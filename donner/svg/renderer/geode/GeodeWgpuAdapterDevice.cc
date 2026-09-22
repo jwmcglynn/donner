@@ -1,23 +1,619 @@
+// Exactly one translation unit in the binary must define `WEBGPU_CPP_IMPLEMENTATION` before
+// including `<webgpu/webgpu.hpp>`. The header ships the body of every C++ wrapper method inside a
+// `#ifdef WEBGPU_CPP_IMPLEMENTATION` block; without this define the wrapper methods are declared
+// but never defined, and linking fails with unresolved `wgpu::Instance::requestAdapter` and
+// friends.
+#define WEBGPU_CPP_IMPLEMENTATION
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <format>
+#include <iterator>
 #include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
+#include "donner/base/AsyncifySuspendProbe.h"
+#include "donner/base/StringUtils.h"
 #include "donner/base/Utils.h"
 #include "donner/gpu/CheckedArithmetic.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+#endif
 
 namespace donner::geode {
+
+#ifdef __EMSCRIPTEN__
+// clang-format off: EM_JS contains JavaScript, whose arrow syntax clang-format corrupts.
+// Keep this internal import name compact: EM_JS function names survive Closure in editor.js.
+EM_JS(void, G, (void* handlesOut, WGPUInstance instance), {
+  if (!navigator.gpu) {
+    // A browser with no WebGPU throws here rather than rejecting, which would abort the module
+    // instead of reporting a failed selection.
+    setTimeout(() => Atomics.store(HEAP32, handlesOut >> 2, 1));
+    return;
+  }
+  navigator.gpu.requestAdapter()
+    .then((adapter) => adapter.requestDevice().then((device) => {
+      // An imported device carries no C-level uncaptured-error callback, because only a device
+      // created through a descriptor is given one. Report them from here so a validation error in
+      // the browser is as visible as it is natively.
+      device.onuncapturederror = (event) => console.error(
+        '[Geode/emscripten] Uncaptured error: ' + event.error.message);
+      // Published before the device below, which is the store the waiting thread is watching.
+      Atomics.store(HEAP32, (handlesOut >> 2) + 1, WebGPU.importJsAdapter(adapter, instance));
+      return WebGPU.importJsDevice(device, instance);
+    }))
+    .catch(() => 1)
+    .then((devicePtr) => setTimeout(() => Atomics.store(HEAP32, handlesOut >> 2, devicePtr)));
+});
+// clang-format on
+#endif
+
+namespace {
+
+/// Instances created for a selection and not yet released; see \ref OutstandingSelectionInstances.
+std::atomic<std::size_t> gSelectionInstances{0};
+
+/// Releases the backend objects a selection created, in the order their ownership nests: the
+/// queue and device first, then the adapter and instance they came from. Shared by the root's
+/// destructor and by a selection that gives up partway, so one sequence releases them however the
+/// selection ends.
+/// @param handles Backend objects to release; left null.
+void ReleaseSelectedHandles(GeodeWgpuRoots& handles);
+
+/// Releases the backend objects a selection has built so far unless the selection completes.
+///
+/// Until the root exists there is no other owner of them: every failure exit after the instance
+/// is created would otherwise strand an instance, and past the adapter and device requests an
+/// adapter, an undestroyed device and a retained device-lost callback as well. Adapter
+/// acquisition failing is the routine outcome on a host with no usable GPU, so those exits are
+/// taken often rather than exceptionally.
+class PartialSelection {
+public:
+  /// Takes responsibility for \p handles until \ref keep is called.
+  /// @param handles Backend objects the selection is filling in.
+  explicit PartialSelection(GeodeWgpuRoots& handles) : handles_(&handles) {}
+
+  ~PartialSelection() {
+    if (handles_ != nullptr) {
+      ReleaseSelectedHandles(*handles_);
+    }
+  }
+
+  PartialSelection(const PartialSelection&) = delete;
+  PartialSelection& operator=(const PartialSelection&) = delete;
+
+  /// Hands the objects to the root that is about to be built, so they outlive this scope.
+  void keep() { handles_ = nullptr; }
+
+private:
+  GeodeWgpuRoots* handles_;
+};
+
+#ifndef __EMSCRIPTEN__
+std::atomic<std::size_t> gOutstandingDeviceLostCallbacks{0};
+
+enum class DeviceLostCallbackStatus : std::uint8_t {
+  Pending,
+  Running,
+  Done,
+  Canceled,
+};
+
+struct DeviceLostCallbackToken {
+  explicit DeviceLostCallbackToken(std::shared_ptr<gpu::DeviceLostState> stateIn)
+      : state(std::move(stateIn)) {}
+
+  std::atomic<DeviceLostCallbackStatus> status{DeviceLostCallbackStatus::Pending};
+  std::atomic<int> references{2};
+  std::shared_ptr<gpu::DeviceLostState> state;
+};
+
+void ReleaseDeviceLostCallbackTokenReference(DeviceLostCallbackToken* token) {
+  if (token->references.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    delete token;
+  }
+}
+
+void* CreateDeviceLostCallbackToken(const std::shared_ptr<gpu::DeviceLostState>& state) {
+  gOutstandingDeviceLostCallbacks.fetch_add(1, std::memory_order_release);
+  return new DeviceLostCallbackToken(state);
+}
+
+std::shared_ptr<gpu::DeviceLostState> ConsumeDeviceLostCallbackState(void* userdata) {
+  auto* token = static_cast<DeviceLostCallbackToken*>(userdata);
+  DeviceLostCallbackStatus expected = DeviceLostCallbackStatus::Pending;
+  if (!token->status.compare_exchange_strong(expected, DeviceLostCallbackStatus::Running,
+                                             std::memory_order_acq_rel)) {
+    return {};
+  }
+
+  std::shared_ptr<gpu::DeviceLostState> state = token->state;
+  token->status.store(DeviceLostCallbackStatus::Done, std::memory_order_release);
+  [[maybe_unused]] const std::size_t previous =
+      gOutstandingDeviceLostCallbacks.fetch_sub(1, std::memory_order_acq_rel);
+  assert(previous > 0);
+  ReleaseDeviceLostCallbackTokenReference(token);
+  return state;
+}
+
+void ReleaseDeviceLostCallbackToken(void*& userdata, bool callbackCannotRun) {
+  if (userdata == nullptr) return;
+
+  auto* token = static_cast<DeviceLostCallbackToken*>(userdata);
+  if (callbackCannotRun) {
+    DeviceLostCallbackStatus expected = DeviceLostCallbackStatus::Pending;
+    if (token->status.compare_exchange_strong(expected, DeviceLostCallbackStatus::Canceled,
+                                              std::memory_order_acq_rel)) {
+      [[maybe_unused]] const std::size_t previous =
+          gOutstandingDeviceLostCallbacks.fetch_sub(1, std::memory_order_acq_rel);
+      assert(previous > 0);
+      ReleaseDeviceLostCallbackTokenReference(token);
+    }
+  }
+
+  ReleaseDeviceLostCallbackTokenReference(token);
+  userdata = nullptr;
+}
+
+/// Error callback wired onto the backend device. Any driver-level validation errors (missing
+/// bindings, bad draw parameters, and the rest) surface here.
+///
+/// The WebGPU C API passes the message as a `WGPUStringView` (pointer + length) rather than a
+/// NUL-terminated string, so the precision-length form of `printf` is what avoids reading past
+/// `length`.
+void OnUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type, WGPUStringView message,
+                       void* /*userdata1*/, void* /*userdata2*/) {
+  std::fprintf(stderr, "[Geode/wgpu-native] Uncaptured error (type=%d): %.*s\n",
+               static_cast<int>(type), static_cast<int>(message.length),
+               message.data ? message.data : "");
+}
+
+/// Device-lost callback wired onto a selected device. Fires at most once per device; `userdata1`
+/// carries a retained reference to the root's loss condition so a spontaneous callback can
+/// outlive everything that registered it. A driver-reported loss sets the same condition that
+/// bounded-wait timeouts set, so both failure modes surface as one detectable state.
+void OnDeviceLost(WGPUDevice const* /*device*/, WGPUDeviceLostReason reason, WGPUStringView message,
+                  void* userdata1, void* /*userdata2*/) {
+  const std::shared_ptr<gpu::DeviceLostState> state = ConsumeDeviceLostCallbackState(userdata1);
+  if (reason == WGPUDeviceLostReason_Destroyed || reason == WGPUDeviceLostReason_InstanceDropped) {
+    // Expected teardown paths, not a driver failure.
+    return;
+  }
+  std::fprintf(stderr, "[Geode/wgpu-native] Device lost (reason=%d): %.*s\n",
+               static_cast<int>(reason), static_cast<int>(message.length),
+               message.data ? message.data : "");
+  if (state) {
+    // Route through the shared declarer rather than storing the flag: it is what leaves
+    // `timedOutSite` empty, which is how a report tells a driver-reported loss from one a bounded
+    // wait's deadline discovered.
+    gpu::DeclareDeviceLost(*state);
+  }
+}
+
+wgpu::BackendType RequestedBackend(bool usePlatformDefault) {
+  const char* backendEnv = std::getenv("WGPU_BACKEND");
+  if (backendEnv != nullptr && backendEnv[0] != '\0') {
+    const std::string_view backend(backendEnv);
+    using namespace std::string_view_literals;
+
+    if (StringUtils::EqualsLowercase(backend, "vulkan"sv)) {
+      return wgpu::BackendType::Vulkan;
+    }
+    if (StringUtils::EqualsLowercase(backend, "metal"sv)) {
+      return wgpu::BackendType::Metal;
+    }
+    if (StringUtils::EqualsLowercase(backend, "opengl"sv) ||
+        StringUtils::EqualsLowercase(backend, "gl"sv)) {
+      return wgpu::BackendType::OpenGL;
+    }
+    if (StringUtils::EqualsLowercase(backend, "opengles"sv) ||
+        StringUtils::EqualsLowercase(backend, "gles"sv)) {
+      return wgpu::BackendType::OpenGLES;
+    }
+
+    std::fprintf(stderr, "[Geode/wgpu-native] Ignoring unsupported WGPU_BACKEND=%.*s.\n",
+                 static_cast<int>(backend.size()), backend.data());
+  }
+
+  if (!usePlatformDefault) {
+    return wgpu::BackendType::Undefined;
+  }
+#if defined(__linux__)
+  return wgpu::BackendType::Vulkan;
+#else
+  return wgpu::BackendType::Undefined;
+#endif
+}
+
+WGPUInstanceBackend InstanceBackendsFor(wgpu::BackendType backendType) {
+  switch (static_cast<WGPUBackendType>(backendType)) {
+    case WGPUBackendType_Vulkan: return WGPUInstanceBackend_Vulkan;
+    case WGPUBackendType_Metal: return WGPUInstanceBackend_Metal;
+    case WGPUBackendType_OpenGL:
+    case WGPUBackendType_OpenGLES: return WGPUInstanceBackend_GL;
+    case WGPUBackendType_D3D12: return WGPUInstanceBackend_DX12;
+    case WGPUBackendType_D3D11: return WGPUInstanceBackend_DX11;
+    case WGPUBackendType_WebGPU: return WGPUInstanceBackend_BrowserWebGPU;
+    default: return WGPUInstanceBackend_All;
+  }
+}
+
+wgpu::Instance CreateSelectionInstance(wgpu::BackendType backendType) {
+  const WGPUInstanceBackend instanceBackends = InstanceBackendsFor(backendType);
+  wgpu::Instance instance;
+  if (instanceBackends != WGPUInstanceBackend_All) {
+    wgpu::InstanceExtras instanceExtras = wgpu::Default;
+    instanceExtras.backends = instanceBackends;
+
+    wgpu::InstanceDescriptor instanceDesc = wgpu::Default;
+    instanceDesc.nextInChain = &instanceExtras.chain;
+    instance = wgpu::createInstance(instanceDesc);
+  } else {
+    instance = wgpu::createInstance();
+  }
+  if (instance) {
+    gSelectionInstances.fetch_add(1, std::memory_order_relaxed);
+  }
+  return instance;
+}
+
+/// Backoff schedule shared by the adapter and device requests below. Under heavy parallel load
+/// both fail transiently at the driver level - wgpu-native reports a validation error and returns
+/// null - and succeed on a re-request after a short pause. Every retry is logged so the flake
+/// stays observable rather than silently absorbed.
+constexpr int kRequestBackoffMs[] = {50, 200, 800};
+
+/// Whether a failed backend request should be retried, sleeping for its backoff first.
+/// @param attempt Zero-based attempt that just failed.
+/// @param what Name of the request, for the log line.
+/// @return True when the caller should re-request; false once the schedule is exhausted.
+bool RetryBackendRequest(int attempt, const char* what) {
+  if (attempt >= static_cast<int>(std::size(kRequestBackoffMs))) {
+    std::fprintf(stderr, "[Geode/wgpu-native] Giving up after %zu %s retries.\n",
+                 std::size(kRequestBackoffMs), what);
+    return false;
+  }
+  const int backoffMs = kRequestBackoffMs[attempt];
+  std::fprintf(stderr,
+               "[Geode/wgpu-native] Transient %s failure under parallel load; retrying "
+               "(attempt %d of %zu) after %d ms.\n",
+               what, attempt + 1, std::size(kRequestBackoffMs), backoffMs);
+  std::this_thread::sleep_for(std::chrono::milliseconds(backoffMs));
+  return true;
+}
+
+/// Logs which adapter the selection landed on and reports whether it is a Vulkan backend.
+///
+/// The log makes it obvious at a glance whether the process is on a discrete GPU, an integrated
+/// GPU or a software rasterizer, and which native backend is driving it. If the query fails on a
+/// real Vulkan device the filter-engine serialization silently disables, which is accepted
+/// residual risk rather than a reason to fail the selection.
+/// @param adapter Adapter to describe.
+/// @return Whether the adapter reports a Vulkan backend; false when the query failed.
+bool DescribeSelectedAdapter(const wgpu::Adapter& adapter) {
+  WGPUAdapterInfo info = {};
+  if (wgpuAdapterGetInfo(adapter, &info) != WGPUStatus_Success) {
+    return false;
+  }
+  const auto text = [](const WGPUStringView& value) {
+    return std::string_view{value.data ? value.data : "", value.data ? value.length : 0};
+  };
+  const char* backend = "?";
+  switch (info.backendType) {
+    case WGPUBackendType_Vulkan: backend = "Vulkan"; break;
+    case WGPUBackendType_Metal: backend = "Metal"; break;
+    case WGPUBackendType_D3D12: backend = "D3D12"; break;
+    case WGPUBackendType_D3D11: backend = "D3D11"; break;
+    case WGPUBackendType_OpenGL: backend = "OpenGL"; break;
+    case WGPUBackendType_OpenGLES: backend = "OpenGLES"; break;
+    case WGPUBackendType_WebGPU: backend = "WebGPU"; break;
+    case WGPUBackendType_Null: backend = "Null"; break;
+    default: break;
+  }
+  const char* type = "?";
+  switch (info.adapterType) {
+    case WGPUAdapterType_DiscreteGPU: type = "DiscreteGPU"; break;
+    case WGPUAdapterType_IntegratedGPU: type = "IntegratedGPU"; break;
+    case WGPUAdapterType_CPU: type = "CPU"; break;
+    case WGPUAdapterType_Unknown: type = "Unknown"; break;
+    default: break;
+  }
+  const auto vendor = text(info.vendor);
+  const auto device = text(info.device);
+  const auto architecture = text(info.architecture);
+  std::fprintf(stderr,
+               "[Geode/wgpu-native] Adapter: %.*s %.*s (%.*s) "
+               "backend=%s type=%s vendorID=0x%04x deviceID=0x%04x\n",
+               static_cast<int>(vendor.size()), vendor.data(), static_cast<int>(device.size()),
+               device.data(), static_cast<int>(architecture.size()), architecture.data(), backend,
+               type, info.vendorID, info.deviceID);
+  const bool isVulkan = info.backendType == WGPUBackendType_Vulkan;
+  wgpuAdapterInfoFreeMembers(info);
+  return isVulkan;
+}
+#else
+void ReleaseDeviceLostCallbackToken(void*& userdata, bool /*callbackCannotRun*/) {
+  assert(userdata == nullptr);
+}
+#endif  // !__EMSCRIPTEN__
+
+/// Queries what every runtime device over \p handles will answer identically.
+/// @param handles Backend objects to query.
+GeodeGpuRootCapabilities QueryRootCapabilities(const GeodeWgpuRoots& handles) {
+  GeodeGpuRootCapabilities capabilities;
+  wgpu::Limits limits;
+  if (handles.device.getLimits(&limits) == wgpu::Status::Success &&
+      limits.maxTextureDimension2D != WGPU_LIMIT_U32_UNDEFINED &&
+      limits.maxTextureDimension2D > 0) {
+    capabilities.maxTextureDimension2D = limits.maxTextureDimension2D;
+  }
+#ifndef __EMSCRIPTEN__
+  if (handles.adapter) {
+    capabilities.isVulkan = DescribeSelectedAdapter(handles.adapter);
+  }
+#endif
+  return capabilities;
+}
+
+#ifdef __EMSCRIPTEN__
+/// Slots the browser import bridge writes into, in the order it writes them: the adapter first,
+/// then the device, whose store is what releases the waiting thread.
+struct BrowserImportState {
+  std::atomic<WGPUDevice> device = nullptr;
+  std::atomic<WGPUAdapter> adapter = nullptr;
+};
+static_assert(offsetof(BrowserImportState, device) == 0);
+static_assert(sizeof(BrowserImportState) == 2 * sizeof(WGPUDevice));
+static_assert(alignof(BrowserImportState) == alignof(WGPUDevice));
+static_assert(offsetof(BrowserImportState, adapter) == sizeof(WGPUDevice));
+static_assert(std::atomic<WGPUDevice>::is_always_lock_free);
+static_assert(std::atomic<WGPUAdapter>::is_always_lock_free);
+
+/// Imports the browser's WebGPU device, which is the only selection that platform offers.
+/// @param handles Root handles to populate; left partly filled on failure.
+/// @param options Caller inputs; its surface provider still runs, because preparing what the
+///   caller presents to is its job even where the choice of adapter is the browser's.
+bool ImportBrowserRoot(GeodeWgpuRoots& handles, const GpuRootSelection& options) {
+  const WGPUInstanceFeatureName timedWaitFeature = WGPUInstanceFeatureName_TimedWaitAny;
+  WGPUInstanceDescriptor instanceDescriptor = WGPU_INSTANCE_DESCRIPTOR_INIT;
+  instanceDescriptor.requiredFeatureCount = 1;
+  instanceDescriptor.requiredFeatures = &timedWaitFeature;
+  handles.instance = wgpu::Instance(wgpuCreateInstance(&instanceDescriptor));
+  if (!handles.instance) {
+    std::fprintf(stderr, "[Geode/emscripten] wgpuCreateInstance returned null.\n");
+    return false;
+  }
+  gSelectionInstances.fetch_add(1, std::memory_order_relaxed);
+  handles.owned = true;
+
+  // The browser chooses the adapter, so the surface constrains nothing here - but the provider is
+  // also what builds the surface the caller presents to, and a caller that could not build it has
+  // nothing to do with a device.
+  if (options.compatibleSurface && !options.compatibleSurface(handles.instance).has_value()) {
+    return false;
+  }
+
+  // WebKit cannot drive Emdawn's adapter/device futures through WaitAnyOnly from a transferred
+  // renderer pthread. Import one direct Promise chain, then cross a task boundary before the C
+  // continuation initializes pipelines. Both handles come back through it, because requesting
+  // either through the C API is the future WebKit cannot drive. Snapshot map futures still use
+  // TimedWaitAny.
+  BrowserImportState state;
+  WGPUDevice importedDevice = nullptr;
+  G(&state.device, handles.instance);
+  while ((importedDevice = state.device.load(std::memory_order_acquire)) == nullptr) {
+    emscripten_sleep(1);
+  }
+  // Written before the device store the loop above was watching, so it is visible now, and taken
+  // before the failure check below so that an import which got this far and then threw leaves the
+  // adapter to the release path rather than stranding it. A caller asking what its surface can
+  // present has an adapter to ask, which is what the editor's window does before it compiles a
+  // pipeline for the answer.
+  handles.adapter = wgpu::Adapter(state.adapter.load(std::memory_order_acquire));
+  if (reinterpret_cast<std::uintptr_t>(importedDevice) == 1) {
+    std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU device request failed.\n");
+    return false;
+  }
+  if (!handles.adapter) {
+    std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU adapter import returned null.\n");
+    return false;
+  }
+  handles.device = wgpu::Device(importedDevice);
+  handles.queue = handles.device.getQueue();
+  if (!handles.queue) {
+    std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU device returned no queue.\n");
+    return false;
+  }
+  return true;
+}
+#endif
+
+}  // namespace
+
+namespace {
+
+void ReleaseSelectedHandles(GeodeWgpuRoots& handles) {
+  ReleaseWgpuHandle(handles.queue);
+  if (handles.device) handles.device.destroy();
+  ReleaseWgpuHandle(handles.device);
+  ReleaseWgpuHandle(handles.adapter);
+  if (handles.instance) {
+    gSelectionInstances.fetch_sub(1, std::memory_order_relaxed);
+  }
+  ReleaseWgpuHandle(handles.instance);
+  ReleaseDeviceLostCallbackToken(handles.deviceLostCallbackToken, /*callbackCannotRun=*/true);
+}
+
+}  // namespace
+
+std::size_t OutstandingSelectionInstances() {
+  return gSelectionInstances.load(std::memory_order_relaxed);
+}
+
+std::size_t OutstandingDeviceLostCallbacks() {
+#ifdef __EMSCRIPTEN__
+  return 0;
+#else
+  return gOutstandingDeviceLostCallbacks.load(std::memory_order_acquire);
+#endif
+}
+
+GeodeGpuRoot::GeodeGpuRoot(GeodeWgpuRoots handles, GeodeGpuRootCapabilities capabilities,
+                           std::shared_ptr<gpu::DeviceLostState> lostState)
+    : handles_(std::move(handles)),
+      capabilities_(capabilities),
+      lostState_(lostState ? std::move(lostState) : std::make_shared<gpu::DeviceLostState>()) {}
+
+GeodeGpuRoot::~GeodeGpuRoot() {
+  if (!handles_.owned) {
+    return;
+  }
+  if (lostState_->lost.load(std::memory_order_acquire)) {
+    // A lost device is a process-fatal condition for GPU rendering, and releasing it calls into a
+    // driver that has stopped answering. Leak one root's worth of driver objects rather than risk
+    // a blocking call into a hung driver.
+    ReleaseDeviceLostCallbackToken(handles_.deviceLostCallbackToken, /*callbackCannotRun=*/false);
+    return;
+  }
+  ReleaseSelectedHandles(handles_);
+}
+
+bool GeodeGpuRoot::names(const wgpu::Instance& instance, const wgpu::Adapter& adapter,
+                         const wgpu::Device& device, const wgpu::Queue& queue) const {
+  return (!instance ||
+          static_cast<WGPUInstance>(instance) == static_cast<WGPUInstance>(handles_.instance)) &&
+         (!adapter ||
+          static_cast<WGPUAdapter>(adapter) == static_cast<WGPUAdapter>(handles_.adapter)) &&
+         (!device || static_cast<WGPUDevice>(device) == static_cast<WGPUDevice>(handles_.device)) &&
+         (!queue || static_cast<WGPUQueue>(queue) == static_cast<WGPUQueue>(handles_.queue));
+}
+
+std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
+  auto lostState = std::make_shared<gpu::DeviceLostState>();
+  GeodeWgpuRoots handles;
+  PartialSelection partial(handles);
+#ifdef __EMSCRIPTEN__
+  if (!ImportBrowserRoot(handles, options)) {
+    return nullptr;
+  }
+#else
+  // 1. Create the instance. `wgpuCreateInstance` is synchronous and never blocks on I/O; the
+  //    returned handle is the root of the object graph.
+  const wgpu::BackendType backendType = RequestedBackend(options.usePlatformDefaultBackend);
+  handles.instance = CreateSelectionInstance(backendType);
+  if (!handles.instance) {
+    std::fprintf(stderr, "[Geode/wgpu-native] wgpuCreateInstance returned null\n");
+    return nullptr;
+  }
+  handles.owned = true;
+
+  // 2. Request an adapter. The synchronous form in webgpu-cpp internally calls the async C API
+  //    with a lambda that parks the result on the stack - wgpu-native invokes the callback before
+  //    returning from the request, so the sync form is safe on native targets.
+  wgpu::RequestAdapterOptions adapterOptions = {};
+  adapterOptions.backendType = backendType;
+  adapterOptions.forceFallbackAdapter = wgpuForceFallbackAdapterRequested();
+  if (options.compatibleSurface) {
+    // A caller that could not build what it presents to has nothing useful to do with a device.
+    const std::optional<wgpu::Surface> surface = options.compatibleSurface(handles.instance);
+    if (!surface.has_value()) {
+      return nullptr;
+    }
+    adapterOptions.compatibleSurface = *surface;
+  }
+
+  for (int attempt = 0;; ++attempt) {
+    handles.adapter = handles.instance.requestAdapter(adapterOptions);
+    if (handles.adapter) {
+      break;
+    }
+    std::fprintf(stderr, "[Geode/wgpu-native] No WebGPU adapter available.\n");
+    if (!RetryBackendRequest(attempt, "adapter-acquisition")) {
+      return nullptr;
+    }
+  }
+
+  // 3. Create the device. Error diagnostics are wired through the descriptor; the callbacks stay
+  //    valid for the device's lifetime.
+  wgpu::DeviceDescriptor deviceDesc = {};
+  deviceDesc.label = wgpu::StringView{options.label};
+  deviceDesc.uncapturedErrorCallbackInfo.callback = OnUncapturedError;
+  deviceDesc.uncapturedErrorCallbackInfo.userdata1 = nullptr;
+  deviceDesc.uncapturedErrorCallbackInfo.userdata2 = nullptr;
+
+  // Only a null device return is retried here. The deterministic failures (null instance, no
+  // adapter for the requested backend) already returned above, and a device lost after successful
+  // creation is out of scope.
+  for (int attempt = 0;; ++attempt) {
+    // A fresh retained loss-condition reference per attempt: each successfully created device
+    // eventually consumes its userdata exactly once through OnDeviceLost, including the
+    // Destroyed-at-teardown delivery. An attempt that returns a null device strands at most one
+    // small retained block, bounded by the retry count.
+    handles.deviceLostCallbackToken = CreateDeviceLostCallbackToken(lostState);
+    deviceDesc.deviceLostCallbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
+    deviceDesc.deviceLostCallbackInfo.callback = OnDeviceLost;
+    deviceDesc.deviceLostCallbackInfo.userdata1 = handles.deviceLostCallbackToken;
+    deviceDesc.deviceLostCallbackInfo.userdata2 = nullptr;
+
+    handles.device = handles.adapter.requestDevice(deviceDesc);
+    if (handles.device) {
+      break;
+    }
+    ReleaseDeviceLostCallbackToken(handles.deviceLostCallbackToken, /*callbackCannotRun=*/true);
+
+    std::fprintf(stderr, "[Geode/wgpu-native] Failed to create device.\n");
+    if (!RetryBackendRequest(attempt, "device-creation")) {
+      return nullptr;
+    }
+  }
+
+  // 4. Grab the default queue.
+  handles.queue = handles.device.getQueue();
+  if (!handles.queue) {
+    std::fprintf(stderr, "[Geode/wgpu-native] Failed to get queue.\n");
+    return nullptr;
+  }
+#endif
+
+  // Queried before the handles are moved from: reading and moving them in one argument list is
+  // unsequenced.
+  const GeodeGpuRootCapabilities capabilities = QueryRootCapabilities(handles);
+  partial.keep();
+  return std::make_shared<GeodeGpuRoot>(std::move(handles), capabilities, std::move(lostState));
+}
+
+std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots& handles,
+                                           std::shared_ptr<gpu::DeviceLostState> lostState) {
+  if (!handles.device || !handles.queue) {
+    std::fprintf(stderr, "[Geode] AdoptGpuRoot: null device or queue\n");
+    return nullptr;
+  }
+  GeodeWgpuRoots borrowed = handles;
+  // Whatever the caller says, an adopted root is borrowed: Donner did not create these objects
+  // and the embedder outlives every context built over them.
+  borrowed.owned = false;
+  borrowed.deviceLostCallbackToken = nullptr;
+  const GeodeGpuRootCapabilities capabilities = QueryRootCapabilities(handles);
+  return std::make_shared<GeodeGpuRoot>(std::move(borrowed), capabilities, std::move(lostState));
+}
+
+std::unique_ptr<GeodeWgpuAdapterDevice> CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
+  UTILS_RELEASE_ASSERT(root != nullptr);
+  return std::make_unique<GeodeWgpuAdapterDevice>(std::move(root));
+}
 
 namespace {
 
@@ -110,17 +706,6 @@ struct Overloaded : Ts... {
 };
 template <typename... Ts>
 Overloaded(Ts...) -> Overloaded<Ts...>;
-
-wgpu::TextureFormat ToWgpuTextureFormat(gpu::TextureFormat format) {
-  switch (format) {
-    case gpu::TextureFormat::RGBA8Unorm: return wgpu::TextureFormat::RGBA8Unorm;
-    case gpu::TextureFormat::BGRA8Unorm: return wgpu::TextureFormat::BGRA8Unorm;
-    case gpu::TextureFormat::R8Unorm: return wgpu::TextureFormat::R8Unorm;
-    case gpu::TextureFormat::RGBA32Float: return wgpu::TextureFormat::RGBA32Float;
-  }
-  UTILS_RELEASE_ASSERT_MSG(false, "validated TextureFormat out of range");
-  return wgpu::TextureFormat::RGBA8Unorm;
-}
 
 wgpu::BufferUsage ToWgpuBufferUsage(gpu::BufferUsage usage) {
   WGPUBufferUsage result = wgpu::BufferUsage::None;
@@ -324,7 +909,7 @@ void ApplyBindingType(wgpu::BindGroupLayoutEntry& entry,
       return;
     case gpu::BindingType::WriteOnlyStorageTexture2d:
       entry.storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-      entry.storageTexture.format = ToWgpuTextureFormat(layoutEntry.storageTextureFormat);
+      entry.storageTexture.format = WgpuTextureFormatFrom(layoutEntry.storageTextureFormat);
       entry.storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
       return;
   }
@@ -333,44 +918,94 @@ void ApplyBindingType(wgpu::BindGroupLayoutEntry& entry,
 
 }  // namespace
 
-GeodeWgpuAdapterDevice::GeodeWgpuAdapterDevice(GeodeDevice& geodeDevice)
-    : geodeDevice_(geodeDevice) {}
+GeodeWgpuAdapterDevice::GeodeWgpuAdapterDevice(std::shared_ptr<GeodeGpuRoot> root)
+    : root_(std::move(root)) {
+  UTILS_RELEASE_ASSERT(root_ != nullptr);
+  // Every runtime device over one backend root answers the same question about whether that root
+  // has stopped answering, so take the root's condition rather than minting a private one.
+  adoptLostState(root_->lostState());
+}
+
+bool GeodeWgpuAdapterDevice::pollSuspending(bool wait) const {
+  const ScopedSuspendPoint suspend(SuspendKind::DeviceWait);
+  return root_->device().poll(wait, nullptr);
+}
 
 GeodeWgpuAdapterDevice::~GeodeWgpuAdapterDevice() {
   // Wait for in-flight submissions so deferred destructions drain before the slot vectors
   // release the remaining wgpu objects. On timeout teardown proceeds anyway: wgpu retains every
-  // resource referenced by a submitted command buffer until it completes.
+  // resource referenced by a submitted command buffer until it completes. That tolerance is why
+  // the drain declares nothing - it is nobody's deadline, it overruns on a loaded host, and the
+  // other contexts over this root are still rendering through it.
   if (lastSubmittedSerial() > completedSerial()) {
-    waitForSerial(lastSubmittedSerial(), /*timeoutSeconds=*/5.0);
+    waitForSerialBounded(lastSubmittedSerial(), teardownDrainSeconds_, LossOnTimeout::Tolerate);
   }
   poll();
 }
 
 uint64_t GeodeWgpuAdapterDevice::completedSerial() const {
-  return completionState_->completedSerial.load(std::memory_order_acquire);
+  // The ceiling is `kNoCompletedSerialCeiling` outside the tests that hold submitted work
+  // incomplete, so this is the backend's own answer everywhere else.
+  return std::min(completionState_->completedSerial.load(std::memory_order_acquire),
+                  completedSerialCeiling_.load(std::memory_order_relaxed));
+}
+
+void GeodeWgpuAdapterDevice::pollForSerialCompletion() {
+  root_->device().poll(true, nullptr);
+  const std::chrono::milliseconds pollCost{
+      serialWaitPollCostMsForTesting_.load(std::memory_order_relaxed)};
+  if (pollCost.count() > 0) {
+    std::this_thread::sleep_for(pollCost);
+  }
 }
 
 bool GeodeWgpuAdapterDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
-  const auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                            std::chrono::duration<double>(timeoutSeconds));
-  // Bounded like GeodeDevice's WaitForSubmittedWork: poll(true) blocks until pending work
-  // progresses (yielding through Asyncify on Emscripten), so iterations are cheap when idle.
-  for (int pollIter = 0; pollIter < 20000; ++pollIter) {
+  return waitForSerialBounded(serial, timeoutSeconds, LossOnTimeout::Declare);
+}
+
+bool GeodeWgpuAdapterDevice::waitForSerialBounded(uint64_t serial, double timeoutSeconds,
+                                                  LossOnTimeout onTimeout) {
+  const auto start = std::chrono::steady_clock::now();
+  const auto deadline = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                    std::chrono::duration<double>(timeoutSeconds));
+  // Bounded like GeodeDevice's queue drain: poll(true) blocks until pending work progresses
+  // (yielding through Asyncify on Emscripten), so iterations are cheap when idle.
+  for (int pollIter = 0; pollIter < kMaxSerialWaitPolls; ++pollIter) {
     if (completedSerial() >= serial) {
       return true;
     }
-    if (geodeDevice_.isDeviceLost()) {
+    if (isLost()) {
       // Nothing will complete on a lost device, so the budget is not spent waiting for something
       // that can never arrive - and polling a lost wgpu device is what hangs on some drivers.
       return false;
     }
     if (std::chrono::steady_clock::now() >= deadline) {
-      return false;
+      return giveUpOnSerialWait(start, timeoutSeconds, onTimeout);
     }
-    geodeDevice_.device().poll(true, nullptr);
+    pollForSerialCompletion();
   }
+  // The poll cap rather than the deadline. A driver whose poll returns without blocking reaches
+  // it in microseconds with the whole budget unspent, which says how that driver implements poll
+  // and nothing about whether submitted work is still completing. Ending the wait here keeps it
+  // from spinning a core; declaring a permanent loss from it would fail every later caller on a
+  // device that is merely idle.
   return completedSerial() >= serial;
+}
+
+bool GeodeWgpuAdapterDevice::giveUpOnSerialWait(std::chrono::steady_clock::time_point start,
+                                                double timeoutSeconds, LossOnTimeout onTimeout) {
+  // A budget of zero is a question about what is already known rather than a wait, so its
+  // negative answer is no evidence that the device stopped answering.
+  if (onTimeout == LossOnTimeout::Declare && timeoutSeconds > 0.0) {
+    // Report the wait that actually ran, not the budget it was given: the budget is a constant
+    // the reader already knows, while the measurement says whether the wait gave up on schedule
+    // or overran under load.
+    markLostAfterWaitTimeout(gpu::DeviceLostWaitSite::QueueIdle,
+                             std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - start),
+                             "submitted GPU work did not complete within the bounded wait");
+  }
+  return false;
 }
 
 bool GeodeWgpuAdapterDevice::onOwnsTextureBacking(uint32_t slotIndex) const {
@@ -409,10 +1044,8 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Te
 
 gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importTextureFrom(
     const GeodeWgpuAdapterDevice& owner, const gpu::Texture& texture) {
-  if (static_cast<WGPUDevice>(owner.geodeDevice_.device()) !=
-          static_cast<WGPUDevice>(geodeDevice_.device()) ||
-      static_cast<WGPUQueue>(owner.geodeDevice_.queue()) !=
-          static_cast<WGPUQueue>(geodeDevice_.queue())) {
+  if (static_cast<WGPUDevice>(owner.root_->device()) != static_cast<WGPUDevice>(root_->device()) ||
+      static_cast<WGPUQueue>(owner.root_->queue()) != static_cast<WGPUQueue>(root_->queue())) {
     return GpuError{GpuErrorType::DeviceMismatch,
                     "importTextureFrom: the owning device drives a different backend device"};
   }
@@ -449,6 +1082,17 @@ wgpu::TextureView GeodeWgpuAdapterDevice::wgpuTextureViewOf(
     return wgpu::TextureView();
   }
   return GetHandle(slotTextureViews_, textureView.slotIndex());
+}
+
+wgpu::TextureFormat WgpuTextureFormatFrom(gpu::TextureFormat format) {
+  switch (format) {
+    case gpu::TextureFormat::RGBA8Unorm: return wgpu::TextureFormat::RGBA8Unorm;
+    case gpu::TextureFormat::BGRA8Unorm: return wgpu::TextureFormat::BGRA8Unorm;
+    case gpu::TextureFormat::R8Unorm: return wgpu::TextureFormat::R8Unorm;
+    case gpu::TextureFormat::RGBA32Float: return wgpu::TextureFormat::RGBA32Float;
+  }
+  UTILS_RELEASE_ASSERT_MSG(false, "validated TextureFormat out of range");
+  return wgpu::TextureFormat::RGBA8Unorm;
 }
 
 gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format) {
@@ -579,7 +1223,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateSurface(uint32_t slotIndex,
   surfaceDescriptor.label = wgpuLabel(std::string_view(descriptor.label));
   surfaceDescriptor.nextInChain = &source.chain;
 
-  wgpu::Surface surface = geodeDevice_.instance().createSurface(surfaceDescriptor);
+  wgpu::Surface surface = root_->instance().createSurface(surfaceDescriptor);
   if (!surface) {
     return GpuError{GpuErrorType::Unsupported, "the backend could not create a surface"};
   }
@@ -596,8 +1240,7 @@ gpu::Result<gpu::SurfaceCapabilities> GeodeWgpuAdapterDevice::onSurfaceCapabilit
   }
 
   wgpu::SurfaceCapabilities backendCapabilities = {};
-  slotSurfaces_[slotIndex].surface.get().getCapabilities(geodeDevice_.adapter(),
-                                                         &backendCapabilities);
+  slotSurfaces_[slotIndex].surface.get().getCapabilities(root_->adapter(), &backendCapabilities);
 
   gpu::SurfaceCapabilities capabilities;
   for (size_t i = 0; i < backendCapabilities.formatCount; ++i) {
@@ -628,8 +1271,8 @@ gpu::Status GeodeWgpuAdapterDevice::onConfigureSurface(
   }
 
   wgpu::SurfaceConfiguration backendConfiguration(wgpu::Default);
-  backendConfiguration.device = geodeDevice_.device();
-  backendConfiguration.format = ToWgpuTextureFormat(configuration.format);
+  backendConfiguration.device = root_->device();
+  backendConfiguration.format = WgpuTextureFormatFrom(configuration.format);
   backendConfiguration.usage = ToWgpuTextureUsage(configuration.usage);
   backendConfiguration.width = configuration.size.width;
   backendConfiguration.height = configuration.size.height;
@@ -679,7 +1322,7 @@ gpu::Result<gpu::SurfaceStatus> GeodeWgpuAdapterDevice::onPresentSurface(uint32_
   // Acquiring the frame took a reference of its own, so it goes back with the frame.
   ReleaseWgpuHandle(slot.acquired);
   slot.hasAcquired = false;
-  return geodeDevice_.isDeviceLost() ? gpu::SurfaceStatus::DeviceLost : gpu::SurfaceStatus::Success;
+  return isLost() ? gpu::SurfaceStatus::DeviceLost : gpu::SurfaceStatus::Success;
 }
 
 void GeodeWgpuAdapterDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
@@ -724,7 +1367,7 @@ gpu::Status GeodeWgpuAdapterDevice::onMapBufferAsync(uint32_t mappingSlotIndex,
     return GpuError{GpuErrorType::InvalidState,
                     std::format("buffer slot {} has no wgpu buffer", bufferSlotIndex)};
   }
-  if (geodeDevice_.isDeviceLost()) {
+  if (isLost()) {
     // A lost device never delivers the completion, so refuse the map rather than hand back a
     // handle whose wait can only ever run out its budget.
     return GpuError{GpuErrorType::InvalidState, "the device is lost, so buffers cannot be mapped"};
@@ -772,7 +1415,7 @@ gpu::MapSliceState GeodeWgpuAdapterDevice::sliceStateOf(
     return completion.ok.load(std::memory_order_relaxed) ? gpu::MapSliceState::Ready
                                                          : gpu::MapSliceState::Failed;
   }
-  return geodeDevice_.isDeviceLost() ? gpu::MapSliceState::DeviceLost : gpu::MapSliceState::Pending;
+  return isLost() ? gpu::MapSliceState::DeviceLost : gpu::MapSliceState::Pending;
 }
 
 bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
@@ -807,7 +1450,7 @@ bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
   // thread's relationship to the instance, not of one mapping: once a status other than
   // Success or TimedOut says this future cannot be time-waited here, every later wait polls.
   static std::atomic<bool> instanceWaitUsable{true};
-  if (!geodeDevice_.instance() || !instanceWaitUsable.load(std::memory_order_relaxed)) {
+  if (!root_->instance() || !instanceWaitUsable.load(std::memory_order_relaxed)) {
     return false;
   }
 
@@ -822,7 +1465,7 @@ bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
   (void)slice;
   const auto sliceNs = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(kBrowserTimedWaitSlice).count());
-  const wgpu::WaitStatus waitStatus = geodeDevice_.instance().waitAny(1, &waitInfo, sliceNs);
+  const wgpu::WaitStatus waitStatus = root_->instance().waitAny(1, &waitInfo, sliceNs);
   if (waitStatus != wgpu::WaitStatus::Success && waitStatus != wgpu::WaitStatus::TimedOut) {
     instanceWaitUsable.store(false, std::memory_order_relaxed);
     return false;
@@ -854,10 +1497,10 @@ bool GeodeWgpuAdapterDevice::finishMapWaitSlice(uint32_t mappingSlotIndex,
     return true;
   }
   if (status == wgpu::WaitStatus::TimedOut && !completion->done.load(std::memory_order_acquire) &&
-      !geodeDevice_.isDeviceLost()) {
+      !isLost()) {
     // A browser can defer pending map completion until another queue submission arrives.
-    geodeDevice_.queue().submit(0, nullptr);
-    geodeDevice_.countSubmit();
+    root_->queue().submit(0, nullptr);
+    count(&GeodeDevice::countSubmit);
   }
   return true;
 }
@@ -870,7 +1513,7 @@ gpu::MapSliceReport GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingS
                                .waitKind = gpu::MapWaitKind::Polled};
   }
   MappingSlot::Completion& completion = *slotMappings_[mappingSlotIndex].completion;
-  if (completion.done.load(std::memory_order_acquire) || geodeDevice_.isDeviceLost()) {
+  if (completion.done.load(std::memory_order_acquire) || isLost()) {
     // Nothing was waited on, so no completion event was used to learn it.
     return gpu::MapSliceReport{.state = sliceStateOf(completion),
                                .waitKind = gpu::MapWaitKind::Polled};
@@ -904,9 +1547,9 @@ gpu::MapSliceReport GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingS
 
   (void)BoundedGpuWait(
       [&] {
-        (void)geodeDevice_.pollSuspending(false);
+        (void)pollSuspending(false);
         return !mappingStillMatches(mappingSlotIndex, &completion, future) ||
-               completion.done.load(std::memory_order_acquire) || geodeDevice_.isDeviceLost();
+               completion.done.load(std::memory_order_acquire) || isLost();
       },
       std::max(slice, std::chrono::microseconds(1)));
 
@@ -959,13 +1602,13 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBuffer(uint32_t slotIndex,
   bufferDescriptor.size = descriptor.byteSize;
   bufferDescriptor.usage = ToWgpuBufferUsage(descriptor.usage);
 
-  wgpu::Buffer buffer = geodeDevice_.device().createBuffer(bufferDescriptor);
+  wgpu::Buffer buffer = root_->device().createBuffer(bufferDescriptor);
   if (!buffer) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("wgpu buffer allocation of {} bytes failed for '{}'",
                                 descriptor.byteSize, std::string_view(descriptor.label))};
   }
-  geodeDevice_.countBuffer();
+  count(&GeodeDevice::countBuffer);
 
   SetSlot(slotBuffers_, slotIndex, ScopedWgpuHandle<wgpu::Buffer>(buffer));
   return OkStatus();
@@ -983,20 +1626,20 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateTexture(uint32_t slotIndex,
   wgpu::TextureDescriptor textureDescriptor = {};
   textureDescriptor.label = wgpuLabel(std::string_view(descriptor.label));
   textureDescriptor.size = {descriptor.size.width, descriptor.size.height, 1u};
-  textureDescriptor.format = ToWgpuTextureFormat(descriptor.format);
+  textureDescriptor.format = WgpuTextureFormatFrom(descriptor.format);
   textureDescriptor.usage = ToWgpuTextureUsage(descriptor.usage);
   textureDescriptor.mipLevelCount = 1;
   textureDescriptor.sampleCount = 1;
   textureDescriptor.dimension = wgpu::TextureDimension::_2D;
 
-  wgpu::Texture texture = geodeDevice_.device().createTexture(textureDescriptor);
+  wgpu::Texture texture = root_->device().createTexture(textureDescriptor);
   if (!texture) {
     return GpuError{
         GpuErrorType::InvalidState,
         std::format("wgpu texture allocation ({}x{}) failed for '{}'", descriptor.size.width,
                     descriptor.size.height, std::string_view(descriptor.label))};
   }
-  geodeDevice_.countTexture();
+  count(&GeodeDevice::countTexture);
 
   SetSlot(slotTextures_, slotIndex, TextureSlot{ScopedWgpuHandle<wgpu::Texture>(texture), texture});
   return OkStatus();
@@ -1036,7 +1679,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateSampler(uint32_t slotIndex,
   samplerDescriptor.addressModeV = ToWgpuAddressMode(descriptor.addressModeV);
   samplerDescriptor.maxAnisotropy = 1;
 
-  wgpu::Sampler sampler = geodeDevice_.device().createSampler(samplerDescriptor);
+  wgpu::Sampler sampler = root_->device().createSampler(samplerDescriptor);
   if (!sampler) {
     return GpuError{GpuErrorType::InvalidState, std::format("wgpu sampler creation failed for '{}'",
                                                             std::string_view(descriptor.label))};
@@ -1061,7 +1704,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBindGroupLayout(
   layoutDescriptor.entryCount = entries.size();
   layoutDescriptor.entries = entries.data();
 
-  wgpu::BindGroupLayout layout = geodeDevice_.device().createBindGroupLayout(layoutDescriptor);
+  wgpu::BindGroupLayout layout = root_->device().createBindGroupLayout(layoutDescriptor);
   if (!layout) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("wgpu bind group layout creation failed for '{}'",
@@ -1128,13 +1771,13 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBindGroup(uint32_t slotIndex,
   groupDescriptor.entryCount = entries.size();
   groupDescriptor.entries = entries.data();
 
-  wgpu::BindGroup group = geodeDevice_.device().createBindGroup(groupDescriptor);
+  wgpu::BindGroup group = root_->device().createBindGroup(groupDescriptor);
   if (!group) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("wgpu bind group creation failed for '{}'",
                                 std::string_view(descriptor.label))};
   }
-  geodeDevice_.countBindGroup();
+  count(&GeodeDevice::countBindGroup);
 
   SetSlot(slotBindGroups_, slotIndex, ScopedWgpuHandle<wgpu::BindGroup>(group));
   return OkStatus();
@@ -1160,7 +1803,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreatePipelineLayout(
   layoutDescriptor.bindGroupLayoutCount = layouts.size();
   layoutDescriptor.bindGroupLayouts = layouts.data();
 
-  wgpu::PipelineLayout layout = geodeDevice_.device().createPipelineLayout(layoutDescriptor);
+  wgpu::PipelineLayout layout = root_->device().createPipelineLayout(layoutDescriptor);
   if (!layout) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("wgpu pipeline layout creation failed for '{}'",
@@ -1188,7 +1831,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateShaderModule(
   moduleDescriptor.label = wgpuLabel(std::string_view(descriptor.label));
   moduleDescriptor.nextInChain = &wgslSource.chain;
 
-  wgpu::ShaderModule module = geodeDevice_.device().createShaderModule(moduleDescriptor);
+  wgpu::ShaderModule module = root_->device().createShaderModule(moduleDescriptor);
   if (!module) {
     return GpuError{GpuErrorType::InvalidDescriptor,
                     std::format("wgpu shader module creation failed for '{}'",
@@ -1237,7 +1880,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateRenderPipeline(
   std::vector<wgpu::ColorTargetState> targets(descriptor.fragment.targets.size());
   for (size_t i = 0; i < descriptor.fragment.targets.size(); ++i) {
     const gpu::ColorTargetState& target = descriptor.fragment.targets[i];
-    targets[i].format = ToWgpuTextureFormat(target.format);
+    targets[i].format = WgpuTextureFormatFrom(target.format);
     targets[i].writeMask = ToWgpuColorWriteMask(target.writeMask);
     if (target.blend.has_value()) {
       blendStorage[i].color.srcFactor = ToWgpuBlendFactor(target.blend->color.srcFactor);
@@ -1272,7 +1915,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateRenderPipeline(
   pipelineDescriptor.multisample.count = 1;
   pipelineDescriptor.multisample.mask = 0xFFFFFFFF;
 
-  wgpu::RenderPipeline pipeline = geodeDevice_.device().createRenderPipeline(pipelineDescriptor);
+  wgpu::RenderPipeline pipeline = root_->device().createRenderPipeline(pipelineDescriptor);
   if (!pipeline) {
     return GpuError{GpuErrorType::InvalidDescriptor,
                     std::format("wgpu render pipeline creation failed for '{}'",
@@ -1301,7 +1944,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateComputePipeline(
   pipelineDescriptor.compute.module = module;
   pipelineDescriptor.compute.entryPoint = wgpuLabel(entryPoint);
 
-  wgpu::ComputePipeline pipeline = geodeDevice_.device().createComputePipeline(pipelineDescriptor);
+  wgpu::ComputePipeline pipeline = root_->device().createComputePipeline(pipelineDescriptor);
   if (!pipeline) {
     return GpuError{GpuErrorType::InvalidDescriptor,
                     std::format("wgpu compute pipeline creation failed for '{}'",
@@ -1382,8 +2025,8 @@ gpu::Status GeodeWgpuAdapterDevice::onWriteBuffer(uint32_t slotIndex, uint64_t o
                                 offsetBytes, data.size())};
   }
 
-  geodeDevice_.queue().writeBuffer(buffer, offsetBytes, data.data(), data.size());
-  geodeDevice_.countBufferWrite(data.size());
+  root_->queue().writeBuffer(buffer, offsetBytes, data.data(), data.size());
+  count(&GeodeDevice::countBufferWrite, data.size());
   return OkStatus();
 }
 
@@ -1416,9 +2059,8 @@ gpu::Status GeodeWgpuAdapterDevice::onWriteTexture(uint32_t slotIndex,
   layout.bytesPerRow = uploadLayout.bytesPerRow;
   layout.rowsPerImage = uploadLayout.rowsPerImage;
   const wgpu::Extent3D extent = {writeSize.width, writeSize.height, 1u};
-  geodeDevice_.queue().writeTexture(destination, uploadData.data(), uploadData.size(), layout,
-                                    extent);
-  geodeDevice_.countTextureWrite(uploadData.size());
+  root_->queue().writeTexture(destination, uploadData.data(), uploadData.size(), layout, extent);
+  count(&GeodeDevice::countTextureWrite, uploadData.size());
   return OkStatus();
 }
 
@@ -1533,7 +2175,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeDraw(EncodingState& state, const gpu::
     return GpuError{GpuErrorType::InvalidState, "draw outside a render pass"};
   }
   state.pass.get().draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
-  geodeDevice_.countDraw();
+  count(&GeodeDevice::countDraw);
   return OkStatus();
 }
 
@@ -1548,7 +2190,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeDrawIndexed(EncodingState& state,
   }
   state.pass.get().drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex,
                                draw.baseVertex, draw.firstInstance);
-  geodeDevice_.countDraw();
+  count(&GeodeDevice::countDraw);
   return OkStatus();
 }
 
@@ -1745,7 +2387,7 @@ void GeodeWgpuAdapterDevice::completeWhenQueueDrains(uint64_t ticket) {
   auto workDoneState = std::make_shared<WorkDoneState>();
   workDoneState->completion = completionState_;
   workDoneState->ticket = ticket;
-  notifyWhenSubmittedWorkDone(geodeDevice_.queue(), workDoneState);
+  notifyWhenSubmittedWorkDone(root_->queue(), workDoneState);
 }
 
 gpu::Status GeodeWgpuAdapterDevice::encodeSubmittedCommandBuffer(
@@ -1792,7 +2434,7 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(
   finished.reserve(commandBuffers.size());
   for (const gpu::SubmittedCommandBuffer& commandBuffer : commandBuffers) {
     EncodingState state;
-    state.encoder.reset(geodeDevice_.device().createCommandEncoder());
+    state.encoder.reset(root_->device().createCommandEncoder());
 
     if (gpu::Status status = encodeSubmittedCommandBuffer(state, commandBuffer.commands);
         status.hasError()) {
@@ -1811,9 +2453,9 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(
     rawCommandBuffers.push_back(static_cast<WGPUCommandBuffer>(commandBuffer.get()));
   }
   completionState_->record(submissionSerial);
-  geodeDevice_.queue().submit(rawCommandBuffers);
-  geodeDevice_.countSubmit();
-  geodeDevice_.countCommandBuffers(rawCommandBuffers.size());
+  root_->queue().submit(rawCommandBuffers);
+  count(&GeodeDevice::countSubmit);
+  count(&GeodeDevice::countCommandBuffers, rawCommandBuffers.size());
 
   completeWhenQueueDrains(submissionSerial);
   return OkStatus();

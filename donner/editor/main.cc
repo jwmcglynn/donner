@@ -16,6 +16,7 @@
 #include "donner/base/AsyncifySuspendProbe.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 #ifdef DONNER_EDITOR_WHOLE_APP_WORKER
 // The app pthread's JS context has no `window`, so the frame-scheduling flag,
@@ -51,6 +52,9 @@ void PublishWasmPinchZoomPolicy(double wheelDeltaPerLnScale) {
 }
 #else
 
+// clang-format off: every EM_JS body below is JavaScript, which clang-format reformats as C++ -
+// it has already split a `===` into `== =`, which is a SyntaxError the browser reports only when
+// the arm is built.
 EM_JS(void, InitializeWasmEditorFrameScheduling, (), {
   window['__donnerEditorFrameRequested'] = true;
   window['__donnerMainLoopRenderedFrames'] = 0;
@@ -153,6 +157,7 @@ EM_JS(void, RecordWasmFrameLoopSample, (int triggerBits, double frameMs), {
 // runtime initialization.
 EM_JS(void, PublishWasmPinchZoomPolicy, (double wheelDeltaPerLnScale),
       { window['__donnerPinchWheelDeltaPerLnScale'] = wheelDeltaPerLnScale; });
+// clang-format on
 #endif  // DONNER_EDITOR_WHOLE_APP_WORKER
 #else
 #include "donner/base/FailureSignalHandler.h"
@@ -305,7 +310,7 @@ void RunWasmEditorFrame(void* userdata) {
     // raster thread burning 265 poll round trips. A non-blocking poll on
     // every skipped tick is nanoseconds when nothing is pending.
     if (const std::shared_ptr<donner::geode::GeodeDevice> device = state->window->geodeDevice()) {
-      device->pollSuspending(false);
+      device->adapterDevice().pollSuspending(false);
     }
     return;
   }

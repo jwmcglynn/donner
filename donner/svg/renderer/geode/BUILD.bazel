@@ -33,6 +33,7 @@ exports_files(
     [
         "GeodeDevice.cc",
         "GeodeDevice.h",
+        "GeodeWgpuAdapterDevice.cc",
     ],
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
@@ -155,6 +156,7 @@ donner_cc_library(
         "//donner/gpu:__subpackages__",
         "//donner/svg/renderer:__subpackages__",
     ],
+    deps = ["//donner/gpu:device_lost"],
 )
 
 donner_cc_test(
@@ -347,6 +349,7 @@ donner_cc_library(
     hdrs = [
         "GeodeCallbackState.h",
         "GeodeDevice.h",
+        "GeodeEmbed.h",
         "GeodeFilterEngine.h",
         "GeodeGpuContext.h",
         "GeodeImagePipeline.h",
@@ -435,6 +438,7 @@ donner_cc_test(
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
+        "//donner/gpu",
         "//donner/svg/renderer/tests:rgba_test_matchers",
     ],
 )

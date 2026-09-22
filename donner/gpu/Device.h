@@ -17,6 +17,7 @@
 #include "donner/base/Utils.h"
 #include "donner/gpu/Commands.h"
 #include "donner/gpu/Descriptors.h"
+#include "donner/gpu/DeviceLost.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/GpuResult.h"
 #include "donner/gpu/Handles.h"
@@ -279,6 +280,35 @@ public:
   /// Process-unique identity of this device (starts at 1, never reused). Baked into every handle
   /// for cross-device validation.
   uint64_t deviceId() const { return deviceId_; }
+
+  /**
+   * True once the backend root this device drives has been declared lost, either by the backend's
+   * device-lost callback or by a bounded wait giving up on it.
+   *
+   * Sticky: never resets. The condition belongs to the root rather than to this device, so every
+   * device sharing the root reports it - a root that stopped answering has stopped answering all
+   * of them. Once lost, rendering output is undefined, readbacks return promptly, and teardown
+   * skips GPU waits.
+   */
+  bool isLost() const { return lostState_->lost.load(std::memory_order_acquire); }
+
+  /**
+   * Declares this device's backend root lost because a bounded wait gave up, recording which wait
+   * it was and how long it actually ran.
+   *
+   * The attribution is what turns "rendering stopped" into a diagnosable report, and it is only
+   * available at the wait site. Loss stays sticky, and only the call that declares it records an
+   * attribution; see \ref DeclareDeviceLostAfterWaitTimeout for why that rule is what keeps a
+   * backend-reported loss from being relabelled as a wait timeout. Const because observers treat
+   * the condition as shared diagnostic state and the waits that discover a hang run through const
+   * accessors.
+   *
+   * @param site Which bounded wait gave up.
+   * @param elapsed Wall time that wait spent before giving up.
+   * @param reason Human-readable cause, logged once.
+   */
+  void markLostAfterWaitTimeout(DeviceLostWaitSite site, std::chrono::milliseconds elapsed,
+                                const char* reason) const;
 
   /// Shader representation accepted by this device. Recording and WebGPU devices use WGSL;
   /// native backends override this so callers select the matching build-time artifact.
@@ -783,6 +813,18 @@ public:
 protected:
   /// Constructor for backends; assigns the process-unique device identity.
   Device();
+
+  /**
+   * Adopts the sticky loss condition of a backend root this device shares with another device.
+   *
+   * Called by a backend at construction, before anything can observe the device. A root drives
+   * several runtime devices - a UI context, a worker context, an isolated readback context - and
+   * they must agree on whether it has stopped answering, so the second and later devices over one
+   * root take the condition the first one published into rather than minting their own.
+   *
+   * @param state Condition to share; ignored when null, so a backend may pass an absent one.
+   */
+  void adoptLostState(std::shared_ptr<DeviceLostState> state);
 
   /// Last accepted submission referencing a buffer slot already validated by the caller.
   /// @param slotIndex A validated live buffer slot.
@@ -1456,6 +1498,10 @@ private:
 
   uint64_t deviceId_ = 0;
   uint64_t lastSubmittedSerial_ = 0;
+
+  /// Sticky loss condition of the backend root, shared with every other device over it. Created
+  /// here so a device whose backend never shares one still has somewhere to publish a loss.
+  std::shared_ptr<DeviceLostState> lostState_ = std::make_shared<DeviceLostState>();
 
   /// Device-alive token shared with every minted handle: `~Device` releases it, so a handle
   /// destroyed after its device skips the RAII release.

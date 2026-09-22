@@ -78,6 +78,9 @@ constexpr const char* kDirectWorkerDocumentCanvasSelectors =
     "#donner-document-canvas,#donner-document-canvas-back";
 constexpr const char* kBitmapWorkerDocumentCanvasSelector = "#donner-worker-document-canvas";
 
+// clang-format off: every EM_JS body below is JavaScript, which clang-format reformats as C++
+// and can silently corrupt - it has split a `===` into `== =` in another file, a SyntaxError the
+// browser only reports once that arm is built.
 EM_JS(int, UseBitmapWorkerSurfaceBridge, (),
       { return globalThis['__donnerWorkerSurfaceMode'] == 'bitmap-bridge' ? 1 : 0; });
 
@@ -124,6 +127,7 @@ EM_JS(void, DiscardWorkerDocumentBitmap, (double frameToken), {
     'args' : [frameToken],
   });
 });
+// clang-format on
 #endif  // DONNER_WASM_WORKER_SURFACE
 
 RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
@@ -780,6 +784,7 @@ void AsyncRenderer::delaySampleThumbnailRendererCreationForTesting(bool shouldDe
     return;
   }
 #ifdef __EMSCRIPTEN__
+  // clang-format off: the MAIN_THREAD_EM_ASM bodies here are JavaScript, not C++.
   MAIN_THREAD_EM_ASM(
       {
         window['__donnerSampleThumbnailRendererCreationBlocked'] = ({
@@ -788,11 +793,14 @@ void AsyncRenderer::delaySampleThumbnailRendererCreationForTesting(bool shouldDe
         });
       },
       constructionStart);
+  // clang-format on
 #endif
   std::this_thread::sleep_for(delay);
 #ifdef __EMSCRIPTEN__
+  // clang-format off: the MAIN_THREAD_EM_ASM body here is JavaScript, not C++.
   MAIN_THREAD_EM_ASM(
       { window['__donnerSampleThumbnailRendererCreationBlocked']['blocked'] = false; });
+  // clang-format on
 #endif
 }
 

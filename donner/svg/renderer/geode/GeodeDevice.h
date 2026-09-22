@@ -14,7 +14,6 @@
 #include <optional>
 #include <tuple>
 #include <vector>
-#include <webgpu/webgpu.hpp>
 
 #include "donner/base/Utils.h"
 #include "donner/gpu/Device.h"
@@ -25,10 +24,6 @@
 
 namespace donner::svg {
 class RendererGeodeTextureSnapshot;
-}
-
-namespace donner::editor::gui {
-class EditorWindow;
 }
 
 namespace donner::geode {
@@ -53,57 +48,60 @@ class GeodeGradientPipeline;
 class GeodeImagePipeline;
 class GeodeMaskPipeline;
 class GeodeFilterEngine;
+class GeodeGpuRoot;
+struct GeodeEmbedConfig;
 class GeodeWgpuAdapterDevice;
 class GeodeSnapshotReadbackPipeline;
 
-/// Shared lifetime owner for one physical WebGPU instance, adapter, device, and queue.
-///
-/// Logical GeodeDevice contexts retain this owner while keeping their runtime handle tables,
-/// submissions, pipelines, caches, counters, and retirement queues independent. Owned roots are
-/// released once after the last context; borrowed roots remain the embedder's responsibility.
+/**
+ * Shared lifetime owner for one selected GPU runtime device and the backend root it drives.
+ *
+ * Logical \ref GeodeDevice contexts retain this owner while keeping their runtime handle tables,
+ * submissions, pipelines, caches, counters and retirement queues independent. Owned roots are
+ * released once, after the last context; borrowed roots remain the embedder's responsibility.
+ */
 class GeodePhysicalDeviceOwner {
 public:
-  /// Creates a non-owning lifetime token for host-provided roots.
-  static std::shared_ptr<GeodePhysicalDeviceOwner> CreateBorrowed(
-      wgpu::Instance instance, wgpu::Adapter adapter, wgpu::Device device, wgpu::Queue queue,
-      std::shared_ptr<GeodeDeviceLostState> lostState = nullptr);
+  /**
+   * Retains the selected runtime device and the backend root it drives.
+   *
+   * Both come from the one selection factory, which is what keeps a caller from assembling a
+   * half-populated root by hand.
+   *
+   * @param root Backend root the selection produced or adopted; must not be null.
+   * @param device Runtime device over \p root from the same selection; must not be null.
+   * @return The owner, or null when either argument is null.
+   */
+  static std::shared_ptr<GeodePhysicalDeviceOwner> Create(
+      std::shared_ptr<GeodeGpuRoot> root, std::unique_ptr<GeodeWgpuAdapterDevice> device);
 
   ~GeodePhysicalDeviceOwner();
 
   GeodePhysicalDeviceOwner(const GeodePhysicalDeviceOwner&) = delete;
   GeodePhysicalDeviceOwner& operator=(const GeodePhysicalDeviceOwner&) = delete;
 
+  /// The backend root every runtime device over this owner drives.
+  const GeodeGpuRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
+
+  /// Sticky loss condition shared by every context and runtime device over this root. Retained
+  /// because a backend device-lost callback can outlive everything that registered it.
+  const std::shared_ptr<GeodeDeviceLostState>& lostState() const UTILS_LIFETIME_BOUND;
+
+  /// A runtime device of its own over this owner's backend root, for a second logical context.
+  /// Two contexts are two runtime devices: separate handle tables, serials and counters over the
+  /// one root they share.
+  std::unique_ptr<GeodeWgpuAdapterDevice> createLogicalDevice() const;
+
 private:
-  /// Borrowed raw roots remain valid while a friend-owned logical context retains this owner.
-  const wgpu::Instance& instance() const UTILS_LIFETIME_BOUND { return instance_; }
-  const wgpu::Adapter& adapter() const UTILS_LIFETIME_BOUND { return adapter_; }
-  const wgpu::Device& device() const UTILS_LIFETIME_BOUND { return device_; }
-  const wgpu::Queue& queue() const UTILS_LIFETIME_BOUND { return queue_; }
-  /// Sticky loss state shared by every logical context; the reference aliases this owner.
-  const std::shared_ptr<GeodeDeviceLostState>& lostState() const UTILS_LIFETIME_BOUND {
-    return lostState_;
-  }
-  bool ownsRootHandles() const { return ownsRootHandles_; }
+  GeodePhysicalDeviceOwner(std::shared_ptr<GeodeGpuRoot> root,
+                           std::unique_ptr<GeodeWgpuAdapterDevice> device);
 
-  /// Creates an empty owned root set populated incrementally by a trusted factory.
-  static std::shared_ptr<GeodePhysicalDeviceOwner> CreateOwned(
-      std::shared_ptr<GeodeDeviceLostState> lostState = nullptr);
-
-  /// Installs the one physical-device loss callback and retains its state through teardown.
-  void configureDeviceLostCallback(wgpu::DeviceDescriptor& descriptor);
-
-  friend class GeodeDevice;
-  friend class donner::editor::gui::EditorWindow;
-
-  GeodePhysicalDeviceOwner(bool ownsRootHandles, std::shared_ptr<GeodeDeviceLostState> lostState);
-
-  bool ownsRootHandles_ = false;
-  wgpu::Instance instance_;
-  wgpu::Adapter adapter_;
-  wgpu::Device device_;
-  wgpu::Queue queue_;
-  std::shared_ptr<GeodeDeviceLostState> lostState_;
-  void* deviceLostCallbackToken_ = nullptr;
+  /// Declared first so the backend root outlives every runtime device built over it.
+  std::shared_ptr<GeodeGpuRoot> root_;
+  /// The selected runtime device, held for its lifetime rather than read through here: the
+  /// logical context created together with this owner is what renders through it, and every
+  /// later context over the same root gets its own from \ref createLogicalDevice.
+  std::unique_ptr<gpu::Device> rootDevice_;
 };
 
 /**
@@ -131,63 +129,6 @@ struct SnapshotReadbackResources {
   [[nodiscard]] bool empty() const {
     return !staging.isValid() || !stagingView.isValid() || !readback.isValid();
   }
-};
-
-/**
- * Configuration for creating a Geode context from existing WebGPU roots.
- *
- * In borrowed mode, the raw root fields are host-owned and must remain valid for
- * the entire lifetime of every context made from this config. In shared-owner
- * mode, `physicalDevice` retains owned or borrowed roots and shared loss state;
- * explicit raw roots and `lostState`, when supplied, must name the same objects.
- *
- * Example:
- * @code
- *   GeodeEmbedConfig config;
- *   config.instance = myInstance;  // Optional; enables browser snapshot callbacks.
- *   config.device = myDevice;
- *   config.queue = myQueue;
- *   config.textureFormat = wgpu::TextureFormat::BGRA8Unorm;
- *
- *   auto geodeDevice = GeodeDevice::CreateFromExternal(config);
- *   RendererGeode renderer(std::move(geodeDevice));
- * @endcode
- *
- * To create multiple logical contexts over one owned physical device, pass the
- * same `physicalDevice` to each config and omit the raw root fields.
- */
-struct GeodeEmbedConfig {
-  /// Optional host-provided WebGPU instance. May be null when `physicalDevice` supplies it. Browser
-  /// embedders should provide it so synchronous snapshot readback can wait for map callback
-  /// completion through `Instance::waitAny()`.
-  wgpu::Instance instance;
-
-  /// Host-provided WebGPU device. Must not be null unless `physicalDevice` supplies it.
-  wgpu::Device device;
-
-  /// Host-provided queue associated with `device`. Must not be null unless `physicalDevice`
-  /// supplies it.
-  wgpu::Queue queue;
-
-  /// Texture format for render targets. Must match the format of any texture
-  /// passed to `RendererGeode::setTargetTexture()`.
-  wgpu::TextureFormat textureFormat = wgpu::TextureFormat::RGBA8Unorm;
-
-  /// Optional adapter handle. May be null when `physicalDevice` supplies it. Preserved for hosts
-  /// that need to query the adapter associated with the external device.
-  wgpu::Adapter adapter;
-
-  /// Optional shared device-lost flag for borrowed raw-root mode. Hosts that install their own
-  /// WebGPU device-lost callback should have that callback set this flag and pass the same state
-  /// here, so a driver-reported loss on the host device and a bounded-wait timeout inside Geode
-  /// converge on the same `GeodeDevice::isDeviceLost()` condition. When null, the GeodeDevice
-  /// creates a private flag that only bounded-wait timeouts can set. When `physicalDevice` is set,
-  /// this must be null or pointer-identical to the owner's loss state.
-  std::shared_ptr<GeodeDeviceLostState> lostState;
-
-  /// Optional shared physical owner. When present, the raw root fields above must either be null
-  /// or name the same roots. Appended to preserve legacy positional aggregate initialization.
-  std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice;
 };
 
 /**
@@ -225,7 +166,7 @@ public:
    *   runtime could not create an adapter/device (e.g., no GPU, no driver).
    */
   static std::unique_ptr<GeodeDevice> CreateHeadless(
-      wgpu::TextureFormat textureFormat = wgpu::TextureFormat::RGBA8Unorm);
+      gpu::TextureFormat textureFormat = gpu::TextureFormat::RGBA8Unorm);
 
   /**
    * Create a logical GeodeDevice context over existing physical roots.
@@ -238,6 +179,20 @@ public:
    *   disagree with the owner, or name an already-lost physical device.
    */
   static std::unique_ptr<GeodeDevice> CreateFromExternal(const GeodeEmbedConfig& config);
+
+  /**
+   * Creates the first logical context over a backend root the caller already selected.
+   *
+   * For a host that has to drive the selection itself - the editor supplies the window surface
+   * the adapter must be able to present to - and then renders through the result like any other
+   * context. The context takes the root's runtime device rather than standing up a second one.
+   *
+   * @param root Root from \ref SelectGpuRoot or \ref AdoptGpuRoot; must not be null.
+   * @param textureFormat Format the context's render targets and pipelines are built for.
+   * @return A valid context, or null when the root could not be retained.
+   */
+  static std::unique_ptr<GeodeDevice> CreateOverSelectedRoot(std::shared_ptr<GeodeGpuRoot> root,
+                                                             gpu::TextureFormat textureFormat);
 
   /// Number of \ref CreateHeadless calls made so far in this process. Each
   /// headless creation stands up a full WebGPU instance/adapter/device, so
@@ -269,31 +224,8 @@ public:
   GeodeDevice(GeodeDevice&&) = delete;
   GeodeDevice& operator=(GeodeDevice&&) = delete;
 
-  /// Returns the wgpu::Device. Guaranteed valid for the lifetime of this object.
-  const wgpu::Device& device() const UTILS_LIFETIME_BOUND { return physicalDevice_->device(); }
-
   /// Maximum supported width or height of a 2D texture on this device.
-  [[nodiscard]] uint32_t maxTextureDimension2D() const { return maxTextureDimension2D_; }
-
-  /// Poll the device, bracketed for ASYNCIFY suspend attribution.
-  ///
-  /// Under Emscripten, emdawnwebgpu implements `poll` by yielding the
-  /// Asyncify-enabled thread for roughly one browser task regardless of
-  /// @p wait, so every poll unwinds and later rewinds the wasm stack. With the
-  /// whole application on one thread (single-canvas presenter architecture) that wall time is UI
-  /// frame time, so it has to be attributable. Route every poll through here rather than calling
-  /// `device().poll` directly; the probe is a pair of clock reads on native builds, where `poll`
-  /// does not suspend at all.
-  ///
-  /// Prefer @p wait = false: a waiting poll can block inside a hung driver
-  /// with no bound. Callers that need to wait for the queue to drain should
-  /// use \ref waitForQueueIdle, which is bounded and reports a hang as a
-  /// device-lost condition.
-  ///
-  /// @return True when the device reports its queue empty (wgpu-native's
-  ///   `wgpuDevicePoll` return value; unspecified under Emscripten, where the
-  ///   poll is a browser-task yield).
-  bool pollSuspending(bool wait) const;
+  [[nodiscard]] uint32_t maxTextureDimension2D() const;
 
   /**
    * Wait, bounded, for all submitted GPU work to complete.
@@ -368,14 +300,6 @@ public:
   void markDeviceLostAfterWaitTimeout(GpuWaitSite site, std::chrono::milliseconds elapsed,
                                       const char* reason) const;
 
-  /// Instance that created the headless device. Null for externally-owned devices.
-  const wgpu::Instance& instance() const UTILS_LIFETIME_BOUND {
-    return physicalDevice_->instance();
-  }
-
-  /// Returns the default queue.
-  const wgpu::Queue& queue() const UTILS_LIFETIME_BOUND { return physicalDevice_->queue(); }
-
   struct ReadbackStats {
     int count = 0;
     int pollIterations = 0;
@@ -425,9 +349,13 @@ public:
   /// Consume aggregate readback diagnostics for all renderers sharing this device.
   [[nodiscard]] ReadbackStats consumeReadbackStats();
 
-  /// Returns the adapter backing this device. May be null when the host does
-  /// not provide one, including embedded mode and browser headless imports.
-  const wgpu::Adapter& adapter() const UTILS_LIFETIME_BOUND { return physicalDevice_->adapter(); }
+  /// The sticky loss condition of the physical root this context renders through, shared with
+  /// every other context over that root and with the runtime devices driving it. Retained rather
+  /// than borrowed because a backend device-lost callback can outlive the context that registered
+  /// it.
+  const std::shared_ptr<GeodeDeviceLostState>& lostState() const UTILS_LIFETIME_BOUND {
+    return physicalDevice_->lostState();
+  }
 
   /// Opaque lifetime token shared by logical contexts over the same physical roots. Raw roots
   /// remain accessible only through a retained logical context.
@@ -435,7 +363,7 @@ public:
 
   /// Render-target texture format. Defaults to RGBA8Unorm for headless devices;
   /// set by the host via `GeodeEmbedConfig::textureFormat` in embedded mode.
-  wgpu::TextureFormat textureFormat() const { return textureFormat_; }
+  gpu::TextureFormat textureFormat() const { return textureFormat_; }
 
   /**
    * Enqueue a bind group for deferred destruction. The handle is kept alive until
@@ -752,7 +680,7 @@ public:
   /// serialization that eliminates a nondeterministic cross-submit
   /// storage-write -> sampled-read visibility race observed on Arc Vulkan.
   /// Metal returns false and keeps the fast multi-submit path.
-  bool isVulkan() const { return isVulkan_; }
+  bool isVulkan() const;
 
   /// @name Shared dummy resources
   /// @{
@@ -861,13 +789,26 @@ private:
   SnapshotReadbackResources acquireSnapshotReadbackResources(uint32_t width, uint32_t height);
   void releaseSnapshotReadbackResources(SnapshotReadbackResources resources);
 
-  GeodeDevice();
-  explicit GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice);
+  /**
+   * Builds a logical context over \p physicalDevice, rendering through \p runtimeDevice.
+   *
+   * @param physicalDevice Owner retained for the whole context lifetime.
+   * @param runtimeDevice Runtime device to render through; either the owner's root device, which
+   *   the context created together with the owner takes, or one of its own from
+   *   \ref GeodePhysicalDeviceOwner::createLogicalDevice.
+   * @param ownedRuntimeDevice Non-null when \p runtimeDevice is this context's own, so the
+   *   context releases it; null when it is the owner's.
+   */
+  GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice,
+              GeodeWgpuAdapterDevice& runtimeDevice,
+              std::unique_ptr<GeodeWgpuAdapterDevice> ownedRuntimeDevice);
 
-  /// Allocate the shared pipelines and filter engine after the physical device,
-  /// queue, and `textureFormat_` are finalised. Called from both
-  /// `CreateHeadless` and `CreateFromExternal`.
-  void initSharedResources();
+  /// Builds a logical context with a runtime device of its own over \p physicalDevice's root.
+  /// @param physicalDevice Owner whose root the new context renders through.
+  /// @return The context, or null when the owner could not stand up a runtime device.
+  static std::unique_ptr<GeodeDevice> CreateLogicalContext(
+      std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice);
+
   /// Creates the shared bind-slot resources through the GPU runtime and wires \ref gpuContext.
   /// Runs with the shared pipelines, once the adapter exists.
   void initSharedBindSlotResources();
@@ -877,19 +818,19 @@ private:
   // Declared before every logical resource so it is destroyed last.
   std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice_;
 
+  /// Held only when this context created its own runtime device; null when it renders through the
+  /// owner's. Declared before \ref impl_ so the pipelines and pooled resources there, which
+  /// release their handles through this device, are destroyed while it still exists.
+  std::unique_ptr<GeodeWgpuAdapterDevice> ownedRuntimeDevice_;
+
+  /// This context's runtime device: \ref ownedRuntimeDevice_, or the owner's root device. Never
+  /// null once construction has finished, and kept out of \ref impl_ so teardown can still drain
+  /// the queue after the logical resources are gone.
+  GeodeWgpuAdapterDevice* runtimeDevice_ = nullptr;
+
   struct Impl;
   std::unique_ptr<Impl> impl_;
-  wgpu::TextureFormat textureFormat_ = wgpu::TextureFormat::RGBA8Unorm;
-
-  /// Queried once during initialization. WebGPU guarantees at least 8,192, which is the
-  /// fail-closed fallback when a device cannot report its limits.
-  uint32_t maxTextureDimension2D_ = 8192u;
-
-  bool supportsTimestamps_ = false;
-
-  /// True when the active wgpu backend is Vulkan. Set during adapter
-  /// selection in CreateHeadless(); see isVulkan().
-  bool isVulkan_ = false;
+  gpu::TextureFormat textureFormat_ = gpu::TextureFormat::RGBA8Unorm;
 
   bool readbackOnly_ = false;
   GeodeCounters isolatedReadbackCounters_;

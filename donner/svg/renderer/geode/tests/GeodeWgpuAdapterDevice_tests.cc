@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -165,12 +166,14 @@ std::vector<uint8_t> ReadbackTexturePixels(GeodeDevice& device, wgpu::Texture te
   bufferDescriptor.label = wgpuLabel("readbackStaging");
   bufferDescriptor.size = byteSize;
   bufferDescriptor.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  ScopedWgpuHandle<wgpu::Buffer> readback(device.device().createBuffer(bufferDescriptor));
+  ScopedWgpuHandle<wgpu::Buffer> readback(
+      device.adapterDevice().root().device().createBuffer(bufferDescriptor));
   if (!readback) {
     return {};
   }
 
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(device.device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
+      device.adapterDevice().root().device().createCommandEncoder());
   wgpu::TexelCopyTextureInfo source = {};
   source.texture = texture;
   wgpu::TexelCopyBufferInfo destination = {};
@@ -180,7 +183,7 @@ std::vector<uint8_t> ReadbackTexturePixels(GeodeDevice& device, wgpu::Texture te
   const wgpu::Extent3D copySize = {sceneSize, sceneSize, 1};
   encoder.get().copyTextureToBuffer(source, destination, copySize);
   ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(encoder.get().finish());
-  device.queue().submit(1, &commandBuffer.get());
+  device.adapterDevice().root().queue().submit(1, &commandBuffer.get());
 
   struct MapState {
     std::atomic<bool> done = false;
@@ -200,7 +203,7 @@ std::vector<uint8_t> ReadbackTexturePixels(GeodeDevice& device, wgpu::Texture te
   readback.get().mapAsync(wgpu::MapMode::Read, 0, byteSize, mapCallback);
   for (int pollIter = 0; pollIter < 2000 && !mapState->done.load(std::memory_order_acquire);
        ++pollIter) {
-    device.device().poll(true, nullptr);
+    device.adapterDevice().root().device().poll(true, nullptr);
   }
   if (!mapState->ok.load(std::memory_order_relaxed)) {
     return {};
@@ -266,13 +269,46 @@ ComputeScene MakeComputeScene(GeodeWgpuAdapterDevice& adapter, const char* label
   return scene;
 }
 
+/// A selection that gives up has already created backend objects, and the root that would release
+/// them is never built: nothing else can reach them. Adapter acquisition failing is the normal
+/// outcome on a host with no usable GPU, so every attempt on such a host would leak an instance.
+TEST(GeodeGpuRootSelection, ASelectionItsSurfaceProviderAbandonsReleasesWhatItBuilt) {
+  const std::size_t instancesBefore = OutstandingSelectionInstances();
+
+  bool providerSawAnInstance = false;
+  GpuRootSelection selection;
+  selection.label = "AbandonedSelection";
+  selection.compatibleSurface =
+      [&providerSawAnInstance](const wgpu::Instance& instance) -> std::optional<wgpu::Surface> {
+    providerSawAnInstance = static_cast<bool>(instance);
+    // A caller that could not build what it meant to present to aborts the selection, which is
+    // the deterministic failure every other one shares an exit with.
+    return std::nullopt;
+  };
+
+  EXPECT_THAT(SelectGpuRoot(selection), testing::IsNull());
+  ASSERT_TRUE(providerSawAnInstance)
+      << "the selection created no instance to abandon, so this host cannot exercise the leak";
+  EXPECT_THAT(OutstandingSelectionInstances(), testing::Eq(instancesBefore))
+      << "the instance an abandoned selection created has no other owner left to release it";
+}
+
 class GeodeWgpuAdapterDeviceTests : public testing::Test {
 protected:
   void SetUp() override {
     geodeDevice_ = GeodeDevice::CreateHeadless();
     ASSERT_NE(geodeDevice_, nullptr)
         << "Failed to create the headless wgpu device. Check driver availability.";
-    adapter_ = std::make_unique<GeodeWgpuAdapterDevice>(*geodeDevice_);
+    adapter_ = geodeDevice_->physicalDeviceOwner()->createLogicalDevice();
+    // The cases below read what this adapter allocated and submitted off the context's counters,
+    // which only happens for a device the context is attributed to.
+    adapter_->setCounterSink(geodeDevice_.get());
+  }
+
+  void TearDown() override {
+    if (adapter_) {
+      adapter_->setCounterSink(nullptr);
+    }
   }
 
   std::unique_ptr<GeodeDevice> geodeDevice_;
@@ -283,7 +319,9 @@ protected:
 /// registered, and the registration describes it the way its owner does rather than the way the
 /// caller says. Registering it must not make this adapter responsible for the memory.
 TEST_F(GeodeWgpuAdapterDeviceTests, ImportingFromASiblingAdapterNamesWhatTheOwnerNames) {
-  GeodeWgpuAdapterDevice sibling(*geodeDevice_);
+  const std::unique_ptr<GeodeWgpuAdapterDevice> siblingDevice =
+      geodeDevice_->physicalDeviceOwner()->createLogicalDevice();
+  GeodeWgpuAdapterDevice& sibling = *siblingDevice;
   const gpu::TextureDescriptor descriptor{"ownedBySibling",
                                           {8, 4},
                                           gpu::TextureFormat::RGBA8Unorm,
@@ -315,7 +353,9 @@ TEST_F(GeodeWgpuAdapterDeviceTests, ImportingRefusesAForeignBackendAndAStaleHand
   const std::unique_ptr<GeodeDevice> otherBackend = GeodeDevice::CreateHeadless();
   ASSERT_THAT(otherBackend, testing::NotNull())
       << "Failed to create a second headless wgpu device. Check driver availability.";
-  GeodeWgpuAdapterDevice foreign(*otherBackend);
+  const std::unique_ptr<GeodeWgpuAdapterDevice> foreignDevice =
+      otherBackend->physicalDeviceOwner()->createLogicalDevice();
+  GeodeWgpuAdapterDevice& foreign = *foreignDevice;
   const gpu::TextureDescriptor descriptor{"ownedElsewhere",
                                           {4, 4},
                                           gpu::TextureFormat::RGBA8Unorm,
@@ -324,7 +364,9 @@ TEST_F(GeodeWgpuAdapterDeviceTests, ImportingRefusesAForeignBackendAndAStaleHand
   EXPECT_THAT(adapter_->importTextureFrom(foreign, onForeignBackend),
               gpu::IsGpuError(gpu::GpuErrorType::DeviceMismatch));
 
-  GeodeWgpuAdapterDevice sibling(*geodeDevice_);
+  const std::unique_ptr<GeodeWgpuAdapterDevice> siblingDevice =
+      geodeDevice_->physicalDeviceOwner()->createLogicalDevice();
+  GeodeWgpuAdapterDevice& sibling = *siblingDevice;
   gpu::Texture retired = gpu::GetResultOrFail(sibling.createTexture(descriptor));
   const gpu::Texture stale =
       gpu::Texture::CreateForBackend(retired.slotIndex(), retired.generation(), retired.deviceId());
@@ -841,7 +883,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, ImportedExternalTextureIsUsableAndNotOwned) 
   externalDescriptor.sampleCount = 1;
   externalDescriptor.dimension = wgpu::TextureDimension::_2D;
   ScopedWgpuHandle<wgpu::Texture> externalTexture(
-      geodeDevice_->device().createTexture(externalDescriptor));
+      geodeDevice_->adapterDevice().root().device().createTexture(externalDescriptor));
   ASSERT_TRUE(static_cast<bool>(externalTexture));
 
   gpu::Texture imported = gpu::GetResultOrFail(adapter_->importExternalTexture(
@@ -1085,7 +1127,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, AMappingReleasedBeforeItsCallbackStillUnmaps
 
   // Let the abandoned map run to completion.
   for (int poll = 0; poll < 2000; ++poll) {
-    (void)geodeDevice_->pollSuspending(false);
+    (void)geodeDevice_->adapterDevice().pollSuspending(false);
   }
 
   // A buffer left mapped with nothing able to unmap it cannot be mapped again, so mapping it a

@@ -17,15 +17,22 @@
 ///  2. End to end: a mid-frame offscreen render of the same document must not
 ///     repaint pixels an outer frame has already recorded (the outer frame
 ///     keeps the gradient bytes that were live when its batch was appended).
+///  3. Logical contexts over one physical root keep their runtime identity,
+///     submission serials and allocation counters to themselves, and share
+///     exactly one sticky device-loss condition.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/Device.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -34,6 +41,8 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeEmbed.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::svg {
 namespace {
@@ -81,6 +90,101 @@ protected:
     return device;
   }
 };
+
+/// A second logical context over the physical root `root` already holds, or null when the root
+/// refuses to share.
+std::unique_ptr<geode::GeodeDevice> siblingContextOf(const geode::GeodeDevice& root) {
+  geode::GeodeEmbedConfig config;
+  config.physicalDevice = root.physicalDeviceOwner();
+  config.textureFormat = geode::WgpuTextureFormatFrom(root.textureFormat());
+  return geode::GeodeDevice::CreateFromExternal(config);
+}
+
+/// Submits one empty command buffer through `runtime` and returns the serial it was given, or 0
+/// when the runtime refused any step of it.
+uint64_t submitEmptyCommandBuffer(gpu::Device& runtime) {
+  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder = runtime.createCommandEncoder();
+  if (encoder.hasError()) {
+    return 0;
+  }
+  gpu::Result<gpu::CommandBuffer> commands = encoder.result()->finish();
+  if (commands.hasError()) {
+    return 0;
+  }
+  gpu::Result<uint64_t> serial = runtime.submit(std::move(commands).result());
+  return serial.hasError() ? 0 : serial.result();
+}
+
+// ---------------------------------------------------------------------------
+// Logical contexts over one physical root
+// ---------------------------------------------------------------------------
+
+/// Two logical contexts over one physical root are two runtime devices: a resource of one is not
+/// a resource of the other, so their identities, submission serials and allocation counters have
+/// to stay apart. Collapsing them would let a handle minted by one pass validation on the other
+/// and name whatever now occupies that slot.
+TEST_F(GeodeSharedDeviceFrameTest, ContextsOverOneRootKeepTheirRuntimeStateApart) {
+  auto root = sharedDevice();
+  ASSERT_TRUE(root) << "GeodeDevice::CreateHeadless failed";
+  std::unique_ptr<geode::GeodeDevice> sibling = siblingContextOf(*root);
+  ASSERT_NE(sibling, nullptr);
+
+  gpu::Device& rootRuntime = root->runtimeDevice();
+  gpu::Device& siblingRuntime = sibling->runtimeDevice();
+  EXPECT_THAT(siblingRuntime.deviceId(), testing::Ne(rootRuntime.deviceId()));
+  EXPECT_THAT(sibling->deviceId(), testing::Ne(root->deviceId()));
+
+  // Serials are per runtime device, so two submissions on one and one on the other must leave the
+  // second runtime a submission behind rather than sharing a counter.
+  const uint64_t siblingBefore = siblingRuntime.lastSubmittedSerial();
+  const uint64_t rootBefore = rootRuntime.lastSubmittedSerial();
+  ASSERT_THAT(submitEmptyCommandBuffer(rootRuntime), testing::Gt(0u));
+  ASSERT_THAT(submitEmptyCommandBuffer(rootRuntime), testing::Gt(0u));
+  ASSERT_THAT(submitEmptyCommandBuffer(siblingRuntime), testing::Gt(0u));
+  EXPECT_THAT(rootRuntime.lastSubmittedSerial(), testing::Eq(rootBefore + 2));
+  EXPECT_THAT(siblingRuntime.lastSubmittedSerial(), testing::Eq(siblingBefore + 1));
+
+  // Allocation counters follow the context the allocation was made on.
+  const uint64_t rootBuffersBefore = root->lifetimeBufferCreates();
+  const uint64_t siblingBuffersBefore = sibling->lifetimeBufferCreates();
+  gpu::Result<gpu::Buffer> buffer = siblingRuntime.createBuffer(
+      gpu::BufferDescriptor{"siblingProbe", 256, gpu::BufferUsage::CopyDst});
+  ASSERT_FALSE(buffer.hasError()) << buffer.error().toString();
+  EXPECT_THAT(sibling->lifetimeBufferCreates(), testing::Eq(siblingBuffersBefore + 1));
+  EXPECT_THAT(root->lifetimeBufferCreates(), testing::Eq(rootBuffersBefore));
+}
+
+/// The physical root is one device, so the condition "this device stopped answering" is one
+/// condition. A bounded wait on one context's runtime that reaches its deadline has observed the
+/// root hang, and every other context over that root renders through the same hung hardware: a
+/// context that still reports a healthy device goes on submitting work that can never complete
+/// and waiting its own full budget for each of it.
+TEST_F(GeodeSharedDeviceFrameTest, ALossOneContextsWaitObservesIsSharedByTheOthers) {
+  // A private root: this case declares the physical device lost, which is sticky, so it must not
+  // reach the shared device the rest of the file renders through.
+  std::unique_ptr<geode::GeodeDevice> root = geode::GeodeDevice::CreateHeadless();
+  ASSERT_NE(root, nullptr) << "GeodeDevice::CreateHeadless failed";
+  std::unique_ptr<geode::GeodeDevice> sibling = siblingContextOf(*root);
+  ASSERT_NE(sibling, nullptr);
+  ASSERT_FALSE(root->isDeviceLost());
+  ASSERT_FALSE(sibling->isDeviceLost());
+
+  geode::GeodeWgpuAdapterDevice& rootRuntime = root->adapterDevice();
+  const uint64_t submitted = submitEmptyCommandBuffer(rootRuntime);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+  // Submitted work that stops retiring, on a device whose poll blocks the way a driver waiting on
+  // it does: the wait can only end by spending its budget.
+  rootRuntime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(1));
+  EXPECT_THAT(rootRuntime.waitForSerial(submitted, 0.25), testing::IsFalse());
+
+  EXPECT_TRUE(root->isDeviceLost());
+  EXPECT_TRUE(sibling->isDeviceLost())
+      << "a loss observed through one context's runtime is a loss of the root both contexts "
+         "render through";
+
+  rootRuntime.holdSubmittedWorkForTesting(geode::GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
+                                          std::chrono::milliseconds(0));
+}
 
 // ---------------------------------------------------------------------------
 // frameStampClaimed unit contract

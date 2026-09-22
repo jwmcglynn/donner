@@ -30,6 +30,16 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
 )
 
+# The sticky device-loss condition of one backend root, without the device, its descriptors or
+# its handles: atomics and chrono only. A bounded wait loop publishes a loss through this, and
+# the header says so, which is only true while this is a target of its own.
+donner_cc_library(
+    name = "device_lost",
+    srcs = ["DeviceLost.cc"],
+    hdrs = ["DeviceLost.h"],
+    visibility = donner_internal_visibility(),
+)
+
 donner_cc_library(
     name = "gpu",
     srcs = [
@@ -50,6 +60,7 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
     deps = [
         ":descriptors",
+        ":device_lost",
         ":gpu_limits",
         "//donner/base",
     ],

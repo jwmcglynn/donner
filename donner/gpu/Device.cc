@@ -520,6 +520,19 @@ uint64_t Device::NextDeviceId() {
 
 Device::Device() : deviceId_(NextDeviceId()), aliveToken_(std::make_shared<Device*>(this)) {}
 
+void Device::markLostAfterWaitTimeout(DeviceLostWaitSite site, std::chrono::milliseconds elapsed,
+                                      const char* reason) const {
+  if (DeclareDeviceLostAfterWaitTimeout(*lostState_, site, elapsed)) {
+    LogDeclaredDeviceLoss(reason);
+  }
+}
+
+void Device::adoptLostState(std::shared_ptr<DeviceLostState> state) {
+  if (state) {
+    lostState_ = std::move(state);
+  }
+}
+
 Device::~Device() {
   // Expire the device-alive token first: handles destroyed after this point release nothing.
   // Deferred backend releases still pending are dropped with the device - backend destructors

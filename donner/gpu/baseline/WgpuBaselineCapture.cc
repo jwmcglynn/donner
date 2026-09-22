@@ -100,7 +100,7 @@ wgpu::Texture CreateRenderTarget(geode::GeodeDevice& device) {
   descriptor.mipLevelCount = 1;
   descriptor.sampleCount = 1;
   descriptor.dimension = wgpu::TextureDimension::_2D;
-  return device.device().createTexture(descriptor);
+  return device.adapterDevice().root().device().createTexture(descriptor);
 }
 
 wgpu::Buffer CreateReadbackBuffer(geode::GeodeDevice& device) {
@@ -108,7 +108,7 @@ wgpu::Buffer CreateReadbackBuffer(geode::GeodeDevice& device) {
   descriptor.label = geode::wgpuLabel("BaselineReadback");
   descriptor.size = kReadbackBytes;
   descriptor.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  return device.device().createBuffer(descriptor);
+  return device.adapterDevice().root().device().createBuffer(descriptor);
 }
 
 void RecordScene(geode::GeodeDevice& device, const gpu::Texture& target, const CorpusScene& scene) {
@@ -125,7 +125,7 @@ void RecordScene(geode::GeodeDevice& device, const gpu::Texture& target, const C
 
 void RecordCopyToReadback(geode::GeodeDevice& device, const wgpu::Texture& target,
                           const wgpu::Buffer& readback) {
-  wgpu::CommandEncoder encoder = device.device().createCommandEncoder();
+  wgpu::CommandEncoder encoder = device.adapterDevice().root().device().createCommandEncoder();
   wgpu::TexelCopyTextureInfo source = {};
   source.texture = target;
   source.mipLevel = 0;
@@ -137,7 +137,7 @@ void RecordCopyToReadback(geode::GeodeDevice& device, const wgpu::Texture& targe
   const wgpu::Extent3D copySize = {kCorpusSize, kCorpusSize, 1};
   encoder.copyTextureToBuffer(source, destination, copySize);
   wgpu::CommandBuffer commands = encoder.finish();
-  device.queue().submit(1, &commands);
+  device.adapterDevice().root().queue().submit(1, &commands);
 }
 
 struct MapState {
@@ -164,7 +164,7 @@ std::string ReadPixels(geode::GeodeDevice& device, const wgpu::Buffer& readback,
 
   const geode::GpuWaitResult waitResult = geode::BoundedGpuWait(
       [&] {
-        device.device().poll(false, nullptr);
+        device.adapterDevice().root().device().poll(false, nullptr);
         return state->done.load(std::memory_order_acquire);
       },
       geode::kDefaultGpuWaitTimeout);
@@ -236,7 +236,8 @@ std::string EnvironmentSlug(const CaptureEnvironment& environment) {
 }
 
 WgpuBaselineCapturer::WgpuBaselineCapturer(std::unique_ptr<geode::GeodeDevice> device)
-    : device_(std::move(device)), environment_(DescribeAdapter(device_->adapter())) {}
+    : device_(std::move(device)),
+      environment_(DescribeAdapter(device_->adapterDevice().root().adapter())) {}
 
 WgpuBaselineCapturer::~WgpuBaselineCapturer() = default;
 

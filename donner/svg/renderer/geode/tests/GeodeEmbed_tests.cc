@@ -1,6 +1,8 @@
 /// @file
 /// Tests for the Geode embedded-device code path.
 
+#include "donner/svg/renderer/geode/GeodeEmbed.h"
+
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
@@ -12,6 +14,7 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"  // IWYU pragma: keep - provides wgpuLabel
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
@@ -41,18 +44,58 @@ TEST(GeodeEmbed, CreateFromExternalSucceeds) {
   ASSERT_NE(headless, nullptr);
 
   geode::GeodeEmbedConfig config;
-  config.instance = headless->instance();
-  config.device = headless->device();
-  config.queue = headless->queue();
-  config.adapter = headless->adapter();
+  config.instance = headless->adapterDevice().root().instance();
+  config.device = headless->adapterDevice().root().device();
+  config.queue = headless->adapterDevice().root().queue();
+  config.adapter = headless->adapterDevice().root().adapter();
   config.textureFormat = wgpu::TextureFormat::RGBA8Unorm;
 
   auto embedded = geode::GeodeDevice::CreateFromExternal(config);
   ASSERT_NE(embedded, nullptr);
-  EXPECT_TRUE(static_cast<bool>(embedded->device()));
-  EXPECT_TRUE(static_cast<bool>(embedded->queue()));
-  EXPECT_TRUE(static_cast<bool>(embedded->instance()));
-  EXPECT_EQ(embedded->textureFormat(), wgpu::TextureFormat::RGBA8Unorm);
+  EXPECT_TRUE(static_cast<bool>(embedded->adapterDevice().root().device()));
+  EXPECT_TRUE(static_cast<bool>(embedded->adapterDevice().root().queue()));
+  EXPECT_TRUE(static_cast<bool>(embedded->adapterDevice().root().instance()));
+  EXPECT_EQ(embedded->textureFormat(), gpu::TextureFormat::RGBA8Unorm);
+}
+
+/// Donner releases nothing an embedder lent it. A context built over a host's backend objects
+/// borrows them, and when that context goes the host's instance, adapter, device and queue are
+/// still the host's to render through. Releasing them here would take the GPU out from under a
+/// host at a point the host never chose, and the symptom would surface in the host's own code
+/// rather than in Donner's.
+TEST(GeodeEmbed, DestroyingAnEmbeddedContextLeavesTheHostDeviceRendering) {
+  std::shared_ptr<geode::GeodeDevice> host = geode::GeodeDevice::CreateHeadless();
+  ASSERT_NE(host, nullptr);
+
+  geode::GeodeEmbedConfig config;
+  config.instance = host->adapterDevice().root().instance();
+  config.device = host->adapterDevice().root().device();
+  config.queue = host->adapterDevice().root().queue();
+  config.adapter = host->adapterDevice().root().adapter();
+  config.textureFormat = wgpu::TextureFormat::RGBA8Unorm;
+
+  std::unique_ptr<geode::GeodeDevice> embedded = geode::GeodeDevice::CreateFromExternal(config);
+  ASSERT_NE(embedded, nullptr);
+  embedded.reset();
+
+  ASSERT_FALSE(host->isDeviceLost())
+      << "the host's device outlived a context that only borrowed it";
+
+  // A full frame and readback through the host: it submits to the queue, waits on the serial and
+  // maps the result back, so every object the embedded context borrowed is exercised rather than
+  // only inspected.
+  RendererGeode renderer(host);
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  renderer.endFrame();
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty())
+      << "the host could not complete a submission and readback after the context borrowing its "
+         "backend objects was destroyed";
+  EXPECT_THAT(pixelAt(snapshot, 16, 16), IsTransparent());
 }
 
 /// Null device should produce a null return, not a crash.
@@ -79,10 +122,10 @@ protected:
         return std::shared_ptr<geode::GeodeDevice>();
       }
       geode::GeodeEmbedConfig config;
-      config.instance = headless->instance();
-      config.device = headless->device();
-      config.queue = headless->queue();
-      config.adapter = headless->adapter();
+      config.instance = headless->adapterDevice().root().instance();
+      config.device = headless->adapterDevice().root().device();
+      config.queue = headless->adapterDevice().root().queue();
+      config.adapter = headless->adapterDevice().root().adapter();
       config.textureFormat = wgpu::TextureFormat::RGBA8Unorm;
       // Keep the headless device alive so the underlying wgpu objects persist.
       // The shared_ptr custom deleter captures `headless`.
@@ -141,7 +184,7 @@ TEST_F(GeodeEmbedTest, SetTargetTextureRendersIntoHostTexture) {
   texDesc.mipLevelCount = 1;
   texDesc.sampleCount = 1;
   texDesc.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture hostTexture = device->device().createTexture(texDesc);
+  wgpu::Texture hostTexture = device->adapterDevice().root().device().createTexture(texDesc);
   ASSERT_TRUE(static_cast<bool>(hostTexture));
 
   auto renderer = createRenderer();
@@ -186,7 +229,7 @@ TEST_F(GeodeEmbedTest, ABlendModeOnADrawOnlyHostTargetDegradesInsteadOfFailing) 
   texDesc.mipLevelCount = 1;
   texDesc.sampleCount = 1;
   texDesc.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture hostTexture = device->device().createTexture(texDesc);
+  wgpu::Texture hostTexture = device->adapterDevice().root().device().createTexture(texDesc);
   ASSERT_THAT(static_cast<bool>(hostTexture), testing::IsTrue());
 
   auto renderer = createRenderer();
@@ -224,7 +267,7 @@ TEST_F(GeodeEmbedTest, ClearTargetTextureRevertsToInternal) {
   texDesc.mipLevelCount = 1;
   texDesc.sampleCount = 1;
   texDesc.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture hostTexture = device->device().createTexture(texDesc);
+  wgpu::Texture hostTexture = device->adapterDevice().root().device().createTexture(texDesc);
   renderer.setTargetTexture(hostTexture);
 
   RenderViewport viewport;

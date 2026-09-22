@@ -45,6 +45,7 @@
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "tiny_skia/filter/ColorSpace.h"
 #include "tiny_skia/filter/GaussianBlur.h"
@@ -261,12 +262,12 @@ TEST(WgslEmitterGeodeValidation, FloatStorageTexturePassesRendererPipelineValida
   ASSERT_THAT(wgsl, HasShaderResult());
   testing::internal::CaptureStderr();
   donner::geode::ScopedWgpuHandle<wgpu::ShaderModule> shader(
-      CreateModuleFromWgsl(device->device(), wgsl.result()));
+      CreateModuleFromWgsl(device->adapterDevice().root().device(), wgsl.result()));
   wgpu::ComputePipelineDescriptor descriptor{};
   descriptor.compute.module = shader.get();
   descriptor.compute.entryPoint = donner::geode::wgpuLabel("cs_main");
   donner::geode::ScopedWgpuHandle<wgpu::ComputePipeline> pipeline(
-      device->device().createComputePipeline(descriptor));
+      device->adapterDevice().root().device().createComputePipeline(descriptor));
   const std::string errors = testing::internal::GetCapturedStderr();
   EXPECT_THAT(static_cast<bool>(shader.get()), testing::IsTrue());
   EXPECT_THAT(static_cast<bool>(pipeline.get()), testing::IsTrue());
@@ -285,9 +286,10 @@ TEST(WgslEmitterGeodeValidation, EmittedSolidFillPassesRendererValidation) {
   ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
   ASSERT_TRUE(static_cast<bool>(shaderModule)) << "Shader module creation returned null";
-  CreateSolidFillPipeline(geodeDevice->device(), shaderModule);
+  CreateSolidFillPipeline(geodeDevice->adapterDevice().root().device(), shaderModule);
   const std::string errors = testing::internal::GetCapturedStderr();
 
   EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)))
@@ -310,8 +312,9 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsPipelineMismatch) {
   ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
-  CreateSolidFillPipeline(geodeDevice->device(), shaderModule,
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
+  CreateSolidFillPipeline(geodeDevice->adapterDevice().root().device(), shaderModule,
                           /*binding7Visibility=*/wgpu::ShaderStage::Fragment);
   const std::string errors = testing::internal::GetCapturedStderr();
 
@@ -387,9 +390,10 @@ TEST(WgslEmitterGeodeValidation, EmittedColorMatrixComputePassesRendererValidati
   ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
   ASSERT_TRUE(static_cast<bool>(shaderModule)) << "Shader module creation returned null";
-  CreateColorMatrixComputePipeline(geodeDevice->device(), shaderModule);
+  CreateColorMatrixComputePipeline(geodeDevice->adapterDevice().root().device(), shaderModule);
   const std::string errors = testing::internal::GetCapturedStderr();
 
   EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)))
@@ -410,8 +414,9 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsComputeStorageAccessMisma
   ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
-  CreateColorMatrixComputePipeline(geodeDevice->device(), shaderModule,
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
+  CreateColorMatrixComputePipeline(geodeDevice->adapterDevice().root().device(), shaderModule,
                                    /*outputAccess=*/wgpu::StorageTextureAccess::ReadOnly);
   const std::string errors = testing::internal::GetCapturedStderr();
 
@@ -526,9 +531,10 @@ TEST(WgslEmitterGeodeValidation, EmittedFloodComputePassesRendererValidation) {
   const ShaderResult<std::string> wgsl = std::string(programs::FloodShader().wgsl);
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
   ASSERT_TRUE(static_cast<bool>(shaderModule)) << "Shader module creation returned null";
-  CreateFloodComputePipeline(geodeDevice->device(), shaderModule);
+  CreateFloodComputePipeline(geodeDevice->adapterDevice().root().device(), shaderModule);
   const std::string errors = testing::internal::GetCapturedStderr();
 
   EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)))
@@ -547,8 +553,9 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsFloodStorageAccessMismatc
   const ShaderResult<std::string> wgsl = std::string(programs::FloodShader().wgsl);
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
-  CreateFloodComputePipeline(geodeDevice->device(), shaderModule,
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
+  CreateFloodComputePipeline(geodeDevice->adapterDevice().root().device(), shaderModule,
                              /*outputAccess=*/wgpu::StorageTextureAccess::ReadOnly);
   const std::string errors = testing::internal::GetCapturedStderr();
 
@@ -566,9 +573,10 @@ TEST(WgslEmitterGeodeValidation, EmittedSubregionClipComputePassesRendererValida
   const ShaderResult<std::string> wgsl = std::string(programs::SubregionClipShader().wgsl);
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
   ASSERT_TRUE(static_cast<bool>(shaderModule)) << "Shader module creation returned null";
-  CreateSubregionClipComputePipeline(geodeDevice->device(), shaderModule);
+  CreateSubregionClipComputePipeline(geodeDevice->adapterDevice().root().device(), shaderModule);
   const std::string errors = testing::internal::GetCapturedStderr();
 
   EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)))
@@ -586,8 +594,9 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsSubregionClipSampleTypeMi
   const ShaderResult<std::string> wgsl = std::string(programs::SubregionClipShader().wgsl);
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
-  CreateSubregionClipComputePipeline(geodeDevice->device(), shaderModule,
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
+  CreateSubregionClipComputePipeline(geodeDevice->adapterDevice().root().device(), shaderModule,
                                      /*inputSampleType=*/wgpu::TextureSampleType::Uint);
   const std::string errors = testing::internal::GetCapturedStderr();
 
@@ -656,9 +665,11 @@ TEST(WgslEmitterGeodeValidation, EmittedFilterColorMatrixPassesRendererValidatio
   const ShaderResult<std::string> wgsl = std::string(programs::FilterColorMatrixShader().wgsl);
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
   ASSERT_TRUE(static_cast<bool>(shaderModule)) << "Shader module creation returned null";
-  CreateFilterColorMatrixComputePipeline(geodeDevice->device(), shaderModule);
+  CreateFilterColorMatrixComputePipeline(geodeDevice->adapterDevice().root().device(),
+                                         shaderModule);
   const std::string errors = testing::internal::GetCapturedStderr();
 
   EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)))
@@ -677,8 +688,9 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsFilterColorMatrixStorageA
   const ShaderResult<std::string> wgsl = std::string(programs::FilterColorMatrixShader().wgsl);
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
-  CreateFilterColorMatrixComputePipeline(geodeDevice->device(), shaderModule,
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
+  CreateFilterColorMatrixComputePipeline(geodeDevice->adapterDevice().root().device(), shaderModule,
                                          /*outputAccess=*/wgpu::StorageTextureAccess::ReadOnly);
   const std::string errors = testing::internal::GetCapturedStderr();
 
@@ -747,9 +759,10 @@ TEST(WgslEmitterGeodeValidation, EmittedOffsetComputePassesRendererValidation) {
   ShaderResult<std::string> wgsl{std::string(programs::OffsetShader().wgsl)};
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
   ASSERT_TRUE(static_cast<bool>(shaderModule)) << "Shader module creation returned null";
-  CreateOffsetComputePipeline(geodeDevice->device(), shaderModule);
+  CreateOffsetComputePipeline(geodeDevice->adapterDevice().root().device(), shaderModule);
   const std::string errors = testing::internal::GetCapturedStderr();
 
   EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)))
@@ -768,8 +781,9 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsOffsetParamsBufferTypeMis
   ShaderResult<std::string> wgsl{std::string(programs::OffsetShader().wgsl)};
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
-  CreateOffsetComputePipeline(geodeDevice->device(), shaderModule,
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
+  CreateOffsetComputePipeline(geodeDevice->adapterDevice().root().device(), shaderModule,
                               /*paramsBufferType=*/wgpu::BufferBindingType::ReadOnlyStorage);
   const std::string errors = testing::internal::GetCapturedStderr();
 
@@ -1071,7 +1085,8 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
   size_t caseIndex = 0;
   for (const Shift& shift : shifts) {
     const std::vector<uint8_t> texels = RunOffsetProgram(
-        geodeDevice->device(), geodeDevice->queue(), wgsl.result(), shift.dx, shift.dy);
+        geodeDevice->adapterDevice().root().device(), geodeDevice->adapterDevice().root().queue(),
+        wgsl.result(), shift.dx, shift.dy);
     ASSERT_THAT(texels, testing::SizeIs(size_t{kOffsetExtent} * kOffsetExtent * 4u))
         << "dispatch failed for shift (" << shift.dx << ", " << shift.dy << ")";
     SCOPED_TRACE(testing::Message() << "shift (" << shift.dx << ", " << shift.dy << ")");
@@ -1159,7 +1174,8 @@ TEST(WgslEmitterGeodeValidation, BlurMatchesCpuGaussianAndAsymmetricBoxReference
                                      clip,
                                      0};
           auto actual = RunInputOutputUniformProgram(
-              device->device(), device->queue(), wgsl, source, kOffsetExtent, kOffsetExtent,
+              device->adapterDevice().root().device(), device->adapterDevice().root().queue(), wgsl,
+              source, kOffsetExtent, kOffsetExtent,
               std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
               shader.entryPoints.front().workgroupSize[0]);
           ASSERT_THAT(actual, testing::SizeIs(source.size()));
@@ -1207,7 +1223,8 @@ TEST(WgslEmitterGeodeValidation, MorphologyMatchesNeighborhoodMinMaxAndTranspare
                    << "radius " << radius[0] << "," << radius[1] << " op=" << op);
       const int32_t params[] = {radius[0], radius[1], op, 0};
       auto actual = RunInputOutputUniformProgram(
-          device->device(), device->queue(), wgsl.result(), source, kOffsetExtent, kOffsetExtent,
+          device->adapterDevice().root().device(), device->adapterDevice().root().queue(),
+          wgsl.result(), source, kOffsetExtent, kOffsetExtent,
           std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
           ReflectedWorkgroupWidth(programs::MorphologyShader()));
       ASSERT_THAT(actual, testing::SizeIs(source.size()));
@@ -1251,7 +1268,8 @@ TEST(WgslEmitterGeodeValidation, TileWrapsSignedOriginsAndClampsSourceEdges) {
   for (const auto& rect : rectangles) {
     SCOPED_TRACE(testing::Message() << "rectangle " << index);
     auto actual = RunInputOutputUniformProgram(
-        device->device(), device->queue(), wgsl.result(), source, kOffsetExtent, kOffsetExtent,
+        device->adapterDevice().root().device(), device->adapterDevice().root().queue(),
+        wgsl.result(), source, kOffsetExtent, kOffsetExtent,
         std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(rect), sizeof(rect)),
         ReflectedWorkgroupWidth(programs::TileShader()));
     ASSERT_THAT(actual, testing::SizeIs(source.size()));
@@ -1281,8 +1299,8 @@ TEST(WgslEmitterGeodeValidation, TilePreservesFloatStorageWithoutQuantization) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
   const ShaderResult<std::string> wgsl = std::string(programs::TileShader().wgsl);
-  const auto& device = geode->device();
-  const auto& queue = geode->queue();
+  const auto& device = geode->adapterDevice().root().device();
+  const auto& queue = geode->adapterDevice().root().queue();
   constexpr uint32_t kWidth = 16, kHeight = 2, kRowBytes = kWidth * 4 * sizeof(float);
   std::vector<float> values(kWidth * kHeight * 4);
   for (size_t i = 0; i < values.size(); i += 4) {
@@ -1397,9 +1415,11 @@ TEST(WgslEmitterGeodeValidation, EmittedColorSpaceConvertPassesRendererValidatio
   const ShaderResult<std::string> wgsl = std::string(programs::ColorSpaceConvertShader().wgsl);
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
   ASSERT_TRUE(static_cast<bool>(shaderModule)) << "Shader module creation returned null";
-  CreateColorSpaceConvertComputePipeline(geodeDevice->device(), shaderModule);
+  CreateColorSpaceConvertComputePipeline(geodeDevice->adapterDevice().root().device(),
+                                         shaderModule);
   const std::string errors = testing::internal::GetCapturedStderr();
 
   EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)))
@@ -1418,8 +1438,9 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsColorSpaceConvertStorageF
   const ShaderResult<std::string> wgsl = std::string(programs::ColorSpaceConvertShader().wgsl);
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
-  CreateColorSpaceConvertComputePipeline(geodeDevice->device(), shaderModule,
+  wgpu::ShaderModule shaderModule =
+      CreateModuleFromWgsl(geodeDevice->adapterDevice().root().device(), wgsl.result());
+  CreateColorSpaceConvertComputePipeline(geodeDevice->adapterDevice().root().device(), shaderModule,
                                          /*outputFormat=*/wgpu::TextureFormat::RGBA16Float);
   const std::string errors = testing::internal::GetCapturedStderr();
 
@@ -1492,8 +1513,8 @@ TEST(WgslEmitterGeodeValidation, ColorSpaceConvertRunsOnTheDeviceAndMatchesTheCp
   for (const Direction& direction : directions) {
     const uint32_t params[4] = {direction.value, 0u, 0u, 0u};
     const std::vector<uint8_t> texels = RunInputOutputUniformProgram(
-        geodeDevice->device(), geodeDevice->queue(), wgsl.result(), TransferSourceTexels(),
-        kTransferExtent, 1,
+        geodeDevice->adapterDevice().root().device(), geodeDevice->adapterDevice().root().queue(),
+        wgsl.result(), TransferSourceTexels(), kTransferExtent, 1,
         std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
         ReflectedWorkgroupWidth(programs::ColorSpaceConvertShader()),
         programs::ColorTransferSamples());
@@ -1543,8 +1564,8 @@ void ExpectColorTransferBoundaries(bool resolve) {
     return std::string(programs::ColorSpaceConvertShader().wgsl);
   }();
   ASSERT_THAT(wgsl, HasShaderResult());
-  const auto& device = geode->device();
-  const auto& queue = geode->queue();
+  const auto& device = geode->adapterDevice().root().device();
+  const auto& queue = geode->adapterDevice().root().queue();
   constexpr uint32_t kRowBytes = kWidth * 4 * sizeof(float);
   const size_t sizeBytes = size_t{kRowBytes} * kHeight;
   wgpu::TextureDescriptor desc = {};
@@ -1647,7 +1668,8 @@ TEST(WgslEmitterGeodeValidation, ColorSpaceConvertLeavesATransparentTexelTranspa
   std::vector<uint8_t> source(size_t{kTransferExtent} * 4u, 0u);
   const uint32_t params[4] = {programs::kColorSpaceConvertSrgbToLinear, 0u, 0u, 0u};
   const std::vector<uint8_t> texels = RunInputOutputUniformProgram(
-      geodeDevice->device(), geodeDevice->queue(), wgsl.result(), source, kTransferExtent, 1,
+      geodeDevice->adapterDevice().root().device(), geodeDevice->adapterDevice().root().queue(),
+      wgsl.result(), source, kTransferExtent, 1,
       std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
       ReflectedWorkgroupWidth(programs::ColorSpaceConvertShader()),
       programs::ColorTransferSamples());
@@ -1810,7 +1832,8 @@ TEST(WgslEmitterGeodeValidation, RoundHalfAwayFromZeroRunsOnTheDeviceAndMatchesT
 
   const std::vector<float> values = MathPrimitiveInputValues();
   const std::vector<uint8_t> texels =
-      RunMathPrimitiveModule(geodeDevice->device(), geodeDevice->queue(), wgsl.result(), values);
+      RunMathPrimitiveModule(geodeDevice->adapterDevice().root().device(),
+                             geodeDevice->adapterDevice().root().queue(), wgsl.result(), values);
   ASSERT_THAT(texels, testing::SizeIs(values.size() * 4u));
 
   for (size_t i = 0; i < values.size(); ++i) {
@@ -1837,8 +1860,8 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsInvalidWgsl) {
   }
 
   testing::internal::CaptureStderr();
-  wgpu::ShaderModule shaderModule =
-      CreateModuleFromWgsl(geodeDevice->device(), "fn broken( -> nonsense { this is not wgsl }");
+  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(
+      geodeDevice->adapterDevice().root().device(), "fn broken( -> nonsense { this is not wgsl }");
   (void)shaderModule;
   const std::string errors = testing::internal::GetCapturedStderr();
 

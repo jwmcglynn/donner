@@ -83,7 +83,7 @@ protected:
     // The device-owned shared pipelines target the device's format; the per-test render
     // targets are created with kFormat, so the two must agree. Pipeline construction lives on
     // GeodeDevice per the ownership rule.
-    ASSERT_EQ(device_->textureFormat(), kFormat);
+    ASSERT_EQ(device_->textureFormat(), GpuTextureFormatFromWgpu(kFormat));
     pipeline_ = &device_->pipeline();
     gradientPipeline_ = &device_->gradientPipeline();
     imagePipeline_ = &device_->imagePipeline();
@@ -104,7 +104,7 @@ protected:
     bd.label = wgpuLabel("TestReadback");
     bd.size = kBytesPerRow * kSize;
     bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-    readback_ = device_->device().createBuffer(bd);
+    readback_ = device_->adapterDevice().root().device().createBuffer(bd);
     ASSERT_TRUE(static_cast<bool>(readback_));
   }
 
@@ -112,7 +112,7 @@ protected:
   /// no padding - `kSize * kSize * 4` bytes).
   std::vector<uint8_t> readback() {
     // Copy texture → readback buffer.
-    wgpu::CommandEncoder enc = device_->device().createCommandEncoder();
+    wgpu::CommandEncoder enc = device_->adapterDevice().root().device().createCommandEncoder();
 
     wgpu::TexelCopyTextureInfo src = {};
     src.texture = backendTarget_;
@@ -128,7 +128,7 @@ protected:
     enc.copyTextureToBuffer(src, dst, copySize);
 
     wgpu::CommandBuffer cmd = enc.finish();
-    device_->queue().submit(1, &cmd);
+    device_->adapterDevice().root().queue().submit(1, &cmd);
 
     // Map readback buffer. wgpu-native's `mapAsync` only exposes the
     // callback-info form; plumb the done flag through `userdata1` and poll
@@ -151,7 +151,7 @@ protected:
     readback_.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow * kSize, mapCb);
     const GpuWaitResult waitResult = BoundedGpuWait(
         [&] {
-          device_->device().poll(false, nullptr);
+          device_->adapterDevice().root().device().poll(false, nullptr);
           return mapState->done.load(std::memory_order_acquire);
         },
         kDefaultGpuWaitTimeout);
@@ -1374,7 +1374,7 @@ TEST_F(GeoEncoderTest, DrawImageHonorsOpacity) {
 
 TEST_F(GeoEncoderTest, DrawImageOverDeviceTextureLimitIsNoOp) {
   wgpu::Limits limits;
-  ASSERT_EQ(device_->device().getLimits(&limits), wgpu::Status::Success);
+  ASSERT_EQ(device_->adapterDevice().root().device().getLimits(&limits), wgpu::Status::Success);
   ASSERT_LT(limits.maxTextureDimension2D, static_cast<uint32_t>(std::numeric_limits<int>::max()));
   const int overLimitWidth = static_cast<int>(limits.maxTextureDimension2D) + 1;
 
@@ -1454,7 +1454,7 @@ TEST_F(GeoEncoderTest, FillPathPatternSolidTile) {
   td.mipLevelCount = 1;
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture tile = device_->device().createTexture(td);
+  wgpu::Texture tile = device_->adapterDevice().root().device().createTexture(td);
   ASSERT_TRUE(static_cast<bool>(tile));
 
   wgpu::TexelCopyTextureInfo dst = {};
@@ -1463,7 +1463,8 @@ TEST_F(GeoEncoderTest, FillPathPatternSolidTile) {
   layout.bytesPerRow = kTileDim * 4;
   layout.rowsPerImage = kTileDim;
   wgpu::Extent3D extent = {kTileDim, kTileDim, 1};
-  device_->queue().writeTexture(dst, tilePixels.data(), tilePixels.size(), layout, extent);
+  device_->adapterDevice().root().queue().writeTexture(dst, tilePixels.data(), tilePixels.size(),
+                                                       layout, extent);
 
   // Name the uploaded tile so the encoder can bind it as paint.
   gpu::Result<gpu::Texture> tileHandleResult = device_->adapterDevice().importExternalTexture(
