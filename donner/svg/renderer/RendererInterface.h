@@ -1301,10 +1301,11 @@ public:
    * The aggregate budgets still apply and are usually reached first at the default cap. TinySkia
    * charges every glyph occurrence two draw calls against
    * \ref RendererDrawBudget::kMaximumDrawCalls and its outline decode against
-   * \ref RendererTextMaterializationBudget::kMaximumBytes, which admits roughly ten thousand
-   * glyphs of a typical Latin font per frame. Geode charges only newly decoded outlines against
-   * that byte budget and draws against its frame geometry budget. Lowering the cap bounds per-frame
-   * text work for untrusted documents.
+   * \ref RendererTextMaterializationBudget::kMaximumBytes, which admits several thousand glyphs
+   * per frame depending on outline complexity. Geode charges that byte budget for each cache miss
+   * (its decode and its entry) and for per-occurrence path copies of stroked, gradient, and
+   * pattern text, and charges draws against its frame geometry budget. Lowering the cap bounds
+   * per-frame text work for untrusted documents.
    *
    * Offscreen instances from \ref createOffscreenInstance share the cap. Backends without text
    * ignore the call.

@@ -99,8 +99,8 @@ See the [Project Roadmap](docs/ProjectRoadmap.md) and
   drawn per frame, distinct outlines decoded per frame, and Geode's resident outlines, defaulting to
   `RendererTextMaterializationBudget::kDefaultMaximumGlyphs`. The aggregate byte, work, and draw
   budgets are unchanged and are usually reached first. TinySkia charges every glyph two draw calls
-  and its outline decode, which admits roughly ten thousand glyphs of a typical Latin font per frame.
-  Geode charges only newly decoded outlines and now also charges each cached glyph its own
+  and its outline decode, which admits several thousand glyphs per frame depending on outline
+  complexity. Geode charges each cache miss and now also charges each cached glyph its own
   footprint, so outline-less glyphs count against the byte budget. Clip paths keep their own
   1024-shape cap.
 
