@@ -635,11 +635,13 @@ TEST_F(RendererRegressionTests, EffectSpanLayoutRunsOncePerTextElement) {
 }
 
 TEST_F(RendererRegressionTests, ExternalTextEffectContextPaintIsResolvedForEachUse) {
-  const std::filesystem::path testdata = "donner/svg/renderer/testdata";
-  SVGDocument shared =
-      loadSVG("donner/svg/renderer/testdata/use-external-text-effect-context-shared.svg", testdata);
+  const std::filesystem::path testdata = "donner/svg/renderer/testdata/regressions";
+  SVGDocument shared = loadSVG(
+      "donner/svg/renderer/testdata/regressions/use-external-text-effect-context-shared.svg",
+      testdata);
   SVGDocument separate = loadSVG(
-      "donner/svg/renderer/testdata/use-external-text-effect-context-separate.svg", testdata);
+      "donner/svg/renderer/testdata/regressions/use-external-text-effect-context-separate.svg",
+      testdata);
   RegisterFontsFromDirectoryForTesting(shared, ResvgResourceRoot() / "fonts");
   RegisterFontsFromDirectoryForTesting(separate, ResvgResourceRoot() / "fonts");
 
@@ -650,11 +652,13 @@ TEST_F(RendererRegressionTests, ExternalTextEffectContextPaintIsResolvedForEachU
 }
 
 TEST_F(RendererRegressionTests, EffectOwnerContextPaintOverridesTheTextRootPaint) {
-  const std::filesystem::path testdata = "donner/svg/renderer/testdata";
+  const std::filesystem::path testdata = "donner/svg/renderer/testdata/regressions";
   SVGDocument context =
-      loadSVG("donner/svg/renderer/testdata/use-external-text-effect-owner-context.svg", testdata);
-  SVGDocument explicitPaint =
-      loadSVG("donner/svg/renderer/testdata/use-external-text-effect-owner-explicit.svg", testdata);
+      loadSVG("donner/svg/renderer/testdata/regressions/use-external-text-effect-owner-context.svg",
+              testdata);
+  SVGDocument explicitPaint = loadSVG(
+      "donner/svg/renderer/testdata/regressions/use-external-text-effect-owner-explicit.svg",
+      testdata);
   RegisterFontsFromDirectoryForTesting(context, ResvgResourceRoot() / "fonts");
   RegisterFontsFromDirectoryForTesting(explicitPaint, ResvgResourceRoot() / "fonts");
 

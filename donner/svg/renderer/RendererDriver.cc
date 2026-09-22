@@ -1609,6 +1609,20 @@ void RendererDriver::draw(SVGDocument& document) {
   if (document.threadingMode() == ThreadingMode::ConcurrentDom) {
     const ScopedFrameResourceScope resourceScope(renderer_);
     RenderSnapshot snapshot = captureRenderSnapshot(document);
+    if (snapshot.fontPayloadLimitExceeded()) {
+      // A bounded snapshot may omit fonts. Render directly while holding document access so
+      // ordinary draw() remains complete even when the snapshot font budget rejects capture.
+      DocumentWriteAccess access = document.writeAccess();
+      ParseWarningSink warnings;
+      RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+      if (warnings.hasWarnings()) {
+        for (const ParseDiagnostic& warning : warnings.warnings()) {
+          std::cerr << warning << '\n';
+        }
+      }
+      drawPreparedDocument(document);
+      return;
+    }
     draw(snapshot);
     return;
   }
@@ -1648,6 +1662,18 @@ void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
       RenderSnapshotRecorder recorder(snapshot, renderer_);
       RendererDriver snapshotDriver(recorder, verbose_);
       snapshotDriver.drawPreparedDocument(document, viewport, surfaceFromCanvas);
+    }
+    if (snapshot.fontPayloadLimitExceeded()) {
+      DocumentWriteAccess access = document.writeAccess();
+      ParseWarningSink warnings;
+      RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+      if (warnings.hasWarnings()) {
+        for (const ParseDiagnostic& warning : warnings.warnings()) {
+          std::cerr << warning << '\n';
+        }
+      }
+      drawPreparedDocument(document, viewport, surfaceFromCanvas);
+      return;
     }
     draw(snapshot);
     return;

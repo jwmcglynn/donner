@@ -331,6 +331,8 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/resources:font_manager",
         "//donner/svg/tests:parser_test_utils",
+        "//third_party/public-sans",
+        "//third_party/roboto",
         "@com_google_gtest//:gtest_main",
     ],
 )

@@ -171,6 +171,7 @@ donner_perf_sensitive_cc_library(
         "//donner/svg/components",
     ] + select({
         ":text_enabled": [
+            ":placed_text_geometry",
             "//donner/svg/resources:font_manager",
             "//donner/svg/text:text_engine",
         ],

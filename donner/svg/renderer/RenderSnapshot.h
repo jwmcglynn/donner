@@ -20,6 +20,9 @@ namespace donner::svg {
  */
 class RenderSnapshot {
 public:
+  /// Maximum font bytes copied into one snapshot across all source registries.
+  static constexpr std::size_t kMaximumCapturedFontBytes = 128 * 1024 * 1024;
+
   /// Create an empty render snapshot.
   RenderSnapshot();
 
@@ -61,6 +64,9 @@ public:
    */
   [[nodiscard]] std::size_t liveRegistryReferenceCountForTesting(const Registry& registry) const;
 
+  /// True when snapshot text exceeded the font-byte budget and some fonts were omitted.
+  [[nodiscard]] bool fontPayloadLimitExceeded() const;
+
   /**
    * Replay the captured command stream into \p renderer.
    *
@@ -92,7 +98,9 @@ public:
    * @param offscreenFactory Backend used only for creating offscreen renderers
    *     while capture prepares filters, masks, and sub-documents.
    */
-  RenderSnapshotRecorder(RenderSnapshot& snapshot, RendererInterface& offscreenFactory);
+  RenderSnapshotRecorder(
+      RenderSnapshot& snapshot, RendererInterface& offscreenFactory,
+      std::size_t maximumCapturedFontBytes = RenderSnapshot::kMaximumCapturedFontBytes);
 
   void draw(SVGDocument& document) override;
   [[nodiscard]] int width() const override;
