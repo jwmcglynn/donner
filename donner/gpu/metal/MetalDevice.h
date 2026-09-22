@@ -192,6 +192,11 @@ public:
   /// Releases the event installed by \ref pauseSubmissionsForTest. Safe when no pause is active.
   void resumeSubmissionsForTest();
 
+  /// Makes the next submission to complete report an execution error, as a command buffer the
+  /// GPU faulted on does, through the same completion path. A deterministic test seam: a real
+  /// fault cannot be produced on demand without hanging or corrupting the GPU.
+  void failNextCompletionForTest();
+
   /// Destructor; releases all Metal objects still alive.
   ~MetalDevice() override;
 

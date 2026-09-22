@@ -198,8 +198,10 @@ struct CompletionState {
   std::atomic<uint64_t> inFlightStagingBytes{0};  //!< Accepted uploads awaiting completion.
   std::atomic<uint64_t> inFlightPayloadBytes{0};  //!< Logical bytes charged to the upload budget.
   std::atomic<bool> hadError{false};  //!< True once any command buffer reported an error.
-  std::mutex mutex;                   //!< Guards errorMessage.
-  std::string errorMessage;           //!< Message of the first captured execution error.
+  /// Set by \ref MetalDevice::failNextCompletionForTest; consumed by the next completion.
+  std::atomic<bool> failNextCompletion{false};
+  std::mutex mutex;          //!< Guards errorMessage.
+  std::string errorMessage;  //!< Message of the first captured execution error.
 };
 
 }  // namespace
@@ -675,6 +677,10 @@ void MetalDevice::resumeSubmissionsForTest() {
     impl_->submissionGate.signaledValue = 1;
     impl_->submissionGate = nil;
   }
+}
+
+void MetalDevice::failNextCompletionForTest() {
+  impl_->completionState->failNextCompletion.store(true, std::memory_order_release);
 }
 
 MetalDevice::~MetalDevice() {
@@ -1787,12 +1793,20 @@ void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t s
   sharedState->inFlightStagingBytes.fetch_add(uploadBytes, std::memory_order_relaxed);
   sharedState->inFlightPayloadBytes.fetch_add(payloadBytes, std::memory_order_relaxed);
   [state.commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
-    if (completedBuffer.error != nil) {
+    NSError* executionError = completedBuffer.error;
+    if (executionError == nil &&
+        sharedState->failNextCompletion.exchange(false, std::memory_order_acq_rel)) {
+      executionError = [NSError
+          errorWithDomain:MTLCommandBufferErrorDomain
+                     code:MTLCommandBufferErrorInternal
+                 userInfo:@{NSLocalizedDescriptionKey : @"injected command buffer failure"}];
+    }
+    if (executionError != nil) {
       sharedState->hadError.store(true, std::memory_order_release);
       std::lock_guard<std::mutex> lock(sharedState->mutex);
       if (sharedState->errorMessage.empty()) {
         sharedState->errorMessage =
-            DescribeNSError(completedBuffer.error, "Metal command buffer execution failed");
+            DescribeNSError(executionError, "Metal command buffer execution failed");
       }
     }
 
