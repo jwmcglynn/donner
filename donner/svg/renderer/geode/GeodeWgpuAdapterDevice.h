@@ -396,9 +396,30 @@ protected:
   bool onWaitForSerial(uint64_t serial, double timeoutSeconds) override;
 
 private:
-  /// Second bound on \ref onWaitForSerial, for a driver whose poll returns without either
-  /// progressing or costing wall time. Reaching it says what the deadline says.
+  /// Second bound on \ref waitForSerialBounded, for a driver whose poll returns without either
+  /// progressing or costing wall time. It keeps such a wait from spinning a core; it is not a
+  /// deadline, and reaching it with the budget unspent says nothing about the device.
   static constexpr int kMaxSerialWaitPolls = 20000;
+
+  /// Whether a wait that spends its whole budget without the work retiring declares the backend
+  /// root lost.
+  enum class LossOnTimeout {
+    /// A caller's own bounded wait: spending the budget is the observation it was there to make,
+    /// so publish it with the attribution that makes the report diagnosable.
+    Declare,
+    /// Teardown's drain: it already proceeds on timeout, it is nobody's deadline, and the other
+    /// contexts over this root are still rendering through it.
+    Tolerate,
+  };
+
+  /// Drives \ref pollForSerialCompletion until \ref completedSerial reaches \p serial, the
+  /// device is lost, the budget elapses, or the poll bound above is reached.
+  ///
+  /// @param serial Submission serial to wait for.
+  /// @param timeoutSeconds Longest to wait, in seconds.
+  /// @param onTimeout What a wait that spends its whole budget publishes.
+  /// @return True once this device has completed \p serial.
+  bool waitForSerialBounded(uint64_t serial, double timeoutSeconds, LossOnTimeout onTimeout);
 
   /**
    * Reports one counted event to the logical context installed as this device's counter sink.
@@ -423,8 +444,10 @@ private:
   ///   the budget it was given.
   /// @param timeoutSeconds Budget the wait was given; zero means the caller asked what was
   ///   already known rather than waiting, so the negative answer declares nothing.
+  /// @param onTimeout What this wait publishes; \ref LossOnTimeout::Tolerate declares nothing.
   /// @return False, always: the wait did not observe the serial complete.
-  bool giveUpOnSerialWait(std::chrono::steady_clock::time_point start, double timeoutSeconds);
+  bool giveUpOnSerialWait(std::chrono::steady_clock::time_point start, double timeoutSeconds,
+                          LossOnTimeout onTimeout);
 
   /// One iteration of \ref onWaitForSerial's wait: lets the backend block until pending work
   /// progresses, plus whatever extra cost \ref holdSubmittedWorkForTesting gave that poll.

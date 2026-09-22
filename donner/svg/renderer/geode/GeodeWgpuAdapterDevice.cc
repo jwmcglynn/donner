@@ -902,9 +902,11 @@ bool GeodeWgpuAdapterDevice::pollSuspending(bool wait) const {
 GeodeWgpuAdapterDevice::~GeodeWgpuAdapterDevice() {
   // Wait for in-flight submissions so deferred destructions drain before the slot vectors
   // release the remaining wgpu objects. On timeout teardown proceeds anyway: wgpu retains every
-  // resource referenced by a submitted command buffer until it completes.
+  // resource referenced by a submitted command buffer until it completes. That tolerance is why
+  // the drain declares nothing - it is nobody's deadline, it overruns on a loaded host, and the
+  // other contexts over this root are still rendering through it.
   if (lastSubmittedSerial() > completedSerial()) {
-    waitForSerial(lastSubmittedSerial(), teardownDrainSeconds_);
+    waitForSerialBounded(lastSubmittedSerial(), teardownDrainSeconds_, LossOnTimeout::Tolerate);
   }
   poll();
 }
@@ -925,13 +927,16 @@ void GeodeWgpuAdapterDevice::pollForSerialCompletion() {
 }
 
 bool GeodeWgpuAdapterDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
+  return waitForSerialBounded(serial, timeoutSeconds, LossOnTimeout::Declare);
+}
+
+bool GeodeWgpuAdapterDevice::waitForSerialBounded(uint64_t serial, double timeoutSeconds,
+                                                  LossOnTimeout onTimeout) {
   const auto start = std::chrono::steady_clock::now();
   const auto deadline = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                     std::chrono::duration<double>(timeoutSeconds));
   // Bounded like GeodeDevice's queue drain: poll(true) blocks until pending work progresses
-  // (yielding through Asyncify on Emscripten), so iterations are cheap when idle. The iteration
-  // cap is a second bound on a driver whose poll returns without either progressing or costing
-  // wall time; reaching it says the same thing the deadline does.
+  // (yielding through Asyncify on Emscripten), so iterations are cheap when idle.
   for (int pollIter = 0; pollIter < kMaxSerialWaitPolls; ++pollIter) {
     if (completedSerial() >= serial) {
       return true;
@@ -942,21 +947,23 @@ bool GeodeWgpuAdapterDevice::onWaitForSerial(uint64_t serial, double timeoutSeco
       return false;
     }
     if (std::chrono::steady_clock::now() >= deadline) {
-      return giveUpOnSerialWait(start, timeoutSeconds);
+      return giveUpOnSerialWait(start, timeoutSeconds, onTimeout);
     }
     pollForSerialCompletion();
   }
-  if (completedSerial() >= serial) {
-    return true;
-  }
-  return giveUpOnSerialWait(start, timeoutSeconds);
+  // The poll cap rather than the deadline. A driver whose poll returns without blocking reaches
+  // it in microseconds with the whole budget unspent, which says how that driver implements poll
+  // and nothing about whether submitted work is still completing. Ending the wait here keeps it
+  // from spinning a core; declaring a permanent loss from it would fail every later caller on a
+  // device that is merely idle.
+  return completedSerial() >= serial;
 }
 
 bool GeodeWgpuAdapterDevice::giveUpOnSerialWait(std::chrono::steady_clock::time_point start,
-                                                double timeoutSeconds) {
+                                                double timeoutSeconds, LossOnTimeout onTimeout) {
   // A budget of zero is a question about what is already known rather than a wait, so its
   // negative answer is no evidence that the device stopped answering.
-  if (timeoutSeconds > 0.0) {
+  if (onTimeout == LossOnTimeout::Declare && timeoutSeconds > 0.0) {
     // Report the wait that actually ran, not the budget it was given: the budget is a constant
     // the reader already knows, while the measurement says whether the wait gave up on schedule
     // or overran under load.
