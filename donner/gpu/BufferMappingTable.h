@@ -34,7 +34,8 @@ public:
    */
   virtual std::span<const uint8_t> mappableBytes(uint32_t bufferSlotIndex) const = 0;
 
-  /// Highest submission serial the device has completed.
+  /// Highest submission serial the device has completed. A backend publishes a submission's
+  /// failure, through \ref deviceLost, before the serial that completes it.
   virtual uint64_t completedSubmissionSerial() const = 0;
 
   /**
