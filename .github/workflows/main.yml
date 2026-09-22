@@ -1171,7 +1171,77 @@ jobs:
       # targets need an explicit invocation.
       GEODE_EDITOR_TARGETS: >-
         //tools/ci:editor_geode
+      # Free space, in GiB, required on every filesystem this job writes. It
+      # bounds the job's working set: main pushes and infrastructure PRs build
+      # and test all of //... with locally executed actions, so the output
+      # base, repository cache and test outputs all land on this host, which
+      # has needed tens of GiB when the output base starts cold.
+      MIN_FREE_DISK_GIB: "40"
     steps:
+      # Runs first so a full disk fails in seconds with an explicit error,
+      # instead of as a Bazel ENOSPC or a lost runner connection tens of
+      # minutes in, which reads like a failure of the change under test.
+      - name: Check runner disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$MIN_FREE_DISK_GIB" in
+            '' | *[!0-9]*)
+              echo "::error title=Invalid disk space threshold::MIN_FREE_DISK_GIB must be a whole number of GiB, got '${MIN_FREE_DISK_GIB}'."
+              exit 1
+              ;;
+          esac
+          # The checkout, runner temp, Bazel's default macOS output root (no
+          # --output_user_root is set and --nohome_rc skips any user rc), and
+          # the repository cache that `--config=ci` places under the home
+          # directory. A location that does not exist yet is measured at its
+          # nearest existing ancestor.
+          rows=""
+          for location in \
+            "workspace=${GITHUB_WORKSPACE}" \
+            "runner temp=${RUNNER_TEMP}" \
+            "Bazel output root=/private/var/tmp/_bazel_${USER:-$(id -un)}" \
+            "Bazel repository cache=${HOME}/.cache/bazel-repo"; do
+            label="${location%%=*}"
+            path="${location#*=}"
+            while [[ ! -e "$path" ]]; do
+              path="$(dirname "$path")"
+            done
+            # df -P prints one line per filesystem: device, 1024-blocks, used,
+            # available, capacity, then the mount point.
+            rows+="$(df -Pk "$path" | awk -v label="$label" 'NR == 2 {
+              mount = $6
+              for (i = 7; i <= NF; i++) mount = mount " " $i
+              printf "%s\t%s\t%s\t%s", $1, $4, mount, label
+            }')"$'\n'
+          done
+          # One line per device, so locations sharing a filesystem are
+          # reported and checked once.
+          printf '%s' "$rows" | awk -F '\t' -v min_gib="$MIN_FREE_DISK_GIB" '
+            $1 in avail_kib { labels[$1] = labels[$1] ", " $4; next }
+            {
+              order[++count] = $1
+              avail_kib[$1] = $2 + 0
+              mount[$1] = $3
+              labels[$1] = $4
+            }
+            END {
+              printf "Free disk space (need at least %d GiB on each filesystem):\n", min_gib
+              for (i = 1; i <= count; i++) {
+                dev = order[i]
+                free_gib = int(avail_kib[dev] / 1048576)
+                printf "  %6d GiB free on %s (%s): %s\n", free_gib, mount[dev], dev, labels[dev]
+                if (avail_kib[dev] < min_gib * 1048576) {
+                  printf "::error title=Runner low on disk space::Runner has %d GiB free on %s (%s); ",
+                    free_gib, mount[dev], labels[dev]
+                  printf "this job needs at least %d GiB. Free space on the runner before retrying.\n",
+                    min_gib
+                  failed = 1
+                }
+              }
+              exit failed
+            }'
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
