@@ -440,6 +440,13 @@ public:
   /// Whether the geometry debug overlay is enabled.
   [[nodiscard]] bool debugGeometryOverlay() const override;
 
+  /// Sets the glyph cap; see \ref RendererInterface::setMaximumGlyphs. It also caps each
+  /// document's resident glyph outlines.
+  void setMaximumGlyphs(std::size_t maximumGlyphs) override;
+
+  /// The glyph cap set by \ref setMaximumGlyphs.
+  [[nodiscard]] std::size_t maximumGlyphs() const override;
+
   /**
    * Returns per-frame instrumentation for the most recently completed
    * `beginFrame`→`endFrame` window. Valid after the first `endFrame()`;

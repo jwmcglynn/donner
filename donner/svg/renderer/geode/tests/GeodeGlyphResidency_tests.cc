@@ -140,16 +140,32 @@ TEST(GeodeGlyphCacheTest, RetainedByteAdmissionRejectsBeforeTakingOutlineOwnersh
   EXPECT_EQ(cache.retainedBytes(), 0u);
 }
 
+TEST(GeodeGlyphCacheTest, EmptyOutlineEntriesCountAgainstTheByteCap) {
+  GeodeGlyphCache cache(/*deviceId=*/1u);
+  constexpr uint64_t kTwoEntries = 2u * GeodeGlyphCache::kEntryOverheadBytes;
+  for (uint32_t glyphIndex = 1; glyphIndex <= 3; ++glyphIndex) {
+    (void)cache.insertWithinBudget(MakeKey(glyphIndex), Path(), EncodedPath(),
+                                   /*oldestOpenFrame=*/1, /*maxEntries=*/1000,
+                                   /*maxRetainedBytes=*/kTwoEntries);
+  }
+
+  EXPECT_EQ(cache.size(), 2u)
+      << "An entry with no outline still retains memory; the byte cap has to bound it.";
+  EXPECT_EQ(cache.retainedBytes(), kTwoEntries);
+}
+
 TEST(GeodeGlyphCacheTest, SharedDocumentFamilyRejectsSecondSubdocumentAtCapPlusOne) {
   Path firstOutline = MakeOutlineWithPoints(128u);
-  const std::optional<std::size_t> entryBytes = firstOutline.retainedBytes();
-  ASSERT_TRUE(entryBytes.has_value());
+  const std::optional<std::size_t> outlineBytes = firstOutline.retainedBytes();
+  ASSERT_TRUE(outlineBytes.has_value());
   Path secondOutline = MakeOutlineWithPoints(128u);
-  ASSERT_EQ(secondOutline.retainedBytes(), entryBytes);
+  ASSERT_EQ(secondOutline.retainedBytes(), outlineBytes);
+  const uint64_t entryBytes =
+      GeodeGlyphCache::kEntryOverheadBytes + static_cast<uint64_t>(*outlineBytes);
 
   svg::components::DocumentResourceFamilyBudget::Limits familyLimits;
-  familyLimits.geometryBytes = *entryBytes * 2u - 1u;
-  familyLimits.maximumTotalRetainedBytes = *entryBytes * 2u - 1u;
+  familyLimits.geometryBytes = entryBytes * 2u - 1u;
+  familyLimits.maximumTotalRetainedBytes = entryBytes * 2u - 1u;
   auto family = std::make_shared<svg::components::DocumentResourceFamilyBudget>(familyLimits);
   auto firstDocument = std::make_shared<GeodeDocumentGeometryBudget>(family);
   auto secondDocument = std::make_shared<GeodeDocumentGeometryBudget>(family);
@@ -160,7 +176,7 @@ TEST(GeodeGlyphCacheTest, SharedDocumentFamilyRejectsSecondSubdocumentAtCapPlusO
     ASSERT_NE(firstCache.insert(MakeKey(/*glyphIndex=*/1), std::move(firstOutline), EncodedPath()),
               nullptr);
     EXPECT_EQ(family->retainedBytes(svg::components::DocumentResourceFamilyBudget::Kind::Geometry),
-              *entryBytes);
+              entryBytes);
 
     EXPECT_EQ(
         secondCache.insert(MakeKey(/*glyphIndex=*/2), std::move(secondOutline), EncodedPath()),
@@ -238,9 +254,11 @@ TEST(GeodeGlyphCacheTest, ByteBudgetDropsEntriesUntilItFits) {
   InsertUsed(cache, MakeKey(/*glyphIndex=*/2), /*curveCount=*/4, /*frame=*/2);
   InsertUsed(cache, MakeKey(/*glyphIndex=*/3), /*curveCount=*/4, /*frame=*/3);
   ASSERT_EQ(cache.encodedBytes(), 12u * curveBytes);
+  const uint64_t entryBytes = GeodeGlyphCache::kEntryOverheadBytes + 4u * curveBytes;
+  ASSERT_EQ(cache.retainedBytes(), 3u * entryBytes);
 
   EXPECT_EQ(cache.evictToBudget(/*oldestOpenFrame=*/4, /*maxEntries=*/100,
-                                /*maxEncodedBytes=*/5u * curveBytes),
+                                /*maxRetainedBytes=*/entryBytes + curveBytes),
             2u);
   EXPECT_EQ(cache.size(), 1u);
   EXPECT_EQ(cache.encodedBytes(), 4u * curveBytes);

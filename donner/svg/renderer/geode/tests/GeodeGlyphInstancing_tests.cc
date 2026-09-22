@@ -36,6 +36,7 @@
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGlyphResidency.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 
 namespace donner::svg {
@@ -593,6 +594,62 @@ TEST_F(GeodeGlyphInstancingTest, GlyphChurnStaysBoundedByEviction) {
       << "Glyph churn must be reclaimed by eviction, not accumulated. If this fails while "
          "the ceiling assertion passes, the churn stopped happening and this test is now "
          "measuring nothing.";
+}
+
+/// A glyph with no outline still costs an entry. Distinct outline-less keys, here non-breaking
+/// spaces at distinct rotations, must be bounded by the frame's byte budget rather than only by
+/// the glyph count.
+TEST_F(GeodeGlyphInstancingTest, OutlineLessGlyphMissesAreChargedTheirEntry) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="24">
+        <text x="10" y="60" rotate="1 2 3 4 5 6">&#160;&#160;&#160;&#160;&#160;&#160;</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  constexpr uint64_t kThreeEntries = 3u * geode::GeodeGlyphCache::kEntryOverheadBytes;
+  renderer.setTextMaterializationBudgetForTesting(
+      {.uniqueOutlines = RendererTextMaterializationBudget::kDefaultMaximumGlyphs,
+       .commands = RendererTextMaterializationBudget::kMaximumCommands,
+       .points = RendererTextMaterializationBudget::kMaximumPoints,
+       .bytes = kThreeEntries,
+       .decodeWork = RendererTextMaterializationBudget::kMaximumDecodeWork},
+      RendererTextMaterializationBudget::kDefaultMaximumGlyphs);
+
+  (void)render(renderer, document);
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.textGlyphOccurrences, 6u);
+  EXPECT_EQ(stats.textMaterializationBytes, kThreeEntries);
+  EXPECT_TRUE(stats.textMaterializationBudgetRejected);
+  EXPECT_EQ(renderer.residentGlyphCountForTesting(document), 3u);
+}
+
+/// The public glyph cap also caps resident outlines: churn that mints four new outlines per frame
+/// settles at the cap instead of growing, and every frame still draws.
+TEST_F(GeodeGlyphInstancingTest, ResidentGlyphsStayWithinTheConfiguredGlyphCap) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <text id="t" x="10" y="120" font-family="Noto Sans" font-size="24"
+              fill="black">Hello</text>
+      </svg>)svg");
+  auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  RendererGeode renderer(sharedDevice());
+  constexpr size_t kMaximumGlyphs = 8u;
+  renderer.setMaximumGlyphs(kMaximumGlyphs);
+
+  uint64_t totalEvictions = 0;
+  for (int round = 0; round < 6; ++round) {
+    text->setAttribute("font-size", std::to_string(20 + round));
+    const Frame frame = render(renderer, document);
+    ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u)
+        << "Text stopped rendering at mutation round " << round;
+    totalEvictions += frame.counters.glyphResidencyEvictions;
+    EXPECT_LE(renderer.residentGlyphCountForTesting(document), kMaximumGlyphs)
+        << "Residency exceeded the glyph cap at mutation round " << round;
+  }
+  EXPECT_GT(totalEvictions, 0u) << "Six rounds of four new outlines must overflow a cap of eight.";
 }
 
 /// The narrowest statement of the same invariant, on the mutation an editor

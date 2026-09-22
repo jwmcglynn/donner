@@ -42,6 +42,8 @@ public:
       RendererFilterPreparationBudget::kMaximumPayloadBytes;
   static constexpr std::size_t kMaximumPreparedFilterShadowEntities =
       RendererFilterPreparationBudget::kMaximumShadowEntities;
+  /// Clip-path shapes copied per frame.
+  static constexpr std::size_t kMaximumClipGeometryPaths = 1024;
 
   /// Optional diagnostics for structured fuzzers and embedders auditing rejected preparation.
   struct SecurityStats {
@@ -419,7 +421,7 @@ private:
 
   RendererFilterPreparationBudget ownedFilterPreparationBudget_;
   RendererFilterPreparationBudget* filterPreparationBudget_ = &ownedFilterPreparationBudget_;
-  RendererTextMaterializationBudget ownedClipGeometryCopyBudget_;
+  RendererTextMaterializationBudget ownedClipGeometryCopyBudget_{kMaximumClipGeometryPaths};
   RendererTextMaterializationBudget* clipGeometryCopyBudget_ = &ownedClipGeometryCopyBudget_;
   SecurityStats* securityStats_ = nullptr;
 

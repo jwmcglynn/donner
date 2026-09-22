@@ -290,7 +290,7 @@ TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeM
            <text x="2" y="14">A</text><text x="24" y="14">A</text>
          </svg>)");
   RendererTinySkia limitedRenderer;
-  limitedRenderer.setTextGlyphBudgetForTesting(1);
+  limitedRenderer.setMaximumGlyphs(1);
   limitedRenderer.draw(limitedDocument);
 
   const RendererResourceStats limitedStats = limitedRenderer.resourceStats();
@@ -303,7 +303,7 @@ TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeM
            <text x="2" y="14">A</text>
          </svg>)");
   RendererTinySkia referenceRenderer;
-  referenceRenderer.setTextGlyphBudgetForTesting(1);
+  referenceRenderer.setMaximumGlyphs(1);
   referenceRenderer.draw(referenceDocument);
   EXPECT_EQ(referenceRenderer.frameCounters().textGlyphMaterializations, 1u);
 
@@ -357,6 +357,39 @@ TEST(RendererPublicApiTest, TextPastOneThousandTwentyFourDistinctGlyphsStillDraw
   ASSERT_EQ(snapshot.dimensions, Vector2i(400, 400));
   EXPECT_THAT(CoveredPixels(snapshot, 340, 340, 400, 400), Gt(0u))
       << "The sentinel glyph after the first 1352 was not drawn.";
+}
+
+TEST(RendererPublicApiTest, GlyphCapIsConfigurableAndSharedWithOffscreenInstances) {
+  SVGDocument document = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="90" height="30">
+           <text x="2" y="20" font-size="20">A</text>
+           <text x="32" y="20" font-size="20">A</text>
+           <text x="62" y="20" font-size="20">A</text>
+         </svg>)");
+  Renderer renderer;
+  EXPECT_EQ(renderer.maximumGlyphs(), RendererTextMaterializationBudget::kDefaultMaximumGlyphs);
+
+  renderer.setMaximumGlyphs(2);
+  EXPECT_EQ(renderer.maximumGlyphs(), 2u);
+  if (std::unique_ptr<RendererInterface> offscreen = renderer.createOffscreenInstance()) {
+    EXPECT_EQ(offscreen->maximumGlyphs(), 2u);
+  }
+
+  renderer.draw(document);
+  const RendererResourceStats capped = renderer.resourceStats();
+  EXPECT_EQ(capped.textGlyphOccurrences, 2u);
+  EXPECT_TRUE(capped.textMaterializationBudgetRejected);
+  const RendererBitmap cappedSnapshot = renderer.takeSnapshot();
+  EXPECT_THAT(CoveredPixels(cappedSnapshot, 30, 0, 60, 30), Gt(0u));
+  EXPECT_EQ(CoveredPixels(cappedSnapshot, 60, 0, 90, 30), 0u)
+      << "The glyph past the cap was drawn.";
+
+  renderer.setMaximumGlyphs(3);
+  renderer.draw(document);
+  const RendererResourceStats raised = renderer.resourceStats();
+  EXPECT_EQ(raised.textGlyphOccurrences, 3u);
+  EXPECT_FALSE(raised.textMaterializationBudgetRejected);
+  EXPECT_THAT(CoveredPixels(renderer.takeSnapshot(), 60, 0, 90, 30), Gt(0u));
 }
 #endif
 

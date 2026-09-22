@@ -1420,28 +1420,8 @@ struct RendererTinySkia::DashedPathWorkBudget {
   bool rejected = false;
 };
 
-struct RendererTinySkia::TextGlyphWorkBudget {
-  void reset() {
-    glyphs = 0;
-    rejected = false;
-  }
-
-  [[nodiscard]] bool canReserve(std::size_t count) const {
-    return !rejected && glyphs <= maximumGlyphs && count <= maximumGlyphs - glyphs;
-  }
-
-  void commit(std::size_t count) { glyphs += count; }
-  void reject() { rejected = true; }
-
-  std::size_t maximumGlyphs = RendererDrawBudget::kMaximumDrawCalls / 2;
-  std::size_t glyphs = 0;
-  bool rejected = false;
-};
-
 RendererTinySkia::RendererTinySkia(bool verbose)
-    : verbose_(verbose),
-      textGlyphWorkBudget_(std::make_shared<TextGlyphWorkBudget>()),
-      dashedPathWorkBudget_(std::make_shared<DashedPathWorkBudget>()) {}
+    : verbose_(verbose), dashedPathWorkBudget_(std::make_shared<DashedPathWorkBudget>()) {}
 
 RendererTinySkia::~RendererTinySkia() = default;
 RendererTinySkia::RendererTinySkia(RendererTinySkia&&) noexcept = default;
@@ -1490,7 +1470,6 @@ void RendererTinySkia::prepareRetainedClipEpochBudget(int pixelWidth, int pixelH
 void RendererTinySkia::resetOwnedFrameBudgets() {
   if (ownsDrawBudget_) {
     drawBudget_->reset();
-    textGlyphWorkBudget_->reset();
     dashedPathWorkBudget_->reset();
   }
   if (ownsTextMaterializationBudget_) {
@@ -2778,22 +2757,23 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
 
 #ifdef DONNER_TEXT_ENABLED
 bool RendererTinySkia::admitTextGlyphBatch(const std::vector<TextRun>& runs) {
-  constexpr std::size_t kMaximumGlyphs = RendererDrawBudget::kMaximumDrawCalls / 2;
+  // Each glyph reserves a fill and a stroke draw call.
+  constexpr std::size_t kMaximumCountableGlyphs = std::numeric_limits<std::size_t>::max() / 2;
   std::size_t glyphCount = 0;
   for (const TextRun& run : runs) {
-    if (run.glyphs.size() > kMaximumGlyphs - glyphCount) {
+    if (run.glyphs.size() > kMaximumCountableGlyphs - glyphCount) {
+      textMaterializationBudget_->reject();
       drawBudget_->reject();
       return false;
     }
     glyphCount += run.glyphs.size();
   }
-  if (!textGlyphWorkBudget_->canReserve(glyphCount) ||
+  if (!textMaterializationBudget_->reserveGlyphOccurrences(glyphCount) ||
       !drawBudget_->reserve({.drawCalls = glyphCount * 2})) {
-    textGlyphWorkBudget_->reject();
+    textMaterializationBudget_->reject();
     drawBudget_->reject();
     return false;
   }
-  textGlyphWorkBudget_->commit(glyphCount);
   return true;
 }
 
@@ -3437,7 +3417,6 @@ std::unique_ptr<RendererInterface> RendererTinySkia::createOffscreenInstance() c
   renderer->ownsDrawBudget_ = false;
   renderer->surfaceBudget_ = surfaceBudget_;
   renderer->ownsSurfaceBudget_ = false;
-  renderer->textGlyphWorkBudget_ = textGlyphWorkBudget_;
   renderer->dashedPathWorkBudget_ = dashedPathWorkBudget_;
   renderer->textMaterializationBudget_ = textMaterializationBudget_;
   renderer->ownsTextMaterializationBudget_ = false;
@@ -3457,9 +3436,12 @@ void RendererTinySkia::setGradientStopBudgetForTesting(std::size_t maximumStops)
   drawBudget_->setGradientStopLimitForTesting(maximumStops);
 }
 
-void RendererTinySkia::setTextGlyphBudgetForTesting(std::size_t maximumGlyphs) {
-  textGlyphWorkBudget_->maximumGlyphs =
-      std::min(textGlyphWorkBudget_->maximumGlyphs, maximumGlyphs);
+void RendererTinySkia::setMaximumGlyphs(std::size_t maximumGlyphs) {
+  textMaterializationBudget_->setMaximumGlyphs(maximumGlyphs);
+}
+
+std::size_t RendererTinySkia::maximumGlyphs() const {
+  return textMaterializationBudget_->maximumGlyphs();
 }
 
 void RendererTinySkia::setTextMaterializationBudgetForTesting(
@@ -3488,6 +3470,7 @@ RendererResourceStats RendererTinySkia::resourceStats() const {
       .textMaterializationPoints = textMaterializationBudget_->points(),
       .textMaterializationBytes = textMaterializationBudget_->bytes(),
       .textGlyphDecodeWork = textMaterializationBudget_->decodeWork(),
+      .textGlyphOccurrences = textMaterializationBudget_->glyphOccurrences(),
       .textMaterializationBudgetRejected = textMaterializationBudget_->rejected(),
   };
 }

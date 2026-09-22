@@ -252,13 +252,13 @@ public:
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
   [[nodiscard]] RendererResourceStats resourceStats() const override;
   [[nodiscard]] RendererFilterPreparationBudget* filterPreparationBudget() override;
+  void setMaximumGlyphs(std::size_t maximumGlyphs) override;
+  [[nodiscard]] std::size_t maximumGlyphs() const override;
 
   /// Reduce generated-dash work for a boundary test.
   void setDashWorkBudgetForTesting(std::size_t maximumWorkUnits);
   /// Reduce materialized gradient stops for a boundary test.
   void setGradientStopBudgetForTesting(std::size_t maximumStops);
-  /// Reduce admitted text glyphs for a boundary test.
-  void setTextGlyphBudgetForTesting(std::size_t maximumGlyphs);
   /// Reduce decoded-outline and path-copy ceilings for a boundary test.
   void setTextMaterializationBudgetForTesting(RendererTextMaterializationBudget::Cost limits);
 
@@ -322,7 +322,6 @@ public:
 
 private:
   struct DashedPathWorkBudget;
-  struct TextGlyphWorkBudget;
 
   struct PatternPaintState {
     tiny_skia::Pixmap pixmap;
@@ -521,7 +520,6 @@ private:
       std::make_shared<RendererTextMaterializationBudget>();
   bool ownsTextMaterializationBudget_ = true;
   std::size_t frameResourceScopeDepth_ = 0;
-  std::shared_ptr<TextGlyphWorkBudget> textGlyphWorkBudget_;
   std::shared_ptr<DashedPathWorkBudget> dashedPathWorkBudget_;
   std::optional<PatternPaintState> patternFillPaint_;
   std::optional<PatternPaintState> patternStrokePaint_;

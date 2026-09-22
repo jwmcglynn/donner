@@ -723,6 +723,7 @@ donner_cc_test(
     deps = [
         ":geode_counters",
         ":geode_device",
+        ":geode_glyph_residency",
         "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",

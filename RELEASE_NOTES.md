@@ -93,6 +93,13 @@ See the [Project Roadmap](docs/ProjectRoadmap.md) and
   A retained foreign subtree materializes one entity per element and counts against
   `maximumTreeNodes` and `maximumTreeDepth` like any other content, and reports a single
   unsupported-namespace warning at the top of the subtree.
+- **The glyph cap is 1,048,576 and configurable.** A frame previously stopped drawing text after
+  1024 distinct glyph outlines (every glyph on the default backend), and Geode kept at most 1024
+  outlines resident per document. `RendererInterface::setMaximumGlyphs` now sets one cap for glyphs
+  drawn per frame, distinct outlines decoded per frame, and Geode's resident outlines, defaulting to
+  `RendererTextMaterializationBudget::kDefaultMaximumGlyphs`. The aggregate byte and work budgets
+  are unchanged and remain the memory bound, so very large text can still be rejected before the
+  cap. Clip paths keep their own 1024-shape cap.
 
 ### Removed
 

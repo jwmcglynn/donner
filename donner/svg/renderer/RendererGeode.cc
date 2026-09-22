@@ -3447,11 +3447,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return slot.recordSlot.buffer.isValid();
   }
 
-  /// Glyph-residency budget, in distinct cached outlines and summed retained
-  /// outline plus encode bytes. Defaults come from `GeodeGlyphCache`; a test shrinks them to reach
-  /// eviction without building a font-sized working set.
-  size_t glyphCacheMaxEntries = geode::GeodeGlyphCache::kDefaultMaxEntries;
+  /// Glyph-residency budget, in distinct cached outlines and summed retained outline plus encode
+  /// bytes. The entry cap follows the shared glyph cap and the byte cap defaults from
+  /// `GeodeGlyphCache`; a test shrinks them to reach eviction without building a font-sized
+  /// working set.
+  size_t glyphCacheMaxEntriesForTesting = std::numeric_limits<size_t>::max();
   uint64_t glyphCacheMaxRetainedBytes = geode::GeodeGlyphCache::kDefaultMaxRetainedBytes;
+
+  /// Distinct glyph outlines one document may keep resident.
+  size_t glyphCacheMaxEntries() const {
+    return std::min(glyphCacheMaxEntriesForTesting, textMaterializationBudget->maximumGlyphs());
+  }
 
   /// Non-cached glyphs needed after the document cache reaches its admission cap. The deque keeps
   /// entry addresses stable for the frame's pending scene batches; beginFrame clears it only after
@@ -3483,7 +3489,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // covers the multi-document tile paths that never reach `draw()`.
     device->countGlyphResidencyEvictions(
         cache->beginFrame(currentFrameIndex, device->oldestOpenFrameGeneration(),
-                          glyphCacheMaxEntries, glyphCacheMaxRetainedBytes));
+                          glyphCacheMaxEntries(), glyphCacheMaxRetainedBytes));
     return cache;
   }
 
@@ -3629,19 +3635,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         textMaterializationBudget->reject();
         return nullptr;
       }
+      // Every miss keeps an entry for the rest of the frame, cached or not, even when its outline
+      // is empty, so the entry itself is what bounds misses on outline-less glyphs.
+      if (!textMaterializationBudget->reserve(
+              {.bytes = geode::GeodeGlyphCache::kEntryOverheadBytes})) {
+        return nullptr;
+      }
 
       // Admission has to happen before outline decoding and before insertion. The frame-start
       // trim cannot bound a cache that begins below its limit and creates a large working set in
       // one frame; entries touched by that open frame are intentionally ineligible for eviction.
       // Reclaim only entries no open frame can still reference, then fail closed if the new entry
       // still would exceed the configured count cap.
-      bool cacheAdmissionAvailable = glyphCacheMaxEntries != 0u;
-      if (cacheAdmissionAvailable && cache->size() >= glyphCacheMaxEntries) {
-        const size_t evicted =
-            cache->evictToBudget(device->oldestOpenFrameGeneration(), glyphCacheMaxEntries - 1u,
-                                 glyphCacheMaxRetainedBytes);
+      const size_t maxEntries = glyphCacheMaxEntries();
+      bool cacheAdmissionAvailable = maxEntries != 0u;
+      if (cacheAdmissionAvailable && cache->size() >= maxEntries) {
+        const size_t evicted = cache->evictToBudget(device->oldestOpenFrameGeneration(),
+                                                    maxEntries - 1u, glyphCacheMaxRetainedBytes);
         device->countGlyphResidencyEvictions(evicted);
-        if (cache->size() >= glyphCacheMaxEntries) {
+        if (cache->size() >= maxEntries) {
           cacheAdmissionAvailable = false;
         }
       }
@@ -3667,7 +3679,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       if (cacheAdmissionAvailable) {
         size_t evicted = 0;
         entry = cache->insertWithinBudget(key, std::move(outline), std::move(encoded),
-                                          device->oldestOpenFrameGeneration(), glyphCacheMaxEntries,
+                                          device->oldestOpenFrameGeneration(), maxEntries,
                                           glyphCacheMaxRetainedBytes, &evicted);
         device->countGlyphResidencyEvictions(evicted);
         if (entry != nullptr) {
@@ -5225,6 +5237,14 @@ void RendererGeode::setDebugGeometryOverlay(bool enabled) {
   impl_->debugGeometryOverlay = enabled;
 }
 
+void RendererGeode::setMaximumGlyphs(std::size_t maximumGlyphs) {
+  impl_->textMaterializationBudget->setMaximumGlyphs(maximumGlyphs);
+}
+
+std::size_t RendererGeode::maximumGlyphs() const {
+  return impl_->textMaterializationBudget->maximumGlyphs();
+}
+
 bool RendererGeode::debugGeometryOverlay() const {
   return impl_->debugGeometryOverlay;
 }
@@ -5332,7 +5352,7 @@ bool RendererGeode::sceneBatchingEnabledForTesting() {
 
 void RendererGeode::setGlyphResidencyBudgetForTesting(size_t maxEntries,
                                                       uint64_t maxRetainedBytes) {
-  impl_->glyphCacheMaxEntries = maxEntries;
+  impl_->glyphCacheMaxEntriesForTesting = maxEntries;
   impl_->glyphCacheMaxRetainedBytes = maxRetainedBytes;
 }
 

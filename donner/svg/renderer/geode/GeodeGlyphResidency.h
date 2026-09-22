@@ -149,7 +149,7 @@ struct GeodeGlyphResidentEntry {
   /// Approximate CPU footprint of the encode, used as the residence budget's
   /// unit. Slab capacity is not usable here: the slab reports whole chunks.
   uint64_t encodedBytes = 0;
-  /// Total retained CPU bytes for the outline and encode.
+  /// Total retained CPU bytes for the entry, its outline, and its encode.
   uint64_t retainedBytes = 0;
 };
 
@@ -263,7 +263,7 @@ public:
   /// Summed \ref GeodeGlyphResidentEntry::encodedBytes over live entries.
   uint64_t encodedBytes() const { return encodedBytes_; }
 
-  /// Total CPU bytes retained by cached outlines and encodes.
+  /// Total CPU bytes retained by cached entries, outlines, and encodes.
   uint64_t retainedBytes() const { return retainedBytes_; }
 
   /// Trim to budget at most once per frame. The frame-index guard makes the
@@ -326,12 +326,16 @@ public:
     return evicted;
   }
 
-  /// Default cap on distinct cached glyph outlines. One document at one size
-  /// in one font needs a few hundred; the cap bounds a document that animates
-  /// font-size continuously, where every frame mints new keys.
-  static constexpr size_t kDefaultMaxEntries = 1024u;
-  /// Default cap on summed retained outline and encode bytes.
+  /// Default cap on summed retained entry bytes. The entry count is capped by the renderer's glyph
+  /// cap; this cap bounds a document that animates font-size continuously, where every frame mints
+  /// new keys.
   static constexpr uint64_t kDefaultMaxRetainedBytes = 8u << 20;
+
+  /// Bytes one entry retains besides its outline and encode vectors: the entry, and the map node
+  /// holding its key, owning pointer, cached hash, and bucket link. Charging it keeps entries with
+  /// empty outlines inside the byte cap.
+  static constexpr uint64_t kEntryOverheadBytes =
+      sizeof(GeodeGlyphResidentEntry) + sizeof(GlyphGeometryKey) + 4u * sizeof(void*);
 
 private:
   template <typename T>
@@ -366,10 +370,12 @@ private:
     const std::optional<std::size_t> outlineBytes = outline.retainedBytes();
     const std::optional<uint64_t> encodedBytes = EncodedBytes(encoded);
     if (!outlineBytes.has_value() || !encodedBytes.has_value() ||
-        *outlineBytes > std::numeric_limits<uint64_t>::max() - *encodedBytes) {
+        *outlineBytes > std::numeric_limits<uint64_t>::max() - kEntryOverheadBytes ||
+        *encodedBytes >
+            std::numeric_limits<uint64_t>::max() - kEntryOverheadBytes - *outlineBytes) {
       return std::nullopt;
     }
-    return static_cast<uint64_t>(*outlineBytes) + *encodedBytes;
+    return kEntryOverheadBytes + static_cast<uint64_t>(*outlineBytes) + *encodedBytes;
   }
 
   uint64_t owningDeviceId_ = 0;
