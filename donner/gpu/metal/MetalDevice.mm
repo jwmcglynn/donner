@@ -305,6 +305,43 @@ void PublishCompletion(CompletionState& state, uint64_t serial, NSError* executi
   }
 }
 
+/// Records one command buffer's outcome. The last buffer of its submission to finish then
+/// publishes the submission's completion, failed when any buffer reported an error, or parks it
+/// when a test holds it.
+/// @param state Completion state of the device. @param outcome Outcome of the buffer's submission.
+/// @param bufferError Error this buffer reported, or nil. @param serial Serial of the submission.
+/// @param held Whether a test holds this submission's completion.
+/// @param uploadBytes Staging bytes to return. @param payloadBytes Payload bytes to return.
+void FinishCommandBuffer(CompletionState& state, SubmissionOutcome& outcome, NSError* bufferError,
+                         uint64_t serial, bool held, uint64_t uploadBytes, uint64_t payloadBytes) {
+  if (bufferError != nil) {
+    std::lock_guard<std::mutex> lock(outcome.mutex);
+    if (outcome.firstError == nil) {
+      outcome.firstError = bufferError;
+    }
+  }
+  if (outcome.buffersRemaining.fetch_sub(1, std::memory_order_acq_rel) != 1) {
+    return;
+  }
+  NSError* executionError = nil;
+  {
+    std::lock_guard<std::mutex> lock(outcome.mutex);
+    executionError = outcome.firstError;
+  }
+  bool parked = false;
+  if (held) {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    if (state.heldSerial == serial) {
+      state.parked = ParkedCompletion{serial, executionError, uploadBytes, payloadBytes};
+      parked = true;
+    }
+  }
+  if (!parked) {
+    PublishCompletion(state, serial, executionError, uploadBytes, payloadBytes);
+  }
+  state.handlersRun.fetch_add(1, std::memory_order_release);
+}
+
 }  // namespace
 
 /// Objective-C++ state of a MetalDevice: the Metal device and queue plus per-resource slot
@@ -1967,34 +2004,8 @@ void MetalDevice::Impl::attachCompletionHandler(std::span<EncodingState> states,
       if (bufferError == nil && injectedFailureIndex == index) {
         bufferError = InjectedCommandBufferFailure();
       }
-      if (bufferError != nil) {
-        std::lock_guard<std::mutex> lock(outcome->mutex);
-        if (outcome->firstError == nil) {
-          outcome->firstError = bufferError;
-        }
-      }
-      if (outcome->buffersRemaining.fetch_sub(1, std::memory_order_acq_rel) != 1) {
-        return;
-      }
-      NSError* executionError = nil;
-      {
-        std::lock_guard<std::mutex> lock(outcome->mutex);
-        executionError = outcome->firstError;
-      }
-      bool parked = false;
-      if (held) {
-        std::lock_guard<std::mutex> lock(sharedState->mutex);
-        if (sharedState->heldSerial == submissionSerial) {
-          sharedState->parked =
-              ParkedCompletion{submissionSerial, executionError, uploadBytes, payloadBytes};
-          parked = true;
-        }
-      }
-      if (!parked) {
-        PublishCompletion(*sharedState, submissionSerial, executionError, uploadBytes,
+      FinishCommandBuffer(*sharedState, *outcome, bufferError, submissionSerial, held, uploadBytes,
                           payloadBytes);
-      }
-      sharedState->handlersRun.fetch_add(1, std::memory_order_release);
     }];
   }
 }
