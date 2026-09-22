@@ -1875,9 +1875,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     ~PatternPaintSlot() = default;
 
     // Move-only, explicitly. The tile this slot owns is a move-only runtime handle, so a copy
-    // could never have worked; saying so here matters because a standard library that
-    // instantiates a container's copy constructor eagerly (libstdc++ does, libc++ does not)
-    // fails to compile on the implicit copy rather than on a copy anyone wrote.
+    // could never have worked; deleting it matters because a container member can advertise a
+    // copy constructor that fails only once instantiated, and `std::vector` reallocation's
+    // `move_if_noexcept` reaches for that copy whenever the element's move is not `noexcept`.
     PatternPaintSlot(const PatternPaintSlot&) = delete;
     PatternPaintSlot& operator=(const PatternPaintSlot&) = delete;
     PatternPaintSlot(PatternPaintSlot&&) = default;
@@ -2348,9 +2348,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     ~ClipStackEntry() = default;
 
     // Move-only, explicitly. The mask textures this entry owns are move-only runtime handles, so
-    // a copy could never have worked; saying so here matters because a standard library that
-    // instantiates a container's copy constructor eagerly (libstdc++ does, libc++ does not)
-    // fails to compile on the implicit copy rather than on a copy anyone wrote.
+    // a copy could never have worked; deleting it matters because the `std::deque` member below
+    // advertises a copy constructor that fails only once instantiated, and a deque's move is
+    // `noexcept` in libc++ but not in libstdc++, so `std::vector` reallocation's
+    // `move_if_noexcept` reaches for that copy on one of them and not the other.
     ClipStackEntry(const ClipStackEntry&) = delete;
     ClipStackEntry& operator=(const ClipStackEntry&) = delete;
     ClipStackEntry(ClipStackEntry&&) = default;
@@ -2409,6 +2410,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::vector<ClipStackEntry> savedClipStack;
     bool allocationRejected = false;
   };
+  // Copyability here is supplied by accident: the `std::unique_ptr` member is what deletes the
+  // copy, while `savedClipStack` holds entries whose copy is a hard error. Removing that member
+  // would make `std::vector` reallocation reach for the copy on a standard library whose deque
+  // move is not `noexcept`, and the failure would surface inside the standard library rather
+  // than here.
+  static_assert(!std::is_copy_constructible_v<FilterStackFrame>,
+                "A copyable filter stack frame would let vector growth copy its clip entries.");
   std::vector<ClipStackEntry> clipStack;
   std::vector<FilterStackFrame> filterStack;
   std::size_t rejectedFilterDepth = 0;
