@@ -108,14 +108,7 @@
         "WGPUSurfaceDescriptor",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
-        "WGPUTextureFormat_RGBA8Unorm",
-        "WGPUTextureUsage",
-        "WGPUTextureUsage_CopyDst",
-        "WGPUTextureUsage_CopySrc",
-        "WGPUTextureUsage_None",
-        "WGPUTextureUsage_RenderAttachment",
-        "WGPUTextureUsage_StorageBinding",
-        "WGPUTextureUsage_TextureBinding"
+        "WGPUTextureFormat_RGBA8Unorm"
       ],
       "wgpuCppTokens": [
         "Adapter",
@@ -141,9 +134,6 @@
         "TexelCopyBufferInfo",
         "TexelCopyTextureInfo",
         "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
-        "TextureUsage",
         "TextureView"
       ]
     },
@@ -155,6 +145,7 @@
       ],
       "wgpuCppTokens": [
         "Adapter",
+        "Buffer",
         "Instance",
         "Surface",
         "Texture"
@@ -422,21 +413,14 @@
       "wgpuCFunctions": [
         "wgpuDevicePoll"
       ],
-      "wgpuCTypes": [
-        "WGPUTextureUsage"
-      ],
       "wgpuCppTokens": [
         "Texture",
-        "TextureDimension",
-        "TextureFormat",
-        "TextureUsage"
+        "TextureFormat"
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
       "wgpuCppTokens": [
-        "Texture",
-        "TextureFormat",
-        "TextureUsage"
+        "TextureFormat"
       ]
     },
     "donner/svg/renderer/geode/GeodeCallbackState.h": {

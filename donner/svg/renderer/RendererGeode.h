@@ -279,11 +279,12 @@ public:
   // --- Embedded rendering ---
 
   /**
-   * Set a host-owned texture as the render target for subsequent frames.
+   * Set a texture this renderer's device already names as the render target for subsequent
+   * frames.
    *
    * When a target texture is set, `beginFrame()` renders into it instead of
    * allocating an internal offscreen target. The texture must:
-   * - Have `wgpu::TextureUsage::RenderAttachment` set.
+   * - Have `gpu::TextureUsage::RenderAttachment` set.
    * - Match the texture format configured on the `GeodeDevice` (default:
    *   `RGBA8Unorm`).
    * - Be at least as large as the viewport (in device pixels).
@@ -291,13 +292,14 @@ public:
    * If the texture also has `CopySrc` usage, `takeSnapshot()` can read it back.
    * If it lacks `CopySrc`, `takeSnapshot()` returns an empty bitmap.
    *
-   * The host retains ownership of the texture; it must remain valid from
-   * `beginFrame()` through `endFrame()`. Call `clearTargetTexture()` to
-   * revert to internal offscreen targets.
+   * Only the identity is kept, so the caller retains ownership and the texture must remain live
+   * from `beginFrame()` through `endFrame()`. A host that holds its target as a backend texture
+   * registers it with the device first; this renderer never sees a backend handle. Call
+   * `clearTargetTexture()` to revert to internal offscreen targets.
    *
-   * @param texture Host-owned render target texture. Must not be null.
+   * @param texture Live target texture of this renderer's device.
    */
-  void setTargetTexture(wgpu::Texture texture);
+  void setTargetTexture(const gpu::Texture& texture);
 
   /// Clear a previously set target texture, reverting to internal offscreen
   /// targets allocated per-frame by `beginFrame()`.

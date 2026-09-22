@@ -133,41 +133,21 @@ gpu::TextureUsage RenderTargetUsage(bool enableReadback) {
                         : gpu::TextureUsage::RenderAttachment;
 }
 
-/// The backend usage matching \p usage. @param usage Runtime usage flags.
-wgpu::TextureUsage WgpuUsageOf(gpu::TextureUsage usage) {
-  WGPUTextureUsage backendUsage = WGPUTextureUsage_None;
-  const auto carries = [usage](gpu::TextureUsage flag) {
-    return (usage & flag) != gpu::TextureUsage::None;
-  };
-  if (carries(gpu::TextureUsage::RenderAttachment)) {
-    backendUsage |= WGPUTextureUsage_RenderAttachment;
+/// The window's own frame target, for a window with no presentable surface. Allocated through the
+/// runtime, so what the frame draws into is a texture of the framebuffer device either way.
+/// @param device Framebuffer device to allocate on.
+/// @param width Target width in device pixels. @param height Target height in device pixels.
+/// @param format Format the frame is recorded for. @param usage Capabilities the frame needs.
+/// @return The target, or a null handle when the allocation failed.
+gpu::Texture CreateOffscreenTargetTexture(gpu::Device& device, int width, int height,
+                                          gpu::TextureFormat format, gpu::TextureUsage usage) {
+  gpu::Result<gpu::Texture> created = device.createTexture(gpu::TextureDescriptor{
+      "EditorWindowOffscreenTarget",
+      gpu::Extent2d{static_cast<uint32_t>(width), static_cast<uint32_t>(height)}, format, usage});
+  if (created.hasError()) {
+    return gpu::Texture();
   }
-  if (carries(gpu::TextureUsage::Sampled)) {
-    backendUsage |= WGPUTextureUsage_TextureBinding;
-  }
-  if (carries(gpu::TextureUsage::CopySrc)) {
-    backendUsage |= WGPUTextureUsage_CopySrc;
-  }
-  if (carries(gpu::TextureUsage::CopyDst)) {
-    backendUsage |= WGPUTextureUsage_CopyDst;
-  }
-  if (carries(gpu::TextureUsage::StorageBinding)) {
-    backendUsage |= WGPUTextureUsage_StorageBinding;
-  }
-  return wgpu::TextureUsage{backendUsage};
-}
-
-wgpu::Texture CreateOffscreenTargetTexture(const wgpu::Device& device, int width, int height,
-                                           gpu::TextureFormat format, gpu::TextureUsage usage) {
-  wgpu::TextureDescriptor textureDesc = {};
-  textureDesc.label = donner::geode::wgpuLabel("EditorWindowOffscreenTarget");
-  textureDesc.size = {static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1u};
-  textureDesc.mipLevelCount = 1;
-  textureDesc.sampleCount = 1;
-  textureDesc.dimension = wgpu::TextureDimension::_2D;
-  textureDesc.format = geode::WgpuTextureFormatFrom(format);
-  textureDesc.usage = WgpuUsageOf(usage);
-  return device.createTexture(textureDesc);
+  return std::move(created).result();
 }
 
 bool SurfaceUsageSupportsReadback(gpu::TextureUsage usage) {
@@ -1345,34 +1325,30 @@ void BeginUiFrame(UiTextureRegistry* registry, ImGuiRuntimeRenderer* renderer) {
   }
 }
 
-/// Records and submits one frame of UI draw data into \p target through the runtime. The surface
-/// still belongs to the presentation path, so the target enters the runtime as an imported
-/// texture whose backing it does not own.
+/// Records and submits one frame of UI draw data into \p target through the runtime.
 /// @param device Device the frame is recorded on.
 /// @param renderer Renderer recording the draw data.
-/// @param target Frame's color target.
+/// @param target Frame's color target, a live texture of \p device.
 /// @param targetSize Target extent in device pixels.
-/// @param surfaceFormat Format \p target was configured with.
 /// @param loadExisting Whether the target already holds content that must be preserved.
 /// @param clearColor Color the target is cleared to when it does not.
-bool RenderUiDrawData(geode::GeodeWgpuAdapterDevice& device, ImGuiRuntimeRenderer& renderer,
-                      wgpu::Texture& target, const gpu::Extent2d& targetSize,
-                      gpu::TextureFormat surfaceFormat, bool loadExisting,
-                      const std::array<double, 4>& clearColor) {
-  // The scissor is clamped to this extent, so it must be the attachment's own size rather than a
-  // separately computed one: clamping against a larger size would let a rectangle past the edge.
-  const gpu::Extent2d attachmentSize{target.getWidth(), target.getHeight()};
+bool RenderUiDrawData(gpu::Device& device, ImGuiRuntimeRenderer& renderer,
+                      const gpu::Texture& target, const gpu::Extent2d& targetSize,
+                      bool loadExisting, const std::array<double, 4>& clearColor) {
+  gpu::Result<gpu::TextureDescriptor> descriptor = device.textureDescriptor(target);
+  if (descriptor.hasError()) {
+    return false;
+  }
+  // The scissor is clamped to this extent, so it must be the device's record of the attachment
+  // rather than a separately computed size: clamping against a larger one would let a rectangle
+  // past the edge.
+  const gpu::Extent2d attachmentSize = descriptor.result().size;
   if (attachmentSize.width != targetSize.width || attachmentSize.height != targetSize.height) {
     std::fprintf(stderr, "EditorWindow: frame target is %ux%u but the frame reported %ux%u\n",
                  attachmentSize.width, attachmentSize.height, targetSize.width, targetSize.height);
   }
-  gpu::Result<gpu::Texture> runtimeTarget = device.importExternalTexture(
-      target, attachmentSize, surfaceFormat, gpu::TextureUsage::RenderAttachment);
-  if (runtimeTarget.hasError()) {
-    return false;
-  }
   gpu::Result<gpu::TextureView> runtimeView =
-      device.createTextureView(runtimeTarget.result(), gpu::TextureViewDescriptor{"editorFrame"});
+      device.createTextureView(target, gpu::TextureViewDescriptor{"editorFrame"});
   if (runtimeView.hasError()) {
     return false;
   }
@@ -1409,11 +1385,13 @@ struct EditorWindow::WgpuState {
   /// The backend objects the contexts below render through, reached through the selected runtime
   /// device rather than held separately, so there is one owner of them.
   const geode::GeodeGpuRoot* root = nullptr;
-  donner::geode::ScopedWgpuHandle<wgpu::Texture> offscreenTexture;
   gpu::TextureFormat surfaceFormat = gpu::TextureFormat::BGRA8Unorm;
   gpu::TextureUsage surfaceUsage = gpu::TextureUsage::RenderAttachment;
   std::shared_ptr<geode::GeodeDevice> geodeDevice;
   std::shared_ptr<geode::GeodeDevice> framebufferGeodeDevice;
+  /// This window's own frame target, for a window with no presentable surface. Allocated on
+  /// \ref framebufferGeodeDevice, so it is declared after that device and released before it.
+  gpu::Texture offscreenTexture;
   /// Where frames are presented, or null when this window renders into \ref offscreenTexture
   /// instead of a presentable surface. Giving a surface up hands its frame back through the
   /// device it was built on, so it is declared after that device and destroyed before it.
@@ -1441,7 +1419,7 @@ struct EditorWindow::WgpuState {
   /// @return Whether this state names a device and something to draw into.
   bool canPresentFrames() const {
     return root != nullptr && root->device() &&
-           (presentation != nullptr || static_cast<bool>(offscreenTexture));
+           (presentation != nullptr || offscreenTexture.isValid());
   }
 };
 #else
@@ -1733,10 +1711,10 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     }
 #endif
   } else {
-    wgpuState_->offscreenTexture.reset(
-        CreateOffscreenTargetTexture(wgpuState_->root->device(), surfaceWidth, surfaceHeight,
-                                     wgpuState_->surfaceFormat, wgpuState_->surfaceUsage));
-    if (!wgpuState_->offscreenTexture) {
+    wgpuState_->offscreenTexture = CreateOffscreenTargetTexture(
+        wgpuState_->framebufferGeodeDevice->runtimeDevice(), surfaceWidth, surfaceHeight,
+        wgpuState_->surfaceFormat, wgpuState_->surfaceUsage);
+    if (!wgpuState_->offscreenTexture.isValid()) {
       std::fprintf(stderr, "EditorWindow: failed to create offscreen WebGPU target\n");
       glfwDestroyWindow(window_);
       window_ = nullptr;
@@ -1895,6 +1873,9 @@ EditorWindow::~EditorWindow() {
       wgpuState_->presentation->shutdown();
       wgpuState_->presentation.reset();
     }
+    // The window's own target is allocated on the framebuffer device, so it goes back before
+    // that device does rather than relying on teardown order to make the release a no-op.
+    wgpuState_->offscreenTexture = gpu::Texture();
     wgpuState_->framebufferGeodeDevice.reset();
     wgpuState_->geodeDevice.reset();
   }
@@ -1987,7 +1968,7 @@ std::shared_ptr<geode::GeodeDevice> EditorWindow::geodeDevice() const {
 #ifdef DONNER_EDITOR_WGPU
 bool EditorWindow::usingOffscreenRenderTarget() const {
   return wgpuState_ != nullptr && wgpuState_->presentation == nullptr &&
-         static_cast<bool>(wgpuState_->offscreenTexture);
+         wgpuState_->offscreenTexture.isValid();
 }
 
 std::shared_ptr<geode::GeodeDevice> EditorWindow::geodeFramebufferDevice() const {
@@ -2161,6 +2142,198 @@ std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentation
 }
 #endif
 
+#ifdef DONNER_EDITOR_WGPU
+bool EditorWindow::configureFrameTarget(int displayW, int displayH) {
+  if (displayW == wgpuState_->configuredWidth && displayH == wgpuState_->configuredHeight) {
+    return true;
+  }
+  if (wgpuState_->presentation != nullptr) {
+    if (!wgpuState_->presentation->configure(displayW, displayH)) {
+      return false;
+    }
+  } else {
+    wgpuState_->offscreenTexture =
+        CreateOffscreenTargetTexture(wgpuState_->framebufferGeodeDevice->runtimeDevice(), displayW,
+                                     displayH, wgpuState_->surfaceFormat, wgpuState_->surfaceUsage);
+    if (!wgpuState_->offscreenTexture.isValid()) {
+      return false;
+    }
+  }
+  wgpuState_->configuredWidth = displayW;
+  wgpuState_->configuredHeight = displayH;
+  return true;
+}
+
+bool EditorWindow::drawFrameBelowUi(const wgpu::Texture& target, const gpu::Texture& frameTarget,
+                                    Vector2i framebufferSizePx,
+                                    const Vector2d& framebufferFromLogicalScale, bool hasUnderlay,
+                                    bool hasDirect, EditorWindowFrameTiming& timing) {
+  if (hasUnderlay || hasDirect) {
+    const auto underlayStart = std::chrono::steady_clock::now();
+    donner::geode::ScopedWgpuHandle<wgpu::TextureView> clearView(target.createView());
+    if (!clearView) {
+      return false;
+    }
+    donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> clearEncoder(
+        wgpuState_->root->device().createCommandEncoder());
+    if (!clearEncoder) {
+      return false;
+    }
+    wgpu::RenderPassColorAttachment clearColor = {};
+    clearColor.view = clearView.get();
+    clearColor.loadOp = wgpu::LoadOp::Clear;
+    clearColor.storeOp = wgpu::StoreOp::Store;
+    clearColor.clearValue = {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+                             options_.clearColor[3]};
+    clearColor.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+
+    wgpu::RenderPassDescriptor clearPassDesc = {};
+    clearPassDesc.colorAttachmentCount = 1;
+    clearPassDesc.colorAttachments = &clearColor;
+    donner::geode::ScopedWgpuHandle<wgpu::RenderPassEncoder> clearPass(
+        clearEncoder.get().beginRenderPass(clearPassDesc));
+    if (!clearPass) {
+      return false;
+    }
+    clearPass.get().end();
+    clearPass.reset();
+    donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> clearCommands(clearEncoder.get().finish());
+    if (!clearCommands) {
+      return false;
+    }
+    wgpuState_->root->queue().submit(1, &clearCommands.get());
+
+    if (hasUnderlay) {
+      EditorWindowWgpuRenderTarget underlayTarget{
+          .texture = frameTarget,
+          .framebufferSizePx = framebufferSizePx,
+          .framebufferFromLogicalScale = framebufferFromLogicalScale,
+      };
+      wgpuUnderlayRenderCallback_(underlayTarget);
+      timing.underlayMs = ElapsedMs(underlayStart);
+    }
+  }
+
+  // The direct pass carries selection/path chrome. It belongs above the
+  // document underlay, but below every ImGui surface so menus, popups, and
+  // contextual controls remain usable and visually unobstructed.
+  if (hasDirect) {
+    const auto directStart = std::chrono::steady_clock::now();
+    EditorWindowWgpuRenderTarget directTarget{
+        .texture = frameTarget,
+        .framebufferSizePx = framebufferSizePx,
+        .framebufferFromLogicalScale = framebufferFromLogicalScale,
+    };
+    wgpuDirectRenderCallback_(directTarget);
+    timing.directMs = ElapsedMs(directStart);
+  }
+  return true;
+}
+
+bool EditorWindow::recordFrameUi(const gpu::Texture& frameTarget, Vector2i framebufferSizePx,
+                                 bool loadExisting, EditorWindowFrameTiming& timing) {
+  const auto imguiDrawStart = std::chrono::steady_clock::now();
+  if (wgpuState_->uiRenderer == nullptr) {
+    return false;
+  }
+  {
+    ZoneScopedN("EditorWindow::renderUiDrawData");
+    // The host-side staging arrays the frame's geometry is packed into only ever grow, so one
+    // busy frame sets their size for the rest of the session. Tagged so the large-block table
+    // names them instead of listing anonymous multi-megabyte blocks.
+    const ScopedAllocTag imguiUploadTag(AllocTag::PresentationUpload);
+    if (!RenderUiDrawData(wgpuState_->framebufferGeodeDevice->runtimeDevice(),
+                          *wgpuState_->uiRenderer, frameTarget,
+                          {static_cast<uint32_t>(framebufferSizePx.x),
+                           static_cast<uint32_t>(framebufferSizePx.y)},
+                          loadExisting,
+                          {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+                           options_.clearColor[3]})) {
+      return false;
+    }
+  }
+  timing.imguiDrawMs = ElapsedMs(imguiDrawStart);
+  return true;
+}
+
+bool EditorWindow::recordFrameReadback(const wgpu::Texture& target, const wgpu::Buffer& buffer,
+                                       uint32_t width, uint32_t height, uint32_t bytesPerRow,
+                                       EditorWindowFrameTiming& timing) {
+  const auto readbackStart = std::chrono::steady_clock::now();
+  donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
+      wgpuState_->root->device().createCommandEncoder());
+  if (!encoder) {
+    return false;
+  }
+  CopySurfaceTextureToReadbackBuffer(target, buffer, width, height, bytesPerRow, encoder.get());
+  donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
+  if (!commands) {
+    return false;
+  }
+  wgpuState_->root->queue().submit(1, &commands.get());
+  timing.readbackMs += ElapsedMs(readbackStart);
+  return true;
+}
+
+void EditorWindow::readFrameReadback(const wgpu::Buffer& buffer, uint64_t byteSize, uint32_t width,
+                                     uint32_t height, uint32_t bytesPerRow,
+                                     svg::RendererBitmap* destination,
+                                     EditorWindowFrameTiming& timing) {
+  if (!MapReadbackBuffer(wgpuState_->root->device(), buffer, byteSize,
+                         wgpuState_->framebufferGeodeDevice)) {
+    return;
+  }
+  const auto readbackStart = std::chrono::steady_clock::now();
+  const uint8_t* mapped = static_cast<const uint8_t*>(buffer.getConstMappedRange(0, byteSize));
+  if (mapped != nullptr) {
+    CopyMappedSurfaceToBitmap(mapped, width, height, bytesPerRow, wgpuState_->surfaceFormat,
+                              destination);
+  }
+  buffer.unmap();
+  timing.readbackMs += ElapsedMs(readbackStart);
+}
+#else
+void EditorWindow::endFrameGl(svg::RendererBitmap* readback, int displayW, int displayH,
+                              EditorWindowFrameTiming& timing) {
+  glViewport(0, 0, displayW, displayH);
+  glClearColor(options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+               options_.clearColor[3]);
+  glClear(GL_COLOR_BUFFER_BIT);
+  {
+    ZoneScopedN("ImGui_ImplOpenGL3_RenderDrawData");
+    const auto imguiDrawStart = std::chrono::steady_clock::now();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    timing.imguiDrawMs = ElapsedMs(imguiDrawStart);
+  }
+  if (readback != nullptr && displayW > 0 && displayH > 0) {
+    ZoneScopedN("glReadPixels");
+    const auto readbackStart = std::chrono::steady_clock::now();
+    constexpr int kChannels = 4;
+    const std::size_t rowBytes = static_cast<std::size_t>(displayW) * kChannels;
+    std::vector<uint8_t> bottomUp(rowBytes * static_cast<std::size_t>(displayH));
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadBuffer(GL_BACK);
+    glReadPixels(0, 0, displayW, displayH, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
+    readback->dimensions = Vector2i(displayW, displayH);
+    readback->rowBytes = rowBytes;
+    readback->alphaType = svg::AlphaType::Premultiplied;
+    readback->pixels.resize(bottomUp.size());
+    for (int y = 0; y < displayH; ++y) {
+      const uint8_t* src = bottomUp.data() + static_cast<std::size_t>(displayH - 1 - y) * rowBytes;
+      uint8_t* dst = readback->pixels.data() + static_cast<std::size_t>(y) * rowBytes;
+      std::memcpy(dst, src, rowBytes);
+    }
+    timing.readbackMs = ElapsedMs(readbackStart);
+  }
+  {
+    ZoneScopedN("glfwSwapBuffers");
+    const auto presentStart = std::chrono::steady_clock::now();
+    glfwSwapBuffers(window_);
+    timing.presentMs = ElapsedMs(presentStart);
+  }
+}
+#endif
+
 void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   ZoneScopedN("EditorWindow::endFrame");
   EditorWindowFrameTiming timing;
@@ -2286,27 +2459,13 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       .consecutiveFailures = wgpuState_->smokeReadbackConsecutiveFailures,
   };
 #endif
-  if (displayW != wgpuState_->configuredWidth || displayH != wgpuState_->configuredHeight) {
-    if (wgpuState_->presentation != nullptr) {
-      if (!wgpuState_->presentation->configure(displayW, displayH)) {
-        return;
-      }
-    } else {
-      wgpuState_->offscreenTexture.reset(
-          CreateOffscreenTargetTexture(wgpuState_->root->device(), displayW, displayH,
-                                       wgpuState_->surfaceFormat, wgpuState_->surfaceUsage));
-      if (!wgpuState_->offscreenTexture) {
-        return;
-      }
-    }
-    wgpuState_->configuredWidth = displayW;
-    wgpuState_->configuredHeight = displayH;
+  if (!configureFrameTarget(displayW, displayH)) {
+    return;
   }
 
   // Holds this frame's acquisition for as long as the frame is being drawn; presenting it below
   // ends the acquisition and leaves this handle stale.
   gpu::Texture acquiredFrame;
-  wgpu::Texture target;
   if (wgpuState_->presentation != nullptr) {
     gpu::SurfaceStatus acquireStatus = gpu::SurfaceStatus::Success;
     acquiredFrame = acquirePresentationFrame(displayW, displayH, timing, acquireStatus);
@@ -2316,12 +2475,15 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
 #endif
       return;
     }
-    // The passes below still bind the frame as a backend texture; the presentation boundary they
-    // go through is what carries it as a runtime handle instead.
-    target = wgpuState_->framebufferGeodeDevice->adapterDevice().wgpuTextureOf(acquiredFrame);
-  } else {
-    target = wgpuState_->offscreenTexture.get();
   }
+  // Whichever of the two holds this frame's target keeps it alive for exactly as long as the
+  // frame below draws into it, so everything downstream names it rather than owning it.
+  const gpu::Texture& frameTarget =
+      wgpuState_->presentation != nullptr ? acquiredFrame : wgpuState_->offscreenTexture;
+  // The clear and readback passes below still bind the frame as a backend texture; moving the
+  // window's own surface handling onto the runtime is what carries it as a handle throughout.
+  const wgpu::Texture target =
+      wgpuState_->framebufferGeodeDevice->adapterDevice().wgpuTextureOf(frameTarget);
   if (!target) {
     return;
   }
@@ -2349,116 +2511,22 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   const bool hasUnderlayRenderCallback = static_cast<bool>(wgpuUnderlayRenderCallback_);
   const bool hasDirectRenderCallback = static_cast<bool>(wgpuDirectRenderCallback_);
   const bool hasPreImGuiFramebufferContent = hasUnderlayRenderCallback || hasDirectRenderCallback;
-  if (hasPreImGuiFramebufferContent) {
-    const auto underlayStart = std::chrono::steady_clock::now();
-    donner::geode::ScopedWgpuHandle<wgpu::TextureView> clearView(target.createView());
-    if (!clearView) {
-      return;
-    }
-    donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> clearEncoder(
-        wgpuState_->root->device().createCommandEncoder());
-    if (!clearEncoder) {
-      return;
-    }
-    wgpu::RenderPassColorAttachment clearColor = {};
-    clearColor.view = clearView.get();
-    clearColor.loadOp = wgpu::LoadOp::Clear;
-    clearColor.storeOp = wgpu::StoreOp::Store;
-    clearColor.clearValue = {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
-                             options_.clearColor[3]};
-    clearColor.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-
-    wgpu::RenderPassDescriptor clearPassDesc = {};
-    clearPassDesc.colorAttachmentCount = 1;
-    clearPassDesc.colorAttachments = &clearColor;
-    donner::geode::ScopedWgpuHandle<wgpu::RenderPassEncoder> clearPass(
-        clearEncoder.get().beginRenderPass(clearPassDesc));
-    if (!clearPass) {
-      return;
-    }
-    clearPass.get().end();
-    clearPass.reset();
-    donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> clearCommands(clearEncoder.get().finish());
-    if (!clearCommands) {
-      return;
-    }
-    wgpuState_->root->queue().submit(1, &clearCommands.get());
-
-    if (hasUnderlayRenderCallback) {
-      EditorWindowWgpuRenderTarget underlayTarget{
-          .texture = target,
-          .framebufferSizePx = Vector2i(displayW, displayH),
-          .framebufferFromLogicalScale = framebufferFromLogicalScale,
-      };
-      wgpuUnderlayRenderCallback_(underlayTarget);
-      timing.underlayMs = ElapsedMs(underlayStart);
-    }
+  if (!drawFrameBelowUi(target, frameTarget, Vector2i(displayW, displayH),
+                        framebufferFromLogicalScale, hasUnderlayRenderCallback,
+                        hasDirectRenderCallback, timing)) {
+    return;
   }
-
-  // The direct pass carries selection/path chrome. It belongs above the
-  // document underlay, but below every ImGui surface so menus, popups, and
-  // contextual controls remain usable and visually unobstructed.
-  if (hasDirectRenderCallback) {
-    const auto directStart = std::chrono::steady_clock::now();
-    EditorWindowWgpuRenderTarget directTarget{
-        .texture = target,
-        .framebufferSizePx = Vector2i(displayW, displayH),
-        .framebufferFromLogicalScale = framebufferFromLogicalScale,
-    };
-    wgpuDirectRenderCallback_(directTarget);
-    timing.directMs = ElapsedMs(directStart);
+  if (!recordFrameUi(frameTarget, Vector2i(displayW, displayH), hasPreImGuiFramebufferContent,
+                     timing)) {
+    return;
   }
-
-  {
-    const auto imguiDrawStart = std::chrono::steady_clock::now();
-    if (wgpuState_->uiRenderer == nullptr) {
-      return;
-    }
-    {
-      ZoneScopedN("EditorWindow::renderUiDrawData");
-      // The host-side staging arrays the frame's geometry is packed into only ever grow, so one
-      // busy frame sets their size for the rest of the session. Tagged so the large-block table
-      // names them instead of listing anonymous multi-megabyte blocks.
-      const ScopedAllocTag imguiUploadTag(AllocTag::PresentationUpload);
-      if (!RenderUiDrawData(wgpuState_->framebufferGeodeDevice->adapterDevice(),
-                            *wgpuState_->uiRenderer, target,
-                            {static_cast<uint32_t>(displayW), static_cast<uint32_t>(displayH)},
-                            wgpuState_->surfaceFormat, hasPreImGuiFramebufferContent,
-                            {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
-                             options_.clearColor[3]})) {
-        return;
-      }
-    }
-    timing.imguiDrawMs = ElapsedMs(imguiDrawStart);
+  if (readbackBuffer && !recordFrameReadback(target, readbackBuffer.get(), readbackWidth,
+                                             readbackHeight, readbackBytesPerRow, timing)) {
+    return;
   }
-  if (readbackBuffer) {
-    const auto readbackStart = std::chrono::steady_clock::now();
-    donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
-        wgpuState_->root->device().createCommandEncoder());
-    if (!encoder) {
-      return;
-    }
-    CopySurfaceTextureToReadbackBuffer(target, readbackBuffer.get(), readbackWidth, readbackHeight,
-                                       readbackBytesPerRow, encoder.get());
-    donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
-    if (!commands) {
-      return;
-    }
-    wgpuState_->root->queue().submit(1, &commands.get());
-    timing.readbackMs += ElapsedMs(readbackStart);
-  }
-  if (targetReadback != nullptr && readbackBuffer &&
-      MapReadbackBuffer(wgpuState_->root->device(), readbackBuffer.get(), readbackBufferSize,
-                        wgpuState_->framebufferGeodeDevice)) {
-    const auto readbackStart = std::chrono::steady_clock::now();
-    const uint8_t* mapped = static_cast<const uint8_t*>(
-        readbackBuffer.get().getConstMappedRange(0, readbackBufferSize));
-    if (mapped != nullptr) {
-      CopyMappedSurfaceToBitmap(mapped, readbackWidth, readbackHeight, readbackBytesPerRow,
-                                wgpuState_->surfaceFormat, targetReadback);
-    }
-    readbackBuffer.get().unmap();
-    timing.readbackMs += ElapsedMs(readbackStart);
+  if (targetReadback != nullptr && readbackBuffer) {
+    readFrameReadback(readbackBuffer.get(), readbackBufferSize, readbackWidth, readbackHeight,
+                      readbackBytesPerRow, targetReadback, timing);
   }
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   if (requestAsyncSmokeReadback && readbackBuffer) {
@@ -2480,42 +2548,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     timing.presentMs = ElapsedMs(presentStart);
   }
 #else
-  glViewport(0, 0, displayW, displayH);
-  glClearColor(options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
-               options_.clearColor[3]);
-  glClear(GL_COLOR_BUFFER_BIT);
-  {
-    ZoneScopedN("ImGui_ImplOpenGL3_RenderDrawData");
-    const auto imguiDrawStart = std::chrono::steady_clock::now();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    timing.imguiDrawMs = ElapsedMs(imguiDrawStart);
-  }
-  if (readback != nullptr && displayW > 0 && displayH > 0) {
-    ZoneScopedN("glReadPixels");
-    const auto readbackStart = std::chrono::steady_clock::now();
-    constexpr int kChannels = 4;
-    const std::size_t rowBytes = static_cast<std::size_t>(displayW) * kChannels;
-    std::vector<uint8_t> bottomUp(rowBytes * static_cast<std::size_t>(displayH));
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadBuffer(GL_BACK);
-    glReadPixels(0, 0, displayW, displayH, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
-    readback->dimensions = Vector2i(displayW, displayH);
-    readback->rowBytes = rowBytes;
-    readback->alphaType = svg::AlphaType::Premultiplied;
-    readback->pixels.resize(bottomUp.size());
-    for (int y = 0; y < displayH; ++y) {
-      const uint8_t* src = bottomUp.data() + static_cast<std::size_t>(displayH - 1 - y) * rowBytes;
-      uint8_t* dst = readback->pixels.data() + static_cast<std::size_t>(y) * rowBytes;
-      std::memcpy(dst, src, rowBytes);
-    }
-    timing.readbackMs = ElapsedMs(readbackStart);
-  }
-  {
-    ZoneScopedN("glfwSwapBuffers");
-    const auto presentStart = std::chrono::steady_clock::now();
-    glfwSwapBuffers(window_);
-    timing.presentMs = ElapsedMs(presentStart);
-  }
+  endFrameGl(readback, displayW, displayH, timing);
 #endif
 #ifdef __EMSCRIPTEN__
   // Keep the HTML loading surface visible until a real editor frame has reached the browser

@@ -574,8 +574,9 @@ struct EditorWindowInputOverride {
 #ifdef DONNER_EDITOR_WGPU
 /// Host framebuffer target exposed to direct Geode passes against the editor surface.
 struct EditorWindowWgpuRenderTarget {
-  /// Current swapchain texture. Valid only for the duration of the callback.
-  wgpu::Texture texture;
+  /// This frame's target, named on the framebuffer device. Borrowed: the frame keeps the texture
+  /// alive, and the name is valid only for the duration of the callback.
+  const gpu::Texture& texture;
   /// Framebuffer dimensions in physical pixels.
   Vector2i framebufferSizePx = Vector2i::Zero();
   /// Physical framebuffer pixels per ImGui logical pixel for this frame.
@@ -789,6 +790,64 @@ private:
   /// @param framebufferHeight Framebuffer height in pixels.
   [[nodiscard]] std::unique_ptr<internal::PresentationSurface> rebuildPresentationSurface(
       int framebufferWidth, int framebufferHeight);
+
+  /// Brings whatever this window draws into in line with \p displayW by \p displayH, when the
+  /// extent it was last configured for is not that. A presentable surface is reconfigured; a
+  /// window without one reallocates its own target.
+  /// @param displayW Framebuffer width in pixels. @param displayH Framebuffer height in pixels.
+  /// @return Whether there is something to draw into at that extent.
+  [[nodiscard]] bool configureFrameTarget(int displayW, int displayH);
+
+  /// Draws everything that belongs below every ImGui surface: the frame is cleared to this
+  /// window's clear color, then the document underlay and the selection and path chrome are
+  /// drawn over it, in that order. A frame with neither callback set is left for the UI pass to
+  /// clear.
+  /// @param target Frame's color target. @param frameTarget The same target, named on the
+  ///   framebuffer device, which is what the callbacks are handed.
+  /// @param framebufferSizePx Framebuffer extent in pixels.
+  /// @param framebufferFromLogicalScale Physical pixels per ImGui logical pixel this frame.
+  /// @param hasUnderlay Whether the underlay callback is set.
+  /// @param hasDirect Whether the chrome callback is set.
+  /// @param timing Frame timing to record their costs in.
+  /// @return Whether the frame is still drawable.
+  [[nodiscard]] bool drawFrameBelowUi(const wgpu::Texture& target, const gpu::Texture& frameTarget,
+                                      Vector2i framebufferSizePx,
+                                      const Vector2d& framebufferFromLogicalScale, bool hasUnderlay,
+                                      bool hasDirect, EditorWindowFrameTiming& timing);
+
+  /// Records and submits the copy that puts this frame's pixels in \p buffer.
+  /// @param target Frame's color target. @param buffer Destination, already sized for the copy.
+  /// @param width Copy width in pixels. @param height Copy height in pixels.
+  /// @param bytesPerRow Destination row pitch. @param timing Frame timing to record the cost in.
+  /// @return Whether the copy was submitted.
+  [[nodiscard]] bool recordFrameReadback(const wgpu::Texture& target, const wgpu::Buffer& buffer,
+                                         uint32_t width, uint32_t height, uint32_t bytesPerRow,
+                                         EditorWindowFrameTiming& timing);
+
+  /// Waits for \p buffer and unpacks it into \p destination, leaving \p destination untouched
+  /// when the map never completed.
+  /// @param buffer Buffer the frame was copied into. @param byteSize Bytes to map.
+  /// @param width Frame width in pixels. @param height Frame height in pixels.
+  /// @param bytesPerRow Row pitch in \p buffer. @param destination Bitmap to fill.
+  /// @param timing Frame timing to record the cost in.
+  void readFrameReadback(const wgpu::Buffer& buffer, uint64_t byteSize, uint32_t width,
+                         uint32_t height, uint32_t bytesPerRow, svg::RendererBitmap* destination,
+                         EditorWindowFrameTiming& timing);
+
+  /// Records and submits this frame's UI draw data into \p frameTarget.
+  /// @param frameTarget Frame's color target, named on the framebuffer device.
+  /// @param framebufferSizePx Framebuffer extent in pixels.
+  /// @param loadExisting Whether the target already holds content that must be preserved.
+  /// @param timing Frame timing to record the cost in.
+  /// @return Whether the draw data was submitted.
+  [[nodiscard]] bool recordFrameUi(const gpu::Texture& frameTarget, Vector2i framebufferSizePx,
+                                   bool loadExisting, EditorWindowFrameTiming& timing);
+#else
+  /// Draws this frame's UI through GL and swaps it in, reading it back first when asked.
+  /// @param readback Bitmap to fill, or null. @param displayW Framebuffer width in pixels.
+  /// @param displayH Framebuffer height in pixels. @param timing Frame timing to record into.
+  void endFrameGl(svg::RendererBitmap* readback, int displayW, int displayH,
+                  EditorWindowFrameTiming& timing);
 #endif
 
   EditorWindowOptions options_;

@@ -1420,9 +1420,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   // --- Host-provided target texture (embedding) ---
   //
-  // When non-null, `beginFrame()` renders into this texture instead of
-  // creating its own offscreen target. The host retains ownership.
-  wgpu::Texture hostTarget;
+  // When valid, `beginFrame()` renders into this texture instead of creating its own offscreen
+  // target. Identity only: the host retains ownership and keeps it alive.
+  gpu::Texture hostTarget;
   bool preserveTargetOnBeginFrame = false;
 
   // Texture format for all render targets. Matches the GeodeDevice's configured
@@ -1445,9 +1445,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Primary render target this renderer allocated, held as the runtime handle that owns it.
   /// Null while the embedder supplies the target instead.
   gpu::Texture ownedTarget;
-  /// Runtime name for an embedder-supplied target. The embedder owns that texture; this only
-  /// names it for the frame's encoders, and is refreshed whenever the supplied target changes.
-  gpu::Texture hostTargetHandle;
   std::optional<RendererGeodeTextureSnapshot> borrowedTargetSnapshot;
 
   // The frame's command buffers, in the order they must execute. endFrame submits all of them
@@ -4878,50 +4875,43 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
-  /// Whether the embedder's texture is a surface this renderer can draw a frame into.
+  /// Whether the host's texture is a surface this renderer can draw a frame into, and its
+  /// extent when it is.
   ///
-  /// Registering an externally owned texture is the only look the runtime gets at it: nothing
-  /// downstream re-reads the backend, so everything that later names it - a render pass, a layer
-  /// composite, a readback copy - is recorded against the registration. Check the shape against
-  /// the texture itself once, here, where the embedder hands it over. Capabilities are not
-  /// checked beyond being drawable, because the registration below carries the ones the texture
-  /// actually has: an embedder that supplies a draw-only surface gets its frame, and the
-  /// operations that surface cannot serve are refused where they are asked for.
-  [[nodiscard]] bool hostTargetIsDrawable() const {
-    return hostTarget.getFormat() == geode::WgpuTextureFormatFrom(textureFormat) &&
-           hostTarget.getSampleCount() == 1 && hostTarget.getDepthOrArrayLayers() == 1 &&
-           hostTarget.getDimension() == wgpu::TextureDimension::_2D &&
-           (static_cast<WGPUTextureUsage>(hostTarget.getUsage()) &
-            static_cast<WGPUTextureUsage>(wgpu::TextureUsage::RenderAttachment)) != 0u;
+  /// The device's own record of the texture is what is checked, so a handle that is stale or of
+  /// another device is refused here rather than at the first pass that names it. Format and the
+  /// render-attachment capability are the whole check: every texture with a record is 2D, single
+  /// layer and single sample, because the runtime's texture model has no way to say otherwise
+  /// and rejects any other sample count where textures are created. The remaining capabilities
+  /// are not checked because the record carries the ones the texture actually has: a host that
+  /// supplies a draw-only surface gets its frame, and the operations that surface cannot serve
+  /// are refused where they are asked for.
+  [[nodiscard]] std::optional<gpu::Extent2d> drawableHostTargetExtent() const {
+    gpu::Result<gpu::TextureDescriptor> descriptor =
+        device->runtimeDevice().textureDescriptor(hostTarget);
+    if (descriptor.hasError() || descriptor.result().format != textureFormat ||
+        !gpu::HasAllFlags(descriptor.result().usage, gpu::TextureUsage::RenderAttachment)) {
+      return std::nullopt;
+    }
+    return descriptor.result().size;
   }
 
   bool prepareHostFrameTarget() {
     retireOwnedTargetAtFrameBoundary();
-    if (hostTarget.getWidth() > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-        hostTarget.getHeight() > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
-        !hostTargetIsDrawable()) {
+    const std::optional<gpu::Extent2d> extent = drawableHostTargetExtent();
+    if (!extent || extent->width > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+        extent->height > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
       (void)surfaceBudget->reserve(-1, -1);
       target = gpu::Texture();
       return false;
     }
-    pixelWidth = static_cast<int>(hostTarget.getWidth());
-    pixelHeight = static_cast<int>(hostTarget.getHeight());
+    pixelWidth = static_cast<int>(extent->width);
+    pixelHeight = static_cast<int>(extent->height);
     if (!surfaceBudget->reserve(pixelWidth, pixelHeight)) {
       target = gpu::Texture();
       return false;
     }
-    // The embedder owns this texture, so the runtime only names it. That name is refreshed
-    // every frame because the embedder is free to hand over a different texture at any time.
-    hostTargetHandle = gpu::Texture();
-    gpu::Result<gpu::Texture> named = device->adapterDevice().importExternalTexture(
-        hostTarget, gpu::Extent2d{hostTarget.getWidth(), hostTarget.getHeight()}, textureFormat,
-        geode::GpuTextureUsageFromWgpu(hostTarget.getUsage()));
-    if (!named.hasResult()) {
-      target = gpu::Texture();
-      return false;
-    }
-    hostTargetHandle = std::move(named).result();
-    target = aliasOf(hostTargetHandle);
+    target = aliasOf(hostTarget);
     return true;
   }
 
@@ -4962,7 +4952,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return false;
     }
     device->setCounters(&counters);
-    if (hostTarget) {
+    if (hostTarget.isValid()) {
       return prepareHostFrameTarget();
     }
     return prepareOwnedFrameTarget();
@@ -5035,7 +5025,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       UTILS_RELEASE_ASSERT(device->deferDestroyTextureBacking(std::move(ownedTarget)));
     }
     ownedTarget = gpu::Texture();
-    hostTargetHandle = gpu::Texture();
   }
 
   /// Wait for the backend to go idle, unless the device is gone or lost.
@@ -5248,14 +5237,14 @@ RendererGeodeTexturePoolStats RendererGeode::texturePoolStats() const {
   return impl_->texturePoolStats();
 }
 
-void RendererGeode::setTargetTexture(wgpu::Texture texture) {
+void RendererGeode::setTargetTexture(const gpu::Texture& texture) {
   impl_->borrowedTargetSnapshot.reset();
-  impl_->hostTarget = std::move(texture);
+  impl_->hostTarget = Impl::aliasOf(texture);
 }
 
 void RendererGeode::clearTargetTexture() {
   impl_->borrowedTargetSnapshot.reset();
-  impl_->hostTarget = wgpu::Texture();
+  impl_->hostTarget = gpu::Texture();
   impl_->preserveTargetOnBeginFrame = false;
 }
 
@@ -7454,7 +7443,7 @@ std::uint64_t RendererGeode::filterBudgetChunksForTesting() const {
 
 std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapshot() {
   impl_->borrowedTargetSnapshot.reset();
-  if (!impl_->device || !impl_->ownedTarget.isValid() || impl_->hostTarget ||
+  if (!impl_->device || !impl_->ownedTarget.isValid() || impl_->hostTarget.isValid() ||
       impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     return nullptr;
   }
@@ -7473,7 +7462,7 @@ std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapsho
 }
 
 const RendererTextureSnapshot* RendererGeode::borrowTextureSnapshot() {
-  if (!impl_->device || !impl_->ownedTarget.isValid() || impl_->hostTarget ||
+  if (!impl_->device || !impl_->ownedTarget.isValid() || impl_->hostTarget.isValid() ||
       impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
     impl_->borrowedTargetSnapshot.reset();
     return nullptr;

@@ -236,10 +236,17 @@ donner::geode::GeodeEmbedConfig config;           // instance(optional), device,
 // nullptr if config.device or config.queue was null. The RendererGeode ctor takes a shared_ptr,
 // which a moved unique_ptr converts to.
 auto geodeDevice = donner::geode::GeodeDevice::CreateFromExternal(config);
-donner::svg::RendererGeode renderer(std::move(geodeDevice));
+// Kept, because the per-frame registration below goes through it.
+std::shared_ptr<donner::geode::GeodeDevice> device = std::move(geodeDevice);
+donner::svg::RendererGeode renderer(device);
 
-// Per frame:
-renderer.setTargetTexture(swapChainTex);
+// Per frame: register the host's texture with the device, then hand over the name.
+// The renderer names textures of its own device and never takes a backend handle.
+auto frameTarget = device->adapterDevice().importExternalTexture(
+    swapChainTex, donner::gpu::Extent2d{width, height}, device->textureFormat(),
+    donner::gpu::TextureUsage::RenderAttachment);
+if (frameTarget.hasError()) { return; }   // The description must match the texture.
+renderer.setTargetTexture(frameTarget.result());
 renderer.draw(document);
 renderer.clearTargetTexture();   // reverts to internal offscreen target
 ```
@@ -251,11 +258,12 @@ renderer.clearTargetTexture();   // reverts to internal offscreen target
   `wgpu::Instance` so Geode can wait for map callback completion through
   `Instance::waitAny()`.
 - Lifetime: host objects must outlive every `GeodeDevice`/`RendererGeode`; destroy renderers
-  before the host `wgpu::Device`; target texture must stay alive through the frame's draw.
-- Target texture must have `RenderAttachment` usage, `sampleCount == 1`, and a format matching
-  `GeodeEmbedConfig::textureFormat` — a mismatched format is rejected at frame start and Geode
-  silently falls back to its internal offscreen target for that frame (symptom: nothing appears
-  in your swap chain).
+  before the host `wgpu::Device`; the target texture and its registration must both stay alive
+  through the frame's draw. `setTargetTexture` keeps only the name and takes no refcount.
+- Target texture must be registered with the renderer's own device, carry `RenderAttachment`
+  usage, have `sampleCount == 1`, and match `GeodeEmbedConfig::textureFormat`. A target that
+  fails any of these is refused at frame start and the frame is declined: nothing is recorded
+  and nothing is submitted (symptom: nothing appears in your swap chain).
 - Runnable host: `bazel run --config=geode //examples:geode_embed -- file.svg`. Its
   platform-surface helpers also demonstrate the X11 macro-collision fix (`None`/`True`/`False`/
   `Status` from Xlib vs `wgpu::Status`) — isolate GLFW-native includes in their own translation

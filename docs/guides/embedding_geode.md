@@ -77,11 +77,24 @@ donner::svg::RendererGeode renderer(device);
 ```cpp
 wgpu::Texture swapChainTex = /* acquire from wgpu::Surface */;
 
-renderer.setTargetTexture(swapChainTex);
+// The renderer names textures of its own device, never backend handles, so register the
+// frame's texture with the device and hand over the name. The registration takes no
+// ownership; dropping the returned handle only forgets it.
+donner::gpu::Result<donner::gpu::Texture> frameTarget =
+    device->adapterDevice().importExternalTexture(
+        swapChainTex,
+        donner::gpu::Extent2d{swapChainTex.getWidth(), swapChainTex.getHeight()},
+        device->textureFormat(), donner::gpu::TextureUsage::RenderAttachment);
+if (frameTarget.hasError()) {
+  return;  // Nothing to draw into this frame.
+}
+
+renderer.setTargetTexture(frameTarget.result());
 renderer.draw(document);      // `donner::svg::SVGDocument&`
 renderer.clearTargetTexture();
 
-// The host then presents its surface however it normally does.
+// The host then presents its surface however it normally does. `frameTarget` going out of
+// scope here forgets the registration and leaves the texture with the host.
 ```
 
 Call `setTargetTexture` once per frame (before `beginFrame` / `draw` /
@@ -95,24 +108,32 @@ it reverts the renderer to the internal offscreen target path.
   `wgpu::Queue`. `GeodeDevice::CreateFromExternal` does not retain refcounts;
   you must keep the host objects alive for the full lifetime of every
   `GeodeDevice` and `RendererGeode` derived from them.
-- The **target texture** (the argument to `setTargetTexture`) must stay live
-  through the matching frame's `endFrame` or `draw` call. For a swap chain,
-  the natural boundary is "don't release until after `surface.present()`".
+- The **target texture** must stay live through the matching frame's `endFrame`
+  or `draw` call, and so must its registration: `setTargetTexture` keeps only
+  the name, takes no refcount on anything, and a name whose registration has
+  been dropped is refused at `beginFrame`. For a swap chain, the natural
+  boundary for both is "don't release until after `surface.present()`".
 - Destroy `RendererGeode` and `GeodeDevice` instances **before** the host's
   `wgpu::Device`. Geode's pipeline objects are released in the renderer's
   destructor and require a live device.
 
 ## Target-texture requirements
 
-| Requirement | Why |
-|-------------|-----|
-| `usage` includes `wgpu::TextureUsage::RenderAttachment` | Geode draws into the texture through a render pass. |
-| `format` matches `GeodeEmbedConfig::textureFormat` | The internal pipelines are built against a single color format. |
-| `usage` includes `wgpu::TextureUsage::CopySrc` | Only needed for `RendererGeode::takeSnapshot()`; omit otherwise. |
-| `sampleCount` is 1 | Geode renders directly into a single-sample target. |
+| Requirement                                                     | Why                                                                                                 |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| the registration includes `gpu::TextureUsage::RenderAttachment` | Geode draws into the texture through a render pass.                                                 |
+| `format` matches `GeodeEmbedConfig::textureFormat`              | The internal pipelines are built against a single color format.                                     |
+| the registration includes `gpu::TextureUsage::CopySrc`          | Only needed for `RendererGeode::takeSnapshot()`; omit otherwise.                                    |
+| `sampleCount` is 1                                              | Geode renders directly into a single-sample target, and the registration cannot describe any other. |
+| the texture is registered with the renderer's own device        | A name from another device resolves to a different texture there, so it is refused.                 |
 
-If the format does not match, Geode rejects the texture at `beginFrame` and
-falls back to its internal offscreen target for that frame.
+The registration describes the texture, so it has to describe it accurately:
+what Geode checks is the device's record, not the backend texture.
+
+A target that fails any of these is refused at `beginFrame` and the frame is
+declined - nothing is recorded and nothing is submitted. It does not fall back
+to the internal offscreen target; that path is for a renderer with no target
+texture set at all.
 
 ## Complete example
 
@@ -134,8 +155,9 @@ The example handles the full host lifecycle:
 4. Wraps the resulting device with `GeodeDevice::CreateFromExternal`, then
    constructs one `RendererGeode` and reuses it across every frame.
 5. In the main loop: `glfwPollEvents`, `surface.getCurrentTexture`,
-   `renderer.setTargetTexture`, `renderer.draw`, `surface.present`,
-   `wgpuTextureRelease`.
+   `GeodeWgpuAdapterDevice::importExternalTexture` to register that texture,
+   `renderer.setTargetTexture` with the name it returned, `renderer.draw`,
+   `surface.present`, `wgpuTextureRelease`.
 
 ## Troubleshooting
 
