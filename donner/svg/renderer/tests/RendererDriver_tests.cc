@@ -1757,6 +1757,28 @@ TEST_F(RendererDriverTest, EffectSpansResolveStylesOncePerTextElement) {
   EXPECT_EQ(driver.textPreparationStatsForTesting().fullElementStylePasses, 2u);
   EXPECT_EQ(driver.textPreparationStatsForTesting().spanStyleVisits, 26u);
 }
+
+TEST_F(RendererDriverTest, PatternFilledEffectSpansPreserveOuterTextPreparation) {
+  std::string body = R"svg(
+    <defs>
+      <pattern id="tile" width="8" height="8" patternUnits="userSpaceOnUse">
+        <rect width="8" height="8" fill="red"/>
+      </pattern>
+      <clipPath id="clip"><rect width="200" height="200"/></clipPath>
+    </defs>
+    <text x="10" y="60" font-family="sans-serif" font-size="48" fill="url(#tile)">)svg";
+  for (int span = 0; span < 12; ++span) {
+    body += R"svg(<tspan clip-path="url(#clip)">S</tspan>)svg";
+  }
+  body += "</text>";
+  SVGDocument document = makeDocument(body, Vector2i(200, 200));
+  ON_CALL(renderer, beginPatternTile(_, _)).WillByDefault(::testing::Return(true));
+
+  driver.draw(document);
+
+  EXPECT_EQ(driver.textPreparationStatsForTesting().fullElementStylePasses, 1u);
+  EXPECT_EQ(driver.textPreparationStatsForTesting().spanStyleVisits, 13u);
+}
 #endif  // DONNER_TEXT_ENABLED
 
 TEST_F(RendererDriverTest, DrawEntityRangeCopiesUrlFilterNodesIntoCssFilterGraph) {
