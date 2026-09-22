@@ -1666,6 +1666,29 @@ private:
     uint64_t orderAfterSerial = 0;
   };
 
+  /// Refuses exporting a texture of a lost device, a registration, or a surface's frame.
+  /// @param texture Already-resolved texture. @param label Its label, for the message.
+  Status checkTextureExportable(const Texture& texture, std::string_view label) const;
+
+  /// Asks the backend to export a texture and records the share every token will hold.
+  /// @param slotIndex Exportable texture slot. @param descriptor Its record.
+  Result<std::shared_ptr<details::TextureShare>> createTextureShare(
+      uint32_t slotIndex, const TextureDescriptor& descriptor);
+
+  /// Refuses an export this device cannot name: another backend family or native device, or a
+  /// backend without cross-device naming. @param share Share the export holds.
+  Status checkRegistrationIdentity(const details::TextureShare& share) const;
+
+  /// Refuses registering an export of this device, of a lost or released texture, of another
+  /// backend or native device, or of a texture with a write still queued.
+  /// @param share Share the export holds.
+  Status checkRegistrationSource(const details::TextureShare& share) const;
+
+  /// Whether the producer work a registration follows has settled: true once it completed, false
+  /// once either device is lost or the producer failed (declaring that failure), and nothing
+  /// while it is still running. @param entry Registration to check.
+  std::optional<bool> textureSourceState(const TextureRegistration& entry) const;
+
   /// The share of an exported texture of this device, or null. @param slotIndex Texture slot.
   details::TextureShare* textureShareOf(uint32_t slotIndex) const;
 

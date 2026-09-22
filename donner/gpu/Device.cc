@@ -2534,55 +2534,122 @@ bool Device::textureHeldElsewhere(uint32_t slotIndex) const {
   return share != nullptr && share->heldElsewhere();
 }
 
-Result<TextureExport> Device::exportTexture(const Texture& texture) {
-  auto record = resolve(textures_, texture, TextureTag::kName);
-  if (record.hasError()) {
-    return std::move(record).error();
-  }
-  const uint32_t slotIndex = texture.slotIndex();
-  const TextureDescriptor& descriptor = record.result()->descriptor;
+Status Device::checkTextureExportable(const Texture& texture, std::string_view label) const {
   if (isLost()) {
     return Err(GpuErrorType::DeviceLost,
                std::format("exportTexture: texture \"{}\" belongs to a lost device, whose "
                            "contents cannot be trusted",
-                           descriptor.label.str()));
+                           label));
   }
-  if (textureRegistrationOf(slotIndex) != nullptr) {
+  if (textureRegistrationOf(texture.slotIndex()) != nullptr) {
     return Err(GpuErrorType::InvalidState,
                std::format("exportTexture: texture \"{}\" is a registration of another device's "
                            "texture; export it from the device that allocated it",
-                           descriptor.label.str()));
+                           label));
   }
   if (namesAcquiredSurfaceFrame(texture)) {
     return Err(GpuErrorType::InvalidState,
                std::format("exportTexture: texture \"{}\" is the frame a surface has out, which "
                            "belongs to that surface",
-                           descriptor.label.str()));
+                           label));
   }
+  return OkStatus();
+}
 
-  std::shared_ptr<details::TextureShare>& share = SideTableSlot(textureShares_, slotIndex);
+Result<std::shared_ptr<details::TextureShare>> Device::createTextureShare(
+    uint32_t slotIndex, const TextureDescriptor& descriptor) {
+  Result<BackendTextureExport> exported = onExportTexture(slotIndex);
+  if (exported.hasError()) {
+    return std::move(exported).error();
+  }
+  BackendTextureExport backend = std::move(exported).result();
+  const BackendDeviceIdentity identity = backendDeviceIdentity();
+  if (!identity.isValid() || backend.backing == nullptr ||
+      (backend.ordering == SourceOrdering::WaitForSource && backend.completion == nullptr)) {
+    return Err(GpuErrorType::InvalidState,
+               "exportTexture: the backend reported an incomplete export");
+  }
+  // Submissions this device accepted before the export are recorded only here, not in the share.
+  backend.contentSerial = std::max(backend.contentSerial, textures_.lastUseOf(slotIndex));
+  if (backend.writePending) {
+    pendingSharedTextureWrites_.push_back(slotIndex);
+  }
+  return std::make_shared<details::TextureShare>(descriptor, deviceId_, identity, lostState_,
+                                                 std::move(backend), sharedTextureTailBytes_);
+}
+
+Result<TextureExport> Device::exportTexture(const Texture& texture) {
+  auto record = resolve(textures_, texture, TextureTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  const TextureDescriptor& descriptor = record.result()->descriptor;
+  if (Status exportable = checkTextureExportable(texture, descriptor.label.str());
+      exportable.hasError()) {
+    return std::move(exportable).error();
+  }
+  std::shared_ptr<details::TextureShare>& share =
+      SideTableSlot(textureShares_, texture.slotIndex());
   if (share == nullptr) {
-    Result<BackendTextureExport> exported = onExportTexture(slotIndex);
-    if (exported.hasError()) {
-      return std::move(exported).error();
+    Result<std::shared_ptr<details::TextureShare>> created =
+        createTextureShare(texture.slotIndex(), descriptor);
+    if (created.hasError()) {
+      return std::move(created).error();
     }
-    BackendTextureExport backend = std::move(exported).result();
-    const BackendDeviceIdentity identity = backendDeviceIdentity();
-    if (!identity.isValid() || backend.backing == nullptr ||
-        (backend.ordering == SourceOrdering::WaitForSource && backend.completion == nullptr)) {
-      return Err(GpuErrorType::InvalidState,
-                 "exportTexture: the backend reported an incomplete export");
-    }
-    // Submissions this device accepted before the export are recorded only here, not in the share.
-    backend.contentSerial = std::max(backend.contentSerial, textures_.lastUseOf(slotIndex));
-    const bool writePending = backend.writePending;
-    share = std::make_shared<details::TextureShare>(descriptor, deviceId_, identity, lostState_,
-                                                    std::move(backend), sharedTextureTailBytes_);
-    if (writePending) {
-      pendingSharedTextureWrites_.push_back(slotIndex);
-    }
+    share = std::move(created).result();
   }
   return TextureExport(std::make_shared<const details::TextureShareLease>(share));
+}
+
+Status Device::checkRegistrationIdentity(const details::TextureShare& share) const {
+  const std::string label = share.descriptor().label.str();
+  const BackendDeviceIdentity identity = backendDeviceIdentity();
+  if (!identity.isValid()) {
+    return Err(GpuErrorType::Unsupported, std::string(kRegistrationUnsupported));
+  }
+  if (identity.family != share.identity().family) {
+    return Err(GpuErrorType::DeviceMismatch,
+               std::format("registerTexture: texture \"{}\" belongs to a device of another "
+                           "backend",
+                           label));
+  }
+  if (identity.nativeDevice != share.identity().nativeDevice) {
+    return Err(
+        GpuErrorType::DeviceMismatch,
+        std::format("registerTexture: texture \"{}\" belongs to a different native device", label));
+  }
+  return OkStatus();
+}
+
+Status Device::checkRegistrationSource(const details::TextureShare& share) const {
+  const std::string label = share.descriptor().label.str();
+  if (share.producerDeviceId() == deviceId_) {
+    return Err(GpuErrorType::InvalidState,
+               std::format("registerTexture: texture \"{}\" is already a texture of this device; "
+                           "use its own handle",
+                           label));
+  }
+  if (isLost() || share.producerLost()) {
+    return Err(GpuErrorType::DeviceLost,
+               std::format("registerTexture: texture \"{}\" cannot be registered once either "
+                           "device is lost",
+                           label));
+  }
+  if (share.producerReleased()) {
+    return Err(
+        GpuErrorType::InvalidHandle,
+        std::format("registerTexture: the producing device no longer names texture \"{}\"", label));
+  }
+  if (Status identity = checkRegistrationIdentity(share); identity.hasError()) {
+    return identity;
+  }
+  if (share.writePending()) {
+    return Err(GpuErrorType::InvalidState,
+               std::format("registerTexture: a write to texture \"{}\" is queued for the "
+                           "producer's next submission; register it once that is submitted",
+                           label));
+  }
+  return OkStatus();
 }
 
 Result<Texture> Device::registerTexture(const TextureExport& source) {
@@ -2590,44 +2657,8 @@ Result<Texture> Device::registerTexture(const TextureExport& source) {
     return Err(GpuErrorType::InvalidHandle, "registerTexture: the export names no texture");
   }
   const std::shared_ptr<details::TextureShare>& share = source.lease_->share();
-  const std::string_view label = share->descriptor().label.str();
-  if (share->producerDeviceId() == deviceId_) {
-    return Err(GpuErrorType::InvalidState,
-               std::format("registerTexture: texture \"{}\" is already a texture of this device; "
-                           "use its own handle",
-                           label));
-  }
-  if (isLost() || share->producerLost()) {
-    return Err(GpuErrorType::DeviceLost,
-               std::format("registerTexture: texture \"{}\" cannot be registered once either "
-                           "device is lost",
-                           label));
-  }
-  if (share->producerReleased()) {
-    return Err(
-        GpuErrorType::InvalidHandle,
-        std::format("registerTexture: the producing device no longer names texture \"{}\"", label));
-  }
-  const BackendDeviceIdentity identity = backendDeviceIdentity();
-  if (!identity.isValid()) {
-    return Err(GpuErrorType::Unsupported, std::string(kRegistrationUnsupported));
-  }
-  if (identity.family != share->identity().family) {
-    return Err(GpuErrorType::DeviceMismatch,
-               std::format("registerTexture: texture \"{}\" belongs to a device of another "
-                           "backend",
-                           label));
-  }
-  if (identity.nativeDevice != share->identity().nativeDevice) {
-    return Err(
-        GpuErrorType::DeviceMismatch,
-        std::format("registerTexture: texture \"{}\" belongs to a different native device", label));
-  }
-  if (share->writePending()) {
-    return Err(GpuErrorType::InvalidState,
-               std::format("registerTexture: a write to texture \"{}\" is queued for the "
-                           "producer's next submission; register it once that is submitted",
-                           label));
+  if (Status admissible = checkRegistrationSource(*share); admissible.hasError()) {
+    return std::move(admissible).error();
   }
   TextureDescriptor descriptor = share->descriptor();
   descriptor.usage = descriptor.usage & kRegistrationUsage;
@@ -2635,7 +2666,7 @@ Result<Texture> Device::registerTexture(const TextureExport& source) {
     return Err(GpuErrorType::UsageMismatch,
                std::format("registerTexture: texture \"{}\" can be neither sampled nor copied "
                            "from, so a registration could do nothing with it",
-                           label));
+                           share->descriptor().label.str()));
   }
   const uint64_t orderAfterSerial = share->contentSerial();
 
@@ -2649,19 +2680,33 @@ Result<Texture> Device::registerTexture(const TextureExport& source) {
   return handle;
 }
 
+std::optional<bool> Device::textureSourceState(const TextureRegistration& entry) const {
+  const details::TextureShare& share = *entry.lease->share();
+  if (isLost() || share.producerLost()) {
+    return false;
+  }
+  const SubmissionCompletion& completion = *share.completion();
+  if (completion.failed()) {
+    if (DeclareDeviceLost(share.producerLostState())) {
+      LogDeclaredDeviceLoss(
+          "the device producing a registered texture reported an execution failure");
+    }
+    return false;
+  }
+  if (completion.completedSerial() >= entry.orderAfterSerial) {
+    return true;
+  }
+  return std::nullopt;
+}
+
 bool Device::waitForTextureSource(const Texture& registration, double timeoutSeconds) {
   if (validateTextureHandleForBackend(registration).hasError()) {
     return false;
   }
   const TextureRegistration* entry = textureRegistrationOf(registration.slotIndex());
-  if (entry == nullptr) {
+  if (entry == nullptr || entry->lease->share()->ordering() == SourceOrdering::SharedQueue) {
     return true;
   }
-  const details::TextureShare& share = *entry->lease->share();
-  if (share.ordering() == SourceOrdering::SharedQueue) {
-    return true;
-  }
-  const SubmissionCompletion& completion = *share.completion();
   const double clampedSeconds =
       timeoutSeconds > 0.0 ? std::min(timeoutSeconds, kMaxWaitSeconds) : 0.0;
   const std::chrono::steady_clock::time_point deadline =
@@ -2670,19 +2715,8 @@ bool Device::waitForTextureSource(const Texture& registration, double timeoutSec
           std::chrono::duration<double>(clampedSeconds));
   constexpr std::chrono::milliseconds kRecheckInterval{1};
   for (;;) {
-    if (isLost() || share.producerLost()) {
-      return false;
-    }
-    if (completion.failed()) {
-      if (DeclareDeviceLost(share.producerLostState())) {
-        LogDeclaredDeviceLoss(
-            "the device producing a registered texture reported an execution "
-            "failure");
-      }
-      return false;
-    }
-    if (completion.completedSerial() >= entry->orderAfterSerial) {
-      return true;
+    if (const std::optional<bool> settled = textureSourceState(*entry)) {
+      return *settled;
     }
     if (std::chrono::steady_clock::now() >= deadline) {
       return false;
@@ -2705,7 +2739,7 @@ Status Device::checkSubmissionTextureSources(std::span<const SubmissionUse> uses
       continue;
     }
     const details::TextureShare& share = *entry->lease->share();
-    const std::string_view label = share.descriptor().label.str();
+    const std::string label = share.descriptor().label.str();
     const SubmissionCompletion* completion = share.completion();
     if (isLost() || share.producerLost() || (completion != nullptr && completion->failed())) {
       return Err(GpuErrorType::DeviceLost,
