@@ -334,7 +334,11 @@ void ApplyBindingType(wgpu::BindGroupLayoutEntry& entry,
 }  // namespace
 
 GeodeWgpuAdapterDevice::GeodeWgpuAdapterDevice(GeodeDevice& geodeDevice)
-    : geodeDevice_(geodeDevice) {}
+    : geodeDevice_(geodeDevice) {
+  // Every runtime device over one backend root answers the same question about whether that root
+  // has stopped answering, so take the root's condition rather than minting a private one.
+  adoptLostState(geodeDevice.lostState());
+}
 
 GeodeWgpuAdapterDevice::~GeodeWgpuAdapterDevice() {
   // Wait for in-flight submissions so deferred destructions drain before the slot vectors
@@ -351,26 +355,47 @@ uint64_t GeodeWgpuAdapterDevice::completedSerial() const {
 }
 
 bool GeodeWgpuAdapterDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
-  const auto deadline = std::chrono::steady_clock::now() +
-                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                            std::chrono::duration<double>(timeoutSeconds));
-  // Bounded like GeodeDevice's WaitForSubmittedWork: poll(true) blocks until pending work
-  // progresses (yielding through Asyncify on Emscripten), so iterations are cheap when idle.
-  for (int pollIter = 0; pollIter < 20000; ++pollIter) {
+  const auto start = std::chrono::steady_clock::now();
+  const auto deadline = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                    std::chrono::duration<double>(timeoutSeconds));
+  // Bounded like GeodeDevice's queue drain: poll(true) blocks until pending work progresses
+  // (yielding through Asyncify on Emscripten), so iterations are cheap when idle. The iteration
+  // cap is a second bound on a driver whose poll returns without either progressing or costing
+  // wall time; reaching it says the same thing the deadline does.
+  for (int pollIter = 0; pollIter < kMaxSerialWaitPolls; ++pollIter) {
     if (completedSerial() >= serial) {
       return true;
     }
-    if (geodeDevice_.isDeviceLost()) {
+    if (isLost()) {
       // Nothing will complete on a lost device, so the budget is not spent waiting for something
       // that can never arrive - and polling a lost wgpu device is what hangs on some drivers.
       return false;
     }
     if (std::chrono::steady_clock::now() >= deadline) {
-      return false;
+      return giveUpOnSerialWait(start, timeoutSeconds);
     }
     geodeDevice_.device().poll(true, nullptr);
   }
-  return completedSerial() >= serial;
+  if (completedSerial() >= serial) {
+    return true;
+  }
+  return giveUpOnSerialWait(start, timeoutSeconds);
+}
+
+bool GeodeWgpuAdapterDevice::giveUpOnSerialWait(std::chrono::steady_clock::time_point start,
+                                                double timeoutSeconds) {
+  // A budget of zero is a question about what is already known rather than a wait, so its
+  // negative answer is no evidence that the device stopped answering.
+  if (timeoutSeconds > 0.0) {
+    // Report the wait that actually ran, not the budget it was given: the budget is a constant
+    // the reader already knows, while the measurement says whether the wait gave up on schedule
+    // or overran under load.
+    markLostAfterWaitTimeout(gpu::DeviceLostWaitSite::QueueIdle,
+                             std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - start),
+                             "submitted GPU work did not complete within the bounded wait");
+  }
+  return false;
 }
 
 bool GeodeWgpuAdapterDevice::onOwnsTextureBacking(uint32_t slotIndex) const {
@@ -679,7 +704,7 @@ gpu::Result<gpu::SurfaceStatus> GeodeWgpuAdapterDevice::onPresentSurface(uint32_
   // Acquiring the frame took a reference of its own, so it goes back with the frame.
   ReleaseWgpuHandle(slot.acquired);
   slot.hasAcquired = false;
-  return geodeDevice_.isDeviceLost() ? gpu::SurfaceStatus::DeviceLost : gpu::SurfaceStatus::Success;
+  return isLost() ? gpu::SurfaceStatus::DeviceLost : gpu::SurfaceStatus::Success;
 }
 
 void GeodeWgpuAdapterDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
@@ -724,7 +749,7 @@ gpu::Status GeodeWgpuAdapterDevice::onMapBufferAsync(uint32_t mappingSlotIndex,
     return GpuError{GpuErrorType::InvalidState,
                     std::format("buffer slot {} has no wgpu buffer", bufferSlotIndex)};
   }
-  if (geodeDevice_.isDeviceLost()) {
+  if (isLost()) {
     // A lost device never delivers the completion, so refuse the map rather than hand back a
     // handle whose wait can only ever run out its budget.
     return GpuError{GpuErrorType::InvalidState, "the device is lost, so buffers cannot be mapped"};
@@ -772,7 +797,7 @@ gpu::MapSliceState GeodeWgpuAdapterDevice::sliceStateOf(
     return completion.ok.load(std::memory_order_relaxed) ? gpu::MapSliceState::Ready
                                                          : gpu::MapSliceState::Failed;
   }
-  return geodeDevice_.isDeviceLost() ? gpu::MapSliceState::DeviceLost : gpu::MapSliceState::Pending;
+  return isLost() ? gpu::MapSliceState::DeviceLost : gpu::MapSliceState::Pending;
 }
 
 bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
@@ -854,7 +879,7 @@ bool GeodeWgpuAdapterDevice::finishMapWaitSlice(uint32_t mappingSlotIndex,
     return true;
   }
   if (status == wgpu::WaitStatus::TimedOut && !completion->done.load(std::memory_order_acquire) &&
-      !geodeDevice_.isDeviceLost()) {
+      !isLost()) {
     // A browser can defer pending map completion until another queue submission arrives.
     geodeDevice_.queue().submit(0, nullptr);
     geodeDevice_.countSubmit();
@@ -870,7 +895,7 @@ gpu::MapSliceReport GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingS
                                .waitKind = gpu::MapWaitKind::Polled};
   }
   MappingSlot::Completion& completion = *slotMappings_[mappingSlotIndex].completion;
-  if (completion.done.load(std::memory_order_acquire) || geodeDevice_.isDeviceLost()) {
+  if (completion.done.load(std::memory_order_acquire) || isLost()) {
     // Nothing was waited on, so no completion event was used to learn it.
     return gpu::MapSliceReport{.state = sliceStateOf(completion),
                                .waitKind = gpu::MapWaitKind::Polled};
@@ -906,7 +931,7 @@ gpu::MapSliceReport GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingS
       [&] {
         (void)geodeDevice_.pollSuspending(false);
         return !mappingStillMatches(mappingSlotIndex, &completion, future) ||
-               completion.done.load(std::memory_order_acquire) || geodeDevice_.isDeviceLost();
+               completion.done.load(std::memory_order_acquire) || isLost();
       },
       std::max(slice, std::chrono::microseconds(1)));
 

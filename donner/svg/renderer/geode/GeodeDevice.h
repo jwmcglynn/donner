@@ -429,6 +429,14 @@ public:
   /// not provide one, including embedded mode and browser headless imports.
   const wgpu::Adapter& adapter() const UTILS_LIFETIME_BOUND { return physicalDevice_->adapter(); }
 
+  /// The sticky loss condition of the physical root this context renders through, shared with
+  /// every other context over that root and with the runtime devices driving it. Retained rather
+  /// than borrowed because a backend device-lost callback can outlive the context that registered
+  /// it.
+  const std::shared_ptr<GeodeDeviceLostState>& lostState() const UTILS_LIFETIME_BOUND {
+    return physicalDevice_->lostState();
+  }
+
   /// Opaque lifetime token shared by logical contexts over the same physical roots. Raw roots
   /// remain accessible only through a retained logical context.
   std::shared_ptr<GeodePhysicalDeviceOwner> physicalDeviceOwner() const { return physicalDevice_; }

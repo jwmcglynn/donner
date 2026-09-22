@@ -155,6 +155,7 @@ donner_cc_library(
         "//donner/gpu:__subpackages__",
         "//donner/svg/renderer:__subpackages__",
     ],
+    deps = ["//donner/gpu"],
 )
 
 donner_cc_test(

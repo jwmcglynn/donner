@@ -36,6 +36,7 @@ donner_cc_library(
         "BufferMappingTable.cc",
         "CommandEncoder.cc",
         "Device.cc",
+        "DeviceLost.cc",
         "GpuError.cc",
     ],
     hdrs = [
@@ -44,6 +45,7 @@ donner_cc_library(
         "CommandEncoder.h",
         "Commands.h",
         "Device.h",
+        "DeviceLost.h",
         "GpuError.h",
         "GpuResult.h",
     ],

@@ -160,6 +160,22 @@ protected:
    */
   bool onWaitForSerial(uint64_t serial, double timeoutSeconds) override;
 
+private:
+  /// Second bound on \ref onWaitForSerial, for a driver whose poll returns without either
+  /// progressing or costing wall time. Reaching it says what the deadline says.
+  static constexpr int kMaxSerialWaitPolls = 20000;
+
+  /// Ends a serial wait that observed no completion, declaring the backend root lost when the
+  /// wait had a real budget to spend.
+  ///
+  /// @param start When the wait began, so the report carries what it actually spent rather than
+  ///   the budget it was given.
+  /// @param timeoutSeconds Budget the wait was given; zero means the caller asked what was
+  ///   already known rather than waiting, so the negative answer declares nothing.
+  /// @return False, always: the wait did not observe the serial complete.
+  bool giveUpOnSerialWait(std::chrono::steady_clock::time_point start, double timeoutSeconds);
+
+protected:
   /// Destroys the wgpu buffer in \p slotIndex, so the allocation goes back now rather than when
   /// the host runtime next collects. @param slotIndex Validated live buffer slot.
   void onDestroyBufferBacking(uint32_t slotIndex) override;

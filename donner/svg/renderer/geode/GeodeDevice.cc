@@ -478,19 +478,9 @@ bool GeodeDevice::pollSuspending(bool wait) const {
   return device().poll(wait, nullptr);
 }
 
-namespace {
-
-/// Log the cause of a device loss. Called only by the declaring caller, so the
-/// line appears exactly once per device.
-void LogDeclaredDeviceLoss(const char* reason) {
-  std::fprintf(stderr, "[Geode] Device declared lost: %s\n", reason ? reason : "(no reason)");
-}
-
-}  // namespace
-
 void GeodeDevice::markDeviceLost(const char* reason) const {
   if (DeclareDeviceLost(*physicalDevice_->lostState())) {
-    LogDeclaredDeviceLoss(reason);
+    gpu::LogDeclaredDeviceLoss(reason);
   }
 }
 
@@ -498,7 +488,7 @@ void GeodeDevice::markDeviceLostAfterWaitTimeout(GpuWaitSite site,
                                                  std::chrono::milliseconds elapsed,
                                                  const char* reason) const {
   if (DeclareDeviceLostAfterWaitTimeout(*physicalDevice_->lostState(), site, elapsed)) {
-    LogDeclaredDeviceLoss(reason);
+    gpu::LogDeclaredDeviceLoss(reason);
   }
 }
 
