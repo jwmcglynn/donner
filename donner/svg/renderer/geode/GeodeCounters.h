@@ -42,8 +42,9 @@ struct GeodeCounters {
   /// repeat-render at the same size.
   uint64_t textureCreates = 0;
 
-  /// Isolated layers retired without a matching pop at a frame boundary. At `beginFrame`, these
-  /// counts describe scopes left by the preceding unfinished frame; at `endFrame`, the current one.
+  /// Isolated layers retired without a matching pop in this beginFrame-to-endFrame window.
+  /// Cleanup during beginFrame counts scopes left by the preceding unfinished frame; endFrame
+  /// adds any scopes left by the current frame.
   uint64_t unclosedLayerScopes = 0;
 
   /// Filter layers retired without a matching pop at a frame boundary.

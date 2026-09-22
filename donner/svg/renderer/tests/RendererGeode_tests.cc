@@ -1936,10 +1936,11 @@ std::size_t OpenStackTextureCount(std::string_view kind) {
   return kind == "Mask" ? 2u : 1u;
 }
 
-void ExpectUnclosedStackCount(const geode::GeodeCounters& counters, std::string_view kind) {
-  EXPECT_EQ(counters.unclosedLayerScopes, kind == "Layer" ? 1u : 0u);
-  EXPECT_EQ(counters.unclosedFilterScopes, kind == "Filter" ? 1u : 0u);
-  EXPECT_EQ(counters.unclosedMaskScopes, kind == "Mask" ? 1u : 0u);
+void ExpectUnclosedStackCount(const geode::GeodeCounters& counters, std::string_view kind,
+                              uint64_t expected = 1u) {
+  EXPECT_EQ(counters.unclosedLayerScopes, kind == "Layer" ? expected : 0u);
+  EXPECT_EQ(counters.unclosedFilterScopes, kind == "Filter" ? expected : 0u);
+  EXPECT_EQ(counters.unclosedMaskScopes, kind == "Mask" ? expected : 0u);
 }
 
 TEST_P(UnclosedFrameStackTest, EndFrameRetiresOpenStackWithoutCompositingIt) {
@@ -1980,6 +1981,7 @@ TEST_P(UnclosedFrameStackTest, BeginFrameRetiresStackFromAbandonedFrame) {
   ExpectUnclosedStackCount(renderer.lastFrameTimings().counters, GetParam());
   PushFrameStack(renderer, GetParam());
   renderer.endFrame();
+  ExpectUnclosedStackCount(renderer.lastFrameTimings().counters, GetParam(), 2u);
   EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u);
   EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), IsTransparent());
 
