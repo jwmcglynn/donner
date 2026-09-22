@@ -24,6 +24,7 @@
 
 #include "donner/base/Utils.h"
 #include "donner/gpu/BufferMappingTable.h"
+#include "donner/gpu/DeviceLost.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/metal/MetalDevice.h"
 #include "donner/gpu/metal/MetalSurface.h"
@@ -200,6 +201,9 @@ struct CompletionState {
   std::atomic<bool> hadError{false};  //!< True once any command buffer reported an error.
   /// Set by \ref MetalDevice::failNextCompletionForTest; consumed by the next completion.
   std::atomic<bool> failNextCompletion{false};
+  /// Loss condition of the backend root, shared with every device over it. A failed command
+  /// buffer declares it, so the handler holds it rather than reaching through the device.
+  std::shared_ptr<DeviceLostState> rootLoss;
   std::mutex mutex;          //!< Guards errorMessage.
   std::string errorMessage;  //!< Message of the first captured execution error.
 };
@@ -632,9 +636,11 @@ std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel,
   // for a buffer nothing ever wrote from the host.
   result->impl_->unifiedMemory =
       memoryModel == MemoryModel::Detected ? (device.hasUnifiedMemory != NO) : false;
-  if (lostState) {
-    result->adoptLostState(std::move(lostState));
+  if (!lostState) {
+    lostState = std::make_shared<DeviceLostState>();
   }
+  result->impl_->completionState->rootLoss = lostState;
+  result->adoptLostState(std::move(lostState));
   return result;
 }
 
@@ -705,10 +711,14 @@ bool MetalDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
                             std::chrono::duration<double>(timeoutSeconds));
   const CompletionState& state = *impl_->completionState;
   for (;;) {
+    // Completion is read before the error flag: a handler publishes a failure before it advances
+    // the serial, so a serial seen complete here brings its failure with it, and failed work can
+    // never read as finished.
+    const bool completed = state.completedSerial.load(std::memory_order_acquire) >= serial;
     if (state.hadError.load(std::memory_order_acquire)) {
       return false;
     }
-    if (state.completedSerial.load(std::memory_order_acquire) >= serial) {
+    if (completed) {
       return true;
     }
     if (std::chrono::steady_clock::now() >= deadline) {
@@ -1802,12 +1812,22 @@ void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t s
                  userInfo:@{NSLocalizedDescriptionKey : @"injected command buffer failure"}];
     }
     if (executionError != nil) {
-      sharedState->hadError.store(true, std::memory_order_release);
-      std::lock_guard<std::mutex> lock(sharedState->mutex);
-      if (sharedState->errorMessage.empty()) {
-        sharedState->errorMessage =
-            DescribeNSError(executionError, "Metal command buffer execution failed");
+      const std::string message =
+          DescribeNSError(executionError, "Metal command buffer execution failed");
+      {
+        std::lock_guard<std::mutex> lock(sharedState->mutex);
+        if (sharedState->errorMessage.empty()) {
+          sharedState->errorMessage = message;
+        }
       }
+      // Work that failed on the GPU leaves the root in an unknown state for every device over
+      // it. The backend reported this loss, so it carries no wait site, and it is declared before
+      // the error flag and the serial below so that no waiter that sees either one can give up
+      // first and claim the loss as its own timeout.
+      if (DeclareDeviceLost(*sharedState->rootLoss)) {
+        LogDeclaredDeviceLoss(("a Metal command buffer failed: " + message).c_str());
+      }
+      sharedState->hadError.store(true, std::memory_order_release);
     }
 
     // Make the reservation available before a completion waiter observes this serial.
@@ -2170,9 +2190,10 @@ public:
 
   bool deviceLost() const override {
     // A failed command buffer still runs its completion handler and still advances the completed
-    // serial, so this flag is the only thing separating "the work finished" from "the work
-    // stopped"; the bytes it was supposed to produce cannot be trusted either way.
-    return completionState_->hadError.load(std::memory_order_acquire);
+    // serial, so the error flag is what separates "the work finished" from "the work stopped".
+    // A loss declared anywhere over the root, by another device's wait or by the caller, ends
+    // this device's mappings the same way: the bytes cannot be trusted either way.
+    return completionState_->hadError.load(std::memory_order_acquire) || device_.isLost();
   }
 
 private:

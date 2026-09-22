@@ -32,6 +32,7 @@ objc_library(
     deps = [
         "//donner/base",
         "//donner/gpu",
+        "//donner/gpu:device_lost",
         "//donner/gpu/shader:msl_binding_map",
     ],
 )

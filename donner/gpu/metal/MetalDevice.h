@@ -80,8 +80,13 @@ namespace donner::gpu::metal {
  *
  * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity. The one
  * exception is command-buffer completion handlers, which Metal invokes on an internal queue;
- * they touch only atomics and a mutex-protected error string, observable through
- * \ref completedSerial, \ref Device::waitForSerial, and \ref lastErrorForTest.
+ * they touch only atomics, a mutex-protected error string, and the root's shared loss condition,
+ * observable through \ref completedSerial, \ref Device::waitForSerial, \ref Device::isLost, and
+ * \ref lastErrorForTest.
+ *
+ * A command buffer that fails on the GPU declares the root lost, with no wait site because the
+ * backend reported it, before its serial is reported complete. Mappings answer loss before
+ * readiness, whichever device over the root declared it.
  *
  * The header is pure C++ (Objective-C state lives behind a pimpl) so it is includable from C++
  * tests; the implementation is Objective-C++.
@@ -146,8 +151,9 @@ public:
    * @param unalignedWriteTimeout Maximum CPU wait for an unaligned write to a busy buffer.
    *   Must be between zero and five seconds; invalid budgets return nullptr.
    * @param lostState Loss condition to share with every other device selected over the same
-   *   backend, or null for a private one. The device reports it through \ref Device::isLost;
-   *   the loss is declared by whoever observes it, such as a context's bounded wait.
+   *   backend, or null for a private one only this device can set. The device reports it through
+   *   \ref Device::isLost; the loss is declared by whoever observes it, such as a failed command
+   *   buffer of this device or a context's bounded wait.
    */
   static std::unique_ptr<MetalDevice> Create(
       MemoryModel memoryModel = MemoryModel::Detected,
