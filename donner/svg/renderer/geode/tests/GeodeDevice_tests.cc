@@ -448,6 +448,40 @@ TEST(GeodeDeviceLost, FirstWaitTimeoutAttributionWins) {
   EXPECT_EQ(stats.timedOutWaitMs, static_cast<int>(kReadbackMapTimeout.count()));
 }
 
+/// A bounded wait for a submission serial that ends at its deadline has observed a device that
+/// stopped answering, and must declare it lost with the same attribution the other bounded waits
+/// record. Leaving the loss unpublished costs every later caller its own full budget on a device
+/// that can no longer complete anything, and leaves a renderer unable to tell "slow" from "gone".
+TEST(GeodeDeviceLost, RuntimeSerialWaitTimeoutDeclaresLossWithWaitAttribution) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+  ASSERT_FALSE(device->isDeviceLost());
+
+  gpu::Device& runtime = device->runtimeDevice();
+  // One past the last serial this runtime submitted. Nothing can ever complete it, so the wait
+  // has no outcome available to it other than reaching its own deadline.
+  const uint64_t unreachableSerial = runtime.lastSubmittedSerial() + 1;
+  EXPECT_THAT(runtime.waitForSerial(unreachableSerial, 0.25), testing::IsFalse());
+
+  EXPECT_TRUE(device->isDeviceLost())
+      << "a bounded runtime wait that reached its deadline must publish the loss it observed";
+
+  const GeodeDevice::ReadbackStats stats = device->consumeReadbackStats();
+  EXPECT_THAT(stats.timedOutWaitSite, Eq(GpuWaitSite::QueueIdle));
+  EXPECT_GT(stats.timedOutWaitMs, 0);
+}
+
+/// A budget of zero is a question about what is already known rather than a wait, so its negative
+/// answer says nothing about the device's health and must not declare it lost.
+TEST(GeodeDeviceLost, RuntimeSerialWaitWithNoBudgetLeavesTheDeviceHealthy) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  gpu::Device& runtime = device->runtimeDevice();
+  EXPECT_THAT(runtime.waitForSerial(runtime.lastSubmittedSerial() + 1, 0.0), testing::IsFalse());
+  EXPECT_FALSE(device->isDeviceLost());
+}
+
 /// A driver-reported loss has no wait to attribute it to, and must not borrow
 /// one: an empty site is how a report distinguishes "the driver told us" from
 /// "one of our deadlines expired".
