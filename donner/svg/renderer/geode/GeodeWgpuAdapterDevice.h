@@ -191,6 +191,11 @@ std::unique_ptr<GeodeWgpuAdapterDevice> CreateGpuDeviceOver(std::shared_ptr<Geod
 /// returns to zero.
 std::size_t OutstandingDeviceLostCallbacks();
 
+/// Backend instances this process created for a selection and has not released. A selection that
+/// fails must leave this where it found it, because nothing else can release the objects it built
+/// before giving up; a root released at teardown returns its own.
+std::size_t OutstandingSelectionInstances();
+
 /**
  * Implements \c donner::gpu::Device on top of one selected backend root, so Geode subsystems can
  * migrate onto the Donner GPU runtime one at a time while the process still renders through wgpu
@@ -275,6 +280,37 @@ public:
    * @param simulate Whether slices should take the simulated event-wait path.
    */
   void setSimulateEventWaitForTest(bool simulate) { simulateEventWaitForTest_ = simulate; }
+
+  /**
+   * Makes this device behave like one that accepted work and stopped retiring it.
+   *
+   * Test seam: a healthy device completes everything in microseconds, so the bounded waits and
+   * their deadlines are otherwise unreachable. Both knobs describe real driver shapes, and the
+   * waits must tell them apart: a driver that blocks in poll spends the wait's budget, while one
+   * that returns from poll at once spends none of it and only exhausts the wait's own poll bound.
+   *
+   * @param completedSerialCeiling Highest serial \ref completedSerial may report;
+   *   \ref kNoCompletedSerialCeiling restores what the backend reports.
+   * @param pollCost Wall time each poll inside a serial wait costs on top of the backend's own,
+   *   standing in for a poll that blocks until pending work progresses. Zero leaves the
+   *   backend's poll timing alone.
+   */
+  void holdSubmittedWorkForTesting(uint64_t completedSerialCeiling,
+                                   std::chrono::milliseconds pollCost) {
+    completedSerialCeiling_.store(completedSerialCeiling, std::memory_order_relaxed);
+    serialWaitPollCostMsForTesting_.store(static_cast<int>(pollCost.count()),
+                                          std::memory_order_relaxed);
+  }
+
+  /// Ceiling value that leaves \ref completedSerial reporting what the backend reports.
+  static constexpr uint64_t kNoCompletedSerialCeiling = UINT64_MAX;
+
+  /// Wall-clock budget the destructor spends draining submitted work before tearing down anyway.
+  /// Lowered by tests that hold submitted work incomplete so the drain reaches its deadline
+  /// without a multi-second wait. Test seam.
+  ///
+  /// @param seconds Budget in seconds.
+  void setTeardownDrainBudgetForTesting(double seconds) { teardownDrainSeconds_ = seconds; }
 
   /**
    * TEMPORARY escape hatch (deleted with the readback and presentation migration): registers an
@@ -389,6 +425,22 @@ private:
   ///   already known rather than waiting, so the negative answer declares nothing.
   /// @return False, always: the wait did not observe the serial complete.
   bool giveUpOnSerialWait(std::chrono::steady_clock::time_point start, double timeoutSeconds);
+
+  /// One iteration of \ref onWaitForSerial's wait: lets the backend block until pending work
+  /// progresses, plus whatever extra cost \ref holdSubmittedWorkForTesting gave that poll.
+  void pollForSerialCompletion();
+
+  /// Highest serial \ref completedSerial may report; see \ref holdSubmittedWorkForTesting.
+  std::atomic<uint64_t> completedSerialCeiling_{kNoCompletedSerialCeiling};
+
+  /// Wall time each poll inside a serial wait costs on top of the backend's own, in milliseconds;
+  /// see \ref holdSubmittedWorkForTesting.
+  std::atomic<int> serialWaitPollCostMsForTesting_{0};
+
+  /// Budget \ref ~GeodeWgpuAdapterDevice spends draining submitted work. Generous: a healthy
+  /// device drains in microseconds, so it only trips on a driver that has effectively hung, and
+  /// teardown proceeds either way.
+  double teardownDrainSeconds_ = 5.0;
 
 protected:
   /// Destroys the wgpu buffer in \p slotIndex, so the allocation goes back now rather than when

@@ -49,6 +49,16 @@ EM_JS(void, G, (void* deviceOut, WGPUInstance instance), {
 
 namespace {
 
+/// Instances created for a selection and not yet released; see \ref OutstandingSelectionInstances.
+std::atomic<std::size_t> gSelectionInstances{0};
+
+/// Releases the backend objects a selection created, in the order their ownership nests: the
+/// queue and device first, then the adapter and instance they came from. Shared by the root's
+/// destructor and by a selection that gives up partway, so one sequence releases them however the
+/// selection ends.
+/// @param handles Backend objects to release; left null.
+void ReleaseSelectedHandles(GeodeWgpuRoots& handles);
+
 #ifndef __EMSCRIPTEN__
 std::atomic<std::size_t> gOutstandingDeviceLostCallbacks{0};
 
@@ -199,15 +209,21 @@ WGPUInstanceBackend InstanceBackendsFor(wgpu::BackendType backendType) {
 
 wgpu::Instance CreateSelectionInstance(wgpu::BackendType backendType) {
   const WGPUInstanceBackend instanceBackends = InstanceBackendsFor(backendType);
+  wgpu::Instance instance;
   if (instanceBackends != WGPUInstanceBackend_All) {
     wgpu::InstanceExtras instanceExtras = wgpu::Default;
     instanceExtras.backends = instanceBackends;
 
     wgpu::InstanceDescriptor instanceDesc = wgpu::Default;
     instanceDesc.nextInChain = &instanceExtras.chain;
-    return wgpu::createInstance(instanceDesc);
+    instance = wgpu::createInstance(instanceDesc);
+  } else {
+    instance = wgpu::createInstance();
   }
-  return wgpu::createInstance();
+  if (instance) {
+    gSelectionInstances.fetch_add(1, std::memory_order_relaxed);
+  }
+  return instance;
 }
 
 /// Backoff schedule shared by the adapter and device requests below. Under heavy parallel load
@@ -329,6 +345,8 @@ bool ImportBrowserRoot(GeodeWgpuRoots& handles, const GpuRootSelection& options)
     std::fprintf(stderr, "[Geode/emscripten] wgpuCreateInstance returned null.\n");
     return false;
   }
+  gSelectionInstances.fetch_add(1, std::memory_order_relaxed);
+  handles.owned = true;
 
   // The browser chooses the adapter, so the surface constrains nothing here - but the provider is
   // also what builds the surface the caller presents to, and a caller that could not build it has
@@ -358,12 +376,31 @@ bool ImportBrowserRoot(GeodeWgpuRoots& handles, const GpuRootSelection& options)
     std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU device returned no queue.\n");
     return false;
   }
-  handles.owned = true;
   return true;
 }
 #endif
 
 }  // namespace
+
+namespace {
+
+void ReleaseSelectedHandles(GeodeWgpuRoots& handles) {
+  ReleaseWgpuHandle(handles.queue);
+  if (handles.device) handles.device.destroy();
+  ReleaseWgpuHandle(handles.device);
+  ReleaseWgpuHandle(handles.adapter);
+  if (handles.instance) {
+    gSelectionInstances.fetch_sub(1, std::memory_order_relaxed);
+  }
+  ReleaseWgpuHandle(handles.instance);
+  ReleaseDeviceLostCallbackToken(handles.deviceLostCallbackToken, /*callbackCannotRun=*/true);
+}
+
+}  // namespace
+
+std::size_t OutstandingSelectionInstances() {
+  return gSelectionInstances.load(std::memory_order_relaxed);
+}
 
 std::size_t OutstandingDeviceLostCallbacks() {
 #ifdef __EMSCRIPTEN__
@@ -390,12 +427,7 @@ GeodeGpuRoot::~GeodeGpuRoot() {
     ReleaseDeviceLostCallbackToken(handles_.deviceLostCallbackToken, /*callbackCannotRun=*/false);
     return;
   }
-  ReleaseWgpuHandle(handles_.queue);
-  if (handles_.device) handles_.device.destroy();
-  ReleaseWgpuHandle(handles_.device);
-  ReleaseWgpuHandle(handles_.adapter);
-  ReleaseWgpuHandle(handles_.instance);
-  ReleaseDeviceLostCallbackToken(handles_.deviceLostCallbackToken, /*callbackCannotRun=*/true);
+  ReleaseSelectedHandles(handles_);
 }
 
 bool GeodeGpuRoot::names(const wgpu::Instance& instance, const wgpu::Adapter& adapter,
@@ -839,13 +871,24 @@ GeodeWgpuAdapterDevice::~GeodeWgpuAdapterDevice() {
   // release the remaining wgpu objects. On timeout teardown proceeds anyway: wgpu retains every
   // resource referenced by a submitted command buffer until it completes.
   if (lastSubmittedSerial() > completedSerial()) {
-    waitForSerial(lastSubmittedSerial(), /*timeoutSeconds=*/5.0);
+    waitForSerial(lastSubmittedSerial(), teardownDrainSeconds_);
   }
   poll();
 }
 
 uint64_t GeodeWgpuAdapterDevice::completedSerial() const {
-  return completionState_->completedSerial.load(std::memory_order_acquire);
+  // The ceiling is `kNoCompletedSerialCeiling` outside the tests that hold submitted work
+  // incomplete, so this is the backend's own answer everywhere else.
+  return std::min(completionState_->completedSerial.load(std::memory_order_acquire),
+                  completedSerialCeiling_.load(std::memory_order_relaxed));
+}
+
+void GeodeWgpuAdapterDevice::pollForSerialCompletion() {
+  root_->device().poll(true, nullptr);
+  const int pollCostMs = serialWaitPollCostMsForTesting_.load(std::memory_order_relaxed);
+  if (pollCostMs > 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(pollCostMs));
+  }
 }
 
 bool GeodeWgpuAdapterDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
@@ -868,7 +911,7 @@ bool GeodeWgpuAdapterDevice::onWaitForSerial(uint64_t serial, double timeoutSeco
     if (std::chrono::steady_clock::now() >= deadline) {
       return giveUpOnSerialWait(start, timeoutSeconds);
     }
-    root_->device().poll(true, nullptr);
+    pollForSerialCompletion();
   }
   if (completedSerial() >= serial) {
     return true;

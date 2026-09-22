@@ -58,6 +58,46 @@ TEST(GeodeEmbed, CreateFromExternalSucceeds) {
   EXPECT_EQ(embedded->textureFormat(), gpu::TextureFormat::RGBA8Unorm);
 }
 
+/// Donner releases nothing an embedder lent it. A context built over a host's backend objects
+/// borrows them, and when that context goes the host's instance, adapter, device and queue are
+/// still the host's to render through. Releasing them here would take the GPU out from under a
+/// host at a point the host never chose, and the symptom would surface in the host's own code
+/// rather than in Donner's.
+TEST(GeodeEmbed, DestroyingAnEmbeddedContextLeavesTheHostDeviceRendering) {
+  std::shared_ptr<geode::GeodeDevice> host = geode::GeodeDevice::CreateHeadless();
+  ASSERT_NE(host, nullptr);
+
+  geode::GeodeEmbedConfig config;
+  config.instance = host->adapterDevice().root().instance();
+  config.device = host->adapterDevice().root().device();
+  config.queue = host->adapterDevice().root().queue();
+  config.adapter = host->adapterDevice().root().adapter();
+  config.textureFormat = wgpu::TextureFormat::RGBA8Unorm;
+
+  std::unique_ptr<geode::GeodeDevice> embedded = geode::GeodeDevice::CreateFromExternal(config);
+  ASSERT_NE(embedded, nullptr);
+  embedded.reset();
+
+  ASSERT_FALSE(host->isDeviceLost())
+      << "the host's device outlived a context that only borrowed it";
+
+  // A full frame and readback through the host: it submits to the queue, waits on the serial and
+  // maps the result back, so every object the embedded context borrowed is exercised rather than
+  // only inspected.
+  RendererGeode renderer(host);
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  renderer.endFrame();
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty())
+      << "the host could not complete a submission and readback after the context borrowing its "
+         "backend objects was destroyed";
+  EXPECT_THAT(pixelAt(snapshot, 16, 16), IsTransparent());
+}
+
 /// Null device should produce a null return, not a crash.
 TEST(GeodeEmbed, CreateFromExternalRejectsNullDevice) {
   geode::GeodeEmbedConfig config;

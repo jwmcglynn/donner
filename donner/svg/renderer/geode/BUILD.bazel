@@ -438,6 +438,7 @@ donner_cc_test(
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
+        "//donner/gpu",
         "//donner/svg/renderer/tests:rgba_test_matchers",
     ],
 )

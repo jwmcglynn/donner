@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -266,6 +267,30 @@ ComputeScene MakeComputeScene(GeodeWgpuAdapterDevice& adapter, const char* label
           "fillCompute", pipelineLayout, gpu::ComputeState{shader, "cs_main"},
           gpu::WorkgroupSize{4, 4, 1}}));
   return scene;
+}
+
+/// A selection that gives up has already created backend objects, and the root that would release
+/// them is never built: nothing else can reach them. Adapter acquisition failing is the normal
+/// outcome on a host with no usable GPU, so every attempt on such a host would leak an instance.
+TEST(GeodeGpuRootSelection, ASelectionItsSurfaceProviderAbandonsReleasesWhatItBuilt) {
+  const std::size_t instancesBefore = OutstandingSelectionInstances();
+
+  bool providerSawAnInstance = false;
+  GpuRootSelection selection;
+  selection.label = "AbandonedSelection";
+  selection.compatibleSurface =
+      [&providerSawAnInstance](const wgpu::Instance& instance) -> std::optional<wgpu::Surface> {
+    providerSawAnInstance = static_cast<bool>(instance);
+    // A caller that could not build what it meant to present to aborts the selection, which is
+    // the deterministic failure every other one shares an exit with.
+    return std::nullopt;
+  };
+
+  EXPECT_THAT(SelectGpuRoot(selection), testing::IsNull());
+  ASSERT_TRUE(providerSawAnInstance)
+      << "the selection created no instance to abandon, so this host cannot exercise the leak";
+  EXPECT_THAT(OutstandingSelectionInstances(), testing::Eq(instancesBefore))
+      << "the instance an abandoned selection created has no other owner left to release it";
 }
 
 class GeodeWgpuAdapterDeviceTests : public testing::Test {

@@ -1197,6 +1197,15 @@ TEST_F(RuntimePresentationSurfaceTest, PresentingWithNoFrameHeldDoesNothing) {
   EXPECT_EQ(device_.abandonCalls, 0);
 }
 
+/// The window settles the format its renderer compiles pipelines for by asking the selected
+/// adapter what the surface can present. With no adapter there is nothing to ask, so answering
+/// anyway settles a format nothing checked: the browser arm of selection reached this with a null
+/// adapter and the window went on to configure the swapchain from the reply.
+TEST_F(RuntimePresentationSurfaceTest, ChoosingAConfigurationWithoutAnAdapterIsRefused) {
+  EXPECT_FALSE(surface_.chooseConfiguration(wgpu::Adapter(), /*enableReadback=*/false))
+      << "a selection that produced no adapter has not produced a surface configuration either";
+}
+
 TEST_F(RuntimePresentationSurfaceTest, ASurfaceThatCannotPresentTheCompiledFormatIsRefused) {
   device_.formats = {gpu::TextureFormat::RGBA8Unorm};
 

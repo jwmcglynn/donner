@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 
+#include "donner/gpu/CommandEncoder.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
@@ -25,10 +26,30 @@ namespace donner::geode {
 
 using svg::test::RgbaEq;
 using testing::Eq;
+using testing::Ge;
 using testing::HasSubstr;
 using testing::IsNull;
+using testing::Lt;
 using testing::Not;
 using testing::NotNull;
+
+/// Submits one empty command buffer through \p runtime and returns the serial it was given, or 0
+/// when the runtime refused any step of it. A wait for a serial needs a serial that was really
+/// submitted: a device that accepted work and stopped retiring it is the only thing such a wait
+/// can be waiting on.
+/// @param runtime Runtime device to submit through.
+uint64_t SubmitEmptyCommandBuffer(gpu::Device& runtime) {
+  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder = runtime.createCommandEncoder();
+  if (encoder.hasError()) {
+    return 0;
+  }
+  gpu::Result<gpu::CommandBuffer> commands = encoder.result()->finish();
+  if (commands.hasError()) {
+    return 0;
+  }
+  gpu::Result<uint64_t> serial = runtime.submit(std::move(commands).result());
+  return serial.hasError() ? 0 : serial.result();
+}
 
 /// Marker that `GeodeDevice`'s uncaptured-error callback prints when wgpu
 /// rejects a descriptor. wgpu still returns a non-null handle in that case, so
@@ -467,27 +488,69 @@ TEST(GeodeDeviceLost, FirstWaitTimeoutAttributionWins) {
   EXPECT_EQ(stats.timedOutWaitMs, static_cast<int>(kReadbackMapTimeout.count()));
 }
 
-/// A bounded wait for a submission serial that ends at its deadline has observed a device that
-/// stopped answering, and must declare it lost with the same attribution the other bounded waits
-/// record. Leaving the loss unpublished costs every later caller its own full budget on a device
-/// that can no longer complete anything, and leaves a renderer unable to tell "slow" from "gone".
+/// Budget the deadline cases below give a wait, chosen so the measured elapsed time is
+/// unambiguously the budget rather than scheduling noise, and the case still runs in well under a
+/// second.
+constexpr double kSerialWaitBudgetSeconds = 0.25;
+
+/// A bounded wait for a submission serial that spends its whole budget without the work retiring
+/// has observed a device that stopped answering, and must declare it lost with the same
+/// attribution the other bounded waits record. Leaving the loss unpublished costs every later
+/// caller its own full budget on a device that can no longer complete anything, and leaves a
+/// renderer unable to tell "slow" from "gone".
 TEST(GeodeDeviceLost, RuntimeSerialWaitTimeoutDeclaresLossWithWaitAttribution) {
   auto device = GeodeDevice::CreateHeadless();
   ASSERT_NE(device, nullptr);
   ASSERT_FALSE(device->isDeviceLost());
 
-  gpu::Device& runtime = device->runtimeDevice();
-  // One past the last serial this runtime submitted. Nothing can ever complete it, so the wait
-  // has no outcome available to it other than reaching its own deadline.
-  const uint64_t unreachableSerial = runtime.lastSubmittedSerial() + 1;
-  EXPECT_THAT(runtime.waitForSerial(unreachableSerial, 0.25), testing::IsFalse());
+  GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
+  const uint64_t submitted = SubmitEmptyCommandBuffer(runtime);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+  // Submitted work that stops retiring, on a device whose poll blocks the way a driver waiting on
+  // it does: the wait can only end by spending its budget.
+  runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(1));
+
+  EXPECT_THAT(runtime.waitForSerial(submitted, kSerialWaitBudgetSeconds), testing::IsFalse());
 
   EXPECT_TRUE(device->isDeviceLost())
-      << "a bounded runtime wait that reached its deadline must publish the loss it observed";
+      << "a bounded runtime wait that spent its deadline must publish the loss it observed";
 
   const GeodeDevice::ReadbackStats stats = device->consumeReadbackStats();
   EXPECT_THAT(stats.timedOutWaitSite, Eq(GpuWaitSite::QueueIdle));
-  EXPECT_GT(stats.timedOutWaitMs, 0);
+  EXPECT_THAT(stats.timedOutWaitMs, Ge(static_cast<int>(kSerialWaitBudgetSeconds * 1000.0) - 1))
+      << "the loss has to come from a deadline that actually elapsed, so the attribution reports "
+         "a wait that was really spent";
+}
+
+/// A wait that ends by exhausting its own poll bound has spent none of its budget: the driver
+/// returned from every poll without blocking and without progressing. That says something about
+/// how this driver implements poll, not that submitted work stopped completing, and declaring a
+/// permanent loss from it fails every later caller on a device that is merely idle.
+TEST(GeodeDeviceLost, RuntimeSerialWaitExhaustingOnlyItsPollBoundLeavesTheDeviceHealthy) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+  ASSERT_FALSE(device->isDeviceLost());
+
+  GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
+  const uint64_t submitted = SubmitEmptyCommandBuffer(runtime);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+  // The same work held incomplete, but a poll that returns at once. The budget is far past
+  // anything this wait can spend, so only the poll bound can end it.
+  runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(0));
+
+  constexpr double kUnreachableBudgetSeconds = 120.0;
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_THAT(runtime.waitForSerial(submitted, kUnreachableBudgetSeconds), testing::IsFalse());
+  const double elapsedSeconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+
+  ASSERT_THAT(elapsedSeconds, Lt(kUnreachableBudgetSeconds / 2.0))
+      << "the poll bound, not the deadline, has to be what ended this wait";
+  EXPECT_FALSE(device->isDeviceLost())
+      << "a wait that spent none of its budget observed nothing to declare";
+
+  runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
+                                      std::chrono::milliseconds(0));
 }
 
 /// A budget of zero is a question about what is already known rather than a wait, so its negative
@@ -496,9 +559,42 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitWithNoBudgetLeavesTheDeviceHealthy) {
   auto device = GeodeDevice::CreateHeadless();
   ASSERT_NE(device, nullptr);
 
-  gpu::Device& runtime = device->runtimeDevice();
-  EXPECT_THAT(runtime.waitForSerial(runtime.lastSubmittedSerial() + 1, 0.0), testing::IsFalse());
+  GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
+  const uint64_t submitted = SubmitEmptyCommandBuffer(runtime);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+  runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(0));
+
+  EXPECT_THAT(runtime.waitForSerial(submitted, 0.0), testing::IsFalse());
   EXPECT_FALSE(device->isDeviceLost());
+
+  runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
+                                      std::chrono::milliseconds(0));
+}
+
+/// Teardown drains what it submitted so deferred destructions can run, and tolerates its own
+/// timeout: wgpu retains every resource a submitted command buffer names until it completes, so
+/// an overrun is a slow teardown rather than a discovery. It is also routine - a loaded host, a
+/// software rasterizer, a contended driver - and the contexts sharing this root are still live.
+/// Declaring the root lost from it would make every one of them refuse to present, map or wait,
+/// and would leak the whole root, because a root declared lost is deliberately not released.
+TEST(GeodeDeviceLost, ATeardownDrainThatOverrunsDoesNotDeclareTheRootLost) {
+  auto context = GeodeDevice::CreateHeadless();
+  ASSERT_NE(context, nullptr);
+  ASSERT_FALSE(context->isDeviceLost());
+
+  std::unique_ptr<GeodeWgpuAdapterDevice> sibling =
+      context->physicalDeviceOwner()->createLogicalDevice();
+  ASSERT_NE(sibling, nullptr);
+  const uint64_t submitted = SubmitEmptyCommandBuffer(*sibling);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+  sibling->holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(1));
+  sibling->setTeardownDrainBudgetForTesting(0.2);
+
+  sibling.reset();
+
+  EXPECT_FALSE(context->isDeviceLost())
+      << "only a wait a caller bounded for its own deadline has observed something worth "
+         "publishing; a teardown drain already proceeds on timeout";
 }
 
 /// A driver-reported loss has no wait to attribute it to, and must not borrow

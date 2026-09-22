@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -168,11 +169,13 @@ TEST_F(GeodeSharedDeviceFrameTest, ALossOneContextsWaitObservesIsSharedByTheOthe
   ASSERT_FALSE(root->isDeviceLost());
   ASSERT_FALSE(sibling->isDeviceLost());
 
-  gpu::Device& rootRuntime = root->runtimeDevice();
-  // One past the last serial that runtime submitted: nothing can complete it, so the wait has no
-  // outcome available to it other than reaching its own deadline.
-  EXPECT_THAT(rootRuntime.waitForSerial(rootRuntime.lastSubmittedSerial() + 1, 0.25),
-              testing::IsFalse());
+  geode::GeodeWgpuAdapterDevice& rootRuntime = root->adapterDevice();
+  const uint64_t submitted = submitEmptyCommandBuffer(rootRuntime);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+  // Submitted work that stops retiring, on a device whose poll blocks the way a driver waiting on
+  // it does: the wait can only end by spending its budget.
+  rootRuntime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(1));
+  EXPECT_THAT(rootRuntime.waitForSerial(submitted, 0.25), testing::IsFalse());
 
   EXPECT_TRUE(root->isDeviceLost());
   EXPECT_TRUE(sibling->isDeviceLost())
