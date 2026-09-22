@@ -3610,6 +3610,37 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return TransformPath(outline, glyphFromLocal);
   }
 
+  /**
+   * Charges one glyph-cache miss against the frame's text budget before its outline is decoded:
+   * the font's predecode bound when it reports one (an untrusted font must), and the entry the miss
+   * keeps for the rest of the frame, cached or not. The entry is all an outline-less glyph costs,
+   * so it is what bounds misses on those.
+   *
+   * @param fontManager Font source for the complexity bound and trust.
+   * @param font Font of the missed glyph.
+   * @param glyphIndex Glyph index within \p font.
+   * @param[out] hasComplexity Whether the font reported a predecode bound.
+   * @return False when the budget rejects the miss.
+   */
+  bool admitGlyphMiss(FontManager& fontManager, FontHandle font, int glyphIndex,
+                      bool& hasComplexity) {
+    const std::optional<FontManager::GlyphOutlineComplexity> complexity =
+        fontManager.glyphOutlineComplexity(font, glyphIndex);
+    hasComplexity = complexity.has_value();
+    if (complexity.has_value()) {
+      const std::optional<RendererTextMaterializationBudget::Cost> cost =
+          GlyphPredecodeCost(*complexity);
+      if (!cost.has_value() || !textMaterializationBudget->reserve(*cost)) {
+        return false;
+      }
+    } else if (!fontManager.isTrustedFont(font)) {
+      textMaterializationBudget->reject();
+      return false;
+    }
+    return textMaterializationBudget->reserve(
+        {.bytes = geode::GeodeGlyphCache::kEntryOverheadBytes});
+  }
+
   template <typename BuildOutlineFn>
   geode::GeodeGlyphResidentEntry* residentGlyphEntry(Registry& registry, FontManager& fontManager,
                                                      FontHandle font, int glyphIndex,
@@ -3623,22 +3654,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (entry != nullptr) {
       device->countGlyphResidencyHit();
     } else {
-      const std::optional<FontManager::GlyphOutlineComplexity> complexity =
-          fontManager.glyphOutlineComplexity(font, glyphIndex);
-      if (complexity.has_value()) {
-        const std::optional<RendererTextMaterializationBudget::Cost> cost =
-            GlyphPredecodeCost(*complexity);
-        if (!cost.has_value() || !textMaterializationBudget->reserve(*cost)) {
-          return nullptr;
-        }
-      } else if (!fontManager.isTrustedFont(font)) {
-        textMaterializationBudget->reject();
-        return nullptr;
-      }
-      // Every miss keeps an entry for the rest of the frame, cached or not, even when its outline
-      // is empty, so the entry itself is what bounds misses on outline-less glyphs.
-      if (!textMaterializationBudget->reserve(
-              {.bytes = geode::GeodeGlyphCache::kEntryOverheadBytes})) {
+      bool hasComplexity = false;
+      if (!admitGlyphMiss(fontManager, font, glyphIndex, hasComplexity)) {
         return nullptr;
       }
 
@@ -3648,17 +3665,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       // Reclaim only entries no open frame can still reference, then fail closed if the new entry
       // still would exceed the configured count cap.
       const size_t maxEntries = glyphCacheMaxEntries();
-      bool cacheAdmissionAvailable = maxEntries != 0u;
+      bool cacheAdmissionAvailable = maxEntries != 0u && cache->admissionOpen();
       if (cacheAdmissionAvailable && cache->size() >= maxEntries) {
         const size_t evicted = cache->evictToBudget(device->oldestOpenFrameGeneration(),
                                                     maxEntries - 1u, glyphCacheMaxRetainedBytes);
         device->countGlyphResidencyEvictions(evicted);
         if (cache->size() >= maxEntries) {
+          cache->closeAdmission();
           cacheAdmissionAvailable = false;
         }
       }
       Path outline = buildOutline();
-      if (!complexity.has_value() && !outline.empty()) {
+      if (!hasComplexity && !outline.empty()) {
         const std::optional<std::size_t> retainedBytes = outline.retainedBytes();
         if (!retainedBytes.has_value() ||
             !textMaterializationBudget->reserve({.uniqueOutlines = 1,

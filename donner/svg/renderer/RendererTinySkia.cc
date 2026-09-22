@@ -2768,9 +2768,10 @@ bool RendererTinySkia::admitTextGlyphBatch(const std::vector<TextRun>& runs) {
     }
     glyphCount += run.glyphs.size();
   }
+  // A failed reservation marks its own budget rejected; the draw budget also stops the frame's
+  // remaining glyphs.
   if (!textMaterializationBudget_->reserveGlyphOccurrences(glyphCount) ||
       !drawBudget_->reserve({.drawCalls = glyphCount * 2})) {
-    textMaterializationBudget_->reject();
     drawBudget_->reject();
     return false;
   }

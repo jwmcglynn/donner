@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <functional>
@@ -315,12 +316,13 @@ TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeM
   EXPECT_THAT(limitedSnapshot.pixels, testing::ContainerEq(referenceSnapshot.pixels));
 }
 
-/// Pixels with non-zero alpha inside the half-open rect [x0, x1) x [y0, y1).
+/// Pixels with non-zero alpha inside the half-open rect [x0, x1) x [y0, y1), clipped to the
+/// snapshot.
 std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1, int y1) {
   const RendererBitmap normalized = NormalizeSnapshot(snapshot);
   std::size_t covered = 0;
-  for (int y = y0; y < y1; ++y) {
-    for (int x = x0; x < x1; ++x) {
+  for (int y = std::max(y0, 0); y < std::min(y1, normalized.dimensions.y); ++y) {
+    for (int x = std::max(x0, 0); x < std::min(x1, normalized.dimensions.x); ++x) {
       const std::size_t offset =
           static_cast<std::size_t>(y) * normalized.rowBytes + static_cast<std::size_t>(x) * 4u + 3u;
       if (normalized.pixels[offset] != 0) {
@@ -369,22 +371,23 @@ TEST(RendererPublicApiTest, GlyphCapIsConfigurableAndSharedWithOffscreenInstance
   Renderer renderer;
   EXPECT_EQ(renderer.maximumGlyphs(), RendererTextMaterializationBudget::kDefaultMaximumGlyphs);
 
-  renderer.setMaximumGlyphs(2);
-  EXPECT_EQ(renderer.maximumGlyphs(), 2u);
-  if (std::unique_ptr<RendererInterface> offscreen = renderer.createOffscreenInstance()) {
-    EXPECT_EQ(offscreen->maximumGlyphs(), 2u);
-  }
+  std::unique_ptr<RendererInterface> offscreen = renderer.createOffscreenInstance();
+  ASSERT_NE(offscreen, nullptr);
+  offscreen->setMaximumGlyphs(2);
+  EXPECT_EQ(renderer.maximumGlyphs(), 2u) << "The offscreen instance must share the parent's cap.";
 
   renderer.draw(document);
   const RendererResourceStats capped = renderer.resourceStats();
   EXPECT_EQ(capped.textGlyphOccurrences, 2u);
   EXPECT_TRUE(capped.textMaterializationBudgetRejected);
   const RendererBitmap cappedSnapshot = renderer.takeSnapshot();
+  ASSERT_EQ(cappedSnapshot.dimensions, Vector2i(90, 30));
   EXPECT_THAT(CoveredPixels(cappedSnapshot, 30, 0, 60, 30), Gt(0u));
   EXPECT_EQ(CoveredPixels(cappedSnapshot, 60, 0, 90, 30), 0u)
       << "The glyph past the cap was drawn.";
 
   renderer.setMaximumGlyphs(3);
+  EXPECT_EQ(offscreen->maximumGlyphs(), 3u);
   renderer.draw(document);
   const RendererResourceStats raised = renderer.resourceStats();
   EXPECT_EQ(raised.textGlyphOccurrences, 3u);
@@ -1175,6 +1178,12 @@ TEST(RendererPublicApiTest, DrawBitmapDefaultSkipsEmptyAndInvalidRowData) {
   invalidRows.pixels.resize(8);
   renderer.drawBitmap(invalidRows, params);
   EXPECT_EQ(renderer.drawImageCount, 0);
+}
+
+TEST(RendererPublicApiTest, GlyphCapDefaultsReportNoTextSupport) {
+  DefaultMethodRenderer renderer;
+  renderer.setMaximumGlyphs(7);
+  EXPECT_EQ(renderer.maximumGlyphs(), 0u);
 }
 
 TEST(RendererPublicApiTest, ResolvedClipCopyAssignmentCopiesClipState) {

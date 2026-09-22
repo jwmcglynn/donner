@@ -234,7 +234,8 @@ public:
 
   /// Insert through the per-cache entry/byte envelope after evicting entries
   /// old enough to be safe. The family reservation in @ref insert remains
-  /// the aggregate cross-document admission gate.
+  /// the aggregate cross-document admission gate. Closes admission for the
+  /// rest of the frame when eviction cannot make room.
   GeodeGlyphResidentEntry* insertWithinBudget(const GlyphGeometryKey& key, Path&& outline,
                                               EncodedPath&& encoded, uint64_t oldestOpenFrame,
                                               size_t maxEntries, uint64_t maxRetainedBytes,
@@ -243,7 +244,8 @@ public:
       return existing;
     }
     const std::optional<uint64_t> entryBytes = EntryRetainedBytes(outline, encoded);
-    if (maxEntries == 0u || !entryBytes.has_value() || *entryBytes > maxRetainedBytes) {
+    if (maxEntries == 0u || !entryBytes.has_value() || *entryBytes > maxRetainedBytes ||
+        !admissionOpen_) {
       return nullptr;
     }
     const size_t evicted =
@@ -252,10 +254,19 @@ public:
       *evictedOut += evicted;
     }
     if (entries_.size() >= maxEntries || retainedBytes_ > maxRetainedBytes - *entryBytes) {
+      admissionOpen_ = false;
       return nullptr;
     }
     return insert(key, std::move(outline), std::move(encoded));
   }
+
+  /// Whether this frame may still add entries. See \ref closeAdmission.
+  bool admissionOpen() const { return admissionOpen_; }
+
+  /// Stop admitting entries until the next \ref beginFrame. Called once an eviction pass leaves
+  /// only entries an open frame still uses: nothing more can be evicted this frame, so every
+  /// further admission would rescan the whole cache and fail.
+  void closeAdmission() { admissionOpen_ = false; }
 
   /// Number of live entries.
   size_t size() const { return entries_.size(); }
@@ -276,6 +287,7 @@ public:
       return 0;
     }
     lastEvictedFrame_ = frameIndex;
+    admissionOpen_ = true;
     return evictToBudget(oldestOpenFrame, maxEntries, maxRetainedBytes);
   }
 
@@ -385,6 +397,8 @@ private:
   uint64_t retainedBytes_ = 0;
   /// Frame index of the last trim; `~0` = never trimmed. See beginFrame().
   uint64_t lastEvictedFrame_ = ~uint64_t{0};
+  /// Cleared by \ref closeAdmission, set again by \ref beginFrame.
+  bool admissionOpen_ = true;
   std::unordered_map<GlyphGeometryKey, std::unique_ptr<GeodeGlyphResidentEntry>,
                      GlyphGeometryKeyHash>
       entries_;

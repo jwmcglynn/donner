@@ -471,8 +471,8 @@ public:
    * Shrink the glyph-residency budget so eviction can be exercised without
    * building a font-sized working set.
    *
-   * @param maxEntries Distinct cached glyph outlines to keep.
-   * @param maxRetainedBytes Summed outline and encode bytes to keep.
+   * @param maxEntries Distinct cached glyph outlines to keep; the glyph cap still applies.
+   * @param maxRetainedBytes Summed entry, outline, and encode bytes to keep.
    */
   void setGlyphResidencyBudgetForTesting(size_t maxEntries, uint64_t maxRetainedBytes);
 

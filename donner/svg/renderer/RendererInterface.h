@@ -1297,7 +1297,14 @@ public:
    * Sets the glyph cap: the most glyph occurrences one frame draws and the most distinct glyph
    * outlines it decodes. Text past the cap is not drawn in that frame. Backends that keep glyph
    * outlines resident across frames also cap each document's resident outlines at this count.
-   * The aggregate byte and work budgets still apply, so text can be rejected before the cap.
+   *
+   * The aggregate budgets still apply and are usually reached first at the default cap. TinySkia
+   * charges every glyph occurrence two draw calls against
+   * \ref RendererDrawBudget::kMaximumDrawCalls and its outline decode against
+   * \ref RendererTextMaterializationBudget::kMaximumBytes, which admits roughly ten thousand
+   * glyphs of a typical Latin font per frame. Geode charges only newly decoded outlines against
+   * that byte budget and draws against its frame geometry budget. Lowering the cap bounds per-frame
+   * text work for untrusted documents.
    *
    * Offscreen instances from \ref createOffscreenInstance share the cap. Backends without text
    * ignore the call.

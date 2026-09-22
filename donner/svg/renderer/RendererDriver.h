@@ -421,6 +421,7 @@ private:
 
   RendererFilterPreparationBudget ownedFilterPreparationBudget_;
   RendererFilterPreparationBudget* filterPreparationBudget_ = &ownedFilterPreparationBudget_;
+  /// Charges each clip shape as one outline, capped at \ref kMaximumClipGeometryPaths.
   RendererTextMaterializationBudget ownedClipGeometryCopyBudget_{kMaximumClipGeometryPaths};
   RendererTextMaterializationBudget* clipGeometryCopyBudget_ = &ownedClipGeometryCopyBudget_;
   SecurityStats* securityStats_ = nullptr;

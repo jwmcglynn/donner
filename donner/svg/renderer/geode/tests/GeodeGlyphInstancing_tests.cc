@@ -257,7 +257,7 @@ TEST_F(GeodeGlyphInstancingTest, EvictionUnderPressureKeepsRenderingCorrect) {
   EXPECT_EQ(unbudgeted.counters.glyphResidencyEvictions, 0u)
       << "The default budget must not evict a ten-glyph document.";
 
-  renderer.setGlyphResidencyBudgetForTesting(/*maxEntries=*/2, /*maxEncodedBytes=*/1u << 30);
+  renderer.setGlyphResidencyBudgetForTesting(/*maxEntries=*/2, /*maxRetainedBytes=*/1u << 30);
 
   const Frame squeezed = render(renderer, document);
   EXPECT_GT(squeezed.counters.glyphResidencyEvictions, 0u)
@@ -269,7 +269,7 @@ TEST_F(GeodeGlyphInstancingTest, EvictionUnderPressureKeepsRenderingCorrect) {
 
   // Still correct once the budget is lifted again: the entries that survived
   // the squeeze are still usable, not left half-released.
-  renderer.setGlyphResidencyBudgetForTesting(/*maxEntries=*/1024, /*maxEncodedBytes=*/1u << 30);
+  renderer.setGlyphResidencyBudgetForTesting(/*maxEntries=*/1024, /*maxRetainedBytes=*/1u << 30);
   const Frame restored = render(renderer, document);
   EXPECT_EQ(nonTransparentPixels(restored.bitmap), covered);
 }
@@ -284,7 +284,7 @@ TEST_F(GeodeGlyphInstancingTest, FirstFrameAdmissionHonorsResidencyEntryBudget) 
   RendererGeode renderer(sharedDevice());
   constexpr size_t kMaximumEntries = 2u;
   renderer.setGlyphResidencyBudgetForTesting(kMaximumEntries,
-                                             /*maxEncodedBytes=*/1u << 30);
+                                             /*maxRetainedBytes=*/1u << 30);
 
   const Frame frame = render(renderer, document);
   ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u) << "Text did not render at all.";
@@ -563,7 +563,7 @@ TEST_F(GeodeGlyphInstancingTest, GlyphChurnStaysBoundedByEviction) {
   constexpr size_t kMaxEntries = 16u;
   constexpr size_t kDistinctGlyphsPerFrame = 4u;
   constexpr size_t kCeiling = kMaxEntries + kDistinctGlyphsPerFrame;
-  renderer.setGlyphResidencyBudgetForTesting(kMaxEntries, /*maxEncodedBytes=*/1u << 30);
+  renderer.setGlyphResidencyBudgetForTesting(kMaxEntries, /*maxRetainedBytes=*/1u << 30);
 
   uint64_t totalEvictions = 0;
   size_t settledCount = 0;

@@ -97,14 +97,21 @@ See the [Project Roadmap](docs/ProjectRoadmap.md) and
   1024 distinct glyph outlines (every glyph on the default backend), and Geode kept at most 1024
   outlines resident per document. `RendererInterface::setMaximumGlyphs` now sets one cap for glyphs
   drawn per frame, distinct outlines decoded per frame, and Geode's resident outlines, defaulting to
-  `RendererTextMaterializationBudget::kDefaultMaximumGlyphs`. The aggregate byte and work budgets
-  are unchanged and remain the memory bound, so very large text can still be rejected before the
-  cap. Clip paths keep their own 1024-shape cap.
+  `RendererTextMaterializationBudget::kDefaultMaximumGlyphs`. The aggregate byte, work, and draw
+  budgets are unchanged and are usually reached first. TinySkia charges every glyph two draw calls
+  and its outline decode, which admits roughly ten thousand glyphs of a typical Latin font per frame.
+  Geode charges only newly decoded outlines and now also charges each cached glyph its own
+  footprint, so outline-less glyphs count against the byte budget. Clip paths keep their own
+  1024-shape cap.
 
 ### Removed
 
 - Full-Skia renderer backend removed. `tiny-skia` remains the default backend and Geode remains
   available.
+- `RendererTextMaterializationBudget::kMaximumUniqueOutlines`,
+  `RendererTextMaterializationBudget::kMaximumGlyphOccurrences`, and
+  `GeodeGlyphCache::kDefaultMaxEntries` are replaced by `kDefaultMaximumGlyphs` and
+  `RendererInterface::setMaximumGlyphs`.
 
 **Full Changelog:** generated when the `v0.8.0` tag is cut.
 
