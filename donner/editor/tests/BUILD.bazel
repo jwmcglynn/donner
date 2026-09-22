@@ -430,6 +430,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
         "//conditions:default": [],
     }),
+    variants = ["geode"],
     deps = [
         "//donner/base",
         "//donner/editor:document_presenter",
@@ -639,6 +640,8 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
         "//conditions:default": [],
     }),
+    opens_gpu_device = True,
+    variants = ["geode"],
     deps = [
         "//donner/editor:gl_texture_cache",
         "@com_google_gtest//:gtest_main",
@@ -1266,6 +1269,8 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_GEODE_BACKEND_AVAILABLE"],
         "//conditions:default": [],
     }),
+    opens_gpu_device = True,
+    variants = ["geode"],
     deps = [
         "//donner/base",
         "//donner/editor:embedded_svg_icon",
