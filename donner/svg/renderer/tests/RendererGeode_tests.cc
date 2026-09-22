@@ -1916,6 +1916,49 @@ TEST_F(RendererGeodeTest, AFrameAbandonedWithATileOpenLeavesNothingOfItselfInThe
          "scale - 4x here, a 2x transform supersampled 2x - painting the rect four times as wide";
 }
 
+TEST_F(RendererGeodeTest, AnUnmatchedClipAtFrameEndDoesNotClipTheNextFrame) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip clip;
+  clip.clipRect = Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0);
+  renderer.pushClip(clip);
+  renderer.endFrame();
+
+  beginFrame(renderer);
+  ResolvedClip nextFrameClip;
+  nextFrameClip.clipRect = Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize);
+  renderer.pushClip(nextFrameClip);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.popClip();
+  renderer.endFrame();
+
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), RgbaEq(255, 0, 0, 255));
+}
+
+TEST_F(RendererGeodeTest, AnOpenPatternRestoresNoUnmatchedOuterClipIntoTheNextFrame) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip outerClip;
+  outerClip.clipRect = Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0);
+  renderer.pushClip(outerClip);
+  ASSERT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), Transform2d()));
+  renderer.endFrame();
+
+  beginFrame(renderer);
+  ResolvedClip nextFrameClip;
+  nextFrameClip.clipRect = Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize);
+  renderer.pushClip(nextFrameClip);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.popClip();
+  renderer.endFrame();
+
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), RgbaEq(255, 0, 0, 255));
+}
+
 TEST_F(RendererGeodeTest, ARecycledPatternTileNeverShowsWhatTheLastFramePaintedIntoIt) {
   ASSERT_TRUE(sharedDevice() != nullptr);
   RendererGeode renderer = createRenderer();
