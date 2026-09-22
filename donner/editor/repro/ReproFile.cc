@@ -266,8 +266,7 @@ void WriteAction(std::ostream& os, const ReproAction& action) {
 }
 
 void WriteExpectation(std::ostream& os, const ReproExpectation& expect) {
-  os << "\"expect\":{"
-     << "\"proof_kind\":";
+  os << "\"expect\":{" << "\"proof_kind\":";
   WriteQuotedJsonString(os, ProofKindTag(expect.proofKind));
   os << ",\"left_mouse_down_ordinal\":" << expect.leftMouseDownOrdinal
      << ",\"frame_offset_after_left_mouse_down\":" << expect.frameOffsetAfterLeftMouseDown
