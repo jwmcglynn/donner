@@ -7,6 +7,7 @@
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
@@ -15,6 +16,7 @@
 #include <iterator>
 #include <limits>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -566,22 +568,88 @@ bool GeodeGpuRoot::names(const wgpu::Instance& instance, const wgpu::Adapter& ad
          (!queue || static_cast<WGPUQueue>(queue) == static_cast<WGPUQueue>(handles_.queue));
 }
 
-GpuBackendKind RequestedGpuBackendKind(GpuBackendKind fallback) {
-  const char* backendEnv = std::getenv("DONNER_GPU_BACKEND");
-  if (backendEnv == nullptr || backendEnv[0] == '\0') {
-    return fallback;
+std::string_view GpuBackendKindName(GpuBackendKind kind) {
+  switch (kind) {
+    case GpuBackendKind::TransitionalWgpu: return "transitional wgpu adapter";
+    case GpuBackendKind::NativeMetal: return "native Metal";
   }
-  const std::string_view backend(backendEnv);
-  using namespace std::string_view_literals;
-  if (StringUtils::EqualsLowercase(backend, "wgpu"sv)) {
+  UTILS_UNREACHABLE();
+}
+
+std::ostream& operator<<(std::ostream& os, GpuBackendKind kind) {
+  return os << GpuBackendKindName(kind);
+}
+
+namespace {
+
+/// The value `DONNER_GPU_BACKEND` holds, or empty when it is unset or empty.
+std::string_view ProcessBackendRequest() {
+  const char* value = std::getenv("DONNER_GPU_BACKEND");
+  return value != nullptr ? std::string_view(value) : std::string_view();
+}
+
+/// What asked for the backend a selection produced.
+enum class BackendRequestSource : uint8_t {
+  Caller,       //!< The caller named it.
+  Environment,  //!< `DONNER_GPU_BACKEND` named it.
+  Default,      //!< Nothing named one, so the process default applied.
+};
+
+/// Halts on a backend request this process cannot serve. A refused selection would read to its
+/// caller as a host without a GPU, and callers skip on that.
+/// @param reason What was asked for and why it cannot be served.
+[[noreturn]] void HaltOnUnservableBackendRequest(const std::string& reason) {
+  std::fprintf(stderr, "[Geode] %s\n", reason.c_str());
+  std::abort();
+}
+
+/// Names the backend a selection produced and what asked for it, once per pair in this process,
+/// so a log shows which backend a run executed on without a line per device.
+/// @param kind Backend selected. @param source What asked for it.
+/// @param request Value of `DONNER_GPU_BACKEND` when that is the source.
+void ReportSelectedBackendOnce(GpuBackendKind kind, BackendRequestSource source,
+                               std::string_view request) {
+  static std::atomic<uint32_t> reported{0};
+  const uint32_t pair = 1u << (static_cast<uint32_t>(kind) * 3u + static_cast<uint32_t>(source));
+  if ((reported.fetch_or(pair, std::memory_order_relaxed) & pair) != 0) {
+    return;
+  }
+  const std::string_view name = GpuBackendKindName(kind);
+  switch (source) {
+    case BackendRequestSource::Caller:
+      std::fprintf(stderr, "[Geode] GPU backend: %.*s, named by the caller.\n",
+                   static_cast<int>(name.size()), name.data());
+      break;
+    case BackendRequestSource::Environment:
+      std::fprintf(stderr, "[Geode] GPU backend: %.*s, requested by DONNER_GPU_BACKEND=%.*s.\n",
+                   static_cast<int>(name.size()), name.data(), static_cast<int>(request.size()),
+                   request.data());
+      break;
+    case BackendRequestSource::Default:
+      std::fprintf(stderr, "[Geode] GPU backend: %.*s, the process default.\n",
+                   static_cast<int>(name.size()), name.data());
+      break;
+  }
+}
+
+}  // namespace
+
+gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind() {
+  const std::string_view request = ProcessBackendRequest();
+  if (request.empty()) {
     return GpuBackendKind::TransitionalWgpu;
   }
-  if (StringUtils::EqualsLowercase(backend, "metal"sv)) {
+  using namespace std::string_view_literals;
+  if (StringUtils::EqualsLowercase(request, "wgpu"sv)) {
+    return GpuBackendKind::TransitionalWgpu;
+  }
+  if (StringUtils::EqualsLowercase(request, "metal"sv)) {
     return GpuBackendKind::NativeMetal;
   }
-  std::fprintf(stderr, "[Geode] Ignoring unsupported DONNER_GPU_BACKEND=%.*s.\n",
-               static_cast<int>(backend.size()), backend.data());
-  return fallback;
+  return gpu::GpuError{
+      gpu::GpuErrorType::InvalidDescriptor,
+      std::format("DONNER_GPU_BACKEND={} names no GPU backend; accepted values: wgpu, metal",
+                  request)};
 }
 
 bool GeodeGpuRoot::hasBackendDevice() const {
@@ -591,13 +659,15 @@ bool GeodeGpuRoot::hasBackendDevice() const {
   return static_cast<bool>(handles_.device) && static_cast<bool>(handles_.queue);
 }
 
-std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
-  auto lostState = std::make_shared<gpu::DeviceLostState>();
-  const GpuBackendKind backendKind = RequestedGpuBackendKind(options.backend);
-  if (backendKind == GpuBackendKind::NativeMetal) {
-    return SelectNativeMetalRoot(options, std::move(lostState));
-  }
+namespace {
 
+/// Selects the transitional adapter's root: creates an instance, requests an adapter and a device,
+/// and takes the default queue, or imports the browser's device under Emscripten.
+/// @param options Caller-supplied inputs.
+/// @param lostState Loss condition the device-lost callback publishes into.
+/// @return The selected root, or null when no adapter or device could be obtained.
+std::shared_ptr<GeodeGpuRoot> SelectTransitionalRoot(
+    const GpuRootSelection& options, std::shared_ptr<gpu::DeviceLostState> lostState) {
   GeodeWgpuRoots handles;
   PartialSelection partial(handles);
 #ifdef __EMSCRIPTEN__
@@ -688,6 +758,42 @@ std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
   const GeodeGpuRootCapabilities capabilities = QueryRootCapabilities(handles);
   partial.keep();
   return std::make_shared<GeodeGpuRoot>(std::move(handles), capabilities, std::move(lostState));
+}
+
+}  // namespace
+
+std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
+  const std::string_view request = ProcessBackendRequest();
+  GpuBackendKind kind = GpuBackendKind::TransitionalWgpu;
+  BackendRequestSource source = BackendRequestSource::Caller;
+  if (options.backend.has_value()) {
+    kind = *options.backend;
+  } else {
+    gpu::Result<GpuBackendKind> processDefault = ProcessDefaultGpuBackendKind();
+    if (processDefault.hasError()) {
+      HaltOnUnservableBackendRequest(processDefault.error().message);
+    }
+    kind = processDefault.result();
+    source = request.empty() ? BackendRequestSource::Default : BackendRequestSource::Environment;
+  }
+
+  auto lostState = std::make_shared<gpu::DeviceLostState>();
+  std::shared_ptr<GeodeGpuRoot> root = kind == GpuBackendKind::NativeMetal
+                                           ? SelectNativeMetalRoot(options, std::move(lostState))
+                                           : SelectTransitionalRoot(options, std::move(lostState));
+  if (root == nullptr) {
+    if (source == BackendRequestSource::Environment) {
+      HaltOnUnservableBackendRequest(
+          std::format("DONNER_GPU_BACKEND={} asked for the {} backend, which this process could "
+                      "not select; a run on any other backend is no evidence for it",
+                      request, GpuBackendKindName(kind)));
+    }
+    return nullptr;
+  }
+  UTILS_RELEASE_ASSERT_MSG(root->capabilities().backend == kind,
+                           "SelectGpuRoot built a root for a backend other than the one resolved");
+  ReportSelectedBackendOnce(kind, source, request);
+  return root;
 }
 
 std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots& handles,

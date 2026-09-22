@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -50,6 +51,14 @@ enum class GpuBackendKind : uint8_t {
   /// The native Metal backend of the Donner GPU runtime. Apple platforms only.
   NativeMetal,
 };
+
+/// Human-readable name of \p kind, for diagnostics.
+/// @param kind Backend kind to name.
+std::string_view GpuBackendKindName(GpuBackendKind kind);
+
+/// Prints \p kind by \ref GpuBackendKindName.
+/// @param os Stream to print to. @param kind Backend kind to print.
+std::ostream& operator<<(std::ostream& os, GpuBackendKind kind);
 
 /// What a selection discovered about a backend root, queried once because every runtime device
 /// over the root answers these identically.
@@ -142,7 +151,7 @@ private:
 };
 
 /// Caller-supplied inputs to backend-root selection. The environment-driven inputs (the backend
-/// override and the force-fallback-adapter request) are read by the selection itself, so every
+/// requests and the force-fallback-adapter request) are read by the selection itself, so every
 /// caller honors them without repeating them.
 struct GpuRootSelection {
   /// Label the selected device carries in driver diagnostics.
@@ -158,11 +167,14 @@ struct GpuRootSelection {
   /// so selection is left unconstrained.
   std::function<std::optional<wgpu::Surface>(const wgpu::Instance&)> compatibleSurface;
 
-  /// Backend to select. The transitional adapter is the default on every platform; a native
-  /// backend the platform does not have is refused rather than silently falling back, because a
-  /// run whose expectations were recorded against one backend and which lands on another is a
-  /// failure that looks like a rendering bug.
-  GpuBackendKind backend = GpuBackendKind::TransitionalWgpu;
+  /// Backend to select, or empty for the process default (see \ref ProcessDefaultGpuBackendKind).
+  /// A caller that names a backend gets that one whatever the process default is, because a case
+  /// about one backend must not run on another when a whole run changes its default.
+  ///
+  /// A backend that cannot be served is refused rather than replaced by another, because a run
+  /// whose expectations were recorded against one backend and which lands on another is a failure
+  /// that looks like a rendering bug.
+  std::optional<GpuBackendKind> backend;
 
   /// Whether an absent `WGPU_BACKEND` override falls back to the platform's preferred backend
   /// rather than leaving the choice to the driver.
@@ -181,13 +193,22 @@ struct GpuRootSelection {
  * default queue.
  *
  * The one selection every caller shares. Headless, editor and embedded construction differ only
- * in \p options, so the adapter retries under load, the backend override, the force-fallback
+ * in \p options, so the adapter retries under load, the backend requests, the force-fallback
  * request, the device-lost callback and the uncaptured-error reporting are decided once rather
  * than per caller. Under Emscripten the browser's device is imported instead, which is the same
  * decision expressed the only way that platform allows.
  *
+ * The first selection of each backend in a process names that backend and what asked for it on
+ * stderr, so a log shows which backend a run actually executed on.
+ *
+ * A backend `DONNER_GPU_BACKEND` asked for that cannot be served halts the process, as does a
+ * value that names no backend. Refusing would hand the caller a null root, which callers and
+ * tests read as a host without a GPU and skip; a run asked to execute on one backend would then
+ * pass without executing on any.
+ *
  * @param options Caller-supplied inputs; the rest come from the environment.
- * @return The selected root, or null when no adapter or device could be obtained.
+ * @return The selected root, or null when no adapter or device could be obtained for a backend
+ *   the caller named or the process selects by default.
  */
 std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options);
 
@@ -218,15 +239,16 @@ std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots& handles,
 std::unique_ptr<gpu::Device> CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
 
 /**
- * The backend kind named by `DONNER_GPU_BACKEND`, or \p fallback when it names none.
+ * The backend a selection that names none builds from: the kind `DONNER_GPU_BACKEND` names
+ * (`wgpu` or `metal`, in any letter case), or the transitional adapter when it is unset or empty.
  *
- * One process-wide override so a suite can be run end to end against a backend that is not yet
- * the default, without a second copy of every target. An unrecognized value is reported and
- * ignored.
+ * One process-wide request so a suite can be run end to end against a backend that is not yet the
+ * default, without a second copy of every target.
  *
- * @param fallback Kind to use when the variable is absent or empty.
+ * @return The kind, or an error naming the value and the accepted values when the variable names
+ *   no backend.
  */
-GpuBackendKind RequestedGpuBackendKind(GpuBackendKind fallback);
+gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind();
 
 /// Retained device-lost callback states this process has not yet seen the backend consume. A
 /// selection that gave up mid-retry strands at most one per attempt, so teardown tests assert this
