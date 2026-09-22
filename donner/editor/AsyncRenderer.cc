@@ -35,21 +35,26 @@ SampleThumbnailRenderOutcome ClassifyTemporaryFontResources(
   }
   if (std::any_of(dependencies.begin(), dependencies.end(), [](const auto& face) {
         return face.waitReason == svg::FontFaceWaitReason::RetainedBudget;
-      }))
+      })) {
     return SampleThumbnailRenderOutcome::ResourceLimit;
+  }
   if (std::any_of(dependencies.begin(), dependencies.end(),
-                  [](const auto& face) { return face.state == svg::FontFaceLoadState::Failed; }))
+                  [](const auto& face) { return face.state == svg::FontFaceLoadState::Failed; })) {
     return SampleThumbnailRenderOutcome::RenderError;
+  }
   if (std::any_of(dependencies.begin(), dependencies.end(),
-                  [](const auto& face) { return face.state != svg::FontFaceLoadState::Loaded; }))
+                  [](const auto& face) { return face.state != svg::FontFaceLoadState::Loaded; })) {
     return SampleThumbnailRenderOutcome::FontsPending;
+  }
   return SampleThumbnailRenderOutcome::Rendered;
 }
 
 namespace {
 
 std::vector<svg::FontFaceDependency> UnresolvedFontDependencies(const svg::SVGDocument& document) {
-  if (!document.hasUnresolvedFontResources()) return {};
+  if (!document.hasUnresolvedFontResources()) {
+    return {};
+  }
   return document.renderedFontDependencies();
 }
 
@@ -288,7 +293,9 @@ SampleThumbnailRenderResult RenderSampleThumbnail(
   auto fontResources = document.renderedFontResources();
   result.fontDependencies = std::move(fontResources.dependencies);
   result.outcome = ClassifyTemporaryFontResources(result.fontDependencies, fontResources.status);
-  if (result.outcome != SampleThumbnailRenderOutcome::Rendered) return result;
+  if (result.outcome != SampleThumbnailRenderOutcome::Rendered) {
+    return result;
+  }
 
   result.bitmap =
       renderer.takeSnapshotInterruptibly([&cancellation] { return cancellation.isCancelled(); });
@@ -1464,7 +1471,9 @@ void AsyncRenderer::workerLoop() {
                                                                 ct.bitmapDims, outputCanvasSize);
           continue;
         }
-        if (ct.isDragTarget && activeDragRequest) continue;
+        if (ct.isDragTarget && activeDragRequest) {
+          continue;
+        }
         if (!publishedTextureMatches(tileId, kind, ct.generation, ct.bitmapDims,
                                      outputCanvasSize)) {
           canReuseNonDragTextures = false;
@@ -1494,7 +1503,9 @@ void AsyncRenderer::workerLoop() {
       std::vector<RenderResult::CompositedTile> previewTiles;
       previewTiles.reserve(compositorTiles.size());
       for (auto& ct : compositorTiles) {
-        if (ct.bitmapDims.x <= 0 || ct.bitmapDims.y <= 0) continue;
+        if (ct.bitmapDims.x <= 0 || ct.bitmapDims.y <= 0) {
+          continue;
+        }
         using OutKind = RenderResult::CompositedTile::Kind;
         const std::string tileId = outputTileId(ct);
         const OutKind kind = outputTileKind(ct);
@@ -1502,7 +1513,9 @@ void AsyncRenderer::workerLoop() {
         const bool metadataOnly =
             !hasPayload &&
             publishedTextureMatches(tileId, kind, ct.generation, ct.bitmapDims, outputCanvasSize);
-        if (!metadataOnly && !hasPayload) continue;
+        if (!metadataOnly && !hasPayload) {
+          continue;
+        }
         RenderResult::CompositedTile tile;
         tile.kind = kind;
         tile.id = tileId;

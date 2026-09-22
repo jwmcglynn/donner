@@ -27,13 +27,18 @@ struct Scenario {
   Case kind = Case::Opaque;
 };
 inline Extent2d InputExtent(Scenario scenario, bool source) {
-  if (scenario.kind == Case::Bounds) return source ? Extent2d{3, 2} : Extent2d{5, 3};
+  if (scenario.kind == Case::Bounds) {
+    return source ? Extent2d{3, 2} : Extent2d{5, 3};
+  }
   return {kWidth, kHeight};
 }
 inline Pixel InputPixel(Scenario scenario, uint32_t x, uint32_t y, bool source) {
-  if (scenario.kind == Case::Transparent && (x + y) % 2 == uint32_t(source)) return {77, 33, 22, 0};
-  if (scenario.kind == Case::Premultiplied)
+  if (scenario.kind == Case::Transparent && (x + y) % 2 == uint32_t(source)) {
+    return {77, 33, 22, 0};
+  }
+  if (scenario.kind == Case::Premultiplied) {
     return source ? Pixel{48, 112, 32, 160} : Pixel{128, 32, 64, 208};
+  }
   constexpr std::array colors{Pixel{32, 128, 224, 255}, Pixel{224, 32, 128, 255},
                               Pixel{128, 224, 32, 255}, Pixel{224, 128, 32, 255},
                               Pixel{0, 0, 0, 255},      Pixel{255, 255, 255, 255},
@@ -48,15 +53,18 @@ inline std::vector<uint8_t> Expected(Scenario scenario) {
   for (bool source : {false, true}) {
     const auto extent = InputExtent(scenario, source);
     auto& image = source ? foreground : background;
-    for (uint32_t y = 0; y < extent.height; ++y)
+    for (uint32_t y = 0; y < extent.height; ++y) {
       for (uint32_t x = 0; x < extent.width; ++x) {
         const auto pixel = InputPixel(scenario, x, y, source);
-        for (size_t c = 0; c < 4; ++c)
+        for (size_t c = 0; c < 4; ++c) {
           image.data()[(y * kWidth + x) * 4 + c] = pixel[3] == 0 ? 0.0f : pixel[c] / 255.0f;
+        }
       }
+    }
   }
-  if (scenario.mode >= 12 && scenario.mode < 16)
+  if (scenario.mode >= 12 && scenario.mode < 16) {
     return NonseparableBlendReference(scenario.mode, background, foreground);
+  }
   constexpr std::array modes{BlendMode::Normal,     BlendMode::Multiply,   BlendMode::Screen,
                              BlendMode::Darken,     BlendMode::Lighten,    BlendMode::Overlay,
                              BlendMode::ColorDodge, BlendMode::ColorBurn,  BlendMode::HardLight,
@@ -70,13 +78,16 @@ inline std::vector<uint8_t> Expected(Scenario scenario) {
 inline std::vector<uint8_t> InputBytes(Scenario scenario, bool source) {
   const auto extent = InputExtent(scenario, source);
   std::vector<uint8_t> result(kRowBytes * extent.height);
-  for (uint32_t y = 0; y < extent.height; ++y)
+  for (uint32_t y = 0; y < extent.height; ++y) {
     for (uint32_t x = 0; x < extent.width; ++x) {
       const auto pixel = InputPixel(scenario, x, y, source);
       std::array<float, 4> value{};
-      for (size_t c = 0; c < 4; ++c) value[c] = pixel[c] / 255.0f;
+      for (size_t c = 0; c < 4; ++c) {
+        value[c] = pixel[c] / 255.0f;
+      }
       std::memcpy(result.data() + y * kRowBytes + x * sizeof(value), value.data(), sizeof(value));
     }
+  }
   return result;
 }
 }  // namespace filter_blend_slice
@@ -169,9 +180,10 @@ void CheckFilterBlend(DeviceType& device, const shader::CompiledShaderView& shad
   ASSERT_THAT(bytes, HasResult());
   ASSERT_THAT(bytes.result(), testing::SizeIs(testing::Ge(kRowBytes * kHeight)));
   auto actual = tiny_skia::filter::FloatPixmap::fromSize(kWidth, kHeight).value();
-  for (uint32_t y = 0; y < kHeight; ++y)
+  for (uint32_t y = 0; y < kHeight; ++y) {
     std::memcpy(actual.data().data() + y * kWidth * 4, bytes.result().data() + y * kRowBytes,
                 kWidth * 4 * sizeof(float));
+  }
   ASSERT_THAT(actual.data(),
               testing::Each(testing::Truly([](float v) { return std::isfinite(v); })));
   const auto pixels = actual.toPixmap();

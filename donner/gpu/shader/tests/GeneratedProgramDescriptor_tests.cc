@@ -33,8 +33,9 @@ TEST_P(GeneratedProgramDescriptorTests, PreservesSourceAndCompleteInterface) {
   std::vector<const ShaderResource*> buffers;
   for (const auto& resource : shader.resources) {
     if (resource.type == BindingType::UniformBuffer ||
-        resource.type == BindingType::ReadOnlyStorageBuffer)
+        resource.type == BindingType::ReadOnlyStorageBuffer) {
       buffers.push_back(&resource);
+    }
   }
   ASSERT_THAT(*descriptor.bufferBindings, testing::SizeIs(buffers.size()));
   for (size_t i = 0; i < buffers.size(); ++i) {

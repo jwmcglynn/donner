@@ -827,28 +827,44 @@ const GeodeGpuContext& GeodeDevice::gpuContext() const {
 }
 
 void GeodeGpuContext::countBuffer() const {
-  if (geodeDevice != nullptr) geodeDevice->countBuffer();
+  if (geodeDevice != nullptr) {
+    geodeDevice->countBuffer();
+  }
 }
 void GeodeGpuContext::countTexture() const {
-  if (geodeDevice != nullptr) geodeDevice->countTexture();
+  if (geodeDevice != nullptr) {
+    geodeDevice->countTexture();
+  }
 }
 void GeodeGpuContext::countBindGroup() const {
-  if (geodeDevice != nullptr) geodeDevice->countBindGroup();
+  if (geodeDevice != nullptr) {
+    geodeDevice->countBindGroup();
+  }
 }
 void GeodeGpuContext::countPipelineSwitch() const {
-  if (geodeDevice != nullptr) geodeDevice->countPipelineSwitch();
+  if (geodeDevice != nullptr) {
+    geodeDevice->countPipelineSwitch();
+  }
 }
 void GeodeGpuContext::countPathEncode() const {
-  if (geodeDevice != nullptr) geodeDevice->countPathEncode();
+  if (geodeDevice != nullptr) {
+    geodeDevice->countPathEncode();
+  }
 }
 void GeodeGpuContext::countBufferWrite(uint64_t bytes) const {
-  if (geodeDevice != nullptr) geodeDevice->countBufferWrite(bytes);
+  if (geodeDevice != nullptr) {
+    geodeDevice->countBufferWrite(bytes);
+  }
 }
 void GeodeGpuContext::countTextureWrite(uint64_t bytes) const {
-  if (geodeDevice != nullptr) geodeDevice->countTextureWrite(bytes);
+  if (geodeDevice != nullptr) {
+    geodeDevice->countTextureWrite(bytes);
+  }
 }
 void GeodeGpuContext::countSubmit() const {
-  if (geodeDevice != nullptr) geodeDevice->countSubmit();
+  if (geodeDevice != nullptr) {
+    geodeDevice->countSubmit();
+  }
 }
 
 GeodeMaskPipeline& GeodeGpuContext::maskPipeline() const {

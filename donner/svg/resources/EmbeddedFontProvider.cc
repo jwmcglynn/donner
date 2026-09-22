@@ -25,7 +25,9 @@ namespace {
 
 const CatalogFontAsset* FindAsset(std::string_view family) {
   for (const auto& asset : CatalogFontAssets()) {
-    if (StringUtils::Equals<StringComparison::IgnoreCase>(asset.family, family)) return &asset;
+    if (StringUtils::Equals<StringComparison::IgnoreCase>(asset.family, family)) {
+      return &asset;
+    }
   }
   return nullptr;
 }
@@ -71,9 +73,13 @@ bool EmbeddedFontProvider::hasFamily(std::string_view family) const {
 FontFaceAvailability EmbeddedFontProvider::availability(std::string_view family,
                                                         const FontFaceRequest&) const {
   const auto* asset = FindAsset(family);
-  if (!asset || !store_) return {};
+  if (!asset || !store_) {
+    return {};
+  }
   auto result = store_->availability(asset->contentId);
-  if (!deferred_) result.state = FontAssetState::Ready;
+  if (!deferred_) {
+    result.state = FontAssetState::Ready;
+  }
   return result;
 }
 
@@ -87,7 +93,9 @@ FontFaceAdmission EmbeddedFontProvider::tryAcquireFace(std::string_view family,
 std::vector<uint8_t> EmbeddedFontProvider::loadFamilyData(
     std::string_view family, const FontFaceRequest& /*request*/) const {
   const auto* asset = FindAsset(family);
-  if (!asset || !store_) return {};
+  if (!asset || !store_) {
+    return {};
+  }
   if (deferred_) {
     // A miss is metadata-only. Only the application coordinator can queue approved visible or
     // explicit-output demand; layout may also inspect fonts belonging to offscreen text.

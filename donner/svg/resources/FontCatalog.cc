@@ -73,11 +73,15 @@ std::vector<uint8_t> FontCatalog::loadFamilyData(std::string_view family,
       // Metadata and admission selected the first claimant. Legacy empty-byte fallback may only
       // reach another synchronous provider; crossing into immutable assets would bypass their
       // identity, readiness, decode reservation, and stricter resource limits.
-      if (skippedSynchronousProvider && immutable) return {};
+      if (skippedSynchronousProvider && immutable) {
+        return {};
+      }
       // Readiness must not change bundled source precedence. Preserve the historic empty-byte
       // fallback for synchronous custom providers, whose metadata has no immutable content ID.
       auto data = provider->loadFamilyData(family, request);
-      if (!data.empty() || immutable) return data;
+      if (!data.empty() || immutable) {
+        return data;
+      }
       skippedSynchronousProvider = true;
     }
   }
@@ -87,7 +91,9 @@ std::vector<uint8_t> FontCatalog::loadFamilyData(std::string_view family,
 FontFaceAvailability FontCatalog::availability(std::string_view family,
                                                const FontFaceRequest& request) const {
   for (const auto& provider : providers_) {
-    if (provider->hasFamily(family)) return provider->availability(family, request);
+    if (provider->hasFamily(family)) {
+      return provider->availability(family, request);
+    }
   }
   return {};
 }
@@ -95,7 +101,9 @@ FontFaceAvailability FontCatalog::availability(std::string_view family,
 FontFaceAdmission FontCatalog::tryAcquireFace(std::string_view family,
                                               const FontFaceRequest& request) const {
   for (const auto& provider : providers_) {
-    if (provider->hasFamily(family)) return provider->tryAcquireFace(family, request);
+    if (provider->hasFamily(family)) {
+      return provider->tryAcquireFace(family, request);
+    }
   }
   return {.state = FontFaceLoadState::Failed};
 }

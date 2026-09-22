@@ -55,8 +55,8 @@
 #include "donner/svg/SVGPolylineElement.h"             // IWYU pragma: export
 #include "donner/svg/SVGRadialGradientElement.h"       // IWYU pragma: export
 #include "donner/svg/SVGRectElement.h"                 // IWYU pragma: export
-#include "donner/svg/SVGSetElement.h"                  // IWYU pragma: export
 #include "donner/svg/SVGSVGElement.h"                  // IWYU pragma: export
+#include "donner/svg/SVGSetElement.h"                  // IWYU pragma: export
 #include "donner/svg/SVGStopElement.h"                 // IWYU pragma: export
 #include "donner/svg/SVGStyleElement.h"                // IWYU pragma: export
 #include "donner/svg/SVGSwitchElement.h"               // IWYU pragma: export

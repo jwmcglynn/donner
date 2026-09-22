@@ -13,8 +13,8 @@ namespace donner::svg::components {
 /// The current SMIL subset supports `discrete` and `linear` only; `paced` and `spline` are
 /// deferred. The parser maps unsupported modes to `Linear`.
 enum class CalcMode : uint8_t {
-  Discrete, ///< Jump between values at keyTime boundaries.
-  Linear,   ///< Linear interpolation (default for `<animate>`).
+  Discrete,  ///< Jump between values at keyTime boundaries.
+  Linear,    ///< Linear interpolation (default for `<animate>`).
 };
 
 /**

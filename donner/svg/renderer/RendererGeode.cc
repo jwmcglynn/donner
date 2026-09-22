@@ -1650,7 +1650,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       // Finishing an encoder that recorded nothing would spend one of the submission's command
       // buffers on a buffer with no work in it, and the frame closes its encoder at every
       // boundary whether or not anything was drawn between two of them.
-      if (reopen) return true;
+      if (reopen) {
+        return true;
+      }
       frameGpuEncoder = nullptr;
       return true;
     }
@@ -1683,8 +1685,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Opens the fresh runtime encoder that records the post-filter composite.
   [[nodiscard]] bool restoreFrameAfterFilter() {
-    if (std::exchange(failFilterFrameRestoreForTesting, false)) return false;
-    if (!device || device->isDeviceLost()) return false;
+    if (std::exchange(failFilterFrameRestoreForTesting, false)) {
+      return false;
+    }
+    if (!device || device->isDeviceLost()) {
+      return false;
+    }
     if (!frameRecordingOpen || !openFrameGpuEncoder() || device->isDeviceLost()) {
       discardFrameGpuEncoder();
       return false;
@@ -2114,7 +2120,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   void retainFailedFilterTexture(gpu::Texture texture,
                                  const gpu::TextureDescriptor& desc) override {
-    if (texture.isValid()) failedFilterTextures.push_back({std::move(texture), desc});
+    if (texture.isValid()) {
+      failedFilterTextures.push_back({std::move(texture), desc});
+    }
   }
 
   void retainPendingFrameReleasesAfterFailure() {
@@ -6012,7 +6020,9 @@ void RendererGeode::popFilterLayer() {
   // in which case the capture itself is what gets composited back.
   std::optional<geode::FilterExecutionResult> execution =
       impl_->executeFilterGraph(frame, bufferDeviceFromFilter);
-  if (!execution.has_value()) return;
+  if (!execution.has_value()) {
+    return;
+  }
   geode::FilterExecutionResult filtered = std::move(*execution);
   const gpu::Texture* filteredTexture = Impl::filterOutput(filtered, frame.layerTexture);
   const gpu::TextureDescriptor& filteredDesc = Impl::filterOutputDesc(filtered, frame.layerDesc);
@@ -7567,7 +7577,9 @@ ReadbackMapResult MapAndWaitReadback(geode::GeodeDevice& device, gpu::Buffer& bu
         device.isDeviceLost() ? ReadbackMapStatus::DeviceLost : ReadbackMapStatus::Failed, {}};
   }
   gpu::BufferMapping liveMapping = std::move(mapping).result();
-  if (mapRequested) mapRequested();
+  if (mapRequested) {
+    mapRequested();
+  }
 
   int pollIter = 0;
   bool cancelled = false;
@@ -7692,7 +7704,9 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
   gpu::Device& runtime = context.runtimeDevice();
   auto createdView = runtime.createTextureView(
       texture, gpu::TextureViewDescriptor{"RendererGeodeReadbackInputView"});
-  if (createdView.hasError()) return false;
+  if (createdView.hasError()) {
+    return false;
+  }
   const gpu::TextureView inputView = std::move(createdView).result();
   auto bindGroup = runtime.createBindGroup(gpu::BindGroupDescriptor{
       "RendererGeodeReadbackBG",
@@ -7700,13 +7714,19 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
       {gpu::BindGroupEntry{pipeline.inputBinding(), gpu::TextureViewBinding{inputView}},
        gpu::BindGroupEntry{pipeline.outputBinding(),
                            gpu::TextureViewBinding{resources.stagingView}}}});
-  if (bindGroup.hasError()) return false;
+  if (bindGroup.hasError()) {
+    return false;
+  }
   auto createdEncoder = runtime.createCommandEncoder();
-  if (createdEncoder.hasError()) return false;
+  if (createdEncoder.hasError()) {
+    return false;
+  }
   const std::unique_ptr<gpu::CommandEncoder> encoder = std::move(createdEncoder).result();
   auto createdPass =
       encoder->beginComputePass(gpu::ComputePassDescriptor{"RendererGeodeReadbackPass"});
-  if (createdPass.hasError()) return false;
+  if (createdPass.hasError()) {
+    return false;
+  }
   gpu::ComputePassEncoder* pass = createdPass.result();
   const gpu::WorkgroupSize workgroup = pipeline.workgroupSize();
   if (pass->setPipeline(pipeline.pipeline()).hasError() ||
@@ -7714,16 +7734,20 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
       pass->dispatchWorkgroups((width + workgroup.x - 1) / workgroup.x,
                                (height + workgroup.y - 1) / workgroup.y, 1)
           .hasError() ||
-      pass->end().hasError())
+      pass->end().hasError()) {
     return false;
+  }
   if (encoder
           ->copyTextureToBuffer(gpu::TexelCopyTextureInfo{resources.staging}, resources.readback,
                                 gpu::TexelCopyBufferLayout{0, alignBytesPerRow(width * 4u), height},
                                 gpu::Extent2d{width, height})
-          .hasError())
+          .hasError()) {
     return false;
+  }
   auto commands = encoder->finish();
-  if (commands.hasError()) return false;
+  if (commands.hasError()) {
+    return false;
+  }
   return !runtime.submit(std::move(commands).result()).hasError();
 }
 
@@ -7767,8 +7791,9 @@ struct RendererGeodeTextureSnapshot::ReadbackControl {
 
   bool stopped() {
     if (status == ReadbackMapStatus::Cancelled || status == ReadbackMapStatus::TimedOut ||
-        status == ReadbackMapStatus::DeviceLost)
+        status == ReadbackMapStatus::DeviceLost) {
       return true;
+    }
     if (shouldCancel && shouldCancel()) {
       status = ReadbackMapStatus::Cancelled;
       return true;
@@ -7812,25 +7837,41 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureGpu(geode::GeodeDevice& 
                                                             const gpu::Texture& texture,
                                                             uint32_t width, uint32_t height,
                                                             ReadbackControl& control) {
-  if (control.stopped()) return {};
+  if (control.stopped()) {
+    return {};
+  }
   const geode::GeodeSnapshotReadbackPipeline& pipeline = context.snapshotReadbackPipeline();
-  if (!pipeline.valid()) return {};
-  if (control.stopped()) return {};
+  if (!pipeline.valid()) {
+    return {};
+  }
+  if (control.stopped()) {
+    return {};
+  }
   geode::SnapshotReadbackResources resources =
       context.acquireSnapshotReadbackResources(width, height);
-  if (resources.empty()) return {};
-  if (control.stopped()) return {};
-  if (!RecordGpuReadback(context, pipeline, texture, resources, width, height)) return {};
+  if (resources.empty()) {
+    return {};
+  }
+  if (control.stopped()) {
+    return {};
+  }
+  if (!RecordGpuReadback(context, pipeline, texture, resources, width, height)) {
+    return {};
+  }
   const uint64_t mapSize = static_cast<uint64_t>(alignBytesPerRow(width * 4u)) * height;
   ReadbackMapResult mapped =
       MapAndWaitReadback(context, resources.readback, mapSize, control.shouldCancel,
                          control.deadline, control.mapRequested);
   control.status = mapped.status;
-  if (mapped.status != ReadbackMapStatus::Success) return {};
+  if (mapped.status != ReadbackMapStatus::Success) {
+    return {};
+  }
   RendererBitmap bitmap =
       readMappedTexture(context, mapped.mapping, width, height, gpu::TextureFormat::RGBA8Unorm,
                         AlphaType::Unpremultiplied, control);
-  if (bitmap.empty()) return {};
+  if (bitmap.empty()) {
+    return {};
+  }
   context.releaseSnapshotReadbackResources(std::move(resources));
   return bitmap;
 }
@@ -7838,32 +7879,49 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureGpu(geode::GeodeDevice& 
 RendererBitmap RendererGeodeTextureSnapshot::readTextureCpu(
     geode::GeodeDevice& context, const gpu::Texture& texture, uint32_t width, uint32_t height,
     gpu::TextureFormat format, AlphaType alphaType, ReadbackControl& control) {
-  if (control.stopped()) return {};
+  if (control.stopped()) {
+    return {};
+  }
   gpu::Device& runtime = context.runtimeDevice();
   const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
   const uint64_t mapSize = static_cast<uint64_t>(bytesPerRow) * height;
   auto createdBuffer = runtime.createBuffer(gpu::BufferDescriptor{
       "RendererGeodeReadback", mapSize, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead});
-  if (createdBuffer.hasError()) return {};
+  if (createdBuffer.hasError()) {
+    return {};
+  }
   gpu::Buffer buffer = std::move(createdBuffer).result();
-  if (control.stopped()) return {};
+  if (control.stopped()) {
+    return {};
+  }
   auto createdEncoder = runtime.createCommandEncoder();
-  if (createdEncoder.hasError()) return {};
+  if (createdEncoder.hasError()) {
+    return {};
+  }
   const std::unique_ptr<gpu::CommandEncoder> encoder = std::move(createdEncoder).result();
   if (encoder
           ->copyTextureToBuffer(gpu::TexelCopyTextureInfo{texture}, buffer,
                                 gpu::TexelCopyBufferLayout{0, bytesPerRow, height},
                                 gpu::Extent2d{width, height})
-          .hasError())
+          .hasError()) {
     return {};
+  }
   auto commands = encoder->finish();
-  if (commands.hasError()) return {};
-  if (control.stopped()) return {};
-  if (runtime.submit(std::move(commands).result()).hasError()) return {};
+  if (commands.hasError()) {
+    return {};
+  }
+  if (control.stopped()) {
+    return {};
+  }
+  if (runtime.submit(std::move(commands).result()).hasError()) {
+    return {};
+  }
   ReadbackMapResult mapped = MapAndWaitReadback(context, buffer, mapSize, control.shouldCancel,
                                                 control.deadline, control.mapRequested);
   control.status = mapped.status;
-  if (mapped.status != ReadbackMapStatus::Success) return {};
+  if (mapped.status != ReadbackMapStatus::Success) {
+    return {};
+  }
   return readMappedTexture(context, mapped.mapping, width, height, format, alphaType, control);
 }
 
@@ -7871,7 +7929,9 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureWithContext(
     geode::GeodeDevice& context, geode::GeodeDevice& owner, const gpu::Texture& texture,
     Vector2i dimensions, const gpu::TextureDescriptor& descriptor, AlphaType alphaType,
     ReadbackControl& control) {
-  if (control.stopped()) return {};
+  if (control.stopped()) {
+    return {};
+  }
   if (context.isDeviceLost()) {
     control.status = ReadbackMapStatus::DeviceLost;
     return {};
@@ -7880,20 +7940,28 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureWithContext(
   // registered there before anything recorded here may name it. The registration is borrowed and
   // lasts exactly as long as this capture: the producer keeps the allocation.
   gpu::Result<gpu::Texture> registered = context.registerCaptureSource(owner, texture);
-  if (registered.hasError()) return {};
+  if (registered.hasError()) {
+    return {};
+  }
   const gpu::Texture source = std::move(registered).result();
   const uint32_t width = static_cast<uint32_t>(dimensions.x);
   const uint32_t height = static_cast<uint32_t>(dimensions.y);
   if (CanUnpremultiplySnapshotOnGpu(descriptor, alphaType)) {
     RendererBitmap bitmap = readTextureGpu(context, source, width, height, control);
-    if (!bitmap.empty()) return bitmap;
+    if (!bitmap.empty()) {
+      return bitmap;
+    }
   }
-  if (control.stopped()) return {};
+  if (control.stopped()) {
+    return {};
+  }
   if (context.isDeviceLost()) {
     control.status = ReadbackMapStatus::DeviceLost;
     return {};
   }
-  if (!gpu::HasAllFlags(descriptor.usage, gpu::TextureUsage::CopySrc)) return {};
+  if (!gpu::HasAllFlags(descriptor.usage, gpu::TextureUsage::CopySrc)) {
+    return {};
+  }
   return readTextureCpu(context, source, width, height, descriptor.format, alphaType, control);
 }
 
@@ -7904,7 +7972,9 @@ RendererBitmap RendererGeodeTextureSnapshot::readTexture(std::shared_ptr<geode::
                                                          std::shared_ptr<Backing> backing) {
   (void)backing;  // Keep the source allocation leased through context-local resource teardown.
   const auto captureStart = std::chrono::steady_clock::now();
-  if (!device) return {};
+  if (!device) {
+    return {};
+  }
   const auto deadline =
       captureStart +
       std::chrono::milliseconds(device->snapshotReadbackBudgetMs_.load(std::memory_order_relaxed));
@@ -7923,10 +7993,16 @@ RendererBitmap RendererGeodeTextureSnapshot::readTexture(std::shared_ptr<geode::
   }
   const std::optional<gpu::TextureDescriptor> descriptor =
       ReadableSnapshotDescriptor(device, texture, dimensions);
-  if (!descriptor || !SnapshotHasReadbackRoute(*descriptor, alphaType)) return {};
-  if (device->isDeviceLost()) return {};
+  if (!descriptor || !SnapshotHasReadbackRoute(*descriptor, alphaType)) {
+    return {};
+  }
+  if (device->isDeviceLost()) {
+    return {};
+  }
   auto capture = device->acquireSnapshotCapture(shouldCancel, deadline);
-  if (capture.status != geode::GeodeDevice::SnapshotCaptureStatus::Ready) return {};
+  if (capture.status != geode::GeodeDevice::SnapshotCaptureStatus::Ready) {
+    return {};
+  }
   RendererBitmap bitmap = readTextureWithContext(*capture.context, *device, texture, dimensions,
                                                  *descriptor, alphaType, control);
   if (control.status == ReadbackMapStatus::Cancelled) {

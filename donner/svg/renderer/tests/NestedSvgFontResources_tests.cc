@@ -65,9 +65,12 @@ std::string ChildUri() {
 std::string ImageSource(bool twoHosts = false, bool parentText = false) {
   std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="360" height="100">)";
   source += "<image id='first' width='160' height='70' href='" + ChildUri() + "'/>";
-  if (twoHosts)
+  if (twoHosts) {
     source += "<image id='second' x='175' width='160' height='70' href='" + ChildUri() + "'/>";
-  if (parentText) source += "<text id='parentText' y='95' font-family='Inter'>Parent</text>";
+  }
+  if (parentText) {
+    source += "<text id='parentText' y='95' font-family='Inter'>Parent</text>";
+  }
   source += "<rect id='unrelated' x='345' y='80' width='10' height='10'/></svg>";
   return source;
 }
@@ -80,7 +83,9 @@ std::string FilterSource() {
 
 SVGDocumentHandle ChildHandle(SVGDocument& document, std::string_view selector) {
   const auto element = document.querySelector(selector);
-  if (!element) return {};
+  if (!element) {
+    return {};
+  }
   const auto* image = document.registry().try_get<components::LoadedSVGImageComponent>(
       element->unsafeEntityHandle().entity());
   return image ? image->subDocument : SVGDocumentHandle{};
@@ -88,7 +93,9 @@ SVGDocumentHandle ChildHandle(SVGDocument& document, std::string_view selector) 
 
 bool StageInter(CatalogEncodedFontStore& store, const FontCatalog& catalog) {
   const auto id = catalog.availability("Inter", {}).contentId;
-  if (!store.queue(id)) return false;
+  if (!store.queue(id)) {
+    return false;
+  }
   const auto token = store.beginFetch(id);
   return token &&
          store.publishVerified(id, token, EmbeddedFontProvider().loadFamilyData("Inter", {}));

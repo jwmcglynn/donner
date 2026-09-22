@@ -64,7 +64,9 @@ public:
     return result;
   }
   constexpr void depend(NodeId node, NodeId dependency) {
-    if (dependency == kNone) return;
+    if (dependency == kNone) {
+      return;
+    }
     if (node >= nodeCount_ || dependency >= nodeCount_ || edgeCount_ == edges_.size()) {
       failed_ = true;
       return;
@@ -73,10 +75,18 @@ public:
     nodes_[node].firstEdge = edgeCount_++;
   }
   constexpr NodeId join(NodeId first, NodeId second) {
-    if (first == kNone || first == second) return second;
-    if (second == kNone) return first;
-    if (first == 0) return second;
-    if (second == 0) return first;
+    if (first == kNone || first == second) {
+      return second;
+    }
+    if (second == kNone) {
+      return first;
+    }
+    if (first == 0) {
+      return second;
+    }
+    if (second == 0) {
+      return first;
+    }
     return make(0, first, second);
   }
   constexpr Mask value(NodeId node) const { return node < nodeCount_ ? nodes_[node].value : 0; }
@@ -87,7 +97,9 @@ public:
       for (NodeId i = 0; i < nodeCount_; ++i) {
         Mask next = nodes_[i].seed;
         for (NodeId edge = nodes_[i].firstEdge; edge != kNone; edge = edges_[edge].next) {
-          if (++work > limit) return false;
+          if (++work > limit) {
+            return false;
+          }
           next |= nodes_[edges_[edge].dependency].value;
         }
         if (next != nodes_[i].value) {
@@ -142,21 +154,29 @@ public:
       : module_(module), workLimit_(workLimit) {}
 
   constexpr UniformityResult run() {
-    for (function_ = 0; function_ < module_.functionCount && ok(); ++function_) analyzeFunction();
+    for (function_ = 0; function_ < module_.functionCount && ok(); ++function_) {
+      analyzeFunction();
+    }
     return result_;
   }
 
 private:
   constexpr bool ok() const { return result_.error == UniformityError::None; }
   constexpr void fail(UniformityError error, SourceSpan span) {
-    if (ok()) result_ = {error, span};
+    if (ok()) {
+      result_ = {error, span};
+    }
   }
   constexpr bool step(SourceSpan span) {
-    if (++work_ > workLimit_) fail(UniformityError::Limit, span);
+    if (++work_ > workLimit_) {
+      fail(UniformityError::Limit, span);
+    }
     return ok();
   }
   constexpr void copy(State& destination, const State& source) const {
-    for (ArenaId i = firstSymbol_; i < endSymbol_; ++i) destination.values[i] = source.values[i];
+    for (ArenaId i = firstSymbol_; i < endSymbol_; ++i) {
+      destination.values[i] = source.values[i];
+    }
     destination.control = source.control;
     destination.possibleDiscard = source.possibleDiscard;
   }
@@ -166,23 +186,33 @@ private:
       join.reached = true;
       return;
     }
-    for (ArenaId i = firstSymbol_; i < endSymbol_; ++i)
+    for (ArenaId i = firstSymbol_; i < endSymbol_; ++i) {
       join.state.values[i] = graph_.join(join.state.values[i], incoming.values[i]);
+    }
     join.state.control = graph_.join(join.state.control, incoming.control);
     join.state.possibleDiscard |= incoming.possibleDiscard;
   }
   constexpr NodeId substitute(Mask mask, const Expression& call,
                               const std::array<NodeId, Expression::kMaxOperands>& arguments) {
-    if (mask == 0) return 0;
+    if (mask == 0) {
+      return 0;
+    }
     const NodeId result = graph_.make(mask & kNonUniform);
-    if (mask & kControl) graph_.depend(result, state_.control);
-    for (uint8_t i = 0; i < call.operandCount; ++i)
-      if (mask & (1u << i)) graph_.depend(result, arguments[i]);
+    if (mask & kControl) {
+      graph_.depend(result, state_.control);
+    }
+    for (uint8_t i = 0; i < call.operandCount; ++i) {
+      if (mask & (1u << i)) {
+        graph_.depend(result, arguments[i]);
+      }
+    }
     return result;
   }
   constexpr void require(NodeId dependencies, SourceSpan span) {
     summary_.collective = true;
-    if (state_.possibleDiscard) fail(UniformityError::AfterDiscard, span);
+    if (state_.possibleDiscard) {
+      fail(UniformityError::AfterDiscard, span);
+    }
     if (requirementCount_ == requirements_.size()) {
       fail(UniformityError::Limit, span);
       return;
@@ -191,15 +221,23 @@ private:
   }
 
   constexpr NodeId expression(ArenaId id, uint16_t depth = 0) {
-    if (id == kInvalidArenaId) return 0;
+    if (id == kInvalidArenaId) {
+      return 0;
+    }
     if (id >= module_.expressionCount || depth >= 128) {
       fail(UniformityError::InvalidModule, {});
       return 0;
     }
     const Expression& node = module_.expressions[id];
-    if (!step(node.span)) return 0;
-    if (node.kind == ExpressionKind::Zero || node.kind == ExpressionKind::Literal) return 0;
-    if (node.kind == ExpressionKind::Symbol) return symbol(node);
+    if (!step(node.span)) {
+      return 0;
+    }
+    if (node.kind == ExpressionKind::Zero || node.kind == ExpressionKind::Literal) {
+      return 0;
+    }
+    if (node.kind == ExpressionKind::Symbol) {
+      return symbol(node);
+    }
     if (node.operandCount > node.operands.size()) {
       fail(UniformityError::InvalidModule, node.span);
       return 0;
@@ -217,12 +255,16 @@ private:
     NodeId value = 0;
     const NodeId control = state_.control;
     for (uint8_t i = 0; i < node.operandCount; ++i) {
-      if (i == 1 && shortCircuit(node)) state_.control = graph_.join(control, arguments[0]);
+      if (i == 1 && shortCircuit(node)) {
+        state_.control = graph_.join(control, arguments[0]);
+      }
       arguments[i] = expression(node.operands[i], depth + 1);
       value = graph_.join(value, arguments[i]);
     }
     state_.control = control;
-    if (node.kind == ExpressionKind::FunctionCall) return call(node, arguments);
+    if (node.kind == ExpressionKind::FunctionCall) {
+      return call(node, arguments);
+    }
     return node.kind == ExpressionKind::BuiltinCall ? builtin(node, value) : value;
   }
 
@@ -233,8 +275,9 @@ private:
       require(state_.control, node.span);
     }
     if (builtin == Builtin::TextureLoad || builtin == Builtin::TextureSample ||
-        builtin == Builtin::TextureSampleLevel)
+        builtin == Builtin::TextureSampleLevel) {
       value = graph_.make(kNonUniform, value);
+    }
     return value;
   }
 
@@ -269,7 +312,9 @@ private:
     }
     const Summary& callee = summaries_[node.payload];
     summary_.stages &= callee.stages;
-    if (callee.collective) require(substitute(callee.required, node, arguments), node.span);
+    if (callee.collective) {
+      require(substitute(callee.required, node, arguments), node.span);
+    }
     state_.possibleDiscard |= callee.discard;
     summary_.discard |= callee.discard;
     escapePointers(callee, node, arguments);
@@ -292,11 +337,16 @@ private:
   constexpr void escapePointers(const Summary& callee, const Expression& node,
                                 const std::array<NodeId, Expression::kMaxOperands>& arguments) {
     bool escapes = false;
-    for (uint8_t i = 0; i < node.operandCount && !escapes; ++i)
+    for (uint8_t i = 0; i < node.operandCount && !escapes; ++i) {
       escapes = pointerOperand(node.operands[i]);
-    if (!escapes) return;
+    }
+    if (!escapes) {
+      return;
+    }
     for (uint8_t i = 0; i < node.operandCount; ++i) {
-      if (!pointerOperand(node.operands[i])) continue;
+      if (!pointerOperand(node.operands[i])) {
+        continue;
+      }
       NodeId indices = 0;
       const ArenaId target = rootSymbol(node.operands[i], indices);
       if (target < firstSymbol_ || target >= endSymbol_) {
@@ -312,10 +362,15 @@ private:
   constexpr ArenaId rootSymbol(ArenaId id, NodeId& indexDependencies) {
     for (uint16_t depth = 0; depth < 128 && id < module_.expressionCount; ++depth) {
       const Expression& node = module_.expressions[id];
-      if (node.kind == ExpressionKind::Symbol) return static_cast<ArenaId>(node.payload);
-      if (node.kind == ExpressionKind::Index)
+      if (node.kind == ExpressionKind::Symbol) {
+        return static_cast<ArenaId>(node.payload);
+      }
+      if (node.kind == ExpressionKind::Index) {
         indexDependencies = graph_.join(indexDependencies, expression(node.operands[1]));
-      if (node.operandCount == 0) break;
+      }
+      if (node.operandCount == 0) {
+        break;
+      }
       id = node.operands[0];
     }
     fail(UniformityError::InvalidModule, {});
@@ -343,7 +398,9 @@ private:
   }
 
   constexpr uint8_t statement(const Statement& node, Context context) {
-    if (!step(node.span)) return 0;
+    if (!step(node.span)) {
+      return 0;
+    }
     switch (node.kind) {
       case StatementKind::Declaration: return declaration(node);
       case StatementKind::Assign: return assignment(node);
@@ -380,8 +437,9 @@ private:
     }
     NodeId value =
         graph_.join(expression(node.secondExpression), graph_.join(indices, state_.control));
-    if (module_.expressions[node.expression].kind != ExpressionKind::Symbol)
+    if (module_.expressions[node.expression].kind != ExpressionKind::Symbol) {
       value = graph_.join(value, state_.values[target]);
+    }
     state_.values[target] = value;
     return kNext;
   }
@@ -389,16 +447,18 @@ private:
   constexpr uint8_t controlStatement(const Statement& node, Context context) {
     switch (node.kind) {
       case StatementKind::Break:
-        if (!context.breaks)
+        if (!context.breaks) {
           fail(UniformityError::InvalidModule, node.span);
-        else
+        } else {
           merge(*context.breaks, state_);
+        }
         return kBreak;
       case StatementKind::Continue:
-        if (!context.continues)
+        if (!context.continues) {
           fail(UniformityError::InvalidModule, node.span);
-        else
+        } else {
           merge(*context.continues, state_);
+        }
         return kContinue;
       case StatementKind::Discard:
         summary_.stages &= kFragment;
@@ -422,14 +482,20 @@ private:
     state_.control = graph_.join(incoming.control, condition);
     const uint8_t yes = block(node.firstBody, context);
     Join normal;
-    if (yes & kNext) merge(normal, state_);
+    if (yes & kNext) {
+      merge(normal, state_);
+    }
     copy(state_, incoming);
     state_.control = graph_.join(incoming.control, condition);
     const uint8_t no = block(node.firstElseBody, context);
-    if (no & kNext) merge(normal, state_);
+    if (no & kNext) {
+      merge(normal, state_);
+    }
     if (normal.reached) {
       copy(state_, normal.state);
-      if (yes == kNext && no == kNext) state_.control = incoming.control;
+      if (yes == kNext && no == kNext) {
+        state_.control = incoming.control;
+      }
     }
     return yes | no;
   }
@@ -455,7 +521,9 @@ private:
       state_.control = graph_.join(incoming.control, selector);
       const uint8_t branch = block(clause.firstBody, Context{&normal, context.continues});
       behaviors |= branch;
-      if (branch & kNext) merge(normal, state_);
+      if (branch & kNext) {
+        merge(normal, state_);
+      }
     }
     if (!hasDefault) {
       copy(state_, incoming);
@@ -464,7 +532,9 @@ private:
     }
     if (normal.reached) {
       copy(state_, normal.state);
-      if (!(behaviors & (kReturn | kContinue))) state_.control = incoming.control;
+      if (!(behaviors & (kReturn | kContinue))) {
+        state_.control = incoming.control;
+      }
     }
     return (behaviors & (kReturn | kContinue)) | (normal.reached ? kNext : 0);
   }
@@ -494,10 +564,14 @@ private:
                               const std::array<NodeId, ModuleLimits::kMaxSymbols>& phis,
                               uint16_t firstRequirement, Join& exits) {
     graph_.depend(header, state_.control);
-    for (ArenaId i = firstSymbol_; i < endSymbol_; ++i)
-      if (phis[i] != kNone) graph_.depend(phis[i], state_.values[i]);
-    if (state_.possibleDiscard && requirementCount_ > firstRequirement)
+    for (ArenaId i = firstSymbol_; i < endSymbol_; ++i) {
+      if (phis[i] != kNone) {
+        graph_.depend(phis[i], state_.values[i]);
+      }
+    }
+    if (state_.possibleDiscard && requirementCount_ > firstRequirement) {
       fail(UniformityError::AfterDiscard, requirements_[firstRequirement].span);
+    }
     exits.state.possibleDiscard |= state_.possibleDiscard;
   }
 
@@ -510,7 +584,9 @@ private:
       fail(UniformityError::InvalidModule, node.span);
       return 0;
     }
-    if (counted) statement(module_.statements[node.init], context);
+    if (counted) {
+      statement(module_.statements[node.init], context);
+    }
     State incoming;
     copy(incoming, state_);
     const auto phis = loopValues();
@@ -521,18 +597,30 @@ private:
     state_.control = graph_.join(header, condition);
     const NodeId bodyControl = state_.control;
     Join exits, continuing;
-    if (conditional) merge(exits, state_);
+    if (conditional) {
+      merge(exits, state_);
+    }
     const uint8_t body = block(node.firstBody, Context{&exits, &continuing});
-    if (body & kNext) merge(continuing, state_);
+    if (body & kNext) {
+      merge(continuing, state_);
+    }
     if (continuing.reached) {
       copy(state_, continuing.state);
-      if (!(body & (kReturn | kBreak))) state_.control = bodyControl;
-      if (counted) statement(module_.statements[node.continuing], context);
+      if (!(body & (kReturn | kBreak))) {
+        state_.control = bodyControl;
+      }
+      if (counted) {
+        statement(module_.statements[node.continuing], context);
+      }
       loopBackedge(header, phis, firstRequirement, exits);
     }
-    if (!exits.reached) return body & kReturn;
+    if (!exits.reached) {
+      return body & kReturn;
+    }
     copy(state_, exits.state);
-    if (!(body & kReturn)) state_.control = incoming.control;
+    if (!(body & kReturn)) {
+      state_.control = incoming.control;
+    }
     return kNext | (body & kReturn);
   }
 
@@ -549,7 +637,9 @@ private:
     initializeFunction(function);
     block(function.firstStatement, {});
     recordPointerExits();
-    if (!ok()) return;
+    if (!ok()) {
+      return;
+    }
     if (!graph_.solve(work_, workLimit_)) {
       fail(UniformityError::Limit, function.nameSpan);
       return;
@@ -560,7 +650,9 @@ private:
   /// Joins each pointer parameter's current pointee into the value seen by the caller on exit.
   constexpr void recordPointerExits() {
     for (uint16_t i = 0; i < pointerParameters_; ++i) {
-      if (!pointerParameter_[i]) continue;
+      if (!pointerParameter_[i]) {
+        continue;
+      }
       pointerExit_[i] = graph_.join(pointerExit_[i], state_.values[firstSymbol_ + i]);
     }
   }
@@ -572,7 +664,9 @@ private:
     requirementCount_ = 0;
     state_.possibleDiscard = false;
     state_.control = graph_.make(function.stage == Stage::None ? kControl : 0);
-    for (ArenaId i = firstSymbol_; i < endSymbol_; ++i) state_.values[i] = kNone;
+    for (ArenaId i = firstSymbol_; i < endSymbol_; ++i) {
+      state_.values[i] = kNone;
+    }
     pointerParameters_ = function.parameterCount < Expression::kMaxOperands
                              ? function.parameterCount
                              : Expression::kMaxOperands;
@@ -588,18 +682,24 @@ private:
 
   constexpr void finishFunction(const Function& function) {
     summary_.result = graph_.value(returned_);
-    for (uint16_t i = 0; i < pointerParameters_; ++i)
-      if (pointerParameter_[i]) summary_.pointerEscape[i] = graph_.value(pointerExit_[i]);
+    for (uint16_t i = 0; i < pointerParameters_; ++i) {
+      if (pointerParameter_[i]) {
+        summary_.pointerEscape[i] = graph_.value(pointerExit_[i]);
+      }
+    }
     for (uint16_t i = 0; i < requirementCount_; ++i) {
       const Mask mask = graph_.value(requirements_[i].dependencies);
-      if (mask & kNonUniform) fail(UniformityError::NonUniformControl, requirements_[i].span);
+      if (mask & kNonUniform) {
+        fail(UniformityError::NonUniformControl, requirements_[i].span);
+      }
       summary_.required |= mask;
     }
     const uint8_t stage = function.stage == Stage::Compute  ? kCompute
                           : function.stage == Stage::Vertex ? kVertex
                                                             : kFragment;
-    if (function.stage != Stage::None && !(summary_.stages & stage))
+    if (function.stage != Stage::None && !(summary_.stages & stage)) {
       fail(UniformityError::InvalidStage, function.nameSpan);
+    }
     summaries_[function_] = summary_;
   }
 
@@ -632,11 +732,13 @@ constexpr UniformityResult AnalyzeUniformity(const Module& module, uint32_t work
     const Expression& node = module.expressions[i];
     if (node.kind == ExpressionKind::BuiltinCall &&
         (node.payload == uint32_t(Builtin::Fwidth) ||
-         node.payload == uint32_t(Builtin::TextureSample)))
+         node.payload == uint32_t(Builtin::TextureSample))) {
       needed = true;
+    }
   }
-  for (uint16_t i = 0; i < module.statementCount; ++i)
+  for (uint16_t i = 0; i < module.statementCount; ++i) {
     needed |= module.statements[i].kind == StatementKind::Discard;
+  }
   return needed ? uniformity_detail::Analyzer(module, workLimit).run() : UniformityResult{};
 }
 }  // namespace donner::gpu::shader::wgsl

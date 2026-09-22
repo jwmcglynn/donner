@@ -162,7 +162,9 @@ std::optional<std::size_t> EstimateDashWorkUnits(const tiny_skia::Path& path,
   for (const tiny_skia::PathVerb verb : path.verbs()) {
     switch (verb) {
       case tiny_skia::PathVerb::Move:
-        if (!finishContour() || pointIndex >= points.size()) return std::nullopt;
+        if (!finishContour() || pointIndex >= points.size()) {
+          return std::nullopt;
+        }
         current = points[pointIndex++];
         contourStart = current;
         break;
@@ -196,7 +198,9 @@ std::optional<std::size_t> EstimateDashWorkUnits(const tiny_skia::Path& path,
         if (current.has_value() && contourStart.has_value() && !addEdge(*current, *contourStart)) {
           return std::nullopt;
         }
-        if (!finishContour()) return std::nullopt;
+        if (!finishContour()) {
+          return std::nullopt;
+        }
         current = contourStart;
         break;
     }
@@ -3094,7 +3098,9 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     // same way resvg renders them.
     auto pixmapView = currentPixmapView();
     const auto drawRunFill = [&]() {
-      if (!spanFillPaint) return;
+      if (!spanFillPaint) {
+        return;
+      }
       for (const auto& tinyPath : runGlyphPaths) {
         tiny_skia::Painter::fillPath(pixmapView, tinyPath, *spanFillPaint,
                                      tiny_skia::FillRule::Winding,
@@ -3102,7 +3108,9 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       }
     };
     const auto drawRunStroke = [&]() {
-      if (!spanStrokePaint) return;
+      if (!spanStrokePaint) {
+        return;
+      }
       for (const auto& tinyPath : runGlyphPaths) {
         tiny_skia::Painter::strokePath(pixmapView, tinyPath, *spanStrokePaint, spanTinyStroke,
                                        toTinyTransform(deviceFromLocalTransform_), mask);

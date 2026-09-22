@@ -113,12 +113,18 @@ inline Texel Expected(Case testCase, uint32_t x, uint32_t y) {
                              m[3][c] * straight[3] + m[4][c];
       result[c] = std::clamp(weighted, 0.0f, 1.0f);
     }
-    for (size_t c = 0; c < 3; ++c) result[c] *= result[3];
+    for (size_t c = 0; c < 3; ++c) {
+      result[c] *= result[3];
+    }
     return result;
   }
   Texel offset{};
-  for (size_t c = 0; c < 4; ++c) offset[c] = std::clamp(m[4][c], 0.0f, 1.0f);
-  if (offset[3] == 0.0f) return result;
+  for (size_t c = 0; c < 4; ++c) {
+    offset[c] = std::clamp(m[4][c], 0.0f, 1.0f);
+  }
+  if (offset[3] == 0.0f) {
+    return result;
+  }
   return {offset[0] * offset[3], offset[1] * offset[3], offset[2] * offset[3], offset[3]};
 }
 
@@ -143,7 +149,9 @@ void CheckFilterColorMatrix(DeviceType& device, const shader::CompiledShaderView
   using namespace filter_color_matrix_slice;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "color matrix", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
   auto input = device.createTexture({"color matrix input",
                                      {kWidth, kHeight},
                                      TextureFormat::RGBA32Float,

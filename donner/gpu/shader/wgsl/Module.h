@@ -402,22 +402,35 @@ struct Module {
 
   /// Returns natural host-shareable alignment, or zero for an unsupported type.
   constexpr uint32_t typeAlignment(Type type) const {
-    if (type.isNumeric() || type.kind == TypeKind::Bool)
+    if (type.isNumeric() || type.kind == TypeKind::Bool) {
       return type.lanes == 1 ? 4 : type.lanes == 2 ? 8 : 16;
-    if (type.kind == TypeKind::Matrix) return type.rows == 2 ? 8 : 16;
-    if (type.kind == TypeKind::Struct)
+    }
+    if (type.kind == TypeKind::Matrix) {
+      return type.rows == 2 ? 8 : 16;
+    }
+    if (type.kind == TypeKind::Struct) {
       return type.structId < structCount ? structs[type.structId].alignment : 0;
-    if (type.kind == TypeKind::Array) return typeAlignment(type.elementType());
+    }
+    if (type.kind == TypeKind::Array) {
+      return typeAlignment(type.elementType());
+    }
     return 0;
   }
 
   /// Returns fixed byte size; runtime arrays and unsupported types have size zero.
   constexpr uint32_t typeSize(Type type) const {
-    if (type.isNumeric() || type.kind == TypeKind::Bool) return 4u * type.lanes;
-    if (type.kind == TypeKind::Matrix) return typeAlignment(type) * type.columns;
-    if (type.kind == TypeKind::Struct)
+    if (type.isNumeric() || type.kind == TypeKind::Bool) {
+      return 4u * type.lanes;
+    }
+    if (type.kind == TypeKind::Matrix) {
+      return typeAlignment(type) * type.columns;
+    }
+    if (type.kind == TypeKind::Struct) {
       return type.structId < structCount ? structs[type.structId].size : 0;
-    if (type.kind == TypeKind::Array) return arrayStride(type) * type.arrayCount;
+    }
+    if (type.kind == TypeKind::Array) {
+      return arrayStride(type) * type.arrayCount;
+    }
     return 0;
   }
 

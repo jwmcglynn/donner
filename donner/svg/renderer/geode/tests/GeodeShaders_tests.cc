@@ -30,16 +30,25 @@ namespace donner::geode {
 namespace {
 gpu::Result<std::vector<uint8_t>> ReadSlugBuffer(gpu::Device& device, const gpu::Buffer& buffer) {
   auto mapping = device.mapBufferAsync(buffer, gpu::MapMode::Read, 0, 2048);
-  if (mapping.hasError()) return mapping.error();
+  if (mapping.hasError()) {
+    return mapping.error();
+  }
   const auto waited = device.waitForMapping(mapping.result(), {0.01, 5.0}, {});
-  if (waited.hasError()) return waited.error();
-  if (waited.result().outcome != gpu::MapWaitOutcome::Ready)
+  if (waited.hasError()) {
+    return waited.error();
+  }
+  if (waited.result().outcome != gpu::MapWaitOutcome::Ready) {
     return gpu::GpuError{gpu::GpuErrorType::InvalidState, "Slug readback did not complete"};
+  }
   const auto bytes = device.mappedBytes(mapping.result());
-  if (bytes.hasError()) return bytes.error();
+  if (bytes.hasError()) {
+    return bytes.error();
+  }
   std::vector<uint8_t> result(bytes.result().begin(), bytes.result().end());
   const auto unmapped = device.unmapBuffer(std::move(mapping).result());
-  if (unmapped.hasError()) return unmapped.error();
+  if (unmapped.hasError()) {
+    return unmapped.error();
+  }
   return result;
 }
 }  // namespace
@@ -149,8 +158,9 @@ protected:
     if (shader == EndpointShader::Mask) {
       return std::string(gpu::shader::programs::SlugMaskShader().wgsl);
     }
-    if (shader == EndpointShader::Fill)
+    if (shader == EndpointShader::Fill) {
       return std::string(gpu::shader::programs::SlugFillShader().wgsl);
+    }
     return std::string(gpu::shader::programs::SlugGradientShader().wgsl);
   }
 

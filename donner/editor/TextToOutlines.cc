@@ -345,7 +345,9 @@ ConvertTextsToOutlinesResult convertTextsToOutlines(svg::SVGDocument& document,
 ConvertTextToOutlinesResult convertTextToOutlines(svg::SVGDocument& document,
                                                   const svg::SVGElement& textElement) {
   auto batch = convertTextsToOutlines(document, std::span(&textElement, 1));
-  if (!batch.ok) return {.error = std::move(batch.error)};
+  if (!batch.ok) {
+    return {.error = std::move(batch.error)};
+  }
   return std::move(batch.conversions.front());
 }
 

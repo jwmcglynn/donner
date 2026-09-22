@@ -2093,11 +2093,19 @@ std::optional<Lengthd> ParseRefKeyword(std::string_view value, bool isX) {
     return Lengthd(50.0, Lengthd::Unit::Percent);
   }
   if (isX) {
-    if (value == "left") return Lengthd(0.0, Lengthd::Unit::Percent);
-    if (value == "right") return Lengthd(100.0, Lengthd::Unit::Percent);
+    if (value == "left") {
+      return Lengthd(0.0, Lengthd::Unit::Percent);
+    }
+    if (value == "right") {
+      return Lengthd(100.0, Lengthd::Unit::Percent);
+    }
   } else {
-    if (value == "top") return Lengthd(0.0, Lengthd::Unit::Percent);
-    if (value == "bottom") return Lengthd(100.0, Lengthd::Unit::Percent);
+    if (value == "top") {
+      return Lengthd(0.0, Lengthd::Unit::Percent);
+    }
+    if (value == "bottom") {
+      return Lengthd(100.0, Lengthd::Unit::Percent);
+    }
   }
   return std::nullopt;
 }

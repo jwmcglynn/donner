@@ -939,7 +939,9 @@ bool RefreshChildFontResource(components::ChildFontPaintDependencies& child,
   if (!traversal.refreshed.contains(childHandle.get())) {
     RefreshDocumentFonts(nested, traversal);
   }
-  if (!traversal.refreshed.at(childHandle.get())) return false;
+  if (!traversal.refreshed.at(childHandle.get())) {
+    return false;
+  }
   return UpdateChildFontSnapshot(nested, child, traversal);
 }
 
@@ -982,7 +984,9 @@ bool RefreshOwnFontResources(Registry& registry, std::vector<Entity>& changedOwn
 
 bool RefreshDocumentFonts(SVGDocument& document, FontRefreshTraversal& traversal) {
   const auto handle = document.handle();
-  if (traversal.refreshed.contains(handle.get())) return traversal.refreshed.at(handle.get());
+  if (traversal.refreshed.contains(handle.get())) {
+    return traversal.refreshed.at(handle.get());
+  }
   traversal.active.insert(handle.get());
   const auto access = document.writeAccess();
   Registry& registry = access.registry();
@@ -1000,8 +1004,9 @@ bool HasChildFontResourceLimit(const Registry& registry) {
   for (const auto& [entity, paint] :
        registry.view<const components::FontPaintDependenciesComponent>().each()) {
     if (paint.resourceLimit || std::any_of(paint.children.begin(), paint.children.end(),
-                                           [](const auto& child) { return child.resourceLimit; }))
+                                           [](const auto& child) { return child.resourceLimit; })) {
       return true;
+    }
   }
   return false;
 }
@@ -1009,12 +1014,15 @@ bool HasChildFontResourceLimit(const Registry& registry) {
 bool HasPendingChildFonts(const Registry& registry) {
   for (const auto& [entity, paint] :
        registry.view<const components::FontPaintDependenciesComponent>().each()) {
-    if (paint.resourceLimit) return true;
+    if (paint.resourceLimit) {
+      return true;
+    }
     for (const auto& child : paint.children) {
       if (child.resourceLimit || child.needsRender || child.document.expired() ||
           std::any_of(child.fontDependencies.begin(), child.fontDependencies.end(),
-                      [](const auto& face) { return face.state != FontFaceLoadState::Loaded; }))
+                      [](const auto& face) { return face.state != FontFaceLoadState::Loaded; })) {
         return true;
+      }
     }
   }
   return false;
@@ -1078,7 +1086,9 @@ FontResourcePreflight ClassifyFontPreflight(components::FontResourceGraph::Colle
         status = Status::Unavailable;
         break;
       }
-      if (dependency.state != FontFaceLoadState::Loaded) status = Status::PendingFonts;
+      if (dependency.state != FontFaceLoadState::Loaded) {
+        status = Status::PendingFonts;
+      }
     }
   }
   return {.status = status, .dependencies = std::move(collection.dependencies)};
@@ -1087,7 +1097,9 @@ FontResourcePreflight ClassifyFontPreflight(components::FontResourceGraph::Colle
 FontResourcePreflight PrepareFontResourcesForTarget(Registry& registry, Entity target) {
   components::ScopedRenderInvalidationRestore restoreInvalidation(registry);
   auto* context = registry.ctx().find<components::RenderingContext>();
-  if (!context) context = &registry.ctx().emplace<components::RenderingContext>(registry);
+  if (!context) {
+    context = &registry.ctx().emplace<components::RenderingContext>(registry);
+  }
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   context->instantiateRenderTree(false, warnings);
   auto collection = components::FontResourceGraph(registry).collect(registry, target);
@@ -1123,11 +1135,15 @@ std::vector<FontFaceDependency> SVGDocument::renderedFontDependencies() const {
 
 std::vector<FontFaceDependency> SVGDocument::fontDependenciesForElement(
     const SVGElement& element) const {
-  if (element.handle_.unsafeRegistry() != &documentState_->registry()) return {};
+  if (element.handle_.unsafeRegistry() != &documentState_->registry()) {
+    return {};
+  }
   [[maybe_unused]] DocumentReadAccess access = readAccess();
   const Registry& registry = documentState_->registry();
   const Entity target = element.handle_.entity();
-  if (!IsLiveFontTarget(registry, target, element.handle_.generation())) return {};
+  if (!IsLiveFontTarget(registry, target, element.handle_.generation())) {
+    return {};
+  }
   return components::FontResourceGraph(registry).collect(registry, target).dependencies;
 }
 
@@ -1146,7 +1162,9 @@ FontResourcePreflight SVGDocument::preflightFontResourcesForElement(const SVGEle
   }
   [[maybe_unused]] DocumentWriteAccess access = writeAccess();
   Registry& registry = documentState_->registry();
-  if (!IsLiveFontTarget(registry, target, generation)) return {.status = Status::InvalidTarget};
+  if (!IsLiveFontTarget(registry, target, generation)) {
+    return {.status = Status::InvalidTarget};
+  }
   if (const auto* state = registry.ctx().find<components::RenderTreeState>();
       state && state->hasBeenBuilt &&
       (state->needsFullRebuild || state->needsFullStyleRecompute ||

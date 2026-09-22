@@ -61,8 +61,11 @@ Rejection Reject(std::string_view source) {
 /// Returns the resolved type of the named declaration, or Void when it is absent.
 /// @param module Validated module. @param name Declaration spelling.
 Type TypeOfSymbol(const Module& module, std::string_view name) {
-  for (uint16_t i = 0; i < module.symbolCount; ++i)
-    if (module.name(module.symbols[i].name) == name) return module.symbols[i].type;
+  for (uint16_t i = 0; i < module.symbolCount; ++i) {
+    if (module.name(module.symbols[i].name) == name) {
+      return module.symbols[i].type;
+    }
+  }
   return Type{};
 }
 
@@ -178,16 +181,20 @@ TEST(PointerLoop, ProjectsPointerParametersAndLoopsToBothBackends) {
 Rejection Accept(std::string_view body) {
   const std::string source = Program(body);
   const Rejection rejection = Reject(source);
-  if (rejection.code != ErrorCode::None) return rejection;
+  if (rejection.code != ErrorCode::None) {
+    return rejection;
+  }
   const ParseResult parsed = Parse(source);
   std::string msl(kMaxTextEmitBytes, '\0');
   TextSink textSink{msl.data(), static_cast<uint32_t>(msl.size())};
-  if (!EmitMsl(parsed.module, textSink).ok())
+  if (!EmitMsl(parsed.module, textSink).ok()) {
     return Rejection{ErrorCode::UnsupportedConstruct, "msl"};
+  }
   std::vector<uint32_t> words(24576);
   SpirvSink spirvSink{words.data(), static_cast<uint32_t>(words.size())};
-  if (EmitSpirv(parsed.module, spirvSink).error != SpirvEmitError::None)
+  if (EmitSpirv(parsed.module, spirvSink).error != SpirvEmitError::None) {
     return Rejection{ErrorCode::UnsupportedConstruct, "spirv"};
+  }
   return rejection;
 }
 
@@ -317,7 +324,9 @@ TEST(PointerLoop, KeepsGraphAllocationOffCallsWithoutPointerArguments) {
                        "fn add2(a: f32, b: f32) -> f32 { return a + b; }\n"
                        "@fragment fn fs_main(@builtin(position) p: vec4f) -> @location(0) vec4f {\n"
                        "  let d = fwidth(p.x);\n  var total = 0.0;\n";
-  for (unsigned call = 0; call < 450; ++call) source += "  total += add2(p.x, p.y);\n";
+  for (unsigned call = 0; call < 450; ++call) {
+    source += "  total += add2(p.x, p.y);\n";
+  }
   source += "  return vec4f(total + d);\n}\n";
   EXPECT_THAT(Reject(source), testing::Eq(Rejection{ErrorCode::None, ""}));
 }
@@ -369,10 +378,13 @@ TEST(PointerLoop, RejectsMalformedLoopsAndLoopControl) {
 
 TEST(PointerLoop, BoundsLoopNesting) {
   std::string body = "fn f() -> f32 { var i = 0u;";
-  for (unsigned depth = 0; depth < ModuleLimits::kMaxLoopDepth; ++depth)
+  for (unsigned depth = 0; depth < ModuleLimits::kMaxLoopDepth; ++depth) {
     body += "loop { if (i > " + std::to_string(depth) + "u) { break; }";
+  }
   std::string closing;
-  for (unsigned depth = 0; depth < ModuleLimits::kMaxLoopDepth; ++depth) closing += "}";
+  for (unsigned depth = 0; depth < ModuleLimits::kMaxLoopDepth; ++depth) {
+    closing += "}";
+  }
   EXPECT_THAT(Reject(std::string(kResources) + body + " i += 1u;" + closing + " return f32(i); }"),
               testing::Eq(Rejection{ErrorCode::None, ""}));
 

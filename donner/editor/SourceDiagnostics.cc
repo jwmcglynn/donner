@@ -81,8 +81,8 @@ SourceDiagnosticSnapshot BuildSourceDiagnosticSnapshot(std::span<const ParseDiag
   for (std::size_t i = 0; i < diagnostics.size() && i < kMaxPublishedDiagnostics; ++i) {
     const ParseDiagnostic& diagnostic = diagnostics[i];
     const SourceByteRange range = NormalizeRange(diagnostic.range, source);
-    const std::size_t sourceOffset = std::min(
-        diagnostic.range.start.resolveOffset(source).offset.value(), source.size());
+    const std::size_t sourceOffset =
+        std::min(diagnostic.range.start.resolveOffset(source).offset.value(), source.size());
     const FileOffset::LineInfo lineInfo = RecoverLineInfo(lineStarts, sourceOffset);
     const FileOffset::LineInfo endLineInfo = RecoverLineInfo(lineStarts, range.end);
     snapshot.diagnostics.push_back(SourceDiagnostic{

@@ -21,7 +21,9 @@ struct SourceText {
   std::array<char, N> bytes{};
   /// Copies an inline source literal. @param text WGSL source, including its terminal NUL.
   constexpr SourceText(const char (&text)[N]) {
-    for (size_t i = 0; i < N; ++i) bytes[i] = text[i];
+    for (size_t i = 0; i < N; ++i) {
+      bytes[i] = text[i];
+    }
   }
   /// Borrows the source bytes, excluding the terminal NUL.
   constexpr std::string_view view() const UTILS_LIFETIME_BOUND { return {bytes.data(), N - 1}; }
@@ -101,35 +103,58 @@ template <SourceText Source, Projection Target>
 inline constexpr auto kEmittedSource = Emit<Target>(kParsedSource<Source>.module);
 
 constexpr bool FitsNames(const Module& module) {
-  for (uint16_t i = 0; i < module.bindingCount; ++i)
-    if (module.bindings[i].name.length > 64) return false;
-  for (uint16_t i = 0; i < module.structMemberCount; ++i)
-    if (module.structMembers[i].name.length > 64) return false;
-  for (uint16_t i = 0; i < module.functionCount; ++i)
-    if (module.functions[i].name.length > 64) return false;
-  for (uint16_t i = 0; i < module.interfaceVariableCount; ++i)
-    if (module.interfaceVariables[i].name.length > 64) return false;
+  for (uint16_t i = 0; i < module.bindingCount; ++i) {
+    if (module.bindings[i].name.length > 64) {
+      return false;
+    }
+  }
+  for (uint16_t i = 0; i < module.structMemberCount; ++i) {
+    if (module.structMembers[i].name.length > 64) {
+      return false;
+    }
+  }
+  for (uint16_t i = 0; i < module.functionCount; ++i) {
+    if (module.functions[i].name.length > 64) {
+      return false;
+    }
+  }
+  for (uint16_t i = 0; i < module.interfaceVariableCount; ++i) {
+    if (module.interfaceVariables[i].name.length > 64) {
+      return false;
+    }
+  }
   return true;
 }
 
 constexpr ShaderName Name(std::string_view text) {
   ShaderName result;
-  if (text.size() > result.bytes.size()) return result;
-  for (size_t i = 0; i < text.size(); ++i) result.bytes[i] = text[i];
+  if (text.size() > result.bytes.size()) {
+    return result;
+  }
+  for (size_t i = 0; i < text.size(); ++i) {
+    result.bytes[i] = text[i];
+  }
   result.size = static_cast<uint8_t>(text.size());
   return result;
 }
 
 constexpr uint16_t EntryCount(const Module& module) {
   uint16_t count = 0;
-  for (uint16_t i = 0; i < module.functionCount; ++i)
-    if (module.functions[i].stage != Stage::None) ++count;
+  for (uint16_t i = 0; i < module.functionCount; ++i) {
+    if (module.functions[i].stage != Stage::None) {
+      ++count;
+    }
+  }
   return count;
 }
 
 constexpr ShaderScalarType ScalarType(Type type) {
-  if (type.kind == TypeKind::F32 || type.kind == TypeKind::Matrix) return ShaderScalarType::F32;
-  if (type.kind == TypeKind::Struct) return ShaderScalarType::None;
+  if (type.kind == TypeKind::F32 || type.kind == TypeKind::Matrix) {
+    return ShaderScalarType::F32;
+  }
+  if (type.kind == TypeKind::Struct) {
+    return ShaderScalarType::None;
+  }
   return type.kind == TypeKind::I32 ? ShaderScalarType::I32 : ShaderScalarType::U32;
 }
 
@@ -192,12 +217,14 @@ constexpr ShaderResource ReflectResource(const Module& module, const Binding& bi
   resource.group = binding.group;
   resource.binding = binding.binding;
   resource.type = ResourceType(binding);
-  if (binding.kind == BindingKind::StorageTexture)
+  if (binding.kind == BindingKind::StorageTexture) {
     resource.storageFormat = binding.type.storageFormat == StorageTextureFormat::Rgba8Unorm
                                  ? TextureFormat::RGBA8Unorm
                                  : TextureFormat::RGBA32Float;
-  if (binding.kind == BindingKind::Uniform || binding.kind == BindingKind::ReadOnlyStorage)
+  }
+  if (binding.kind == BindingKind::Uniform || binding.kind == BindingKind::ReadOnlyStorage) {
     ReflectBufferLayout(module, binding.type, resource);
+  }
   return resource;
 }
 
@@ -236,17 +263,22 @@ constexpr ShaderInterfaceVariable ReflectInterface(const Module& module,
 
 template <typename Artifact>
 constexpr void FreezeInterface(const Module& module, Artifact& result) {
-  for (uint16_t i = 0; i < module.structMemberCount; ++i)
+  for (uint16_t i = 0; i < module.structMemberCount; ++i) {
     result.members[i] = ReflectMember(module, module.structMembers[i]);
-  for (uint16_t i = 0; i < module.bindingCount; ++i)
+  }
+  for (uint16_t i = 0; i < module.bindingCount; ++i) {
     result.resources[i] = ReflectResource(module, module.bindings[i]);
+  }
   size_t entry = 0;
   for (uint16_t i = 0; i < module.functionCount; ++i) {
     const Function& function = module.functions[i];
-    if (function.stage != Stage::None) result.entryPoints[entry++] = ReflectEntry(module, function);
+    if (function.stage != Stage::None) {
+      result.entryPoints[entry++] = ReflectEntry(module, function);
+    }
   }
-  for (uint16_t i = 0; i < module.interfaceVariableCount; ++i)
+  for (uint16_t i = 0; i < module.interfaceVariableCount; ++i) {
     result.interfaceVariables[i] = ReflectInterface(module, module.interfaceVariables[i]);
+  }
 }
 
 }  // namespace compiler_detail
@@ -275,9 +307,15 @@ consteval auto Compile() {
                  parsed.module.structMemberCount, compiler_detail::EntryCount(parsed.module),
                  parsed.module.interfaceVariableCount>
       result;
-  for (size_t i = 0; i < emitted.wgslSize; ++i) result.wgsl[i] = emitted.wgsl[i];
-  for (size_t i = 0; i < emitted.mslSize; ++i) result.msl[i] = emitted.msl[i];
-  for (size_t i = 0; i < emitted.spirvSize; ++i) result.spirv[i] = emitted.spirv[i];
+  for (size_t i = 0; i < emitted.wgslSize; ++i) {
+    result.wgsl[i] = emitted.wgsl[i];
+  }
+  for (size_t i = 0; i < emitted.mslSize; ++i) {
+    result.msl[i] = emitted.msl[i];
+  }
+  for (size_t i = 0; i < emitted.spirvSize; ++i) {
+    result.spirv[i] = emitted.spirv[i];
+  }
   compiler_detail::FreezeInterface(parsed.module, result);
   return result;
 }

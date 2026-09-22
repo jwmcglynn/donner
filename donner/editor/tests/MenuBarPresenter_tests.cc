@@ -194,8 +194,7 @@ TEST(MenuBarPresenterActionsTest, ApplyViewMenuToggleActionsHandlesNullAndIndepe
   ApplyViewMenuToggleActions(actions, nullptr, nullptr);
   EXPECT_EQ(compositedRenderingMode, CompositedRenderingMode::On)
       << "null out-param must leave the caller's mode untouched";
-  ApplyViewMenuToggleActions(actions, nullptr, nullptr, nullptr, nullptr,
-                             &compositedRenderingMode);
+  ApplyViewMenuToggleActions(actions, nullptr, nullptr, nullptr, nullptr, &compositedRenderingMode);
   EXPECT_EQ(compositedRenderingMode, CompositedRenderingMode::FilterOnly);
 }
 

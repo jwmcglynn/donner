@@ -33,7 +33,9 @@ inline Pixel InputPixel(uint32_t x, uint32_t y) {
 inline Pixel Expected(uint32_t x, uint32_t y) {
   const Pixel input = InputPixel(x, y);
   const uint32_t alpha = input[3];
-  if (alpha == 0) return {0, 0, 0, 0};
+  if (alpha == 0) {
+    return {0, 0, 0, 0};
+  }
   const uint32_t half = alpha / 2;
   Pixel result{};
   for (size_t c = 0; c < 3; ++c) {
@@ -64,7 +66,9 @@ void CheckSnapshotUnpremultiply(DeviceType& device, const shader::CompiledShader
   using namespace snapshot_unpremultiply_slice;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "snapshot unpremultiply", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
   auto input = device.createTexture({"snapshot input",
                                      {kWidth, kHeight},
                                      TextureFormat::RGBA8Unorm,

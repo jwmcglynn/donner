@@ -75,7 +75,9 @@ inline shader::programs::SlugFillParams Parameters(Case c) {
   p.clipRect[3] = 5;
   p.fillRule = c == Case::EvenOdd || c == Case::AnalyticEvenOdd;
   p.paintMode = c == Case::Pattern ? 1u : 0u;
-  for (size_t i = 0; i < 4; ++i) p.color[i] = kUniformColor[i] / 255.0f;
+  for (size_t i = 0; i < 4; ++i) {
+    p.color[i] = kUniformColor[i] / 255.0f;
+  }
   return p;
 }
 inline std::array<shader::programs::SlugFillInstance, 2> Records(Case c) {
@@ -85,10 +87,16 @@ inline std::array<shader::programs::SlugFillInstance, 2> Records(Case c) {
     Geometry(p);
     p.transformRow0[0] = p.transformRow1[1] = 1;
     const Pixel color = n == 0 ? kRecordColor : kUniformColor;
-    for (size_t i = 0; i < 4; ++i) p.color[i] = color[i] / 255.0f;
+    for (size_t i = 0; i < 4; ++i) {
+      p.color[i] = color[i] / 255.0f;
+    }
     p.gradientStopCount = 2;
-    if (n == 1 && (c == Case::FirstInstance || c == Case::DeclaredRange)) p.transformRow0[2] = 1;
-    if (c == Case::BatchedPattern) p.paintMode = 1;
+    if (n == 1 && (c == Case::FirstInstance || c == Case::DeclaredRange)) {
+      p.transformRow0[2] = 1;
+    }
+    if (c == Case::BatchedPattern) {
+      p.paintMode = 1;
+    }
     if (c == Case::BatchedClipRect) {
       p.clipRectActive = 1;
       p.clipRect[0] = 2;
@@ -96,24 +104,36 @@ inline std::array<shader::programs::SlugFillInstance, 2> Records(Case c) {
       p.clipRect[2] = 6;
       p.clipRect[3] = 5;
     }
-    if (c == Case::LinearGradient) p.paintMode = 2;
-    if (c == Case::RadialGradient) p.paintMode = 3;
+    if (c == Case::LinearGradient) {
+      p.paintMode = 2;
+    }
+    if (c == Case::RadialGradient) {
+      p.paintMode = 3;
+    }
   }
   return result;
 }
 inline bool OutsideClip(Case c, float px, float py) {
-  if (c != Case::ClipRect && c != Case::BatchedClipRect) return false;
+  if (c != Case::ClipRect && c != Case::BatchedClipRect) {
+    return false;
+  }
   return px < 2 || px >= 6 || py < 2 || py >= 5;
 }
 inline float Coverage(Case c, uint32_t x, uint32_t y) {
   const float shift = c == Case::FirstInstance ? 1.0f : 0.0f;
   const float px = x + 0.5f - shift, py = y + 0.5f;
-  if (py < 1 || py >= 6 || c == Case::EvenOdd) return 0;
-  if (OutsideClip(c, px, py)) return 0;
+  if (py < 1 || py >= 6 || c == Case::EvenOdd) {
+    return 0;
+  }
+  if (OutsideClip(c, px, py)) {
+    return 0;
+  }
   float coverage = c == Case::Binary ? float(px >= 1.25f && px < 6.75f)
                                      : std::max(0.0f, std::min(float(x + 1) - shift, 6.75f) -
                                                           std::max(float(x) - shift, 1.25f));
-  if (c == Case::Clip) coverage *= ClipValue(x, y) / 255.0f;
+  if (c == Case::Clip) {
+    coverage *= ClipValue(x, y) / 255.0f;
+  }
   return coverage;
 }
 inline std::array<float, 4> Color(Case c, uint32_t x, uint32_t y, uint32_t instance) {
@@ -127,9 +147,10 @@ inline std::array<float, 4> Color(Case c, uint32_t x, uint32_t y, uint32_t insta
                       : instance == 0                                   ? kRecordColor
                                                                         : kUniformColor;
   std::array<float, 4> result{};
-  for (size_t i = 0; i < 4; ++i)
+  for (size_t i = 0; i < 4; ++i) {
     result[i] =
         bytes[i] / 255.0f * ((c == Case::Pattern || c == Case::BatchedPattern) ? 0.75f : 1.0f);
+  }
   return result;
 }
 inline std::vector<uint8_t> Expected(Case c) {
@@ -138,13 +159,15 @@ inline std::vector<uint8_t> Expected(Case c) {
   for (uint32_t instance = First(c); instance < First(c) + Count(c); ++instance) {
     auto foreground = FloatPixmap::fromSize(kWidth, kHeight).value();
     auto output = FloatPixmap::fromSize(kWidth, kHeight).value();
-    for (uint32_t y = 0; y < kHeight; ++y)
+    for (uint32_t y = 0; y < kHeight; ++y) {
       for (uint32_t x = 0; x < kWidth; ++x) {
         const auto color = Color(c, x, y, c == Case::DeclaredRange ? 0 : instance);
         const float coverage = Coverage(c, x, y);
-        for (size_t lane = 0; lane < 4; ++lane)
+        for (size_t lane = 0; lane < 4; ++lane) {
           foreground.data()[(y * kWidth + x) * 4 + lane] = color[lane] * coverage;
+        }
       }
+    }
     tiny_skia::filter::blend(background, foreground, output, tiny_skia::filter::BlendMode::Normal);
     background = FloatPixmap::fromPixmap(output.toPixmap());
   }
@@ -204,9 +227,11 @@ void CheckSlugFill(DeviceType& device, const shader::CompiledShaderView& shader,
   auto sampler = device.createSampler({"pattern"});
   ASSERT_THAT(sampler, HasResult());
   std::array<uint8_t, kRowBytes * kHeight> clipBytes{};
-  for (uint32_t y = 0; y < kHeight; ++y)
-    for (uint32_t x = 0; x < kWidth; ++x)
+  for (uint32_t y = 0; y < kHeight; ++y) {
+    for (uint32_t x = 0; x < kWidth; ++x) {
       std::fill_n(clipBytes.begin() + y * kRowBytes + x * 4, 4, ClipValue(x, y));
+    }
+  }
   ASSERT_THAT(
       device.writeTexture(clip.result(), clipBytes, {0, kRowBytes, kHeight}, {kWidth, kHeight}),
       IsOk());
@@ -222,7 +247,9 @@ void CheckSlugFill(DeviceType& device, const shader::CompiledShaderView& shader,
   const std::array<uint32_t, 6> grid{0, 0, 0, 1, 0, 1};
   const std::array<uint32_t, 10> doubledGrid{0, 0, 0, 0, 1, 1, 0, 0, 1, 1};
   auto actualParams = params;
-  if (testCase == Case::EvenOdd) actualParams.vRefsBase = 6;
+  if (testCase == Case::EvenOdd) {
+    actualParams.vRefsBase = 6;
+  }
   std::array<float, 100> paint{};
   paint[0] = paint[5] = 1;
   paint[10] = 8;
@@ -247,13 +274,15 @@ void CheckSlugFill(DeviceType& device, const shader::CompiledShaderView& shader,
   ASSERT_EQ(upload("vBands", band, sizeof(band)), true);
   ASSERT_EQ(upload("curveData", h, sizeof(h)), true);
   ASSERT_EQ(upload("vCurveData", v, sizeof(v)), true);
-  if (testCase == Case::EvenOdd)
+  if (testCase == Case::EvenOdd) {
     ASSERT_EQ(upload("gridData", doubledGrid, sizeof(doubledGrid)), true);
-  else
+  } else {
     ASSERT_EQ(upload("gridData", grid, sizeof(grid)), true);
+  }
   ASSERT_EQ(upload("paintData", paint, sizeof(paint)), true);
-  for (const char* name : {"clipMaskTexture", "patternTexture", "patternSampler"})
+  for (const char* name : {"clipMaskTexture", "patternTexture", "patternSampler"}) {
     ASSERT_NE(shader.resource(name), nullptr);
+  }
   entries.push_back(
       {shader.resource("clipMaskTexture")->binding, TextureViewBinding{clipView.result()}});
   entries.push_back(
@@ -285,8 +314,9 @@ void CheckSlugFill(DeviceType& device, const shader::CompiledShaderView& shader,
   ASSERT_THAT(bytes, HasResult());
   ASSERT_THAT(bytes.result(), testing::SizeIs(testing::Ge(kRowBytes * kHeight)));
   std::vector<uint8_t> pixels(kWidth * kHeight * 4);
-  for (uint32_t y = 0; y < kHeight; ++y)
+  for (uint32_t y = 0; y < kHeight; ++y) {
     std::memcpy(pixels.data() + y * kWidth * 4, bytes.result().data() + y * kRowBytes, kWidth * 4);
+  }
   editor::tests::CompareBitmapToBitmap(
       svg::RendererBitmap{Vector2i(kWidth, kHeight), pixels, kWidth * 4},
       svg::RendererBitmap{Vector2i(kWidth, kHeight), Expected(testCase), kWidth * 4},

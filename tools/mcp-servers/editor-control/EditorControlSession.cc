@@ -499,24 +499,60 @@ ToolCallResult EditorControlSession::handleToolCall(std::string_view name, const
   if (!arguments.is_object()) {
     return MakeErrorResult("tool arguments must be a JSON object");
   }
-  if (name == "load_document") return loadDocument(arguments);
-  if (name == "load_svg") return loadSvg(arguments);
-  if (name == "get_svg_source") return getSvgSource(arguments);
-  if (name == "edit_svg_source") return editSvgSource(arguments);
-  if (name == "select_by_selector") return selectBySelector(arguments);
-  if (name == "click_layer_button") return clickLayerButton(arguments);
-  if (name == "set_active_tool") return setActiveTool(arguments);
-  if (name == "set_style_property") return setStyleProperty(arguments);
-  if (name == "pen_path") return penPath(arguments);
-  if (name == "drag_selector") return dragSelector(arguments);
-  if (name == "transform_selector") return transformSelector(arguments);
-  if (name == "pointer_gesture") return pointerGesture(arguments);
-  if (name == "render_frame") return renderFrameTool(arguments);
-  if (name == "session_state") return sessionState(arguments);
-  if (name == "start_rnr_recording") return startRnrRecording(arguments);
-  if (name == "stop_rnr_recording") return stopRnrRecording(arguments);
-  if (name == "rnr_recording_state") return rnrRecordingState(arguments);
-  if (name == "replay_rnr") return replayRnr(arguments);
+  if (name == "load_document") {
+    return loadDocument(arguments);
+  }
+  if (name == "load_svg") {
+    return loadSvg(arguments);
+  }
+  if (name == "get_svg_source") {
+    return getSvgSource(arguments);
+  }
+  if (name == "edit_svg_source") {
+    return editSvgSource(arguments);
+  }
+  if (name == "select_by_selector") {
+    return selectBySelector(arguments);
+  }
+  if (name == "click_layer_button") {
+    return clickLayerButton(arguments);
+  }
+  if (name == "set_active_tool") {
+    return setActiveTool(arguments);
+  }
+  if (name == "set_style_property") {
+    return setStyleProperty(arguments);
+  }
+  if (name == "pen_path") {
+    return penPath(arguments);
+  }
+  if (name == "drag_selector") {
+    return dragSelector(arguments);
+  }
+  if (name == "transform_selector") {
+    return transformSelector(arguments);
+  }
+  if (name == "pointer_gesture") {
+    return pointerGesture(arguments);
+  }
+  if (name == "render_frame") {
+    return renderFrameTool(arguments);
+  }
+  if (name == "session_state") {
+    return sessionState(arguments);
+  }
+  if (name == "start_rnr_recording") {
+    return startRnrRecording(arguments);
+  }
+  if (name == "stop_rnr_recording") {
+    return stopRnrRecording(arguments);
+  }
+  if (name == "rnr_recording_state") {
+    return rnrRecordingState(arguments);
+  }
+  if (name == "replay_rnr") {
+    return replayRnr(arguments);
+  }
 
   return MakeErrorResult("unknown tool: " + std::string(name));
 }

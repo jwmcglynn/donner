@@ -1002,10 +1002,11 @@ TEST_F(CommandEncoderTests, MalformedAttachmentOperationsPoisonBeforeRecording) 
   for (bool badLoad : {false, true}) {
     auto encoder = GetResultOrFail(device_.createCommandEncoder());
     auto descriptor = passDescriptor();
-    if (badLoad)
+    if (badLoad) {
       descriptor.colorAttachments[0].loadOp = static_cast<LoadOp>(255);
-    else
+    } else {
       descriptor.colorAttachments[0].storeOp = static_cast<StoreOp>(255);
+    }
     const auto result = encoder->beginRenderPass(descriptor);
     ASSERT_THAT(result, IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
                                               HasSubstr(badLoad ? "loadOp" : "storeOp")));

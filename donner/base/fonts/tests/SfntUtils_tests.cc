@@ -208,7 +208,9 @@ std::vector<uint8_t> MakeCff1WithCharset(std::vector<std::vector<uint8_t>> charS
       nextTop.insert(nextTop.end(), encodedPrivateOffset.begin(), encodedPrivateOffset.end());
       nextTop.push_back(18);
     }
-    if (nextTop == topDict) break;
+    if (nextTop == topDict) {
+      break;
+    }
     topDict = std::move(nextTop);
   }
   topIndex = MakeCffIndex({topDict}, false);
@@ -223,7 +225,9 @@ std::vector<uint8_t> MakeCff1WithCharset(std::vector<std::vector<uint8_t>> charS
   append(globalIndex);
   append(charset);
   append(privateDict);
-  if (!localSubrs.empty()) result.insert(result.end(), localIndex.begin(), localIndex.end());
+  if (!localSubrs.empty()) {
+    result.insert(result.end(), localIndex.begin(), localIndex.end());
+  }
   result.insert(result.end(), encodedCharStrings.begin(), encodedCharStrings.end());
   return result;
 }
@@ -1031,7 +1035,9 @@ TEST(SfntUtils, CffCurveAndLineFamiliesHaveExactExpansionBounds) {
     SCOPED_TRACE(int(item.op));
     std::vector<uint8_t> program{139, 139, 21};  // Open a contour at the origin.
     program.insert(program.end(), item.operands, 139);
-    if (item.escaped) program.push_back(12);
+    if (item.escaped) {
+      program.push_back(12);
+    }
     program.push_back(item.op);
     program.push_back(14);
     const auto result = ValidateCffOutlineComplexities(MakeCff1WithSubrs(program, {}), false, 1);

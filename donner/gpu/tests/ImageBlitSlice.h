@@ -108,16 +108,20 @@ inline FloatPixel Sample(const Scenario& scenario, float u, float v) {
   const uint32_t repeatY = scenario.kind == Case::Pixelated ? 3u : 1u;
   const int width = 2 * repeatX, height = 2 * repeatY;
   std::vector<Pixel> expanded(width * height);
-  for (int y = 0; y < height; ++y)
-    for (int x = 0; x < width; ++x)
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
       expanded[y * width + x] = SourcePixel(scenario, x / repeatX, y / repeatY);
+    }
+  }
   const auto texel = [&](int x, int y) {
     return expanded[std::clamp(y, 0, height - 1) * width + std::clamp(x, 0, width - 1)];
   };
   FloatPixel result{};
   if (scenario.kind == Case::Nearest) {
     const Pixel value = texel(int(std::floor(u * width)), int(std::floor(v * height)));
-    for (size_t c = 0; c < 4; ++c) result[c] = value[c] / 255.0f;
+    for (size_t c = 0; c < 4; ++c) {
+      result[c] = value[c] / 255.0f;
+    }
     return result;
   }
   const float x = u * width - 0.5f, y = v * height - 0.5f;
@@ -127,7 +131,9 @@ inline FloatPixel Sample(const Scenario& scenario, float u, float v) {
     for (int column = 0; column < 2; ++column) {
       const Pixel value = texel(left + column, top + row);
       const float weight = (column ? fx : 1.0f - fx) * (row ? fy : 1.0f - fy);
-      for (size_t c = 0; c < 4; ++c) result[c] += value[c] / 255.0f * weight;
+      for (size_t c = 0; c < 4; ++c) {
+        result[c] += value[c] / 255.0f * weight;
+      }
     }
   }
   return result;
@@ -140,10 +146,15 @@ inline bool OutsideRectangle(float x, float y, const std::array<float, 4>& rect)
 inline float CoverageScale(const shader::programs::ImageBlitParams& params, uint32_t x,
                            uint32_t y) {
   float scale = params.opacity;
-  if (params.hasClipMask) scale *= ClipValue(x, y) / 255.0f;
-  if (params.maskMode == 1)
+  if (params.hasClipMask) {
+    scale *= ClipValue(x, y) / 255.0f;
+  }
+  if (params.maskMode == 1) {
     scale *= (0.2126f * kMask[0] + 0.7152f * kMask[1] + 0.0722f * kMask[2]) / 255.0f;
-  if (params.maskMode == 2) scale *= kMask[3] / 255.0f;
+  }
+  if (params.maskMode == 2) {
+    scale *= kMask[3] / 255.0f;
+  }
   return scale;
 }
 
@@ -152,9 +163,13 @@ inline FloatPixel ForegroundPixel(const Scenario& scenario,
                                   uint32_t y) {
   const float px = x + 0.5f, py = y + 0.5f;
   if (OutsideRectangle(
-          px, py, {params.destRect[0], params.destRect[1], params.destRect[2], params.destRect[3]}))
+          px, py,
+          {params.destRect[0], params.destRect[1], params.destRect[2], params.destRect[3]})) {
     return {};
-  if (params.applyMaskBounds && OutsideRectangle(px, py, {2, 1, 6, 3})) return {};
+  }
+  if (params.applyMaskBounds && OutsideRectangle(px, py, {2, 1, 6, 3})) {
+    return {};
+  }
   const float u = params.srcRect[0] + (px - params.destRect[0]) /
                                           (params.destRect[2] - params.destRect[0]) *
                                           (params.srcRect[2] - params.srcRect[0]);
@@ -162,10 +177,15 @@ inline FloatPixel ForegroundPixel(const Scenario& scenario,
                                           (params.destRect[3] - params.destRect[1]) *
                                           (params.srcRect[3] - params.srcRect[1]);
   FloatPixel value = Sample(scenario, u, v);
-  if (!params.sourceIsPremult)
-    for (size_t c = 0; c < 3; ++c) value[c] *= value[3];
+  if (!params.sourceIsPremult) {
+    for (size_t c = 0; c < 3; ++c) {
+      value[c] *= value[3];
+    }
+  }
   const float scale = CoverageScale(params, x, y);
-  for (float& component : value) component *= scale;
+  for (float& component : value) {
+    component *= scale;
+  }
   return value;
 }
 
@@ -179,8 +199,11 @@ inline std::vector<uint8_t> Expected(const Scenario& scenario) {
   for (uint32_t y = 0; y < scenario.height(); ++y) {
     for (uint32_t x = 0; x < scenario.width(); ++x) {
       const size_t offset = (y * scenario.width() + x) * 4;
-      if (scenario.kind == Case::Blend)
-        for (size_t c = 0; c < 4; ++c) background.data()[offset + c] = kBackdrop[c] / 255.0f;
+      if (scenario.kind == Case::Blend) {
+        for (size_t c = 0; c < 4; ++c) {
+          background.data()[offset + c] = kBackdrop[c] / 255.0f;
+        }
+      }
       const FloatPixel value = ForegroundPixel(scenario, params, x, y);
       std::copy(value.begin(), value.end(), foreground.data().begin() + offset);
     }
@@ -190,8 +213,9 @@ inline std::vector<uint8_t> Expected(const Scenario& scenario) {
       BlendMode::Darken,    BlendMode::Lighten,    BlendMode::ColorDodge, BlendMode::ColorBurn,
       BlendMode::HardLight, BlendMode::SoftLight,  BlendMode::Difference, BlendMode::Exclusion,
       BlendMode::Hue,       BlendMode::Saturation, BlendMode::Color,      BlendMode::Luminosity};
-  if (scenario.blendMode >= 12)
+  if (scenario.blendMode >= 12) {
     return NonseparableBlendReference(scenario.blendMode, background, foreground);
+  }
   tiny_skia::filter::blend(background, foreground, output, modes[scenario.blendMode]);
   const auto pixels = output.toPixmap();
   return {pixels.data().begin(), pixels.data().end()};
@@ -255,7 +279,9 @@ void CheckImageBlit(DeviceType& device, const shader::CompiledShaderView& shader
     for (uint32_t y = 0; y < height; ++y) {
       for (uint32_t x = 0; x < width; ++x) {
         Pixel pixel = i == 0 ? SourcePixel(scenario, x, y) : i == 1 ? kMask : kBackdrop;
-        if (i == 3) pixel.fill(ClipValue(x, y));
+        if (i == 3) {
+          pixel.fill(ClipValue(x, y));
+        }
         std::copy(pixel.begin(), pixel.end(), upload.begin() + y * kRowBytes + x * 4);
       }
     }
@@ -291,9 +317,10 @@ void CheckImageBlit(DeviceType& device, const shader::CompiledShaderView& shader
   auto encoder = device.createCommandEncoder();
   ASSERT_THAT(encoder, HasResult());
   std::array<double, 4> clear{};
-  if (scenario.kind == Case::Blend)
+  if (scenario.kind == Case::Blend) {
     clear = {kBackdrop[0] / 255.0, kBackdrop[1] / 255.0, kBackdrop[2] / 255.0,
              kBackdrop[3] / 255.0};
+  }
   auto pass = encoder.result()->beginRenderPass(
       {"image", {{outputView.result(), LoadOp::Clear, StoreOp::Store, clear}}});
   ASSERT_THAT(pass, HasResult());
@@ -314,9 +341,10 @@ void CheckImageBlit(DeviceType& device, const shader::CompiledShaderView& shader
   ASSERT_THAT(bytes, HasResult());
   ASSERT_THAT(bytes.result(), testing::SizeIs(testing::Ge(kRowBytes * scenario.height())));
   std::vector<uint8_t> pixels(scenario.width() * scenario.height() * 4);
-  for (uint32_t y = 0; y < scenario.height(); ++y)
+  for (uint32_t y = 0; y < scenario.height(); ++y) {
     std::memcpy(pixels.data() + y * scenario.width() * 4, bytes.result().data() + y * kRowBytes,
                 scenario.width() * 4);
+  }
   editor::tests::CompareBitmapToBitmap(
       svg::RendererBitmap{Vector2i(scenario.width(), scenario.height()), pixels,
                           scenario.width() * 4},

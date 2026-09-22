@@ -240,18 +240,18 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     ApplyMenuBarCommand(ImGui::MenuItem("Reset Layout"), MenuBarCommand::ResetLayout, state,
                         &actions);
     if (ImGui::BeginMenu("Composited Rendering")) {
-      ApplyMenuBarCommand(ImGui::MenuItem("On", nullptr,
-                                          state.compositedRenderingMode ==
-                                              CompositedRenderingMode::On),
-                          MenuBarCommand::SetCompositedRenderingOn, state, &actions);
-      ApplyMenuBarCommand(ImGui::MenuItem("Filters Only", nullptr,
-                                          state.compositedRenderingMode ==
-                                              CompositedRenderingMode::FilterOnly),
-                          MenuBarCommand::SetCompositedRenderingFilterOnly, state, &actions);
-      ApplyMenuBarCommand(ImGui::MenuItem("Off", nullptr,
-                                          state.compositedRenderingMode ==
-                                              CompositedRenderingMode::Off),
-                          MenuBarCommand::SetCompositedRenderingOff, state, &actions);
+      ApplyMenuBarCommand(
+          ImGui::MenuItem("On", nullptr,
+                          state.compositedRenderingMode == CompositedRenderingMode::On),
+          MenuBarCommand::SetCompositedRenderingOn, state, &actions);
+      ApplyMenuBarCommand(
+          ImGui::MenuItem("Filters Only", nullptr,
+                          state.compositedRenderingMode == CompositedRenderingMode::FilterOnly),
+          MenuBarCommand::SetCompositedRenderingFilterOnly, state, &actions);
+      ApplyMenuBarCommand(
+          ImGui::MenuItem("Off", nullptr,
+                          state.compositedRenderingMode == CompositedRenderingMode::Off),
+          MenuBarCommand::SetCompositedRenderingOff, state, &actions);
       ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Performance Overlay")) {

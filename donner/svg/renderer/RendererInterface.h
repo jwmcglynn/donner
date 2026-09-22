@@ -277,7 +277,9 @@ public:
   }
 
   [[nodiscard]] bool reserveNodes(std::size_t count) {
-    if (!reserveCounter(nodes_, count, limits_.nodes)) return false;
+    if (!reserveCounter(nodes_, count, limits_.nodes)) {
+      return false;
+    }
     ++graphs_;
     return true;
   }

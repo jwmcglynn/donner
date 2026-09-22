@@ -179,7 +179,7 @@ std::variant<FilePtr, ResourceLoaderError> OpenSandboxedBinaryFile(
 
   for (size_t i = 0; i < components.size(); ++i) {
     const bool isLast = i + 1 == components.size();
-    struct stat linkStatus{};
+    struct stat linkStatus {};
     if (fstatat(currentFd, components[i].c_str(), &linkStatus, AT_SYMLINK_NOFOLLOW) != 0) {
       close(currentFd);
       return ResourceLoaderError::NotFound;
@@ -224,7 +224,7 @@ struct OpenedFileInfo {
 
 std::optional<OpenedFileInfo> GetOpenedFileInfo(std::FILE* file) {
 #ifdef _WIN32
-  struct _stat64 status{};
+  struct _stat64 status {};
   if (_fstat64(_fileno(file), &status) != 0 || status.st_size < 0) {
     return std::nullopt;
   }
@@ -233,7 +233,7 @@ std::optional<OpenedFileInfo> GetOpenedFileInfo(std::FILE* file) {
       .regular = (status.st_mode & _S_IFMT) == _S_IFREG,
   };
 #else
-  struct stat status{};
+  struct stat status {};
   if (fstat(fileno(file), &status) != 0 || status.st_size < 0) {
     return std::nullopt;
   }

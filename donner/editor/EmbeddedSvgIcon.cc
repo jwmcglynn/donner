@@ -301,8 +301,7 @@ std::optional<svg::RendererBitmap> RenderEmbeddedSvgArtwork(std::span<const unsi
 std::vector<std::optional<svg::RendererBitmap>> RenderEmbeddedSvgIconBatch(
     std::span<const EmbeddedSvgIconRequest> requests) {
   std::vector<std::optional<svg::RendererBitmap>> results(requests.size());
-  for (std::size_t firstIndex = 0; firstIndex < requests.size();
-       firstIndex += kIconsPerAtlasPass) {
+  for (std::size_t firstIndex = 0; firstIndex < requests.size(); firstIndex += kIconsPerAtlasPass) {
     RenderEmbeddedSvgIconAtlasPass(
         requests, firstIndex, std::min(firstIndex + kIconsPerAtlasPass, requests.size()), results);
   }

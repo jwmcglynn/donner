@@ -464,7 +464,9 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       }
       constexpr uint64_t kMinGrow = uint64_t{64} * 1024;
       uint64_t newCap = std::max(arena.capacity * 2u, kMinGrow);
-      while (newCap < size) newCap *= 2;
+      while (newCap < size) {
+        newCap *= 2;
+      }
       // Prefer a pooled buffer recycled from a previous frame's encoder
       // (steady-state bufferCreates -> 0). Falls
       // back to a fresh allocation when the pool has no fit.

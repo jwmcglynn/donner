@@ -95,7 +95,9 @@ struct Shortcut {
    * @return true if the shortcut matches, false otherwise.
    */
   bool matches(const ImGuiIO& io) const {
-    if (key1 == ImGuiKey_None) return false;
+    if (key1 == ImGuiKey_None) {
+      return false;
+    }
 
     bool keyPressed = ImGui::IsKeyPressed(key1) ||
                       (key1 == ImGuiKey_Enter && ImGui::IsKeyPressed(ImGuiKey_KeypadEnter));
@@ -1169,9 +1171,15 @@ private:
 
   struct FocusReferenceLinkLess {
     bool operator()(const FocusReferenceLink& lhs, const FocusReferenceLink& rhs) const {
-      if (lhs.from.line != rhs.from.line) return lhs.from.line < rhs.from.line;
-      if (lhs.from.column != rhs.from.column) return lhs.from.column < rhs.from.column;
-      if (lhs.to.line != rhs.to.line) return lhs.to.line < rhs.to.line;
+      if (lhs.from.line != rhs.from.line) {
+        return lhs.from.line < rhs.from.line;
+      }
+      if (lhs.from.column != rhs.from.column) {
+        return lhs.from.column < rhs.from.column;
+      }
+      if (lhs.to.line != rhs.to.line) {
+        return lhs.to.line < rhs.to.line;
+      }
       return lhs.to.column < rhs.to.column;
     }
   };

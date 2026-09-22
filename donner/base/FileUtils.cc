@@ -101,7 +101,7 @@ FileReadResult ReadOpenedFile(const std::filesystem::path& path, size_t maximumS
     return FileReadError::OpenFailed;
   }
 
-  struct stat status{};
+  struct stat status {};
   if (fstat(file.get(), &status) != 0 || !S_ISREG(status.st_mode) || status.st_size < 0 ||
       static_cast<std::uint64_t>(status.st_size) > std::numeric_limits<size_t>::max()) {
     return FileReadError::OpenFailed;

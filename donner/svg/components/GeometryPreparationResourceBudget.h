@@ -25,7 +25,9 @@ public:
                                     Limits limits)
       : family_(std::move(family)), limits_(limits) {}
   ~GeometryPreparationResourceBudget() {
-    if (family_) family_->release(DocumentResourceFamilyBudget::Kind::Geometry, retainedBytes_);
+    if (family_) {
+      family_->release(DocumentResourceFamilyBudget::Kind::Geometry, retainedBytes_);
+    }
   }
 
   GeometryPreparationResourceBudget(const GeometryPreparationResourceBudget&) = delete;
@@ -46,7 +48,9 @@ public:
       const std::size_t released = previous - bytes;
       retainedBytes_ -= released;
       reservations_[entity] = bytes;
-      if (family_) family_->release(DocumentResourceFamilyBudget::Kind::Geometry, released);
+      if (family_) {
+        family_->release(DocumentResourceFamilyBudget::Kind::Geometry, released);
+      }
       return true;
     }
 
@@ -64,15 +68,21 @@ public:
 
   void release(Entity entity) {
     const auto it = reservations_.find(entity);
-    if (it == reservations_.end()) return;
+    if (it == reservations_.end()) {
+      return;
+    }
     const std::size_t bytes = it->second;
     retainedBytes_ -= bytes;
     reservations_.erase(it);
-    if (family_) family_->release(DocumentResourceFamilyBudget::Kind::Geometry, bytes);
+    if (family_) {
+      family_->release(DocumentResourceFamilyBudget::Kind::Geometry, bytes);
+    }
   }
 
   void reset() {
-    if (family_) family_->release(DocumentResourceFamilyBudget::Kind::Geometry, retainedBytes_);
+    if (family_) {
+      family_->release(DocumentResourceFamilyBudget::Kind::Geometry, retainedBytes_);
+    }
     reservations_.clear();
     retainedBytes_ = 0;
     rejected_ = false;

@@ -150,9 +150,13 @@ private:
   }
 
   bool consumeQuotedValue() {
-    if (pos_ >= size_) return false;
+    if (pos_ >= size_) {
+      return false;
+    }
     const char quote = source_[pos_];
-    if (quote != '"' && quote != '\'') return false;
+    if (quote != '"' && quote != '\'') {
+      return false;
+    }
     ++pos_;
     while (pos_ < size_ && source_[pos_] != quote) {
       ++pos_;
@@ -226,11 +230,11 @@ private:
       pos_ += 9;
       int bracket = 0;
       while (pos_ < size_) {
-        if (source_[pos_] == '[')
+        if (source_[pos_] == '[') {
           ++bracket;
-        else if (source_[pos_] == ']')
+        } else if (source_[pos_] == ']') {
           --bracket;
-        else if (source_[pos_] == '>' && bracket <= 0) {
+        } else if (source_[pos_] == '>' && bracket <= 0) {
           ++pos_;
           emit(fn, T::Doctype, tagStart, pos_);
           return;
@@ -305,7 +309,9 @@ private:
         emit(fn, T::Whitespace, wsStart, pos_);
       }
 
-      if (pos_ >= size_) break;
+      if (pos_ >= size_) {
+        break;
+      }
 
       if (source_[pos_] == '>') {
         emit(fn, T::TagClose, pos_, pos_ + 1);

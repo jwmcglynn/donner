@@ -22,7 +22,7 @@ namespace offset_slice {
 inline constexpr uint32_t kWidth = 5, kHeight = 4, kBytesPerRow = 256;
 inline std::array<float, kWidth * kHeight * 4> InputTexels() {
   std::array<float, kWidth * kHeight * 4> result{};
-  for (uint32_t y = 0; y < kHeight; ++y)
+  for (uint32_t y = 0; y < kHeight; ++y) {
     for (uint32_t x = 0; x < kWidth; ++x) {
       const size_t index = (y * kWidth + x) * 4;
       result[index] = float(1 + x) / 8.0f;
@@ -30,13 +30,16 @@ inline std::array<float, kWidth * kHeight * 4> InputTexels() {
       result[index + 2] = float((x + 2 * y) % 7) / 8.0f;
       result[index + 3] = 1.0f;
     }
+  }
   return result;
 }
 inline std::array<float, 4> Expected(const std::array<float, kWidth * kHeight * 4>& input,
                                      shader::programs::OffsetParams params, int32_t x, int32_t y) {
   const int32_t sx = x - static_cast<int32_t>(std::round(params.dx));
   const int32_t sy = y - static_cast<int32_t>(std::round(params.dy));
-  if (sx < 0 || sy < 0 || sx >= int32_t(kWidth) || sy >= int32_t(kHeight)) return {};
+  if (sx < 0 || sy < 0 || sx >= int32_t(kWidth) || sy >= int32_t(kHeight)) {
+    return {};
+  }
   std::array<float, 4> result{};
   std::copy_n(input.begin() + (sy * kWidth + sx) * 4, 4, result.begin());
   return result;

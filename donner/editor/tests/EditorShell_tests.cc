@@ -3431,7 +3431,9 @@ TEST(EditorShellTest, ShellGeometryHelpersClampToViewportAndSelectionCache) {
 
 TEST(EditorShellTest, PendingPreviewRetriesWhenAdmissionWakePrecedesResultPolling) {
   gui::EditorWindow window = MakeHiddenWindow();
-  if (!window.valid()) GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(shell.valid());
   const auto store = shell.fontCatalog().encodedStore();
@@ -3462,7 +3464,9 @@ TEST(EditorShellTest, PendingPreviewRetriesWhenAdmissionWakePrecedesResultPollin
 
 TEST(EditorShellTest, HiddenPreviewCancelsItsWaitBeforeAdmissionRelease) {
   gui::EditorWindow window = MakeHiddenWindow();
-  if (!window.valid()) GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(shell.valid());
   const auto store = shell.fontCatalog().encodedStore();
@@ -3487,7 +3491,9 @@ TEST(EditorShellTest, HiddenPreviewCancelsItsWaitBeforeAdmissionRelease) {
 
 TEST(EditorShellTest, CancelledPreviewGenerationRejectsLateResultForTheSameCard) {
   gui::EditorWindow window = MakeHiddenWindow();
-  if (!window.valid()) GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(shell.valid());
   auto oldResult = EditorShellTestAccess::PendingSampleFontResult(
@@ -3504,7 +3510,9 @@ TEST(EditorShellTest, CancelledPreviewGenerationRejectsLateResultForTheSameCard)
 
 TEST(EditorShellTest, OutputFontDemandDeduplicatesAssetsAndCancelsAfterSourceMutation) {
   gui::EditorWindow window = MakeHiddenWindow();
-  if (!window.valid()) GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_TRUE(shell.valid());
   ASSERT_FALSE(svg::CatalogFontAssets().empty());

@@ -44,9 +44,15 @@ uint32_t Checksum(const donner::gpu::shader::CompiledShaderView& shader) {
   const volatile char* wgsl = shader.wgsl.data();
   const volatile char* msl = shader.msl.data();
   const volatile uint32_t* spirv = shader.spirv.data();
-  for (size_t i = 0; i < shader.wgsl.size(); ++i) checksum += static_cast<unsigned char>(wgsl[i]);
-  for (size_t i = 0; i < shader.msl.size(); ++i) checksum += static_cast<unsigned char>(msl[i]);
-  for (size_t i = 0; i < shader.spirv.size(); ++i) checksum += spirv[i];
+  for (size_t i = 0; i < shader.wgsl.size(); ++i) {
+    checksum += static_cast<unsigned char>(wgsl[i]);
+  }
+  for (size_t i = 0; i < shader.msl.size(); ++i) {
+    checksum += static_cast<unsigned char>(msl[i]);
+  }
+  for (size_t i = 0; i < shader.spirv.size(); ++i) {
+    checksum += spirv[i];
+  }
   return checksum;
 }
 

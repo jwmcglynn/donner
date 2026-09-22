@@ -1871,10 +1871,11 @@ TEST_F(SurfaceTests, ABackendWithoutPresentationReportsItUnsupported) {
 TEST_F(RenderPipelineValidationTests, VertexLayoutsRequireStrideAndAttributesTogether) {
   for (bool emptyAttributes : {false, true}) {
     auto descriptor = validDescriptor();
-    if (emptyAttributes)
+    if (emptyAttributes) {
       descriptor.vertex.buffers[0].attributes.clear();
-    else
+    } else {
       descriptor.vertex.buffers[0].strideBytes = 0;
+    }
     const auto before = device_.serialize();
     EXPECT_THAT(
         device_.createRenderPipeline(descriptor),
@@ -1936,7 +1937,9 @@ TEST_F(SurfaceTests, FailedAcquireDoesNotLeakAFrameOrPreventRetry) {
   SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
   ASSERT_TRUE(frame.texture.isValid());
   ASSERT_EQ(device_.acquireSlots.size(), 4u);
-  for (uint32_t slot : device_.acquireSlots) EXPECT_EQ(slot, frame.texture.slotIndex());
+  for (uint32_t slot : device_.acquireSlots) {
+    EXPECT_EQ(slot, frame.texture.slotIndex());
+  }
   EXPECT_THAT(device_.abandonCurrentTexture(surface), IsOk());
   EXPECT_FALSE(device_.backendHasFrame);
 }

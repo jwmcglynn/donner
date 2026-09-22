@@ -31,7 +31,9 @@ void CheckFlood(DeviceType& device, const shader::CompiledShaderView& shader,
   using namespace flood_slice;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "flood", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
   auto output = device.createTexture({"flood output",
                                       {kWidth, kHeight},
                                       TextureFormat::RGBA32Float,

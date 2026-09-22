@@ -42,9 +42,13 @@ void AttachProvider(svg::SVGDocument& document, const svg::FontFamilyProvider& p
 
 bool StageInter(svg::CatalogEncodedFontStore& store, const svg::FontCatalog& catalog) {
   const auto id = catalog.availability("Inter", {}).contentId;
-  if (!store.queue(id)) return false;
+  if (!store.queue(id)) {
+    return false;
+  }
   const auto token = store.beginFetch(id);
-  if (token == 0) return false;
+  if (token == 0) {
+    return false;
+  }
   return store.publishVerified(id, token, svg::EmbeddedFontProvider().loadFamilyData("Inter", {}));
 }
 

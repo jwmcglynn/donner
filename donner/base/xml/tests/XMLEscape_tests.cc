@@ -72,7 +72,9 @@ TEST(XMLEscape, NulByteRejected) {
 TEST(XMLEscape, C0ControlCharsRejected) {
   // Every C0 character other than \t \n \r is forbidden in XML 1.0.
   for (char c = 1; c < 0x20; ++c) {
-    if (c == '\t' || c == '\n' || c == '\r') continue;
+    if (c == '\t' || c == '\n' || c == '\r') {
+      continue;
+    }
     const std::string s(1, c);
     EXPECT_THAT(EscapeAttributeValue(s), Eq(std::nullopt))
         << "C0 char 0x" << std::hex << static_cast<int>(c) << " should be rejected";

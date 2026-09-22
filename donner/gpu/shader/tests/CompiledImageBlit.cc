@@ -12,12 +12,20 @@ consteval auto ReplaceExact(wgsl::SourceText<N> source, const char (&before)[Old
   char bytes[N - Old + New]{};
   const std::string_view pattern(before, Old - 1);
   const size_t at = source.view().find(pattern);
-  if (at == std::string_view::npos || source.view().find(pattern, at + 1) != std::string_view::npos)
+  if (at == std::string_view::npos ||
+      source.view().find(pattern, at + 1) != std::string_view::npos) {
     std::abort();
+  }
   size_t cursor = 0;
-  for (size_t i = 0; i < at; ++i) bytes[cursor++] = source.bytes[i];
-  for (size_t i = 0; i < New - 1; ++i) bytes[cursor++] = after[i];
-  for (size_t i = at + Old - 1; i < N; ++i) bytes[cursor++] = source.bytes[i];
+  for (size_t i = 0; i < at; ++i) {
+    bytes[cursor++] = source.bytes[i];
+  }
+  for (size_t i = 0; i < New - 1; ++i) {
+    bytes[cursor++] = after[i];
+  }
+  for (size_t i = at + Old - 1; i < N; ++i) {
+    bytes[cursor++] = source.bytes[i];
+  }
   return wgsl::SourceText<N - Old + New>(bytes);
 }
 constexpr auto kArtifact = wgsl::Compile<programs::kImageBlitSource, wgsl::Projection::All>();

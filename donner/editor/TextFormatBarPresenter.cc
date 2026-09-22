@@ -88,8 +88,12 @@ void RenderFontFamilyFeedback(const FormatBarFontFamily& family, bool rowVisible
   if (family.availability == svg::FontAssetState::Failed) {
     ImGui::TextDisabled("Font unavailable");
     ImGui::SameLine();
-    if (ImGui::SmallButton("Retry font")) actions.retryFontFamilies.push_back(family.name);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Retries are limited to once every 30 seconds.");
+    if (ImGui::SmallButton("Retry font")) {
+      actions.retryFontFamilies.push_back(family.name);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Retries are limited to once every 30 seconds.");
+    }
   }
 }
 
@@ -103,7 +107,9 @@ bool RenderFontFamilyRow(const FormatBarFontFamily& family, bool selected,
   const ImVec2 rowMin = ImGui::GetItemRectMin();
   const ImVec2 rowMax = ImGui::GetItemRectMax();
   const bool rowVisible = ImGui::IsItemVisible();
-  if (rowVisible) actions.visibleFontFamilies.push_back(family.name);
+  if (rowVisible) {
+    actions.visibleFontFamilies.push_back(family.name);
+  }
   DrawFontFamilyPreview(family, rowMin, rowMax, rowVisible, actions);
   RenderFontFamilyFeedback(family, rowVisible, actions);
   ImGui::PopID();

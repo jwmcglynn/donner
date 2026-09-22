@@ -471,7 +471,9 @@ void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFac
 void ResourceManagerContext::synchronizeStylesheetFontFaces(
     Entity stylesheetEntity, std::span<const css::FontFace> fontFaces) {
   auto& registration = stylesheetFontFaceRegistrations_[stylesheetEntity];
-  if (registration.data == fontFaces.data() && registration.size == fontFaces.size()) return;
+  if (registration.data == fontFaces.data() && registration.size == fontFaces.size()) {
+    return;
+  }
   registration = {.data = fontFaces.data(), .size = fontFaces.size()};
 
   for (const css::FontFace& fontFace : fontFaces) {

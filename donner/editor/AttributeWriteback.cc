@@ -302,7 +302,9 @@ std::optional<TextPatch> buildAttributeWritebackForNode(std::string_view source,
       while (pos < source.size() && source[pos] != c) {
         ++pos;
       }
-      if (pos < source.size()) ++pos;
+      if (pos < source.size()) {
+        ++pos;
+      }
     } else if (c == '>' || (c == '/' && pos + 1 < source.size() && source[pos + 1] == '>')) {
       // Found the tag close. Insert ` name="value"` right before it.
       std::string insertion;

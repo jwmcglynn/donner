@@ -108,7 +108,9 @@ void CheckComposite(DeviceType& device, const shader::CompiledShaderView& shader
   using namespace composite_slice;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "composite", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
   std::vector<Texture> textures;
   std::vector<TextureView> views;
   std::vector<BindGroupEntry> entries;

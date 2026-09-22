@@ -292,7 +292,6 @@ TEST(TransformSyntaxPreserving, RotationDeltaWrapsThroughShortestArc) {
   ExpectRoundTrips(out, target);
 }
 
-
 TEST(TransformSyntaxPreserving, PreservesVerbatimSignedExponentToken) {
   // Exponent with an explicit sign (1e+1) on the unchanged component is
   // re-emitted byte-for-byte, exercising the scanner branch that consumes the

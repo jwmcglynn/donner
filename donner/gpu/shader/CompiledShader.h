@@ -101,8 +101,11 @@ struct CompiledShaderView {
   /// Finds a resource by its authored WGSL name; the result borrows this view's artifact.
   /// @param name Authored resource name.
   constexpr const ShaderResource* resource(std::string_view name) const UTILS_LIFETIME_BOUND {
-    for (const auto& value : resources)
-      if (value.name.view() == name) return &value;
+    for (const auto& value : resources) {
+      if (value.name.view() == name) {
+        return &value;
+      }
+    }
     return nullptr;
   }
 
@@ -110,9 +113,14 @@ struct CompiledShaderView {
   /// @param first First member. @param count Member count. @param name Unqualified member name.
   constexpr const ShaderBufferMember* findMember(uint32_t first, uint32_t count,
                                                  std::string_view name) const UTILS_LIFETIME_BOUND {
-    if (first > members.size() || count > members.size() - first) return nullptr;
-    for (uint32_t i = first; i < first + count; ++i)
-      if (members[i].name.view() == name) return &members[i];
+    if (first > members.size() || count > members.size() - first) {
+      return nullptr;
+    }
+    for (uint32_t i = first; i < first + count; ++i) {
+      if (members[i].name.view() == name) {
+        return &members[i];
+      }
+    }
     return nullptr;
   }
 
@@ -142,18 +150,25 @@ struct CompiledShaderView {
                                uint32_t arrayCount = 0, uint32_t arrayStrideBytes = 0,
                                uint8_t matrixColumns = 0, uint32_t matrixStrideBytes = 0) const {
     const ShaderResource* binding = resource(resourceName);
-    if (!binding) return false;
+    if (!binding) {
+      return false;
+    }
     uint32_t first = binding->firstMember, count = binding->memberCount, baseOffset = 0;
     while (!memberName.empty()) {
       const size_t dot = memberName.find('.');
       const auto part = memberName.substr(0, dot);
       const ShaderBufferMember* member = findMember(first, count, part);
-      if (!member || member->offsetBytes > UINT32_MAX - baseOffset) return false;
+      if (!member || member->offsetBytes > UINT32_MAX - baseOffset) {
+        return false;
+      }
       baseOffset += member->offsetBytes;
-      if (dot == std::string_view::npos)
+      if (dot == std::string_view::npos) {
         return matchesLayout(*member, baseOffset, offsetBytes, sizeBytes, scalarType, lanes,
                              arrayCount, arrayStrideBytes, matrixColumns, matrixStrideBytes);
-      if (member->arrayCount != 0) return false;
+      }
+      if (member->arrayCount != 0) {
+        return false;
+      }
       first = member->firstMember;
       count = member->memberCount;
       memberName.remove_prefix(dot + 1);

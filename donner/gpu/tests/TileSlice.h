@@ -25,7 +25,9 @@ void CheckTileStorage(DeviceType& device, const shader::CompiledShaderView& shad
                       Readback readbackBuffer) {
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "tile", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
   auto input =
       device.createTexture(TextureDescriptor{"tile input",
                                              {4, 2},

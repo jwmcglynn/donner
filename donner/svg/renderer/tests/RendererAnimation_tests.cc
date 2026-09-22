@@ -4,10 +4,11 @@
 #include "donner/svg/tests/ParserTestUtils.h"
 
 /// @file
-/// Time-sampled golden render checks for the initial SMIL animation subset. Each test renders a small SVG
-/// at fixed document times and compares the result against a hand-verifiable ASCII golden (black
-/// fill renders as '@', background as '.'). Covers before/mid/after phases, freeze vs remove fill,
-/// remove revert across time samples of one live document, transform animation, and repeatCount.
+/// Time-sampled golden render checks for the initial SMIL animation subset. Each test renders a
+/// small SVG at fixed document times and compares the result against a hand-verifiable ASCII golden
+/// (black fill renders as '@', background as '.'). Covers before/mid/after phases, freeze vs remove
+/// fill, remove revert across time samples of one live document, transform animation, and
+/// repeatCount.
 
 namespace donner::svg {
 namespace {

@@ -36,7 +36,9 @@ struct Stop {
   std::array<float, 4> color;
 };
 inline std::vector<Stop> Stops(Case testCase) {
-  if (testCase == Case::EmptyStops) return {};
+  if (testCase == Case::EmptyStops) {
+    return {};
+  }
   const uint32_t count = testCase == Case::ManyStops ? 16u : testCase == Case::SingleStop ? 1u : 2u;
   std::vector<Stop> result;
   for (uint32_t i = 0; i < count; ++i) {
@@ -49,8 +51,12 @@ inline std::vector<Stop> Stops(Case testCase) {
   return result;
 }
 inline slug_mask_slice::Case GeometryCase(Case testCase) {
-  if (testCase == Case::EvenOdd) return slug_mask_slice::Case::DoubleEvenOdd;
-  if (testCase == Case::DeclaredRange) return slug_mask_slice::Case::DeclaredRange;
+  if (testCase == Case::EvenOdd) {
+    return slug_mask_slice::Case::DoubleEvenOdd;
+  }
+  if (testCase == Case::DeclaredRange) {
+    return slug_mask_slice::Case::DeclaredRange;
+  }
   return testCase == Case::Binary ? slug_mask_slice::Case::Binary : slug_mask_slice::Case::Analytic;
 }
 inline void ConfigureRadial(shader::programs::SlugGradientParams& p, Case testCase) {
@@ -62,7 +68,9 @@ inline void ConfigureRadial(shader::programs::SlugGradientParams& p, Case testCa
     p.radialCenter[1] = 2;
     p.radialRadius = 6;
   }
-  if (testCase == Case::FocalRadius) p.radialFocalRadius = 2;
+  if (testCase == Case::FocalRadius) {
+    p.radialFocalRadius = 2;
+  }
   if (testCase == Case::RadialOutside) {
     p.radialCenter[0] = 6;
     p.radialRadius = 2;
@@ -71,7 +79,9 @@ inline void ConfigureRadial(shader::programs::SlugGradientParams& p, Case testCa
     p.radialCenter[0] = 6;
     p.radialRadius = 6;
   }
-  if (testCase == Case::ZeroRadius) p.radialRadius = 0;
+  if (testCase == Case::ZeroRadius) {
+    p.radialRadius = 0;
+  }
 }
 inline void ConfigurePaint(shader::programs::SlugGradientParams& p, Case testCase) {
   p.row0[0] = p.row1[1] = 1;
@@ -117,58 +127,86 @@ inline uint8_t ClipValue(uint32_t x, uint32_t y) {
   return values[(x + y) % 4];
 }
 inline bool OutsideClipPolygon(Case testCase, float x, float y) {
-  if (testCase != Case::ClipPolygon) return false;
+  if (testCase != Case::ClipPolygon) {
+    return false;
+  }
   return x < 2 || x >= 6 || y < 2 || y >= 5;
 }
 inline float Coverage(Case testCase, uint32_t x, uint32_t y) {
   const float px = x + 0.5f, py = y + 0.5f;
-  if (py < 1 || py >= 6 || testCase == Case::EvenOdd || testCase == Case::DeclaredRange) return 0;
-  if (OutsideClipPolygon(testCase, px, py)) return 0;
+  if (py < 1 || py >= 6 || testCase == Case::EvenOdd || testCase == Case::DeclaredRange) {
+    return 0;
+  }
+  if (OutsideClipPolygon(testCase, px, py)) {
+    return 0;
+  }
   float result = testCase == Case::Binary
                      ? float(px >= 1.25f && px < 6.75f)
                      : std::max(0.0f, std::min(float(x + 1), 6.75f) - std::max(float(x), 1.25f));
-  if (testCase == Case::ClipMask) result *= ClipValue(x, y) / 255.0f;
+  if (testCase == Case::ClipMask) {
+    result *= ClipValue(x, y) / 255.0f;
+  }
   return result;
 }
 /// Intersects the sample ray with the outer circle, independently of the shader's t polynomial.
 inline std::optional<double> RadialParameter(const shader::programs::SlugGradientParams& p,
                                              double x, double y) {
-  if (p.radialRadius == 0) return 1.0;
+  if (p.radialRadius == 0) {
+    return 1.0;
+  }
   const double vx = x - p.radialFocal[0], vy = y - p.radialFocal[1];
   const double distance = std::hypot(vx, vy);
-  if (p.radialFocalRadius > 0)
+  if (p.radialFocalRadius > 0) {
     return (distance - p.radialFocalRadius) / (p.radialRadius - p.radialFocalRadius);
-  if (distance == 0) return 0;
+  }
+  if (distance == 0) {
+    return 0;
+  }
   const double dx = p.radialCenter[0] - p.radialFocal[0], dy = p.radialCenter[1] - p.radialFocal[1];
   const double projected = (dx * vx + dy * vy) / distance;
   const double discriminant =
       double(p.radialRadius) * p.radialRadius - dx * dx - dy * dy + projected * projected;
-  if (discriminant < 0) return std::nullopt;
+  if (discriminant < 0) {
+    return std::nullopt;
+  }
   const double nearDistance = projected - std::sqrt(discriminant);
   const double farDistance = projected + std::sqrt(discriminant);
   const double hit = nearDistance > 0 ? nearDistance : farDistance;
-  if (hit <= 0) return std::nullopt;
+  if (hit <= 0) {
+    return std::nullopt;
+  }
   return distance / hit;
 }
 inline double Spread(double t, uint32_t mode) {
-  if (mode == 0) return std::clamp(t, 0.0, 1.0);
+  if (mode == 0) {
+    return std::clamp(t, 0.0, 1.0);
+  }
   const double period = mode == 1 ? 2.0 : 1.0;
   double result = std::fmod(t, period);
-  if (result < 0) result += period;
+  if (result < 0) {
+    result += period;
+  }
   return result > 1 ? 2 - result : result;
 }
 inline std::array<float, 4> SampleStops(const std::vector<Stop>& stops, double t) {
-  if (stops.empty()) return {};
-  if (t <= stops.front().offset) return stops.front().color;
-  if (t >= stops.back().offset) return stops.back().color;
+  if (stops.empty()) {
+    return {};
+  }
+  if (t <= stops.front().offset) {
+    return stops.front().color;
+  }
+  if (t >= stops.back().offset) {
+    return stops.back().color;
+  }
   const auto right =
       std::upper_bound(stops.begin(), stops.end(), t,
                        [](double value, const Stop& stop) { return value < stop.offset; });
   const auto& left = *(right - 1);
   const double amount = (t - left.offset) / (right->offset - left.offset);
   std::array<float, 4> result{};
-  for (size_t i = 0; i < 4; ++i)
+  for (size_t i = 0; i < 4; ++i) {
     result[i] = std::lerp(double(left.color[i]), double(right->color[i]), amount);
+  }
   return result;
 }
 inline std::vector<uint8_t> Expected(Case testCase) {
@@ -181,11 +219,17 @@ inline std::vector<uint8_t> Expected(Case testCase) {
       const double py = p.row1[0] * (x + 0.5) + p.row1[1] * (y + 0.5) + p.row1[2];
       const auto parameter =
           p.gradientKind ? RadialParameter(p, px, py) : std::optional<double>{px / p.endGrad[0]};
-      if (!parameter) continue;
+      if (!parameter) {
+        continue;
+      }
       auto color = SampleStops(stops, Spread(*parameter, p.spreadMode));
-      for (size_t i = 0; i < 3; ++i) color[i] *= color[3];
+      for (size_t i = 0; i < 3; ++i) {
+        color[i] *= color[3];
+      }
       const float coverage = Coverage(testCase, x, y);
-      for (size_t i = 0; i < 4; ++i) image.data()[(y * kWidth + x) * 4 + i] = color[i] * coverage;
+      for (size_t i = 0; i < 4; ++i) {
+        image.data()[(y * kWidth + x) * 4 + i] = color[i] * coverage;
+      }
     }
   }
   const auto pixels = image.toPixmap();
@@ -236,9 +280,11 @@ void CheckSlugGradient(DeviceType& device, const shader::CompiledShaderView& sha
   ASSERT_THAT(outputView, HasResult());
   ASSERT_THAT(clipView, HasResult());
   std::array<uint8_t, kRowBytes * kHeight> clipBytes{};
-  for (uint32_t y = 0; y < kHeight; ++y)
-    for (uint32_t x = 0; x < kWidth; ++x)
+  for (uint32_t y = 0; y < kHeight; ++y) {
+    for (uint32_t x = 0; x < kWidth; ++x) {
       std::fill_n(clipBytes.begin() + y * kRowBytes + x * 4, 4, ClipValue(x, y));
+    }
+  }
   ASSERT_THAT(
       device.writeTexture(clip.result(), clipBytes, {0, kRowBytes, kHeight}, {kWidth, kHeight}),
       IsOk());
@@ -282,8 +328,9 @@ void CheckSlugGradient(DeviceType& device, const shader::CompiledShaderView& sha
   ASSERT_THAT(bytes, HasResult());
   ASSERT_THAT(bytes.result(), testing::SizeIs(testing::Ge(kRowBytes * kHeight)));
   std::vector<uint8_t> pixels(kWidth * kHeight * 4);
-  for (uint32_t y = 0; y < kHeight; ++y)
+  for (uint32_t y = 0; y < kHeight; ++y) {
     std::memcpy(pixels.data() + y * kWidth * 4, bytes.result().data() + y * kRowBytes, kWidth * 4);
+  }
   // The ClipMask case differs by one alpha LSB on two pixels between the GPU
   // float pipeline and the CPU oracle (measured: RGB bit-identical, alpha 127
   // vs 128). Pixelmatch 1.x masked this through uint8 blend quantization; 2.0

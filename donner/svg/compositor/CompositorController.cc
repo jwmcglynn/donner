@@ -767,7 +767,9 @@ std::unordered_map<Entity, Entity> BuildStructuralEntityRemap(const SVGDocument&
     bool fail = false;
 
     void step(SVGElement oldEl, SVGElement newEl) {
-      if (fail) return;
+      if (fail) {
+        return;
+      }
       // Tag name must match byte-for-byte (namespace-qualified).
       if (oldEl.tagName() != newEl.tagName()) {
         fail = true;
@@ -1405,7 +1407,9 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     };
     for (Entity e : dirtyEntitySnapshot) {
       const auto* dirty = registry.try_get<components::DirtyFlagsComponent>(e);
-      if (dirty == nullptr) continue;
+      if (dirty == nullptr) {
+        continue;
+      }
       if ((dirty->flags & ~kTransformOnlyMask) != 0) {
         eligible = false;
         break;
@@ -2444,7 +2448,9 @@ std::pair<Entity, Entity> CompositorController::computeEntityRange(Registry& reg
     Entity result =
         registry.all_of<components::RenderingInstanceComponent>(start) ? start : entt::null;
     const auto* tree = registry.try_get<TreeComponent>(start);
-    if (tree == nullptr) return result;
+    if (tree == nullptr) {
+      return result;
+    }
     for (Entity child = tree->firstChild(); child != entt::null;) {
       const Entity descendantLast = self(self, child);
       if (descendantLast != entt::null) {

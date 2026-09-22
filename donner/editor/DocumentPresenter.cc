@@ -5,7 +5,6 @@
 #include <tuple>
 #include <utility>
 
-
 namespace donner::editor {
 
 bool DocumentPresentationMappingChanged(const ViewportState& before, const ViewportState& after) {

@@ -24,7 +24,9 @@ consteval SourceText<N> ReplaceExact(SourceText<N> source, std::string_view oldT
     for (size_t index = 0; index < oldText.size(); ++index) {
       matches = matches && source.bytes[offset + index] == oldText[index];
     }
-    if (!matches) continue;
+    if (!matches) {
+      continue;
+    }
     for (size_t index = 0; index < newText.size(); ++index) {
       source.bytes[offset + index] = newText[index];
     }

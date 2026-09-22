@@ -324,7 +324,9 @@ struct FilterResourceArena {
                                          const gpu::BindGroup& bindGroup, uint32_t workgroupsX,
                                          uint32_t workgroupsY) {
     gpu::CommandEncoder* commands = commandEncoder();
-    if (commands == nullptr) return false;
+    if (commands == nullptr) {
+      return false;
+    }
 
     gpu::Result<gpu::ComputePassEncoder*> pass =
         commands->beginComputePass(gpu::ComputePassDescriptor{std::move(label)});
@@ -365,7 +367,9 @@ struct FilterResourceArena {
       return false;
     }
     gpu::CommandEncoder* commands = commandEncoder();
-    if (commands == nullptr) return false;
+    if (commands == nullptr) {
+      return false;
+    }
     gpu::Result<gpu::RenderPassEncoder*> pass = commands->beginRenderPass(gpu::RenderPassDescriptor{
         RcString("FilterTransparentClearPass"),
         {gpu::RenderPassColorAttachment{*view, gpu::LoadOp::Clear, gpu::StoreOp::Store, {}}}});
@@ -418,7 +422,9 @@ struct FilterResourceArena {
     if (!commandEncoder_) {
       gpu::Result<std::unique_ptr<gpu::CommandEncoder>> created =
           device_.adapterDevice().createCommandEncoder();
-      if (!created.hasResult()) return nullptr;
+      if (!created.hasResult()) {
+        return nullptr;
+      }
       commandEncoder_ = std::move(created).result();
     }
     ++passesInOpenChunk_;
@@ -436,7 +442,9 @@ struct FilterResourceArena {
       }
       ++framePendingChunks_;
       ++acceptedChunks_;
-      if (chunkSubmittedHook_) chunkSubmittedHook_(acceptedChunks_);
+      if (chunkSubmittedHook_) {
+        chunkSubmittedHook_(acceptedChunks_);
+      }
       return !device_.isDeviceLost();
     }
 
@@ -448,8 +456,12 @@ struct FilterResourceArena {
     }
     ++queueSubmittedChunks_;
     ++acceptedChunks_;
-    if (chunkSubmittedHook_) chunkSubmittedHook_(acceptedChunks_);
-    if (device_.isDeviceLost()) return false;
+    if (chunkSubmittedHook_) {
+      chunkSubmittedHook_(acceptedChunks_);
+    }
+    if (device_.isDeviceLost()) {
+      return false;
+    }
     // Without a frame collecting them, a chunk boundary is a cross-submit edge inside one filter
     // graph: pass N writes a storage texture in the submitted buffer while pass N+1 samples it
     // from the next submission. On hardware Vulkan the automatic cross-submit storage-write to
@@ -463,7 +475,9 @@ struct FilterResourceArena {
     // The wait is bounded: a timeout declares device loss and fails this execution, so no output
     // or accepted-work backing can be detached or returned to a reusable pool.
     if (device_.isVulkan()) {
-      if (device_.waitForQueueIdle() != GpuWaitResult::Complete) return false;
+      if (device_.waitForQueueIdle() != GpuWaitResult::Complete) {
+        return false;
+      }
       completedQueueChunks_ = queueSubmittedChunks_;
     }
     return true;
@@ -471,7 +485,9 @@ struct FilterResourceArena {
 
   /// Closes this execution's open chunk, if any, and hands it on.
   bool closeCommandBuffer() {
-    if (!commandEncoder_) return true;
+    if (!commandEncoder_) {
+      return true;
+    }
     // Read before the chunk closes: passes in a chunk that is dropped rather than accepted never
     // reach a command buffer, so they must not be left counted against the bound.
     passesInOpenChunk_ = 0;
@@ -884,7 +900,9 @@ RuntimeComputeProgram CreateReflectedOutputProgram(
       SelectShaderProjection(runtime, wgslShader, nativeShader);
   const auto* output = shader.resource("outputTexture");
   const auto* params = shader.resource("params");
-  if (!output || !params) return {};
+  if (!output || !params) {
+    return {};
+  }
   RuntimeComputeProgram result = CreateReflectedProgram(runtime, wgslShader, nativeShader, label);
   result.inputOutputParameterBindings = {UINT32_MAX, output->binding, params->binding};
   return result;
@@ -904,11 +922,15 @@ RuntimeComputeProgram CreateReflectedFilterProgram(
   const auto* input = shader.resource(inputName);
   const auto* output = shader.resource("outputTexture");
   const auto* params = shader.resource("params");
-  if (!input || !output || !params) return {};
+  if (!input || !output || !params) {
+    return {};
+  }
   RuntimeComputeProgram result = CreateReflectedProgram(runtime, wgslShader, nativeShader, label);
   result.inputOutputParameterBindings = {input->binding, output->binding, params->binding};
   if (const auto* table = shader.resource("transferTable")) {
-    if (table->type != gpu::BindingType::ReadOnlyStorageBuffer) return {};
+    if (table->type != gpu::BindingType::ReadOnlyStorageBuffer) {
+      return {};
+    }
     result.transferTableBinding = table->binding;
   }
   return result;
@@ -937,7 +959,9 @@ RuntimeComputeProgram CreateReflectedTwoInputProgram(
   const auto* backdrop = shader.resource(names.backdrop);
   const auto* output = shader.resource(names.output);
   const auto* params = names.params.empty() ? nullptr : shader.resource(names.params);
-  if (!source || !backdrop || !output || (!names.params.empty() && !params)) return {};
+  if (!source || !backdrop || !output || (!names.params.empty() && !params)) {
+    return {};
+  }
   RuntimeComputeProgram result = CreateReflectedProgram(runtime, wgslShader, nativeShader, label);
   result.twoInputBindings = {source->binding, backdrop->binding, output->binding,
                              params ? params->binding : UINT32_MAX};
@@ -970,7 +994,9 @@ std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
     return false;
   }
 
-  if ((transferTable != nullptr) != program.transferTableBinding.has_value()) return false;
+  if ((transferTable != nullptr) != program.transferTableBinding.has_value()) {
+    return false;
+  }
 
   if (!input || !output) {
     return false;
@@ -1288,7 +1314,9 @@ RuntimeComputeProgram CreateReflectedProgram(gpu::Device& runtime,
                                              std::string_view label) {
   const gpu::shader::CompiledShaderView& shader =
       SelectShaderProjection(runtime, wgslShader, nativeShader);
-  if (!HasSingleComputeEntry(shader)) return {};
+  if (!HasSingleComputeEntry(shader)) {
+    return {};
+  }
   return CreateRuntimeComputeProgram(
       runtime, gpu::shader::MakeShaderDescriptor(shader, runtime.shaderSourceKind(), label),
       gpu::shader::MakeBindingLayout(shader));
@@ -1997,7 +2025,9 @@ bool GeodeFilterEngine::recordPassesForTesting(size_t passCount,
                              {1, 1},
                              gpu::TextureFormat::RGBA8Unorm,
                              gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled});
-  if (!texture) return false;
+  if (!texture) {
+    return false;
+  }
   for (size_t pass = 0; pass != passCount; ++pass) {
     if (!arena.clearTexture(texture)) {
       arena.markExecutionFailed();
@@ -2809,16 +2839,21 @@ FilterTexture GeodeFilterEngine::applyComposite(
 FilterTexture GeodeFilterEngine::applyBlend(
     FilterResourceArena& arena, FilterTexture in1, FilterTexture in2,
     const svg::components::filter_primitive::Blend& primitive) {
-  if (!in1 || !in2) return {};
+  if (!in1 || !in2) {
+    return {};
+  }
   const gpu::Extent2d extent{in1.width(), in1.height()};
   const FilterTexture output = arena.createRuntimeTexture(gpu::TextureDescriptor{
       "FilterBlendOutput", extent, gpu::TextureFormat::RGBA32Float,
       gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  if (!output) return {};
+  if (!output) {
+    return {};
+  }
   const BlendParams params{static_cast<uint32_t>(primitive.mode), 0, 0, 0};
   if (!dispatchRuntimeTwoInput(arena, blendProgram_, in1, in2, output, extent, UniformBytes(params),
-                               "FilterBlendPass"))
+                               "FilterBlendPass")) {
     return {};
+  }
   return output;
 }
 

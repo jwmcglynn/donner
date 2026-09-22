@@ -36,8 +36,9 @@ fn read_record(r:Record,i:u32)->vec4f{return r.vertices[i]+r.transform.row;}
 
 TEST(SlugFeatures, BoundsLargerSourceAndFunctionArenas) {
   std::string source(40000, ' ');
-  for (unsigned i = 0; i < 40; ++i)
+  for (unsigned i = 0; i < 40; ++i) {
     source += "fn helper_" + std::to_string(i) + "()->u32{return 1u;}\n";
+  }
   EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::None);
 }
 
@@ -53,8 +54,12 @@ TEST(SlugFeatures, EntryPointsPrecedeEveryExecutionMode) {
   bool modes = false;
   for (uint32_t i = 5; i < sink.size; i += words[i] >> 16) {
     ASSERT_GT(words[i] >> 16, 0u);
-    if ((words[i] & 65535u) == 16u) modes = true;
-    if ((words[i] & 65535u) == 15u) EXPECT_THAT(modes, testing::IsFalse());
+    if ((words[i] & 65535u) == 16u) {
+      modes = true;
+    }
+    if ((words[i] & 65535u) == 15u) {
+      EXPECT_THAT(modes, testing::IsFalse());
+    }
   }
 }
 
@@ -91,8 +96,9 @@ TEST(SlugFeatures, RejectsNestedBufferRootReuse) {
 
 TEST(SlugFeatures, ValidatesDeeplyNestedMetalBufferLayout) {
   std::string source = "struct S0{v:vec3f,tail:f32,}\n";
-  for (unsigned i = 1; i < 16; ++i)
+  for (unsigned i = 1; i < 16; ++i) {
     source += "struct S" + std::to_string(i) + "{v:S" + std::to_string(i - 1) + ",}\n";
+  }
   source +=
       "@group(0) @binding(0)var<storage,read>b:array<S15>;@compute @workgroup_size(1)fn main(){}";
   const auto parsed = Parse(source);
