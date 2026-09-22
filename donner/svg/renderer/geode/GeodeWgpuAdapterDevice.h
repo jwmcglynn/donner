@@ -595,11 +595,9 @@ protected:
                              const gpu::TexelCopyBufferLayout& dataLayout,
                              const gpu::Extent2d& writeSize,
                              const gpu::Origin2d& destinationOrigin) override;
-  /// A write whose data ends at a minimal final row is repacked before it reaches the queue (see
-  /// \ref onWriteTexture), so it reports the repacked size rather than the caller's span.
-  uint64_t onTextureWriteByteCount(gpu::TextureFormat format, std::span<const uint8_t> data,
-                                   const gpu::TexelCopyBufferLayout& dataLayout,
-                                   const gpu::Extent2d& writeSize) const override;
+  /// The bytes \ref onWriteTexture handed the queue for the write it just accepted: the caller's
+  /// span, or the repacked rows when the span ends at a minimal final row.
+  uint64_t onTextureWriteByteCount(std::span<const uint8_t> data) const override;
   gpu::Status onSubmit(uint64_t submissionSerial,
                        std::span<const gpu::SubmittedCommandBuffer> commandBuffers) override;
 
@@ -740,6 +738,10 @@ private:
   /// Declared before every slot vector so the backend handles outlive the objects created from
   /// them: members are destroyed in reverse declaration order.
   std::shared_ptr<GeodeGpuRoot> root_;
+
+  /// Bytes the most recent accepted \ref onWriteTexture handed the queue; see
+  /// \ref onTextureWriteByteCount.
+  uint64_t lastTextureUploadBytes_ = 0;
 
   /// State of one pending or completed host mapping.
   ///

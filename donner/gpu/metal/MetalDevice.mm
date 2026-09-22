@@ -1580,8 +1580,7 @@ Status MetalDevice::Impl::encodeDrawIndexed(EncodingState& state, const DrawInde
   if (Status status = bindRenderInputs(state); status.hasError()) {
     return status;
   }
-  // The encoder records zero-count draws; no backend issues a native draw for them.
-  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+  if (IsEmptyIndexedDraw(draw)) {
     return OkStatus();
   }
   const uint64_t indexBytes = IndexFormatByteSize(state.indexBinding->format);

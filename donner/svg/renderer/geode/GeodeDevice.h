@@ -802,12 +802,13 @@ public:
   /**
    * The observer this context installs on its own runtime device, on every backend. It reports
    * what that device allocates, uploads, and submits through the `count*` members above, so the
-   * counters describe the same work whichever backend renders it.
+   * counters follow the same rules whichever backend renders. Texture upload bytes are what each
+   * backend hands its queue, so they can differ where a backend repacks rows.
    *
-   * Installing it on another runtime device attributes that device's work to this context as
-   * well; the caller removes it again before this context is destroyed.
+   * A test that installs it on another runtime device attributes that device's work to this
+   * context as well, and removes it again before either is destroyed.
    */
-  gpu::DeviceObserver& runtimeCounterObserver() const UTILS_LIFETIME_BOUND;
+  gpu::DeviceObserver& runtimeCounterObserverForTesting() const UTILS_LIFETIME_BOUND;
 
 private:
   friend class svg::RendererGeodeTextureSnapshot;

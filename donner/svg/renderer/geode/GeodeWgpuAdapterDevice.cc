@@ -849,33 +849,29 @@ using gpu::GpuError;
 using gpu::GpuErrorType;
 using gpu::OkStatus;
 
-/// How a texture upload's bytes reach the wgpu queue.
-struct WgpuTextureUploadShape {
-  bool repacked = false;     //!< The rows are copied at \ref bytesPerRow rather than sent in place.
-  uint64_t rowBytes = 0;     //!< Bytes of one row of texels.
-  uint64_t bytesPerRow = 0;  //!< Row pitch of the repacked rows; unused when not repacked.
-  uint64_t byteCount = 0;    //!< Bytes handed to the queue.
-};
-
-/// Decides how \p callerByteCount bytes laid out as \p callerLayout reach the queue: in place when
-/// they hold every row at the caller's own pitch, otherwise repacked at the smallest aligned pitch,
-/// because wgpu-native implementations read a complete final row pitch.
-gpu::Result<WgpuTextureUploadShape> WgpuTextureUploadShapeFor(
-    gpu::TextureFormat format, uint64_t callerByteCount,
-    const gpu::TexelCopyBufferLayout& callerLayout, const gpu::Extent2d& writeSize) {
-  const std::optional<uint64_t> rowBytes =
-      gpu::CheckedMul(writeSize.width, gpu::TextureFormatBytesPerTexel(format));
+/// Makes a caller's minimally-sized final row safe for wgpu-native implementations that read a
+/// complete final row pitch. Keeps already-complete spans zero-copy and otherwise repacks into the
+/// smallest aligned row pitch, independent of unused stride in the caller's layout.
+gpu::Status PrepareWgpuTextureUpload(wgpu::TextureFormat textureFormat,
+                                     std::span<const uint8_t> callerData,
+                                     const gpu::TexelCopyBufferLayout& callerLayout,
+                                     const gpu::Extent2d& writeSize,
+                                     SmallVector<uint8_t, gpu::kTexelRowPitchAlignment>& ownedData,
+                                     std::span<const uint8_t>& uploadData,
+                                     gpu::TexelCopyBufferLayout& uploadLayout) {
+  uploadData = callerData;
+  uploadLayout = callerLayout;
   const std::optional<uint64_t> fullRows =
       gpu::CheckedMul(writeSize.height, callerLayout.bytesPerRow);
   const std::optional<uint64_t> fullEnd =
       fullRows ? gpu::CheckedAdd(callerLayout.offsetBytes, *fullRows) : std::nullopt;
-  if (fullEnd && *fullEnd <= callerByteCount) {
-    return WgpuTextureUploadShape{.repacked = false,
-                                  .rowBytes = rowBytes.value_or(0),
-                                  .bytesPerRow = callerLayout.bytesPerRow,
-                                  .byteCount = callerByteCount};
+  if (fullEnd && *fullEnd <= callerData.size()) {
+    return OkStatus();
   }
 
+  const uint32_t texelBytes =
+      gpu::TextureFormatBytesPerTexel(GpuTextureFormatFromWgpu(textureFormat));
+  const std::optional<uint64_t> rowBytes = gpu::CheckedMul(writeSize.width, texelBytes);
   const std::optional<uint64_t> roundedRowBytes =
       rowBytes ? gpu::CheckedAdd(*rowBytes, gpu::kTexelRowPitchAlignment - 1) : std::nullopt;
   if (!roundedRowBytes) {
@@ -890,36 +886,8 @@ gpu::Result<WgpuTextureUploadShape> WgpuTextureUploadShapeFor(
     return GpuError{GpuErrorType::OutOfBounds,
                     "writeTexture: compact wgpu upload byte size overflows"};
   }
-  return WgpuTextureUploadShape{.repacked = true,
-                                .rowBytes = *rowBytes,
-                                .bytesPerRow = compactBytesPerRow,
-                                .byteCount = *compactBytes};
-}
 
-/// Makes a caller's minimally-sized final row safe for wgpu-native implementations that read a
-/// complete final row pitch. Keeps already-complete spans zero-copy and otherwise repacks into the
-/// smallest aligned row pitch, independent of unused stride in the caller's layout.
-gpu::Status PrepareWgpuTextureUpload(wgpu::TextureFormat textureFormat,
-                                     std::span<const uint8_t> callerData,
-                                     const gpu::TexelCopyBufferLayout& callerLayout,
-                                     const gpu::Extent2d& writeSize,
-                                     SmallVector<uint8_t, gpu::kTexelRowPitchAlignment>& ownedData,
-                                     std::span<const uint8_t>& uploadData,
-                                     gpu::TexelCopyBufferLayout& uploadLayout) {
-  uploadData = callerData;
-  uploadLayout = callerLayout;
-  gpu::Result<WgpuTextureUploadShape> shape = WgpuTextureUploadShapeFor(
-      GpuTextureFormatFromWgpu(textureFormat), callerData.size(), callerLayout, writeSize);
-  if (shape.hasError()) {
-    return std::move(shape).error();
-  }
-  if (!shape.result().repacked) {
-    return OkStatus();
-  }
-  const uint64_t rowBytes = shape.result().rowBytes;
-  const uint64_t compactBytesPerRow = shape.result().bytesPerRow;
-
-  ownedData.resize(static_cast<size_t>(shape.result().byteCount));
+  ownedData.resize(static_cast<size_t>(*compactBytes));
   for (uint32_t row = 0; row < writeSize.height; ++row) {
     const std::optional<uint64_t> sourceRowOffset =
         gpu::CheckedMul(static_cast<uint64_t>(row), callerLayout.bytesPerRow);
@@ -927,13 +895,13 @@ gpu::Status PrepareWgpuTextureUpload(wgpu::TextureFormat textureFormat,
         sourceRowOffset ? gpu::CheckedAdd(callerLayout.offsetBytes, *sourceRowOffset)
                         : std::nullopt;
     const std::optional<uint64_t> sourceEnd =
-        sourceRow ? gpu::CheckedAdd(*sourceRow, rowBytes) : std::nullopt;
+        sourceRow ? gpu::CheckedAdd(*sourceRow, *rowBytes) : std::nullopt;
     if (!sourceEnd || *sourceEnd > callerData.size()) {
       return GpuError{GpuErrorType::OutOfBounds,
                       "writeTexture: validated caller row range became invalid"};
     }
     std::copy_n(
-        callerData.begin() + static_cast<size_t>(*sourceRow), static_cast<size_t>(rowBytes),
+        callerData.begin() + static_cast<size_t>(*sourceRow), static_cast<size_t>(*rowBytes),
         ownedData.begin() + static_cast<size_t>(row) * static_cast<size_t>(compactBytesPerRow));
   }
   uploadData = std::span<const uint8_t>(ownedData.data(), ownedData.size());
@@ -2348,16 +2316,12 @@ gpu::Status GeodeWgpuAdapterDevice::onWriteTexture(uint32_t slotIndex,
   layout.rowsPerImage = uploadLayout.rowsPerImage;
   const wgpu::Extent3D extent = {writeSize.width, writeSize.height, 1u};
   root_->queue().writeTexture(destination, uploadData.data(), uploadData.size(), layout, extent);
+  lastTextureUploadBytes_ = uploadData.size();
   return OkStatus();
 }
 
-uint64_t GeodeWgpuAdapterDevice::onTextureWriteByteCount(
-    gpu::TextureFormat format, std::span<const uint8_t> data,
-    const gpu::TexelCopyBufferLayout& dataLayout, const gpu::Extent2d& writeSize) const {
-  // Asked only after onWriteTexture uploaded this span, so its shape was computable then.
-  const gpu::Result<WgpuTextureUploadShape> shape =
-      WgpuTextureUploadShapeFor(format, data.size(), dataLayout, writeSize);
-  return shape.hasResult() ? shape.result().byteCount : data.size();
+uint64_t GeodeWgpuAdapterDevice::onTextureWriteByteCount(std::span<const uint8_t> /*data*/) const {
+  return lastTextureUploadBytes_;
 }
 
 gpu::Status GeodeWgpuAdapterDevice::encodeBeginRenderPass(
@@ -2479,8 +2443,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeDrawIndexed(EncodingState& state,
   if (!state.pass) {
     return GpuError{GpuErrorType::InvalidState, "drawIndexed outside a render pass"};
   }
-  // The encoder records zero-count draws; no backend issues a native draw for them.
-  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+  if (gpu::IsEmptyIndexedDraw(draw)) {
     return OkStatus();
   }
   state.pass.get().drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex,

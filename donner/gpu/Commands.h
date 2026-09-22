@@ -94,6 +94,19 @@ struct DrawIndexedCommand {
   uint32_t firstInstance = 0;  //!< First instance index.
 };
 
+/**
+ * Whether \p draw has no work: no indices or no instances.
+ *
+ * The encoder records such a draw. A backend may skip it rather than issue a native draw with
+ * nothing to draw, and \ref DeviceObserver does not count it as a draw, so every backend reports
+ * the same draw count for the same commands.
+ *
+ * @param draw Recorded indexed draw.
+ */
+constexpr bool IsEmptyIndexedDraw(const DrawIndexedCommand& draw) {
+  return draw.indexCount == 0 || draw.instanceCount == 0;
+}
+
 /// Recorded `dispatchWorkgroups`.
 struct DispatchWorkgroupsCommand {
   uint32_t workgroupCountX = 1;  //!< Workgroups along X.

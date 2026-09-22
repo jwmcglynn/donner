@@ -3727,8 +3727,7 @@ Status VulkanDevice::Impl::encodeDrawIndexed(EncodingState& state, const DrawInd
   if (Status status = bindDrawDescriptorSets(state, "drawIndexed"); status.hasError()) {
     return status;
   }
-  // The encoder records zero-count draws; no backend issues a native draw for them.
-  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+  if (IsEmptyIndexedDraw(draw)) {
     return OkStatus();
   }
   // The encoder bounded this draw's index range inside the binding, so the offset is in range.

@@ -2,21 +2,22 @@
 /// @file
 /// \c donner::gpu::DeviceObserver - notification of the work a device accepts, on every backend.
 
-#include <cstddef>
 #include <cstdint>
 
 namespace donner::gpu {
 
 /**
- * Receives one notification per operation a \ref Device validated and its backend accepted.
+ * Receives one notification for each operation a \ref Device accepted, and one for each queue
+ * submission its backend made on its own.
  *
- * Installed per device with \ref Device::setObserver. The notifications come from the shared
- * validation layer rather than from any backend, so a caller that measures its own allocation,
- * upload, and submission traffic sees the same events whichever backend the device runs on. A
- * refused operation, whether the validation layer or the backend refused it, notifies nothing.
+ * Installed per device with \ref Device::installObserver. Notifications for the caller's
+ * operations come from the shared validation layer, after the backend accepted the operation, so
+ * a caller measuring its allocation, upload, and submission traffic counts it under the same
+ * rules whichever backend the device runs on. A refused operation, whether the validation layer or
+ * the backend refused it, notifies nothing.
  *
- * Calls are synchronous, on the thread that is using the device, after the backend accepted the
- * operation.
+ * Calls are synchronous, on the thread using the device. An observer must not call back into the
+ * device that notified it.
  */
 class DeviceObserver {
 public:
@@ -38,8 +39,8 @@ public:
   virtual void onBufferWritten(uint64_t byteCount) = 0;
 
   /// A queue write to a texture was accepted.
-  /// @param byteCount Bytes the backend handed to its queue for the write, which is the caller's
-  ///   span unless the backend repacks the rows first.
+  /// @param byteCount Bytes the backend handed its queue for the write: the caller's span, or the
+  ///   repacked rows on a backend that repacks them first, so this can differ between backends.
   virtual void onTextureWritten(uint64_t byteCount) = 0;
 
   /**
@@ -47,10 +48,19 @@ public:
    *
    * @param commandBufferCount Command buffers the submission carried. Zero for a submission a
    *   backend made on its own, outside \ref Device::submit, to make the queue progress.
-   * @param drawCount Draws the backend issued: every draw, and every indexed draw with at least
-   *   one index and one instance. An empty indexed draw is recorded but never issued.
+   * @param drawCount Draws counted under one rule on every backend: each draw command, including
+   *   one with no vertices or no instances, and each indexed draw command that is not empty (see
+   *   \ref IsEmptyIndexedDraw), whether or not the backend issues it natively.
    */
-  virtual void onSubmitted(size_t commandBufferCount, uint64_t drawCount) = 0;
+  virtual void onSubmitted(uint64_t commandBufferCount, uint64_t drawCount) = 0;
+
+protected:
+  /// Constructible only as a base.
+  DeviceObserver() = default;
+  /// Copyable only by a derived observer, so an observer is never sliced through its base.
+  DeviceObserver(const DeviceObserver&) = default;
+  /// Assignable only by a derived observer. @return This observer.
+  DeviceObserver& operator=(const DeviceObserver&) = default;
 };
 
 }  // namespace donner::gpu

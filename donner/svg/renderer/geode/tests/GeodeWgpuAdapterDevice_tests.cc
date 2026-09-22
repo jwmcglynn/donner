@@ -464,12 +464,13 @@ protected:
     ASSERT_NE(adapter_, nullptr);
     // The cases below read what this adapter allocated and submitted off the context's counters,
     // which only happens for a device the context is attributed to.
-    adapter_->setObserver(&geodeDevice_->runtimeCounterObserver());
+    ASSERT_THAT(adapter_->installObserver(geodeDevice_->runtimeCounterObserverForTesting()),
+                gpu::IsOk());
   }
 
   void TearDown() override {
     if (adapter_) {
-      adapter_->setObserver(nullptr);
+      adapter_->removeObserver(geodeDevice_->runtimeCounterObserverForTesting());
     }
   }
 

@@ -206,7 +206,7 @@ public:
   void onBindGroupCreated() override { context_.countBindGroup(); }
   void onBufferWritten(uint64_t byteCount) override { context_.countBufferWrite(byteCount); }
   void onTextureWritten(uint64_t byteCount) override { context_.countTextureWrite(byteCount); }
-  void onSubmitted(size_t commandBufferCount, uint64_t drawCount) override {
+  void onSubmitted(uint64_t commandBufferCount, uint64_t drawCount) override {
     context_.countSubmit();
     context_.countCommandBuffers(commandBufferCount);
     context_.countDraws(drawCount);
@@ -239,7 +239,11 @@ GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevic
   // Allocations and submissions this context makes through the runtime are counted against it,
   // which is what keeps two contexts over one root from sharing a per-frame ceiling.
   runtimeCounterObserver_ = std::make_unique<RuntimeCounterObserver>(*this);
-  runtimeDevice.setObserver(runtimeCounterObserver_.get());
+  // Every factory gives each context a runtime device of its own, so a device that already
+  // reports to another observer is a second context over it, whose counts would silently vanish.
+  const gpu::Status installed = runtimeDevice.installObserver(*runtimeCounterObserver_);
+  UTILS_RELEASE_ASSERT_MSG(!installed.hasError(),
+                           "GeodeDevice: its runtime device already reports to another context");
 }
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateLogicalContext(
@@ -263,7 +267,7 @@ GeodeDevice::SnapshotCaptureLease::~SnapshotCaptureLease() {
 GeodeDevice::~GeodeDevice() {
   // The owner's root device outlives a context that rendered through it, so stop attributing to a
   // context that is going away.
-  runtimeDevice_->setObserver(nullptr);
+  runtimeDevice_->removeObserver(*runtimeCounterObserver_);
   // Release all resources that were created from the device before releasing the
   // root queue/device/adapter/instance handles. `webgpu.hpp` handles are raw
   // wrappers: their destructors do not release native references.
@@ -884,7 +888,7 @@ const GeodeGpuContext& GeodeDevice::gpuContext() const {
   return impl_->gpuContext;
 }
 
-gpu::DeviceObserver& GeodeDevice::runtimeCounterObserver() const {
+gpu::DeviceObserver& GeodeDevice::runtimeCounterObserverForTesting() const {
   return *runtimeCounterObserver_;
 }
 

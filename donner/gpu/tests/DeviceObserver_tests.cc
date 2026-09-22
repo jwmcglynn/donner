@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -23,14 +24,15 @@
 
 using testing::ElementsAre;
 using testing::Eq;
+using testing::HasSubstr;
 
 namespace donner::gpu {
 namespace {
 
 /// One reported submission: how many command buffers it carried and how many draws it issued.
 struct ObservedSubmission {
-  size_t commandBuffers = 0;  //!< Command buffers the submission carried.
-  uint64_t draws = 0;         //!< Draws it issued.
+  uint64_t commandBuffers = 0;  //!< Command buffers the submission carried.
+  uint64_t draws = 0;           //!< Draws it issued.
 
   /// Equality operator. @param other Submission to compare against.
   bool operator==(const ObservedSubmission& other) const = default;
@@ -72,28 +74,34 @@ public:
   void onBindGroupCreated() override { ++events.bindGroupCreates; }
   void onBufferWritten(uint64_t byteCount) override { events.bufferWrites.push_back(byteCount); }
   void onTextureWritten(uint64_t byteCount) override { events.textureWrites.push_back(byteCount); }
-  void onSubmitted(size_t commandBufferCount, uint64_t drawCount) override {
+  void onSubmitted(uint64_t commandBufferCount, uint64_t drawCount) override {
     events.submissions.push_back(ObservedSubmission{commandBufferCount, drawCount});
   }
 
   ObservedEvents events;  //!< What this observer has been told so far.
 };
 
+/// A step the scripted backend can refuse after validation accepted it.
+enum class BackendStep {
+  Buffer,        //!< onCreateBuffer.
+  Texture,       //!< onCreateTexture.
+  BindGroup,     //!< onCreateBindGroup.
+  TextureWrite,  //!< onWriteTexture.
+  Submission,    //!< onSubmit.
+};
+
 /**
  * Test backend with the behaviors that decide what is reported: it can name a texture it was
- * handed instead of allocating one, refuse the next buffer or submission, report a repacked
- * texture upload size, and submit to its queue on its own.
+ * handed instead of allocating one, refuse one step after validation accepted it, report a
+ * repacked texture upload size, and submit to its queue on its own.
  */
 class ScriptedBackendDevice final : public Device {
 public:
   /// Makes the next created texture a registration of memory this device does not own.
   void registerNextTexture() { registerNextTexture_ = true; }
 
-  /// Makes the backend refuse the next buffer it is asked to create.
-  void refuseNextBuffer() { refuseNextBuffer_ = true; }
-
-  /// Makes the backend refuse the next submission.
-  void refuseNextSubmission() { refuseNextSubmission_ = true; }
+  /// Makes the backend refuse the next \p step it is asked to perform. @param step Step to refuse.
+  void refuseNext(BackendStep step) { refuseNext_ = step; }
 
   /// Makes every accepted texture write report \p byteCount as its uploaded size, the way a
   /// backend that repacks rows before uploading does. @param byteCount Size to report.
@@ -108,12 +116,12 @@ public:
 
 protected:
   Status onCreateBuffer(uint32_t, const BufferDescriptor&) override {
-    if (std::exchange(refuseNextBuffer_, false)) {
-      return GpuError{GpuErrorType::InvalidState, "the test backend refused the buffer"};
-    }
-    return OkStatus();
+    return outcomeOf(BackendStep::Buffer);
   }
   Status onCreateTexture(uint32_t slotIndex, const TextureDescriptor&) override {
+    if (Status status = outcomeOf(BackendStep::Texture); status.hasError()) {
+      return status;
+    }
     if (ownedTextures_.size() <= slotIndex) {
       ownedTextures_.resize(slotIndex + 1, true);
     }
@@ -130,7 +138,9 @@ protected:
   Status onCreateBindGroupLayout(uint32_t, const BindGroupLayoutDescriptor&) override {
     return OkStatus();
   }
-  Status onCreateBindGroup(uint32_t, const BindGroupDescriptor&) override { return OkStatus(); }
+  Status onCreateBindGroup(uint32_t, const BindGroupDescriptor&) override {
+    return outcomeOf(BackendStep::BindGroup);
+  }
   Status onCreatePipelineLayout(uint32_t, const PipelineLayoutDescriptor&) override {
     return OkStatus();
   }
@@ -147,26 +157,28 @@ protected:
   Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
   Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,
                         const Extent2d&, const Origin2d&) override {
-    return OkStatus();
+    return outcomeOf(BackendStep::TextureWrite);
   }
-  uint64_t onTextureWriteByteCount(TextureFormat format, std::span<const uint8_t> data,
-                                   const TexelCopyBufferLayout& dataLayout,
-                                   const Extent2d& writeSize) const override {
-    return repackedTextureWriteBytes_.value_or(
-        Device::onTextureWriteByteCount(format, data, dataLayout, writeSize));
+  uint64_t onTextureWriteByteCount(std::span<const uint8_t> data) const override {
+    return repackedTextureWriteBytes_.value_or(Device::onTextureWriteByteCount(data));
   }
   Status onSubmit(uint64_t, std::span<const SubmittedCommandBuffer>) override {
-    if (std::exchange(refuseNextSubmission_, false)) {
-      return GpuError{GpuErrorType::DeviceLost, "the test backend lost the device"};
-    }
-    return OkStatus();
+    return outcomeOf(BackendStep::Submission);
   }
 
 private:
+  /// Refuses \p step when it is the one scripted to be refused next. @param step Step performed.
+  Status outcomeOf(BackendStep step) {
+    if (refuseNext_ != step) {
+      return OkStatus();
+    }
+    refuseNext_.reset();
+    return GpuError{GpuErrorType::DeviceLost, "the test backend refused the step"};
+  }
+
   std::vector<bool> ownedTextures_;
   bool registerNextTexture_ = false;
-  bool refuseNextBuffer_ = false;
-  bool refuseNextSubmission_ = false;
+  std::optional<BackendStep> refuseNext_;
   std::optional<uint64_t> repackedTextureWriteBytes_;
 };
 
@@ -203,10 +215,10 @@ protected:
             {VertexBufferLayout{
                 8, VertexStepMode::Vertex, {VertexAttribute{VertexFormat::Float32x2, 0, 0}}}}},
         FragmentState{shader_, "fsMain", {ColorTargetState{TextureFormat::RGBA8Unorm}}}}));
-    device_.setObserver(&observer_);
+    ASSERT_THAT(device_.installObserver(observer_), IsOk());
   }
 
-  void TearDown() override { device_.setObserver(nullptr); }
+  void TearDown() override { device_.removeObserver(observer_); }
 
   BindGroupDescriptor bindGroupDescriptor() const {
     return BindGroupDescriptor{"solidUniforms",
@@ -215,14 +227,12 @@ protected:
   }
 
   /**
-   * Records one command buffer holding one render pass that issues \p draws plain draws and
-   * \p indexedDraws indexed draws, followed by \p emptyIndexedDraws indexed draws of no indices.
+   * Records one command buffer holding one render pass, with the pipeline, bind group, vertex
+   * buffer and index buffer bound, whose draws \p recordDraws records.
    *
-   * @param draws Plain draws to record.
-   * @param indexedDraws Indexed draws of six indices to record.
-   * @param emptyIndexedDraws Indexed draws of zero indices to record.
+   * @param recordDraws Records the pass's draws.
    */
-  CommandBuffer recordPass(uint32_t draws, uint32_t indexedDraws, uint32_t emptyIndexedDraws) {
+  CommandBuffer recordPass(const std::function<void(RenderPassEncoder&)>& recordDraws) {
     std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
     RenderPassEncoder* pass = GetResultOrFail(encoder->beginRenderPass(RenderPassDescriptor{
         "pass", {RenderPassColorAttachment{targetView_, LoadOp::Clear, StoreOp::Store}}}));
@@ -230,17 +240,30 @@ protected:
     EXPECT_THAT(pass->setBindGroup(0, bindGroup_), IsOk());
     EXPECT_THAT(pass->setVertexBuffer(0, vertexBuffer_), IsOk());
     EXPECT_THAT(pass->setIndexBuffer(indexBuffer_, IndexFormat::Uint16), IsOk());
-    for (uint32_t i = 0; i < draws; ++i) {
-      EXPECT_THAT(pass->draw(3), IsOk());
-    }
-    for (uint32_t i = 0; i < indexedDraws; ++i) {
-      EXPECT_THAT(pass->drawIndexed(6), IsOk());
-    }
-    for (uint32_t i = 0; i < emptyIndexedDraws; ++i) {
-      EXPECT_THAT(pass->drawIndexed(0), IsOk());
-    }
+    recordDraws(*pass);
     EXPECT_THAT(pass->end(), IsOk());
     return GetResultOrFail(encoder->finish());
+  }
+
+  /**
+   * Records a pass of \p draws plain draws, \p indexedDraws indexed draws of six indices, and
+   * \p emptyIndexedDraws indexed draws of no indices.
+   *
+   * @param draws Plain draws. @param indexedDraws Indexed draws. @param emptyIndexedDraws Empty
+   *   indexed draws.
+   */
+  CommandBuffer recordPass(uint32_t draws, uint32_t indexedDraws, uint32_t emptyIndexedDraws) {
+    return recordPass([&](RenderPassEncoder& pass) {
+      for (uint32_t i = 0; i < draws; ++i) {
+        EXPECT_THAT(pass.draw(3), IsOk());
+      }
+      for (uint32_t i = 0; i < indexedDraws; ++i) {
+        EXPECT_THAT(pass.drawIndexed(6), IsOk());
+      }
+      for (uint32_t i = 0; i < emptyIndexedDraws; ++i) {
+        EXPECT_THAT(pass.drawIndexed(0), IsOk());
+      }
+    });
   }
 
   ScriptedBackendDevice device_;
@@ -281,7 +304,7 @@ TEST_F(DeviceObserverTests, EachAcceptedOperationIsReportedOnce) {
                                                   .submissions = {{1, 1}}}));
 }
 
-TEST_F(DeviceObserverTests, ASubmissionReportsItsBuffersAndTheDrawsItIssues) {
+TEST_F(DeviceObserverTests, ASubmissionReportsItsBuffersAndTheDrawsItCounts) {
   std::array<CommandBuffer, 2> span{
       recordPass(/*draws=*/2, /*indexedDraws=*/1, /*emptyIndexedDraws=*/1),
       recordPass(/*draws=*/0, /*indexedDraws=*/3, /*emptyIndexedDraws=*/2)};
@@ -289,21 +312,58 @@ TEST_F(DeviceObserverTests, ASubmissionReportsItsBuffersAndTheDrawsItIssues) {
   ASSERT_THAT(device_.submit(span), HasResult());
 
   EXPECT_THAT(observer_.events.submissions, ElementsAre(ObservedSubmission{2, 6}))
-      << "an indexed draw of no indices is recorded but never issued, so it is not a draw";
+      << "an empty indexed draw is recorded but does not count as a draw";
 }
 
-TEST_F(DeviceObserverTests, RefusedOperationsReportNothing) {
-  // Refused by validation.
+TEST_F(DeviceObserverTests, AnEmptyPlainDrawStillCounts) {
+  ASSERT_THAT(device_.submit(recordPass([](RenderPassEncoder& pass) {
+    EXPECT_THAT(pass.draw(0), IsOk());
+    EXPECT_THAT(pass.draw(3, 0), IsOk());
+    EXPECT_THAT(pass.drawIndexed(6, 0), IsOk());
+  })),
+              HasResult());
+
+  EXPECT_THAT(observer_.events.submissions, ElementsAre(ObservedSubmission{1, 2}))
+      << "a draw command counts even with no vertices or instances; an indexed draw with no "
+         "instances does not";
+}
+
+TEST_F(DeviceObserverTests, OperationsValidationRefusesReportNothing) {
   EXPECT_THAT(device_.createBuffer(BufferDescriptor{"empty", 0, BufferUsage::CopyDst}),
               IsGpuError(GpuErrorType::InvalidDescriptor));
+  EXPECT_THAT(device_.createTexture(TextureDescriptor{
+                  "empty", Extent2d{0, 2}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+  EXPECT_THAT(
+      device_.createBindGroup(BindGroupDescriptor{"noEntries", bindGroupLayout_, /*entries=*/{}}),
+      IsGpuError(GpuErrorType::InvalidDescriptor));
   const std::array<uint8_t, 64> tooLong{};
   EXPECT_THAT(device_.writeBuffer(uniformBuffer_, 0, tooLong),
               IsGpuError(GpuErrorType::OutOfBounds));
-  // Refused by the backend after validation accepted it.
-  device_.refuseNextBuffer();
+  const std::vector<uint8_t> textureBytes(256 * 4);
+  EXPECT_THAT(
+      device_.writeTexture(target_, textureBytes, TexelCopyBufferLayout{0, 256, 8}, Extent2d{4, 8}),
+      IsGpuError(GpuErrorType::OutOfBounds));
+
+  EXPECT_THAT(observer_.events, Eq(ObservedEvents{}));
+}
+
+TEST_F(DeviceObserverTests, OperationsTheBackendRefusesReportNothing) {
+  device_.refuseNext(BackendStep::Buffer);
   EXPECT_THAT(device_.createBuffer(BufferDescriptor{"refused", 16, BufferUsage::CopyDst}),
-              IsGpuError(GpuErrorType::InvalidState));
-  device_.refuseNextSubmission();
+              IsGpuError(GpuErrorType::DeviceLost));
+  device_.refuseNext(BackendStep::Texture);
+  EXPECT_THAT(device_.createTexture(TextureDescriptor{
+                  "refused", Extent2d{2, 2}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}),
+              IsGpuError(GpuErrorType::DeviceLost));
+  device_.refuseNext(BackendStep::BindGroup);
+  EXPECT_THAT(device_.createBindGroup(bindGroupDescriptor()), IsGpuError(GpuErrorType::DeviceLost));
+  device_.refuseNext(BackendStep::TextureWrite);
+  const std::vector<uint8_t> textureBytes(256 * 2);
+  EXPECT_THAT(
+      device_.writeTexture(target_, textureBytes, TexelCopyBufferLayout{0, 256, 2}, Extent2d{4, 2}),
+      IsGpuError(GpuErrorType::DeviceLost));
+  device_.refuseNext(BackendStep::Submission);
   EXPECT_THAT(device_.submit(recordPass(1, 1, 0)), IsGpuError(GpuErrorType::DeviceLost));
 
   EXPECT_THAT(observer_.events, Eq(ObservedEvents{}));
@@ -343,8 +403,47 @@ TEST_F(DeviceObserverTests, ABackendsOwnQueueSubmissionCarriesNoBuffersOrDraws) 
       << "a backend's own queue submission is not a runtime submission and takes no serial";
 }
 
+TEST_F(DeviceObserverTests, ADifferentObserverIsRefusedAndTheInstalledOneKeepsReporting) {
+  RecordingObserver other;
+  EXPECT_THAT(device_.installObserver(other),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("another observer")));
+  EXPECT_THAT(device_.observer(), Eq(&observer_));
+
+  const Buffer buffer =
+      GetResultOrFail(device_.createBuffer(BufferDescriptor{"b", 16, BufferUsage::CopyDst}));
+
+  EXPECT_THAT(observer_.events, Eq(ObservedEvents{.bufferCreates = 1}));
+  EXPECT_THAT(other.events, Eq(ObservedEvents{}));
+}
+
+TEST_F(DeviceObserverTests, InstallingTheInstalledObserverAgainChangesNothing) {
+  ASSERT_THAT(device_.installObserver(observer_), IsOk());
+
+  const Buffer buffer =
+      GetResultOrFail(device_.createBuffer(BufferDescriptor{"b", 16, BufferUsage::CopyDst}));
+
+  EXPECT_THAT(observer_.events, Eq(ObservedEvents{.bufferCreates = 1}))
+      << "one installation reports each operation once";
+}
+
+TEST_F(DeviceObserverTests, OnlyTheInstalledObserverCanBeRemoved) {
+  RecordingObserver other;
+  device_.removeObserver(other);
+  EXPECT_THAT(device_.observer(), Eq(&observer_)) << "removing another observer changes nothing";
+
+  device_.removeObserver(observer_);
+  EXPECT_THAT(device_.observer(), Eq(nullptr));
+  ASSERT_THAT(device_.installObserver(other), IsOk());
+  const Buffer buffer =
+      GetResultOrFail(device_.createBuffer(BufferDescriptor{"b", 16, BufferUsage::CopyDst}));
+  device_.removeObserver(other);
+
+  EXPECT_THAT(other.events, Eq(ObservedEvents{.bufferCreates = 1}));
+  EXPECT_THAT(observer_.events, Eq(ObservedEvents{}));
+}
+
 TEST_F(DeviceObserverTests, RemovingTheObserverStopsReports) {
-  device_.setObserver(nullptr);
+  device_.removeObserver(observer_);
   const Buffer buffer = GetResultOrFail(
       device_.createBuffer(BufferDescriptor{"unobserved", 16, BufferUsage::CopyDst}));
   ASSERT_THAT(device_.submit(recordPass(1, 0, 0)), HasResult());
@@ -357,13 +456,13 @@ TEST_F(DeviceObserverTests, RemovingTheObserverStopsReports) {
 TEST(DeviceObserverRecordingDeviceTests, TheRecordingBackendReportsTheCallersSpan) {
   RecordingDevice device;
   RecordingObserver observer;
-  device.setObserver(&observer);
+  ASSERT_THAT(device.installObserver(observer), IsOk());
   const Texture texture = GetResultOrFail(device.createTexture(TextureDescriptor{
       "texture", Extent2d{2, 2}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
   const std::vector<uint8_t> bytes(256 + 8);
   ASSERT_THAT(device.writeTexture(texture, bytes, TexelCopyBufferLayout{0, 256, 2}, Extent2d{2, 2}),
               IsOk());
-  device.setObserver(nullptr);
+  device.removeObserver(observer);
 
   EXPECT_THAT(observer.events, Eq(ObservedEvents{.textureCreates = 1, .textureWrites = {264}}));
 }
