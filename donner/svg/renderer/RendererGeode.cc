@@ -2089,10 +2089,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
-  /// Defer a release until after the frame's command buffer has been
-  /// submitted. Used by `popIsolatedLayer` / `popFilterLayer` / etc.,
-  /// where the layer texture is still referenced by commands recorded
-  /// into the frame encoder and must not be recycled mid-frame.
+  /// Defer a release until after submission, or retain it if the frame's submission is uncertain.
+  /// Layer, filter, mask, and clip textures may still be named by recorded commands.
   struct PendingRelease {
     gpu::Texture texture;
     gpu::TextureDescriptor desc;
@@ -2102,6 +2100,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   void releaseTextureAtFrameEnd(gpu::Texture texture, const gpu::TextureDescriptor& desc) {
     if (!texture.isValid()) {
+      return;
+    }
+    if (frameRecordingAbandoned) {
+      failedFilterTextures.push_back({std::move(texture), desc});
       return;
     }
     framePendingReleases.push_back({std::move(texture), desc});
