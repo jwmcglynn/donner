@@ -190,8 +190,6 @@ MTLPrimitiveType ToMtlPrimitiveType(PrimitiveTopology topology) {
   return MTLPrimitiveTypeTriangle;
 }
 
-/// State shared with Metal command-buffer completion handlers, which run on a Metal-internal
-/// thread. Held by shared_ptr so a handler that outlives the device touches valid memory.
 /// How long presenting waits for the frame's own work before reporting that it is not showing.
 /// Long enough that a heavy frame is never cut off, short enough that a wedged GPU does not stall
 /// the caller indefinitely.
@@ -205,6 +203,8 @@ struct ParkedCompletion {
   uint64_t payloadBytes = 0;  //!< Payload bytes the submission reserved.
 };
 
+/// State shared with Metal command-buffer completion handlers, which run on a Metal-internal
+/// thread. Held by shared_ptr so a handler that outlives the device touches valid memory.
 struct CompletionState {
   /// Highest serial through which every submission's completion has been published. Advanced
   /// only in serial order, under \ref watermarkMutex.
@@ -299,7 +299,8 @@ void PublishCompletion(CompletionState& state, uint64_t serial, NSError* executi
   if (declaredLoss) {
     LogDeclaredDeviceLoss(("a Metal command buffer failed: " + message).c_str());
   } else if (executionError != nil) {
-    std::fprintf(stderr, "[gpu] A Metal command buffer failed after the device was lost: %s\n",
+    std::fprintf(stderr,
+                 "[gpu] A Metal command buffer failed on a device already declared lost: %s\n",
                  message.c_str());
   }
 }
@@ -1950,7 +1951,8 @@ void MetalDevice::Impl::attachCompletionHandler(std::span<EncodingState> states,
   if (std::exchange(failNextSubmission, false)) {
     injectedFailureIndex = std::min(failedCommandBufferIndex.value_or(lastIndex), lastIndex);
   }
-  if (std::exchange(holdNextCompletion, false)) {
+  const bool held = std::exchange(holdNextCompletion, false);
+  if (held) {
     std::lock_guard<std::mutex> lock(sharedState->mutex);
     sharedState->heldSerial = submissionSerial;
   }
@@ -1980,7 +1982,7 @@ void MetalDevice::Impl::attachCompletionHandler(std::span<EncodingState> states,
         executionError = outcome->firstError;
       }
       bool parked = false;
-      {
+      if (held) {
         std::lock_guard<std::mutex> lock(sharedState->mutex);
         if (sharedState->heldSerial == submissionSerial) {
           sharedState->parked =
@@ -2278,6 +2280,9 @@ Result<SurfaceStatus> MetalDevice::onPresentSurface(uint32_t slotIndex) {
     // The frame is the layer's either way; the caller is told the frame it drew is not showing.
     surface->abandon();
     impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
+    if (isLost()) {
+      return SurfaceStatus::DeviceLost;
+    }
     return GpuError{GpuErrorType::InvalidState,
                     std::format("presentSurface: the frame's work did not complete: {}",
                                 lastErrorForTest().empty() ? "timed out" : lastErrorForTest())};
