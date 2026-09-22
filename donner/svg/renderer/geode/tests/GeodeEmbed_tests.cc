@@ -17,6 +17,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"  // IWYU pragma: keep - provides wgpuLabel
+#include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::svg {
@@ -34,9 +35,11 @@ using test::IsTransparent;
 
 /// Create a headless device, then wrap it as if it were host-provided.
 /// This exercises the CreateFromExternal factory without needing a real host
-/// application.
+/// application. A host hands the embedding surface wgpu objects, so every host
+/// here is a transitional-adapter context, selected by name whatever the
+/// process default is.
 TEST(GeodeEmbed, CreateFromExternalSucceeds) {
-  auto headless = geode::GeodeDevice::CreateHeadless();
+  auto headless = geode::CreateTransitionalAdapterContext();
   ASSERT_NE(headless, nullptr);
 
   geode::GeodeEmbedConfig config;
@@ -60,7 +63,7 @@ TEST(GeodeEmbed, CreateFromExternalSucceeds) {
 /// host at a point the host never chose, and the symptom would surface in the host's own code
 /// rather than in Donner's.
 TEST(GeodeEmbed, DestroyingAnEmbeddedContextLeavesTheHostDeviceRendering) {
-  std::shared_ptr<geode::GeodeDevice> host = geode::GeodeDevice::CreateHeadless();
+  std::shared_ptr<geode::GeodeDevice> host = geode::CreateTransitionalAdapterContext();
   ASSERT_NE(host, nullptr);
 
   geode::GeodeEmbedConfig config;
@@ -113,7 +116,7 @@ protected:
     static auto device = [] {
       // Create a real headless device, then wrap it via the embedded path so
       // all pipelines are created with the embedded factory.
-      auto headless = geode::GeodeDevice::CreateHeadless();
+      auto headless = geode::CreateTransitionalAdapterContext();
       if (!headless) {
         return std::shared_ptr<geode::GeodeDevice>();
       }
@@ -309,7 +312,7 @@ TEST_F(GeodeEmbedTest, ClearTargetTextureRevertsToInternal) {
 TEST_F(GeodeEmbedTest, ATargetOfAnotherDeviceIsRefused) {
   auto device = sharedEmbedDevice();
   ASSERT_NE(device, nullptr);
-  const std::unique_ptr<geode::GeodeDevice> elsewhere = geode::GeodeDevice::CreateHeadless();
+  const std::unique_ptr<geode::GeodeDevice> elsewhere = geode::CreateTransitionalAdapterContext();
   ASSERT_THAT(elsewhere, testing::NotNull())
       << "Failed to create a second headless wgpu device. Check driver availability.";
 

@@ -297,6 +297,17 @@ std::shared_ptr<geode::GeodeDevice> SharedGeodeDevice() {
   return device;
 }
 
+/// Skips the current case, naming why, when \p device does not render through the transitional
+/// adapter: the UI renderer imports and registers textures through that adapter's wgpu objects,
+/// so a case that installs it exercises the adapter.
+#define SKIP_UNLESS_UI_RENDERER_CAN_INSTALL(device)                                     \
+  do {                                                                                  \
+    if (!(device)->hasTransitionalAdapter()) {                                          \
+      GTEST_SKIP() << "installs the UI renderer, which registers textures through the " \
+                      "transitional adapter";                                           \
+    }                                                                                   \
+  } while (false)
+
 std::unique_ptr<ImGuiRuntimeRenderer> InstallTestUiRenderer(
     geode::GeodeWgpuAdapterDevice& device, std::unique_ptr<UiTextureRegistry>* registry) {
   *registry = std::make_unique<UiTextureRegistry>(device);
@@ -425,7 +436,7 @@ TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesBordersAcrossStagingChunkBo
   ASSERT_NE(device, nullptr);
   GlTextureCache cache(device);
   const std::uint64_t createsBefore = device->lifetimeTextureCreates();
-  const uint64_t submittedBefore = device->adapterDevice().lastSubmittedSerial();
+  const uint64_t submittedBefore = device->runtimeDevice().lastSubmittedSerial();
   geode::GeodeCounters counters;
   device->setCounters(&counters);
 
@@ -437,7 +448,7 @@ TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesBordersAcrossStagingChunkBo
   ASSERT_NE(snapshot, nullptr);
   EXPECT_THAT(snapshot->allocationDimensions(), testing::Eq(Vector2i(512, 1024)));
   EXPECT_THAT(device->lifetimeTextureCreates(), testing::Eq(createsBefore + 1u));
-  EXPECT_THAT(device->adapterDevice().lastSubmittedSerial(), testing::Eq(submittedBefore));
+  EXPECT_THAT(device->runtimeDevice().lastSubmittedSerial(), testing::Eq(submittedBefore));
   EXPECT_THAT(counters.textureCreates, testing::Eq(1u));
   EXPECT_THAT(counters.textureWriteBytes, testing::Eq(512u * 1024u * 4u));
   EXPECT_THAT(counters.submits, testing::Eq(0u));
@@ -544,6 +555,7 @@ RenderResult::CompositedPreview SingleSnapshotTilePreview(
 TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
+  SKIP_UNLESS_UI_RENDERER_CAN_INSTALL(device);
   // Start from an empty mailbox, so backing released by earlier cases is not counted here.
   device->drainDeferredTextureBackings();
   int firstDestructionCount = 0;
@@ -614,9 +626,10 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
 }
 
 TEST(GlTextureCacheTest, RegisteredBackingSurvivesUntilItsExactRetirementIsReleased) {
-  ImGuiContext* context = ImGui::CreateContext();
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
+  SKIP_UNLESS_UI_RENDERER_CAN_INSTALL(device);
+  ImGuiContext* context = ImGui::CreateContext();
   geode::GeodeWgpuAdapterDevice& runtimeDevice = device->adapterDevice();
   UiTextureRegistry registry(runtimeDevice);
   gpu::Result<std::unique_ptr<ImGuiRuntimeRenderer>> created =
@@ -651,9 +664,10 @@ TEST(GlTextureCacheTest, RegisteredBackingSurvivesUntilItsExactRetirementIsRelea
 }
 
 TEST(GlTextureCacheTest, RegisteredBackingIsDestroyedIfRendererUninstallsBeforeCache) {
-  ImGuiContext* context = ImGui::CreateContext();
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
+  SKIP_UNLESS_UI_RENDERER_CAN_INSTALL(device);
+  ImGuiContext* context = ImGui::CreateContext();
   std::unique_ptr<UiTextureRegistry> registry;
   std::unique_ptr<ImGuiRuntimeRenderer> renderer =
       InstallTestUiRenderer(device->adapterDevice(), &registry);
@@ -674,6 +688,7 @@ TEST(GlTextureCacheTest, RegisteredBackingIsDestroyedIfRendererUninstallsBeforeC
 TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures) {
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
+  SKIP_UNLESS_UI_RENDERER_CAN_INSTALL(device);
   ImGuiContext* context = ImGui::CreateContext();
   std::unique_ptr<UiTextureRegistry> registry;
   std::unique_ptr<ImGuiRuntimeRenderer> renderer =

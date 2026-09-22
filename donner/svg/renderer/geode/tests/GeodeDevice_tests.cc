@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/DeviceLost.h"
@@ -25,6 +26,7 @@
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 #if defined(__APPLE__)
@@ -83,22 +85,31 @@ TEST(GeodeCallbackState, CallbackOwnsStateAfterCallerReturns) {
   EXPECT_TRUE(weakState.expired());
 }
 
-/// Smoke test: can we instantiate a headless Dawn device at all?
+/// Smoke test: can we instantiate a headless device at all, on the backend the process selects?
 /// If this fails, the entire Geode backend is non-functional.
 TEST(GeodeDevice, CreateHeadlessSucceeds) {
   auto device = GeodeDevice::CreateHeadless();
-  ASSERT_NE(device, nullptr) << "Failed to create headless Dawn device. Check driver availability "
+  ASSERT_NE(device, nullptr) << "Failed to create a headless device. Check driver availability "
                                 "(Metal on macOS, Vulkan/SwiftShader on Linux).";
+
+  EXPECT_TRUE(device->physicalDeviceOwner()->root().hasBackendDevice());
+}
+
+/// A transitional root holds the wgpu objects every runtime device over it records against.
+TEST(GeodeDevice, ATransitionalRootHoldsTheWgpuObjectsItSelected) {
+  auto device = CreateTransitionalAdapterContext();
+  ASSERT_NE(device, nullptr) << "no wgpu adapter is available on this host";
 
   EXPECT_TRUE(static_cast<bool>(device->adapterDevice().root().device()));
   EXPECT_TRUE(static_cast<bool>(device->adapterDevice().root().queue()));
   EXPECT_TRUE(static_cast<bool>(device->adapterDevice().root().adapter()));
 }
 
+/// The device-lost callback is a wgpu registration, so this is a transitional-adapter case.
 TEST(GeodeDevice, DestructionConsumesDeviceLostCallbackState) {
   const std::size_t before = GeodeDevice::outstandingDeviceLostCallbacksForTesting();
   {
-    auto device = GeodeDevice::CreateHeadless();
+    auto device = CreateTransitionalAdapterContext();
     ASSERT_NE(device, nullptr);
     EXPECT_EQ(GeodeDevice::outstandingDeviceLostCallbacksForTesting(), before + 1u);
   }
@@ -147,9 +158,10 @@ constexpr auto kEmbedConfigConflictArms = std::to_array<EmbedConfigConflictArm>(
 /// instance, or loss flag that does not belong to the device it renders on - so creation is
 /// refused for each field independently, and accepted when the repeated roots agree.
 TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingRoots) {
-  auto ownerContext = GeodeDevice::CreateHeadless();
+  // The conflicting roots are wgpu objects, so both contexts are transitional-adapter contexts.
+  auto ownerContext = CreateTransitionalAdapterContext();
   ASSERT_NE(ownerContext, nullptr);
-  auto foreignContext = GeodeDevice::CreateHeadless();
+  auto foreignContext = CreateTransitionalAdapterContext();
   ASSERT_NE(foreignContext, nullptr);
   // Each root the arms below borrow has to be non-null, because the comparison skips a field the
   // config leaves empty. A headless context imported from the browser leaves its adapter on the
@@ -184,7 +196,7 @@ TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingRoots) {
 }
 
 TEST(GeodeDevice, LegacyBorrowedAggregateConfigurationRemainsSupported) {
-  auto ownerContext = GeodeDevice::CreateHeadless();
+  auto ownerContext = CreateTransitionalAdapterContext();
   ASSERT_NE(ownerContext, nullptr);
 
   GeodeEmbedConfig config{ownerContext->adapterDevice().root().instance(),
@@ -197,7 +209,7 @@ TEST(GeodeDevice, LegacyBorrowedAggregateConfigurationRemainsSupported) {
 }
 
 TEST(GeodeDevice, SharedPhysicalOwnerRejectsAlreadyLostDevice) {
-  auto ownerContext = GeodeDevice::CreateHeadless();
+  auto ownerContext = CreateTransitionalAdapterContext();
   ASSERT_NE(ownerContext, nullptr);
 
   auto lostState = std::make_shared<GeodeDeviceLostState>();
@@ -220,39 +232,35 @@ TEST(GeodeDevice, SharedPhysicalOwnerRejectsAlreadyLostDevice) {
   borrowedContext.reset();
 }
 
-/// Can we allocate an offscreen render-target texture?
-TEST(GeodeDevice, CanCreateRenderTargetTexture) {
+/// An offscreen render target holds exactly the texels written to it. Every texel of a 64x64
+/// pattern comes back through a mapped readback buffer, so the allocation has the extent and format
+/// it was described with, and the readback buffer a snapshot readback allocates can be created and
+/// mapped, on the backend the process selects.
+TEST(GeodeDevice, ARenderTargetRoundTripsTheTexelsWrittenToIt) {
   auto device = GeodeDevice::CreateHeadless();
   ASSERT_NE(device, nullptr);
 
-  wgpu::TextureDescriptor desc = {};
-  desc.label = wgpuLabel("TestRenderTarget");
-  desc.size = {64, 64, 1};
-  desc.format = wgpu::TextureFormat::RGBA8Unorm;
-  desc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
-  desc.mipLevelCount = 1;
-  desc.sampleCount = 1;
-  desc.dimension = wgpu::TextureDimension::_2D;
+  gpu::Device& runtime = device->runtimeDevice();
+  constexpr uint32_t kSize = 64;
+  const gpu::Texture target = gpu::GetResultOrFail(runtime.createTexture(
+      gpu::TextureDescriptor{"TestRenderTarget",
+                             {kSize, kSize},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
+                                 gpu::TextureUsage::CopyDst}));
+  std::vector<uint8_t> written(static_cast<size_t>(kSize) * kSize * 4u);
+  for (size_t i = 0; i < written.size(); ++i) {
+    written[i] = static_cast<uint8_t>((i * 7u + 3u) & 0xFFu);
+  }
+  ASSERT_THAT(
+      runtime.writeTexture(target, written, gpu::TexelCopyBufferLayout{0, kSize * 4u, kSize},
+                           gpu::Extent2d{kSize, kSize}),
+      gpu::IsOk());
 
-  wgpu::Texture texture = device->adapterDevice().root().device().createTexture(desc);
-  ASSERT_TRUE(static_cast<bool>(texture));
-  EXPECT_EQ(texture.getWidth(), 64u);
-  EXPECT_EQ(texture.getHeight(), 64u);
-}
-
-/// Can we allocate a buffer for readback?
-TEST(GeodeDevice, CanCreateReadbackBuffer) {
-  auto device = GeodeDevice::CreateHeadless();
-  ASSERT_NE(device, nullptr);
-
-  wgpu::BufferDescriptor desc = {};
-  desc.label = wgpuLabel("TestReadbackBuffer");
-  desc.size = 1024;
-  desc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-
-  wgpu::Buffer buffer = device->adapterDevice().root().device().createBuffer(desc);
-  ASSERT_TRUE(static_cast<bool>(buffer));
-  EXPECT_EQ(buffer.getSize(), 1024u);
+  const gpu::Result<std::vector<uint8_t>> readBack =
+      ReadTexturePixels(runtime, target, gpu::Extent2d{kSize, kSize});
+  ASSERT_THAT(readBack, gpu::HasResult());
+  EXPECT_THAT(readBack.result(), Eq(written));
 }
 
 /// End-to-end: clear a texture to red and read back the first pixel.
@@ -260,104 +268,33 @@ TEST(GeodeDevice, CanCreateReadbackBuffer) {
 TEST(GeodeDevice, CanExecuteClearAndReadback) {
   auto geodeDevice = GeodeDevice::CreateHeadless();
   ASSERT_NE(geodeDevice, nullptr);
-
-  const wgpu::Device& device = geodeDevice->adapterDevice().root().device();
-  const wgpu::Queue& queue = geodeDevice->adapterDevice().root().queue();
+  gpu::Device& runtime = geodeDevice->runtimeDevice();
 
   constexpr uint32_t kSize = 4;  // Small texture for a quick test.
+  const gpu::Texture target = gpu::GetResultOrFail(runtime.createTexture(
+      gpu::TextureDescriptor{"ClearTarget",
+                             {kSize, kSize},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc}));
+  const gpu::TextureView targetView = gpu::GetResultOrFail(
+      runtime.createTextureView(target, gpu::TextureViewDescriptor{"ClearTargetView"}));
 
-  // Create render target.
-  wgpu::TextureDescriptor texDesc = {};
-  texDesc.size = {kSize, kSize, 1};
-  texDesc.format = wgpu::TextureFormat::RGBA8Unorm;
-  texDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
-  texDesc.mipLevelCount = 1;
-  texDesc.sampleCount = 1;
-  texDesc.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture target = device.createTexture(texDesc);
-  ASSERT_TRUE(static_cast<bool>(target));
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(runtime.createCommandEncoder());
+  gpu::RenderPassEncoder* pass =
+      gpu::GetResultOrFail(encoder->beginRenderPass(gpu::RenderPassDescriptor{
+          "ClearToRed",
+          {gpu::RenderPassColorAttachment{
+              targetView, gpu::LoadOp::Clear, gpu::StoreOp::Store, {1.0, 0.0, 0.0, 1.0}}}}));
+  ASSERT_THAT(pass->end(), gpu::IsOk());
+  ASSERT_THAT(runtime.submit(gpu::GetResultOrFail(encoder->finish())), gpu::HasResult());
 
-  // Create readback buffer. Bytes per row must be a multiple of 256 per WebGPU spec.
-  constexpr uint32_t kBytesPerRow = 256;  // Padded from kSize*4=16.
-  constexpr uint32_t kBufferSize = kBytesPerRow * kSize;
-  wgpu::BufferDescriptor bufDesc = {};
-  bufDesc.size = kBufferSize;
-  bufDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  wgpu::Buffer readback = device.createBuffer(bufDesc);
-
-  // Encode: clear to red, then copy to buffer.
-  wgpu::CommandEncoder encoder = device.createCommandEncoder();
-
-  wgpu::RenderPassColorAttachment colorAttachment = {};
-  colorAttachment.view = target.createView();
-  colorAttachment.loadOp = wgpu::LoadOp::Clear;
-  colorAttachment.storeOp = wgpu::StoreOp::Store;
-  colorAttachment.clearValue = {1.0, 0.0, 0.0, 1.0};        // Red.
-  colorAttachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;  // Dawn requires this on 2D views.
-
-  wgpu::RenderPassDescriptor passDesc = {};
-  passDesc.colorAttachmentCount = 1;
-  passDesc.colorAttachments = &colorAttachment;
-
-  wgpu::RenderPassEncoder pass = encoder.beginRenderPass(passDesc);
-  pass.end();
-
-  wgpu::TexelCopyTextureInfo src = {};
-  src.texture = target;
-  src.mipLevel = 0;
-  src.origin = {0, 0, 0};
-
-  wgpu::TexelCopyBufferInfo dst = {};
-  dst.buffer = readback;
-  dst.layout.bytesPerRow = kBytesPerRow;
-  dst.layout.rowsPerImage = kSize;
-
-  wgpu::Extent3D copySize = {kSize, kSize, 1};
-  encoder.copyTextureToBuffer(src, dst, copySize);
-
-  wgpu::CommandBuffer commands = encoder.finish();
-  queue.submit(1, &commands);
-
-  // Map the buffer synchronously. wgpu-native's `mapAsync` only accepts a
-  // `BufferMapCallbackInfo` with a raw C callback + void* userdata, so we
-  // hand the done flag through userdata1 and spin on `device.poll(true)`
-  // until wgpu-native drains the pending callback.
-  struct MapState {
-    std::atomic<bool> done = false;
-    std::atomic<bool> ok = false;
-  };
-  auto mapState = std::make_shared<MapState>();
-  wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
-  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1,
-                      void* /*userdata2*/) {
-    const std::shared_ptr<MapState> state = takeWgpuCallbackState<MapState>(userdata1);
-    state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
-    state->done.store(true, std::memory_order_release);
-    if (!state->ok.load(std::memory_order_relaxed)) {
-      (void)message;  // Keep the message parameter named for future logging.
-    }
-  };
-  mapCb.userdata1 = retainWgpuCallbackState(mapState);
-  mapCb.userdata2 = nullptr;
-  readback.mapAsync(wgpu::MapMode::Read, 0, kBufferSize, mapCb);
-
-  const GpuWaitResult waitResult = BoundedGpuWait(
-      [&] {
-        device.poll(false, nullptr);
-        return mapState->done.load(std::memory_order_acquire);
-      },
-      kDefaultGpuWaitTimeout);
-  ASSERT_EQ(waitResult, GpuWaitResult::Complete) << "buffer map wait timed out";
-  EXPECT_TRUE(mapState->ok.load(std::memory_order_relaxed)) << "buffer map failed";
-
-  const uint8_t* pixels = static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBufferSize));
-  ASSERT_NE(pixels, nullptr);
-
-  // First pixel should be red (255, 0, 0, 255).
-  const std::array<uint8_t, 4> firstPixel = {pixels[0], pixels[1], pixels[2], pixels[3]};
+  const gpu::Result<std::vector<uint8_t>> pixels =
+      ReadTexturePixels(runtime, target, gpu::Extent2d{kSize, kSize});
+  ASSERT_THAT(pixels, gpu::HasResult());
+  const std::vector<uint8_t>& bytes = pixels.result();
+  const std::array<uint8_t, 4> firstPixel = {bytes[0], bytes[1], bytes[2], bytes[3]};
   EXPECT_THAT(firstPixel, RgbaEq(255, 0, 0, 255));
-
-  readback.unmap();
 }
 
 /// `runtimeDevice()` and `adapterDevice()` are two names for one object: the second only widens
@@ -366,7 +303,7 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
 /// remaining raw callers would validate them against another, so a handle would go foreign for no
 /// visible reason. Pin the identity while both accessors exist.
 TEST(GeodeDevice, RuntimeAndAdapterAccessorsNameOneDevice) {
-  auto device = GeodeDevice::CreateHeadless();
+  auto device = CreateTransitionalAdapterContext();
   ASSERT_NE(device, nullptr);
 
   EXPECT_THAT(device->runtimeDevice().deviceId(), Eq(device->adapterDevice().deviceId()));
@@ -510,7 +447,7 @@ constexpr double kSerialWaitBudgetSeconds = 0.25;
 /// caller its own full budget on a device that can no longer complete anything, and leaves a
 /// renderer unable to tell "slow" from "gone".
 TEST(GeodeDeviceLost, RuntimeSerialWaitTimeoutDeclaresLossWithWaitAttribution) {
-  auto device = GeodeDevice::CreateHeadless();
+  auto device = CreateTransitionalAdapterContext();
   ASSERT_NE(device, nullptr);
   ASSERT_FALSE(device->isDeviceLost());
 
@@ -543,7 +480,7 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitTimeoutDeclaresLossWithWaitAttribution) {
 /// nothing: declaring a permanent loss from it would fail every later caller on a device that is
 /// merely idle. The wait still ends by its own deadline.
 TEST(GeodeDeviceLost, RuntimeSerialWaitWhosePollsNeverBlockKeepsItsBudgetAndDeclaresNothing) {
-  auto device = GeodeDevice::CreateHeadless();
+  auto device = CreateTransitionalAdapterContext();
   ASSERT_NE(device, nullptr);
   ASSERT_FALSE(device->isDeviceLost());
 
@@ -578,7 +515,7 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitWhosePollsNeverBlockKeepsItsBudgetAndDecl
 /// lowered to one poll that costs twice the budget, which makes the two coincide deterministically.
 TEST(GeodeDeviceLost,
      RuntimeSerialWaitWhoseLastPollSpendsItsBudgetDeclaresLossWithWaitAttribution) {
-  auto device = GeodeDevice::CreateHeadless();
+  auto device = CreateTransitionalAdapterContext();
   ASSERT_NE(device, nullptr);
   ASSERT_FALSE(device->isDeviceLost());
 
@@ -611,7 +548,7 @@ TEST(GeodeDeviceLost,
 /// completion is held back and released from another thread well after the wait's poll bound is
 /// spent, which makes that interleaving deterministic.
 TEST(GeodeDeviceLost, RuntimeSerialWaitSeesACompletionAnotherThreadDeliversLate) {
-  auto device = GeodeDevice::CreateHeadless();
+  auto device = CreateTransitionalAdapterContext();
   ASSERT_NE(device, nullptr);
 
   GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
@@ -642,7 +579,7 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitSeesACompletionAnotherThreadDeliversLate)
 /// A budget of zero is a question about what is already known rather than a wait, so its negative
 /// answer says nothing about the device's health and must not declare it lost.
 TEST(GeodeDeviceLost, RuntimeSerialWaitWithNoBudgetLeavesTheDeviceHealthy) {
-  auto device = GeodeDevice::CreateHeadless();
+  auto device = CreateTransitionalAdapterContext();
   ASSERT_NE(device, nullptr);
 
   GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
@@ -666,7 +603,7 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitWithNoBudgetLeavesTheDeviceHealthy) {
 /// Declaring the root lost from it would make every one of them refuse to present, map or wait,
 /// and would leak the whole root, because a root declared lost is deliberately not released.
 TEST(GeodeDeviceLost, ATeardownDrainThatOverrunsDoesNotDeclareTheRootLost) {
-  auto context = GeodeDevice::CreateHeadless();
+  auto context = CreateTransitionalAdapterContext();
   ASSERT_NE(context, nullptr);
   ASSERT_FALSE(context->isDeviceLost());
 
@@ -749,9 +686,7 @@ TEST(GeodeDeviceLost, WaitForQueueIdleCompletesOnHealthyDevice) {
   ASSERT_NE(device, nullptr);
 
   // Submit a trivial command buffer so the wait has real work to drain.
-  wgpu::CommandEncoder encoder = device->adapterDevice().root().device().createCommandEncoder();
-  wgpu::CommandBuffer cmd = encoder.finish();
-  device->adapterDevice().root().queue().submit(1, &cmd);
+  ASSERT_THAT(SubmitEmptyCommandBuffer(device->runtimeDevice()), testing::Gt(0u));
 
   EXPECT_EQ(device->waitForQueueIdle(), GpuWaitResult::Complete);
 }
@@ -765,9 +700,7 @@ TEST(GeodeDeviceLost, TeardownAfterLossSkipsGpuWaits) {
   auto device = GeodeDevice::CreateHeadless();
   ASSERT_NE(device, nullptr);
 
-  wgpu::CommandEncoder encoder = device->adapterDevice().root().device().createCommandEncoder();
-  wgpu::CommandBuffer cmd = encoder.finish();
-  device->adapterDevice().root().queue().submit(1, &cmd);
+  ASSERT_THAT(SubmitEmptyCommandBuffer(device->runtimeDevice()), testing::Gt(0u));
   device->markDeviceLost("test-injected loss before teardown");
 
   const auto start = std::chrono::steady_clock::now();
@@ -781,7 +714,7 @@ TEST(GeodeDeviceLost, TeardownAfterLossSkipsGpuWaits) {
 /// the wrapper, and a loss marked through the wrapper is visible to the
 /// embedder: the flag converges both directions.
 TEST(GeodeDeviceLost, ExternalConfigSharesLostState) {
-  auto headless = GeodeDevice::CreateHeadless();
+  auto headless = CreateTransitionalAdapterContext();
   ASSERT_NE(headless, nullptr);
 
   auto lostState = std::make_shared<GeodeDeviceLostState>();

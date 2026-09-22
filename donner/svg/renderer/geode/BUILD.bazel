@@ -433,12 +433,30 @@ donner_cc_library(
            native_shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES),
 )
 
+# Test support: a context over a backend a test names, and texture readback through the runtime.
+donner_cc_library(
+    name = "geode_test_contexts",
+    testonly = 1,
+    srcs = ["tests/GeodeTestContexts.cc"],
+    hdrs = ["tests/GeodeTestContexts.h"],
+    target_compatible_with = _GEODE_ONLY,
+    visibility = [
+        "//donner/gpu:__subpackages__",
+        "//donner/svg/renderer:__subpackages__",
+    ],
+    deps = [
+        ":geode_device",
+        "//donner/gpu",
+    ],
+)
+
 donner_cc_test(
     name = "geode_wgpu_adapter_device_tests_impl",
     srcs = ["tests/GeodeWgpuAdapterDevice_tests.cc"],
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
+        ":geode_test_contexts",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu",
         "//donner/gpu:float_texture_slice",
@@ -468,6 +486,7 @@ donner_cc_test(
     deps = [
         ":geode_device",
         ":geode_gpu_wait",
+        ":geode_test_contexts",
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
@@ -536,6 +555,7 @@ donner_cc_test(
                ":geode_device",
                ":geode_gpu_wait",
                ":geode_shaders",
+               ":geode_test_contexts",
                ":geode_wgpu_util",
                "//donner/base:gtest_timeout_main",
                "//donner/editor/tests:bitmap_golden_compare",
@@ -645,10 +665,13 @@ donner_cc_test(
         ":geode_handle_retirement",
         ":geode_path_cache_component",
         ":geode_resource_budget",
+        ":geode_test_contexts",
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/css",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/resources:image_resource",
     ],
@@ -793,6 +816,7 @@ donner_cc_test(
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
+        ":geode_test_contexts",
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
@@ -877,6 +901,7 @@ donner_cc_test(
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
+        ":geode_test_contexts",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/svg",

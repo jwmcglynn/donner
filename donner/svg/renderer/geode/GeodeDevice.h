@@ -858,9 +858,9 @@ public:
 
   /// This context's GPU runtime device: the owner of its handle tables, submission serials, and
   /// resource retirement. Renderer services that need only the runtime contract take this instead
-  /// of naming the concrete backend type. Today it is the same object \ref adapterDevice returns,
-  /// which `GeodeDevice_tests.RuntimeAndAdapterAccessorsNameOneDevice` pins while both accessors
-  /// exist.
+  /// of naming the concrete backend type. On the transitional adapter it is the same object
+  /// \ref adapterDevice returns, which `GeodeDevice_tests.RuntimeAndAdapterAccessorsNameOneDevice`
+  /// pins while both accessors exist; on a native backend it is that backend's device.
   gpu::Device& runtimeDevice() const UTILS_LIFETIME_BOUND;
 
   /// Whether this context renders through the transitional adapter, so \ref adapterDevice names

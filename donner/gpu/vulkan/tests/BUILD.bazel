@@ -89,6 +89,7 @@ donner_cc_test(
         "//donner/svg/renderer/geode:geo_encoder",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_path_encoder",
+        "//donner/svg/renderer/geode:geode_test_contexts",
         "//donner/svg/renderer/geode:geode_wgpu_util",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],

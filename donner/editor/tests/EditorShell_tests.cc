@@ -2003,8 +2003,8 @@ TEST(EditorShellTest, UiRuntimeProducersUseFramebufferDevice) {
   const std::shared_ptr<geode::GeodeDevice> framebuffer = window.geodeFramebufferDevice();
   ASSERT_NE(primary, nullptr);
   ASSERT_NE(framebuffer, nullptr);
-  const std::uint64_t primaryDeviceId = primary->adapterDevice().deviceId();
-  const std::uint64_t framebufferDeviceId = framebuffer->adapterDevice().deviceId();
+  const std::uint64_t primaryDeviceId = primary->runtimeDevice().deviceId();
+  const std::uint64_t framebufferDeviceId = framebuffer->runtimeDevice().deviceId();
   ASSERT_NE(primaryDeviceId, framebufferDeviceId);
 
   EditorShell shell(window, OptionsWithSource(kInitialSvg));

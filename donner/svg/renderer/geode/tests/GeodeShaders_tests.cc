@@ -25,6 +25,7 @@
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 
 namespace donner::geode {
 namespace {
@@ -55,19 +56,19 @@ gpu::Result<std::vector<uint8_t>> ReadSlugBuffer(gpu::Device& device, const gpu:
 TEST(GeodeShaders, SlugFillReferenceEvenOdd) {
   auto device = GeodeDevice::CreateHeadless();
   ASSERT_NE(device, nullptr);
-  auto& adapter = device->adapterDevice();
+  gpu::Device& runtime = device->runtimeDevice();
   gpu::tests::CheckSlugFill(
-      adapter, gpu::shader::programs::SlugFillShader(),
-      [&](const gpu::Buffer& b) { return ReadSlugBuffer(adapter, b); },
+      runtime, gpu::shader::programs::SlugFillShader(),
+      [&](const gpu::Buffer& b) { return ReadSlugBuffer(runtime, b); },
       gpu::tests::slug_fill_slice::Case::EvenOdd);
 }
 TEST(GeodeShaders, SlugFillReferenceLinearGradient) {
   auto device = GeodeDevice::CreateHeadless();
   ASSERT_NE(device, nullptr);
-  auto& adapter = device->adapterDevice();
+  gpu::Device& runtime = device->runtimeDevice();
   gpu::tests::CheckSlugFill(
-      adapter, gpu::shader::programs::SlugFillShader(),
-      [&](const gpu::Buffer& b) { return ReadSlugBuffer(adapter, b); },
+      runtime, gpu::shader::programs::SlugFillShader(),
+      [&](const gpu::Buffer& b) { return ReadSlugBuffer(runtime, b); },
       gpu::tests::slug_fill_slice::Case::LinearGradient);
 }
 
@@ -79,7 +80,7 @@ TEST(GeodeShaders, SlugFillCompiles) {
   auto geodeDevice = GeodeDevice::CreateHeadless();
   ASSERT_NE(geodeDevice, nullptr);
 
-  gpu::Result<gpu::ShaderModule> module = createSlugFillShader(geodeDevice->adapterDevice());
+  gpu::Result<gpu::ShaderModule> module = createSlugFillShader(geodeDevice->runtimeDevice());
   ASSERT_FALSE(module.hasError()) << "Slug fill shader failed to compile: " << module.error();
 
   // Note: Dawn's shader compilation is asynchronous in principle but for
@@ -93,7 +94,7 @@ TEST(GeodeShaders, SlugGradientCompiles) {
   auto geodeDevice = GeodeDevice::CreateHeadless();
   ASSERT_NE(geodeDevice, nullptr);
 
-  gpu::Result<gpu::ShaderModule> module = createSlugGradientShader(geodeDevice->adapterDevice());
+  gpu::Result<gpu::ShaderModule> module = createSlugGradientShader(geodeDevice->runtimeDevice());
   ASSERT_FALSE(module.hasError()) << "Slug gradient shader failed to compile: " << module.error();
 }
 
@@ -102,7 +103,7 @@ TEST(GeodeShaders, SlugMaskCompiles) {
   auto geodeDevice = GeodeDevice::CreateHeadless();
   ASSERT_NE(geodeDevice, nullptr);
 
-  gpu::Result<gpu::ShaderModule> module = createSlugMaskShader(geodeDevice->adapterDevice());
+  gpu::Result<gpu::ShaderModule> module = createSlugMaskShader(geodeDevice->runtimeDevice());
   ASSERT_FALSE(module.hasError()) << "Slug mask shader failed to compile: " << module.error();
 }
 
@@ -111,7 +112,7 @@ TEST(GeodeShaders, ImageBlitCompiles) {
   auto geodeDevice = GeodeDevice::CreateHeadless();
   ASSERT_NE(geodeDevice, nullptr);
 
-  gpu::Result<gpu::ShaderModule> module = createImageBlitShader(geodeDevice->adapterDevice());
+  gpu::Result<gpu::ShaderModule> module = createImageBlitShader(geodeDevice->runtimeDevice());
   ASSERT_FALSE(module.hasError()) << "Image blit shader failed to compile: " << module.error();
 }
 
@@ -139,8 +140,10 @@ class SlugEndpointTest : public testing::Test {
 protected:
   void SetUp() override { ASSERT_THAT(device(), testing::NotNull()); }
 
+  /// The probes are hand-assembled WGSL compiled and dispatched through the wgpu device, so the
+  /// fixture selects the transitional adapter by name.
   static std::shared_ptr<GeodeDevice> device() {
-    static std::shared_ptr<GeodeDevice> result = GeodeDevice::CreateHeadless();
+    static std::shared_ptr<GeodeDevice> result = CreateTransitionalAdapterContext();
     return result;
   }
 

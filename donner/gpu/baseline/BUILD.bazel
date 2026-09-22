@@ -82,6 +82,7 @@ donner_cc_library(
         "//donner/svg/renderer/geode:geo_encoder",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_gpu_wait",
+        "//donner/svg/renderer/geode:geode_test_contexts",
         "//donner/svg/renderer/geode:geode_wgpu_util",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],

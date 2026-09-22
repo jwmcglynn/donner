@@ -47,6 +47,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::svg {
@@ -162,9 +163,10 @@ TEST_F(GeodeSharedDeviceFrameTest, ContextsOverOneRootKeepTheirRuntimeStateApart
 /// and waiting its own full budget for each of it.
 TEST_F(GeodeSharedDeviceFrameTest, ALossOneContextsWaitObservesIsSharedByTheOthers) {
   // A private root: this case declares the physical device lost, which is sticky, so it must not
-  // reach the shared device the rest of the file renders through.
-  std::unique_ptr<geode::GeodeDevice> root = geode::GeodeDevice::CreateHeadless();
-  ASSERT_NE(root, nullptr) << "GeodeDevice::CreateHeadless failed";
+  // reach the shared device the rest of the file renders through. It holds work through the
+  // transitional adapter's test seam, so it selects that backend by name.
+  std::unique_ptr<geode::GeodeDevice> root = geode::CreateTransitionalAdapterContext();
+  ASSERT_NE(root, nullptr) << "no wgpu adapter is available on this host";
   std::unique_ptr<geode::GeodeDevice> sibling = siblingContextOf(*root);
   ASSERT_NE(sibling, nullptr);
   ASSERT_FALSE(root->isDeviceLost());
