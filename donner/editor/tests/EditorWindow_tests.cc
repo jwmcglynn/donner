@@ -370,14 +370,14 @@ public:
       return;
     }
     // A texture of the drawing device is registered directly; one rendered on another device is
-    // registered here through its owner, which is what makes it nameable on this one.
+    // registered here from the export its producer took, which is what makes it nameable on this
+    // one.
     if (runtimeTexture->deviceId() != device.deviceId()) {
-      if (geodeTexture.owningDevice() == nullptr) {
+      const gpu::TextureExport* exported = geodeTexture.textureExport();
+      if (exported == nullptr) {
         return;
       }
-      gpu::Result<gpu::Texture> imported =
-          static_cast<geode::GeodeWgpuAdapterDevice&>(device).importTextureFrom(
-              geodeTexture.owningDevice()->adapterDevice(), *runtimeTexture);
+      gpu::Result<gpu::Texture> imported = geode::RegisterOrderedTexture(device, *exported);
       if (imported.hasError()) {
         return;
       }

@@ -549,6 +549,30 @@ void GeodeDevice::finishSnapshotCapture(GeodeDevice& context) {
   readbackPoolBytes_.store(poolBytes, std::memory_order_relaxed);
 }
 
+gpu::Result<gpu::Texture> RegisterOrderedTexture(gpu::Device& consumer,
+                                                 const gpu::TextureExport& source) {
+  gpu::Result<gpu::Texture> registered = consumer.registerTexture(source);
+  if (registered.hasError()) {
+    return registered;
+  }
+  const auto waitStart = std::chrono::steady_clock::now();
+  if (consumer.waitForTextureSource(
+          registered.result(), std::chrono::duration<double>(kDefaultGpuWaitTimeout).count())) {
+    return registered;
+  }
+  if (consumer.isLost()) {
+    return gpu::GpuError{gpu::GpuErrorType::DeviceLost,
+                         "the device producing a registered texture is lost"};
+  }
+  consumer.markLostAfterWaitTimeout(
+      GpuWaitSite::QueueIdle,
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                            waitStart),
+      "the work producing a registered texture did not complete within the bounded wait");
+  return gpu::GpuError{gpu::GpuErrorType::DeviceLost,
+                       "the work producing a registered texture did not complete"};
+}
+
 namespace {
 /// Process-wide count of CreateHeadless calls, for tests that pin device
 /// sharing. Monotonic; never reset.

@@ -414,23 +414,6 @@ public:
                                                   gpu::TextureUsage usage);
 
   /**
-   * TEMPORARY (deleted when cross-context snapshot drawing and UI texture registration export on
-   * the producer's thread): exports \p texture from \p owner and registers the export here, in one
-   * call on the caller's thread.
-   *
-   * Equivalent to \ref gpu::Device::exportTexture on \p owner followed by
-   * \ref gpu::Device::registerTexture here, with their refusals: a stale or forged handle fails
-   * with `InvalidHandle`, and an owner over a different backend device or queue with
-   * `DeviceMismatch`. It reads \p owner's table on the caller's thread, so the caller must be the
-   * only thread using \p owner; that is the reason it goes.
-   *
-   * @param owner Adapter that owns \p texture.
-   * @param texture Live texture handle of \p owner.
-   */
-  gpu::Result<gpu::Texture> importTextureFrom(GeodeWgpuAdapterDevice& owner,
-                                              const gpu::Texture& texture);
-
-  /**
    * TEMPORARY escape hatch (deleted with the presentation migration): the public form of this
    * adapter's handle-to-backend resolution, for the presentation call sites that still hand a
    * backend texture to something outside the runtime. Returns a null handle if \p texture does not

@@ -1336,15 +1336,6 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Te
                                  gpu::TextureDescriptor{"externalTexture", size, format, usage});
 }
 
-gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importTextureFrom(GeodeWgpuAdapterDevice& owner,
-                                                                    const gpu::Texture& texture) {
-  gpu::Result<gpu::TextureExport> exported = owner.exportTexture(texture);
-  if (exported.hasError()) {
-    return std::move(exported).error();
-  }
-  return registerTexture(exported.result());
-}
-
 namespace {
 
 /// Address that identifies this adapter in a \ref gpu::BackendDeviceIdentity. Its value differs

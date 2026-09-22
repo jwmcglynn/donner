@@ -88,9 +88,11 @@ public:
   /// Runtime identity of the texture this snapshot names, or null when it names nothing.
   /// The returned handle borrows this snapshot's lifetime and must never be consumed.
   [[nodiscard]] const gpu::Texture* runtimeTexture() const UTILS_LIFETIME_BOUND;
-  /// Device that owns the texture this snapshot names, or null when the snapshot only borrows a
-  /// producer's frame target. A consumer on another device needs this to register the texture.
-  [[nodiscard]] const std::shared_ptr<geode::GeodeDevice>& owningDevice() const { return device_; }
+  /// The export another context registers this snapshot's texture through, taken on the
+  /// producer's thread when the snapshot was adopted, or null when the snapshot only borrows a
+  /// producer's frame target or its backend cannot share textures. Registering it never touches
+  /// the producing device, so a consumer on any thread may use it.
+  [[nodiscard]] const gpu::TextureExport* textureExport() const UTILS_LIFETIME_BOUND;
   /// Identity of the runtime device the named texture belongs to, or zero when this snapshot
   /// names nothing.
   [[nodiscard]] uint64_t deviceId() const;

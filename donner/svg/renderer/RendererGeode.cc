@@ -182,6 +182,10 @@ gpu::Texture RendererGeodeTextureSnapshot::takeRuntimeRegistrationForTesting() {
   return backing_ ? std::move(backing_->runtimeTexture) : gpu::Texture();
 }
 
+const gpu::TextureExport* RendererGeodeTextureSnapshot::textureExport() const {
+  return backing_ != nullptr && backing_->exported.isValid() ? &backing_->exported : nullptr;
+}
+
 uint64_t RendererGeodeTextureSnapshot::deviceId() const {
   const gpu::Texture* runtime = runtimeTexture();
   return runtime != nullptr ? runtime->deviceId() : 0;
@@ -1545,33 +1549,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::unordered_map<const RendererGeodeTextureSnapshot::Backing*, gpu::Texture>
       frameSnapshotImports;
 
-  /**
-   * The texture \p source names, as a texture of this renderer's context: a registration of
-   * \p owner's texture, made the first time the frame draws it and reused for the rest of the
-   * frame. Naming another context's texture is a registration only the transitional adapter
-   * performs so far, so a native context refuses.
-   *
-   * @param owner Context that owns \p source.
-   * @param source Live texture of \p owner.
-   * @param key Snapshot backing the registration is kept under until the frame boundary.
-   * @return The registration, or null to refuse the draw.
-   */
-  const gpu::Texture* registerFrameSnapshotSource(
-      const geode::GeodeDevice& owner, const gpu::Texture& source,
-      const RendererGeodeTextureSnapshot::Backing* key) {
-    const auto found = frameSnapshotImports.find(key);
-    if (found != frameSnapshotImports.end()) {
-      return &found->second;
+  /// This context's registration of another context's snapshot for the rest of the frame, made
+  /// from the export the snapshot took on its producer's thread, or null when it is refused.
+  /// @param key Backing the registration is cached under for the frame.
+  /// @param exported The snapshot's export.
+  const gpu::Texture* registerFrameSnapshot(const RendererGeodeTextureSnapshot::Backing* key,
+                                            const gpu::TextureExport& exported) {
+    auto found = frameSnapshotImports.find(key);
+    if (found == frameSnapshotImports.end()) {
+      gpu::Result<gpu::Texture> registered =
+          geode::RegisterOrderedTexture(device->runtimeDevice(), exported);
+      if (registered.hasError()) {
+        return nullptr;
+      }
+      found = frameSnapshotImports.emplace(key, std::move(registered).result()).first;
     }
-    if (!device->hasTransitionalAdapter() || !owner.hasTransitionalAdapter()) {
-      return nullptr;
-    }
-    gpu::Result<gpu::Texture> imported =
-        device->adapterDevice().importTextureFrom(owner.adapterDevice(), source);
-    if (imported.hasError()) {
-      return nullptr;
-    }
-    return &frameSnapshotImports.emplace(key, std::move(imported).result()).first->second;
+    return &found->second;
   }
 
   /// Opens a runtime view over an already-named texture, valid for the rest of the frame. Views
@@ -6985,8 +6978,8 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
   const gpu::Texture* source = geodeTexture->runtimeTexture();
   UTILS_RELEASE_ASSERT(source != nullptr);
   if (source->deviceId() != impl_->device->runtimeDevice().deviceId()) {
-    source = impl_->registerFrameSnapshotSource(*geodeTexture->device_, *source,
-                                                geodeTexture->backing_.get());
+    source = impl_->registerFrameSnapshot(geodeTexture->backing_.get(),
+                                          geodeTexture->backing_->exported);
     if (source == nullptr) {
       return false;
     }
@@ -8144,7 +8137,9 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureWithContext(
     return {};
   }
   const gpu::Texture source = std::move(registered).result();
-  if (!waitForCaptureSource(context, source, control)) return {};
+  if (!waitForCaptureSource(context, source, control)) {
+    return {};
+  }
   const uint32_t width = static_cast<uint32_t>(dimensions.x);
   const uint32_t height = static_cast<uint32_t>(dimensions.y);
   if (CanUnpremultiplySnapshotOnGpu(descriptor, alphaType)) {

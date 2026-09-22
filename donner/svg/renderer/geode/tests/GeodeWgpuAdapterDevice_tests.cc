@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -554,6 +555,39 @@ TEST_F(GeodeWgpuAdapterDeviceTests, ARegistrationOnTheSharedQueueNeedsNoSourceWa
   const gpu::Texture registered = gpu::GetResultOrFail(
       adapter_->registerTexture(gpu::GetResultOrFail(sibling.exportTexture(owned))));
   EXPECT_THAT(adapter_->waitForTextureSource(registered, 0.0), testing::IsTrue());
+}
+
+/// A consumer registers from an export its owner took on the owner's own thread, and never
+/// reaches into the owner, so the two adapters can each stay on their own thread: the owner keeps
+/// allocating and retiring textures while the consumer registers, orders and drops the one it was
+/// handed. Under the thread sanitizer this is the regression for a consumer that read the owner's
+/// tables while the owner was rendering.
+TEST_F(GeodeWgpuAdapterDeviceTests, RegisteringOnTheConsumersThreadWhileTheOwnerRenders) {
+  const std::unique_ptr<GeodeWgpuAdapterDevice> ownerDevice = SiblingAdapterOf(*geodeDevice_);
+  ASSERT_THAT(ownerDevice, testing::NotNull());
+  GeodeWgpuAdapterDevice& owner = *ownerDevice;
+  const gpu::TextureDescriptor descriptor{"sharedAcrossThreads",
+                                          {4, 4},
+                                          gpu::TextureFormat::RGBA8Unorm,
+                                          gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc};
+  const gpu::Texture shared = gpu::GetResultOrFail(owner.createTexture(descriptor));
+  const gpu::TextureExport exported = gpu::GetResultOrFail(owner.exportTexture(shared));
+
+  std::atomic<bool> consumerDone{false};
+  std::thread ownerThread([&] {
+    while (!consumerDone.load()) {
+      gpu::Texture churn = gpu::GetResultOrFail(owner.createTexture(descriptor));
+      EXPECT_THAT(owner.destroyTexture(std::move(churn)), gpu::IsOk());
+    }
+  });
+  constexpr int kRegistrations = 200;
+  for (int i = 0; i < kRegistrations; ++i) {
+    gpu::Texture registered = gpu::GetResultOrFail(adapter_->registerTexture(exported));
+    EXPECT_THAT(adapter_->waitForTextureSource(registered, 1.0), testing::IsTrue());
+    EXPECT_THAT(adapter_->destroyTexture(std::move(registered)), gpu::IsOk());
+  }
+  consumerDone.store(true);
+  ownerThread.join();
 }
 
 /// The owner giving back its allocation does not pull it out from under a registration: the

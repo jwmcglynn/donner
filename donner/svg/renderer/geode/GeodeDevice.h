@@ -150,6 +150,23 @@ struct SnapshotReadbackResources {
 };
 
 /**
+ * Registers a texture another context exported as a texture of \p consumer, and waits until the
+ * producer's work on it has completed, so what \p consumer records against it next may be
+ * submitted.
+ *
+ * For a context that draws the registration in a frame rather than capturing it: on a backend
+ * whose contexts share one queue it returns at once, and otherwise it blocks this thread for the
+ * producer's frame. A wait that reaches \ref kDefaultGpuWaitTimeout declares the backend root
+ * lost with the queue-idle attribution, like every other bounded wait over this root, and fails.
+ *
+ * @param consumer Runtime device of the context that will name the texture.
+ * @param source Export of the producer's texture.
+ * @return The registration, or why it was refused or could not be ordered.
+ */
+gpu::Result<gpu::Texture> RegisterOrderedTexture(gpu::Device& consumer,
+                                                 const gpu::TextureExport& source);
+
+/**
  * Owns (or wraps) a WebGPU device/queue pair for GPU rendering.
  *
  * GeodeDevice is the entry point to the Geode rendering backend. In **headless

@@ -44,8 +44,8 @@ bool HasUiTextureRegistry();
  * registration is refused. The alpha interpretation comes from the snapshot.
  *
  * A texture of the device the interface is drawn on is registered directly; one rendered on a
- * different device is registered through the device that owns it, so a snapshot that only borrows
- * a producer's frame target cannot be registered at all.
+ * different device is registered from the export its producer took, so a snapshot that only
+ * borrows a producer's frame target cannot be registered at all.
  *
  * @param snapshot Snapshot to register.
  * @param backing Receives the handles keeping the registration's backing reachable.
