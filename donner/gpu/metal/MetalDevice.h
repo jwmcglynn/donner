@@ -80,13 +80,19 @@ namespace donner::gpu::metal {
  *
  * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity. The one
  * exception is command-buffer completion handlers, which Metal invokes on an internal queue;
- * they touch only atomics, a mutex-protected error string, and the root's shared loss condition,
- * observable through \ref completedSerial, \ref Device::waitForSerial, \ref Device::isLost, and
- * \ref lastErrorForTest.
+ * they touch only atomics, mutex-protected completion state (the error string and the ordered
+ * completion watermark), and the root's shared loss condition, observable through
+ * \ref completedSerial, \ref Device::waitForSerial, \ref Device::isLost, and
+ * \ref lastErrorForTest. A handler that saw work fail also writes one diagnostic line to stderr,
+ * after it has published everything a waiter reads.
  *
- * A command buffer that fails on the GPU declares the root lost, with no wait site because the
- * backend reported it, before its serial is reported complete. Mappings answer loss before
- * readiness, whichever device over the root declared it.
+ * Every command buffer of a submission reports its outcome, and the submission completes once all
+ * of them have. When any of them failed on the GPU, the submission failed: the root is declared
+ * lost, with no wait site because the backend reported it, before the submission's serial is
+ * reported complete. The completed serial advances only in serial order, so a serial seen complete
+ * carries the outcome of every submission through it, whatever order their handlers ran in.
+ * Mappings answer loss before readiness and serial waits give up at once, whichever device over
+ * the root declared the loss, so teardown after a hang does not wait it out.
  *
  * The header is pure C++ (Objective-C state lives behind a pimpl) so it is includable from C++
  * tests; the implementation is Objective-C++.
@@ -217,10 +223,10 @@ public:
   /// lets it publish normally when its handler has not run yet. Safe when nothing is held.
   void releaseHeldCompletionForTest();
 
-  /// Waits until \p count completion handlers have run on this device, including parked ones.
-  /// Test seam for ordering completions deterministically.
-  /// @param count Handlers to wait for. @param timeoutSeconds Longest to wait.
-  /// @return True once that many have run.
+  /// Waits until \p count submissions have had all their completion handlers run on this device,
+  /// parked ones included. Test seam for ordering completions deterministically.
+  /// @param count Submissions to wait for. @param timeoutSeconds Longest to wait.
+  /// @return True once that many have.
   [[nodiscard]] bool waitForCompletionHandlersForTest(uint64_t count, double timeoutSeconds) const;
 
   /// Destructor; releases all Metal objects still alive.
