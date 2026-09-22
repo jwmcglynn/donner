@@ -7,9 +7,11 @@
 #include <cmath>
 #include <format>
 #include <memory>
+#include <span>
 #include <sstream>
 #include <thread>
 #include <utility>
+#include <variant>
 
 #include "donner/gpu/CheckedArithmetic.h"
 #include "donner/gpu/CommandEncoder.h"
@@ -461,6 +463,25 @@ Status ValidateWorkgroupSizeAgainstModule(const ComputePipelineDescriptor& descr
                          moduleDescriptor.label.str(), descriptor.compute.entryPoint.str()));
 }
 
+/// Draws the backend issues for \p commandBuffers: every draw, and every indexed draw with at
+/// least one index and one instance, since the encoder records an empty indexed draw that no
+/// backend issues.
+/// @param commandBuffers Command buffers of one accepted submission.
+uint64_t CountIssuedDraws(std::span<const SubmittedCommandBuffer> commandBuffers) {
+  uint64_t draws = 0;
+  for (const SubmittedCommandBuffer& commandBuffer : commandBuffers) {
+    for (const Command& command : commandBuffer.commands) {
+      if (std::holds_alternative<DrawCommand>(command)) {
+        ++draws;
+      } else if (const auto* indexed = std::get_if<DrawIndexedCommand>(&command);
+                 indexed != nullptr && indexed->indexCount != 0 && indexed->instanceCount != 0) {
+        ++draws;
+      }
+    }
+  }
+  return draws;
+}
+
 }  // namespace
 
 Result<uint64_t> ValidateTexelCopyInternal(const TexelCopyBufferLayout& layout,
@@ -740,6 +761,9 @@ Result<Buffer> Device::createBuffer(const BufferDescriptor& descriptor) {
     buffers_.release(handle.slotIndex());
     return std::move(status).error();
   }
+  if (observer_ != nullptr) {
+    observer_->onBufferCreated();
+  }
   return handle;
 }
 
@@ -752,6 +776,11 @@ Result<Texture> Device::createTexture(const TextureDescriptor& descriptor) {
   if (Status status = onCreateTexture(handle.slotIndex(), descriptor); status.hasError()) {
     textures_.release(handle.slotIndex());
     return std::move(status).error();
+  }
+  // A backend that names a texture it was handed, rather than allocating one, says so through
+  // the same ownership answer that keeps destroyTextureBacking from freeing it.
+  if (observer_ != nullptr && onOwnsTextureBacking(handle.slotIndex())) {
+    observer_->onTextureCreated();
   }
   return handle;
 }
@@ -1093,6 +1122,9 @@ Result<BindGroup> Device::createBindGroup(const BindGroupDescriptor& descriptor)
   if (Status status = onCreateBindGroup(handle.slotIndex(), descriptor); status.hasError()) {
     bindGroups_.release(handle.slotIndex());
     return std::move(status).error();
+  }
+  if (observer_ != nullptr) {
+    observer_->onBindGroupCreated();
   }
   return handle;
 }
@@ -1968,7 +2000,13 @@ Status Device::writeBuffer(const Buffer& buffer, uint64_t offsetBytes,
                            record.result()->descriptor.byteSize));
   }
 
-  return onWriteBuffer(buffer.slotIndex(), offsetBytes, data);
+  if (Status status = onWriteBuffer(buffer.slotIndex(), offsetBytes, data); status.hasError()) {
+    return status;
+  }
+  if (observer_ != nullptr) {
+    observer_->onBufferWritten(data.size());
+  }
+  return OkStatus();
 }
 
 Status Device::writeTexture(const Texture& texture, std::span<const uint8_t> data,
@@ -2010,7 +2048,28 @@ Status Device::writeTexture(const Texture& texture, std::span<const uint8_t> dat
                            requiredEnd.result(), data.size()));
   }
 
-  return onWriteTexture(texture.slotIndex(), data, dataLayout, writeSize, destinationOrigin);
+  const TextureFormat format = textureDescriptor.format;
+  if (Status status =
+          onWriteTexture(texture.slotIndex(), data, dataLayout, writeSize, destinationOrigin);
+      status.hasError()) {
+    return status;
+  }
+  if (observer_ != nullptr) {
+    observer_->onTextureWritten(onTextureWriteByteCount(format, data, dataLayout, writeSize));
+  }
+  return OkStatus();
+}
+
+uint64_t Device::onTextureWriteByteCount(TextureFormat /*format*/, std::span<const uint8_t> data,
+                                         const TexelCopyBufferLayout& /*dataLayout*/,
+                                         const Extent2d& /*writeSize*/) const {
+  return data.size();
+}
+
+void Device::notifyObserverOfBackendSubmission() const {
+  if (observer_ != nullptr) {
+    observer_->onSubmitted(0, 0);
+  }
 }
 
 Status Device::consumeSubmissionCommandBuffers(std::span<CommandBuffer> commandBuffers,
@@ -2107,6 +2166,9 @@ Result<uint64_t> Device::submit(std::span<CommandBuffer> commandBuffers) {
   }
   lastSubmittedSerial_ = serial;
   markSubmissionUses(uses, serial);
+  if (observer_ != nullptr) {
+    observer_->onSubmitted(submitted.size(), CountIssuedDraws(submitted));
+  }
   return serial;
 }
 

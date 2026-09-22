@@ -18,6 +18,7 @@
 #include "donner/gpu/Commands.h"
 #include "donner/gpu/Descriptors.h"
 #include "donner/gpu/DeviceLost.h"
+#include "donner/gpu/DeviceObserver.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/GpuResult.h"
 #include "donner/gpu/Handles.h"
@@ -810,6 +811,20 @@ public:
    */
   bool waitForSerial(uint64_t serial, double timeoutSeconds);
 
+  /**
+   * Installs \p observer to be notified of every operation this device validates and its backend
+   * accepts (see \ref DeviceObserver), replacing any observer installed before.
+   *
+   * Non-owning: the caller keeps \p observer alive until it installs another one or null. With
+   * none installed, each operation costs one null check.
+   *
+   * @param observer Observer to notify, or null for none.
+   */
+  void setObserver(DeviceObserver* observer) { observer_ = observer; }
+
+  /// The installed observer, or null when there is none.
+  DeviceObserver* observer() const { return observer_; }
+
 protected:
   /// Constructor for backends; assigns the process-unique device identity.
   Device();
@@ -1078,6 +1093,25 @@ protected:
    */
   virtual Status onSubmit(uint64_t submissionSerial,
                           std::span<const SubmittedCommandBuffer> commandBuffers) = 0;
+
+  /**
+   * Backend hook: the bytes a texture write that \ref onWriteTexture accepted handed to the
+   * backend's queue, which \ref DeviceObserver::onTextureWritten reports. The default is the
+   * caller's whole span; a backend that repacks the rows before uploading reports the repacked
+   * size instead.
+   *
+   * @param format Format of the written texture.
+   * @param data The caller's span.
+   * @param dataLayout Row layout of \p data.
+   * @param writeSize Extent written, in texels.
+   */
+  virtual uint64_t onTextureWriteByteCount(TextureFormat format, std::span<const uint8_t> data,
+                                           const TexelCopyBufferLayout& dataLayout,
+                                           const Extent2d& writeSize) const;
+
+  /// Reports a queue submission the backend made on its own, outside \ref submit, to the
+  /// installed observer as a submission of no command buffers and no draws.
+  void notifyObserverOfBackendSubmission() const;
 
 private:
   friend class CommandEncoder;
@@ -1498,6 +1532,9 @@ private:
 
   uint64_t deviceId_ = 0;
   uint64_t lastSubmittedSerial_ = 0;
+
+  /// Notified of accepted operations; see \ref setObserver. Non-owning.
+  DeviceObserver* observer_ = nullptr;
 
   /// Sticky loss condition of the backend root, shared with every other device over it. Created
   /// here so a device whose backend never shares one still has somewhere to publish a loss.

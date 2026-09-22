@@ -464,12 +464,12 @@ protected:
     ASSERT_NE(adapter_, nullptr);
     // The cases below read what this adapter allocated and submitted off the context's counters,
     // which only happens for a device the context is attributed to.
-    adapter_->setCounterSink(geodeDevice_.get());
+    adapter_->setObserver(&geodeDevice_->runtimeCounterObserver());
   }
 
   void TearDown() override {
     if (adapter_) {
-      adapter_->setCounterSink(nullptr);
+      adapter_->setObserver(nullptr);
     }
   }
 

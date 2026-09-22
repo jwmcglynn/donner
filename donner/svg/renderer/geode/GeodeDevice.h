@@ -575,9 +575,10 @@ public:
       ++counters_->pathEncodes;
     }
   }
-  void countDraw() const {
-    if (counters_) {
-      ++counters_->drawCalls;
+  /// Record draws the backend issued. @param count Draws issued.
+  void countDraws(uint64_t count) const {
+    if (counters_ != nullptr) {
+      counters_->drawCalls += count;
     }
   }
   void countPipelineSwitch() const {
@@ -798,8 +799,21 @@ public:
   /// pipelines and owned here, so it lives exactly as long as this device does.
   const GeodeGpuContext& gpuContext() const UTILS_LIFETIME_BOUND;
 
+  /**
+   * The observer this context installs on its own runtime device, on every backend. It reports
+   * what that device allocates, uploads, and submits through the `count*` members above, so the
+   * counters describe the same work whichever backend renders it.
+   *
+   * Installing it on another runtime device attributes that device's work to this context as
+   * well; the caller removes it again before this context is destroyed.
+   */
+  gpu::DeviceObserver& runtimeCounterObserver() const UTILS_LIFETIME_BOUND;
+
 private:
   friend class svg::RendererGeodeTextureSnapshot;
+
+  /// Forwards a runtime device's notifications to this context's counters.
+  class RuntimeCounterObserver;
 
   enum class SnapshotCaptureStatus { Ready, Cancelled, TimedOut };
   struct SnapshotCaptureLease {
@@ -906,6 +920,9 @@ private:
   std::vector<uint64_t> openFrameGenerations_;
 
   GeodeCounters* counters_ = nullptr;
+
+  /// Installed on this context's runtime device for the context's whole lifetime.
+  std::unique_ptr<RuntimeCounterObserver> runtimeCounterObserver_;
 
   // Process-lifetime cumulative totals - see `lifetimeTextureCreates()`
   // for why these are separate from the scoped `counters_`. Mutable
