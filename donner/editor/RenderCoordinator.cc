@@ -91,6 +91,9 @@ void PublishWorkerTimingStats(
       static_cast<double>(app.undoTimeline().entryCount()),
       static_cast<double>(timing.fullCanvasTextureAllocationFailureCount)};
   std::copy(std::begin(values), std::end(values), std::begin(buffer));
+  // clang-format off: EM_JS and EM_ASM bodies are JavaScript, which clang-format rewrites
+  // as C++ - it has already split a `===` into `== =` elsewhere in the editor, a SyntaxError
+  // the browser reports only once that arm is built.
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const b = $0 >> 3;
@@ -143,10 +146,12 @@ void PublishWorkerTimingStats(
         window['__donnerWorkerStats'] = stats;
       },
       buffer, GpuWaitTimeoutSiteName(timing.timedOutWaitSite));
+  // clang-format on
 }
 
 /// Marks only the matching result whose textures passed the presentation admission gates.
 void PublishAcceptedWorkerResult(const RenderResult& result) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const stats = window['__donnerWorkerStats'];
@@ -157,6 +162,7 @@ void PublishAcceptedWorkerResult(const RenderResult& result) {
       },
       static_cast<double>(result.documentGeneration), static_cast<double>(result.version),
       static_cast<double>(result.fontResourceRevision));
+  // clang-format on
 }
 
 // Publish a GPU-wait failure that produced no frame.
@@ -169,6 +175,7 @@ void PublishAcceptedWorkerResult(const RenderResult& result) {
 // counter orders presentation samples and must keep counting frames only.
 void PublishWorkerGpuWaitFailure(bool deviceLost, const char* timedOutWaitSiteName,
                                  int timedOutWaitMs) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const previous = window['__donnerWorkerStats'];
@@ -188,6 +195,7 @@ void PublishWorkerGpuWaitFailure(bool deviceLost, const char* timedOutWaitSiteNa
         window['__donnerWorkerStats'] = stats;
       },
       deviceLost ? 1 : 0, timedOutWaitSiteName, timedOutWaitMs);
+  // clang-format on
 }
 #endif
 

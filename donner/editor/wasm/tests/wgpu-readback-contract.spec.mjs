@@ -469,7 +469,7 @@ test("worker WebGPU startup keeps its browser Promise bridge private and single-
   );
   assert.match(
     geodeSelectionSource,
-    /setTimeout\([\s\S]*Atomics\.store\(HEAP32, handlesOut >> 2, devicePtr\)/,
+    /setTimeout\(\(\) => Atomics\.store\(HEAP32, handlesOut >> 2, devicePtr\)\)/,
     "the result store must cross a browser task before releasing the waiting pthread",
   );
 

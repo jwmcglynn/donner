@@ -38,6 +38,12 @@ namespace donner::geode {
 // clang-format off: EM_JS contains JavaScript, whose arrow syntax clang-format corrupts.
 // Keep this internal import name compact: EM_JS function names survive Closure in editor.js.
 EM_JS(void, G, (void* handlesOut, WGPUInstance instance), {
+  if (!navigator.gpu) {
+    // A browser with no WebGPU throws here rather than rejecting, which would abort the module
+    // instead of reporting a failed selection.
+    setTimeout(() => Atomics.store(HEAP32, handlesOut >> 2, 1));
+    return;
+  }
   navigator.gpu.requestAdapter()
     .then((adapter) => adapter.requestDevice().then((device) => {
       // An imported device carries no C-level uncaptured-error callback, because only a device
@@ -218,9 +224,7 @@ wgpu::BackendType RequestedBackend(bool usePlatformDefault) {
       return wgpu::BackendType::OpenGLES;
     }
 
-    std::fprintf(stderr,
-                 "[Geode/wgpu-native] Ignoring unsupported WGPU_BACKEND=%.*s; "
-                 "using platform default.\n",
+    std::fprintf(stderr, "[Geode/wgpu-native] Ignoring unsupported WGPU_BACKEND=%.*s.\n",
                  static_cast<int>(backend.size()), backend.data());
   }
 
@@ -371,6 +375,7 @@ struct BrowserImportState {
   std::atomic<WGPUDevice> device = nullptr;
   std::atomic<WGPUAdapter> adapter = nullptr;
 };
+static_assert(offsetof(BrowserImportState, device) == 0);
 static_assert(sizeof(BrowserImportState) == 2 * sizeof(WGPUDevice));
 static_assert(alignof(BrowserImportState) == alignof(WGPUDevice));
 static_assert(offsetof(BrowserImportState, adapter) == sizeof(WGPUDevice));
@@ -412,14 +417,16 @@ bool ImportBrowserRoot(GeodeWgpuRoots& handles, const GpuRootSelection& options)
   while ((importedDevice = state.device.load(std::memory_order_acquire)) == nullptr) {
     emscripten_sleep(1);
   }
+  // Written before the device store the loop above was watching, so it is visible now, and taken
+  // before the failure check below so that an import which got this far and then threw leaves the
+  // adapter to the release path rather than stranding it. A caller asking what its surface can
+  // present has an adapter to ask, which is what the editor's window does before it compiles a
+  // pipeline for the answer.
+  handles.adapter = wgpu::Adapter(state.adapter.load(std::memory_order_acquire));
   if (reinterpret_cast<std::uintptr_t>(importedDevice) == 1) {
     std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU device request failed.\n");
     return false;
   }
-  // Written before the device store the loop above was watching, so it is visible now. A caller
-  // asking what its surface can present has an adapter to ask, which is what the editor's window
-  // does before it compiles a pipeline for the answer.
-  handles.adapter = wgpu::Adapter(state.adapter.load(std::memory_order_acquire));
   if (!handles.adapter) {
     std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU adapter import returned null.\n");
     return false;
@@ -945,9 +952,10 @@ uint64_t GeodeWgpuAdapterDevice::completedSerial() const {
 
 void GeodeWgpuAdapterDevice::pollForSerialCompletion() {
   root_->device().poll(true, nullptr);
-  const int pollCostMs = serialWaitPollCostMsForTesting_.load(std::memory_order_relaxed);
-  if (pollCostMs > 0) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(pollCostMs));
+  const std::chrono::milliseconds pollCost{
+      serialWaitPollCostMsForTesting_.load(std::memory_order_relaxed)};
+  if (pollCost.count() > 0) {
+    std::this_thread::sleep_for(pollCost);
   }
 }
 

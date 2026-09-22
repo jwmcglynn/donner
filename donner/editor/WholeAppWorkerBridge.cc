@@ -86,7 +86,11 @@ BrowserMirror& Mirror() {
 // The worker's `performance` has its own time origin, so a worker-side
 // `performance.now()` is not comparable with a page-side one. Both contexts do
 // agree on `timeOrigin + now()`, which is Unix-epoch milliseconds.
+// clang-format off: EM_JS and EM_ASM bodies are JavaScript, which clang-format rewrites
+// as C++ - it has already split a `===` into `== =` elsewhere in the editor, a SyntaxError
+// the browser reports only once that arm is built.
 EM_JS(double, WorkerEpochNowMs, (), { return performance.timeOrigin + performance.now(); });
+// clang-format on
 
 /// Sequence number of the most recent main-thread mousedown this thread has
 /// already turned into a latency sample.
@@ -108,6 +112,7 @@ bool OnAppThreadMouseDown(int /*eventType*/, const EmscriptenMouseEvent* /*event
   g_lastObservedMouseDownSeq = seqBefore;
 
   const double latencyMs = WorkerEpochNowMs() - dispatchedAtMs;
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const samples = window['__donnerInputLatencyMsSamples'];
@@ -116,6 +121,7 @@ bool OnAppThreadMouseDown(int /*eventType*/, const EmscriptenMouseEvent* /*event
         }
       },
       latencyMs);
+  // clang-format on
   return false;
 }
 
@@ -246,6 +252,7 @@ void InstallWorkerGlobalShim() {
 
 void Install() {
   BrowserMirror& mirror = Mirror();
+  // clang-format off
   MAIN_THREAD_EM_ASM(
       {
         const base = $0;
@@ -379,6 +386,7 @@ void Install() {
         }
       },
       &mirror);
+  // clang-format on
 
   emscripten_set_mousedown_callback_on_thread(EMSCRIPTEN_EVENT_TARGET_WINDOW, /*userData=*/nullptr,
                                               /*useCapture=*/EM_TRUE, &OnAppThreadMouseDown,
@@ -408,6 +416,7 @@ void WakeForPendingReadback() {
 }
 
 void MarkReadbackCaptureStarted(int requestId) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerWgpuReadbackCaptureStarts'] =
@@ -415,6 +424,7 @@ void MarkReadbackCaptureStarted(int requestId) {
         window['__donnerWgpuReadbackLastStartedRequest'] = $0;
       },
       requestId);
+  // clang-format on
 }
 
 void PublishReadbackFailure(int requestId) {
@@ -425,6 +435,7 @@ void PublishReadbackFailure(int requestId) {
   if (requestId > LoadRelaxed(mirror.readbackCompletedId)) {
     StoreRelaxed(mirror.readbackCompletedId, requestId);
   }
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerWgpuReadbackCompleted'] =
@@ -434,6 +445,7 @@ void PublishReadbackFailure(int requestId) {
         window['__donnerWgpuReadbackLastFailedRequest'] = $0;
       },
       requestId);
+  // clang-format on
 }
 
 void PublishReadbackStats(int renderSamples, int renderColored, int renderNonBlack,
@@ -444,6 +456,7 @@ void PublishReadbackStats(int renderSamples, int renderColored, int renderNonBla
   if (requestId > 0 && requestId > LoadRelaxed(mirror.readbackCompletedId)) {
     StoreRelaxed(mirror.readbackCompletedId, requestId);
   }
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         if ($9 > 0) {
@@ -473,6 +486,7 @@ void PublishReadbackStats(int renderSamples, int renderColored, int renderNonBla
       },
       renderSamples, renderColored, renderNonBlack, renderMaxChannel, layerSamples, layerColored,
       layerNonBlack, layerMaxChannel, selectionChromePixels, requestId);
+  // clang-format on
 }
 
 void PublishCarouselThumbnailStats(const int* values, int count) {
@@ -484,6 +498,7 @@ void PublishCarouselThumbnailStats(const int* values, int count) {
   static int buffer[kMaxThumbnails * kStride];
   const int clamped = count > kMaxThumbnails ? kMaxThumbnails : count;
   std::copy(values, values + static_cast<size_t>(clamped) * kStride, buffer);
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const stride = 7;
@@ -507,6 +522,7 @@ void PublishCarouselThumbnailStats(const int* values, int count) {
         }
       },
       buffer, clamped);
+  // clang-format on
 }
 
 int CssWidth() {
@@ -634,8 +650,10 @@ extern "C" EMSCRIPTEN_KEEPALIVE void donner_whole_app_vsync_tick() {
   emscripten_proxy_async(state.proxyQueue, state.appThread, &RunProxiedFrame, nullptr);
 }
 
+// clang-format off
 EM_JS(bool, WorkerRequestAnimationFrameAvailableImpl, (),
       { return typeof globalThis.requestAnimationFrame == 'function'; });
+// clang-format on
 
 bool WorkerRequestAnimationFrameAvailable() {
   return WorkerRequestAnimationFrameAvailableImpl();
@@ -651,7 +669,9 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
     // Emscripten's `fps == 0` path selects EM_TIMING_RAF, whose scheduler calls
     // `globalThis.requestAnimationFrame` when it exists. Nothing else to do.
     state.driver = FrameDriver::WorkerRequestAnimationFrame;
+    // clang-format off
     MAIN_THREAD_ASYNC_EM_ASM({ window['__donnerFrameDriver'] = 'worker-raf'; });
+    // clang-format on
     emscripten_set_main_loop_arg(&RunDrivenFrame, userData, /*fps=*/0,
                                  /*simulateInfiniteLoop=*/true);
     return state.driver;
@@ -664,13 +684,16 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
   state.proxyQueue = em_proxying_queue_create();
   if (state.proxyQueue == nullptr) {
     state.driver = FrameDriver::SetTimeoutFallback;
+    // clang-format off
     MAIN_THREAD_ASYNC_EM_ASM({ window['__donnerFrameDriver'] = 'set-timeout'; });
+    // clang-format on
     emscripten_set_main_loop_arg(&RunDrivenFrame, userData, /*fps=*/0,
                                  /*simulateInfiniteLoop=*/true);
     return state.driver;
   }
 
   state.driver = FrameDriver::ProxiedMainThreadRequestAnimationFrame;
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM({
     window['__donnerFrameDriver'] = 'proxied-main-raf';
     const tick = function() {
@@ -679,6 +702,7 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
     };
     requestAnimationFrame(tick);
   });
+  // clang-format on
   // The app thread must keep returning to its event loop so the proxying queue
   // drains; `emscripten_exit_with_live_runtime` does exactly that without
   // installing a second scheduler that would double-drive the frame.
@@ -716,6 +740,7 @@ namespace {
 void PublishSuspendAndTickStats() {
   const FrameSuspendTotals suspend = EndSuspendFrame();
   const FrameTickStats ticks = TickStats();
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         let stats = window['__donnerAsyncifySuspendStats'];
@@ -761,6 +786,7 @@ void PublishSuspendAndTickStats() {
       suspend.msByKind[static_cast<std::size_t>(SuspendKind::DeviceWait)],
       suspend.msByKind[static_cast<std::size_t>(SuspendKind::Startup)],
       static_cast<double>(ticks.ticks), ticks.p50Ms, ticks.p99Ms, ticks.maxMs);
+  // clang-format on
   // Open the next frame's attribution window immediately: the interval between
   // this publish and the next frame body is the browser's, not ours, but any
   // suspend that happens in it is still frame cost the next sample should own.
@@ -1078,6 +1104,7 @@ void PublishMemoryAttribution() {
 }  // namespace
 
 void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const stats = window['__donnerFrameLoopStats'];
@@ -1124,12 +1151,14 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
             Math.max(Number(window['__donnerHeapBytesHighWater'] || 0), $3);
       },
       triggerBits, frameMs, callbacks, static_cast<double>(emscripten_get_heap_size()));
+  // clang-format on
 
   PublishSuspendAndTickStats();
   PublishMemoryAttribution();
 }
 
 void PublishImGuiDrawStats(int vertexCount, int indexCount, int commandListCount) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const previous = window['__donnerImGuiDrawStats'];
@@ -1145,11 +1174,13 @@ void PublishImGuiDrawStats(int vertexCount, int indexCount, int commandListCount
         });
       },
       vertexCount, indexCount, commandListCount);
+  // clang-format on
 }
 
 void PublishHostFrameTiming(double endFrameMs, double imguiRenderMs, double surfaceAcquireMs,
                             double underlayMs, double imguiDrawMs, double directMs,
                             double readbackMs, double presentMs) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const stats = window['__donnerHostFrameTiming'] ||
@@ -1167,14 +1198,18 @@ void PublishHostFrameTiming(double endFrameMs, double imguiRenderMs, double surf
       },
       endFrameMs, imguiRenderMs, surfaceAcquireMs, underlayMs, imguiDrawMs, directMs, readbackMs,
       presentMs);
+  // clang-format on
 }
 
 void PublishPinchZoomPolicy(double wheelDeltaPerLnScale) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       { window['__donnerPinchWheelDeltaPerLnScale'] = $0; }, wheelDeltaPerLnScale);
+  // clang-format on
 }
 
 void NotifyFirstFramePresented(int headlessDeviceCreations) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerHeadlessDeviceCreations'] = $0;
@@ -1184,10 +1219,12 @@ void NotifyFirstFramePresented(int headlessDeviceCreations) {
         window['__donnerNotifyFirstFramePresented']();
       },
       headlessDeviceCreations);
+  // clang-format on
 }
 
 void RecordScrollDebug(bool zoomModifierHeld, double xoffset, double yoffset,
                        bool physicalKeyHeld) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const previous = window['__donnerLastScrollEvent'];
@@ -1201,6 +1238,7 @@ void RecordScrollDebug(bool zoomModifierHeld, double xoffset, double yoffset,
         });
       },
       zoomModifierHeld ? 1 : 0, xoffset, yoffset, physicalKeyHeld ? 1 : 0);
+  // clang-format on
 }
 
 extern "C" EMSCRIPTEN_KEEPALIVE void donner_catalog_font_complete(
@@ -1259,6 +1297,7 @@ uint32_t InstallCatalogFonts(std::shared_ptr<svg::CatalogEncodedFontStore> store
     return 0;
   }
   std::memcpy(ownedManifest, manifest.c_str(), manifest.size() + 1);
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
     const session = $0;
@@ -1300,6 +1339,7 @@ if (!window['__donnerFirstFramePresented']) {
 }
 },
       session, ownedManifest);
+// clang-format on
 return session;
 }
 
@@ -1310,6 +1350,7 @@ void RequestCatalogFont(uint32_t session, std::string_view contentId, uint64_t r
                                   [&](const auto& asset) { return asset.contentId == contentId; });
   if (!session || found == assets.end()) return;
   const size_t index = static_cast<size_t>(found - assets.begin());
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const record = window['__donnerCatalogBrokers'] ?.get($0);
@@ -1320,6 +1361,7 @@ void RequestCatalogFont(uint32_t session, std::string_view contentId, uint64_t r
         }
       },
       session, index, static_cast<double>(requestToken), priority, explicitRetry ? 1 : 0);
+  // clang-format on
 }
 
 void UninstallCatalogFonts(uint32_t session) {
@@ -1329,6 +1371,7 @@ void UninstallCatalogFonts(uint32_t session) {
     std::lock_guard lock(sessions.mutex);
     sessions.stores.erase(session);
   }
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const brokers = window['__donnerCatalogBrokers'];
@@ -1340,6 +1383,7 @@ void UninstallCatalogFonts(uint32_t session) {
         }
       },
       session);
+  // clang-format on
 }
 
 }  // namespace donner::editor::whole_app_worker

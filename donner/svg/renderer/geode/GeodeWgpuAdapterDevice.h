@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -143,11 +144,12 @@ struct GpuRootSelection {
   /// Whether an absent `WGPU_BACKEND` override falls back to the platform's preferred backend
   /// rather than leaving the choice to the driver.
   ///
-  /// Offscreen selection does: a headless run that silently lands on a different backend than the
-  /// one its expectations were recorded against is a failure that looks like a rendering bug. A
-  /// caller that presents to a window does not, because the window is served by whatever backend
-  /// the system can drive its surface with, and narrowing that leaves a host whose preferred
-  /// backend is unusable with no adapter at all.
+  /// The headless entry point does: a run whose expectations were recorded against one backend
+  /// and which silently lands on another is a failure that looks like a rendering bug. The editor
+  /// does not. Its window is served by whatever backend the system can drive its surface with,
+  /// and narrowing that leaves a host whose preferred backend is unusable with no adapter at all;
+  /// its offscreen target takes the same answer so that one editor does not select two different
+  /// ways depending on where its frames go.
   bool usePlatformDefaultBackend = true;
 };
 
@@ -200,6 +202,7 @@ std::size_t OutstandingDeviceLostCallbacks();
 /// Backend instances this process created for a selection and has not released. A selection that
 /// fails must leave this where it found it, because nothing else can release the objects it built
 /// before giving up; a root released at teardown returns its own.
+/// @return Instances created for a selection and not yet released.
 std::size_t OutstandingSelectionInstances();
 
 /**
@@ -274,6 +277,7 @@ public:
   /// therefore defers unboundedly until something waits: a frame loop must call
   /// \ref gpu::Device::waitForSerial on its frame cadence (or extend the adapter with a
   /// non-blocking wgpu poll) so completions are observed and deferred destroys drain.
+  /// Capped by \ref holdSubmittedWorkForTesting while a test holds submitted work incomplete.
   uint64_t completedSerial() const override;
 
   /**
@@ -304,12 +308,11 @@ public:
   void holdSubmittedWorkForTesting(uint64_t completedSerialCeiling,
                                    std::chrono::milliseconds pollCost) {
     completedSerialCeiling_.store(completedSerialCeiling, std::memory_order_relaxed);
-    serialWaitPollCostMsForTesting_.store(static_cast<int>(pollCost.count()),
-                                          std::memory_order_relaxed);
+    serialWaitPollCostMsForTesting_.store(pollCost.count(), std::memory_order_relaxed);
   }
 
   /// Ceiling value that leaves \ref completedSerial reporting what the backend reports.
-  static constexpr uint64_t kNoCompletedSerialCeiling = UINT64_MAX;
+  static constexpr uint64_t kNoCompletedSerialCeiling = std::numeric_limits<uint64_t>::max();
 
   /// Wall-clock budget the destructor spends draining submitted work before tearing down anyway.
   /// Lowered by tests that hold submitted work incomplete so the drain reaches its deadline
@@ -464,7 +467,7 @@ private:
 
   /// Wall time each poll inside a serial wait costs on top of the backend's own, in milliseconds;
   /// see \ref holdSubmittedWorkForTesting.
-  std::atomic<int> serialWaitPollCostMsForTesting_{0};
+  std::atomic<std::chrono::milliseconds::rep> serialWaitPollCostMsForTesting_{0};
 
   /// Budget \ref ~GeodeWgpuAdapterDevice spends draining submitted work. Generous: a healthy
   /// device drains in microseconds, so it only trips on a driver that has effectively hung, and

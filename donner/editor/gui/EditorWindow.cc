@@ -333,6 +333,9 @@ void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
 }
 
 #if defined(__EMSCRIPTEN__) && !defined(DONNER_EDITOR_WHOLE_APP_WORKER)
+// clang-format off: EM_JS and EM_ASM bodies are JavaScript, which clang-format rewrites
+// as C++ - it has already split a `===` into `== =` elsewhere in the editor, a SyntaxError
+// the browser reports only once that arm is built.
 EM_JS(int, CanvasPixelWidth, (), {
   if (Module['canvas']) {
     return Module['canvas'].width;
@@ -346,6 +349,7 @@ EM_JS(int, CanvasPixelHeight, (), {
   }
   return Math.max(1, Math.floor(window.innerHeight * (window.devicePixelRatio || 1)));
 });
+// clang-format on
 #endif
 
 #ifdef __EMSCRIPTEN__
@@ -403,6 +407,7 @@ void PublishWgpuCarouselThumbnailStats(const int* values, int count) {
   whole_app_worker::PublishCarouselThumbnailStats(values, count);
 }
 #else
+// clang-format off
 EM_JS(int, CanvasCssWidth, (), { return Math.max(1, Math.floor(window.innerWidth)); });
 EM_JS(int, CanvasCssHeight, (), { return Math.max(1, Math.floor(window.innerHeight)); });
 EM_JS(double, BrowserDevicePixelRatio, (), { return window.devicePixelRatio || 1.0; });
@@ -514,6 +519,7 @@ EM_JS(void, PublishWgpuCarouselThumbnailStats, (const int* values, int count), {
     stats['carouselThumbnails'] = thumbnails;
   }
 });
+// clang-format on
 #endif  // DONNER_EDITOR_WHOLE_APP_WORKER
 
 double CurrentDisplayScale() {
@@ -1430,8 +1436,9 @@ struct EditorWindow::WgpuState {
   /// for the same thing the first one did.
   bool surfaceReadbackEnabled = false;
 
-  /// Whether this state names a device and something to draw into. A constructor that gave up
-  /// before the device was selected leaves the root null with the rest of the state in place.
+  /// A constructor that gave up before the device was selected leaves the root null with the rest
+  /// of the state in place.
+  /// @return Whether this state names a device and something to draw into.
   bool canPresentFrames() const {
     return root != nullptr && root->device() &&
            (presentation != nullptr || static_cast<bool>(offscreenTexture));
@@ -1592,10 +1599,10 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 
   geode::GpuRootSelection selection;
   selection.label = "DonnerEditorWGPUDevice";
-  // The window is served by whatever backend the system can present its surface with, which is
-  // the choice the editor has always left to the driver. Narrowing it to a platform preference
-  // would leave a host whose preferred backend is unusable with no adapter at all, where it
-  // previously fell back and ran.
+  // The editor is served by whatever backend the system can drive, which is the choice it has
+  // always left to the driver on both its window and offscreen paths. Narrowing it to a platform
+  // preference would leave a host whose preferred backend is unusable with no adapter at all,
+  // where it previously fell back and ran.
   selection.usePlatformDefaultBackend = false;
   if (!useOffscreenWgpuTarget) {
     // The window surface has to exist before an adapter is chosen, because the adapter has to be

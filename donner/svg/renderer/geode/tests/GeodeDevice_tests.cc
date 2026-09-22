@@ -520,6 +520,9 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitTimeoutDeclaresLossWithWaitAttribution) {
   EXPECT_THAT(stats.timedOutWaitMs, Ge(static_cast<int>(kSerialWaitBudgetSeconds * 1000.0) - 1))
       << "the loss has to come from a deadline that actually elapsed, so the attribution reports "
          "a wait that was really spent";
+
+  runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
+                                      std::chrono::milliseconds(0));
 }
 
 /// A wait that ends by exhausting its own poll bound has spent none of its budget: the driver
@@ -544,7 +547,10 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitExhaustingOnlyItsPollBoundLeavesTheDevice
   const double elapsedSeconds =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 
-  ASSERT_THAT(elapsedSeconds, Lt(kUnreachableBudgetSeconds / 2.0))
+  // Bounded well under the per-case budget rather than merely under the wait's: the poll bound is
+  // reached in milliseconds when poll returns without blocking, which is the only shape this case
+  // is about, and a wait that took seconds here ended some other way.
+  ASSERT_THAT(elapsedSeconds, Lt(5.0))
       << "the poll bound, not the deadline, has to be what ended this wait";
   EXPECT_FALSE(device->isDeviceLost())
       << "a wait that spent none of its budget observed nothing to declare";

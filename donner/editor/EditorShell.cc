@@ -140,33 +140,42 @@ extern "C" EMSCRIPTEN_KEEPALIVE int donner_set_overlay_state(int key, int enable
 }
 
 int SampleThumbnailRendererCreationRequestForTesting() {
+  // clang-format off
   return MAIN_THREAD_EM_ASM_INT({
     const raw =
         new URLSearchParams(window.location.search).get('sampleThumbnailRendererCreationRequest');
     const value = Number(raw || 0);
     return Number.isFinite(value) ? Math.max(0, Math.min(64, Math.floor(value))) : 0;
   });
+  // clang-format on
 }
 
 int SampleThumbnailRendererCreationDelayMsForTesting() {
+  // clang-format off
   return MAIN_THREAD_EM_ASM_INT({
     const raw =
         new URLSearchParams(window.location.search).get('sampleThumbnailRendererCreationDelayMs');
     const value = Number(raw || 0);
     return Number.isFinite(value) ? Math.max(0, Math.min(5000, Math.floor(value))) : 0;
   });
+  // clang-format on
 }
 
 bool BrowserOverlayControlEnabledForTesting() {
+  // clang-format off
   return MAIN_THREAD_EM_ASM_INT({
            return new URLSearchParams(window.location.search).get('testControl') == 'overlay';
          }) != 0;
+  // clang-format on
 }
 
 // The app runs on a pthread in the browser build, where `window` and
 // `document` do not exist; every publish below proxies to the browser main
 // thread. Fire-and-forget: none of these are read back by the app.
 void PublishActiveSampleId(const char* sampleId) {
+  // clang-format off: EM_JS and EM_ASM bodies are JavaScript, which clang-format rewrites
+  // as C++ - it has already split a `===` into `== =` elsewhere in the editor, a SyntaxError
+  // the browser reports only once that arm is built.
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const id = UTF8ToString($0);
@@ -180,6 +189,7 @@ void PublishActiveSampleId(const char* sampleId) {
         });
       },
       sampleId);
+  // clang-format on
 }
 
 void PublishSampleThumbnailStats(int requested, int started, int completed, int rendered, int ready,
@@ -187,6 +197,7 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
                                  int foregroundHandoffWaits, int firstAttemptCompleted,
                                  int offscreenRendererConstructionStarts,
                                  int offscreenRendererConstructionBlocked) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const frame = Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
@@ -225,6 +236,7 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
       requested, started, completed, rendered, ready, pending, active, resultReady,
       foregroundHandoffWaits, firstAttemptCompleted, offscreenRendererConstructionStarts,
       offscreenRendererConstructionBlocked);
+  // clang-format on
 }
 
 void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy, int dragging,
@@ -235,6 +247,7 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
   // its aiming move has been applied and is then hit-tested at the previous
   // pointer position. Publishing the applied position lets a browser probe
   // hold its press until the editor has the pointer where the press will land.
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerInteractionStats'] = ({
@@ -248,6 +261,7 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
         });
       },
       selectedCount, pendingClick, workerBusy, dragging, dragHasVisualChange, pointerX, pointerY);
+  // clang-format on
 }
 
 /**
@@ -284,6 +298,7 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
 void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay,
                          int selectionChromeSnapshotPresent, double currentDocVersion,
                          double displayedDocVersion, double overlayVersionGateSuppressions) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerOverlayStats'] = ({
@@ -297,12 +312,14 @@ void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay,
       },
       compositorTileOverlay, geometryDebugOverlay, selectionChromeSnapshotPresent,
       currentDocVersion, displayedDocVersion, overlayVersionGateSuppressions);
+  // clang-format on
 }
 
 void PublishViewportStats(double paneX, double paneY, double paneWidth, double paneHeight,
                           double documentX, double documentY, double documentWidth,
                           double documentHeight, double zoom, double documentCanvasCommits,
                           double overviewInfillRenders) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerViewportStats'] = ({
@@ -321,12 +338,14 @@ void PublishViewportStats(double paneX, double paneY, double paneWidth, double p
       },
       paneX, paneY, paneWidth, paneHeight, documentX, documentY, documentWidth, documentHeight,
       zoom, documentCanvasCommits, overviewInfillRenders);
+  // clang-format on
 }
 
 void PublishLayerThumbnailStats(double rowCount, double renderedCount, double reusedCount,
                                 double deferredCount, double skippedForCanvasInvalidationCount,
                                 double snapshotRebuildCount, double bitmapCount, double bitmapBytes,
                                 double textureSnapshotCount, double textureCount) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerLayerThumbnailStats'] = ({
@@ -344,6 +363,7 @@ void PublishLayerThumbnailStats(double rowCount, double renderedCount, double re
       },
       rowCount, renderedCount, reusedCount, deferredCount, skippedForCanvasInvalidationCount,
       snapshotRebuildCount, bitmapCount, bitmapBytes, textureSnapshotCount, textureCount);
+  // clang-format on
 }
 
 // Accumulate this frame's UI-phase costs into the main-loop probe published by `main.cc`. The
@@ -353,6 +373,7 @@ void PublishLayerThumbnailStats(double rowCount, double renderedCount, double re
 void AccumulateFrameLoopPhaseCost(double layoutMs, double menusDialogsMs, double sourcePaneMs,
                                   double renderPaneMs, double sidebarsMs, double splittersMs,
                                   double nonUiMs, double imguiRenderMs, double imguiDrawMs) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const stats = window['__donnerFrameLoopStats'];
@@ -387,6 +408,7 @@ void AccumulateFrameLoopPhaseCost(double layoutMs, double menusDialogsMs, double
       },
       layoutMs, menusDialogsMs, sourcePaneMs, renderPaneMs, sidebarsMs, splittersMs, nonUiMs,
       imguiRenderMs, imguiDrawMs);
+  // clang-format on
 }
 
 void PublishPresentationResourceStats(double totalTrackedBytes, double peakTrackedBytes,
@@ -395,6 +417,7 @@ void PublishPresentationResourceStats(double totalTrackedBytes, double peakTrack
                                       double overviewTileTextures, double pendingRetiredTextures,
                                       double agedRetiredTextures, double retiredFrameCount,
                                       double lifetimeTextureCreates, double lifetimeBufferCreates) {
+  // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerPresentationResourceStats'] = ({
@@ -415,6 +438,7 @@ void PublishPresentationResourceStats(double totalTrackedBytes, double peakTrack
       totalTrackedBytes, peakTrackedBytes, documentCompositeBytes, pendingRetiredBytes,
       agedRetiredBytes, activeTileTextures, overviewTileTextures, pendingRetiredTextures,
       agedRetiredTextures, retiredFrameCount, lifetimeTextureCreates, lifetimeBufferCreates);
+  // clang-format on
 }
 
 #endif
@@ -7637,6 +7661,7 @@ void EditorShell::runFrame() {
   const Vector2i windowSize = window_.windowSize();
   lastFullFrameWindowSize_ = windowSize;
 #ifdef __EMSCRIPTEN__
+  // clang-format off
   static const bool kPreferTouchInput =
       EM_ASM_INT({
         const hasTouchPoints = navigator.maxTouchPoints > 0;
@@ -7644,6 +7669,7 @@ void EditorShell::runFrame() {
             window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
         return hasTouchPoints || hasCoarsePointer ? 1 : 0;
       }) != 0;
+  // clang-format on
 #else
   constexpr bool kPreferTouchInput = false;
 #endif

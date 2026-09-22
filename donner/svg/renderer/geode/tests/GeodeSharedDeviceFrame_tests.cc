@@ -181,6 +181,9 @@ TEST_F(GeodeSharedDeviceFrameTest, ALossOneContextsWaitObservesIsSharedByTheOthe
   EXPECT_TRUE(sibling->isDeviceLost())
       << "a loss observed through one context's runtime is a loss of the root both contexts "
          "render through";
+
+  rootRuntime.holdSubmittedWorkForTesting(geode::GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
+                                          std::chrono::milliseconds(0));
 }
 
 // ---------------------------------------------------------------------------
