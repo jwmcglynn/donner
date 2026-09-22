@@ -966,12 +966,18 @@ wgpu::Surface RuntimePresentationSurface::adapterSelectionSurface() const {
 
 bool RuntimePresentationSurface::chooseConfiguration(const wgpu::Adapter& adapter,
                                                      bool enableReadback) {
+  if (!adapter) {
+    // The format below is what the adapter reports its surface can present. Settling one without
+    // asking would compile the renderer's pipelines for a format nothing checked, and the window
+    // would then configure its swapchain from the same unchecked answer.
+    std::fprintf(stderr, "EditorWindow: no adapter to ask what the window surface can present\n");
+    return false;
+  }
   readback_ = enableReadback;
   // The renderer compiles its pipelines for this format before there is a device to ask the
   // runtime for surface capabilities, so it is settled here and checked against what the surface
   // reports as soon as there is one.
 #ifdef __APPLE__
-  (void)adapter;
   // A Core Animation Metal layer presents BGRA8Unorm.
   format_ = gpu::TextureFormat::BGRA8Unorm;
 #else
@@ -1423,6 +1429,13 @@ struct EditorWindow::WgpuState {
   /// Whether finished frames are copied back to the host, remembered so a rebuilt surface asks
   /// for the same thing the first one did.
   bool surfaceReadbackEnabled = false;
+
+  /// Whether this state names a device and something to draw into. A constructor that gave up
+  /// before the device was selected leaves the root null with the rest of the state in place.
+  bool canPresentFrames() const {
+    return root != nullptr && root->device() &&
+           (presentation != nullptr || static_cast<bool>(offscreenTexture));
+  }
 };
 #else
 struct EditorWindow::WgpuState {};
@@ -1579,6 +1592,11 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 
   geode::GpuRootSelection selection;
   selection.label = "DonnerEditorWGPUDevice";
+  // The window is served by whatever backend the system can present its surface with, which is
+  // the choice the editor has always left to the driver. Narrowing it to a platform preference
+  // would leave a host whose preferred backend is unusable with no adapter at all, where it
+  // previously fell back and ran.
+  selection.usePlatformDefaultBackend = false;
   if (!useOffscreenWgpuTarget) {
     // The window surface has to exist before an adapter is chosen, because the adapter has to be
     // able to present to it. The selection hands over the instance for exactly that.
@@ -2113,7 +2131,8 @@ std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentation
   // window hands one over.
   std::unique_ptr<internal::PresentationSurface> replacement =
       internal::CreateEditorPresentationSurface();
-  if (!replacement->attachToWindow(wgpuState_->root->instance(), window_) ||
+  if (wgpuState_->root == nullptr ||
+      !replacement->attachToWindow(wgpuState_->root->instance(), window_) ||
       !replacement->chooseConfiguration(wgpuState_->root->adapter(),
                                         wgpuState_->surfaceReadbackEnabled)) {
     return nullptr;
@@ -2202,8 +2221,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   if (targetReadback != nullptr) {
     *targetReadback = svg::RendererBitmap{};
   }
-  if (wgpuState_ == nullptr || !wgpuState_->root->device() || displayW <= 0 || displayH <= 0 ||
-      (wgpuState_->presentation == nullptr && !wgpuState_->offscreenTexture)) {
+  if (wgpuState_ == nullptr || !wgpuState_->canPresentFrames() || displayW <= 0 || displayH <= 0) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
     // There is no persistent WGPU state in which to count retries. Complete this diagnostic
     // request as a terminal setup failure rather than rearming an impossible capture forever.

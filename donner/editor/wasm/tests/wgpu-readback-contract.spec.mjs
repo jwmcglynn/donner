@@ -449,17 +449,27 @@ test("worker WebGPU startup keeps its browser Promise bridge private and single-
     1,
     "browser device acquisition must continue from that adapter exactly once",
   );
-  assert.doesNotMatch(geodeSelectionSource, /WebGPU\.importJsAdapter/);
+  assert.match(
+    browserBridge[1],
+    /WebGPU\.importJsAdapter\(adapter, instance\)/,
+    "the adapter the browser chose has to come back too: a caller asking what its surface can "
+      + "present needs an adapter to ask",
+  );
   assert.match(geodeSelectionSource, /WebGPU\.importJsDevice\(device, instance\)/);
+  assert.match(
+    browserBridge[1],
+    /device\.onuncapturederror\s*=/,
+    "an imported device carries no C-level uncaptured-error callback, so the bridge installs one",
+  );
   assert.match(geodeSelectionSource, /\.catch\(\(\) => 1\)/);
   assert.doesNotMatch(geodeSelectionSource, /Module\["_.*Geode.*"\]/);
   assert.match(
     geodeSelectionSource,
-    /Atomics\.store\(HEAP32, deviceOut >> 2, devicePtr\)/,
+    /Atomics\.store\(HEAP32, handlesOut >> 2, devicePtr\)/,
   );
   assert.match(
     geodeSelectionSource,
-    /setTimeout\([\s\S]*Atomics\.store\(HEAP32, deviceOut >> 2, devicePtr\)/,
+    /setTimeout\([\s\S]*Atomics\.store\(HEAP32, handlesOut >> 2, devicePtr\)/,
     "the result store must cross a browser task before releasing the waiting pthread",
   );
 

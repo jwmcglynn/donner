@@ -143,6 +143,16 @@ struct GpuRootSelection {
   /// no surface can constrain - a Metal layer presents from any Metal adapter the system reports -
   /// so selection is left unconstrained.
   std::function<std::optional<wgpu::Surface>(const wgpu::Instance&)> compatibleSurface;
+
+  /// Whether an absent `WGPU_BACKEND` override falls back to the platform's preferred backend
+  /// rather than leaving the choice to the driver.
+  ///
+  /// Offscreen selection does: a headless run that silently lands on a different backend than the
+  /// one its expectations were recorded against is a failure that looks like a rendering bug. A
+  /// caller that presents to a window does not, because the window is served by whatever backend
+  /// the system can drive its surface with, and narrowing that leaves a host whose preferred
+  /// backend is unusable with no adapter at all.
+  bool usePlatformDefaultBackend = true;
 };
 
 /**

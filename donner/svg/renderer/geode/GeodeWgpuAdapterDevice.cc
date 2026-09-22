@@ -37,12 +37,20 @@ namespace donner::geode {
 #ifdef __EMSCRIPTEN__
 // clang-format off: EM_JS contains JavaScript, whose arrow syntax clang-format corrupts.
 // Keep this internal import name compact: EM_JS function names survive Closure in editor.js.
-EM_JS(void, G, (void* deviceOut, WGPUInstance instance), {
+EM_JS(void, G, (void* handlesOut, WGPUInstance instance), {
   navigator.gpu.requestAdapter()
-    .then((adapter) => adapter.requestDevice())
-    .then((device) => WebGPU.importJsDevice(device, instance))
+    .then((adapter) => adapter.requestDevice().then((device) => {
+      // An imported device carries no C-level uncaptured-error callback, because only a device
+      // created through a descriptor is given one. Report them from here so a validation error in
+      // the browser is as visible as it is natively.
+      device.onuncapturederror = (event) => console.error(
+        '[Geode/emscripten] Uncaptured error: ' + event.error.message);
+      // Published before the device below, which is the store the waiting thread is watching.
+      Atomics.store(HEAP32, (handlesOut >> 2) + 1, WebGPU.importJsAdapter(adapter, instance));
+      return WebGPU.importJsDevice(device, instance);
+    }))
     .catch(() => 1)
-    .then((devicePtr) => setTimeout(() => Atomics.store(HEAP32, deviceOut >> 2, devicePtr)));
+    .then((devicePtr) => setTimeout(() => Atomics.store(HEAP32, handlesOut >> 2, devicePtr)));
 });
 // clang-format on
 #endif
@@ -189,7 +197,7 @@ void OnDeviceLost(WGPUDevice const* /*device*/, WGPUDeviceLostReason reason, WGP
   }
 }
 
-wgpu::BackendType RequestedBackend() {
+wgpu::BackendType RequestedBackend(bool usePlatformDefault) {
   const char* backendEnv = std::getenv("WGPU_BACKEND");
   if (backendEnv != nullptr && backendEnv[0] != '\0') {
     const std::string_view backend(backendEnv);
@@ -216,6 +224,9 @@ wgpu::BackendType RequestedBackend() {
                  static_cast<int>(backend.size()), backend.data());
   }
 
+  if (!usePlatformDefault) {
+    return wgpu::BackendType::Undefined;
+  }
 #if defined(__linux__)
   return wgpu::BackendType::Vulkan;
 #else
@@ -353,12 +364,17 @@ GeodeGpuRootCapabilities QueryRootCapabilities(const GeodeWgpuRoots& handles) {
 }
 
 #ifdef __EMSCRIPTEN__
+/// Slots the browser import bridge writes into, in the order it writes them: the adapter first,
+/// then the device, whose store is what releases the waiting thread.
 struct BrowserImportState {
   std::atomic<WGPUDevice> device = nullptr;
+  std::atomic<WGPUAdapter> adapter = nullptr;
 };
-static_assert(sizeof(BrowserImportState) == sizeof(WGPUDevice));
+static_assert(sizeof(BrowserImportState) == 2 * sizeof(WGPUDevice));
 static_assert(alignof(BrowserImportState) == alignof(WGPUDevice));
+static_assert(offsetof(BrowserImportState, adapter) == sizeof(WGPUDevice));
 static_assert(std::atomic<WGPUDevice>::is_always_lock_free);
+static_assert(std::atomic<WGPUAdapter>::is_always_lock_free);
 
 /// Imports the browser's WebGPU device, which is the only selection that platform offers.
 /// @param handles Root handles to populate; left partly filled on failure.
@@ -386,8 +402,8 @@ bool ImportBrowserRoot(GeodeWgpuRoots& handles, const GpuRootSelection& options)
 
   // WebKit cannot drive Emdawn's adapter/device futures through WaitAnyOnly from a transferred
   // renderer pthread. Import one direct Promise chain, then cross a task boundary before the C
-  // continuation initializes pipelines. The adapter stays JavaScript-only because Emdawn accepts
-  // the instance as an imported device's future parent. Snapshot map futures still use
+  // continuation initializes pipelines. Both handles come back through it, because requesting
+  // either through the C API is the future WebKit cannot drive. Snapshot map futures still use
   // TimedWaitAny.
   BrowserImportState state;
   WGPUDevice importedDevice = nullptr;
@@ -397,6 +413,14 @@ bool ImportBrowserRoot(GeodeWgpuRoots& handles, const GpuRootSelection& options)
   }
   if (reinterpret_cast<std::uintptr_t>(importedDevice) == 1) {
     std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU device request failed.\n");
+    return false;
+  }
+  // Written before the device store the loop above was watching, so it is visible now. A caller
+  // asking what its surface can present has an adapter to ask, which is what the editor's window
+  // does before it compiles a pipeline for the answer.
+  handles.adapter = wgpu::Adapter(state.adapter.load(std::memory_order_acquire));
+  if (!handles.adapter) {
+    std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU adapter import returned null.\n");
     return false;
   }
   handles.device = wgpu::Device(importedDevice);
@@ -480,7 +504,7 @@ std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
 #else
   // 1. Create the instance. `wgpuCreateInstance` is synchronous and never blocks on I/O; the
   //    returned handle is the root of the object graph.
-  const wgpu::BackendType backendType = RequestedBackend();
+  const wgpu::BackendType backendType = RequestedBackend(options.usePlatformDefaultBackend);
   handles.instance = CreateSelectionInstance(backendType);
   if (!handles.instance) {
     std::fprintf(stderr, "[Geode/wgpu-native] wgpuCreateInstance returned null\n");
