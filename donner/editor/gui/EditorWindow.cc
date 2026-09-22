@@ -2142,6 +2142,198 @@ std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentation
 }
 #endif
 
+#ifdef DONNER_EDITOR_WGPU
+bool EditorWindow::configureFrameTarget(int displayW, int displayH) {
+  if (displayW == wgpuState_->configuredWidth && displayH == wgpuState_->configuredHeight) {
+    return true;
+  }
+  if (wgpuState_->presentation != nullptr) {
+    if (!wgpuState_->presentation->configure(displayW, displayH)) {
+      return false;
+    }
+  } else {
+    wgpuState_->offscreenTexture =
+        CreateOffscreenTargetTexture(wgpuState_->framebufferGeodeDevice->runtimeDevice(), displayW,
+                                     displayH, wgpuState_->surfaceFormat, wgpuState_->surfaceUsage);
+    if (!wgpuState_->offscreenTexture.isValid()) {
+      return false;
+    }
+  }
+  wgpuState_->configuredWidth = displayW;
+  wgpuState_->configuredHeight = displayH;
+  return true;
+}
+
+bool EditorWindow::drawFrameBelowUi(const wgpu::Texture& target, const gpu::Texture& frameTarget,
+                                    Vector2i framebufferSizePx,
+                                    const Vector2d& framebufferFromLogicalScale, bool hasUnderlay,
+                                    bool hasDirect, EditorWindowFrameTiming& timing) {
+  if (hasUnderlay || hasDirect) {
+    const auto underlayStart = std::chrono::steady_clock::now();
+    donner::geode::ScopedWgpuHandle<wgpu::TextureView> clearView(target.createView());
+    if (!clearView) {
+      return false;
+    }
+    donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> clearEncoder(
+        wgpuState_->root->device().createCommandEncoder());
+    if (!clearEncoder) {
+      return false;
+    }
+    wgpu::RenderPassColorAttachment clearColor = {};
+    clearColor.view = clearView.get();
+    clearColor.loadOp = wgpu::LoadOp::Clear;
+    clearColor.storeOp = wgpu::StoreOp::Store;
+    clearColor.clearValue = {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+                             options_.clearColor[3]};
+    clearColor.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+
+    wgpu::RenderPassDescriptor clearPassDesc = {};
+    clearPassDesc.colorAttachmentCount = 1;
+    clearPassDesc.colorAttachments = &clearColor;
+    donner::geode::ScopedWgpuHandle<wgpu::RenderPassEncoder> clearPass(
+        clearEncoder.get().beginRenderPass(clearPassDesc));
+    if (!clearPass) {
+      return false;
+    }
+    clearPass.get().end();
+    clearPass.reset();
+    donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> clearCommands(clearEncoder.get().finish());
+    if (!clearCommands) {
+      return false;
+    }
+    wgpuState_->root->queue().submit(1, &clearCommands.get());
+
+    if (hasUnderlay) {
+      EditorWindowWgpuRenderTarget underlayTarget{
+          .texture = frameTarget,
+          .framebufferSizePx = framebufferSizePx,
+          .framebufferFromLogicalScale = framebufferFromLogicalScale,
+      };
+      wgpuUnderlayRenderCallback_(underlayTarget);
+      timing.underlayMs = ElapsedMs(underlayStart);
+    }
+  }
+
+  // The direct pass carries selection/path chrome. It belongs above the
+  // document underlay, but below every ImGui surface so menus, popups, and
+  // contextual controls remain usable and visually unobstructed.
+  if (hasDirect) {
+    const auto directStart = std::chrono::steady_clock::now();
+    EditorWindowWgpuRenderTarget directTarget{
+        .texture = frameTarget,
+        .framebufferSizePx = framebufferSizePx,
+        .framebufferFromLogicalScale = framebufferFromLogicalScale,
+    };
+    wgpuDirectRenderCallback_(directTarget);
+    timing.directMs = ElapsedMs(directStart);
+  }
+  return true;
+}
+
+bool EditorWindow::recordFrameUi(const gpu::Texture& frameTarget, Vector2i framebufferSizePx,
+                                 bool loadExisting, EditorWindowFrameTiming& timing) {
+  const auto imguiDrawStart = std::chrono::steady_clock::now();
+  if (wgpuState_->uiRenderer == nullptr) {
+    return false;
+  }
+  {
+    ZoneScopedN("EditorWindow::renderUiDrawData");
+    // The host-side staging arrays the frame's geometry is packed into only ever grow, so one
+    // busy frame sets their size for the rest of the session. Tagged so the large-block table
+    // names them instead of listing anonymous multi-megabyte blocks.
+    const ScopedAllocTag imguiUploadTag(AllocTag::PresentationUpload);
+    if (!RenderUiDrawData(wgpuState_->framebufferGeodeDevice->runtimeDevice(),
+                          *wgpuState_->uiRenderer, frameTarget,
+                          {static_cast<uint32_t>(framebufferSizePx.x),
+                           static_cast<uint32_t>(framebufferSizePx.y)},
+                          loadExisting,
+                          {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+                           options_.clearColor[3]})) {
+      return false;
+    }
+  }
+  timing.imguiDrawMs = ElapsedMs(imguiDrawStart);
+  return true;
+}
+
+bool EditorWindow::recordFrameReadback(const wgpu::Texture& target, const wgpu::Buffer& buffer,
+                                       uint32_t width, uint32_t height, uint32_t bytesPerRow,
+                                       EditorWindowFrameTiming& timing) {
+  const auto readbackStart = std::chrono::steady_clock::now();
+  donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
+      wgpuState_->root->device().createCommandEncoder());
+  if (!encoder) {
+    return false;
+  }
+  CopySurfaceTextureToReadbackBuffer(target, buffer, width, height, bytesPerRow, encoder.get());
+  donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
+  if (!commands) {
+    return false;
+  }
+  wgpuState_->root->queue().submit(1, &commands.get());
+  timing.readbackMs += ElapsedMs(readbackStart);
+  return true;
+}
+
+void EditorWindow::readFrameReadback(const wgpu::Buffer& buffer, uint64_t byteSize, uint32_t width,
+                                     uint32_t height, uint32_t bytesPerRow,
+                                     svg::RendererBitmap* destination,
+                                     EditorWindowFrameTiming& timing) {
+  if (!MapReadbackBuffer(wgpuState_->root->device(), buffer, byteSize,
+                         wgpuState_->framebufferGeodeDevice)) {
+    return;
+  }
+  const auto readbackStart = std::chrono::steady_clock::now();
+  const uint8_t* mapped = static_cast<const uint8_t*>(buffer.getConstMappedRange(0, byteSize));
+  if (mapped != nullptr) {
+    CopyMappedSurfaceToBitmap(mapped, width, height, bytesPerRow, wgpuState_->surfaceFormat,
+                              destination);
+  }
+  buffer.unmap();
+  timing.readbackMs += ElapsedMs(readbackStart);
+}
+#else
+void EditorWindow::endFrameGl(svg::RendererBitmap* readback, int displayW, int displayH,
+                              EditorWindowFrameTiming& timing) {
+  glViewport(0, 0, displayW, displayH);
+  glClearColor(options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+               options_.clearColor[3]);
+  glClear(GL_COLOR_BUFFER_BIT);
+  {
+    ZoneScopedN("ImGui_ImplOpenGL3_RenderDrawData");
+    const auto imguiDrawStart = std::chrono::steady_clock::now();
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    timing.imguiDrawMs = ElapsedMs(imguiDrawStart);
+  }
+  if (readback != nullptr && displayW > 0 && displayH > 0) {
+    ZoneScopedN("glReadPixels");
+    const auto readbackStart = std::chrono::steady_clock::now();
+    constexpr int kChannels = 4;
+    const std::size_t rowBytes = static_cast<std::size_t>(displayW) * kChannels;
+    std::vector<uint8_t> bottomUp(rowBytes * static_cast<std::size_t>(displayH));
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadBuffer(GL_BACK);
+    glReadPixels(0, 0, displayW, displayH, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
+    readback->dimensions = Vector2i(displayW, displayH);
+    readback->rowBytes = rowBytes;
+    readback->alphaType = svg::AlphaType::Premultiplied;
+    readback->pixels.resize(bottomUp.size());
+    for (int y = 0; y < displayH; ++y) {
+      const uint8_t* src = bottomUp.data() + static_cast<std::size_t>(displayH - 1 - y) * rowBytes;
+      uint8_t* dst = readback->pixels.data() + static_cast<std::size_t>(y) * rowBytes;
+      std::memcpy(dst, src, rowBytes);
+    }
+    timing.readbackMs = ElapsedMs(readbackStart);
+  }
+  {
+    ZoneScopedN("glfwSwapBuffers");
+    const auto presentStart = std::chrono::steady_clock::now();
+    glfwSwapBuffers(window_);
+    timing.presentMs = ElapsedMs(presentStart);
+  }
+}
+#endif
+
 void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   ZoneScopedN("EditorWindow::endFrame");
   EditorWindowFrameTiming timing;
@@ -2267,21 +2459,8 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       .consecutiveFailures = wgpuState_->smokeReadbackConsecutiveFailures,
   };
 #endif
-  if (displayW != wgpuState_->configuredWidth || displayH != wgpuState_->configuredHeight) {
-    if (wgpuState_->presentation != nullptr) {
-      if (!wgpuState_->presentation->configure(displayW, displayH)) {
-        return;
-      }
-    } else {
-      wgpuState_->offscreenTexture = CreateOffscreenTargetTexture(
-          wgpuState_->framebufferGeodeDevice->runtimeDevice(), displayW, displayH,
-          wgpuState_->surfaceFormat, wgpuState_->surfaceUsage);
-      if (!wgpuState_->offscreenTexture.isValid()) {
-        return;
-      }
-    }
-    wgpuState_->configuredWidth = displayW;
-    wgpuState_->configuredHeight = displayH;
+  if (!configureFrameTarget(displayW, displayH)) {
+    return;
   }
 
   // Holds this frame's acquisition for as long as the frame is being drawn; presenting it below
@@ -2332,116 +2511,22 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   const bool hasUnderlayRenderCallback = static_cast<bool>(wgpuUnderlayRenderCallback_);
   const bool hasDirectRenderCallback = static_cast<bool>(wgpuDirectRenderCallback_);
   const bool hasPreImGuiFramebufferContent = hasUnderlayRenderCallback || hasDirectRenderCallback;
-  if (hasPreImGuiFramebufferContent) {
-    const auto underlayStart = std::chrono::steady_clock::now();
-    donner::geode::ScopedWgpuHandle<wgpu::TextureView> clearView(target.createView());
-    if (!clearView) {
-      return;
-    }
-    donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> clearEncoder(
-        wgpuState_->root->device().createCommandEncoder());
-    if (!clearEncoder) {
-      return;
-    }
-    wgpu::RenderPassColorAttachment clearColor = {};
-    clearColor.view = clearView.get();
-    clearColor.loadOp = wgpu::LoadOp::Clear;
-    clearColor.storeOp = wgpu::StoreOp::Store;
-    clearColor.clearValue = {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
-                             options_.clearColor[3]};
-    clearColor.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-
-    wgpu::RenderPassDescriptor clearPassDesc = {};
-    clearPassDesc.colorAttachmentCount = 1;
-    clearPassDesc.colorAttachments = &clearColor;
-    donner::geode::ScopedWgpuHandle<wgpu::RenderPassEncoder> clearPass(
-        clearEncoder.get().beginRenderPass(clearPassDesc));
-    if (!clearPass) {
-      return;
-    }
-    clearPass.get().end();
-    clearPass.reset();
-    donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> clearCommands(clearEncoder.get().finish());
-    if (!clearCommands) {
-      return;
-    }
-    wgpuState_->root->queue().submit(1, &clearCommands.get());
-
-    if (hasUnderlayRenderCallback) {
-      EditorWindowWgpuRenderTarget underlayTarget{
-          .texture = frameTarget,
-          .framebufferSizePx = Vector2i(displayW, displayH),
-          .framebufferFromLogicalScale = framebufferFromLogicalScale,
-      };
-      wgpuUnderlayRenderCallback_(underlayTarget);
-      timing.underlayMs = ElapsedMs(underlayStart);
-    }
+  if (!drawFrameBelowUi(target, frameTarget, Vector2i(displayW, displayH),
+                        framebufferFromLogicalScale, hasUnderlayRenderCallback,
+                        hasDirectRenderCallback, timing)) {
+    return;
   }
-
-  // The direct pass carries selection/path chrome. It belongs above the
-  // document underlay, but below every ImGui surface so menus, popups, and
-  // contextual controls remain usable and visually unobstructed.
-  if (hasDirectRenderCallback) {
-    const auto directStart = std::chrono::steady_clock::now();
-    EditorWindowWgpuRenderTarget directTarget{
-        .texture = frameTarget,
-        .framebufferSizePx = Vector2i(displayW, displayH),
-        .framebufferFromLogicalScale = framebufferFromLogicalScale,
-    };
-    wgpuDirectRenderCallback_(directTarget);
-    timing.directMs = ElapsedMs(directStart);
+  if (!recordFrameUi(frameTarget, Vector2i(displayW, displayH), hasPreImGuiFramebufferContent,
+                     timing)) {
+    return;
   }
-
-  {
-    const auto imguiDrawStart = std::chrono::steady_clock::now();
-    if (wgpuState_->uiRenderer == nullptr) {
-      return;
-    }
-    {
-      ZoneScopedN("EditorWindow::renderUiDrawData");
-      // The host-side staging arrays the frame's geometry is packed into only ever grow, so one
-      // busy frame sets their size for the rest of the session. Tagged so the large-block table
-      // names them instead of listing anonymous multi-megabyte blocks.
-      const ScopedAllocTag imguiUploadTag(AllocTag::PresentationUpload);
-      if (!RenderUiDrawData(wgpuState_->framebufferGeodeDevice->runtimeDevice(),
-                            *wgpuState_->uiRenderer, frameTarget,
-                            {static_cast<uint32_t>(displayW), static_cast<uint32_t>(displayH)},
-                            hasPreImGuiFramebufferContent,
-                            {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
-                             options_.clearColor[3]})) {
-        return;
-      }
-    }
-    timing.imguiDrawMs = ElapsedMs(imguiDrawStart);
+  if (readbackBuffer && !recordFrameReadback(target, readbackBuffer.get(), readbackWidth,
+                                             readbackHeight, readbackBytesPerRow, timing)) {
+    return;
   }
-  if (readbackBuffer) {
-    const auto readbackStart = std::chrono::steady_clock::now();
-    donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
-        wgpuState_->root->device().createCommandEncoder());
-    if (!encoder) {
-      return;
-    }
-    CopySurfaceTextureToReadbackBuffer(target, readbackBuffer.get(), readbackWidth, readbackHeight,
-                                       readbackBytesPerRow, encoder.get());
-    donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
-    if (!commands) {
-      return;
-    }
-    wgpuState_->root->queue().submit(1, &commands.get());
-    timing.readbackMs += ElapsedMs(readbackStart);
-  }
-  if (targetReadback != nullptr && readbackBuffer &&
-      MapReadbackBuffer(wgpuState_->root->device(), readbackBuffer.get(), readbackBufferSize,
-                        wgpuState_->framebufferGeodeDevice)) {
-    const auto readbackStart = std::chrono::steady_clock::now();
-    const uint8_t* mapped = static_cast<const uint8_t*>(
-        readbackBuffer.get().getConstMappedRange(0, readbackBufferSize));
-    if (mapped != nullptr) {
-      CopyMappedSurfaceToBitmap(mapped, readbackWidth, readbackHeight, readbackBytesPerRow,
-                                wgpuState_->surfaceFormat, targetReadback);
-    }
-    readbackBuffer.get().unmap();
-    timing.readbackMs += ElapsedMs(readbackStart);
+  if (targetReadback != nullptr && readbackBuffer) {
+    readFrameReadback(readbackBuffer.get(), readbackBufferSize, readbackWidth, readbackHeight,
+                      readbackBytesPerRow, targetReadback, timing);
   }
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   if (requestAsyncSmokeReadback && readbackBuffer) {
@@ -2463,42 +2548,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     timing.presentMs = ElapsedMs(presentStart);
   }
 #else
-  glViewport(0, 0, displayW, displayH);
-  glClearColor(options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
-               options_.clearColor[3]);
-  glClear(GL_COLOR_BUFFER_BIT);
-  {
-    ZoneScopedN("ImGui_ImplOpenGL3_RenderDrawData");
-    const auto imguiDrawStart = std::chrono::steady_clock::now();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-    timing.imguiDrawMs = ElapsedMs(imguiDrawStart);
-  }
-  if (readback != nullptr && displayW > 0 && displayH > 0) {
-    ZoneScopedN("glReadPixels");
-    const auto readbackStart = std::chrono::steady_clock::now();
-    constexpr int kChannels = 4;
-    const std::size_t rowBytes = static_cast<std::size_t>(displayW) * kChannels;
-    std::vector<uint8_t> bottomUp(rowBytes * static_cast<std::size_t>(displayH));
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadBuffer(GL_BACK);
-    glReadPixels(0, 0, displayW, displayH, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
-    readback->dimensions = Vector2i(displayW, displayH);
-    readback->rowBytes = rowBytes;
-    readback->alphaType = svg::AlphaType::Premultiplied;
-    readback->pixels.resize(bottomUp.size());
-    for (int y = 0; y < displayH; ++y) {
-      const uint8_t* src = bottomUp.data() + static_cast<std::size_t>(displayH - 1 - y) * rowBytes;
-      uint8_t* dst = readback->pixels.data() + static_cast<std::size_t>(y) * rowBytes;
-      std::memcpy(dst, src, rowBytes);
-    }
-    timing.readbackMs = ElapsedMs(readbackStart);
-  }
-  {
-    ZoneScopedN("glfwSwapBuffers");
-    const auto presentStart = std::chrono::steady_clock::now();
-    glfwSwapBuffers(window_);
-    timing.presentMs = ElapsedMs(presentStart);
-  }
+  endFrameGl(readback, displayW, displayH, timing);
 #endif
 #ifdef __EMSCRIPTEN__
   // Keep the HTML loading surface visible until a real editor frame has reached the browser

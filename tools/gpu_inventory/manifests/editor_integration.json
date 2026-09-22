@@ -174,8 +174,10 @@
       ],
       "wgpuCppTokens": [
         "Adapter",
+        "Buffer",
         "Instance",
-        "Surface"
+        "Surface",
+        "Texture"
       ]
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
