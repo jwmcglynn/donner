@@ -4,6 +4,7 @@
 #include <atomic>
 
 #include "donner/base/MemoryAttribution.h"
+#include "donner/base/Utils.h"
 // The browser tier is Geode-only, so `__EMSCRIPTEN__` always implies `DONNER_EDITOR_WGPU`.
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -1608,6 +1609,13 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     TerminateGlfw();
     return;
   }
+  // Presentation, surface readback and UI texture registration still reach the transitional
+  // adapter's wgpu objects directly. Halting names the gap; a window that failed to open instead
+  // reads to its tests as a host without a GPU, and they skip.
+  UTILS_RELEASE_ASSERT_MSG(
+      root->capabilities().backend == geode::GpuBackendKind::TransitionalWgpu,
+      "EditorWindow presents only through the transitional adapter, and the process selected a "
+      "native GPU backend");
 
   bool enableSurfaceReadback = options_.enableFramebufferReadback;
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)

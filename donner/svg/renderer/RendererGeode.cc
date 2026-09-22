@@ -6811,6 +6811,12 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
     const auto key = geodeTexture->backing_.get();
     auto found = impl_->frameSnapshotImports.find(key);
     if (found == impl_->frameSnapshotImports.end()) {
+      // Naming another context's texture here is a registration only the transitional adapter
+      // performs so far; a native context refuses the draw rather than reach for one.
+      if (!impl_->device->hasTransitionalAdapter() ||
+          !geodeTexture->device_->hasTransitionalAdapter()) {
+        return false;
+      }
       gpu::Result<gpu::Texture> imported = impl_->device->adapterDevice().importTextureFrom(
           geodeTexture->device_->adapterDevice(), *source);
       if (imported.hasError()) {
