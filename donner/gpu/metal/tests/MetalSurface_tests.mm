@@ -12,6 +12,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -370,6 +371,33 @@ TEST_F(MetalSurfaceTest, DestroyingASurfaceReturnsTheFrameItWasHolding) {
     ASSERT_EQ(next.status, SurfaceStatus::Success) << "frame " << frameIndex;
     EXPECT_THAT(device_->abandonCurrentTexture(replacement), IsOk()) << "frame " << frameIndex;
   }
+}
+
+TEST_F(MetalSurfaceTest, PresentingOverALostRootReportsTheLoss) {
+  // A device that shares its root's loss condition with a sibling, as selected devices do.
+  const auto rootLoss = std::make_shared<DeviceLostState>();
+  device_ = MetalDevice::Create(MetalDevice::MemoryModel::Detected, kMaxBufferByteSize,
+                                std::chrono::seconds(5), rootLoss);
+  const std::unique_ptr<MetalDevice> sibling = MetalDevice::Create(
+      MetalDevice::MemoryModel::Detected, kMaxBufferByteSize, std::chrono::seconds(5), rootLoss);
+  ASSERT_NE(device_, nullptr);
+  ASSERT_NE(sibling, nullptr);
+  const Surface surface = configuredSurface();
+  SurfaceTexture frame = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_EQ(frame.status, SurfaceStatus::Success);
+
+  // The frame's work has not finished when the sibling gives up on the root.
+  device_->holdNextCompletionForTest();
+  (void)renderClear(frame.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+  ASSERT_TRUE(device_->waitForCompletionHandlersForTest(1, 30.0));
+  sibling->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
+                                    "a sibling's queue drain gave up");
+
+  const Result<SurfaceStatus> presented = device_->presentSurface(surface);
+  ASSERT_THAT(presented, HasResult())
+      << "a lost root is a status the caller acts on, not a failure to present";
+  EXPECT_EQ(presented.result(), SurfaceStatus::DeviceLost);
+  device_->releaseHeldCompletionForTest();
 }
 
 }  // namespace
