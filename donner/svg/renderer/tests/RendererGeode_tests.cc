@@ -6761,8 +6761,7 @@ TEST_F(RendererGeodeTest, PlacementExactCoverageAtLargePathCoordinates) {
 // none of them. Each case puts the path-space origin inside the geometry, where a zero mapping
 // would otherwise read full coverage, and runs a different pipeline: a solo fill, a cross-entity
 // batch of two paints, a gradient, a clip mask and a pattern. Every render must be identical to a
-// fully transparent target; none of the paints is white, which pixelmatch could not tell from
-// transparent because it compares colours composited over white.
+// fully transparent target.
 TEST_F(RendererGeodeTest, TransformWithoutInverseDrawsNothing) {
   constexpr std::array<std::string_view, 3> kSingularTransforms = {
       "matrix(1 3 3 9 13 29)",
