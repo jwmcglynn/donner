@@ -876,7 +876,6 @@ struct ResolvedClip {
 struct ImageParams {
   /// Destination rectangle in device-independent units.
   Box2d targetRect;
-  double opacity = 1.0;
   /// Legacy source-compatibility switch. New callers set `imageRendering`.
   bool imageRenderingPixelated = false;
   /// Source entity the drawn image was loaded onto. Set by the driver at the `drawImage`

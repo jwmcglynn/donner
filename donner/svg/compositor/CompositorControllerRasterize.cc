@@ -993,16 +993,8 @@ bool CompositorController::composePayload(
   ImageParams params;
   params.targetRect = Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(payloadDims.x),
                                                        static_cast<double>(payloadDims.y)));
-  // Reset the renderer's per-element paint state to defaults (opacity 1.0)
-  // before blitting a composited tile. The renderer convention is that
-  // `setPaint` is called before every draw; this tile blit isn't a normal
-  // element draw, so without it the blit inherits whatever `paintOpacity_` the
-  // previous draw left behind. When the prior compose step direct-renders an
-  // immediate layer whose range ends inside an opacity group (e.g. the
-  // splash `#Clouds_with_gradients` group, opacity 0.75), that group opacity
-  // leaks into this blit and dims the (already fully-composited) tile -
-  // the #633 cached-segment drag divergence (the same tile drawn immediate
-  // sets its own paint, which is why caching it exposed the leak).
+  // Tile blits are not element draws. Reset per-element paint so they cannot inherit styling
+  // from the previous element on a backend that consumes paint state for bitmap payloads.
   renderer().setPaint(PaintParams{});
   renderer().setTransform(canvasFromPayload);
   if (texture != nullptr) {

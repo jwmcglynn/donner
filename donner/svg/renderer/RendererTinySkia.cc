@@ -2271,7 +2271,6 @@ void RendererTinySkia::endPatternTile(bool forStroke) {
 
 void RendererTinySkia::setPaint(const PaintParams& paint) {
   paint_ = paint;
-  paintOpacity_ = paint.opacity;
 }
 
 bool RendererTinySkia::applyPathLengthAdjustment(const Path& path, StrokeParams& stroke) {
@@ -2645,7 +2644,6 @@ void RendererTinySkia::drawImagePixmap(const tiny_skia::PixmapView& source, int 
       tiny_skia::Pixmap& destination = currentPixmap();
       tiny_skia::PixmapPaint paint =
           makePixmapPaint(destination, tiny_skia::FilterQuality::Nearest);
-      paint.opacity = NarrowToFloat(params.opacity * paintOpacity_);
       paint.blendMode = tiny_skia::BlendMode::SourceOver;
       const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
       DrawProceduralPixelatedImage(source, sourceWidth, sourceHeight, plan.destFromSource,
@@ -2659,7 +2657,6 @@ void RendererTinySkia::drawImagePixmap(const tiny_skia::PixmapView& source, int 
 
   tiny_skia::PixmapPaint paint =
       makePixmapPaint(currentPixmap(), FilterQualityForImageRendering(imageRendering));
-  paint.opacity = NarrowToFloat(params.opacity * paintOpacity_);
   paint.blendMode = tiny_skia::BlendMode::SourceOver;
 
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;

@@ -329,7 +329,6 @@ TEST_F(GeodePerfTest, MultiImageBlit_PoolsCompositeUniforms) {
 
   ImageParams params;
   params.targetRect = Box2d({8.0, 8.0}, {24.0, 24.0});
-  params.opacity = 1.0;
 
   renderer.drawImage(image, params);
   params.targetRect = Box2d({32.0, 8.0}, {48.0, 24.0});

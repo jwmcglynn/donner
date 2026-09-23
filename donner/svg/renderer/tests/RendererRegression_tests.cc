@@ -264,6 +264,25 @@ RendererBitmap RenderTextOpacityCase(std::string_view body) {
   return RenderDocumentWithBackend(document, ActiveRendererBackend());
 }
 
+RendererBitmap RenderImageOpacityCase(bool imageOpacity, bool groupOpacity) {
+  std::string body = R"svg(<rect width="64" height="64" fill="white"/>)svg";
+  if (groupOpacity) {
+    body += R"svg(<g opacity="0.5">)svg";
+  }
+  body += R"svg(<image x="16" y="16" width="32" height="32")svg";
+  if (imageOpacity) {
+    body += R"svg( opacity="0.5")svg";
+  }
+  body += R"svg( href=")svg";
+  body += kRedImageDataUri;
+  body += R"svg("/>)svg";
+  if (groupOpacity) {
+    body += "</g>";
+  }
+  SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(64, 64));
+  return RenderDocumentWithBackend(document, ActiveRendererBackend());
+}
+
 class RendererRegressionTests : public ImageComparisonTestFixture {};
 
 TEST_F(RendererRegressionTests, FontPropertiesDoNotChangeReducedCrosshair) {
@@ -610,6 +629,15 @@ TEST_F(RendererRegressionTests, TextOpacityAppliesOnceLikeGroupOpacity) {
   ExpectVisibleBitmap(textOpacity, "text_opacity_visible");
   ExpectBitmapsDiffer(textOpacity, opaque, "text_opacity_differs_from_opaque");
   ExpectBitmapsIdentical(textOpacity, groupOpacity, "text_opacity_matches_group_opacity");
+}
+
+TEST_F(RendererRegressionTests, ImageOpacityAppliesOnceLikeGroupOpacity) {
+  const RendererBitmap imageOpacity = RenderImageOpacityCase(true, false);
+  const RendererBitmap groupOpacity = RenderImageOpacityCase(false, true);
+  const RendererBitmap opaque = RenderImageOpacityCase(false, false);
+
+  ExpectBitmapsDiffer(imageOpacity, opaque, "image_opacity_differs_from_opaque");
+  ExpectBitmapsIdentical(imageOpacity, groupOpacity, "image_opacity_matches_group_opacity");
 }
 
 TEST_F(RendererRegressionTests, EffectSpanLayoutRunsOncePerTextElement) {

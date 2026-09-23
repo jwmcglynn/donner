@@ -3553,7 +3553,6 @@ TEST_F(RendererGeodeTest, DrawImageFourColorQuadrants) {
 
   ImageParams params;
   params.targetRect = Box2d({16.0, 16.0}, {48.0, 48.0});
-  params.opacity = 1.0;
   params.imageRendering = ImageRendering::Pixelated;
 
   renderer.drawImage(image, params);
@@ -3638,7 +3637,6 @@ TEST_F(RendererGeodeTest, DrawImageHonorsTransformStack) {
 
   ImageParams params;
   params.targetRect = Box2d({0.0, 0.0}, {8.0, 8.0});
-  params.opacity = 1.0;
 
   renderer.pushTransform(Transform2d::Translate(Vector2d(16, 16)));
   renderer.drawImage(image, params);
@@ -3656,21 +3654,12 @@ TEST_F(RendererGeodeTest, DrawImageHonorsTransformStack) {
   EXPECT_THAT(unshifted, IsTransparent()) << "Unshifted origin should be transparent";
 }
 
-/// `ImageParams::opacity` controls fade at the draw call; ancestor
-/// `opacity` attributes are applied by the driver via
-/// `pushIsolatedLayer`, *not* by multiplying `PaintParams::opacity`
-/// into the draw itself. This test verifies both channels:
-///  * `paint.opacity` alone does NOT attenuate a direct `drawImage`
-///    (because it only takes effect at layer composite time)
-///  * `params.opacity = 0.5` on its own halves the output alpha
-TEST_F(RendererGeodeTest, DrawImageCombinedOpacity) {
+/// Image opacity belongs to the driver's isolated layer. Setting paint opacity alone must not
+/// attenuate a direct image draw.
+TEST_F(RendererGeodeTest, DrawImageIgnoresPaintOpacity) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
-  // paint.opacity is intentionally set but should NOT affect the raster:
-  // it is only honored by the driver's group-opacity path
-  // (pushIsolatedLayer/popIsolatedLayer). params.opacity = 0.5 is the
-  // only channel that fades the draw here.
   PaintParams paint;
   paint.opacity = 0.5;
   renderer.setPaint(paint);
@@ -3682,16 +3671,13 @@ TEST_F(RendererGeodeTest, DrawImageCombinedOpacity) {
 
   ImageParams params;
   params.targetRect = Box2d({16.0, 16.0}, {48.0, 48.0});
-  params.opacity = 0.5;
 
   renderer.drawImage(image, params);
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
   auto center = pixelAt(snap, 32, 32);
-  // Straight-alpha: R=255, A≈128 (255 * 0.5 from params.opacity only).
-  EXPECT_THAT(center, Rgba(Near(255, 2), testing::_, testing::_, Near(128, 2)))
-      << "params.opacity should be applied once while preserving straight-alpha R";
+  EXPECT_THAT(center, RgbaEq(255, 0, 0, 255));
 }
 
 /// Empty image data (width/height = 0) and a zero-size target rect both

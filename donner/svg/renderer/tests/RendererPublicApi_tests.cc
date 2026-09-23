@@ -1124,7 +1124,8 @@ TEST(RendererPublicApiTest, DrawBitmapHonorsPaddedRows) {
   viewport.devicePixelRatio = 1.0;
   renderer.beginFrame(viewport);
 
-  ImageParams params{Box2d(Vector2d::Zero(), Vector2d(2, 2)), 1.0, true};
+  ImageParams params{.targetRect = Box2d(Vector2d::Zero(), Vector2d(2, 2)),
+                     .imageRenderingPixelated = true};
   renderer.drawBitmap(MakePaddedTwoByTwoBitmap(), params);
   renderer.endFrame();
 
@@ -1223,7 +1224,7 @@ TEST(RendererPublicApiTest, ActiveRendererRejectsShortAndTrailingImagePayloads) 
   std::unique_ptr<RendererInterface> renderer = CreateActiveRendererInstance();
   renderer->beginFrame(RenderViewport{.size = Vector2d(2, 1), .devicePixelRatio = 1.0});
 
-  ImageParams shortParams{Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0), 1.0, false};
+  ImageParams shortParams{.targetRect = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0)};
   renderer->drawImage(ImageResource{{255, 0, 0}, 1, 1}, shortParams);
 
   ImageParams trailingParams;

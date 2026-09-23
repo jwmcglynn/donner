@@ -470,7 +470,6 @@ private:
   bool warnedUnsupportedText_ = false;
   RenderViewport viewport_;
   PaintParams paint_;
-  double paintOpacity_ = 1.0;
 
   /// Top-level frame buffer.
   ///
