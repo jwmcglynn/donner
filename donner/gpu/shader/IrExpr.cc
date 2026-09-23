@@ -388,7 +388,7 @@ ShaderResult<IrExpr> Mul(const IrExpr& lhs, const IrExpr& rhs, const RcString& l
 
 ShaderResult<IrExpr> Div(const IrExpr& lhs, const IrExpr& rhs, const RcString& label) {
   // vector / broadcast-scalar and broadcast-scalar / vector with matching element type; the
-  // solid-fill fragment stage needs the latter for `1.0 / fwidth(sample_pos)`.
+  // solid-fill fragment stage needs the latter for its per-axis `1.0 / extent`.
   const IrType& lt = lhs.type();
   const IrType& rt = rhs.type();
   const bool vectorScalar =

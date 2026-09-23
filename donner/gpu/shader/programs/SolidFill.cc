@@ -420,6 +420,9 @@ ShaderResult<IrModule> BuildSolidFillModule() {
                                                                {"_gridPad1", u32},
                                                                {"clipPolygonPlanes", planesArray},
                                                                {"boundingVertices", planesArray},
+                                                               {"pathFromPixel", vec4f},
+                                                               {"pixelOrigin", vec2f},
+                                                               {"pathOffset", vec2f},
                                                            }));
   const IrType bandType = e(IrType::Struct("Band", {
                                                        {"curveStart", u32},
@@ -1200,8 +1203,7 @@ ShaderResult<IrModule> BuildSolidFillModule() {
         "vs_main",
         {IrParam{"vertex_index", u32, std::nullopt, BuiltinInput::VertexIndex},
          IrParam{"instance_index", u32, std::nullopt, BuiltinInput::InstanceIndex}},
-        {IrOutputMember{"clip_pos", vec4f, std::nullopt, BuiltinOutput::Position},
-         IrOutputMember{"sample_pos", vec2f, 0}});
+        {IrOutputMember{"clip_pos", vec4f, std::nullopt, BuiltinOutput::Position}});
     if (result.hasError()) {
       return std::move(result).error();
     }
@@ -1233,16 +1235,14 @@ ShaderResult<IrModule> BuildSolidFillModule() {
 
     const IrExpr clipPos =
         e(Mul(effectiveMvp, e(ConstructVector(vec4f, {dilated, F(0.0f), F(1.0f)}))));
-    e.ok(fn.returnOutputs({clipPos, dilated}));
+    e.ok(fn.returnOutputs({clipPos}));
     e.ok(fn.finish());
   }
 
   // ----- fs_main: dual-ray analytic coverage, fill rule, clips, and paint -----
   {
     auto result = builder.createFragmentEntryPoint(
-        "fs_main",
-        {IrParam{"clip_pos", vec4f, std::nullopt, BuiltinInput::Position},
-         IrParam{"sample_pos", vec2f, 0}},
+        "fs_main", {IrParam{"clip_pos", vec4f, std::nullopt, BuiltinInput::Position}},
         {IrOutputMember{"color", vec4f, 0}});
     if (result.hasError()) {
       return std::move(result).error();
@@ -1250,14 +1250,36 @@ ShaderResult<IrModule> BuildSolidFillModule() {
     FunctionBuilder fn = std::move(result).result();
 
     const IrExpr uniforms = e(fn.ref("uniforms"));
-    const IrExpr samplePos = e(fn.ref("sample_pos"));
 
     const IrExpr pixelCenter =
         e(fn.addLet("pixel_center", e(Swizzle(e(fn.ref("clip_pos")), "xy"))));
 
-    // Path-units per pixel, per axis (sample_pos is linear in viewport position).
-    const IrExpr ppem =
-        e(fn.addLet("ppem", e(Div(F(1.0f), e(CallBuiltin(BuiltinFn::Fwidth, {samplePos}))))));
+    // The pixel center mapped exactly into path space, as the production fill does: the integer
+    // pixel origin comes off first, then the inverse linear transform and the path offset apply.
+    const IrExpr pathFromPixel =
+        e(fn.addLet("path_from_pixel", e(Member(uniforms, "pathFromPixel"))));
+    // An all-zero mapping marks a transform without an inverse, which covers no pixel.
+    e.ok(fn.beginIf(
+        e(CallBuiltin(BuiltinFn::All, {e(Le(e(CallBuiltin(BuiltinFn::Abs, {pathFromPixel})),
+                                            e(ConstructVector(vec4f, {F(0.0f)}))))}))));
+    e.ok(fn.discard());
+    e.ok(fn.endIf());
+    const IrExpr local =
+        e(fn.addLet("local", e(Sub(pixelCenter, e(Member(uniforms, "pixelOrigin"))))));
+    const IrExpr samplePos = e(fn.addLet(
+        "sample_pos",
+        e(Add(e(ConstructVector(
+                  vec2f, {e(Add(e(Mul(e(Swizzle(pathFromPixel, "x")), e(Swizzle(local, "x")))),
+                                e(Mul(e(Swizzle(pathFromPixel, "z")), e(Swizzle(local, "y")))))),
+                          e(Add(e(Mul(e(Swizzle(pathFromPixel, "y")), e(Swizzle(local, "x")))),
+                                e(Mul(e(Swizzle(pathFromPixel, "w")), e(Swizzle(local, "y"))))))})),
+              e(Member(uniforms, "pathOffset"))))));
+
+    // Pixels per path unit, per axis: the reciprocal of the mapping's `fwidth`.
+    const IrExpr ppem = e(fn.addLet(
+        "ppem", e(Div(F(1.0f),
+                      e(Add(e(CallBuiltin(BuiltinFn::Abs, {e(Swizzle(pathFromPixel, "xy"))})),
+                            e(CallBuiltin(BuiltinFn::Abs, {e(Swizzle(pathFromPixel, "zw"))}))))))));
 
     // Horizontal band lookup + ray.
     const IrExpr hCov = e(fn.addVar("hCov", rayCoverageType, e(fn.callFunction("empty_ray", {}))));

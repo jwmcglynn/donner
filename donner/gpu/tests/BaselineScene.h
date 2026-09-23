@@ -22,6 +22,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
+#include "donner/gpu/shader/programs/SlugFill.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 
 namespace donner::gpu::tests {
@@ -201,8 +202,11 @@ struct alignas(16) SolidFillUniforms {
   uint32_t gridPad1;             //!< Padding.
   float clipPolygonPlanes[16];   //!< Four vec4 half-planes (unused: hasClipPolygon == 0).
   float boundingVertices[16];    //!< Two path-space vec2 vertices per vec4, up to eight.
+  float pathFromPixel[4];        //!< Inverse linear transform, two columns, pixel to path.
+  float pixelOrigin[2];          //!< Integer pixel the mapping is taken relative to.
+  float pathOffset[2];           //!< Path position of the translation's fractional remainder.
 };
-static_assert(sizeof(SolidFillUniforms) == 352, "SolidFillUniforms must match the shader layout");
+static_assert(sizeof(SolidFillUniforms) == 384, "SolidFillUniforms must match the shader layout");
 
 /// Builds the same clip-space MVP the production encoder computes: scene -> pixel via
 /// \p pixelFromScene, then pixel -> clip with x_clip = 2x/W - 1 and y_clip = -2y/H + 1 (the Y
@@ -229,6 +233,18 @@ inline void BuildSolidFillMvp(const Transform2d& pixelFromScene, float* out16) {
   out16[12] = static_cast<float>(sx * e - 1.0);
   out16[13] = static_cast<float>(sy * f + 1.0);
   out16[15] = 1.0f;
+}
+
+/// Writes the pixel-to-path mapping the production encoder computes for \p pixelFromScene, so each
+/// fragment maps its own pixel center into scene space exactly as the production shaders do.
+///
+/// @param pixelFromScene Scene-to-pixel transform.
+/// @param uniforms Uniform block to fill.
+inline void WritePixelMapping(const Transform2d& pixelFromScene, SolidFillUniforms& uniforms) {
+  shader::programs::WriteSlugPixelMapping(
+      uniforms, shader::programs::ComputeSlugPixelMapping(
+                    pixelFromScene.data[0], pixelFromScene.data[1], pixelFromScene.data[2],
+                    pixelFromScene.data[3], pixelFromScene.data[4], pixelFromScene.data[5]));
 }
 
 /// Writes an identity 4x4 into \p out16 (column-major). @param out16 Receives sixteen floats.
