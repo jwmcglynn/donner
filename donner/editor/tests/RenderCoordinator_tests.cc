@@ -9,6 +9,7 @@
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/svg/renderer/RendererInterface.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -53,6 +54,10 @@ struct RenderCoordinatorTestAccess {
   static void makeCanvasCommitDue(RenderCoordinator& coordinator) {
     coordinator.pendingCanvasSizeSince_ =
         std::chrono::steady_clock::now() - std::chrono::milliseconds(200);
+  }
+
+  static void clearPresentationRefresh(RenderCoordinator& coordinator) {
+    coordinator.pendingPresentationRefresh_ = false;
   }
 
   static std::optional<std::uint64_t> requestedCommitGeneration(
@@ -1015,6 +1020,66 @@ TEST(RenderCoordinatorTest, DelayedCanvasSizeCommitInvalidatesSameVersionPixelCa
   coordinator.asyncRenderer().cancelInFlight();
   ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
       std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+}
+
+// ---------------------------------------------------------------------------
+// pollRenderResult - a worker result that carries nothing to present.
+// ---------------------------------------------------------------------------
+
+// A worker iteration can end with nothing to present: no compositor tile and no permitted
+// full-canvas payload, for example when the renderer can allocate or read back no surface. The
+// coordinator must keep the frame it already presents. Marking the result's version displayed would
+// let the overlay version gate draw newer chrome over the older pixels. It asks for one retry of
+// that version, not one per result, so a failure that persists cannot keep the worker spinning.
+// The rejection happens before any texture upload, so this runs without a GPU context.
+TEST(RenderCoordinatorTest, ResultWithNothingToPresentKeepsThePresentedFrame) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+           <rect width="64" height="64" fill="blue"/>
+         </svg>)"));
+  app.document().document().setCanvasSize(64, 64);
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  const ViewportState viewport = MakeViewport(app);
+
+  // One RGBA surface at this output size exceeds a frame's surface budget, so the worker can
+  // allocate no frame target, compositor tile, or snapshot for the request.
+  constexpr int kUnallocatablePx = 9000;
+  static_assert(static_cast<std::uint64_t>(kUnallocatablePx) * kUnallocatablePx * 4u >
+                svg::RendererSurfaceBudget::kMaximumBytes);
+  const auto renderNothingAndPoll = [&] {
+    RenderRequest request(coordinator.renderer(), app.document().document());
+    request.version = app.document().currentFrameVersion();
+    request.documentGeneration = app.document().documentGeneration();
+    request.fontResourceRevision = app.document().fontResourceRevision();
+    request.rasterViewport.documentRect = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+    request.rasterViewport.outputSizePx = Vector2i(kUnallocatablePx, kUnallocatablePx);
+    request.rasterViewport.semanticCanvasSizePx = Vector2i(64, 64);
+    request.rasterViewport.outputFromDocument = Transform2d::Scale(kUnallocatablePx / 64.0);
+    coordinator.asyncRenderer().requestRender(request);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (std::chrono::steady_clock::now() < deadline) {
+      coordinator.pollRenderResult(app, viewport, textures);
+      if (!coordinator.asyncRenderer().isBusy()) {
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+  };
+
+  ASSERT_TRUE(renderNothingAndPoll()) << "the worker must publish the iteration for the poll";
+  EXPECT_EQ(coordinator.displayedDocVersionForDiagnostics(), 0u)
+      << "a result with nothing to present must not become the displayed version";
+  EXPECT_TRUE(coordinator.presentationRefreshPending())
+      << "the version that could not be presented is still owed a render";
+
+  RenderCoordinatorTestAccess::clearPresentationRefresh(coordinator);
+  ASSERT_TRUE(renderNothingAndPoll());
+  EXPECT_EQ(coordinator.displayedDocVersionForDiagnostics(), 0u);
+  EXPECT_FALSE(coordinator.presentationRefreshPending())
+      << "a second empty result for the same version must not schedule another retry";
 }
 
 }  // namespace

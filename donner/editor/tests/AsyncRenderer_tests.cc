@@ -2589,6 +2589,139 @@ TEST(AsyncRendererTest, EmptyDocumentProducesTransparentCompositorSegment) {
   EXPECT_FALSE(ContainsFullCanvasTile(*result));
 }
 
+namespace {
+
+/// Canvas edge, in device pixels, past which one RGBA surface exceeds a frame's surface budget.
+/// Every frame target, compositor offscreen, and snapshot at this size is refused, so a render of
+/// it produces no pixels at all: the same state a failed GPU readback leaves on a backend whose
+/// compositor tiles are CPU bitmaps.
+constexpr int kUnallocatableCanvasPx = 9000;
+static_assert(static_cast<std::uint64_t>(kUnallocatableCanvasPx) * kUnallocatableCanvasPx * 4u >
+              svg::RendererSurfaceBudget::kMaximumBytes);
+
+constexpr std::string_view kFullCanvasTargetSvg = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+    <rect width="64" height="64" fill="white"/>
+    <rect id="target" width="64" height="64" fill="blue"/>
+  </svg>
+)svg";
+
+/// Output raster that maps the 64x64 fixture onto a canvas no surface can be allocated for.
+EditorRasterViewport UnallocatableRasterViewport() {
+  EditorRasterViewport raster;
+  raster.documentRect = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  raster.outputSizePx = Vector2i(kUnallocatableCanvasPx, kUnallocatableCanvasPx);
+  raster.semanticCanvasSizePx = Vector2i(64, 64);
+  raster.outputFromDocument = Transform2d::Scale(kUnallocatableCanvasPx / 64.0);
+  return raster;
+}
+
+/// What a result would put on screen, for failure messages.
+std::string DescribePresentation(const RenderResult& result) {
+  std::ostringstream out;
+  out << "version=" << result.version << " bitmap=" << result.bitmap.dimensions;
+  if (!result.compositedPreview.has_value()) {
+    out << " preview=none";
+    return out.str();
+  }
+  out << " tiles=[";
+  for (const RenderResult::CompositedTile& tile : result.compositedPreview->tiles) {
+    out << " {id=" << tile.id << " px=" << tile.bitmapDimsPx
+        << " payload=" << (HasPresentationPayload(tile) ? "yes" : "no") << "}";
+  }
+  out << " ]";
+  return out.str();
+}
+
+}  // namespace
+
+// A render whose renderer can allocate no surface produces no compositor tile and no snapshot. That
+// is a frame with nothing to present, not an impossible state: the worker must hand it back as
+// such, without aborting the editor and without a monolithic full-canvas payload in its place.
+TEST(AsyncRendererTest, RenderWithoutAnAllocatableSurfacePublishesNothingToPresent) {
+  svg::SVGDocument document = svg::instantiateSubtree(kFullCanvasTargetSvg);
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  const auto renderSelected = [&](std::uint64_t version,
+                                  std::optional<EditorRasterViewport> rasterViewport) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    if (rasterViewport.has_value()) {
+      request.rasterViewport = *rasterViewport;
+    }
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> empty = renderSelected(1, UnallocatableRasterViewport());
+  ASSERT_TRUE(empty.has_value()) << "the worker must publish the iteration instead of aborting";
+  EXPECT_FALSE(empty->compositedPreview.has_value()) << DescribePresentation(*empty);
+  EXPECT_THAT(empty->bitmap.pixels, ::testing::IsEmpty()) << DescribePresentation(*empty);
+
+  const std::optional<RenderResult> recovered = renderSelected(2, std::nullopt);
+  ASSERT_TRUE(recovered.has_value());
+  ASSERT_TRUE(recovered->compositedPreview.has_value()) << DescribePresentation(*recovered);
+  EXPECT_FALSE(ContainsFullCanvasTile(*recovered)) << DescribePresentation(*recovered);
+  const RenderResult::CompositedTile* layer = FindLayerTile(*recovered, entity);
+  ASSERT_NE(layer, nullptr) << DescribePresentation(*recovered);
+  EXPECT_TRUE(HasPresentationPayload(*layer)) << DescribePresentation(*recovered);
+}
+
+// A drag frame whose tiles cannot be re-rendered leaves no tile to present. Nothing rendered for an
+// earlier frame may stand in for it as a full-canvas payload: that frame shows the dragged shape at
+// a position the gesture already left.
+TEST(AsyncRendererTest, DragFrameWithoutRenderableTilesNeverPresentsAStaleFullCanvas) {
+  svg::SVGDocument document = svg::instantiateSubtree(kFullCanvasTargetSvg);
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  const auto postDrag = [&](std::uint64_t version, double x,
+                            std::optional<EditorRasterViewport> rasterViewport) {
+    SetGraphicsElementTranslation(*target, Vector2d(x, 0.0));
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+    };
+    if (rasterViewport.has_value()) {
+      request.rasterViewport = *rasterViewport;
+    }
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> started = postDrag(1, 2.0, std::nullopt);
+  ASSERT_TRUE(started.has_value());
+  ASSERT_TRUE(started->compositedPreview.has_value()) << DescribePresentation(*started);
+
+  const std::optional<RenderResult> stalled = postDrag(2, 4.0, UnallocatableRasterViewport());
+  ASSERT_TRUE(stalled.has_value()) << "the worker must publish the iteration instead of aborting";
+  EXPECT_FALSE(ContainsFullCanvasTile(*stalled)) << DescribePresentation(*stalled);
+  EXPECT_THAT(stalled->bitmap.pixels, ::testing::IsEmpty()) << DescribePresentation(*stalled);
+
+  const std::optional<RenderResult> resumed = postDrag(3, 6.0, std::nullopt);
+  ASSERT_TRUE(resumed.has_value());
+  ASSERT_TRUE(resumed->compositedPreview.has_value()) << DescribePresentation(*resumed);
+  EXPECT_FALSE(ContainsFullCanvasTile(*resumed)) << DescribePresentation(*resumed);
+  const RenderResult::CompositedTile* dragTile = FindLayerTile(*resumed, entity);
+  ASSERT_NE(dragTile, nullptr) << DescribePresentation(*resumed);
+  EXPECT_TRUE(HasPresentationPayload(*dragTile)) << DescribePresentation(*resumed);
+}
+
 TEST(AsyncRendererTest, CompositedTilesCarryRasterCanvasSizeForCacheIdentity) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <rect id="target" x="8" y="8" width="20" height="20" fill="red" />
