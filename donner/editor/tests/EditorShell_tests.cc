@@ -1,3 +1,9 @@
+#define IMGUI_DEFINE_MATH_OPERATORS
+// ImGui internals must load before EditorShell.h brings in imgui.h.
+// clang-format off
+#include "donner/editor/ImGuiInternalIncludes.h"
+// clang-format on
+
 #include "donner/editor/EditorShell.h"
 
 #include <GLFW/glfw3.h>
@@ -25,7 +31,6 @@
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/FillStrokeWidget.h"
-#include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/editor/InMemoryClipboard.h"
 #include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/gui/EditorWindow.h"
