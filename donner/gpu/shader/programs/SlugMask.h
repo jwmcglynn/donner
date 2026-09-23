@@ -28,6 +28,9 @@ struct alignas(16) SlugMaskParams {
   uint32_t _boundingPad1;        //!< Bounding data padding.
   uint32_t _boundingPad2;        //!< Bounding data padding.
   float boundingVertices[16];    //!< Four packed pairs of bounding vertices.
+  float pathFromPixel[4];        //!< Inverse linear transform, two columns, pixel to path.
+  float pixelOrigin[2];          //!< Integer pixel the mapping is taken relative to.
+  float pathOffset[2];           //!< Path position of `pixelOrigin`'s fractional remainder.
 };
 
 /// Host element layout of either band array.
@@ -36,7 +39,7 @@ struct SlugMaskBand {
   uint32_t curveCount;  //!< Number of references in this band.
 };
 
-static_assert(sizeof(SlugMaskParams) == 192);
+static_assert(sizeof(SlugMaskParams) == 224);
 static_assert(offsetof(SlugMaskParams, boundingVertices) == 128);
 static_assert(sizeof(SlugMaskBand) == 8);
 

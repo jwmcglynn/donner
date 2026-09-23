@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iterator>
 #include <optional>
@@ -78,7 +79,7 @@ uint32_t FillBinding(std::string_view name) {
   return resource->binding;
 }
 
-static_assert(sizeof(Uniforms) == 416, "Uniforms struct layout mismatch");
+static_assert(sizeof(Uniforms) == 448, "Uniforms struct layout mismatch");
 
 /// Rows the stop ramp starts at inside a gradient paint block. Must match the
 /// layout documented beside `paintData` in `donner/gpu/shader/programs/SlugFillSource.h`;
@@ -130,6 +131,90 @@ Transform2d composeOrthographicMvp(uint32_t targetWidth, uint32_t targetHeight,
   result.data[4] = sx * t.data[4] - 1.0;
   result.data[5] = sy * t.data[5] + 1.0;
   return result;
+}
+
+/// Pixel-to-path mapping a Slug fragment applies to its own pixel center `p`:
+/// `pathFromPixel * (p - pixelOrigin) + pathOffset`, where `pathFromPixel` holds the
+/// inverse linear transform's two columns.
+struct PixelMapping {
+  float pathFromPixel[4] = {};
+  float pixelOrigin[2] = {};
+  float pathOffset[2] = {};
+};
+
+/// Largest translation, in pixels, taken as an integer pixel origin. A pixel center is a multiple
+/// of one half inside a target at most tens of thousands of pixels wide, so it minus an integer
+/// origin below 2^22 is a multiple of one half below 2^23, which float32 represents exactly.
+constexpr double kMaxExactPixelOrigin = 4194304.0;
+
+/// Computes the mapping for a path-to-target-pixel transform in double precision.
+///
+/// The translation splits into an integer pixel origin and a fractional remainder. The shader
+/// subtracts the origin from the pixel center exactly, and every other input depends only on the
+/// linear part and that remainder. Draws whose translations differ by an integer, with the sum
+/// exact in double as it is for every atlas or tile placement of an ordinary draw, therefore map
+/// corresponding pixels to the same path positions whatever their target. A translation too large
+/// to split this way stays whole in the offset, as precise as the float path data it is compared
+/// with.
+///
+/// A transform without an inverse, or one whose inverse float cannot hold, gets an all-zero
+/// mapping, and the shaders cover no pixel of a draw that carries it. The draw's enclosure is
+/// built on the GPU from float axes that rounding can leave slightly invertible, so it can still
+/// rasterize a sliver of pixels, and only that rule keeps them empty.
+///
+/// @param targetFromPath Affine taking path space to target pixels.
+PixelMapping ComputePixelMapping(const Transform2d& targetFromPath) {
+  PixelMapping mapping;
+  const double a = targetFromPath.data[0];
+  const double b = targetFromPath.data[1];
+  const double c = targetFromPath.data[2];
+  const double d = targetFromPath.data[3];
+  const double e = targetFromPath.data[4];
+  const double f = targetFromPath.data[5];
+  const double determinant = a * d - b * c;
+  if (!std::isfinite(determinant) || determinant == 0.0) {
+    return mapping;
+  }
+  const double pathXFromPixelX = d / determinant;
+  const double pathYFromPixelX = -b / determinant;
+  const double pathXFromPixelY = -c / determinant;
+  const double pathYFromPixelY = a / determinant;
+  const auto integerOrigin = [](double translation) {
+    return std::isfinite(translation) && std::abs(translation) < kMaxExactPixelOrigin
+               ? std::floor(translation)
+               : 0.0;
+  };
+  const double originX = integerOrigin(e);
+  const double originY = integerOrigin(f);
+  const double remainderX = e - originX;
+  const double remainderY = f - originY;
+  mapping.pathFromPixel[0] = static_cast<float>(pathXFromPixelX);
+  mapping.pathFromPixel[1] = static_cast<float>(pathYFromPixelX);
+  mapping.pathFromPixel[2] = static_cast<float>(pathXFromPixelY);
+  mapping.pathFromPixel[3] = static_cast<float>(pathYFromPixelY);
+  mapping.pixelOrigin[0] = static_cast<float>(originX);
+  mapping.pixelOrigin[1] = static_cast<float>(originY);
+  mapping.pathOffset[0] =
+      static_cast<float>(-(pathXFromPixelX * remainderX + pathXFromPixelY * remainderY));
+  mapping.pathOffset[1] =
+      static_cast<float>(-(pathYFromPixelX * remainderX + pathYFromPixelY * remainderY));
+  const auto finite = [](float value) { return std::isfinite(value); };
+  if (!std::all_of(std::begin(mapping.pathFromPixel), std::end(mapping.pathFromPixel), finite) ||
+      !std::all_of(std::begin(mapping.pathOffset), std::end(mapping.pathOffset), finite)) {
+    return PixelMapping();
+  }
+  return mapping;
+}
+
+/// Writes `mapping` into any parameter block that carries the three mapping fields.
+template <typename ParamsT>
+void writePixelMapping(ParamsT& params, const PixelMapping& mapping) {
+  std::copy(std::begin(mapping.pathFromPixel), std::end(mapping.pathFromPixel),
+            std::begin(params.pathFromPixel));
+  std::copy(std::begin(mapping.pixelOrigin), std::end(mapping.pixelOrigin),
+            std::begin(params.pixelOrigin));
+  std::copy(std::begin(mapping.pathOffset), std::end(mapping.pathOffset),
+            std::begin(params.pathOffset));
 }
 
 /// Build a column-major 4x4 matrix from an affine `Transform2d` and write it
@@ -628,6 +713,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       t.data[5] = instanceTransforms[i * 8u + 6u];
       const Transform2d composed = composeOrthographicMvp(targetWidth, targetHeight, t);
       InstanceRecord& rec = records[i];
+      writePixelMapping(rec, ComputePixelMapping(t));
+      rec.pixelMappingSource = 1u;
       rec.transformRow0[0] = static_cast<float>(composed.data[0]);
       rec.transformRow0[1] = static_cast<float>(composed.data[2]);
       rec.transformRow0[2] = static_cast<float>(composed.data[4]);
@@ -669,7 +756,16 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// Populate the per-instance InstanceRecord from args + encoded +
   /// transform. Same sharing contract as populateBatchUniform.
   void populateInstanceRecord(InstanceRecord& r, const EncodedPath& encoded,
-                              const FillDrawArgs& args, const Transform2d& transform);
+                              const FillDrawArgs& args, const Transform2d& transform,
+                              const Transform2d* targetFromPath = nullptr);
+
+  /// Populate a resident entity's record. A solo record (\p bakeTransform)
+  /// keeps the identity transform and no pixel mapping, so its draw reads
+  /// both from the uniform; a scene-batch record carries \p recordTransform
+  /// composed with the orthographic mapping, and the pixel mapping for it.
+  void populateResidentRecord(InstanceRecord& r, const EncodedPath& encoded,
+                              const FillDrawArgs& args, const Transform2d& recordTransform,
+                              bool bakeTransform);
 
   /// (Re)upload `encoded` into `slot`'s persistent combined buffer and
   /// reset its cached bind group. Bumps `bufferCreates` + one `bufferWrite`
@@ -1556,6 +1652,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
                 offsetof(gpu::shader::programs::SlugMaskBand, curveCount));
   gpu::shader::programs::SlugMaskParams u = {};
   impl_->buildMvp(u.mvp);
+  writePixelMapping(u, ComputePixelMapping(impl_->transform));
   u.viewport[0] = static_cast<float>(impl_->targetWidth);
   u.viewport[1] = static_cast<float>(impl_->targetHeight);
   u.fillRule = (rule == FillRule::EvenOdd) ? 1u : 0u;
@@ -1801,10 +1898,12 @@ void GeoEncoder::Impl::populateBatchUniform(Uniforms& u, const FillDrawArgs& arg
     // Scene-batch form: the vertex stage composes an IDENTITY uniform mvp
     // with each record's host-composed transform, so the float32 matrix
     // multiply is exact and the batch reproduces the double-precision
-    // host composition of the solo path.
+    // host composition of the solo path. Each record carries its own pixel
+    // mapping too, so the uniform's stays zero.
     writeIdentityMvp(u.mvp);
   } else {
     buildMvp(u.mvp, mvpTransform);
+    writePixelMapping(u, ComputePixelMapping(mvpTransform));
   }
   affineToMat4(args.patternFromPath, u.patternFromPath);
   u.viewport[0] = static_cast<float>(targetWidth);
@@ -1839,8 +1938,13 @@ void packRecordTransform(InstanceRecord& r, const Transform2d& xf) {
 /// reproduces the per-draw composition.
 void GeoEncoder::Impl::populateInstanceRecord(InstanceRecord& r, const EncodedPath& encoded,
                                               const FillDrawArgs& args,
-                                              const Transform2d& transform) {
+                                              const Transform2d& transform,
+                                              const Transform2d* targetFromPath) {
   packRecordTransform(r, transform);
+  if (targetFromPath != nullptr) {
+    writePixelMapping(r, ComputePixelMapping(*targetFromPath));
+    r.pixelMappingSource = 1u;
+  }
   r.color[0] = args.solidColor[0];
   r.color[1] = args.solidColor[1];
   r.color[2] = args.solidColor[2];
@@ -1872,6 +1976,19 @@ void GeoEncoder::Impl::populateInstanceRecord(InstanceRecord& r, const EncodedPa
   // rasterizer and the two tests agree exactly; a batched draw runs with the
   // scissor opened to the full target and relies on this value alone.
   writeClipRect(r.clipRect, r.clipRectActive);
+}
+
+void GeoEncoder::Impl::populateResidentRecord(InstanceRecord& r, const EncodedPath& encoded,
+                                              const FillDrawArgs& args,
+                                              const Transform2d& recordTransform,
+                                              bool bakeTransform) {
+  if (bakeTransform) {
+    populateInstanceRecord(r, encoded, args, Transform2d());
+    return;
+  }
+  populateInstanceRecord(r, encoded, args,
+                         composeOrthographicMvp(targetWidth, targetHeight, recordTransform),
+                         &recordTransform);
 }
 
 void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded) {
@@ -2168,10 +2285,7 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
   // Either way the write is skipped when the bytes are unchanged, so a
   // static re-render emits zero buffer writes.
   InstanceRecord record = {};
-  populateInstanceRecord(record, encoded, args,
-                         bakeTransform
-                             ? Transform2d()
-                             : composeOrthographicMvp(targetWidth, targetHeight, recordTransform));
+  populateResidentRecord(record, encoded, args, recordTransform, bakeTransform);
   // Chunk-relative element offsets, which is what a cross-entity batch
   // needs: its one bind group spans the whole chunk so every instance can
   // reach its own slot. A solo draw binds its own sub-ranges instead and
@@ -2832,6 +2946,7 @@ void GeoEncoder::Impl::buildLinearGradientUniforms(GradientUniforms& u,
                                                    const LinearGradientParams& params,
                                                    FillRule rule) {
   buildMvp(u.mvp);
+  writePixelMapping(u, ComputePixelMapping(transform));
   u.viewport[0] = static_cast<float>(targetWidth);
   u.viewport[1] = static_cast<float>(targetHeight);
   populateSharedGradientUniforms<LinearGradientParams::Stop>(u, params.gradientFromPath,
@@ -2850,6 +2965,7 @@ void GeoEncoder::Impl::buildRadialGradientUniforms(GradientUniforms& u,
                                                    const RadialGradientParams& params,
                                                    FillRule rule) {
   buildMvp(u.mvp);
+  writePixelMapping(u, ComputePixelMapping(transform));
   u.viewport[0] = static_cast<float>(targetWidth);
   u.viewport[1] = static_cast<float>(targetHeight);
   populateSharedGradientUniforms<RadialGradientParams::Stop>(u, params.gradientFromPath,

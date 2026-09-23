@@ -775,7 +775,7 @@ public:
    * slot.
    *
    * The slot's combined buffer holds the encoded band/curve/grid data and
-   * the 672-byte gradient uniform block; on an unchanged frame the draw
+   * the 704-byte gradient uniform block; on an unchanged frame the draw
    * rewrites nothing and reuses the cached 11-binding bind group. Falls
    * back to the per-frame arena path internally when a clip mask, clip
    * polygon, or mask pass is active (the cached bind group binds dummy

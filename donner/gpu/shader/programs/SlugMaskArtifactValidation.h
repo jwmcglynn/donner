@@ -64,6 +64,14 @@ consteval bool ValidateSlugMaskArtifact() {
   static_assert(shader.matchesMember(
       "uniforms", "boundingVertices", offsetof(SlugMaskParams, boundingVertices),
       sizeof(SlugMaskParams::boundingVertices), ShaderScalarType::F32, 4, 4, 16));
+  static_assert(
+      shader.matchesMember("uniforms", "pathFromPixel", offsetof(SlugMaskParams, pathFromPixel),
+                           sizeof(SlugMaskParams::pathFromPixel), ShaderScalarType::F32, 4));
+  static_assert(
+      shader.matchesMember("uniforms", "pixelOrigin", offsetof(SlugMaskParams, pixelOrigin),
+                           sizeof(SlugMaskParams::pixelOrigin), ShaderScalarType::F32, 2));
+  static_assert(shader.matchesMember("uniforms", "pathOffset", offsetof(SlugMaskParams, pathOffset),
+                                     sizeof(SlugMaskParams::pathOffset), ShaderScalarType::F32, 2));
   static_assert(shader.resource("bands") != nullptr);
   static_assert(shader.resource("bands")->type == BindingType::ReadOnlyStorageBuffer);
   static_assert(shader.resource("bands")->runtimeArrayStrideBytes == sizeof(SlugMaskBand));

@@ -44,13 +44,16 @@ struct alignas(16) SlugGradientParams {
   uint32_t _boundingPad1;         //!< Reserved layout padding.
   uint32_t _boundingPad2;         //!< Reserved layout padding.
   float boundingVertices[4 * 4];  //!< Four packed pairs of bounding vertices.
+  float pathFromPixel[4];         //!< Inverse linear transform, two columns, pixel to path.
+  float pixelOrigin[2];           //!< Integer pixel the mapping is taken relative to.
+  float pathOffset[2];            //!< Path position of `pixelOrigin`'s fractional remainder.
 };
 /// Host element of either gradient band array.
 struct SlugGradientBand {
   uint32_t curveStart;  //!< First curve reference.
   uint32_t curveCount;  //!< Number of curve references.
 };
-static_assert(sizeof(SlugGradientParams) == 672);
+static_assert(sizeof(SlugGradientParams) == 704);
 static_assert(sizeof(SlugGradientBand) == 8);
 /// Returns the WGSL gradient artifact.
 /// @return Stable view into process-lifetime data.

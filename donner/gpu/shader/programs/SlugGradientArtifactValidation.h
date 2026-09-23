@@ -117,6 +117,15 @@ consteval bool ValidateSlugGradientArtifact() {
   static_assert(shader.matchesMember(
       "uniforms", "boundingVertices", offsetof(SlugGradientParams, boundingVertices),
       sizeof(SlugGradientParams::boundingVertices), ShaderScalarType::F32, 4, 4, 16));
+  static_assert(
+      shader.matchesMember("uniforms", "pathFromPixel", offsetof(SlugGradientParams, pathFromPixel),
+                           sizeof(SlugGradientParams::pathFromPixel), ShaderScalarType::F32, 4));
+  static_assert(
+      shader.matchesMember("uniforms", "pixelOrigin", offsetof(SlugGradientParams, pixelOrigin),
+                           sizeof(SlugGradientParams::pixelOrigin), ShaderScalarType::F32, 2));
+  static_assert(
+      shader.matchesMember("uniforms", "pathOffset", offsetof(SlugGradientParams, pathOffset),
+                           sizeof(SlugGradientParams::pathOffset), ShaderScalarType::F32, 2));
   static_assert(shader.resource("bands") &&
                 shader.resource("bands")->type == BindingType::ReadOnlyStorageBuffer);
   static_assert(shader.resource("bands")->minSizeBytes == sizeof(SlugGradientBand));

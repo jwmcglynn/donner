@@ -26,7 +26,14 @@ inline constexpr wgsl::SourceText kSlugFillSource{
 // curve crosses a given ray at most once. The per-root coverage is
 // `saturate(r + 0.5)` (signed by winding direction) with weight
 // `saturate(1 - 2|r|)`, where `r` is the signed root distance from the pixel
-// center in pixels (`pixelsPerEm = 1/fwidth(sample_pos)`).
+// center in pixels.
+//
+// The rays start at the pixel center mapped exactly into path space, not at an
+// interpolated position: the draw's integer pixel origin is subtracted from the
+// pixel center first, which is exact, and only then does the inverse transform
+// apply. A pixel's path position therefore depends only on its offset from that
+// origin, never on where the draw lands in its target or how large the target
+// is, so a center lying exactly on an edge is decided the same way everywhere.
 
 // ============================================================================
 // Uniforms
@@ -89,6 +96,13 @@ struct Uniforms {
   paintBase: u32,
   gradientSpread: u32,
   gradientStopCount: u32,
+  // Pixel-to-path mapping of a draw whose instances share one transform, read
+  // when the bound record defers to the draw (see `pixelMappingSource`).
+  // `pathFromPixel` holds the inverse linear transform's two columns; a pixel
+  // center `p` maps to `pathFromPixel * (p - pixelOrigin) + pathOffset`.
+  pathFromPixel: vec4f,
+  pixelOrigin: vec2f,
+  pathOffset: vec2f,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -148,12 +162,15 @@ struct InstanceRecord {
   xBase: f32,
   vStride: f32,
   vBandCount: u32,
-  _gridPad0: u32,
-  _gridPad1: u32,
+  // This instance's pixel-to-path mapping, laid out like the uniform's, split
+  // across the record's spare slots so the stride stays 256 bytes.
+  pixelOrigin: vec2f,
   boundingVertexCount: u32,
-  _boundingPad0: u32,
-  _boundingPad1: u32,
-  _boundingPad2: u32,
+  // Nonzero when this record carries its own pixel-to-path mapping. The
+  // device's shared identity record is zero here, so a draw that binds it
+  // reads the mapping from the uniform instead.
+  pixelMappingSource: u32,
+  pathOffset: vec2f,
   // Two path-space vec2 vertices per vec4, up to eight vertices.
   boundingVertices: array<vec4f, 4>,
   // Element offsets into the bound arrays. When a batch binds a whole
@@ -180,9 +197,10 @@ struct InstanceRecord {
   paintBase: u32,
   gradientSpread: u32,
   gradientStopCount: u32,
-  // Tail padding to 256 bytes so record-slab slot offsets satisfy the
-  // baseline min_storage_buffer_offset_alignment (256).
-  _padTail: vec4f,
+  // Last of the mapping fields; it also ends the record at 256 bytes, so
+  // record-slab slot offsets satisfy the baseline
+  // min_storage_buffer_offset_alignment (256).
+  pathFromPixel: vec4f,
 };
 @group(0) @binding(7) var<storage, read> instances: array<InstanceRecord>;
 
@@ -245,12 +263,40 @@ fn clip_mask_coverage(pixel_center: vec2f) -> f32 {
 
 struct VertexOutput {
   @builtin(position) clip_pos: vec4f,
-  // Path-space sample position. Fragment shader casts both rays from here.
-  @location(0) sample_pos: vec2f,
+  // This instance's pixel-to-path mapping, passed flat so every fragment maps
+  // its own pixel center with exactly the values the host computed.
+  @location(0) @interpolate(flat) path_from_pixel: vec4f,
   // Flat instance index - the fragment stage reads its InstanceRecord
   // through this so overlapping batched instances blend in instance order.
   @location(1) @interpolate(flat) instance_id: u32,
+  // `pixelOrigin` in xy, `pathOffset` in zw.
+  @location(2) @interpolate(flat) pixel_origin_offset: vec4f,
 };
+
+// Path-space position of a pixel center under the mapping a draw was issued
+// with. Subtracting the integer pixel origin first is exact, so the result
+// depends only on the pixel's offset from the draw, not on its target.
+fn path_position_of_pixel(pixel_center: vec2f, mapping: vec4f,
+                          origin_offset: vec4f) -> vec2f {
+  let local = pixel_center - origin_offset.xy;
+  return vec2f(mapping.x * local.x + mapping.z * local.y,
+               mapping.y * local.x + mapping.w * local.y) +
+         origin_offset.zw;
+}
+
+// Path units spanned by one pixel along each path axis: the `fwidth` of the
+// mapping above, taken from its coefficients instead of neighbouring pixels.
+fn path_units_per_pixel(mapping: vec4f) -> vec2f {
+  return abs(mapping.xy) + abs(mapping.zw);
+}
+
+// True for the all-zero mapping the host gives a draw whose transform has no
+// inverse. Such a draw covers no area, but its enclosure is built from float
+// axes that rounding can leave slightly invertible, so it may still rasterize
+// a sliver of pixels; they must stay empty.
+fn maps_no_pixel(mapping: vec4f) -> bool {
+  return all(abs(mapping) <= vec4f(0.0));
+}
 
 // Bounding polygon of the path this vertex belongs to. Built once per
 // vertex from either the uniform or the instance's record, so the dilation
@@ -398,7 +444,7 @@ fn dilated_bounding_vertex(shape: ShapeParams, axes: mat2x2f, polygon_index: u32
 
   // Work in viewport pixels, including WebGPU's Y flip. Intersect the two adjacent edge
   // half-planes after moving each outward by half a pixel, then map that miter back to path
-  // space so the fragment shader's analytic sample coordinates remain exact.
+  // space. The enclosure only chooses which pixels run; each fragment maps its own center.
   if (!axes_are_well_conditioned(axes)) {
     return position;
   }
@@ -435,8 +481,9 @@ fn effective_bounding_vertex(shape: ShapeParams, effective_mvp: mat4x4f,
   return dilated_bounding_vertex(shape, axes, polygon_index);
 }
 
-fn emit_vertex(shape: ShapeParams, xf: InstanceTransform, vertex_index: u32,
+fn emit_vertex(shape: ShapeParams, rec: InstanceRecord, vertex_index: u32,
                instance_index: u32) -> VertexOutput {
+  let xf = rec.transform;
   let instance_mat = mat4x4f(
     vec4f(xf.row0.x, xf.row1.x, 0.0, 0.0),
     vec4f(xf.row0.y, xf.row1.y, 0.0, 0.0),
@@ -449,26 +496,37 @@ fn emit_vertex(shape: ShapeParams, xf: InstanceTransform, vertex_index: u32,
 
   var out: VertexOutput;
   out.clip_pos = effective_mvp * vec4f(dilated, 0.0, 1.0);
-  out.sample_pos = dilated;
+  // The instance's own mapping, or the draw's when the record defers to it, as
+  // the device's shared identity record does.
+  if (rec.pixelMappingSource != 0u) {
+    out.path_from_pixel = rec.pathFromPixel;
+    out.pixel_origin_offset = vec4f(rec.pixelOrigin.x, rec.pixelOrigin.y, rec.pathOffset.x,
+                                    rec.pathOffset.y);
+  } else {
+    out.path_from_pixel = uniforms.pathFromPixel;
+    out.pixel_origin_offset = vec4f(uniforms.pixelOrigin.x, uniforms.pixelOrigin.y,
+                                    uniforms.pathOffset.x, uniforms.pathOffset.y);
+  }
   out.instance_id = instance_index;
   return out;
 }
 
 /// Shared-geometry entry point: every instance draws the same encoded path,
 /// so the bounding polygon comes from the uniform and only the per-instance
-/// transform is read from the record. A single fill binds the device's
-/// identity record here and reads nothing else from binding 7.
+/// transform and pixel mapping are read from the record. A single fill binds
+/// the device's identity record here, which defers the mapping to the uniform.
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32,
            @builtin(instance_index) instance_index: u32) -> VertexOutput {
   var shape: ShapeParams;
   shape.boundingVertexCount = uniforms.boundingVertexCount;
   shape.boundingVertices = uniforms.boundingVertices;
-  return emit_vertex(shape, instances[instance_index].transform, vertex_index, instance_index);
+  return emit_vertex(shape, instances[instance_index], vertex_index, instance_index);
 }
 
 /// Cross-entity batch entry point: each instance draws a DIFFERENT encoded
-/// path, so both the bounding polygon and the transform come from its record.
+/// path, so the bounding polygon, transform and pixel mapping come from its
+/// record.
 @vertex
 fn vs_main_batched(@builtin(vertex_index) vertex_index: u32,
                    @builtin(instance_index) instance_index: u32) -> VertexOutput {
@@ -476,7 +534,7 @@ fn vs_main_batched(@builtin(vertex_index) vertex_index: u32,
   var shape: ShapeParams;
   shape.boundingVertexCount = rec.boundingVertexCount;
   shape.boundingVertices = rec.boundingVertices;
-  return emit_vertex(shape, rec.transform, vertex_index, instance_index);
+  return emit_vertex(shape, rec, vertex_index, instance_index);
 }
 
 // ============================================================================
@@ -1014,29 +1072,31 @@ struct FragOutput {
 /// Analytic coverage of this fragment, folded through the fill rule and every
 /// clip. Returns zero when nothing of this path covers the pixel; the caller
 /// discards rather than blending a fully transparent fragment.
-fn shade_coverage(paint: PaintParams, in: VertexOutput) -> f32 {
+fn shade_coverage(paint: PaintParams, in: VertexOutput, sample: vec2f) -> f32 {
   let pixel_center = in.clip_pos.xy;
+  if (maps_no_pixel(in.path_from_pixel)) {
+    return 0.0;
+  }
 
-  // Path-units per pixel, per axis. `sample_pos` is a linear function of the
-  // viewport position, so fwidth gives the constant per-pixel path delta.
-  let ppem = 1.0 / fwidth(in.sample_pos);
+  // Pixels per path unit, per axis.
+  let ppem = 1.0 / path_units_per_pixel(in.path_from_pixel);
 
   // Look up this pixel's horizontal and vertical bands in O(1).
   var hCov = empty_ray();
   if (paint.hBandCount > 0u) {
-    let hi = clamp(i32((in.sample_pos.y - paint.yBase) / paint.hStride),
+    let hi = clamp(i32((sample.y - paint.yBase) / paint.hStride),
                    0, i32(paint.hBandCount) - 1);
     let slot = gridData[paint.hGridBase + u32(hi)];
-    hCov = accumulateHoriz(paint, slot, in.sample_pos, ppem.x,
+    hCov = accumulateHoriz(paint, slot, sample, ppem.x,
                            paint.fillRule == 0u && uniforms.antialias != 0u);
   }
 
   var vCov = empty_ray();
   if (paint.vBandCount > 0u) {
-    let vj = clamp(i32((in.sample_pos.x - paint.xBase) / paint.vStride),
+    let vj = clamp(i32((sample.x - paint.xBase) / paint.vStride),
                    0, i32(paint.vBandCount) - 1);
     let slot = gridData[paint.vGridBase + u32(vj)];
-    vCov = accumulateVert(paint, slot, in.sample_pos, ppem.y,
+    vCov = accumulateVert(paint, slot, sample, ppem.y,
                            paint.fillRule == 0u && uniforms.antialias != 0u);
   }
 
@@ -1060,8 +1120,8 @@ fn shade_coverage(paint: PaintParams, in: VertexOutput) -> f32 {
   return coverage * clipCoverage;
 }
 
-fn shade_pattern(paint: PaintParams, in: VertexOutput, coverage: f32) -> vec4f {
-  let patternPos = (uniforms.patternFromPath * vec4f(in.sample_pos, 0.0, 1.0)).xy;
+fn shade_pattern(paint: PaintParams, sample: vec2f, coverage: f32) -> vec4f {
+  let patternPos = (uniforms.patternFromPath * vec4f(sample, 0.0, 1.0)).xy;
   let wrapped = vec2f(
     fract(patternPos.x / uniforms.tileSize.x) * uniforms.tileSize.x,
     fract(patternPos.y / uniforms.tileSize.y) * uniforms.tileSize.y,
@@ -1077,8 +1137,8 @@ fn shade_pattern(paint: PaintParams, in: VertexOutput, coverage: f32) -> vec4f {
          paint.patternOpacity * coverage;
 }
 
-fn shade_gradient(paint: PaintParams, in: VertexOutput, coverage: f32) -> vec4f {
-  let raw_t = gradient_t(paint, in.sample_pos);
+fn shade_gradient(paint: PaintParams, sample: vec2f, coverage: f32) -> vec4f {
+  let raw_t = gradient_t(paint, sample);
   if (raw_t < -1e20) {
     discard;
   }
@@ -1124,7 +1184,9 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   paint.gradientSpread = uniforms.gradientSpread;
   paint.gradientStopCount = uniforms.gradientStopCount;
 
-  let coverage = shade_coverage(paint, in);
+  let sample =
+    path_position_of_pixel(in.clip_pos.xy, in.path_from_pixel, in.pixel_origin_offset);
+  let coverage = shade_coverage(paint, in, sample);
   if (coverage <= 0.0) {
     discard;
   }
@@ -1134,7 +1196,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     out.color = paint.color * coverage;
     return out;
   }
-  out.color = shade_pattern(paint, in, coverage);
+  out.color = shade_pattern(paint, sample, coverage);
   return out;
 }
 
@@ -1169,7 +1231,9 @@ fn fs_main_batched(in: VertexOutput) -> FragOutput {
   paint.gradientSpread = rec.gradientSpread;
   paint.gradientStopCount = rec.gradientStopCount;
 
-  let coverage = shade_coverage(paint, in);
+  let sample =
+    path_position_of_pixel(in.clip_pos.xy, in.path_from_pixel, in.pixel_origin_offset);
+  let coverage = shade_coverage(paint, in, sample);
   if (coverage <= 0.0) {
     discard;
   }
@@ -1179,10 +1243,10 @@ fn fs_main_batched(in: VertexOutput) -> FragOutput {
     return out;
   }
   if (paint.paintMode >= kPaintLinearGradient) {
-    out.color = shade_gradient(paint, in, coverage);
+    out.color = shade_gradient(paint, sample, coverage);
     return out;
   }
-  out.color = shade_pattern(paint, in, coverage);
+  out.color = shade_pattern(paint, sample, coverage);
   return out;
 }
 )wgsl"};

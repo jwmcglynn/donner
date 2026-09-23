@@ -10,7 +10,8 @@ inline constexpr wgsl::SourceText kSlugGradientSource{
 // commentary) but the fragment evaluates a linear/radial gradient
 // at the pixel center instead of a solid color, then folds the analytic
 // coverage into the premultiplied output. Single convex bounding fan + dense H/V
-// band grids -> no band-seam double-count.
+// band grids -> no band-seam double-count. Like the fill, each fragment maps its
+// own pixel center into path space exactly (see `path_position_of_pixel`).
 
 // ============================================================================
 // Uniforms
@@ -58,6 +59,12 @@ struct GradientUniforms {
   _boundingPad1: u32,
   _boundingPad2: u32,
   boundingVertices: array<vec4f, 4>,
+  // Pixel-to-path mapping: `pathFromPixel` holds the inverse linear
+  // transform's two columns; a pixel center `p` maps to
+  // `pathFromPixel * (p - pixelOrigin) + pathOffset`.
+  pathFromPixel: vec4f,
+  pixelOrigin: vec2f,
+  pathOffset: vec2f,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: GradientUniforms;
@@ -93,8 +100,17 @@ fn clip_mask_coverage(pixel_center: vec2f) -> f32 {
 
 struct VertexOutput {
   @builtin(position) clip_pos: vec4f,
-  @location(0) sample_pos: vec2f,
 };
+
+// Path-space position of a pixel center. Subtracting the draw's integer pixel
+// origin first is exact, so the result depends only on the pixel's offset from
+// the draw, not on where the draw lands in its target.
+fn path_position_of_pixel(pixel_center: vec2f) -> vec2f {
+  let local = pixel_center - uniforms.pixelOrigin;
+  return vec2f(uniforms.pathFromPixel.x * local.x + uniforms.pathFromPixel.z * local.y,
+               uniforms.pathFromPixel.y * local.x + uniforms.pathFromPixel.w * local.y) +
+         uniforms.pathOffset;
+}
 
 fn load_bounding_vertex(index: u32) -> vec2f {
   let pair = uniforms.boundingVertices[index / 2u];
@@ -264,7 +280,6 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
 
   var out: VertexOutput;
   out.clip_pos = uniforms.mvp * vec4f(dilated, 0.0, 1.0);
-  out.sample_pos = dilated;
   return out;
 }
 
@@ -733,21 +748,28 @@ struct FragOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> FragOutput {
   let pixel_center = in.clip_pos.xy;
-  let ppem = 1.0 / fwidth(in.sample_pos);
+  // An all-zero mapping marks a transform without an inverse: the draw covers no
+  // area, though its float-built enclosure may still rasterize a sliver.
+  if (all(abs(uniforms.pathFromPixel) <= vec4f(0.0))) {
+    discard;
+  }
+  let sample = path_position_of_pixel(pixel_center);
+  // Pixels per path unit, per axis: the reciprocal of the mapping's `fwidth`.
+  let ppem = 1.0 / (abs(uniforms.pathFromPixel.xy) + abs(uniforms.pathFromPixel.zw));
 
   var hCov = empty_ray();
   if (uniforms.hBandCount > 0u) {
-    let hi = clamp(i32((in.sample_pos.y - uniforms.yBase) / uniforms.hStride),
+    let hi = clamp(i32((sample.y - uniforms.yBase) / uniforms.hStride),
                    0, i32(uniforms.hBandCount) - 1);
-    hCov = accumulateHoriz(hBandGrid[hi], in.sample_pos, ppem.x,
+    hCov = accumulateHoriz(hBandGrid[hi], sample, ppem.x,
                            uniforms.fillRule == 0u && uniforms.antialias != 0u);
   }
 
   var vCov = empty_ray();
   if (uniforms.vBandCount > 0u) {
-    let vj = clamp(i32((in.sample_pos.x - uniforms.xBase) / uniforms.vStride),
+    let vj = clamp(i32((sample.x - uniforms.xBase) / uniforms.vStride),
                    0, i32(uniforms.vBandCount) - 1);
-    vCov = accumulateVert(vBandGrid[vj], in.sample_pos, ppem.y,
+    vCov = accumulateVert(vBandGrid[vj], sample, ppem.y,
                            uniforms.fillRule == 0u && uniforms.antialias != 0u);
   }
 
@@ -767,7 +789,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     discard;
   }
 
-  let raw_t = gradient_t(in.sample_pos);
+  let raw_t = gradient_t(sample);
   if (raw_t < -1e20) {
     discard;
   }
