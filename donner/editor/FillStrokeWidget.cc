@@ -190,9 +190,8 @@ void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2&
     drawList->PopClipRect();
   }
 
-  // Outlines: a light inner keyline plus a role-colored outer border. W8 routes
-  // the custom-paint accent and the "none" slash through the theme so this
-  // extracted widget tracks the Signal Teal palette with the rest of the shell.
+  // A light inner keyline and accent outer border distinguish the active role
+  // while keeping custom paint and the none slash legible against the theme.
   const EditorTheme& theme = EditorTheme::Active();
   drawList->AddRect(min, max, IM_COL32(255, 255, 255, 210), kRounding, 0, 1.0f);
   drawList->AddRect(min, max,

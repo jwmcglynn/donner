@@ -562,7 +562,6 @@ constexpr float kReferenceChipPaddingY = 5.0f;
 constexpr float kReferenceChipRadius = 6.0f;
 constexpr float kReferenceChipGapFromAabb = 30.0f;
 constexpr float kReferenceChipMinFontSize = 15.0f;
-constexpr float kToolPaletteButtonSize = 32.0f;
 constexpr float kToolPalettePaintWidgetHeight = 44.0f;
 constexpr float kToolPaletteGap = 4.0f;
 constexpr float kToolPalettePadding = 8.0f;

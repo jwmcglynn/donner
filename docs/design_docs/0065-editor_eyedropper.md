@@ -1,8 +1,8 @@
 # Design: Editor Document Eyedropper
 
-**Status:** Implementing. The document sampler and focused native Geode tests pass, and
-[PR #1376](https://github.com/jwmcglynn/donner/pull/1376) is open for review. The active Fill/Stroke
-toolbar control, browser validation, full qualification, and green CI remain pending.
+**Status:** Implementing. The document sampler and active Fill/Stroke toolbar control pass focused
+native Geode tests, and [PR #1376](https://github.com/jwmcglynn/donner/pull/1376) is open for
+review. Browser validation, full qualification, and green CI remain pending.
 **Author:** GPT-6 Sol
 **Created:** 2026-09-22
 **Related:** [Issue #1304](https://github.com/jwmcglynn/donner/issues/1304)
@@ -56,11 +56,11 @@ selection handles, the transparency checkerboard, another window, or pixels outs
   - [x] Add eyedropper tool identity, toolbar/popup entry points, shortcut capture, and cancellation.
   - [x] Share the color application path with the picker and record one selection undo entry.
   - [x] Render the loupe and pending/unavailable feedback without hover mutations.
-- [ ] Active Fill/Stroke foreground control
-  - [ ] Anchor Fill upper-left and Stroke lower-right; draw and hit-test the active role in front.
-  - [ ] Make the first click on the rear swatch activate it, and an active-swatch click open its picker.
-  - [ ] Draw the angled swap arrow and one None control that clears the active role.
-  - [ ] Route toolbar and shortcut sampling through the active role, with popup-specific targeting.
+- [x] Active Fill/Stroke foreground control
+  - [x] Anchor Fill upper-left and Stroke lower-right; draw and hit-test the active role in front.
+  - [x] Make the first click on the rear swatch activate it, and an active-swatch click open its picker.
+  - [x] Draw the angled swap arrow and one None control that clears the active role.
+  - [x] Route toolbar and shortcut sampling through the active role, with popup-specific targeting.
 - [x] Worker-owned document capture
   - [x] Request a bounded composed CPU snapshot when armed or the accepted frame changes.
   - [x] Bind capture to the accepted document, font, viewport, canvas commit, and session identities.
