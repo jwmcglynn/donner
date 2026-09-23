@@ -271,6 +271,7 @@ donner_cc_test(
     srcs = [
         "tests/ImageLoader_tests.cc",
     ],
+    data = ["tests/image_loader_corpus/regression-gif-declared-canvas.gif"],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -281,6 +282,7 @@ donner_cc_test(
     deps = [
         ":image_loader",
         ":resource_loader_interface",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

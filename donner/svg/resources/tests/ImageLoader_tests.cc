@@ -3,12 +3,15 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include "donner/base/tests/Runfiles.h"
 #include "donner/svg/resources/NullResourceLoader.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
@@ -210,6 +213,20 @@ TEST(ImageLoader, RejectsDecodedImageBeforeAllocationWhenOverConfiguredLimit) {
   ImageLoader imageLoader(resourceLoader, UrlLoader::kDefaultMaximumResourceSize, nullptr, 3);
 
   ExpectImageLoaderError(imageLoader.fromUri("one-pixel.png"), UrlLoaderError::ResourceTooLarge);
+}
+
+TEST(ImageLoader, RejectsTinyGifWithProductionDecodeAmplification) {
+  const std::string path = Runfiles::instance().Rlocation(
+      "donner/svg/resources/tests/image_loader_corpus/regression-gif-declared-canvas.gif");
+  std::ifstream input(path, std::ios::binary);
+  ASSERT_TRUE(input.is_open()) << path;
+  const std::vector<uint8_t> gif(std::istreambuf_iterator<char>{input}, {});
+  ASSERT_EQ(gif.size(), 77u);
+
+  StaticResourceLoader resourceLoader(gif);
+  ImageLoader imageLoader(resourceLoader);
+  ExpectImageLoaderError(imageLoader.fromUri("declared-canvas.gif"),
+                         UrlLoaderError::ResourceTooLarge);
 }
 
 TEST(ImageLoader, ChargesRawAndDecodedBytesToSharedBudget) {
