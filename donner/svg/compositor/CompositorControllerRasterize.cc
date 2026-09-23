@@ -41,12 +41,17 @@ uint64_t SegmentTileId(Entity left, Entity right) {
   return (l << 32) | r;  // bit 63 stays 0 - doesn't collide with layer ids.
 }
 
-// Sets a layer payload from a drawn offscreen. Returns false when the texture
-// snapshot failed, leaving the offscreen's drawn target attached.
+// Sets a layer payload from a drawn offscreen. Returns false, keeping the previous payload, when
+// the snapshot failed: a null texture snapshot, which leaves the offscreen's drawn target
+// attached, or an empty bitmap from a failed readback or a refused target.
 bool SetLayerPayloadFromOffscreen(CompositorLayer& layer, RendererInterface& offscreen,
                                   const Transform2d& surfaceFromEntity) {
   if (!offscreen.requiresTextureSnapshotPresentation()) {
-    layer.setBitmap(offscreen.takeSnapshot(), surfaceFromEntity);
+    RendererBitmap bitmap = offscreen.takeSnapshot();
+    if (bitmap.empty()) {
+      return false;
+    }
+    layer.setBitmap(std::move(bitmap), surfaceFromEntity);
     return true;
   }
   std::shared_ptr<const RendererTextureSnapshot> texture = offscreen.takeTextureSnapshot();
@@ -57,13 +62,18 @@ bool SetLayerPayloadFromOffscreen(CompositorLayer& layer, RendererInterface& off
   return true;
 }
 
-// Sets a static-segment payload from a drawn offscreen. Returns false when the
-// texture snapshot failed, leaving the offscreen's drawn target attached.
+// Sets a static-segment payload from a drawn offscreen. Returns false, keeping the previous
+// payload, when the snapshot failed: a null texture snapshot, which leaves the offscreen's drawn
+// target attached, or an empty bitmap from a failed readback or a refused target.
 bool SetSegmentPayloadFromOffscreen(RendererBitmap& segment,
                                     std::shared_ptr<const RendererTextureSnapshot>& segmentTexture,
                                     RendererInterface& offscreen) {
   if (!offscreen.requiresTextureSnapshotPresentation()) {
-    segment = offscreen.takeSnapshot();
+    RendererBitmap bitmap = offscreen.takeSnapshot();
+    if (bitmap.empty()) {
+      return false;
+    }
+    segment = std::move(bitmap);
     segmentTexture.reset();
     return true;
   }
