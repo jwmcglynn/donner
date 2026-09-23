@@ -44,6 +44,13 @@ Vector2d CenterOf(const Box2d& box) {
   return (box.topLeft + box.bottomRight) * 0.5;
 }
 
+/// The entity \p element names, read under document access. Called when a gesture starts, so the
+/// drag preview can name its elements without resolving them against the registry later.
+Entity EntityOf(const svg::SVGElement& element) {
+  return element.withReadAccess(
+      [](svg::DocumentReadAccess&, EntityHandle handle) { return handle.entity(); });
+}
+
 Transform2d DocumentFromParentTransform(const svg::SVGElement& element) {
   const std::optional<svg::SVGElement> parent = element.parentElement();
   if (!parent.has_value()) {
@@ -276,6 +283,7 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
       .primary =
           PerElementDrag{
               .element = element,
+              .entity = EntityOf(element),
               .startTransform = primaryStartTransform,
               .currentTransform = primaryStartTransform,
               .documentFromParent = DocumentFromParentTransform(element),
@@ -352,6 +360,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
         });
     return PerElementDrag{
         .element = element,
+        .entity = EntityOf(element),
         .startTransform = startTransform,
         .currentTransform = startTransform,
         .documentFromParent = DocumentFromParentTransform(element),
@@ -850,14 +859,17 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() con
     return std::nullopt;
   }
 
+  // The entities were captured when the gesture started. The preview is read every frame on the UI
+  // thread without document access, while the render worker may be adding storage to the registry,
+  // so it must not resolve the elements here.
   std::vector<Entity> extraEntities;
   extraEntities.reserve(dragState_->extras.size());
   for (const PerElementDrag& extra : dragState_->extras) {
-    extraEntities.push_back(extra.element.unsafeEntityHandle().entity());
+    extraEntities.push_back(extra.entity);
   }
 
   return ActiveDragPreview{
-      .entity = dragState_->primary.element.unsafeEntityHandle().entity(),
+      .entity = dragState_->primary.entity,
       .extraEntities = std::move(extraEntities),
       .translation = dragState_->currentDocumentDelta,
       .documentFromCachedDocument = dragState_->currentDocumentFromStartDocument,

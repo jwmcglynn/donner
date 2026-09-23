@@ -236,6 +236,10 @@ private:
   /// the stable locator for later canvas-to-text writeback.
   struct PerElementDrag {
     svg::SVGElement element;
+    /// The entity \ref element names, captured at gesture start (see
+    /// `sourceTransformAttributeValue` for why then), so the drag preview never resolves the
+    /// element against a registry the render worker may be growing.
+    Entity entity = entt::null;
     Transform2d startTransform;
     Transform2d currentTransform;
     /// Document-space transform of the element's parent captured at gesture start.
