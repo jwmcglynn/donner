@@ -303,10 +303,18 @@ test("a GPU wait failure publishes worker stats even though no frame completed",
   );
   assert.ok(poll, "expected the UI-thread result poll");
   const failureCall = poll[0].indexOf("PublishWorkerGpuWaitFailure(");
-  const earlyReturn = poll[0].indexOf("if (!IsCurrentRenderResult(resultOpt, app)) {\n    return;");
   assert.ok(failureCall >= 0, "the poll must report a GPU wait failure");
+  assert.match(
+    poll[0],
+    /if \(!resultOpt\.has_value\(\)\) \{\s*PublishWorkerGpuWaitFailure\(/,
+    "the separate failure publish must apply only when no frame completed",
+  );
+  const earlyReturn = poll[0].match(
+    /if \(!IsCurrentRenderResult\(resultOpt, app\)\) \{\s*rejectPixelCaptureResult\(resultOpt\);\s*return;\s*\}/,
+  );
+  assert.ok(earlyReturn, "the poll must return when no current frame completed");
   assert.ok(
-    failureCall < earlyReturn,
+    failureCall < earlyReturn.index,
     "the failure report must happen before the no-result early return",
   );
   assert.match(poll[0], /gpuWaitFailure\.generation != publishedGpuWaitGeneration_/);
