@@ -61,8 +61,9 @@ std::array<uint8_t, 4> PixelAt(const Bitmap& bitmap, int x, int y,
 
 /**
  * Whether \p bitmap holds every pixel of its extent, failing the calling test once at the caller's
- * line when it does not: naming the snapshot as empty when it holds no pixels, and naming the
- * shortfall when its pixel buffer ends before the last pixel of its extent.
+ * line when it does not: naming the snapshot as empty when it holds no pixels, naming the stride
+ * when its rows are closer together than one row of pixels, and naming the shortfall when its pixel
+ * buffer ends before the last pixel of its extent.
  *
  * A renderer that could not read its frame back returns an empty snapshot. A helper that walks a
  * snapshot by its own extent visits no pixel of an empty one, so it counts no pixels and finds two
@@ -85,6 +86,13 @@ bool ExpectSnapshotHasPixels(const Bitmap& bitmap,
     return false;
   }
   const size_t rowPixelBytes = static_cast<size_t>(bitmap.dimensions.x) * 4u;
+  if (bitmap.rowBytes != 0 && static_cast<size_t>(bitmap.rowBytes) < rowPixelBytes) {
+    ADD_FAILURE_AT(caller.file_name(), caller.line())
+        << "read a " << bitmap.dimensions.x << "x" << bitmap.dimensions.y
+        << " snapshot whose rows are " << bitmap.rowBytes << " bytes apart, less than the "
+        << rowPixelBytes << " bytes a row of its pixels needs: its rows would overlap";
+    return false;
+  }
   const size_t rowBytes =
       bitmap.rowBytes != 0 ? static_cast<size_t>(bitmap.rowBytes) : rowPixelBytes;
   const size_t neededBytes =
