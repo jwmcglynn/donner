@@ -1626,6 +1626,40 @@ TEST(EditorWindowTest, WgpuPhysicalDeviceOutlivesWindowWhenContextIsRetained) {
 }
 #endif
 
+/// A framebuffer readback whose map outlasts the editor's bound declares the framebuffer device
+/// lost at the readback-map wait site, so later frames fail at once instead of stalling, and the
+/// frame reads back nothing. The map is held pending through the transitional adapter's event-wait
+/// seam, under which every wait slice reports that it waited and learned nothing.
+TEST(EditorWindowTest, AReadbackMapThatOutlastsItsBoundDeclaresTheDeviceLost) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Readback Map Bound Test",
+      .initialWidth = 64,
+      .initialHeight = 48,
+      .visible = false,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
+  });
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+  const std::shared_ptr<geode::GeodeDevice> framebufferDevice = window.geodeFramebufferDevice();
+  ASSERT_THAT(framebufferDevice, testing::NotNull());
+  if (!framebufferDevice->hasTransitionalAdapter()) {
+    GTEST_SKIP() << "holds the readback map pending through the transitional adapter's event-wait "
+                    "seam, which no native backend has";
+  }
+  framebufferDevice->adapterDevice().setSimulateEventWaitForTest(true);
+  window.setFramebufferReadbackBudgetForTesting(std::chrono::milliseconds(50));
+
+  window.beginFrame();
+  const svg::RendererBitmap bitmap = window.endFrameAndReadPixels();
+
+  EXPECT_THAT(bitmap.empty(), testing::IsTrue()) << "a frame whose map never completed was read";
+  EXPECT_THAT(framebufferDevice->isDeviceLost(), testing::IsTrue())
+      << "a map that outlasted the bound left the device answering";
+  EXPECT_THAT(framebufferDevice->consumeReadbackStats().timedOutWaitSite,
+              testing::Eq(geode::GpuWaitSite::ReadbackMap))
+      << "the loss was not attributed to the readback map's wait";
+}
+
 TEST(EditorWindowTest, WgpuCheckerboardRejectsAStaleFramebufferExtent) {
   EditorWindow window(EditorWindowOptions{
       .title = "Stale WGPU Framebuffer Extent Test",

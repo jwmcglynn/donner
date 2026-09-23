@@ -1473,6 +1473,9 @@ struct EditorWindow::WgpuState {
   /// Whether finished frames are copied back to the host, remembered so a rebuilt surface asks
   /// for the same thing the first one did.
   bool surfaceReadbackEnabled = false;
+  /// Longest a framebuffer readback waits for its map before the device is declared lost; see
+  /// \ref EditorWindow::setFramebufferReadbackBudgetForTesting.
+  std::chrono::milliseconds readbackBudget = geode::kDefaultGpuWaitTimeout;
 
   /// A constructor that gave up before the framebuffer context existed leaves it null with the
   /// rest of the state in place. Asked of the context rather than of the root's wgpu objects,
@@ -2033,6 +2036,15 @@ void EditorWindow::setWgpuUnderlayRenderCallback(WgpuUnderlayRenderCallback call
 void EditorWindow::setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback) {
   wgpuDirectRenderCallback_ = std::move(callback);
 }
+
+void EditorWindow::setFramebufferReadbackBudgetForTesting(std::chrono::milliseconds budget) {
+  if (wgpuState_ == nullptr) {
+    return;
+  }
+  wgpuState_->readbackBudget = budget > std::chrono::milliseconds::zero()
+                                   ? std::min(budget, geode::kDefaultGpuWaitTimeout)
+                                   : geode::kDefaultGpuWaitTimeout;
+}
 #endif
 
 void EditorWindow::pollEvents() {
@@ -2320,13 +2332,13 @@ void EditorWindow::readFrameReadback(const gpu::Buffer& buffer, uint64_t byteSiz
     return;
   }
   const auto waitStart = std::chrono::steady_clock::now();
-  const gpu::Result<gpu::MapWaitReport> waited = device.waitForMapping(
-      mapping.result(),
-      gpu::MapWaitParams{
-          std::chrono::duration<double>(geode::kGpuWaitPollInterval).count(),
-          std::chrono::duration<double>(geode::kDefaultGpuWaitTimeout).count(),
-      },
-      /*shouldCancel=*/{});
+  const gpu::Result<gpu::MapWaitReport> waited =
+      device.waitForMapping(mapping.result(),
+                            gpu::MapWaitParams{
+                                std::chrono::duration<double>(geode::kGpuWaitPollInterval).count(),
+                                std::chrono::duration<double>(wgpuState_->readbackBudget).count(),
+                            },
+                            /*shouldCancel=*/{});
   const gpu::MapWaitOutcome outcome =
       waited.hasError() ? gpu::MapWaitOutcome::Failed : waited.result().outcome;
   if (outcome == gpu::MapWaitOutcome::TimedOut) {

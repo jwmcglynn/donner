@@ -22,6 +22,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -770,6 +771,16 @@ public:
   /// Set the direct framebuffer overlay callback for the next and subsequent frames.
   /// The callback renders above the document underlay and below ImGui UI.
   void setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback);
+
+  /**
+   * Test seam: bounds how long \ref endFrameAndReadPixels waits for its readback map, in place of
+   * the editor's readback bound, so a case can reach the bound without spending it. A map that
+   * outlasts the bound declares the framebuffer device lost either way.
+   *
+   * @param budget Longest the map may take. Clamped to the editor's bound; zero or less restores
+   *   it.
+   */
+  void setFramebufferReadbackBudgetForTesting(std::chrono::milliseconds budget);
 #endif
 
 private:
