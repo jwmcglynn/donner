@@ -55,7 +55,7 @@ selection handles, the transparency checkerboard, another window, or pixels outs
   - [x] Render the loupe and pending/unavailable feedback without hover mutations.
 - [x] Worker-owned document capture
   - [x] Request a bounded composed CPU snapshot when armed or the accepted frame changes.
-  - [x] Bind capture to the accepted document, font, viewport, and session identities.
+  - [x] Bind capture to the accepted document, font, viewport, canvas commit, and session identities.
   - [x] Validate RGBA layout, alpha conversion, memory cap, and edge sampling.
 - [ ] Validation and delivery
   - [x] Add focused native tests for paint, input, capture freshness, and pixel mapping.
@@ -128,7 +128,10 @@ before accepting its replacement. Keep at most one retained accepted capture and
 the tool exits; worker staging and normal render buffers have separate lifetimes.
 
 The capture identity includes document generation, exact document frame version, font-resource
-revision, raster mapping, and the presentation epoch accepted for the canvas. A result that passes
+revision, semantic canvas-size commit generation, raster mapping, and the presentation epoch
+accepted for the canvas. A delayed canvas-size commit keeps the loupe Pending even if an earlier
+capture finishes. Its idle deadline schedules the post-commit render and invalidates that earlier
+capture even when the document frame version is unchanged. A result that passes
 the editor's broad viewport-presentability test can still be unsuitable for sampling: a high-zoom
 bounded raster may cover only part of the pane, and an overview infill or transformed drag preview
 may differ from the main composed bitmap. Sampling therefore requires a settled, crisp current

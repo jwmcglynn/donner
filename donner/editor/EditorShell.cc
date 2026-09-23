@@ -3459,6 +3459,7 @@ bool EditorShell::armEyedropper(PaintTarget target) {
   interactionController_.clearPendingClick();
   activeTool_ = ActiveTool::Eyedropper;
   renderCoordinator_.setDocumentPixelCaptureEnabled(true);
+  requestRenderAtEndOfFrame_ = true;
   window_.wakeEventLoop();
   return true;
 }
@@ -7732,6 +7733,11 @@ void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
 }
 
 void EditorShell::applyDeferredRenderRequest() {
+  const std::optional<float> canvasCommitWake =
+      renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds();
+  if (canvasCommitWake.has_value() && *canvasCommitWake <= 0.0f) {
+    requestRenderAtEndOfFrame_ = true;
+  }
   if (!requestRenderAtEndOfFrame_) {
     return;
   }

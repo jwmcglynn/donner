@@ -382,6 +382,7 @@ public:
   [[nodiscard]] Entity selectedCompositedEntityForDiagnostics(EditorApp& app) const;
 
 private:
+  friend struct EditorShellTestAccess;
   friend struct RenderCoordinatorTestAccess;
   void noteMissingPixelCaptureResult(const std::optional<RenderResult>& result);
   void rejectPixelCaptureResult(const std::optional<RenderResult>& result);
