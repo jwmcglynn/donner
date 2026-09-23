@@ -385,6 +385,17 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             self.assertIn("--build_tag_filters=%s" % tag, body)
             self.assertNotRegex(body.replace("//...", ""), r"//[^\s]+")
 
+    def test_production_image_decode_soak_runs_on_both_nightly_hosts(self):
+        target = "//tools/ci:image_loader_production_soak"
+        self.assertEqual(self.fuzz.count("Soak image loader at production decode budget"), 2)
+        self.assertEqual(self.fuzz.count(target), 2)
+        for job in ("linux", "macos"):
+            section = self.fuzz.split("\n  %s:\n" % job, 1)[1]
+            if job == "linux":
+                section = section.split("\n  macos:\n", 1)[0]
+            self.assertIn("--config=asan-fuzzer", section)
+            self.assertIn("--config=fuzz-soak", section)
+
     def test_ubsan_corpora_are_selected_by_bazel_tags(self):
         body = _step_body(self.sanitizers, "Replay untrusted-input fuzzer corpora with UBSan")
         for tag in ("fuzz_ubsan", "fuzz_ubsan_text_full", "fuzz_ubsan_geode"):

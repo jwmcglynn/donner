@@ -25,6 +25,14 @@ public:
   /// Default maximum number of decoded RGBA bytes for one raster image.
   static constexpr size_t kDefaultMaximumDecodedImageSize = 64 * 1024 * 1024;
 
+  /**
+   * Decode-amplification budget: output RGBA bytes may not exceed 4096 times the encoded input
+   * size, with a 1 MiB floor for small ordinary images. The configured per-image limit and shared
+   * document budget remain additional caps. This bounds synchronous work from tiny inputs.
+   */
+  static constexpr size_t kMaximumDecodedBytesPerInputByte = 4096;
+  static constexpr size_t kMinimumDecodedImageAllowance = 1 * 1024 * 1024;
+
   /// Result type returned by \ref fromUri. Contains either decoded raster pixels, raw SVG content,
   /// or an error.
   using Result = std::variant<ImageResource, SvgImageContent, UrlLoaderError>;

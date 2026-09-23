@@ -9,9 +9,9 @@ name: Fuzz
 # the PR gate now runs them briefly. That is where the mutation belongs: this
 # lane builds with `--config=asan-fuzzer`, so an input it discovers reports a
 # diagnosable sanitizer failure, while the PR sweep builds without sanitizers
-# and its mutation time was searching with the detectors switched off. Corpus
-# REGRESSION coverage did not move - the `{fuzzer}` targets replay every
-# checked-in corpus input with no time budget and still run on every PR.
+# and its mutation time was searching with the detectors switched off. The
+# existing `{fuzzer}` corpus targets still replay on PRs. The production-budget
+# image corpus is a separate manual nightly lane so the short PR target stays fast.
 #
 # - Schedule: 06:00 UTC daily — catches new corpus regressions within 24h.
 # - workflow_dispatch — manual trigger for ad-hoc runs.
@@ -84,6 +84,14 @@ jobs:
             --build_tag_filters=fuzz_text_full \
             //...
 
+      - name: Soak image loader at production decode budget
+        run: |
+          bazelisk test \
+            --config=asan-fuzzer \
+            --config=fuzz-soak \
+            --test_output=errors \
+            //tools/ci:image_loader_production_soak
+
       - name: Test Geode render fuzzers
         run: |
           bazelisk test \
@@ -141,6 +149,14 @@ jobs:
             --test_tag_filters=fuzz_text_full \
             --build_tag_filters=fuzz_text_full \
             //...
+
+      - name: Soak image loader at production decode budget
+        run: |
+          bazelisk test \
+            --config=asan-fuzzer \
+            --config=fuzz-soak \
+            --test_output=errors \
+            //tools/ci:image_loader_production_soak
 
       - name: Retain failed test evidence
         if: failure()

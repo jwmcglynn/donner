@@ -271,7 +271,10 @@ donner_cc_test(
     srcs = [
         "tests/ImageLoader_tests.cc",
     ],
-    data = ["tests/image_loader_corpus/regression-gif-declared-canvas.gif"],
+    data = [
+        "tests/image_loader_corpus/regression-gif-declared-canvas.gif",
+        "tests/image_loader_production_corpus/valid-2048x2048-uniform.png",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -332,6 +335,27 @@ donner_cc_fuzzer(
         "tests/ImageLoader_fuzzer.cc",
     ],
     corpus = "tests/image_loader_corpus",
+    deps = [
+        ":image_loader",
+        ":resource_loader_interface",
+    ],
+)
+
+filegroup(
+    name = "image_loader_production_corpus",
+    srcs = glob([
+        "tests/image_loader_corpus/**",
+        "tests/image_loader_production_corpus/**",
+    ]),
+)
+
+donner_cc_fuzzer(
+    name = "image_loader_production_fuzzer",
+    srcs = ["tests/ImageLoader_fuzzer.cc"],
+    corpus = ":image_loader_production_corpus",
+    copts = ["-DDONNER_IMAGE_LOADER_FUZZ_PRODUCTION_BUDGET=1"],
+    per_input_timeout_seconds = 10,
+    tags = ["manual"],
     deps = [
         ":image_loader",
         ":resource_loader_interface",

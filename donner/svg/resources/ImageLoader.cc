@@ -127,6 +127,15 @@ std::optional<size_t> RgbaByteSize(int width, int height) {
   return widthSize * heightSize * kRgbaChannels;
 }
 
+size_t AmplificationBudget(size_t inputBytes, size_t maximumDecodedImageSize) {
+  constexpr size_t kRatio = ImageLoader::kMaximumDecodedBytesPerInputByte;
+  const size_t ratioBudget = inputBytes > std::numeric_limits<size_t>::max() / kRatio
+                                 ? maximumDecodedImageSize
+                                 : inputBytes * kRatio;
+  return std::min(maximumDecodedImageSize,
+                  std::max(ImageLoader::kMinimumDecodedImageAllowance, ratioBudget));
+}
+
 std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
                                                       const std::vector<uint8_t>& fileContents,
                                                       size_t maximumDecodedImageSize) {
@@ -172,7 +181,8 @@ std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
   if (!dataSize.has_value()) {
     return UrlLoaderError::DataCorrupt;
   }
-  if (*dataSize > maximumDecodedImageSize) {
+  const size_t decodedLimit = AmplificationBudget(fileContents.size(), maximumDecodedImageSize);
+  if (*dataSize > decodedLimit) {
     return UrlLoaderError::ResourceTooLarge;
   }
 
@@ -188,7 +198,7 @@ std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
     stbi_image_free(data);
     return UrlLoaderError::DataCorrupt;
   }
-  if (*loadedDataSize > maximumDecodedImageSize) {
+  if (*loadedDataSize > decodedLimit) {
     stbi_image_free(data);
     return UrlLoaderError::ResourceTooLarge;
   }
