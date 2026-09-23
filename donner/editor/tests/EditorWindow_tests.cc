@@ -23,6 +23,10 @@
 #include <vector>
 
 #if defined(DONNER_EDITOR_WGPU)
+// Resizing a window is the one thing these cases ask of the window library directly.
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
+
 #include "donner/base/Box.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/RunfileGate.h"
@@ -54,6 +58,7 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
@@ -1546,6 +1551,86 @@ TEST_P(EditorWindowBackendTest, OpensOnTheBackendTheProcessSelected) {
 }
 
 INSTANTIATE_TEST_SUITE_P(Targets, EditorWindowBackendTest, testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? std::string("Offscreen")
+                                             : std::string("WindowSurface");
+                         });
+
+/// A real window, presenting to its surface (false) or rendering offscreen (true), taken through
+/// what happens to a window during its life: being resized, and losing its device.
+class EditorWindowLifecycleTest : public testing::TestWithParam<bool> {
+protected:
+  /// A hidden window on the parameter's arm that reads its frames back and clears to opaque blue.
+  EditorWindowOptions options() const {
+    return EditorWindowOptions{
+        .title = "Window Lifecycle Test",
+        .initialWidth = 64,
+        .initialHeight = 48,
+        .visible = false,
+        .forceOffscreenRenderTarget = GetParam(),
+        .clearColor = {0.0f, 0.0f, 1.0f, 1.0f},
+        .enableFramebufferReadback = true,
+    };
+  }
+};
+
+/// A resized window follows its new framebuffer extent on the next frame: a presented window
+/// reconfigures its surface, an offscreen one reallocates its target, and the frame is drawn and
+/// read back at the new extent, including the texels the old extent did not cover.
+TEST_P(EditorWindowLifecycleTest, AResizedWindowDrawsAndReadsBackAtItsNewExtent) {
+  EditorWindow window(options());
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+
+  window.beginFrame();
+  const svg::RendererBitmap before = window.endFrameAndReadPixels();
+  ASSERT_THAT(before.empty(), testing::IsFalse());
+  ASSERT_THAT(before.dimensions, testing::Eq(window.framebufferSize()));
+
+  glfwSetWindowSize(window.rawHandle(), 96, 72);
+  window.pollEvents();
+  const Vector2i resized = window.framebufferSize();
+  ASSERT_THAT(resized, testing::Ne(before.dimensions)) << "the window was not resized";
+
+  window.beginFrame();
+  const svg::RendererBitmap after = window.endFrameAndReadPixels();
+  ASSERT_THAT(after.empty(), testing::IsFalse()) << "the resized window drew no frame";
+  EXPECT_THAT(after.dimensions, testing::Eq(resized));
+  EXPECT_THAT(after.rowBytes, testing::Eq(static_cast<std::size_t>(resized.x) * 4u));
+  EXPECT_THAT(PixelAt(after, resized.x - 1, resized.y - 1),
+              Rgba(testing::Le(3), testing::Le(3), Near(255, 3), testing::Eq(255)))
+      << "a texel outside the old extent was not drawn at the new one";
+}
+
+/// A device declared lost stops the window drawing without stalling it. The loss reaches the
+/// window through the condition its framebuffer context shares with the runtime device it draws
+/// on, whichever backend that is, and no frame after it spends the readback bound waiting for a
+/// device that will never answer.
+TEST_P(EditorWindowLifecycleTest, FramesAfterTheDeviceIsDeclaredLostEndWithoutWaiting) {
+  EditorWindow window(options());
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+
+  window.beginFrame();
+  ASSERT_THAT(window.endFrameAndReadPixels().empty(), testing::IsFalse())
+      << "the frame before the loss is drawn";
+
+  window.geodeFramebufferDevice()->markDeviceLost("declared lost by the window lifecycle test");
+  EXPECT_THAT(window.geodeFramebufferDevice()->runtimeDevice().isLost(), testing::IsTrue())
+      << "the framebuffer context and its runtime device do not share one loss condition";
+
+  for (int frame = 0; frame < 2; ++frame) {
+    SCOPED_TRACE(testing::Message() << "frame " << frame << " after the loss");
+    const auto frameStart = std::chrono::steady_clock::now();
+    window.beginFrame();
+    const svg::RendererBitmap lost = window.endFrameAndReadPixels();
+    const auto frameTime = std::chrono::steady_clock::now() - frameStart;
+    EXPECT_THAT(lost.empty(), testing::IsTrue()) << "a lost device's frame was read back";
+    EXPECT_THAT(std::chrono::duration_cast<std::chrono::milliseconds>(frameTime),
+                testing::Lt(geode::kDefaultGpuWaitTimeout))
+        << "the frame waited out the readback bound on a lost device";
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(Targets, EditorWindowLifecycleTest, testing::Bool(),
                          [](const testing::TestParamInfo<bool>& info) {
                            return info.param ? std::string("Offscreen")
                                              : std::string("WindowSurface");

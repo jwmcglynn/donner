@@ -269,6 +269,7 @@ donner_cc_test(
             "//donner/svg/renderer/geode:geode_device",
             "//donner/svg/renderer/tests:renderer_image_test_utils",
             "//donner/svg/renderer/tests:rgba_test_matchers",
+            "@glfw",
         ],
         "//conditions:default": [],
     }),
