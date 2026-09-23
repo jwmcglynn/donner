@@ -941,6 +941,19 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     return geometryAdmission->admitGeometry(encoded, logicalDraws);
   }
 
+  bool admitResidentInstance(const EncodedPath& encoded) {
+    if (geometryAdmission == nullptr) {
+      return !encoded.rejected();
+    }
+    return geometryAdmission->admitResidentInstance(encoded);
+  }
+
+  void releaseResidentInstance(const EncodedPath& encoded) {
+    if (geometryAdmission != nullptr) {
+      geometryAdmission->releaseResidentInstance(encoded);
+    }
+  }
+
   bool canEncodeGeometry() const {
     return geometryAdmission == nullptr || geometryAdmission->canEncodeGeometry();
   }
@@ -2392,7 +2405,7 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
                                            const GeodeRecordSlab::Slot* recordSlotOverride,
                                            std::vector<uint8_t>* overrideRecordCache,
                                            SceneRecordState* recordState, bool publishPaint) {
-  if (publishPaint && !impl_->admitGeometry(encoded, 1u)) {
+  if (publishPaint && !impl_->admitResidentInstance(encoded)) {
     return false;
   }
   if (encoded.empty()) {
@@ -2401,7 +2414,7 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
   if (publishPaint && impl_->scenePreparationFailureCountdown.has_value()) {
     if (*impl_->scenePreparationFailureCountdown == 0u) {
       impl_->scenePreparationFailureCountdown.reset();
-      impl_->releaseGeometry(encoded, 1u);
+      impl_->releaseResidentInstance(encoded);
       return false;
     }
     --*impl_->scenePreparationFailureCountdown;
@@ -2430,7 +2443,7 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
       slot, encoded, args, recordTransform, recordSlotOverride, overrideRecordCache,
       /*bakeTransform=*/false, recordState, publishPaint);
   if (publishPaint && !prepared) {
-    impl_->releaseGeometry(encoded, 1u);
+    impl_->releaseResidentInstance(encoded);
   } else if (publishPaint && impl_->geometryAdmission != nullptr) {
     ++impl_->pendingSceneAdmissions;
   }
@@ -2442,7 +2455,7 @@ void GeoEncoder::releasePreparedSceneAdmission(const EncodedPath& encoded) {
     return;
   }
   --impl_->pendingSceneAdmissions;
-  impl_->releaseGeometry(encoded, 1u);
+  impl_->releaseResidentInstance(encoded);
 }
 
 void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,

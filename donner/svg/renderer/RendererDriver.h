@@ -44,6 +44,13 @@ public:
       RendererFilterPreparationBudget::kMaximumShadowEntities;
   /// Clip-path shapes copied per frame.
   static constexpr std::size_t kMaximumClipGeometryPaths = 1024;
+  /// Per-frame limits on clip-path geometry copies, independent of the text budget's.
+  static constexpr RendererTextMaterializationBudget::Cost kClipGeometryCopyLimits{
+      .uniqueOutlines = kMaximumClipGeometryPaths,
+      .commands = 4 * 1024 * 1024,
+      .points = 8 * 1024 * 1024,
+      .bytes = 64ULL * 1024 * 1024,
+      .decodeWork = 64 * 1024 * 1024};
 
   /// Optional diagnostics for structured fuzzers and embedders auditing rejected preparation.
   struct SecurityStats {
@@ -421,8 +428,8 @@ private:
 
   RendererFilterPreparationBudget ownedFilterPreparationBudget_;
   RendererFilterPreparationBudget* filterPreparationBudget_ = &ownedFilterPreparationBudget_;
-  /// Charges each clip shape as one outline, capped at \ref kMaximumClipGeometryPaths.
-  RendererTextMaterializationBudget ownedClipGeometryCopyBudget_{kMaximumClipGeometryPaths};
+  /// Charges each clip shape as one outline within \ref kClipGeometryCopyLimits.
+  RendererTextMaterializationBudget ownedClipGeometryCopyBudget_{kClipGeometryCopyLimits};
   RendererTextMaterializationBudget* clipGeometryCopyBudget_ = &ownedClipGeometryCopyBudget_;
   SecurityStats* securityStats_ = nullptr;
 

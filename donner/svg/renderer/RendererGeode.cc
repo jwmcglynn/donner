@@ -3308,6 +3308,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   bool canEncodeGeometry() const override { return !geometryBudget->rejected(); }
 
+  /// A resident instance retains its record for the frame, not a copy of the geometry, which the
+  /// document's resident budget already holds.
+  bool admitResidentInstance(const geode::EncodedPath& encoded) override {
+    if (encoded.rejected()) {
+      geometryBudget->reject();
+      return false;
+    }
+    if (encoded.empty()) {
+      return true;
+    }
+    return geometryBudget->reserve(1u, encoded.geometryItemCount(), sizeof(geode::InstanceRecord));
+  }
+
+  void releaseResidentInstance(const geode::EncodedPath& encoded) override {
+    if (encoded.empty() || encoded.rejected()) {
+      return;
+    }
+    geometryBudget->release(1u, encoded.geometryItemCount(), sizeof(geode::InstanceRecord));
+  }
+
   void releaseGeometry(const geode::EncodedPath& encoded, std::size_t logicalDraws) override {
     if (encoded.empty() || encoded.rejected() || logicalDraws == 0u) {
       return;

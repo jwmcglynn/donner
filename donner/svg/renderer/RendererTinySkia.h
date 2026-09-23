@@ -433,7 +433,7 @@ private:
   bool compositeTransformedFilter(SurfaceFrame& frame);
   void compositeDeviceFilter(SurfaceFrame& frame);
   tiny_skia::Pixmap extractFilterViewport(const SurfaceFrame& frame, int width, int height);
-  bool admitTextGlyphBatch(const std::vector<TextRun>& runs);
+  bool admitTextGlyphBatch(const std::vector<TextRun>& runs, bool stroked);
   bool admitGlyphPredecode(const FontManager& fontManager, FontHandle font, int glyphIndex,
                            bool& hasComplexity);
   bool admitPlacedGlyph(bool hasPredecodeComplexity, const Path& path);

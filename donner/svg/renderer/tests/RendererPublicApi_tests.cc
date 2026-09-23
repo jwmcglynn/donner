@@ -295,7 +295,7 @@ TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeM
   limitedRenderer.draw(limitedDocument);
 
   const RendererResourceStats limitedStats = limitedRenderer.resourceStats();
-  EXPECT_EQ(limitedStats.drawCalls, 2u);
+  EXPECT_EQ(limitedStats.drawCalls, 1u);
   EXPECT_TRUE(limitedStats.drawBudgetRejected);
   EXPECT_EQ(limitedRenderer.frameCounters().textGlyphMaterializations, 1u);
 

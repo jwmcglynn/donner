@@ -99,6 +99,16 @@ std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
                                                  .bytes = commandBytes + pointBytes,
                                                  .decodeWork = complexity.work};
 }
+
+/// Whether any glyph of this text can be stroked: the element or one of its spans has a stroke
+/// paint. Width alone is not evidence, since it defaults to 1 whether or not anything strokes.
+bool TextMayStroke(const components::ComputedTextComponent& text,
+                   const components::ResolvedPaintServer& elementStroke) {
+  return !std::holds_alternative<PaintServer::None>(elementStroke) ||
+         std::any_of(text.spans.begin(), text.spans.end(), [](const auto& span) {
+           return !std::holds_alternative<PaintServer::None>(span.resolvedStroke);
+         });
+}
 #endif
 
 const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
@@ -2756,8 +2766,9 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
 }
 
 #ifdef DONNER_TEXT_ENABLED
-bool RendererTinySkia::admitTextGlyphBatch(const std::vector<TextRun>& runs) {
-  // Each glyph reserves a fill and a stroke draw call.
+bool RendererTinySkia::admitTextGlyphBatch(const std::vector<TextRun>& runs, bool stroked) {
+  // Each glyph reserves a fill draw call, and a stroke draw call when the text can be stroked.
+  const std::size_t drawCallsPerGlyph = stroked ? 2u : 1u;
   constexpr std::size_t kMaximumCountableGlyphs = std::numeric_limits<std::size_t>::max() / 2;
   std::size_t glyphCount = 0;
   for (const TextRun& run : runs) {
@@ -2771,7 +2782,7 @@ bool RendererTinySkia::admitTextGlyphBatch(const std::vector<TextRun>& runs) {
   // A failed reservation marks its own budget rejected; the draw budget also stops the frame's
   // remaining glyphs.
   if (!textMaterializationBudget_->reserveGlyphOccurrences(glyphCount) ||
-      !drawBudget_->reserve({.drawCalls = glyphCount * 2})) {
+      !drawBudget_->reserve({.drawCalls = glyphCount * drawCallsPerGlyph})) {
     drawBudget_->reject();
     return false;
   }
@@ -2848,7 +2859,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   // whose spans own effects is not charged once per draw for the glyphs it does not paint.
   ClearUnpaintedSpanGlyphs(text, params.spanEffectOwner, runs);
 
-  (void)admitTextGlyphBatch(runs);
+  (void)admitTextGlyphBatch(runs, TextMayStroke(text, paint_.stroke));
   if (currentPixmap().width() == 0 || currentPixmap().height() == 0) {
     return;
   }

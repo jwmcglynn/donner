@@ -483,20 +483,17 @@ private:
 class RendererTextMaterializationBudget {
 public:
   /// Default glyph cap: glyph occurrences and distinct outlines admitted per frame.
-  static constexpr std::size_t kDefaultMaximumGlyphs = 1024 * 1024;
-  static constexpr std::size_t kMaximumCommands = 4 * 1024 * 1024;
-  static constexpr std::size_t kMaximumPoints = 8 * 1024 * 1024;
-  static constexpr std::uint64_t kMaximumBytes = 64ULL * 1024 * 1024;
+  static constexpr std::size_t kDefaultMaximumGlyphs = 64 * 1024;
+  // The default aggregate limits admit about ten dense pages of text per frame on a backend that
+  // charges every glyph occurrence its outline decode.
+  /// Default cap on path commands materialized per frame.
+  static constexpr std::size_t kMaximumCommands = 16 * 1024 * 1024;
+  /// Default cap on path points materialized per frame.
+  static constexpr std::size_t kMaximumPoints = 32 * 1024 * 1024;
+  /// Default cap on bytes materialized per frame.
+  static constexpr std::uint64_t kMaximumBytes = 256ULL * 1024 * 1024;
+  /// Default cap on outline decode work per frame.
   static constexpr std::size_t kMaximumDecodeWork = 64 * 1024 * 1024;
-
-  /**
-   * Creates a budget.
-   *
-   * @param maximumGlyphs Glyph occurrences and distinct outlines admitted per frame.
-   */
-  explicit RendererTextMaterializationBudget(std::size_t maximumGlyphs = kDefaultMaximumGlyphs) {
-    setMaximumGlyphs(maximumGlyphs);
-  }
 
   struct Cost {
     std::size_t uniqueOutlines = 0;
@@ -505,6 +502,18 @@ public:
     std::uint64_t bytes = 0;
     std::size_t decodeWork = 0;
   };
+
+  /// Creates a text budget with the default glyph cap and aggregate limits.
+  RendererTextMaterializationBudget() { setMaximumGlyphs(kDefaultMaximumGlyphs); }
+
+  /**
+   * Creates a budget with explicit limits.
+   *
+   * @param limits Per-frame limits; `limits.uniqueOutlines` is also the glyph occurrence cap.
+   */
+  explicit RendererTextMaterializationBudget(const Cost& limits) : limits_(limits) {
+    setMaximumGlyphs(limits.uniqueOutlines);
+  }
 
   void reset() {
     uniqueOutlines_ = 0;
@@ -1298,10 +1307,10 @@ public:
    * outlines it decodes. Text past the cap is not drawn in that frame. Backends that keep glyph
    * outlines resident across frames also cap each document's resident outlines at this count.
    *
-   * The aggregate budgets still apply and are usually reached first at the default cap. TinySkia
-   * charges every glyph occurrence two draw calls against
-   * \ref RendererDrawBudget::kMaximumDrawCalls and its outline decode against
-   * \ref RendererTextMaterializationBudget::kMaximumBytes, which admits several thousand glyphs
+   * The aggregate budgets still apply and can be reached first. TinySkia charges every glyph
+   * occurrence one draw call, two when the text is stroked, against
+   * \ref RendererDrawBudget::kMaximumDrawCalls, and its outline decode against
+   * \ref RendererTextMaterializationBudget::kMaximumBytes, which admits tens of thousands of glyphs
    * per frame depending on outline complexity. Geode charges that byte budget for each cache miss
    * (its decode and its entry) and for per-occurrence path copies of stroked, gradient, and
    * pattern text, and charges draws against its frame geometry budget. Lowering the cap bounds

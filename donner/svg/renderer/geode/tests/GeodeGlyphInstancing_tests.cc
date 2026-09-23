@@ -629,6 +629,39 @@ TEST_F(GeodeGlyphInstancingTest, ResidentGlyphOccurrencesChargeTheFrameTheirReco
       << "One byte less than nine records must not fit nine occurrences.";
 }
 
+/// Every occurrence still evaluates its outline on the GPU, so each one keeps counting the
+/// outline's items toward the frame's work bound even though its geometry is shared.
+TEST_F(GeodeGlyphInstancingTest, ResidentGlyphOccurrencesStillCountTheirItems) {
+  constexpr std::size_t kUnlimited = std::numeric_limits<std::size_t>::max();
+  constexpr std::uint64_t kUnlimitedBytes = std::numeric_limits<std::uint64_t>::max();
+  const auto parseRun = [&](std::string_view glyphs) {
+    return parse(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+        font-family="Noto Sans" font-size="24"><text x="10" y="60" fill="black">)svg") +
+                 std::string(glyphs) + "</text></svg>");
+  };
+
+  SVGDocument one = parseRun("e");
+  RendererGeode measure(sharedDevice());
+  ASSERT_GT(nonTransparentPixels(render(measure, one).bitmap), 0u);
+  const std::size_t itemsPerOccurrence = measure.resourceStats().geometryItems;
+  ASSERT_GT(itemsPerOccurrence, 0u);
+
+  SVGDocument fits = parseRun("eeeeeeeee");
+  RendererGeode renderer(sharedDevice());
+  renderer.setGeometryBudgetForTesting(kUnlimited, 9u * itemsPerOccurrence, kUnlimitedBytes,
+                                       kUnlimitedBytes, kUnlimitedBytes);
+  (void)render(renderer, fits);
+  EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected);
+
+  SVGDocument overflows = parseRun("eeeeeeeee");
+  RendererGeode tighter(sharedDevice());
+  tighter.setGeometryBudgetForTesting(kUnlimited, 9u * itemsPerOccurrence - 1u, kUnlimitedBytes,
+                                      kUnlimitedBytes, kUnlimitedBytes);
+  (void)render(tighter, overflows);
+  EXPECT_TRUE(tighter.resourceStats().geometryBudgetRejected)
+      << "Nine occurrences must be charged nine times their outline's items.";
+}
+
 /// A glyph with no outline still costs an entry. Distinct outline-less keys, here non-breaking
 /// spaces at distinct rotations, must be bounded by the frame's byte budget rather than only by
 /// the glyph count.

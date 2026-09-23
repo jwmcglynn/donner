@@ -93,16 +93,20 @@ See the [Project Roadmap](docs/ProjectRoadmap.md) and
   A retained foreign subtree materializes one entity per element and counts against
   `maximumTreeNodes` and `maximumTreeDepth` like any other content, and reports a single
   unsupported-namespace warning at the top of the subtree.
-- **The glyph cap is 1,048,576 and configurable.** A frame previously stopped drawing text after
-  1024 distinct glyph outlines (every glyph on the default backend), and Geode kept at most 1024
-  outlines resident per document. `RendererInterface::setMaximumGlyphs` now sets one cap for glyphs
-  drawn per frame, distinct outlines decoded per frame, and Geode's resident outlines, defaulting to
-  `RendererTextMaterializationBudget::kDefaultMaximumGlyphs`. The aggregate byte, work, and draw
-  budgets are unchanged and are usually reached first. TinySkia charges every glyph two draw calls
-  and its outline decode, which admits several thousand glyphs per frame depending on outline
-  complexity. Geode charges each cache miss and now also charges each cached glyph its own
-  footprint, so outline-less glyphs count against the byte budget. Clip paths keep their own
-  1024-shape cap.
+- **More text per frame, with a configurable glyph cap.** A frame previously stopped drawing text
+  after 1024 distinct glyph outlines, which on the default backend meant 1024 glyphs, and Geode
+  kept at most 1024 outlines resident per document. `RendererInterface::setMaximumGlyphs` now sets
+  one cap for glyphs drawn per frame, distinct outlines decoded per frame, and Geode's resident
+  outlines, defaulting to 65,536 (`RendererTextMaterializationBudget::kDefaultMaximumGlyphs`).
+  Per-frame budgets are sized for about ten dense pages of text. The text budget grows to 256 MiB,
+  16M path commands, and 32M points: roughly 44,000 Latin or 29,000 CJK glyphs on TinySkia, which
+  charges every glyph its outline decode. Geode's frame geometry budget grows to 4Mi items and
+  256 MiB. Every scene-batched resident draw, including batched glyph occurrences and per-entity
+  paths, now charges that budget its instance record rather than a copy of its resident geometry,
+  but still counts the geometry's items as work, so more of them fit per frame. TinySkia reserves a
+  stroke draw call only for stroked text, and Geode charges each cached glyph its own footprint,
+  so outline-less glyphs count against the byte budget. Clip paths keep their previous 1024-shape
+  and 64 MiB limits.
 
 ### Removed
 

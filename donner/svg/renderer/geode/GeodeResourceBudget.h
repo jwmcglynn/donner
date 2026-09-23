@@ -17,8 +17,9 @@ namespace donner::geode {
 class GeodeFrameGeometryBudget {
 public:
   static constexpr std::size_t kMaximumDraws = 64u * 1024u;
-  static constexpr std::size_t kMaximumItems = 1u << 20;
-  static constexpr std::uint64_t kMaximumRetainedBytes = 64u << 20;
+  /// Sized with the text budget for about ten dense pages of instanced glyphs per frame.
+  static constexpr std::size_t kMaximumItems = 4u << 20;
+  static constexpr std::uint64_t kMaximumRetainedBytes = 256u << 20;
 
   struct Limits {
     std::size_t draws = kMaximumDraws;
