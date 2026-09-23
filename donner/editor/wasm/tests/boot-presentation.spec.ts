@@ -1,8 +1,11 @@
 import { expect, test } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 
 const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 
 type BootSample = {
+  /** Page clock when the animation frame ran, so a failure shows the cadence. */
+  atMs: number;
   firstFrame: boolean;
   covered: boolean;
   canvasCount: number;
@@ -15,7 +18,14 @@ type BootSample = {
 };
 type BootWindow = Window & {
   __donnerFirstFramePresented?: boolean;
-  __bootPresentationProbe: { running: boolean; samples: BootSample[] };
+  __bootPresentationProbe: {
+    running: boolean;
+    samples: BootSample[];
+    // Every visibility the page had, timed. A hidden page is delivered no
+    // animation frames at all, so a gap in the samples' cadence reads as a
+    // starved compositor or a hidden page only with this beside it.
+    visibility: Array<{ atMs: number; state: DocumentVisibilityState }>;
+  };
 };
 
 test("delayed startup never exposes an unconfigured canvas", async ({ page }, testInfo) => {
@@ -33,7 +43,17 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
   });
   await page.addInitScript(() => {
     const state = window as BootWindow;
-    state.__bootPresentationProbe = { running: true, samples: [] };
+    state.__bootPresentationProbe = {
+      running: true,
+      samples: [],
+      visibility: [{ atMs: performance.now(), state: document.visibilityState }],
+    };
+    document.addEventListener("visibilitychange", () => {
+      state.__bootPresentationProbe.visibility.push({
+        atMs: performance.now(),
+        state: document.visibilityState,
+      });
+    });
     const sample = () => {
       if (!state.__bootPresentationProbe.running) return;
       const canvas = document.querySelector("canvas");
@@ -42,6 +62,7 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
         const style = getComputedStyle(loader);
         const bounds = loader.getBoundingClientRect();
         state.__bootPresentationProbe.samples.push({
+          atMs: performance.now(),
           firstFrame: state.__donnerFirstFramePresented === true,
           covered: !loader.hidden && style.display !== "none" && style.visibility === "visible"
             && Number(style.opacity) === 1 && bounds.left <= 0 && bounds.top <= 0
@@ -66,13 +87,26 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
       await expect(page.locator("#loading-screen")).toBeVisible();
       await expect(page.locator("canvas")).toHaveCount(1);
       await page.setViewportSize({ width: 1390, height: 1121 });
-      await expect.poll(() =>
-        page.evaluate(() =>
-          (window as BootWindow).__bootPresentationProbe.samples.filter((sample) =>
-            sample.viewportWidth === 1390 && sample.viewportHeight === 1121
-          ).length
-        )
-      ).toBeGreaterThanOrEqual(5);
+      // Startup must begin after the page is laid out at the new size, or the
+      // canvas it configures says nothing about a resize. An animation frame
+      // sampled at the new viewport with the loader still covering the page is
+      // that evidence, and one is all it takes: nothing on the page changes
+      // until startup is released, so every later frame repeats it.
+      //
+      // Waiting for five such frames inside a fixed five seconds measured the
+      // browser's frame rate rather than the page. A cold browser on a shared
+      // runner delivered three and four, failing runs whose loader covered
+      // every frame it drew.
+      await expect.poll(
+        () =>
+          page.evaluate(() =>
+            (window as BootWindow).__bootPresentationProbe.samples.filter((sample) =>
+              sample.viewportWidth === 1390 && sample.viewportHeight === 1121 && sample.covered
+              && !sample.firstFrame
+            ).length
+          ),
+        { message: "the page never drew a covered frame at the resized viewport" },
+      ).toBeGreaterThanOrEqual(1);
       expect(await page.evaluate(() => (window as BootWindow).__donnerFirstFramePresented === true))
         .toBe(false);
     } finally {
@@ -128,6 +162,7 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
         if (probe) probe.running = false;
         return {
           samples: probe?.samples ?? [],
+          visibility: probe?.visibility ?? [],
           framesAwaitingPresentedFrame: state.__donnerFramesAwaitingPresentedFrame,
           loader: document.getElementById("loading-screen")?.outerHTML,
           canvas: document.querySelector("canvas")?.outerHTML,
@@ -137,8 +172,13 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
         timer = setTimeout(() => resolve({ error: "diagnostic capture timed out" }), 5000);
       }),
     ]).finally(() => clearTimeout(timer));
+    // Written to a file rather than attached as a body: the list reporter
+    // prints neither, and a body attachment never reaches the output directory
+    // that CI and Bazel keep from a failed run.
+    const diagnosticsPath = testInfo.outputPath("boot-presentation-samples.json");
+    await writeFile(diagnosticsPath, JSON.stringify({ diagnostics, errors }, null, 2));
     await testInfo.attach("boot-presentation-samples", {
-      body: JSON.stringify({ diagnostics, errors }, null, 2),
+      path: diagnosticsPath,
       contentType: "application/json",
     });
   }
