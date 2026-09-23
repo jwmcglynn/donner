@@ -56,23 +56,23 @@ protected:
     std::vector<gpu::Buffer> buffers;
     buffers.push_back(std::move(buffer));
     std::vector<gpu::BindGroup> bindGroups;
-    retirement_.retire(buffers, bindGroups);
+    EXPECT_THAT(retirement_.retire(buffers, bindGroups), Eq(0u));
     EXPECT_THAT(buffers, IsEmpty());
   }
 
   gpu::RecordingDevice device_;
-  GeodeHandleRetirement retirement_;
+  GeodeHandleRetirement retirement_{device_.deviceId()};
 };
 
 TEST_F(GeodeHandleRetirementTest, RetiringHoldsAHandleUntilTheOwnerReleasesIt) {
   retireOne(createBuffer());
 
-  EXPECT_THAT(retirement_.heldCountForTesting(), Eq(1u));
+  EXPECT_THAT(retirement_.heldCountsForTesting().buffers, Eq(1u));
   EXPECT_THAT(ReleasedBufferCount(device_), Eq(0u)) << "retiring must not reach the device";
 
   retirement_.release();
 
-  EXPECT_THAT(retirement_.heldCountForTesting(), Eq(0u));
+  EXPECT_THAT(retirement_.heldCountsForTesting().buffers, Eq(0u));
   EXPECT_THAT(ReleasedBufferCount(device_), Eq(1u));
 }
 
@@ -99,7 +99,7 @@ TEST_F(GeodeHandleRetirementTest, RetiringOnAnotherThreadReachesTheDeviceOnlyOnT
   other.join();
   retirement_.release();
 
-  EXPECT_THAT(retirement_.heldCountForTesting(), Eq(0u));
+  EXPECT_THAT(retirement_.heldCountsForTesting().buffers, Eq(0u));
   EXPECT_THAT(ReleasedBufferCount(device_), Eq(kBuffers));
 }
 
@@ -115,13 +115,30 @@ TEST_F(GeodeHandleRetirementTest, ClosingReleasesWhatIsHeldAndLaterRetirementsWa
   // After the context closed, nothing releases on its behalf: a late retirement is kept until the
   // retirement itself goes, which its owner arranges to be after the device.
   retireOne(createBuffer());
-  EXPECT_THAT(retirement_.heldCountForTesting(), Eq(1u));
+  EXPECT_THAT(retirement_.heldCountsForTesting().buffers, Eq(1u));
   EXPECT_THAT(ReleasedBufferCount(device_), Eq(1u));
 }
 
+TEST_F(GeodeHandleRetirementTest, AnotherDevicesHandleStaysWithTheCaller) {
+  gpu::RecordingDevice other;
+  std::vector<gpu::Buffer> buffers;
+  buffers.push_back(createBuffer());
+  buffers.push_back(gpu::GetResultOrFail(other.createBuffer(gpu::BufferDescriptor{
+      "foreign", 16, gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst})));
+  buffers.emplace_back();  // A null handle, which is simply dropped.
+  std::vector<gpu::BindGroup> bindGroups;
+
+  EXPECT_THAT(retirement_.retire(buffers, bindGroups), Eq(1u));
+
+  ASSERT_THAT(buffers.size(), Eq(1u));
+  EXPECT_THAT(buffers.front().deviceId(), Eq(other.deviceId()))
+      << "only this retirement's device's handles may be released on its thread";
+  EXPECT_THAT(retirement_.heldCountsForTesting().buffers, Eq(1u));
+}
+
 TEST(GeodePerDeviceTest, EachDeviceGetsItsOwnEntry) {
-  const auto first = std::make_shared<GeodeHandleRetirement>();
-  const auto second = std::make_shared<GeodeHandleRetirement>();
+  const auto first = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
+  const auto second = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
   GeodePerDevice<int> perDevice;
 
   perDevice.forDevice(GeodeDeviceKey{1, first}) = 10;
@@ -136,13 +153,13 @@ TEST(GeodePerDeviceTest, EachDeviceGetsItsOwnEntry) {
 }
 
 TEST(GeodePerDeviceTest, AnEntryStaysPutWhileOtherDevicesComeAndGo) {
-  const auto first = std::make_shared<GeodeHandleRetirement>();
+  const auto first = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
   GeodePerDevice<int> perDevice;
   int& entry = perDevice.forDevice(GeodeDeviceKey{1, first});
 
   std::vector<std::shared_ptr<GeodeHandleRetirement>> others;
   for (uint64_t deviceId = 2; deviceId < 34; ++deviceId) {
-    others.push_back(std::make_shared<GeodeHandleRetirement>());
+    others.push_back(std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u));
     (void)perDevice.forDevice(GeodeDeviceKey{deviceId, others.back()});
   }
   others.clear();
@@ -153,9 +170,9 @@ TEST(GeodePerDeviceTest, AnEntryStaysPutWhileOtherDevicesComeAndGo) {
 }
 
 TEST(GeodePerDeviceTest, AGoneContextsEntryIsDroppedAtTheNextLookup) {
-  const auto closing = std::make_shared<GeodeHandleRetirement>();
-  auto destroyed = std::make_shared<GeodeHandleRetirement>();
-  const auto live = std::make_shared<GeodeHandleRetirement>();
+  const auto closing = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
+  auto destroyed = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
+  const auto live = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
   GeodePerDevice<int> perDevice;
   (void)perDevice.forDevice(GeodeDeviceKey{1, closing});
   (void)perDevice.forDevice(GeodeDeviceKey{2, destroyed});

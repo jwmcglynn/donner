@@ -19,6 +19,7 @@
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
+#include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
@@ -387,8 +388,10 @@ TEST_F(GeoEncoderTest, PreparedSceneAdmissionCanBeRefundedBeforeSingletonFallbac
   ASSERT_FALSE(encoded.empty());
   ProbeGeometryAdmission admission;
 
-  auto geometry = std::make_shared<GeodeResidentSlab>(device_->deviceId());
-  auto records = std::make_shared<GeodeRecordSlab>(device_->deviceId());
+  auto geometry =
+      std::make_shared<GeodeResidentSlab>(device_->deviceId(), device_->handleRetirement());
+  auto records =
+      std::make_shared<GeodeRecordSlab>(device_->deviceId(), device_->handleRetirement());
   GeodeResidentSlot slot;
   slot.slab = geometry;
   slot.recordSlab = records;
@@ -482,7 +485,8 @@ TEST_F(GeoEncoderTest, IllConditionedShearStillRasterizesHalfPixelHalo) {
 /// later allocation would hand the same storage to another entity while the
 /// survivor's cached bind group still binds it.
 TEST_F(GeoEncoderTest, ResidentSlotMoveTransfersRecordSlot) {
-  auto slab = std::make_shared<geode::GeodeRecordSlab>(device_->deviceId());
+  auto slab =
+      std::make_shared<geode::GeodeRecordSlab>(device_->deviceId(), device_->handleRetirement());
 
   geode::GeodeResidentSlot survivor;
   survivor.recordSlab = slab;
@@ -515,7 +519,7 @@ TEST_F(GeoEncoderTest, ResidentSlotMoveTransfersRecordSlot) {
 }
 
 TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
-  geode::GeodeRecordSlab slab(device_->deviceId());
+  geode::GeodeRecordSlab slab(device_->deviceId(), device_->handleRetirement());
 
   // Fill past the first chunk so a second chunk exists.
   std::vector<geode::GeodeRecordSlab::Slot> slots;
@@ -565,7 +569,7 @@ TEST_F(GeoEncoderTest, ResidentSlabRejectsGrowthPastExactDocumentBudget) {
   budget->setLimitsForTesting({.cacheBytes = 64u << 20, .residentBytes = kInitialBytes});
 
   {
-    GeodeResidentSlab slab(device_->deviceId(), budget);
+    GeodeResidentSlab slab(device_->deviceId(), device_->handleRetirement(), budget);
     GeodeResidentSlab::Allocation exact;
     ASSERT_TRUE(slab.allocate(*device_, kInitialBytes, /*alignment=*/256u, exact));
     EXPECT_EQ(budget->residentBytes(), kInitialBytes);
@@ -587,7 +591,7 @@ TEST_F(GeoEncoderTest, RecordSlabRejectsGrowthPastExactDocumentBudget) {
   budget->setLimitsForTesting({.cacheBytes = 64u << 20, .residentBytes = kInitialBytes});
 
   {
-    GeodeRecordSlab slab(device_->deviceId(), budget);
+    GeodeRecordSlab slab(device_->deviceId(), device_->handleRetirement(), budget);
     GeodeRecordSlab::Slot slot;
     for (std::size_t i = 0; i < kInitialSlots; ++i) {
       ASSERT_TRUE(slab.allocateSlot(*device_, slot)) << "slot " << i;
@@ -623,7 +627,9 @@ TEST(GeodeResourceBudgetTest, ResidentSlotMirrorReplacementPreservesExactReserva
   constexpr uint64_t kUniformBytes = 100u;
   auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
   budget->setLimitsForTesting({.cacheBytes = kUniformBytes, .residentBytes = 64u << 20});
-  auto slab = std::make_shared<GeodeResidentSlab>(/*deviceId=*/1u, budget);
+  // No device: these slabs never create a buffer, so their retirement never receives one.
+  const auto retirement = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
+  auto slab = std::make_shared<GeodeResidentSlab>(/*deviceId=*/1u, retirement, budget);
 
   {
     GeodeResidentSlot slot;
@@ -641,7 +647,9 @@ TEST(GeodeResourceBudgetTest, ResidentGradientMirrorReleasesAtOwnerDestruction) 
   constexpr uint64_t kUniformBytes = 672u;
   auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
   budget->setLimitsForTesting({.cacheBytes = kUniformBytes, .residentBytes = 64u << 20});
-  auto slab = std::make_shared<GeodeResidentSlab>(/*deviceId=*/1u, budget);
+  // No device: these slabs never create a buffer, so their retirement never receives one.
+  const auto retirement = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
+  auto slab = std::make_shared<GeodeResidentSlab>(/*deviceId=*/1u, retirement, budget);
 
   {
     GeodeResidentGradientSlot slot;
@@ -659,7 +667,7 @@ TEST_F(GeoEncoderTest, BatchUniformCpuMirrorStopsAtCapPlusOneAndReleases) {
   auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
 
   {
-    GeodeRecordSlab slab(device_->deviceId(), budget);
+    GeodeRecordSlab slab(device_->deviceId(), device_->handleRetirement(), budget);
     const uint32_t first[4] = {1u, 2u, 3u, 4u};
     const uint32_t second[4] = {5u, 6u, 7u, 8u};
     ASSERT_TRUE(slab.acquireBatchUniform(*device_, first, sizeof(first)).buffer.isValid());
@@ -682,7 +690,7 @@ TEST_F(GeoEncoderTest, BatchUniformCpuReservationIncludesVectorSpareCapacity) {
   auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
 
   {
-    GeodeRecordSlab slab(device_->deviceId(), budget);
+    GeodeRecordSlab slab(device_->deviceId(), device_->handleRetirement(), budget);
     for (uint32_t index = 0; index < 5u; ++index) {
       const uint32_t value[4] = {index, index + 1u, index + 2u, index + 3u};
       ASSERT_TRUE(slab.acquireBatchUniform(*device_, value, sizeof(value)).buffer.isValid());
@@ -700,7 +708,9 @@ TEST(GeodeResourceBudgetTest, ChargedResidentMirrorsMoveAndReleaseExactlyOnce) {
   constexpr uint64_t kSolidBytes = 100u;
   constexpr uint64_t kGradientBytes = 200u;
   auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
-  auto slab = std::make_shared<GeodeResidentSlab>(/*deviceId=*/1u, budget);
+  // No device: these slabs never create a buffer, so their retirement never receives one.
+  const auto retirement = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
+  auto slab = std::make_shared<GeodeResidentSlab>(/*deviceId=*/1u, retirement, budget);
 
   {
     GeodeResidentSlot solid;
@@ -792,8 +802,8 @@ TEST_F(GeoEncoderTest, BufferIdsAreNeverReusedAcrossSlabGenerations) {
   // One document's worth of slabs, destroyed before returning: exactly the
   // lifetime a rendered-and-closed document has.
   const auto renderOneDocument = [this]() {
-    geode::GeodeResidentSlab geometry(device_->deviceId());
-    geode::GeodeRecordSlab records(device_->deviceId());
+    geode::GeodeResidentSlab geometry(device_->deviceId(), device_->handleRetirement());
+    geode::GeodeRecordSlab records(device_->deviceId(), device_->handleRetirement());
 
     geode::GeodeResidentSlab::Allocation geometryAlloc;
     EXPECT_TRUE(geometry.allocate(*device_, 4096, 256, geometryAlloc));
@@ -849,7 +859,7 @@ TEST_F(GeoEncoderTest, BufferIdsAreNeverReusedAcrossSlabGenerations) {
   // Within one slab generation the ids DO have to be stable, or the cache
   // would miss every frame and the batched draw would rebuild its bind group
   // each time.
-  geode::GeodeRecordSlab records(device_->deviceId());
+  geode::GeodeRecordSlab records(device_->deviceId(), device_->handleRetirement());
   geode::GeodeRecordSlab::Slot slotA;
   geode::GeodeRecordSlab::Slot slotB;
   ASSERT_TRUE(records.allocateSlot(*device_, slotA));
@@ -889,8 +899,10 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
 
   const auto makeGeneration = [this]() {
     Generation generation;
-    generation.geometry = std::make_shared<geode::GeodeResidentSlab>(device_->deviceId());
-    generation.records = std::make_shared<geode::GeodeRecordSlab>(device_->deviceId());
+    generation.geometry = std::make_shared<geode::GeodeResidentSlab>(device_->deviceId(),
+                                                                     device_->handleRetirement());
+    generation.records =
+        std::make_shared<geode::GeodeRecordSlab>(device_->deviceId(), device_->handleRetirement());
     // 4 KiB of geometry is enough to own a chunk; the chunk's SIZE is what
     // the key sees, and the slab's initial chunk is the same for every
     // generation.
@@ -1001,8 +1013,10 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
 /// really did hand back the same buffer, so this test cannot quietly stop
 /// testing anything.
 TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesRecycledArenaUniforms) {
-  auto geometry = std::make_shared<geode::GeodeResidentSlab>(device_->deviceId());
-  auto records = std::make_shared<geode::GeodeRecordSlab>(device_->deviceId());
+  auto geometry =
+      std::make_shared<geode::GeodeResidentSlab>(device_->deviceId(), device_->handleRetirement());
+  auto records =
+      std::make_shared<geode::GeodeRecordSlab>(device_->deviceId(), device_->handleRetirement());
 
   geode::GeodeResidentSlab::Allocation chunk;
   ASSERT_TRUE(geometry->allocate(*device_, 4096, 256, chunk));

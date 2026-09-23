@@ -3467,7 +3467,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     DocumentDeviceResidency& residency = documentResidency(registry);
     if (!residency.records) {
       residency.records = std::make_shared<geode::GeodeRecordSlab>(
-          device->deviceId(), std::move(documentBudget), device->handleRetirement());
+          device->deviceId(), device->handleRetirement(), std::move(documentBudget));
     }
     return residency.records;
   }
@@ -3911,7 +3911,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     std::shared_ptr<geode::GeodeResidentSlab>& slab = documentResidency(registry).geometry;
     if (!slab) {
       slab = std::make_shared<geode::GeodeResidentSlab>(
-          device->deviceId(), std::move(documentBudget), device->handleRetirement());
+          device->deviceId(), device->handleRetirement(), std::move(documentBudget));
     }
     // Merge the previous frame's freed ranges, at most once per frame (the
     // slab gates on the index). Gating here rather than at one draw entry

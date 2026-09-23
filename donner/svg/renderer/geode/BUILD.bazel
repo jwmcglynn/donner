@@ -246,6 +246,7 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        "//donner/base",
         "//donner/gpu/shader:slug_fill_api",
         # The slabs stamp every buffer they create with
         # `GeodeDevice::AllocateBufferId`, which is defined out of line, so
@@ -640,6 +641,7 @@ donner_cc_test(
         ":geo_encoder",
         ":geode_device",
         ":geode_gpu_wait",
+        ":geode_handle_retirement",
         ":geode_path_cache_component",
         ":geode_resource_budget",
         ":geode_wgpu_util",
@@ -935,18 +937,25 @@ donner_multi_transitioned_test(
 donner_cc_test(
     name = "geode_document_residency_tests_impl",
     srcs = ["tests/GeodeDocumentResidency_tests.cc"],
+    data = ["//third_party/resvg-test-suite:fonts"],
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_counters",
         ":geode_device",
+        ":geode_handle_retirement",
+        ":geode_resource_budget",
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
         "//donner/svg",
         "//donner/svg/parser",
+        "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:image_comparison_test_fixture",
     ],
 )
 

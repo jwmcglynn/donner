@@ -33,6 +33,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/Utils.h"
 #include "donner/gpu/Descriptors.h"
 #include "donner/gpu/Handles.h"
 #include "donner/gpu/shader/programs/SlugFill.h"
@@ -54,16 +55,19 @@ using InstanceRecord = gpu::shader::programs::SlugFillInstance;
 static_assert(sizeof(InstanceRecord) == 256, "InstanceRecord struct layout mismatch");
 
 /// Hands \p buffers and \p bindGroups to \p owner, to be released on the thread of the context
-/// that created them. They are dropped here only without an owner, or once it is gone, which is
-/// after their device is gone and their release is skipped.
+/// that created them. They are dropped here only once \p owner is gone, which is after their device
+/// is gone, so releasing them does nothing.
 /// @param owner Retirement of the context that created the handles.
-/// @param buffers Buffers to let go of.
-/// @param bindGroups Bind groups to let go of.
+/// @param buffers Buffers to let go of; all of \p owner's device.
+/// @param bindGroups Bind groups to let go of; all of \p owner's device.
 inline void RetireSlabHandles(const std::weak_ptr<GeodeHandleRetirement>& owner,
                               std::vector<gpu::Buffer> buffers,
                               std::vector<gpu::BindGroup> bindGroups) {
   if (const std::shared_ptr<GeodeHandleRetirement> retirement = owner.lock()) {
-    retirement->retire(buffers, bindGroups);
+    // A slab only ever holds its own device's handles. One of another device's would be released
+    // here, on a thread that device may not be using, so stop rather than corrupt its tables.
+    UTILS_RELEASE_ASSERT_MSG(retirement->retire(buffers, bindGroups) == 0,
+                             "a resident slab held another device's GPU handle");
   }
 }
 
@@ -101,15 +105,16 @@ public:
   };
 
   /// @param deviceId Device the slab's buffers are created on.
+  /// @param owner Retirement of the context that owns the device (see
+  ///   `GeodeDevice::handleRetirement`); must be live. The slab's buffers and bind groups are
+  ///   handed there when it is destroyed, so they are released on that context's thread whichever
+  ///   thread destroys the slab.
   /// @param budget Document budget its bytes are charged to, if any.
-  /// @param owner Retirement of the context that owns the device. The slab's buffers and bind
-  ///   groups are handed there when it is destroyed, so they are released on that context's
-  ///   thread whichever thread destroys the slab. Without one they are released where the slab is
-  ///   destroyed, which is only right on the device's own thread.
-  explicit GeodeRecordSlab(uint64_t deviceId,
-                           std::shared_ptr<GeodeDocumentGeometryBudget> budget = nullptr,
-                           std::weak_ptr<GeodeHandleRetirement> owner = {})
-      : owningDeviceId_(deviceId), budget_(std::move(budget)), owner_(std::move(owner)) {}
+  GeodeRecordSlab(uint64_t deviceId, std::weak_ptr<GeodeHandleRetirement> owner,
+                  std::shared_ptr<GeodeDocumentGeometryBudget> budget = nullptr)
+      : owningDeviceId_(deviceId), budget_(std::move(budget)), owner_(std::move(owner)) {
+    UTILS_RELEASE_ASSERT_MSG(!owner_.expired(), "a record slab needs its context's retirement");
+  }
 
   ~GeodeRecordSlab() {
     if (budget_ && accountedBytes_ != 0) {
@@ -497,12 +502,14 @@ public:
 
   /// Create an empty slab bound to `deviceId` (usually the current
   /// renderer's device). Chunks are allocated lazily on first use.
-  /// @param owner Retirement of the context that owns the device; see
+  /// @param owner Retirement of the context that owns the device; must be live. See
   ///   \ref GeodeRecordSlab::GeodeRecordSlab.
-  explicit GeodeResidentSlab(uint64_t deviceId,
-                             std::shared_ptr<GeodeDocumentGeometryBudget> budget = nullptr,
-                             std::weak_ptr<GeodeHandleRetirement> owner = {})
-      : owningDeviceId_(deviceId), budget_(std::move(budget)), owner_(std::move(owner)) {}
+  /// @param budget Document budget its bytes are charged to, if any.
+  GeodeResidentSlab(uint64_t deviceId, std::weak_ptr<GeodeHandleRetirement> owner,
+                    std::shared_ptr<GeodeDocumentGeometryBudget> budget = nullptr)
+      : owningDeviceId_(deviceId), budget_(std::move(budget)), owner_(std::move(owner)) {
+    UTILS_RELEASE_ASSERT_MSG(!owner_.expired(), "a resident slab needs its context's retirement");
+  }
 
   ~GeodeResidentSlab() {
     if (budget_ && accountedBytes_ > 0) {

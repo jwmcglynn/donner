@@ -89,6 +89,10 @@ public:
     return rootDeviceRetirement_;
   }
 
+  /// Whether the root context's retirement is destroyed after the root device: true when
+  /// \c rootDeviceRetirement_ is declared before \c rootDevice_. Test accessor.
+  [[nodiscard]] bool rootRetirementOutlivesRootDeviceForTesting() const;
+
 private:
   /// Only a context builds an owner, from a root and the device \ref CreateGpuDeviceOver opened
   /// over it, so a device can never be paired with a root of another backend.
@@ -109,7 +113,8 @@ private:
   /// Declared first so the backend root outlives every runtime device built over it.
   std::shared_ptr<GeodeGpuRoot> root_;
   /// Retirement of the context that renders through \ref rootDevice_. Held here and declared before
-  /// it so that handles retired after that context closed go only once the device is gone.
+  /// it so that handles retired after that context closed go only once the device is gone
+  /// (checked by \ref rootRetirementOutlivesRootDeviceForTesting).
   std::shared_ptr<GeodeHandleRetirement> rootDeviceRetirement_;
   /// The selected runtime device, held for its lifetime rather than read through here: the
   /// logical context created together with this owner is what renders through it, and every
@@ -420,7 +425,12 @@ public:
   void releaseRetiredHandles();
 
   /// Handles retired to this context and not yet released. Test accessor.
-  [[nodiscard]] std::size_t retiredHandleCountForTesting() const;
+  [[nodiscard]] GeodeHandleRetirement::HeldCounts retiredHandleCountsForTesting() const;
+
+  /// Whether this context's retirement is destroyed after the runtime device it created, as
+  /// \ref handleRetirement requires: true when \c handleRetirement_ is declared before
+  /// \c ownedRuntimeDevice_. Test accessor.
+  [[nodiscard]] bool retirementOutlivesOwnedRuntimeDeviceForTesting() const;
 
   /**
    * Drop all deferred-destroy handles, releasing their GPU resources.
@@ -921,7 +931,8 @@ private:
   /// See \ref handleRetirement: the owner's root-device retirement when this context renders
   /// through the root device, else one of its own. Closed at teardown while the runtime device
   /// still exists, and declared before \ref ownedRuntimeDevice_ so an own retirement, and the
-  /// handles retired to it after it closed, go only once that device is gone.
+  /// handles retired to it after it closed, go only once that device is gone (checked by
+  /// \ref retirementOutlivesOwnedRuntimeDeviceForTesting).
   std::shared_ptr<GeodeHandleRetirement> handleRetirement_;
 
   /// Held only when this context created its own runtime device; null when it renders through the
