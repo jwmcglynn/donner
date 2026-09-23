@@ -36,6 +36,7 @@
 namespace donner::geode {
 
 using svg::test::RgbaEq;
+using testing::ElementsAreArray;
 using testing::Eq;
 using testing::Ge;
 using testing::HasSubstr;
@@ -270,7 +271,7 @@ TEST(GeodeDevice, ARenderTargetRoundTripsTheTexelsWrittenToIt) {
   const gpu::Result<std::vector<uint8_t>> readBack =
       ReadTexturePixels(runtime, target, gpu::Extent2d{kSize, kSize});
   ASSERT_THAT(readBack, gpu::HasResult());
-  EXPECT_THAT(readBack.result(), Eq(written));
+  EXPECT_THAT(readBack.result(), ElementsAreArray(written));
 }
 
 /// End-to-end: clear a texture to red and read back the first pixel.
