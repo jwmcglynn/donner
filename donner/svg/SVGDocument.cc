@@ -8,6 +8,7 @@
 #include <unordered_set>
 
 #include "donner/base/element/ElementTraversalGenerators.h"
+#include "donner/base/xml/XMLSourceStore.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/base/xml/components/TreeMutationContext.h"
 #include "donner/base/xml/components/XMLDocumentContext.h"
@@ -664,6 +665,11 @@ SVGDocument::SVGDocument(SVGDocumentHandle documentState, Settings settings,
                          EntityHandle ontoEntityHandle)
     : documentState_(std::move(documentState)) {
   Registry& registry = documentState_->registry();
+  // A document built on a parsed XML tree takes its source store from the XML context now, while
+  // this thread is the only one that can reach the registry; see DocumentState::sourceStore.
+  if (const auto* xmlContext = registry.ctx().find<xml::components::XMLDocumentContext>()) {
+    documentState_->setSourceStore(xmlContext->sourceStore);
+  }
   std::shared_ptr<components::DocumentResourceFamilyBudget> resourceFamily =
       settings.resourceFamilyBudget;
   if (!resourceFamily) {
@@ -1175,30 +1181,20 @@ FontResourcePreflight SVGDocument::preflightFontResourcesForElement(const SVGEle
   return PrepareFontResourcesForTarget(registry, target);
 }
 
+// The three source accessors below read the store through DocumentState rather than the registry
+// context, so a thread may read the source while another holds the document's write access.
 bool SVGDocument::hasSourceStore() const {
-  if (!documentState_->registry().ctx().contains<xml::components::XMLDocumentContext>()) {
-    return false;
-  }
-
-  return xmlDocument().hasSourceStore();
+  return documentState_->sourceStore() != nullptr;
 }
 
 std::string_view SVGDocument::source() const {
-  Registry& registry = documentState_->registry();
-  if (!registry.ctx().contains<xml::components::XMLDocumentContext>()) {
-    return std::string_view();
-  }
-
-  const auto& context = registry.ctx().get<xml::components::XMLDocumentContext>();
-  return context.sourceStore != nullptr ? context.sourceStore->source() : std::string_view();
+  const std::shared_ptr<xml::XMLSourceStore>& store = documentState_->sourceStore();
+  return store != nullptr ? store->source() : std::string_view();
 }
 
 std::uint64_t SVGDocument::sourceVersion() const {
-  if (!documentState_->registry().ctx().contains<xml::components::XMLDocumentContext>()) {
-    return 0;
-  }
-
-  return xmlDocument().sourceVersion();
+  const std::shared_ptr<xml::XMLSourceStore>& store = documentState_->sourceStore();
+  return store != nullptr ? store->sourceVersion() : 0;
 }
 
 xml::ApplySourceEditResult SVGDocument::applySourceEdit(const xml::XMLEditIntent& intent) {

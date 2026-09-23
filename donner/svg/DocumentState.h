@@ -25,6 +25,10 @@
 #define DONNER_NO_THREAD_SAFETY_ANALYSIS
 #endif
 
+namespace donner::xml {
+class XMLSourceStore;
+}  // namespace donner::xml
+
 namespace donner::svg {
 
 /// DOM threading policy for a document.
@@ -305,6 +309,29 @@ public:
 
   /// Get the shared registry retained by this state.
   std::shared_ptr<Registry> sharedRegistry() const { return registry_; }
+
+  /**
+   * The XML source store of a document parsed from source, or null for one built without source.
+   *
+   * The store's own home is the registry context, but finding it there reads the context's map,
+   * which a thread holding the document's write access, a render worker preparing a frame, can
+   * be reshaping at the same moment. This copy lives outside the registry, so a thread that only
+   * reads the source can reach the store without document access.
+   */
+  const std::shared_ptr<xml::XMLSourceStore>& sourceStore() const UTILS_LIFETIME_BOUND {
+    return sourceStore_;
+  }
+
+  /**
+   * Records the document's source store. Called once, while the document is being built and
+   * before any other thread can reach it; the XML parser installs the store before that, and
+   * nothing replaces it afterwards.
+   *
+   * @param sourceStore Store from the document's XML context, or null.
+   */
+  void setSourceStore(std::shared_ptr<xml::XMLSourceStore> sourceStore) {
+    sourceStore_ = std::move(sourceStore);
+  }
 
   /// Acquire read access to the document.
   DocumentReadAccess read();
@@ -608,6 +635,8 @@ private:
   inline static thread_local bool activeMutationBatchMutated_ = false;
 
   std::shared_ptr<Registry> registry_;
+  /// See \ref sourceStore.
+  std::shared_ptr<xml::XMLSourceStore> sourceStore_;
   std::atomic<std::uint64_t> revision_ = 0;
   std::atomic<std::uint64_t> readAccesses_ = 0;
   std::atomic<std::uint64_t> writeAccesses_ = 0;
