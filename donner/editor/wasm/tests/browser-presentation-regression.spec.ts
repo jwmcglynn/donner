@@ -2165,6 +2165,7 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     message: "Text tool after sampled Fill",
     timeoutMs: scaledMs(4_000),
   });
+  await waitForPressReadiness(page, "Text tool toolbar activation after eyedropper sampling");
   await page.mouse.click(textTool.x, textTool.y);
   const textPoint = splashDocumentToPage(viewport, { x: 735, y: 400 });
   await page.mouse.move(textPoint.x, textPoint.y);
@@ -2172,6 +2173,14 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     message: "new SVG text placement",
     timeoutMs: scaledMs(4_000),
   });
+  await expect.poll(
+    () => page.evaluate(() => window.__donnerEyedropperShortcutProbe?.current ?? null),
+    {
+      message: "Text tool must activate after the toolbar click",
+      timeout: scaledMs(4_000),
+    },
+  ).toEqual(expect.objectContaining({ textToolActive: true, eyedropperActive: false }));
+  await waitForPressReadiness(page, "new SVG text placement");
   await page.mouse.dblclick(textPoint.x, textPoint.y);
   await expect.poll(() =>
     page.evaluate(() => ({
