@@ -2623,6 +2623,18 @@ Status VulkanDevice::onCreateTextureView(uint32_t slotIndex, uint32_t textureSlo
                     std::format("texture slot {} has no Vulkan image", textureSlotIndex)};
   }
 
+  // Vulkan accepts a view only of an image it can sample, store to or render to. A view of any
+  // other texture keeps its slot with no native view, and binding it is refused before it gets
+  // here.
+  constexpr TextureUsage kViewableUsage =
+      TextureUsage::Sampled | TextureUsage::StorageBinding | TextureUsage::RenderAttachment;
+  if ((texture->usage & kViewableUsage) == TextureUsage::None) {
+    SetSlot(impl_->textureViews, slotIndex,
+            std::optional<Impl::TextureViewRecord>(
+                Impl::TextureViewRecord{VK_NULL_HANDLE, textureSlotIndex}));
+    return OkStatus();
+  }
+
   VkImageViewCreateInfo viewInfo = {};
   viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
   viewInfo.image = texture->image;
@@ -2728,7 +2740,7 @@ Status VulkanDevice::Impl::bindDescriptorResource(const BindGroupEntry& entry, s
   } else if (const TextureViewBinding* viewBinding =
                  std::get_if<TextureViewBinding>(&entry.resource)) {
     const TextureViewRecord* view = FindRecord(textureViews, viewBinding->view.slotIndex());
-    if (view == nullptr) {
+    if (view == nullptr || view->view == VK_NULL_HANDLE) {
       return GpuError{GpuErrorType::InvalidState,
                       std::format("bind group binding {} does not resolve to a Vulkan "
                                   "image view",
@@ -3618,7 +3630,7 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
     const RenderPassColorAttachment& attachment = attachmentDescriptors[i];
     const TextureViewRecord* view = FindRecord(textureViews, attachment.view.slotIndex());
     TextureRecord* texture = view != nullptr ? FindRecord(textures, view->textureSlot) : nullptr;
-    if (view == nullptr || texture == nullptr) {
+    if (view == nullptr || texture == nullptr || view->view == VK_NULL_HANDLE) {
       return GpuError{
           GpuErrorType::InvalidState,
           std::format("render pass attachment {} does not resolve to a Vulkan image", i)};
