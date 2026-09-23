@@ -376,6 +376,23 @@ public:
   [[nodiscard]] Entity selectedCompositedEntityForDiagnostics(EditorApp& app) const;
 
 private:
+  void noteMissingPixelCaptureResult(const std::optional<RenderResult>& result);
+  void rejectPixelCaptureResult(const std::optional<RenderResult>& result);
+  void acceptPixelCaptureResult(RenderResult& result, const EditorApp& app,
+                                const ViewportState& viewport);
+  [[nodiscard]] bool preparePixelCaptureRequest(const EditorApp& app, const ViewportState& viewport,
+                                                DocumentPixelCaptureIdentity* desired);
+  [[nodiscard]] bool pixelCaptureBlocksViewportDefer(bool captureNeeded) const;
+  [[nodiscard]] bool shouldDeferViewportRender(bool selectedViewportDeferred,
+                                               bool needsOverviewInfill, bool captureNeeded) const;
+  [[nodiscard]] bool shouldCapturePixelsForRequest(
+      bool requestOverviewInfill, bool activeDrag,
+      const EditorRasterViewport& rasterViewport) const;
+  void configurePixelCaptureRequest(RenderRequest* request, bool requestOverviewInfill,
+                                    bool activeDrag,
+                                    const EditorRasterViewport& rasterViewport) const;
+  void recordPixelCaptureRequest(const RenderRequest& request,
+                                 const DocumentPixelCaptureIdentity& desired);
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
   [[nodiscard]] std::vector<Entity> selectedCompositedExtraEntities(EditorApp& app,
                                                                     Entity primaryEntity) const;

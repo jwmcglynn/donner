@@ -544,9 +544,11 @@ public:
    * @param label Human-readable undo label.
    * @param anchorElement Element used to anchor the source snapshot.
    * @param beforeSource Document source captured before the gesture began.
+   * @param preserveSelection Restore the current selection on both undo and redo.
    */
   void recordDocumentSourceUndoOnNextFlush(std::string label, svg::SVGElement anchorElement,
-                                           std::string beforeSource);
+                                           std::string beforeSource,
+                                           bool preserveSelection = false);
 
   /// Whether there is an entry to undo.
   [[nodiscard]] bool canUndo() const { return undoTimeline_.canUndo(); }

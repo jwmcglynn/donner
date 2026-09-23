@@ -125,6 +125,7 @@ namespace {
 
 std::atomic<int> gBrowserOverlayStateRequest{0};
 std::atomic<bool> gBrowserOverlayControlEnabled{false};
+constexpr std::size_t kEyedropperTestFieldMaxBytes = 512u;
 
 }  // namespace
 
@@ -166,6 +167,36 @@ bool BrowserOverlayControlEnabledForTesting() {
   return MAIN_THREAD_EM_ASM_INT({
            return new URLSearchParams(window.location.search).get('testControl') == 'overlay';
          }) != 0;
+  // clang-format on
+}
+
+bool BrowserEyedropperControlEnabledForTesting() {
+  // clang-format off
+  static const bool enabled = MAIN_THREAD_EM_ASM_INT({
+                                return new URLSearchParams(window.location.search)
+                                           .get('testControl') == 'eyedropper';
+                              }) != 0;
+  // clang-format on
+  return enabled;
+}
+
+void PublishEyedropperTestState(std::string_view activeFill, std::string_view activeStroke,
+                                std::string_view selectedStyle, std::string_view selectedText) {
+  const std::string fill(activeFill.substr(0, kEyedropperTestFieldMaxBytes));
+  const std::string stroke(activeStroke.substr(0, kEyedropperTestFieldMaxBytes));
+  const std::string style(selectedStyle.substr(0, kEyedropperTestFieldMaxBytes));
+  const std::string text(selectedText.substr(0, kEyedropperTestFieldMaxBytes));
+  // clang-format off
+  MAIN_THREAD_EM_ASM(
+      {
+        window['__donnerEyedropperTestState'] = ({
+          'activeFill' : UTF8ToString($0),
+          'activeStroke' : UTF8ToString($1),
+          'selectedStyle' : UTF8ToString($2),
+          'selectedText' : UTF8ToString($3),
+        });
+      },
+      fill.c_str(), stroke.c_str(), style.c_str(), text.c_str());
   // clang-format on
 }
 
@@ -240,7 +271,8 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
 }
 
 void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy, int dragging,
-                             int dragHasVisualChange, double pointerX, double pointerY) {
+                             int dragHasVisualChange, double pointerX, double pointerY,
+                             int eyedropperArmed, int eyedropperReady, int eyedropperUnavailable) {
   // `pointerX`/`pointerY` is the pointer position this frame's input processing
   // actually used, in page CSS pixels. A DOM mouse move reaches the app thread
   // through the proxying queue, so under load a press can be dispatched before
@@ -258,9 +290,13 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
           moved : !!$4,
           'pointerX' : $5,
           'pointerY' : $6,
+          'eyedropperArmed' : !!$7,
+          'eyedropperReady' : !!$8,
+          'eyedropperUnavailable' : !!$9,
         });
       },
-      selectedCount, pendingClick, workerBusy, dragging, dragHasVisualChange, pointerX, pointerY);
+      selectedCount, pendingClick, workerBusy, dragging, dragHasVisualChange, pointerX, pointerY,
+      eyedropperArmed, eyedropperReady, eyedropperUnavailable);
   // clang-format on
 }
 
@@ -2831,14 +2867,7 @@ void EditorShell::handleGlobalShortcuts() {
     toggleSourceFocusMode();
   }
 
-  if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
-      ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false)) {
-    armEyedropper(PaintTarget::Fill);
-  }
-
-  if (!anyPopupOpen && activeTool_ == ActiveTool::Eyedropper &&
-      ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false)) {
-    cancelEyedropper(true);
+  if (handleEyedropperGlobalShortcut(sourcePaneFocused, anyPopupOpen, cmd)) {
     return;
   }
 
@@ -2848,18 +2877,14 @@ void EditorShell::handleGlobalShortcuts() {
     // command instead of discarding it.
     penTool_.commitOpenPath(app_);
     flushQueuedMutationAndRefreshOverlay();
-    if (textTool_.commit(app_)) {
-      refreshAfterToolDrivenFlush();
-    }
+    commitTextToolIfNeeded();
     cancelEyedropper(false);
     activeTool_ = ActiveTool::Select;
   }
 
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
       ImGui::IsKeyPressed(ImGuiKey_P, /*repeat=*/false)) {
-    if (textTool_.commit(app_)) {
-      refreshAfterToolDrivenFlush();
-    }
+    commitTextToolIfNeeded();
     cancelEyedropper(false);
     activeTool_ = ActiveTool::Pen;
   }
@@ -3444,6 +3469,127 @@ void EditorShell::cancelEyedropper(bool restorePreviousTool) {
   window_.wakeEventLoop();
 }
 
+bool EditorShell::handleEyedropperGlobalShortcut(bool sourcePaneFocused, bool anyPopupOpen,
+                                                 bool cmd) {
+  if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
+      ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false)) {
+    armEyedropper(PaintTarget::Fill);
+  }
+  if (!anyPopupOpen && activeTool_ == ActiveTool::Eyedropper &&
+      ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false)) {
+    cancelEyedropper(true);
+    return true;
+  }
+  return false;
+}
+
+void EditorShell::commitTextToolIfNeeded() {
+  if (textTool_.commit(app_)) {
+    refreshAfterToolDrivenFlush();
+  }
+}
+
+void EditorShell::onToolbarToolClicked(ActiveTool tool) {
+  if (tool == ActiveTool::Eyedropper) {
+    armEyedropper(PaintTarget::Fill);
+    return;
+  }
+  if (tool != ActiveTool::Pen && penTool_.commitOpenPath(app_)) {
+    flushQueuedMutationAndRefreshOverlay();
+  }
+  if (tool != ActiveTool::Text) {
+    commitTextToolIfNeeded();
+  }
+  cancelEyedropper(false);
+  activeTool_ = tool;
+}
+
+void EditorShell::cancelEyedropperForSessionChange() {
+  if (activeTool_ == ActiveTool::Eyedropper &&
+      (!app_.hasDocument() ||
+       app_.document().documentGeneration() != eyedropperDocumentGeneration_ ||
+       app_.selectedElements() != eyedropperSelection_ || ImGui::GetIO().AppFocusLost)) {
+    cancelEyedropper(true);
+  }
+}
+
+void EditorShell::handleRenderPaneRightClick(bool canvasHovered, const Vector2d& documentPoint) {
+  if (activeTool_ == ActiveTool::Eyedropper) {
+    cancelEyedropper(true);
+  } else if (canvasHovered) {
+    openRenderPaneContextMenu(documentPoint);
+  }
+}
+
+void EditorShell::handleEyedropperCanvasClick(bool toolEligible, bool spaceHeld,
+                                              bool overCanvasScrollbar) {
+  if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left) || spaceHeld ||
+      interactionController_.panning() || overCanvasScrollbar) {
+    return;
+  }
+  const Vector2d pointer(ImGui::GetMousePos().x, ImGui::GetMousePos().y);
+  const ViewportState& viewport = interactionController_.viewport();
+  const DocumentPixelCapture* capture = renderCoordinator_.documentPixelCaptureFor(app_, viewport);
+  const EditorRasterViewport raster =
+      capture != nullptr ? capture->identity.rasterViewport : viewport.rasterViewport();
+  const std::optional<Vector2i> pixel = DocumentPixelIndexAtScreenPoint(viewport, raster, pointer);
+  if (!toolEligible || !pixel.has_value()) {
+    cancelEyedropper(true);
+    return;
+  }
+  if (capture != nullptr && !renderCoordinator_.asyncRenderer().isBusy()) {
+    if (const std::optional<css::RGBA> sampled = ReadDocumentPixel(capture->bitmap, *pixel)) {
+      applyPaintColor(eyedropperTarget_, *sampled, /*recordUndo=*/true);
+      cancelEyedropper(true);
+    }
+  }
+}
+
+void EditorShell::setEyedropperCursorIfEligible(bool toolEligible) {
+  if (activeTool_ == ActiveTool::Eyedropper && toolEligible) {
+    rotateCursorSet_.clearIfActive();
+    SetImGuiOsCursorManagementEnabled(true);
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+  }
+}
+
+#ifdef __EMSCRIPTEN__
+void EditorShell::publishEyedropperTestStateIfEnabled() {
+  if (!BrowserEyedropperControlEnabledForTesting() || renderCoordinator_.asyncRenderer().isBusy()) {
+    return;
+  }
+  std::string selectedStyle;
+  std::string selectedText;
+  if (app_.hasSelection()) {
+    const svg::SVGElement& selected = app_.selectedElements().front();
+    selected.withReadAccess([&](svg::DocumentReadAccess&, EntityHandle) {
+      if (const std::optional<RcString> style = selected.getAttribute("style")) {
+        selectedStyle =
+            std::string(std::string_view(*style).substr(0, kEyedropperTestFieldMaxBytes));
+      }
+      if (selected.type() == svg::ElementType::Text) {
+        const RcString content = selected.cast<svg::SVGTextElement>().textContent();
+        selectedText =
+            std::string(std::string_view(content).substr(0, kEyedropperTestFieldMaxBytes));
+        for (std::optional<svg::SVGElement> child = selected.firstChild(); child.has_value();
+             child = child->nextSibling()) {
+          if (child->type() == svg::ElementType::TSpan) {
+            const std::size_t remaining = kEyedropperTestFieldMaxBytes - selectedText.size();
+            if (remaining == 0u) {
+              break;
+            }
+            const RcString childText = child->cast<svg::SVGTSpanElement>().textContent();
+            selectedText += std::string(std::string_view(childText).substr(0, remaining));
+          }
+        }
+      }
+    });
+  }
+  PublishEyedropperTestState(app_.activePaintStyle().fill, app_.activePaintStyle().stroke,
+                             selectedStyle, selectedText);
+}
+#endif
+
 void EditorShell::applyPaintColor(PaintTarget target, const css::RGBA& color, bool recordUndo) {
   const std::string svgColor = ColorToSvgAttribute(color);
   const std::string_view property = target == PaintTarget::Fill ? "fill" : "stroke";
@@ -3463,7 +3609,8 @@ void EditorShell::applyPaintColor(PaintTarget target, const css::RGBA& color, bo
     if (app_.setStylePropertyOnSelection(property, svgColor)) {
       if (recordUndo) {
         app_.recordDocumentSourceUndoOnNextFlush("Sample document color",
-                                                 app_.selectedElements().front(), sourceBefore);
+                                                 app_.selectedElements().front(), sourceBefore,
+                                                 /*preserveSelection=*/true);
       }
       flushQueuedMutationAndRefreshOverlay();
       return;
@@ -3471,6 +3618,44 @@ void EditorShell::applyPaintColor(PaintTarget target, const css::RGBA& color, bo
   }
   window_.wakeEventLoop();
 }
+
+namespace {
+
+void DrawEyedropperPixelGrid(ImDrawList* drawList, const svg::RendererBitmap& bitmap,
+                             const Vector2i& center, float left, float top) {
+  constexpr int kCells = 11;
+  constexpr float kCellSize = 10.0f;
+  constexpr float kPadding = 8.0f;
+  for (int y = 0; y < kCells; ++y) {
+    for (int x = 0; x < kCells; ++x) {
+      const float x0 = left + kPadding + x * kCellSize;
+      const float y0 = top + kPadding + y * kCellSize;
+      const ImVec2 cellMin(x0, y0);
+      const ImVec2 cellMax(x0 + kCellSize, y0 + kCellSize);
+      drawList->AddRectFilled(
+          cellMin, cellMax,
+          (x + y) % 2 == 0 ? IM_COL32(212, 214, 218, 255) : IM_COL32(132, 136, 142, 255));
+      const Vector2i source(center.x + x - kCells / 2, center.y + y - kCells / 2);
+      if (const std::optional<css::RGBA> pixel = ReadDocumentPixel(bitmap, source)) {
+        drawList->AddRectFilled(cellMin, cellMax, IM_COL32(pixel->r, pixel->g, pixel->b, pixel->a));
+      } else {
+        drawList->AddLine(cellMin, cellMax, IM_COL32(62, 65, 72, 220));
+      }
+    }
+  }
+  const float centerX = left + kPadding + (kCells / 2) * kCellSize;
+  const float centerY = top + kPadding + (kCells / 2) * kCellSize;
+  drawList->AddRect(ImVec2(centerX, centerY), ImVec2(centerX + kCellSize, centerY + kCellSize),
+                    IM_COL32(255, 255, 255, 255), 0.0f, 0, 2.0f);
+  drawList->AddLine(ImVec2(centerX + kCellSize * 0.5f, centerY - 3.0f),
+                    ImVec2(centerX + kCellSize * 0.5f, centerY + kCellSize + 3.0f),
+                    IM_COL32(0, 0, 0, 255));
+  drawList->AddLine(ImVec2(centerX - 3.0f, centerY + kCellSize * 0.5f),
+                    ImVec2(centerX + kCellSize + 3.0f, centerY + kCellSize * 0.5f),
+                    IM_COL32(0, 0, 0, 255));
+}
+
+}  // namespace
 
 void EditorShell::renderEyedropperLoupe(const Vector2d& pointerScreen, const Box2d& paneRect) {
   if (activeTool_ != ActiveTool::Eyedropper || !paneRect.contains(pointerScreen)) {
@@ -3516,34 +3701,7 @@ void EditorShell::renderEyedropperLoupe(const Vector2d& pointerScreen, const Box
       label = sampled->toHexString();
       alphaLabel = "Alpha " + std::to_string(sampled->a) + "/255";
     }
-    for (int y = 0; y < kCells; ++y) {
-      for (int x = 0; x < kCells; ++x) {
-        const float x0 = left + kPadding + x * kCellSize;
-        const float y0 = top + kPadding + y * kCellSize;
-        const ImVec2 cellMin(x0, y0);
-        const ImVec2 cellMax(x0 + kCellSize, y0 + kCellSize);
-        const bool light = (x + y) % 2 == 0;
-        drawList->AddRectFilled(
-            cellMin, cellMax, light ? IM_COL32(212, 214, 218, 255) : IM_COL32(132, 136, 142, 255));
-        const Vector2i source(center->x + x - kCells / 2, center->y + y - kCells / 2);
-        if (const std::optional<css::RGBA> pixel = ReadDocumentPixel(capture->bitmap, source)) {
-          drawList->AddRectFilled(cellMin, cellMax,
-                                  IM_COL32(pixel->r, pixel->g, pixel->b, pixel->a));
-        } else {
-          drawList->AddLine(cellMin, cellMax, IM_COL32(62, 65, 72, 220));
-        }
-      }
-    }
-    const float centerX = left + kPadding + (kCells / 2) * kCellSize;
-    const float centerY = top + kPadding + (kCells / 2) * kCellSize;
-    drawList->AddRect(ImVec2(centerX, centerY), ImVec2(centerX + kCellSize, centerY + kCellSize),
-                      IM_COL32(255, 255, 255, 255), 0.0f, 0, 2.0f);
-    drawList->AddLine(ImVec2(centerX + kCellSize * 0.5f, centerY - 3.0f),
-                      ImVec2(centerX + kCellSize * 0.5f, centerY + kCellSize + 3.0f),
-                      IM_COL32(0, 0, 0, 255));
-    drawList->AddLine(ImVec2(centerX - 3.0f, centerY + kCellSize * 0.5f),
-                      ImVec2(centerX + kCellSize + 3.0f, centerY + kCellSize * 0.5f),
-                      IM_COL32(0, 0, 0, 255));
+    DrawEyedropperPixelGrid(drawList, capture->bitmap, *center, left, top);
   } else if (capture != nullptr) {
     label = "Outside document";
   }
@@ -3848,20 +4006,7 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
     }
     if (ImGui::Button(label,
                       ImVec2(adaptiveUiLayout_.toolButtonSize, adaptiveUiLayout_.toolButtonSize))) {
-      if (tool == ActiveTool::Eyedropper) {
-        armEyedropper(PaintTarget::Fill);
-      } else {
-        // Leaving a tool commits its in-progress session as one undoable
-        // command rather than dropping it.
-        if (tool != ActiveTool::Pen && penTool_.commitOpenPath(app_)) {
-          flushQueuedMutationAndRefreshOverlay();
-        }
-        if (tool != ActiveTool::Text && textTool_.commit(app_)) {
-          refreshAfterToolDrivenFlush();
-        }
-        cancelEyedropper(false);
-        activeTool_ = tool;
-      }
+      onToolbarToolClicked(tool);
     }
     // The icon preserves its authored black core and white halo. The selected
     // tool gets an accent stroke on top, routed through the theme.
@@ -4401,12 +4546,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
                                           documentViewBox,
                                           /*preservePaneCenterDocumentPoint=*/true);
   interactionController_.updateDevicePixelRatio(window_.contentScale().x);
-  if (activeTool_ == ActiveTool::Eyedropper &&
-      (!app_.hasDocument() ||
-       app_.document().documentGeneration() != eyedropperDocumentGeneration_ ||
-       app_.selectedElements() != eyedropperSelection_ || ImGui::GetIO().AppFocusLost)) {
-    cancelEyedropper(true);
-  }
+  cancelEyedropperForSessionChange();
 
 #ifndef __EMSCRIPTEN__
   if (pendingViewportReplayOverride_.has_value()) {
@@ -4555,11 +4695,8 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
       interactionController_.viewport().pixelsPerDocUnit() /
       (adaptiveUiLayout_.compactTouch() ? 2.0 : 1.0);
 
-  if (activeTool_ == ActiveTool::Eyedropper &&
-      ImGui::IsMouseClicked(ImGuiMouseButton_Right, /*repeat=*/false)) {
-    cancelEyedropper(true);
-  } else if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right, /*repeat=*/false)) {
-    openRenderPaneContextMenu(screenToDocument(ImGui::GetMousePos()));
+  if (ImGui::IsMouseClicked(ImGuiMouseButton_Right, /*repeat=*/false)) {
+    handleRenderPaneRightClick(canvasHovered, screenToDocument(ImGui::GetMousePos()));
   }
 
   const ImVec2 hoverMousePos = ImGui::GetMousePos();
@@ -4575,34 +4712,12 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   const SelectionTransformHandleIntent hoverTransformIntent =
       updateRenderPaneToolCursor(rotateCursorLocked, toolEligible, showPanCursor, selectToolActive,
                                  penToolActive, textToolActive, pointerHitTestPixelsPerDocUnit);
-  if (eyedropperToolActive && toolEligible) {
-    rotateCursorSet_.clearIfActive();
-    SetImGuiOsCursorManagementEnabled(true);
-    ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
-  }
+  setEyedropperCursorIfEligible(toolEligible);
   // Double-click while drafting commits the in-progress open path (no trailing
   // Z) as one undoable command, matching Enter. Checked before the click is
   // buffered so the double-click doesn't also place a stray anchor.
-  if (eyedropperToolActive && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !spaceHeld &&
-      !interactionController_.panning() && !overCanvasScrollbar) {
-    const Vector2d pointer(ImGui::GetMousePos().x, ImGui::GetMousePos().y);
-    const DocumentPixelCapture* capture =
-        renderCoordinator_.documentPixelCaptureFor(app_, interactionController_.viewport());
-    const std::optional<Vector2i> pixel =
-        capture != nullptr
-            ? DocumentPixelIndexAtScreenPoint(interactionController_.viewport(),
-                                              capture->identity.rasterViewport, pointer)
-            : DocumentPixelIndexAtScreenPoint(interactionController_.viewport(),
-                                              interactionController_.viewport().rasterViewport(),
-                                              pointer);
-    if (!toolEligible || !pixel.has_value()) {
-      cancelEyedropper(true);
-    } else if (capture != nullptr && !renderCoordinator_.asyncRenderer().isBusy()) {
-      if (const std::optional<css::RGBA> sampled = ReadDocumentPixel(capture->bitmap, *pixel)) {
-        applyPaintColor(eyedropperTarget_, *sampled, /*recordUndo=*/true);
-        cancelEyedropper(true);
-      }
-    }
+  if (eyedropperToolActive) {
+    handleEyedropperCanvasClick(toolEligible, spaceHeld, overCanvasScrollbar);
   } else if (penToolActive && toolEligible && penTool_.isDrafting() &&
              ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
     penTool_.commitOpenPath(app_);
@@ -7757,8 +7872,13 @@ void EditorShell::recordFrameTelemetry(
                             selectTool_.isDragging() ? 1 : 0,
                             selectTool_.dragHasVisualChange() ? 1 : 0,
                             pointerValid ? static_cast<double>(imguiMousePos.x) : -1.0,
-                            pointerValid ? static_cast<double>(imguiMousePos.y) : -1.0);
+                            pointerValid ? static_cast<double>(imguiMousePos.y) : -1.0,
+                            activeTool_ == ActiveTool::Eyedropper,
+                            renderCoordinator_.documentPixelCaptureFor(
+                                app_, interactionController_.viewport()) != nullptr,
+                            renderCoordinator_.documentPixelCaptureUnavailable());
   }
+  publishEyedropperTestStateIfEnabled();
   {
     const ViewportState& viewport = interactionController_.viewport();
     const Box2d documentRect = viewport.imageScreenRect();

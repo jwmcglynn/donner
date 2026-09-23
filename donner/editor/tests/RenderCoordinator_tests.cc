@@ -884,5 +884,58 @@ TEST(RenderCoordinatorTest, MaybeRequestRenderDispatchesWithoutTextureCache) {
   EXPECT_EQ(app.document().document().canvasSize(), viewport.desiredCanvasSize());
 }
 
+TEST(RenderCoordinatorTest, CancelledPixelCaptureRepostsWithoutDocumentOrViewportChange) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  app.setSelection(QuerySelector(app, "#r1"));
+  coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(100));
+  coordinator.setDocumentPixelCaptureEnabled(true);
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+
+  coordinator.asyncRenderer().cancelInFlight();
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  ASSERT_FALSE(coordinator.asyncRenderer().isBusy());
+  coordinator.pollRenderResult(app, viewport, textures);
+  EXPECT_TRUE(coordinator.presentationRefreshPending());
+  EXPECT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+      << "A dropped worker result must not leave a same-epoch picker permanently pending.";
+
+  coordinator.asyncRenderer().cancelInFlight();
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
+}
+
+TEST(RenderCoordinatorTest, SelectedPixelCaptureRepostsAfterPanCancelsInFlightResult) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  ViewportState viewport = MakeViewport(app);
+  app.setSelection(QuerySelector(app, "#r1"));
+  coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(100));
+  coordinator.setDocumentPixelCaptureEnabled(true);
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+
+  viewport.panScreenPoint.x += 20.0;
+  coordinator.asyncRenderer().cancelInFlight();
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  ASSERT_FALSE(coordinator.asyncRenderer().isBusy());
+  coordinator.pollRenderResult(app, viewport, textures);
+  EXPECT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+
+  coordinator.asyncRenderer().cancelInFlight();
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
+}
+
 }  // namespace
 }  // namespace donner::editor

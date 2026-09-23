@@ -183,6 +183,12 @@ renderer resource limits apply, and the new pixel-indexing boundary checks strid
 and payload completeness before reading. The sampled color remains local to the document/editor;
 diagnostics should not log bitmap bytes or sampled document content.
 
+The browser regression URL may explicitly opt into `testControl=eyedropper`. Only that URL
+publishes active Fill/Stroke and the first selected element's style/text to the same page for
+assertions. Each field is capped at 512 bytes before copying; the bridge publishes no whole SVG
+source or bitmap. Ordinary editor URLs expose no eyedropper test-state object. The browser test
+target below checks that negative boundary.
+
 Negative tests should exercise an empty bitmap, truncated rows, zero/overflowing dimensions,
 premultiplied and straight alpha, document replacement, selection change, focus loss, stale
 version/font/viewport result, outside-document points, edge loupe cells, and cancellation before a
@@ -206,9 +212,9 @@ eyedropper or capture the final UI framebuffer.
   checkerboard exclusion, and the showcase Donner-text -> new "SVG" text journey.
 - Add eyedropper scenarios to `//donner/editor/wasm/tests:browser_presentation_regression_test`
   or a focused Bazel-owned browser target: repeat the actual canvas journey in WebGPU, including
-  alpha, stale-frame rejection, and visible loupe behavior. Browser screenshots alone do not prove
-  WebGPU swapchain pixels; assert through the editor's readback/diagnostic surface and the
-  resulting SVG style as well.
+  alpha, stale-frame rejection, visible loupe behavior, and absence of opt-in state on an ordinary
+  URL. Browser screenshots alone do not prove WebGPU swapchain pixels; assert through the editor's
+  readback/diagnostic surface and the resulting SVG style as well.
 
 Native and browser checks compare sampled pre-checkerboard document RGBA with an independent
 document-only pixel reference, and test its visible correspondence to the presented content.

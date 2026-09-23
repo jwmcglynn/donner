@@ -7,6 +7,7 @@ import {
   isSplashCaptureUsable,
   type PixelBounds,
   readCssPngPixelDifferenceStats,
+  readCanvasColorStats,
   readEditorBackgroundCoverage,
   readEditorPixelBounds,
   readEditorPixelBoundsFromPng,
@@ -39,6 +40,8 @@ declare global {
     __donnerWorkerStats?: {
       cachedTileCount?: number;
       completedResults: number;
+      sourceVersion?: number;
+      undoEntryCount?: number;
       offscreenCreateCount?: number;
       offscreenCreateTotal?: number;
       offscreenRecycleCount?: number;
@@ -62,6 +65,15 @@ declare global {
       workerBusy: boolean;
       pointerX: number;
       pointerY: number;
+      eyedropperArmed: boolean;
+      eyedropperReady: boolean;
+      eyedropperUnavailable: boolean;
+    };
+    __donnerEyedropperTestState?: {
+      activeFill: string;
+      activeStroke: string;
+      selectedStyle: string;
+      selectedText: string;
     };
     __donnerSampleThumbnailStats?: {
       publishedAtMs?: number;
@@ -565,7 +577,10 @@ async function readPressSelectionState(
   }));
 }
 
-async function openEditor(page: Page, enableOverlayControl = false): Promise<string[]> {
+async function openEditor(
+  page: Page,
+  testControl: false | "overlay" | "eyedropper" = false,
+): Promise<string[]> {
   const failures: string[] = [];
   page.on("console", (message) => {
     if (
@@ -581,8 +596,8 @@ async function openEditor(page: Page, enableOverlayControl = false): Promise<str
   consoleFailuresByPage.set(page, failures);
 
   const editorUrl = new URL(kBaseUrl);
-  if (enableOverlayControl) {
-    editorUrl.searchParams.set("testControl", "overlay");
+  if (testControl) {
+    editorUrl.searchParams.set("testControl", testControl);
   }
   await page.goto(editorUrl.toString(), { waitUntil: "domcontentloaded" });
   await expect.poll(() => page.evaluate(() => window.__donnerCanStartWasm)).toBe(true);
@@ -927,11 +942,12 @@ test("browser overlay control stays disabled after a normal editor frame", async
   });
   expect(after?.compositorTileOverlay).toBe(before.overlays?.compositorTileOverlay);
   expect(after?.geometryDebugOverlay).toBe(before.overlays?.geometryDebugOverlay);
+  expect(await page.evaluate(() => window.__donnerEyedropperTestState)).toBeUndefined();
   expect(failures).toEqual([]);
 });
 
 test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ page }) => {
-  const failures = await openEditor(page, true);
+  const failures = await openEditor(page, "overlay");
   const { canvasBounds, documentClip } = await openBasicShapes(page);
   const rejectedControlInputs = await page.evaluate(() => {
     const control = window.Module?._donner_set_overlay_state;
@@ -1906,6 +1922,305 @@ async function openDonnerSplash(page: Page): Promise<{
   await waitForBrowserComposite(page);
   return { editorBounds };
 }
+
+function eyedropperToolbarPoint(viewport: ViewportStats): { x: number; y: number } {
+  const paletteWidth = 4 * 32 + 120 + 4 * 4 + 2 * 8;
+  return {
+    x: viewport.paneX + (viewport.paneWidth - paletteWidth) / 2 + 8 + 3 * (32 + 4) + 16,
+    y: viewport.paneY + 12 + 8 + 16,
+  };
+}
+
+async function readEyedropperState(page: Page) {
+  return page.evaluate(() => ({
+    armed: window.__donnerInteractionStats?.eyedropperArmed ?? false,
+    ready: window.__donnerInteractionStats?.eyedropperReady ?? false,
+    unavailable: window.__donnerInteractionStats?.eyedropperUnavailable ?? false,
+    busy: window.__donnerInteractionStats?.workerBusy ?? true,
+    sourceVersion: window.__donnerWorkerStats?.sourceVersion ?? -1,
+  }));
+}
+
+async function expectEyedropperReady(page: Page): Promise<void> {
+  await expect.poll(() => readEyedropperState(page), {
+    message: "the real eyedropper activation must accept a current document capture",
+    timeout: scaledMs(5_000),
+    intervals: [16, 25, 50, 100],
+  }).toEqual(expect.objectContaining({
+    armed: true,
+    ready: true,
+    unavailable: false,
+    busy: false,
+  }));
+}
+
+test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", async ({ page }) => {
+  const failures = await openEditor(page, "eyedropper");
+  await openDonnerSplash(page);
+  const viewport = await readViewportStats(page);
+  const stem = splashDocumentToPage(viewport, kSplashLetterD.stemPress);
+  const point = { x: Math.floor(stem.x) + 0.5, y: Math.floor(stem.y) + 0.5 };
+  const stemRegion = { x: point.x - 4, y: point.y - 4, width: 8, height: 8 };
+  expect(
+    (await readEditorPixelBounds(page, stemRegion, "splash-yellow"))?.pixels ?? 0,
+    "the sample point must visibly lie on the Donner lettering",
+  ).toBeGreaterThan(0);
+  const pixelRegion = { x: point.x - 0.5, y: point.y - 0.5, width: 1, height: 1 };
+  const presentedPixel = await captureSplashPresentationFrame(page, pixelRegion, pixelRegion);
+  await test.info().attach("eyedropper-donner-reference.png", {
+    body: presentedPixel.png,
+    contentType: "image/png",
+  });
+  expect(presentedPixel.letter?.pixels,
+    `expected the sampled WebGPU pixel to be Donner lettering: ${JSON.stringify(presentedPixel.census)}`)
+    .toBe(1);
+  expect(presentedPixel.census.samples).toBe(1);
+  const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(
+    presentedPixel.census.dominantColors[0]?.color ?? "",
+  );
+  expect(rgb, "the presented sample must have one decoded RGB pixel").not.toBeNull();
+  const expectedFill = `#${rgb!.slice(1).map((channel) =>
+    Number(channel).toString(16).padStart(2, "0")).join("")}`;
+  const baselineSourceVersion = await page.evaluate(
+    () => window.__donnerWorkerStats?.sourceVersion ?? -1,
+  );
+  expect(baselineSourceVersion, "the Splash worker must publish a source version")
+    .toBeGreaterThanOrEqual(0);
+
+  const eyedropperTool = eyedropperToolbarPoint(viewport);
+  await page.mouse.move(eyedropperTool.x, eyedropperTool.y);
+  await waitForAppliedPointer(page, eyedropperTool, {
+    message: "eyedropper toolbar activation",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(eyedropperTool.x, eyedropperTool.y);
+  await expectEyedropperReady(page);
+  await page.mouse.move(point.x, point.y);
+  await waitForAppliedPointer(page, point, {
+    message: "Donner lettering eyedropper hover",
+    timeoutMs: scaledMs(4_000),
+  });
+  await waitForBrowserComposite(page);
+  const loupe = await page.screenshot({
+    clip: {
+      x: viewport.paneX,
+      y: viewport.paneY,
+      width: viewport.paneWidth,
+      height: viewport.paneHeight,
+    },
+  });
+  await test.info().attach("eyedropper-donner-loupe.png", {
+    body: loupe,
+    contentType: "image/png",
+  });
+  expect(await readEyedropperState(page)).toEqual(expect.objectContaining({
+    armed: true,
+    ready: true,
+    sourceVersion: baselineSourceVersion,
+  }));
+
+  await page.mouse.click(point.x, point.y);
+  await expect.poll(() => readEyedropperState(page)).toEqual(expect.objectContaining({
+    armed: false,
+    sourceVersion: baselineSourceVersion,
+  }));
+  await expect.poll(() => page.evaluate(() => window.__donnerEyedropperTestState?.activeFill), {
+    message: "the sampled Fill must equal the independently presented glyph pixel",
+    timeout: scaledMs(5_000),
+  }).toBe(expectedFill);
+
+  const textTool = { x: eyedropperTool.x - 36, y: eyedropperTool.y };
+  await page.mouse.move(textTool.x, textTool.y);
+  await waitForAppliedPointer(page, textTool, {
+    message: "Text tool after sampled Fill",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(textTool.x, textTool.y);
+  const textPoint = splashDocumentToPage(viewport, { x: 735, y: 400 });
+  await page.mouse.move(textPoint.x, textPoint.y);
+  await waitForAppliedPointer(page, textPoint, {
+    message: "new SVG text placement",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(textPoint.x, textPoint.y);
+  await expect.poll(() => page.evaluate(() => ({
+    selectedCount: window.__donnerInteractionStats?.selectedCount,
+    selectedStyle: window.__donnerEyedropperTestState?.selectedStyle,
+  })), {
+    message: "Text tool must create and select a text node with the sampled Fill before typing",
+    timeout: scaledMs(5_000),
+  }).toEqual({
+    selectedCount: 1,
+    selectedStyle: expect.stringContaining(expectedFill),
+  });
+  await page.keyboard.type("SVG");
+  await page.keyboard.press("Escape");
+  await expect.poll(() => page.evaluate(() => window.__donnerEyedropperTestState), {
+    message: "new text must inherit the eyedropper Fill through the DOM/source path",
+    timeout: scaledMs(5_000),
+  }).toEqual(expect.objectContaining({
+    activeFill: expectedFill,
+    selectedText: "SVG",
+    selectedStyle: expect.stringContaining(expectedFill),
+  }));
+  expect(failures).toEqual([]);
+});
+
+test("WebGPU eyedropper Escape and an outside-document click cancel a ready capture", async ({ page }) => {
+  const failures = await openEditor(page);
+  await openDonnerSplash(page);
+  const viewport = await readViewportStats(page);
+  const sourceVersion = await page.evaluate(() => window.__donnerWorkerStats?.sourceVersion ?? -1);
+
+  await page.keyboard.press("i");
+  await expectEyedropperReady(page);
+  await page.keyboard.press("Escape");
+  await expect.poll(() => readEyedropperState(page)).toEqual(expect.objectContaining({
+    armed: false,
+    sourceVersion,
+  }));
+
+  await page.keyboard.press("i");
+  await expectEyedropperReady(page);
+  const outside = {
+    x: viewport.paneX + viewport.paneWidth / 2,
+    y: viewport.paneY + viewport.paneHeight - 20,
+  };
+  await page.mouse.move(outside.x, outside.y);
+  await waitForAppliedPointer(page, outside, {
+    message: "outside-document eyedropper cancellation",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(outside.x, outside.y);
+  await expect.poll(() => readEyedropperState(page)).toEqual(expect.objectContaining({
+    armed: false,
+    sourceVersion,
+  }));
+  expect(failures).toEqual([]);
+});
+
+test("WebGPU eyedropper copies translucent document alpha, not checkerboard alpha", async ({ page }) => {
+  const failures = await openEditor(page, "eyedropper");
+  await openDonnerSplash(page);
+  const beforeSourceVersion = await page.evaluate(
+    () => window.__donnerWorkerStats?.sourceVersion ?? -1,
+  );
+  const fixture = '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" '
+    + 'viewBox="0 0 128 128"><rect width="128" height="128" fill="#ff000080"/></svg>';
+  const beforeSourceFocusFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+  await page.mouse.click(120, 180);
+  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
+    .toBeGreaterThan(beforeSourceFocusFrame);
+  const beforeSelectAllFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+  await page.keyboard.press("Control+A");
+  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
+    .toBeGreaterThan(beforeSelectAllFrame);
+  await page.keyboard.type(fixture);
+  await expect.poll(() => page.evaluate((before) => {
+    const width = window.__donnerViewportStats?.documentWidth ?? 0;
+    const height = window.__donnerViewportStats?.documentHeight ?? 0;
+    const sourceVersion = window.__donnerWorkerStats?.sourceVersion ?? -1;
+    const busy = window.__donnerInteractionStats?.workerBusy ?? true;
+    return {
+      ready: sourceVersion > before && width > 0 && height > 0
+        && Math.abs(width - height) < 1 && !busy,
+      sourceVersion,
+      width,
+      height,
+      busy,
+    };
+  }, beforeSourceVersion), {
+    message: "the typed translucent SVG must become a settled square document",
+    timeout: scaledMs(8_000),
+    intervals: [16, 25, 50, 100],
+  }).toEqual(expect.objectContaining({ ready: true }));
+  const sourceVersion = await page.evaluate(() => window.__donnerWorkerStats?.sourceVersion ?? -1);
+  expect(sourceVersion).toBeGreaterThan(beforeSourceVersion);
+  const viewport = await readViewportStats(page);
+  expect(Math.abs(viewport.documentWidth - viewport.documentHeight)).toBeLessThan(1);
+  const center = {
+    x: viewport.documentX + viewport.documentWidth / 2,
+    y: viewport.documentY + viewport.documentHeight / 2,
+  };
+  const redRegion = { x: center.x - 12, y: center.y - 12, width: 24, height: 24 };
+  expect((await readCanvasColorStats(page, redRegion)).coloredPixels,
+    "the translucent rectangle must be visible in the presented WebGPU canvas")
+    .toBeGreaterThan(0);
+
+  await page.mouse.move(center.x, center.y);
+  await waitForAppliedPointer(page, center, {
+    message: "translucent rectangle selection",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(center.x, center.y);
+  await expect.poll(() => page.evaluate(() => window.__donnerInteractionStats?.selectedCount))
+    .toBe(1);
+  const beforeUndo = await page.evaluate(() => window.__donnerWorkerStats?.undoEntryCount ?? -1);
+  const edge = { x: viewport.documentX + 1, y: viewport.documentY + 1 };
+  const paneClip = {
+    x: viewport.paneX,
+    y: viewport.paneY,
+    width: viewport.paneWidth,
+    height: viewport.paneHeight,
+  };
+  await page.mouse.move(edge.x, edge.y);
+  await waitForAppliedPointer(page, edge, {
+    message: "translucent edge before arming",
+    timeoutMs: scaledMs(4_000),
+  });
+  await waitForBrowserComposite(page);
+  const beforeLoupe = await page.screenshot({ clip: paneClip });
+  const eyedropperTool = eyedropperToolbarPoint(viewport);
+  await page.mouse.move(eyedropperTool.x, eyedropperTool.y);
+  await waitForAppliedPointer(page, eyedropperTool, {
+    message: "translucent fixture eyedropper toolbar activation",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(eyedropperTool.x, eyedropperTool.y);
+  await expectEyedropperReady(page);
+  await page.mouse.move(edge.x, edge.y);
+  await waitForAppliedPointer(page, edge, {
+    message: "translucent document edge loupe",
+    timeoutMs: scaledMs(4_000),
+  });
+  await waitForBrowserComposite(page);
+  const loupe = await page.screenshot({ clip: paneClip });
+  await test.info().attach("eyedropper-alpha-edge-loupe.png", {
+    body: loupe,
+    contentType: "image/png",
+  });
+  const loupeDifference = readCssPngPixelDifferenceStats(beforeLoupe, loupe, paneClip, {
+    x: edge.x - paneClip.x + 18,
+    y: edge.y - paneClip.y + 18,
+    width: 126,
+    height: 164,
+  });
+  expect(loupeDifference.changedPixelsAbove8,
+    `the edge loupe must visibly change its predicted screen region: ${JSON.stringify(loupeDifference)}`)
+    .toBeGreaterThan(0);
+  expect(await readEyedropperState(page)).toEqual(expect.objectContaining({
+    armed: true,
+    ready: true,
+    sourceVersion,
+  }));
+  await page.mouse.move(center.x, center.y);
+  await waitForAppliedPointer(page, center, {
+    message: "translucent document sample",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(center.x, center.y);
+  await expect.poll(() => page.evaluate(() => window.__donnerEyedropperTestState), {
+    message: "the rendered half-alpha red pixel must reach the selected element style",
+    timeout: scaledMs(5_000),
+    intervals: [16, 25, 50, 100],
+  }).toEqual(expect.objectContaining({
+    activeFill: "#ff000080",
+    selectedStyle: expect.stringContaining("#ff000080"),
+  }));
+  await expect.poll(() => page.evaluate(() => window.__donnerWorkerStats?.undoEntryCount ?? -1))
+    .toBe(beforeUndo + 1);
+  expect(failures).toEqual([]);
+});
 
 // Whether the presented document covers the whole probe region.
 //

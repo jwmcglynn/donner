@@ -25,6 +25,7 @@
 #include "donner/editor/EditorShellInternal.h"
 #include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/FillStrokeWidget.h"
+#include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/editor/InMemoryClipboard.h"
 #include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/gui/EditorWindow.h"
@@ -32,6 +33,7 @@
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_EDITOR_WGPU
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -1398,6 +1400,11 @@ public:
     return shell.eyedropperTarget_ == EditorShell::PaintTarget::Stroke;
   }
 
+  static const DocumentPixelCapture* PixelCapture(const EditorShell& shell) {
+    return shell.renderCoordinator_.documentPixelCaptureFor(shell.app_,
+                                                            shell.viewportForReadback());
+  }
+
   static bool TextToolIsEditing(const EditorShell& shell) { return shell.textTool_.isEditing(); }
 
   static std::size_t TextToolCaretIndex(const EditorShell& shell) {
@@ -1768,6 +1775,17 @@ void ClickToolbar(gui::EditorWindow& window, EditorShell& shell, const ImVec2& c
   RenderToolbarFrame(window, shell, cursor, mouse, /*mouseDown=*/false);
   RenderToolbarFrame(window, shell, cursor, mouse, /*mouseDown=*/true);
   RenderToolbarFrame(window, shell, cursor, mouse, /*mouseDown=*/false);
+}
+
+std::optional<ImVec2> CurrentPopupFirstButtonCenter() {
+  ImGuiContext* context = ImGui::GetCurrentContext();
+  if (context == nullptr || context->OpenPopupStack.empty() ||
+      context->OpenPopupStack.back().Window == nullptr) {
+    return std::nullopt;
+  }
+  const ImGuiWindow* popup = context->OpenPopupStack.back().Window;
+  return ImVec2(popup->DC.CursorStartPos.x + 45.0f,
+                popup->DC.CursorStartPos.y + ImGui::GetFrameHeight() * 0.5f);
 }
 
 void RenderToolPaletteFrame(gui::EditorWindow& window, EditorShell& shell, const ImVec2& paneOrigin,
@@ -5329,6 +5347,27 @@ void RunFrameWithMouse(gui::EditorWindow& window, EditorShell& shell, const ImVe
   window.endFrame();
 }
 
+svg::RendererBitmap CaptureFrameWithMouse(gui::EditorWindow& window, EditorShell& shell,
+                                          const ImVec2& mouse) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddMousePosEvent(mouse.x, mouse.y);
+  io.AddMouseButtonEvent(0, false);
+  window.beginFrame();
+  shell.runFrame();
+  return window.endFrameAndReadPixels();
+}
+
+void WriteEyedropperScreenshot(const svg::RendererBitmap& bitmap, std::string_view name) {
+  const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  if (outputDir == nullptr || bitmap.empty()) {
+    return;
+  }
+  const std::filesystem::path path = std::filesystem::path(outputDir) / name;
+  EXPECT_TRUE(svg::RendererImageIO::writeRgbaPixelsToPngFile(
+      path.string().c_str(), bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
+      bitmap.rowBytes / 4u));
+}
+
 /// Hover, press, and release at @p pos; ImGui buttons fire on release.
 void ClickAt(gui::EditorWindow& window, EditorShell& shell, const ImVec2& pos) {
   RunFrameWithMouse(window, shell, pos, /*mouseDown=*/false);
@@ -5637,6 +5676,26 @@ TEST(EditorShellTest, ToolbarEyedropperButtonArmsWithoutSamplingItsActivationCli
   EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
 }
 
+TEST(EditorShellTest, StrokeColorPopupEyedropperButtonTargetsStroke) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+  constexpr ImVec2 kWidgetCursor(20.0f, 40.0f);
+  constexpr ImVec2 kStrokeSwatch(50.0f, 47.0f);
+  ClickToolbar(window, shell, kWidgetCursor, kStrokeSwatch);
+  const std::optional<ImVec2> popupButton = CurrentPopupFirstButtonCenter();
+  ASSERT_THAT(popupButton, testing::Optional(testing::_));
+  RenderToolbarFrame(window, shell, kWidgetCursor, *popupButton, /*mouseDown=*/false);
+  RenderToolbarFrame(window, shell, kWidgetCursor, *popupButton, /*mouseDown=*/true);
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
+  EXPECT_THAT(EditorShellTestAccess::EyedropperTargetsStroke(shell), testing::Eq(true));
+  RenderToolbarFrame(window, shell, kWidgetCursor, *popupButton, /*mouseDown=*/false);
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
+}
+
 TEST(EditorShellTest, SampledFillChangesSelectedStylesInOneUndoAndDefaultsNewText) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -5668,6 +5727,14 @@ TEST(EditorShellTest, SampledFillChangesSelectedStylesInOneUndoAndDefaultsNewTex
   app.undo();
   app.flushFrame();
   EXPECT_THAT(std::string(document.source()), testing::Eq(before));
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(2));
+  EXPECT_THAT(std::string(app.selectedElements()[0].id()), testing::Eq("first"));
+  EXPECT_THAT(std::string(app.selectedElements()[1].id()), testing::Eq("second"));
+  app.redo();
+  app.flushFrame();
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(2));
+  EXPECT_THAT(std::string(app.selectedElements()[0].id()), testing::Eq("first"));
+  EXPECT_THAT(std::string(app.selectedElements()[1].id()), testing::Eq("second"));
 }
 
 TEST(EditorShellTest, StrokeTargetUpdatesAuthoringDefaultWithoutDocumentUndo) {
@@ -5685,5 +5752,89 @@ TEST(EditorShellTest, StrokeTargetUpdatesAuthoringDefaultWithoutDocumentUndo) {
   EXPECT_THAT(EditorShellTestAccess::App(shell).activePaintStyle().stroke, testing::Eq("#112233"));
   EXPECT_THAT(shell.documentSourceForReadback(), testing::Optional(testing::Eq(before)));
   EXPECT_THAT(EditorShellTestAccess::App(shell).canUndo(), testing::Eq(false));
+}
+
+TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Eyedropper integration test",
+      .initialWidth = 1600,
+      .initialHeight = 900,
+      .visible = false,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  constexpr std::string_view kTextSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120">
+<text id="donner" x="10" y="75" font-family="sans-serif" font-size="48"
+ style="fill:#53c4f1">Donner</text></svg>)";
+  EditorShell shell(window, OptionsWithSource(kTextSource));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+  ASSERT_THAT(EditorShellTestAccess::ArmEyedropper(shell, /*stroke=*/false), testing::Eq(true));
+
+  const DocumentPixelCapture* capture = nullptr;
+  for (int attempt = 0; attempt < 4 && capture == nullptr; ++attempt) {
+    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+        std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+    capture = EditorShellTestAccess::PixelCapture(shell);
+  }
+  ASSERT_NE(capture, nullptr) << "The composed worker readback never reached the live canvas.";
+
+  const ViewportState& viewport = shell.viewportForReadback();
+  const Vector2d textScreen = viewport.documentToScreen(Vector2d(18.0, 55.0));
+  const std::optional<Vector2i> pixel =
+      DocumentPixelIndexAtScreenPoint(viewport, capture->identity.rasterViewport, textScreen);
+  ASSERT_THAT(pixel, testing::Optional(testing::_));
+  const std::optional<css::RGBA> color = ReadDocumentPixel(capture->bitmap, *pixel);
+  ASSERT_THAT(color, testing::Optional(testing::_));
+  EXPECT_THAT(color->toHexString(), testing::Eq("#53c4f1"));
+
+  const Vector2d edgeScreen = viewport.documentToScreen(Vector2d(0.1, 0.1));
+  const svg::RendererBitmap screenshot = CaptureFrameWithMouse(
+      window, shell, ImVec2(static_cast<float>(edgeScreen.x), static_cast<float>(edgeScreen.y)));
+  WriteEyedropperScreenshot(screenshot, "eyedropper_loupe_document_edge.png");
+  const ImVec2 textMouse(static_cast<float>(textScreen.x), static_cast<float>(textScreen.y));
+  RunFrameWithMouse(window, shell, textMouse, false);
+  RunFrameWithMouse(window, shell, textMouse, true);
+  RunFrameWithMouse(window, shell, textMouse, false);
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsSelect(shell), testing::Eq(true));
+  EXPECT_THAT(EditorShellTestAccess::App(shell).activePaintStyle().fill, testing::Eq("#53c4f1"));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_T});
+  MouseModifiers modifiers;
+  modifiers.doubleClick = true;
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(20.0, 108.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+      .modifiers = modifiers,
+  });
+  RunShellFrame(window, shell);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(20.0, 108.0),
+      .leftMouseReleased = true,
+  });
+  RunShellFrame(window, shell);
+  ImGui::GetIO().AddInputCharactersUTF8("SVG");
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  RunShellFrame(window, shell);
+  ASSERT_THAT(EditorShellTestAccess::App(shell).selectedElements(), testing::SizeIs(1));
+  const svg::SVGElement& newText = EditorShellTestAccess::App(shell).selectedElements().front();
+  EXPECT_THAT(newText.type(), testing::Eq(svg::ElementType::Text));
+  EXPECT_THAT(std::string(newText.id()), testing::Ne("donner"));
+  EXPECT_THAT(std::string(newText.cast<svg::SVGTextElement>().textContent()), testing::Eq("SVG"));
+  ASSERT_THAT(newText.getAttribute("style"), testing::Optional(testing::_));
+  EXPECT_THAT(std::string(*newText.getAttribute("style")), testing::HasSubstr("fill: #53c4f1"));
+  const std::optional<svg::SVGElement> originalDonner =
+      EditorShellTestAccess::App(shell).document().document().querySelector("#donner");
+  ASSERT_THAT(originalDonner, testing::Optional(testing::_));
+  EXPECT_THAT(std::string(originalDonner->cast<svg::SVGTextElement>().textContent()),
+              testing::Eq("Donner"));
 }
 }  // namespace donner::editor

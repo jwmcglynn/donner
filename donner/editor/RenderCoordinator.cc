@@ -349,6 +349,19 @@ bool SamePixelCaptureIdentity(const DocumentPixelCaptureIdentity& lhs,
          SameViewport(lhs.viewport, rhs.viewport);
 }
 
+bool IsExactPixelCaptureResult(const RenderResult& result,
+                               const DocumentPixelCaptureIdentity& current) {
+  return result.documentGeneration == current.documentGeneration &&
+         result.version == current.version &&
+         result.fontResourceRevision == current.fontResourceRevision &&
+         SameRasterViewport(result.rasterViewport, current.rasterViewport) &&
+         SameViewport(result.viewport, current.viewport) && !result.overviewInfillOnly &&
+         (!result.compositedPreview.has_value() ||
+          !result.compositedPreview->representedDragPreview.has_value() ||
+          result.compositedPreview->representedDragPreview->interactionKind !=
+              svg::compositor::InteractionHint::ActiveDrag);
+}
+
 bool SameRasterScaleAndSemanticCanvas(const EditorRasterViewport& lhs,
                                       const EditorRasterViewport& rhs) {
   return lhs.semanticCanvasSizePx == rhs.semanticCanvasSizePx && lhs.viewportBounded &&
@@ -680,6 +693,114 @@ const DocumentPixelCapture* RenderCoordinator::documentPixelCaptureFor(
              : nullptr;
 }
 
+void RenderCoordinator::noteMissingPixelCaptureResult(const std::optional<RenderResult>& result) {
+  if (!result.has_value() && documentPixelCaptureEnabled_ && requestedPixelCapture_.has_value() &&
+      !documentPixelCapture_.has_value() && !captureUnavailable_ &&
+      !renderWorker_.asyncRenderer.isBusy()) {
+    requestedPixelCapture_.reset();
+    requestPresentationRefresh();
+  }
+}
+
+void RenderCoordinator::rejectPixelCaptureResult(const std::optional<RenderResult>& result) {
+  if (result.has_value() && documentPixelCaptureEnabled_ &&
+      result->cpuSnapshotRequestId == documentPixelCaptureSessionId_) {
+    requestedPixelCapture_.reset();
+    captureUnavailable_ = false;
+  }
+}
+
+void RenderCoordinator::acceptPixelCaptureResult(RenderResult& result, const EditorApp& app,
+                                                 const ViewportState& viewport) {
+  if (!documentPixelCaptureEnabled_ ||
+      result.cpuSnapshotRequestId != documentPixelCaptureSessionId_ ||
+      !requestedPixelCapture_.has_value()) {
+    return;
+  }
+  const DocumentPixelCaptureIdentity current =
+      CurrentPixelCaptureIdentity(app, viewport, documentPixelCaptureSessionId_);
+  if (!SamePixelCaptureIdentity(*requestedPixelCapture_, current) ||
+      !IsExactPixelCaptureResult(result, current)) {
+    requestedPixelCapture_.reset();
+    captureUnavailable_ = false;
+    return;
+  }
+  captureUnavailable_ = !IsValidDocumentPixelBitmap(result.bitmap);
+  if (!captureUnavailable_) {
+    documentPixelCapture_ = DocumentPixelCapture{
+        .identity = current,
+        .bitmap = std::move(result.bitmap),
+    };
+  }
+}
+
+bool RenderCoordinator::preparePixelCaptureRequest(const EditorApp& app,
+                                                   const ViewportState& viewport,
+                                                   DocumentPixelCaptureIdentity* desired) {
+  if (!documentPixelCaptureEnabled_) {
+    return false;
+  }
+  *desired = CurrentPixelCaptureIdentity(app, viewport, documentPixelCaptureSessionId_);
+  if (documentPixelCapture_.has_value() &&
+      !SamePixelCaptureIdentity(documentPixelCapture_->identity, *desired)) {
+    documentPixelCapture_.reset();
+    captureUnavailable_ = false;
+  }
+  if (requestedPixelCapture_.has_value() &&
+      !SamePixelCaptureIdentity(*requestedPixelCapture_, *desired)) {
+    requestedPixelCapture_.reset();
+    captureUnavailable_ = false;
+  }
+  const bool alreadyRequested = requestedPixelCapture_.has_value();
+  if (documentPixelCapture_.has_value() || alreadyRequested) {
+    return false;
+  }
+  if (!CanCaptureDocumentPixelSize(desired->rasterViewport.outputSizePx)) {
+    requestedPixelCapture_ = *desired;
+    captureUnavailable_ = true;
+    return false;
+  }
+  return true;
+}
+
+bool RenderCoordinator::pixelCaptureBlocksViewportDefer(bool captureNeeded) const {
+  return captureNeeded || (documentPixelCaptureEnabled_ && requestedPixelCapture_.has_value() &&
+                           !documentPixelCapture_.has_value());
+}
+
+bool RenderCoordinator::shouldDeferViewportRender(bool selectedViewportDeferred,
+                                                  bool needsOverviewInfill,
+                                                  bool captureNeeded) const {
+  return selectedViewportDeferred && !needsOverviewInfill && !pendingPresentationRefresh_ &&
+         !pixelCaptureBlocksViewportDefer(captureNeeded);
+}
+
+bool RenderCoordinator::shouldCapturePixelsForRequest(
+    bool requestOverviewInfill, bool activeDrag, const EditorRasterViewport& rasterViewport) const {
+  return documentPixelCaptureEnabled_ && !documentPixelCapture_.has_value() &&
+         !captureUnavailable_ && !requestOverviewInfill && !activeDrag &&
+         !compositedPresentation_.isWaitingForFullRender() &&
+         CanCaptureDocumentPixelSize(rasterViewport.outputSizePx);
+}
+
+void RenderCoordinator::configurePixelCaptureRequest(
+    RenderRequest* request, bool requestOverviewInfill, bool activeDrag,
+    const EditorRasterViewport& rasterViewport) const {
+  request->captureCpuSnapshot =
+      shouldCapturePixelsForRequest(requestOverviewInfill, activeDrag, rasterViewport);
+  if (request->captureCpuSnapshot) {
+    request->cpuSnapshotRequestId = documentPixelCaptureSessionId_;
+  }
+}
+
+void RenderCoordinator::recordPixelCaptureRequest(const RenderRequest& request,
+                                                  const DocumentPixelCaptureIdentity& desired) {
+  if (request.captureCpuSnapshot) {
+    requestedPixelCapture_ = desired;
+    captureUnavailable_ = false;
+  }
+}
+
 bool RenderCoordinator::setSourceHoverElements(std::vector<svg::SVGElement> elements) {
   if (sourceHoverElements_ == elements) {
     return false;
@@ -974,15 +1095,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   ZoneScopedN("RenderCoordinator::pollRenderResult");
   const ScopedHeapDelta pollHeapDelta(MemoryStage::AppPollResult);
   auto resultOpt = renderWorker_.asyncRenderer.pollResult();
-  const bool activeCaptureResult =
-      resultOpt.has_value() && documentPixelCaptureEnabled_ &&
-      resultOpt->cpuSnapshotRequestId == documentPixelCaptureSessionId_;
-  const auto rejectCaptureResult = [&]() {
-    if (activeCaptureResult) {
-      requestedPixelCapture_.reset();
-      captureUnavailable_ = false;
-    }
-  };
+  noteMissingPixelCaptureResult(resultOpt);
 #ifdef __EMSCRIPTEN__
   // Report a GPU-wait failure whether or not a frame landed. The completed
   // frame below carries the same fields, so consume the generation either way
@@ -1001,7 +1114,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   }
 #endif
   if (!IsCurrentRenderResult(resultOpt, app)) {
-    rejectCaptureResult();
+    rejectPixelCaptureResult(resultOpt);
     return;
   }
 
@@ -1034,7 +1147,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     return;
   }
   if (!RasterViewportCanPresentCurrentViewport(result.rasterViewport, rasterViewport)) {
-    rejectCaptureResult();
+    rejectPixelCaptureResult(resultOpt);
     return;
   }
   if (result.rasterViewport.viewportBounded && rasterViewport.viewportBounded &&
@@ -1043,13 +1156,13 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     // sole presented content: zooming out would expose checkerboard for missing tile coverage
     // instead of document transparency. Keep the previous presentation until an overview infill
     // exists underneath the crisp bounded tiles.
-    rejectCaptureResult();
+    rejectPixelCaptureResult(resultOpt);
     return;
   }
   const Vector2i resultCanvasSize = result.rasterViewport.outputSizePx;
   if (result.compositedPreview.has_value() && result.compositedPreview->valid()) {
     if (!ShouldPresentCompositedPreviewForViewport(*result.compositedPreview, resultCanvasSize)) {
-      rejectCaptureResult();
+      rejectPixelCaptureResult(resultOpt);
       return;
     }
 
@@ -1097,32 +1210,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     compositedPresentation_.noteChromeRefreshCompleted(displayedDocVersion_);
   }
   promoteSelectionBoundsIfReady();
-  if (activeCaptureResult && requestedPixelCapture_.has_value()) {
-    const DocumentPixelCaptureIdentity current =
-        CurrentPixelCaptureIdentity(app, viewport, documentPixelCaptureSessionId_);
-    const bool exactResult = SamePixelCaptureIdentity(*requestedPixelCapture_, current) &&
-                             result.documentGeneration == current.documentGeneration &&
-                             result.version == current.version &&
-                             result.fontResourceRevision == current.fontResourceRevision &&
-                             SameRasterViewport(result.rasterViewport, current.rasterViewport) &&
-                             SameViewport(result.viewport, current.viewport) &&
-                             !result.overviewInfillOnly &&
-                             (!result.compositedPreview.has_value() ||
-                              !result.compositedPreview->representedDragPreview.has_value() ||
-                              result.compositedPreview->representedDragPreview->interactionKind !=
-                                  svg::compositor::InteractionHint::ActiveDrag);
-    if (exactResult) {
-      captureUnavailable_ = !IsValidDocumentPixelBitmap(result.bitmap);
-      if (!captureUnavailable_) {
-        documentPixelCapture_ = DocumentPixelCapture{
-            .identity = current,
-            .bitmap = std::move(resultOpt->bitmap),
-        };
-      }
-    } else {
-      rejectCaptureResult();
-    }
-  }
+  acceptPixelCaptureResult(*resultOpt, app, viewport);
 }
 
 bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
@@ -1166,29 +1254,8 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // mouse-up unless the document still needs its first canvas.
   const bool deferCanvasCommitForActiveDrag = dragPreview.has_value() && !firstCommit;
   const auto currentVersion = app.document().currentFrameVersion();
-  bool captureNeeded = false;
   DocumentPixelCaptureIdentity desiredCapture;
-  if (documentPixelCaptureEnabled_) {
-    desiredCapture = CurrentPixelCaptureIdentity(app, viewport, documentPixelCaptureSessionId_);
-    if (documentPixelCapture_.has_value() &&
-        !SamePixelCaptureIdentity(documentPixelCapture_->identity, desiredCapture)) {
-      documentPixelCapture_.reset();
-      captureUnavailable_ = false;
-    }
-    if (requestedPixelCapture_.has_value() &&
-        !SamePixelCaptureIdentity(*requestedPixelCapture_, desiredCapture)) {
-      requestedPixelCapture_.reset();
-      captureUnavailable_ = false;
-    }
-    const bool alreadyRequested = requestedPixelCapture_.has_value() &&
-                                  SamePixelCaptureIdentity(*requestedPixelCapture_, desiredCapture);
-    captureNeeded = !documentPixelCapture_.has_value() && !alreadyRequested;
-    if (captureNeeded && !CanCaptureDocumentPixelSize(rasterViewport.outputSizePx)) {
-      requestedPixelCapture_ = desiredCapture;
-      captureUnavailable_ = true;
-      captureNeeded = false;
-    }
-  }
+  const bool captureNeeded = preparePixelCaptureRequest(app, viewport, &desiredCapture);
   const Entity prewarmEntity = selectedCompositedEntity(app);
   const PresentationCoverageDiagnostics coverageDiagnostics =
       textures != nullptr ? textures->coverageDiagnostics() : PresentationCoverageDiagnostics{};
@@ -1201,10 +1268,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       prewarmEntity, dragPreview.has_value(), currentVersion, displayedDocVersion_,
       compositedPresentation_.hasCachedTextures(), rasterViewportSettled, needsOverviewInfill,
       pendingSelectedLayerRasterization);
-  if (deferSelectedViewportRefresh && !needsOverviewInfill && !pendingPresentationRefresh_ &&
-      !captureNeeded &&
-      !(documentPixelCaptureEnabled_ && requestedPixelCapture_.has_value() &&
-        !documentPixelCapture_.has_value())) {
+  if (shouldDeferViewportRender(deferSelectedViewportRefresh, needsOverviewInfill, captureNeeded)) {
     if (renderWorker_.asyncRenderer.isBusy()) {
       renderWorker_.asyncRenderer.cancelInFlight();
     }
@@ -1219,9 +1283,10 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       requestOverviewInfill ? std::vector<Entity>{}
                             : selectedCompositedExtraEntities(app, prewarmEntity);
   const bool forceSelectedLayerRasterization = pendingSelectedLayerRasterization;
+  const bool forcePresentationRefresh = pendingPresentationRefresh_ || captureNeeded;
   const bool hasIndependentSelectedPrewarmRenderReason =
       dragPreview.has_value() || currentVersion != displayedDocVersion_ ||
-      forceSelectedLayerRasterization || pendingPresentationRefresh_ || captureNeeded;
+      forceSelectedLayerRasterization || forcePresentationRefresh;
   const bool useSelectedPrewarmRasterViewport =
       !captureNeeded &&
       ShouldUseSelectedPrewarmRasterViewport(
@@ -1261,7 +1326,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
           .selectedEntity = requestOverviewInfill ? entt::null : prewarmEntity,
           .selectedExtraEntities = prewarmExtraEntities,
           .activeDragPreview = dragPreview,
-          .forcePresentationRefresh = pendingPresentationRefresh_ || captureNeeded,
+          .forcePresentationRefresh = forcePresentationRefresh,
           .forceSelectedLayerRasterization = forceSelectedLayerRasterization,
           .currentVersion = currentVersion,
           .currentCanvasSize = currentCanvasSize,
@@ -1284,14 +1349,8 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // the exact viewport `requestRasterViewport` was derived from.
   req.viewport = viewport;
   req.overviewInfillOnly = requestOverviewInfill;
-  req.captureCpuSnapshot = documentPixelCaptureEnabled_ && !documentPixelCapture_.has_value() &&
-                           !captureUnavailable_ && !requestOverviewInfill &&
-                           !dragPreview.has_value() &&
-                           !compositedPresentation_.isWaitingForFullRender() &&
-                           CanCaptureDocumentPixelSize(requestRasterViewport.outputSizePx);
-  if (req.captureCpuSnapshot) {
-    req.cpuSnapshotRequestId = documentPixelCaptureSessionId_;
-  }
+  configurePixelCaptureRequest(&req, requestOverviewInfill, dragPreview.has_value(),
+                               requestRasterViewport);
   // Drain any pending structural remap from a recent `setDocumentMaybe
   // Structural` call. Non-empty remap lets the worker preserve the
   // compositor's cached state across the document swap instead of
@@ -1314,10 +1373,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
     ++overviewInfillRenderTotal_;
   }
   renderWorker_.asyncRenderer.requestRender(req);
-  if (req.captureCpuSnapshot) {
-    requestedPixelCapture_ = desiredCapture;
-    captureUnavailable_ = false;
-  }
+  recordPixelCaptureRequest(req, desiredCapture);
   pendingPresentationRefresh_ = false;
   return true;
 }
