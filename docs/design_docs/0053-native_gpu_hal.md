@@ -108,6 +108,11 @@ the native backend, and a separate change then flips that platform's default. Un
   it reads the adapter's wgpu backing-destroy counter. A snapshot that was not read back fails
   the shared Geode and renderer test helpers that read, count or compare its pixels, instead of
   reading as transparent, blank or identical.
+- The editor window opens on the selected device. On Apple its Metal layer is attached before
+  selection and constrains none, the surface settles BGRA8Unorm without an adapter, and the
+  surface, UI renderer and UI texture registry take the runtime device. The frame clear and the
+  framebuffer readback still record on the adapter's wgpu objects, so a frame on a native backend
+  halts at the adapter accessor until they move.
 
 On Metal, snapshot capture and cross-context snapshot drawing register their source across
 runtime devices (see [Cross-device texture registration](#cross-device-texture-registration)).

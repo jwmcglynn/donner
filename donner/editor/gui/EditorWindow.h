@@ -175,6 +175,10 @@ struct AcquiredFrame {
  * platform object exists before there is an adapter, adapter selection may need to be constrained
  * to the surface, the renderer compiles its pipelines for the texture format before there is a
  * device, and a surface built on the GPU runtime cannot exist until the device does.
+ *
+ * On Apple the platform object is a Core Animation Metal layer, which presents from any Metal
+ * device the system reports and belongs to no instance, so it constrains no selection and the
+ * window attaches it before selecting one.
  */
 class PresentationSurface {
 public:
@@ -183,15 +187,18 @@ public:
   /**
    * Takes hold of the platform object behind \p window.
    *
-   * @param instance WebGPU instance the surface belongs to.
+   * @param instance WebGPU instance the surface belongs to; unused on Apple, where the Metal layer
+   *   belongs to none.
    * @param window Window whose platform object frames are presented to.
    * @return False when the platform object could not be obtained.
    */
   [[nodiscard]] virtual bool attachToWindow(const wgpu::Instance& instance, GLFWwindow* window) = 0;
 
+#ifndef __APPLE__
   /// The surface adapter selection is constrained to, or a null handle when this surface places
   /// no constraint on which adapter is chosen.
   [[nodiscard]] virtual wgpu::Surface adapterSelectionSurface() const = 0;
+#endif
 
   /**
    * Settles the format acquired textures carry, and records whether finished frames are to be
@@ -199,7 +206,9 @@ public:
    * \ref format; everything else a frame carries is settled by \ref attachToDevice, which is the
    * first point the surface can say what it supports.
    *
-   * @param adapter Adapter the device will be created on.
+   * @param adapter Adapter the device will be created on. Not consulted on Apple, where a Metal
+   *   layer presents BGRA8Unorm whichever device draws into it; a native device's selection
+   *   produces no adapter.
    * @param enableReadback Whether finished frames are copied back to the host.
    * @return False when the surface cannot serve the editor's frames.
    */
@@ -259,10 +268,11 @@ public:
  * on presents.
  *
  * What differs between platforms is only the platform object frames go to. A Core Animation
- * Metal layer is named directly and the runtime builds the surface on it. Everywhere else the
- * window library the editor already links makes the surface object, because adapter selection
- * has to be constrained to it before there is a device to build anything with; the runtime is
- * then pointed at that object and builds its swapchain on it without taking it over.
+ * Metal layer is named directly and the runtime builds the surface on it, on whichever backend
+ * the process selected. Everywhere else the window library the editor already links makes the
+ * surface object, because adapter selection has to be constrained to it before there is a device
+ * to build anything with; the runtime is then pointed at that object and builds its swapchain on
+ * it without taking it over.
  */
 class RuntimePresentationSurface final : public PresentationSurface {
 public:
@@ -273,7 +283,9 @@ public:
   ~RuntimePresentationSurface() override;
 
   bool attachToWindow(const wgpu::Instance& instance, GLFWwindow* window) override;
+#ifndef __APPLE__
   wgpu::Surface adapterSelectionSurface() const override;
+#endif
   bool chooseConfiguration(const wgpu::Adapter& adapter, bool enableReadback) override;
   bool attachToDevice(geode::GeodeDevice& device) override;
 

@@ -713,7 +713,9 @@ public:
   void refuseConfiguration() { configureSucceeds_ = false; }
 
   bool attachToWindow(const wgpu::Instance&, GLFWwindow*) override { return true; }
+#ifndef __APPLE__
   wgpu::Surface adapterSelectionSurface() const override { return {}; }
+#endif
   bool chooseConfiguration(const wgpu::Adapter&, bool) override { return true; }
   bool attachToDevice(geode::GeodeDevice&) override { return true; }
 
