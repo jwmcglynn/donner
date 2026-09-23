@@ -687,10 +687,10 @@ struct AsyncSmokeReadback {
 
 /// Copies this frame into \p buffer for the asynchronous diagnostic readback.
 ///
-/// Recorded on the root's wgpu device rather than through the runtime: that readback completes
-/// from the backend's map callback on a later browser task, and the runtime has no map completion
-/// a caller can observe without waiting for it, which the browser's main thread cannot do. The
-/// runtime submits to the same queue, so the copy is ordered after the frame it reads.
+/// Recorded on the root's wgpu device rather than through the runtime: the runtime observes a
+/// map's completion only by waiting for it, and this diagnostic must not stall the frame it
+/// measures, so it completes from the backend's map callback on a later task instead. The runtime
+/// submits to the same queue, so the copy is ordered after the frame it reads.
 ///
 /// @param root Root the frame's device records against.
 /// @param target The frame's backend texture. @param buffer Destination, sized for the copy.
@@ -789,12 +789,14 @@ void BeginAsyncSmokeReadback(geode::ScopedWgpuHandle<wgpu::Buffer> buffer, uint6
 /// @param surfaceFormat Format of \p target. @param requestId Diagnostic request being served.
 /// @param inFlight Set while the map is outstanding. @param alive Cleared when the window goes.
 /// @param consecutiveFailures Failures since the last completed request.
+/// @param timing Frame timing the copy's cost is recorded in, as a readback's.
 /// @return Whether the map callback now owns the request; false when setup failed first.
 bool StartAsyncSmokeReadback(const geode::GeodeGpuRoot& root, const wgpu::Texture& target,
                              uint32_t width, uint32_t height, gpu::TextureFormat surfaceFormat,
                              int requestId, const std::shared_ptr<std::atomic_bool>& inFlight,
                              const std::shared_ptr<std::atomic_bool>& alive,
-                             const std::shared_ptr<std::atomic_uint>& consecutiveFailures) {
+                             const std::shared_ptr<std::atomic_uint>& consecutiveFailures,
+                             EditorWindowFrameTiming& timing) {
   const uint32_t bytesPerRow = AlignTextureCopyBytesPerRow(width * 4u);
   const uint64_t size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
   wgpu::BufferDescriptor descriptor = {};
@@ -802,10 +804,14 @@ bool StartAsyncSmokeReadback(const geode::GeodeGpuRoot& root, const wgpu::Textur
   descriptor.size = size;
   descriptor.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
   geode::ScopedWgpuHandle<wgpu::Buffer> buffer(root.device().createBuffer(descriptor));
-  if (!target || !buffer ||
-      !SubmitSmokeReadbackCopy(root, target, buffer.get(), width, height, bytesPerRow)) {
+  if (!target || !buffer) {
     return false;
   }
+  const auto copyStart = std::chrono::steady_clock::now();
+  if (!SubmitSmokeReadbackCopy(root, target, buffer.get(), width, height, bytesPerRow)) {
+    return false;
+  }
+  timing.readbackMs += ElapsedMs(copyStart);
   inFlight->store(true, std::memory_order_release);
   BeginAsyncSmokeReadback(std::move(buffer), size, width, height, bytesPerRow, surfaceFormat,
                           requestId, inFlight, alive, consecutiveFailures);
@@ -1351,7 +1357,7 @@ void BeginUiFrame(UiTextureRegistry* registry, ImGuiRuntimeRenderer* renderer) {
 /// lands on the window's clear color rather than on whatever the target held.
 /// @param device Device \p target belongs to.
 /// @param target Frame's color target, a live texture of \p device.
-/// @param clearColor Premultiplied color the target is cleared to.
+/// @param clearColor Color the target is cleared to.
 /// @return Whether the clear was submitted.
 bool ClearFrameTarget(gpu::Device& device, const gpu::Texture& target,
                       const std::array<double, 4>& clearColor) {
@@ -2568,7 +2574,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
           wgpuState_->framebufferGeodeDevice->adapterDevice().wgpuTextureOf(frameTarget),
           readbackWidth, readbackHeight, wgpuState_->surfaceFormat, smokeReadbackRequestId,
           wgpuState_->smokeReadbackInFlight, wgpuState_->smokeReadbackAlive,
-          wgpuState_->smokeReadbackConsecutiveFailures)) {
+          wgpuState_->smokeReadbackConsecutiveFailures, timing)) {
     smokeReadbackHandedOffToMapCallback = true;
   }
   if (publishSmokeReadbackStats && targetReadback != nullptr && !targetReadback->empty()) {
