@@ -661,7 +661,9 @@ private:
 // ----- Types and constants -----
 
 uint32_t Emitter::typeVoid() {
-  if (const uint32_t id = cached("void")) return id;
+  if (const uint32_t id = cached("void")) {
+    return id;
+  }
   const uint32_t id = newId();
   Instr(globals_, kOpTypeVoid, {id});
   typeIds_["void"] = id;
@@ -676,7 +678,9 @@ uint32_t Emitter::typeScalar(ScalarKind kind) {
     case ScalarKind::U32: key = "u32"; break;
     case ScalarKind::F32: key = "f32"; break;
   }
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   switch (kind) {
     case ScalarKind::Bool: Instr(globals_, kOpTypeBool, {id}); break;
@@ -691,7 +695,9 @@ uint32_t Emitter::typeScalar(ScalarKind kind) {
 uint32_t Emitter::typeVector(ScalarKind kind, uint32_t size) {
   const uint32_t componentId = typeScalar(kind);
   const std::string key = std::format("vec|{}|{}", componentId, size);
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   Instr(globals_, kOpTypeVector, {id, componentId, size});
   typeIds_[key] = id;
@@ -705,7 +711,9 @@ uint32_t Emitter::typeBoolVector(uint32_t size) {
 uint32_t Emitter::typeMatrix2x2f() {
   const uint32_t columnId = typeVector(ScalarKind::F32, 2);
   const std::string key = "mat2x2f";
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   Instr(globals_, kOpTypeMatrix, {id, columnId, 2});
   typeIds_[key] = id;
@@ -715,7 +723,9 @@ uint32_t Emitter::typeMatrix2x2f() {
 uint32_t Emitter::typeMatrix4x4f() {
   const uint32_t columnId = typeVector(ScalarKind::F32, 4);
   const std::string key = "mat4x4f";
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   Instr(globals_, kOpTypeMatrix, {id, columnId, 4});
   typeIds_[key] = id;
@@ -725,7 +735,9 @@ uint32_t Emitter::typeMatrix4x4f() {
 uint32_t Emitter::typeImage2dF32() {
   const uint32_t sampledType = typeScalar(ScalarKind::F32);
   const std::string key = "image2df32";
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   // 2D, non-depth, non-arrayed, single-sampled, sampled (usable with a sampler), format unknown.
   Instr(globals_, kOpTypeImage, {id, sampledType, kDim2D, 0, 0, 0, 1, kImageFormatUnknown});
@@ -741,7 +753,9 @@ uint32_t Emitter::typeStorageImage2d(StorageTextureFormat format) {
     case StorageTextureFormat::Rgba32Float: imageFormat = kImageFormatRgba32f; break;
   }
   const std::string key = std::format("storageimage2d|{}", imageFormat);
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   // 2D, non-depth, non-arrayed, single-sampled, Sampled=2 (accessed without a sampler), with an
   // explicit texel format so no extended-format capability is required.
@@ -753,7 +767,9 @@ uint32_t Emitter::typeStorageImage2d(StorageTextureFormat format) {
 uint32_t Emitter::typeSampledImage() {
   const uint32_t imageId = typeImage2dF32();
   const std::string key = "sampledimage";
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   Instr(globals_, kOpTypeSampledImage, {id, imageId});
   typeIds_[key] = id;
@@ -762,7 +778,9 @@ uint32_t Emitter::typeSampledImage() {
 
 uint32_t Emitter::typeSampler() {
   const std::string key = "sampler";
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   Instr(globals_, kOpTypeSampler, {id});
   typeIds_[key] = id;
@@ -771,7 +789,9 @@ uint32_t Emitter::typeSampler() {
 
 uint32_t Emitter::typePointer(uint32_t storageClass, uint32_t pointeeId) {
   const std::string key = std::format("ptr|{}|{}", storageClass, pointeeId);
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   Instr(globals_, kOpTypePointer, {id, storageClass, pointeeId});
   typeIds_[key] = id;
@@ -783,7 +803,9 @@ uint32_t Emitter::typeFunction(uint32_t returnTypeId, const std::vector<uint32_t
   for (const uint32_t paramTypeId : paramTypeIds) {
     key += std::format("|{}", paramTypeId);
   }
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   std::vector<uint32_t> operands = {id, returnTypeId};
   operands.insert(operands.end(), paramTypeIds.begin(), paramTypeIds.end());
@@ -816,7 +838,9 @@ uint32_t Emitter::plainTypeId(const IrType& type) {
 uint32_t Emitter::plainArrayTypeId(const IrType& type) {
   const uint32_t elementId = plainTypeId(type.elementType());
   const std::string key = std::format("arr|{}|{}", elementId, type.arrayCount());
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t lengthId = constU32(type.arrayCount());
   const uint32_t id = newId();
   Instr(globals_, kOpTypeArray, {id, elementId, lengthId});
@@ -831,7 +855,9 @@ uint32_t Emitter::plainStructTypeId(const IrType& type) {
     memberIds.push_back(plainTypeId(member.type));
     key += std::format("|{}", memberIds.back());
   }
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   std::vector<uint32_t> operands = {id};
   operands.insert(operands.end(), memberIds.begin(), memberIds.end());
@@ -870,7 +896,9 @@ uint32_t Emitter::laidArrayTypeId(const IrType& type, AddressSpace space) {
   const uint32_t elementId = laidTypeId(type.elementType(), space);
   const std::string key =
       std::format("arrL|{}|{}|{}", elementId, type.arrayCount(), stride.result());
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t lengthId = constU32(type.arrayCount());
   const uint32_t id = newId();
   Instr(globals_, kOpTypeArray, {id, elementId, lengthId});
@@ -887,7 +915,9 @@ uint32_t Emitter::laidRuntimeArrayTypeId(const IrType& type, AddressSpace space)
   }
   const uint32_t elementId = laidTypeId(type.elementType(), space);
   const std::string key = std::format("rta|{}|{}", elementId, stride.result());
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   Instr(globals_, kOpTypeRuntimeArray, {id, elementId});
   Instr(decorations_, kOpDecorate, {id, kDecorationArrayStride, stride.result()});
@@ -908,7 +938,9 @@ uint32_t Emitter::laidStructTypeId(const IrType& type, AddressSpace space) {
     memberIds.push_back(laidTypeId(members[i].type, space));
     key += std::format("|{}@{}", memberIds.back(), layout.result().members[i].offsetBytes);
   }
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   std::vector<uint32_t> operands = {id};
   operands.insert(operands.end(), memberIds.begin(), memberIds.end());
@@ -945,7 +977,9 @@ uint32_t Emitter::blockStructId(const IrType& structType, AddressSpace space) {
     memberIds.push_back(laidTypeId(members[i].type, space));
     key += std::format("|{}@{}", memberIds.back(), layout.result().members[i].offsetBytes);
   }
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   std::vector<uint32_t> operands = {id};
   operands.insert(operands.end(), memberIds.begin(), memberIds.end());
@@ -958,7 +992,9 @@ uint32_t Emitter::blockStructId(const IrType& structType, AddressSpace space) {
 
 uint32_t Emitter::runtimeArrayBlockId(uint32_t runtimeArrayTypeId) {
   const std::string key = std::format("wrap|{}", runtimeArrayTypeId);
-  if (const uint32_t id = cached(key)) return id;
+  if (const uint32_t id = cached(key)) {
+    return id;
+  }
   const uint32_t id = newId();
   Instr(globals_, kOpTypeStruct, {id, runtimeArrayTypeId});
   Instr(decorations_, kOpDecorate, {id, kDecorationBlock});
@@ -970,7 +1006,9 @@ uint32_t Emitter::runtimeArrayBlockId(uint32_t runtimeArrayTypeId) {
 uint32_t Emitter::constBool(bool value) {
   const std::string key = value ? "c|true" : "c|false";
   const auto it = constantIds_.find(key);
-  if (it != constantIds_.end()) return it->second;
+  if (it != constantIds_.end()) {
+    return it->second;
+  }
   const uint32_t typeId = typeScalar(ScalarKind::Bool);
   const uint32_t id = newId();
   Instr(globals_, value ? kOpConstantTrue : kOpConstantFalse, {typeId, id});
@@ -981,7 +1019,9 @@ uint32_t Emitter::constBool(bool value) {
 uint32_t Emitter::constU32(uint32_t value) {
   const std::string key = std::format("c|u32|{}", value);
   const auto it = constantIds_.find(key);
-  if (it != constantIds_.end()) return it->second;
+  if (it != constantIds_.end()) {
+    return it->second;
+  }
   const uint32_t typeId = typeScalar(ScalarKind::U32);
   const uint32_t id = newId();
   Instr(globals_, kOpConstant, {typeId, id, value});
@@ -993,7 +1033,9 @@ uint32_t Emitter::constI32(int32_t value) {
   const uint32_t bits = static_cast<uint32_t>(value);
   const std::string key = std::format("c|i32|{}", bits);
   const auto it = constantIds_.find(key);
-  if (it != constantIds_.end()) return it->second;
+  if (it != constantIds_.end()) {
+    return it->second;
+  }
   const uint32_t typeId = typeScalar(ScalarKind::I32);
   const uint32_t id = newId();
   Instr(globals_, kOpConstant, {typeId, id, bits});
@@ -1014,7 +1056,9 @@ uint32_t Emitter::constF32(float value) {
   const uint32_t bits = std::bit_cast<uint32_t>(value);
   const std::string key = std::format("c|f32|{}", bits);
   const auto it = constantIds_.find(key);
-  if (it != constantIds_.end()) return it->second;
+  if (it != constantIds_.end()) {
+    return it->second;
+  }
   const uint32_t typeId = typeScalar(ScalarKind::F32);
   const uint32_t id = newId();
   Instr(globals_, kOpConstant, {typeId, id, bits});
@@ -1025,7 +1069,9 @@ uint32_t Emitter::constF32(float value) {
 uint32_t Emitter::constSplat(uint32_t vectorTypeId, uint32_t scalarId, uint32_t size) {
   const std::string key = std::format("cc|{}|{}|{}", vectorTypeId, scalarId, size);
   const auto it = constantIds_.find(key);
-  if (it != constantIds_.end()) return it->second;
+  if (it != constantIds_.end()) {
+    return it->second;
+  }
   const uint32_t id = newId();
   std::vector<uint32_t> operands = {vectorTypeId, id};
   for (uint32_t i = 0; i < size; ++i) {

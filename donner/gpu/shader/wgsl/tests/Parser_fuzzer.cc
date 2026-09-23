@@ -20,10 +20,14 @@ constexpr size_t kSpirvFuzzCapacity = kMaxSpirvEmitWords;
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* bytes, size_t size) {
   using namespace donner::gpu::shader::wgsl;
-  if (size > ModuleLimits::kMaxSourceBytes) return 0;
+  if (size > ModuleLimits::kMaxSourceBytes) {
+    return 0;
+  }
 
   const ParseResult parsed = Parse(std::string_view(reinterpret_cast<const char*>(bytes), size));
-  if (!parsed.hasResult()) return 0;
+  if (!parsed.hasResult()) {
+    return 0;
+  }
 
   static std::array<char, kTextFuzzCapacity> text = {};
   TextSink mslSink{text.data(), static_cast<uint32_t>(text.size())};

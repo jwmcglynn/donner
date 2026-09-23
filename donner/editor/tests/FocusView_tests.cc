@@ -395,9 +395,15 @@ bool ContainsElement(const std::vector<svg::SVGElement>& elements,
 std::vector<FocusReferenceLink> SortLinks(std::vector<FocusReferenceLink> links) {
   std::sort(links.begin(), links.end(),
             [](const FocusReferenceLink& a, const FocusReferenceLink& b) {
-              if (a.from.line != b.from.line) return a.from.line < b.from.line;
-              if (a.from.column != b.from.column) return a.from.column < b.from.column;
-              if (a.to.line != b.to.line) return a.to.line < b.to.line;
+              if (a.from.line != b.from.line) {
+                return a.from.line < b.from.line;
+              }
+              if (a.from.column != b.from.column) {
+                return a.from.column < b.from.column;
+              }
+              if (a.to.line != b.to.line) {
+                return a.to.line < b.to.line;
+              }
               return a.to.column < b.to.column;
             });
   return links;

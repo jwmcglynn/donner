@@ -89,8 +89,8 @@ struct ReferenceHighlightSummary {
   std::vector<svg::SVGElement> referencedElements;
   /// Elements that directly reference the active selection.
   std::vector<svg::SVGElement> referencingElements;
-  std::size_t traversalWork = 0;         ///< Aggregate nodes and selected entities visited.
-  bool resourceLimitExceeded = false;    ///< True when summary construction was truncated.
+  std::size_t traversalWork = 0;       ///< Aggregate nodes and selected entities visited.
+  bool resourceLimitExceeded = false;  ///< True when summary construction was truncated.
 
   /// Number of references represented by this summary.
   [[nodiscard]] std::size_t totalCount() const {

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# lint.sh - run the repo-wide banned-source-patterns check.
+# lint.sh - run repo-wide source and formatting checks.
 #
-# This is the whole banned-patterns gate. It used to be 476 per-target py_tests
+# The banned-patterns check used to be 476 per-target py_tests
 # emitted by the donner_cc_* macros, which cost 714 of the test suite's 2297
 # CPU-seconds to do work that takes about 2.5 seconds here, in one process.
 #
@@ -11,14 +11,14 @@
 # `select()`-valued sources, label-form sources, `manual`-tagged targets, and
 # files no target lists at all were never linted. This scans the trees.
 #
-# Checks enforced (see docs/coding_style.md "Language and Library Features" and
-# build_defs/check_banned_patterns.py): no `long long`, no `std::aligned_storage`,
+# Checks enforced (see docs/coding_style.md and build_defs/check_banned_patterns.py):
+# clang-format 18 including required braces, no `long long`, no `std::aligned_storage`,
 # no user-defined literal operators, no hidden Unicode whitespace or typographic
 # punctuation, and no new or worsened supported out-of-line method definition
 # above the local decision-point complexity limit.
 #
 # Usage:
-#   tools/lint.sh                 # lint donner/ and examples/
+#   tools/lint.sh                 # lint project C++ (excluding third_party/)
 #   tools/lint.sh path [path...]  # lint specific files or directories
 
 set -euo pipefail
@@ -73,6 +73,26 @@ if [[ ${#sources[@]} -eq 0 ]]; then
 fi
 
 python3 "${kChecker}" "${sources[@]}"
+
+# clang-format 18 is the repository's formatting baseline. A full-tree check keeps
+# InsertBraces enforcement independent of Bazel target reachability. Include tracked
+# C++ utilities outside donner/ and examples/ while leaving vendored code alone.
+format_sources=("${sources[@]}")
+if [[ ${lint_explicit_roots} -eq 0 ]]; then
+  format_sources=()
+  while IFS= read -r -d '' path; do
+    if [[ "${path}" != third_party/* && -f "${path}" ]]; then
+      format_sources+=("${path}")
+    fi
+  done < <(git ls-files -z -- '*.cc' '*.h' '*.cpp' '*.hpp' '*.mm')
+fi
+formatter="${DONNER_CLANG_FORMAT:-clang-format-18}"
+if ! command -v "${formatter}" >/dev/null 2>&1; then
+  echo "lint.sh: clang-format 18 is required (set DONNER_CLANG_FORMAT to its path)" >&2
+  exit 1
+fi
+"${formatter}" --dry-run --Werror --style="file:${repo_root}/.clang-format" \
+  "${format_sources[@]}"
 
 # CodeFactor evaluates complexity only on changed methods. Mirror that locally without making
 # existing repository debt block every lint run. The target branch can be overridden for stacked

@@ -40,8 +40,7 @@ public:
    *   fallback). Pass null to skip the annotation.
    * @return true if a document mutation was queued this frame.
    */
-  bool render(EditorApp* liveApp, double nowSeconds,
-              const svg::FontCatalog* fontCatalog = nullptr);
+  bool render(EditorApp* liveApp, double nowSeconds, const svg::FontCatalog* fontCatalog = nullptr);
 
 private:
   /// Re-seed the local edit buffers from the currently-selected element.

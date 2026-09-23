@@ -138,13 +138,16 @@ uint32_t ReadBigEndianU32(std::span<const uint8_t> data, size_t offset) {
 
 bool ReadWoff2TableTag(Woff2Cursor& cursor, uint8_t flags, uint32_t* tag) {
   const uint8_t knownTagIndex = flags & 0x3Fu;
-  if (knownTagIndex == 0x3F) return cursor.readU32(tag);
-  if (knownTagIndex == 10)
+  if (knownTagIndex == 0x3F) {
+    return cursor.readU32(tag);
+  }
+  if (knownTagIndex == 10) {
     *tag = kGlyfTag;
-  else if (knownTagIndex == 11)
+  } else if (knownTagIndex == 11) {
     *tag = kLocaTag;
-  else if (knownTagIndex == 13)
+  } else if (knownTagIndex == 13) {
     *tag = kCffTag;
+  }
   return true;
 }
 

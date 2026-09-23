@@ -678,7 +678,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
 
   switch (fn) {
     case BuiltinFn::Abs:
-      if (args.size() != 1) return argCountError(1);
+      if (args.size() != 1) {
+        return argCountError(1);
+      }
       if (!args[0].type().isNumeric()) {
         return ShaderError{std::format("abs requires a numeric type, got {}", TypeName(args[0])),
                            label};
@@ -687,7 +689,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
 
     case BuiltinFn::Min:
     case BuiltinFn::Max:
-      if (args.size() != 2) return argCountError(2);
+      if (args.size() != 2) {
+        return argCountError(2);
+      }
       if (!(args[0].type() == args[1].type()) || !args[0].type().isNumeric()) {
         return ShaderError{std::format("min/max require matching numeric types, got {} and {}",
                                        TypeName(args[0]), TypeName(args[1])),
@@ -696,7 +700,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
       return args[0].type();
 
     case BuiltinFn::Clamp:
-      if (args.size() != 3) return argCountError(3);
+      if (args.size() != 3) {
+        return argCountError(3);
+      }
       if (!(args[0].type() == args[1].type()) || !(args[0].type() == args[2].type()) ||
           !args[0].type().isNumeric()) {
         return ShaderError{
@@ -717,7 +723,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
     case BuiltinFn::Floor:
     case BuiltinFn::Ceil:
     case BuiltinFn::Exp:
-      if (args.size() != 1) return argCountError(1);
+      if (args.size() != 1) {
+        return argCountError(1);
+      }
       if (!args[0].type().isFloatScalarOrVector()) {
         return ShaderError{
             std::format("builtin requires f32 scalar or vector, got {}", TypeName(args[0])), label};
@@ -725,7 +733,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
       return args[0].type();
 
     case BuiltinFn::Pow:
-      if (args.size() != 2) return argCountError(2);
+      if (args.size() != 2) {
+        return argCountError(2);
+      }
       if (!(args[0].type() == args[1].type()) || !args[0].type().isFloatScalarOrVector()) {
         return ShaderError{
             std::format("pow requires two matching f32 scalars or vectors, got {} and {}",
@@ -735,7 +745,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
       return args[0].type();
 
     case BuiltinFn::Length:
-      if (args.size() != 1) return argCountError(1);
+      if (args.size() != 1) {
+        return argCountError(1);
+      }
       if (!args[0].type().isVector() || args[0].type().scalarKind() != ScalarKind::F32) {
         return ShaderError{std::format("length requires a float vector, got {}", TypeName(args[0])),
                            label};
@@ -743,7 +755,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
       return IrType::F32();
 
     case BuiltinFn::Normalize:
-      if (args.size() != 1) return argCountError(1);
+      if (args.size() != 1) {
+        return argCountError(1);
+      }
       if (!args[0].type().isVector() || args[0].type().scalarKind() != ScalarKind::F32) {
         return ShaderError{
             std::format("normalize requires a float vector, got {}", TypeName(args[0])), label};
@@ -751,7 +765,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
       return args[0].type();
 
     case BuiltinFn::Dot:
-      if (args.size() != 2) return argCountError(2);
+      if (args.size() != 2) {
+        return argCountError(2);
+      }
       if (!args[0].type().isVector() || args[0].type().scalarKind() != ScalarKind::F32 ||
           !(args[0].type() == args[1].type())) {
         return ShaderError{std::format("dot requires two matching float vectors, got {} and {}",
@@ -762,7 +778,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
 
     case BuiltinFn::Any:
     case BuiltinFn::All:
-      if (args.size() != 1) return argCountError(1);
+      if (args.size() != 1) {
+        return argCountError(1);
+      }
       // Only a bool vector: reducing a scalar bool is a no-op that hides a mistake, and reducing
       // a numeric vector would need an implicit truthiness rule none of the three backends has.
       if (!args[0].type().isVector() || args[0].type().scalarKind() != ScalarKind::Bool) {
@@ -772,7 +790,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
       return IrType::Bool();
 
     case BuiltinFn::Select:
-      if (args.size() != 3) return argCountError(3);
+      if (args.size() != 3) {
+        return argCountError(3);
+      }
       if (!(args[0].type() == args[1].type())) {
         return ShaderError{std::format("select branches must have matching types, got {} and {}",
                                        TypeName(args[0]), TypeName(args[1])),
@@ -785,7 +805,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
       return args[0].type();
 
     case BuiltinFn::TextureSample:
-      if (args.size() != 3) return argCountError(3);
+      if (args.size() != 3) {
+        return argCountError(3);
+      }
       if (args[0].type().kind() != IrType::Kind::Texture2dF32 ||
           args[1].type().kind() != IrType::Kind::Sampler || !(args[2].type() == IrType::Vec2f())) {
         return ShaderError{
@@ -797,7 +819,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
       return IrType::Vec4f();
 
     case BuiltinFn::TextureLoad:
-      if (args.size() != 3) return argCountError(3);
+      if (args.size() != 3) {
+        return argCountError(3);
+      }
       if (args[0].type().kind() != IrType::Kind::Texture2dF32 ||
           !(args[1].type() == IrType::Vec2i()) ||
           (!(args[2].type() == IrType::I32()) && !(args[2].type() == IrType::U32()))) {
@@ -810,7 +834,9 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
       return IrType::Vec4f();
 
     case BuiltinFn::TextureDimensions:
-      if (args.size() != 1) return argCountError(1);
+      if (args.size() != 1) {
+        return argCountError(1);
+      }
       if (args[0].type().kind() != IrType::Kind::Texture2dF32 &&
           args[0].type().kind() != IrType::Kind::WriteOnlyStorageTexture2d) {
         return ShaderError{

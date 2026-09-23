@@ -28,8 +28,9 @@ struct CatalogEncodedFontStore::State {
 
     bool matchesEncodedPayload(std::span<const uint8_t> payload) const {
       if (payload.size() != asset.encodedBytes || !HasCatalogWoff2Header(payload) ||
-          asset.decodedBytes > kMaximumAssetBytes)
+          asset.decodedBytes > kMaximumAssetBytes) {
         return false;
+      }
       const size_t declaredBytes = (size_t(payload[16]) << 24) | (size_t(payload[17]) << 16) |
                                    (size_t(payload[18]) << 8) | size_t(payload[19]);
       return declaredBytes == asset.decodedBytes;
@@ -70,7 +71,9 @@ public:
       state_->decodeAdmitted = false;
       wake = state_->changed();
     }
-    if (wake) wake();
+    if (wake) {
+      wake();
+    }
   }
 
 private:
@@ -88,7 +91,9 @@ CatalogEncodedFontStore::~CatalogEncodedFontStore() = default;
 FontFaceAvailability CatalogEncodedFontStore::availability(std::string_view contentId) const {
   const std::lock_guard lock(state_->mutex);
   const auto it = state_->find(contentId);
-  if (it == state_->entries.end()) return {};
+  if (it == state_->entries.end()) {
+    return {};
+  }
   return {.state = it->state,
           .format = FontFileFormat::Woff2,
           .contentId = it->asset.contentId,
@@ -101,7 +106,9 @@ FontFaceAvailability CatalogEncodedFontStore::availability(std::string_view cont
 bool CatalogEncodedFontStore::queue(std::string_view contentId) {
   const std::lock_guard lock(state_->mutex);
   const auto it = state_->find(contentId);
-  if (it == state_->entries.end() || it->state != FontAssetState::Absent) return false;
+  if (it == state_->entries.end() || it->state != FontAssetState::Absent) {
+    return false;
+  }
   it->state = FontAssetState::Queued;
   return true;
 }
@@ -109,12 +116,16 @@ bool CatalogEncodedFontStore::queue(std::string_view contentId) {
 uint64_t CatalogEncodedFontStore::beginFetch(std::string_view contentId) {
   const std::lock_guard lock(state_->mutex);
   const auto it = state_->find(contentId);
-  if (it == state_->entries.end() || it->state != FontAssetState::Queued) return 0;
+  if (it == state_->entries.end() || it->state != FontAssetState::Queued) {
+    return 0;
+  }
   const auto fetching =
       std::count_if(state_->entries.begin(), state_->entries.end(), [](const State::Entry& entry) {
         return entry.state == FontAssetState::Fetching && !entry.staged;
       });
-  if (fetching >= 2) return 0;
+  if (fetching >= 2) {
+    return 0;
+  }
   it->state = FontAssetState::Fetching;
   it->requestToken = state_->nextRequestToken++;
   return it->requestToken;
@@ -135,7 +146,9 @@ bool CatalogEncodedFontStore::publishVerified(std::string_view contentId, uint64
     it->staged = true;
     wake = state_->changed();
   }
-  if (wake) wake();
+  if (wake) {
+    wake();
+  }
   return true;
 }
 
@@ -151,9 +164,13 @@ bool CatalogEncodedFontStore::adoptReadyAssets() {
         adopted = true;
       }
     }
-    if (adopted) wake = state_->changed();
+    if (adopted) {
+      wake = state_->changed();
+    }
   }
-  if (wake) wake();
+  if (wake) {
+    wake();
+  }
   return adopted;
 }
 
@@ -162,18 +179,24 @@ bool CatalogEncodedFontStore::fail(std::string_view contentId, uint64_t requestT
   {
     const std::lock_guard lock(state_->mutex);
     const auto it = state_->find(contentId);
-    if (it == state_->entries.end() || !it->matchesActiveRequest(requestToken)) return false;
+    if (it == state_->entries.end() || !it->matchesActiveRequest(requestToken)) {
+      return false;
+    }
     it->state = FontAssetState::Failed;
     wake = state_->changed();
   }
-  if (wake) wake();
+  if (wake) {
+    wake();
+  }
   return true;
 }
 
 bool CatalogEncodedFontStore::retry(std::string_view contentId) {
   const std::lock_guard lock(state_->mutex);
   const auto it = state_->find(contentId);
-  if (it == state_->entries.end() || it->state != FontAssetState::Failed) return false;
+  if (it == state_->entries.end() || it->state != FontAssetState::Failed) {
+    return false;
+  }
   it->state = FontAssetState::Queued;
   return true;
 }
@@ -189,8 +212,9 @@ bool CatalogEncodedFontStore::evict(std::string_view contentId) {
   const std::lock_guard lock(state_->mutex);
   const auto it = state_->find(contentId);
   if (it == state_->entries.end() || it->state != FontAssetState::Ready || !it->bytes ||
-      it->bytes.use_count() != 1)
+      it->bytes.use_count() != 1) {
     return false;
+  }
   state_->retainedBytes -= it->bytes->capacity();
   it->bytes.reset();
   it->state = FontAssetState::Absent;
@@ -209,9 +233,10 @@ FontFaceAdmission CatalogEncodedFontStore::tryAcquireDecode(std::string_view con
       it->asset.decodedBytes > kMaximumAssetBytes) {
     return {.state = FontFaceLoadState::Failed};
   }
-  if (state_->decodeAdmitted)
+  if (state_->decodeAdmitted) {
     return {.state = FontFaceLoadState::WaitingForAdmission,
             .waitReason = FontFaceWaitReason::SharedDecodeSlot};
+  }
   auto reservation = std::make_unique<Reservation>(state_);
   state_->decodeAdmitted = true;
   return {.state = FontFaceLoadState::Resolving, .reservation = std::move(reservation)};

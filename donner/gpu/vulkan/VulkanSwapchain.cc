@@ -599,7 +599,9 @@ Status VulkanSwapchain::createSwapchainUnguarded() {
   const SurfaceConfiguration& configuration = *configuration_;
 
   if (swapchain_ != VK_NULL_HANDLE) {
-    if (Status retired = retireSwapchainGeneration(); retired.hasError()) return retired;
+    if (Status retired = retireSwapchainGeneration(); retired.hasError()) {
+      return retired;
+    }
   }
 
   VkSurfaceCapabilitiesKHR native = {};
@@ -669,7 +671,9 @@ Status VulkanSwapchain::retireSwapchainGeneration() {
   }
   // The semaphores and images about to be released may still be named by submitted work, and a
   // discarded frame certainly is, so nothing is destroyed while the device could be reading it.
-  if (Status presented = drainPresentFences(); presented.hasError()) return presented;
+  if (Status presented = drainPresentFences(); presented.hasError()) {
+    return presented;
+  }
   return drainPendingSubmissions();
 }
 
@@ -842,7 +846,9 @@ Result<VulkanSwapchain::AcquireAttempt> VulkanSwapchain::acquireImage() {
 Result<SurfaceStatus> VulkanSwapchain::acquire() {
   preparedForDestruction_ = false;
   Result<AcquireAttempt> acquired = acquireImage();
-  if (acquired.hasError()) return std::move(acquired).error();
+  if (acquired.hasError()) {
+    return std::move(acquired).error();
+  }
   const AcquireAttempt attempt = acquired.result();
 
   if (attempt.result == VK_ERROR_DEVICE_LOST) {
@@ -1006,7 +1012,9 @@ Status VulkanSwapchain::finishHandoverSubmission(VkResult result, const SurfaceW
 Status VulkanSwapchain::submitFrameHandover(const std::optional<TextureSyncState>& state,
                                             VkSemaphore signalSemaphore) {
   Result<PendingSubmission> recorded = recordHandoverSubmission(state);
-  if (recorded.hasError()) return std::move(recorded).error();
+  if (recorded.hasError()) {
+    return std::move(recorded).error();
+  }
   PendingSubmission submission = recorded.result();
 
   // Whatever is left of this frame's acquisition wait rides here: if no submission ever drew
@@ -1129,7 +1137,9 @@ void VulkanSwapchain::pollPendingSubmissions() {
 }
 
 Status VulkanSwapchain::drainPendingSubmissions() {
-  if (Status status = provePendingSubmissionsComplete(); status.hasError()) return status;
+  if (Status status = provePendingSubmissionsComplete(); status.hasError()) {
+    return status;
+  }
   releasePreparedSubmissions();
   return OkStatus();
 }

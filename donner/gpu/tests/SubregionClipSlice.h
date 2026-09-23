@@ -104,7 +104,9 @@ void CheckSubregionClip(DeviceType& device, const shader::CompiledShaderView& sh
   using namespace subregion_clip_slice;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "subregion clip", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
   auto input = device.createTexture({"clip input",
                                      {kWidth, kHeight},
                                      TextureFormat::RGBA32Float,

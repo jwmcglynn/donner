@@ -273,7 +273,9 @@ fn coefficient() -> f32 { return params.coefficients[vec2<i32>(25i).x]; }
 
 TEST(Parser, BoundsLeftAssociativeExpressionTreeDepth) {
   std::string source = "fn f(x: i32) -> i32 { return x";
-  for (uint16_t i = 0; i < ModuleLimits::kMaxNesting; ++i) source += " + 1i";
+  for (uint16_t i = 0; i < ModuleLimits::kMaxNesting; ++i) {
+    source += " + 1i";
+  }
   source += "; }";
   EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::NestingLimit);
 }

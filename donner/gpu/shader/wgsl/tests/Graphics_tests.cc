@@ -133,8 +133,9 @@ TEST(GraphicsCompiler, ReflectsRuntimeStridesIntoDeviceBufferRequirements) {
   EXPECT_EQ((*descriptor.bufferBindings)[1].runtimeArrayStrideBytes, 8u);
   EXPECT_EQ((*descriptor.bufferBindings)[2].runtimeArrayStrideBytes, 4u);
   EXPECT_EQ((*descriptor.bufferBindings)[3].runtimeArrayStrideBytes, 4u);
-  for (const auto& binding : *descriptor.bufferBindings)
+  for (const auto& binding : *descriptor.bufferBindings) {
     EXPECT_EQ(binding.stage, ShaderStage::Fragment);
+  }
 }
 
 TEST(GraphicsCompiler, StorageArrayOrdinaryEmissionMatchesFrozenArtifact) {

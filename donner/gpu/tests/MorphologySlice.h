@@ -26,7 +26,9 @@ void CheckMorphologyStorage(DeviceType& device, const shader::CompiledShaderView
                             Readback readbackBuffer, bool erode) {
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "morphology", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
   auto input =
       device.createTexture(TextureDescriptor{"morphology input",
                                              {4, 4},

@@ -80,18 +80,42 @@ private:
   static constexpr std::size_t kTrackedKeyCount = 12;
 
   [[nodiscard]] static int trackedKeyIndex(int key) {
-    if (key == ImGuiKey_Tab) return 0;
-    if (key == ImGuiKey_Enter) return 1;
-    if (key == ImGuiKey_KeypadEnter) return 2;
-    if (key == ImGuiKey_Backspace) return 3;
-    if (key == ImGuiKey_Delete) return 4;
-    if (key == ImGuiKey_V) return 5;
-    if (key == ImGuiKey_X) return 6;
-    if (key == ImGuiKey_Z) return 7;
-    if (key == ImGuiKey_Y) return 8;
-    if (key == ImGuiKey_D) return 9;
-    if (key == ImGuiKey_K) return 10;
-    if (key == ImGuiKey_U) return 11;
+    if (key == ImGuiKey_Tab) {
+      return 0;
+    }
+    if (key == ImGuiKey_Enter) {
+      return 1;
+    }
+    if (key == ImGuiKey_KeypadEnter) {
+      return 2;
+    }
+    if (key == ImGuiKey_Backspace) {
+      return 3;
+    }
+    if (key == ImGuiKey_Delete) {
+      return 4;
+    }
+    if (key == ImGuiKey_V) {
+      return 5;
+    }
+    if (key == ImGuiKey_X) {
+      return 6;
+    }
+    if (key == ImGuiKey_Z) {
+      return 7;
+    }
+    if (key == ImGuiKey_Y) {
+      return 8;
+    }
+    if (key == ImGuiKey_D) {
+      return 9;
+    }
+    if (key == ImGuiKey_K) {
+      return 10;
+    }
+    if (key == ImGuiKey_U) {
+      return 11;
+    }
     return -1;
   }
 

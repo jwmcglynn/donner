@@ -46,9 +46,7 @@ public:
       GLFWwindow* window, const std::optional<std::string>& suggestedPath);
 
   /// In-process recent-files list, newest first.
-  [[nodiscard]] const std::vector<std::string>& recentFiles() const {
-    return state_.recentFiles();
-  }
+  [[nodiscard]] const std::vector<std::string>& recentFiles() const { return state_.recentFiles(); }
 
 private:
   void recordChosen(const std::string& path);

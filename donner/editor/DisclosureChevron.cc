@@ -23,7 +23,9 @@ const std::optional<svg::RendererBitmap>& CachedDisclosureChevronBitmap(bool exp
   return expanded ? expandedBitmap : collapsed;
 }
 
-int DisclosureChevronTextureVariant(bool expanded) { return expanded ? 1 : 0; }
+int DisclosureChevronTextureVariant(bool expanded) {
+  return expanded ? 1 : 0;
+}
 
 void DrawDisclosureChevron(ImDrawList* drawList, ImTextureID texture, const Vector2d& uvBottomRight,
                            const ImVec2& center, float sizePx, ImU32 tint) {

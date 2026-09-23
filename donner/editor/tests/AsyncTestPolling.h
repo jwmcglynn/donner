@@ -35,8 +35,8 @@ auto PollForResult(PollFn&& poll, int maxPolls) -> decltype(poll()) {
 
 // Polls until `poll()` yields a value, or `deadline` passes.
 template <typename PollFn>
-auto PollForResult(PollFn&& poll, std::chrono::steady_clock::time_point deadline)
-    -> decltype(poll()) {
+auto PollForResult(PollFn&& poll,
+                   std::chrono::steady_clock::time_point deadline) -> decltype(poll()) {
   while (std::chrono::steady_clock::now() < deadline) {
     if (auto result = poll(); result.has_value()) {
       return result;

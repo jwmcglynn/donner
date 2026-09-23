@@ -116,7 +116,9 @@ Vector2d RenderPaneSizeForWindow(double windowW, double windowH) {
 
 std::string LoadFileOrEmpty(const std::filesystem::path& path) {
   std::ifstream file(path, std::ios::binary);
-  if (!file.is_open()) return {};
+  if (!file.is_open()) {
+    return {};
+  }
   std::ostringstream buf;
   buf << file.rdbuf();
   return buf.str();
@@ -277,7 +279,9 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
                 while (auto parent = cursor.parentElement()) {
                   if (parent->hasAttribute(xml::XMLQualifiedNameRef("filter"))) {
                     filterAncestorId = std::string(parent->id());
-                    if (filterAncestorId.empty()) filterAncestorId = "<filter-ancestor-no-id>";
+                    if (filterAncestorId.empty()) {
+                      filterAncestorId = "<filter-ancestor-no-id>";
+                    }
                     break;
                   }
                   cursor = *parent;
@@ -379,18 +383,19 @@ void DumpHistogram(const ReplayResults& r, uint64_t fromFrame, uint64_t toFrame,
     if (f.reproFrameIndex <= fromFrame || f.reproFrameIndex >= toFrame || f.workerMs < 0.0) {
       continue;
     }
-    if (f.workerMs < 5)
+    if (f.workerMs < 5) {
       buckets[0]++;
-    else if (f.workerMs < 15)
+    } else if (f.workerMs < 15) {
       buckets[1]++;
-    else if (f.workerMs < 30)
+    } else if (f.workerMs < 30) {
       buckets[2]++;
-    else if (f.workerMs < 60)
+    } else if (f.workerMs < 60) {
       buckets[3]++;
-    else if (f.workerMs < 120)
+    } else if (f.workerMs < 120) {
       buckets[4]++;
-    else
+    } else {
       buckets[5]++;
+    }
   }
   std::cerr << "[FilterDragRepro] " << label << " worker-ms histogram:";
   std::cerr << " <5=" << buckets[0];
@@ -409,7 +414,9 @@ void DumpFirstFiveFrames(const ReplayResults& r, uint64_t fromFrame, uint64_t to
     if (f.reproFrameIndex <= fromFrame || f.reproFrameIndex >= toFrame || f.workerMs < 0.0) {
       continue;
     }
-    if (printed++ >= 5) break;
+    if (printed++ >= 5) {
+      break;
+    }
     std::cerr << f.workerMs << "ms ";
   }
   std::cerr << "\n";

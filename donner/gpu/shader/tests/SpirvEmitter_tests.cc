@@ -491,9 +491,15 @@ TEST(SpirvEmitterTests, SaturateLowersToFClampZeroOne) {
   uint32_t zeroId = 0;
   uint32_t oneId = 0;
   for (const SpvInstruction& constant : WithOpcode(instructions, kOpConstant)) {
-    if (constant.operands[0] != floatTypeId) continue;
-    if (constant.operands[2] == 0x00000000) zeroId = constant.operands[1];
-    if (constant.operands[2] == 0x3F800000) oneId = constant.operands[1];
+    if (constant.operands[0] != floatTypeId) {
+      continue;
+    }
+    if (constant.operands[2] == 0x00000000) {
+      zeroId = constant.operands[1];
+    }
+    if (constant.operands[2] == 0x3F800000) {
+      oneId = constant.operands[1];
+    }
   }
   ASSERT_THAT(zeroId, testing::Not(testing::Eq(0u)));
   ASSERT_THAT(oneId, testing::Not(testing::Eq(0u)));
@@ -534,8 +540,12 @@ TEST(SpirvEmitterTests, SelectSwapsOperandOrderToConditionTrueFalse) {
   uint32_t oneId = 0;
   uint32_t twoId = 0;
   for (const SpvInstruction& constant : WithOpcode(instructions, kOpConstant)) {
-    if (constant.operands[2] == 0x3F800000) oneId = constant.operands[1];
-    if (constant.operands[2] == 0x40000000) twoId = constant.operands[1];
+    if (constant.operands[2] == 0x3F800000) {
+      oneId = constant.operands[1];
+    }
+    if (constant.operands[2] == 0x40000000) {
+      twoId = constant.operands[1];
+    }
   }
   const std::vector<SpvInstruction> trues = WithOpcode(instructions, kOpConstantTrue);
   ASSERT_THAT(trues, SizeIs(1u));

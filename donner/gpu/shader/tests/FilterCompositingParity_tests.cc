@@ -48,8 +48,9 @@ TEST(FilterBlendParity, HueAndSaturationPreserveMiddleChannel) {
     svg::RendererGeode renderer(device);
     renderer.draw(document.result());
     std::vector<uint8_t> expected(3 * 3 * 4);
-    for (size_t offset = 0; offset < expected.size(); offset += 4)
+    for (size_t offset = 0; offset < expected.size(); offset += 4) {
       std::copy(testCase.expected.begin(), testCase.expected.end(), expected.begin() + offset);
+    }
     editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(),
                                          svg::RendererBitmap{Vector2i(3, 3), expected, 12},
                                          std::string("filter_blend_middle_") + testCase.mode,

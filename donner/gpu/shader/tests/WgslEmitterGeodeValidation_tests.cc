@@ -1548,8 +1548,12 @@ void ExpectColorTransferBoundaries(bool resolve) {
     const float alpha = alphas[y / 4];
     for (uint32_t x = 0; x < kWidth; ++x) {
       float channel = (static_cast<float>(x) + (y % 4 == 0 ? 0.0f : 0.5f)) / (kWidth - 1);
-      if (y % 4 == 2) channel = std::nextafter(channel, 0.0f);
-      if (y % 4 == 3) channel = std::nextafter(channel, 2.0f);
+      if (y % 4 == 2) {
+        channel = std::nextafter(channel, 0.0f);
+      }
+      if (y % 4 == 3) {
+        channel = std::nextafter(channel, 2.0f);
+      }
       const size_t offset = (size_t{y} * kWidth + x) * 4;
       pixels->data()[offset] = std::min(channel, 1.0f) * alpha;
       pixels->data()[offset + 1] = 0.0f;
@@ -1560,7 +1564,9 @@ void ExpectColorTransferBoundaries(bool resolve) {
   auto geode = donner::geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(geode, testing::NotNull());
   const auto wgsl = [&]() -> ShaderResult<std::string> {
-    if (resolve) return std::string(programs::FilterResolveShader().wgsl);
+    if (resolve) {
+      return std::string(programs::FilterResolveShader().wgsl);
+    }
     return std::string(programs::ColorSpaceConvertShader().wgsl);
   }();
   ASSERT_THAT(wgsl, HasShaderResult());

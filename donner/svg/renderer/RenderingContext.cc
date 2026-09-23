@@ -705,11 +705,15 @@ public:
 #ifdef DONNER_TEXT_ENABLED
           std::optional<FontManager::DependencyCapture> capture;
           auto* fontManager = registry_.ctx().find<FontManager>();
-          if (fontManager) capture.emplace(*fontManager, clipPaths.fontDependencies);
+          if (fontManager) {
+            capture.emplace(*fontManager, clipPaths.fontDependencies);
+          }
 #endif
           collectClipPaths(resolved.reference.handle, clipPaths.clipPaths, guard);
 #ifdef DONNER_TEXT_ENABLED
-          if (fontManager) clipPaths.fontResourceRevision = fontManager->fontResourceRevision();
+          if (fontManager) {
+            clipPaths.fontResourceRevision = fontManager->fontResourceRevision();
+          }
 #endif
         }
       }

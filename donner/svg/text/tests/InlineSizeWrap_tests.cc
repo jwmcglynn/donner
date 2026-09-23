@@ -66,7 +66,9 @@ TextLayoutParams makeParams(double measurePx, TextAnchor anchor = TextAnchor::St
 }
 
 // Convenience accessor for the (single-run) glyphs after wrapping.
-const std::vector<TextGlyph>& glyphs(const Synth& s) { return s.runs[0].glyphs; }
+const std::vector<TextGlyph>& glyphs(const Synth& s) {
+  return s.runs[0].glyphs;
+}
 
 TEST(InlineSizeWrap, FitsOnOneLineReturnsFalse) {
   Synth s = makeSingleSpan("aaa bbb");  // width 70

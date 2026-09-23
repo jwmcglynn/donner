@@ -193,10 +193,16 @@ TEST(TextEmitter, WgslProjectionOfCommentFreeSourceKeepsEveryLine) {
   std::string expected;
   for (size_t start = 0; start < kSource.size();) {
     size_t end = kSource.find('\n', start);
-    if (end == std::string_view::npos) end = kSource.size();
+    if (end == std::string_view::npos) {
+      end = kSource.size();
+    }
     std::string_view line = kSource.substr(start, end - start);
-    while (!line.empty() && line.front() == ' ') line.remove_prefix(1);
-    if (!line.empty()) expected.append(line).push_back('\n');
+    while (!line.empty() && line.front() == ' ') {
+      line.remove_prefix(1);
+    }
+    if (!line.empty()) {
+      expected.append(line).push_back('\n');
+    }
     start = end + 1;
   }
   EXPECT_EQ(sink.view(), expected);

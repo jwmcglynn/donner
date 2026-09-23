@@ -20,9 +20,11 @@ fn caller(x:f32)->f32 { return weighted(x,2,3,4,5,6,7,8); }
 )");
   ASSERT_TRUE(parsed.hasResult()) << unsigned(parsed.diagnostic.code);
   const Expression* call = nullptr;
-  for (uint16_t i = 0; i < parsed.module.expressionCount; ++i)
-    if (parsed.module.expressions[i].kind == ExpressionKind::FunctionCall)
+  for (uint16_t i = 0; i < parsed.module.expressionCount; ++i) {
+    if (parsed.module.expressions[i].kind == ExpressionKind::FunctionCall) {
       call = &parsed.module.expressions[i];
+    }
+  }
   ASSERT_NE(call, nullptr);
   ASSERT_EQ(call->operandCount, 8);
   for (uint8_t i = 0; i < call->operandCount; ++i) {
@@ -241,7 +243,9 @@ TEST(Language, DiscardDoesNotReplaceTheAuthoredReturn) {
 
 TEST(Language, BoundsElseIfChains) {
   std::string source = "fn f(b: bool) { if(b) {}";
-  for (uint16_t i = 0; i < ModuleLimits::kMaxNesting; ++i) source += " else if(b) {}";
+  for (uint16_t i = 0; i < ModuleLimits::kMaxNesting; ++i) {
+    source += " else if(b) {}";
+  }
   source += " }";
   EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::NestingLimit);
 }

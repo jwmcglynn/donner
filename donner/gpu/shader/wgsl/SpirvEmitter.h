@@ -28,12 +28,16 @@ struct SpirvSink {
   /// Appends one word, failing closed on capacity exhaustion.
   /// @param value Word to append.
   constexpr void word(uint32_t value) {
-    if (error != SpirvEmitError::None) return;
+    if (error != SpirvEmitError::None) {
+      return;
+    }
     if (size == UINT32_MAX || (data && size >= capacity)) {
       error = SpirvEmitError::Capacity;
       return;
     }
-    if (data) data[size] = value;
+    if (data) {
+      data[size] = value;
+    }
     ++size;
   }
 };
@@ -70,8 +74,9 @@ struct Words {
   constexpr void string(std::string_view value) {
     for (size_t offset = 0; offset <= value.size(); offset += 4) {
       uint32_t packed = 0;
-      for (size_t byte = 0; byte < 4 && offset + byte < value.size(); ++byte)
+      for (size_t byte = 0; byte < 4 && offset + byte < value.size(); ++byte) {
         packed |= uint32_t(static_cast<unsigned char>(value[offset + byte])) << (byte * 8);
+      }
       word(packed);
     }
   }
@@ -113,28 +118,43 @@ private:
   }
   template <size_t N>
   static constexpr void append(SpirvSink& sink, const Words<N>& block) {
-    for (uint32_t i = 0; i < block.size; ++i) sink.word(block.data[i]);
+    for (uint32_t i = 0; i < block.size; ++i) {
+      sink.word(block.data[i]);
+    }
   }
 
 public:
   constexpr explicit Emitter(const Module& module) : module_(module) {}
 
   constexpr SpirvEmitResult emit(SpirvSink& sink) {
-    if (!module_.isValid()) return {SpirvEmitError::InvalidModule, {}};
-    for (ArenaId i = 0; i < module_.functionCount; ++i) functionIds_[i] = id();
+    if (!module_.isValid()) {
+      return {SpirvEmitError::InvalidModule, {}};
+    }
+    for (ArenaId i = 0; i < module_.functionCount; ++i) {
+      functionIds_[i] = id();
+    }
     declareBindings();
     declareInterfaces();
-    for (ArenaId i = 0; i < module_.functionCount && result_.isSuccess(); ++i) emitFunction(i);
-    if (!declarations_.valid || !annotations_.valid || !functions_.valid)
+    for (ArenaId i = 0; i < module_.functionCount && result_.isSuccess(); ++i) {
+      emitFunction(i);
+    }
+    if (!declarations_.valid || !annotations_.valid || !functions_.valid) {
       fail(SpirvEmitError::Capacity);
-    if (!result_.isSuccess()) return result_;
+    }
+    if (!result_.isSuccess()) {
+      return result_;
+    }
     writeModuleHeader(sink);
     writeEntryPoints(sink);
-    if (!result_.isSuccess()) return result_;
+    if (!result_.isSuccess()) {
+      return result_;
+    }
     append(sink, annotations_);
     append(sink, declarations_);
     append(sink, functions_);
-    if (sink.error != SpirvEmitError::None) return {sink.error, {}};
+    if (sink.error != SpirvEmitError::None) {
+      return {sink.error, {}};
+    }
     return result_;
   }
 
@@ -158,17 +178,22 @@ private:
       declarations_.instruction(59, pointer, bindingIds_[i], storage);
       annotations_.instruction(71, bindingIds_[i], 33, binding.binding);
       annotations_.instruction(71, bindingIds_[i], 34, binding.group);
-      if (binding.kind == BindingKind::StorageTexture)
+      if (binding.kind == BindingKind::StorageTexture) {
         annotations_.instruction(71, bindingIds_[i], 25);
-      if (binding.kind == BindingKind::ReadOnlyStorage)
+      }
+      if (binding.kind == BindingKind::ReadOnlyStorage) {
         annotations_.instruction(71, bindingIds_[i], 24);
+      }
     }
   }
 
   constexpr uint32_t arrayBlockType(Type type) {
     const uint32_t array = typeId(type);
-    for (uint16_t i = 0; i < arrayBlockCount_; ++i)
-      if (arrayBlocks_[i].type == array) return arrayBlocks_[i].id;
+    for (uint16_t i = 0; i < arrayBlockCount_; ++i) {
+      if (arrayBlocks_[i].type == array) {
+        return arrayBlocks_[i].id;
+      }
+    }
     if (arrayBlockCount_ == arrayBlocks_.size()) {
       fail(SpirvEmitError::Capacity);
       return 0;
@@ -190,7 +215,9 @@ private:
   }
 
   constexpr void declareInterfaceRange(uint16_t first, uint16_t count, Stage stage, bool input) {
-    if (!validIoRange(first, count)) return;
+    if (!validIoRange(first, count)) {
+      return;
+    }
     for (uint16_t i = first; i < first + count; ++i) {
       const InterfaceVariable& variable = module_.interfaceVariables[i];
       interfaceIds_[i] = id();
@@ -199,7 +226,9 @@ private:
       declarations_.instruction(59, pointer, interfaceIds_[i], storage);
       if (variable.decoration.location != UINT32_MAX) {
         annotations_.instruction(71, interfaceIds_[i], 30, variable.decoration.location);
-        if (variable.decoration.flat) annotations_.instruction(71, interfaceIds_[i], 14);
+        if (variable.decoration.flat) {
+          annotations_.instruction(71, interfaceIds_[i], 14);
+        }
       } else {
         uint32_t builtin = 0;
         switch (variable.decoration.builtin) {
@@ -217,7 +246,9 @@ private:
   constexpr void declareInterfaces() {
     for (ArenaId i = 0; i < module_.functionCount; ++i) {
       const Function& function = module_.functions[i];
-      if (function.stage == Stage::None) continue;
+      if (function.stage == Stage::None) {
+        continue;
+      }
       declareInterfaceRange(function.firstInput, function.inputCount, function.stage, true);
       declareInterfaceRange(function.firstOutput, function.outputCount, function.stage, false);
     }
@@ -235,7 +266,9 @@ private:
     sink.word(1);
     Words<4> extension;
     extension.string("GLSL.std.450");
-    for (uint32_t i = 0; i < extension.size; ++i) sink.word(extension.data[i]);
+    for (uint32_t i = 0; i < extension.size; ++i) {
+      sink.word(extension.data[i]);
+    }
     writeInstruction(sink, 14, 0, 1);
   }
 
@@ -249,37 +282,53 @@ private:
     sink.word(((3u + encoded.size + function.inputCount + function.outputCount) << 16) | 15u);
     sink.word(function.stage == Stage::Compute ? 5 : function.stage == Stage::Vertex ? 0 : 4);
     sink.word(functionIds_[i]);
-    for (uint32_t j = 0; j < encoded.size; ++j) sink.word(encoded.data[j]);
-    for (uint16_t j = 0; j < function.inputCount; ++j)
+    for (uint32_t j = 0; j < encoded.size; ++j) {
+      sink.word(encoded.data[j]);
+    }
+    for (uint16_t j = 0; j < function.inputCount; ++j) {
       sink.word(interfaceIds_[function.firstInput + j]);
-    for (uint16_t j = 0; j < function.outputCount; ++j)
+    }
+    for (uint16_t j = 0; j < function.outputCount; ++j) {
       sink.word(interfaceIds_[function.firstOutput + j]);
+    }
   }
 
   constexpr void writeEntryPoints(SpirvSink& sink) {
     for (ArenaId i = 0; i < module_.functionCount; ++i) {
       const Function& function = module_.functions[i];
-      if (function.stage == Stage::None) continue;
+      if (function.stage == Stage::None) {
+        continue;
+      }
       writeEntryPoint(sink, function, i);
     }
     for (ArenaId i = 0; i < module_.functionCount; ++i) {
       const Function& function = module_.functions[i];
-      if (function.stage == Stage::Compute)
+      if (function.stage == Stage::Compute) {
         writeInstruction(sink, 16, functionIds_[i], 17, function.workgroupSize[0],
                          function.workgroupSize[1], function.workgroupSize[2]);
-      if (function.stage == Stage::Fragment) writeInstruction(sink, 16, functionIds_[i], 7);
+      }
+      if (function.stage == Stage::Fragment) {
+        writeInstruction(sink, 16, functionIds_[i], 7);
+      }
     }
   }
 
   constexpr void fail(SpirvEmitError error, SourceSpan span = {}) {
-    if (result_.isSuccess()) result_ = {error, span};
+    if (result_.isSuccess()) {
+      result_ = {error, span};
+    }
   }
   constexpr uint32_t id() { return nextId_++; }
 
   constexpr uint32_t typeId(Type type) {
-    if (type.kind == TypeKind::Pointer) return pointerType(typeId(type.elementType()), 7);
-    for (uint32_t i = 0; i < typeCount_; ++i)
-      if (types_[i].type == type) return types_[i].id;
+    if (type.kind == TypeKind::Pointer) {
+      return pointerType(typeId(type.elementType()), 7);
+    }
+    for (uint32_t i = 0; i < typeCount_; ++i) {
+      if (types_[i].type == type) {
+        return types_[i].id;
+      }
+    }
     if (typeCount_ == types_.size()) {
       fail(SpirvEmitError::Capacity);
       return 0;
@@ -323,10 +372,11 @@ private:
       return;
     }
     const uint32_t element = typeId(type.elementType());
-    if (type.arrayCount == 0)
+    if (type.arrayCount == 0) {
       declarations_.instruction(29, value, element);
-    else
+    } else {
       declarations_.instruction(28, value, element, constant(Type{TypeKind::U32}, type.arrayCount));
+    }
     annotations_.instruction(71, value, 6, stride);
   }
 
@@ -337,14 +387,17 @@ private:
     }
     const Struct& structure = module_.structs[type.structId];
     std::array<uint32_t, ModuleLimits::kMaxStructMembers> members{};
-    for (uint16_t i = 0; i < structure.memberCount; ++i)
+    for (uint16_t i = 0; i < structure.memberCount; ++i) {
       members[i] = typeId(module_.structMembers[structure.firstMember + i].type);
+    }
     declarations_.word((uint32_t(structure.memberCount + 2) << 16) | 30u);
     declarations_.word(value);
     for (uint16_t i = 0; i < structure.memberCount; ++i) {
       declarations_.word(members[i]);
       // A structure reaching a bool has no defined buffer layout, so it carries no byte offsets.
-      if (!structure.hostShareable) continue;
+      if (!structure.hostShareable) {
+        continue;
+      }
       annotations_.instruction(72, value, i, 35,
                                module_.structMembers[structure.firstMember + i].offset);
       const Type memberType = module_.structMembers[structure.firstMember + i].type;
@@ -393,8 +446,11 @@ private:
   }
 
   constexpr uint32_t pointerType(uint32_t type, uint32_t storage) {
-    for (uint32_t i = 0; i < pointerCount_; ++i)
-      if (pointers_[i].type == type && pointers_[i].storage == storage) return pointers_[i].id;
+    for (uint32_t i = 0; i < pointerCount_; ++i) {
+      if (pointers_[i].type == type && pointers_[i].storage == storage) {
+        return pointers_[i].id;
+      }
+    }
     if (pointerCount_ == pointers_.size()) {
       fail(SpirvEmitError::Capacity);
       return 0;
@@ -414,7 +470,9 @@ private:
       declarations_.word((uint32_t(type.lanes + 3) << 16) | 44u);
       declarations_.word(typeValue);
       declarations_.word(value);
-      for (uint8_t i = 0; i < type.lanes; ++i) declarations_.word(component);
+      for (uint8_t i = 0; i < type.lanes; ++i) {
+        declarations_.word(component);
+      }
     } else if (type.kind == TypeKind::Struct || type.kind == TypeKind::Matrix ||
                type.kind == TypeKind::Array) {
       declarations_.instruction(46, typeValue, value);
@@ -426,8 +484,11 @@ private:
   }
 
   constexpr uint32_t constant(Type type, uint32_t bits) {
-    for (uint32_t i = 0; i < constantCount_; ++i)
-      if (constants_[i].type == type && constants_[i].bits == bits) return constants_[i].id;
+    for (uint32_t i = 0; i < constantCount_; ++i) {
+      if (constants_[i].type == type && constants_[i].bits == bits) {
+        return constants_[i].id;
+      }
+    }
     if (constantCount_ == constants_.size()) {
       fail(SpirvEmitError::Capacity);
       return 0;
@@ -454,22 +515,29 @@ private:
     terminated_ = false;
   }
   constexpr void branch(uint32_t value) {
-    if (!terminated_) functions_.instruction(249, value);
+    if (!terminated_) {
+      functions_.instruction(249, value);
+    }
     terminated_ = true;
   }
   constexpr uint32_t splat(Type type, uint32_t value) {
-    if (type.lanes == 1) return value;
+    if (type.lanes == 1) {
+      return value;
+    }
     const uint32_t result = id();
     functions_.word((uint32_t(type.lanes + 3) << 16) | 80u);
     functions_.word(typeId(type));
     functions_.word(result);
-    for (uint8_t i = 0; i < type.lanes; ++i) functions_.word(value);
+    for (uint8_t i = 0; i < type.lanes; ++i) {
+      functions_.word(value);
+    }
     return result;
   }
   constexpr uint32_t select(Type type, Type conditionType, uint32_t condition, uint32_t yes,
                             uint32_t no) {
-    if (type.lanes > 1 && conditionType.lanes == 1)
+    if (type.lanes > 1 && conditionType.lanes == 1) {
       condition = splat(Type{TypeKind::Bool, type.lanes}, condition);
+    }
     return operation(169, type, condition, yes, no);
   }
 
@@ -481,20 +549,24 @@ private:
       fail(SpirvEmitError::Capacity);
       return 0;
     }
-    for (uint16_t i = 0; i < record.count; ++i)
+    for (uint16_t i = 0; i < record.count; ++i) {
       record.parameters[i] = typeId(module_.symbols[function.firstParameter + i].type);
+    }
     for (uint16_t i = 0; i < functionTypeCount_; ++i) {
       const auto& other = functionTypes_[i];
       if (other.result == record.result && other.count == record.count &&
-          other.parameters == record.parameters)
+          other.parameters == record.parameters) {
         return other.id;
+      }
     }
     record.id = id();
     functionTypes_[functionTypeCount_++] = record;
     declarations_.word((uint32_t(record.count + 3) << 16) | 33u);
     declarations_.word(record.id);
     declarations_.word(record.result);
-    for (uint16_t i = 0; i < record.count; ++i) declarations_.word(record.parameters[i]);
+    for (uint16_t i = 0; i < record.count; ++i) {
+      declarations_.word(record.parameters[i]);
+    }
     return record.id;
   }
 
@@ -504,13 +576,18 @@ private:
   }
 
   constexpr uint32_t arrayTemporary(ArenaId expression) const {
-    for (uint16_t i = 0; i < arrayTemporaryCount_; ++i)
-      if (arrayTemporaries_[i].expression == expression) return arrayTemporaries_[i].pointer;
+    for (uint16_t i = 0; i < arrayTemporaryCount_; ++i) {
+      if (arrayTemporaries_[i].expression == expression) {
+        return arrayTemporaries_[i].pointer;
+      }
+    }
     return 0;
   }
 
   constexpr void declareArrayTemporaries(ArenaId expression, uint16_t depth = 0) {
-    if (expression == kInvalidArenaId || !result_.isSuccess()) return;
+    if (expression == kInvalidArenaId || !result_.isSuccess()) {
+      return;
+    }
     if (expression >= module_.expressionCount || depth >= 128) {
       fail(SpirvEmitError::InvalidNode);
       return;
@@ -520,20 +597,23 @@ private:
       fail(SpirvEmitError::InvalidNode, node.span);
       return;
     }
-    for (uint8_t i = 0; i < node.operandCount; ++i)
+    for (uint8_t i = 0; i < node.operandCount; ++i) {
       declareArrayTemporaries(node.operands[i], depth + 1);
+    }
     declareIndexedTemporary(node);
   }
 
   constexpr void declareIndexedTemporary(const Expression& node) {
     if (node.kind != ExpressionKind::Index || node.operandCount != 2 ||
-        node.operands[0] >= module_.expressionCount)
+        node.operands[0] >= module_.expressionCount) {
       return;
+    }
     const ArenaId base = node.operands[0];
     const Type type = module_.expressions[base].type;
     if (type.kind != TypeKind::Array || type.arrayCount == 0 || addressable(base) ||
-        arrayTemporary(base))
+        arrayTemporary(base)) {
       return;
+    }
     if (arrayTemporaryCount_ == arrayTemporaries_.size()) {
       fail(SpirvEmitError::Capacity, node.span);
       return;
@@ -563,9 +643,15 @@ private:
         declareArrayTemporaries(node.secondExpression);
         declareArrayTemporaries(node.thirdExpression);
       }
-      if (node.init != kInvalidArenaId) declareVariables(node.init);
-      if (node.firstBody != kInvalidArenaId) declareVariables(node.firstBody);
-      if (node.firstElseBody != kInvalidArenaId) declareVariables(node.firstElseBody);
+      if (node.init != kInvalidArenaId) {
+        declareVariables(node.init);
+      }
+      if (node.firstBody != kInvalidArenaId) {
+        declareVariables(node.firstBody);
+      }
+      if (node.firstElseBody != kInvalidArenaId) {
+        declareVariables(node.firstElseBody);
+      }
     }
   }
 
@@ -573,7 +659,9 @@ private:
     const Function& function = module_.functions[index];
     currentFunction_ = index;
     arrayTemporaryCount_ = 0;
-    for (uint16_t i = 0; i < module_.symbolCount; ++i) symbolValues_[i] = 0;
+    for (uint16_t i = 0; i < module_.symbolCount; ++i) {
+      symbolValues_[i] = 0;
+    }
     const uint32_t signature = functionType(function);
     functions_.instruction(54, typeId(function.stage == Stage::None ? function.returnType : Type{}),
                            functionIds_[index], 0, signature);
@@ -586,13 +674,16 @@ private:
     }
     label(id());
     declareVariables(function.firstStatement);
-    if (function.stage != Stage::None) loadEntryParameters(function);
+    if (function.stage != Stage::None) {
+      loadEntryParameters(function);
+    }
     emitBlock(function.firstStatement);
     if (!terminated_) {
-      if (function.returnType.kind != TypeKind::Void)
+      if (function.returnType.kind != TypeKind::Void) {
         fail(SpirvEmitError::InvalidNode);
-      else
+      } else {
         functions_.instruction(253);
+      }
     }
     functions_.instruction(56);
   }
@@ -605,8 +696,9 @@ private:
       uint16_t count = 0;
       for (uint16_t i = function.firstInput; i < function.firstInput + function.inputCount; ++i) {
         const InterfaceVariable& variable = module_.interfaceVariables[i];
-        if (variable.symbol == symbol)
+        if (variable.symbol == symbol) {
           values[count++] = operation(61, variable.type, interfaceIds_[i]);
+        }
       }
       if (type.kind != TypeKind::Struct) {
         if (count != 1) {
@@ -619,7 +711,9 @@ private:
         functions_.word((uint32_t(count + 3) << 16) | 80u);
         functions_.word(typeId(type));
         functions_.word(result);
-        for (uint16_t i = 0; i < count; ++i) functions_.word(values[i]);
+        for (uint16_t i = 0; i < count; ++i) {
+          functions_.word(values[i]);
+        }
         symbolValues_[symbol] = result;
       }
     }
@@ -651,18 +745,26 @@ private:
 
   constexpr bool addressable(ArenaId expression) const {
     for (uint16_t depth = 0; depth < ModuleLimits::kMaxNesting; ++depth) {
-      if (expression >= module_.expressionCount) return false;
+      if (expression >= module_.expressionCount) {
+        return false;
+      }
       const Expression& node = module_.expressions[expression];
-      if (node.kind == ExpressionKind::Deref) return true;
+      if (node.kind == ExpressionKind::Deref) {
+        return true;
+      }
       if (node.kind == ExpressionKind::Symbol && node.payload < module_.symbolCount) {
         const auto& symbol = module_.symbols[node.payload];
         return localStorage(symbol) || symbol.kind == SymbolKind::Binding;
       }
       if (node.kind == ExpressionKind::Index && node.operands[0] < module_.expressionCount) {
         const Type base = module_.expressions[node.operands[0]].type;
-        if (base.kind == TypeKind::Array && base.arrayCount == 0) return false;
+        if (base.kind == TypeKind::Array && base.arrayCount == 0) {
+          return false;
+        }
       }
-      if (node.kind != ExpressionKind::Member && node.kind != ExpressionKind::Index) return false;
+      if (node.kind != ExpressionKind::Member && node.kind != ExpressionKind::Index) {
+        return false;
+      }
       expression = node.operands[0];
     }
     return false;
@@ -685,8 +787,12 @@ private:
         return symbolValues_[node.payload];
       }
     }
-    if (node.kind == ExpressionKind::Deref) return pointerValue(node.operands[0], storage);
-    if (node.kind == ExpressionKind::Index) return indexedPointer(node, storage);
+    if (node.kind == ExpressionKind::Deref) {
+      return pointerValue(node.operands[0], storage);
+    }
+    if (node.kind == ExpressionKind::Index) {
+      return indexedPointer(node, storage);
+    }
     if (node.kind == ExpressionKind::Member && node.operandCount == 1) {
       const auto& base = module_.expressions[node.operands[0]];
       if (base.type.structId >= module_.structCount) {
@@ -722,7 +828,9 @@ private:
     const Expression& node = module_.expressions[expression];
     if (node.kind == ExpressionKind::AddressOf && node.operandCount == 1) {
       const uint32_t pointer = lvalue(node.operands[0], storage);
-      if (storage != 7) fail(SpirvEmitError::InvalidNode, node.span);
+      if (storage != 7) {
+        fail(SpirvEmitError::InvalidNode, node.span);
+      }
       return pointer;
     }
     if (node.kind == ExpressionKind::Symbol && node.payload < module_.symbolCount &&
@@ -811,9 +919,9 @@ private:
 
 constexpr uint32_t Emitter::arrayPointer(ArenaId expression, uint32_t& storage, SourceSpan span) {
   uint32_t base = 0;
-  if (addressable(expression))
+  if (addressable(expression)) {
     base = lvalue(expression, storage);
-  else {
+  } else {
     base = arrayTemporary(expression);
     if (!base) {
       fail(SpirvEmitError::InvalidNode, span);
@@ -930,15 +1038,18 @@ constexpr uint32_t Emitter::emitAccess(ArenaId index, const Expression& node) {
     }
     return operation(81, node.type, emitExpression(node.operands[0]), node.payload);
   }
-  if (base.kind == TypeKind::Array && base.arrayCount == 0) return emitRuntimeArrayIndex(node);
+  if (base.kind == TypeKind::Array && base.arrayCount == 0) {
+    return emitRuntimeArrayIndex(node);
+  }
   uint32_t storage = 0;
   return operation(61, node.type, lvalue(index, storage));
 }
 
 constexpr uint32_t Emitter::emitPointerOperator(const Expression& node) {
   uint32_t storage = 0;
-  if (node.kind == ExpressionKind::Deref)
+  if (node.kind == ExpressionKind::Deref) {
     return operation(61, node.type, pointerValue(node.operands[0], storage));
+  }
   const uint32_t pointer = lvalue(node.operands[0], storage);
   if (storage != 7) {
     fail(SpirvEmitError::InvalidNode, node.span);
@@ -949,7 +1060,9 @@ constexpr uint32_t Emitter::emitPointerOperator(const Expression& node) {
 
 constexpr uint32_t Emitter::emitUnary(const Expression& node) {
   const uint32_t operand = emitExpression(node.operands[0]);
-  if (static_cast<UnaryOp>(node.payload) == UnaryOp::Not) return operation(168, node.type, operand);
+  if (static_cast<UnaryOp>(node.payload) == UnaryOp::Not) {
+    return operation(168, node.type, operand);
+  }
   return operation(node.type.kind == TypeKind::F32 ? 127 : 126, node.type, operand);
 }
 
@@ -988,39 +1101,54 @@ constexpr uint32_t Emitter::emitSymbol(const Expression& node) {
     }
     return operation(61, node.type, bindingIds_[symbol.bindingId]);
   }
-  if (localStorage(symbol)) return operation(61, node.type, symbolValues_[node.payload]);
-  if (!symbolValues_[node.payload]) fail(SpirvEmitError::InvalidNode, node.span);
+  if (localStorage(symbol)) {
+    return operation(61, node.type, symbolValues_[node.payload]);
+  }
+  if (!symbolValues_[node.payload]) {
+    fail(SpirvEmitError::InvalidNode, node.span);
+  }
   return symbolValues_[node.payload];
 }
 
 constexpr uint32_t Emitter::emitSwizzle(const Expression& node) {
   const uint32_t base = emitExpression(node.operands[0]);
-  if (node.type.lanes == 1) return operation(81, node.type, base, node.payload & 3u);
+  if (node.type.lanes == 1) {
+    return operation(81, node.type, base, node.payload & 3u);
+  }
   const uint32_t result = id();
   functions_.word((uint32_t(node.type.lanes + 5) << 16) | 79u);
   functions_.word(typeId(node.type));
   functions_.word(result);
   functions_.word(base);
   functions_.word(base);
-  for (uint8_t lane = 0; lane < node.type.lanes; ++lane)
+  for (uint8_t lane = 0; lane < node.type.lanes; ++lane) {
     functions_.word((node.payload >> (2 * lane)) & 3u);
+  }
   return result;
 }
 
 constexpr uint32_t Emitter::emitConstruct(const Expression& node) {
   std::array<uint32_t, Expression::kMaxOperands> values{};
-  for (uint8_t i = 0; i < node.operandCount; ++i) values[i] = emitExpression(node.operands[i]);
-  if (node.type.kind == TypeKind::Matrix && node.operandCount == 1) return values[0];
+  for (uint8_t i = 0; i < node.operandCount; ++i) {
+    values[i] = emitExpression(node.operands[i]);
+  }
+  if (node.type.kind == TypeKind::Matrix && node.operandCount == 1) {
+    return values[0];
+  }
   const bool numericConversion = node.type.isNumeric() && node.operandCount == 1;
-  if (numericConversion && module_.expressions[node.operands[0]].type.lanes == 1)
+  if (numericConversion && module_.expressions[node.operands[0]].type.lanes == 1) {
     return splat(node.type, values[0]);
-  if (numericConversion)
+  }
+  if (numericConversion) {
     return convert(module_.expressions[node.operands[0]].type, node.type, values[0]);
+  }
   const uint32_t result = id();
   functions_.word((uint32_t(node.operandCount + 3) << 16) | 80u);
   functions_.word(typeId(node.type));
   functions_.word(result);
-  for (uint8_t i = 0; i < node.operandCount; ++i) functions_.word(values[i]);
+  for (uint8_t i = 0; i < node.operandCount; ++i) {
+    functions_.word(values[i]);
+  }
   return result;
 }
 
@@ -1030,18 +1158,24 @@ constexpr uint32_t Emitter::emitCall(const Expression& node) {
     return 0;
   }
   std::array<uint32_t, Expression::kMaxOperands> arguments{};
-  for (uint8_t i = 0; i < node.operandCount; ++i) arguments[i] = emitExpression(node.operands[i]);
+  for (uint8_t i = 0; i < node.operandCount; ++i) {
+    arguments[i] = emitExpression(node.operands[i]);
+  }
   const uint32_t result = id();
   functions_.word((uint32_t(node.operandCount + 4) << 16) | 57u);
   functions_.word(typeId(node.type));
   functions_.word(result);
   functions_.word(functionIds_[node.payload]);
-  for (uint8_t i = 0; i < node.operandCount; ++i) functions_.word(arguments[i]);
+  for (uint8_t i = 0; i < node.operandCount; ++i) {
+    functions_.word(arguments[i]);
+  }
   return result;
 }
 
 constexpr uint32_t Emitter::convert(Type from, Type to, uint32_t operand) {
-  if (from == to) return operand;
+  if (from == to) {
+    return operand;
+  }
   if (from.lanes != to.lanes || !from.isNumeric() || !to.isNumeric()) {
     fail(SpirvEmitError::UnsupportedType);
     return 0;
@@ -1055,8 +1189,9 @@ constexpr uint32_t Emitter::convert(Type from, Type to, uint32_t operand) {
     operand = extended(43, from, operand, low, high);
     return operation(to.kind == TypeKind::I32 ? 110 : 109, to, operand);
   }
-  if (to.kind == TypeKind::F32)
+  if (to.kind == TypeKind::F32) {
     return operation(from.kind == TypeKind::I32 ? 111 : 112, to, operand);
+  }
   return operation(124, to, operand);
 }
 
@@ -1083,7 +1218,9 @@ constexpr uint32_t BinaryOpcode(BinaryOp op, TypeKind kind) {
       {BinaryOp::Ne, 183, 171, 171, 165},
   }};
   for (const Encoding& encoding : encodings) {
-    if (encoding.op != op) continue;
+    if (encoding.op != op) {
+      continue;
+    }
     switch (kind) {
       case TypeKind::F32: return encoding.floating;
       case TypeKind::I32: return encoding.signedInteger;
@@ -1135,13 +1272,18 @@ constexpr uint32_t Emitter::safeDivisor(Type type, uint32_t lhs, uint32_t rhs) {
 constexpr uint32_t Emitter::emitBinary(const Expression& node) {
   const BinaryOp op = static_cast<BinaryOp>(node.payload);
   uint32_t lhs = emitExpression(node.operands[0]);
-  if (op == BinaryOp::And || op == BinaryOp::Or) return emitShortCircuit(node, lhs);
+  if (op == BinaryOp::And || op == BinaryOp::Or) {
+    return emitShortCircuit(node, lhs);
+  }
   uint32_t rhs = emitExpression(node.operands[1]);
-  if (op == BinaryOp::BitAnd) return operation(199, node.type, lhs, rhs);
+  if (op == BinaryOp::BitAnd) {
+    return operation(199, node.type, lhs, rhs);
+  }
   const Type leftType = module_.expressions[node.operands[0]].type;
   const Type rightType = module_.expressions[node.operands[1]].type;
-  if (leftType.kind == TypeKind::Matrix || rightType.kind == TypeKind::Matrix)
+  if (leftType.kind == TypeKind::Matrix || rightType.kind == TypeKind::Matrix) {
     return emitMatrixProduct(node, leftType, rightType, lhs, rhs);
+  }
   return emitNumericBinary(node, leftType, rightType, lhs, rhs);
 }
 
@@ -1151,10 +1293,12 @@ constexpr uint32_t Emitter::emitMatrixProduct(const Expression& node, Type leftT
     fail(SpirvEmitError::InvalidNode);
     return 0;
   }
-  if (leftType.kind == TypeKind::Matrix && rightType.kind == TypeKind::Matrix)
+  if (leftType.kind == TypeKind::Matrix && rightType.kind == TypeKind::Matrix) {
     return operation(146, node.type, lhs, rhs);
-  if (leftType.kind == TypeKind::Matrix)
+  }
+  if (leftType.kind == TypeKind::Matrix) {
     return operation(rightType.lanes == 1 ? 143 : 145, node.type, lhs, rhs);
+  }
   return leftType.lanes == 1 ? operation(143, node.type, rhs, lhs)
                              : operation(144, node.type, lhs, rhs);
 }
@@ -1165,10 +1309,15 @@ constexpr uint32_t Emitter::emitNumericBinary(const Expression& node, Type leftT
   const TypeKind kind = leftType.kind;
   Type operandType = leftType;
   operandType.lanes = leftType.lanes > rightType.lanes ? leftType.lanes : rightType.lanes;
-  if (leftType.lanes == 1) lhs = splat(operandType, lhs);
-  if (rightType.lanes == 1) rhs = splat(operandType, rhs);
-  if ((op == BinaryOp::Div || op == BinaryOp::Mod) && kind != TypeKind::F32)
+  if (leftType.lanes == 1) {
+    lhs = splat(operandType, lhs);
+  }
+  if (rightType.lanes == 1) {
+    rhs = splat(operandType, rhs);
+  }
+  if ((op == BinaryOp::Div || op == BinaryOp::Mod) && kind != TypeKind::F32) {
     rhs = safeDivisor(operandType, lhs, rhs);
+  }
   const uint32_t opcode = BinaryOpcode(op, kind);
   if (!opcode) {
     fail(SpirvEmitError::InvalidNode, node.span);
@@ -1188,7 +1337,9 @@ constexpr uint32_t Emitter::UnaryBuiltinOpcode(Builtin builtin) {
       {Builtin::Floor, 8},      {Builtin::Sign, 6},   {Builtin::Sin, 13},  {Builtin::Cos, 14},
   };
   for (const Encoding& encoding : kEncodings) {
-    if (encoding.builtin == builtin) return encoding.opcode;
+    if (encoding.builtin == builtin) {
+      return encoding.opcode;
+    }
   }
   return 0;
 }
@@ -1202,23 +1353,28 @@ constexpr uint32_t Emitter::emitSampling(const Expression& node,
   }
   const uint32_t sampled = id();
   functions_.instruction(86, sampledImageType_, sampled, args[0], args[1]);
-  if (node.payload == uint32_t(Builtin::TextureSampleLevel))
+  if (node.payload == uint32_t(Builtin::TextureSampleLevel)) {
     return operation(88, node.type, sampled, args[2], 2u, args[3]);
+  }
   return operation(87, node.type, sampled, args[2]);
 }
 
 constexpr uint32_t Emitter::emitMix(const Expression& node, std::array<uint32_t, 4> args) {
-  if (module_.expressions[node.operands[2]].type.lanes == 1 && node.type.lanes > 1)
+  if (module_.expressions[node.operands[2]].type.lanes == 1 && node.type.lanes > 1) {
     args[2] = splat(node.type, args[2]);
+  }
   return extended(46, node.type, args[0], args[1], args[2]);
 }
 
 constexpr uint32_t Emitter::emitBuiltin(const Expression& node) {
   std::array<uint32_t, 4> args{};
-  for (uint8_t i = 0; i < node.operandCount; ++i) args[i] = emitExpression(node.operands[i]);
+  for (uint8_t i = 0; i < node.operandCount; ++i) {
+    args[i] = emitExpression(node.operands[i]);
+  }
   const Builtin builtin = static_cast<Builtin>(node.payload);
-  if (const uint32_t opcode = UnaryBuiltinOpcode(builtin))
+  if (const uint32_t opcode = UnaryBuiltinOpcode(builtin)) {
     return extended(opcode, node.type, args[0]);
+  }
   switch (builtin) {
     case Builtin::Pow: return extended(26, node.type, args[0], args[1]);
     case Builtin::TextureSample:
@@ -1257,8 +1413,9 @@ constexpr uint32_t Emitter::emitCoreBuiltin(const Expression& node,
 }
 
 constexpr uint32_t Emitter::textureDimensions(const Expression& node, uint32_t image) {
-  if (module_.expressions[node.operands[0]].type.kind == TypeKind::StorageTexture2d)
+  if (module_.expressions[node.operands[0]].type.kind == TypeKind::StorageTexture2d) {
     return operation(104, node.type, image);
+  }
   return operation(103, node.type, image, constant(Type{TypeKind::I32}, 0));
 }
 
@@ -1323,10 +1480,11 @@ constexpr void Emitter::emitDeclaration(const Statement& node) {
   const Symbol& symbol = module_.symbols[node.symbolId];
   const uint32_t value = node.expression == kInvalidArenaId ? constant(symbol.type, 0)
                                                             : emitExpression(node.expression);
-  if (localStorage(symbol))
+  if (localStorage(symbol)) {
     functions_.instruction(62, symbolValues_[node.symbolId], value);
-  else
+  } else {
     symbolValues_[node.symbolId] = value;
+  }
 }
 
 constexpr void Emitter::emitAssignment(const Statement& node) {
@@ -1366,7 +1524,9 @@ constexpr void Emitter::emitSwitchSelectors(
     SourceSpan span) {
   for (uint16_t i = 0; i < count; ++i) {
     const ArenaId value = module_.statements[clauses[i]].expression;
-    if (value == kInvalidArenaId) continue;
+    if (value == kInvalidArenaId) {
+      continue;
+    }
     if (value >= module_.expressionCount ||
         module_.expressions[value].kind != ExpressionKind::Literal) {
       fail(SpirvEmitError::InvalidNode, span);
@@ -1393,10 +1553,11 @@ constexpr void Emitter::emitSwitch(const Statement& node) {
     }
     clauses[count] = current;
     labels[count] = id();
-    if (module_.statements[current].expression == kInvalidArenaId)
+    if (module_.statements[current].expression == kInvalidArenaId) {
       defaultLabel = labels[count];
-    else
+    } else {
       ++selectorCount;
+    }
     ++count;
   }
   functions_.instruction(247, merge, 0);
@@ -1490,10 +1651,11 @@ constexpr void Emitter::emitLoop(const Statement& node) {
 
 constexpr void Emitter::emitLoopExit(const Statement& node) {
   const uint32_t target = node.kind == StatementKind::Break ? breakTarget_ : continueTarget_;
-  if (target == 0)
+  if (target == 0) {
     fail(SpirvEmitError::InvalidNode, node.span);
-  else
+  } else {
     branch(target);
+  }
 }
 
 constexpr void Emitter::emitControlStatement(const Statement& node) {

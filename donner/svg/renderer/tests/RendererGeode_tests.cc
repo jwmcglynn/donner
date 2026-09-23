@@ -481,7 +481,9 @@ TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsOrdinaryFrame) {
   size_t acceptedChunks = 0;
   device->filterEngine().setChunkSubmittedHookForTesting([&](size_t chunk) {
     acceptedChunks = chunk;
-    if (chunk == 1) device->markDeviceLost("injected ordinary filter chunk loss");
+    if (chunk == 1) {
+      device->markDeviceLost("injected ordinary filter chunk loss");
+    }
   });
   const uint64_t submitsBeforeBoundary = device->counters()->submits;
 
@@ -519,7 +521,9 @@ TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsTransformedFrame) {
   size_t acceptedChunks = 0;
   device->filterEngine().setChunkSubmittedHookForTesting([&](size_t chunk) {
     acceptedChunks = chunk;
-    if (chunk == 1) device->markDeviceLost("injected transformed filter chunk loss");
+    if (chunk == 1) {
+      device->markDeviceLost("injected transformed filter chunk loss");
+    }
   });
   const uint64_t submitsBeforeBoundary = device->counters()->submits;
 
@@ -623,7 +627,9 @@ TEST_F(RendererGeodeTest, AFramePastTheSubmissionBoundSplitsAndStillRenders) {
 TEST_F(RendererGeodeTest, AFrameSplitTakesTheCrossSubmitCompletionWait) {
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(device, testing::NotNull());
-  if (!device->isVulkan()) GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
+  if (!device->isVulkan()) {
+    GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
+  }
   device->filterEngine().setMaximumTileExtentForTesting(16);
   RendererGeode renderer(device);
   beginFrame(renderer);

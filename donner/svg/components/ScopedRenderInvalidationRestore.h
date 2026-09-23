@@ -15,7 +15,9 @@ namespace donner::svg::components {
 class ScopedRenderInvalidationRestore {
 public:
   explicit ScopedRenderInvalidationRestore(Registry& registry) : registry_(registry) {
-    if (const auto* state = registry_.ctx().find<RenderTreeState>()) state_ = *state;
+    if (const auto* state = registry_.ctx().find<RenderTreeState>()) {
+      state_ = *state;
+    }
     for (const Entity entity : registry_.view<DirtyFlagsComponent>()) {
       dirty_.emplace_back(entity, registry_.get<DirtyFlagsComponent>(entity).flags);
     }
@@ -29,7 +31,9 @@ public:
       }
     }
     registry_.ctx().erase<RenderTreeState>();
-    if (state_) registry_.ctx().emplace<RenderTreeState>(*state_);
+    if (state_) {
+      registry_.ctx().emplace<RenderTreeState>(*state_);
+    }
   }
 
   ScopedRenderInvalidationRestore(const ScopedRenderInvalidationRestore&) = delete;

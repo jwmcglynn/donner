@@ -150,7 +150,9 @@ std::shared_ptr<gpu::DeviceLostState> ConsumeDeviceLostCallbackState(void* userd
 }
 
 void ReleaseDeviceLostCallbackToken(void*& userdata, bool callbackCannotRun) {
-  if (userdata == nullptr) return;
+  if (userdata == nullptr) {
+    return;
+  }
 
   auto* token = static_cast<DeviceLostCallbackToken*>(userdata);
   if (callbackCannotRun) {
@@ -447,7 +449,9 @@ namespace {
 
 void ReleaseSelectedHandles(GeodeWgpuRoots& handles) {
   ReleaseWgpuHandle(handles.queue);
-  if (handles.device) handles.device.destroy();
+  if (handles.device) {
+    handles.device.destroy();
+  }
   ReleaseWgpuHandle(handles.device);
   ReleaseWgpuHandle(handles.adapter);
   if (handles.instance) {

@@ -69,10 +69,9 @@ enum class EditorCursor : std::uint8_t {
 /// Every editor cursor, in a stable order. Single source of truth for the
 /// cursor-set completeness test.
 inline constexpr std::array<EditorCursor, 10> kEditorCursors = {
-    EditorCursor::Select,     EditorCursor::Pen,       EditorCursor::PenAdd,
-    EditorCursor::PenRemove,  EditorCursor::PenClose,  EditorCursor::Rotate,
-    EditorCursor::Scale,      EditorCursor::PathModify, EditorCursor::PanOpen,
-    EditorCursor::PanClosed,
+    EditorCursor::Select,   EditorCursor::Pen,       EditorCursor::PenAdd, EditorCursor::PenRemove,
+    EditorCursor::PenClose, EditorCursor::Rotate,    EditorCursor::Scale,  EditorCursor::PathModify,
+    EditorCursor::PanOpen,  EditorCursor::PanClosed,
 };
 
 /// Pointer hotspot for a cursor, in 32x32 cursor-image pixels.

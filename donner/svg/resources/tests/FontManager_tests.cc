@@ -55,7 +55,9 @@ std::vector<uint8_t> readFile(const std::string& path) {
 
 std::vector<uint8_t> WithCompressedFlavor(std::vector<uint8_t> data, uint32_t flavor) {
   EXPECT_GE(data.size(), 8u);
-  if (data.size() < 8) return {};
+  if (data.size() < 8) {
+    return {};
+  }
   data[4] = static_cast<uint8_t>(flavor >> 24);
   data[5] = static_cast<uint8_t>(flavor >> 16);
   data[6] = static_cast<uint8_t>(flavor >> 8);
@@ -161,11 +163,17 @@ size_t RetainedCharge(std::span<const uint8_t> data) {
 
 size_t SetFamilyInitial(std::vector<uint8_t>& data, size_t record, size_t strings,
                         uint16_t initial) {
-  if (record + 12 > data.size()) return 0;
+  if (record + 12 > data.size()) {
+    return 0;
+  }
   const uint16_t nameId = fonts::ReadBe16(data.data() + record + 6);
-  if (fonts::ReadBe16(data.data() + record) != 3 || (nameId != 1 && nameId != 16)) return 0;
+  if (fonts::ReadBe16(data.data() + record) != 3 || (nameId != 1 && nameId != 16)) {
+    return 0;
+  }
   const size_t start = strings + fonts::ReadBe16(data.data() + record + 10);
-  if (fonts::ReadBe16(data.data() + record + 8) < 2 || start + 2 > data.size()) return 0;
+  if (fonts::ReadBe16(data.data() + record + 8) < 2 || start + 2 > data.size()) {
+    return 0;
+  }
   data[start] = static_cast<uint8_t>(initial >> 8);
   data[start + 1] = static_cast<uint8_t>(initial);
   return 1;
@@ -175,10 +183,14 @@ std::vector<uint8_t> WithFamilyInitial(std::span<const uint8_t> source, uint16_t
   std::vector<uint8_t> data(source.begin(), source.end());
   const auto sfnt = fonts::SfntFont::Validate(data);
   EXPECT_THAT(sfnt.has_value(), testing::IsTrue());
-  if (!sfnt) return {};
+  if (!sfnt) {
+    return {};
+  }
   const auto table = sfnt->findTable(data, "name");
   EXPECT_THAT(table.has_value(), testing::IsTrue());
-  if (!table || table->size() < 6) return {};
+  if (!table || table->size() < 6) {
+    return {};
+  }
   const size_t offset = table->data() - data.data();
   const size_t strings = offset + fonts::ReadBe16(table->data() + 4);
   size_t changed = 0;

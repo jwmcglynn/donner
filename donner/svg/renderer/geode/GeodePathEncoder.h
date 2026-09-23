@@ -135,9 +135,13 @@ struct EncodedPath {
   [[nodiscard]] std::size_t retainedBytes() const {
     std::size_t total = 0;
     const auto add = [&](std::size_t capacity, std::size_t itemSize) {
-      if (capacity > std::numeric_limits<std::size_t>::max() / itemSize) return false;
+      if (capacity > std::numeric_limits<std::size_t>::max() / itemSize) {
+        return false;
+      }
       const std::size_t bytes = capacity * itemSize;
-      if (bytes > std::numeric_limits<std::size_t>::max() - total) return false;
+      if (bytes > std::numeric_limits<std::size_t>::max() - total) {
+        return false;
+      }
       total += bytes;
       return true;
     };

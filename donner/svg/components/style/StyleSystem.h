@@ -127,7 +127,9 @@ public:
 
   void release(Entity entity) {
     const auto it = reservations_.find(entity);
-    if (it == reservations_.end()) return;
+    if (it == reservations_.end()) {
+      return;
+    }
     const std::size_t bytes = it->second;
     complexPropertyBytes_ -= bytes;
     reservations_.erase(it);

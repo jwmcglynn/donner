@@ -190,6 +190,10 @@ The column limit is set at **100 characters**.
 ## Formatting
 
 The `.clang-format` file in the repository root is the source of truth for formatting.
+Use braces around every `if`, `else`, `for`, `while`, and `do` body, including one-line bodies.
+`InsertBraces: true` in `.clang-format` and `readability-braces-around-statements` in
+`.clang-tidy` enforce the rule. Run `tools/lint.sh` locally; CI checks the complete project-owned
+C++ source tree with clang-format 18.
 
 ## Language and Library Features
 

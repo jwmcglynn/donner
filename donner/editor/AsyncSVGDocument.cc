@@ -160,7 +160,9 @@ bool AsyncSVGDocument::flushFrame() {
 }
 
 bool AsyncSVGDocument::refreshFontResources() {
-  if (!document_ || !document_->refreshFontResources()) return false;
+  if (!document_ || !document_->refreshFontResources()) {
+    return false;
+  }
   ++fontResourceRevision_;
   frameVersion_.fetch_add(1, std::memory_order_release);
   return true;

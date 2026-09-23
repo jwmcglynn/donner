@@ -136,7 +136,9 @@ public:
    */
   std::optional<FakeElement> previousSibling() const {
     auto parent = parentElement();
-    if (!parent) return std::nullopt;
+    if (!parent) {
+      return std::nullopt;
+    }
 
     // Find where this element is in the parent, and return the previous if non-zero.
     auto it = std::find(parent->data_->children.begin(), parent->data_->children.end(), *this);
@@ -155,7 +157,9 @@ public:
    */
   std::optional<FakeElement> nextSibling() const {
     auto parent = parentElement();
-    if (!parent) return std::nullopt;
+    if (!parent) {
+      return std::nullopt;
+    }
 
     // Find where this element is in the parent, and return the next if we're not the last.
     auto it = std::find(parent->data_->children.begin(), parent->data_->children.end(), *this);

@@ -68,7 +68,9 @@ TEST(CatalogEncodedFontStoreTest, RejectsUnknownStaleDuplicateAndOversizedPublic
 TEST(CatalogEncodedFontStoreTest, AtMostTwoTransportRequestsAreActive) {
   CatalogEncodedFontStore store;
   const auto assets = CatalogFontAssets();
-  for (size_t i = 0; i < 3; ++i) EXPECT_EQ(store.queue(assets[i].contentId), true);
+  for (size_t i = 0; i < 3; ++i) {
+    EXPECT_EQ(store.queue(assets[i].contentId), true);
+  }
   const auto first = store.beginFetch(assets[0].contentId);
   EXPECT_NE(first, 0u);
   EXPECT_NE(store.beginFetch(assets[1].contentId), 0u);
@@ -163,7 +165,9 @@ public:
                                       const FontFaceRequest& request) const override {
     ++loads;
     auto bytes = native_.loadFamilyData(family, request);
-    if (corrupt) bytes[8] = 0xff;  // Invalid declared input length, before Brotli allocation.
+    if (corrupt) {
+      bytes[8] = 0xff;  // Invalid declared input length, before Brotli allocation.
+    }
     return bytes;
   }
   bool corrupt = true;

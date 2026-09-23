@@ -2123,10 +2123,11 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
   std::uint64_t segment1GenBefore = 0;
   for (const auto& tile : tilesBefore) {
     if (tile.layerEntity == entt::null) {
-      if (tile.paintOrderIndex == 0)
+      if (tile.paintOrderIndex == 0) {
         segment0GenBefore = tile.generation;
-      else
+      } else {
         segment1GenBefore = tile.generation;
+      }
     }
   }
 
@@ -2140,10 +2141,11 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
   std::uint64_t segment1GenAfter = 0;
   for (const auto& tile : tilesAfter) {
     if (tile.layerEntity == entt::null) {
-      if (tile.paintOrderIndex == 0)
+      if (tile.paintOrderIndex == 0) {
         segment0GenAfter = tile.generation;
-      else
+      } else {
         segment1GenAfter = tile.generation;
+      }
     }
   }
   EXPECT_EQ(segment0GenBefore, segment0GenAfter)
@@ -2633,7 +2635,9 @@ TEST_F(CompositorGoldenTest, DragGroupWithRadialGradientChild_NoArtifact) {
         worst = std::max(worst, std::abs(static_cast<int>(composited.pixels[off + c]) -
                                          static_cast<int>(reference.pixels[off + c])));
       }
-      if (worst > 5) ++mismatchesOver5;
+      if (worst > 5) {
+        ++mismatchesOver5;
+      }
       if (worst > maxDiff) {
         maxDiff = worst;
         worstX = x;
@@ -2706,7 +2710,9 @@ TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseNoClip) {
         worst = std::max(worst, std::abs(static_cast<int>(on.pixels[o + c]) -
                                          static_cast<int>(off.pixels[o + c])));
       }
-      if (worst > 5) ++diff;
+      if (worst > 5) {
+        ++diff;
+      }
       if (worst > maxDiff) {
         maxDiff = worst;
         worstX = x;
@@ -2771,7 +2777,9 @@ TEST_F(CompositorGoldenTest, TightBoundsGradientWithClipPathSublayer) {
         worst = std::max(worst, std::abs(static_cast<int>(on.pixels[o + c]) -
                                          static_cast<int>(off.pixels[o + c])));
       }
-      if (worst > 5) ++diff;
+      if (worst > 5) {
+        ++diff;
+      }
       if (worst > maxDiff) {
         maxDiff = worst;
         worstX = x;
@@ -2853,7 +2861,9 @@ TEST_F(CompositorGoldenTest, TightBoundsWithRotatingGradientNoDrift) {
         worst = std::max(worst, std::abs(static_cast<int>(tightOn.pixels[off + c]) -
                                          static_cast<int>(tightOff.pixels[off + c])));
       }
-      if (worst > 5) ++diff;
+      if (worst > 5) {
+        ++diff;
+      }
       if (worst > maxDiff) {
         maxDiff = worst;
         worstX = x;
@@ -2931,7 +2941,9 @@ TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseWithRotatingGradient) {
         worst = std::max(worst, std::abs(static_cast<int>(on.pixels[o + c]) -
                                          static_cast<int>(off.pixels[o + c])));
       }
-      if (worst > 5) ++diff;
+      if (worst > 5) {
+        ++diff;
+      }
       if (worst > maxDiff) {
         maxDiff = worst;
         worstX = x;
@@ -3005,8 +3017,12 @@ TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
       worst = std::max(worst, std::abs(static_cast<int>(tightOn.pixels[p + c]) -
                                        static_cast<int>(tightOff.pixels[p + c])));
     }
-    if (worst > 0) ++onVsOffDiff;
-    if (worst > onVsOffMax) onVsOffMax = worst;
+    if (worst > 0) {
+      ++onVsOffDiff;
+    }
+    if (worst > onVsOffMax) {
+      onVsOffMax = worst;
+    }
   }
   std::cerr << "[repro] tight-on vs tight-off diff=" << onVsOffDiff << " maxDiff=" << onVsOffMax
             << "\n";
@@ -3019,8 +3035,12 @@ TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
       worst = std::max(worst, std::abs(static_cast<int>(tightOff.pixels[p + c]) -
                                        static_cast<int>(reference.pixels[p + c])));
     }
-    if (worst > 5) ++offVsRefDiff;
-    if (worst > offVsRefMax) offVsRefMax = worst;
+    if (worst > 5) {
+      ++offVsRefDiff;
+    }
+    if (worst > offVsRefMax) {
+      offVsRefMax = worst;
+    }
   }
   std::cerr << "[repro] tight-off vs reference diff>5=" << offVsRefDiff
             << " maxDiff=" << offVsRefMax << "\n";
@@ -3040,15 +3060,21 @@ TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
         worst = std::max(worst, std::abs(static_cast<int>(composited.pixels[off + c]) -
                                          static_cast<int>(reference.pixels[off + c])));
       }
-      if (worst > 5) ++diffOver5;
+      if (worst > 5) {
+        ++diffOver5;
+      }
       if (worst > maxDiff) {
         maxDiff = worst;
         worstX = x;
         worstY = y;
       }
       if (x >= 467 && x < 527 && y >= 92 && y < 152) {
-        if (worst > 5) ++cls8DiffOver5;
-        if (worst > cls8MaxDiff) cls8MaxDiff = worst;
+        if (worst > 5) {
+          ++cls8DiffOver5;
+        }
+        if (worst > cls8MaxDiff) {
+          cls8MaxDiff = worst;
+        }
       }
     }
   }
@@ -3160,7 +3186,9 @@ TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
         worst = std::max(worst, std::abs(static_cast<int>(composited.pixels[off + c]) -
                                          static_cast<int>(reference.pixels[off + c])));
       }
-      if (worst > 5) ++diffOver5;
+      if (worst > 5) {
+        ++diffOver5;
+      }
       if (worst > maxDiff) {
         maxDiff = worst;
         worstX = x;
@@ -3290,7 +3318,9 @@ TEST_F(CompositorGoldenTest, DragGroupWithClipPathSiblingAndGradient) {
         worst = std::max(worst, std::abs(static_cast<int>(composited.pixels[off + c]) -
                                          static_cast<int>(reference.pixels[off + c])));
       }
-      if (worst > 5) ++mismatchesOver5;
+      if (worst > 5) {
+        ++mismatchesOver5;
+      }
       if (worst > maxDiff) {
         maxDiff = worst;
         worstX = x;

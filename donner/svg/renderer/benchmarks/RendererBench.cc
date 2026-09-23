@@ -533,21 +533,20 @@ int main(int argc, char* argv[]) {
     std::printf("  %-10s count=%d polls=%d timedWaitAny=%s\n", "Readback:", readbackStats.count,
                 readbackStats.pollIterations, readbackStats.usedTimedWaitAny ? "yes" : "no");
     const donner::geode::GeodeCounters& counters = renderer.lastFrameTimings().counters;
-    std::printf(
-        "  %-10s drawCalls=%" PRIu64 " pipelineSwitches=%" PRIu64 " pathEncodes=%" PRIu64
-        " bufferCreates=%" PRIu64 " bindgroupCreates=%" PRIu64 " textureCreates=%" PRIu64
-        " submits=%" PRIu64 " bufferWrites=%" PRIu64 " bufferWriteBytes=%" PRIu64
-        " textureWriteBytes=%" PRIu64 "\n",
-        "Counters:", static_cast<std::uint64_t>(counters.drawCalls),
-        static_cast<std::uint64_t>(counters.pipelineSwitches),
-        static_cast<std::uint64_t>(counters.pathEncodes),
-        static_cast<std::uint64_t>(counters.bufferCreates),
-        static_cast<std::uint64_t>(counters.bindgroupCreates),
-        static_cast<std::uint64_t>(counters.textureCreates),
-        static_cast<std::uint64_t>(counters.submits),
-        static_cast<std::uint64_t>(counters.bufferWrites),
-        static_cast<std::uint64_t>(counters.bufferWriteBytes),
-        static_cast<std::uint64_t>(counters.textureWriteBytes));
+    std::printf("  %-10s drawCalls=%" PRIu64 " pipelineSwitches=%" PRIu64 " pathEncodes=%" PRIu64
+                " bufferCreates=%" PRIu64 " bindgroupCreates=%" PRIu64 " textureCreates=%" PRIu64
+                " submits=%" PRIu64 " bufferWrites=%" PRIu64 " bufferWriteBytes=%" PRIu64
+                " textureWriteBytes=%" PRIu64 "\n",
+                "Counters:", static_cast<std::uint64_t>(counters.drawCalls),
+                static_cast<std::uint64_t>(counters.pipelineSwitches),
+                static_cast<std::uint64_t>(counters.pathEncodes),
+                static_cast<std::uint64_t>(counters.bufferCreates),
+                static_cast<std::uint64_t>(counters.bindgroupCreates),
+                static_cast<std::uint64_t>(counters.textureCreates),
+                static_cast<std::uint64_t>(counters.submits),
+                static_cast<std::uint64_t>(counters.bufferWrites),
+                static_cast<std::uint64_t>(counters.bufferWriteBytes),
+                static_cast<std::uint64_t>(counters.textureWriteBytes));
     std::printf("\n");
 
     if (ps.draw.median > 0.0) {

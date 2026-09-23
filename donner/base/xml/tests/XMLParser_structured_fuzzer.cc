@@ -41,7 +41,9 @@ std::string ConsumeName(FuzzedDataProvider& provider, bool withNamespacePrefix) 
   }
   // Strip illegal chars quickly.
   for (char& c : name) {
-    if (static_cast<unsigned char>(c) > 0x7F || c == ':' || c == '-' || c == '.') c = 'a';
+    if (static_cast<unsigned char>(c) > 0x7F || c == ':' || c == '-' || c == '.') {
+      c = 'a';
+    }
   }
   if (withNamespacePrefix) {
     return "ns" + std::to_string(provider.ConsumeIntegral<uint8_t>()) + ":" + name;
@@ -128,9 +130,15 @@ std::string BuildXmlString(FuzzedDataProvider& provider) {
   // 2. Optional XML declaration
   if (provider.ConsumeBool()) {
     xml.append("<?xml");
-    if (provider.ConsumeBool()) xml.append(" version=\"1.0\"");
-    if (provider.ConsumeBool()) xml.append(" encoding=\"UTF-8\"");
-    if (provider.ConsumeBool()) xml.append(" standalone=\"yes\"");
+    if (provider.ConsumeBool()) {
+      xml.append(" version=\"1.0\"");
+    }
+    if (provider.ConsumeBool()) {
+      xml.append(" encoding=\"UTF-8\"");
+    }
+    if (provider.ConsumeBool()) {
+      xml.append(" standalone=\"yes\"");
+    }
     xml.append("?>");
   }
 
@@ -161,7 +169,9 @@ std::string BuildXmlString(FuzzedDataProvider& provider) {
 
   // Random attributes on root
   const int numRootAttrs = provider.ConsumeIntegralInRange<int>(0, 8);
-  for (int i = 0; i < numRootAttrs; ++i) EmitAttribute(provider, xml);
+  for (int i = 0; i < numRootAttrs; ++i) {
+    EmitAttribute(provider, xml);
+  }
 
   const bool selfClosingRoot = provider.ConsumeBool();
   if (selfClosingRoot) {
@@ -180,7 +190,9 @@ std::string BuildXmlString(FuzzedDataProvider& provider) {
         const std::string tag = ConsumeName(provider, provider.ConsumeBool());
         xml += tag;
         const int numAttrs = provider.ConsumeIntegralInRange<int>(0, 4);
-        for (int j = 0; j < numAttrs; ++j) EmitAttribute(provider, xml);
+        for (int j = 0; j < numAttrs; ++j) {
+          EmitAttribute(provider, xml);
+        }
         xml.push_back('>');
 
         // Optionally reference an entity inside
@@ -475,24 +487,25 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     std::cout << "\"";
     for (char c : xml) {
       unsigned char uc = static_cast<unsigned char>(c);
-      if (c == '\n')
+      if (c == '\n') {
         std::cout << "\\n";
-      else if (c == '\r')
+      } else if (c == '\r') {
         std::cout << "\\r";
-      else if (c == '\t')
+      } else if (c == '\t') {
         std::cout << "\\t";
-      else if (c == '\b')
+      } else if (c == '\b') {
         std::cout << "\\b";
-      else if (c == '\f')
+      } else if (c == '\f') {
         std::cout << "\\f";
-      else if (c == '\\')
+      } else if (c == '\\') {
         std::cout << "\\\\";
-      else if (c == '\"')
+      } else if (c == '\"') {
         std::cout << "\\\"";
-      else if (!std::isprint(uc))
+      } else if (!std::isprint(uc)) {
         std::cout << "\\x" << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(uc);
-      else
+      } else {
         std::cout << c;
+      }
     }
     std::cout << "\"\n";
     std::cout << "---------------\n";

@@ -37,10 +37,13 @@ consteval bool ValidateSlugFillResources() {
   for (const auto& b : buffers) {
     const auto* r = Shader.resource(b.name);
     if (!r || r->type != b.type || r->minSizeBytes != b.size || r->alignmentBytes != b.alignment ||
-        r->runtimeArrayStrideBytes != b.stride)
+        r->runtimeArrayStrideBytes != b.stride) {
       return false;
-    if (r->runtimeArrayLanes != b.lanes || (b.lanes != 0 && r->runtimeArrayScalarType != b.scalar))
+    }
+    if (r->runtimeArrayLanes != b.lanes ||
+        (b.lanes != 0 && r->runtimeArrayScalarType != b.scalar)) {
       return false;
+    }
   }
   return true;
 }
@@ -52,7 +55,9 @@ consteval bool ValidateSlugFillTextures() {
       {"clipMaskTexture", BindingType::SampledTexture2dUnfilterableFloat}};
   for (const auto& e : entries) {
     const auto* r = Shader.resource(e.first);
-    if (!r || r->type != e.second) return false;
+    if (!r || r->type != e.second) {
+      return false;
+    }
   }
   return true;
 }
@@ -208,14 +213,20 @@ consteval bool ValidateSlugFillArtifact() {
       {"instances", "_padTail", offsetof(SlugFillInstance, _padTail),
        sizeof(SlugFillInstance::_padTail), ShaderScalarType::F32, 4, 0, 0, 0, 0},
   };
-  for (const auto& f : fields)
+  for (const auto& f : fields) {
     if (!Shader.matchesMember(f.resource, f.name, f.offset, f.size, f.scalar, f.lanes, f.count,
-                              f.stride, f.columns, f.matrixStride))
+                              f.stride, f.columns, f.matrixStride)) {
       return false;
-  if (Shader.entryPoints.size() != 4 || Shader.resources.size() != 11) return false;
-  for (size_t i = 0; i < 4; ++i)
-    if (Shader.entryPoints[i].stage != (i < 2 ? ShaderStage::Vertex : ShaderStage::Fragment))
+    }
+  }
+  if (Shader.entryPoints.size() != 4 || Shader.resources.size() != 11) {
+    return false;
+  }
+  for (size_t i = 0; i < 4; ++i) {
+    if (Shader.entryPoints[i].stage != (i < 2 ? ShaderStage::Vertex : ShaderStage::Fragment)) {
       return false;
+    }
+  }
   return ValidateSlugFillResources<Shader>() && ValidateSlugFillTextures<Shader>();
 }
 }  // namespace donner::gpu::shader::programs

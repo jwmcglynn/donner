@@ -131,7 +131,9 @@ TEST(ReproDecodeClicks, MapClicksToDocumentElements) {
   int clickIdx = 0;
   for (const auto& frame : file->frames) {
     for (const auto& ev : frame.events) {
-      if (ev.kind != ReproEvent::Kind::MouseDown) continue;
+      if (ev.kind != ReproEvent::Kind::MouseDown) {
+        continue;
+      }
       const Vector2d screen(frame.mouseX, frame.mouseY);
       const Vector2d docPoint = viewport.screenToDocument(screen);
 

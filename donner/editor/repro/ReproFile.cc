@@ -122,14 +122,30 @@ const char* EventKindTag(ReproEvent::Kind kind) {
 }
 
 std::optional<ReproEvent::Kind> ParseEventKind(std::string_view tag) {
-  if (tag == "mdown") return ReproEvent::Kind::MouseDown;
-  if (tag == "mup") return ReproEvent::Kind::MouseUp;
-  if (tag == "kdown") return ReproEvent::Kind::KeyDown;
-  if (tag == "kup") return ReproEvent::Kind::KeyUp;
-  if (tag == "chr") return ReproEvent::Kind::Char;
-  if (tag == "wheel") return ReproEvent::Kind::Wheel;
-  if (tag == "resize") return ReproEvent::Kind::Resize;
-  if (tag == "focus") return ReproEvent::Kind::Focus;
+  if (tag == "mdown") {
+    return ReproEvent::Kind::MouseDown;
+  }
+  if (tag == "mup") {
+    return ReproEvent::Kind::MouseUp;
+  }
+  if (tag == "kdown") {
+    return ReproEvent::Kind::KeyDown;
+  }
+  if (tag == "kup") {
+    return ReproEvent::Kind::KeyUp;
+  }
+  if (tag == "chr") {
+    return ReproEvent::Kind::Char;
+  }
+  if (tag == "wheel") {
+    return ReproEvent::Kind::Wheel;
+  }
+  if (tag == "resize") {
+    return ReproEvent::Kind::Resize;
+  }
+  if (tag == "focus") {
+    return ReproEvent::Kind::Focus;
+  }
   return std::nullopt;
 }
 
@@ -143,9 +159,15 @@ const char* ActionKindTag(ReproAction::Kind kind) {
 }
 
 std::optional<ReproAction::Kind> ParseActionKind(std::string_view tag) {
-  if (tag == "active_tool") return ReproAction::Kind::SetActiveTool;
-  if (tag == "style") return ReproAction::Kind::SetStyleProperty;
-  if (tag == "commit_pen_path") return ReproAction::Kind::CommitPenPath;
+  if (tag == "active_tool") {
+    return ReproAction::Kind::SetActiveTool;
+  }
+  if (tag == "style") {
+    return ReproAction::Kind::SetStyleProperty;
+  }
+  if (tag == "commit_pen_path") {
+    return ReproAction::Kind::CommitPenPath;
+  }
   return std::nullopt;
 }
 
@@ -160,10 +182,18 @@ const char* ProofKindTag(ReproExpectationProofKind kind) {
 }
 
 std::optional<ReproExpectationProofKind> ParseProofKind(std::string_view tag) {
-  if (tag == "presented-pixels") return ReproExpectationProofKind::PresentedPixels;
-  if (tag == "active-drag-alignment") return ReproExpectationProofKind::ActiveDragAlignment;
-  if (tag == "selection") return ReproExpectationProofKind::Selection;
-  if (tag == "worker-liveness") return ReproExpectationProofKind::WorkerLiveness;
+  if (tag == "presented-pixels") {
+    return ReproExpectationProofKind::PresentedPixels;
+  }
+  if (tag == "active-drag-alignment") {
+    return ReproExpectationProofKind::ActiveDragAlignment;
+  }
+  if (tag == "selection") {
+    return ReproExpectationProofKind::Selection;
+  }
+  if (tag == "worker-liveness") {
+    return ReproExpectationProofKind::WorkerLiveness;
+  }
   return std::nullopt;
 }
 
@@ -171,7 +201,9 @@ void WriteHit(std::ostream& os, const ReproHit& hit) {
   os << "\"hit\":{";
   bool first = true;
   const auto writeFieldSeparator = [&]() {
-    if (!first) os << ',';
+    if (!first) {
+      os << ',';
+    }
     first = false;
   };
   if (hit.empty) {
@@ -234,8 +266,7 @@ void WriteAction(std::ostream& os, const ReproAction& action) {
 }
 
 void WriteExpectation(std::ostream& os, const ReproExpectation& expect) {
-  os << "\"expect\":{"
-     << "\"proof_kind\":";
+  os << "\"expect\":{" << "\"proof_kind\":";
   WriteQuotedJsonString(os, ProofKindTag(expect.proofKind));
   os << ",\"left_mouse_down_ordinal\":" << expect.leftMouseDownOrdinal
      << ",\"frame_offset_after_left_mouse_down\":" << expect.frameOffsetAfterLeftMouseDown
@@ -324,7 +355,9 @@ void WriteFrameLine(std::ostream& os, const ReproFrame& frame) {
   if (!frame.actions.empty()) {
     os << ",\"a\":[";
     for (std::size_t i = 0; i < frame.actions.size(); ++i) {
-      if (i > 0) os << ',';
+      if (i > 0) {
+        os << ',';
+      }
       WriteAction(os, frame.actions[i]);
     }
     os << ']';
@@ -332,7 +365,9 @@ void WriteFrameLine(std::ostream& os, const ReproFrame& frame) {
   if (!frame.events.empty()) {
     os << ",\"e\":[";
     for (std::size_t i = 0; i < frame.events.size(); ++i) {
-      if (i > 0) os << ',';
+      if (i > 0) {
+        os << ',';
+      }
       WriteEvent(os, frame.events[i]);
     }
     os << ']';
@@ -379,7 +414,9 @@ std::string_view FindKey(std::string_view object, std::string_view key, ReproPar
       if (depth == targetDepth && !escaped &&
           object.substr(stringStart, stringEnd - stringStart) == key &&
           valueStart < object.size() && object[valueStart] == ':') {
-        if (!budget.chargeScan(valueStart + 1)) return {};
+        if (!budget.chargeScan(valueStart + 1)) {
+          return {};
+        }
         return object.substr(valueStart + 1);
       }
       i = stringEnd + 1;
@@ -404,9 +441,13 @@ std::string_view FindKey(std::string_view object, std::string_view key, ReproPar
 std::optional<double> ReadNumber(std::string_view& cursor, ReproParseBudget& budget) {
   // Skip leading whitespace.
   std::size_t i = 0;
-  while (i < cursor.size() && (cursor[i] == ' ' || cursor[i] == '\t')) ++i;
+  while (i < cursor.size() && (cursor[i] == ' ' || cursor[i] == '\t')) {
+    ++i;
+  }
   const std::size_t start = i;
-  if (i < cursor.size() && (cursor[i] == '-' || cursor[i] == '+')) ++i;
+  if (i < cursor.size() && (cursor[i] == '-' || cursor[i] == '+')) {
+    ++i;
+  }
   while (i < cursor.size() &&
          ((cursor[i] >= '0' && cursor[i] <= '9') || cursor[i] == '.' || cursor[i] == 'e' ||
           cursor[i] == 'E' || cursor[i] == '+' || cursor[i] == '-')) {
@@ -417,8 +458,12 @@ std::optional<double> ReadNumber(std::string_view& cursor, ReproParseBudget& bud
       return std::nullopt;
     }
   }
-  if (i == start) return std::nullopt;
-  if (!budget.chargeScan(i)) return std::nullopt;
+  if (i == start) {
+    return std::nullopt;
+  }
+  if (!budget.chargeScan(i)) {
+    return std::nullopt;
+  }
   const std::string token(cursor.substr(start, i - start));
   char* endPtr = nullptr;
   errno = 0;
@@ -470,15 +515,25 @@ std::optional<float> ReadFloat(std::string_view& cursor, ReproParseBudget& budge
 std::optional<std::string> ReadString(std::string_view& cursor, size_t maximumBytes,
                                       ReproParseBudget& budget) {
   const auto hexValue = [](char c) -> int {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return 10 + c - 'a';
-    if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+    if (c >= '0' && c <= '9') {
+      return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+      return 10 + c - 'a';
+    }
+    if (c >= 'A' && c <= 'F') {
+      return 10 + c - 'A';
+    }
     return -1;
   };
   const auto appendUtf8 = [](std::string& out, std::uint32_t codepoint, size_t maximumSize) {
     size_t encodedBytes = 1;
-    if (codepoint > 0x7Fu) encodedBytes = codepoint <= 0x7FFu ? 2 : codepoint <= 0xFFFFu ? 3 : 4;
-    if (encodedBytes > maximumSize - out.size()) return false;
+    if (codepoint > 0x7Fu) {
+      encodedBytes = codepoint <= 0x7FFu ? 2 : codepoint <= 0xFFFFu ? 3 : 4;
+    }
+    if (encodedBytes > maximumSize - out.size()) {
+      return false;
+    }
     if (codepoint <= 0x7Fu) {
       out += static_cast<char>(codepoint);
     } else if (codepoint <= 0x7FFu) {
@@ -498,8 +553,12 @@ std::optional<std::string> ReadString(std::string_view& cursor, size_t maximumBy
   };
   maximumBytes = std::min(maximumBytes, budget.remainingStringBytes());
   std::size_t i = 0;
-  while (i < cursor.size() && (cursor[i] == ' ' || cursor[i] == '\t')) ++i;
-  if (i >= cursor.size() || cursor[i] != '"') return std::nullopt;
+  while (i < cursor.size() && (cursor[i] == ' ' || cursor[i] == '\t')) {
+    ++i;
+  }
+  if (i >= cursor.size() || cursor[i] != '"') {
+    return std::nullopt;
+  }
   ++i;
   std::string out;
   bool containsNonAscii = false;
@@ -515,7 +574,9 @@ std::optional<std::string> ReadString(std::string_view& cursor, size_t maximumBy
         budget.reject();
         return std::nullopt;
       }
-      if (!budget.retainString(out.size())) return std::nullopt;
+      if (!budget.retainString(out.size())) {
+        return std::nullopt;
+      }
       cursor.remove_prefix(i + 1);
       return out;
     }
@@ -548,11 +609,15 @@ std::optional<std::string> ReadString(std::string_view& cursor, size_t maximumBy
           break;
         }
         case 'u': {
-          if (i + 5 >= cursor.size()) return std::nullopt;
+          if (i + 5 >= cursor.size()) {
+            return std::nullopt;
+          }
           std::uint32_t codepoint = 0;
           for (std::size_t j = 0; j < 4; ++j) {
             const int value = hexValue(cursor[i + 2 + j]);
-            if (value < 0) return std::nullopt;
+            if (value < 0) {
+              return std::nullopt;
+            }
             codepoint = (codepoint << 4) | static_cast<std::uint32_t>(value);
           }
           size_t encodedInputBytes = 6;
@@ -564,7 +629,9 @@ std::optional<std::string> ReadString(std::string_view& cursor, size_t maximumBy
             std::uint32_t lowSurrogate = 0;
             for (std::size_t j = 0; j < 4; ++j) {
               const int value = hexValue(cursor[i + 8 + j]);
-              if (value < 0) return std::nullopt;
+              if (value < 0) {
+                return std::nullopt;
+              }
               lowSurrogate = (lowSurrogate << 4) | static_cast<std::uint32_t>(value);
             }
             if (lowSurrogate < 0xDC00u || lowSurrogate > 0xDFFFu) {
@@ -622,21 +689,27 @@ bool ExtractBalancedObject(std::string_view& cursor, std::string_view& body,
     if (cursor[i] == '"') {
       ++i;
       while (i < cursor.size() && cursor[i] != '"') {
-        if (cursor[i] == '\\' && i + 1 < cursor.size())
+        if (cursor[i] == '\\' && i + 1 < cursor.size()) {
           i += 2;
-        else
+        } else {
           ++i;
+        }
       }
-      if (i < cursor.size()) ++i;
+      if (i < cursor.size()) {
+        ++i;
+      }
       continue;
     }
-    if (cursor[i] == '{')
+    if (cursor[i] == '{') {
       ++depth;
-    else if (cursor[i] == '}')
+    } else if (cursor[i] == '}') {
       --depth;
+    }
     ++i;
   }
-  if (!budget.chargeScan(i) || depth != 0) return false;
+  if (!budget.chargeScan(i) || depth != 0) {
+    return false;
+  }
   body = cursor.substr(0, i - 1);
   cursor.remove_prefix(i);
   return true;
@@ -648,27 +721,37 @@ std::optional<ReproHit> ParseHitObject(std::string_view body, ReproParseBudget& 
   auto emptyRest = FindKey(body, "empty", budget);
   if (!emptyRest.empty()) {
     auto value = ReadInteger<int>(emptyRest, budget);
-    if (!value || (*value != 0 && *value != 1)) return std::nullopt;
+    if (!value || (*value != 0 && *value != 1)) {
+      return std::nullopt;
+    }
     hit.empty = *value != 0;
-    if (hit.empty) return hit;
+    if (hit.empty) {
+      return hit;
+    }
   }
 
   auto tagRest = FindKey(body, "tag", budget);
   if (!tagRest.empty()) {
     auto tag = ReadString(tagRest, kMaximumReproShortStringBytes, budget);
-    if (!tag.has_value()) return std::nullopt;
+    if (!tag.has_value()) {
+      return std::nullopt;
+    }
     hit.tag = std::move(*tag);
   }
   auto idRest = FindKey(body, "id", budget);
   if (!idRest.empty()) {
     auto id = ReadString(idRest, kMaximumReproIdentifierBytes, budget);
-    if (!id.has_value()) return std::nullopt;
+    if (!id.has_value()) {
+      return std::nullopt;
+    }
     hit.id = std::move(*id);
   }
   auto idxRest = FindKey(body, "idx", budget);
   if (!idxRest.empty()) {
     auto index = ReadInteger<int>(idxRest, budget);
-    if (!index) return std::nullopt;
+    if (!index) {
+      return std::nullopt;
+    }
     hit.docOrderIndex = *index;
   }
   return hit;
@@ -678,43 +761,67 @@ std::optional<ReproHit> ParseHitObject(std::string_view body, ReproParseBudget& 
 // Advances `cursor` past the matching `}`. Returns nullopt on malformed input.
 std::optional<ReproEvent> ParseEventObject(std::string_view& cursor, ReproParseBudget& budget) {
   std::string_view body;
-  if (!ExtractBalancedObject(cursor, body, budget)) return std::nullopt;
+  if (!ExtractBalancedObject(cursor, body, budget)) {
+    return std::nullopt;
+  }
 
   ReproEvent ev;
   auto rest = FindKey(body, "k", budget);
-  if (rest.empty()) return std::nullopt;
+  if (rest.empty()) {
+    return std::nullopt;
+  }
   auto kindStr = ReadString(rest, kMaximumReproShortStringBytes, budget);
-  if (!kindStr.has_value()) return std::nullopt;
+  if (!kindStr.has_value()) {
+    return std::nullopt;
+  }
   auto kind = ParseEventKind(*kindStr);
-  if (!kind.has_value()) return std::nullopt;
+  if (!kind.has_value()) {
+    return std::nullopt;
+  }
   ev.kind = *kind;
 
   const auto readIntField = [&](std::string_view key, int& out) {
     auto r = FindKey(body, key, budget);
-    if (r.empty()) return;
+    if (r.empty()) {
+      return;
+    }
     auto v = ReadInteger<int>(r, budget);
-    if (!v) return;
+    if (!v) {
+      return;
+    }
     out = *v;
   };
   const auto readUintField = [&](std::string_view key, std::uint32_t& out) {
     auto r = FindKey(body, key, budget);
-    if (r.empty()) return;
+    if (r.empty()) {
+      return;
+    }
     auto v = ReadInteger<std::uint32_t>(r, budget);
-    if (!v) return;
+    if (!v) {
+      return;
+    }
     out = *v;
   };
   const auto readFloatField = [&](std::string_view key, float& out) {
     auto r = FindKey(body, key, budget);
-    if (r.empty()) return;
+    if (r.empty()) {
+      return;
+    }
     auto v = ReadFloat(r, budget);
-    if (!v) return;
+    if (!v) {
+      return;
+    }
     out = *v;
   };
   const auto readBoolField = [&](std::string_view key, bool& out) {
     auto r = FindKey(body, key, budget);
-    if (r.empty()) return;
+    if (r.empty()) {
+      return;
+    }
     auto v = ReadInteger<int>(r, budget);
-    if (!v || (*v != 0 && *v != 1)) return;
+    if (!v || (*v != 0 && *v != 1)) {
+      return;
+    }
     out = *v != 0;
   };
 
@@ -741,13 +848,21 @@ std::optional<ReproEvent> ParseEventObject(std::string_view& cursor, ReproParseB
   auto hitRest = FindKey(body, "hit", budget);
   if (!hitRest.empty()) {
     std::size_t p = 0;
-    while (p < hitRest.size() && (hitRest[p] == ' ' || hitRest[p] == '\t')) ++p;
-    if (p >= hitRest.size() || hitRest[p] != '{') return std::nullopt;
+    while (p < hitRest.size() && (hitRest[p] == ' ' || hitRest[p] == '\t')) {
+      ++p;
+    }
+    if (p >= hitRest.size() || hitRest[p] != '{') {
+      return std::nullopt;
+    }
     std::string_view hitCursor = hitRest.substr(p + 1);
     std::string_view hitBody;
-    if (!ExtractBalancedObject(hitCursor, hitBody, budget)) return std::nullopt;
+    if (!ExtractBalancedObject(hitCursor, hitBody, budget)) {
+      return std::nullopt;
+    }
     auto hit = ParseHitObject(hitBody, budget);
-    if (!hit.has_value()) return std::nullopt;
+    if (!hit.has_value()) {
+      return std::nullopt;
+    }
     ev.hit = std::move(*hit);
   }
 
@@ -758,22 +873,34 @@ std::optional<ReproEvent> ParseEventObject(std::string_view& cursor, ReproParseB
 // Advances `cursor` past the matching `}`. Returns nullopt on malformed input.
 std::optional<ReproAction> ParseActionObject(std::string_view& cursor, ReproParseBudget& budget) {
   std::string_view body;
-  if (!ExtractBalancedObject(cursor, body, budget)) return std::nullopt;
+  if (!ExtractBalancedObject(cursor, body, budget)) {
+    return std::nullopt;
+  }
 
   ReproAction action;
   auto rest = FindKey(body, "k", budget);
-  if (rest.empty()) return std::nullopt;
+  if (rest.empty()) {
+    return std::nullopt;
+  }
   auto kindStr = ReadString(rest, kMaximumReproShortStringBytes, budget);
-  if (!kindStr.has_value()) return std::nullopt;
+  if (!kindStr.has_value()) {
+    return std::nullopt;
+  }
   auto kind = ParseActionKind(*kindStr);
-  if (!kind.has_value()) return std::nullopt;
+  if (!kind.has_value()) {
+    return std::nullopt;
+  }
   action.kind = *kind;
 
   const auto readStringField = [&](std::string_view key, size_t maximumBytes, std::string& out) {
     auto r = FindKey(body, key, budget);
-    if (r.empty()) return false;
+    if (r.empty()) {
+      return false;
+    }
     auto value = ReadString(r, maximumBytes, budget);
-    if (!value.has_value()) return false;
+    if (!value.has_value()) {
+      return false;
+    }
     out = std::move(*value);
     return true;
   };
@@ -802,27 +929,59 @@ std::optional<ReproViewport> ParseViewportObject(std::string_view body, ReproPar
   ReproViewport viewport;
   const auto readField = [&](std::string_view key, double& out) {
     auto r = FindKey(body, key, budget);
-    if (r.empty()) return false;
+    if (r.empty()) {
+      return false;
+    }
     auto v = ReadBoundedNumber(r, budget);
-    if (!v) return false;
+    if (!v) {
+      return false;
+    }
     out = *v;
     return true;
   };
 
-  if (!readField("ox", viewport.paneOriginX)) return std::nullopt;
-  if (!readField("oy", viewport.paneOriginY)) return std::nullopt;
-  if (!readField("pw", viewport.paneSizeW)) return std::nullopt;
-  if (!readField("ph", viewport.paneSizeH)) return std::nullopt;
-  if (!readField("dpr", viewport.devicePixelRatio)) return std::nullopt;
-  if (!readField("z", viewport.zoom)) return std::nullopt;
-  if (!readField("pdx", viewport.panDocX)) return std::nullopt;
-  if (!readField("pdy", viewport.panDocY)) return std::nullopt;
-  if (!readField("psx", viewport.panScreenX)) return std::nullopt;
-  if (!readField("psy", viewport.panScreenY)) return std::nullopt;
-  if (!readField("vbx", viewport.viewBoxX)) return std::nullopt;
-  if (!readField("vby", viewport.viewBoxY)) return std::nullopt;
-  if (!readField("vbw", viewport.viewBoxW)) return std::nullopt;
-  if (!readField("vbh", viewport.viewBoxH)) return std::nullopt;
+  if (!readField("ox", viewport.paneOriginX)) {
+    return std::nullopt;
+  }
+  if (!readField("oy", viewport.paneOriginY)) {
+    return std::nullopt;
+  }
+  if (!readField("pw", viewport.paneSizeW)) {
+    return std::nullopt;
+  }
+  if (!readField("ph", viewport.paneSizeH)) {
+    return std::nullopt;
+  }
+  if (!readField("dpr", viewport.devicePixelRatio)) {
+    return std::nullopt;
+  }
+  if (!readField("z", viewport.zoom)) {
+    return std::nullopt;
+  }
+  if (!readField("pdx", viewport.panDocX)) {
+    return std::nullopt;
+  }
+  if (!readField("pdy", viewport.panDocY)) {
+    return std::nullopt;
+  }
+  if (!readField("psx", viewport.panScreenX)) {
+    return std::nullopt;
+  }
+  if (!readField("psy", viewport.panScreenY)) {
+    return std::nullopt;
+  }
+  if (!readField("vbx", viewport.viewBoxX)) {
+    return std::nullopt;
+  }
+  if (!readField("vby", viewport.viewBoxY)) {
+    return std::nullopt;
+  }
+  if (!readField("vbw", viewport.viewBoxW)) {
+    return std::nullopt;
+  }
+  if (!readField("vbh", viewport.viewBoxH)) {
+    return std::nullopt;
+  }
   if (std::abs(viewport.paneOriginX) > kMaximumReproDimension ||
       std::abs(viewport.paneOriginY) > kMaximumReproDimension || viewport.paneSizeW < 0.0 ||
       viewport.paneSizeW > kMaximumReproDimension || viewport.paneSizeH < 0.0 ||
@@ -839,17 +998,29 @@ std::optional<ReproExpectedCrop> ParseExpectedCropObject(std::string_view body,
   ReproExpectedCrop crop;
   const auto readField = [&](std::string_view key, int& out) {
     auto r = FindKey(body, key, budget);
-    if (r.empty()) return false;
+    if (r.empty()) {
+      return false;
+    }
     auto v = ReadInteger<int>(r, budget);
-    if (!v) return false;
+    if (!v) {
+      return false;
+    }
     out = *v;
     return true;
   };
 
-  if (!readField("x", crop.x)) return std::nullopt;
-  if (!readField("y", crop.y)) return std::nullopt;
-  if (!readField("w", crop.width)) return std::nullopt;
-  if (!readField("h", crop.height)) return std::nullopt;
+  if (!readField("x", crop.x)) {
+    return std::nullopt;
+  }
+  if (!readField("y", crop.y)) {
+    return std::nullopt;
+  }
+  if (!readField("w", crop.width)) {
+    return std::nullopt;
+  }
+  if (!readField("h", crop.height)) {
+    return std::nullopt;
+  }
   if (std::abs(static_cast<double>(crop.x)) > kMaximumReproScalarMagnitude ||
       std::abs(static_cast<double>(crop.y)) > kMaximumReproScalarMagnitude || crop.width < 0 ||
       crop.width > kMaximumReproDimension || crop.height < 0 ||
@@ -864,34 +1035,50 @@ std::optional<ReproExpectation> ParseExpectationObject(std::string_view body,
   ReproExpectation expect;
   const auto readIntField = [&](std::string_view key, int& out) {
     auto r = FindKey(body, key, budget);
-    if (r.empty()) return false;
+    if (r.empty()) {
+      return false;
+    }
     auto v = ReadInteger<int>(r, budget);
-    if (!v) return false;
+    if (!v) {
+      return false;
+    }
     out = *v;
     return true;
   };
   const auto readStringField = [&](std::string_view key, size_t maximumBytes, std::string& out) {
     auto r = FindKey(body, key, budget);
-    if (r.empty()) return false;
+    if (r.empty()) {
+      return false;
+    }
     auto value = ReadString(r, maximumBytes, budget);
-    if (!value.has_value()) return false;
+    if (!value.has_value()) {
+      return false;
+    }
     out = std::move(*value);
     return true;
   };
   const auto readOptionalIntField = [&](std::string_view key, std::optional<int>& out) {
     auto r = FindKey(body, key, budget);
-    if (r.empty()) return true;
+    if (r.empty()) {
+      return true;
+    }
     auto v = ReadInteger<int>(r, budget);
-    if (!v) return false;
+    if (!v) {
+      return false;
+    }
     out = *v;
     return true;
   };
   const auto readOptionalStringField = [&](std::string_view key, size_t maximumBytes,
                                            std::optional<std::string>& out) {
     auto r = FindKey(body, key, budget);
-    if (r.empty()) return true;
+    if (r.empty()) {
+      return true;
+    }
     auto value = ReadString(r, maximumBytes, budget);
-    if (!value.has_value()) return false;
+    if (!value.has_value()) {
+      return false;
+    }
     out = std::move(*value);
     return true;
   };
@@ -899,9 +1086,13 @@ std::optional<ReproExpectation> ParseExpectationObject(std::string_view body,
   auto proofKindRest = FindKey(body, "proof_kind", budget);
   if (!proofKindRest.empty()) {
     auto proofKindString = ReadString(proofKindRest, kMaximumReproShortStringBytes, budget);
-    if (!proofKindString.has_value()) return std::nullopt;
+    if (!proofKindString.has_value()) {
+      return std::nullopt;
+    }
     auto proofKind = ParseProofKind(*proofKindString);
-    if (!proofKind.has_value()) return std::nullopt;
+    if (!proofKind.has_value()) {
+      return std::nullopt;
+    }
     expect.proofKind = *proofKind;
   }
 
@@ -911,8 +1102,12 @@ std::optional<ReproExpectation> ParseExpectationObject(std::string_view body,
   if (!readIntField("frame_offset_after_left_mouse_down", expect.frameOffsetAfterLeftMouseDown)) {
     return std::nullopt;
   }
-  if (!readIntField("min_frame_index", expect.minFrameIndex)) return std::nullopt;
-  if (!readIntField("max_frame_index", expect.maxFrameIndex)) return std::nullopt;
+  if (!readIntField("min_frame_index", expect.minFrameIndex)) {
+    return std::nullopt;
+  }
+  if (!readIntField("max_frame_index", expect.maxFrameIndex)) {
+    return std::nullopt;
+  }
   if (!readStringField("target_selector", kMaximumReproIdentifierBytes, expect.targetSelector)) {
     return std::nullopt;
   }
@@ -923,13 +1118,21 @@ std::optional<ReproExpectation> ParseExpectationObject(std::string_view body,
   auto cropRest = FindKey(body, "crop", budget);
   if (!cropRest.empty()) {
     std::size_t p = 0;
-    while (p < cropRest.size() && (cropRest[p] == ' ' || cropRest[p] == '\t')) ++p;
-    if (p >= cropRest.size() || cropRest[p] != '{') return std::nullopt;
+    while (p < cropRest.size() && (cropRest[p] == ' ' || cropRest[p] == '\t')) {
+      ++p;
+    }
+    if (p >= cropRest.size() || cropRest[p] != '{') {
+      return std::nullopt;
+    }
     std::string_view cropCursor = cropRest.substr(p + 1);
     std::string_view cropBody;
-    if (!ExtractBalancedObject(cropCursor, cropBody, budget)) return std::nullopt;
+    if (!ExtractBalancedObject(cropCursor, cropBody, budget)) {
+      return std::nullopt;
+    }
     auto crop = ParseExpectedCropObject(cropBody, budget);
-    if (!crop.has_value()) return std::nullopt;
+    if (!crop.has_value()) {
+      return std::nullopt;
+    }
     expect.cropRect = *crop;
   }
 
@@ -967,35 +1170,59 @@ std::optional<ReproFrame> ParseFrameLine(std::string_view line, ReproParseBudget
   ReproFrame frame;
   auto readIntField = [&](std::string_view key, auto& out) {
     auto r = FindKey(line, key, budget);
-    if (r.empty()) return false;
+    if (r.empty()) {
+      return false;
+    }
     using FieldType = std::remove_reference_t<decltype(out)>;
     auto v = ReadInteger<FieldType>(r, budget);
-    if (!v) return false;
+    if (!v) {
+      return false;
+    }
     out = *v;
     return true;
   };
   auto readDoubleField = [&](std::string_view key, double& out) {
     auto r = FindKey(line, key, budget);
-    if (r.empty()) return false;
+    if (r.empty()) {
+      return false;
+    }
     auto v = ReadBoundedNumber(r, budget);
-    if (!v) return false;
+    if (!v) {
+      return false;
+    }
     out = *v;
     return true;
   };
-  if (!readIntField("f", frame.index)) return std::nullopt;
-  if (frame.index < 0 || frame.index > static_cast<int>(kMaximumReproFrames)) return std::nullopt;
-  if (!readDoubleField("t", frame.timestampSeconds)) return std::nullopt;
-  if (!readDoubleField("dt", frame.deltaMs)) return std::nullopt;
+  if (!readIntField("f", frame.index)) {
+    return std::nullopt;
+  }
+  if (frame.index < 0 || frame.index > static_cast<int>(kMaximumReproFrames)) {
+    return std::nullopt;
+  }
+  if (!readDoubleField("t", frame.timestampSeconds)) {
+    return std::nullopt;
+  }
+  if (!readDoubleField("dt", frame.deltaMs)) {
+    return std::nullopt;
+  }
   if (frame.timestampSeconds < 0.0 || frame.timestampSeconds > kMaximumReproDurationSeconds ||
       frame.deltaMs < 0.0 || frame.deltaMs > kMaximumReproDeltaMilliseconds) {
     return std::nullopt;
   }
-  if (!readDoubleField("mx", frame.mouseX)) return std::nullopt;
-  if (!readDoubleField("my", frame.mouseY)) return std::nullopt;
+  if (!readDoubleField("mx", frame.mouseX)) {
+    return std::nullopt;
+  }
+  if (!readDoubleField("my", frame.mouseY)) {
+    return std::nullopt;
+  }
   int btn = 0;
   int mod = 0;
-  if (!readIntField("btn", btn)) return std::nullopt;
-  if (!readIntField("mod", mod)) return std::nullopt;
+  if (!readIntField("btn", btn)) {
+    return std::nullopt;
+  }
+  if (!readIntField("mod", mod)) {
+    return std::nullopt;
+  }
   frame.mouseButtonMask = btn;
   frame.modifiers = mod;
 
@@ -1003,7 +1230,9 @@ std::optional<ReproFrame> ParseFrameLine(std::string_view line, ReproParseBudget
   double mouseDocY = 0.0;
   const bool hasMouseDocX = readDoubleField("mdx", mouseDocX);
   const bool hasMouseDocY = readDoubleField("mdy", mouseDocY);
-  if (hasMouseDocX != hasMouseDocY) return std::nullopt;
+  if (hasMouseDocX != hasMouseDocY) {
+    return std::nullopt;
+  }
   if (hasMouseDocX) {
     frame.mouseDocX = mouseDocX;
     frame.mouseDocY = mouseDocY;
@@ -1012,11 +1241,17 @@ std::optional<ReproFrame> ParseFrameLine(std::string_view line, ReproParseBudget
   auto viewportRest = FindKey(line, "vp", budget);
   if (!viewportRest.empty()) {
     std::size_t p = 0;
-    while (p < viewportRest.size() && (viewportRest[p] == ' ' || viewportRest[p] == '\t')) ++p;
-    if (p >= viewportRest.size() || viewportRest[p] != '{') return std::nullopt;
+    while (p < viewportRest.size() && (viewportRest[p] == ' ' || viewportRest[p] == '\t')) {
+      ++p;
+    }
+    if (p >= viewportRest.size() || viewportRest[p] != '{') {
+      return std::nullopt;
+    }
     std::string_view viewportCursor = viewportRest.substr(p + 1);
     std::string_view viewportBody;
-    if (!ExtractBalancedObject(viewportCursor, viewportBody, budget)) return std::nullopt;
+    if (!ExtractBalancedObject(viewportCursor, viewportBody, budget)) {
+      return std::nullopt;
+    }
     auto viewport = ParseViewportObject(viewportBody, budget);
     if (!viewport.has_value()) {
       std::fprintf(stderr, "ReproFile: malformed `vp` block in frame %" PRIu64 "\n",
@@ -1030,21 +1265,35 @@ std::optional<ReproFrame> ParseFrameLine(std::string_view line, ReproParseBudget
   if (!actionsStart.empty()) {
     // Find the opening '[' then parse objects separated by commas until ']'.
     std::size_t p = 0;
-    while (p < actionsStart.size() && actionsStart[p] != '[') ++p;
-    if (p >= actionsStart.size()) return std::nullopt;
+    while (p < actionsStart.size() && actionsStart[p] != '[') {
+      ++p;
+    }
+    if (p >= actionsStart.size()) {
+      return std::nullopt;
+    }
     std::string_view cursor = actionsStart.substr(p + 1);
     while (!cursor.empty()) {
       std::size_t q = 0;
       while (q < cursor.size() && (cursor[q] == ' ' || cursor[q] == ',' || cursor[q] == '\t')) {
         ++q;
       }
-      if (q >= cursor.size()) break;
-      if (cursor[q] == ']') break;
-      if (cursor[q] != '{') return std::nullopt;
+      if (q >= cursor.size()) {
+        break;
+      }
+      if (cursor[q] == ']') {
+        break;
+      }
+      if (cursor[q] != '{') {
+        return std::nullopt;
+      }
       cursor.remove_prefix(q + 1);
       auto action = ParseActionObject(cursor, budget);
-      if (!action.has_value()) return std::nullopt;
-      if (frame.actions.size() >= kMaximumReproItemsPerFrame) return std::nullopt;
+      if (!action.has_value()) {
+        return std::nullopt;
+      }
+      if (frame.actions.size() >= kMaximumReproItemsPerFrame) {
+        return std::nullopt;
+      }
       frame.actions.push_back(*action);
     }
   }
@@ -1053,19 +1302,35 @@ std::optional<ReproFrame> ParseFrameLine(std::string_view line, ReproParseBudget
   if (!eventsStart.empty()) {
     // Find the opening '[' then parse objects separated by commas until ']'.
     std::size_t p = 0;
-    while (p < eventsStart.size() && eventsStart[p] != '[') ++p;
-    if (p >= eventsStart.size()) return std::nullopt;
+    while (p < eventsStart.size() && eventsStart[p] != '[') {
+      ++p;
+    }
+    if (p >= eventsStart.size()) {
+      return std::nullopt;
+    }
     std::string_view cursor = eventsStart.substr(p + 1);
     while (!cursor.empty()) {
       std::size_t q = 0;
-      while (q < cursor.size() && (cursor[q] == ' ' || cursor[q] == ',' || cursor[q] == '\t')) ++q;
-      if (q >= cursor.size()) break;
-      if (cursor[q] == ']') break;
-      if (cursor[q] != '{') return std::nullopt;
+      while (q < cursor.size() && (cursor[q] == ' ' || cursor[q] == ',' || cursor[q] == '\t')) {
+        ++q;
+      }
+      if (q >= cursor.size()) {
+        break;
+      }
+      if (cursor[q] == ']') {
+        break;
+      }
+      if (cursor[q] != '{') {
+        return std::nullopt;
+      }
       cursor.remove_prefix(q + 1);
       auto ev = ParseEventObject(cursor, budget);
-      if (!ev.has_value()) return std::nullopt;
-      if (frame.events.size() >= kMaximumReproItemsPerFrame) return std::nullopt;
+      if (!ev.has_value()) {
+        return std::nullopt;
+      }
+      if (frame.events.size() >= kMaximumReproItemsPerFrame) {
+        return std::nullopt;
+      }
       frame.events.push_back(*ev);
     }
   }
@@ -1202,7 +1467,9 @@ std::optional<ReproFile> ParseReproFile(std::string_view contents) {
     const std::string_view view = remaining.substr(0, newline);
     remaining =
         newline == std::string_view::npos ? std::string_view() : remaining.substr(newline + 1);
-    if (view.empty()) continue;
+    if (view.empty()) {
+      continue;
+    }
     const size_t maximumLineBytes =
         gotMeta ? kMaximumReproFrameLineBytes : kMaximumReproMetadataLineBytes;
     if (view.size() > maximumLineBytes || !budget.chargeScan(view.size())) {
@@ -1216,7 +1483,9 @@ std::optional<ReproFile> ParseReproFile(std::string_view contents) {
         return std::nullopt;
       }
       auto vn = ReadInteger<int>(r, budget);
-      if (!vn) return std::nullopt;
+      if (!vn) {
+        return std::nullopt;
+      }
       version = *vn;
       if (version < 1 || version > kReproFileVersion) {
         std::fprintf(stderr, "ReproFile: version %d, expected 1 through %d\n", version,
@@ -1227,14 +1496,20 @@ std::optional<ReproFile> ParseReproFile(std::string_view contents) {
       auto svgRest = FindKey(view, "svg", budget);
       if (!svgRest.empty()) {
         auto s = ReadString(svgRest, kMaximumReproSvgPathBytes, budget);
-        if (s) meta.svgPath = std::move(*s);
-        if (budget.rejected()) return std::nullopt;
+        if (s) {
+          meta.svgPath = std::move(*s);
+        }
+        if (budget.rejected()) {
+          return std::nullopt;
+        }
       }
       // wnd parsed as two numbers between `[` `]`.
       auto wndRest = FindKey(view, "wnd", budget);
       if (!wndRest.empty()) {
         std::size_t p = 0;
-        while (p < wndRest.size() && wndRest[p] != '[') ++p;
+        while (p < wndRest.size() && wndRest[p] != '[') {
+          ++p;
+        }
         if (p < wndRest.size()) {
           std::string_view cursor = wndRest.substr(p + 1);
           auto w = ReadInteger<int>(cursor, budget);
@@ -1252,12 +1527,16 @@ std::optional<ReproFile> ParseReproFile(std::string_view contents) {
       auto scaleRest = FindKey(view, "scale", budget);
       if (!scaleRest.empty()) {
         auto v = ReadBoundedNumber(scaleRest, budget);
-        if (v && *v > 0.0 && *v <= 64.0) meta.displayScale = *v;
+        if (v && *v > 0.0 && *v <= 64.0) {
+          meta.displayScale = *v;
+        }
       }
       auto expRest = FindKey(view, "exp", budget);
       if (!expRest.empty()) {
         auto v = ReadInteger<int>(expRest, budget);
-        if (v && (*v == 0 || *v == 1)) meta.experimentalMode = *v != 0;
+        if (v && (*v == 0 || *v == 1)) {
+          meta.experimentalMode = *v != 0;
+        }
       }
       const int effectiveWidth = meta.windowWidth > 0 ? meta.windowWidth : kDefaultReproWindowWidth;
       const int effectiveHeight =
@@ -1270,27 +1549,43 @@ std::optional<ReproFile> ParseReproFile(std::string_view contents) {
       auto atRest = FindKey(view, "at", budget);
       if (!atRest.empty()) {
         auto s = ReadString(atRest, kMaximumReproShortStringBytes, budget);
-        if (s) meta.startedAtIso8601 = std::move(*s);
-        if (budget.rejected()) return std::nullopt;
+        if (s) {
+          meta.startedAtIso8601 = std::move(*s);
+        }
+        if (budget.rejected()) {
+          return std::nullopt;
+        }
       }
       auto svgBaseRest = FindKey(view, "svg_base", budget);
       if (!svgBaseRest.empty()) {
         auto s = ReadString(svgBaseRest, kMaximumReproSvgPathBytes, budget);
-        if (s) meta.svgBasename = std::move(*s);
-        if (budget.rejected()) return std::nullopt;
+        if (s) {
+          meta.svgBasename = std::move(*s);
+        }
+        if (budget.rejected()) {
+          return std::nullopt;
+        }
       }
       auto svgHashRest = FindKey(view, "svg_hash", budget);
       if (!svgHashRest.empty()) {
         auto s = ReadString(svgHashRest, kMaximumReproShortStringBytes, budget);
-        if (s) meta.svgContentHash = std::move(*s);
-        if (budget.rejected()) return std::nullopt;
+        if (s) {
+          meta.svgContentHash = std::move(*s);
+        }
+        if (budget.rejected()) {
+          return std::nullopt;
+        }
       }
       auto svgSourceRest = FindKey(view, "svg_src", budget);
       if (!svgSourceRest.empty()) {
         auto s =
             ReadString(svgSourceRest, svg::parser::SVGParser::kDefaultMaximumInputSize, budget);
-        if (s) meta.svgSource = std::move(*s);
-        if (budget.rejected()) return std::nullopt;
+        if (s) {
+          meta.svgSource = std::move(*s);
+        }
+        if (budget.rejected()) {
+          return std::nullopt;
+        }
       }
       if (!meta.svgSource.has_value() && !meta.svgPath.empty() &&
           !IsSafeReproSvgPath(meta.svgPath)) {
@@ -1299,11 +1594,17 @@ std::optional<ReproFile> ParseReproFile(std::string_view contents) {
       auto expectRest = FindKey(view, "expect", budget);
       if (!expectRest.empty()) {
         std::size_t p = 0;
-        while (p < expectRest.size() && (expectRest[p] == ' ' || expectRest[p] == '\t')) ++p;
-        if (p >= expectRest.size() || expectRest[p] != '{') return std::nullopt;
+        while (p < expectRest.size() && (expectRest[p] == ' ' || expectRest[p] == '\t')) {
+          ++p;
+        }
+        if (p >= expectRest.size() || expectRest[p] != '{') {
+          return std::nullopt;
+        }
         std::string_view expectCursor = expectRest.substr(p + 1);
         std::string_view expectBody;
-        if (!ExtractBalancedObject(expectCursor, expectBody, budget)) return std::nullopt;
+        if (!ExtractBalancedObject(expectCursor, expectBody, budget)) {
+          return std::nullopt;
+        }
         auto expect = ParseExpectationObject(expectBody, budget);
         if (!expect.has_value()) {
           std::fprintf(stderr, "ReproFile: malformed `expect` metadata block\n");
@@ -1311,7 +1612,9 @@ std::optional<ReproFile> ParseReproFile(std::string_view contents) {
         }
         meta.expect = std::move(*expect);
       }
-      if (budget.rejected()) return std::nullopt;
+      if (budget.rejected()) {
+        return std::nullopt;
+      }
       file.metadata = std::move(meta);
       replayWindowWidth =
           file.metadata.windowWidth > 0 ? file.metadata.windowWidth : kDefaultReproWindowWidth;
@@ -1326,7 +1629,9 @@ std::optional<ReproFile> ParseReproFile(std::string_view contents) {
       std::fprintf(stderr, "ReproFile: malformed frame line (%zu bytes)\n", view.size());
       return std::nullopt;
     }
-    if (budget.rejected()) return std::nullopt;
+    if (budget.rejected()) {
+      return std::nullopt;
+    }
     if (previousTimestamp && frame->timestampSeconds < *previousTimestamp) {
       return std::nullopt;
     }
@@ -1357,7 +1662,9 @@ std::optional<ReproFile> ParseReproFile(std::string_view contents) {
     std::fprintf(stderr, "ReproFile: empty file\n");
     return std::nullopt;
   }
-  if (budget.rejected()) return std::nullopt;
+  if (budget.rejected()) {
+    return std::nullopt;
+  }
   return file;
 }
 

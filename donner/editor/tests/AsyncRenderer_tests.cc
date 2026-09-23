@@ -4909,8 +4909,12 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   double clickDMs = 0.0;
   double clickOMs = 0.0;
   for (const auto& t : timings) {
-    if (t.label == "click-D (first promote)") clickDMs = t.wallMs;
-    if (t.label == "click-O (second promote)") clickOMs = t.wallMs;
+    if (t.label == "click-D (first promote)") {
+      clickDMs = t.wallMs;
+    }
+    if (t.label == "click-O (second promote)") {
+      clickOMs = t.wallMs;
+    }
   }
   EXPECT_LT(clickOMs, clickDMs * 2.0)
       << "click-O (" << clickOMs << " ms) is more than 2x click-D (" << clickDMs
@@ -4971,7 +4975,9 @@ TEST(AsyncRendererE2ETest, PresentationStaysNonTransparentAcrossDragTargetSwap) 
     asyncRenderer.requestRender(request);
   };
   const auto isBitmapMostlyTransparent = [](const svg::RendererBitmap& bitmap) {
-    if (bitmap.empty()) return true;
+    if (bitmap.empty()) {
+      return true;
+    }
     // Count non-zero-alpha pixels. If ≥1% of pixels have any alpha, the
     // bitmap contains real content (the splash has a navy background
     // fill that covers the whole canvas, so at rest this is ~100%).

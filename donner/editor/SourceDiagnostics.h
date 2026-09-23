@@ -18,8 +18,8 @@ struct SourceDiagnostic {
   std::uint64_t id = 0;  ///< Stable within one parse revision.
   DiagnosticSeverity severity = DiagnosticSeverity::Error;
   SourceByteRange range;
-  std::size_t line = 1;    ///< One-based line number.
-  std::size_t column = 0;  ///< Zero-based byte column.
+  std::size_t line = 1;       ///< One-based line number.
+  std::size_t column = 0;     ///< Zero-based byte column.
   std::size_t endLine = 1;    ///< One-based line number for the exclusive range end.
   std::size_t endColumn = 0;  ///< Zero-based byte column for the exclusive range end.
   std::string message;

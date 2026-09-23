@@ -140,7 +140,7 @@ constexpr Observed kSteadyState = {
 struct CounterField {
   uint32_t bit;
   const char* name;
-  uint64_t Observed::* member;
+  uint64_t Observed::*member;
   /// What the counter proves when it holds, used in failure messages.
   const char* rationale;
 };

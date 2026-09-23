@@ -85,11 +85,19 @@ inline Vec3 ReferenceNormal(const std::array<float, kWidth * kHeight * 4>& input
   };
 
   float nx = 2.0f * horizontal(y);
-  if (y > params.sampleMinY) nx += horizontal(y - 1);
-  if (y < params.sampleMaxY) nx += horizontal(y + 1);
+  if (y > params.sampleMinY) {
+    nx += horizontal(y - 1);
+  }
+  if (y < params.sampleMaxY) {
+    nx += horizontal(y + 1);
+  }
   float ny = 2.0f * vertical(x);
-  if (x > params.sampleMinX) ny += vertical(x - 1);
-  if (x < params.sampleMaxX) ny += vertical(x + 1);
+  if (x > params.sampleMinX) {
+    ny += vertical(x - 1);
+  }
+  if (x < params.sampleMaxX) {
+    ny += vertical(x + 1);
+  }
   const bool corner = (x == params.sampleMinX || x == params.sampleMaxX) &&
                       (y == params.sampleMinY || y == params.sampleMaxY);
   const float divisor = corner ? 3.0f : 4.0f;
@@ -228,7 +236,9 @@ void CheckLightingStorage(DeviceType& device, const shader::CompiledShaderView& 
   using namespace lighting_detail;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "lighting", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
   auto input =
       device.createTexture(TextureDescriptor{"lighting input",
                                              {kWidth, kHeight},

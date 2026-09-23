@@ -47,10 +47,18 @@ int PackCurrentModifiers() {
   // Packed bitmask: use low 4 bits for Ctrl/Shift/Alt/Super.
   // Matches the encoding ReproPlayer will unpack to ImGui's
   // `ImGuiKey_Mod*` values.
-  if (io.KeyCtrl) mods |= 1 << 0;
-  if (io.KeyShift) mods |= 1 << 1;
-  if (io.KeyAlt) mods |= 1 << 2;
-  if (io.KeySuper) mods |= 1 << 3;
+  if (io.KeyCtrl) {
+    mods |= 1 << 0;
+  }
+  if (io.KeyShift) {
+    mods |= 1 << 1;
+  }
+  if (io.KeyAlt) {
+    mods |= 1 << 2;
+  }
+  if (io.KeySuper) {
+    mods |= 1 << 3;
+  }
   return mods;
 }
 
@@ -58,7 +66,9 @@ int CurrentMouseButtonMask() {
   ImGuiIO& io = ImGui::GetIO();
   int mask = 0;
   for (int i = 0; i < kMaxMouseButtons && i < IM_ARRAYSIZE(io.MouseDown); ++i) {
-    if (io.MouseDown[i]) mask |= 1 << i;
+    if (io.MouseDown[i]) {
+      mask |= 1 << i;
+    }
   }
   return mask;
 }

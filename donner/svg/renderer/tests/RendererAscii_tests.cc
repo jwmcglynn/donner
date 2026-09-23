@@ -45,9 +45,7 @@ TEST(RendererAsciiTests, GeodeAlternativeMatchesExactly) {
   }
 
   const AsciiImage alternativeImage{"alternative\n"};
-  EXPECT_TRUE(alternativeImage.matchBackend()
-                  .geode("primary\n")
-                  .geodeAlternative("alternative\n"));
+  EXPECT_TRUE(alternativeImage.matchBackend().geode("primary\n").geodeAlternative("alternative\n"));
 }
 
 TEST(RendererAsciiTests, TspanPaintOrderMatchesExplicitStrokeThenFillPasses) {

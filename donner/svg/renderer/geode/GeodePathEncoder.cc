@@ -352,7 +352,9 @@ bool CurveCancellationInputFits(std::span<const CurveWithRange> curves, std::siz
   for (const CurveWithRange& item : curves) {
     const EncodedPath::Curve& curve = item.curve;
     for (float coordinate : {curve.p0x, curve.p0y, curve.p1x, curve.p1y, curve.p2x, curve.p2y}) {
-      if (!std::isfinite(coordinate)) return false;
+      if (!std::isfinite(coordinate)) {
+        return false;
+      }
     }
   }
   return true;
@@ -387,7 +389,9 @@ void CompactUncanceledCurves(std::vector<CurveWithRange>& curves,
   std::size_t output = 0;
   for (std::size_t i = 0; i < curves.size(); ++i) {
     if (canceled[i] == 0) {
-      if (output != i) curves[output] = curves[i];
+      if (output != i) {
+        curves[output] = curves[i];
+      }
       ++output;
     }
   }
@@ -739,7 +743,9 @@ bool bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
   std::fill_n(preflightBandCounts.begin(), bandCount, 0u);
   for (const CurveWithRange& curve : allCurves) {
     const std::optional<BandSpan> curveSpan = curveBandSpan(curve.range, bounds, axis, bandCount);
-    if (!curveSpan) continue;
+    if (!curveSpan) {
+      continue;
+    }
     for (uint16_t band = curveSpan->first; band <= curveSpan->last; ++band) {
       ++preflightBandCounts[band];
     }
@@ -879,7 +885,9 @@ std::optional<Path> CubicToQuadraticBounded(const Path& path, double tolerance,
   for (const Path::Command& command : path.commands()) {
     switch (command.verb) {
       case Path::Verb::MoveTo:
-        if (!admitCommand()) return std::nullopt;
+        if (!admitCommand()) {
+          return std::nullopt;
+        }
         currentPoint = points[command.pointIndex];
         subpathStart = currentPoint;
         hasCurrentPoint = true;
@@ -887,19 +895,25 @@ std::optional<Path> CubicToQuadraticBounded(const Path& path, double tolerance,
         break;
 
       case Path::Verb::LineTo:
-        if (!hasCurrentPoint || !admitCommand()) return std::nullopt;
+        if (!hasCurrentPoint || !admitCommand()) {
+          return std::nullopt;
+        }
         currentPoint = points[command.pointIndex];
         builder.lineTo(currentPoint);
         break;
 
       case Path::Verb::QuadTo:
-        if (!hasCurrentPoint || !admitCommand()) return std::nullopt;
+        if (!hasCurrentPoint || !admitCommand()) {
+          return std::nullopt;
+        }
         currentPoint = points[command.pointIndex + 1u];
         builder.quadTo(points[command.pointIndex], currentPoint);
         break;
 
       case Path::Verb::CurveTo: {
-        if (!hasCurrentPoint || outputCommands >= maximumCommands) return std::nullopt;
+        if (!hasCurrentPoint || outputCommands >= maximumCommands) {
+          return std::nullopt;
+        }
         const std::size_t remainingCommands = maximumCommands - outputCommands;
         const std::size_t maximumOutputPoints =
             remainingCommands > std::numeric_limits<std::size_t>::max() / 2u
@@ -912,7 +926,9 @@ std::optional<Path> CubicToQuadraticBounded(const Path& path, double tolerance,
           return std::nullopt;
         }
         const std::size_t quadraticCount = quadratics.size() / 2u;
-        if (quadraticCount > remainingCommands) return std::nullopt;
+        if (quadraticCount > remainingCommands) {
+          return std::nullopt;
+        }
         for (std::size_t index = 0; index < quadratics.size(); index += 2u) {
           builder.quadTo(quadratics[index], quadratics[index + 1u]);
         }
@@ -922,7 +938,9 @@ std::optional<Path> CubicToQuadraticBounded(const Path& path, double tolerance,
       }
 
       case Path::Verb::ClosePath:
-        if (!hasCurrentPoint || !admitCommand()) return std::nullopt;
+        if (!hasCurrentPoint || !admitCommand()) {
+          return std::nullopt;
+        }
         builder.closePath();
         currentPoint = subpathStart;
         break;
