@@ -10,7 +10,6 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
-#include <cstring>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -25,6 +24,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/tests/Runfiles.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/SVGDocument.h"
@@ -117,21 +117,6 @@ ResidencyWork DrawAndMeasure(RendererGeode& renderer, SVGDocument& document) {
   const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
   return ResidencyWork{counters.bufferCreates, counters.bindgroupCreates, counters.bufferWrites,
                        counters.bufferWriteBytes};
-}
-
-/// Identical dimensions and identical visible pixels, and not empty.
-bool BitmapsEqual(const RendererBitmap& a, const RendererBitmap& b) {
-  if (a.dimensions != b.dimensions || a.empty()) {
-    return false;
-  }
-  for (int y = 0; y < a.dimensions.y; ++y) {
-    const uint8_t* rowA = a.pixels.data() + static_cast<size_t>(y) * a.rowBytes;
-    const uint8_t* rowB = b.pixels.data() + static_cast<size_t>(y) * b.rowBytes;
-    if (std::memcmp(rowA, rowB, static_cast<size_t>(a.dimensions.x) * 4u) != 0) {
-      return false;
-    }
-  }
-  return true;
 }
 
 /// The geometry budget of \p document, which every device's residence for it is charged to, or
@@ -381,8 +366,11 @@ TEST_F(GeodeDocumentResidencyTest, AnEditOnOneDeviceReachesTheOtherDevicesReside
   onSecond.draw(document);
   const RendererBitmap onSecondAfterEdit = onSecond.takeSnapshot();
 
-  EXPECT_THAT(BitmapsEqual(onFirstAfterEdit, onSecondAfterEdit), IsTrue())
-      << "both devices must draw the edited path";
+  // Both devices must draw the edited path, pixel for pixel.
+  ASSERT_FALSE(onFirstAfterEdit.empty());
+  editor::tests::CompareBitmapToBitmap(onSecondAfterEdit, onFirstAfterEdit,
+                                       "edit_reaches_the_other_devices_residence",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 TEST_F(GeodeDocumentResidencyTest, ADeviceThatGoesStopsCountingAgainstTheDocumentBudget) {

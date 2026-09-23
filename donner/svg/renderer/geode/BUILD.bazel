@@ -947,6 +947,7 @@ donner_cc_test(
         "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
         "//donner/svg",
