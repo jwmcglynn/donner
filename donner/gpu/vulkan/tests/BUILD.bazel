@@ -415,6 +415,24 @@ donner_cc_test(
     ],
 )
 
+# Texture views on Vulkan: which views get a native image view, and that binding one without it
+# stays refused.
+donner_cc_test(
+    name = "vulkan_texture_view_tests",
+    srcs = ["VulkanTextureView_tests.cc"],
+    env = {
+        "DONNER_REQUIRE_VULKAN": "1",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/vulkan:vulkan_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "vulkan_ui_renderer_tests",
     srcs = ["VulkanUiRenderer_tests.cc"],

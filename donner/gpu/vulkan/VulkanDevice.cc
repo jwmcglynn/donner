@@ -2478,6 +2478,19 @@ Result<VulkanDevice::TrackedTextureLayout> VulkanDevice::trackedTextureLayoutFor
   }
 }
 
+Result<bool> VulkanDevice::hasNativeViewForTest(const TextureView& view) const {
+  if (Status status = validateTextureViewHandleForBackend(view); status.hasError()) {
+    return std::move(status).error();
+  }
+  const Impl::TextureViewRecord* record = FindRecord(impl_->textureViews, view.slotIndex());
+  if (record == nullptr) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    std::format("texture view handle (slot {}) does not name a live Vulkan view",
+                                view.slotIndex())};
+  }
+  return record->view != VK_NULL_HANDLE;
+}
+
 void VulkanDevice::setImageBarrierRecordingForTest(bool enabled) {
   if (enabled) {
     impl_->recordedBarriers.emplace();
