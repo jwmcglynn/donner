@@ -5,6 +5,7 @@ on:
   push:
     branches: ["*"]
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || (github.ref == 'refs/heads/main' && format('push-{0}-{1}', github.workflow, github.run_id) || format('push-{0}-{1}', github.workflow, github.ref)) }}
@@ -42,6 +43,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Reject tool-session links in PR body
+        if: github.event_name == 'pull_request'
+        run: python3 tools/check_pr_body.py "$GITHUB_EVENT_PATH"
 
       - id: dup_push
         name: Detect duplicate push (PR already open for this branch)

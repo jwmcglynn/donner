@@ -38,6 +38,18 @@ class CheckPrBodyTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertNotIn(link, result.stdout + result.stderr)
 
+    def test_cli_accepts_a_body_without_session_links(self):
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            event.write_text(json.dumps({"pull_request": {"body": "Fixes SVG handling."}}))
+            result = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("check_pr_body.py")), str(event)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_cli_fails_closed_without_pull_request_payload(self):
         with tempfile.TemporaryDirectory() as directory:
             event = Path(directory) / "event.json"
