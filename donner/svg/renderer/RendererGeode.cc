@@ -3608,7 +3608,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// for) is still cached, so that miss also costs one backend call per
   /// document rather than one per occurrence per frame.
 #ifdef DONNER_TEXT_ENABLED
-  void admitTextRuns(std::vector<TextRun>& runs) {
+  void admitTextRuns(Registry& registry, std::vector<TextRun>& runs) {
+    // Trim the document's glyph cache before admission can reject the runs, so a lowered glyph
+    // cap also shrinks the cache on frames whose text it rejects.
+    (void)glyphCache(registry);
     std::size_t glyphOccurrences = 0;
     for (const TextRun& run : runs) {
       if (run.glyphs.size() > std::numeric_limits<std::size_t>::max() - glyphOccurrences) {
@@ -5276,11 +5279,19 @@ void RendererGeode::setDebugGeometryOverlay(bool enabled) {
 }
 
 void RendererGeode::setMaximumGlyphs(std::size_t maximumGlyphs) {
+#ifdef DONNER_TEXT_ENABLED
   impl_->textMaterializationBudget->setMaximumGlyphs(maximumGlyphs);
+#else
+  (void)maximumGlyphs;
+#endif
 }
 
 std::size_t RendererGeode::maximumGlyphs() const {
+#ifdef DONNER_TEXT_ENABLED
   return impl_->textMaterializationBudget->maximumGlyphs();
+#else
+  return 0;
+#endif
 }
 
 bool RendererGeode::debugGeometryOverlay() const {
@@ -6883,7 +6894,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   // whose spans own effects is not charged once per draw for the glyphs it does not paint.
   ClearUnpaintedSpanGlyphs(text, params.spanEffectOwner, runs);
 
-  impl_->admitTextRuns(runs);
+  impl_->admitTextRuns(registry, runs);
 
   const Path textBoundsPath =
       textBounds.isEmpty() ? Path() : PathBuilder().addRect(textBounds).build();

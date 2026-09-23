@@ -3449,11 +3449,19 @@ void RendererTinySkia::setGradientStopBudgetForTesting(std::size_t maximumStops)
 }
 
 void RendererTinySkia::setMaximumGlyphs(std::size_t maximumGlyphs) {
+#ifdef DONNER_TEXT_ENABLED
   textMaterializationBudget_->setMaximumGlyphs(maximumGlyphs);
+#else
+  (void)maximumGlyphs;
+#endif
 }
 
 std::size_t RendererTinySkia::maximumGlyphs() const {
+#ifdef DONNER_TEXT_ENABLED
   return textMaterializationBudget_->maximumGlyphs();
+#else
+  return 0;
+#endif
 }
 
 void RendererTinySkia::setTextMaterializationBudgetForTesting(
