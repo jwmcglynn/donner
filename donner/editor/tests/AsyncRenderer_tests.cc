@@ -216,7 +216,8 @@ TEST(AsyncRendererPresentationPolicyTest, LayerPanelFixtureDownsamplesTheSameHig
 
 TEST(AsyncRendererPresentationPolicyTest, TexturePresentationSkipsFinalSnapshotWhenTilesExist) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
-      /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/true,
+      /*hasCompositedPreview=*/true, /*fullCanvasPresentationAllowed=*/false,
+      /*requiresTextureSnapshotPresentation=*/true,
       /*captureCpuSnapshot=*/false);
 
   EXPECT_FALSE(plan.captureCpuSnapshot);
@@ -225,7 +226,8 @@ TEST(AsyncRendererPresentationPolicyTest, TexturePresentationSkipsFinalSnapshotW
 
 TEST(AsyncRendererPresentationPolicyTest, TexturePresentationCapturesFallbackWhenTilesAreMissing) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
-      /*hasCompositedPreview=*/false, /*requiresTextureSnapshotPresentation=*/true,
+      /*hasCompositedPreview=*/false, /*fullCanvasPresentationAllowed=*/true,
+      /*requiresTextureSnapshotPresentation=*/true,
       /*captureCpuSnapshot=*/false);
 
   EXPECT_FALSE(plan.captureCpuSnapshot);
@@ -234,7 +236,8 @@ TEST(AsyncRendererPresentationPolicyTest, TexturePresentationCapturesFallbackWhe
 
 TEST(AsyncRendererPresentationPolicyTest, CpuPresentationSkipsRedundantSnapshotWhenTilesExist) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
-      /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/false,
+      /*hasCompositedPreview=*/true, /*fullCanvasPresentationAllowed=*/false,
+      /*requiresTextureSnapshotPresentation=*/false,
       /*captureCpuSnapshot=*/false);
 
   EXPECT_FALSE(plan.captureCpuSnapshot);
@@ -243,7 +246,8 @@ TEST(AsyncRendererPresentationPolicyTest, CpuPresentationSkipsRedundantSnapshotW
 
 TEST(AsyncRendererPresentationPolicyTest, CpuPresentationHonorsExplicitSnapshotRequestWithTiles) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
-      /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/false,
+      /*hasCompositedPreview=*/true, /*fullCanvasPresentationAllowed=*/false,
+      /*requiresTextureSnapshotPresentation=*/false,
       /*captureCpuSnapshot=*/true);
 
   EXPECT_TRUE(plan.captureCpuSnapshot)
@@ -254,11 +258,30 @@ TEST(AsyncRendererPresentationPolicyTest, CpuPresentationHonorsExplicitSnapshotR
 
 TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCapturesFallbackWhenTilesAreMissing) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
-      /*hasCompositedPreview=*/false, /*requiresTextureSnapshotPresentation=*/false,
+      /*hasCompositedPreview=*/false, /*fullCanvasPresentationAllowed=*/true,
+      /*requiresTextureSnapshotPresentation=*/false,
       /*captureCpuSnapshot=*/false);
 
   EXPECT_TRUE(plan.captureCpuSnapshot);
   EXPECT_FALSE(plan.captureTextureSnapshot);
+}
+
+TEST(AsyncRendererPresentationPolicyTest, MissingTilesCaptureNothingWhenFullCanvasIsForbidden) {
+  for (const bool requiresTexture : {false, true}) {
+    for (const bool captureCpuSnapshot : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "requiresTexture=" << requiresTexture
+                                        << " captureCpuSnapshot=" << captureCpuSnapshot);
+      const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
+          /*hasCompositedPreview=*/false, /*fullCanvasPresentationAllowed=*/false, requiresTexture,
+          captureCpuSnapshot);
+
+      EXPECT_FALSE(plan.captureCpuSnapshot)
+          << "With compositing on and no tiles, the renderer's frame is either an earlier one or "
+             "composed from the missing tiles; it may neither be presented nor handed out as a "
+             "capture";
+      EXPECT_FALSE(plan.captureTextureSnapshot);
+    }
+  }
 }
 
 TEST(AsyncRendererTest, GeometryOverlayForcesFlatFrameThenRepromotesSelectionWhenDisabled) {
@@ -2664,11 +2687,15 @@ TEST(AsyncRendererTest, RenderWithoutAnAllocatableSurfacePublishesNothingToPrese
   ASSERT_TRUE(empty.has_value()) << "the worker must publish the iteration instead of aborting";
   EXPECT_FALSE(empty->compositedPreview.has_value()) << DescribePresentation(*empty);
   EXPECT_THAT(empty->bitmap.pixels, ::testing::IsEmpty()) << DescribePresentation(*empty);
+  EXPECT_TRUE(empty->workerTiming.nothingToPresent)
+      << "the empty iteration must be reported, not only inferred: "
+      << DescribePresentation(*empty);
 
   const std::optional<RenderResult> recovered = renderSelected(2, std::nullopt);
   ASSERT_TRUE(recovered.has_value());
   ASSERT_TRUE(recovered->compositedPreview.has_value()) << DescribePresentation(*recovered);
   EXPECT_FALSE(ContainsFullCanvasTile(*recovered)) << DescribePresentation(*recovered);
+  EXPECT_FALSE(recovered->workerTiming.nothingToPresent) << DescribePresentation(*recovered);
   const RenderResult::CompositedTile* layer = FindLayerTile(*recovered, entity);
   ASSERT_NE(layer, nullptr) << DescribePresentation(*recovered);
   EXPECT_TRUE(HasPresentationPayload(*layer)) << DescribePresentation(*recovered);
@@ -2712,11 +2739,14 @@ TEST(AsyncRendererTest, DragFrameWithoutRenderableTilesNeverPresentsAStaleFullCa
   ASSERT_TRUE(stalled.has_value()) << "the worker must publish the iteration instead of aborting";
   EXPECT_FALSE(ContainsFullCanvasTile(*stalled)) << DescribePresentation(*stalled);
   EXPECT_THAT(stalled->bitmap.pixels, ::testing::IsEmpty()) << DescribePresentation(*stalled);
+  EXPECT_EQ(stalled->workerTiming.nothingToPresent, !stalled->compositedPreview.has_value())
+      << DescribePresentation(*stalled);
 
   const std::optional<RenderResult> resumed = postDrag(3, 6.0, std::nullopt);
   ASSERT_TRUE(resumed.has_value());
   ASSERT_TRUE(resumed->compositedPreview.has_value()) << DescribePresentation(*resumed);
   EXPECT_FALSE(ContainsFullCanvasTile(*resumed)) << DescribePresentation(*resumed);
+  EXPECT_FALSE(resumed->workerTiming.nothingToPresent) << DescribePresentation(*resumed);
   const RenderResult::CompositedTile* dragTile = FindLayerTile(*resumed, entity);
   ASSERT_NE(dragTile, nullptr) << DescribePresentation(*resumed);
   EXPECT_TRUE(HasPresentationPayload(*dragTile)) << DescribePresentation(*resumed);

@@ -7,6 +7,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"
@@ -523,6 +524,9 @@ private:
   bool pendingDocumentMutationOverviewRefresh_ = false;
   /// Renderer-only state changed and must be represented by the next accepted worker frame.
   bool pendingPresentationRefresh_ = false;
+  /// Document generation and version of the last worker result that had nothing to present and
+  /// was granted its one automatic re-render. Cleared when a result carries a presentation.
+  std::optional<std::pair<std::uint64_t, std::uint64_t>> nothingToPresentRetry_;
   bool documentPixelCaptureEnabled_ = false;
   bool captureUnavailable_ = false;
   std::uint64_t documentPixelCaptureSessionId_ = 0;

@@ -186,7 +186,8 @@ struct RenderRequest {
   /// Capture a CPU-readable copy of the fully composed frame.
   ///
   /// Geode normally publishes GPU texture tiles without readback. Diagnostics, replay tools, and
-  /// pixel-asserting tests set this flag when they explicitly need a bitmap.
+  /// pixel-asserting tests set this flag when they explicitly need a bitmap. A composited render
+  /// that produced no compositor tiles returns no bitmap either, since its frame is incomplete.
   bool captureCpuSnapshot = false;
   /// Nonzero identity for an explicit editor pixel capture; echoed in the result.
   std::uint64_t cpuSnapshotRequestId = 0;
@@ -204,12 +205,16 @@ struct PresentationSnapshotPlan {
  * Choose final full-canvas snapshot work for a render result.
  *
  * @param hasCompositedPreview True when compositor tiles already provide the presented pixels.
+ * @param fullCanvasPresentationAllowed True when a full-canvas snapshot may be presented in place
+ *   of compositor tiles: composited rendering is off, the request is an overview infill, or the
+ *   geometry debug pass is active.
  * @param requiresTextureSnapshotPresentation True when presentation must remain on GPU textures.
  * @param captureCpuSnapshot True when the caller explicitly requested a CPU-readable frame.
  * @return The final snapshot plan for this worker iteration.
  */
 [[nodiscard]] PresentationSnapshotPlan ChoosePresentationSnapshotPlan(
-    bool hasCompositedPreview, bool requiresTextureSnapshotPresentation, bool captureCpuSnapshot);
+    bool hasCompositedPreview, bool fullCanvasPresentationAllowed,
+    bool requiresTextureSnapshotPresentation, bool captureCpuSnapshot);
 
 /**
  * Capture the full-canvas texture snapshot for a render result. When the renderer cannot
@@ -302,6 +307,10 @@ struct RenderResult {
     /// Full-canvas texture captures whose GPU texture could not be allocated. The worker then
     /// used a CPU snapshot (captured here unless the plan already captured one).
     int fullCanvasTextureAllocationFailureCount = 0;
+    /// True when the iteration produced nothing to present: no compositor tile, and no
+    /// full-canvas payload where one is permitted. The result then carries neither a preview nor a
+    /// bitmap, and the UI keeps presenting its previous frame.
+    bool nothingToPresent = false;
   };
 
   /// One composite tile from the worker's `CompositorController::

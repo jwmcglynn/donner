@@ -57,7 +57,7 @@ void PublishWorkerTimingStats(
     const RenderResult& result, const EditorApp& app,
     const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
   const auto& timing = result.workerTiming;
-  constexpr std::size_t kValueCount = 32;
+  constexpr std::size_t kValueCount = 33;
   static double buffer[kValueCount];
   const double values[kValueCount] = {
       result.workerMs,
@@ -91,7 +91,8 @@ void PublishWorkerTimingStats(
       static_cast<double>(result.fontResourceRevision),
       static_cast<double>(app.document().document().sourceVersion()),
       static_cast<double>(app.undoTimeline().entryCount()),
-      static_cast<double>(timing.fullCanvasTextureAllocationFailureCount)};
+      static_cast<double>(timing.fullCanvasTextureAllocationFailureCount),
+      timing.nothingToPresent ? 1.0 : 0.0};
   std::copy(std::begin(values), std::end(values), std::begin(buffer));
   // clang-format off: EM_JS and EM_ASM bodies are JavaScript, which clang-format rewrites
   // as C++ - it has already split a `===` into `== =` elsewhere in the editor, a SyntaxError
@@ -144,6 +145,7 @@ void PublishWorkerTimingStats(
         stats['sourceVersion'] = heap[b + 29];
         stats['undoEntryCount'] = heap[b + 30];
         stats['fullCanvasTextureAllocationFailureCount'] = heap[b + 31];
+        stats['nothingToPresent'] = heap[b + 32] > 0;
         stats['publishReason'] = 'render-result';
         window['__donnerWorkerStats'] = stats;
       },
@@ -666,6 +668,7 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   pendingRasterViewportSince_ = std::chrono::steady_clock::time_point{};
   pendingDocumentMutationOverviewRefresh_ = false;
   pendingPresentationRefresh_ = false;
+  nothingToPresentRetry_.reset();
   setDocumentPixelCaptureEnabled(false);
   lastFrameCostBreakdown_ = FrameCostBreakdown{};
 }
@@ -1179,10 +1182,25 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   if (frameHistory != nullptr) {
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
   }
+  if (!result.compositedPreview.has_value() || !result.compositedPreview->valid()) {
+    // The worker rendered nothing for this frame, so the previous one stays on screen. Its version
+    // is not displayed: overlays stay gated to the presented pixels, and the scheduler still owes
+    // the version a render. One automatic re-render per version recovers a transient renderer
+    // failure without input; a failure that persists waits for the next input instead of spinning
+    // the worker. Every result past this point carries a valid preview.
+    rejectPixelCaptureResult(resultOpt);
+    const std::pair<std::uint64_t, std::uint64_t> retryIdentity{result.documentGeneration,
+                                                                result.version};
+    if (nothingToPresentRetry_ != retryIdentity) {
+      nothingToPresentRetry_ = retryIdentity;
+      requestPresentationRefresh();
+    }
+    return;
+  }
+  nothingToPresentRetry_.reset();
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
   const bool overviewInfillResult =
-      result.overviewInfillOnly && result.compositedPreview.has_value() &&
-      result.compositedPreview->valid() && !result.rasterViewport.viewportBounded;
+      result.overviewInfillOnly && !result.rasterViewport.viewportBounded;
   if (overviewInfillResult && rasterViewport.viewportBounded) {
     textures.uploadCompositedOverview(*result.compositedPreview, result.rasterViewport);
     lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
@@ -1207,37 +1225,35 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     return;
   }
   const Vector2i resultCanvasSize = result.rasterViewport.outputSizePx;
-  if (result.compositedPreview.has_value() && result.compositedPreview->valid()) {
-    if (!ShouldPresentCompositedPreviewForViewport(*result.compositedPreview, resultCanvasSize)) {
-      rejectPixelCaptureResult(resultOpt);
-      return;
-    }
+  if (!ShouldPresentCompositedPreviewForViewport(*result.compositedPreview, resultCanvasSize)) {
+    rejectPixelCaptureResult(resultOpt);
+    return;
+  }
 
-    textures.uploadComposited(*result.compositedPreview, result.rasterViewport);
-    lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
-    if (!result.rasterViewport.viewportBounded) {
-      pendingDocumentMutationOverviewRefresh_ = false;
+  textures.uploadComposited(*result.compositedPreview, result.rasterViewport);
+  lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
+  if (!result.rasterViewport.viewportBounded) {
+    pendingDocumentMutationOverviewRefresh_ = false;
+  }
+  if (displayNoneSuppressedLayerEntity_ != entt::null) {
+    const bool stillCarriesSuppressedLayer = std::ranges::any_of(
+        result.compositedPreview->tiles, [&](const RenderResult::CompositedTile& tile) {
+          return tile.kind == RenderResult::CompositedTile::Kind::Layer &&
+                 tile.layerEntity == displayNoneSuppressedLayerEntity_;
+        });
+    if (!stillCarriesSuppressedLayer) {
+      displayNoneSuppressedSelectionEntity_ = entt::null;
+      displayNoneSuppressedLayerEntity_ = entt::null;
     }
-    if (displayNoneSuppressedLayerEntity_ != entt::null) {
-      const bool stillCarriesSuppressedLayer = std::ranges::any_of(
-          result.compositedPreview->tiles, [&](const RenderResult::CompositedTile& tile) {
-            return tile.kind == RenderResult::CompositedTile::Kind::Layer &&
-                   tile.layerEntity == displayNoneSuppressedLayerEntity_;
-          });
-      if (!stillCarriesSuppressedLayer) {
-        displayNoneSuppressedSelectionEntity_ = entt::null;
-        displayNoneSuppressedLayerEntity_ = entt::null;
-      }
-    }
-    compositedPresentation_.noteCachedTextures(
-        result.compositedPreview->entity, result.version, resultCanvasSize,
-        DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview));
-    if (CompositedPreviewClearsPendingSelectedLayerRasterization(
-            *result.compositedPreview, pendingSelectedLayerRasterizationEntity_, result.version,
-            pendingSelectedLayerRasterizationVersion_)) {
-      pendingSelectedLayerRasterizationEntity_ = entt::null;
-      pendingSelectedLayerRasterizationVersion_ = 0;
-    }
+  }
+  compositedPresentation_.noteCachedTextures(
+      result.compositedPreview->entity, result.version, resultCanvasSize,
+      DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview));
+  if (CompositedPreviewClearsPendingSelectedLayerRasterization(
+          *result.compositedPreview, pendingSelectedLayerRasterizationEntity_, result.version,
+          pendingSelectedLayerRasterizationVersion_)) {
+    pendingSelectedLayerRasterizationEntity_ = entt::null;
+    pendingSelectedLayerRasterizationVersion_ = 0;
   }
 
   displayedDocVersion_ = result.version;
@@ -1245,8 +1261,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   PublishAcceptedWorkerResult(result);
 #endif
   renderScheduler_.noteRenderCompleted(result.version, resultCanvasSize, result.rasterViewport);
-  if (result.compositedPreview.has_value() && result.compositedPreview->valid() &&
-      compositedPresentation_.isWaitingForChromeRefresh() && app.hasDocument()) {
+  if (compositedPresentation_.isWaitingForChromeRefresh() && app.hasDocument()) {
     refreshSelectionBoundsCache(app);
     // Preserve the last-known marquee rect across this internal
     // chrome-refresh path. Composited drag lands here; SelectTool isn't
