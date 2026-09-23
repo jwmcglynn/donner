@@ -34,6 +34,7 @@
 #include "donner/gpu/DeviceObserver.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/tests/RecordingDeviceObserver.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #include "donner/gpu/vulkan/VulkanLoader.h"
 #include "donner/gpu/vulkan/VulkanSwapchain.h"
@@ -1719,7 +1720,8 @@ public:
 TEST_F(VulkanSurfaceTest, AnObserverSeesTheQueueSubmissionThatEndsEachFrame) {
   const Surface surface = configuredSurface();
   SubmissionCounter counter;
-  ASSERT_THAT(device_->installObserver(counter), IsOk());
+  const gpu::tests::ScopedObserverInstallation observing(*device_, counter);
+  ASSERT_THAT(observing.status(), IsOk());
 
   // Nothing is submitted through `submit` here: the only queue work is the swapchain's own
   // handover barrier, once for the presented frame and once for the abandoned one.
@@ -1733,8 +1735,6 @@ TEST_F(VulkanSurfaceTest, AnObserverSeesTheQueueSubmissionThatEndsEachFrame) {
   EXPECT_THAT(device_->abandonCurrentTexture(surface), IsOk());
   EXPECT_EQ(counter.submissions, 2u);
   EXPECT_EQ(counter.commandBuffers, 0u) << "a backend's own submission carries no caller buffers";
-
-  device_->removeObserver(counter);
 }
 
 TEST_F(VulkanSurfaceTest, AbandonsMoreFramesThanTheSwapchainHoldsImages) {

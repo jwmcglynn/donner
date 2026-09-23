@@ -427,6 +427,7 @@ donner_cc_test(
     deps = [
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device_observer",
         "//donner/gpu/vulkan:vulkan_device",
         "@com_google_gtest//:gtest_main",
         "@vulkan_headers",
