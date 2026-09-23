@@ -1405,7 +1405,7 @@ test("the surface frame probe reports canvas work submitted after its task ended
     })
     .toEqual(expect.objectContaining({ canvasWorkers: 1, lateSubmits: 0 }));
   expect((await readSurfaceFrameProbe(page)).inTaskSubmits).toBeGreaterThan(0);
-  expect(await selfCheckSurfaceFrameProbe(page)).toContainEqual({ late: 1, inTask: 1 });
+  expect(await selfCheckSurfaceFrameProbe(page)).toContainEqual({ late: 1, inTask: 2 });
   expect(failures).toEqual([]);
 });
 

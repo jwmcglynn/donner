@@ -1,23 +1,25 @@
 import type { Page, Worker } from "@playwright/test";
 
 /**
- * A command buffer that wrote into a canvas frame after the task that acquired
- * the frame had already ended.
+ * A command buffer that wrote into a canvas frame in a later task than the one
+ * that acquired the frame.
  *
- * A WebGPU canvas presents its current texture when the task that called
- * `getCurrentTexture()` returns to the event loop, and the texture is expired at
- * that point. Work submitted into it afterwards never reaches the screen, and
- * whatever had been submitted before the task ended is what the page shows - a
- * partially drawn frame, or an empty one. On the Wasm build a task ends early
- * whenever the frame suspends through Asyncify (a GPU wait, a map, a sleep), so
- * this is the observable for "a frame yielded while it held the canvas".
+ * A WebGPU canvas presents its current texture at the rendering update that
+ * follows the task which called `getCurrentTexture()`, and expires the texture
+ * there. That update can only run between tasks, so once the acquiring task has
+ * ended the canvas may already show whatever had been written by then - a
+ * partially drawn frame, or an empty one - and later writes never reach the
+ * screen. On the Wasm build a frame's task ends early whenever the frame
+ * suspends through Asyncify (a GPU wait, a map, a sleep), so this is the
+ * observable for "a frame gave the thread back while it held the canvas".
+ * Microtasks the acquiring task runs before it ends still belong to it.
  */
 export interface LateCanvasSubmit {
   /** Ordinal of the canvas frame, counting acquisitions in this worker. */
   frame: number;
   /** Worker clock when the frame's texture was acquired. */
   acquiredAtMs: number;
-  /** Worker clock when the acquiring task gave the thread back to the event loop. */
+  /** Worker clock when the first task after the acquiring one ran. */
   taskEndedAtMs: number;
   /** Worker clock of the late submission. */
   submittedAtMs: number;
@@ -35,7 +37,8 @@ export interface SurfaceFrameProbeReport {
   /**
    * Submissions that wrote into a canvas frame inside the task that acquired
    * it. Zero with frames above zero would mean the probe never saw the frames'
-   * own work, and a clean `lateSubmits` would then prove nothing.
+   * own work, and a clean `lateSubmits` would then prove nothing. Reads of a
+   * frame, such as a copy out of it, are not writes and are counted nowhere.
    */
   inTaskSubmits: number;
   lateSubmits: LateCanvasSubmit[];
@@ -48,7 +51,11 @@ interface WorkerProbeState {
   lateSubmits: LateCanvasSubmit[];
 }
 
-type ProbeGlobal = typeof globalThis & { __donnerSurfaceFrameProbe?: WorkerProbeState };
+type ProbeGlobal = typeof globalThis & {
+  __donnerSurfaceFrameProbe?: WorkerProbeState;
+  /** Resolves in a task that runs after every task boundary the probe has marked so far. */
+  __donnerSurfaceFrameProbeNextTask?: () => Promise<void>;
+};
 
 // Runs inside each worker. Everything it needs is defined in the body because
 // Playwright serializes the function source into the worker's scope.
@@ -85,6 +92,21 @@ function installInWorker(): boolean {
   const bufferFrames = new WeakMap<GPUCommandBuffer, Set<GPUTexture>>();
   let heldFrame: FrameRecord | null = null;
 
+  // Task boundaries are marked with messages to the probe's own port: a message
+  // is a task of its own, so it runs only once the task that posted it and that
+  // task's microtasks are done, and one port delivers its messages in order. A
+  // resumption the engine delivered ahead of that message would go unreported,
+  // never misreported.
+  const boundaryCallbacks: Array<() => void> = [];
+  const boundaries = new MessageChannel();
+  boundaries.port1.onmessage = () => boundaryCallbacks.shift()?.();
+  const afterThisTask = (callback: () => void) => {
+    boundaryCallbacks.push(callback);
+    boundaries.port2.postMessage(null);
+  };
+  scope.__donnerSurfaceFrameProbeNextTask = () =>
+    new Promise<void>((resolve) => afterThisTask(resolve));
+
   const getCurrentTexture = GPUCanvasContext.prototype.getCurrentTexture;
   GPUCanvasContext.prototype.getCurrentTexture = function(this: GPUCanvasContext) {
     const texture = getCurrentTexture.call(this);
@@ -102,10 +124,7 @@ function installInWorker(): boolean {
       };
       frames.set(texture, record);
       heldFrame = record;
-      // A microtask runs once the JavaScript stack is empty: at the end of the
-      // task, or the moment an Asyncify suspend unwinds the frame to the event
-      // loop. Either is when the canvas presents this texture.
-      queueMicrotask(() => {
+      afterThisTask(() => {
         record.taskEnded = true;
         record.taskEndedAtMs = performance.now();
         if (heldFrame === record) {
@@ -136,7 +155,9 @@ function installInWorker(): boolean {
     return view;
   };
 
-  const noteFrame = (encoder: GPUCommandEncoder, texture: GPUTexture | undefined) => {
+  // Records that `encoder` writes into a canvas frame. Only writes are recorded:
+  // a late read, such as a copy out of an expired frame, changes nothing on screen.
+  const noteFrameWrite = (encoder: GPUCommandEncoder, texture: GPUTexture | undefined) => {
     if (texture === undefined || !frames.has(texture)) {
       return;
     }
@@ -155,23 +176,29 @@ function installInWorker(): boolean {
   ) {
     for (const attachment of descriptor.colorAttachments ?? []) {
       if (attachment) {
-        noteFrame(this, textureOfView.get(attachment.view as GPUTextureView));
+        noteFrameWrite(this, textureOfView.get(attachment.view as GPUTextureView));
         if (attachment.resolveTarget) {
-          noteFrame(this, textureOfView.get(attachment.resolveTarget as GPUTextureView));
+          noteFrameWrite(this, textureOfView.get(attachment.resolveTarget as GPUTextureView));
         }
       }
     }
     return beginRenderPass.call(this, descriptor);
   };
 
-  const copyTextureToBuffer = GPUCommandEncoder.prototype.copyTextureToBuffer;
-  GPUCommandEncoder.prototype.copyTextureToBuffer = function(
+  const copyBufferToTexture = GPUCommandEncoder.prototype.copyBufferToTexture;
+  GPUCommandEncoder.prototype.copyBufferToTexture = function(
     this: GPUCommandEncoder,
-    source: GPUTexelCopyTextureInfo,
+    source: GPUTexelCopyBufferInfo,
+    destination: GPUTexelCopyTextureInfo,
     ...rest: unknown[]
   ) {
-    noteFrame(this, source.texture);
-    return (copyTextureToBuffer as (...args: unknown[]) => void).call(this, source, ...rest);
+    noteFrameWrite(this, destination.texture);
+    return (copyBufferToTexture as (...args: unknown[]) => void).call(
+      this,
+      source,
+      destination,
+      ...rest,
+    );
   };
 
   const copyTextureToTexture = GPUCommandEncoder.prototype.copyTextureToTexture;
@@ -181,8 +208,7 @@ function installInWorker(): boolean {
     destination: GPUTexelCopyTextureInfo,
     ...rest: unknown[]
   ) {
-    noteFrame(this, source.texture);
-    noteFrame(this, destination.texture);
+    noteFrameWrite(this, destination.texture);
     return (copyTextureToTexture as (...args: unknown[]) => void).call(
       this,
       source,
@@ -233,12 +259,15 @@ function installInWorker(): boolean {
   return true;
 }
 
-// Runs inside a worker that already has the probe installed. Clears a scratch
-// canvas frame once inside the task that acquired it and once more after that
-// task has ended - the second is exactly the ordering the probe exists to report.
+// Runs inside a worker that already has the probe installed. Writes a scratch
+// canvas frame in the task that acquired it, again from a microtask of that
+// same task, and once more after that task has ended; reads it once late as
+// well. Only the third write is the ordering the probe exists to report.
 async function selfCheckInWorker(): Promise<{ late: number; inTask: number } | string> {
-  const state = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbe;
-  if (!state?.installed) {
+  const scope = globalThis as ProbeGlobal;
+  const state = scope.__donnerSurfaceFrameProbe;
+  const nextTask = scope.__donnerSurfaceFrameProbeNextTask;
+  if (!state?.installed || nextTask === undefined) {
     return "probe not installed";
   }
   const adapter = await navigator.gpu?.requestAdapter();
@@ -251,7 +280,11 @@ async function selfCheckInWorker(): Promise<{ late: number; inTask: number } | s
   if (context === null) {
     return "no webgpu canvas context";
   }
-  context.configure({ device, format: navigator.gpu.getPreferredCanvasFormat() });
+  context.configure({
+    device,
+    format: navigator.gpu.getPreferredCanvasFormat(),
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
+  });
   const lateBefore = state.lateSubmits.length;
   const inTaskBefore = state.inTaskSubmits;
   const clear = (texture: GPUTexture) => {
@@ -261,10 +294,19 @@ async function selfCheckInWorker(): Promise<{ late: number; inTask: number } | s
     }).end();
     device.queue.submit([encoder.finish()]);
   };
+  const readBack = (texture: GPUTexture) => {
+    const buffer = device.createBuffer({ size: 256 * 16, usage: GPUBufferUsage.COPY_DST });
+    const encoder = device.createCommandEncoder();
+    encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: 256 }, [16, 16]);
+    device.queue.submit([encoder.finish()]);
+  };
   const frame = context.getCurrentTexture();
   clear(frame);
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await Promise.resolve();
   clear(frame);
+  await nextTask();
+  clear(frame);
+  readBack(frame);
   device.destroy();
   return {
     late: state.lateSubmits.length - lateBefore,
@@ -273,7 +315,8 @@ async function selfCheckInWorker(): Promise<{ late: number; inTask: number } | s
 }
 
 function readInWorker(): WorkerProbeState | null {
-  return (globalThis as ProbeGlobal).__donnerSurfaceFrameProbe ?? null;
+  const state = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbe;
+  return state === undefined ? null : { ...state, lateSubmits: [...state.lateSubmits] };
 }
 
 // A pthread parked in a blocking wait never returns to its event loop, so an
@@ -320,9 +363,11 @@ export async function installSurfaceFrameProbe(page: Page): Promise<number> {
 
 /**
  * Prove the probe reports the ordering it watches for, in the engine under
- * test: a frame cleared inside its task counts once as in-task, and a frame
- * cleared after its task ended counts once as late. The scratch canvas and
- * device are the probe's own, so the editor's frames are untouched.
+ * test: two writes inside the acquiring task (one from its microtask) count as
+ * in-task, one write after the task ended counts as late, and a late read
+ * counts as neither, so a working probe answers `{ late: 1, inTask: 2 }`. The
+ * scratch canvas and device are the probe's own, so the editor's frames are
+ * untouched.
  */
 export async function selfCheckSurfaceFrameProbe(
   page: Page,
