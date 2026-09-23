@@ -50,5 +50,18 @@ TEST(RgbaTestMatchersTest, ReadingAPixelOfAnEmptySnapshotFails) {
   EXPECT_NONFATAL_FAILURE(PixelAt(RendererBitmap{}, 0, 0), "of an empty snapshot");
 }
 
+/// A snapshot whose pixel buffer ends before its extent does was not read back whole. Counting it
+/// fails once, naming the shortfall, instead of once for every pixel past the end, and counts
+/// nothing.
+TEST(RgbaTestMatchersTest, CountingATruncatedSnapshotFailsOnce) {
+  RendererBitmap truncated = PaddedSnapshot();
+  truncated.pixels.resize(20);
+
+  size_t count = 0;
+  EXPECT_NONFATAL_FAILURE(count = CountNonTransparentPixels(truncated),
+                          "3x2 snapshot whose 20 bytes end before the 28 its extent needs");
+  EXPECT_THAT(count, testing::Eq(0u));
+}
+
 }  // namespace
 }  // namespace donner::svg::test
