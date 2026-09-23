@@ -29,6 +29,7 @@ using ::testing::Field;
 using ::testing::Ge;
 using ::testing::Gt;
 using ::testing::HasSubstr;
+using ::testing::Ne;
 using ::testing::NiceMock;
 using ::testing::SizeIs;
 
@@ -3156,5 +3157,143 @@ TEST_F(CompositorControllerTest, ComposeRefusesCpuBitmapPayloadInTextureMode) {
       << "texture-presentation mode must never upload a CPU bitmap payload";
   EXPECT_THAT(compositor.lastRenderFrameStats().composePayloadRefusalCount, Ge(1));
 }
+
+void PrintTo(const CompositorTile& tile, std::ostream* os) {
+  *os << "CompositorTile{tileId=" << tile.tileId
+      << ", layerEntity=" << entt::to_integral(tile.layerEntity)
+      << ", generation=" << tile.generation << ", bitmapDims=" << tile.bitmapDims
+      << ", isDragTarget=" << tile.isDragTarget << "}";
+}
+
+// A zoom or resize changes the raster every tile is drawn under, so every tile re-rasterizes. When
+// those re-rasterizations are refused, a payload drawn for the previous raster is at the wrong
+// scale or canvas: publishing it as a tile of the new raster would present it mis-sized. Covered
+// for CPU bitmap tiles and texture tiles.
+class CompositorControllerRasterChangeTest : public CompositorControllerTest,
+                                             public ::testing::WithParamInterface<bool> {
+protected:
+  /// Installs offscreens whose snapshots fail while `state->failTexture` is true; CPU tiles when
+  /// the test parameter is true, texture tiles otherwise.
+  std::shared_ptr<TextureFailureState> installFailableOffscreens() {
+    auto state = std::make_shared<TextureFailureState>();
+    state->failTexture = false;
+    state->cpuTiles = GetParam();
+    ConfigureBudgetAwareOffscreens(renderer_, state);
+    return state;
+  }
+
+  static RenderViewport ZoomedViewport() {
+    RenderViewport viewport;
+    viewport.size = Vector2d(kTestSvgDefaultSize.x * 2.0, kTestSvgDefaultSize.y * 2.0);
+    return viewport;
+  }
+};
+
+MATCHER(CarriesAPayload, "carries a payload") {
+  return arg.bitmapDims.x > 0 && arg.bitmapDims.y > 0;
+}
+
+MATCHER(CarriesNoPayload, "carries no payload") {
+  return arg.bitmapDims.x <= 0 || arg.bitmapDims.y <= 0;
+}
+
+TEST_P(CompositorControllerRasterChangeTest, RefusedRerasterizationPublishesNoTileOfTheNewRaster) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="16" height="16" fill="white" />
+    <rect id="target" x="4" y="4" width="8" height="8" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+  auto state = installFailableOffscreens();
+  CompositorController compositor(document, renderer_, CachedLayersOnlyConfig());
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const std::vector<CompositorTile> firstTiles = compositor.snapshotTilesForUpload();
+  ASSERT_THAT(firstTiles,
+              AllOf(Contains(AllOf(Field(&CompositorTile::layerEntity, entity), CarriesAPayload())),
+                    Contains(AllOf(Field(&CompositorTile::layerEntity, Entity(entt::null)),
+                                   CarriesAPayload()))))
+      << "the first frame must publish the layer and the static segment";
+  const auto firstLayer = std::ranges::find(firstTiles, entity, &CompositorTile::layerEntity);
+  ASSERT_NE(firstLayer, firstTiles.end());
+  const uint64_t firstGeneration = firstLayer->generation;
+
+  // Zoom in: the canvas doubles and the surface scales by two, and every re-rasterization fails.
+  state->failTexture = true;
+  compositor.renderFrame(ZoomedViewport(), Transform2d::Scale(2.0));
+  EXPECT_THAT(compositor.snapshotTilesForUpload(), Each(CarriesNoPayload()))
+      << "a payload drawn for the previous raster must not be published as a tile of the new one";
+
+  state->failTexture = false;
+  compositor.renderFrame(ZoomedViewport(), Transform2d::Scale(2.0));
+  EXPECT_THAT(compositor.snapshotTilesForUpload(),
+              Contains(AllOf(Field(&CompositorTile::layerEntity, entity), CarriesAPayload(),
+                             Field(&CompositorTile::generation, Ne(firstGeneration)))))
+      << "once re-rasterization succeeds, the layer is published with a payload drawn at the new "
+         "raster";
+}
+
+// In viewport-bounded rasterization a zoom keeps the output canvas size and changes only the
+// canvas-to-surface scale. A payload drawn at the old scale is then at another raster although
+// the canvas size matches.
+TEST_P(CompositorControllerRasterChangeTest,
+       RefusedRerasterizationAtTheSameCanvasSizePublishesNoTileOfTheNewScale) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="16" height="16" fill="white" />
+    <rect id="target" x="4" y="4" width="8" height="8" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+  auto state = installFailableOffscreens();
+  CompositorController compositor(document, renderer_, CachedLayersOnlyConfig());
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_THAT(compositor.snapshotTilesForUpload(),
+              Contains(AllOf(Field(&CompositorTile::layerEntity, entity), CarriesAPayload())));
+
+  state->failTexture = true;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, Transform2d::Scale(2.0));
+  EXPECT_THAT(compositor.snapshotTilesForUpload(), Each(CarriesNoPayload()))
+      << "a payload drawn at the previous scale must not be published at the new one";
+}
+
+// A translation-only change of the surface (a pan) moves every tile without changing its scale or
+// canvas. A layer whose re-rasterization is refused then keeps its payload, placed by its compose
+// offset, as before.
+TEST_P(CompositorControllerRasterChangeTest, TranslationOnlyChangeKeepsTheLayerPayload) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="16" height="16" fill="white" />
+    <rect id="target" x="4" y="4" width="8" height="8" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+  auto state = installFailableOffscreens();
+  CompositorController compositor(document, renderer_, CachedLayersOnlyConfig());
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto firstTiles = compositor.snapshotTilesForUpload();
+  const auto firstLayer =
+      std::find_if(firstTiles.begin(), firstTiles.end(),
+                   [entity](const CompositorTile& tile) { return tile.layerEntity == entity; });
+  ASSERT_NE(firstLayer, firstTiles.end());
+
+  state->failTexture = true;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, Transform2d::Translate(3.0, 2.0));
+  EXPECT_THAT(compositor.snapshotTilesForUpload(),
+              Contains(AllOf(Field(&CompositorTile::layerEntity, entity), CarriesAPayload(),
+                             Field(&CompositorTile::generation, firstLayer->generation))))
+      << "a pan keeps the layer's payload when its re-rasterization is refused";
+}
+
+INSTANTIATE_TEST_SUITE_P(CpuAndTextureTiles, CompositorControllerRasterChangeTest,
+                         ::testing::Bool(), [](const ::testing::TestParamInfo<bool>& info) {
+                           return info.param ? "CpuTiles" : "TextureTiles";
+                         });
 
 }  // namespace donner::svg::compositor

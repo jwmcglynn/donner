@@ -2702,6 +2702,55 @@ TEST(AsyncRendererTest, RenderWithoutAnAllocatableSurfacePublishesNothingToPrese
   EXPECT_TRUE(HasPresentationPayload(*layer)) << DescribePresentation(*recovered);
 }
 
+// A zoom re-rasterizes every tile at the new scale. When those re-rasterizations are refused, the
+// payloads the compositor kept were drawn for the previous raster; published as tiles of the new
+// raster they would present at the old scale, about 140 times too small here. Such a frame must
+// publish nothing to present instead.
+TEST(AsyncRendererTest, ZoomWhoseTilesCannotReRasterizeNeverPublishesTheOldScalePayload) {
+  svg::SVGDocument document = svg::instantiateSubtree(kFullCanvasTargetSvg);
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  const auto renderSelected = [&](std::uint64_t version,
+                                  std::optional<EditorRasterViewport> rasterViewport) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    if (rasterViewport.has_value()) {
+      request.rasterViewport = *rasterViewport;
+    }
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> before = renderSelected(1, std::nullopt);
+  ASSERT_TRUE(before.has_value());
+  ASSERT_TRUE(before->compositedPreview.has_value()) << DescribePresentation(*before);
+  ASSERT_NE(FindLayerTile(*before, entity), nullptr) << DescribePresentation(*before);
+
+  const std::optional<RenderResult> zoomed = renderSelected(2, UnallocatableRasterViewport());
+  ASSERT_TRUE(zoomed.has_value());
+  EXPECT_FALSE(zoomed->compositedPreview.has_value())
+      << "no tile of the new raster may carry the payload drawn for the 64-pixel raster: "
+      << DescribePresentation(*zoomed);
+  EXPECT_THAT(zoomed->bitmap.pixels, ::testing::IsEmpty()) << DescribePresentation(*zoomed);
+  EXPECT_TRUE(zoomed->workerTiming.nothingToPresent)
+      << "the zoomed iteration must be reported as nothing to present: "
+      << DescribePresentation(*zoomed);
+
+  const std::optional<RenderResult> restored = renderSelected(3, std::nullopt);
+  ASSERT_TRUE(restored.has_value());
+  ASSERT_TRUE(restored->compositedPreview.has_value()) << DescribePresentation(*restored);
+  const RenderResult::CompositedTile* layer = FindLayerTile(*restored, entity);
+  ASSERT_NE(layer, nullptr) << DescribePresentation(*restored);
+  EXPECT_TRUE(HasPresentationPayload(*layer)) << DescribePresentation(*restored);
+}
+
 // A drag frame whose tiles all fail leaves nothing to present. The renderer's main target still
 // holds the last frame it composed, which a drag frame skips recomposing, so it shows the dragged
 // shape at a position the gesture already left. Presenting it as a full-canvas payload in place of
