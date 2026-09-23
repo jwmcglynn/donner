@@ -429,6 +429,9 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
 /**
  * @brief Asserts two live renderer bitmaps are pixel-for-pixel identical.
  *
+ * An empty bitmap on either side fails the test: a render that was not read back is never
+ * identical to anything, including another empty one.
+ *
  * Strict identity pixelmatch (threshold 0, AA included, 0 mismatches allowed) -
  * the renderer suite's shared bitmap-to-bitmap comparator (so tests don't roll a
  * private one; mirrors the editor's `CompareBitmapToBitmap`). On mismatch, adds a

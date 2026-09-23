@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <functional>
 #include <limits>
+#include <source_location>
 #include <tuple>
 #include <vector>
 
@@ -345,8 +346,12 @@ TEST(RendererTinySkiaSecurityTest, TextReservesAStrokeDrawCallOnlyWhenStroked) {
 }
 
 /// Pixels with non-zero alpha inside the half-open rect [x0, x1) x [y0, y1), clipped to the
-/// snapshot.
-std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1, int y1) {
+/// snapshot. An empty snapshot fails the calling test instead of covering no pixel of the rect.
+std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1, int y1,
+                          std::source_location caller = std::source_location::current()) {
+  if (!test::ExpectSnapshotHasPixels(snapshot, caller)) {
+    return 0;
+  }
   const RendererBitmap normalized = NormalizeSnapshot(snapshot);
   std::size_t covered = 0;
   for (int y = std::max(y0, 0); y < std::min(y1, normalized.dimensions.y); ++y) {

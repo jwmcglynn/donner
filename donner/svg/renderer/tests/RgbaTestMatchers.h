@@ -60,8 +60,34 @@ std::array<uint8_t, 4> PixelAt(const Bitmap& bitmap, int x, int y,
 }
 
 /**
+ * Whether \p bitmap holds pixels to read, failing the calling test at the caller's line, naming
+ * the snapshot as empty, when it holds none.
+ *
+ * A renderer that could not read its frame back returns an empty snapshot. A helper that walks a
+ * snapshot by its own extent visits no pixel of an empty one, so it counts no pixels and finds two
+ * empty snapshots identical, which an assertion about absent or unchanged content accepts. Every
+ * helper that reads a whole snapshot, or a region of one, asks this first.
+ *
+ * @param bitmap Snapshot about to be read.
+ * @param caller Where the read was made; defaults to the call site.
+ * @return True when \p bitmap has pixels.
+ */
+template <typename Bitmap>
+bool ExpectSnapshotHasPixels(const Bitmap& bitmap,
+                             std::source_location caller = std::source_location::current()) {
+  if (bitmap.dimensions.x > 0 && bitmap.dimensions.y > 0 && !bitmap.pixels.empty()) {
+    return true;
+  }
+  ADD_FAILURE_AT(caller.file_name(), caller.line())
+      << "read an empty " << bitmap.dimensions.x << "x" << bitmap.dimensions.y
+      << " snapshot: the renderer returned no pixels, so the frame was not read back";
+  return false;
+}
+
+/**
  * Counts the pixels of \p bitmap whose RGBA satisfies \p predicate, reading each through
- * \ref PixelAt.
+ * \ref PixelAt. An empty snapshot fails the calling test (see \ref ExpectSnapshotHasPixels) and
+ * counts nothing, rather than counting as a snapshot with no such pixels.
  *
  * @param bitmap Snapshot to count.
  * @param predicate Called with each pixel's RGBA; true counts the pixel.
@@ -71,6 +97,9 @@ std::array<uint8_t, 4> PixelAt(const Bitmap& bitmap, int x, int y,
 template <typename Bitmap, typename Predicate>
 size_t CountPixelsWhere(const Bitmap& bitmap, const Predicate& predicate,
                         std::source_location caller = std::source_location::current()) {
+  if (!ExpectSnapshotHasPixels(bitmap, caller)) {
+    return 0;
+  }
   size_t count = 0;
   for (int y = 0; y < bitmap.dimensions.y; ++y) {
     for (int x = 0; x < bitmap.dimensions.x; ++x) {
@@ -83,7 +112,8 @@ size_t CountPixelsWhere(const Bitmap& bitmap, const Predicate& predicate,
 }
 
 /**
- * Pixels of \p bitmap with a non-zero alpha: the liveness signal that something rendered.
+ * Pixels of \p bitmap with a non-zero alpha: the liveness signal that something rendered. An
+ * empty snapshot fails the calling test instead of counting as one that rendered nothing.
  *
  * @param bitmap Snapshot to count.
  * @param caller Where the count was made; defaults to the call site.

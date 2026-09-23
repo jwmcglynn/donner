@@ -608,6 +608,18 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
   }
 }
 
+namespace {
+
+/// Names which of a comparison's two bitmaps is empty, for its failure message.
+std::string_view EmptyBitmapSides(const RendererBitmap& actual, const RendererBitmap& expected) {
+  if (actual.empty() && expected.empty()) {
+    return "the actual and expected bitmaps are empty";
+  }
+  return actual.empty() ? "the actual bitmap is empty" : "the expected bitmap is empty";
+}
+
+}  // namespace
+
 std::string WriteBitmapToTestOutputs(const RendererBitmap& bitmap, std::string_view label) {
   const std::filesystem::path path =
       parityOutputDir() / ("actual_" + escapeFilename(std::string(label)) + ".png");
@@ -619,6 +631,13 @@ std::string WriteBitmapToTestOutputs(const RendererBitmap& bitmap, std::string_v
 
 void ExpectBitmapsIdentical(const RendererBitmap& actual, const RendererBitmap& expected,
                             std::string_view label) {
+  // An empty bitmap is a render that was not read back. Two of them agree on every size field, so
+  // without this they would reach the pixel comparison with no pixels, which is never identity.
+  if (actual.empty() || expected.empty()) {
+    ADD_FAILURE() << label << ": " << EmptyBitmapSides(actual, expected)
+                  << ", so the renderer returned no pixels to compare";
+    return;
+  }
   if (actual.dimensions != expected.dimensions || actual.rowBytes != expected.rowBytes ||
       actual.pixels.size() != expected.pixels.size()) {
     ADD_FAILURE() << label << ": bitmap size mismatch (actual " << actual.dimensions.x << "x"
@@ -820,6 +839,9 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   }
 
   const RendererBitmap snapshot = NormalizeSnapshot(RenderDocumentWithBackend(document, backend));
+  ASSERT_FALSE(snapshot.empty()) << "the " << RendererBackendName(backend)
+                                 << " renderer returned an empty snapshot, so there are no pixels "
+                                    "to compare with the golden";
   ASSERT_EQ(snapshot.rowBytes % 4u, 0u);
 
   const size_t strideInPixels = snapshot.rowBytes / 4u;

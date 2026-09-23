@@ -150,7 +150,13 @@ RendererBitmap renderDefault(const std::shared_ptr<geode::GeodeDevice>& device) 
   return renderer.takeSnapshot();
 }
 
-bool bitmapsIdentical(const RendererBitmap& a, const RendererBitmap& b) {
+/// Whether \p a and \p b hold the same bytes. An empty snapshot fails the calling test and is not
+/// identical to anything: two renders that were not read back hold the same no bytes.
+bool bitmapsIdentical(const RendererBitmap& a, const RendererBitmap& b,
+                      std::source_location caller = std::source_location::current()) {
+  if (!test::ExpectSnapshotHasPixels(a, caller) || !test::ExpectSnapshotHasPixels(b, caller)) {
+    return false;
+  }
   return a.dimensions == b.dimensions && a.rowBytes == b.rowBytes && a.pixels == b.pixels;
 }
 
