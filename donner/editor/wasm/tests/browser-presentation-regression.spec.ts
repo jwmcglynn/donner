@@ -2379,15 +2379,46 @@ test("WebGPU eyedropper Escape and an outside-document click cancel a ready capt
     x: viewport.paneX + viewport.paneWidth / 2,
     y: viewport.paneY + viewport.paneHeight - 20,
   };
+  await page.bringToFront();
   await page.mouse.move(focusPoint.x, focusPoint.y);
   await waitForAppliedPointer(page, focusPoint, {
     message: "render pane focus before eyedropper shortcut",
     timeoutMs: scaledMs(4_000),
   });
-  const beforeFocusFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
-  await page.mouse.click(focusPoint.x, focusPoint.y);
-  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
-    .toBeGreaterThan(beforeFocusFrame);
+  const beforeMouseDownFrame = await page.evaluate(
+    () => window.__donnerEyedropperShortcutProbe?.current?.frameNumber ?? 0,
+  );
+  await page.mouse.down();
+  await expect.poll(() =>
+    page.evaluate((before) => {
+      const gate = window.__donnerEyedropperShortcutProbe?.current;
+      return {
+        down: gate?.mouseLeftDown ?? false,
+        renderedAfterGate:
+          (window.__donnerMainLoopRenderedFrames ?? 0) > (gate?.frameNumber ?? Infinity),
+        newGate: (gate?.frameNumber ?? 0) > before,
+      };
+    }, beforeMouseDownFrame), {
+    message: "render pane mouse-down must finish an editor frame before release",
+    timeout: scaledMs(4_000),
+  }).toEqual({ down: true, renderedAfterGate: true, newGate: true });
+  const beforeMouseUpFrame = await page.evaluate(
+    () => window.__donnerEyedropperShortcutProbe?.current?.frameNumber ?? 0,
+  );
+  await page.mouse.up();
+  await expect.poll(() =>
+    page.evaluate((before) => {
+      const gate = window.__donnerEyedropperShortcutProbe?.current;
+      return {
+        down: gate?.mouseLeftDown ?? true,
+        renderedAfterGate:
+          (window.__donnerMainLoopRenderedFrames ?? 0) > (gate?.frameNumber ?? Infinity),
+        newGate: (gate?.frameNumber ?? 0) > before,
+      };
+    }, beforeMouseUpFrame), {
+    message: "render pane mouse release must finish an editor frame before I",
+    timeout: scaledMs(4_000),
+  }).toEqual({ down: false, renderedAfterGate: true, newGate: true });
   await expect.poll(
     () => page.evaluate(() => window.__donnerEyedropperTestState?.sourcePaneFocused),
     {

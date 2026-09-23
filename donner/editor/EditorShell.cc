@@ -272,8 +272,8 @@ void PublishEyedropperShortcutProbe(bool wantTextInput, bool popupOpen, bool sou
           'appFocusLost' : !!$11,
           'mouseLeftClicked' : !!$12,
           'mouseLeftDown' : !!$13,
-          'domActiveElementId' : String((document.activeElement && document.activeElement.id) || '').slice(0, 64),
-          'domActiveElementTag' : String((document.activeElement && document.activeElement.tagName) || '').slice(0, 32),
+          'domActiveElementId' : String((document.activeElement && document.activeElement.id) || "").slice(0, 64),
+          'domActiveElementTag' : String((document.activeElement && document.activeElement.tagName) || "").slice(0, 32),
           'frameNumber' : Number(window['__donnerMainLoopRenderedFrames'] || 0),
         });
         previous['current'] = gate;
