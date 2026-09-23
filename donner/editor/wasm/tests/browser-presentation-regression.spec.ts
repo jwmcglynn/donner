@@ -18,6 +18,12 @@ import {
   type SplashToneCensus,
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
+import {
+  installSurfaceFrameProbe,
+  readSurfaceFrameProbe,
+  selfCheckSurfaceFrameProbe,
+  type SurfaceFrameProbeReport,
+} from "./surface-frame-probe";
 
 declare global {
   interface Window {
@@ -320,6 +326,40 @@ function splashFramesAgree(a: SplashPresentationFrame, b: SplashPresentationFram
     && Math.abs(a.census.checkerboardPixels - b.census.checkerboardPixels) <= coverageTolerance;
 }
 
+// Keep a piece of evidence as a file in the test's output directory.
+//
+// An attachment given only a body reaches the reporters, and the list reporter
+// these lanes run prints no attachment at all, so nothing was left of it once
+// a run failed: the unusable capture behind a blank Firefox Splash press was
+// lost that way. A file is what CI archives and Bazel keeps as a test output.
+async function attachEvidenceFile(
+  name: string,
+  body: Buffer | string,
+  contentType: "image/png" | "application/json",
+): Promise<void> {
+  const fileName = `${name.replace(/[^A-Za-z0-9._-]+/g, "-")}.${
+    contentType === "image/png" ? "png" : "json"
+  }`;
+  const evidencePath = test.info().outputPath(fileName);
+  await writeFile(evidencePath, body);
+  await test.info().attach(name, { path: evidencePath, contentType });
+}
+
+// What `openEditor` has collected from the page's console, kept per page so a
+// helper that throws before the test reaches its own `expect(failures)` can
+// still report an abort that happened first.
+const consoleFailuresByPage = new WeakMap<Page, string[]>();
+
+function summarizeSurfaceFrames(report: SurfaceFrameProbeReport): object {
+  return {
+    canvasWorkers: report.canvasWorkers,
+    frames: report.frames,
+    inTaskSubmits: report.inTaskSubmits,
+    lateSubmits: report.lateSubmits.length,
+    lastLateSubmits: report.lateSubmits.slice(-3),
+  };
+}
+
 // Take one capture of the presented document and refuse to score an unusable
 // one.
 //
@@ -380,10 +420,7 @@ async function captureSplashDragFrame(
     previousUsable = frame;
   }
   if (last !== null) {
-    await test.info().attach(`unusable-capture-${context}`, {
-      body: last.png,
-      contentType: "image/png",
-    });
+    await attachEvidenceFile(`unusable-capture-${context}`, last.png, "image/png");
   }
   const published = await page.evaluate(() => ({
     frameLoop: window.__donnerFrameLoopStats,
@@ -392,10 +429,28 @@ async function captureSplashDragFrame(
     viewport: window.__donnerViewportStats,
     worker: window.__donnerWorkerStats,
   }));
+  // A page that shows no editor at all is four different failures, and the
+  // screenshot cannot tell them apart. Say which one this is:
+  //   - `surfaceFrames.lateSubmits` above zero: a frame gave the thread back
+  //     while it held the canvas, so the canvas showed what that frame had
+  //     drawn by then (a product presentation bug);
+  //   - `canvas.beforeWake` above zero: the canvas held the frame and only the
+  //     screenshot missed it (the harness);
+  //   - `beforeWake` zero and `afterWake` above zero: the presented image was
+  //     lost while the frame loop was parked (the engine);
+  //   - both zero: the editor presents nothing, and `console` says why.
+  // The frame-loop state above is read first because the canvas probe wakes
+  // the editor for one frame.
+  const surfaceFrames = await readSurfaceFrameProbe(page);
+  const diagnosis = {
+    surfaceFrames: summarizeSurfaceFrames(surfaceFrames),
+    canvas: await diagnosePresentedCanvas(page),
+    console: consoleFailuresByPage.get(page) ?? [],
+  };
   throw new Error(
     `${context}: no usable capture of the presented document after 4 attempts. `
       + `region=${JSON.stringify(region)} census=${JSON.stringify(last?.census)} `
-      + `published=${JSON.stringify(published)}`,
+      + `published=${JSON.stringify(published)} diagnosis=${JSON.stringify(diagnosis)}`,
   );
 }
 
@@ -523,6 +578,7 @@ async function openEditor(page: Page, enableOverlayControl = false): Promise<str
     }
   });
   page.on("pageerror", (error) => failures.push(`[pageerror] ${error.message}`));
+  consoleFailuresByPage.set(page, failures);
 
   const editorUrl = new URL(kBaseUrl);
   if (enableOverlayControl) {
@@ -886,7 +942,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   });
   expect(rejectedControlInputs).toEqual([0, 0]);
   const baseline = await page.screenshot({ clip: documentClip });
-  await test.info().attach("overlay-baseline", { body: baseline, contentType: "image/png" });
+  await attachEvidenceFile("overlay-baseline", baseline, "image/png");
   // Since the single-canvas architecture the document has no element of its own to measure, so the
   // document-space mapping is recovered from the document's own pixels: the
   // Basic Shapes blue rounded rectangle spans (32,32)-(212,152) in document
@@ -939,10 +995,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   );
   await waitForBrowserComposite(page);
   const compositorOverlay = await page.screenshot({ clip: documentClip });
-  await test.info().attach("compositor-tile-overlay", {
-    body: compositorOverlay,
-    contentType: "image/png",
-  });
+  await attachEvidenceFile("compositor-tile-overlay", compositorOverlay, "image/png");
   const compositorDifference = readCssPngPixelDifferenceStats(
     baseline,
     compositorOverlay,
@@ -989,15 +1042,9 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
       },
     )
     .toBe(0);
-  await test.info().attach("overlay-restore-difference", {
-    body: lastRestoreDifference,
-    contentType: "application/json",
-  });
+  await attachEvidenceFile("overlay-restore-difference", lastRestoreDifference, "application/json");
   const geometryBaseline = await page.screenshot({ clip: documentClip });
-  await test.info().attach("overlay-disabled-baseline", {
-    body: geometryBaseline,
-    contentType: "image/png",
-  });
+  await attachEvidenceFile("overlay-disabled-baseline", geometryBaseline, "image/png");
 
   // The blue rounded rectangle spans (32,32)-(212,152). Its emitted
   // triangles share the diagonal through (122,92). Dynamic Slug dilation
@@ -1022,10 +1069,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   );
   await waitForBrowserComposite(page);
   const geometryOverlay = await page.screenshot({ clip: documentClip });
-  await test.info().attach("geometry-debug-overlay", {
-    body: geometryOverlay,
-    contentType: "image/png",
-  });
+  await attachEvidenceFile("geometry-debug-overlay", geometryOverlay, "image/png");
   expect(
     geometryOverlay.equals(geometryBaseline),
     "Geometry Debug Overlay was checked and accepted, but contributed no visible canvas pixels",
@@ -1080,7 +1124,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
 
 test(
   "dragging a circle retains its curved path outline inside the selection bounds",
-  async ({ page }, testInfo) => {
+  async ({ page }) => {
     const failures = await openEditor(page);
     await openBasicShapes(page);
     const viewport = await readViewportStats(page);
@@ -1128,12 +1172,7 @@ test(
           }, { message: `circle path outline at drag offset ${offset}` }).not.toBeNull();
         } finally {
           if (capture.length > 0) {
-            const capturePath = testInfo.outputPath(`circle-path-${offset}.png`);
-            await writeFile(capturePath, capture);
-            await testInfo.attach(`circle-path-${offset}`, {
-              path: capturePath,
-              contentType: "image/png",
-            });
+            await attachEvidenceFile(`circle-path-${offset}`, capture, "image/png");
           }
         }
       }
@@ -1348,6 +1387,28 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   expect(failures).toEqual([]);
 });
 
+// The surface frame probe decides one of the blank-canvas failures in
+// captureSplashDragFrame, and "no late submissions" only means something from a
+// probe that sees frames. So show, in the engine under test, that it sees the
+// editor's own canvas work and that it reports the ordering it exists for: a
+// scratch canvas frame cleared after the task that acquired it has ended.
+test("the surface frame probe reports canvas work submitted after its task ended", async ({ page }) => {
+  const failures = await openEditor(page);
+  expect(await installSurfaceFrameProbe(page), "no worker could host the probe").toBeGreaterThan(0);
+  await page.evaluate(() => {
+    window.__donnerEditorFrameRequested = true;
+  });
+  await expect
+    .poll(async () => summarizeSurfaceFrames(await readSurfaceFrameProbe(page)), {
+      message: "the probe never saw an editor frame write to its canvas",
+      timeout: scaledMs(5_000),
+    })
+    .toEqual(expect.objectContaining({ canvasWorkers: 1, lateSubmits: 0 }));
+  expect((await readSurfaceFrameProbe(page)).inTaskSubmits).toBeGreaterThan(0);
+  expect(await selfCheckSurfaceFrameProbe(page)).toContainEqual({ late: 1, inTask: 2 });
+  expect(failures).toEqual([]);
+});
+
 test("Firefox never exposes the checkerboard while dragging a Splash letter", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const failures = await openEditor(page);
@@ -1357,6 +1418,9 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   // first Splash raster takes, and every assertion below then describes the
   // picker instead of the document.
   await openDonnerSplash(page);
+  // Watched from here so a capture that shows no editor can say whether a frame
+  // gave up the canvas early (see captureSplashDragFrame).
+  await installSurfaceFrameProbe(page);
 
   const viewport = await readViewportStats(page);
   const documentRegion = presentedDocumentRegion(viewport);
@@ -1474,10 +1538,7 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
     // group instead of the letter, chrome that never reached the screen, and
     // chrome nobody can see all read the same here. The capture is of the
     // whole presented document, so attaching it answers that directly.
-    await test.info().attach("press-frame", {
-      body: pressFrame.png,
-      contentType: "image/png",
-    });
+    await attachEvidenceFile("press-frame", pressFrame.png, "image/png");
   }
   expect(
     pressFrame.outline,
@@ -1933,10 +1994,7 @@ async function readProbeCoverage(
     }
     await page.waitForTimeout(kProbeRetakeIntervalMs);
   }
-  await test.info().attach(`no-render-pane-${context}`, {
-    body: last.png,
-    contentType: "image/png",
-  });
+  await attachEvidenceFile(`no-render-pane-${context}`, last.png, "image/png");
   const published = await page.evaluate(() => ({
     frameLoop: window.__donnerFrameLoopStats,
     renderedFrames: window.__donnerMainLoopRenderedFrames || 0,
