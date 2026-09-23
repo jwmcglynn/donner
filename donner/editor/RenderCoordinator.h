@@ -58,6 +58,9 @@ struct RenderAttemptIdentity {
   bool overviewInfillOnly = false;       //!< True for an overview infill request.
   Entity selectedEntity = entt::null;    //!< Selected entity the request kept promoted.
   std::optional<RenderRequest::DragPreview> dragPreview;  //!< Drag state the request carried.
+  /// Presentation refreshes requested before the request was posted. A renderer-setting change
+  /// (composited mode, geometry debug, the eyedropper) changes only this.
+  std::uint64_t presentationEpoch = 0;
 };
 
 /**
@@ -99,7 +102,8 @@ public:
   [[nodiscard]] bool retryScheduled() const;
 
   /**
-   * Seconds until the scheduled retry is due, or nullopt when none is scheduled.
+   * Seconds until the scheduled retry is due, or nullopt when none is scheduled or it is already
+   * due: the wake for it has fired, and the next frame that asks for a render posts it.
    *
    * @param now Current time.
    */
@@ -268,8 +272,12 @@ public:
   [[nodiscard]] std::uint64_t overviewInfillRenderTotal() const {
     return overviewInfillRenderTotal_;
   }
-  /// Request one worker render even when document and viewport epochs are already current.
-  void requestPresentationRefresh() { pendingPresentationRefresh_ = true; }
+  /// Request one worker render even when document and viewport epochs are already current. The
+  /// request is a new one even if an identical earlier request is being held back.
+  void requestPresentationRefresh() {
+    pendingPresentationRefresh_ = true;
+    ++presentationEpoch_;
+  }
   /// Arm or disarm the worker-owned document pixel capture.
   void setDocumentPixelCaptureEnabled(bool enabled);
   /// Whether an editor session currently retains or requests document pixels.
@@ -599,6 +607,8 @@ private:
   bool pendingDocumentMutationOverviewRefresh_ = false;
   /// Renderer-only state changed and must be represented by the next accepted worker frame.
   bool pendingPresentationRefresh_ = false;
+  /// Count of presentation refreshes requested, carried by each posted request's identity.
+  std::uint64_t presentationEpoch_ = 0;
   /// The last request posted to the worker. A result with nothing to present belongs to it.
   std::optional<RenderAttemptIdentity> lastPostedAttempt_;
   /// Paces re-posting a request whose result had nothing to present.

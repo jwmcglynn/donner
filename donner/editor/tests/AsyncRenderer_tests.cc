@@ -32,6 +32,7 @@
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/tests/AsyncTestPolling.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/editor/tests/RenderCoordinatorTestAccess.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"
@@ -43,20 +44,6 @@
 #include "gtest/gtest.h"
 
 namespace donner::editor {
-
-struct RenderCoordinatorTestAccess {
-  /// Replaces the steady clock that paces nothing-to-present retries with one the test advances.
-  static void useFakeRetryClock(RenderCoordinator& coordinator) {
-    fakeRetryNow = std::chrono::steady_clock::time_point{} + std::chrono::hours(1);
-    coordinator.nothingToPresentRetryClockForTesting_ = &FakeRetryNow;
-  }
-
-  static void advanceFakeRetryClock(std::chrono::milliseconds step) { fakeRetryNow += step; }
-
-  static std::chrono::steady_clock::time_point FakeRetryNow() { return fakeRetryNow; }
-
-  static inline std::chrono::steady_clock::time_point fakeRetryNow{};
-};
 
 void PrintTo(const Vector2d& vector, std::ostream* os) {
   *os << "Vector2d{x=" << vector.x << ", y=" << vector.y << "}";

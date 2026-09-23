@@ -342,6 +342,7 @@ bool SameRenderAttempt(const RenderAttemptIdentity& lhs, const RenderAttemptIden
   return lhs.documentGeneration == rhs.documentGeneration && lhs.version == rhs.version &&
          lhs.overviewInfillOnly == rhs.overviewInfillOnly &&
          lhs.selectedEntity == rhs.selectedEntity &&
+         lhs.presentationEpoch == rhs.presentationEpoch &&
          SameRasterViewport(lhs.rasterViewport, rhs.rasterViewport) &&
          SameRequestedDragPreview(lhs.dragPreview, rhs.dragPreview);
 }
@@ -349,7 +350,8 @@ bool SameRenderAttempt(const RenderAttemptIdentity& lhs, const RenderAttemptIden
 RenderAttemptIdentity MakeRenderAttempt(
     std::uint64_t documentGeneration, std::uint64_t version,
     const EditorRasterViewport& rasterViewport, bool overviewInfillOnly, Entity selectedEntity,
-    const std::optional<RenderRequest::DragPreview>& scheduledDragPreview) {
+    const std::optional<RenderRequest::DragPreview>& scheduledDragPreview,
+    std::uint64_t presentationEpoch) {
   return RenderAttemptIdentity{
       .documentGeneration = documentGeneration,
       .version = version,
@@ -357,6 +359,7 @@ RenderAttemptIdentity MakeRenderAttempt(
       .overviewInfillOnly = overviewInfillOnly,
       .selectedEntity = selectedEntity,
       .dragPreview = overviewInfillOnly ? std::nullopt : scheduledDragPreview,
+      .presentationEpoch = presentationEpoch,
   };
 }
 
@@ -686,7 +689,7 @@ bool NothingToPresentRetry::retryScheduled() const {
 }
 
 std::optional<float> NothingToPresentRetry::secondsUntilRetry(Clock::time_point now) const {
-  if (!retryScheduled()) {
+  if (!retryScheduled() || now >= retryAt_) {
     return std::nullopt;
   }
   return std::max(0.0f, std::chrono::duration<float>(retryAt_ - now).count());
@@ -1509,9 +1512,9 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   if (!schedule.shouldRequestRender()) {
     return false;
   }
-  const RenderAttemptIdentity attempt =
-      MakeRenderAttempt(app.document().documentGeneration(), currentVersion, requestRasterViewport,
-                        requestOverviewInfill, prewarmEntity, schedule.dragPreview);
+  const RenderAttemptIdentity attempt = MakeRenderAttempt(
+      app.document().documentGeneration(), currentVersion, requestRasterViewport,
+      requestOverviewInfill, prewarmEntity, schedule.dragPreview, presentationEpoch_);
   if (!nothingToPresentRetry_.mayPost(attempt, nothingToPresentRetryNow())) {
     return false;
   }

@@ -10,6 +10,7 @@
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/tests/RenderCoordinatorTestAccess.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -31,52 +32,6 @@
 // (raw GL), which is unreachable from this contextless unit harness.
 
 namespace donner::editor {
-
-struct RenderCoordinatorTestAccess {
-  static void seedPreCommitPixelCapture(RenderCoordinator& coordinator, const EditorApp& app,
-                                        const ViewportState& viewport) {
-    coordinator.documentPixelCaptureEnabled_ = true;
-    coordinator.documentPixelCaptureSessionId_ = 1;
-    const DocumentPixelCaptureIdentity identity{
-        .sessionId = 1,
-        .documentGeneration = app.document().documentGeneration(),
-        .version = app.document().currentFrameVersion(),
-        .fontResourceRevision = app.document().fontResourceRevision(),
-        .canvasCommitGeneration = coordinator.documentCanvasCommitTotal_,
-        .rasterViewport = viewport.rasterViewport(),
-        .viewport = viewport,
-    };
-    coordinator.documentPixelCapture_ = DocumentPixelCapture{.identity = identity};
-    coordinator.requestedPixelCapture_ = identity;
-    coordinator.pendingCanvasSize_ = viewport.rasterViewport().semanticCanvasSizePx;
-    coordinator.pendingCanvasSizeSince_ = std::chrono::steady_clock::now();
-  }
-
-  static void makeCanvasCommitDue(RenderCoordinator& coordinator) {
-    coordinator.pendingCanvasSizeSince_ =
-        std::chrono::steady_clock::now() - std::chrono::milliseconds(200);
-  }
-
-  /// Replaces the steady clock that paces nothing-to-present retries with one the test advances.
-  static void useFakeRetryClock(RenderCoordinator& coordinator) {
-    fakeRetryNow = std::chrono::steady_clock::time_point{} + std::chrono::hours(1);
-    coordinator.nothingToPresentRetryClockForTesting_ = &FakeRetryNow;
-  }
-
-  static void advanceFakeRetryClock(std::chrono::milliseconds step) { fakeRetryNow += step; }
-
-  static std::chrono::steady_clock::time_point FakeRetryNow() { return fakeRetryNow; }
-
-  static inline std::chrono::steady_clock::time_point fakeRetryNow{};
-
-  static std::optional<std::uint64_t> requestedCommitGeneration(
-      const RenderCoordinator& coordinator) {
-    if (!coordinator.requestedPixelCapture_.has_value()) {
-      return std::nullopt;
-    }
-    return coordinator.requestedPixelCapture_->canvasCommitGeneration;
-  }
-};
 
 namespace {
 
@@ -171,6 +126,8 @@ TEST(RenderCoordinatorPolicyTest, NothingToPresentRetryPacesTheFailedRequestThen
                     ::testing::FloatNear(std::chrono::duration<float>(delay).count(), 1e-4f)));
     now += delay;
     EXPECT_TRUE(retry.mayPost(failing, now));
+    EXPECT_EQ(retry.secondsUntilRetry(now), std::nullopt)
+        << "a due retry asks for no further wake; the next frame that renders posts it";
   }
 
   EXPECT_TRUE(retry.noteFailure(failing, now)) << "the failure after the last retry gives up";
@@ -203,6 +160,9 @@ TEST(RenderCoordinatorPolicyTest, NothingToPresentRetryTreatsAChangedRasterOrDra
   RenderAttemptIdentity replaced = failing;
   replaced.documentGeneration = 2;
   EXPECT_TRUE(retry.mayPost(replaced, now));
+  RenderAttemptIdentity refreshed = failing;
+  refreshed.presentationEpoch = 1;
+  EXPECT_TRUE(retry.mayPost(refreshed, now)) << "a presentation refresh is a new request";
   RenderAttemptIdentity recaptured = failing;
   recaptured.dragPreview->forceLayerRasterization = true;
   EXPECT_FALSE(retry.mayPost(recaptured, now))

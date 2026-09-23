@@ -577,7 +577,8 @@ public:
 
   /**
    * Drop every compositor tile a completed render produced, as a render whose tile payloads all
-   * failed would, so tests can drive the result that carries nothing to present.
+   * failed would, so tests can drive the result that carries nothing to present. Unlike a real
+   * failure, the compositor's own tiles stay valid and clean; only the published result omits them.
    *
    * @param withhold True to withhold the tiles of every later render, false to publish them again.
    */
