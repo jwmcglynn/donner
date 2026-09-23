@@ -2543,6 +2543,7 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   }).toBeGreaterThan(beforeEditorPasteFrame);
   await page.keyboard.up("v");
   await page.keyboard.up("Control");
+  await retainEyedropperPng("eyedropper-alpha-source-after-paste.png", await page.screenshot());
   await expect.poll(() =>
     page.evaluate(() => {
       const state = window.__donnerEyedropperTestState;
@@ -2555,7 +2556,6 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     message: "Ctrl+V must replace the selected intermediate source with the full SVG fixture",
     timeout: scaledMs(4_000),
   }).toEqual(expect.objectContaining({ sourceBytes: fixture.length, selectedBytes: 0 }));
-  await retainEyedropperPng("eyedropper-alpha-source-after-paste.png", await page.screenshot());
   await expect.poll(() =>
     page.evaluate((before) => {
       const width = window.__donnerViewportStats?.documentWidth ?? 0;
