@@ -78,6 +78,11 @@ declare global {
       sourceSelectionActive: boolean;
       activePaintTarget: "fill" | "stroke";
       undoEntryCount: number;
+      documentGeneration: number;
+      sourceBufferByteLength: number;
+      sourceSelectionByteLength: number;
+      sourceDiagnosticCount: number;
+      textSyncWakePending: boolean;
     };
     __donnerEyedropperShortcutProbe?: {
       current: EyedropperShortcutGate;
@@ -1997,6 +2002,12 @@ async function clickAppliedPoint(
   await page.mouse.click(point.x, point.y);
 }
 
+async function retainEyedropperPng(name: string, png: Buffer): Promise<void> {
+  const path = test.info().outputPath(name);
+  await writeFile(path, png);
+  await test.info().attach(name, { path, contentType: "image/png" });
+}
+
 async function readEyedropperState(page: Page) {
   return page.evaluate(() => ({
     armed: window.__donnerInteractionStats?.eyedropperArmed ?? false,
@@ -2057,10 +2068,7 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
   ).toBeGreaterThan(0);
   const pixelRegion = { x: point.x - 0.5, y: point.y - 0.5, width: 1, height: 1 };
   const presentedPixel = await captureSplashPresentationFrame(page, pixelRegion, pixelRegion);
-  await test.info().attach("eyedropper-donner-reference.png", {
-    body: presentedPixel.png,
-    contentType: "image/png",
-  });
+  await retainEyedropperPng("eyedropper-donner-reference.png", presentedPixel.png);
   expect(
     presentedPixel.letter?.pixels,
     `expected the sampled WebGPU pixel to be Donner lettering: ${
@@ -2124,10 +2132,7 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
       height: viewport.paneHeight,
     },
   });
-  await test.info().attach("eyedropper-donner-loupe.png", {
-    body: loupe,
-    contentType: "image/png",
-  });
+  await retainEyedropperPng("eyedropper-donner-loupe.png", loupe);
   expect(await readEyedropperState(page)).toEqual(expect.objectContaining({
     armed: true,
     ready: true,
@@ -2197,6 +2202,18 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     selectedText: "SVG",
     selectedStyle: expect.stringContaining(expectedFill),
   }));
+  await waitForBrowserComposite(page);
+  await retainEyedropperPng(
+    "eyedropper-new-svg-text.png",
+    await page.screenshot({
+      clip: {
+        x: viewport.paneX,
+        y: viewport.paneY,
+        width: viewport.paneWidth,
+        height: viewport.paneHeight,
+      },
+    }),
+  );
   expect(failures).toEqual([]);
 });
 
@@ -2264,8 +2281,9 @@ test("WebGPU eyedropper follows the active paint swatch through Stroke, None, an
     timeoutMs: scaledMs(4_000),
   });
   await waitForBrowserComposite(page);
-  await test.info().attach("eyedropper-active-stroke-loupe.png", {
-    body: await page.screenshot({
+  await retainEyedropperPng(
+    "eyedropper-active-stroke-loupe.png",
+    await page.screenshot({
       clip: {
         x: viewport.paneX,
         y: viewport.paneY,
@@ -2273,8 +2291,7 @@ test("WebGPU eyedropper follows the active paint swatch through Stroke, None, an
         height: viewport.paneHeight,
       },
     }),
-    contentType: "image/png",
-  });
+  );
   await page.mouse.click(point.x, point.y);
   await expect.poll(() => readPaintTargetState(page), {
     message: "toolbar eyedropper must write the sampled pixel to Stroke only",
@@ -2417,9 +2434,10 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     message: "the source pane reveal must move the render pane before source editing",
     timeout: scaledMs(4_000),
   }).toBeGreaterThan(500);
-  const beforeSourceVersion = await page.evaluate(
-    () => window.__donnerWorkerStats?.sourceVersion ?? -1,
+  const beforeDocumentGeneration = await page.evaluate(
+    () => window.__donnerEyedropperTestState?.documentGeneration ?? -1,
   );
+  expect(beforeDocumentGeneration).toBeGreaterThanOrEqual(0);
   const fixture = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"128\" height=\"128\" "
     + "viewBox=\"0 0 128 128\"><rect width=\"128\" height=\"128\" fill=\"#ff000080\"/></svg>";
   const sourcePoint = { x: 120, y: 180 };
@@ -2444,13 +2462,19 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   ).toBe(true);
   await page.keyboard.down("Control");
   await page.keyboard.down("a");
-  await expect.poll(
-    () => page.evaluate(() => window.__donnerEyedropperTestState?.sourceSelectionActive),
-    {
-      message: "Control+A must select the existing SVG source before pasting the fixture",
-      timeout: scaledMs(4_000),
-    },
-  ).toBe(true);
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const state = window.__donnerEyedropperTestState;
+      return {
+        coversAll: (state?.sourceBufferByteLength ?? 0) > 0
+          && state?.sourceSelectionByteLength === state?.sourceBufferByteLength,
+        selectedBytes: state?.sourceSelectionByteLength ?? -1,
+        sourceBytes: state?.sourceBufferByteLength ?? -1,
+      };
+    }), {
+    message: "Control+A must select the entire existing SVG source before pasting the fixture",
+    timeout: scaledMs(4_000),
+  }).toEqual(expect.objectContaining({ coversAll: true }));
   await page.keyboard.up("a");
   await page.keyboard.up("Control");
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
@@ -2489,36 +2513,44 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   await expect.poll(() =>
     page.evaluate(() => ({
       replaced: window.__donnerEyedropperTestState?.sourceSelectionActive === false,
+      sourceBytes: window.__donnerEyedropperTestState?.sourceBufferByteLength ?? -1,
       pasteEvents: window.__donnerTestPasteEventStats ?? null,
       activeElement: document.activeElement?.id || document.activeElement?.tagName || "none",
     })), {
     message: "the single platform paste must replace the selected source",
     timeout: scaledMs(4_000),
-  }).toEqual(expect.objectContaining({ replaced: true }));
+  }).toEqual(expect.objectContaining({ replaced: true, sourceBytes: fixture.length }));
+  await retainEyedropperPng("eyedropper-alpha-source-after-paste.png", await page.screenshot());
   await expect.poll(() =>
     page.evaluate((before) => {
       const width = window.__donnerViewportStats?.documentWidth ?? 0;
       const height = window.__donnerViewportStats?.documentHeight ?? 0;
       const sourceVersion = window.__donnerWorkerStats?.sourceVersion ?? -1;
       const busy = window.__donnerInteractionStats?.workerBusy ?? true;
+      const sourceState = window.__donnerEyedropperTestState;
       return {
-        ready: sourceVersion > before && width > 0 && height > 0
+        ready: (sourceState?.documentGeneration ?? -1) > before && width > 0 && height > 0
           && Math.abs(width - height) < 1 && !busy,
+        documentGeneration: sourceState?.documentGeneration ?? -1,
         sourceVersion,
         width,
         height,
         busy,
-        sourcePaneFocused: window.__donnerEyedropperTestState?.sourcePaneFocused ?? false,
-        sourceSelectionActive: window.__donnerEyedropperTestState?.sourceSelectionActive ?? false,
+        sourcePaneFocused: sourceState?.sourcePaneFocused ?? false,
+        sourceSelectionActive: sourceState?.sourceSelectionActive ?? false,
+        sourceBytes: sourceState?.sourceBufferByteLength ?? -1,
+        selectionBytes: sourceState?.sourceSelectionByteLength ?? -1,
+        diagnostics: sourceState?.sourceDiagnosticCount ?? -1,
+        textSyncWakePending: sourceState?.textSyncWakePending ?? false,
         completedResults: window.__donnerWorkerStats?.completedResults ?? -1,
       };
-    }, beforeSourceVersion), {
+    }, beforeDocumentGeneration), {
     message: "the pasted translucent SVG must become a settled square document",
     timeout: scaledMs(5_000),
     intervals: [16, 25, 50, 100],
   }).toEqual(expect.objectContaining({ ready: true }));
   const sourceVersion = await page.evaluate(() => window.__donnerWorkerStats?.sourceVersion ?? -1);
-  expect(sourceVersion).toBeGreaterThan(beforeSourceVersion);
+  expect(sourceVersion).toBeGreaterThanOrEqual(0);
   const viewport = await readViewportStats(page);
   expect(Math.abs(viewport.documentWidth - viewport.documentHeight)).toBeLessThan(1);
   const center = {
@@ -2570,10 +2602,7 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   });
   await waitForBrowserComposite(page);
   const loupe = await page.screenshot({ clip: paneClip });
-  await test.info().attach("eyedropper-alpha-edge-loupe.png", {
-    body: loupe,
-    contentType: "image/png",
-  });
+  await retainEyedropperPng("eyedropper-alpha-edge-loupe.png", loupe);
   expect(await readEyedropperState(page)).toEqual(expect.objectContaining({
     armed: true,
     ready: true,
