@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cinttypes>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <span>
 #include <utility>
 
@@ -146,6 +148,8 @@ void PublishWorkerTimingStats(
         stats['undoEntryCount'] = heap[b + 30];
         stats['fullCanvasTextureAllocationFailureCount'] = heap[b + 31];
         stats['nothingToPresent'] = heap[b + 32] > 0;
+        stats['nothingToPresentTotal'] = (previous ? previous['nothingToPresentTotal'] || 0 : 0) +
+                                         (stats['nothingToPresent'] ? 1 : 0);
         stats['publishReason'] = 'render-result';
         window['__donnerWorkerStats'] = stats;
       },
@@ -321,6 +325,39 @@ bool SameRasterViewport(const EditorRasterViewport& lhs, const EditorRasterViewp
          lhs.semanticCanvasSizePx == rhs.semanticCanvasSizePx &&
          lhs.viewportBounded == rhs.viewportBounded &&
          SameTransform(lhs.outputFromDocument, rhs.outputFromDocument);
+}
+
+bool SameRequestedDragPreview(const std::optional<RenderRequest::DragPreview>& lhs,
+                              const std::optional<RenderRequest::DragPreview>& rhs) {
+  if (!lhs.has_value() || !rhs.has_value()) {
+    return lhs.has_value() == rhs.has_value();
+  }
+  return lhs->entity == rhs->entity && lhs->extraEntities == rhs->extraEntities &&
+         lhs->interactionKind == rhs->interactionKind &&
+         lhs->dragGeneration == rhs->dragGeneration && lhs->translation == rhs->translation &&
+         SameTransform(lhs->documentFromCachedDocument, rhs->documentFromCachedDocument);
+}
+
+bool SameRenderAttempt(const RenderAttemptIdentity& lhs, const RenderAttemptIdentity& rhs) {
+  return lhs.documentGeneration == rhs.documentGeneration && lhs.version == rhs.version &&
+         lhs.overviewInfillOnly == rhs.overviewInfillOnly &&
+         lhs.selectedEntity == rhs.selectedEntity &&
+         SameRasterViewport(lhs.rasterViewport, rhs.rasterViewport) &&
+         SameRequestedDragPreview(lhs.dragPreview, rhs.dragPreview);
+}
+
+RenderAttemptIdentity MakeRenderAttempt(
+    std::uint64_t documentGeneration, std::uint64_t version,
+    const EditorRasterViewport& rasterViewport, bool overviewInfillOnly, Entity selectedEntity,
+    const std::optional<RenderRequest::DragPreview>& scheduledDragPreview) {
+  return RenderAttemptIdentity{
+      .documentGeneration = documentGeneration,
+      .version = version,
+      .rasterViewport = rasterViewport,
+      .overviewInfillOnly = overviewInfillOnly,
+      .selectedEntity = selectedEntity,
+      .dragPreview = overviewInfillOnly ? std::nullopt : scheduledDragPreview,
+  };
 }
 
 bool SameViewport(const ViewportState& lhs, const ViewportState& rhs) {
@@ -621,6 +658,45 @@ RenderCoordinator::RenderWorkerBundle::RenderWorkerBundle(
 RenderCoordinator::RenderCoordinator(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice)
     : renderWorker_(std::move(geodeDevice)) {}
 
+bool NothingToPresentRetry::noteFailure(const RenderAttemptIdentity& attempt,
+                                        Clock::time_point now) {
+  if (failedAttempt_.has_value() && SameRenderAttempt(*failedAttempt_, attempt)) {
+    ++failures_;
+  } else {
+    failedAttempt_ = attempt;
+    failures_ = 1;
+  }
+  if (failures_ <= kRetryDelays.size()) {
+    retryAt_ = now + kRetryDelays[failures_ - 1];
+    return false;
+  }
+  return failures_ == kRetryDelays.size() + 1;
+}
+
+bool NothingToPresentRetry::mayPost(const RenderAttemptIdentity& attempt,
+                                    Clock::time_point now) const {
+  if (!failedAttempt_.has_value() || !SameRenderAttempt(*failedAttempt_, attempt)) {
+    return true;
+  }
+  return retryScheduled() && now >= retryAt_;
+}
+
+bool NothingToPresentRetry::retryScheduled() const {
+  return failedAttempt_.has_value() && failures_ <= kRetryDelays.size();
+}
+
+std::optional<float> NothingToPresentRetry::secondsUntilRetry(Clock::time_point now) const {
+  if (!retryScheduled()) {
+    return std::nullopt;
+  }
+  return std::max(0.0f, std::chrono::duration<float>(retryAt_ - now).count());
+}
+
+void NothingToPresentRetry::reset() {
+  failedAttempt_.reset();
+  failures_ = 0;
+}
+
 void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration) {
   (void)documentGeneration;
   compositedPresentation_ = CompositedPresentation{};
@@ -668,6 +744,7 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   pendingRasterViewportSince_ = std::chrono::steady_clock::time_point{};
   pendingDocumentMutationOverviewRefresh_ = false;
   pendingPresentationRefresh_ = false;
+  lastPostedAttempt_.reset();
   nothingToPresentRetry_.reset();
   setDocumentPixelCaptureEnabled(false);
   lastFrameCostBreakdown_ = FrameCostBreakdown{};
@@ -701,6 +778,40 @@ const DocumentPixelCapture* RenderCoordinator::documentPixelCaptureFor(
   return SamePixelCaptureIdentity(documentPixelCapture_->identity, current)
              ? &*documentPixelCapture_
              : nullptr;
+}
+
+std::optional<float> RenderCoordinator::nextNothingToPresentRetryWakeSeconds() const {
+  if (renderWorker_.asyncRenderer.isBusy()) {
+    return std::nullopt;
+  }
+  return nothingToPresentRetry_.secondsUntilRetry(nothingToPresentRetryNow());
+}
+
+std::chrono::steady_clock::time_point RenderCoordinator::nothingToPresentRetryNow() const {
+  return nothingToPresentRetryClockForTesting_ != nullptr ? nothingToPresentRetryClockForTesting_()
+                                                          : std::chrono::steady_clock::now();
+}
+
+void RenderCoordinator::noteResultWithNothingToPresent(const std::optional<RenderResult>& result) {
+  ++nothingToPresentResultTotal_;
+  const bool fromLastPost = lastPostedAttempt_.has_value() &&
+                            lastPostedAttempt_->documentGeneration == result->documentGeneration &&
+                            lastPostedAttempt_->version == result->version;
+  if (!fromLastPost ||
+      !nothingToPresentRetry_.noteFailure(*lastPostedAttempt_, nothingToPresentRetryNow())) {
+    rejectPixelCaptureResult(result);
+    return;
+  }
+  std::fprintf(stderr,
+               "[editor] document version %" PRIu64
+               " rendered nothing to present %zu times; not rendering it again until it changes\n",
+               result->version, NothingToPresentRetry::kRetryDelays.size() + 1);
+  if (documentPixelCaptureEnabled_ &&
+      result->cpuSnapshotRequestId == documentPixelCaptureSessionId_) {
+    // Hold the capture request for this identity as unavailable, as for an oversized capture, so
+    // the picker stops asking for it until the document or viewport changes.
+    captureUnavailable_ = true;
+  }
 }
 
 std::optional<float> RenderCoordinator::nextPixelCaptureCanvasCommitWakeSeconds() const {
@@ -1183,18 +1294,9 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
   }
   if (!result.compositedPreview.has_value() || !result.compositedPreview->valid()) {
-    // The worker rendered nothing for this frame, so the previous one stays on screen. Its version
-    // is not displayed: overlays stay gated to the presented pixels, and the scheduler still owes
-    // the version a render. One automatic re-render per version recovers a transient renderer
-    // failure without input; a failure that persists waits for the next input instead of spinning
-    // the worker. Every result past this point carries a valid preview.
-    rejectPixelCaptureResult(resultOpt);
-    const std::pair<std::uint64_t, std::uint64_t> retryIdentity{result.documentGeneration,
-                                                                result.version};
-    if (nothingToPresentRetry_ != retryIdentity) {
-      nothingToPresentRetry_ = retryIdentity;
-      requestPresentationRefresh();
-    }
+    // Nothing to present: the previous frame, and the overlays gated to its version, stay on
+    // screen. Every result past this point carries a valid preview.
+    noteResultWithNothingToPresent(resultOpt);
     return;
   }
   nothingToPresentRetry_.reset();
@@ -1391,7 +1493,10 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
           .selectedEntity = requestOverviewInfill ? entt::null : prewarmEntity,
           .selectedExtraEntities = prewarmExtraEntities,
           .activeDragPreview = dragPreview,
-          .forcePresentationRefresh = forcePresentationRefresh,
+          // A scheduled retry owes a render even when the failed request's only reason for one,
+          // such as a presentation refresh, was consumed when it was posted.
+          .forcePresentationRefresh =
+              forcePresentationRefresh || nothingToPresentRetry_.retryScheduled(),
           .forceSelectedLayerRasterization = forceSelectedLayerRasterization,
           .currentVersion = currentVersion,
           .currentCanvasSize = currentCanvasSize,
@@ -1402,6 +1507,12 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
           .selectionOnlyPrewarmMayTriggerRender = kSelectionOnlyPrewarmMayTriggerRender,
       });
   if (!schedule.shouldRequestRender()) {
+    return false;
+  }
+  const RenderAttemptIdentity attempt =
+      MakeRenderAttempt(app.document().documentGeneration(), currentVersion, requestRasterViewport,
+                        requestOverviewInfill, prewarmEntity, schedule.dragPreview);
+  if (!nothingToPresentRetry_.mayPost(attempt, nothingToPresentRetryNow())) {
     return false;
   }
 
@@ -1427,17 +1538,14 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // Carry the current renderable selection on every render so the compositor can keep the selected
   // entity promoted across drag → idle → drag transitions. A selected `display:none` element keeps
   // editor chrome but must not keep or refresh a promoted content layer.
-  if (prewarmEntity != entt::null) {
-    req.selectedEntity = prewarmEntity;
-  }
-  if (!requestOverviewInfill && schedule.dragPreview.has_value()) {
-    req.dragPreview = *schedule.dragPreview;
-  }
+  req.selectedEntity = attempt.selectedEntity;
+  req.dragPreview = attempt.dragPreview;
   ++lastFrameCostBreakdown_.renderRequestsPosted;
   if (requestOverviewInfill) {
     ++overviewInfillRenderTotal_;
   }
   renderWorker_.asyncRenderer.requestRender(req);
+  lastPostedAttempt_ = attempt;
   recordPixelCaptureRequest(req, desiredCapture);
   pendingPresentationRefresh_ = false;
   return true;

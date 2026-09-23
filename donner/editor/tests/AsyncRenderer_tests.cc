@@ -44,6 +44,20 @@
 
 namespace donner::editor {
 
+struct RenderCoordinatorTestAccess {
+  /// Replaces the steady clock that paces nothing-to-present retries with one the test advances.
+  static void useFakeRetryClock(RenderCoordinator& coordinator) {
+    fakeRetryNow = std::chrono::steady_clock::time_point{} + std::chrono::hours(1);
+    coordinator.nothingToPresentRetryClockForTesting_ = &FakeRetryNow;
+  }
+
+  static void advanceFakeRetryClock(std::chrono::milliseconds step) { fakeRetryNow += step; }
+
+  static std::chrono::steady_clock::time_point FakeRetryNow() { return fakeRetryNow; }
+
+  static inline std::chrono::steady_clock::time_point fakeRetryNow{};
+};
+
 void PrintTo(const Vector2d& vector, std::ostream* os) {
   *os << "Vector2d{x=" << vector.x << ", y=" << vector.y << "}";
 }
@@ -5691,6 +5705,7 @@ TEST(RenderCoordinatorTest, NothingToPresentKeepsThePresentedFrameUntilARenderPr
     GTEST_SKIP() << "Geode-only presentation regression: TinySkia test path lacks a GL context "
                     "for composited texture upload.";
   }
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
   const auto runFrame = [&] {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
     while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
@@ -5729,10 +5744,13 @@ TEST(RenderCoordinatorTest, NothingToPresentKeepsThePresentedFrameUntilARenderPr
   }
   EXPECT_THAT(posted, ::testing::AllOf(::testing::Ge(1), ::testing::Le(2)))
       << "ten idle frames of a render that keeps producing nothing to present";
+  EXPECT_EQ(posted, 1) << "the first retry waits for its delay";
   EXPECT_EQ(coordinator.displayedDocVersionForDiagnostics(), presentedVersion)
       << "the presented frame stays until a render presents";
+  EXPECT_EQ(coordinator.nothingToPresentResultTotalForDiagnostics(), 1u);
 
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(false);
+  RenderCoordinatorTestAccess::advanceFakeRetryClock(NothingToPresentRetry::kRetryDelays.front());
   EXPECT_EQ(presentCurrentVersion(), editedVersion)
       << "once the renderer produces tiles again, the owed version presents";
 }

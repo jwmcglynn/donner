@@ -1579,6 +1579,7 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
   }
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds());
+  includeWake(renderCoordinator_.nextNothingToPresentRetryWakeSeconds());
   includeWake(textEditor_.nextFlashWakeSeconds());
   includeWake(textEditor_.nextRopeAnimationWakeSeconds());
   const bool sourcePaneTargetVisible = !adaptiveUiLayout_.compactTouch() && sourcePaneVisible_;
