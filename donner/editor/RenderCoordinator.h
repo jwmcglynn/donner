@@ -36,6 +36,8 @@ struct DocumentPixelCaptureIdentity {
   std::uint64_t documentGeneration = 0;
   std::uint64_t version = 0;
   std::uint64_t fontResourceRevision = 0;
+  /// Monotonic editor canvas-size commit represented by this render.
+  std::uint64_t canvasCommitGeneration = 0;
   EditorRasterViewport rasterViewport;
   ViewportState viewport;
 };
@@ -211,6 +213,8 @@ public:
       const EditorApp& app, const ViewportState& viewport) const;
   /// True when the current capture attempt completed without a usable bitmap.
   [[nodiscard]] bool documentPixelCaptureUnavailable() const { return captureUnavailable_; }
+  /// Wake deadline for an armed picker waiting on a delayed semantic canvas-size commit.
+  [[nodiscard]] std::optional<float> nextPixelCaptureCanvasCommitWakeSeconds() const;
   /// Whether a renderer-presentation setting still needs a worker frame.
   [[nodiscard]] bool presentationRefreshPending() const { return pendingPresentationRefresh_; }
   /// Clear the per-frame cost accumulator before a new UI frame starts.
@@ -378,6 +382,7 @@ public:
   [[nodiscard]] Entity selectedCompositedEntityForDiagnostics(EditorApp& app) const;
 
 private:
+  friend struct RenderCoordinatorTestAccess;
   void noteMissingPixelCaptureResult(const std::optional<RenderResult>& result);
   void rejectPixelCaptureResult(const std::optional<RenderResult>& result);
   void acceptPixelCaptureResult(RenderResult& result, const EditorApp& app,
@@ -395,6 +400,11 @@ private:
                                     const EditorRasterViewport& rasterViewport) const;
   void recordPixelCaptureRequest(const RenderRequest& request,
                                  const DocumentPixelCaptureIdentity& desired);
+  void noteCanvasSizeCommitForPixelCapture(const EditorApp& app, const ViewportState& viewport,
+                                           DocumentPixelCaptureIdentity* desired,
+                                           bool* captureNeeded, bool* forcePresentationRefresh);
+  void updatePixelCaptureCanvasCommitWake(bool wouldChange, bool firstCommit,
+                                          bool deferForActiveDrag);
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
   [[nodiscard]] std::vector<Entity> selectedCompositedExtraEntities(EditorApp& app,
                                                                     Entity primaryEntity) const;
@@ -517,6 +527,7 @@ private:
   std::uint64_t documentPixelCaptureSessionId_ = 0;
   std::optional<DocumentPixelCaptureIdentity> requestedPixelCapture_;
   std::optional<DocumentPixelCapture> documentPixelCapture_;
+  std::optional<std::chrono::steady_clock::time_point> pixelCaptureCanvasCommitDue_;
   FrameCostBreakdown lastFrameCostBreakdown_;
   /// Cumulative canvas-size commits; see `documentCanvasCommitTotal`.
   std::uint64_t documentCanvasCommitTotal_ = 0;

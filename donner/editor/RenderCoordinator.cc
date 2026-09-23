@@ -330,12 +330,14 @@ bool SameViewport(const ViewportState& lhs, const ViewportState& rhs) {
 
 DocumentPixelCaptureIdentity CurrentPixelCaptureIdentity(const EditorApp& app,
                                                          const ViewportState& viewport,
-                                                         std::uint64_t sessionId) {
+                                                         std::uint64_t sessionId,
+                                                         std::uint64_t canvasCommitGeneration) {
   return DocumentPixelCaptureIdentity{
       .sessionId = sessionId,
       .documentGeneration = app.document().documentGeneration(),
       .version = app.document().currentFrameVersion(),
       .fontResourceRevision = app.document().fontResourceRevision(),
+      .canvasCommitGeneration = canvasCommitGeneration,
       .rasterViewport = viewport.rasterViewport(),
       .viewport = viewport,
   };
@@ -345,6 +347,7 @@ bool SamePixelCaptureIdentity(const DocumentPixelCaptureIdentity& lhs,
                               const DocumentPixelCaptureIdentity& rhs) {
   return lhs.sessionId == rhs.sessionId && lhs.documentGeneration == rhs.documentGeneration &&
          lhs.version == rhs.version && lhs.fontResourceRevision == rhs.fontResourceRevision &&
+         lhs.canvasCommitGeneration == rhs.canvasCommitGeneration &&
          SameRasterViewport(lhs.rasterViewport, rhs.rasterViewport) &&
          SameViewport(lhs.viewport, rhs.viewport);
 }
@@ -676,6 +679,7 @@ void RenderCoordinator::setDocumentPixelCaptureEnabled(bool enabled) {
   requestedPixelCapture_.reset();
   documentPixelCapture_.reset();
   captureUnavailable_ = false;
+  pixelCaptureCanvasCommitDue_.reset();
   if (enabled) {
     requestPresentationRefresh();
   }
@@ -686,11 +690,23 @@ const DocumentPixelCapture* RenderCoordinator::documentPixelCaptureFor(
   if (!documentPixelCaptureEnabled_ || !documentPixelCapture_.has_value() || !app.hasDocument()) {
     return nullptr;
   }
-  const DocumentPixelCaptureIdentity current =
-      CurrentPixelCaptureIdentity(app, viewport, documentPixelCaptureSessionId_);
+  if (pixelCaptureCanvasCommitDue_.has_value()) {
+    return nullptr;
+  }
+  const DocumentPixelCaptureIdentity current = CurrentPixelCaptureIdentity(
+      app, viewport, documentPixelCaptureSessionId_, documentCanvasCommitTotal_);
   return SamePixelCaptureIdentity(documentPixelCapture_->identity, current)
              ? &*documentPixelCapture_
              : nullptr;
+}
+
+std::optional<float> RenderCoordinator::nextPixelCaptureCanvasCommitWakeSeconds() const {
+  if (!documentPixelCaptureEnabled_ || !pixelCaptureCanvasCommitDue_.has_value() ||
+      renderWorker_.asyncRenderer.isBusy()) {
+    return std::nullopt;
+  }
+  const auto remaining = *pixelCaptureCanvasCommitDue_ - std::chrono::steady_clock::now();
+  return std::max(0.0f, std::chrono::duration<float>(remaining).count());
 }
 
 void RenderCoordinator::noteMissingPixelCaptureResult(const std::optional<RenderResult>& result) {
@@ -717,8 +733,8 @@ void RenderCoordinator::acceptPixelCaptureResult(RenderResult& result, const Edi
       !requestedPixelCapture_.has_value()) {
     return;
   }
-  const DocumentPixelCaptureIdentity current =
-      CurrentPixelCaptureIdentity(app, viewport, documentPixelCaptureSessionId_);
+  const DocumentPixelCaptureIdentity current = CurrentPixelCaptureIdentity(
+      app, viewport, documentPixelCaptureSessionId_, documentCanvasCommitTotal_);
   if (!SamePixelCaptureIdentity(*requestedPixelCapture_, current) ||
       !IsExactPixelCaptureResult(result, current)) {
     requestedPixelCapture_.reset();
@@ -740,7 +756,8 @@ bool RenderCoordinator::preparePixelCaptureRequest(const EditorApp& app,
   if (!documentPixelCaptureEnabled_) {
     return false;
   }
-  *desired = CurrentPixelCaptureIdentity(app, viewport, documentPixelCaptureSessionId_);
+  *desired = CurrentPixelCaptureIdentity(app, viewport, documentPixelCaptureSessionId_,
+                                         documentCanvasCommitTotal_);
   if (documentPixelCapture_.has_value() &&
       !SamePixelCaptureIdentity(documentPixelCapture_->identity, *desired)) {
     documentPixelCapture_.reset();
@@ -764,8 +781,10 @@ bool RenderCoordinator::preparePixelCaptureRequest(const EditorApp& app,
 }
 
 bool RenderCoordinator::pixelCaptureBlocksViewportDefer(bool captureNeeded) const {
-  return captureNeeded || (documentPixelCaptureEnabled_ && requestedPixelCapture_.has_value() &&
-                           !documentPixelCapture_.has_value());
+  return captureNeeded ||
+         (documentPixelCaptureEnabled_ &&
+          (pixelCaptureCanvasCommitDue_.has_value() ||
+           (requestedPixelCapture_.has_value() && !documentPixelCapture_.has_value())));
 }
 
 bool RenderCoordinator::shouldDeferViewportRender(bool selectedViewportDeferred,
@@ -799,6 +818,34 @@ void RenderCoordinator::recordPixelCaptureRequest(const RenderRequest& request,
     requestedPixelCapture_ = desired;
     captureUnavailable_ = false;
   }
+}
+
+void RenderCoordinator::updatePixelCaptureCanvasCommitWake(bool wouldChange, bool firstCommit,
+                                                           bool deferForActiveDrag) {
+  if (documentPixelCaptureEnabled_ && wouldChange && !firstCommit && !deferForActiveDrag) {
+    pixelCaptureCanvasCommitDue_ = pendingCanvasSizeSince_ + kCanvasSizeCommitDelay;
+  } else {
+    pixelCaptureCanvasCommitDue_.reset();
+  }
+}
+
+void RenderCoordinator::noteCanvasSizeCommitForPixelCapture(const EditorApp& app,
+                                                            const ViewportState& viewport,
+                                                            DocumentPixelCaptureIdentity* desired,
+                                                            bool* captureNeeded,
+                                                            bool* forcePresentationRefresh) {
+  pixelCaptureCanvasCommitDue_.reset();
+  if (!documentPixelCaptureEnabled_) {
+    return;
+  }
+  documentPixelCapture_.reset();
+  requestedPixelCapture_.reset();
+  captureUnavailable_ = false;
+  *desired = CurrentPixelCaptureIdentity(app, viewport, documentPixelCaptureSessionId_,
+                                         documentCanvasCommitTotal_);
+  *captureNeeded = true;
+  *forcePresentationRefresh = true;
+  requestPresentationRefresh();
 }
 
 bool RenderCoordinator::setSourceHoverElements(std::vector<svg::SVGElement> elements) {
@@ -1253,9 +1300,10 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // rerasterize every cached span before the next pointer frame; defer that crisp refresh until
   // mouse-up unless the document still needs its first canvas.
   const bool deferCanvasCommitForActiveDrag = dragPreview.has_value() && !firstCommit;
+  updatePixelCaptureCanvasCommitWake(wouldChange, firstCommit, deferCanvasCommitForActiveDrag);
   const auto currentVersion = app.document().currentFrameVersion();
   DocumentPixelCaptureIdentity desiredCapture;
-  const bool captureNeeded = preparePixelCaptureRequest(app, viewport, &desiredCapture);
+  bool captureNeeded = preparePixelCaptureRequest(app, viewport, &desiredCapture);
   const Entity prewarmEntity = selectedCompositedEntity(app);
   const PresentationCoverageDiagnostics coverageDiagnostics =
       textures != nullptr ? textures->coverageDiagnostics() : PresentationCoverageDiagnostics{};
@@ -1283,12 +1331,12 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       requestOverviewInfill ? std::vector<Entity>{}
                             : selectedCompositedExtraEntities(app, prewarmEntity);
   const bool forceSelectedLayerRasterization = pendingSelectedLayerRasterization;
-  const bool forcePresentationRefresh = pendingPresentationRefresh_ || captureNeeded;
+  bool forcePresentationRefresh = pendingPresentationRefresh_ || captureNeeded;
   const bool hasIndependentSelectedPrewarmRenderReason =
       dragPreview.has_value() || currentVersion != displayedDocVersion_ ||
       forceSelectedLayerRasterization || forcePresentationRefresh;
   const bool useSelectedPrewarmRasterViewport =
-      !captureNeeded &&
+      !documentPixelCaptureEnabled_ &&
       ShouldUseSelectedPrewarmRasterViewport(
           prewarmEntity, requestOverviewInfill, rasterViewport.viewportBounded,
           kSelectionOnlyPrewarmMayTriggerRender, hasIndependentSelectedPrewarmRenderReason);
@@ -1306,6 +1354,8 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
     ++lastFrameCostBreakdown_.documentCanvasCommitCount;
     ++documentCanvasCommitTotal_;
     lastFrameCostBreakdown_.lastCommittedCanvasSize = pendingCanvasSize_;
+    noteCanvasSizeCommitForPixelCapture(app, viewport, &desiredCapture, &captureNeeded,
+                                        &forcePresentationRefresh);
   }
 
   const Entity suppressedLayerEntity = suppressedCompositedLayerEntity(app);
