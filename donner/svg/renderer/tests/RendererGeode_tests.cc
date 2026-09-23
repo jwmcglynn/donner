@@ -12,14 +12,18 @@
 #include <cstdint>
 #include <latch>
 #include <limits>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/base/FillRule.h"
+#include "donner/base/MathUtils.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
@@ -33,6 +37,7 @@
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"  // IWYU pragma: keep - provides UnpremultiplyRgba
 #include "donner/svg/renderer/PlacedTextGeometry.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -6376,6 +6381,393 @@ TEST_F(RendererGeodeTest, IsolatedReadbackPoolRemainsBoundedAcrossSizes) {
   const auto retained = device->consumeReadbackStats();
   EXPECT_THAT(retained.poolEntries, testing::Eq(4u));
   EXPECT_THAT(retained.poolBytes, testing::Eq(42496u));
+}
+
+/// Copies the `size` rectangle at `origin` out of `bitmap` into a tightly packed bitmap, so content
+/// drawn into part of a larger target can be compared with the same content drawn on its own. A
+/// rectangle that does not lie inside `bitmap` fails the test and yields an empty bitmap.
+RendererBitmap CopyBitmapRegion(const RendererBitmap& bitmap, Vector2i origin, Vector2i size) {
+  if (origin.x < 0 || origin.y < 0 || size.x < 0 || size.y < 0 ||
+      origin.x + size.x > bitmap.dimensions.x || origin.y + size.y > bitmap.dimensions.y) {
+    ADD_FAILURE() << "region at " << origin << " of size " << size << " is outside the "
+                  << bitmap.dimensions << " bitmap";
+    return RendererBitmap();
+  }
+  RendererBitmap region;
+  region.dimensions = size;
+  region.rowBytes = static_cast<std::size_t>(size.x) * 4u;
+  region.alphaType = bitmap.alphaType;
+  region.pixels.resize(region.rowBytes * static_cast<std::size_t>(size.y));
+  for (int y = 0; y < size.y; ++y) {
+    const uint8_t* source = bitmap.pixels.data() +
+                            static_cast<std::size_t>(origin.y + y) * bitmap.rowBytes +
+                            static_cast<std::size_t>(origin.x) * 4u;
+    std::copy_n(source, region.rowBytes,
+                region.pixels.data() + static_cast<std::size_t>(y) * region.rowBytes);
+  }
+  return region;
+}
+
+/// One fill case for the placement tests: an SVG body drawn over a 16-unit view box, and a pixel
+/// of the 20 px render whose center lies exactly on one of its edges.
+struct PixelCenterEdgeCase {
+  std::string_view name;
+  std::string_view body;
+  Vector2i edgePixel;
+};
+
+/// Each case runs a different fill pipeline: a solo solid fill, a cross-entity batch of two
+/// paints, slanted edges, a gradient, a path clip rendered through the mask pipeline, and a
+/// pattern. At 20 px over a 16-unit view box (scale 1.25) their edges fall at 2.5 and 17.5, on
+/// pixel centers, and the triangle's slanted edges pass through pixel centers as well.
+constexpr std::array<PixelCenterEdgeCase, 6> kPixelCenterEdgeCases = {{
+    {"solid", R"svg(<rect x="2" y="2" width="12" height="12" fill="#000"/>)svg", {2, 8}},
+    {"abutting_paints",
+     R"svg(<rect x="2" y="2" width="6" height="12" fill="#000"/>)svg"
+     R"svg(<rect x="8" y="2" width="6" height="12" fill="#fff"/>)svg",
+     {2, 8}},
+    {"slanted_edges", R"svg(<path d="M8 2 L14 14 L2 14 Z" fill="#000"/>)svg", {4, 13}},
+    {"linear_gradient",
+     R"svg(<defs><linearGradient id="g"><stop offset="0" stop-color="#000"/>)svg"
+     R"svg(<stop offset="1" stop-color="#3973ad"/></linearGradient></defs>)svg"
+     R"svg(<rect x="2" y="2" width="12" height="12" fill="url(#g)"/>)svg",
+     {2, 8}},
+    {"clip_mask",
+     R"svg(<defs><clipPath id="c"><path d="M8 2 L14 14 L2 14 Z"/></clipPath></defs>)svg"
+     R"svg(<rect width="16" height="16" fill="#000" clip-path="url(#c)"/>)svg",
+     {4, 13}},
+    {"pattern",
+     R"svg(<defs><pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse">)svg"
+     R"svg(<rect width="4" height="4" fill="#b75d23"/><rect width="2" height="2" fill="#31ba55"/>)svg"
+     R"svg(</pattern></defs><rect x="2" y="2" width="12" height="12" fill="url(#p)"/>)svg",
+     {2, 8}},
+}};
+
+/// Parses one of the placement cases as a 20 px document over a 16-unit view box.
+std::optional<SVGDocument> ParsePixelCenterEdgeCase(const PixelCenterEdgeCase& testCase) {
+  const std::string source =
+      std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20")"
+                  R"( viewBox="0 0 16 16">)") +
+      std::string(testCase.body) + "</svg>";
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  if (parsed.hasError()) {
+    return std::nullopt;
+  }
+  return std::move(parsed.result());
+}
+
+// Coverage at a pixel whose center lies exactly on a path edge or vertex is decided by the sample
+// position alone: the half-open ownership rule gives the edge to exactly one side of the ray, and
+// a half-covered pixel sits on the 127.5 rounding boundary. That position must not depend on where
+// the draw lands in its target or how large the target is, or the same shape renders differently
+// in an atlas tile than on its own, which is the contract `RenderDocumentsToAtlasBitmap` offers.
+TEST_F(RendererGeodeTest, PixelCenterEdgeCoverageDoesNotDependOnPlacement) {
+  struct Placement {
+    Vector2i targetSize;
+    Vector2i origin;
+  };
+  constexpr std::array<Placement, 3> kPlacements = {{
+      {{97, 53}, {0, 0}},
+      {{97, 53}, {41, 17}},
+      {{64, 64}, {3, 29}},
+  }};
+  constexpr Vector2i kTileSize(20, 20);
+
+  for (const PixelCenterEdgeCase& testCase : kPixelCenterEdgeCases) {
+    SCOPED_TRACE(testCase.name);
+    std::optional<SVGDocument> standaloneDocument = ParsePixelCenterEdgeCase(testCase);
+    ASSERT_THAT(standaloneDocument, testing::Optional(testing::_));
+    RendererGeode standaloneRenderer = createRenderer();
+    standaloneRenderer.draw(*standaloneDocument);
+    const RendererBitmap standalone = standaloneRenderer.takeSnapshot();
+    ASSERT_EQ(standalone.dimensions, kTileSize);
+    const uint8_t edgeAlpha =
+        standalone.pixels[static_cast<std::size_t>(testCase.edgePixel.y) * standalone.rowBytes +
+                          static_cast<std::size_t>(testCase.edgePixel.x) * 4u + 3u];
+    EXPECT_THAT(edgeAlpha, testing::AllOf(testing::Gt(0), testing::Lt(255)))
+        << "pixel " << testCase.edgePixel
+        << " should be partially covered: its center is on an edge";
+
+    for (const Placement& placement : kPlacements) {
+      std::optional<SVGDocument> atlasDocument = ParsePixelCenterEdgeCase(testCase);
+      ASSERT_THAT(atlasDocument, testing::Optional(testing::_));
+      RendererGeode atlasRenderer = createRenderer();
+      const std::array<AtlasDocumentPlacement, 1> placements = {
+          {AtlasDocumentPlacement{&*atlasDocument, placement.origin}}};
+      const RendererBitmap atlas =
+          RenderDocumentsToAtlasBitmap(atlasRenderer, placements, placement.targetSize);
+      ASSERT_EQ(atlas.dimensions, placement.targetSize);
+      const std::string label =
+          std::string("pixel_center_edges_") + std::string(testCase.name) + "_" +
+          std::to_string(placement.targetSize.x) + "x" + std::to_string(placement.targetSize.y) +
+          "_at_" + std::to_string(placement.origin.x) + "_" + std::to_string(placement.origin.y);
+      editor::tests::CompareBitmapToBitmap(CopyBitmapRegion(atlas, placement.origin, kTileSize),
+                                           standalone, label,
+                                           editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+/// A draw's target, in device pixels, and where its canvas origin lands in it.
+struct DevicePlacement {
+  Vector2i targetSize;
+  Vector2i origin;
+};
+
+/// One document for the placement precision tests, and a pixel of its unplaced render whose
+/// alpha shows the document was drawn: partially covered when its center lies on an edge, or
+/// fully covered for an interior probe.
+struct PlacementPrecisionCase {
+  std::string name;
+  std::string source;
+  Vector2i probePixel;
+  bool probeOnEdge;
+};
+
+/// Builds an SVG document source of `size` px over `viewBox` around `body`.
+std::string PlacementDocument(int size, std::string_view viewBox, std::string_view body) {
+  return std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width=")") + std::to_string(size) +
+         R"(" height=")" + std::to_string(size) + R"(" viewBox=")" + std::string(viewBox) +
+         R"(">)" + std::string(body) + "</svg>";
+}
+
+/// Draws `source` through the renderer driver, the path `RenderDocumentsToAtlasBitmap` takes, into
+/// a fresh `targetSize` frame at `devicePixelRatio`, with the canvas mapped to the target by
+/// `canvasTransform`, then the device pixel ratio, then a translation to `origin`.
+std::optional<RendererBitmap> RenderDocumentPlaced(
+    const std::shared_ptr<geode::GeodeDevice>& device, std::string_view source, Vector2i targetSize,
+    Vector2i origin, double devicePixelRatio, const Transform2d& canvasTransform) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  if (parsed.hasError()) {
+    return std::nullopt;
+  }
+  SVGDocument document = std::move(parsed.result());
+  RenderViewport viewport;
+  viewport.size = Vector2d(targetSize.x / devicePixelRatio, targetSize.y / devicePixelRatio);
+  viewport.devicePixelRatio = devicePixelRatio;
+  const Transform2d surfaceFromCanvas = canvasTransform * Transform2d::Scale(devicePixelRatio) *
+                                        Transform2d::Translate(Vector2d(origin.x, origin.y));
+  RendererGeode renderer(device);
+  renderer.beginFrame(viewport);
+  RendererDriver driver(renderer);
+  renderer.setTransform(surfaceFromCanvas);
+  driver.drawDocumentIntoCurrentFrame(document, viewport, surfaceFromCanvas);
+  renderer.endFrame();
+  return renderer.takeSnapshot();
+}
+
+/// Renders each case once with its canvas at the origin of a `tileSize` target and once at each
+/// placement, and requires every placed tile to match the unplaced render exactly.
+void ExpectPlacementExactRenders(const std::shared_ptr<geode::GeodeDevice>& device,
+                                 std::string_view label,
+                                 std::span<const PlacementPrecisionCase> cases, Vector2i tileSize,
+                                 double devicePixelRatio, const Transform2d& canvasTransform,
+                                 std::span<const DevicePlacement> placements) {
+  for (const PlacementPrecisionCase& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    const std::optional<RendererBitmap> reference = RenderDocumentPlaced(
+        device, testCase.source, tileSize, Vector2i::Zero(), devicePixelRatio, canvasTransform);
+    ASSERT_THAT(reference, testing::Optional(testing::_));
+    ASSERT_EQ(reference->dimensions, tileSize);
+    const uint8_t probeAlpha =
+        reference->pixels[static_cast<std::size_t>(testCase.probePixel.y) * reference->rowBytes +
+                          static_cast<std::size_t>(testCase.probePixel.x) * 4u + 3u];
+    if (testCase.probeOnEdge) {
+      EXPECT_THAT(probeAlpha, testing::AllOf(testing::Gt(0), testing::Lt(255)))
+          << "pixel " << testCase.probePixel << " should be partially covered";
+    } else {
+      EXPECT_THAT(probeAlpha, testing::Eq(255))
+          << "pixel " << testCase.probePixel << " should be covered";
+    }
+
+    for (const DevicePlacement& placement : placements) {
+      const std::optional<RendererBitmap> placed =
+          RenderDocumentPlaced(device, testCase.source, placement.targetSize, placement.origin,
+                               devicePixelRatio, canvasTransform);
+      ASSERT_THAT(placed, testing::Optional(testing::_));
+      ASSERT_EQ(placed->dimensions, placement.targetSize);
+      const std::string tileLabel =
+          std::string(label) + "_" + testCase.name + "_" + std::to_string(placement.targetSize.x) +
+          "x" + std::to_string(placement.targetSize.y) + "_at_" +
+          std::to_string(placement.origin.x) + "_" + std::to_string(placement.origin.y);
+      editor::tests::CompareBitmapToBitmap(CopyBitmapRegion(*placed, placement.origin, tileSize),
+                                           *reference, tileLabel,
+                                           editor::tests::PixelmatchIdentityParams());
+    }
+  }
+}
+
+/// The pixel-center cases as full 20 px documents over a 16-unit view box.
+std::vector<PlacementPrecisionCase> PixelCenterEdgePrecisionCases() {
+  std::vector<PlacementPrecisionCase> cases;
+  for (const PixelCenterEdgeCase& testCase : kPixelCenterEdgeCases) {
+    cases.push_back({std::string(testCase.name), PlacementDocument(20, "0 0 16 16", testCase.body),
+                     testCase.edgePixel, true});
+  }
+  return cases;
+}
+
+// Placement exactness holds for any linear part and any fractional translation, not only for
+// the pixel-aligned scales that put edges on pixel centers: the mapping is exact in the integer
+// part of the translation and identical in everything else. A rotation about the tile center
+// with a non-integer scale gives both a non-axis-aligned linear part and a fractional
+// translation.
+TEST_F(RendererGeodeTest, PlacementExactCoverageUnderRotationAndFractionalScale) {
+  std::vector<PlacementPrecisionCase> cases = PixelCenterEdgePrecisionCases();
+  for (PlacementPrecisionCase& testCase : cases) {
+    // The tile center stays covered under a rotation about it.
+    testCase.probePixel = Vector2i(10, 10);
+    testCase.probeOnEdge = false;
+  }
+  const Transform2d canvasTransform = Transform2d::Translate(Vector2d(-10, -10)) *
+                                      Transform2d::Rotate(MathConstants<double>::kPi / 7.0) *
+                                      Transform2d::Scale(1.13) *
+                                      Transform2d::Translate(Vector2d(10, 10));
+  constexpr std::array<DevicePlacement, 2> kPlacements = {{
+      {{97, 53}, {41, 17}},
+      {{64, 64}, {3, 29}},
+  }};
+  ExpectPlacementExactRenders(sharedDevice(), "rotated", cases, Vector2i(20, 20), 1.0,
+                              canvasTransform, kPlacements);
+}
+
+// A device pixel ratio scales the canvas before placement, so exactness holds at DPR 2 as well.
+// Quarter-unit coordinates at scale 2 put these edges on pixel centers (4.5, 35.5) and the
+// triangle's slanted edges through them.
+TEST_F(RendererGeodeTest, PlacementExactCoverageAtDevicePixelRatioTwo) {
+  const std::vector<PlacementPrecisionCase> cases = {
+      {"solid",
+       PlacementDocument(20, "0 0 20 20",
+                         R"svg(<rect x="2.25" y="2.25" width="15.5" height="15.5"/>)svg"),
+       {4, 20},
+       true},
+      {"slanted_edges",
+       PlacementDocument(20, "0 0 20 20",
+                         R"svg(<path d="M10 2.25 L17.75 17.75 L2.25 17.75 Z"/>)svg"),
+       {19, 5},
+       true},
+      {"clip_mask",
+       PlacementDocument(20, "0 0 20 20",
+                         R"svg(<defs><clipPath id="c"><path d="M10 2.25 L17.75 17.75)svg"
+                         R"svg( L2.25 17.75 Z"/></clipPath></defs>)svg"
+                         R"svg(<rect width="20" height="20" clip-path="url(#c)"/>)svg"),
+       {19, 5},
+       true},
+  };
+  constexpr std::array<DevicePlacement, 2> kPlacements = {{
+      {{96, 52}, {41, 11}},
+      {{64, 64}, {23, 3}},
+  }};
+  ExpectPlacementExactRenders(sharedDevice(), "dpr2", cases, Vector2i(40, 40), 2.0, Transform2d(),
+                              kPlacements);
+}
+
+// Subtracting the integer pixel origin is exact for every target the device can create, so a tile
+// placed thousands of pixels into a wide target maps its pixels exactly as one at the origin does.
+TEST_F(RendererGeodeTest, PlacementExactCoverageAtLargeDeviceOffsets) {
+  constexpr std::array<DevicePlacement, 2> kPlacements = {{
+      {{8192, 32}, {8150, 7}},
+      {{4200, 64}, {4097, 41}},
+  }};
+  ExpectPlacementExactRenders(sharedDevice(), "far", PixelCenterEdgePrecisionCases(),
+                              Vector2i(20, 20), 1.0, Transform2d(), kPlacements);
+}
+
+// Path data far from the path-space origin puts the draw's integer pixel origin far away too; the
+// subtraction stays exact below 2^22 pixels, so placement exactness does not depend on how large
+// the path coordinates are. These view boxes start at 65536, so the geometry's coordinates are
+// 65538 and up.
+TEST_F(RendererGeodeTest, PlacementExactCoverageAtLargePathCoordinates) {
+  constexpr std::string_view kViewBox = "65536 65536 16 16";
+  const std::vector<PlacementPrecisionCase> cases = {
+      {"solid",
+       PlacementDocument(20, kViewBox,
+                         R"svg(<rect x="65538" y="65538" width="12" height="12"/>)svg"),
+       {2, 8},
+       true},
+      {"slanted_edges",
+       PlacementDocument(20, kViewBox,
+                         R"svg(<path d="M65544 65538 L65550 65550 L65538 65550 Z"/>)svg"),
+       {4, 13},
+       true},
+      {"clip_mask",
+       PlacementDocument(20, kViewBox,
+                         R"svg(<defs><clipPath id="c"><path d="M65544 65538 L65550 65550)svg"
+                         R"svg( L65538 65550 Z"/></clipPath></defs>)svg"
+                         R"svg(<rect x="65536" y="65536" width="16" height="16")svg"
+                         R"svg( clip-path="url(#c)"/>)svg"),
+       {4, 13},
+       true},
+  };
+  constexpr std::array<DevicePlacement, 2> kPlacements = {{
+      {{97, 53}, {41, 17}},
+      {{64, 64}, {3, 29}},
+  }};
+  ExpectPlacementExactRenders(sharedDevice(), "large_path", cases, Vector2i(20, 20), 1.0,
+                              Transform2d(), kPlacements);
+}
+
+// A transform without an inverse maps the path onto a line, which covers no area, so nothing may
+// be drawn. The host gives such a draw an all-zero pixel-to-path mapping. The GPU builds the draw's
+// enclosure from float32 axes that pick up rounding from the clip-space mapping, so the enclosure
+// is not necessarily degenerate and can rasterize a sliver of pixels; the shaders must still cover
+// none of them. Each case puts the path-space origin inside the geometry, where a zero mapping
+// would otherwise read full coverage, and runs a different pipeline: a solo fill, a cross-entity
+// batch of two paints, a gradient, a clip mask and a pattern.
+TEST_F(RendererGeodeTest, TransformWithoutInverseDrawsNothing) {
+  constexpr std::array<std::string_view, 3> kSingularTransforms = {
+      "matrix(1 3 3 9 13 29)",
+      "matrix(2 1 4 2 40 20)",
+      "matrix(0.25 0.75 0.5 1.5 48.5 26.5)",
+  };
+  constexpr std::array<std::string_view, 5> kBodies = {
+      R"svg(<rect x="-5" y="-5" width="10" height="10" transform="TRANSFORM"/>)svg",
+      R"svg(<g transform="TRANSFORM"><rect x="-5" y="-5" width="5" height="10" fill="#000"/>)svg"
+      R"svg(<rect x="0" y="-5" width="5" height="10" fill="#3973ad"/></g>)svg",
+      R"svg(<defs><linearGradient id="g"><stop offset="0" stop-color="#000"/>)svg"
+      R"svg(<stop offset="1" stop-color="#3973ad"/></linearGradient></defs>)svg"
+      R"svg(<rect x="-5" y="-5" width="10" height="10" fill="url(#g)" transform="TRANSFORM"/>)svg",
+      R"svg(<defs><clipPath id="c"><rect x="-5" y="-5" width="10" height="10")svg"
+      R"svg( transform="TRANSFORM"/></clipPath></defs>)svg"
+      R"svg(<rect width="97" height="53" fill="#000" clip-path="url(#c)"/>)svg",
+      R"svg(<defs><pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse">)svg"
+      R"svg(<rect width="4" height="4" fill="#b75d23"/></pattern></defs>)svg"
+      R"svg(<rect x="-5" y="-5" width="10" height="10" fill="url(#p)" transform="TRANSFORM"/>)svg",
+  };
+  constexpr Vector2i kTargetSize(97, 53);
+
+  for (std::string_view transform : kSingularTransforms) {
+    for (std::string_view bodyTemplate : kBodies) {
+      std::string body(bodyTemplate);
+      const std::size_t marker = body.find("TRANSFORM");
+      ASSERT_NE(marker, std::string::npos);
+      body.replace(marker, std::string_view("TRANSFORM").size(), transform);
+      SCOPED_TRACE(body);
+      const std::string source =
+          R"(<svg xmlns="http://www.w3.org/2000/svg" width="97" height="53">)" + body + "</svg>";
+      const std::optional<RendererBitmap> rendered = RenderDocumentPlaced(
+          sharedDevice(), source, kTargetSize, Vector2i::Zero(), 1.0, Transform2d());
+      ASSERT_THAT(rendered, testing::Optional(testing::_));
+      ASSERT_EQ(rendered->dimensions, kTargetSize);
+      int drawnPixels = 0;
+      Vector2i firstDrawn;
+      for (int y = 0; y < kTargetSize.y; ++y) {
+        for (int x = 0; x < kTargetSize.x; ++x) {
+          const uint8_t alpha = rendered->pixels[static_cast<std::size_t>(y) * rendered->rowBytes +
+                                                 static_cast<std::size_t>(x) * 4u + 3u];
+          if (alpha != 0) {
+            if (drawnPixels == 0) {
+              firstDrawn = Vector2i(x, y);
+            }
+            ++drawnPixels;
+          }
+        }
+      }
+      EXPECT_EQ(drawnPixels, 0) << "first drawn pixel " << firstDrawn;
+    }
+  }
 }
 
 }  // namespace

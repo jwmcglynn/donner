@@ -887,7 +887,7 @@ struct GeodeResidentSlot {
   /// Bytes last written to the uniform region. A draw whose recomputed
   /// uniform matches this skips the `writeBuffer` entirely (steady-state
   /// static frame => zero buffer writes); a camera/color change rewrites
-  /// only this 416-byte region and keeps the cached bind group.
+  /// only this 448-byte region and keeps the cached bind group.
   std::vector<uint8_t> lastUniform;
   GeodeGeometryCacheReservation cpuMirrorReservation;
   uint64_t cpuUniformBytes = 0;
@@ -1043,7 +1043,7 @@ private:
 /// GPU-resident geometry for one gradient-painted fill. Mirrors
 /// \ref GeodeResidentSlot: a combined-usage
 /// buffer holds the same eight analytic dual-ray SSBO regions, but the
-/// uniform region holds the 672-byte gradient uniform block (stops inline,
+/// uniform region holds the 704-byte gradient uniform block (stops inline,
 /// `donner/gpu/shader/programs/SlugGradientSource.h`) and the cached bind group uses the
 /// reflected ten-resource gradient pipeline layout with the device-owned dummy
 /// clip-mask texture. Residence is only taken
@@ -1054,7 +1054,7 @@ struct GeodeResidentGradientSlot {
   /// Combined Storage|Uniform|CopyDst buffer, borrowed from the owning
   /// `GeodeResidentSlab` chunk; region offsets are ABSOLUTE buffer
   /// offsets. Region layout matches \ref GeodeResidentSlot, with the
-  /// uniform region sized for `GradientUniforms` (672 bytes).
+  /// uniform region sized for `GradientUniforms` (704 bytes).
   gpu::BufferRef buffer;
   /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`), so
   /// returning the allocation matches the owning chunk by identity rather

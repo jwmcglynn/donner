@@ -39,6 +39,8 @@ inline shader::programs::SlugMaskParams Parameters(Case testCase) {
   result.mvp[10] = result.mvp[15] = 1.0f;
   result.mvp[12] = -1.0f;
   result.mvp[13] = 1.0f;
+  // Path space is target pixels, so a pixel center maps to itself.
+  result.pathFromPixel[0] = result.pathFromPixel[3] = 1.0f;
   result.viewport[0] = kWidth;
   result.viewport[1] = kHeight;
   result.antialias = testCase == Case::Analytic || testCase == Case::NestedClip;

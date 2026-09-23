@@ -63,6 +63,8 @@ inline shader::programs::SlugFillParams Parameters(Case c) {
   p.mvp[12] = -1;
   p.mvp[13] = 1;
   p.patternFromPath[0] = p.patternFromPath[5] = p.patternFromPath[10] = p.patternFromPath[15] = 1;
+  // Path space is target pixels, so a pixel center maps to itself.
+  p.pathFromPixel[0] = p.pathFromPixel[3] = 1;
   p.viewport[0] = kWidth;
   p.viewport[1] = kHeight;
   p.tileSize[0] = p.tileSize[1] = 1;
@@ -86,6 +88,8 @@ inline std::array<shader::programs::SlugFillInstance, 2> Records(Case c) {
     auto& p = result[n];
     Geometry(p);
     p.transformRow0[0] = p.transformRow1[1] = 1;
+    p.pixelMappingSource = 1;
+    p.pathFromPixel[0] = p.pathFromPixel[3] = 1;
     const Pixel color = n == 0 ? kRecordColor : kUniformColor;
     for (size_t i = 0; i < 4; ++i) {
       p.color[i] = color[i] / 255.0f;
@@ -93,6 +97,7 @@ inline std::array<shader::programs::SlugFillInstance, 2> Records(Case c) {
     p.gradientStopCount = 2;
     if (n == 1 && (c == Case::FirstInstance || c == Case::DeclaredRange)) {
       p.transformRow0[2] = 1;
+      p.pixelOrigin[0] = 1;
     }
     if (c == Case::BatchedPattern) {
       p.paintMode = 1;

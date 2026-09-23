@@ -64,6 +64,7 @@ using gpu::tests::LegacyAxis;
 using gpu::tests::LegacyBand;
 using gpu::tests::SolidFillUniforms;
 using gpu::tests::WriteBoundingPolygon;
+using gpu::tests::WritePixelMapping;
 
 constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte aligned.
 
@@ -450,6 +451,7 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
     // Uniforms: exactly the production populateFillUniform values for a solid fill.
     SolidFillUniforms uniforms = {};
     BuildSolidFillMvp(pixelFromScene, uniforms.mvp);
+    WritePixelMapping(pixelFromScene, uniforms);
     BuildIdentity4x4(uniforms.patternFromPath);
     uniforms.viewport[0] = static_cast<float>(kBaselineSize);
     uniforms.viewport[1] = static_cast<float>(kBaselineSize);

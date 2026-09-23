@@ -91,6 +91,7 @@ donner_cc_library(
     deps = [
         "//donner/base",
         "//donner/css",
+        "//donner/gpu/shader:slug_fill_api",
         "//donner/svg/renderer/geode:geode_path_encoder",
     ],
 )

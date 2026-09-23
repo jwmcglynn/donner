@@ -741,6 +741,7 @@ donner_cc_test(
         "//donner/svg",
         "//donner/svg/components/filter:components",
         "//donner/svg/parser",
+        "//donner/svg/renderer",
         "//donner/svg/renderer:pixel_format_utils",
         "//donner/svg/renderer:placed_text_geometry",
         "//donner/svg/renderer:renderer_driver",

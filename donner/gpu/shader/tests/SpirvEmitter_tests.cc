@@ -800,12 +800,15 @@ TEST(SpirvEmitterTests, UniformBlockCarriesOffsetsMatrixAndArrayStrideDecoration
   EXPECT_THAT(FindMemberDecoration(instructions, structId, 0, kDecorationMatrixStride),
               testing::Optional(ElementsAre(16u)));
 
-  // The clipPolygonPlanes member type is array<vec4f, 4> with uniform stride 16.
+  // The clipPolygonPlanes member type is array<vec4f, 4> with uniform stride 16. OpTypeStruct's
+  // operands are the result id followed by one type per member, so member 21's type follows it.
+  constexpr size_t kClipPolygonPlanesMember = 21;
   const std::vector<SpvInstruction> structs = WithOpcode(instructions, kOpTypeStruct);
   uint32_t planesTypeId = 0;
   for (const SpvInstruction& structType : structs) {
-    if (structType.operands[0] == structId) {
-      planesTypeId = structType.operands.back();
+    if (structType.operands[0] == structId &&
+        structType.operands.size() > kClipPolygonPlanesMember + 1) {
+      planesTypeId = structType.operands[kClipPolygonPlanesMember + 1];
     }
   }
   ASSERT_THAT(planesTypeId, testing::Not(testing::Eq(0u)));

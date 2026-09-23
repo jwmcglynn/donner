@@ -101,6 +101,7 @@ inline shader::programs::SlugGradientParams Parameters(Case testCase) {
   const auto geometry = slug_mask_slice::Parameters(GeometryCase(testCase));
   shader::programs::SlugGradientParams p{};
   std::copy_n(geometry.mvp, 16, p.mvp);
+  std::copy_n(geometry.pathFromPixel, 4, p.pathFromPixel);
   std::copy_n(geometry.boundingVertices, 16, p.boundingVertices);
   p.viewport[0] = kWidth;
   p.viewport[1] = kHeight;

@@ -155,7 +155,7 @@ TEST(IrExprTests, MulSupportsMatrixAndScalarVectorForms) {
 }
 
 TEST(IrExprTests, DivSupportsVectorScalarForms) {
-  // scalar / vector broadcast: slug_fill computes 1.0 / fwidth(sample_pos) (f32 / vec2f).
+  // scalar / vector broadcast: slug_fill computes its pixels per path unit as 1.0 / vec2f.
   const IrExpr scalarVec = GetShaderResultOrFail(Div(F32Val(), Vec2fVal()), LiteralF32(0));
   EXPECT_EQ(scalarVec.type(), IrType::Vec2f());
 

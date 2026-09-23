@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iterator>
 #include <optional>
@@ -78,7 +79,7 @@ uint32_t FillBinding(std::string_view name) {
   return resource->binding;
 }
 
-static_assert(sizeof(Uniforms) == 416, "Uniforms struct layout mismatch");
+static_assert(sizeof(Uniforms) == 448, "Uniforms struct layout mismatch");
 
 /// Rows the stop ramp starts at inside a gradient paint block. Must match the
 /// layout documented beside `paintData` in `donner/gpu/shader/programs/SlugFillSource.h`;
@@ -130,6 +131,21 @@ Transform2d composeOrthographicMvp(uint32_t targetWidth, uint32_t targetHeight,
   result.data[4] = sx * t.data[4] - 1.0;
   result.data[5] = sy * t.data[5] + 1.0;
   return result;
+}
+
+/// The Slug pixel-to-path mapping for a path-to-target-pixel transform; see
+/// `gpu::shader::programs::ComputeSlugPixelMapping` for the precision contract.
+/// @param targetFromPath Affine taking path space to target pixels.
+gpu::shader::programs::SlugPixelMapping ComputePixelMapping(const Transform2d& targetFromPath) {
+  return gpu::shader::programs::ComputeSlugPixelMapping(
+      targetFromPath.data[0], targetFromPath.data[1], targetFromPath.data[2],
+      targetFromPath.data[3], targetFromPath.data[4], targetFromPath.data[5]);
+}
+
+/// Writes the mapping for `targetFromPath` into a fill, gradient or mask parameter block.
+template <typename ParamsT>
+void writePixelMapping(ParamsT& params, const Transform2d& targetFromPath) {
+  gpu::shader::programs::WriteSlugPixelMapping(params, ComputePixelMapping(targetFromPath));
 }
 
 /// Build a column-major 4x4 matrix from an affine `Transform2d` and write it
@@ -628,6 +644,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       t.data[5] = instanceTransforms[i * 8u + 6u];
       const Transform2d composed = composeOrthographicMvp(targetWidth, targetHeight, t);
       InstanceRecord& rec = records[i];
+      writePixelMapping(rec, t);
+      rec.pixelMappingSource = 1u;
       rec.transformRow0[0] = static_cast<float>(composed.data[0]);
       rec.transformRow0[1] = static_cast<float>(composed.data[2]);
       rec.transformRow0[2] = static_cast<float>(composed.data[4]);
@@ -669,7 +687,16 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// Populate the per-instance InstanceRecord from args + encoded +
   /// transform. Same sharing contract as populateBatchUniform.
   void populateInstanceRecord(InstanceRecord& r, const EncodedPath& encoded,
-                              const FillDrawArgs& args, const Transform2d& transform);
+                              const FillDrawArgs& args, const Transform2d& transform,
+                              const Transform2d* targetFromPath = nullptr);
+
+  /// Populate a resident entity's record. A solo record (\p bakeTransform)
+  /// keeps the identity transform and no pixel mapping, so its draw reads
+  /// both from the uniform; a scene-batch record carries \p recordTransform
+  /// composed with the orthographic mapping, and the pixel mapping for it.
+  void populateResidentRecord(InstanceRecord& r, const EncodedPath& encoded,
+                              const FillDrawArgs& args, const Transform2d& recordTransform,
+                              bool bakeTransform);
 
   /// (Re)upload `encoded` into `slot`'s persistent combined buffer and
   /// reset its cached bind group. Bumps `bufferCreates` + one `bufferWrite`
@@ -1556,6 +1583,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
                 offsetof(gpu::shader::programs::SlugMaskBand, curveCount));
   gpu::shader::programs::SlugMaskParams u = {};
   impl_->buildMvp(u.mvp);
+  writePixelMapping(u, impl_->transform);
   u.viewport[0] = static_cast<float>(impl_->targetWidth);
   u.viewport[1] = static_cast<float>(impl_->targetHeight);
   u.fillRule = (rule == FillRule::EvenOdd) ? 1u : 0u;
@@ -1801,10 +1829,12 @@ void GeoEncoder::Impl::populateBatchUniform(Uniforms& u, const FillDrawArgs& arg
     // Scene-batch form: the vertex stage composes an IDENTITY uniform mvp
     // with each record's host-composed transform, so the float32 matrix
     // multiply is exact and the batch reproduces the double-precision
-    // host composition of the solo path.
+    // host composition of the solo path. Each record carries its own pixel
+    // mapping too, so the uniform's stays zero.
     writeIdentityMvp(u.mvp);
   } else {
     buildMvp(u.mvp, mvpTransform);
+    writePixelMapping(u, mvpTransform);
   }
   affineToMat4(args.patternFromPath, u.patternFromPath);
   u.viewport[0] = static_cast<float>(targetWidth);
@@ -1839,8 +1869,13 @@ void packRecordTransform(InstanceRecord& r, const Transform2d& xf) {
 /// reproduces the per-draw composition.
 void GeoEncoder::Impl::populateInstanceRecord(InstanceRecord& r, const EncodedPath& encoded,
                                               const FillDrawArgs& args,
-                                              const Transform2d& transform) {
+                                              const Transform2d& transform,
+                                              const Transform2d* targetFromPath) {
   packRecordTransform(r, transform);
+  if (targetFromPath != nullptr) {
+    writePixelMapping(r, *targetFromPath);
+    r.pixelMappingSource = 1u;
+  }
   r.color[0] = args.solidColor[0];
   r.color[1] = args.solidColor[1];
   r.color[2] = args.solidColor[2];
@@ -1872,6 +1907,19 @@ void GeoEncoder::Impl::populateInstanceRecord(InstanceRecord& r, const EncodedPa
   // rasterizer and the two tests agree exactly; a batched draw runs with the
   // scissor opened to the full target and relies on this value alone.
   writeClipRect(r.clipRect, r.clipRectActive);
+}
+
+void GeoEncoder::Impl::populateResidentRecord(InstanceRecord& r, const EncodedPath& encoded,
+                                              const FillDrawArgs& args,
+                                              const Transform2d& recordTransform,
+                                              bool bakeTransform) {
+  if (bakeTransform) {
+    populateInstanceRecord(r, encoded, args, Transform2d());
+    return;
+  }
+  populateInstanceRecord(r, encoded, args,
+                         composeOrthographicMvp(targetWidth, targetHeight, recordTransform),
+                         &recordTransform);
 }
 
 void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded) {
@@ -2168,10 +2216,7 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
   // Either way the write is skipped when the bytes are unchanged, so a
   // static re-render emits zero buffer writes.
   InstanceRecord record = {};
-  populateInstanceRecord(record, encoded, args,
-                         bakeTransform
-                             ? Transform2d()
-                             : composeOrthographicMvp(targetWidth, targetHeight, recordTransform));
+  populateResidentRecord(record, encoded, args, recordTransform, bakeTransform);
   // Chunk-relative element offsets, which is what a cross-entity batch
   // needs: its one bind group spans the whole chunk so every instance can
   // reach its own slot. A solo draw binds its own sub-ranges instead and
@@ -2832,6 +2877,7 @@ void GeoEncoder::Impl::buildLinearGradientUniforms(GradientUniforms& u,
                                                    const LinearGradientParams& params,
                                                    FillRule rule) {
   buildMvp(u.mvp);
+  writePixelMapping(u, transform);
   u.viewport[0] = static_cast<float>(targetWidth);
   u.viewport[1] = static_cast<float>(targetHeight);
   populateSharedGradientUniforms<LinearGradientParams::Stop>(u, params.gradientFromPath,
@@ -2850,6 +2896,7 @@ void GeoEncoder::Impl::buildRadialGradientUniforms(GradientUniforms& u,
                                                    const RadialGradientParams& params,
                                                    FillRule rule) {
   buildMvp(u.mvp);
+  writePixelMapping(u, transform);
   u.viewport[0] = static_cast<float>(targetWidth);
   u.viewport[1] = static_cast<float>(targetHeight);
   populateSharedGradientUniforms<RadialGradientParams::Stop>(u, params.gradientFromPath,
