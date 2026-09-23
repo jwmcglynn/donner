@@ -7,8 +7,9 @@
 namespace donner::gpu {
 
 /**
- * Receives one notification for each operation a \ref Device accepted, and one for each queue
- * submission its backend made on its own.
+ * Receives one notification for each operation a \ref Device accepted, one for each queue
+ * submission its backend made on its own, and one when the device's ownership of a texture
+ * allocation ends, which can happen inside \ref Device::poll as well as inside a destroy.
  *
  * Installed per device with \ref Device::installObserver. Notifications for the caller's
  * operations come from the shared validation layer, after the backend accepted the operation, so
@@ -32,11 +33,19 @@ public:
   virtual void onTextureCreated() = 0;
 
   /**
-   * A texture allocation the device owns went back to its backend: its backing was destroyed at
-   * once through \ref Device::destroyTextureBacking, or the texture was destroyed and the last
-   * submission using it completed. Reported once for each allocation \ref onTextureCreated
-   * reports; releasing a registration of a texture the device does not own releases no allocation
-   * and is not reported.
+   * The device's ownership of a texture allocation it made ended: its backing was released
+   * through \ref Device::destroyTextureBacking, or the texture was destroyed and the last
+   * submission using it completed and its slot was recycled. Reported at most once per owned
+   * allocation, while the observer is installed, on the thread using the device: an allocation
+   * made before the observer was installed, one still owned when the device is destroyed, and
+   * one whose retired slot is never recycled are not reported. Releasing a registration of a
+   * texture the device does not own ends no ownership and is not reported.
+   *
+   * The allocation itself may outlive the report: an export of the texture keeps it alive until
+   * its last holder lets go, and \ref Device::sharedTextureTailBytes counts those bytes meanwhile.
+   * Nothing is reported when that holder finally releases it. A destroyed texture a holder still
+   * reads enters that gauge when it is retired but is reported here only when its slot is
+   * recycled, so while its last submission is in flight both count it.
    */
   virtual void onTextureReleased() = 0;
 

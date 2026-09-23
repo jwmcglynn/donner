@@ -617,11 +617,18 @@ void Device::recycleRetiredSlot(ResourceKind kind, uint32_t slotIndex) {
   }
 }
 
+void Device::reportTextureRelease(bool released) const {
+  if (released && observer_ != nullptr) {
+    observer_->onTextureReleased();
+  }
+}
+
 void Device::onRetireBuffer(uint32_t) {}
 
 void Device::onRetireTexture(uint32_t) {}
 
-void Device::retireResource(ResourceKind kind, uint32_t slotIndex, uint64_t lastUseSerial) {
+void Device::retireResource(ResourceKind kind, uint32_t slotIndex, uint64_t lastUseSerial,
+                            bool releasesTextureAllocation) {
   if (kind == ResourceKind::Buffer) {
     // A mapping names bytes of this buffer, so it cannot outlive the allocation. The handle stays
     // resolvable and fails closed on use, which tells its holder what happened; keeping the
@@ -638,8 +645,10 @@ void Device::retireResource(ResourceKind kind, uint32_t slotIndex, uint64_t last
   }
   if (lastUseSerial <= completedSerial()) {
     recycleRetiredSlot(kind, slotIndex);
+    reportTextureRelease(releasesTextureAllocation);
   } else {
-    pendingDestroys_.push_back(PendingDestroy{lastUseSerial, kind, slotIndex});
+    pendingDestroys_.push_back(
+        PendingDestroy{lastUseSerial, kind, slotIndex, releasesTextureAllocation});
   }
 }
 
@@ -649,6 +658,7 @@ void Device::poll() {
   for (const PendingDestroy& pending : pendingDestroys_) {
     if (pending.readySerial <= completed) {
       recycleRetiredSlot(pending.kind, pending.slotIndex);
+      reportTextureRelease(pending.releasesTextureAllocation);
     } else {
       pendingDestroys_[writeIndex++] = pending;
     }
@@ -670,20 +680,23 @@ Status Device::destroyResource(details::SlotTable<Record>& table, Handle<Tag>&& 
   }
   const uint32_t slotIndex = consumed.slotIndex();
   const uint64_t lastUseSerial = table.lastUseOf(slotIndex);
+  const bool releasesTextureAllocation = ReleasesTextureAllocation(*resolved.result());
   table.retire(slotIndex);
-  retireResource(kind, slotIndex, lastUseSerial);
+  retireResource(kind, slotIndex, lastUseSerial, releasesTextureAllocation);
   return OkStatus();
 }
 
 template <typename Record>
 void Device::releaseFromRaii(details::SlotTable<Record>& table, uint32_t slotIndex,
                              uint32_t generation, ResourceKind kind) {
-  if (table.find(slotIndex, generation) == nullptr) {
+  const Record* record = table.find(slotIndex, generation);
+  if (record == nullptr) {
     return;  // Already destroyed explicitly (or consumed); RAII release is a no-op.
   }
   const uint64_t lastUseSerial = table.lastUseOf(slotIndex);
+  const bool releasesTextureAllocation = ReleasesTextureAllocation(*record);
   table.retire(slotIndex);
-  retireResource(kind, slotIndex, lastUseSerial);
+  retireResource(kind, slotIndex, lastUseSerial, releasesTextureAllocation);
 }
 
 namespace details {
@@ -782,8 +795,11 @@ Result<Texture> Device::createTexture(const TextureDescriptor& descriptor) {
     return std::move(status).error();
   }
   // A backend that names a texture it was handed, rather than allocating one, says so through
-  // the same ownership answer that keeps destroyTextureBacking from freeing it.
-  if (observer_ != nullptr && onOwnsTextureBacking(handle.slotIndex())) {
+  // the same ownership answer that keeps destroyTextureBacking from freeing it. The answer is kept
+  // with the record, because a backend's own answer changes once it has freed the backing.
+  const bool ownsAllocation = onOwnsTextureBacking(handle.slotIndex());
+  textures_.findMutable(handle.slotIndex(), handle.generation())->ownsAllocation = ownsAllocation;
+  if (observer_ != nullptr && ownsAllocation) {
     observer_->onTextureCreated();
   }
   return handle;
@@ -1401,6 +1417,13 @@ Status Device::destroyTextureBacking(Texture&& texture) {
   const Status validated = validateTextureHandleForBackend(texture);
   if (!validated.hasError() && ownsTextureBacking(texture)) {
     releaseTextureBackingOrDefer(texture.slotIndex());
+    // This device's claim on the allocation ends here, whether the backend frees it now or an
+    // export keeps it alive until its last holder lets go. The record forgets the claim, so the
+    // slot's later recycle does not report it a second time.
+    if (TextureRecord* record = textures_.findMutable(texture.slotIndex(), texture.generation());
+        record != nullptr) {
+      reportTextureRelease(std::exchange(record->ownsAllocation, false));
+    }
   }
   const Status destroyed = destroyTexture(std::move(texture));
   return validated.hasError() ? validated : destroyed;
