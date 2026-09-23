@@ -21,9 +21,7 @@ type BootWindow = Window & {
   __bootPresentationProbe: {
     running: boolean;
     samples: BootSample[];
-    // Every visibility the page had, timed. A hidden page is delivered no
-    // animation frames at all, so a gap in the samples' cadence reads as a
-    // starved compositor or a hidden page only with this beside it.
+    // A hidden page gets no frames, so a gap in the cadence needs this beside it.
     visibility: Array<{ atMs: number; state: DocumentVisibilityState }>;
   };
 };
@@ -87,16 +85,7 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
       await expect(page.locator("#loading-screen")).toBeVisible();
       await expect(page.locator("canvas")).toHaveCount(1);
       await page.setViewportSize({ width: 1390, height: 1121 });
-      // Startup must begin after the page is laid out at the new size, or the
-      // canvas it configures says nothing about a resize. An animation frame
-      // sampled at the new viewport with the loader still covering the page is
-      // that evidence, and one is all it takes: nothing on the page changes
-      // until startup is released, so every later frame repeats it.
-      //
-      // Waiting for five such frames inside a fixed five seconds measured the
-      // browser's frame rate rather than the page. A cold browser on a shared
-      // runner delivered three and four, failing runs whose loader covered
-      // every frame it drew.
+      // One covered frame at the new size suffices: nothing changes while startup is held.
       await expect.poll(
         () =>
           page.evaluate(() =>
@@ -172,9 +161,7 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
         timer = setTimeout(() => resolve({ error: "diagnostic capture timed out" }), 5000);
       }),
     ]).finally(() => clearTimeout(timer));
-    // Written to a file rather than attached as a body: the list reporter
-    // prints neither, and a body attachment never reaches the output directory
-    // that CI and Bazel keep from a failed run.
+    // A file survives a failed run; a body-only attachment is neither printed nor kept.
     const diagnosticsPath = testInfo.outputPath("boot-presentation-samples.json");
     await writeFile(diagnosticsPath, JSON.stringify({ diagnostics, errors }, null, 2));
     await testInfo.attach("boot-presentation-samples", {
