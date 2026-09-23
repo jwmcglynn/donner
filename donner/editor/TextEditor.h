@@ -310,6 +310,14 @@ public:
    */
   std::string getText() const;
 
+  /// Byte counts for source diagnostics without copying the editor buffer.
+  std::size_t textByteLength() const { return text_.byteLength(); }
+  std::size_t selectionByteLength() const {
+    const std::size_t start = text_.getByteOffset(state_.selectionStart);
+    const std::size_t end = text_.getByteOffset(state_.selectionEnd);
+    return start < end ? end - start : start - end;
+  }
+
   /**
    * Resolve a full-buffer byte offset to editor coordinates.
    *

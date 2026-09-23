@@ -213,7 +213,11 @@ EyedropperSelectedTestFields ReadEyedropperSelectedTestFields(const svg::SVGElem
 void PublishEyedropperTestState(std::string_view activeFill, std::string_view activeStroke,
                                 std::string_view selectedStyle, std::string_view selectedText,
                                 bool strokeActive, bool sourcePaneFocused,
-                                bool sourceSelectionActive, std::size_t undoEntryCount) {
+                                bool sourceSelectionActive, std::size_t undoEntryCount,
+                                std::size_t sourceBufferByteLength,
+                                std::size_t sourceSelectionByteLength,
+                                std::size_t sourceDiagnosticCount, bool textSyncWakePending,
+                                double documentGeneration) {
   const std::string fill(activeFill.substr(0, kEyedropperTestFieldMaxBytes));
   const std::string stroke(activeStroke.substr(0, kEyedropperTestFieldMaxBytes));
   const std::string style(selectedStyle.substr(0, kEyedropperTestFieldMaxBytes));
@@ -230,10 +234,17 @@ void PublishEyedropperTestState(std::string_view activeFill, std::string_view ac
           'sourcePaneFocused' : !!$5,
           'sourceSelectionActive' : !!$6,
           'undoEntryCount' : Number($7),
+          'sourceBufferByteLength' : Number($8),
+          'sourceSelectionByteLength' : Number($9),
+          'sourceDiagnosticCount' : Number($10),
+          'textSyncWakePending' : !!$11,
+          'documentGeneration' : Number($12),
         });
       },
       fill.c_str(), stroke.c_str(), style.c_str(), text.c_str(), strokeActive,
-      sourcePaneFocused, sourceSelectionActive, undoEntryCount);
+      sourcePaneFocused, sourceSelectionActive, undoEntryCount,
+      sourceBufferByteLength, sourceSelectionByteLength, sourceDiagnosticCount,
+      textSyncWakePending, documentGeneration);
   // clang-format on
 }
 
@@ -3695,7 +3706,11 @@ void EditorShell::publishEyedropperTestStateIfEnabled() {
   PublishEyedropperTestState(
       app_.activePaintStyle().fill, app_.activePaintStyle().stroke, selectedFields.style,
       selectedFields.text, activePaintTarget_ == PaintTarget::Stroke, sourcePaneFocused,
-      sourcePaneFocused && textEditor_.hasSelection(), app_.undoTimeline().entryCount());
+      sourcePaneFocused && textEditor_.hasSelection(), app_.undoTimeline().entryCount(),
+      textEditor_.textByteLength(), textEditor_.selectionByteLength(),
+      textEditor_.sourceDiagnostics().size(),
+      documentSyncController_.nextTextSyncWakeSeconds().has_value(),
+      app_.hasDocument() ? static_cast<double>(app_.document().documentGeneration()) : 0.0);
 }
 #endif
 
