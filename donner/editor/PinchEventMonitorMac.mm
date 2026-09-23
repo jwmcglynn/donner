@@ -41,9 +41,8 @@ bool InstallPinchEventMonitor(GLFWwindow* window, std::vector<RenderPaneScrollEv
                                        return event;
                                      }
 
-                                     const double scrollDeltaY =
-                                         PinchMagnificationToScrollDelta(event.magnification,
-                                                                         wheelZoomStep);
+                                     const double scrollDeltaY = PinchMagnificationToScrollDelta(
+                                         event.magnification, wheelZoomStep);
                                      if (std::abs(scrollDeltaY) > kEpsilonScroll) {
                                        double cursorX = 0.0;
                                        double cursorY = 0.0;

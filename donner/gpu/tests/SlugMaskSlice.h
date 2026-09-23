@@ -67,7 +67,9 @@ inline std::vector<uint8_t> Expected(Case testCase) {
                        ? std::max(0.0f, std::min(float(x + 1), kRight) - std::max(float(x), kLeft))
                        : float(x + 0.5f >= kLeft && x + 0.5f < kRight);
       }
-      if (testCase == Case::DoubleEvenOdd || testCase == Case::DeclaredRange) coverage = 0.0f;
+      if (testCase == Case::DoubleEvenOdd || testCase == Case::DeclaredRange) {
+        coverage = 0.0f;
+      }
       const uint32_t scale = testCase == Case::NestedClip ? ClipValue(x, y) : 255;
       const uint8_t value = static_cast<uint8_t>(std::lround(coverage * scale));
       std::fill_n(bytes.begin() + (y * kWidth + x) * 4, 4, value);
@@ -81,15 +83,21 @@ inline bool UploadBinding(Device& device, const shader::CompiledShaderView& shad
                           std::vector<Buffer>& buffers, std::vector<BindGroupEntry>& entries) {
   const auto* resource = shader.resource(name);
   EXPECT_NE(resource, nullptr);
-  if (!resource) return false;
+  if (!resource) {
+    return false;
+  }
   const BufferUsage usage =
       resource->type == BindingType::UniformBuffer ? BufferUsage::Uniform : BufferUsage::Storage;
   auto buffer = device.createBuffer({name, bytes.size(), usage | BufferUsage::CopyDst});
   EXPECT_THAT(buffer, HasResult());
-  if (buffer.hasError()) return false;
+  if (buffer.hasError()) {
+    return false;
+  }
   const auto write = device.writeBuffer(buffer.result(), 0, bytes);
   EXPECT_THAT(write, IsOk());
-  if (write.hasError()) return false;
+  if (write.hasError()) {
+    return false;
+  }
   buffers.push_back(std::move(buffer).result());
   entries.push_back({resource->binding, BufferBinding{buffers.back(), 0, range}});
   return true;
@@ -174,9 +182,11 @@ void CheckSlugMask(DeviceType& device, const shader::CompiledShaderView& shader,
   ASSERT_THAT(outputView, HasResult());
   ASSERT_THAT(clipView, HasResult());
   std::array<uint8_t, kRowBytes * kHeight> clipBytes{};
-  for (uint32_t y = 0; y < kHeight; ++y)
-    for (uint32_t x = 0; x < kWidth; ++x)
+  for (uint32_t y = 0; y < kHeight; ++y) {
+    for (uint32_t x = 0; x < kWidth; ++x) {
       std::fill_n(clipBytes.begin() + y * kRowBytes + x * 4, 4, ClipValue(x, y));
+    }
+  }
   ASSERT_THAT(
       device.writeTexture(clip.result(), clipBytes, {0, kRowBytes, kHeight}, {kWidth, kHeight}),
       IsOk());
@@ -217,8 +227,9 @@ void CheckSlugMask(DeviceType& device, const shader::CompiledShaderView& shader,
   ASSERT_THAT(bytes, HasResult());
   ASSERT_THAT(bytes.result(), testing::SizeIs(testing::Ge(kRowBytes * kHeight)));
   std::vector<uint8_t> pixels(kWidth * kHeight * 4);
-  for (uint32_t y = 0; y < kHeight; ++y)
+  for (uint32_t y = 0; y < kHeight; ++y) {
     std::memcpy(pixels.data() + y * kWidth * 4, bytes.result().data() + y * kRowBytes, kWidth * 4);
+  }
   editor::tests::CompareBitmapToBitmap(
       svg::RendererBitmap{Vector2i(kWidth, kHeight), pixels, kWidth * 4},
       svg::RendererBitmap{Vector2i(kWidth, kHeight), Expected(testCase), kWidth * 4},

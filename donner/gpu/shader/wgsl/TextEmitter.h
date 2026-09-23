@@ -95,23 +95,31 @@ public:
     if (!module_.isValid() || module_.sourceByteCount > ModuleLimits::kMaxSourceBytes) {
       return fail(TextEmitError::InvalidModule);
     }
-    if (!everyBindingFitsArgumentTables()) return fail(TextEmitError::UnsupportedBinding);
+    if (!everyBindingFitsArgumentTables()) {
+      return fail(TextEmitError::UnsupportedBinding);
+    }
     text("#include <metal_stdlib>\nusing namespace metal;\n\n");
     for (uint16_t index = 0; index < module_.structCount; ++index) {
-      if (error_ != TextEmitError::None) return finish();
+      if (error_ != TextEmitError::None) {
+        return finish();
+      }
       emitStruct(index);
       newline();
     }
     emitArrayHelpers();
     emitTextureHelpers();
     for (uint16_t index = 0; index < module_.functionCount; ++index) {
-      if (error_ != TextEmitError::None) return finish();
+      if (error_ != TextEmitError::None) {
+        return finish();
+      }
       emitFunction(index);
       newline();
     }
     for (uint16_t index = 0; index < module_.functionCount; ++index) {
       const Stage stage = module_.functions[index].stage;
-      if (stage == Stage::Vertex || stage == Stage::Fragment) emitGraphicsWrapper(index);
+      if (stage == Stage::Vertex || stage == Stage::Fragment) {
+        emitGraphicsWrapper(index);
+      }
     }
     return finish();
   }
@@ -128,7 +136,9 @@ private:
   /// tables are narrower than the binding index range this frontend accepts.
   constexpr bool everyBindingFitsArgumentTables() const {
     for (uint16_t index = 0; index < module_.bindingCount; ++index) {
-      if (!bindingFitsArgumentTables(module_.bindings[index])) return false;
+      if (!bindingFitsArgumentTables(module_.bindings[index])) {
+        return false;
+      }
     }
     return true;
   }
@@ -266,7 +276,9 @@ private:
       case TypeKind::Sampler: text("sampler"); return;
       case TypeKind::SampledTexture2d: text("texture2d<float, access::read>"); return;
       case TypeKind::StorageTexture2d:
-        if (!value.hasSupportedStorageFormat()) error_ = TextEmitError::UnsupportedType;
+        if (!value.hasSupportedStorageFormat()) {
+          error_ = TextEmitError::UnsupportedType;
+        }
         text("texture2d<float, access::write>");
         return;
       default: emitScalarType(value); return;
@@ -321,9 +333,15 @@ private:
   }
 
   constexpr uint32_t typeAlignment(const Type& value) const {
-    if (value.kind == TypeKind::Struct) return module_.typeAlignment(value);
-    if (value.kind == TypeKind::Matrix) return value.rows == 2 ? 8 : 16;
-    if (value.kind == TypeKind::Array) return typeAlignment(value.elementType());
+    if (value.kind == TypeKind::Struct) {
+      return module_.typeAlignment(value);
+    }
+    if (value.kind == TypeKind::Matrix) {
+      return value.rows == 2 ? 8 : 16;
+    }
+    if (value.kind == TypeKind::Array) {
+      return typeAlignment(value.elementType());
+    }
     if (!value.isNumeric() && value.kind != TypeKind::Bool) {
       return 0;
     }
@@ -331,9 +349,15 @@ private:
   }
 
   constexpr uint32_t typeSize(const Type& value) const {
-    if (value.kind == TypeKind::Struct) return module_.typeSize(value);
-    if (value.kind == TypeKind::Matrix) return typeAlignment(value) * value.columns;
-    if (value.kind == TypeKind::Array) return module_.arrayStride(value) * value.arrayCount;
+    if (value.kind == TypeKind::Struct) {
+      return module_.typeSize(value);
+    }
+    if (value.kind == TypeKind::Matrix) {
+      return typeAlignment(value) * value.columns;
+    }
+    if (value.kind == TypeKind::Array) {
+      return module_.arrayStride(value) * value.arrayCount;
+    }
     if (!value.isNumeric() && value.kind != TypeKind::Bool) {
       return 0;
     }
@@ -358,9 +382,13 @@ private:
     ++indent_;
     StructLayoutState layout;
     emitStructMembers(structure, buffer, &layout);
-    if (error_ != TextEmitError::None) return;
+    if (error_ != TextEmitError::None) {
+      return;
+    }
     validateStructLayout(structure, buffer, layout);
-    if (error_ != TextEmitError::None) return;
+    if (error_ != TextEmitError::None) {
+      return;
+    }
     --indent_;
     text("};\n");
   }
@@ -375,7 +403,9 @@ private:
     for (uint16_t index = 0; index < structure.memberCount; ++index) {
       emitStructMemberWithLayout(module_.structMembers[structure.firstMember + index], buffer,
                                  layout);
-      if (error_ != TextEmitError::None) return;
+      if (error_ != TextEmitError::None) {
+        return;
+      }
     }
   }
 
@@ -383,14 +413,18 @@ private:
                                             StructLayoutState* layout) {
     const uint32_t alignment = typeAlignment(member.type);
     const uint32_t size = typeSize(member.type);
-    if (!validMemberLayout(member, buffer, alignment, size)) return;
+    if (!validMemberLayout(member, buffer, alignment, size)) {
+      return;
+    }
     layout->offset = ((layout->offset + alignment - 1) / alignment) * alignment;
     if (buffer && member.offset != layout->offset) {
       error_ = TextEmitError::UniformLayoutMismatch;
       return;
     }
     layout->offset += size;
-    if (alignment > layout->maximumAlignment) layout->maximumAlignment = alignment;
+    if (alignment > layout->maximumAlignment) {
+      layout->maximumAlignment = alignment;
+    }
     emitStructMember(member);
   }
 
@@ -409,29 +443,45 @@ private:
     const uint32_t naturalSize =
         ((layout.offset + layout.maximumAlignment - 1) / layout.maximumAlignment) *
         layout.maximumAlignment;
-    if (buffer && (structure.alignment != layout.maximumAlignment || structure.size != naturalSize))
+    if (buffer &&
+        (structure.alignment != layout.maximumAlignment || structure.size != naturalSize)) {
       error_ = TextEmitError::UniformLayoutMismatch;
+    }
   }
 
   constexpr bool containsStruct(Type type, uint16_t wanted, uint16_t depth = 0) {
-    if (type.kind != TypeKind::Array && type.kind != TypeKind::Struct) return false;
+    if (type.kind != TypeKind::Array && type.kind != TypeKind::Struct) {
+      return false;
+    }
     if (depth > ModuleLimits::kMaxStructs) {
       error_ = TextEmitError::InvalidModule;
       return false;
     }
-    if (type.kind == TypeKind::Array) return containsStruct(type.elementType(), wanted, depth + 1);
-    if (type.kind != TypeKind::Struct || type.structId >= module_.structCount) return false;
-    if (type.structId == wanted) return true;
+    if (type.kind == TypeKind::Array) {
+      return containsStruct(type.elementType(), wanted, depth + 1);
+    }
+    if (type.kind != TypeKind::Struct || type.structId >= module_.structCount) {
+      return false;
+    }
+    if (type.structId == wanted) {
+      return true;
+    }
     const Struct& structure = module_.structs[type.structId];
-    for (uint16_t i = 0; i < structure.memberCount; ++i)
-      if (containsStruct(module_.structMembers[structure.firstMember + i].type, wanted, depth + 1))
+    for (uint16_t i = 0; i < structure.memberCount; ++i) {
+      if (containsStruct(module_.structMembers[structure.firstMember + i].type, wanted,
+                         depth + 1)) {
         return true;
+      }
+    }
     return false;
   }
 
   constexpr bool structIsBuffer(uint16_t structId) {
-    for (uint16_t i = 0; i < module_.bindingCount; ++i)
-      if (containsStruct(module_.bindings[i].type, structId)) return true;
+    for (uint16_t i = 0; i < module_.bindingCount; ++i) {
+      if (containsStruct(module_.bindings[i].type, structId)) {
+        return true;
+      }
+    }
     return false;
   }
 
@@ -444,15 +494,19 @@ private:
   }
 
   constexpr bool usesRuntimeArrays(uint32_t mask = ~uint32_t(0)) const {
-    for (uint16_t i = 0; i < module_.bindingCount; ++i)
+    for (uint16_t i = 0; i < module_.bindingCount; ++i) {
       if ((mask & (uint32_t(1) << i)) && module_.bindings[i].type.kind == TypeKind::Array &&
-          module_.bindings[i].type.arrayCount == 0)
+          module_.bindings[i].type.arrayCount == 0) {
         return true;
+      }
+    }
     return false;
   }
 
   constexpr void emitArrayHelpers() {
-    if (!usesRuntimeArrays()) return;
+    if (!usesRuntimeArrays()) {
+      return;
+    }
     text(
         "template<typename T> T donner_msl_array_load(const device T* data, uint count, uint "
         "index) {\n");
@@ -474,7 +528,9 @@ private:
   constexpr void resourceParameters(bool attributes, uint32_t mask) {
     bool comma = false;
     for (uint16_t index = 0; index < module_.bindingCount; ++index) {
-      if (!(mask & (uint32_t(1) << index))) continue;
+      if (!(mask & (uint32_t(1) << index))) {
+        continue;
+      }
       if (comma) {
         text(", ");
       }
@@ -486,7 +542,9 @@ private:
       emitResourceParameter(index, attributes);
     }
     if (usesRuntimeArrays(mask)) {
-      if (comma) text(", ");
+      if (comma) {
+        text(", ");
+      }
       text("constant uint* donner_msl_lengths");
       if (attributes) {
         text(" [[buffer(");
@@ -538,10 +596,11 @@ private:
 
   constexpr void emitTextureParameter(uint16_t index, bool attributes) {
     const Binding& binding = module_.bindings[index];
-    if (binding.kind == BindingKind::SampledTexture && binding.sampled)
+    if (binding.kind == BindingKind::SampledTexture && binding.sampled) {
       text("texture2d<float, access::sample>");
-    else
+    } else {
       type(binding.type);
+    }
     character(' ');
     bindingName(index);
     if (attributes) {
@@ -554,28 +613,37 @@ private:
   constexpr void forwardingParameters(uint32_t mask) {
     bool comma = false;
     for (uint16_t index = 0; index < module_.bindingCount; ++index) {
-      if (!(mask & (uint32_t(1) << index))) continue;
-      if (comma) text(", ");
+      if (!(mask & (uint32_t(1) << index))) {
+        continue;
+      }
+      if (comma) {
+        text(", ");
+      }
       bindingName(index);
       comma = true;
     }
     if (usesRuntimeArrays(mask)) {
-      if (comma) text(", ");
+      if (comma) {
+        text(", ");
+      }
       text("donner_msl_lengths");
     }
   }
 
   constexpr void emitTextureHelpers() {
     bool sampled = false;
-    for (uint16_t i = 0; i < module_.bindingCount; ++i) sampled |= module_.bindings[i].sampled;
-    if (sampled)
+    for (uint16_t i = 0; i < module_.bindingCount; ++i) {
+      sampled |= module_.bindings[i].sampled;
+    }
+    if (sampled) {
       text(
           "template<access A>\nfloat4 donner_msl_texture_load(texture2d<float, A> texture, int2 "
           "coord, int level) {\n");
-    else
+    } else {
       text(
           "float4 donner_msl_texture_load(texture2d<float, access::read> texture, int2 coord, int "
           "level) {\n");
+    }
     text("  if (level < 0 || uint(level) >= texture.get_num_mip_levels()) return float4(0.0f);\n");
     text("  uint mip = uint(level);\n");
     text("  uint2 size(texture.get_width(mip), texture.get_height(mip));\n");
@@ -649,7 +717,9 @@ private:
   }
 
   constexpr void expression(ArenaId id) {
-    if (error_ != TextEmitError::None) return;
+    if (error_ != TextEmitError::None) {
+      return;
+    }
     if (!validId(id, module_.expressionCount)) {
       error_ = TextEmitError::InvalidArenaReference;
       return;
@@ -764,7 +834,9 @@ private:
     type(node.type);
     character(aggregate ? '{' : '(');
     for (uint8_t index = 0; index < node.operandCount; ++index) {
-      if (index != 0) text(", ");
+      if (index != 0) {
+        text(", ");
+      }
       emitChild(node, index);
     }
     character(aggregate ? '}' : ')');
@@ -882,10 +954,11 @@ private:
   constexpr void emitFixedArrayIndex(const Expression& node, const Type& array, const Type& index) {
     expression(node.operands[0]);
     text("[");
-    if (index.kind == TypeKind::I32)
+    if (index.kind == TypeKind::I32) {
       emitSignedArrayIndex(node, array.arrayCount);
-    else
+    } else {
       emitUnsignedArrayIndex(node, array.arrayCount);
+    }
     text("]");
   }
 
@@ -1044,8 +1117,12 @@ private:
 
   constexpr void expressionList(const Expression& node, uint8_t start = 0) {
     for (uint8_t index = start; index < node.operandCount; ++index) {
-      if (error_ != TextEmitError::None) return;
-      if (index != start) text(", ");
+      if (error_ != TextEmitError::None) {
+        return;
+      }
+      if (index != start) {
+        text(", ");
+      }
       expression(node.operands[index]);
     }
   }
@@ -1082,7 +1159,9 @@ private:
         {Builtin::TextureLoad, "donner_msl_texture_load"},
     };
     for (const NamedBuiltin& entry : kNames) {
-      if (entry.builtin == builtin) return entry.name;
+      if (entry.builtin == builtin) {
+        return entry.name;
+      }
     }
     return {};
   }
@@ -1124,7 +1203,9 @@ private:
       case Builtin::TextureStore: error_ = TextEmitError::InvalidModule; return;
       default:
         const std::string_view name = BuiltinName(builtin);
-        if (!name.empty()) emitNamedBuiltin(name, node);
+        if (!name.empty()) {
+          emitNamedBuiltin(name, node);
+        }
         return;
     }
   }
@@ -1150,22 +1231,30 @@ private:
     character('(');
     forwardingParameters(function.resourceMask);
     for (uint8_t index = 0; index < node.operandCount; ++index) {
-      if (function.resourceMask != 0 || index != 0) text(", ");
+      if (function.resourceMask != 0 || index != 0) {
+        text(", ");
+      }
       expression(node.operands[index]);
     }
     character(')');
   }
 
   constexpr void statement(ArenaId id, bool inlineStatement = false) {
-    if (error_ != TextEmitError::None) return;
+    if (error_ != TextEmitError::None) {
+      return;
+    }
     if (!validId(id, module_.statementCount)) {
       error_ = TextEmitError::InvalidArenaReference;
       return;
     }
     const Statement& node = module_.statements[id];
-    if (!inlineStatement) indentation();
+    if (!inlineStatement) {
+      indentation();
+    }
     emitStatementNode(node, inlineStatement);
-    if (!inlineStatement) newline();
+    if (!inlineStatement) {
+      newline();
+    }
   }
 
   constexpr void emitStatementNode(const Statement& node, bool inlineStatement) {
@@ -1176,7 +1265,9 @@ private:
       case StatementKind::For: emitFor(node); break;
       case StatementKind::Call:
         expression(node.expression);
-        if (!inlineStatement) character(';');
+        if (!inlineStatement) {
+          character(';');
+        }
         break;
       case StatementKind::While: emitWhile(node); break;
       case StatementKind::Loop: emitLoop(node); break;
@@ -1194,7 +1285,9 @@ private:
       case StatementKind::Continue: text("continue;"); break;
       case StatementKind::Discard:
         text("discard_fragment(); return");
-        if (currentReturnType_.kind != TypeKind::Void) text(" {}");
+        if (currentReturnType_.kind != TypeKind::Void) {
+          text(" {}");
+        }
         character(';');
         break;
     }
@@ -1212,14 +1305,18 @@ private:
     symbolName(node.symbolId);
     text(" = ");
     expression(node.expression);
-    if (!inlineStatement) character(';');
+    if (!inlineStatement) {
+      character(';');
+    }
   }
 
   constexpr void emitAssignment(const Statement& node, bool inlineStatement) {
     expression(node.expression);
     text(" = ");
     expression(node.secondExpression);
-    if (!inlineStatement) character(';');
+    if (!inlineStatement) {
+      character(';');
+    }
   }
 
   constexpr void emitIf(const Statement& node) {
@@ -1256,9 +1353,9 @@ private:
       }
       const Statement& clause = module_.statements[id];
       indentation();
-      if (clause.expression == kInvalidArenaId)
+      if (clause.expression == kInvalidArenaId) {
         text("default");
-      else {
+      } else {
         text("case ");
         expression(clause.expression);
       }
@@ -1319,7 +1416,9 @@ private:
       character(' ');
       expression(node.expression);
     }
-    if (!inlineStatement) character(';');
+    if (!inlineStatement) {
+      character(';');
+    }
   }
 
   constexpr void emitTextureStore(const Statement& node, bool inlineStatement) {
@@ -1330,14 +1429,18 @@ private:
     text(", ");
     expression(node.thirdExpression);
     character(')');
-    if (!inlineStatement) character(';');
+    if (!inlineStatement) {
+      character(';');
+    }
   }
 
   constexpr void block(ArenaId first) {
     ArenaId current = first;
     uint16_t count = 0;
     while (current != kInvalidArenaId) {
-      if (error_ != TextEmitError::None) return;
+      if (error_ != TextEmitError::None) {
+        return;
+      }
       if (count++ >= module_.statementCount || current >= module_.statementCount) {
         error_ = TextEmitError::InvalidArenaReference;
         return;
@@ -1370,7 +1473,9 @@ private:
                                                 : " [[user(locn");
       uintText(variable.decoration.location);
       text(")");
-      if (variable.decoration.flat) text(", flat");
+      if (variable.decoration.flat) {
+        text(", flat");
+      }
       text("]]");
     } else {
       error_ = TextEmitError::InvalidModule;
@@ -1389,17 +1494,24 @@ private:
     const Function& function = module_.functions[functionId];
     const uint16_t first = input ? function.firstInput : function.firstOutput;
     const uint16_t count = input ? function.inputCount : function.outputCount;
-    if (!validIoRange(first, count)) return 0;
+    if (!validIoRange(first, count)) {
+      return 0;
+    }
     uint16_t fields = 0;
-    for (uint16_t i = first; i < first + count; ++i)
+    for (uint16_t i = first; i < first + count; ++i) {
       fields += !isVertexIndexBuiltin(module_.interfaceVariables[i].decoration.builtin);
-    if (fields == 0) return 0;
+    }
+    if (fields == 0) {
+      return 0;
+    }
     text("struct ");
     ioTypeName(functionId, input);
     text(" {\n");
     for (uint16_t i = first; i < first + count; ++i) {
       const InterfaceVariable& variable = module_.interfaceVariables[i];
-      if (isVertexIndexBuiltin(variable.decoration.builtin)) continue;
+      if (isVertexIndexBuiltin(variable.decoration.builtin)) {
+        continue;
+      }
       text("  ");
       type(variable.type);
       character(' ');
@@ -1425,7 +1537,9 @@ private:
   constexpr void emitGraphicsArguments(const Function& function) {
     forwardingParameters(function.resourceMask);
     for (uint16_t parameter = 0; parameter < function.parameterCount; ++parameter) {
-      if (parameter != 0 || function.resourceMask != 0) text(", ");
+      if (parameter != 0 || function.resourceMask != 0) {
+        text(", ");
+      }
       const ArenaId symbolId = function.firstParameter + parameter;
       const Symbol& symbol = module_.symbols[symbolId];
       const bool structure = symbol.type.kind == TypeKind::Struct;
@@ -1435,21 +1549,31 @@ private:
       }
       uint16_t count = 0;
       for (uint16_t i = function.firstInput; i < function.firstInput + function.inputCount; ++i) {
-        if (module_.interfaceVariables[i].symbol != symbolId) continue;
-        if (count++ != 0) text(", ");
+        if (module_.interfaceVariables[i].symbol != symbolId) {
+          continue;
+        }
+        if (count++ != 0) {
+          text(", ");
+        }
         emitIoInput(i);
       }
-      if (structure) character('}');
+      if (structure) {
+        character('}');
+      }
     }
   }
 
   constexpr void emitGraphicsReturn(const Function& function, uint16_t functionId) {
-    if (function.outputCount == 0) return;
+    if (function.outputCount == 0) {
+      return;
+    }
     text("  return ");
     ioTypeName(functionId, false);
     character('{');
     for (uint16_t i = 0; i < function.outputCount; ++i) {
-      if (i != 0) text(", ");
+      if (i != 0) {
+        text(", ");
+      }
       text("donner_msl_result");
       const InterfaceVariable& variable = module_.interfaceVariables[function.firstOutput + i];
       if (variable.member != kInvalidArenaId) {
@@ -1462,8 +1586,12 @@ private:
 
   constexpr void emitIndexParameters(const Function& function, bool& comma) {
     for (uint16_t i = function.firstInput; i < function.firstInput + function.inputCount; ++i) {
-      if (!isVertexIndexBuiltin(module_.interfaceVariables[i].decoration.builtin)) continue;
-      if (comma) text(", ");
+      if (!isVertexIndexBuiltin(module_.interfaceVariables[i].decoration.builtin)) {
+        continue;
+      }
+      if (comma) {
+        text(", ");
+      }
       text(module_.interfaceVariables[i].decoration.builtin == BuiltinValue::VertexIndex
                ? "uint donner_msl_vertex_index [[vertex_id]]"
                : "uint donner_msl_instance_index [[instance_id]]");
@@ -1475,31 +1603,38 @@ private:
     const Function& function = module_.functions[functionId];
     const uint16_t inputFields = emitIoStruct(functionId, true);
     const uint16_t outputFields = emitIoStruct(functionId, false);
-    if (error_ != TextEmitError::None) return;
+    if (error_ != TextEmitError::None) {
+      return;
+    }
     const auto name = module_.name(function.name);
     if (!validName(name) || reservedEntryName(name) || name.starts_with("donner_msl_")) {
       error_ = TextEmitError::UnsupportedEntryPointName;
       return;
     }
     text(function.stage == Stage::Vertex ? "vertex " : "fragment ");
-    if (outputFields != 0)
+    if (outputFields != 0) {
       ioTypeName(functionId, false);
-    else
+    } else {
       text("void");
+    }
     character(' ');
     text(name);
     character('(');
     resourceParameters(true, function.resourceMask);
     bool comma = function.resourceMask != 0;
     if (inputFields != 0) {
-      if (comma) text(", ");
+      if (comma) {
+        text(", ");
+      }
       ioTypeName(functionId, true);
       text(" donner_msl_inputs [[stage_in]]");
       comma = true;
     }
     emitIndexParameters(function, comma);
     text(") {\n  ");
-    if (outputFields != 0) text("const auto donner_msl_result = ");
+    if (outputFields != 0) {
+      text("const auto donner_msl_result = ");
+    }
     prefixed("donner_msl_function_", function.name);
     character('(');
     emitGraphicsArguments(function);
@@ -1511,7 +1646,9 @@ private:
   Type currentReturnType_;
 
   constexpr void emitFunction(uint16_t functionId) {
-    if (error_ != TextEmitError::None) return;
+    if (error_ != TextEmitError::None) {
+      return;
+    }
     if (functionId >= module_.functionCount) {
       error_ = TextEmitError::InvalidArenaReference;
       return;
@@ -1563,7 +1700,9 @@ private:
         error_ = TextEmitError::InvalidArenaReference;
         return;
       }
-      if (function.resourceMask != 0 || index != 0) text(", ");
+      if (function.resourceMask != 0 || index != 0) {
+        text(", ");
+      }
       const Symbol& symbol = module_.symbols[symbolId];
       if ((entry && symbol.builtin != BuiltinValue::GlobalInvocationId) ||
           (function.stage == Stage::None && symbol.builtin != BuiltinValue::None)) {
@@ -1573,7 +1712,9 @@ private:
       type(symbol.type);
       character(' ');
       symbolName(symbolId);
-      if (entry) text(" [[thread_position_in_grid]]");
+      if (entry) {
+        text(" [[thread_position_in_grid]]");
+      }
     }
   }
 };
@@ -1594,7 +1735,9 @@ namespace detail {
 constexpr std::string_view TrimLine(std::string_view line) {
   constexpr std::string_view kBlank = " \t\r";
   const size_t first = line.find_first_not_of(kBlank);
-  if (first == std::string_view::npos) return {};
+  if (first == std::string_view::npos) {
+    return {};
+  }
   const size_t last = line.find_last_not_of(kBlank);
   return line.substr(first, last - first + 1);
 }
@@ -1621,10 +1764,14 @@ constexpr TextEmitResult EmitWgsl(const Module& module, TextSink& sink) {
     size_t cursor = 0;
     while (cursor < source.size() && error == TextEmitError::None) {
       size_t end = source.find('\n', cursor);
-      if (end == std::string_view::npos) end = source.size();
+      if (end == std::string_view::npos) {
+        end = source.size();
+      }
       std::string_view line = source.substr(cursor, end - cursor);
       const size_t comment = line.find("//");
-      if (comment != std::string_view::npos) line = line.substr(0, comment);
+      if (comment != std::string_view::npos) {
+        line = line.substr(0, comment);
+      }
       line = detail::TrimLine(line);
       if (!line.empty() && (!sink.append(line) || !sink.append('\n'))) {
         error = TextEmitError::SinkTooSmall;

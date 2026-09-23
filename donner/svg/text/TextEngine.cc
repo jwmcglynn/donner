@@ -1357,7 +1357,9 @@ std::vector<const components::ComputedTextGeometryComponent::CharacterGeometry*>
 template <typename Geometry>
 bool FontDependenciesChanged(Geometry& geometry, uint64_t revision,
                              std::span<const FontFaceDependency> resolved) {
-  if (geometry.fontResourceRevision == revision) return false;
+  if (geometry.fontResourceRevision == revision) {
+    return false;
+  }
   geometry.fontResourceRevision = revision;
   for (const auto& dependency : geometry.fontDependencies) {
     const auto current = std::find_if(resolved.begin(), resolved.end(), [&](const auto& face) {
@@ -1405,8 +1407,9 @@ std::vector<Entity> TextEngine::refreshFontResources() {
   for (auto view = registry_.view<components::ComputedTextGeometryComponent>();
        const Entity root : view) {
     if (FontDependenciesChanged(view.get<components::ComputedTextGeometryComponent>(root), revision,
-                                resolved))
+                                resolved)) {
       changedRoots.push_back(root);
+    }
   }
   for (const Entity root : changedRoots) {
     components::InvalidateTextLayout(EntityHandle(registry_, root));
@@ -1414,8 +1417,9 @@ std::vector<Entity> TextEngine::refreshFontResources() {
   for (auto view = registry_.view<components::FontMetricDependenciesComponent>();
        const Entity entity : view) {
     if (!FontDependenciesChanged(view.get<components::FontMetricDependenciesComponent>(entity),
-                                 revision, resolved))
+                                 revision, resolved)) {
       continue;
+    }
     registry_.remove<components::ComputedPathComponent>(entity);
     registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
         components::DirtyFlagsComponent::Shape | components::DirtyFlagsComponent::LayoutCascade |
@@ -1425,8 +1429,9 @@ std::vector<Entity> TextEngine::refreshFontResources() {
   for (auto view = registry_.view<components::ComputedClipPathsComponent>();
        const Entity entity : view) {
     if (!FontDependenciesChanged(view.get<components::ComputedClipPathsComponent>(entity), revision,
-                                 resolved))
+                                 resolved)) {
       continue;
+    }
     registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
         components::DirtyFlagsComponent::TextGeometry | components::DirtyFlagsComponent::Paint |
         components::DirtyFlagsComponent::RenderInstance);
@@ -1435,8 +1440,9 @@ std::vector<Entity> TextEngine::refreshFontResources() {
   for (auto view = registry_.view<components::FontPaintDependenciesComponent>();
        const Entity entity : view) {
     if (!FontDependenciesChanged(view.get<components::FontPaintDependenciesComponent>(entity),
-                                 revision, resolved))
+                                 revision, resolved)) {
       continue;
+    }
     registry_.get_or_emplace<components::DirtyFlagsComponent>(entity).mark(
         components::DirtyFlagsComponent::TextGeometry | components::DirtyFlagsComponent::Filter |
         components::DirtyFlagsComponent::RenderInstance);
@@ -1560,10 +1566,16 @@ FontHandle ResolveSpanFace(FontManager& fontManager,
 float AdjustFontSize(const TextBackend& backend, FontHandle font, float sizePx,
                      const std::optional<double>& fontSizeAdjust) {
   sizePx = CheckedFontSizePx(sizePx);
-  if (sizePx == 0.0f || !fontSizeAdjust) return sizePx;
-  if (!std::isfinite(*fontSizeAdjust) || *fontSizeAdjust <= 0.0) return 0.0f;
+  if (sizePx == 0.0f || !fontSizeAdjust) {
+    return sizePx;
+  }
+  if (!std::isfinite(*fontSizeAdjust) || *fontSizeAdjust <= 0.0) {
+    return 0.0f;
+  }
   const FontVMetrics metrics = backend.fontVMetrics(font);
-  if (metrics.xHeight <= 0 || metrics.unitsPerEm <= 0) return sizePx;
+  if (metrics.xHeight <= 0 || metrics.unitsPerEm <= 0) {
+    return sizePx;
+  }
   const double aspect = static_cast<double>(metrics.xHeight) / metrics.unitsPerEm;
   return CheckedFontSizePx(static_cast<double>(sizePx) * *fontSizeAdjust / aspect);
 }
@@ -1631,7 +1643,9 @@ ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2
                                              const FontMetrics& fontMetrics) const {
   UTILS_RELEASE_ASSERT(styleOwner.registry() == &registry_);
   const auto* style = registry_.try_get<components::ComputedStyleComponent>(styleOwner.entity());
-  if (!style || !style->properties) return {};
+  if (!style || !style->properties) {
+    return {};
+  }
   const auto& properties = *style->properties;
   components::ComputedTextComponent::TextSpan span;
   span.fontFamilies = properties.fontFamily.get().value();
@@ -1648,6 +1662,7 @@ ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2
 
 std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent& text,
                                         const TextLayoutParams& params) {
+  ++layoutCallCount_;
   // ── Resolve base font ─────────────────────────────────────────────────────────
   FontHandle font = FindFirstAvailableFont(fontManager_, params.fontFamilies);
   if (!font) {
@@ -2373,7 +2388,9 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
           Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + glyph.yAdvance);
       charGeom.advance += std::hypot(glyph.xAdvance, glyph.yAdvance);
 
-      if (runFontSizePx == 0.0f) continue;
+      if (runFontSizePx == 0.0f) {
+        continue;
+      }
 
       const float emScale = run.font ? scaleForEmToPixels(run.font, runFontSizePx) : 0.0f;
       Path glyphPath = glyphOutline(run.font, glyph.glyphIndex, emScale * glyph.fontSizeScale);

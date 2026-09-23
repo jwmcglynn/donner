@@ -110,12 +110,16 @@ TEST_F(SourceDiagnosticsPanelImGuiTest, EmptyDiagnosticsOrZeroHeightRenderNothin
 
 TEST_F(SourceDiagnosticsPanelImGuiTest, HoverReportsRowAndClickActivatesIt) {
   const std::array diagnostics = {
-      SourceDiagnostic{
-          .id = 21, .severity = DiagnosticSeverity::Error, .line = 3, .column = 4,
-          .message = "unexpected token"},
-      SourceDiagnostic{
-          .id = 22, .severity = DiagnosticSeverity::Warning, .line = 9, .column = 0,
-          .message = "unused attribute"},
+      SourceDiagnostic{.id = 21,
+                       .severity = DiagnosticSeverity::Error,
+                       .line = 3,
+                       .column = 4,
+                       .message = "unexpected token"},
+      SourceDiagnostic{.id = 22,
+                       .severity = DiagnosticSeverity::Warning,
+                       .line = 9,
+                       .column = 0,
+                       .message = "unused attribute"},
   };
   constexpr float kHeight = 160.0f;
 

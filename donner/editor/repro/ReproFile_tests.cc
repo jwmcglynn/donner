@@ -256,7 +256,9 @@ TEST(ReproFileTest, UnsafeResizePixelSurfaceFallsBackToZero) {
 TEST(ReproFileTest, RejectsTooManyItemsInOneFrame) {
   std::string actions = R"(,"a":[)";
   for (size_t i = 0; i <= kMaximumReproItemsPerFrame; ++i) {
-    if (i != 0) actions += ',';
+    if (i != 0) {
+      actions += ',';
+    }
     actions += R"({"k":"commit_pen_path"})";
   }
   actions += ']';
@@ -1303,10 +1305,20 @@ TEST(ReproFileTest, ReadsWhitespacePrefixedNestedBlocksAndEmptyArrays) {
   const std::string expect =
       R"("left_mouse_down_ordinal":1,"frame_offset_after_left_mouse_down":2,)"
       R"("min_frame_index":3,"max_frame_index":4,"target_selector":"#target",)"
-      R"("crop_mode":"document","crop": 	{"x":5,"y":6,"w":7,"h":8})";
-  WriteTextFile(path, MetadataLineWith(std::string(R"(,"expect": 	{)") + expect + "}") +
-                          FrameLineWith(std::string(R"(,"vp": 	{)") + viewport +
-                                        R"(},"a":[],"e":[{"k":"mdown","hit": 	{"tag":"rect"}}])"));
+      R"("crop_mode":"document","crop": )"
+      "\t"
+      R"({"x":5,"y":6,"w":7,"h":8})";
+  WriteTextFile(path, MetadataLineWith(std::string(R"(,"expect": )"
+                                                   "\t"
+                                                   "{") +
+                                       expect + "}") +
+                          FrameLineWith(std::string(R"(,"vp": )"
+                                                    "\t"
+                                                    "{") +
+                                        viewport +
+                                        R"(},"a":[],"e":[{"k":"mdown","hit": )"
+                                        "\t"
+                                        R"({"tag":"rect"}}])"));
 
   auto loaded = ReadReproFile(path);
   ASSERT_TRUE(loaded.has_value());

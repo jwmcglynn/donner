@@ -1254,10 +1254,14 @@ extern "C" EMSCRIPTEN_KEEPALIVE void donner_catalog_font_complete(
     auto& sessions = FontSessions();
     std::lock_guard lock(sessions.mutex);
     const auto found = sessions.stores.find(session);
-    if (found == sessions.stores.end()) return;
+    if (found == sessions.stores.end()) {
+      return;
+    }
     store = found->second.lock();
   }
-  if (!store) return;
+  if (!store) {
+    return;
+  }
   const auto& asset = assets[assetIndex];
   const uint64_t token = static_cast<uint64_t>(requestToken);
   if (!bytes || size != asset.encodedBytes ||
@@ -1273,18 +1277,24 @@ extern "C" EMSCRIPTEN_KEEPALIVE void donner_catalog_font_complete(
 }
 
 uint32_t InstallCatalogFonts(std::shared_ptr<svg::CatalogEncodedFontStore> store) {
-  if (!store) return 0;
+  if (!store) {
+    return 0;
+  }
   uint32_t session;
   {
     auto& sessions = FontSessions();
     std::lock_guard lock(sessions.mutex);
-    if (sessions.nextId == 0) return 0;
+    if (sessions.nextId == 0) {
+      return 0;
+    }
     session = sessions.nextId++;
     sessions.stores.emplace(session, store);
   }
   std::string manifest = "[";
   for (const auto& asset : svg::CatalogFontAssets()) {
-    if (manifest.size() > 1) manifest += ',';
+    if (manifest.size() > 1) {
+      manifest += ',';
+    }
     // Paths and hashes are restricted ASCII generated from the pinned catalog, never user text.
     manifest += "{\"id\":\"" + asset.contentId + "\",\"path\":\"" + asset.packagePath +
                 "\",\"encodedBytes\":" + std::to_string(asset.encodedBytes) +
@@ -1348,7 +1358,9 @@ void RequestCatalogFont(uint32_t session, std::string_view contentId, uint64_t r
   const auto assets = svg::CatalogFontAssets();
   const auto found = std::find_if(assets.begin(), assets.end(),
                                   [&](const auto& asset) { return asset.contentId == contentId; });
-  if (!session || found == assets.end()) return;
+  if (!session || found == assets.end()) {
+    return;
+  }
   const size_t index = static_cast<size_t>(found - assets.begin());
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
@@ -1365,7 +1377,9 @@ void RequestCatalogFont(uint32_t session, std::string_view contentId, uint64_t r
 }
 
 void UninstallCatalogFonts(uint32_t session) {
-  if (!session) return;
+  if (!session) {
+    return;
+  }
   {
     auto& sessions = FontSessions();
     std::lock_guard lock(sessions.mutex);

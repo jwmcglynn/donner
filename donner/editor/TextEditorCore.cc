@@ -1527,10 +1527,11 @@ void TextEditorCore::handleMidLineBackspace(const Coordinates& pos, UndoRecord& 
       int startIndex = charIndex - 1;
       int countSpaces = 0;
       for (int i = 0; i < tabSize_ && startIndex - i >= 0; i++) {
-        if (line[startIndex - i].character == ' ')
+        if (line[startIndex - i].character == ' ') {
           countSpaces++;
-        else
+        } else {
           break;
+        }
       }
       if (countSpaces == tabSize_) {
         undo.removedStart = Coordinates(pos.line, pos.column - tabSize_);
@@ -1714,12 +1715,13 @@ void TextEditorCore::detectIndentationStyle() {
     int leadingSpaces = 0;
     int leadingTabs = 0;
     for (auto& g : line) {
-      if (g.character == ' ')
+      if (g.character == ' ') {
         leadingSpaces++;
-      else if (g.character == '\t')
+      } else if (g.character == '\t') {
         leadingTabs++;
-      else
+      } else {
         break;
+      }
     }
 
     // Count total spaces/tabs to guess mode
@@ -2185,7 +2187,9 @@ const LanguageDefinition& LanguageDefinition::SVG() {
     // Custom XML-aware tokenizer.
     def.tokenize = [](const char* inBegin, const char* inEnd, const char*& outBegin,
                       const char*& outEnd, ColorIndex& outColor) -> bool {
-      if (inBegin >= inEnd) return false;
+      if (inBegin >= inEnd) {
+        return false;
+      }
 
       const char* p = inBegin;
       const char c = *p;
@@ -2229,13 +2233,17 @@ const LanguageDefinition& LanguageDefinition::SVG() {
         ++p;
         if (p < inEnd && *p == '#') {
           ++p;
-          if (p < inEnd && (*p == 'x' || *p == 'X')) ++p;
+          if (p < inEnd && (*p == 'x' || *p == 'X')) {
+            ++p;
+          }
         }
         while (p < inEnd && *p != ';' && *p != '<' && *p != '>' && *p != ' ' && *p != '\t' &&
                *p != '\n') {
           ++p;
         }
-        if (p < inEnd && *p == ';') ++p;
+        if (p < inEnd && *p == ';') {
+          ++p;
+        }
         outBegin = inBegin;
         outEnd = p;
         outColor = ColorIndex::Number;
@@ -2245,14 +2253,20 @@ const LanguageDefinition& LanguageDefinition::SVG() {
       // Numbers
       if ((c >= '0' && c <= '9') || (c == '-' && p + 1 < inEnd && p[1] >= '0' && p[1] <= '9') ||
           (c == '.' && p + 1 < inEnd && p[1] >= '0' && p[1] <= '9')) {
-        if (c == '-') ++p;
+        if (c == '-') {
+          ++p;
+        }
         while (p < inEnd && ((*p >= '0' && *p <= '9') || *p == '.')) {
           ++p;
         }
         if (p < inEnd && (*p == 'e' || *p == 'E')) {
           ++p;
-          if (p < inEnd && (*p == '+' || *p == '-')) ++p;
-          while (p < inEnd && *p >= '0' && *p <= '9') ++p;
+          if (p < inEnd && (*p == '+' || *p == '-')) {
+            ++p;
+          }
+          while (p < inEnd && *p >= '0' && *p <= '9') {
+            ++p;
+          }
         }
         if (p < inEnd && *p == '%') {
           ++p;

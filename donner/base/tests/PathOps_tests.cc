@@ -1614,8 +1614,8 @@ TEST(PathOpsTest, UnionWithClosedLoopCubicCrossingRect) {
   Path teardrop =
       PathBuilder().moveTo({0, 0}).curveTo({-30, -60}, {30, -60}, {0, 0}).closePath().build();
 
-  const PathBooleanResult result =
-      Boolean(PathBooleanOp::Union, {Input(std::move(teardrop)), Input(RectPath(-50, -10, 100, 20))});
+  const PathBooleanResult result = Boolean(
+      PathBooleanOp::Union, {Input(std::move(teardrop)), Input(RectPath(-50, -10, 100, 20))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_THAT(result.paths, Not(IsEmpty()));
@@ -1668,8 +1668,8 @@ TEST(PathOpsTest, UnionIgnoresZeroLengthSegmentFromDuplicateVertex) {
                            .closePath()
                            .build();
 
-  const PathBooleanResult result =
-      Boolean(PathBooleanOp::Union, {Input(std::move(dupVertexRect)), Input(RectPath(0, -50, 50, 50))});
+  const PathBooleanResult result = Boolean(
+      PathBooleanOp::Union, {Input(std::move(dupVertexRect)), Input(RectPath(0, -50, 50, 50))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
   ASSERT_THAT(result.paths, Not(IsEmpty()));

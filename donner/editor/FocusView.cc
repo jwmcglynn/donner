@@ -440,7 +440,9 @@ void AppendReferencedFragmentsInSubtree(std::string_view source, const svg::SVGE
                                         FocusTraversalBudget* budget = nullptr,
                                         std::size_t depth = 0) {
   if (depth > kMaximumFocusTraversalDepth) {
-    if (budget != nullptr) budget->reject();
+    if (budget != nullptr) {
+      budget->reject();
+    }
     return;
   }
   if (budget != nullptr && !budget->consume()) {
@@ -546,7 +548,9 @@ void AppendMatchedCssFragmentReferencesInSubtree(std::string_view source,
                                                  FocusTraversalBudget* budget = nullptr,
                                                  std::size_t depth = 0) {
   if (depth > kMaximumFocusTraversalDepth) {
-    if (budget != nullptr) budget->reject();
+    if (budget != nullptr) {
+      budget->reject();
+    }
     return;
   }
   if (!HasLiveSvgTreeComponents(root) || (budget != nullptr && !budget->consume())) {
@@ -584,14 +588,18 @@ void AppendDocumentElements(const svg::SVGElement& root, std::vector<svg::SVGEle
                             FocusTraversalBudget* budget = nullptr, std::size_t depth = 0,
                             std::size_t maximumElements = std::numeric_limits<std::size_t>::max()) {
   if (depth > kMaximumFocusTraversalDepth) {
-    if (budget != nullptr) budget->reject();
+    if (budget != nullptr) {
+      budget->reject();
+    }
     return;
   }
   if (!HasLiveSvgTreeComponents(root) || (budget != nullptr && !budget->consume())) {
     return;
   }
   if (elements->size() >= maximumElements) {
-    if (budget != nullptr) budget->reject();
+    if (budget != nullptr) {
+      budget->reject();
+    }
     return;
   }
 

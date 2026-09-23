@@ -17,9 +17,9 @@ enum class AnimationFill : uint8_t {
 
 /// Restart behavior for an animation.
 enum class AnimationRestart : uint8_t {
-  Always,        ///< Can always restart.
-  WhenNotActive, ///< Can only restart when not active.
-  Never,         ///< Cannot restart.
+  Always,         ///< Can always restart.
+  WhenNotActive,  ///< Can only restart when not active.
+  Never,          ///< Cannot restart.
 };
 
 /**

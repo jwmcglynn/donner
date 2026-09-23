@@ -24,9 +24,15 @@ namespace donner::svg::components {
 namespace {
 
 int ReadinessSeverity(const FontFaceDependency& dependency) {
-  if (dependency.state == FontFaceLoadState::Failed) return 4;
-  if (dependency.waitReason == FontFaceWaitReason::RetainedBudget) return 3;
-  if (dependency.state == FontFaceLoadState::WaitingForAdmission) return 2;
+  if (dependency.state == FontFaceLoadState::Failed) {
+    return 4;
+  }
+  if (dependency.waitReason == FontFaceWaitReason::RetainedBudget) {
+    return 3;
+  }
+  if (dependency.state == FontFaceLoadState::WaitingForAdmission) {
+    return 2;
+  }
   return dependency.state == FontFaceLoadState::Loaded ? 0 : 1;
 }
 
@@ -68,10 +74,13 @@ void AppendDependencies(std::vector<FontFaceDependency>& result,
   auto output = result.begin();
   for (auto item = result.begin(); item != result.end(); ++item) {
     if (output != result.begin() && SameDependencyIdentity(*(output - 1), *item)) {
-      if (ReadinessSeverity(*item) > ReadinessSeverity(*(output - 1)))
+      if (ReadinessSeverity(*item) > ReadinessSeverity(*(output - 1))) {
         *(output - 1) = std::move(*item);
+      }
     } else {
-      if (output != item) *output = std::move(*item);
+      if (output != item) {
+        *output = std::move(*item);
+      }
       ++output;
     }
   }
@@ -80,7 +89,9 @@ void AppendDependencies(std::vector<FontFaceDependency>& result,
 
 bool HasUnpreparedFragment(const Registry& registry, const RenderingInstanceComponent& instance,
                            const FontPaintDependenciesComponent* paint) {
-  if (paint && paint->resourceLimit) return false;
+  if (paint && paint->resourceLimit) {
+    return false;
+  }
   const auto captured = [&](const SVGDocumentHandle& document) {
     return !document || (paint && std::any_of(paint->children.begin(), paint->children.end(),
                                               [&](const auto& child) {
@@ -89,13 +100,17 @@ bool HasUnpreparedFragment(const Registry& registry, const RenderingInstanceComp
   };
   if (instance.visible) {
     if (const auto* image = registry.try_get<LoadedSVGImageComponent>(instance.dataEntity);
-        image && !captured(image->subDocument))
+        image && !captured(image->subDocument)) {
       return true;
+    }
     if (const auto* use = registry.try_get<ExternalUseComponent>(instance.dataEntity);
-        use && !captured(use->subDocument))
+        use && !captured(use->subDocument)) {
       return true;
+    }
   }
-  if (!instance.resolvedFilter) return false;
+  if (!instance.resolvedFilter) {
+    return false;
+  }
   if (const auto* effects = std::get_if<std::vector<FilterEffect>>(&*instance.resolvedFilter)) {
     return (!paint || !paint->prepared) &&
            std::any_of(effects->begin(), effects->end(), [](const FilterEffect& effect) {
@@ -103,9 +118,13 @@ bool HasUnpreparedFragment(const Registry& registry, const RenderingInstanceComp
            });
   }
   const auto* reference = std::get_if<ResolvedReference>(&*instance.resolvedFilter);
-  if (!reference || reference->handle.registry() != &registry || !reference->valid()) return false;
+  if (!reference || reference->handle.registry() != &registry || !reference->valid()) {
+    return false;
+  }
   const auto* filter = registry.try_get<ComputedFilterComponent>(reference->handle.entity());
-  if (!filter) return false;
+  if (!filter) {
+    return false;
+  }
   return std::any_of(
       filter->filterGraph.nodes.begin(), filter->filterGraph.nodes.end(), [&](const auto& node) {
         const auto* image = std::get_if<filter_primitive::Image>(&node.primitive);
@@ -117,10 +136,13 @@ bool HasUnpreparedFragment(const Registry& registry, const RenderingInstanceComp
 bool HasCurrentRenderExclusion(const Registry& registry, Entity entity) {
   const auto* scope = registry.ctx().find<RenderedFontResourceScope>();
   const auto* preparation = registry.ctx().find<FontResourcePreparationState>();
-  if (!scope || !preparation || !scope->complete || scope->preparationEpoch != preparation->epoch)
+  if (!scope || !preparation || !scope->complete || scope->preparationEpoch != preparation->epoch) {
     return false;
+  }
   const auto* manager = registry.ctx().find<FontManager>();
-  if (scope->fontResourceRevision != (manager ? manager->fontResourceRevision() : 0)) return false;
+  if (scope->fontResourceRevision != (manager ? manager->fontResourceRevision() : 0)) {
+    return false;
+  }
   return scope->excluded.contains(entity);
 }
 
@@ -135,7 +157,9 @@ public:
   }
 
   bool contains(Entity entity) {
-    if (resourceLimit_) return false;
+    if (resourceLimit_) {
+      return false;
+    }
     std::vector<Entity> path;
     Entity current = entity;
     while (!membership_.contains(current)) {
@@ -148,7 +172,9 @@ public:
       current = tree ? tree->parent() : entt::null;
     }
     const bool result = membership_.at(current);
-    for (const Entity visited : path) membership_.emplace(visited, result);
+    for (const Entity visited : path) {
+      membership_.emplace(visited, result);
+    }
     return result;
   }
 
@@ -168,9 +194,13 @@ bool HasCompletedCurrentScope(const Registry& registry) {
 }
 
 bool HasRenderCoverage(const Registry& registry, Entity target) {
-  if (!HasCompletedCurrentScope(registry)) return false;
+  if (!HasCompletedCurrentScope(registry)) {
+    return false;
+  }
   const auto& scope = registry.ctx().get<RenderedFontResourceScope>();
-  if (scope.coverageRoot == entt::null) return false;
+  if (scope.coverageRoot == entt::null) {
+    return false;
+  }
   TargetMembership membership(registry, scope.coverageRoot);
   return membership.contains(target) && !membership.resourceLimit();
 }
@@ -200,11 +230,15 @@ ScopedFontResourceRender::~ScopedFontResourceRender() {
 }
 
 void ScopedFontResourceRender::finish(bool completed) {
-  if (finished_) return;
+  if (finished_) {
+    return;
+  }
   finished_ = true;
   auto& scope = registry_.ctx().get<RenderedFontResourceScope>();
   scope.pendingComplete &= completed;
-  if (--scope.depth != 0) return;
+  if (--scope.depth != 0) {
+    return;
+  }
   if (scope.excluded != scope.pendingExcluded || scope.coverageRoot != scope.pendingCoverageRoot) {
     InvalidateFontResourcePreparation(registry_);
   }
@@ -224,9 +258,13 @@ void ScopedFontResourceRender::setCoverageRoot(Entity root) {
 
 void ScopedFontResourceRender::recordDraw(Registry& registry, Entity entity, bool excluded) {
   auto* scope = registry.ctx().find<RenderedFontResourceScope>();
-  if (!scope || scope->depth == 0) return;
+  if (!scope || scope->depth == 0) {
+    return;
+  }
   if (excluded) {
-    if (!scope->painted.contains(entity)) scope->pendingExcluded.insert(entity);
+    if (!scope->painted.contains(entity)) {
+      scope->pendingExcluded.insert(entity);
+    }
   } else {
     scope->painted.insert(entity);
     scope->pendingExcluded.erase(entity);
@@ -241,8 +279,12 @@ FontResourceGraph::FontResourceGraph(const Registry& registry) {
   for (const Entity entity : registry.view<const RenderingInstanceComponent>()) {
     instances_.push_back(snapshotInstance(registry, entity, current));
   }
-  if (!initializeIntervals()) return;
-  for (std::size_t i = 0; i < instances_.size(); ++i) addInstanceReferences(registry, i);
+  if (!initializeIntervals()) {
+    return;
+  }
+  for (std::size_t i = 0; i < instances_.size(); ++i) {
+    addInstanceReferences(registry, i);
+  }
 }
 
 FontResourceGraph::Instance FontResourceGraph::snapshotInstance(
@@ -258,8 +300,9 @@ FontResourceGraph::Instance FontResourceGraph::snapshotInstance(
                     .drawOrder = rendered.drawOrder,
                     .visible = rendered.visible,
                     .textRoot = registry.all_of<TextRootComponent>(geometryOwner)};
-  if (instance.visible)
+  if (instance.visible) {
     appendGeometryDependencies(instance, registry, rendered.dataEntity, current);
+  }
   if (previous && instance.textRoot &&
       !registry.all_of<ComputedTextGeometryComponent>(geometryOwner)) {
     AppendDependencies(instance.dependencies, previous->geometryDependencies, current);
@@ -270,7 +313,9 @@ FontResourceGraph::Instance FontResourceGraph::snapshotInstance(
   }
   instance.renderedDependencies = instance.dependencies;
   const auto* paint = registry.try_get<FontPaintDependenciesComponent>(entity);
-  if (paint) appendPaintDependencies(instance, *paint, current);
+  if (paint) {
+    appendPaintDependencies(instance, *paint, current);
+  }
   const bool unprepared = HasUnpreparedFragment(registry, rendered, paint);
   instance.needsRender |= unprepared;
   instance.renderedNeedsRender |= unprepared;
@@ -322,7 +367,9 @@ bool FontResourceGraph::initializeIntervals() {
   }
   dependencies_.resize(count * 2);
   consumers_.resize(count * 2);
-  for (std::size_t i = 0; i < count; ++i) indices_.emplace(instances_[i].storageEntity, i);
+  for (std::size_t i = 0; i < count; ++i) {
+    indices_.emplace(instances_[i].storageEntity, i);
+  }
   for (std::size_t i = 1; i < count; ++i) {
     addEdge(i, i * 2);
     addEdge(i, i * 2 + 1);
@@ -344,10 +391,18 @@ void FontResourceGraph::addInstanceReferences(const Registry& registry, std::siz
   if (const auto* stroke = std::get_if<PaintResolvedReference>(&instance.resolvedStroke)) {
     addSubtree(stroke->subtreeInfo);
   }
-  if (instance.mask) addSubtree(instance.mask->subtreeInfo);
-  if (instance.markerStart) addSubtree(instance.markerStart->subtreeInfo);
-  if (instance.markerMid) addSubtree(instance.markerMid->subtreeInfo);
-  if (instance.markerEnd) addSubtree(instance.markerEnd->subtreeInfo);
+  if (instance.mask) {
+    addSubtree(instance.mask->subtreeInfo);
+  }
+  if (instance.markerStart) {
+    addSubtree(instance.markerStart->subtreeInfo);
+  }
+  if (instance.markerMid) {
+    addSubtree(instance.markerMid->subtreeInfo);
+  }
+  if (instance.markerEnd) {
+    addSubtree(instance.markerEnd->subtreeInfo);
+  }
 }
 
 void FontResourceGraph::addEdge(std::size_t consumer, std::size_t dependency) {
@@ -366,8 +421,12 @@ void FontResourceGraph::addRange(std::size_t consumer, Entity first, Entity last
   std::size_t begin = instances_.size() + firstIndex->second;
   std::size_t end = instances_.size() + lastIndex->second + 1;
   while (begin < end) {
-    if (begin & 1) addEdge(consumer, begin++);
-    if (end & 1) addEdge(consumer, --end);
+    if (begin & 1) {
+      addEdge(consumer, begin++);
+    }
+    if (end & 1) {
+      addEdge(consumer, --end);
+    }
     begin /= 2;
     end /= 2;
   }
@@ -399,7 +458,9 @@ std::vector<std::size_t> FontResourceGraph::collectSeeds(const Registry& registr
   TargetMembership membership(registry, target);
   std::vector<std::size_t> seeds;
   for (std::size_t i = 0; i < instances_.size(); ++i) {
-    if (membership.contains(instances_[i].storageEntity)) seeds.push_back(instances_.size() + i);
+    if (membership.contains(instances_[i].storageEntity)) {
+      seeds.push_back(instances_.size() + i);
+    }
   }
   if (const auto index = containingTextRootIndex(registry, target, result)) {
     seeds.push_back(instances_.size() + *index);
@@ -429,15 +490,18 @@ struct FontResourceGraph::DependencyAccumulator {
               face.availability.contentId,
               face.availability.contentGeneration};
       auto [entry, inserted] = values.try_emplace(std::move(key), face);
-      if (!inserted && ReadinessSeverity(face) > ReadinessSeverity(entry->second))
+      if (!inserted && ReadinessSeverity(face) > ReadinessSeverity(entry->second)) {
         entry->second = face;
+      }
     }
   }
 
   std::vector<FontFaceDependency> finish() {
     std::vector<FontFaceDependency> result;
     result.reserve(values.size());
-    for (auto& [key, face] : values) result.push_back(std::move(face));
+    for (auto& [key, face] : values) {
+      result.push_back(std::move(face));
+    }
     return result;
   }
 };
@@ -460,7 +524,9 @@ void FontResourceGraph::appendCollectedInstance(Collection& result, std::size_t 
 FontResourceGraph::Collection FontResourceGraph::collect(const Registry& registry, Entity target,
                                                          Purpose purpose) const {
   Collection result{.resourceLimit = resourceLimit_};
-  if (resourceLimit_) return result;
+  if (resourceLimit_) {
+    return result;
+  }
   result.needsRender = purpose == Purpose::RenderedFrame && !HasRenderCoverage(registry, target);
   std::vector<bool> visited(dependencies_.size(), false);
   std::vector<std::size_t> pending;
@@ -470,7 +536,9 @@ FontResourceGraph::Collection FontResourceGraph::collect(const Registry& registr
       pending.push_back(node);
     }
   };
-  for (const std::size_t seed : collectSeeds(registry, target, result)) enqueue(seed);
+  for (const std::size_t seed : collectSeeds(registry, target, result)) {
+    enqueue(seed);
+  }
   std::unordered_set<Entity> textRoots;
   DependencyAccumulator accumulated;
   while (!pending.empty()) {
@@ -478,10 +546,14 @@ FontResourceGraph::Collection FontResourceGraph::collect(const Registry& registr
     pending.pop_back();
     if (node >= instances_.size()) {
       const auto index = node - instances_.size();
-      if (purpose == Purpose::RenderedFrame && instances_[index].excludedFromRender) continue;
+      if (purpose == Purpose::RenderedFrame && instances_[index].excludedFromRender) {
+        continue;
+      }
       appendCollectedInstance(result, index, textRoots, purpose, accumulated);
     }
-    for (const std::size_t dependency : dependencies_[node]) enqueue(dependency);
+    for (const std::size_t dependency : dependencies_[node]) {
+      enqueue(dependency);
+    }
   }
   result.dependencies = accumulated.finish();
   return result;
@@ -498,7 +570,9 @@ void FontResourceGraph::refreshMetadata(const Registry& registry) {
 
 void FontResourceGraph::invalidateDependents(Registry& registry,
                                              std::span<const Entity> changedOwners) const {
-  if (dependencies_.empty() || changedOwners.empty()) return;
+  if (dependencies_.empty() || changedOwners.empty()) {
+    return;
+  }
   const std::unordered_set<Entity> changed(changedOwners.begin(), changedOwners.end());
   std::vector<bool> visited(consumers_.size(), false);
   std::vector<std::size_t> pending;
@@ -525,7 +599,9 @@ void FontResourceGraph::invalidateDependents(Registry& registry,
             DirtyFlagsComponent::RenderInstance);
       }
     }
-    for (const std::size_t consumer : consumers_[node]) enqueue(consumer);
+    for (const std::size_t consumer : consumers_[node]) {
+      enqueue(consumer);
+    }
   }
 }
 
@@ -545,7 +621,9 @@ std::size_t ScaleWork(std::size_t count, std::size_t factor) {
 
 std::size_t WorkLevels(std::size_t count) {
   std::size_t levels = 1;
-  for (; count > 1; count /= 2) ++levels;
+  for (; count > 1; count /= 2) {
+    ++levels;
+  }
   return levels;
 }
 
@@ -567,15 +645,23 @@ MetadataWork InstanceMetadataWork(const Registry& registry, Entity entity, std::
                            ? entity
                            : rendered.dataEntity;
   std::size_t items = 0;
-  if (const auto* text = registry.try_get<ComputedTextGeometryComponent>(owner))
+  if (const auto* text = registry.try_get<ComputedTextGeometryComponent>(owner)) {
     items = text->fontDependencies.size();
+  }
   const auto* metrics = registry.try_get<FontMetricDependenciesComponent>(entity);
-  if (!metrics) metrics = registry.try_get<FontMetricDependenciesComponent>(rendered.dataEntity);
-  if (metrics) items = AddWork(items, metrics->fontDependencies.size());
-  if (const auto* clip = registry.try_get<ComputedClipPathsComponent>(entity))
+  if (!metrics) {
+    metrics = registry.try_get<FontMetricDependenciesComponent>(rendered.dataEntity);
+  }
+  if (metrics) {
+    items = AddWork(items, metrics->fontDependencies.size());
+  }
+  if (const auto* clip = registry.try_get<ComputedClipPathsComponent>(entity)) {
     items = AddWork(items, clip->fontDependencies.size());
+  }
   const auto* paint = registry.try_get<FontPaintDependenciesComponent>(entity);
-  if (paint) items = AddWork(items, paint->fontDependencies.size());
+  if (paint) {
+    items = AddWork(items, paint->fontDependencies.size());
+  }
   items = ScaleWork(items, 2);
   if (paint) {
     for (const auto& child : paint->children) {
@@ -594,7 +680,9 @@ MetadataWork EstimateMetadataWork(const Registry& registry, std::size_t faces) {
     const auto instance = InstanceMetadataWork(registry, entity, faces);
     total.items = AddWork(total.items, instance.items);
     total.build = AddWork(total.build, instance.build);
-    if (total.build > FontResourceGraphCache::kMaximumWork) break;
+    if (total.build > FontResourceGraphCache::kMaximumWork) {
+      break;
+    }
   }
   return total;
 }
@@ -624,18 +712,25 @@ bool FontResourceGraphCache::prepareEntry(Entry& entry, const SVGDocumentHandle&
   const uint64_t epoch = preparation ? preparation->epoch : 0;
   const auto* manager = registry.ctx().find<FontManager>();
   const auto faces = manager ? manager->faceDependencies() : std::vector<FontFaceDependency>();
-  if (!reserve(ScaleWork(faces.size(), 2))) return false;
+  if (!reserve(ScaleWork(faces.size(), 2))) {
+    return false;
+  }
   const bool scopeComplete = HasCompletedCurrentScope(registry);
-  if (entry.matches(document, epoch, faces, scopeComplete)) return true;
+  if (entry.matches(document, epoch, faces, scopeComplete)) {
+    return true;
+  }
   entry = Entry{};
   const std::size_t traversalWork = CollectionWork(registry);
   // The pre-scan reads at most 64 child evidence records per rendered instance.
   if (!reserve(AddWork(traversalWork,
-                       ScaleWork(registry.view<const RenderingInstanceComponent>().size(), 64))))
+                       ScaleWork(registry.view<const RenderingInstanceComponent>().size(), 64)))) {
     return false;
+  }
   const auto metadata = EstimateMetadataWork(registry, faces.size());
   const std::size_t buildWork = AddWork(traversalWork, metadata.build);
-  if (!reserve(buildWork)) return false;
+  if (!reserve(buildWork)) {
+    return false;
+  }
   entry.document = document;
   entry.documentRevision = document->revision();
   entry.preparationEpoch = epoch;
@@ -657,10 +752,14 @@ void FontResourceGraphCache::preserveBeforeRefresh(const SVGDocumentHandle& docu
 void FontResourceGraphCache::finishRefresh(const SVGDocumentHandle& document,
                                            std::span<const Entity> changedOwners) {
   auto& entry = entries_[document.get()];
-  if (!entry.graph || !reserve(entry.buildWork)) return;
+  if (!entry.graph || !reserve(entry.buildWork)) {
+    return;
+  }
   entry.graph->invalidateDependents(document->registry(), changedOwners);
   entry.graph->refreshMetadata(document->registry());
-  for (auto& targets : entry.targets) targets.clear();
+  for (auto& targets : entry.targets) {
+    targets.clear();
+  }
   const auto* manager = document->registry().ctx().find<FontManager>();
   entry.faces = manager ? manager->faceDependencies() : std::vector<FontFaceDependency>();
   entry.preparationEpoch = document->registry().ctx().emplace<FontResourcePreparationState>().epoch;
@@ -670,24 +769,33 @@ void FontResourceGraphCache::finishRefresh(const SVGDocumentHandle& document,
 FontResourceGraph::Collection FontResourceGraphCache::collect(const SVGDocumentHandle& document,
                                                               Entity target,
                                                               FontResourceGraph::Purpose purpose) {
-  if (target == entt::null) return {};
+  if (target == entt::null) {
+    return {};
+  }
   if (purpose == FontResourceGraph::Purpose::RenderedFrame &&
-      !HasCompletedCurrentScope(document->registry()))
+      !HasCompletedCurrentScope(document->registry())) {
     return {.needsRender = true};
+  }
   auto& entry = entries_[document.get()];
-  if (!prepareEntry(entry, document)) return {.resourceLimit = true};
+  if (!prepareEntry(entry, document)) {
+    return {.resourceLimit = true};
+  }
   const auto* scope = document->registry().ctx().find<RenderedFontResourceScope>();
   const uint64_t token = scope ? scope->token : 0;
   auto& targets = entry.targets[static_cast<std::size_t>(purpose)];
   if (const auto found = targets.find(target); found != targets.end()) {
     // prepareEntry already validated the epoch, including the completed exclusion set. Identical
     // immutable evidence may be rebound to this completed token without rescanning the child.
-    if (!reserve(found->second.value.dependencies.size())) return {.resourceLimit = true};
+    if (!reserve(found->second.value.dependencies.size())) {
+      return {.resourceLimit = true};
+    }
     found->second.renderScopeToken = token;
     ++stats_->cacheHits;
     return found->second.value;
   }
-  if (!reserve(entry.collectionWork)) return {.resourceLimit = true};
+  if (!reserve(entry.collectionWork)) {
+    return {.resourceLimit = true};
+  }
   auto result = entry.graph->collect(document->registry(), target, purpose);
   // Layout-only root identities are not part of painted evidence. Keeping them would turn a
   // repeated-host cache hit back into an O(child scene size) copy.

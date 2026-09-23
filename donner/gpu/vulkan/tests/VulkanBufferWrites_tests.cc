@@ -37,13 +37,17 @@ shader::ShaderResult<shader::IrModule> BuildUniformReadModule() {
   e.ok(builder.addWriteOnlyStorageTexture2d(0, 1, "outputTexture",
                                             StorageTextureFormat::Rgba8Unorm));
   auto function = builder.createComputeEntryPoint("cs", {}, {1, 1, 1});
-  if (function.hasError()) return std::move(function).error();
+  if (function.hasError()) {
+    return std::move(function).error();
+  }
   FunctionBuilder entry = std::move(function).result();
   e.ok(entry.textureStore(e(entry.ref("outputTexture")),
                           e(ConstructVector(IrType::Vec2i(), {LiteralI32(0)})),
                           e(Member(e(entry.ref("params")), "color"))));
   e.ok(entry.finish());
-  if (e.error) return *e.error;
+  if (e.error) {
+    return *e.error;
+  }
   return builder.build();
 }
 
@@ -104,7 +108,9 @@ protected:
   }
 
   void TearDown() override {
-    if (!device_) return;
+    if (!device_) {
+      return;
+    }
     if (expectDeviceLoss_) {
       EXPECT_THAT(device_->lastErrorForTest(), testing::HasSubstr("VK_ERROR_DEVICE_LOST"));
     } else {
@@ -118,10 +124,14 @@ protected:
          groupLayout_,
          {{0, BufferBinding{input, 0, sizeof(kRed)}}, {1, TextureViewBinding{view_}}}}));
     auto encoder = GetResultOrFail(device_->createCommandEncoder());
-    if (!encoder) return 0;
+    if (!encoder) {
+      return 0;
+    }
     auto passResult = encoder->beginComputePass({});
     EXPECT_THAT(passResult, HasResult());
-    if (passResult.hasError()) return 0;
+    if (passResult.hasError()) {
+      return 0;
+    }
     ComputePassEncoder* pass = passResult.result();
     EXPECT_THAT(pass->setPipeline(pipeline_), IsOk());
     EXPECT_THAT(pass->setBindGroup(0, group), IsOk());
@@ -133,7 +143,9 @@ protected:
 
   uint64_t submitEmpty() {
     auto encoder = GetResultOrFail(device_->createCommandEncoder());
-    if (!encoder) return 0;
+    if (!encoder) {
+      return 0;
+    }
     return GetResultOrFail(device_->submit(GetResultOrFail(encoder->finish())));
   }
 

@@ -76,7 +76,9 @@ void CheckColorSpaceConvert(DeviceType& device, const shader::CompiledShaderView
   using namespace color_space_convert_slice;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "color space convert", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
   auto input = device.createTexture({"convert input",
                                      {kWidth, kHeight},
                                      TextureFormat::RGBA32Float,

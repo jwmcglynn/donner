@@ -74,7 +74,8 @@ constexpr std::string_view kDestinationSvg =
 /// it somehow fails to parse (it should not); the fuzzer then no-ops.
 std::optional<SVGDocument> ParseDestination() {
   ParseWarningSink sink = ParseWarningSink::Disabled();
-  ParseResult<SVGDocument> parsed = SVGParser::ParseSVG(kDestinationSvg, sink, EditorParseOptions());
+  ParseResult<SVGDocument> parsed =
+      SVGParser::ParseSVG(kDestinationSvg, sink, EditorParseOptions());
   if (parsed.hasError()) {
     return std::nullopt;
   }
@@ -100,8 +101,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // NOLINTNEXTLINE: Allow reinterpret_cast, matches SVGParser_fuzzer.cc.
   const std::string_view clipboardText(reinterpret_cast<const char*>(data), size);
 
-  const std::optional<ShapeClipboardPayload> payload =
-      ShapeClipboardPayload::parse(clipboardText);
+  const std::optional<ShapeClipboardPayload> payload = ShapeClipboardPayload::parse(clipboardText);
   if (!payload.has_value()) {
     // Empty/whitespace clipboard, or header-only text: nothing to paste.
     return 0;

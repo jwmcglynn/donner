@@ -121,7 +121,9 @@ TEST(Diagnostics, TokenLimitTripsBeforeOtherArenas) {
   std::string source = "fn f() { var v: i32 = 0i;\n";
   const uint32_t statements = ModuleLimits::kMaxTokens / kTokensPerStatement + 2;
   static_assert(ModuleLimits::kMaxTokens / kTokensPerStatement + 2 < ModuleLimits::kMaxStatements);
-  for (uint32_t i = 0; i < statements; ++i) source += kStatement;
+  for (uint32_t i = 0; i < statements; ++i) {
+    source += kStatement;
+  }
   source += "}\n";
   ExpectRejected(source, ErrorCode::TokenLimit);
 }
@@ -220,7 +222,9 @@ TEST(Diagnostics, ExpressionLimitTripsBeforeStatementsAndSymbols) {
 TEST(Diagnostics, StatementLimitTripsOnRepeatedAssignments) {
   // Each assignment costs one statement and two expressions and declares nothing.
   std::string source = "fn f() { var v: i32 = 0i;\n";
-  for (uint32_t i = 0; i <= ModuleLimits::kMaxStatements; ++i) source += "v = 1i;\n";
+  for (uint32_t i = 0; i <= ModuleLimits::kMaxStatements; ++i) {
+    source += "v = 1i;\n";
+  }
   source += "}\n";
   ExpectRejected(source, ErrorCode::StatementLimit);
 }

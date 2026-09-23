@@ -15,7 +15,9 @@ using Kind = DocumentResourceFamilyBudget::Kind;
 constexpr std::size_t kKindCount = static_cast<std::size_t>(Kind::Count);
 
 void Require(bool condition) {
-  if (!condition) std::abort();
+  if (!condition) {
+    std::abort();
+  }
 }
 
 DocumentResourceFamilyBudget::Limits MakeLimits(std::size_t perKindBytes, std::size_t totalBytes) {
@@ -71,7 +73,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     return 0;
   }
 
-  if (size < 2) return 0;
+  if (size < 2) {
+    return 0;
+  }
   const std::size_t perKindLimit = data[0];
   const std::size_t totalLimit = data[1];
   DocumentResourceFamilyBudget budget(MakeLimits(perKindLimit, totalLimit));

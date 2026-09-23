@@ -59,7 +59,6 @@
 #include "donner/svg/resources/ImageResource.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/base/MathUtils.h"
-#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
@@ -258,22 +257,6 @@ bool IsBgraTextureFormat(gpu::TextureFormat format) {
 // DONNER_TEXT_ENABLED region.
 
 #ifdef DONNER_TEXT_ENABLED
-TextLayoutParams toTextLayoutParams(const TextParams& params) {
-  TextLayoutParams layoutParams;
-  layoutParams.fontFamilies = params.fontFamilies;
-  layoutParams.fontSize = params.fontSize;
-  layoutParams.viewBox = params.viewBox;
-  layoutParams.fontMetrics = params.fontMetrics;
-  layoutParams.textAnchor = params.textAnchor;
-  layoutParams.writingMode = params.writingMode;
-  layoutParams.letterSpacingPx = params.letterSpacingPx;
-  layoutParams.wordSpacingPx = params.wordSpacingPx;
-  layoutParams.textLength = params.textLength;
-  layoutParams.lengthAdjust = params.lengthAdjust;
-  layoutParams.inlineSizePx = params.inlineSizePx;
-  return layoutParams;
-}
-
 std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
     const FontManager::GlyphOutlineComplexity& complexity) {
   constexpr std::size_t kCommandCopiesPerVertex = 6;
@@ -1650,7 +1633,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       // Finishing an encoder that recorded nothing would spend one of the submission's command
       // buffers on a buffer with no work in it, and the frame closes its encoder at every
       // boundary whether or not anything was drawn between two of them.
-      if (reopen) return true;
+      if (reopen) {
+        return true;
+      }
       frameGpuEncoder = nullptr;
       return true;
     }
@@ -1683,8 +1668,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Opens the fresh runtime encoder that records the post-filter composite.
   [[nodiscard]] bool restoreFrameAfterFilter() {
-    if (std::exchange(failFilterFrameRestoreForTesting, false)) return false;
-    if (!device || device->isDeviceLost()) return false;
+    if (std::exchange(failFilterFrameRestoreForTesting, false)) {
+      return false;
+    }
+    if (!device || device->isDeviceLost()) {
+      return false;
+    }
     if (!frameRecordingOpen || !openFrameGpuEncoder() || device->isDeviceLost()) {
       discardFrameGpuEncoder();
       return false;
@@ -2089,10 +2078,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
   }
 
-  /// Defer a release until after the frame's command buffer has been
-  /// submitted. Used by `popIsolatedLayer` / `popFilterLayer` / etc.,
-  /// where the layer texture is still referenced by commands recorded
-  /// into the frame encoder and must not be recycled mid-frame.
+  /// Defer a release until after submission, or retain it if the frame's submission is uncertain.
+  /// Layer, filter, mask, and clip textures may still be named by recorded commands.
   struct PendingRelease {
     gpu::Texture texture;
     gpu::TextureDescriptor desc;
@@ -2104,6 +2091,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!texture.isValid()) {
       return;
     }
+    if (frameRecordingAbandoned) {
+      failedFilterTextures.push_back({std::move(texture), desc});
+      return;
+    }
     framePendingReleases.push_back({std::move(texture), desc});
   }
 
@@ -2112,9 +2103,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     releaseTextureAtFrameEnd(std::move(texture), desc);
   }
 
-  void retainFailedFilterTexture(gpu::Texture texture,
-                                 const gpu::TextureDescriptor& desc) override {
-    if (texture.isValid()) failedFilterTextures.push_back({std::move(texture), desc});
+  /// Keep unresolved frame resources alive until device teardown instead of recycling them.
+  void retainTextureWithoutCompletionProof(gpu::Texture texture,
+                                           const gpu::TextureDescriptor& desc) override {
+    if (texture.isValid()) {
+      failedFilterTextures.push_back({std::move(texture), desc});
+    }
   }
 
   void retainPendingFrameReleasesAfterFailure() {
@@ -2503,8 +2497,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                            geometry->blurPadding + frame.filterRegion.height()));
     if (!suspendFrameForFilter()) {
       device->markDeviceLost("frame commands could not be submitted before filter execution");
-      retainFailedFilterTexture(std::move(localTexture), localDesc);
-      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureWithoutCompletionProof(std::move(localTexture), localDesc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       frame.localRasterRequiredForBudget = true;
       if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
         device->markDeviceLost("frame encoder could not be restored after filter suspension");
@@ -2517,9 +2511,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                               localDeviceFromFilter, *this, nullptr, frame.localFilterPlan, this);
     if (!restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");
-      retainFailedFilterTexture(std::move(localFiltered.texture), localFiltered.desc);
-      retainFailedFilterTexture(std::move(localTexture), localDesc);
-      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureWithoutCompletionProof(std::move(localFiltered.texture), localFiltered.desc);
+      retainTextureWithoutCompletionProof(std::move(localTexture), localDesc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
       return TransformedFilterResult::FrameAbandoned;
     }
@@ -2569,7 +2563,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
     if (!suspendFrameForFilter()) {
       device->markDeviceLost("frame commands could not be submitted before filter execution");
-      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       filtered.kind = geode::FilterExecutionResult::Kind::Failed;
     } else {
       filtered = filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.layerDesc,
@@ -2579,8 +2573,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (frameGpuEncoder == nullptr && !restoreFrameAfterFilter()) {
       device->markDeviceLost("frame encoder could not be restored after filter execution");
       filterExecutionBudget->release(frame.filterReservation);
-      retainFailedFilterTexture(std::move(filtered.texture), filtered.desc);
-      retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+      retainTextureWithoutCompletionProof(std::move(filtered.texture), filtered.desc);
+      retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
       abandonFrameRecordingAfterFilterFailure(frame.savedTarget);
       return std::nullopt;
     }
@@ -4796,6 +4790,62 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     entries.clear();
   }
 
+  void retireOpenLayerStack(bool submitRecordedWork) {
+    for (LayerStackFrame& frame : layerStack) {
+      if (submitRecordedWork) {
+        retireFinishedEncoder(std::move(frame.savedEncoder));
+      }
+      releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+    }
+    layerStack.clear();
+  }
+
+  void retireOpenFilterStack(bool submitRecordedWork) {
+    for (FilterStackFrame& frame : filterStack) {
+      if (submitRecordedWork && frame.savedEncoder) {
+        if (frame.allocationRejected) {
+          frame.savedEncoder->finish();
+        }
+        retireFinishedEncoder(std::move(frame.savedEncoder));
+      }
+      releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+      releaseClipStackTexturesAtFrameEnd(frame.savedClipStack);
+      filterExecutionBudget->release(frame.filterReservation);
+    }
+    filterStack.clear();
+    rejectedFilterDepth = 0;
+  }
+
+  void retireOpenMaskStack(bool submitRecordedWork) {
+    for (MaskStackFrame& frame : maskStack) {
+      if (submitRecordedWork) {
+        retireFinishedEncoder(std::move(frame.savedEncoder));
+      }
+      releaseTextureAtFrameEnd(std::move(frame.maskTexture), frame.maskDesc);
+      releaseTextureAtFrameEnd(std::move(frame.contentTexture), frame.contentDesc);
+    }
+    maskStack.clear();
+  }
+
+  /// Drop unclosed offscreen scopes without compositing their contents into the root target.
+  /// Recorded encoders remain alive through submission; an abandoned frame can discard them.
+  void retireOpenFrameStacksAtBoundary(bool submitRecordedWork) {
+    releaseClipStackTexturesAtFrameEnd(clipStack);
+    if (layerStack.empty() && filterStack.empty() && maskStack.empty()) {
+      return;
+    }
+
+    counters.unclosedLayerScopes += layerStack.size();
+    counters.unclosedFilterScopes += filterStack.size();
+    counters.unclosedMaskScopes += maskStack.size();
+    retireOpenLayerStack(submitRecordedWork);
+    retireOpenFilterStack(submitRecordedWork);
+    retireOpenMaskStack(submitRecordedWork);
+
+    geometryDebugEdges.clear();
+    target = hostTarget.isValid() ? aliasOf(hostTarget) : aliasOf(ownedTarget);
+  }
+
   static void releaseClipStackTextures(std::vector<ClipStackEntry>& entries) {
     for (ClipStackEntry& entry : entries) {
       for (PendingRelease& release : entry.maskLayerTextures) {
@@ -4813,6 +4863,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (device) {
       device->drainDeferredDestroys();
     }
+    counters.reset();
     viewport = nextViewport;
     const Vector2i pixelSize = CheckedViewportPixels(nextViewport).value_or(Vector2i::Zero());
     pixelWidth = pixelSize.x;
@@ -4823,12 +4874,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     encoder.reset();
     frameFinishedEncoders.clear();
     discardFrameGpuEncoder();
-    // A caller that abandons a frame without ending it leaves pattern state and pending
-    // releases behind. The recording they belonged to is gone by now, so they go back to the
-    // pool here - and they go back before the budget reset below, because that budget is the
-    // one they were charged against.
+    // An unfinished frame can leave pattern tiles, clips, open scopes, and pending releases
+    // behind. Retire them before resetting their budget. Unsubmitted work returns to the pool;
+    // resources whose submission is uncertain stay retained until device teardown.
     retireUnconsumedPatternTilesAtFrameEnd(OuterPatternState::kDrop);
-    drainPendingReleases();
+    retireOpenFrameStacksAtBoundary(/*submitRecordedWork=*/false);
+    if (frameRecordingAbandoned) {
+      retainPendingFrameReleasesAfterFailure();
+    } else {
+      drainPendingReleases();
+    }
     geometryDebugEdges.clear();
     rejectedFilterDepth = 0;
     frameRecordingAbandoned = false;
@@ -4853,7 +4908,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     pendingBatch.reset();
     transientGlyphEntries.clear();
     transientTextEncodes.clear();
-    counters.reset();
   }
 
   void resetOwnedFrameBudgets() {
@@ -5461,6 +5515,8 @@ void RendererGeode::endFrame() {
   // Before anything is submitted, so a submission failure retains these tiles along with the
   // rest of what the frame named rather than returning them to a pool.
   impl_->retireUnconsumedPatternTilesAtFrameEnd(Impl::OuterPatternState::kRestore);
+  impl_->retireOpenFrameStacksAtBoundary(impl_->frameRecordingOpen &&
+                                         !impl_->frameRecordingAbandoned);
 
   if (impl_->encoder) {
     // Ends the open render pass without submitting - shared-mode.
@@ -5737,7 +5793,7 @@ void RendererGeode::popClip() {
     Impl::ClipStackEntry& entry = impl_->clipStack.back();
     for (auto& release : entry.maskLayerTextures) {
       if (impl_->frameRecordingAbandoned) {
-        impl_->retainFailedFilterTexture(std::move(release.texture), release.desc);
+        impl_->retainTextureWithoutCompletionProof(std::move(release.texture), release.desc);
       } else {
         impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
       }
@@ -5826,7 +5882,7 @@ void RendererGeode::popIsolatedLayer() {
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
-    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
     return;
   }
 
@@ -5983,7 +6039,7 @@ void RendererGeode::popFilterLayer() {
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
-    impl_->retainFailedFilterTexture(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.layerTexture), frame.layerDesc);
     impl_->filterExecutionBudget->release(frame.filterReservation);
     return;
   }
@@ -6012,7 +6068,9 @@ void RendererGeode::popFilterLayer() {
   // in which case the capture itself is what gets composited back.
   std::optional<geode::FilterExecutionResult> execution =
       impl_->executeFilterGraph(frame, bufferDeviceFromFilter);
-  if (!execution.has_value()) return;
+  if (!execution.has_value()) {
+    return;
+  }
   geode::FilterExecutionResult filtered = std::move(*execution);
   const gpu::Texture* filteredTexture = Impl::filterOutput(filtered, frame.layerTexture);
   const gpu::TextureDescriptor& filteredDesc = Impl::filterOutputDesc(filtered, frame.layerDesc);
@@ -6182,8 +6240,8 @@ void RendererGeode::popMask() {
   if (impl_->frameRecordingAbandoned) {
     impl_->target = Impl::aliasOf(frame.savedTarget);
     impl_->replaceActiveEncoder(nullptr);
-    impl_->retainFailedFilterTexture(std::move(frame.maskTexture), frame.maskDesc);
-    impl_->retainFailedFilterTexture(std::move(frame.contentTexture), frame.contentDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.maskTexture), frame.maskDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.contentTexture), frame.contentDesc);
     return;
   }
 
@@ -6359,7 +6417,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     impl_->replaceActiveEncoder(nullptr);
     impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
     impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
-    impl_->retainFailedFilterTexture(std::move(frame.tileTexture), frame.tileDesc);
+    impl_->retainTextureWithoutCompletionProof(std::move(frame.tileTexture), frame.tileDesc);
     return;
   }
 
@@ -6785,32 +6843,9 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   auto& textEngine = registry.ctx().get<TextEngine>();
   auto& fontManager = registry.ctx().get<FontManager>();
 
-  // Use cached layout runs from `ComputedTextGeometryComponent` when
-  // available; otherwise lay out fresh via the engine. This matches
-  // the pattern in `RendererTinySkia::drawText`.
-  std::vector<TextRun> runs;
-  if (params.textRootEntity != entt::null) {
-    if (const auto* cache =
-            registry.try_get<components::ComputedTextGeometryComponent>(params.textRootEntity)) {
-      runs = cache->runs;
-    }
-  }
-  if (runs.empty()) {
-    const TextLayoutParams layoutParams = toTextLayoutParams(params);
-    runs = textEngine.layout(text, layoutParams);
-  }
-
-  // Text bounding box for `objectBoundingBox` gradient/pattern paint. A tspan
-  // has no bbox, so span gradient/pattern paint maps through this element-level
-  // box - same computation as `RendererTinySkia::drawText` (shared helper). The
-  // bbox is passed to `drawPaintedPathAgainst` as the gradient *geometry* path
-  // while the glyph outline is the *draw* path. Every draw of this element sees the same box, so
-  // it is taken across all spans, before the ones this draw does not paint are dropped.
-  const Box2d textBounds = ComputeTextBounds(textEngine, runs);
-
-  // Drop the spans this draw is not responsible for before charging the glyph budget, so a text
-  // whose spans own effects is not charged once per draw for the glyphs it does not paint.
-  ClearUnpaintedSpanGlyphs(text, params.spanEffectOwner, runs);
+  TextDrawGeometry drawGeometry = PrepareTextDrawGeometry(registry, text, params, textEngine);
+  std::vector<TextRun>& runs = drawGeometry.runs;
+  const Box2d& textBounds = drawGeometry.elementBounds;
 
   impl_->admitTextRuns(runs);
 
@@ -7557,7 +7592,9 @@ ReadbackMapResult MapAndWaitReadback(geode::GeodeDevice& device, gpu::Buffer& bu
         device.isDeviceLost() ? ReadbackMapStatus::DeviceLost : ReadbackMapStatus::Failed, {}};
   }
   gpu::BufferMapping liveMapping = std::move(mapping).result();
-  if (mapRequested) mapRequested();
+  if (mapRequested) {
+    mapRequested();
+  }
 
   int pollIter = 0;
   bool cancelled = false;
@@ -7682,7 +7719,9 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
   gpu::Device& runtime = context.runtimeDevice();
   auto createdView = runtime.createTextureView(
       texture, gpu::TextureViewDescriptor{"RendererGeodeReadbackInputView"});
-  if (createdView.hasError()) return false;
+  if (createdView.hasError()) {
+    return false;
+  }
   const gpu::TextureView inputView = std::move(createdView).result();
   auto bindGroup = runtime.createBindGroup(gpu::BindGroupDescriptor{
       "RendererGeodeReadbackBG",
@@ -7690,13 +7729,19 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
       {gpu::BindGroupEntry{pipeline.inputBinding(), gpu::TextureViewBinding{inputView}},
        gpu::BindGroupEntry{pipeline.outputBinding(),
                            gpu::TextureViewBinding{resources.stagingView}}}});
-  if (bindGroup.hasError()) return false;
+  if (bindGroup.hasError()) {
+    return false;
+  }
   auto createdEncoder = runtime.createCommandEncoder();
-  if (createdEncoder.hasError()) return false;
+  if (createdEncoder.hasError()) {
+    return false;
+  }
   const std::unique_ptr<gpu::CommandEncoder> encoder = std::move(createdEncoder).result();
   auto createdPass =
       encoder->beginComputePass(gpu::ComputePassDescriptor{"RendererGeodeReadbackPass"});
-  if (createdPass.hasError()) return false;
+  if (createdPass.hasError()) {
+    return false;
+  }
   gpu::ComputePassEncoder* pass = createdPass.result();
   const gpu::WorkgroupSize workgroup = pipeline.workgroupSize();
   if (pass->setPipeline(pipeline.pipeline()).hasError() ||
@@ -7704,16 +7749,20 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
       pass->dispatchWorkgroups((width + workgroup.x - 1) / workgroup.x,
                                (height + workgroup.y - 1) / workgroup.y, 1)
           .hasError() ||
-      pass->end().hasError())
+      pass->end().hasError()) {
     return false;
+  }
   if (encoder
           ->copyTextureToBuffer(gpu::TexelCopyTextureInfo{resources.staging}, resources.readback,
                                 gpu::TexelCopyBufferLayout{0, alignBytesPerRow(width * 4u), height},
                                 gpu::Extent2d{width, height})
-          .hasError())
+          .hasError()) {
     return false;
+  }
   auto commands = encoder->finish();
-  if (commands.hasError()) return false;
+  if (commands.hasError()) {
+    return false;
+  }
   return !runtime.submit(std::move(commands).result()).hasError();
 }
 
@@ -7757,8 +7806,9 @@ struct RendererGeodeTextureSnapshot::ReadbackControl {
 
   bool stopped() {
     if (status == ReadbackMapStatus::Cancelled || status == ReadbackMapStatus::TimedOut ||
-        status == ReadbackMapStatus::DeviceLost)
+        status == ReadbackMapStatus::DeviceLost) {
       return true;
+    }
     if (shouldCancel && shouldCancel()) {
       status = ReadbackMapStatus::Cancelled;
       return true;
@@ -7802,25 +7852,41 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureGpu(geode::GeodeDevice& 
                                                             const gpu::Texture& texture,
                                                             uint32_t width, uint32_t height,
                                                             ReadbackControl& control) {
-  if (control.stopped()) return {};
+  if (control.stopped()) {
+    return {};
+  }
   const geode::GeodeSnapshotReadbackPipeline& pipeline = context.snapshotReadbackPipeline();
-  if (!pipeline.valid()) return {};
-  if (control.stopped()) return {};
+  if (!pipeline.valid()) {
+    return {};
+  }
+  if (control.stopped()) {
+    return {};
+  }
   geode::SnapshotReadbackResources resources =
       context.acquireSnapshotReadbackResources(width, height);
-  if (resources.empty()) return {};
-  if (control.stopped()) return {};
-  if (!RecordGpuReadback(context, pipeline, texture, resources, width, height)) return {};
+  if (resources.empty()) {
+    return {};
+  }
+  if (control.stopped()) {
+    return {};
+  }
+  if (!RecordGpuReadback(context, pipeline, texture, resources, width, height)) {
+    return {};
+  }
   const uint64_t mapSize = static_cast<uint64_t>(alignBytesPerRow(width * 4u)) * height;
   ReadbackMapResult mapped =
       MapAndWaitReadback(context, resources.readback, mapSize, control.shouldCancel,
                          control.deadline, control.mapRequested);
   control.status = mapped.status;
-  if (mapped.status != ReadbackMapStatus::Success) return {};
+  if (mapped.status != ReadbackMapStatus::Success) {
+    return {};
+  }
   RendererBitmap bitmap =
       readMappedTexture(context, mapped.mapping, width, height, gpu::TextureFormat::RGBA8Unorm,
                         AlphaType::Unpremultiplied, control);
-  if (bitmap.empty()) return {};
+  if (bitmap.empty()) {
+    return {};
+  }
   context.releaseSnapshotReadbackResources(std::move(resources));
   return bitmap;
 }
@@ -7828,32 +7894,49 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureGpu(geode::GeodeDevice& 
 RendererBitmap RendererGeodeTextureSnapshot::readTextureCpu(
     geode::GeodeDevice& context, const gpu::Texture& texture, uint32_t width, uint32_t height,
     gpu::TextureFormat format, AlphaType alphaType, ReadbackControl& control) {
-  if (control.stopped()) return {};
+  if (control.stopped()) {
+    return {};
+  }
   gpu::Device& runtime = context.runtimeDevice();
   const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
   const uint64_t mapSize = static_cast<uint64_t>(bytesPerRow) * height;
   auto createdBuffer = runtime.createBuffer(gpu::BufferDescriptor{
       "RendererGeodeReadback", mapSize, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead});
-  if (createdBuffer.hasError()) return {};
+  if (createdBuffer.hasError()) {
+    return {};
+  }
   gpu::Buffer buffer = std::move(createdBuffer).result();
-  if (control.stopped()) return {};
+  if (control.stopped()) {
+    return {};
+  }
   auto createdEncoder = runtime.createCommandEncoder();
-  if (createdEncoder.hasError()) return {};
+  if (createdEncoder.hasError()) {
+    return {};
+  }
   const std::unique_ptr<gpu::CommandEncoder> encoder = std::move(createdEncoder).result();
   if (encoder
           ->copyTextureToBuffer(gpu::TexelCopyTextureInfo{texture}, buffer,
                                 gpu::TexelCopyBufferLayout{0, bytesPerRow, height},
                                 gpu::Extent2d{width, height})
-          .hasError())
+          .hasError()) {
     return {};
+  }
   auto commands = encoder->finish();
-  if (commands.hasError()) return {};
-  if (control.stopped()) return {};
-  if (runtime.submit(std::move(commands).result()).hasError()) return {};
+  if (commands.hasError()) {
+    return {};
+  }
+  if (control.stopped()) {
+    return {};
+  }
+  if (runtime.submit(std::move(commands).result()).hasError()) {
+    return {};
+  }
   ReadbackMapResult mapped = MapAndWaitReadback(context, buffer, mapSize, control.shouldCancel,
                                                 control.deadline, control.mapRequested);
   control.status = mapped.status;
-  if (mapped.status != ReadbackMapStatus::Success) return {};
+  if (mapped.status != ReadbackMapStatus::Success) {
+    return {};
+  }
   return readMappedTexture(context, mapped.mapping, width, height, format, alphaType, control);
 }
 
@@ -7861,7 +7944,9 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureWithContext(
     geode::GeodeDevice& context, geode::GeodeDevice& owner, const gpu::Texture& texture,
     Vector2i dimensions, const gpu::TextureDescriptor& descriptor, AlphaType alphaType,
     ReadbackControl& control) {
-  if (control.stopped()) return {};
+  if (control.stopped()) {
+    return {};
+  }
   if (context.isDeviceLost()) {
     control.status = ReadbackMapStatus::DeviceLost;
     return {};
@@ -7870,20 +7955,28 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureWithContext(
   // registered there before anything recorded here may name it. The registration is borrowed and
   // lasts exactly as long as this capture: the producer keeps the allocation.
   gpu::Result<gpu::Texture> registered = context.registerCaptureSource(owner, texture);
-  if (registered.hasError()) return {};
+  if (registered.hasError()) {
+    return {};
+  }
   const gpu::Texture source = std::move(registered).result();
   const uint32_t width = static_cast<uint32_t>(dimensions.x);
   const uint32_t height = static_cast<uint32_t>(dimensions.y);
   if (CanUnpremultiplySnapshotOnGpu(descriptor, alphaType)) {
     RendererBitmap bitmap = readTextureGpu(context, source, width, height, control);
-    if (!bitmap.empty()) return bitmap;
+    if (!bitmap.empty()) {
+      return bitmap;
+    }
   }
-  if (control.stopped()) return {};
+  if (control.stopped()) {
+    return {};
+  }
   if (context.isDeviceLost()) {
     control.status = ReadbackMapStatus::DeviceLost;
     return {};
   }
-  if (!gpu::HasAllFlags(descriptor.usage, gpu::TextureUsage::CopySrc)) return {};
+  if (!gpu::HasAllFlags(descriptor.usage, gpu::TextureUsage::CopySrc)) {
+    return {};
+  }
   return readTextureCpu(context, source, width, height, descriptor.format, alphaType, control);
 }
 
@@ -7894,7 +7987,9 @@ RendererBitmap RendererGeodeTextureSnapshot::readTexture(std::shared_ptr<geode::
                                                          std::shared_ptr<Backing> backing) {
   (void)backing;  // Keep the source allocation leased through context-local resource teardown.
   const auto captureStart = std::chrono::steady_clock::now();
-  if (!device) return {};
+  if (!device) {
+    return {};
+  }
   const auto deadline =
       captureStart +
       std::chrono::milliseconds(device->snapshotReadbackBudgetMs_.load(std::memory_order_relaxed));
@@ -7913,10 +8008,16 @@ RendererBitmap RendererGeodeTextureSnapshot::readTexture(std::shared_ptr<geode::
   }
   const std::optional<gpu::TextureDescriptor> descriptor =
       ReadableSnapshotDescriptor(device, texture, dimensions);
-  if (!descriptor || !SnapshotHasReadbackRoute(*descriptor, alphaType)) return {};
-  if (device->isDeviceLost()) return {};
+  if (!descriptor || !SnapshotHasReadbackRoute(*descriptor, alphaType)) {
+    return {};
+  }
+  if (device->isDeviceLost()) {
+    return {};
+  }
   auto capture = device->acquireSnapshotCapture(shouldCancel, deadline);
-  if (capture.status != geode::GeodeDevice::SnapshotCaptureStatus::Ready) return {};
+  if (capture.status != geode::GeodeDevice::SnapshotCaptureStatus::Ready) {
+    return {};
+  }
   RendererBitmap bitmap = readTextureWithContext(*capture.context, *device, texture, dimensions,
                                                  *descriptor, alphaType, control);
   if (control.status == ReadbackMapStatus::Cancelled) {

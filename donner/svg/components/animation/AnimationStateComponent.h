@@ -10,9 +10,9 @@ namespace donner::svg::components {
 
 /// Phase of an animation element's lifecycle.
 enum class AnimationPhase : uint8_t {
-  Before, ///< Document time is before the animation's begin time.
-  Active, ///< Animation is currently active.
-  After,  ///< Animation has finished its active duration.
+  Before,  ///< Document time is before the animation's begin time.
+  Active,  ///< Animation is currently active.
+  After,   ///< Animation has finished its active duration.
 };
 
 /**

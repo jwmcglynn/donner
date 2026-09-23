@@ -580,7 +580,9 @@ int HorizontalWinding(const std::vector<EncodedPath::Curve>& curves, double px, 
     double ts[2];
     int n = 0;
     if (std::abs(a) < 1e-9) {
-      if (std::abs(b) > 1e-12) ts[n++] = -cc / b;
+      if (std::abs(b) > 1e-12) {
+        ts[n++] = -cc / b;
+      }
     } else {
       const double disc = b * b - 4 * a * cc;
       if (disc >= 0) {
@@ -591,10 +593,14 @@ int HorizontalWinding(const std::vector<EncodedPath::Curve>& curves, double px, 
     }
     for (int i = 0; i < n; ++i) {
       const double t = ts[i];
-      if (!IsOwnedWindingRoot(c.p0y, c.p2y, py, t)) continue;
+      if (!IsOwnedWindingRoot(c.p0y, c.p2y, py, t)) {
+        continue;
+      }
       const double omt = 1.0 - t;
       const double x = omt * omt * c.p0x + 2 * omt * t * c.p1x + t * t * c.p2x;
-      if (x < px) continue;
+      if (x < px) {
+        continue;
+      }
       const double dydt = 2 * omt * (c.p1y - c.p0y) + 2 * t * (c.p2y - c.p1y);
       winding += (dydt > 0) ? 1 : (dydt < 0 ? -1 : 0);
     }
@@ -612,7 +618,9 @@ int VerticalWinding(const std::vector<EncodedPath::Curve>& curves, double px, do
     double ts[2];
     int n = 0;
     if (std::abs(a) < 1e-9) {
-      if (std::abs(b) > 1e-12) ts[n++] = -cc / b;
+      if (std::abs(b) > 1e-12) {
+        ts[n++] = -cc / b;
+      }
     } else {
       const double disc = b * b - 4 * a * cc;
       if (disc >= 0) {
@@ -623,10 +631,14 @@ int VerticalWinding(const std::vector<EncodedPath::Curve>& curves, double px, do
     }
     for (int i = 0; i < n; ++i) {
       const double t = ts[i];
-      if (!IsOwnedWindingRoot(c.p0x, c.p2x, px, t)) continue;
+      if (!IsOwnedWindingRoot(c.p0x, c.p2x, px, t)) {
+        continue;
+      }
       const double omt = 1.0 - t;
       const double y = omt * omt * c.p0y + 2 * omt * t * c.p1y + t * t * c.p2y;
-      if (y < py) continue;
+      if (y < py) {
+        continue;
+      }
       const double dxdt = 2 * omt * (c.p1x - c.p0x) + 2 * t * (c.p2x - c.p1x);
       winding += (dxdt > 0) ? 1 : (dxdt < 0 ? -1 : 0);
     }

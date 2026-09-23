@@ -293,7 +293,9 @@ TEST(XMLTokenizer, UnterminatedAttributeValue) {
   // Should emit TagOpen, TagName, Whitespace, AttributeName, =, then ErrorRecovery.
   bool hasError = false;
   for (const auto& t : tokens) {
-    if (t.type == T::ErrorRecovery) hasError = true;
+    if (t.type == T::ErrorRecovery) {
+      hasError = true;
+    }
   }
   EXPECT_TRUE(hasError) << "Expected an ErrorRecovery token for unterminated attribute";
 }
@@ -303,7 +305,9 @@ TEST(XMLTokenizer, MalformedTagName) {
   const auto tokens = TokenizeWithText("<1bad>");
   bool hasError = false;
   for (const auto& t : tokens) {
-    if (t.type == T::ErrorRecovery) hasError = true;
+    if (t.type == T::ErrorRecovery) {
+      hasError = true;
+    }
   }
   EXPECT_TRUE(hasError) << "Expected ErrorRecovery for invalid element name";
 }

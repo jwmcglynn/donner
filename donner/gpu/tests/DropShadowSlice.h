@@ -30,7 +30,9 @@ void CheckDropShadowStorage(DeviceType& device, const shader::CompiledShaderView
                             Readback readbackBuffer) {
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "drop shadow", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
   const auto runCase = [&](bool aliasedInputs) {
     auto source =
         device.createTexture(TextureDescriptor{"shadow source",

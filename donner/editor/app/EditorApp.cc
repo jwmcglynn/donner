@@ -48,14 +48,20 @@ std::string_view StatusLabel(RenderSessionStatus status) {
 }
 
 RenderSessionStatus FetchStatusToRenderSessionStatus(SvgFetchStatus status) {
-  if (status == SvgFetchStatus::kOk) return RenderSessionStatus::kRendered;
+  if (status == SvgFetchStatus::kOk) {
+    return RenderSessionStatus::kRendered;
+  }
   return RenderSessionStatus::kFetchError;
 }
 
 bool HasExplicitScheme(std::string_view uri) {
   const auto colon = uri.find(':');
-  if (colon == std::string_view::npos || colon == 0) return false;
-  if (uri.size() < colon + 3) return false;
+  if (colon == std::string_view::npos || colon == 0) {
+    return false;
+  }
+  if (uri.size() < colon + 3) {
+    return false;
+  }
   return uri.substr(colon, 3) == "://";
 }
 

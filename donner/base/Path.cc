@@ -1345,7 +1345,9 @@ std::vector<Path::Vertex> Path::vertices() const {
         if (NearZero(startOrientation.lengthSquared())) {
           for (size_t j = i + 1; j < commands_.size(); ++j) {
             const Verb verb = commands_[j].verb;
-            if (verb == Verb::MoveTo || verb == Verb::ClosePath) break;
+            if (verb == Verb::MoveTo || verb == Verb::ClosePath) {
+              break;
+            }
             const Vector2d t = tangentAtStart(commands_, points_, j).normalize();
             if (!NearZero(t.lengthSquared())) {
               startOrientation = t;
@@ -2176,14 +2178,20 @@ Vector2d commandExitTangent(Path::Verb verb, const Vector2d& start, std::span<co
   switch (verb) {
     case Path::Verb::CurveTo: {
       Vector2d t = pts[pointIndex + 2] - pts[pointIndex + 1];  // end - c2
-      if (t.lengthSquared() > kDegenerateSquared) return t;
+      if (t.lengthSquared() > kDegenerateSquared) {
+        return t;
+      }
       t = pts[pointIndex + 2] - pts[pointIndex];  // end - c1
-      if (t.lengthSquared() > kDegenerateSquared) return t;
+      if (t.lengthSquared() > kDegenerateSquared) {
+        return t;
+      }
       return pts[pointIndex + 2] - start;  // end - start
     }
     case Path::Verb::QuadTo: {
       Vector2d t = pts[pointIndex + 1] - pts[pointIndex];  // end - control
-      if (t.lengthSquared() > kDegenerateSquared) return t;
+      if (t.lengthSquared() > kDegenerateSquared) {
+        return t;
+      }
       return pts[pointIndex + 1] - start;  // end - start
     }
     case Path::Verb::LineTo: return pts[pointIndex] - start;
@@ -2201,14 +2209,20 @@ Vector2d commandEntryTangent(Path::Verb verb, const Vector2d& start, std::span<c
   switch (verb) {
     case Path::Verb::CurveTo: {
       Vector2d t = pts[pointIndex] - start;  // c1 - start
-      if (t.lengthSquared() > kDegenerateSquared) return t;
+      if (t.lengthSquared() > kDegenerateSquared) {
+        return t;
+      }
       t = pts[pointIndex + 1] - start;  // c2 - start
-      if (t.lengthSquared() > kDegenerateSquared) return t;
+      if (t.lengthSquared() > kDegenerateSquared) {
+        return t;
+      }
       return pts[pointIndex + 2] - start;  // end - start
     }
     case Path::Verb::QuadTo: {
       Vector2d t = pts[pointIndex] - start;  // control - start
-      if (t.lengthSquared() > kDegenerateSquared) return t;
+      if (t.lengthSquared() > kDegenerateSquared) {
+        return t;
+      }
       return pts[pointIndex + 1] - start;  // end - start
     }
     case Path::Verb::LineTo: return pts[pointIndex] - start;
@@ -2328,7 +2342,9 @@ void computeCurveBoundaryOverrides(const Path& originalPath, std::vector<FlatSub
           break;
         }
       }
-      if (matched) break;
+      if (matched) {
+        break;
+      }
       // Not present from the cursor onward in this subpath - skip to next.
       cursorSubpath++;
       cursorVertex = 1;

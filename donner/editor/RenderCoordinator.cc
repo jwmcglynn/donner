@@ -26,7 +26,9 @@ namespace donner::editor {
 namespace {
 
 bool IsCurrentRenderResult(const std::optional<RenderResult>& result, EditorApp& app) {
-  if (!result || !app.hasDocument()) return false;
+  if (!result || !app.hasDocument()) {
+    return false;
+  }
   return result->documentGeneration == app.document().documentGeneration() &&
          result->fontResourceRevision == app.document().fontResourceRevision();
 }

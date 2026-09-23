@@ -2901,7 +2901,9 @@ TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
 
   for (std::uint64_t frame = kBaselineFrame; frame <= kLastFrame; ++frame) {
     const repro::GlRnrReplayFrameDiagnostics* diag = FindFrameDiagnostics(result, frame);
-    if (diag == nullptr) continue;
+    if (diag == nullptr) {
+      continue;
+    }
     std::optional<svg::RendererBitmap> bmp = LoadCaptureBitmap(result, frame);
     std::cerr << "[diag] f=" << frame << " docV=" << diag->documentFrameVersion
               << " dispV=" << diag->displayedDocVersion

@@ -13,6 +13,8 @@
 #include <latch>
 #include <limits>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -481,7 +483,9 @@ TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsOrdinaryFrame) {
   size_t acceptedChunks = 0;
   device->filterEngine().setChunkSubmittedHookForTesting([&](size_t chunk) {
     acceptedChunks = chunk;
-    if (chunk == 1) device->markDeviceLost("injected ordinary filter chunk loss");
+    if (chunk == 1) {
+      device->markDeviceLost("injected ordinary filter chunk loss");
+    }
   });
   const uint64_t submitsBeforeBoundary = device->counters()->submits;
 
@@ -519,7 +523,9 @@ TEST_F(RendererGeodeTest, AcceptedFilterChunkLossAbandonsTransformedFrame) {
   size_t acceptedChunks = 0;
   device->filterEngine().setChunkSubmittedHookForTesting([&](size_t chunk) {
     acceptedChunks = chunk;
-    if (chunk == 1) device->markDeviceLost("injected transformed filter chunk loss");
+    if (chunk == 1) {
+      device->markDeviceLost("injected transformed filter chunk loss");
+    }
   });
   const uint64_t submitsBeforeBoundary = device->counters()->submits;
 
@@ -623,7 +629,9 @@ TEST_F(RendererGeodeTest, AFramePastTheSubmissionBoundSplitsAndStillRenders) {
 TEST_F(RendererGeodeTest, AFrameSplitTakesTheCrossSubmitCompletionWait) {
   std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(device, testing::NotNull());
-  if (!device->isVulkan()) GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
+  if (!device->isVulkan()) {
+    GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
+  }
   device->filterEngine().setMaximumTileExtentForTesting(16);
   RendererGeode renderer(device);
   beginFrame(renderer);
@@ -776,6 +784,35 @@ TEST_F(RendererGeodeTest, AnAbandonedFrameSubmitsNothingItRecorded) {
   EXPECT_THAT(device->adapterDevice().lastSubmittedSerial(), testing::Eq(serialBefore))
       << "an abandoned frame must consume no submission serial";
   EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
+}
+
+TEST_F(RendererGeodeTest, EarlyAbandonmentRetainsAnUnmatchedPathClipMask) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  ASSERT_THAT(device->counters(), testing::NotNull());
+
+  ResolvedClip clip;
+  ClipPathShape shape;
+  shape.path = PathBuilder().addRect(Box2d::FromXYWH(0.0, 0.0, 32.0, 32.0)).build();
+  clip.clipPaths.push_back(std::move(shape));
+  const uint64_t textureCreatesBefore = device->counters()->textureCreates;
+  renderer.pushClip(clip);
+  ASSERT_GT(device->counters()->textureCreates, textureCreatesBefore);
+
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.injectFrameEncoderCloseFailureForTesting();
+  (void)renderer.submitFilterBudgetChunkForTesting();
+  ASSERT_THAT(renderer.deviceLost(), testing::IsTrue());
+
+  const std::size_t pooledBefore = renderer.texturePoolStats().textureCount;
+  const std::size_t retainedBefore = renderer.failedFilterTextureCountForTesting();
+  renderer.endFrame();
+
+  EXPECT_EQ(renderer.texturePoolStats().textureCount, pooledBefore);
+  EXPECT_GT(renderer.failedFilterTextureCountForTesting(), retainedBefore);
 }
 
 TEST_F(RendererGeodeTest, RefusalAfterAdmissionPreservesTheParentPixels) {
@@ -1914,6 +1951,202 @@ TEST_F(RendererGeodeTest, AFrameAbandonedWithATileOpenLeavesNothingOfItselfInThe
   EXPECT_THAT(pixelAt(bitmap, 12, 12), IsTransparent())
       << "An abandoned tile still on the stack would scale this frame's transform by its raster "
          "scale - 4x here, a 2x transform supersampled 2x - painting the rect four times as wide";
+}
+
+class UnclosedFrameStackTest : public RendererGeodeTest,
+                               public testing::WithParamInterface<const char*> {};
+
+void PushFrameStack(RendererGeode& renderer, std::string_view kind) {
+  if (kind == "Layer") {
+    renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  } else if (kind == "Filter") {
+    renderer.pushFilterLayer(components::FilterGraph{},
+                             Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize));
+  } else {
+    renderer.pushMask(std::nullopt, MaskType::Alpha);
+  }
+}
+
+std::size_t OpenStackTextureCount(std::string_view kind) {
+  return kind == "Mask" ? 2u : 1u;
+}
+
+void ExpectUnclosedStackCount(const geode::GeodeCounters& counters, std::string_view kind,
+                              uint64_t expected = 1u) {
+  EXPECT_EQ(counters.unclosedLayerScopes, kind == "Layer" ? expected : 0u);
+  EXPECT_EQ(counters.unclosedFilterScopes, kind == "Filter" ? expected : 0u);
+  EXPECT_EQ(counters.unclosedMaskScopes, kind == "Mask" ? expected : 0u);
+}
+
+TEST_P(UnclosedFrameStackTest, EndFrameRetiresOpenStackWithoutCompositingIt) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  const std::size_t pooledBefore = renderer.texturePoolStats().textureCount;
+
+  PushFrameStack(renderer, GetParam());
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.endFrame();
+
+  ExpectUnclosedStackCount(renderer.lastFrameTimings().counters, GetParam());
+  EXPECT_EQ(renderer.texturePoolStats().textureCount,
+            pooledBefore + OpenStackTextureCount(GetParam()));
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), IsTransparent());
+
+  beginFrame(renderer);
+  PushFrameStack(renderer, GetParam());
+  renderer.endFrame();
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u);
+
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.endFrame();
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), RgbaEq(255, 0, 0, 255));
+}
+
+TEST_P(UnclosedFrameStackTest, BeginFrameRetiresStackFromAbandonedFrame) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  PushFrameStack(renderer, GetParam());
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+
+  beginFrame(renderer);
+  ExpectUnclosedStackCount(renderer.lastFrameTimings().counters, GetParam());
+  PushFrameStack(renderer, GetParam());
+  renderer.endFrame();
+  ExpectUnclosedStackCount(renderer.lastFrameTimings().counters, GetParam(), 2u);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u);
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), IsTransparent());
+
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.endFrame();
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), RgbaEq(255, 0, 0, 255));
+}
+
+INSTANTIATE_TEST_SUITE_P(OpenLayerFilterAndMask, UnclosedFrameStackTest,
+                         testing::Values("Layer", "Filter", "Mask"),
+                         [](const testing::TestParamInfo<const char*>& info) {
+                           return std::string(info.param);
+                         });
+
+TEST_F(RendererGeodeTest, AnUnclosedFilterDropsActiveAndSavedClipsAtFrameEnd) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  ResolvedClip outerClip;
+  outerClip.clipRect = Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0);
+  renderer.pushClip(outerClip);
+  renderer.pushFilterLayer(components::FilterGraph{},
+                           Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize));
+  ResolvedClip innerClip;
+  innerClip.clipRect = Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0);
+  renderer.pushClip(innerClip);
+  renderer.endFrame();
+
+  beginFrame(renderer);
+  renderer.popFilterLayer();
+  ResolvedClip nextFrameClip;
+  nextFrameClip.clipRect = Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize);
+  renderer.pushClip(nextFrameClip);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.popClip();
+  renderer.endFrame();
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), RgbaEq(255, 0, 0, 255));
+}
+
+TEST_F(RendererGeodeTest, NestedUnclosedScopesReturnAllOffscreensWithoutCompositing) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  const std::size_t pooledBefore = renderer.texturePoolStats().textureCount;
+  renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  renderer.pushFilterLayer(components::FilterGraph{},
+                           Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize));
+  renderer.pushMask(std::nullopt, MaskType::Alpha);
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.endFrame();
+
+  const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
+  EXPECT_EQ(counters.unclosedLayerScopes, 1u);
+  EXPECT_EQ(counters.unclosedFilterScopes, 1u);
+  EXPECT_EQ(counters.unclosedMaskScopes, 1u);
+  EXPECT_EQ(renderer.texturePoolStats().textureCount, pooledBefore + 4u);
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), IsTransparent());
+
+  beginFrame(renderer);
+  renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  renderer.pushFilterLayer(components::FilterGraph{},
+                           Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize));
+  renderer.pushMask(std::nullopt, MaskType::Alpha);
+  renderer.endFrame();
+  EXPECT_EQ(renderer.lastFrameTimings().counters.textureCreates, 0u);
+}
+
+TEST_F(RendererGeodeTest, AnUnmatchedClipAtFrameEndDoesNotClipTheNextFrame) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip clip;
+  clip.clipRect = Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0);
+  renderer.pushClip(clip);
+  renderer.endFrame();
+
+  beginFrame(renderer);
+  ResolvedClip nextFrameClip;
+  nextFrameClip.clipRect = Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize);
+  renderer.pushClip(nextFrameClip);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.popClip();
+  renderer.endFrame();
+
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), RgbaEq(255, 0, 0, 255));
+}
+
+TEST_F(RendererGeodeTest, AnUnmatchedClipInAnAbandonedFrameDoesNotClipTheNextFrame) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip clip;
+  clip.clipRect = Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0);
+  renderer.pushClip(clip);
+
+  beginFrame(renderer);
+  ResolvedClip nextFrameClip;
+  nextFrameClip.clipRect = Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize);
+  renderer.pushClip(nextFrameClip);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.popClip();
+  renderer.endFrame();
+
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), RgbaEq(255, 0, 0, 255));
+}
+
+TEST_F(RendererGeodeTest, AnOpenPatternRestoresNoUnmatchedOuterClipIntoTheNextFrame) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ResolvedClip outerClip;
+  outerClip.clipRect = Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0);
+  renderer.pushClip(outerClip);
+  ASSERT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), Transform2d()));
+  renderer.endFrame();
+
+  beginFrame(renderer);
+  ResolvedClip nextFrameClip;
+  nextFrameClip.clipRect = Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize);
+  renderer.pushClip(nextFrameClip);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, kViewportSize, kViewportSize), StrokeParams{});
+  renderer.popClip();
+  renderer.endFrame();
+
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), RgbaEq(255, 0, 0, 255));
 }
 
 TEST_F(RendererGeodeTest, ARecycledPatternTileNeverShowsWhatTheLastFramePaintedIntoIt) {

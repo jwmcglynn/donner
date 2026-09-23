@@ -95,10 +95,10 @@ TEST(PatternTile, RasterMetricsRejectUnsafeDimensionsAndTransforms) {
       Transform2d::Scale(std::numeric_limits<double>::denorm_min(), 1.0)));
   EXPECT_FALSE(ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0),
                                                Transform2d::Scale(kMax, kMax)));
-  EXPECT_FALSE(ComputePatternTileRasterMetrics(
-      Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0), Transform2d::Scale(kMax, 1.0 / kMax)));
-  EXPECT_FALSE(ComputePatternTileRasterMetrics(
-      Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0), Transform2d::Scale(1.0 / kMax, kMax)));
+  EXPECT_FALSE(ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0),
+                                               Transform2d::Scale(kMax, 1.0 / kMax)));
+  EXPECT_FALSE(ComputePatternTileRasterMetrics(Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0),
+                                               Transform2d::Scale(1.0 / kMax, kMax)));
 
   Transform2d nonFiniteTransform;
   nonFiniteTransform.data[5] = kInfinity;

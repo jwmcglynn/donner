@@ -185,7 +185,9 @@ void CheckComponentTransferStorage(DeviceType& device, const shader::CompiledSha
                                    Readback readbackBuffer) {
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "component transfer", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
 
   const std::array<component_transfer::Case, 4> cases{
       component_transfer::MixedFunctions(), component_transfer::GammaFunctions(),

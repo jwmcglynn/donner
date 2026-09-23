@@ -121,8 +121,12 @@ int main() {
       uint8_t g = bitmap.pixels[i + 1];
       uint8_t b = bitmap.pixels[i + 2];
       uint8_t a = bitmap.pixels[i + 3];
-      if (r > 200 && g < 50 && b < 50 && a > 200) red++;
-      if (r < 50 && g < 50 && b > 200 && a > 200) blue++;
+      if (r > 200 && g < 50 && b < 50 && a > 200) {
+        red++;
+      }
+      if (r < 50 && g < 50 && b > 200 && a > 200) {
+        blue++;
+      }
     }
 
     std::printf("  Bitmap: %dx%d, Red: %d, Blue: %d\n", bitmap.dimensions.x, bitmap.dimensions.y,

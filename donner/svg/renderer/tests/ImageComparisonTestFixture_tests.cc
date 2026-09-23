@@ -55,7 +55,9 @@ TEST_F(GoldenArtifactTest, MismatchExportsActualExpectedAndDiff) {
     const std::string filename = entry.path().filename().string();
     prefixes.push_back(filename.substr(0, filename.find('_')));
     EXPECT_THAT(entry.file_size(), testing::Gt(0));
-    if (filename.starts_with("expected_")) expectedArtifact = entry.path();
+    if (filename.starts_with("expected_")) {
+      expectedArtifact = entry.path();
+    }
   }
   std::sort(prefixes.begin(), prefixes.end());
   ASSERT_THAT(prefixes, testing::ElementsAre("actual", "diff", "expected"));

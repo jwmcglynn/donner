@@ -8,14 +8,20 @@ namespace {
 template <size_t N>
 consteval wgsl::SourceText<N> ReplaceExact(wgsl::SourceText<N> source, std::string_view oldText,
                                            std::string_view newText) {
-  if (oldText.size() != newText.size()) std::abort();
+  if (oldText.size() != newText.size()) {
+    std::abort();
+  }
   for (size_t offset = 0; offset + oldText.size() <= source.view().size(); ++offset) {
     bool matches = true;
-    for (size_t index = 0; index < oldText.size(); ++index)
+    for (size_t index = 0; index < oldText.size(); ++index) {
       matches = matches && source.bytes[offset + index] == oldText[index];
-    if (!matches) continue;
-    for (size_t index = 0; index < newText.size(); ++index)
+    }
+    if (!matches) {
+      continue;
+    }
+    for (size_t index = 0; index < newText.size(); ++index) {
       source.bytes[offset + index] = newText[index];
+    }
     return source;
   }
   std::abort();

@@ -46,7 +46,9 @@ struct GeodeWgpuAdapterDeviceTestAccess {
   using CompletionState = GeodeWgpuAdapterDevice::CompletionState;
 
   static void installPendingMap(GeodeWgpuAdapterDevice& adapter, uint32_t index = 0) {
-    if (adapter.slotMappings_.size() <= index) adapter.slotMappings_.resize(index + 1);
+    if (adapter.slotMappings_.size() <= index) {
+      adapter.slotMappings_.resize(index + 1);
+    }
     auto& slot = adapter.slotMappings_[index];
     slot.completion = new GeodeWgpuAdapterDevice::MappingSlot::Completion();
     // This controlled completion has no backend callback retaining a second reference.

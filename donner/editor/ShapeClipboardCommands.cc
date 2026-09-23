@@ -7,8 +7,8 @@
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseWarningSink.h"
-#include "donner/editor/EditorParseOptions.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/editor/EditorParseOptions.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/parser/SVGParser.h"
 

@@ -4,7 +4,9 @@
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "donner/svg/SVGRectElement.h"
@@ -16,6 +18,12 @@
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/svg/renderer/PlacedTextGeometry.h"
+#include "donner/svg/resources/FontManager.h"
+#include "embed_resources/PublicSansFont.h"
+#include "embed_resources/RobotoFont.h"
+#endif
 
 using ::testing::_;
 using ::testing::AtLeast;
@@ -324,6 +332,149 @@ TEST(RendererSnapshotTests, ImageSourceEntityIsClearedBeforeReplay) {
   EXPECT_FALSE(static_cast<bool>(replayedImageParams.back().sourceEntity))
       << "a replayed drawImage must not carry a handle into the live document registry";
 }
+
+#ifdef DONNER_TEXT_ENABLED
+TEST(RendererSnapshotTests, PreparedTextRunsUseFontsFromReplayRegistry) {
+  ::testing::NiceMock<MockRendererInterface> renderer;
+  RendererDriver driver(renderer);
+  RenderSnapshot snapshot;
+  {
+    SVGDocument document = MakeDocument(R"svg(
+      <defs><clipPath id="clip"><rect width="200" height="200"/></clipPath></defs>
+      <text x="10" y="60" font-family="sans-serif" font-size="48"
+            text-decoration="underline">A<tspan clip-path="url(#clip)">B</tspan>C</text>
+    )svg");
+    snapshot = driver.captureRenderSnapshot(document);
+    EXPECT_EQ(snapshot.liveRegistryReferenceCountForTesting(document.registry()), 0u);
+  }
+
+  std::size_t drawCount = 0;
+  EXPECT_CALL(renderer, drawText(_, _, _))
+      .WillRepeatedly([&](Registry& registry, const components::ComputedTextComponent& text,
+                          const TextParams& params) {
+        ++drawCount;
+        ASSERT_TRUE(params.preparedTextDraw);
+        const auto& fonts = registry.ctx().get<FontManager>();
+        for (const TextRun& run : params.preparedTextDraw->runs) {
+          if (!run.glyphs.empty()) {
+            EXPECT_FALSE(fonts.fontData(run.font).empty());
+          }
+        }
+        for (const auto& span : text.spans) {
+          if (span.decorationFont) {
+            EXPECT_FALSE(fonts.fontData(span.decorationFont->font).empty());
+          }
+        }
+      });
+
+  driver.draw(snapshot);
+  EXPECT_GE(drawCount, 2u);
+}
+
+TEST(RendererSnapshotTests, PreparedFontsFromDistinctSourceRegistriesKeepSeparateReplayDomains) {
+  ::testing::NiceMock<MockRendererInterface> renderer;
+  RenderSnapshot snapshot;
+  {
+    Registry first;
+    Registry second;
+    auto& firstManager = first.ctx().emplace<FontManager>(first);
+    auto& secondManager = second.ctx().emplace<FontManager>(second);
+    const FontHandle firstFont =
+        firstManager.loadFontData(embedded::kPublicSansMediumOtf, FontDataTrust::Trusted);
+    const FontHandle secondFont =
+        secondManager.loadFontData(embedded::kRobotoRegularTtf, FontDataTrust::Trusted);
+    ASSERT_TRUE(static_cast<bool>(firstFont));
+    ASSERT_TRUE(static_cast<bool>(secondFont));
+    EXPECT_EQ(firstFont.entity(), secondFont.entity());
+
+    RenderSnapshotRecorder recorder(snapshot, renderer);
+    const components::ComputedTextComponent text;
+    for (const auto [registry, font] :
+         {std::pair<Registry*, FontHandle>{&first, firstFont}, {&second, secondFont}}) {
+      auto prepared = std::make_shared<PreparedTextDraw>();
+      TextRun run;
+      run.font = font;
+      run.glyphs.push_back(TextGlyph{.glyphIndex = 1});
+      prepared->runs.push_back(std::move(run));
+      TextParams params;
+      params.preparedTextDraw = std::move(prepared);
+      recorder.drawText(*registry, text, params);
+    }
+  }
+
+  EXPECT_FALSE(snapshot.fontPayloadLimitExceeded());
+  Registry* firstReplayRegistry = nullptr;
+  std::size_t drawCount = 0;
+  EXPECT_CALL(renderer, drawText(_, _, _))
+      .WillRepeatedly([&](Registry& registry, const components::ComputedTextComponent&,
+                          const TextParams& params) {
+        ASSERT_TRUE(params.preparedTextDraw);
+        ASSERT_EQ(params.preparedTextDraw->runs.size(), 1u);
+        if (drawCount == 0) {
+          firstReplayRegistry = &registry;
+        } else {
+          EXPECT_NE(&registry, firstReplayRegistry);
+        }
+        const auto& fonts = registry.ctx().get<FontManager>();
+        const auto bytes = fonts.fontData(params.preparedTextDraw->runs.front().font);
+        const std::vector<uint8_t> actual(bytes.begin(), bytes.end());
+        if (drawCount == 0) {
+          EXPECT_EQ(actual, std::vector<uint8_t>(embedded::kPublicSansMediumOtf.begin(),
+                                                 embedded::kPublicSansMediumOtf.end()));
+        } else {
+          EXPECT_EQ(actual, std::vector<uint8_t>(embedded::kRobotoRegularTtf.begin(),
+                                                 embedded::kRobotoRegularTtf.end()));
+        }
+        ++drawCount;
+      });
+
+  snapshot.replay(renderer);
+  EXPECT_EQ(drawCount, 2u);
+}
+
+TEST(RendererSnapshotTests, FontPayloadLimitRejectsLaterFontWithoutRetainingItsBytes) {
+  ::testing::NiceMock<MockRendererInterface> renderer;
+  RenderSnapshot snapshot;
+  {
+    Registry source;
+    auto& fonts = source.ctx().emplace<FontManager>(source);
+    const FontHandle first =
+        fonts.loadFontData(embedded::kPublicSansMediumOtf, FontDataTrust::Trusted);
+    const FontHandle second =
+        fonts.loadFontData(embedded::kRobotoRegularTtf, FontDataTrust::Trusted);
+    ASSERT_TRUE(static_cast<bool>(first));
+    ASSERT_TRUE(static_cast<bool>(second));
+
+    RenderSnapshotRecorder recorder(snapshot, renderer, embedded::kPublicSansMediumOtf.size());
+    const components::ComputedTextComponent text;
+    for (const FontHandle font : {first, second}) {
+      auto prepared = std::make_shared<PreparedTextDraw>();
+      TextRun run;
+      run.font = font;
+      run.glyphs.push_back(TextGlyph{.glyphIndex = 1});
+      prepared->runs.push_back(std::move(run));
+      TextParams params;
+      params.preparedTextDraw = std::move(prepared);
+      recorder.drawText(source, text, params);
+    }
+  }
+
+  EXPECT_TRUE(snapshot.fontPayloadLimitExceeded());
+  std::size_t drawCount = 0;
+  EXPECT_CALL(renderer, drawText(_, _, _))
+      .WillRepeatedly([&](Registry& registry, const components::ComputedTextComponent&,
+                          const TextParams& params) {
+        ASSERT_TRUE(params.preparedTextDraw);
+        ASSERT_EQ(params.preparedTextDraw->runs.size(), 1u);
+        const auto& fonts = registry.ctx().get<FontManager>();
+        const auto bytes = fonts.fontData(params.preparedTextDraw->runs.front().font);
+        EXPECT_EQ(bytes.empty(), drawCount == 1);
+        ++drawCount;
+      });
+  snapshot.replay(renderer);
+  EXPECT_EQ(drawCount, 2u);
+}
+#endif  // DONNER_TEXT_ENABLED
 
 TEST(RendererSnapshotTests, FeImageFragmentReferencesAreClearedBeforeReplay) {
   SVGDocument document = MakeDocument(R"svg(

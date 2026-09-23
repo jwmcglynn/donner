@@ -59,7 +59,9 @@ public:
 
   void release(Kind kind, std::size_t bytes) {
     const std::size_t index = static_cast<std::size_t>(kind);
-    if (index >= stats_.retainedBytes.size()) return;
+    if (index >= stats_.retainedBytes.size()) {
+      return;
+    }
 
     std::size_t& retained = stats_.retainedBytes[index];
     const std::size_t released = bytes > retained ? retained : bytes;

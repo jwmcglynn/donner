@@ -88,14 +88,17 @@ void RunCheckerboardCases(NativeDevice& device, const RenderPipeline& pipeline,
           auto encoder = device.createCommandEncoder();
           ASSERT_THAT(encoder, HasResult());
           std::array<double, 4> clear{};
-          for (size_t channel = 0; channel < 4; ++channel)
+          for (size_t channel = 0; channel < 4; ++channel) {
             clear[channel] = background[channel] / 255.0;
+          }
           auto pass = encoder.result()->beginRenderPass(RenderPassDescriptor{
               "checkerboard", {{view.result(), LoadOp::Clear, StoreOp::Store, clear}}});
           ASSERT_THAT(pass, HasResult());
           ASSERT_THAT(pass.result()->setPipeline(pipeline), IsOk());
           ASSERT_THAT(pass.result()->setBindGroup(0, group.result()), IsOk());
-          if (scissor) ASSERT_THAT(pass.result()->setScissorRect(7, 5, 41, 29), IsOk());
+          if (scissor) {
+            ASSERT_THAT(pass.result()->setScissorRect(7, 5, 41, 29), IsOk());
+          }
           ASSERT_THAT(pass.result()->draw(3), IsOk());
           ASSERT_THAT(pass.result()->end(), IsOk());
           ASSERT_THAT(encoder.result()->copyTextureToBuffer({target.result()}, readback.result(),
@@ -115,7 +118,7 @@ void RunCheckerboardCases(NativeDevice& device, const RenderPipeline& pipeline,
           expectedBitmap.rowBytes = pitch;
           expectedBitmap.alphaType = svg::AlphaType::Premultiplied;
           expectedBitmap.pixels.resize(pitch * height);
-          for (uint32_t y = 0; y < height; ++y)
+          for (uint32_t y = 0; y < height; ++y) {
             for (uint32_t x = 0; x < width; ++x) {
               std::array<uint8_t, 4> expected = background;
               if (!scissor || (x >= 7 && x < 48 && y >= 5 && y < 34)) {
@@ -137,6 +140,7 @@ void RunCheckerboardCases(NativeDevice& device, const RenderPipeline& pipeline,
               std::copy(expected.begin(), expected.end(),
                         expectedBitmap.pixels.begin() + y * pitch + x * 4);
             }
+          }
           svg::RendererBitmap actual = expectedBitmap;
           actual.pixels = std::move(pixels).result();
           editor::tests::CompareBitmapToBitmap(
@@ -167,7 +171,9 @@ void ExpectCheckerboardPixels(NativeDevice& device) {
     checkerboard_detail::RunCheckerboardCases(device, pipeline.pipeline(),
                                               pipeline.bindGroupLayout(), pipeline.uniformBinding(),
                                               destinationOver, "checkerboard_");
-    if (testing::Test::HasFatalFailure()) return;
+    if (testing::Test::HasFatalFailure()) {
+      return;
+    }
   }
 }
 

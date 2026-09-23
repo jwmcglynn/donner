@@ -25,8 +25,7 @@ TEST(SVGDescElementTests, TextContentAccessible) {
   auto desc = instantiateSubtreeElementAs<SVGDescElement>(
       "<desc>A solid blue circle indicating the service is online.</desc>");
 
-  EXPECT_THAT(desc->textContent(),
-              Eq("A solid blue circle indicating the service is online."));
+  EXPECT_THAT(desc->textContent(), Eq("A solid blue circle indicating the service is online."));
 }
 
 /// @test `setTextContent` updates the text exposed by `textContent`.

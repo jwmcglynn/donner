@@ -95,7 +95,9 @@ void CheckDisplacementMapStorage(DeviceType& device, const shader::CompiledShade
   using namespace displacement_map_details;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "displacement", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
 
   auto source =
       device.createTexture(TextureDescriptor{"displacement source",

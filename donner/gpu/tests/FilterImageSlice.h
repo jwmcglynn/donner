@@ -167,7 +167,9 @@ void CheckFilterImageStorage(DeviceType& device, const shader::CompiledShaderVie
   const FilterImageTestParams params = scenes[sceneIndex];
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "image filter", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
 
   auto input =
       device.createTexture(TextureDescriptor{"image filter input",

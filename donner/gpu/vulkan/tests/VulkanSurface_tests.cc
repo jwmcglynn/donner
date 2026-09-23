@@ -66,7 +66,9 @@ VKAPI_ATTR VkResult VKAPI_CALL RecordDeviceWaitIdle(VkDevice) {
 VKAPI_ATTR VkResult VKAPI_CALL RecordWaitForFences(VkDevice, uint32_t, const VkFence*, VkBool32,
                                                    uint64_t) {
   gTeardownRecorder->calls.push_back("wait-fences");
-  if (gTeardownRecorder->onWait) gTeardownRecorder->onWait();
+  if (gTeardownRecorder->onWait) {
+    gTeardownRecorder->onWait();
+  }
   const size_t index = gTeardownRecorder->fenceWait++;
   return index < gTeardownRecorder->fenceResults.size() ? gTeardownRecorder->fenceResults[index]
                                                         : VK_SUCCESS;
@@ -249,7 +251,9 @@ VKAPI_ATTR VkResult VKAPI_CALL CaptureCreateInstance(const VkInstanceCreateInfo*
 VKAPI_ATTR VkResult VKAPI_CALL CapturePhysicalDevices(VkInstance, uint32_t* count,
                                                       VkPhysicalDevice* devices) {
   *count = 1;
-  if (devices) devices[0] = FakeHandle<VkPhysicalDevice>(81);
+  if (devices) {
+    devices[0] = FakeHandle<VkPhysicalDevice>(81);
+  }
   return VK_SUCCESS;
 }
 
@@ -261,7 +265,9 @@ VKAPI_ATTR void VKAPI_CALL CapturePhysicalProperties(VkPhysicalDevice,
 VKAPI_ATTR void VKAPI_CALL CaptureQueueFamilies(VkPhysicalDevice, uint32_t* count,
                                                 VkQueueFamilyProperties* properties) {
   *count = 1;
-  if (properties) properties[0].queueFlags = VK_QUEUE_GRAPHICS_BIT;
+  if (properties) {
+    properties[0].queueFlags = VK_QUEUE_GRAPHICS_BIT;
+  }
 }
 
 VKAPI_ATTR void VKAPI_CALL CaptureFeatures(VkPhysicalDevice, VkPhysicalDeviceFeatures* features) {
@@ -782,8 +788,9 @@ TEST(VulkanPresentationCreationTest, EnablesBothOfferedInstanceAliasesBeforeChoo
     recorder.instanceOffers = {
         VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME,
         VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME};
-    if (deviceOffersKhr)
+    if (deviceOffersKhr) {
       recorder.deviceOffers.push_back(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+    }
     gCreationRecorder = &recorder;
     EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true),
                 testing::IsTrue());
@@ -981,7 +988,9 @@ TEST(VulkanPresentationCreationTest, QueuedFactoriesAreRefusedAfterShutdownFailu
                   race.releaseTeardown = true;
                   race.changed.notify_all();
                 }
-                for (std::thread& creator : creators) creator.join();
+                for (std::thread& creator : creators) {
+                  creator.join();
+                }
                 owner.join();
                 EXPECT_THAT(admitted, testing::Each(testing::IsNull()));
                 EXPECT_EQ(race.admissions.load(), 0u);

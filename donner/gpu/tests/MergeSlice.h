@@ -73,7 +73,9 @@ void CheckMerge(DeviceType& device, const shader::CompiledShaderView& shader,
   using namespace merge_slice;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "merge", compute);
-  if (testing::Test::HasFatalFailure()) return;
+  if (testing::Test::HasFatalFailure()) {
+    return;
+  }
   std::vector<Texture> textures;
   std::vector<TextureView> views;
   std::vector<BindGroupEntry> entries;

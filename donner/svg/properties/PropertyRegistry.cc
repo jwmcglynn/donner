@@ -168,8 +168,12 @@ ParseResult<TextAnchor> ParseTextAnchor(std::span<const css::ComponentValue> com
 ParseResult<Isolation> ParseIsolation(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("auto")) return Isolation::Auto;
-      if (ident->value.equalsLowercase("isolate")) return Isolation::Isolate;
+      if (ident->value.equalsLowercase("auto")) {
+        return Isolation::Auto;
+      }
+      if (ident->value.equalsLowercase("isolate")) {
+        return Isolation::Isolate;
+      }
     }
   }
   ParseDiagnostic err;
@@ -186,13 +190,27 @@ ParseResult<Isolation> ParseIsolation(std::span<const css::ComponentValue> compo
 ParseResult<ImageRendering> ParseImageRendering(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("auto")) return ImageRendering::Auto;
-      if (ident->value.equalsLowercase("smooth")) return ImageRendering::Smooth;
-      if (ident->value.equalsLowercase("crisp-edges")) return ImageRendering::CrispEdges;
-      if (ident->value.equalsLowercase("pixelated")) return ImageRendering::Pixelated;
-      if (ident->value.equalsLowercase("high-quality")) return ImageRendering::HighQuality;
-      if (ident->value.equalsLowercase("optimizespeed")) return ImageRendering::OptimizeSpeed;
-      if (ident->value.equalsLowercase("optimizequality")) return ImageRendering::OptimizeQuality;
+      if (ident->value.equalsLowercase("auto")) {
+        return ImageRendering::Auto;
+      }
+      if (ident->value.equalsLowercase("smooth")) {
+        return ImageRendering::Smooth;
+      }
+      if (ident->value.equalsLowercase("crisp-edges")) {
+        return ImageRendering::CrispEdges;
+      }
+      if (ident->value.equalsLowercase("pixelated")) {
+        return ImageRendering::Pixelated;
+      }
+      if (ident->value.equalsLowercase("high-quality")) {
+        return ImageRendering::HighQuality;
+      }
+      if (ident->value.equalsLowercase("optimizespeed")) {
+        return ImageRendering::OptimizeSpeed;
+      }
+      if (ident->value.equalsLowercase("optimizequality")) {
+        return ImageRendering::OptimizeQuality;
+      }
     }
   }
   ParseDiagnostic err;
@@ -241,15 +259,21 @@ ParseResult<PaintOrder> ParsePaintOrder(std::span<const css::ComponentValue> com
     }
 
     if (ident->equalsLowercase("fill")) {
-      if (seenFill) return err;
+      if (seenFill) {
+        return err;
+      }
       seenFill = true;
       listed[count++] = PaintComponent::Fill;
     } else if (ident->equalsLowercase("stroke")) {
-      if (seenStroke) return err;
+      if (seenStroke) {
+        return err;
+      }
       seenStroke = true;
       listed[count++] = PaintComponent::Stroke;
     } else if (ident->equalsLowercase("markers")) {
-      if (seenMarkers) return err;
+      if (seenMarkers) {
+        return err;
+      }
       seenMarkers = true;
       listed[count++] = PaintComponent::Markers;
     } else {
@@ -265,9 +289,15 @@ ParseResult<PaintOrder> ParsePaintOrder(std::span<const css::ComponentValue> com
   PaintOrder result;
   result.order = listed;
   size_t idx = count;
-  if (!seenFill) result.order[idx++] = PaintComponent::Fill;
-  if (!seenStroke) result.order[idx++] = PaintComponent::Stroke;
-  if (!seenMarkers) result.order[idx++] = PaintComponent::Markers;
+  if (!seenFill) {
+    result.order[idx++] = PaintComponent::Fill;
+  }
+  if (!seenStroke) {
+    result.order[idx++] = PaintComponent::Stroke;
+  }
+  if (!seenMarkers) {
+    result.order[idx++] = PaintComponent::Markers;
+  }
 
   return result;
 }
@@ -410,22 +440,54 @@ ParseResult<MixBlendMode> ParseMixBlendMode(std::span<const css::ComponentValue>
   if (components.size() == 1) {
     if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
       const RcString& v = ident->value;
-      if (v.equalsLowercase("normal")) return MixBlendMode::Normal;
-      if (v.equalsLowercase("multiply")) return MixBlendMode::Multiply;
-      if (v.equalsLowercase("screen")) return MixBlendMode::Screen;
-      if (v.equalsLowercase("overlay")) return MixBlendMode::Overlay;
-      if (v.equalsLowercase("darken")) return MixBlendMode::Darken;
-      if (v.equalsLowercase("lighten")) return MixBlendMode::Lighten;
-      if (v.equalsLowercase("color-dodge")) return MixBlendMode::ColorDodge;
-      if (v.equalsLowercase("color-burn")) return MixBlendMode::ColorBurn;
-      if (v.equalsLowercase("hard-light")) return MixBlendMode::HardLight;
-      if (v.equalsLowercase("soft-light")) return MixBlendMode::SoftLight;
-      if (v.equalsLowercase("difference")) return MixBlendMode::Difference;
-      if (v.equalsLowercase("exclusion")) return MixBlendMode::Exclusion;
-      if (v.equalsLowercase("hue")) return MixBlendMode::Hue;
-      if (v.equalsLowercase("saturation")) return MixBlendMode::Saturation;
-      if (v.equalsLowercase("color")) return MixBlendMode::Color;
-      if (v.equalsLowercase("luminosity")) return MixBlendMode::Luminosity;
+      if (v.equalsLowercase("normal")) {
+        return MixBlendMode::Normal;
+      }
+      if (v.equalsLowercase("multiply")) {
+        return MixBlendMode::Multiply;
+      }
+      if (v.equalsLowercase("screen")) {
+        return MixBlendMode::Screen;
+      }
+      if (v.equalsLowercase("overlay")) {
+        return MixBlendMode::Overlay;
+      }
+      if (v.equalsLowercase("darken")) {
+        return MixBlendMode::Darken;
+      }
+      if (v.equalsLowercase("lighten")) {
+        return MixBlendMode::Lighten;
+      }
+      if (v.equalsLowercase("color-dodge")) {
+        return MixBlendMode::ColorDodge;
+      }
+      if (v.equalsLowercase("color-burn")) {
+        return MixBlendMode::ColorBurn;
+      }
+      if (v.equalsLowercase("hard-light")) {
+        return MixBlendMode::HardLight;
+      }
+      if (v.equalsLowercase("soft-light")) {
+        return MixBlendMode::SoftLight;
+      }
+      if (v.equalsLowercase("difference")) {
+        return MixBlendMode::Difference;
+      }
+      if (v.equalsLowercase("exclusion")) {
+        return MixBlendMode::Exclusion;
+      }
+      if (v.equalsLowercase("hue")) {
+        return MixBlendMode::Hue;
+      }
+      if (v.equalsLowercase("saturation")) {
+        return MixBlendMode::Saturation;
+      }
+      if (v.equalsLowercase("color")) {
+        return MixBlendMode::Color;
+      }
+      if (v.equalsLowercase("luminosity")) {
+        return MixBlendMode::Luminosity;
+      }
     }
   }
   ParseDiagnostic err;
@@ -1550,25 +1612,34 @@ ParseResult<Lengthd> ParseFontSizeValue(std::span<const css::ComponentValue> com
                                         bool allowUserUnits) {
   if (components.size() == 1) {
     if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("larger")) return Lengthd(120, Lengthd::Unit::Percent);
+      if (ident->value.equalsLowercase("larger")) {
+        return Lengthd(120, Lengthd::Unit::Percent);
+      }
       if (ident->value.equalsLowercase("smaller")) {
         return Lengthd(100.0 / 1.2, Lengthd::Unit::Percent);
       }
       constexpr double kMediumFontSize = 12.0;
-      if (ident->value.equalsLowercase("xx-small"))
+      if (ident->value.equalsLowercase("xx-small")) {
         return Lengthd(kMediumFontSize * 3.0 / 5.0, Lengthd::Unit::Px);
-      if (ident->value.equalsLowercase("x-small"))
+      }
+      if (ident->value.equalsLowercase("x-small")) {
         return Lengthd(kMediumFontSize * 3.0 / 4.0, Lengthd::Unit::Px);
-      if (ident->value.equalsLowercase("small"))
+      }
+      if (ident->value.equalsLowercase("small")) {
         return Lengthd(kMediumFontSize * 8.0 / 9.0, Lengthd::Unit::Px);
-      if (ident->value.equalsLowercase("medium"))
+      }
+      if (ident->value.equalsLowercase("medium")) {
         return Lengthd(kMediumFontSize, Lengthd::Unit::Px);
-      if (ident->value.equalsLowercase("large"))
+      }
+      if (ident->value.equalsLowercase("large")) {
         return Lengthd(kMediumFontSize * 6.0 / 5.0, Lengthd::Unit::Px);
-      if (ident->value.equalsLowercase("x-large"))
+      }
+      if (ident->value.equalsLowercase("x-large")) {
         return Lengthd(kMediumFontSize * 3.0 / 2.0, Lengthd::Unit::Px);
-      if (ident->value.equalsLowercase("xx-large"))
+      }
+      if (ident->value.equalsLowercase("xx-large")) {
         return Lengthd(kMediumFontSize * 2.0, Lengthd::Unit::Px);
+      }
     }
   }
   auto result = parser::ParseLengthPercentage(components, allowUserUnits);
@@ -1584,12 +1655,20 @@ ParseResult<int> ParseFontWeight(std::span<const css::ComponentValue> components
   if (components.size() == 1) {
     const auto& comp = components.front();
     if (const auto* ident = comp.tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("normal")) return 400;
-      if (ident->value.equalsLowercase("bold")) return 700;
+      if (ident->value.equalsLowercase("normal")) {
+        return 400;
+      }
+      if (ident->value.equalsLowercase("bold")) {
+        return 700;
+      }
       // Relative keywords: stored as sentinels, resolved during cascade
       // by resolveFontWeight() when the inherited value is available.
-      if (ident->value.equalsLowercase("bolder")) return PropertyRegistry::kFontWeightBolder;
-      if (ident->value.equalsLowercase("lighter")) return PropertyRegistry::kFontWeightLighter;
+      if (ident->value.equalsLowercase("bolder")) {
+        return PropertyRegistry::kFontWeightBolder;
+      }
+      if (ident->value.equalsLowercase("lighter")) {
+        return PropertyRegistry::kFontWeightLighter;
+      }
     } else if (const auto* num = comp.tryGetToken<css::Token::Number>()) {
       if (num->value >= 1 && num->value <= 1000) {
         return static_cast<int>(num->value);
@@ -1604,9 +1683,15 @@ ParseResult<int> ParseFontWeight(std::span<const css::ComponentValue> components
 ParseResult<FontStyle> ParseFontStyle(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("normal")) return FontStyle::Normal;
-      if (ident->value.equalsLowercase("italic")) return FontStyle::Italic;
-      if (ident->value.equalsLowercase("oblique")) return FontStyle::Oblique;
+      if (ident->value.equalsLowercase("normal")) {
+        return FontStyle::Normal;
+      }
+      if (ident->value.equalsLowercase("italic")) {
+        return FontStyle::Italic;
+      }
+      if (ident->value.equalsLowercase("oblique")) {
+        return FontStyle::Oblique;
+      }
     }
   }
   ParseDiagnostic err;
@@ -1617,25 +1702,40 @@ ParseResult<FontStyle> ParseFontStyle(std::span<const css::ComponentValue> compo
 ParseResult<int> ParseFontStretch(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("normal")) return static_cast<int>(FontStretch::Normal);
-      if (ident->value.equalsLowercase("ultra-condensed"))
+      if (ident->value.equalsLowercase("normal")) {
+        return static_cast<int>(FontStretch::Normal);
+      }
+      if (ident->value.equalsLowercase("ultra-condensed")) {
         return static_cast<int>(FontStretch::UltraCondensed);
-      if (ident->value.equalsLowercase("extra-condensed"))
+      }
+      if (ident->value.equalsLowercase("extra-condensed")) {
         return static_cast<int>(FontStretch::ExtraCondensed);
-      if (ident->value.equalsLowercase("condensed"))
+      }
+      if (ident->value.equalsLowercase("condensed")) {
         return static_cast<int>(FontStretch::Condensed);
-      if (ident->value.equalsLowercase("semi-condensed"))
+      }
+      if (ident->value.equalsLowercase("semi-condensed")) {
         return static_cast<int>(FontStretch::SemiCondensed);
-      if (ident->value.equalsLowercase("semi-expanded"))
+      }
+      if (ident->value.equalsLowercase("semi-expanded")) {
         return static_cast<int>(FontStretch::SemiExpanded);
-      if (ident->value.equalsLowercase("expanded")) return static_cast<int>(FontStretch::Expanded);
-      if (ident->value.equalsLowercase("extra-expanded"))
+      }
+      if (ident->value.equalsLowercase("expanded")) {
+        return static_cast<int>(FontStretch::Expanded);
+      }
+      if (ident->value.equalsLowercase("extra-expanded")) {
         return static_cast<int>(FontStretch::ExtraExpanded);
-      if (ident->value.equalsLowercase("ultra-expanded"))
+      }
+      if (ident->value.equalsLowercase("ultra-expanded")) {
         return static_cast<int>(FontStretch::UltraExpanded);
+      }
       // SVG 1.1 relative keywords, stored as sentinels.
-      if (ident->value.equalsLowercase("narrower")) return PropertyRegistry::kFontStretchNarrower;
-      if (ident->value.equalsLowercase("wider")) return PropertyRegistry::kFontStretchWider;
+      if (ident->value.equalsLowercase("narrower")) {
+        return PropertyRegistry::kFontStretchNarrower;
+      }
+      if (ident->value.equalsLowercase("wider")) {
+        return PropertyRegistry::kFontStretchWider;
+      }
     }
   }
   ParseDiagnostic err;
@@ -1646,8 +1746,12 @@ ParseResult<int> ParseFontStretch(std::span<const css::ComponentValue> component
 ParseResult<FontVariant> ParseFontVariant(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
-      if (ident->value.equalsLowercase("normal")) return FontVariant::Normal;
-      if (ident->value.equalsLowercase("small-caps")) return FontVariant::SmallCaps;
+      if (ident->value.equalsLowercase("normal")) {
+        return FontVariant::Normal;
+      }
+      if (ident->value.equalsLowercase("small-caps")) {
+        return FontVariant::SmallCaps;
+      }
     }
   }
   ParseDiagnostic err;
@@ -1669,7 +1773,9 @@ ParseDiagnostic FontParseError(std::span<const css::ComponentValue> components,
 bool IsReservedFontFamilyIdentifier(const RcString& value) {
   for (std::string_view keyword :
        {"inherit", "initial", "unset", "revert", "revert-layer", "default"}) {
-    if (value.equalsLowercase(keyword)) return true;
+    if (value.equalsLowercase(keyword)) {
+      return true;
+    }
   }
   return false;
 }
@@ -1682,12 +1788,16 @@ ParseResult<RcString> ParseUnquotedFontFamily(std::span<const css::ComponentValu
     if (IsReservedFontFamilyIdentifier(ident)) {
       return FontParseError(components, "Invalid font-family identifier");
     }
-    if (!name.empty()) name.push_back(' ');
+    if (!name.empty()) {
+      name.push_back(' ');
+    }
     name.append(ident);
     components = components.subspan(1);
     SkipWhitespace(components);
   }
-  if (name.empty()) return FontParseError(components, "Missing font family");
+  if (name.empty()) {
+    return FontParseError(components, "Missing font family");
+  }
   return RcString(name);
 }
 
@@ -1721,11 +1831,17 @@ ParseResult<SmallVector<RcString, 1>> ParseFontFamily(
   SmallVector<RcString, 1> families;
   while (true) {
     SkipWhitespace(components);
-    if (components.empty()) return FontParseError(components, "Missing font family");
+    if (components.empty()) {
+      return FontParseError(components, "Missing font family");
+    }
     auto name = ParseFontFamilyName(components);
-    if (name.hasError()) return name.error();
+    if (name.hasError()) {
+      return name.error();
+    }
     families.emplace_back(std::move(name.result()));
-    if (components.empty()) return families;
+    if (components.empty()) {
+      return families;
+    }
     if (!TrySkipToken<css::Token::Comma>(components)) {
       return FontParseError(components, "Expected comma after font family");
     }
@@ -1771,9 +1887,13 @@ bool IsFontLineHeight(const css::ComponentValue& component, bool allowUserUnits)
 ParseResult<FontShorthandValues> ParseFontShorthandSuffix(
     std::span<const css::ComponentValue> components, const FontShorthandValues& prefix,
     bool allowUserUnits) {
-  if (components.empty()) return FontParseError(components, "Missing font size");
+  if (components.empty()) {
+    return FontParseError(components, "Missing font size");
+  }
   auto size = ParseFontSizeValue(components.first(1), allowUserUnits);
-  if (size.hasError()) return size.error();
+  if (size.hasError()) {
+    return size.error();
+  }
   components = components.subspan(1);
   SkipWhitespace(components);
   if (!components.empty() && components.front().isToken<css::Token::Delim>() &&
@@ -1787,7 +1907,9 @@ ParseResult<FontShorthandValues> ParseFontShorthandSuffix(
     SkipWhitespace(components);
   }
   auto families = ParseFontFamily(components);
-  if (families.hasError()) return families.error();
+  if (families.hasError()) {
+    return families.error();
+  }
   FontShorthandValues result = prefix;
   result.size = size.result();
   result.families = std::move(families.result());
@@ -1797,7 +1919,9 @@ ParseResult<FontShorthandValues> ParseFontShorthandSuffix(
 /// Accepts a prefix component only once, preserving the longhand parser's value.
 template <typename T>
 bool TryFontPrefixValue(const ParseResult<T>& parsed, bool& seen, T& destination) {
-  if (parsed.hasError() || seen) return false;
+  if (parsed.hasError() || seen) {
+    return false;
+  }
   destination = parsed.result();
   seen = true;
   return true;
@@ -1819,7 +1943,9 @@ struct FontShorthandPrefix {
 
   bool consume(std::span<const css::ComponentValue> current) {
     const auto* ident = current.front().tryGetToken<css::Token::Ident>();
-    if (ident && ident->value.equalsLowercase("normal")) return true;
+    if (ident && ident->value.equalsLowercase("normal")) {
+      return true;
+    }
     const auto style = ParseFontStyle(current);
     const auto variant = ParseFontVariant(current);
     const auto weight = ParseFontWeight(current);
@@ -1842,13 +1968,21 @@ ParseResult<FontShorthandValues> ParseFontShorthandValues(
   SkipWhitespace(components);
   while (!components.empty()) {
     auto suffix = ParseFontShorthandSuffix(components, prefix.values, allowUserUnits);
-    if (!suffix.hasError()) candidate = std::move(suffix.result());
-    if (optionalCount++ == 4) break;
-    if (!prefix.consume(components.first(1))) break;
+    if (!suffix.hasError()) {
+      candidate = std::move(suffix.result());
+    }
+    if (optionalCount++ == 4) {
+      break;
+    }
+    if (!prefix.consume(components.first(1))) {
+      break;
+    }
     components = components.subspan(1);
     SkipWhitespace(components);
   }
-  if (candidate) return std::move(*candidate);
+  if (candidate) {
+    return std::move(*candidate);
+  }
   return FontParseError(components, "Invalid or incomplete font shorthand");
 }
 
@@ -1861,7 +1995,9 @@ std::optional<ParseDiagnostic> ParseFontShorthand(PropertyRegistry& registry,
         parsed, [&](auto& property) { property.set(params.explicitState, params.specificity); });
   } else {
     auto result = ParseFontShorthandValues(params.components(), params.allowUserUnits());
-    if (result.hasError()) return result.error();
+    if (result.hasError()) {
+      return result.error();
+    }
     auto& values = result.result();
     ForEachFontProperty(parsed, [&](auto& property) {
       property.set(PropertyState::ExplicitInitial, params.specificity);
@@ -2065,8 +2201,12 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          if (components.size() == 1) {
                            if (const auto* ident =
                                    components.front().tryGetToken<css::Token::Ident>()) {
-                             if (ident->value.equalsLowercase("auto")) return FontKerning::Auto;
-                             if (ident->value.equalsLowercase("normal")) return FontKerning::Normal;
+                             if (ident->value.equalsLowercase("auto")) {
+                               return FontKerning::Auto;
+                             }
+                             if (ident->value.equalsLowercase("normal")) {
+                               return FontKerning::Normal;
+                             }
                              if (ident->value.equalsLowercase("none")) {
                                return FontKerning::None;
                              }

@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -47,6 +48,7 @@
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/core/ImageRendering.h"
@@ -54,12 +56,52 @@
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/properties/PaintServer.h"
+#ifdef DONNER_TEXT_ENABLED
+#include "donner/svg/renderer/PlacedTextGeometry.h"
+#endif
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 #include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
+
+struct RendererDriverTextFrameCache {
+  struct Group {
+    components::ComputedTextComponent text;
+    std::shared_ptr<PreparedTextDraw> prepared;
+    bool stylesResolved = false;
+  };
+
+  struct Root {
+    std::unordered_map<Entity, Group> groups;
+    Box2d elementBounds;
+    bool prepared = false;
+  };
+
+  using Roots = std::unordered_map<Entity, Root>;
+  std::unordered_map<Registry*, Roots> roots;
+
+  // A pattern or marker can revisit text in the same registry with a different paint context.
+  // Keep its preparations separate without evicting the caller's text between effect runs.
+  class ScopedRegistryOccurrence {
+  public:
+    ScopedRegistryOccurrence(RendererDriverTextFrameCache& cache, Registry& registry)
+        : cache_(cache), registry_(&registry) {
+      savedRoots_.swap(cache_.roots[registry_]);
+    }
+
+    ~ScopedRegistryOccurrence() { savedRoots_.swap(cache_.roots[registry_]); }
+
+    ScopedRegistryOccurrence(const ScopedRegistryOccurrence&) = delete;
+    ScopedRegistryOccurrence& operator=(const ScopedRegistryOccurrence&) = delete;
+
+  private:
+    RendererDriverTextFrameCache& cache_;
+    Registry* registry_;
+    Roots savedRoots_;
+  };
+};
 
 namespace {
 
@@ -70,12 +112,16 @@ public:
         host_(host),
         manager_(registry.ctx().find<FontManager>()),
         preparesReferences_(preparesReferences) {
-    if (manager_) capture_.emplace(*manager_, dependencies_);
+    if (manager_) {
+      capture_.emplace(*manager_, dependencies_);
+    }
   }
 
   ~CapturePaintFontDependencies() {
     capture_.reset();
-    if (!registry_.valid(host_)) return;
+    if (!registry_.valid(host_)) {
+      return;
+    }
     auto& paint = registry_.get_or_emplace<components::FontPaintDependenciesComponent>(host_);
     const bool preparationChanged = preparesReferences_ && !paint.prepared;
     if (preparationChanged || !dependencies_.empty()) {
@@ -88,10 +134,11 @@ public:
           paint.fontDependencies.begin(), paint.fontDependencies.end(), [&](const auto& face) {
             return face.family == dependency.family && face.request == dependency.request;
           });
-      if (existing == paint.fontDependencies.end())
+      if (existing == paint.fontDependencies.end()) {
         paint.fontDependencies.push_back(dependency);
-      else
+      } else {
         *existing = dependency;
+      }
     }
     if (preparationChanged || before != paint.fontDependencies) {
       components::InvalidateFontResourcePreparation(registry_);
@@ -131,7 +178,9 @@ bool HasCompleteFragmentRange(const Registry& registry, Entity target,
            registry.valid(instance.subtreeInfo->lastRenderedEntity);
   }
   // A text root draws its own complete span layout without traversing child instances.
-  if (registry.all_of<components::ComputedTextComponent>(instance.dataEntity)) return true;
+  if (registry.all_of<components::ComputedTextComponent>(instance.dataEntity)) {
+    return true;
+  }
   const auto* tree = registry.try_get<donner::components::TreeComponent>(target);
   return tree && tree->firstChild() == entt::null;
 }
@@ -431,13 +480,16 @@ SpanLayerOwnership ResolveSpanLayerOwnership(Registry& registry, Entity textRoot
 /// `spansHaveOwnEffectInstances` says whether the copy being drawn has the per-span rendering
 /// instances that carry span-level `clip-path` / `mask` / `filter`. When it does not, every span is
 /// left for this draw to paint, without those effects.
+/// An owner slice that already has layout and layer ownership may skip refreshing those fields.
 void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent& text,
                           EntityHandle textRootHandle,
                           const components::ResolvedPaintServer& contextFill,
                           const components::ResolvedPaintServer& contextStroke,
-                          bool spansHaveOwnEffectInstances) {
-  if (auto* textEngine = registry.ctx().find<TextEngine>()) {
-    textEngine->resolvePerSpanLayoutStyles(textRootHandle, text);
+                          bool spansHaveOwnEffectInstances, bool refreshLayoutAndOwnership) {
+  if (refreshLayoutAndOwnership) {
+    if (auto* textEngine = registry.ctx().find<TextEngine>()) {
+      textEngine->resolvePerSpanLayoutStyles(textRootHandle, text);
+    }
   }
 
   const auto resolveSpanPaint = [&](const PaintServer& paint) -> components::ResolvedPaintServer {
@@ -455,10 +507,12 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
       continue;
     }
 
-    const SpanLayerOwnership ownership = ResolveSpanLayerOwnership(
-        registry, textRootHandle.entity(), span.sourceEntity, spansHaveOwnEffectInstances);
-    span.effectOwner = ownership.effectOwner;
-    span.opacity = ownership.opacity;
+    if (refreshLayoutAndOwnership) {
+      const SpanLayerOwnership ownership = ResolveSpanLayerOwnership(
+          registry, textRootHandle.entity(), span.sourceEntity, spansHaveOwnEffectInstances);
+      span.effectOwner = ownership.effectOwner;
+      span.opacity = ownership.opacity;
+    }
 
     const Box2d viewBox =
         textRootHandle.registry() ? components::LayoutSystem().getViewBox(textRootHandle) : Box2d();
@@ -1370,6 +1424,49 @@ Entity InstanceTextRootEntity(Registry& registry,
              : entt::null;
 }
 
+#ifdef DONNER_TEXT_ENABLED
+void PrepareTextRoot(Registry& registry, EntityHandle textRootHandle,
+                     components::ComputedTextComponent& text, const TextParams& params,
+                     RendererDriverTextFrameCache::Root& preparedRoot,
+                     RendererDriver::TextPreparationStats& stats) {
+  ++stats.fullElementStylePasses;
+  TextEngine& textEngine = registry.ctx().get<TextEngine>();
+  textEngine.resolvePerSpanLayoutStyles(textRootHandle, text);
+  std::vector<TextRun> runs;
+  if (const auto* cached =
+          registry.try_get<components::ComputedTextGeometryComponent>(textRootHandle.entity());
+      cached != nullptr && !cached->runs.empty()) {
+    runs = cached->runs;
+  } else {
+    runs = textEngine.layout(text, ToTextLayoutParams(params));
+  }
+  preparedRoot.elementBounds = ComputeTextBounds(textEngine, runs);
+
+  for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
+    Entity owner = entt::null;
+    if (runIndex < text.spans.size() && text.spans[runIndex].sourceEntity != entt::null) {
+      auto& span = text.spans[runIndex];
+      const SpanLayerOwnership ownership =
+          ResolveSpanLayerOwnership(registry, textRootHandle.entity(), span.sourceEntity,
+                                    /*spansHaveOwnEffectInstances=*/true);
+      span.effectOwner = ownership.effectOwner;
+      span.opacity = ownership.opacity;
+      owner = span.effectOwner;
+    }
+    auto& group = preparedRoot.groups[owner];
+    if (!group.prepared) {
+      group.prepared = std::make_shared<PreparedTextDraw>();
+      group.prepared->elementBounds = preparedRoot.elementBounds;
+    }
+    if (runIndex < text.spans.size()) {
+      group.text.spans.push_back(text.spans[runIndex]);
+    }
+    group.prepared->runs.push_back(std::move(runs[runIndex]));
+  }
+  preparedRoot.prepared = true;
+}
+#endif
+
 /**
  * @brief Draw the spans of \p textRootEntity that \p instance is responsible for.
  *
@@ -1380,11 +1477,14 @@ Entity InstanceTextRootEntity(Registry& registry,
  * @param textRootEntity Root text entity supplying the laid-out spans.
  * @param style Computed style of \p entity.
  * @param paint Paint already resolved for \p instance.
+ * @param textFrameCache Prepared text shared by all effect instances in this traversal.
+ * @param textPreparationStats Counter evidence for full-span style work.
  */
 void DrawInstanceText(RendererInterface& renderer, Registry& registry,
                       const components::RenderingInstanceComponent& instance, Entity entity,
                       Entity textRootEntity, const components::ComputedStyleComponent& style,
-                      const PaintParams& paint) {
+                      const PaintParams& paint, RendererDriverTextFrameCache& textFrameCache,
+                      RendererDriver::TextPreparationStats& textPreparationStats) {
   const EntityHandle textRootHandle(registry, textRootEntity);
   auto* text = textRootHandle.try_get<components::ComputedTextComponent>();
   if (text == nullptr) {
@@ -1403,7 +1503,7 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   const CapturePaintFontDependencies captureFontDependencies(registry, entity,
                                                              /*preparesReferences=*/false);
   const auto* textComp = textRootHandle.try_get<components::TextComponent>();
-  const TextParams textParams =
+  TextParams textParams =
       toTextParams(registry, instance, *textRootStyle, textComp, textRootHandle);
 
   // A shadow instance (from `<use>`) paints the light tree's text, but the span instances that
@@ -1411,8 +1511,36 @@ void DrawInstanceText(RendererInterface& renderer, Registry& registry,
   // only one that paints the copy. Claiming spans for instances that do not exist in this copy
   // would drop them entirely, so the copy paints every span, without the span-level effects.
   const bool spansHaveOwnEffectInstances = !instance.isShadow(registry);
+#ifdef DONNER_TEXT_ENABLED
+  if (spansHaveOwnEffectInstances && registry.ctx().contains<TextEngine>()) {
+    auto& preparedRoot = textFrameCache.roots[&registry][textRootEntity];
+    if (!preparedRoot.prepared) {
+      PrepareTextRoot(registry, textRootHandle, *text, textParams, preparedRoot,
+                      textPreparationStats);
+    }
+    auto& group = preparedRoot.groups[textParams.spanEffectOwner];
+    if (!group.prepared) {
+      group.prepared = std::make_shared<PreparedTextDraw>();
+      group.prepared->elementBounds = preparedRoot.elementBounds;
+    }
+    if (!group.stylesResolved) {
+      textPreparationStats.spanStyleVisits += group.text.spans.size();
+      resolvePerSpanStyles(registry, group.text, textRootHandle, paint.fill, paint.stroke,
+                           /*spansHaveOwnEffectInstances=*/true,
+                           /*refreshLayoutAndOwnership=*/false);
+      group.stylesResolved = true;
+    }
+    textParams.preparedTextDraw = group.prepared;
+    renderer.drawText(registry, group.text, textParams);
+    return;
+  }
+#else
+  (void)textFrameCache;
+#endif
+  ++textPreparationStats.fullElementStylePasses;
+  textPreparationStats.spanStyleVisits += text->spans.size();
   resolvePerSpanStyles(registry, *text, textRootHandle, paint.fill, paint.stroke,
-                       spansHaveOwnEffectInstances);
+                       spansHaveOwnEffectInstances, /*refreshLayoutAndOwnership=*/true);
   renderer.drawText(registry, *text, textParams);
 }
 
@@ -1442,7 +1570,9 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
 }  // namespace
 
 void RendererDriver::syncFilterPreparationStats() {
-  if (!securityStats_) return;
+  if (!securityStats_) {
+    return;
+  }
   securityStats_->filterPreparationAttempts = filterPreparationBudget_->attempts();
   securityStats_->preparedFilterGraphs = filterPreparationBudget_->graphs();
   securityStats_->preparedFilterNodes = filterPreparationBudget_->nodes();
@@ -1456,11 +1586,16 @@ void RendererDriver::syncFilterPreparationStats() {
 
 RendererDriver::RendererDriver(RendererInterface& renderer, bool verbose,
                                SecurityStats* securityStats)
-    : renderer_(renderer), verbose_(verbose), securityStats_(securityStats) {
+    : renderer_(renderer),
+      verbose_(verbose),
+      textFrameCache_(std::make_unique<RendererDriverTextFrameCache>()),
+      securityStats_(securityStats) {
   if (RendererFilterPreparationBudget* shared = renderer_.filterPreparationBudget()) {
     filterPreparationBudget_ = shared;
   }
 }
+
+RendererDriver::~RendererDriver() = default;
 
 void RendererDriver::resetOwnedSecurityBudgets() {
   if (filterPreparationBudget_ == &ownedFilterPreparationBudget_) {
@@ -1482,6 +1617,20 @@ void RendererDriver::draw(SVGDocument& document) {
   if (document.threadingMode() == ThreadingMode::ConcurrentDom) {
     const ScopedFrameResourceScope resourceScope(renderer_);
     RenderSnapshot snapshot = captureRenderSnapshot(document);
+    if (snapshot.fontPayloadLimitExceeded()) {
+      // A bounded snapshot may omit fonts. Render directly while holding document access so
+      // ordinary draw() remains complete even when the snapshot font budget rejects capture.
+      DocumentWriteAccess access = document.writeAccess();
+      ParseWarningSink warnings;
+      RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+      if (warnings.hasWarnings()) {
+        for (const ParseDiagnostic& warning : warnings.warnings()) {
+          std::cerr << warning << '\n';
+        }
+      }
+      drawPreparedDocument(document);
+      return;
+    }
     draw(snapshot);
     return;
   }
@@ -1521,6 +1670,18 @@ void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
       RenderSnapshotRecorder recorder(snapshot, renderer_);
       RendererDriver snapshotDriver(recorder, verbose_);
       snapshotDriver.drawPreparedDocument(document, viewport, surfaceFromCanvas);
+    }
+    if (snapshot.fontPayloadLimitExceeded()) {
+      DocumentWriteAccess access = document.writeAccess();
+      ParseWarningSink warnings;
+      RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+      if (warnings.hasWarnings()) {
+        for (const ParseDiagnostic& warning : warnings.warnings()) {
+          std::cerr << warning << '\n';
+        }
+      }
+      drawPreparedDocument(document, viewport, surfaceFromCanvas);
+      return;
     }
     draw(snapshot);
     return;
@@ -1622,6 +1783,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document) {
 
 void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                                           const Transform2d& surfaceFromCanvas) {
+  textFrameCache_->roots.clear();
   components::ScopedFontResourceRender fontRenderScope(
       document.registry(),
       document.registry().ctx().get<components::SVGDocumentContext>().rootEntity);
@@ -1677,6 +1839,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
 void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
                                      const RenderViewport& viewport,
                                      const Transform2d& surfaceFromCanvas) {
+  textFrameCache_->roots.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
@@ -1699,6 +1862,7 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
                                                   Entity lastEntity, const RenderViewport& viewport,
                                                   const Transform2d& surfaceFromCanvas,
                                                   const std::function<bool()>& shouldCancel) {
+  textFrameCache_->roots.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
@@ -1748,6 +1912,7 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
                                                      Entity lastEntity,
                                                      const RenderViewport& viewport,
                                                      const Transform2d& surfaceFromCanvas) {
+  textFrameCache_->roots.clear();
   components::ScopedFontResourceRender fontRenderScope(registry);
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
@@ -1904,7 +2069,8 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
-        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
+                         *textFrameCache_, textPreparationStats_);
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
         const std::optional<ImageParams> imageParams =
@@ -2257,7 +2423,9 @@ std::optional<std::uint64_t> RendererDriver::reservePreparedFilterImage(Vector2i
 bool RendererDriver::reservePreparedFilterShadowTree(Registry& registry, Entity targetEntity) {
   const std::optional<std::size_t> entityCount =
       BoundedShadowTreeEntityCount(registry, targetEntity, kMaximumPreparedFilterShadowEntities);
-  if (!entityCount.has_value()) return false;
+  if (!entityCount.has_value()) {
+    return false;
+  }
   const bool accepted = filterPreparationBudget_->reserveShadowEntities(*entityCount);
   syncFilterPreparationStats();
   return accepted;
@@ -2483,7 +2651,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
-        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
+                         *textFrameCache_, textPreparationStats_);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
         // SVG sub-document referenced by <image>.
@@ -2564,7 +2733,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
         }
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
-        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
+                         *textFrameCache_, textPreparationStats_);
       }
     }
 
@@ -2737,7 +2907,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                                instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
-        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
+                         *textFrameCache_, textPreparationStats_);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
         if (svgImage->subDocument) {
@@ -2786,7 +2957,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
         }
       } else if (const Entity textRootEntity = InstanceTextRootEntity(registry, instance);
                  textRootEntity != entt::null) {
-        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint);
+        DrawInstanceText(renderer_, registry, instance, entity, textRootEntity, style, paint,
+                         *textFrameCache_, textPreparationStats_);
       }
     }
 
@@ -3101,18 +3273,21 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   // Save and override surfaceFromCanvasTransform for pattern content rendering.
   const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
   surfaceFromCanvasTransform_ = patternContentFromPatternTile;
-
-  if (subtreeAhead) {
-    traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
-                  ref.subtreeInfo->lastRenderedEntity);
-  } else {
-    // Re-render the shared subtree without disturbing the caller's cursor: rewind to the start
-    // of the snapshot so traverseRange can locate the (already-passed) subtree entities.
-    const RenderingInstanceView::SavedState savedPosition = view.save();
-    view.restore(RenderingInstanceView::SavedState{0});
-    traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
-                  ref.subtreeInfo->lastRenderedEntity);
-    view.restore(savedPosition);
+  {
+    RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_,
+                                                                          registry);
+    if (subtreeAhead) {
+      traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
+                    ref.subtreeInfo->lastRenderedEntity);
+    } else {
+      // Re-render the shared subtree without disturbing the caller's cursor: rewind to the start
+      // of the snapshot so traverseRange can locate the (already-passed) subtree entities.
+      const RenderingInstanceView::SavedState savedPosition = view.save();
+      view.restore(RenderingInstanceView::SavedState{0});
+      traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
+                    ref.subtreeInfo->lastRenderedEntity);
+      view.restore(savedPosition);
+    }
   }
 
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
@@ -3430,6 +3605,8 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   }
 
   if (marker.subtreeInfo) {
+    RendererDriverTextFrameCache::ScopedRegistryOccurrence textOccurrence(*textFrameCache_,
+                                                                          registry);
     // The marker subtree may lie *behind* the caller's cursor when it is shared with an earlier
     // instantiation (e.g. the same shape stamped through several marker branches reuses one
     // cached offscreen subtree). Rewind to the start of the snapshot so traverseRange can locate
@@ -3450,7 +3627,9 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
 
 components::FontResourceGraphCache& RendererDriver::fontCollectionCache() {
   if (!fontCollectionCache_) {
-    if (securityStats_) securityStats_->nestedFontResources = {};
+    if (securityStats_) {
+      securityStats_->nestedFontResources = {};
+    }
     fontCollectionCache_ = std::make_shared<components::FontResourceGraphCache>(
         securityStats_ ? &securityStats_->nestedFontResources : nullptr);
   }
@@ -3459,6 +3638,8 @@ components::FontResourceGraphCache& RendererDriver::fontCollectionCache() {
 
 void RendererDriver::prepareSubDocument(SVGDocument& document) {
   Registry& registry = document.registry();
+  // One child registry can be traversed by several external uses with different context paints.
+  textFrameCache_->roots.erase(&registry);
   const auto* state = registry.ctx().find<components::RenderTreeState>();
   if (!state || !state->hasBeenBuilt || document.hasPendingRenderInvalidation()) {
     components::InvalidateFontResourcePreparation(registry);
@@ -3469,7 +3650,9 @@ void RendererDriver::prepareSubDocument(SVGDocument& document) {
 
 void RendererDriver::recordChildFontDependencies(SVGDocument& child, Entity target,
                                                  Registry& hostRegistry, Entity host) {
-  if (!hostRegistry.valid(host)) return;
+  if (!hostRegistry.valid(host)) {
+    return;
+  }
   auto& paint = hostRegistry.get_or_emplace<components::FontPaintDependenciesComponent>(host);
   paint.prepared = true;
   const auto handle = child.handle();
@@ -3502,11 +3685,14 @@ void RendererDriver::recordChildFontDependencies(SVGDocument& child, Entity targ
   };
   const bool changed =
       previous == paint.children.end() || !SameChildFontEvidence(*previous, snapshot);
-  if (previous == paint.children.end())
+  if (previous == paint.children.end()) {
     paint.children.push_back(std::move(snapshot));
-  else
+  } else {
     *previous = std::move(snapshot);
-  if (changed) components::InvalidateFontResourcePreparation(hostRegistry);
+  }
+  if (changed) {
+    components::InvalidateFontResourcePreparation(hostRegistry);
+  }
 }
 
 bool RendererDriver::beginSubDocumentFontTraversal(const SVGDocumentHandle& child,
@@ -3535,7 +3721,9 @@ void RendererDriver::drawSubDocument(SVGDocument& subDocument, const Box2d& view
                                      const Transform2d& parentAbsoluteTransform,
                                      Registry& hostRegistry, Entity hostEntity) {
   const auto child = subDocument.handle();
-  if (!beginSubDocumentFontTraversal(child, hostRegistry, hostEntity)) return;
+  if (!beginSubDocumentFontTraversal(child, hostRegistry, hostEntity)) {
+    return;
+  }
   const ActiveFontSubDocument active(*activeFontSubDocuments_, child.get());
   const auto childAccess = subDocument.writeAccess();
   // Prepare the sub-document's render tree (styles, layout, resources).
@@ -3601,7 +3789,9 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
                                             double opacity, Registry& hostRegistry,
                                             Entity hostEntity) {
   const auto child = subDocument.handle();
-  if (!beginSubDocumentFontTraversal(child, hostRegistry, hostEntity)) return;
+  if (!beginSubDocumentFontTraversal(child, hostRegistry, hostEntity)) {
+    return;
+  }
   const ActiveFontSubDocument active(*activeFontSubDocuments_, child.get());
   const auto childAccess = subDocument.writeAccess();
   hostRegistry.get_or_emplace<components::FontPaintDependenciesComponent>(hostEntity).prepared =

@@ -124,14 +124,12 @@ TEST(CompositedPresentationTest, PureTranslationRecapturesBeforeOverdrawIsExhaus
   SelectTool::ActiveDragPreview active = represented;
   active.translation = Vector2d(150.0, 0.0);
   active.documentFromCachedDocument = Transform2d::Translate(active.translation);
-  EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/4,
-                                                 Vector2i(100, 100),
+  EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/4, Vector2i(100, 100),
                                                  /*translationRecaptureDistanceDoc=*/128.0));
 
   active.translation = Vector2d(169.0, 0.0);
   active.documentFromCachedDocument = Transform2d::Translate(active.translation);
-  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5,
-                                                Vector2i(100, 100),
+  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100),
                                                 /*translationRecaptureDistanceDoc=*/128.0));
 }
 

@@ -22,7 +22,7 @@ inline constexpr uint32_t kWidth = 5, kHeight = 4, kBytesPerRow = 256;
 inline std::array<float, kWidth * kHeight * 4> InputTexels() {
   std::array<float, kWidth * kHeight * 4> result{};
   constexpr std::array<float, 4> alphas{0.0f, 0.25f, 0.5f, 1.0f};
-  for (uint32_t y = 0; y < kHeight; ++y)
+  for (uint32_t y = 0; y < kHeight; ++y) {
     for (uint32_t x = 0; x < kWidth; ++x) {
       const float alpha = alphas[(x + y) % 4];
       const size_t at = (y * kWidth + x) * 4;
@@ -31,6 +31,7 @@ inline std::array<float, kWidth * kHeight * 4> InputTexels() {
       result[at + 2] = alpha * (1.0f - float((x + y) % 4) / 4.0f);
       result[at + 3] = alpha;
     }
+  }
   return result;
 }
 inline std::array<float, shader::programs::kFilterResolveTransferCount> TransferTable() {
@@ -44,16 +45,16 @@ inline std::array<float, shader::programs::kFilterResolveTransferCount> Transfer
 inline std::vector<uint8_t> Expected(const std::array<float, kWidth * kHeight * 4>& input,
                                      const std::array<float, 8192>& table, bool convert) {
   std::vector<uint8_t> result(kWidth * kHeight * 4);
-  for (uint32_t y = 0; y < kHeight; ++y)
+  for (uint32_t y = 0; y < kHeight; ++y) {
     for (uint32_t x = 1; x < 4; ++x) {
       const size_t at = (y * kWidth + x) * 4;
       const float alpha = input[at + 3];
       for (uint32_t c = 0; c < 4; ++c) {
         float value = input[at + c];
         if (convert && c < 3) {
-          if (alpha <= 0.0f)
+          if (alpha <= 0.0f) {
             value = 0.0f;
-          else {
+          } else {
             const uint32_t index =
                 static_cast<uint32_t>(std::clamp(value / alpha, 0.0f, 1.0f) * 4095.0f + 0.5f);
             value = table[4096 + index] * alpha;
@@ -62,6 +63,7 @@ inline std::vector<uint8_t> Expected(const std::array<float, kWidth * kHeight * 
         result[at + c] = static_cast<uint8_t>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
       }
     }
+  }
   return result;
 }
 
@@ -188,9 +190,10 @@ void CheckFilterResolveStorage(DeviceType& device, const shader::CompiledShaderV
   ASSERT_THAT(bytes.result(), testing::SizeIs(testing::Ge(kBytesPerRow * kHeight)));
 
   std::vector<uint8_t> pixels(kWidth * kHeight * 4);
-  for (uint32_t y = 0; y < kHeight; ++y)
+  for (uint32_t y = 0; y < kHeight; ++y) {
     std::memcpy(pixels.data() + y * kWidth * 4, bytes.result().data() + y * kBytesPerRow,
                 kWidth * 4);
+  }
   editor::tests::CompareBitmapToBitmap(
       svg::RendererBitmap{Vector2i(kWidth, kHeight), pixels, kWidth * 4},
       svg::RendererBitmap{Vector2i(kWidth, kHeight), Expected(inputTexels, table, convert),

@@ -449,7 +449,9 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     size_t firstIdx = paintOrder.size();
     size_t lastIdx = paintOrder.size();
     for (size_t j = 0; j < paintOrder.size(); ++j) {
-      if (paintOrder[j] == first) firstIdx = j;
+      if (paintOrder[j] == first) {
+        firstIdx = j;
+      }
       if (paintOrder[j] == last) {
         lastIdx = j;
         break;
@@ -871,7 +873,9 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
     return idx < staticSpanPlans_.size() && staticSpanPlans_[idx].mode == StaticSpanMode::Immediate;
   };
   const auto includePayload = [payload](bool hasPayload, bool isDragTarget, bool immediate) {
-    if (!hasPayload) return false;
+    if (!hasPayload) {
+      return false;
+    }
     switch (payload) {
       case CompositorTileBitmapPayload::All: return true;
       case CompositorTileBitmapPayload::DragTargetOnly: return isDragTarget;

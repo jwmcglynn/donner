@@ -77,7 +77,9 @@ int RenderSessionRepl::run() {
 #endif
     {
       // Standard blocking path: stringstream input (tests) or watch disabled.
-      if (!std::getline(in_, line)) break;
+      if (!std::getline(in_, line)) {
+        break;
+      }
     }
 
     // Poll once even on the non-poll path (for stringstream-based tests).
@@ -87,14 +89,18 @@ int RenderSessionRepl::run() {
       }
     }
 
-    if (dispatch(line)) ++count;
+    if (dispatch(line)) {
+      ++count;
+    }
   }
   return count;
 }
 
 bool RenderSessionRepl::dispatch(const std::string& line) {
   const auto tokens = Tokenize(line);
-  if (tokens.empty()) return false;
+  if (tokens.empty()) {
+    return false;
+  }
   const auto& cmd = tokens.front();
 
   if (cmd == "help" || cmd == "?") {
@@ -137,7 +143,9 @@ bool RenderSessionRepl::dispatch(const std::string& line) {
       return true;
     };
     int w = 0, h = 0;
-    if (!parseDim(tokens[1], w) || !parseDim(tokens[2], h)) return false;
+    if (!parseDim(tokens[1], w) || !parseDim(tokens[2], h)) {
+      return false;
+    }
     cmdResize(w, h);
     return true;
   }

@@ -2574,7 +2574,9 @@ void TextEditor::renderSourceStyleDecorationTooltip() {
 void TextEditor::renderSelection(int lineNo, const Line& line, const ImVec2& lineStart,
                                  const ImVec2& contentSize, ImDrawList* drawList) {
   // If no selection, nothing to do
-  if (!hasSelection()) return;
+  if (!hasSelection()) {
+    return;
+  }
 
   const auto& start = state_.selectionStart;
   const auto& end = state_.selectionEnd;
@@ -2939,7 +2941,9 @@ namespace {
 
 void renderBufferedText(const std::string& buffer, ImVec2& offset, const ImVec2& pos,
                         ImDrawList* drawList, ImU32 color) {
-  if (buffer.empty()) return;
+  if (buffer.empty()) {
+    return;
+  }
 
   const ImVec2 textPos(pos.x + offset.x, pos.y + offset.y);
   drawList->AddText(textPos, color, buffer.c_str());
@@ -4050,9 +4054,15 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
 
   if (ImGui::BeginPopupContextItem((std::string("##edcontext") + titleStr).c_str())) {
     if (rightClickPos_.x - uiCursorPos_.x > ImGui::GetStyle().WindowPadding.x) {
-      if (ImGui::Selectable("Cut")) cut();
-      if (ImGui::Selectable("Copy")) copy();
-      if (ImGui::Selectable("Paste")) paste();
+      if (ImGui::Selectable("Cut")) {
+        cut();
+      }
+      if (ImGui::Selectable("Copy")) {
+        copy();
+      }
+      if (ImGui::Selectable("Paste")) {
+        paste();
+      }
     }
     if (sourceFocusModeContextMenuVisible_) {
       ImGui::Separator();
@@ -4171,8 +4181,7 @@ void TextEditor::applyExternalSourceEdit(std::size_t offset, std::size_t removed
   // reused by the existing diagnostic and focus-metadata remapping path. This
   // keeps DOM-mirrored edits (issue #1205) aligned with user-typed edits.
   const Coordinates startCoord = text_.getCoordinatesAtByteOffset(offset);
-  const Coordinates removedEndCoord =
-      text_.getCoordinatesAtByteOffset(offset + removedLength);
+  const Coordinates removedEndCoord = text_.getCoordinatesAtByteOffset(offset + removedLength);
 
   flashDecorations_.applySourceEdit(offset, removedLength, replacement.size(), newSize);
   core_.applyExternalSourceEdit(offset, removedLength, replacement);
@@ -4187,10 +4196,9 @@ void TextEditor::applyExternalSourceEdit(std::size_t offset, std::size_t removed
       .replacement = std::string(replacement),
       .kind = SourceEditIntentKind::Replace,
       .start = SourceEditPoint{.line = startCoord.line, .column = startCoord.column},
-      .removedEnd =
-          SourceEditPoint{.line = removedEndCoord.line, .column = removedEndCoord.column},
-      .replacementEnd = SourceEditPoint{.line = replacementEndCoord.line,
-                                        .column = replacementEndCoord.column},
+      .removedEnd = SourceEditPoint{.line = removedEndCoord.line, .column = removedEndCoord.column},
+      .replacementEnd =
+          SourceEditPoint{.line = replacementEndCoord.line, .column = replacementEndCoord.column},
   };
   if (removedLength == 0 && !replacement.empty()) {
     intent.kind = SourceEditIntentKind::Insert;

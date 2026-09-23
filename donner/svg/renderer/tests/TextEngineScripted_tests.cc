@@ -1163,7 +1163,9 @@ std::shared_ptr<const std::vector<uint8_t>> MakeUnparseableOutlineFontData() {
                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
   const char tag[4] = {'C', 'F', 'F', ' '};
   data.insert(data.end(), tag, tag + 4);
-  for (int i = 0; i < 4; ++i) data.push_back(0);      // Checksum.
+  for (int i = 0; i < 4; ++i) {
+    data.push_back(0);  // Checksum.
+  }
   data.insert(data.end(), {0x00, 0x00, 0x00, 0x1C});  // Offset = 28.
   data.insert(data.end(), {0x00, 0x00, 0x00, 0x01});  // Length = 1.
   data.push_back(0);

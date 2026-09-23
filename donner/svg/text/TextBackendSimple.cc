@@ -323,7 +323,9 @@ TextBackend::ShapedRun TextBackendSimple::shapeRunImpl(FontHandle font, float fo
                                                        size_t byteLength, bool isVertical,
                                                        FontVariant fontVariant, bool enableKerning,
                                                        bool /*forceLogicalOrder*/) const {
-  if (!std::isfinite(fontSizePx) || fontSizePx <= 0.0f) return {};
+  if (!std::isfinite(fontSizePx) || fontSizePx <= 0.0f) {
+    return {};
+  }
   const stbtt_fontinfo* info = getFontInfo(font);
   if (!info) {
     return {};

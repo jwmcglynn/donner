@@ -330,13 +330,17 @@ public:
 
   void beginFrameResourceScope() override;
   void endFrameResourceScope() override;
+  /// A new frame retires any layer, filter, or mask scope left open by an unfinished frame.
   void beginFrame(const RenderViewport& viewport) override;
+  /// Open layer, filter, and mask scopes are dropped without compositing their offscreen content.
   void endFrame() override;
 
   void setTransform(const Transform2d& transform) override;
   void pushTransform(const Transform2d& transform) override;
   void popTransform() override;
 
+  /// An unmatched push on the active or pattern-restored stack is a caller error repaired at the
+  /// frame boundary, so its clip state does not carry into a later frame.
   void pushClip(const ResolvedClip& clip) override;
   void popClip() override;
 

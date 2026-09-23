@@ -524,14 +524,20 @@ public:
   // per-frame counters.
   void countBuffer() const {
     ++lifetimeBufferCreates_;
-    if (counters_) ++counters_->bufferCreates;
+    if (counters_) {
+      ++counters_->bufferCreates;
+    }
   }
   void countBindGroup() const {
-    if (counters_) ++counters_->bindgroupCreates;
+    if (counters_) {
+      ++counters_->bindgroupCreates;
+    }
   }
   void countTexture() const {
     ++lifetimeTextureCreates_;
-    if (counters_) ++counters_->textureCreates;
+    if (counters_) {
+      ++counters_->textureCreates;
+    }
   }
 
   /// Cumulative number of `countTexture()` calls since this `GeodeDevice`
@@ -547,21 +553,31 @@ public:
     return lifetimeBufferCreates_ + readbackLifetimeBufferCreates_.load(std::memory_order_relaxed);
   }
   void countSubmit() const {
-    if (counters_) ++counters_->submits;
+    if (counters_) {
+      ++counters_->submits;
+    }
   }
   /// Record the command buffers one submission carried.
   /// @param count Command buffers handed to the queue together.
   void countCommandBuffers(uint64_t count) const {
-    if (counters_) counters_->commandBuffers += count;
+    if (counters_) {
+      counters_->commandBuffers += count;
+    }
   }
   void countPathEncode() const {
-    if (counters_) ++counters_->pathEncodes;
+    if (counters_) {
+      ++counters_->pathEncodes;
+    }
   }
   void countDraw() const {
-    if (counters_) ++counters_->drawCalls;
+    if (counters_) {
+      ++counters_->drawCalls;
+    }
   }
   void countPipelineSwitch() const {
-    if (counters_) ++counters_->pipelineSwitches;
+    if (counters_) {
+      ++counters_->pipelineSwitches;
+    }
   }
   /// Record one `wgpu::Queue::writeBuffer` call of `bytes` payload bytes.
   void countBufferWrite(uint64_t bytes) const {
@@ -572,7 +588,9 @@ public:
   }
   /// Record one `wgpu::Queue::writeTexture` call of `bytes` payload bytes.
   void countTextureWrite(uint64_t bytes) const {
-    if (counters_) counters_->textureWriteBytes += bytes;
+    if (counters_) {
+      counters_->textureWriteBytes += bytes;
+    }
   }
   /**
    * Open a frame on this device and return its generation.
@@ -636,15 +654,21 @@ public:
 
   /// Record one glyph occurrence served from an already-resident outline.
   void countGlyphResidencyHit() const {
-    if (counters_) ++counters_->glyphResidencyHits;
+    if (counters_) {
+      ++counters_->glyphResidencyHits;
+    }
   }
   /// Record one unique glyph outline encoded and made resident.
   void countGlyphResidencyUpload() const {
-    if (counters_) ++counters_->glyphResidencyUploads;
+    if (counters_) {
+      ++counters_->glyphResidencyUploads;
+    }
   }
   /// Record `count` cached glyph outlines dropped to stay inside the budget.
   void countGlyphResidencyEvictions(uint64_t count) const {
-    if (counters_) counters_->glyphResidencyEvictions += count;
+    if (counters_) {
+      counters_->glyphResidencyEvictions += count;
+    }
   }
 
   /// Shared live-resident-bytes gauge for GPU residence. Co-owned with

@@ -25,7 +25,9 @@ const std::shared_ptr<geode::GeodeDevice>& SharedDevice() {
 SVGDocument ParseRequiredDocument(std::string_view source) {
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = parser::SVGParser::ParseSVG(source, warnings);
-  if (!parsed.hasResult()) std::abort();
+  if (!parsed.hasResult()) {
+    std::abort();
+  }
   return std::move(parsed).result();
 }
 
@@ -62,7 +64,9 @@ extern "C" int LLVMFuzzerInitialize(int* /*argc*/, char*** /*argv*/) {
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   const std::shared_ptr<geode::GeodeDevice>& device = SharedDevice();
-  if (!device) return 0;
+  if (!device) {
+    return 0;
+  }
 
   const std::string_view input(reinterpret_cast<const char*>(data), size);  // NOLINT
   if (input == kBoundaryMarker) {
@@ -72,12 +76,16 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   ParseWarningSink warnings = ParseWarningSink::Disabled();
   auto parsed = parser::SVGParser::ParseSVG(input, warnings);
-  if (!parsed.hasResult()) return 0;
+  if (!parsed.hasResult()) {
+    return 0;
+  }
 
   static RendererGeode renderer(device);
   SVGDocument document = std::move(parsed).result();
   renderer.draw(document);
-  if (!renderer.resourceStats().geometryBudgetSupported) std::abort();
+  if (!renderer.resourceStats().geometryBudgetSupported) {
+    std::abort();
+  }
   return 0;
 }
 

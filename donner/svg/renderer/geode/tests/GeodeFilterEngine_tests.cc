@@ -84,7 +84,8 @@ public:
     retired.push_back(std::move(texture));
   }
 
-  void retainFailedFilterTexture(gpu::Texture texture, const gpu::TextureDescriptor&) override {
+  void retainTextureWithoutCompletionProof(gpu::Texture texture,
+                                           const gpu::TextureDescriptor&) override {
     retainedFailed.push_back(std::move(texture));
   }
 
@@ -120,7 +121,9 @@ public:
 
   gpu::Texture acquireFilterTexture(const gpu::TextureDescriptor& descriptor) override {
     gpu::Texture reused = acquireReleasedOnly(descriptor);
-    if (reused.isValid()) return reused;
+    if (reused.isValid()) {
+      return reused;
+    }
     gpu::Texture texture = gpu::GetResultOrFail(device_.createTexture(descriptor));
     issued.push_back(IdentityOf(texture));
     return texture;
@@ -145,8 +148,8 @@ public:
     pending_.push_back({std::move(texture), desc});
   }
 
-  void retainFailedFilterTexture(gpu::Texture texture,
-                                 const gpu::TextureDescriptor& desc) override {
+  void retainTextureWithoutCompletionProof(gpu::Texture texture,
+                                           const gpu::TextureDescriptor& desc) override {
     retainedFailed_.push_back({std::move(texture), desc});
   }
 
@@ -217,7 +220,9 @@ public:
   explicit RecordingFrameSink(GeodeDevice& device) : device_(device) {}
 
   bool appendFrameCommandBuffer(gpu::CommandBuffer commandBuffer) override {
-    if (refuse_) return false;
+    if (refuse_) {
+      return false;
+    }
     // The renderer's frame submits what it holds when it reaches its own bound, so the double
     // here does too: an execution must see the same split behaviour a real frame gives it.
     if (submitAt_ != 0 && commandBuffers_.size() >= submitAt_) {
@@ -246,7 +251,9 @@ public:
 
   /// Ends the frame: one submission carrying every buffer collected, in order.
   void submit() {
-    if (commandBuffers_.empty()) return;
+    if (commandBuffers_.empty()) {
+      return;
+    }
     EXPECT_THAT(device_.runtimeDevice().submit(commandBuffers_).hasResult(), testing::IsTrue());
     commandBuffers_.clear();
     retained_.clear();
@@ -540,7 +547,9 @@ TEST_F(GeodeFilterEngineTest, LaterChunkLossDetachesNothingFromAcceptedWork) {
       .op = filter_primitive::Morphology::Operator::Dilate, .radiusX = 2048, .radiusY = 0};
   graph.nodes.push_back(node);
   engine_->setChunkSubmittedHookForTesting([&](size_t chunk) {
-    if (chunk == 1) device_->markDeviceLost("injected filter chunk loss");
+    if (chunk == 1) {
+      device_->markDeviceLost("injected filter chunk loss");
+    }
   });
   const uint64_t before = device_->adapterDevice().lastSubmittedSerial();
   PoolingTextureAllocator allocator(device_->adapterDevice());
@@ -579,7 +588,9 @@ TEST_F(GeodeFilterEngineTest, HealthyRefusalAfterCompletedChunkRetiresExecutionT
       acceptedChunks = chunk;
       // Fail the execution on the healthy device right after its first chunk reached the queue,
       // so what it allocated is retired only if that chunk is proven to have completed.
-      if (chunk == 1) allocator.refuseEverything = true;
+      if (chunk == 1) {
+        allocator.refuseEverything = true;
+      }
     });
 
     const ExecutedFilter result = execute(graph, allocator);
@@ -605,7 +616,9 @@ TEST_F(GeodeFilterEngineTest, LostDeviceRefusesAnotherExecutionBeforeAllocation)
 
 TEST_F(GeodeFilterEngineTest, FinalAcceptedChunkLossReturnsNoReusableOutput) {
   engine_->setChunkSubmittedHookForTesting([&](size_t chunk) {
-    if (chunk == 1) device_->markDeviceLost("injected final filter chunk loss");
+    if (chunk == 1) {
+      device_->markDeviceLost("injected final filter chunk loss");
+    }
   });
   PoolingTextureAllocator allocator(device_->adapterDevice());
 
@@ -642,7 +655,9 @@ TEST_F(GeodeFilterEngineTest, StandaloneExecutionSubmitsEveryChunkOnItsOwn) {
 }
 
 TEST_F(GeodeFilterEngineTest, StandaloneChunkBoundaryStillForcesTheCompletionWait) {
-  if (!device_->isVulkan()) GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
+  if (!device_->isVulkan()) {
+    GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
+  }
   device_->setQueueWaitResultForTesting(GpuWaitResult::TimedOut);
   RefusingTextureAllocator allocator(device_->adapterDevice(), "");
 
@@ -655,7 +670,9 @@ TEST_F(GeodeFilterEngineTest, StandaloneChunkBoundaryStillForcesTheCompletionWai
 }
 
 TEST_F(GeodeFilterEngineTest, VulkanFinalChunkTimeoutRetainsEveryAcceptedTexture) {
-  if (!device_->isVulkan()) GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
+  if (!device_->isVulkan()) {
+    GTEST_SKIP() << "requires the Vulkan cross-submit completion wait";
+  }
   device_->setQueueWaitResultForTesting(GpuWaitResult::TimedOut);
   const uint64_t before = device_->adapterDevice().lastSubmittedSerial();
   PoolingTextureAllocator allocator(device_->adapterDevice());

@@ -45,9 +45,15 @@ public:
         return;  // Retain possibly in-use objects until the device is destroyed.
       }
     }
-    if (pool_ != VK_NULL_HANDLE) api_.vkDestroyCommandPool(device_, pool_, nullptr);
-    if (fence_ != VK_NULL_HANDLE) api_.vkDestroyFence(device_, fence_, nullptr);
-    if (semaphore_ != VK_NULL_HANDLE) destroySemaphore_(device_, semaphore_, nullptr);
+    if (pool_ != VK_NULL_HANDLE) {
+      api_.vkDestroyCommandPool(device_, pool_, nullptr);
+    }
+    if (fence_ != VK_NULL_HANDLE) {
+      api_.vkDestroyFence(device_, fence_, nullptr);
+    }
+    if (semaphore_ != VK_NULL_HANDLE) {
+      destroySemaphore_(device_, semaphore_, nullptr);
+    }
   }
 
   void start() {
@@ -72,7 +78,9 @@ public:
   }
 
   VkResult release() {
-    if (released_) return VK_SUCCESS;
+    if (released_) {
+      return VK_SUCCESS;
+    }
     VkSemaphoreSignalInfoKHR signal = {};
     signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO_KHR;
     signal.semaphore = semaphore_;
