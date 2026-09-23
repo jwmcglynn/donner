@@ -5880,6 +5880,30 @@ TEST(EditorShellTest, CancelledIdleEyedropperCaptureRepostsThroughShellFrame) {
   EXPECT_NE(EditorShellTestAccess::PixelCapture(shell), nullptr);
 }
 
+TEST(EditorShellTest, ToolPaletteButtonsReachTheCenteredBottomEdge) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+
+  constexpr ImVec2 kPaneOrigin(0.0f, 0.0f);
+  constexpr ImVec2 kContentRegion(640.0f, 480.0f);
+  const Box2d palette =
+      EditorShellTestAccess::ToolPaletteScreenRect(shell, kPaneOrigin, kContentRegion);
+  const float buttonSize = EditorShellTestAccess::AdaptiveUiLayout(shell).toolButtonSize;
+  ASSERT_THAT(buttonSize, testing::Lt(44.0f));
+  const ImVec2 penButtonNearBottom(
+      static_cast<float>(palette.topLeft.x) + 8.0f + buttonSize + 4.0f + buttonSize * 0.5f,
+      static_cast<float>(palette.bottomRight.y) - 8.0f - 2.0f - (44.0f - buttonSize) * 0.5f);
+
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, penButtonNearBottom, false);
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, penButtonNearBottom, true);
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, penButtonNearBottom, false);
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsPen(shell), testing::Eq(true));
+}
+
 TEST(EditorShellTest, ToolbarEyedropperButtonArmsWithoutSamplingItsActivationClick) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
