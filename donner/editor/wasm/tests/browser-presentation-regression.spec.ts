@@ -2592,10 +2592,32 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   }).toEqual(expect.objectContaining({ ready: true }));
   const sourceVersion = await page.evaluate(() => window.__donnerWorkerStats?.sourceVersion ?? -1);
   expect(sourceVersion).toBeGreaterThanOrEqual(0);
-  const viewport = await readViewportStats(page);
-  expect(Math.abs(viewport.documentWidth - viewport.documentHeight)).toBeLessThan(1);
+  const offscreenViewport = await readViewportStats(page);
+  expect(Math.abs(offscreenViewport.documentWidth - offscreenViewport.documentHeight)).toBeLessThan(
+    1,
+  );
   await waitForBrowserComposite(page);
   await retainEyedropperPng("eyedropper-alpha-settled-document.png", await page.screenshot());
+  // Source replacement preserves the old document's pan. Use the editor's
+  // visible 100% control to center this new, much smaller viewBox in the pane.
+  const resetZoom = {
+    x: offscreenViewport.paneX + 34,
+    y: offscreenViewport.paneY + offscreenViewport.paneHeight - 24,
+  };
+  await clickAppliedPoint(page, resetZoom, "center the replacement SVG with the 100% control");
+  await expect.poll(async () => {
+    const current = await readViewportStats(page);
+    const x = current.documentX + current.documentWidth / 2;
+    const y = current.documentY + current.documentHeight / 2;
+    return x >= current.paneX && x < current.paneX + current.paneWidth
+      && y >= current.paneY && y < current.paneY + current.paneHeight;
+  }, {
+    message: "the new SVG document center must be inside the render pane after reset",
+    timeout: scaledMs(4_000),
+  }).toBe(true);
+  await waitForBrowserComposite(page);
+  await retainEyedropperPng("eyedropper-alpha-centered-document.png", await page.screenshot());
+  const viewport = await readViewportStats(page);
   const center = {
     x: viewport.documentX + viewport.documentWidth / 2,
     y: viewport.documentY + viewport.documentHeight / 2,
