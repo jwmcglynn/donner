@@ -575,6 +575,16 @@ public:
    */
   void setReplayResultHoldFramesForTesting(int frameCount);
 
+  /**
+   * Drop every compositor tile a completed render produced, as a render whose tile payloads all
+   * failed would, so tests can drive the result that carries nothing to present.
+   *
+   * @param withhold True to withhold the tiles of every later render, false to publish them again.
+   */
+  void setWithholdCompositorTilesForTesting(bool withhold) {
+    withholdCompositorTilesForTesting_.store(withhold, std::memory_order_release);
+  }
+
   /// Install a synthetic low-priority warmup state for document-access gate tests.
   void stageCompositorWarmupForTesting(bool pending, bool active) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1108,6 +1118,9 @@ private:
 
   /// Replay/test-only number of poll attempts to hold each newly staged result.
   int replayResultHoldFramesForTesting_ = 0;
+
+  /// Test-only: publish every render as though none of its compositor tiles had a payload.
+  std::atomic<bool> withholdCompositorTilesForTesting_{false};
 
   /// Replay/test-only count of poll attempts that withheld a staged result.
   std::atomic<std::uint64_t> replayResultHoldPollCount_{0};

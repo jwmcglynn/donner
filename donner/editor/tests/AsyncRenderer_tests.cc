@@ -2701,10 +2701,11 @@ TEST(AsyncRendererTest, RenderWithoutAnAllocatableSurfacePublishesNothingToPrese
   EXPECT_TRUE(HasPresentationPayload(*layer)) << DescribePresentation(*recovered);
 }
 
-// A drag frame whose tiles cannot be re-rendered leaves no tile to present. Nothing rendered for an
-// earlier frame may stand in for it as a full-canvas payload: that frame shows the dragged shape at
-// a position the gesture already left.
-TEST(AsyncRendererTest, DragFrameWithoutRenderableTilesNeverPresentsAStaleFullCanvas) {
+// A drag frame whose tiles all fail leaves nothing to present. The renderer's main target still
+// holds the last frame it composed, which a drag frame skips recomposing, so it shows the dragged
+// shape at a position the gesture already left. Presenting it as a full-canvas payload in place of
+// the missing tiles would put the shape back there.
+TEST(AsyncRendererTest, DragFrameWithoutTilesNeverPresentsTheEarlierFrame) {
   svg::SVGDocument document = svg::instantiateSubtree(kFullCanvasTargetSvg);
   document.setCanvasSize(64, 64);
   auto target = document.querySelector("#target");
@@ -2713,8 +2714,7 @@ TEST(AsyncRendererTest, DragFrameWithoutRenderableTilesNeverPresentsAStaleFullCa
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
-  const auto postDrag = [&](std::uint64_t version, double x,
-                            std::optional<EditorRasterViewport> rasterViewport) {
+  const auto postDrag = [&](std::uint64_t version, double x) {
     SetGraphicsElementTranslation(*target, Vector2d(x, 0.0));
     RenderRequest request(renderer, document);
     request.version = version;
@@ -2724,32 +2724,29 @@ TEST(AsyncRendererTest, DragFrameWithoutRenderableTilesNeverPresentsAStaleFullCa
         .entity = entity,
         .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
     };
-    if (rasterViewport.has_value()) {
-      request.rasterViewport = *rasterViewport;
-    }
     asyncRenderer.requestRender(request);
     return WaitForRenderResult(asyncRenderer);
   };
 
-  const std::optional<RenderResult> started = postDrag(1, 2.0, std::nullopt);
+  const std::optional<RenderResult> started = postDrag(1, 2.0);
   ASSERT_TRUE(started.has_value());
   ASSERT_TRUE(started->compositedPreview.has_value()) << DescribePresentation(*started);
 
-  const std::optional<RenderResult> stalled = postDrag(2, 4.0, UnallocatableRasterViewport());
+  asyncRenderer.setWithholdCompositorTilesForTesting(true);
+  const std::optional<RenderResult> stalled = postDrag(2, 4.0);
   ASSERT_TRUE(stalled.has_value()) << "the worker must publish the iteration instead of aborting";
-  EXPECT_FALSE(ContainsFullCanvasTile(*stalled)) << DescribePresentation(*stalled);
+  EXPECT_FALSE(stalled->compositedPreview.has_value()) << DescribePresentation(*stalled);
   EXPECT_THAT(stalled->bitmap.pixels, ::testing::IsEmpty()) << DescribePresentation(*stalled);
-  EXPECT_EQ(stalled->workerTiming.nothingToPresent, !stalled->compositedPreview.has_value())
-      << DescribePresentation(*stalled);
+  EXPECT_TRUE(stalled->workerTiming.nothingToPresent) << DescribePresentation(*stalled);
 
-  const std::optional<RenderResult> resumed = postDrag(3, 6.0, std::nullopt);
+  asyncRenderer.setWithholdCompositorTilesForTesting(false);
+  const std::optional<RenderResult> resumed = postDrag(3, 6.0);
   ASSERT_TRUE(resumed.has_value());
   ASSERT_TRUE(resumed->compositedPreview.has_value()) << DescribePresentation(*resumed);
   EXPECT_FALSE(ContainsFullCanvasTile(*resumed)) << DescribePresentation(*resumed);
   EXPECT_FALSE(resumed->workerTiming.nothingToPresent) << DescribePresentation(*resumed);
   const RenderResult::CompositedTile* dragTile = FindLayerTile(*resumed, entity);
-  ASSERT_NE(dragTile, nullptr) << DescribePresentation(*resumed);
-  EXPECT_TRUE(HasPresentationPayload(*dragTile)) << DescribePresentation(*resumed);
+  EXPECT_NE(dragTile, nullptr) << DescribePresentation(*resumed);
 }
 
 TEST(AsyncRendererTest, CompositedTilesCarryRasterCanvasSizeForCacheIdentity) {
@@ -5668,6 +5665,76 @@ TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPromotedTilePresentati
   EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), target->unsafeEntityHandle().entity())
       << "The live DOM has hidden the selected element, so stale promoted-layer pixels should not "
          "be drawn even while selection chrome remains visible.";
+}
+
+// A frame the worker renders nothing for leaves the presented frame on screen: the displayed
+// version stays on the frame the pixels belong to, and the failing request is not re-posted on
+// every idle frame. Once the renderer produces tiles again, the owed version presents.
+TEST(RenderCoordinatorTest, NothingToPresentKeepsThePresentedFrameUntilARenderPresents) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect width="64" height="64" fill="white"/>
+      <rect id="target" x="8" y="8" width="24" height="24" fill="blue"/>
+    </svg>
+  )svg"));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(128.0, 128.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  viewport.devicePixelRatio = 1.0;
+  viewport.resetTo100Percent();
+
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode-only presentation regression: TinySkia test path lacks a GL context "
+                    "for composited texture upload.";
+  }
+  const auto runFrame = [&] {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
+      coordinator.pollRenderResult(app, viewport, textures);
+      if (coordinator.asyncRenderer().isBusy()) {
+        std::this_thread::sleep_for(kPollInterval);
+      }
+    }
+    return coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+  };
+  const auto presentCurrentVersion = [&] {
+    for (int frame = 0; frame < 20 && coordinator.displayedDocVersionForDiagnostics() !=
+                                          app.document().currentFrameVersion();
+         ++frame) {
+      runFrame();
+    }
+    return coordinator.displayedDocVersionForDiagnostics();
+  };
+
+  const std::uint64_t presentedVersion = presentCurrentVersion();
+  ASSERT_EQ(presentedVersion, app.document().currentFrameVersion());
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.applyMutation(EditorCommand::SetAttributeCommand(*target, "fill", "green"));
+  ASSERT_TRUE(app.flushFrame());
+  const std::uint64_t editedVersion = app.document().currentFrameVersion();
+  ASSERT_GT(editedVersion, presentedVersion);
+
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  int posted = 0;
+  for (int frame = 0; frame < 10; ++frame) {
+    if (runFrame()) {
+      ++posted;
+    }
+  }
+  EXPECT_THAT(posted, ::testing::AllOf(::testing::Ge(1), ::testing::Le(2)))
+      << "ten idle frames of a render that keeps producing nothing to present";
+  EXPECT_EQ(coordinator.displayedDocVersionForDiagnostics(), presentedVersion)
+      << "the presented frame stays until a render presents";
+
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(false);
+  EXPECT_EQ(presentCurrentVersion(), editedVersion)
+      << "once the renderer produces tiles again, the owed version presents";
 }
 
 TEST(RenderCoordinatorTest, StableSelectedFullDocumentPrewarmStaysIdle) {

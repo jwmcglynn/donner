@@ -1689,6 +1689,9 @@ void AsyncRenderer::workerLoop() {
       const auto buildPreviewStart = std::chrono::steady_clock::now();
       const ScopedHeapDelta buildPreviewHeapDelta(MemoryStage::WorkerBuildPreview);
       compositedPreview = buildCompositedPreview();
+      if (withholdCompositorTilesForTesting_.load(std::memory_order_acquire)) {
+        compositedPreview.reset();
+      }
       workerTiming.buildPreviewMs = elapsedSince(buildPreviewStart);
     }
     // Selection chrome is no longer baked into the bitmap - main.cc

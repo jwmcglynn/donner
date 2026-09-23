@@ -56,10 +56,6 @@ struct RenderCoordinatorTestAccess {
         std::chrono::steady_clock::now() - std::chrono::milliseconds(200);
   }
 
-  static void clearPresentationRefresh(RenderCoordinator& coordinator) {
-    coordinator.pendingPresentationRefresh_ = false;
-  }
-
   static std::optional<std::uint64_t> requestedCommitGeneration(
       const RenderCoordinator& coordinator) {
     if (!coordinator.requestedPixelCapture_.has_value()) {
@@ -1023,63 +1019,73 @@ TEST(RenderCoordinatorTest, DelayedCanvasSizeCommitInvalidatesSameVersionPixelCa
 }
 
 // ---------------------------------------------------------------------------
-// pollRenderResult - a worker result that carries nothing to present.
+// A worker result that carries nothing to present.
 // ---------------------------------------------------------------------------
 
-// A worker iteration can end with nothing to present: no compositor tile and no permitted
-// full-canvas payload, for example when the renderer can allocate or read back no surface. The
-// coordinator must keep the frame it already presents. Marking the result's version displayed would
-// let the overlay version gate draw newer chrome over the older pixels. It asks for one retry of
-// that version, not one per result, so a failure that persists cannot keep the worker spinning.
-// The rejection happens before any texture upload, so this runs without a GPU context.
-TEST(RenderCoordinatorTest, ResultWithNothingToPresentKeepsThePresentedFrame) {
-  EditorApp app;
-  ASSERT_TRUE(app.loadFromString(
-      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-           <rect width="64" height="64" fill="blue"/>
-         </svg>)"));
-  app.document().document().setCanvasSize(64, 64);
-  RenderCoordinator coordinator;
-  GlTextureCache textures;
-  const ViewportState viewport = MakeViewport(app);
-
-  // One RGBA surface at this output size exceeds a frame's surface budget, so the worker can
-  // allocate no frame target, compositor tile, or snapshot for the request.
-  constexpr int kUnallocatablePx = 9000;
-  static_assert(static_cast<std::uint64_t>(kUnallocatablePx) * kUnallocatablePx * 4u >
-                svg::RendererSurfaceBudget::kMaximumBytes);
-  const auto renderNothingAndPoll = [&] {
-    RenderRequest request(coordinator.renderer(), app.document().document());
-    request.version = app.document().currentFrameVersion();
-    request.documentGeneration = app.document().documentGeneration();
-    request.fontResourceRevision = app.document().fontResourceRevision();
-    request.rasterViewport.documentRect = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
-    request.rasterViewport.outputSizePx = Vector2i(kUnallocatablePx, kUnallocatablePx);
-    request.rasterViewport.semanticCanvasSizePx = Vector2i(64, 64);
-    request.rasterViewport.outputFromDocument = Transform2d::Scale(kUnallocatablePx / 64.0);
-    coordinator.asyncRenderer().requestRender(request);
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (std::chrono::steady_clock::now() < deadline) {
-      coordinator.pollRenderResult(app, viewport, textures);
-      if (!coordinator.asyncRenderer().isBusy()) {
-        return true;
-      }
+/// Runs one editor frame's render handoff the way the shell does: consume the finished worker
+/// result, then ask for the next render at the end of the frame. Returns true when a request was
+/// posted. A result with nothing to present is rejected before any texture upload, so this runs
+/// without a GPU context as long as every result is withheld.
+bool RunRenderFrame(RenderCoordinator& coordinator, EditorApp& app, SelectTool& selectTool,
+                    const ViewportState& viewport, GlTextureCache& textures) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
+    coordinator.pollRenderResult(app, viewport, textures);
+    if (coordinator.asyncRenderer().isBusy()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    return false;
-  };
+  }
+  EXPECT_FALSE(coordinator.asyncRenderer().isBusy()) << "the worker never finished its render";
+  return coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+}
 
-  ASSERT_TRUE(renderNothingAndPoll()) << "the worker must publish the iteration for the poll";
+int CountPostedRenders(RenderCoordinator& coordinator, EditorApp& app, SelectTool& selectTool,
+                       const ViewportState& viewport, GlTextureCache& textures, int frames) {
+  int posted = 0;
+  for (int frame = 0; frame < frames; ++frame) {
+    if (RunRenderFrame(coordinator, app, selectTool, viewport, textures)) {
+      ++posted;
+    }
+  }
+  return posted;
+}
+
+// Every idle frame asks the coordinator for a render, and a result with nothing to present marks
+// neither its version nor its raster rendered. Without pacing, a failure that persists (a lost
+// device, surfaces the renderer keeps refusing) re-posts the identical failing request on every
+// frame, and every result wakes the next frame: the worker and the UI loop spin at full rate.
+TEST(RenderCoordinatorTest, RenderWithNothingToPresentIsNotRepostedEveryFrame) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+
+  const int posted = CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10);
+  EXPECT_THAT(posted, ::testing::AllOf(::testing::Ge(1), ::testing::Le(2)))
+      << "ten idle frames of a render that keeps producing nothing to present";
   EXPECT_EQ(coordinator.displayedDocVersionForDiagnostics(), 0u)
       << "a result with nothing to present must not become the displayed version";
-  EXPECT_TRUE(coordinator.presentationRefreshPending())
-      << "the version that could not be presented is still owed a render";
+}
 
-  RenderCoordinatorTestAccess::clearPresentationRefresh(coordinator);
-  ASSERT_TRUE(renderNothingAndPoll());
-  EXPECT_EQ(coordinator.displayedDocVersionForDiagnostics(), 0u);
-  EXPECT_FALSE(coordinator.presentationRefreshPending())
-      << "a second empty result for the same version must not schedule another retry";
+// The eyedropper keeps asking for a document pixel capture until one lands. A capture render that
+// comes back with nothing to present must not re-arm that request on every frame either.
+TEST(RenderCoordinatorTest, PixelCaptureWithNothingToPresentIsNotRepostedEveryFrame) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  coordinator.setDocumentPixelCaptureEnabled(true);
+
+  const int posted = CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10);
+  EXPECT_THAT(posted, ::testing::AllOf(::testing::Ge(1), ::testing::Le(2)))
+      << "ten idle frames of a capture render that keeps producing nothing to present";
+  EXPECT_EQ(coordinator.documentPixelCaptureFor(app, viewport), nullptr);
 }
 
 }  // namespace
