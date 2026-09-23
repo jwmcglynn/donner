@@ -20,7 +20,6 @@
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -34,6 +33,7 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::svg {
@@ -1120,24 +1120,6 @@ TEST_F(GeodePerfTest, GpuResidence_SteadyAcrossRepeatedRenders) {
 // the fix.
 // ---------------------------------------------------------------------------
 
-// Identical dimensions and identical visible pixels (each bitmap's own
-// `rowBytes` absorbs any inter-row padding difference).
-bool bitmapsEqual(const RendererBitmap& a, const RendererBitmap& b) {
-  if (a.dimensions != b.dimensions) {
-    return false;
-  }
-  const int w = a.dimensions.x;
-  const int h = a.dimensions.y;
-  for (int y = 0; y < h; ++y) {
-    const uint8_t* ra = a.pixels.data() + static_cast<size_t>(y) * a.rowBytes;
-    const uint8_t* rb = b.pixels.data() + static_cast<size_t>(y) * b.rowBytes;
-    if (std::memcmp(ra, rb, static_cast<size_t>(w) * 4u) != 0) {
-      return false;
-    }
-  }
-  return true;
-}
-
 TEST_F(GeodePerfTest, GpuResidence_ReUploadsWhenDeviceChanges) {
   // Two INDEPENDENT headless devices (not the shared fixture device): this is
   // the "document crosses devices" scenario.
@@ -1181,19 +1163,19 @@ TEST_F(GeodePerfTest, GpuResidence_ReUploadsWhenDeviceChanges) {
   const RendererBitmap resultB = rendererB.takeSnapshot();
   ASSERT_FALSE(resultB.empty()) << "device B produced no snapshot";
 
-  EXPECT_TRUE(bitmapsEqual(referenceA, resultB))
-      << "device B output diverged from device A: resident GPU resources from "
-         "device A leaked into device B's render pass (cross-device residence). "
-         "device A non-transparent px="
-      << test::CountNonTransparentPixels(referenceA)
-      << ", device B non-transparent px=" << test::CountNonTransparentPixels(resultB);
+  {
+    SCOPED_TRACE(
+        "device B output diverged from device A: resident GPU resources from device A leaked into "
+        "device B's render pass (cross-device residence)");
+    ExpectBitmapsIdentical(resultB, referenceA, "residence_device_b_matches_device_a");
+  }
 
   // A render back on device A must still match, from device A's own residence.
   RendererGeode rendererA2(deviceA);
   rendererA2.draw(document);
   const RendererBitmap reReferenceA = rendererA2.takeSnapshot();
-  EXPECT_TRUE(bitmapsEqual(referenceA, reReferenceA))
-      << "device A output changed after a device-B render round-trip";
+  SCOPED_TRACE("device A output changed after a device-B render round-trip");
+  ExpectBitmapsIdentical(reReferenceA, referenceA, "residence_device_a_matches_after_device_b");
 }
 
 // ---------------------------------------------------------------------------
