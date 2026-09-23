@@ -1440,13 +1440,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::size_t frameResourceScopeDepth = 0;
   std::shared_ptr<geode::GeodeDocumentGeometryBudget::Limits> documentGeometryLimits =
       std::make_shared<geode::GeodeDocumentGeometryBudget::Limits>();
-  /// The documents' geometry budgets, as `resourceStats` reports them for the frame.
+  /// The documents' geometry budgets, as `resourceStats` reports them for the frame. Shared by a
+  /// renderer and its offscreen instances, and reset with the owner's frame budgets. Each of them
+  /// keeps its own list of the budgets its open frame touched (`touchedDocumentBudgets`) and
+  /// settles only those here.
   struct DocumentGeometryFrameState {
     using Budget = geode::GeodeDocumentGeometryBudget;
-
-    /// Budgets of the documents an open frame is drawing. Held only until that frame ends: see
-    /// `settle`.
-    std::vector<std::shared_ptr<Budget>> touched;
+    /// Budgets one renderer's open frame is drawing, held only until that frame ends.
+    using Touched = std::vector<std::shared_ptr<Budget>>;
 
     /// What a document's budget reported when the last frame that drew it ended.
     struct Settled {
@@ -1463,24 +1464,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       bool rejected = false;            //!< Whether any budget had refused a request.
     };
 
-    void reset() {
-      touched.clear();
-      settled.clear();
-    }
+    void reset() { settled.clear(); }
 
-    void touch(const std::shared_ptr<Budget>& budget) {
-      const auto existing = std::find_if(touched.begin(), touched.end(), [&](const auto& value) {
-        return value.get() == budget.get();
-      });
-      if (existing == touched.end()) {
-        touched.push_back(budget);
-      }
-    }
-
-    /// Record what each touched budget reports and let go of it. Call when a frame ends, while the
-    /// documents it drew are still held: afterwards the renderer neither reads those budgets
-    /// without holding their documents nor drops the last reference to one on its own thread.
-    void settle() {
+    /// Record what each budget in \p touched reports and let go of it. Call when the frame that
+    /// touched them ends, while the documents it drew are still held: afterwards the renderer
+    /// neither reads those budgets without holding their documents nor drops the last reference to
+    /// one on its own thread. Only that frame's own list: another renderer's frame may still be
+    /// drawing the documents in its list, and may still give back what it borrowed from them.
+    /// @param touched The ending frame's budgets; empty on return.
+    void settle(Touched& touched) {
       for (const std::shared_ptr<Budget>& budget : touched) {
         Settled figures{budget, budget->cacheBytes() + budget->residentBytes(), budget->rejected()};
         const auto existing =
@@ -1495,8 +1487,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       touched.clear();
     }
 
-    /// Settled figures for documents no open frame is drawing, live ones for those it is.
-    Figures figures() const {
+    /// Settled figures for documents \p touched does not name, live ones for those it does.
+    /// @param touched Budgets the asking renderer's open frame is drawing.
+    Figures figures(const Touched& touched) const {
       Figures result;
       const auto add = [&result](std::uint64_t bytes, bool rejected) {
         result.retainedBytes =
@@ -1527,6 +1520,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   };
   std::shared_ptr<DocumentGeometryFrameState> documentGeometryFrameState =
       std::make_shared<DocumentGeometryFrameState>();
+  /// Budgets of the documents this renderer's open frame is drawing. This renderer's own, never
+  /// shared with its offscreen instances, so each frame settles exactly the documents it drew.
+  DocumentGeometryFrameState::Touched touchedDocumentBudgets;
 
   // GPU resources. Created in the constructor; if device creation fails,
   // `device` is null and the renderer enters a no-op state.
@@ -3998,7 +3994,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = *budgetPtr;
     budget->setLimitsForTesting(*documentGeometryLimits);
-    documentGeometryFrameState->touch(budget);
+    const auto existing =
+        std::find_if(touchedDocumentBudgets.begin(), touchedDocumentBudgets.end(),
+                     [&](const auto& value) { return value.get() == budget.get(); });
+    if (existing == touchedDocumentBudgets.end()) {
+      touchedDocumentBudgets.push_back(budget);
+    }
     return budget;
   }
 
@@ -5095,15 +5096,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   ///
   /// `endFrame` calls this once the frame has submitted, while whoever drives the frame still holds
   /// its documents. Left for the next frame, it would run while the renderer holds another
-  /// document, or none, against a thread that may be editing or destroying these. The documents'
-  /// budgets are settled at the same point, for the same reason.
+  /// document, or none, against a thread that may be editing or destroying these. The budgets this
+  /// renderer's frame touched are settled at the same point, for the same reason.
   void releaseFrameLoans() {
     for (const SceneTempRecordSlot& tempSlot : sceneTempRecordSlots) {
       tempSlot.slab->freeSlot(tempSlot.slot);
     }
     sceneTempRecordSlots.clear();
     transientGlyphEntries.clear();
-    documentGeometryFrameState->settle();
+    documentGeometryFrameState->settle(touchedDocumentBudgets);
   }
 
   void resetForBeginFrame(const RenderViewport& nextViewport) {
@@ -5170,6 +5171,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (ownsGeometryBudget) {
       geometryBudget->reset();
       documentGeometryFrameState->reset();
+      touchedDocumentBudgets.clear();
     }
     if (ownsSurfaceBudget) {
       surfaceBudget->reset();
@@ -5655,7 +5657,7 @@ void RendererGeode::setGeometryBudgetForTesting(std::size_t maximumDraws, std::s
   impl_->documentGeometryLimits->residentBytes =
       std::min(impl_->documentGeometryLimits->residentBytes, maximumResidentBytes);
   for (const std::shared_ptr<geode::GeodeDocumentGeometryBudget>& document :
-       impl_->documentGeometryFrameState->touched) {
+       impl_->touchedDocumentBudgets) {
     document->setLimitsForTesting(*impl_->documentGeometryLimits);
   }
 }
@@ -5680,7 +5682,7 @@ void RendererGeode::injectScenePreparationFailureAfterForTesting(
 
 RendererResourceStats RendererGeode::resourceStats() const {
   const Impl::DocumentGeometryFrameState::Figures documents =
-      impl_->documentGeometryFrameState->figures();
+      impl_->documentGeometryFrameState->figures(impl_->touchedDocumentBudgets);
   const std::uint64_t documentBytes = documents.retainedBytes;
   const bool documentRejected = documents.rejected;
   const std::uint64_t geometryBytes = impl_->geometryBudget->retainedBytes();

@@ -51,6 +51,7 @@ namespace donner::svg {
 namespace {
 
 using testing::Eq;
+using testing::Ge;
 using testing::Gt;
 using testing::IsFalse;
 using testing::IsTrue;
@@ -74,6 +75,14 @@ constexpr std::string_view kTextSvg = R"(
     <text x="10" y="140" fill="#36c">donner</text>
   </svg>)";
 
+/// One rectangle and nothing else. With no other draw to batch with, its draw is still pending when
+/// anything later in the frame runs, and it is given residence only when the frame flushes it at
+/// its end.
+constexpr std::string_view kLoneRectSvg = R"(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+    <rect x="10" y="10" width="80" height="60" fill="#c33"/>
+  </svg>)";
+
 /// One text element drawn three times, itself and twice through `<use>`. A repeat may not rewrite
 /// the records that an earlier drawing's batch in the same frame reads, so each repeat borrows
 /// records for the frame.
@@ -89,9 +98,10 @@ constexpr std::string_view kRepeatedTextSvg = R"(
 /// host's installed fonts.
 constexpr std::string_view kFontsRunfilesPath = "third_party/resvg-test-suite/fonts";
 
-SVGDocument ParseShapes() {
+/// Parses \p svg, a document without text. @param svg Document source.
+SVGDocument ParseShapes(std::string_view svg = kShapesSvg) {
   ParseWarningSink sink = ParseWarningSink::Disabled();
-  auto parsed = parser::SVGParser::ParseSVG(kShapesSvg, sink);
+  auto parsed = parser::SVGParser::ParseSVG(svg, sink);
   EXPECT_FALSE(parsed.hasError()) << parsed.error().reason;
   return std::move(parsed.result());
 }
@@ -135,16 +145,22 @@ ResidencyWork DrawAndMeasure(RendererGeode& renderer, SVGDocument& document) {
                        counters.bufferWriteBytes};
 }
 
+/// The viewport every document here is drawn at: the documents' own 200 by 200 pixels.
+RenderViewport DocumentViewport() {
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 200);
+  return viewport;
+}
+
 /// Draws \p document through the driver's interruptible entry point, as an editor's render worker
 /// does, rather than through `RendererGeode::draw`.
 ///
 /// @param driver Driver over the renderer to draw with.
-/// @param document Document to draw, whole, at 200 by 200 pixels.
+/// @param document Document to draw, whole.
 /// @return Whether the frame completed.
 bool DrawLikeARenderWorker(RendererDriver& driver, SVGDocument& document) {
-  RenderViewport viewport;
-  viewport.size = Vector2d(200, 200);
-  return driver.drawInterruptibly(document, viewport, Transform2d(), [] { return false; });
+  return driver.drawInterruptibly(document, DocumentViewport(), Transform2d(),
+                                  [] { return false; });
 }
 
 /// Admit one glyph outline to \p renderer's glyph cache, so each frame makes every other glyph
@@ -159,6 +175,41 @@ std::shared_ptr<geode::GeodeDocumentGeometryBudget> DocumentBudgetOf(SVGDocument
   auto* budget =
       document.registry().ctx().find<std::shared_ptr<geode::GeodeDocumentGeometryBudget>>();
   return budget != nullptr ? *budget : nullptr;
+}
+
+/// Cache plus resident geometry bytes charged to \p document's budget, or 0 before any renderer has
+/// drawn it. @param document Document to measure.
+uint64_t RetainedBytesOf(SVGDocument& document) {
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
+  return budget ? budget->cacheBytes() + budget->residentBytes() : 0;
+}
+
+/// Draws \p document into one frame of \p renderer, holding the document for the whole frame as a
+/// multi-document frame does, and returns what the frame reports.
+///
+/// @param renderer Renderer to draw with.
+/// @param document Document to draw, whole.
+/// @param offscreenPassAfter Whether an offscreen pass, such as a filter's, opens and ends inside
+/// the
+///   frame after the document is drawn.
+/// @return The frame's resource stats, read after it ended.
+RendererResourceStats DrawOneFrame(RendererGeode& renderer, SVGDocument& document,
+                                   bool offscreenPassAfter) {
+  const RenderViewport viewport = DocumentViewport();
+  const DocumentWriteAccess access = document.writeAccess();
+  renderer.beginFrame(viewport);
+  RendererDriver driver(renderer);
+  driver.drawDocumentIntoCurrentFrame(document, viewport, Transform2d());
+  if (offscreenPassAfter) {
+    const std::unique_ptr<RendererInterface> offscreen = renderer.createOffscreenInstance();
+    EXPECT_THAT(offscreen, NotNull());
+    if (offscreen) {
+      offscreen->beginFrame(viewport);
+      offscreen->endFrame();
+    }
+  }
+  renderer.endFrame();
+  return renderer.resourceStats();
 }
 
 /// A second logical context over the physical root \p root holds, the way an editor's UI context
@@ -581,6 +632,56 @@ TEST_F(GeodeDocumentResidencyTest, AFramesResourceStatsNeedNoDocumentAccess) {
   const RendererResourceStats stats = onFirst.resourceStats();
   other.join();
   EXPECT_THAT(stats.geometryRetainedBytes, Gt(0u));
+}
+
+TEST_F(GeodeDocumentResidencyTest, AnOffscreenPassEndingFirstLeavesTheFramesDocumentToTheFrame) {
+  // Two copies of one document: a frame without the pass shows what a frame with it must report.
+  SVGDocument alone = ParseShapes(kLoneRectSvg);
+  SVGDocument withPass = ParseShapes(kLoneRectSvg);
+  RendererGeode renderer(first_);
+
+  const RendererResourceStats expected = DrawOneFrame(renderer, alone, false);
+  const RendererResourceStats actual = DrawOneFrame(renderer, withPass, true);
+  ASSERT_THAT(RetainedBytesOf(withPass), Eq(RetainedBytesOf(alone)))
+      << "both copies must end their frames retaining the same bytes";
+
+  // The pass ended while the frame's rectangle was still pending. The frame gave it residence at
+  // its end, and must report its document as it left it, not as the pass saw it.
+  EXPECT_THAT(actual.geometryRetainedBytes, Eq(expected.geometryRetainedBytes));
+}
+
+TEST_F(GeodeDocumentResidencyTest, AnOffscreenPassLetsGoOfTheDocumentItDrewWhenItEnds) {
+  std::optional<SVGDocument> nested = ParseShapes();
+  RendererGeode renderer(first_);
+  const RenderViewport viewport = DocumentViewport();
+  renderer.beginFrame(viewport);
+
+  // An offscreen pass inside the frame draws another document while that document is held, as a
+  // filter's feImage draws a nested SVG.
+  const std::unique_ptr<RendererInterface> offscreen = renderer.createOffscreenInstance();
+  ASSERT_THAT(offscreen, NotNull());
+  std::weak_ptr<geode::GeodeDocumentGeometryBudget> nestedBudget;
+  uint64_t nestedBytes = 0;
+  {
+    const DocumentWriteAccess access = nested->writeAccess();
+    offscreen->beginFrame(viewport);
+    RendererDriver driver(*offscreen);
+    driver.drawDocumentIntoCurrentFrame(*nested, viewport, Transform2d());
+    offscreen->endFrame();
+    nestedBudget = DocumentBudgetOf(*nested);
+    nestedBytes = RetainedBytesOf(*nested);
+  }
+  ASSERT_THAT(nestedBytes, Gt(0u));
+
+  // The document goes while the outer frame is still open. The pass that drew it has ended, so
+  // nothing may still hold its budget, the outer frame included.
+  nested.reset();
+  EXPECT_THAT(nestedBudget.expired(), IsTrue())
+      << "the pass must settle the document it drew when it ends, not leave it to the outer frame";
+
+  renderer.endFrame();
+  EXPECT_THAT(renderer.resourceStats().geometryRetainedBytes, Ge(nestedBytes))
+      << "the frame still reports what its offscreen pass drew";
 }
 
 TEST_F(GeodeSharedRootResidencyTest, EachRetirementOutlivesTheDeviceItReleasesInto) {
