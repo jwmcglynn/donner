@@ -1327,24 +1327,39 @@ struct DocumentDeviceResidency {
   std::shared_ptr<geode::GeodeGlyphCache> glyphs;      //!< Resident glyph outlines.
 };
 
+/// Per-entity component types that keep state per device, and the sweep that drops gone devices
+/// from all of them.
+template <typename... Components>
+struct PerDeviceComponents {
+  /// Drops gone devices' entries from every entity's \p Components.
+  static void DropGone(Registry& registry) { (DropGoneFrom<Components>(registry), ...); }
+
+private:
+  template <typename Component>
+  static void DropGoneFrom(Registry& registry) {
+    for (auto&& [entity, component] : registry.view<Component>().each()) {
+      (void)component.devices.dropGone();
+    }
+  }
+};
+
+/// Every per-entity component that keeps state per device in a `geode::GeodePerDevice`. A new one
+/// must be listed here, or a gone device's slots on it would keep that device's slabs alive.
+using DocumentPerDeviceComponents = PerDeviceComponents<geode::GeodeResidentPathComponent,
+                                                        geode::GeodeTextInstanceResidencyComponent>;
+
 /**
  * Drops, from every entity of \p registry, the residence slots of devices that are gone.
  *
- * An entity's slots are otherwise dropped only when a device next looks the entity up, and an
- * entity no remaining device draws would keep a gone device's slots, and through them its slabs
- * and their charge to the document's geometry budget, for as long as the document lives. Called
- * when a gone device's document-level residence is dropped, so once per gone device.
+ * Nothing else drops them: looking an entity's slots up drops nothing. Without this, an entity
+ * would keep a gone device's slots, and through them its slabs and their charge to the document's
+ * geometry budget, for as long as the document lives. Called where a gone device's document-level
+ * residence is dropped, so once per gone device.
  *
  * @param registry Registry of the document.
  */
 void DropGoneDevicesFromEntities(Registry& registry) {
-  for (auto&& [entity, component] : registry.view<geode::GeodeResidentPathComponent>().each()) {
-    (void)component.devices.dropGone();
-  }
-  for (auto&& [entity, component] :
-       registry.view<geode::GeodeTextInstanceResidencyComponent>().each()) {
-    (void)component.devices.dropGone();
-  }
+  DocumentPerDeviceComponents::DropGone(registry);
 }
 
 /// Residence of every device that draws a document, kept in the document's registry context.
@@ -3915,6 +3930,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           std::make_shared<DocumentResidency>());
     }
     geode::GeodePerDevice<DocumentDeviceResidency>& devices = (*residencyPtr)->devices;
+    // The one place a document drops gone devices, together with their slots on every entity:
+    // `forDevice` itself drops nothing, so a context closing on another thread in between leaves
+    // its entry for the next call to drop and sweep.
     if (devices.dropGone() != 0) {
       DropGoneDevicesFromEntities(registry);
     }

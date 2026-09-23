@@ -461,8 +461,9 @@ class GeodeDevice;
  * cursors without locking. The callers that reach it through the document
  * hold the document, which serializes them. A renderer can also keep a slot or
  * slab of the last document it drew and touch it at its next frame without
- * holding that document; that is serialized only by the renderer's device
- * being the slab's device. Destroying it releases nothing on the calling
+ * holding that document. Nothing orders that against another thread holding
+ * the document, one resetting slots after an edit or destroying the document,
+ * so that is a known unguarded case. Destroying it releases nothing on the calling
  * thread: its buffers and bind groups go to the owning context's retirement
  * (see the constructor), because the device's own thread may be using its
  * tables.

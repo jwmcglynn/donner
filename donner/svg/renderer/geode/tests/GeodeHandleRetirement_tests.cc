@@ -163,13 +163,13 @@ TEST(GeodePerDeviceTest, AnEntryStaysPutWhileOtherDevicesComeAndGo) {
     (void)perDevice.forDevice(GeodeDeviceKey{deviceId, others.back()});
   }
   others.clear();
-  (void)perDevice.forDevice(GeodeDeviceKey{1, first});
+  EXPECT_THAT(perDevice.dropGone(), Eq(32u));
 
   EXPECT_THAT(perDevice.size(), Eq(1u));
   EXPECT_THAT(perDevice.find(1), Eq(&entry));
 }
 
-TEST(GeodePerDeviceTest, AGoneContextsEntryIsDroppedAtTheNextLookup) {
+TEST(GeodePerDeviceTest, OnlyDropGoneDropsAGoneContextsEntry) {
   const auto closing = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
   auto destroyed = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
   const auto live = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
@@ -180,9 +180,11 @@ TEST(GeodePerDeviceTest, AGoneContextsEntryIsDroppedAtTheNextLookup) {
 
   closing->close();
   destroyed.reset();
-  EXPECT_THAT(perDevice.size(), Eq(3u)) << "entries are dropped only when one is looked up";
-
   (void)perDevice.forDevice(GeodeDeviceKey{3, live});
+  EXPECT_THAT(perDevice.size(), Eq(3u))
+      << "a lookup drops nothing, so its owner drops gone entries in one place";
+
+  EXPECT_THAT(perDevice.dropGone(), Eq(2u));
 
   EXPECT_THAT(perDevice.find(1), IsNull()) << "a closed context's entry must go";
   EXPECT_THAT(perDevice.find(2), IsNull()) << "a destroyed context's entry must go";

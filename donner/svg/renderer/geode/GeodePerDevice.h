@@ -29,10 +29,17 @@ struct GeodeDeviceKey {
  * second device must neither reuse it nor replace it: replacing it would destroy the first
  * device's state on the second device's thread and make the first device rebuild it on its next
  * frame. Each device gets its own entry instead. An entry whose context has gone away (its
- * retirement is closed or destroyed) is dropped the next time an entry is looked up, or by
- * \ref dropGone. That is safe on any thread: the entry's state hands its handles to a closed
+ * retirement is closed or destroyed) stays until \ref dropGone drops it; looking entries up never
+ * drops one, so the owner decides where that happens and can do everything that goes with it
+ * there. Dropping is safe on any thread: the entry's state hands its handles to a closed
  * retirement, which keeps them, or, once that retirement is destroyed, drops them after their
  * device is gone, when releasing them does nothing.
+ *
+ * A document drops gone devices' entries in one place: when its own entry for a gone device is
+ * dropped, it drops that device's entries from every per-entity component that holds one of
+ * these. A new per-entity component type holding one must be added to that sweep (see
+ * `DocumentPerDeviceComponents` in RendererGeode.cc), or a gone device's slots would keep its slabs
+ * alive.
  *
  * Values are held by pointer, so a reference to one stays valid while other devices' entries come
  * and go.
@@ -51,11 +58,9 @@ public:
   GeodePerDevice(GeodePerDevice&&) noexcept = default;
   GeodePerDevice& operator=(GeodePerDevice&&) noexcept = default;
 
-  /// The entry for \p device, creating an empty one when it has none. Drops the entries of
-  /// contexts that are gone first.
+  /// The entry for \p device, creating an empty one when it has none. Drops nothing.
   /// @param device Device the entry belongs to.
   T& forDevice(const GeodeDeviceKey& device) {
-    (void)dropGone();
     for (Entry& entry : entries_) {
       if (entry.deviceId == device.deviceId) {
         return *entry.value;
