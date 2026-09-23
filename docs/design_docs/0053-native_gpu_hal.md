@@ -118,9 +118,10 @@ the native backend, and a separate change then flips that platform's default. Un
 
 On Metal, snapshot capture and cross-context snapshot drawing register their source across
 runtime devices (see [Cross-device texture registration](#cross-device-texture-registration)).
-Every Geode target and `renderer_geode_tests` now pass with `DONNER_GPU_BACKEND=metal`. The
-renderer's other suites have not been qualified natively yet, and editor presentation remains.
-Vulkan and the browser follow the same sequence.
+Every Geode target and `renderer_geode_tests` now pass with `DONNER_GPU_BACKEND=metal`, and so do
+the Geode editor integration targets listed under [Testing and Validation](#testing-and-validation)
+and `editor_shell_tests`, under Metal API and shader validation. The renderer's other suites have
+not been qualified natively yet. Vulkan and the browser follow the same sequence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
 paths now use their reviewed runtime resource boundaries. Cross-context readback and presentation
