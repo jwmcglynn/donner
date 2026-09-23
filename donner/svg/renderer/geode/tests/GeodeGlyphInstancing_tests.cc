@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -594,6 +595,38 @@ TEST_F(GeodeGlyphInstancingTest, GlyphChurnStaysBoundedByEviction) {
       << "Glyph churn must be reclaimed by eviction, not accumulated. If this fails while "
          "the ceiling assertion passes, the churn stopped happening and this test is now "
          "measuring nothing.";
+}
+
+/// A batched occurrence draws its glyph from resident geometry, so the frame retains only its
+/// instance record: nine occurrences fit a frame budget of exactly nine records.
+TEST_F(GeodeGlyphInstancingTest, ResidentGlyphOccurrencesChargeTheFrameTheirRecord) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Occurrences draw solo without scene batching and charge their geometry.";
+  }
+  constexpr std::string_view kNineOccurrences = R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="24">
+        <text x="10" y="60" fill="black">eeeeeeeee</text>
+      </svg>)svg";
+  constexpr std::uint64_t kNineRecords = 9u * sizeof(geode::InstanceRecord);
+  constexpr std::size_t kUnlimited = std::numeric_limits<std::size_t>::max();
+  constexpr std::uint64_t kUnlimitedBytes = std::numeric_limits<std::uint64_t>::max();
+
+  SVGDocument fits = parse(kNineOccurrences);
+  RendererGeode renderer(sharedDevice());
+  renderer.setGeometryBudgetForTesting(kUnlimited, kUnlimited, kNineRecords, kUnlimitedBytes,
+                                       kUnlimitedBytes);
+  EXPECT_GT(nonTransparentPixels(render(renderer, fits).bitmap), 0u);
+  EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected)
+      << "Nine occurrences of one resident outline must cost the frame nine records.";
+
+  SVGDocument overflows = parse(kNineOccurrences);
+  RendererGeode tighter(sharedDevice());
+  tighter.setGeometryBudgetForTesting(kUnlimited, kUnlimited, kNineRecords - 1u, kUnlimitedBytes,
+                                      kUnlimitedBytes);
+  (void)render(tighter, overflows);
+  EXPECT_TRUE(tighter.resourceStats().geometryBudgetRejected)
+      << "One byte less than nine records must not fit nine occurrences.";
 }
 
 /// A glyph with no outline still costs an entry. Distinct outline-less keys, here non-breaking
