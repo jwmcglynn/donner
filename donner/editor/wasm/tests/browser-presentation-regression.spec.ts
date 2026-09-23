@@ -2563,10 +2563,16 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
       const sourceVersion = window.__donnerWorkerStats?.sourceVersion ?? -1;
       const busy = window.__donnerInteractionStats?.workerBusy ?? true;
       const sourceState = window.__donnerEyedropperTestState;
+      const worker = window.__donnerWorkerStats;
       return {
         ready: (sourceState?.documentGeneration ?? -1) > before && width > 0 && height > 0
-          && Math.abs(width - height) < 1 && !busy,
+          && Math.abs(width - height) < 1 && !busy
+          && worker?.documentGeneration === sourceState?.documentGeneration
+          && worker?.acceptedForPresentation === true && worker?.presentedAtMs !== undefined,
         documentGeneration: sourceState?.documentGeneration ?? -1,
+        workerGeneration: worker?.documentGeneration ?? -1,
+        acceptedForPresentation: worker?.acceptedForPresentation ?? false,
+        presentedAtMs: worker?.presentedAtMs ?? -1,
         sourceVersion,
         width,
         height,
@@ -2588,6 +2594,8 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   expect(sourceVersion).toBeGreaterThanOrEqual(0);
   const viewport = await readViewportStats(page);
   expect(Math.abs(viewport.documentWidth - viewport.documentHeight)).toBeLessThan(1);
+  await waitForBrowserComposite(page);
+  await retainEyedropperPng("eyedropper-alpha-settled-document.png", await page.screenshot());
   const center = {
     x: viewport.documentX + viewport.documentWidth / 2,
     y: viewport.documentY + viewport.documentHeight / 2,
