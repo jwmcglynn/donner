@@ -102,15 +102,18 @@ the native backend, and a separate change then flips that platform's default. Un
   observer; the adapter accessor resolves only on the adapter.
 - The Geode, renderer and GPU-shader fixtures run on whichever backend the process selects. Cases
   whose subject is the adapter, or wgpu objects an embedder hands over, select the adapter by
-  name, run under any override, and log why when the process default is another backend; cases
-  that install the editor's UI renderer skip by name on a native backend until presentation
-  moves. A snapshot that was not read back fails every pixel read, count and comparison instead
-  of reading as transparent, blank or identical.
+  name, run under any override, and log why when the process default is another backend. The
+  texture-cache cases install the editor's UI renderer on the selected device; only
+  `GlTextureCacheTest.RetiredSnapshotsAgeByPresentationFrame` skips on a native backend, because
+  it reads the adapter's wgpu backing-destroy counter. A snapshot that was not read back fails
+  the shared Geode and renderer test helpers that read, count or compare its pixels, instead of
+  reading as transparent, blank or identical.
 
-On Metal, the remaining parity work is backend conformance for what Geode records, and editor
-presentation. Snapshot capture and cross-context snapshot drawing register their source across
+On Metal, snapshot capture and cross-context snapshot drawing register their source across
 runtime devices (see [Cross-device texture registration](#cross-device-texture-registration)).
-Vulkan and the browser follow the same sequence.
+The Geode and renderer suites now pass with `DONNER_GPU_BACKEND=metal` except one renderer case
+whose foreign-device construction registers natively, and editor presentation remains. Vulkan and
+the browser follow the same sequence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
 paths now use their reviewed runtime resource boundaries. Cross-context readback and presentation
@@ -369,12 +372,11 @@ producer's pixels once the gate opens. The adapter's own registration tests, the
 snapshot suites and `geode_perf_tests` pass on the transitional adapter, including a capture
 cancelled after its readback was queued, which must release its source once the readback
 completes. On native Metal, the Metal registration suite passes and snapshot readback returns the
-rendered pixels. `renderer_geode_tests` runs natively without the cases whose fixtures still
-reach the transitional adapter directly, since reaching it aborts, and the rest pass except one
-that asserts a wgpu-only destroy counter. `geode_snapshot_readback_tests` does not run natively:
-its fixture uploads the test texture through the transitional adapter, and the first case that
-reaches it aborts the suite. `geode_perf_tests` passes on native Metal except one case that counts
-wgpu handle releases.
+rendered pixels. With the fixtures on the selected backend, every Geode target, including
+`geode_snapshot_readback_tests` and `geode_perf_tests`, passes on native Metal, and
+`renderer_geode_tests` passes except `ForeignRuntimeSnapshotIsRejectedBeforeRecording`. Its
+owner is a second headless device, which is foreign only on the transitional adapter: on Metal
+it shares the consumer's `MTLDevice`, so its snapshot registers and draws.
 
 ### Resource plumbing and uploads
 
