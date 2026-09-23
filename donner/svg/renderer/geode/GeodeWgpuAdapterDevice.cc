@@ -1200,7 +1200,7 @@ bool GeodeWgpuAdapterDevice::waitForSerialBounded(uint64_t serial, double timeou
                                     std::chrono::duration<double>(timeoutSeconds));
   // Bounded like GeodeDevice's queue drain: poll(true) blocks until pending work progresses
   // (yielding through Asyncify on Emscripten), so iterations are cheap when idle.
-  for (int pollIter = 0; pollIter < kMaxSerialWaitPolls; ++pollIter) {
+  for (int pollIter = 0; pollIter < serialWaitPollBound_; ++pollIter) {
     if (completedSerial() >= serial) {
       return true;
     }

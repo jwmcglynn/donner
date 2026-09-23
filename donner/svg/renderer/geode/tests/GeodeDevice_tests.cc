@@ -567,6 +567,39 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitWhosePollsNeverBlockKeepsItsBudgetAndDecl
                                       std::chrono::milliseconds(0));
 }
 
+/// The poll bound and the deadline can fall on the same poll: a device whose polls block long
+/// enough reaches its bound on the very poll that carries the wait past its deadline. That wait
+/// spent its budget polling, so it must declare the loss with the same attribution as any wait that
+/// did; only a wait with budget left goes on to wait for a delivered completion. The bound is
+/// lowered to one poll that costs twice the budget, which makes the two coincide deterministically.
+TEST(GeodeDeviceLost,
+     RuntimeSerialWaitWhoseLastPollSpendsItsBudgetDeclaresLossWithWaitAttribution) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+  ASSERT_FALSE(device->isDeviceLost());
+
+  GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
+  const uint64_t submitted = SubmitEmptyCommandBuffer(runtime);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+  const auto budgetMs = static_cast<int>(kSerialWaitBudgetSeconds * 1000.0);
+  runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(2 * budgetMs));
+  runtime.setSerialWaitPollBoundForTesting(1);
+
+  EXPECT_THAT(runtime.waitForSerial(submitted, kSerialWaitBudgetSeconds), testing::IsFalse());
+
+  EXPECT_TRUE(device->isDeviceLost())
+      << "a wait whose last poll before its bound spent its budget must publish the loss it "
+         "observed, as a wait that reached its deadline sooner does";
+
+  const GeodeDevice::ReadbackStats stats = device->consumeReadbackStats();
+  EXPECT_THAT(stats.timedOutWaitSite, Eq(GpuWaitSite::QueueIdle));
+  EXPECT_THAT(stats.timedOutWaitMs, Ge(budgetMs - 1))
+      << "the attribution has to report the budget the wait actually spent";
+
+  runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
+                                      std::chrono::milliseconds(0));
+}
+
 /// Contexts over one root drive its queue from different threads, and a completion callback runs
 /// on whichever thread's poll collected it. A wait can therefore find its polls returning at once
 /// while its own completion is still to be delivered by another thread, which is slow to do so

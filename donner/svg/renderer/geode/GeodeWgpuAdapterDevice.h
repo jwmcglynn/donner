@@ -386,6 +386,13 @@ public:
   /// @param seconds Budget in seconds.
   void setTeardownDrainBudgetForTesting(double seconds) { teardownDrainSeconds_ = seconds; }
 
+  /// Polls a serial wait makes before it stops polling, in place of \ref kMaxSerialWaitPolls.
+  /// Lowered by tests so a wait reaches its poll bound on a poll that also carries it past its
+  /// deadline, which twenty thousand polls cannot do deterministically. Test seam.
+  ///
+  /// @param polls Poll bound for this device's later serial waits.
+  void setSerialWaitPollBoundForTesting(int polls) { serialWaitPollBound_ = polls; }
+
   /**
    * TEMPORARY escape hatch (deleted with the presentation migration): registers an
    * externally owned wgpu texture - e.g. a render target created by the host or an earlier
@@ -523,8 +530,10 @@ private:
   };
 
   /// Drives \ref pollForSerialCompletion until \ref completedSerial reaches \p serial, the
-  /// device is lost, or the budget elapses. Past the poll bound above it stops polling in a loop
-  /// and waits for the completion to be delivered (\ref waitForDeliveredCompletion).
+  /// device is lost, or the budget elapses. Past the poll bound above, and only with budget left,
+  /// it stops polling in a loop and waits for the completion to be delivered
+  /// (\ref waitForDeliveredCompletion). A wait whose last poll carries it past its deadline has
+  /// spent its budget polling, so it ends as any such wait does.
   ///
   /// @param serial Submission serial to wait for.
   /// @param timeoutSeconds Longest to wait, in seconds.
@@ -567,6 +576,10 @@ private:
   /// Wall time each poll inside a serial wait costs on top of the backend's own, in milliseconds;
   /// see \ref holdSubmittedWorkForTesting.
   std::atomic<std::chrono::milliseconds::rep> serialWaitPollCostMsForTesting_{0};
+
+  /// Polls a serial wait makes before it stops polling; see
+  /// \ref setSerialWaitPollBoundForTesting.
+  int serialWaitPollBound_ = kMaxSerialWaitPolls;
 
   /// Budget \ref ~GeodeWgpuAdapterDevice spends draining submitted work. Generous: a healthy
   /// device drains in microseconds, so it only trips on a driver that has effectively hung, and
