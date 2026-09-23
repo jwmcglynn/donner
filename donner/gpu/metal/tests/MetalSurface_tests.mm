@@ -400,5 +400,24 @@ TEST_F(MetalSurfaceTest, PresentingOverALostRootReportsTheLoss) {
   device_->releaseHeldCompletionForTest();
 }
 
+TEST_F(MetalSurfaceTest, PresentingAFrameWhoseWorkFailedReportsTheLoss) {
+  const Surface surface = configuredSurface();
+  SurfaceTexture frame = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_EQ(frame.status, SurfaceStatus::Success);
+
+  // The frame's own command buffer fails on the GPU and has already completed by the time the
+  // frame is presented. A failed submission declares the loss and still completes its serial, so
+  // the frame reads as finished.
+  device_->failNextSubmissionForTest();
+  (void)renderClear(frame.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+  ASSERT_TRUE(device_->waitForCompletionHandlersForTest(1, 30.0));
+  ASSERT_TRUE(device_->isLost());
+
+  const Result<SurfaceStatus> presented = device_->presentSurface(surface);
+  ASSERT_THAT(presented, HasResult());
+  EXPECT_EQ(presented.result(), SurfaceStatus::DeviceLost)
+      << "a frame whose work failed must not be shown as if it had drawn";
+}
+
 }  // namespace
 }  // namespace donner::gpu::metal::tests
