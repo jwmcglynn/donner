@@ -175,6 +175,18 @@ py_test(
 )
 
 py_test(
+    name = "check_pr_body_tests",
+    size = "small",
+    srcs = [
+        "check_pr_body.py",
+        "check_pr_body_tests.py",
+    ],
+    data = ["//:.github/workflows/main.yml"],
+    deps = ["@rules_python//python/runfiles"],
+    imports = ["."],
+)
+
+py_test(
     name = "verify_metal_validation_tests",
     size = "small",
     srcs = [
