@@ -20,15 +20,19 @@
 ///  3. Logical contexts over one physical root keep their runtime identity,
 ///     submission serials and allocation counters to themselves, and share
 ///     exactly one sticky device-loss condition.
+///  4. Contexts over one root can be driven from two threads at once.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
+#include <thread>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/gpu/CommandEncoder.h"
@@ -181,6 +185,55 @@ TEST_F(GeodeSharedDeviceFrameTest, ALossOneContextsWaitObservesIsSharedByTheOthe
 
   rootRuntime.holdSubmittedWorkForTesting(geode::GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
                                           std::chrono::milliseconds(0));
+}
+
+/// An editor drives one context from its UI thread and another from its render worker, both over
+/// one root. A submission's completion callback runs on whichever thread next drives the root's
+/// queue, so one context's completion regularly runs inside the other context's submit, on the
+/// other thread. Each thread's submissions must still complete, and the handoff must be ordered.
+TEST_F(GeodeSharedDeviceFrameTest, ContextsOverOneRootSubmitFromTwoThreads) {
+  std::unique_ptr<geode::GeodeDevice> root = geode::GeodeDevice::CreateHeadless();
+  ASSERT_NE(root, nullptr) << "GeodeDevice::CreateHeadless failed";
+  std::unique_ptr<geode::GeodeDevice> sibling = siblingContextOf(*root);
+  ASSERT_NE(sibling, nullptr);
+  constexpr int kSubmissions = 64;
+  constexpr double kWaitSeconds = 5.0;
+
+  // Submits on `runtime` and waits for the last submission. Returns what went wrong, or an empty
+  // string.
+  const auto submitAndWait = [](gpu::Device& runtime) -> std::string {
+    int refusedSubmissions = 0;
+    uint64_t last = 0;
+    for (int i = 0; i < kSubmissions; ++i) {
+      const uint64_t serial = submitEmptyCommandBuffer(runtime);
+      if (serial == 0) {
+        ++refusedSubmissions;
+      } else {
+        last = serial;
+      }
+    }
+    if (refusedSubmissions != 0) {
+      return std::to_string(refusedSubmissions) + " submissions refused";
+    }
+    const auto waitStart = std::chrono::steady_clock::now();
+    if (!runtime.waitForSerial(last, kWaitSeconds)) {
+      const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - waitStart);
+      return "the wait for serial " + std::to_string(last) + " gave up after " +
+             std::to_string(waited.count()) + " ms with serial " +
+             std::to_string(runtime.completedSerial()) + " complete";
+    }
+    return {};
+  };
+
+  std::string siblingProblem;
+  std::thread other([&] { siblingProblem = submitAndWait(sibling->runtimeDevice()); });
+  const std::string rootProblem = submitAndWait(root->runtimeDevice());
+  other.join();
+
+  EXPECT_THAT(rootProblem, testing::IsEmpty());
+  EXPECT_THAT(siblingProblem, testing::IsEmpty());
+  EXPECT_FALSE(root->isDeviceLost());
 }
 
 // ---------------------------------------------------------------------------
