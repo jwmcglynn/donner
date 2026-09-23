@@ -1269,8 +1269,6 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_GEODE_BACKEND_AVAILABLE"],
         "//conditions:default": [],
     }),
-    opens_gpu_device = True,
-    variants = ["geode"],
     deps = [
         "//donner/base",
         "//donner/editor:embedded_svg_icon",
