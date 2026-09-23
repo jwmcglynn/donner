@@ -206,6 +206,7 @@ public:
 
   void onBufferCreated() override { context_.countBuffer(); }
   void onTextureCreated() override { context_.countTexture(); }
+  void onTextureReleased() override { context_.countTextureRelease(); }
   void onBindGroupCreated() override { context_.countBindGroup(); }
   void onBufferWritten(uint64_t byteCount) override { context_.countBufferWrite(byteCount); }
   void onTextureWritten(uint64_t byteCount) override { context_.countTextureWrite(byteCount); }

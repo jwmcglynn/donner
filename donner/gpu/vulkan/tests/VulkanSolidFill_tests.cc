@@ -53,6 +53,7 @@
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 
 namespace donner::gpu::vulkan::tests {
 namespace {
@@ -81,7 +82,10 @@ constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte 
 /// GeodeDevice::CreateHeadless + GeoEncoder + mapped readback) and returns the RGBA8 pixels, or
 /// empty on failure.
 std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
-  auto device = geode::GeodeDevice::CreateHeadless();
+  // The reference is the transitional adapter's renderer, selected by name whatever the process
+  // default is.
+  auto device =
+      geode::CreateTransitionalAdapterContext("the reference render is the transitional adapter's");
   if (!device) {
     return std::nullopt;
   }

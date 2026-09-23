@@ -16,6 +16,7 @@
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 
 namespace donner::gpu::baseline {
 namespace {
@@ -242,7 +243,10 @@ WgpuBaselineCapturer::WgpuBaselineCapturer(std::unique_ptr<geode::GeodeDevice> d
 WgpuBaselineCapturer::~WgpuBaselineCapturer() = default;
 
 std::unique_ptr<WgpuBaselineCapturer> WgpuBaselineCapturer::Create() {
-  std::unique_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  // The oracle is the transitional adapter's renderer, so it is selected by name whatever backend
+  // the process selects by default.
+  std::unique_ptr<geode::GeodeDevice> device = geode::CreateTransitionalAdapterContext(
+      "the baseline oracle is the transitional adapter's renderer");
   if (!device) {
     return nullptr;
   }

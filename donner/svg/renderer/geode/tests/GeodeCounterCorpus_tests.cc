@@ -66,6 +66,7 @@
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
 
 namespace donner::svg {
@@ -776,20 +777,6 @@ struct SceneMeasurement {
   size_t visiblePixels = 0;
 };
 
-/// Count pixels with non-zero alpha.
-size_t nonTransparentPixels(const RendererBitmap& bitmap) {
-  size_t count = 0;
-  for (int y = 0; y < bitmap.dimensions.y; ++y) {
-    const uint8_t* row = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
-    for (int x = 0; x < bitmap.dimensions.x; ++x) {
-      if (row[x * 4 + 3] != 0) {
-        ++count;
-      }
-    }
-  }
-  return count;
-}
-
 FrameSample sampleFrame(const RendererGeode& renderer) {
   const auto timings = renderer.lastFrameTimings();
   const geode::GeodeCounters& counters = timings.counters;
@@ -814,7 +801,7 @@ SceneMeasurement measureFrames(const std::shared_ptr<geode::GeodeDevice>& device
   measurement.first = sampleFrame(renderer);
   // Settle frame one through a readback so deferred GPU work completes before
   // the frame that gets measured, and use the pixels for the liveness check.
-  measurement.visiblePixels = nonTransparentPixels(renderer.takeSnapshot());
+  measurement.visiblePixels = test::CountNonTransparentPixels(renderer.takeSnapshot());
 
   renderer.draw(document);
   // Deliberately sampled BEFORE a second snapshot; see the file header.

@@ -745,101 +745,32 @@
     },
     "donner/svg/renderer/geode/tests/GeoEncoder_tests.cc": {
       "operations": [
-        "copyTextureToBuffer",
-        "createBuffer",
-        "createCommandEncoder",
         "createTexture",
         "finish",
-        "getConstMappedRange",
-        "mapAsync",
-        "poll",
         "setScissorRect",
-        "submit",
-        "unmap",
         "writeBuffer",
         "writeTexture"
       ],
-      "wgpuCFunctions": [
-        "wgpuLabel",
-        "wgpuTextureOf"
-      ],
       "wgpuCTypes": [
-        "WGPUBuffer",
-        "WGPUMapAsyncStatus",
-        "WGPUMapAsyncStatus_Success",
-        "WGPUStringView"
+        "WGPUBuffer"
       ],
       "wgpuCppTokens": [
-        "Buffer",
-        "BufferDescriptor",
-        "BufferMapCallbackInfo",
-        "BufferUsage",
-        "CommandBuffer",
-        "CommandEncoder",
-        "Default",
-        "Extent3D",
-        "Limits",
-        "MapMode",
-        "Status",
-        "TexelCopyBufferInfo",
-        "TexelCopyBufferLayout",
-        "TexelCopyTextureInfo",
-        "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
-        "TextureFormat",
-        "TextureUsage"
+        "TextureFormat"
       ]
     },
     "donner/svg/renderer/geode/tests/GeodeDevice_tests.cc": {
       "operations": [
-        "beginRenderPass",
-        "copyTextureToBuffer",
-        "createBuffer",
         "createCommandEncoder",
         "createTexture",
-        "createView",
-        "finish",
-        "getConstMappedRange",
-        "mapAsync",
-        "poll",
         "release",
         "submit",
-        "unmap"
-      ],
-      "wgpuCFunctions": [
-        "wgpuLabel"
+        "writeTexture"
       ],
       "wgpuCTypes": [
-        "WGPUAdapter",
-        "WGPUMapAsyncStatus",
-        "WGPUMapAsyncStatus_Success",
-        "WGPUStringView"
+        "WGPUAdapter"
       ],
       "wgpuCppTokens": [
-        "Buffer",
-        "BufferDescriptor",
-        "BufferMapCallbackInfo",
-        "BufferUsage",
-        "CommandBuffer",
-        "CommandEncoder",
-        "Default",
-        "Device",
-        "Extent3D",
-        "LoadOp",
-        "MapMode",
-        "Queue",
-        "RenderPassColorAttachment",
-        "RenderPassDescriptor",
-        "RenderPassEncoder",
-        "StoreOp",
-        "TexelCopyBufferInfo",
-        "TexelCopyTextureInfo",
-        "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
-        "TextureFormat",
-        "TextureUsage"
+        "TextureFormat"
       ]
     },
     "donner/svg/renderer/geode/tests/GeodeEmbed_tests.cc": {
@@ -858,14 +789,6 @@
         "TextureDimension",
         "TextureFormat",
         "TextureUsage"
-      ]
-    },
-    "donner/svg/renderer/geode/tests/GeodePerf_tests.cc": {
-      "operations": [
-        "draw"
-      ],
-      "wgpuCppTokens": [
-        "Texture"
       ]
     },
     "donner/svg/renderer/geode/tests/GeodeShaders_tests.cc": {
@@ -1007,10 +930,6 @@
       ],
       "wgpuCFunctions": [
         "wgpuTextureOf"
-      ],
-      "wgpuCTypes": [
-        "WGPUDevice",
-        "WGPUQueue"
       ],
       "wgpuCppTokens": [
         "Texture",

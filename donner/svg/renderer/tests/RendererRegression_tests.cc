@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <source_location>
 #include <string>
 #include <string_view>
 
@@ -27,6 +28,7 @@
 namespace donner::svg {
 namespace {
 
+using test::ExpectSnapshotHasPixels;
 using test::PixelAt;
 
 using Params = ImageComparisonParams;
@@ -58,22 +60,32 @@ SVGDocument ParseSvg(std::string_view svg) {
   return std::move(maybeResult.result());
 }
 
-/// Counts pixels with alpha above \p threshold in the given device row.
-int CountOpaqueInRow(const RendererBitmap& bitmap, int y, uint8_t threshold = 128) {
+/// Counts pixels with alpha above \p threshold in the given device row. An empty snapshot fails
+/// the calling test instead of counting as a row with no opaque pixel.
+int CountOpaqueInRow(const RendererBitmap& bitmap, int y, uint8_t threshold = 128,
+                     std::source_location caller = std::source_location::current()) {
+  if (!ExpectSnapshotHasPixels(bitmap, caller)) {
+    return 0;
+  }
   int count = 0;
   for (int x = 0; x < bitmap.dimensions.x; ++x) {
-    if (PixelAt(bitmap, x, y)[3] > threshold) {
+    if (PixelAt(bitmap, x, y, caller)[3] > threshold) {
       ++count;
     }
   }
   return count;
 }
 
-/// Counts pixels with alpha above \p threshold in the given device column.
-int CountOpaqueInColumn(const RendererBitmap& bitmap, int x, uint8_t threshold = 128) {
+/// Counts pixels with alpha above \p threshold in the given device column. An empty snapshot fails
+/// the calling test instead of counting as a column with no opaque pixel.
+int CountOpaqueInColumn(const RendererBitmap& bitmap, int x, uint8_t threshold = 128,
+                        std::source_location caller = std::source_location::current()) {
+  if (!ExpectSnapshotHasPixels(bitmap, caller)) {
+    return 0;
+  }
   int count = 0;
   for (int y = 0; y < bitmap.dimensions.y; ++y) {
-    if (PixelAt(bitmap, x, y)[3] > threshold) {
+    if (PixelAt(bitmap, x, y, caller)[3] > threshold) {
       ++count;
     }
   }
@@ -82,12 +94,16 @@ int CountOpaqueInColumn(const RendererBitmap& bitmap, int x, uint8_t threshold =
 
 /// Length of the first run of pixels with alpha above \p threshold in device row \p y, at or after
 /// \p startX. Leading transparent pixels are skipped; returns 0 when the row has no opaque pixel
-/// at or after \p startX.
+/// at or after \p startX. An empty snapshot fails the calling test instead of measuring no run.
 int FirstOpaqueRunLengthInRow(const RendererBitmap& bitmap, int y, int startX,
-                              uint8_t threshold = 128) {
+                              uint8_t threshold = 128,
+                              std::source_location caller = std::source_location::current()) {
+  if (!ExpectSnapshotHasPixels(bitmap, caller)) {
+    return 0;
+  }
   int length = 0;
   for (int x = startX; x < bitmap.dimensions.x; ++x) {
-    if (PixelAt(bitmap, x, y)[3] > threshold) {
+    if (PixelAt(bitmap, x, y, caller)[3] > threshold) {
       ++length;
     } else if (length > 0) {
       break;
@@ -221,21 +237,14 @@ ImageComparisonParams GoldenParams() {
   return params;
 }
 
-/// Uses the existing pixelmatch assertion to require that two renders are NOT identical, so an
-/// equivalence test cannot pass by having neither side render the thing under test.
-void ExpectBitmapsDiffer(const RendererBitmap& actual, const RendererBitmap& expected,
-                         std::string_view label) {
-  testing::TestPartResultArray differences;
-  {
-    testing::ScopedFakeTestPartResultReporter capture(
-        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
-    ExpectBitmapsIdentical(actual, expected, label);
+/// Uses the existing pixelmatch assertion to reject a vacuous empty-bitmap identity result. An
+/// empty render fails here, outside the captured comparison, because its failure there would read
+/// as visible content.
+void ExpectVisibleBitmap(const RendererBitmap& bitmap, std::string_view label,
+                         std::source_location caller = std::source_location::current()) {
+  if (!ExpectSnapshotHasPixels(bitmap, caller)) {
+    return;
   }
-  EXPECT_THAT(differences.size(), testing::Ge(1)) << label << ": expected the renders to differ";
-}
-
-/// Uses the existing pixelmatch assertion to reject a vacuous empty-bitmap identity result.
-void ExpectVisibleBitmap(const RendererBitmap& bitmap, std::string_view label) {
   RendererBitmap empty = bitmap;
   std::fill(empty.pixels.begin(), empty.pixels.end(), 0);
   testing::TestPartResultArray differences;
@@ -245,6 +254,18 @@ void ExpectVisibleBitmap(const RendererBitmap& bitmap, std::string_view label) {
     ExpectBitmapsIdentical(bitmap, empty, label);
   }
   EXPECT_THAT(differences.size(), testing::Eq(1)) << "Expected visible rendered content";
+}
+
+/// A renderer that could not read its frame back returns an empty bitmap, which has no content to
+/// be visible, to differ, or to count. Each guard this suite uses must reject one, because an
+/// equivalence or extent test whose renders all came back empty would otherwise pass.
+TEST(RendererRegressionHelpersTest, AnEmptyRenderIsNeitherVisibleNorDifferentNorCounted) {
+  EXPECT_NONFATAL_FAILURE(CountOpaqueInRow(RendererBitmap{}, 0), "empty 0x0 snapshot");
+  EXPECT_NONFATAL_FAILURE(CountOpaqueInColumn(RendererBitmap{}, 0), "empty 0x0 snapshot");
+  EXPECT_NONFATAL_FAILURE(FirstOpaqueRunLengthInRow(RendererBitmap{}, 0, 0), "empty 0x0 snapshot");
+  EXPECT_NONFATAL_FAILURE(ExpectVisibleBitmap(RendererBitmap{}, "visible"), "empty 0x0 snapshot");
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsDiffer(RendererBitmap{}, RendererBitmap{}, "differ"),
+                          "empty 0x0 snapshot");
 }
 
 /// Renders \p body at 200x200 with the hermetic test fonts, through the backend this build is

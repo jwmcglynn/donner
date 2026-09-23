@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <optional>
 #include <ostream>
+#include <source_location>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -429,6 +430,9 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
 /**
  * @brief Asserts two live renderer bitmaps are pixel-for-pixel identical.
  *
+ * An empty bitmap on either side fails the test: a render that was not read back is never
+ * identical to anything, including another empty one.
+ *
  * Strict identity pixelmatch (threshold 0, AA included, 0 mismatches allowed) -
  * the renderer suite's shared bitmap-to-bitmap comparator (so tests don't roll a
  * private one; mirrors the editor's `CompareBitmapToBitmap`). On mismatch, adds a
@@ -442,6 +446,24 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
  */
 void ExpectBitmapsIdentical(const RendererBitmap& actual, const RendererBitmap& expected,
                             std::string_view label);
+
+/**
+ * @brief Asserts two live renderer bitmaps are not pixel-for-pixel identical, by the strict
+ * identity \ref ExpectBitmapsIdentical applies.
+ *
+ * For a check that a change alters output, so an equivalence test cannot pass by having neither
+ * render draw the thing under test. An empty bitmap on either side fails the test at the caller's
+ * line, outside the comparison, because its failure inside the comparison would read as a
+ * difference. Two identical bitmaps fail the test at the caller's line.
+ *
+ * @param actual The bitmap under test.
+ * @param expected The bitmap it must differ from.
+ * @param label Short identifier for log output and dumped PNG names.
+ * @param caller Where the check was made; defaults to the call site.
+ */
+void ExpectBitmapsDiffer(const RendererBitmap& actual, const RendererBitmap& expected,
+                         std::string_view label,
+                         std::source_location caller = std::source_location::current());
 
 /**
  * @brief Writes @p bitmap to `actual_<label>.png` under `$TEST_UNDECLARED_OUTPUTS_DIR`.

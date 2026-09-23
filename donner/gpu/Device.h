@@ -1023,11 +1023,11 @@ protected:
    *
    * Asked for a validated slot that is not a surface's acquired frame, from two places: the
    * public \ref ownsTextureBacking, and \ref createTexture immediately after \ref onCreateTexture
-   * accepted the slot, to decide whether the creation is an allocation an observer counts. The
-   * answer must therefore already hold when \ref onCreateTexture returns. The default is true:
-   * every texture a backend holds is one it created. A backend that can also name memory
-   * belonging to someone else - a registration of a host-owned object, say - overrides this and
-   * says which is which.
+   * accepted the slot, to decide whether the creation is an allocation an observer counts, both
+   * when it is created and when it is released. The answer must therefore already hold when
+   * \ref onCreateTexture returns. The default is true: every texture a backend holds is one it
+   * created. A backend that can also name memory belonging to someone else - a registration of a
+   * host-owned object, say - overrides this and says which is which.
    *
    * @param slotIndex Validated live texture slot.
    */
@@ -1306,6 +1306,15 @@ private:
   /// Validated per-texture state.
   struct TextureRecord {
     TextureDescriptor descriptor;  //!< Creation descriptor.
+    /// Whether the backing is an allocation this device made and still owns, set at creation
+    /// whether or not an observer is installed. \ref destroyTextureBacking reports the end of that
+    /// ownership and clears it, so the slot's later recycle reports nothing more. Otherwise the
+    /// texture's retirement, which drops this record, carries the value to the slot's recycle,
+    /// which reports it, at once or from \ref PendingDestroy after the last submission using the
+    /// texture completes. So the end is reported at most once, and only to an observer installed
+    /// when it happens. An export can keep the allocation alive after this device's ownership
+    /// ends; \ref sharedTextureTailBytes counts those bytes.
+    bool ownsAllocation = false;
   };
   /// Validated per-view state. Consumers re-resolve the viewed texture through
   /// \ref resolveViewedTexture on every use, so a view cannot outlive its texture unnoticed.
@@ -1420,6 +1429,8 @@ private:
     uint64_t readySerial = 0;  //!< Backend destruction is safe once completedSerial() >= this.
     ResourceKind kind = ResourceKind::Buffer;  //!< Resource kind, for table dispatch.
     uint32_t slotIndex = 0;                    //!< Retired slot index.
+    /// Whether recycling the slot ends this device's ownership of a texture allocation it made.
+    bool releasesTextureAllocation = false;
   };
 
   /// Allocates a slot in \p table and mints a handle carrying this device's identity.
@@ -1462,15 +1473,34 @@ private:
   /// @param surface Already-validated surface handle.
   SurfaceRecord* mutableSurfaceRecord(const Surface& surface);
 
+  /// Whether retiring \p record releases a texture allocation this device owns. Only a texture
+  /// record can; every other kind answers false. @param record Record about to be retired.
+  template <typename Record>
+  static bool ReleasesTextureAllocation(const Record& record) {
+    if constexpr (std::is_same_v<Record, TextureRecord>) {
+      return record.ownsAllocation;
+    } else {
+      return false;
+    }
+  }
+
   /// Releases the backend object of a retired slot and recycles the slot for reuse.
   /// @param kind Resource kind. @param slotIndex Retired slot index.
   void recycleRetiredSlot(ResourceKind kind, uint32_t slotIndex);
+
+  /// Tells the observer, if any, that this device's ownership of a texture allocation it made
+  /// ended, when \p released says it did.
+  /// @param released Whether the release just performed ended such an ownership.
+  void reportTextureRelease(bool released) const;
 
   /// Retires a resolved resource: defers the backend release if the resource is referenced by an
   /// incomplete submission, otherwise releases it immediately.
   /// @param kind Resource kind. @param slotIndex Slot index. @param lastUseSerial Serial of the
   /// last submission referencing the resource.
-  void retireResource(ResourceKind kind, uint32_t slotIndex, uint64_t lastUseSerial);
+  /// @param releasesTextureAllocation Whether the resource is a texture allocation the device still
+  ///   owns, whose ownership ends, and is reported, when the slot is recycled.
+  void retireResource(ResourceKind kind, uint32_t slotIndex, uint64_t lastUseSerial,
+                      bool releasesTextureAllocation);
 
   /// RAII destructor path: destroys the resource identified by (\p slotIndex, \p generation) in
   /// \p table if it is still alive; a silent no-op when the identity is stale.

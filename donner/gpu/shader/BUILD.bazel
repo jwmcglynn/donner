@@ -732,6 +732,7 @@ donner_cc_test(
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_gpu_wait",
+        "//donner/svg/renderer/geode:geode_test_contexts",
         "//donner/svg/renderer/geode:geode_wgpu_util",
         "//third_party/webgpu-cpp:webgpu_cpp",
         "@tiny-skia-cpp//src/tiny_skia/filter",

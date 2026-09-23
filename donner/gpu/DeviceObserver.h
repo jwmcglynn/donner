@@ -7,8 +7,9 @@
 namespace donner::gpu {
 
 /**
- * Receives one notification for each operation a \ref Device accepted, and one for each queue
- * submission its backend made on its own.
+ * Receives one notification for each operation a \ref Device accepted, one for each queue
+ * submission its backend made on its own, and one when the device's ownership of a texture
+ * allocation ends, which can happen inside \ref Device::poll as well as inside a destroy.
  *
  * Installed per device with \ref Device::installObserver. Notifications for the caller's
  * operations come from the shared validation layer, after the backend accepted the operation, so
@@ -30,6 +31,25 @@ public:
   /// A texture allocation the device owns was created. A registration of a texture the device
   /// does not own is not an allocation and is not reported.
   virtual void onTextureCreated() = 0;
+
+  /**
+   * The device's ownership of a texture allocation it made ended: its backing was released
+   * through \ref Device::destroyTextureBacking, or the texture was destroyed and the last
+   * submission using it completed and its slot was recycled. Reported at most once per owned
+   * allocation, on the thread using the device, to the observer installed at that moment. That
+   * includes an allocation made before this observer was installed, whose creation it never
+   * heard, so an observer installed late can count more releases than creations. An allocation
+   * still owned when the device is destroyed, and one whose retired slot is never recycled, are
+   * not reported. Releasing a registration of a texture the device does not own ends no ownership
+   * and is not reported.
+   *
+   * The allocation itself may outlive the report: an export of the texture keeps it alive until
+   * its last holder lets go, and \ref Device::sharedTextureTailBytes counts those bytes meanwhile.
+   * Nothing is reported when that holder finally releases it. A destroyed texture a holder still
+   * reads enters that gauge when it is retired but is reported here only when its slot is
+   * recycled, so while its last submission is in flight both count it.
+   */
+  virtual void onTextureReleased() = 0;
 
   /// A bind group was created.
   virtual void onBindGroupCreated() = 0;

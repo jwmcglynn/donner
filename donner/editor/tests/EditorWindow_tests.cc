@@ -2333,7 +2333,7 @@ TEST(EditorWindowTest, CompositorDebugPanelUploadsCpuThumbnailThroughRuntime) {
   CompositorDebugPanel panel(device);
   auto tile = CpuDebugThumbnail();
 
-  const uint64_t submittedBefore = device->adapterDevice().lastSubmittedSerial();
+  const uint64_t submittedBefore = device->runtimeDevice().lastSubmittedSerial();
   geode::GeodeCounters counters;
   device->setCounters(&counters);
   const ImTextureID texture = CompositorDebugPanelTestAccess::upload(panel, tile);
@@ -2342,7 +2342,7 @@ TEST(EditorWindowTest, CompositorDebugPanelUploadsCpuThumbnailThroughRuntime) {
   EXPECT_EQ(counters.textureCreates, 1u);
   EXPECT_EQ(counters.textureWriteBytes, 256u * 2u);
   EXPECT_EQ(counters.submits, 0u);
-  EXPECT_EQ(device->adapterDevice().lastSubmittedSerial(), submittedBefore);
+  EXPECT_EQ(device->runtimeDevice().lastSubmittedSerial(), submittedBefore);
 
   window.beginFrame();
   ImGui::GetBackgroundDrawList()->AddImage(texture, ImVec2(16, 16), ImVec2(48, 48));

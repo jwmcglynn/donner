@@ -95,6 +95,16 @@ donner_cc_library(
     ],
 )
 
+donner_cc_test(
+    name = "rgba_test_matchers_tests",
+    srcs = ["RgbaTestMatchers_tests.cc"],
+    deps = [
+        ":rgba_test_matchers",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_library(
     name = "renderer_image_test_utils",
     testonly = 1,
@@ -209,6 +219,7 @@ donner_cc_library(
     deps = [
         ":renderer_image_test_utils",
         ":renderer_test_backend",
+        ":rgba_test_matchers",
         "//donner/base:base_test_utils",
         "//donner/css:core",
         "//donner/svg/components/resources:resource_manager_context",
@@ -751,6 +762,7 @@ donner_cc_test(
         "//donner/svg/renderer:stroke_params",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_path_cache_component",
+        "//donner/svg/renderer/geode:geode_test_contexts",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/resources:image_resource",
         "@tiny-skia-cpp//src:tiny_skia_lib",

@@ -3,19 +3,21 @@
 /// debug overlay.
 ///
 /// Contract under test:
-///  1. Overlay OFF is the default and is byte-identical to a renderer
+///  1. Overlay OFF is the default and is pixel-identical to a renderer
 ///     that never touched the flag (zero behavior change when off).
 ///  2. Overlay ON draws the actual post-vertex Slug convex-fan edges
 ///     (`boundingVertices` plus dynamic pixel dilation and transform fallbacks)
 ///     without tinting normal document pixels between those edges.
 ///  3. Overlay ON emits one frame-final wireframe draw; turning it back off
-///     restores byte-identical output (no sticky state).
+///     restores pixel-identical output (no sticky state).
 
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <source_location>
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
@@ -24,6 +26,7 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::svg {
@@ -147,40 +150,16 @@ RendererBitmap renderDefault(const std::shared_ptr<geode::GeodeDevice>& device) 
   return renderer.takeSnapshot();
 }
 
-bool bitmapsIdentical(const RendererBitmap& a, const RendererBitmap& b) {
-  return a.dimensions == b.dimensions && a.rowBytes == b.rowBytes && a.pixels == b.pixels;
-}
-
-/// Count pixels in the overlay's magenta family. The frame-final wireframe
-/// is opaque magenta, while antialiasing over arbitrary content keeps R and
-/// B high and G low near its edges.
-int countMagentaFamilyPixels(const RendererBitmap& bitmap) {
-  int count = 0;
-  for (int y = 0; y < bitmap.dimensions.y; ++y) {
-    const uint8_t* row = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
-    for (int x = 0; x < bitmap.dimensions.x; ++x) {
-      const uint8_t* px = row + static_cast<size_t>(x) * 4;
-      if (px[0] > 150 && px[2] > 150 && px[1] < 80) {
-        ++count;
-      }
-    }
-  }
-  return count;
-}
-
-int countNonTransparentPixels(const RendererBitmap& bitmap) {
-  int count = 0;
-  for (int y = 0; y < bitmap.dimensions.y; ++y) {
-    const uint8_t* row = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
-    for (int x = 0; x < bitmap.dimensions.x; ++x) {
-      count += row[static_cast<size_t>(x) * 4 + 3] != 0 ? 1 : 0;
-    }
-  }
-  return count;
-}
-
+/// Whether \p pixel is in the overlay's magenta family. The frame-final wireframe is opaque
+/// magenta, while antialiasing over arbitrary content keeps R and B high and G low near its edges.
 bool isMagentaFamily(const std::array<uint8_t, 4>& pixel) {
   return pixel[0] > 150 && pixel[2] > 150 && pixel[1] < 80;
+}
+
+/// Count pixels in the overlay's magenta family.
+size_t countMagentaFamilyPixels(const RendererBitmap& bitmap,
+                                std::source_location caller = std::source_location::current()) {
+  return test::CountPixelsWhere(bitmap, isMagentaFamily, caller);
 }
 
 bool hasMagentaFamilyPixel(const RendererBitmap& bitmap, int x0, int y0, int x1, int y1) {
@@ -237,7 +216,7 @@ TEST_F(GeodeDebugOverlayTest, OffscreenInstanceDoesNotInheritDebugGeometryOverla
       << "Resource and compositor offscreens must not bake debug geometry into cached pixels";
 }
 
-TEST_F(GeodeDebugOverlayTest, OffIsByteIdenticalToDefault) {
+TEST_F(GeodeDebugOverlayTest, OffIsPixelIdenticalToDefault) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
@@ -245,8 +224,8 @@ TEST_F(GeodeDebugOverlayTest, OffIsByteIdenticalToDefault) {
   const RendererBitmap explicitlyOff = renderWithOverlay(device, false);
 
   ASSERT_FALSE(untouched.empty());
-  EXPECT_TRUE(bitmapsIdentical(untouched, explicitlyOff))
-      << "setDebugGeometryOverlay(false) must not change output vs never calling it.";
+  SCOPED_TRACE("setDebugGeometryOverlay(false) must not change output vs never calling it.");
+  ExpectBitmapsIdentical(explicitlyOff, untouched, "debug_overlay_off_matches_default");
 }
 
 TEST_F(GeodeDebugOverlayTest, OnDrawsActualTriangleEdgesWithoutTintingInterior) {
@@ -258,13 +237,16 @@ TEST_F(GeodeDebugOverlayTest, OnDrawsActualTriangleEdgesWithoutTintingInterior) 
 
   ASSERT_FALSE(off.empty());
   ASSERT_FALSE(on.empty());
-  EXPECT_FALSE(bitmapsIdentical(off, on)) << "Overlay-on output must differ from overlay-off.";
+  {
+    SCOPED_TRACE("Overlay-on output must differ from overlay-off.");
+    ExpectBitmapsDiffer(on, off, "debug_overlay_on_differs_from_off");
+  }
 
   // The bounding-quad wireframe is magenta; at least a hairline's worth
   // of pixels must land in the magenta family. Overlay-off must have none
   // (the fixture palette has no magenta).
-  EXPECT_EQ(countMagentaFamilyPixels(off), 0);
-  EXPECT_GT(countMagentaFamilyPixels(on), 50);
+  EXPECT_EQ(countMagentaFamilyPixels(off), 0u);
+  EXPECT_GT(countMagentaFamilyPixels(on), 50u);
 
   // The rectangle's four bounding vertices encode a two-triangle fan over
   // (20,20)-(90,90). The overlay applies the vertex shader's dynamic dilation,
@@ -292,10 +274,12 @@ TEST_F(GeodeDebugOverlayTest, TextGlyphSlugTrianglesAreIncluded) {
   // Prove the fixture produced glyph pixels before using it to test the
   // overlay. With no background, every non-transparent baseline pixel comes
   // from the glyph itself.
-  EXPECT_GT(countNonTransparentPixels(off), 200);
-  EXPECT_FALSE(bitmapsIdentical(off, on))
-      << "Geometry debug mode must capture Slug submissions made by drawText.";
-  EXPECT_GT(countMagentaFamilyPixels(on), 20)
+  EXPECT_GT(test::CountNonTransparentPixels(off), 200u);
+  {
+    SCOPED_TRACE("Geometry debug mode must capture Slug submissions made by drawText.");
+    ExpectBitmapsDiffer(on, off, "debug_overlay_captures_text_glyphs");
+  }
+  EXPECT_GT(countMagentaFamilyPixels(on), 20u)
       << "The text glyph's emitted Slug triangle edges must be visible.";
 }
 
@@ -374,15 +358,15 @@ TEST_F(GeodeDebugOverlayTest, OnEmitsExtraDrawsAndTogglesCleanly) {
   const uint64_t drawsOn = renderer.lastFrameTimings().counters.drawCalls;
   EXPECT_GT(drawsOn, drawsOff) << "Overlay-on frame should emit additional overlay draw calls.";
 
-  // Toggling back off restores byte-identical output on the same renderer.
+  // Toggling back off restores pixel-identical output on the same renderer.
   renderer.setDebugGeometryOverlay(false);
   renderer.draw(document);
   const RendererBitmap afterBitmap = renderer.takeSnapshot();
   const uint64_t drawsOffAgain = renderer.lastFrameTimings().counters.drawCalls;
 
   EXPECT_EQ(drawsOffAgain, drawsOff);
-  EXPECT_TRUE(bitmapsIdentical(beforeBitmap, afterBitmap))
-      << "Disabling the overlay must fully restore non-overlay rendering.";
+  SCOPED_TRACE("Disabling the overlay must fully restore non-overlay rendering.");
+  ExpectBitmapsIdentical(afterBitmap, beforeBitmap, "debug_overlay_toggled_off_matches_before");
 }
 
 TEST_F(GeodeDebugOverlayTest, GeometryOverlayPreservesUseInstancingTopology) {

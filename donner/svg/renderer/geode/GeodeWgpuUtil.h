@@ -139,11 +139,6 @@ public:
   /// True when a non-null handle is owned.
   [[nodiscard]] explicit operator bool() const noexcept { return static_cast<bool>(handle_); }
 
-  /// Number of non-null handles released by this scoped-handle specialization.
-  [[nodiscard]] static uint64_t releaseCountForTesting() noexcept {
-    return releaseCount_.load(std::memory_order_relaxed);
-  }
-
   /// Number of explicit backing-destroy calls made by this handle specialization.
   [[nodiscard]] static uint64_t backingDestroyCountForTesting() noexcept {
     return backingDestroyCount_.load(std::memory_order_relaxed);
@@ -160,10 +155,7 @@ public:
 
   /// Release the current handle and optionally take ownership of a replacement.
   void reset(Handle handle = Handle()) noexcept {
-    if (handle_) {  // Keep the release counter scoped to RAII-owned resources.
-      ReleaseWgpuHandle(handle_);
-      releaseCount_.fetch_add(1, std::memory_order_relaxed);
-    }
+    ReleaseWgpuHandle(handle_);
     handle_ = std::move(handle);
   }
 
@@ -175,7 +167,6 @@ public:
   }
 
 private:
-  static inline std::atomic<uint64_t> releaseCount_{0};
   static inline std::atomic<uint64_t> backingDestroyCount_{0};
   Handle handle_;
 };

@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -35,6 +36,7 @@
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 
 using testing::ElementsAre;
 using testing::Ge;
@@ -332,6 +334,34 @@ private:
   std::optional<std::string> previous_;
 };
 
+/// A case that selects the transitional adapter by name while the process default is another
+/// backend says so, naming itself and its reason, so a run on that backend shows which cases did
+/// not run on it and why. Under the adapter default the selection changes nothing and says nothing.
+TEST(GeodeTestContextsTest, AnAdapterSelectionUnderAnotherDefaultLogsTheCaseAndItsReason) {
+  {
+    const ScopedGpuBackendRequest metal("metal");
+    testing::internal::CaptureStderr();
+    const std::unique_ptr<GeodeDevice> context =
+        CreateTransitionalAdapterContext("the reason under test");
+    const std::string log = testing::internal::GetCapturedStderr();
+    ASSERT_THAT(context, testing::NotNull()) << "no wgpu adapter is available on this host";
+    EXPECT_THAT(log,
+                HasSubstr("GeodeTestContextsTest."
+                          "AnAdapterSelectionUnderAnotherDefaultLogsTheCaseAndItsReason uses a "
+                          "transitional wgpu adapter context, not the process default native "
+                          "Metal: the reason under test"));
+  }
+  {
+    const ScopedGpuBackendRequest unset(nullptr);
+    testing::internal::CaptureStderr();
+    const std::unique_ptr<GeodeDevice> context =
+        CreateTransitionalAdapterContext("the reason under test");
+    const std::string log = testing::internal::GetCapturedStderr();
+    ASSERT_THAT(context, testing::NotNull()) << "no wgpu adapter is available on this host";
+    EXPECT_THAT(log, Not(HasSubstr("the reason under test")));
+  }
+}
+
 /// A process that asks for no backend, or asks with an empty value, renders through the
 /// transitional adapter: it is the production path until a platform's suites pass natively.
 TEST(GeodeGpuRootSelection, AnUnsetOrEmptyRequestSelectsTheTransitionalAdapter) {
@@ -441,8 +471,12 @@ TEST(GeodeGpuRootSelectionDeathTest, ARequestTheHostCannotServeHaltsRatherThanRe
                "DONNER_GPU_BACKEND=metal asked for the native Metal backend");
 }
 
+/// Why every context in this suite selects the transitional adapter by name.
+constexpr std::string_view kAdapterIsTheSubject =
+    "the transitional adapter is this suite's subject";
+
 /// The runtime device \p context's owner stands up over its root, named as the transitional
-/// adapter. Every context here selects that backend, which is what makes the cast sound; a
+/// adapter. Every context here selects that backend by name, which is what makes the cast sound; a
 /// context on a native backend has no adapter and returns null.
 /// @param context Context whose owner stands up the device.
 std::unique_ptr<GeodeWgpuAdapterDevice> SiblingAdapterOf(const GeodeDevice& context) {
@@ -458,7 +492,8 @@ std::unique_ptr<GeodeWgpuAdapterDevice> SiblingAdapterOf(const GeodeDevice& cont
 class GeodeWgpuAdapterDeviceTests : public testing::Test {
 protected:
   void SetUp() override {
-    geodeDevice_ = GeodeDevice::CreateHeadless();
+    // The adapter is this suite's subject, so it is selected by name whatever the process default.
+    geodeDevice_ = CreateTransitionalAdapterContext(kAdapterIsTheSubject);
     ASSERT_NE(geodeDevice_, nullptr)
         << "Failed to create the headless wgpu device. Check driver availability.";
     adapter_ = SiblingAdapterOf(*geodeDevice_);
@@ -515,7 +550,8 @@ TEST_F(GeodeWgpuAdapterDeviceTests, RegisteringASiblingsExportNamesWhatTheOwnerN
 /// sample or copy: a texture whose owner drives a different backend device, and a handle its own
 /// owner no longer resolves, which the owner already refuses to export.
 TEST_F(GeodeWgpuAdapterDeviceTests, RegistrationRefusesAForeignBackendAndExportAStaleHandle) {
-  const std::unique_ptr<GeodeDevice> otherBackend = GeodeDevice::CreateHeadless();
+  const std::unique_ptr<GeodeDevice> otherBackend =
+      CreateTransitionalAdapterContext(kAdapterIsTheSubject);
   ASSERT_THAT(otherBackend, testing::NotNull())
       << "Failed to create a second headless wgpu device. Check driver availability.";
   const std::unique_ptr<GeodeWgpuAdapterDevice> foreignDevice = SiblingAdapterOf(*otherBackend);

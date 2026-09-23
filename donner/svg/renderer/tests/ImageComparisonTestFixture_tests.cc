@@ -125,5 +125,49 @@ TEST(ImageComparisonTestFixtureTests, TextFullOnlyRunsUseDisabledGtestNameInSimp
 }
 #endif
 
+/// A 2x2 opaque red bitmap: the side of the comparisons below that has pixels.
+RendererBitmap OpaqueRedBitmap() {
+  RendererBitmap bitmap;
+  bitmap.dimensions = Vector2i(2, 2);
+  bitmap.rowBytes = 8;
+  bitmap.pixels = {255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255};
+  return bitmap;
+}
+
+/// A renderer that could not read its frame back returns an empty bitmap. That render has no
+/// pixels to compare, so it is never identical to another render, not even to another empty one:
+/// an equivalence test whose two renders both failed must not pass.
+TEST(ImageComparisonTestFixtureTests, AnEmptyBitmapIsNeverIdentical) {
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsIdentical(OpaqueRedBitmap(), RendererBitmap{}, "e"),
+                          "e: the expected bitmap is empty");
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsIdentical(RendererBitmap{}, OpaqueRedBitmap(), "a"),
+                          "a: the actual bitmap is empty");
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsIdentical(RendererBitmap{}, RendererBitmap{}, "both"),
+                          "both: the actual and expected bitmaps are empty");
+}
+
+/// A check that a change alters output must not pass because a render was not read back: the
+/// empty side fails on its own, once, rather than inside the comparison, where its failure would
+/// read as a difference.
+TEST(ImageComparisonTestFixtureTests, AnEmptyBitmapNeverDiffers) {
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsDiffer(OpaqueRedBitmap(), RendererBitmap{}, "e"),
+                          "empty 0x0 snapshot");
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsDiffer(RendererBitmap{}, RendererBitmap{}, "both"),
+                          "empty 0x0 snapshot");
+}
+
+TEST(ImageComparisonTestFixtureTests, IdenticalBitmapsFailTheDifferCheck) {
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsDiffer(OpaqueRedBitmap(), OpaqueRedBitmap(), "same"),
+                          "same: expected the renders to differ, but they are pixel-identical");
+}
+
+TEST(ImageComparisonTestFixtureTests, OnePixelOfDifferencePassesTheDifferCheck) {
+  RendererBitmap oneBluePixel = OpaqueRedBitmap();
+  oneBluePixel.pixels[0] = 0;
+  oneBluePixel.pixels[2] = 255;
+
+  ExpectBitmapsDiffer(oneBluePixel, OpaqueRedBitmap(), "one_blue_pixel");
+}
+
 }  // namespace
 }  // namespace donner::svg

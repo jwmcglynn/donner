@@ -3,8 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
-#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -15,10 +15,9 @@
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
+#include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
-#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
@@ -26,6 +25,7 @@
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
 
@@ -35,7 +35,6 @@ namespace {
 
 constexpr uint32_t kSize = 64;
 constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
-constexpr uint32_t kBytesPerRow = 256;  // Padded from kSize*4 = 256.
 constexpr gpu::Extent2d kTargetSize = {kSize, kSize};
 
 using svg::test::FormatRgba;
@@ -100,88 +99,27 @@ protected:
     gradientPipeline_ = &device_->gradientPipeline();
     imagePipeline_ = &device_->imagePipeline();
 
-    auto targetResult = device_->adapterDevice().createTexture(
+    auto targetResult = device_->runtimeDevice().createTexture(
         gpu::TextureDescriptor{"TestTarget", kTargetSize, gpu::TextureFormat::RGBA8Unorm,
                                gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
                                    gpu::TextureUsage::Sampled});
     ASSERT_TRUE(targetResult.hasResult()) << "createTexture failed";
     target_ = std::move(targetResult).result();
     ASSERT_TRUE(target_.isValid());
-    // Readback below drives the copy through the backend queue directly, so it
-    // needs the backing texture object the runtime handle names.
-    backendTarget_ = device_->adapterDevice().wgpuTextureOf(target_);
-    ASSERT_TRUE(static_cast<bool>(backendTarget_));
-
-    wgpu::BufferDescriptor bd = {};
-    bd.label = wgpuLabel("TestReadback");
-    bd.size = kBytesPerRow * kSize;
-    bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-    readback_ = device_->adapterDevice().root().device().createBuffer(bd);
-    ASSERT_TRUE(static_cast<bool>(readback_));
   }
 
   /// Read back the rendered texture into a flat RGBA byte array (row-major,
-  /// no padding - `kSize * kSize * 4` bytes).
+  /// no padding - `kSize * kSize * 4` bytes). A readback the runtime refuses
+  /// fails the test and answers transparent texels, so the caller's own pixel
+  /// assertions still run and print what they expected.
   std::vector<uint8_t> readback() {
-    // Copy texture → readback buffer.
-    wgpu::CommandEncoder enc = device_->adapterDevice().root().device().createCommandEncoder();
-
-    wgpu::TexelCopyTextureInfo src = {};
-    src.texture = backendTarget_;
-    src.mipLevel = 0;
-    src.origin = {0, 0, 0};
-
-    wgpu::TexelCopyBufferInfo dst = {};
-    dst.buffer = readback_;
-    dst.layout.bytesPerRow = kBytesPerRow;
-    dst.layout.rowsPerImage = kSize;
-
-    wgpu::Extent3D copySize = {kSize, kSize, 1};
-    enc.copyTextureToBuffer(src, dst, copySize);
-
-    wgpu::CommandBuffer cmd = enc.finish();
-    device_->adapterDevice().root().queue().submit(1, &cmd);
-
-    // Map readback buffer. wgpu-native's `mapAsync` only exposes the
-    // callback-info form; plumb the done flag through `userdata1` and poll
-    // non-blocking under a bounded wait, which drains pending callbacks
-    // without risking an unbounded block inside a hung driver.
-    struct MapState {
-      std::atomic<bool> done = false;
-      std::atomic<bool> ok = false;
-    };
-    auto mapState = std::make_shared<MapState>();
-    wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
-    mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
-                        void* /*userdata2*/) {
-      const std::shared_ptr<MapState> state = takeWgpuCallbackState<MapState>(userdata1);
-      state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
-      state->done.store(true, std::memory_order_release);
-    };
-    mapCb.userdata1 = retainWgpuCallbackState(mapState);
-    mapCb.userdata2 = nullptr;
-    readback_.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow * kSize, mapCb);
-    const GpuWaitResult waitResult = BoundedGpuWait(
-        [&] {
-          device_->adapterDevice().root().device().poll(false, nullptr);
-          return mapState->done.load(std::memory_order_acquire);
-        },
-        kDefaultGpuWaitTimeout);
-    EXPECT_EQ(waitResult, GpuWaitResult::Complete) << "buffer map wait timed out";
-    EXPECT_TRUE(mapState->ok.load(std::memory_order_relaxed)) << "buffer map failed";
-
-    const uint8_t* mapped =
-        static_cast<const uint8_t*>(readback_.getConstMappedRange(0, kBytesPerRow * kSize));
-
-    // Strip the row padding (256 bytes per row → 256 bytes per row, but the
-    // visible part is kSize * 4 = 256 bytes for kSize=64, so no stripping
-    // needed for our test size). Be defensive in case kSize ever changes.
-    std::vector<uint8_t> pixels(kSize * kSize * 4);
-    for (uint32_t y = 0; y < kSize; ++y) {
-      std::copy_n(mapped + y * kBytesPerRow, kSize * 4, pixels.data() + y * kSize * 4);
+    gpu::Result<std::vector<uint8_t>> pixels =
+        ReadTexturePixels(device_->runtimeDevice(), target_, kTargetSize);
+    if (pixels.hasError()) {
+      ADD_FAILURE() << "the render target could not be read back: " << pixels.error();
+      return std::vector<uint8_t>(static_cast<size_t>(kSize) * kSize * 4, 0);
     }
-    readback_.unmap();
-    return pixels;
+    return std::move(pixels).result();
   }
 
   /// Get the RGBA value at pixel (x, y).
@@ -196,8 +134,6 @@ protected:
   GeodeGradientPipeline* gradientPipeline_ = nullptr;
   GeodeImagePipeline* imagePipeline_ = nullptr;
   gpu::Texture target_;
-  wgpu::Texture backendTarget_;
-  wgpu::Buffer readback_;
 };
 
 // ----------------------------------------------------------------------------
@@ -220,7 +156,7 @@ TEST_F(GeoEncoderTest, ClearWritesDirectTarget) {
 /// encoder with no pass. Every recording entry point has to notice that rather than record
 /// against it.
 TEST_F(GeoEncoderTest, ATargetThatCannotOpenARenderPassRecordsNothing) {
-  auto sampledOnly = device_->adapterDevice().createTexture(
+  auto sampledOnly = device_->runtimeDevice().createTexture(
       gpu::TextureDescriptor{"SampledOnlyTarget", kTargetSize, gpu::TextureFormat::RGBA8Unorm,
                              gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   ASSERT_TRUE(sampledOnly.hasResult());
@@ -257,7 +193,7 @@ TEST_F(GeoEncoderTest, ATargetThatCannotOpenARenderPassRecordsNothing) {
 /// blits.
 TEST_F(GeoEncoderTest, AScissorSetBeforeTheFirstBlitStillClipsIt) {
   constexpr uint32_t kSourceDim = 4;
-  auto sourceResult = device_->adapterDevice().createTexture(
+  auto sourceResult = device_->runtimeDevice().createTexture(
       gpu::TextureDescriptor{"ScissoredBlitSource",
                              {kSourceDim, kSourceDim},
                              gpu::TextureFormat::RGBA8Unorm,
@@ -272,7 +208,7 @@ TEST_F(GeoEncoderTest, AScissorSetBeforeTheFirstBlitStillClipsIt) {
       texel[3] = 255;
     }
   }
-  const gpu::Status written = device_->adapterDevice().writeTexture(
+  const gpu::Status written = device_->runtimeDevice().writeTexture(
       source, sourcePixels, {0, gpu::kTexelRowPitchAlignment, kSourceDim},
       {kSourceDim, kSourceDim});
   ASSERT_TRUE(written.hasResult()) << written.error();
@@ -940,7 +876,7 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
       record.boundingVertexCount = 4;
       const float quad[8] = {8.0f, 8.0f, 24.0f, 8.0f, 24.0f, 24.0f, 8.0f, 24.0f};
       std::memcpy(record.boundingVertices, quad, sizeof(quad));
-      (void)device_->adapterDevice().writeBuffer(
+      (void)device_->runtimeDevice().writeBuffer(
           generation.records->bufferForId(generation.recordSlots[i].bufferId),
           generation.recordSlots[i].offset,
           std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&record), sizeof(record)));
@@ -1047,7 +983,7 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesRecycledArenaUniform
   record.boundingVertexCount = 4;
   const float quad[8] = {8.0f, 8.0f, 24.0f, 8.0f, 24.0f, 24.0f, 8.0f, 24.0f};
   std::memcpy(record.boundingVertices, quad, sizeof(quad));
-  (void)device_->adapterDevice().writeBuffer(
+  (void)device_->runtimeDevice().writeBuffer(
       records->bufferForId(recordSlot.bufferId), recordSlot.offset,
       std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&record), sizeof(record)));
 
@@ -1417,10 +1353,9 @@ TEST_F(GeoEncoderTest, DrawImageHonorsOpacity) {
 }
 
 TEST_F(GeoEncoderTest, DrawImageOverDeviceTextureLimitIsNoOp) {
-  wgpu::Limits limits;
-  ASSERT_EQ(device_->adapterDevice().root().device().getLimits(&limits), wgpu::Status::Success);
-  ASSERT_LT(limits.maxTextureDimension2D, static_cast<uint32_t>(std::numeric_limits<int>::max()));
-  const int overLimitWidth = static_cast<int>(limits.maxTextureDimension2D) + 1;
+  const uint32_t maxTextureDimension = device_->maxTextureDimension2D();
+  ASSERT_LT(maxTextureDimension, static_cast<uint32_t>(std::numeric_limits<int>::max()));
+  const int overLimitWidth = static_cast<int>(maxTextureDimension) + 1;
 
   svg::ImageResource image;
   image.width = overLimitWidth;
@@ -1490,31 +1425,22 @@ TEST_F(GeoEncoderTest, FillPathPatternSolidTile) {
     tilePixels[i + 2] = 0;
     tilePixels[i + 3] = 255;
   }
-  wgpu::TextureDescriptor td = {};
-  td.label = wgpuLabel("PatternTile");
-  td.size = {kTileDim, kTileDim, 1};
-  td.format = kFormat;
-  td.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture tile = device_->adapterDevice().root().device().createTexture(td);
-  ASSERT_TRUE(static_cast<bool>(tile));
-
-  wgpu::TexelCopyTextureInfo dst = {};
-  dst.texture = tile;
-  wgpu::TexelCopyBufferLayout layout = {};
-  layout.bytesPerRow = kTileDim * 4;
-  layout.rowsPerImage = kTileDim;
-  wgpu::Extent3D extent = {kTileDim, kTileDim, 1};
-  device_->adapterDevice().root().queue().writeTexture(dst, tilePixels.data(), tilePixels.size(),
-                                                       layout, extent);
-
-  // Name the uploaded tile so the encoder can bind it as paint.
-  gpu::Result<gpu::Texture> tileHandleResult = device_->adapterDevice().importExternalTexture(
-      tile, gpu::Extent2d{kTileDim, kTileDim}, gpu::TextureFormat::RGBA8Unorm,
-      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst);
+  gpu::Device& runtime = device_->runtimeDevice();
+  gpu::Result<gpu::Texture> tileHandleResult = runtime.createTexture(
+      gpu::TextureDescriptor{"PatternTile",
+                             {kTileDim, kTileDim},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
   ASSERT_TRUE(tileHandleResult.hasResult());
+  std::array<uint8_t, gpu::kTexelRowPitchAlignment * kTileDim> tileUpload{};
+  for (uint32_t y = 0; y < kTileDim; ++y) {
+    std::copy_n(tilePixels.data() + y * kTileDim * 4, kTileDim * 4,
+                tileUpload.data() + y * gpu::kTexelRowPitchAlignment);
+  }
+  ASSERT_THAT(
+      runtime.writeTexture(tileHandleResult.result(), tileUpload,
+                           {0, gpu::kTexelRowPitchAlignment, kTileDim}, {kTileDim, kTileDim}),
+      gpu::IsOk());
   const gpu::Texture tileHandle = std::move(tileHandleResult).result();
 
   // 2. Fill a path with the pattern. The tile size in pattern-space is

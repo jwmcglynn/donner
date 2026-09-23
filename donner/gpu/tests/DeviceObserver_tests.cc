@@ -12,7 +12,6 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <ostream>
 #include <span>
 #include <utility>
 #include <vector>
@@ -21,6 +20,7 @@
 #include "donner/gpu/Device.h"
 #include "donner/gpu/RecordingDevice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/tests/RecordingDeviceObserver.h"
 
 using testing::ElementsAre;
 using testing::Eq;
@@ -29,57 +29,9 @@ using testing::HasSubstr;
 namespace donner::gpu {
 namespace {
 
-/// One reported submission: how many command buffers it carried and how many draws it counted.
-struct ObservedSubmission {
-  uint64_t commandBuffers = 0;  //!< Command buffers the submission carried.
-  uint64_t draws = 0;           //!< Draws it counted.
-
-  /// Equality operator. @param other Submission to compare against.
-  bool operator==(const ObservedSubmission& other) const = default;
-};
-
-/// Prints an \ref ObservedSubmission. @param value Submission. @param os Output stream.
-void PrintTo(const ObservedSubmission& value, std::ostream* os) {
-  *os << "{commandBuffers=" << value.commandBuffers << " draws=" << value.draws << "}";
-}
-
-/// Everything an observer was told, in one comparable value.
-struct ObservedEvents {
-  uint32_t bufferCreates = 0;                   //!< onBufferCreated calls.
-  uint32_t textureCreates = 0;                  //!< onTextureCreated calls.
-  uint32_t bindGroupCreates = 0;                //!< onBindGroupCreated calls.
-  std::vector<uint64_t> bufferWrites;           //!< Byte count of each onBufferWritten.
-  std::vector<uint64_t> textureWrites;          //!< Byte count of each onTextureWritten.
-  std::vector<ObservedSubmission> submissions;  //!< Each onSubmitted, in order.
-
-  /// Equality operator. @param other Events to compare against.
-  bool operator==(const ObservedEvents& other) const = default;
-};
-
-/// Prints \ref ObservedEvents field by field, so a mismatch names the event that differs.
-/// @param value Events. @param os Output stream.
-void PrintTo(const ObservedEvents& value, std::ostream* os) {
-  *os << "{bufferCreates=" << value.bufferCreates << " textureCreates=" << value.textureCreates
-      << " bindGroupCreates=" << value.bindGroupCreates
-      << " bufferWrites=" << testing::PrintToString(value.bufferWrites)
-      << " textureWrites=" << testing::PrintToString(value.textureWrites)
-      << " submissions=" << testing::PrintToString(value.submissions) << "}";
-}
-
-/// Observer that records every notification it receives.
-class RecordingObserver final : public DeviceObserver {
-public:
-  void onBufferCreated() override { ++events.bufferCreates; }
-  void onTextureCreated() override { ++events.textureCreates; }
-  void onBindGroupCreated() override { ++events.bindGroupCreates; }
-  void onBufferWritten(uint64_t byteCount) override { events.bufferWrites.push_back(byteCount); }
-  void onTextureWritten(uint64_t byteCount) override { events.textureWrites.push_back(byteCount); }
-  void onSubmitted(uint64_t commandBufferCount, uint64_t drawCount) override {
-    events.submissions.push_back(ObservedSubmission{commandBufferCount, drawCount});
-  }
-
-  ObservedEvents events;  //!< What this observer has been told so far.
-};
+using tests::ObservedEvents;
+using tests::ObservedSubmission;
+using tests::RecordingDeviceObserver;
 
 /// A step the scripted backend can refuse after validation accepted it.
 enum class BackendStep {
@@ -111,8 +63,17 @@ public:
   /// queue so that a pending completion is delivered.
   void submitOnItsOwn() const { notifyObserverOfBackendSubmission(); }
 
-  /// Submissions complete as they are accepted.
-  uint64_t completedSerial() const override { return lastSubmittedSerial(); }
+  /// Holds submissions at or after \p serial incomplete until \ref completeAll, the way a
+  /// backend still executing them does. @param serial First submission to hold.
+  void holdCompletionsFrom(uint64_t serial) { heldFrom_ = serial; }
+
+  /// Lets every held submission complete.
+  void completeAll() { heldFrom_.reset(); }
+
+  /// Submissions complete as they are accepted, unless held.
+  uint64_t completedSerial() const override {
+    return heldFrom_.has_value() ? *heldFrom_ - 1 : lastSubmittedSerial();
+  }
 
 protected:
   Status onCreateBuffer(uint32_t, const BufferDescriptor&) override {
@@ -180,6 +141,7 @@ private:
   bool registerNextTexture_ = false;
   std::optional<BackendStep> refuseNext_;
   std::optional<uint64_t> repackedTextureWriteBytes_;
+  std::optional<uint64_t> heldFrom_;
 };
 
 /// A drawable scene (target, vertex, index and uniform buffers, one bind group, one pipeline)
@@ -267,7 +229,7 @@ protected:
   }
 
   ScriptedBackendDevice device_;
-  RecordingObserver observer_;
+  RecordingDeviceObserver observer_;
   Texture target_;
   TextureView targetView_;
   Buffer vertexBuffer_;
@@ -381,6 +343,88 @@ TEST_F(DeviceObserverTests, ARegisteredTextureIsNotAnAllocation) {
   EXPECT_THAT(observer_.events.textureCreates, Eq(1u));
 }
 
+/// Creates a 2x2 texture the device owns, the subject of the release cases below.
+/// @param device Device to create it on.
+Texture CreateOwnedTexture(Device& device) {
+  return GetResultOrFail(device.createTexture(TextureDescriptor{
+      "released", Extent2d{2, 2}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
+}
+
+TEST_F(DeviceObserverTests, ADestroyedTextureReportsItsReleaseOnce) {
+  Texture texture = CreateOwnedTexture(device_);
+  ASSERT_THAT(device_.destroyTexture(std::move(texture)), IsOk());
+  device_.poll();
+
+  EXPECT_THAT(observer_.events, Eq(ObservedEvents{.textureCreates = 1, .textureReleases = 1}));
+}
+
+TEST_F(DeviceObserverTests, ADroppedTextureHandleReportsItsReleaseOnce) {
+  { const Texture texture = CreateOwnedTexture(device_); }
+  device_.poll();
+
+  EXPECT_THAT(observer_.events, Eq(ObservedEvents{.textureCreates = 1, .textureReleases = 1}));
+}
+
+/// A destroyed texture that submitted work still uses keeps its allocation until that work
+/// completes, so its release is reported then rather than when the handle goes.
+TEST_F(DeviceObserverTests, ATextureInUseReportsItsReleaseWhenItsLastSubmissionCompletes) {
+  Texture texture = GetResultOrFail(
+      device_.createTexture(TextureDescriptor{"inUse", Extent2d{2, 2}, TextureFormat::RGBA8Unorm,
+                                              TextureUsage::CopySrc | TextureUsage::CopyDst}));
+  const Texture sink = CreateOwnedTexture(device_);
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device_.createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToTexture(texture, sink, Extent2d{2, 2}), IsOk());
+  device_.holdCompletionsFrom(device_.lastSubmittedSerial() + 1);
+  ASSERT_THAT(device_.submit(GetResultOrFail(encoder->finish())), HasResult());
+  ASSERT_THAT(device_.destroyTexture(std::move(texture)), IsOk());
+  device_.poll();
+  EXPECT_THAT(observer_.events.textureReleases, Eq(0u))
+      << "the backend still uses the allocation, so it has not been released";
+
+  device_.completeAll();
+  device_.poll();
+  EXPECT_THAT(observer_.events.textureReleases, Eq(1u));
+}
+
+/// Destroying the backing releases the allocation at once. The slot the handle named is recycled
+/// later, and that does not release the same allocation a second time.
+TEST_F(DeviceObserverTests, DestroyingATexturesBackingReportsItsReleaseOnce) {
+  Texture texture = CreateOwnedTexture(device_);
+  ASSERT_THAT(device_.destroyTextureBacking(std::move(texture)), IsOk());
+  EXPECT_THAT(observer_.events.textureReleases, Eq(1u));
+
+  device_.poll();
+  EXPECT_THAT(observer_.events, Eq(ObservedEvents{.textureCreates = 1, .textureReleases = 1}));
+}
+
+/// The fixture's target was created before the observer was installed, so the observer never heard
+/// of its creation. Its release still ends an allocation the device owns, and goes to the observer
+/// installed when it happens.
+TEST_F(DeviceObserverTests, ATextureCreatedBeforeTheObserverReportsItsReleaseToIt) {
+  ASSERT_THAT(device_.destroyTexture(std::move(target_)), IsOk());
+  device_.poll();
+
+  EXPECT_THAT(observer_.events, Eq(ObservedEvents{.textureReleases = 1}))
+      << "a creation and a release each go to the observer installed when they happen";
+}
+
+TEST_F(DeviceObserverTests, ReleasingARegisteredTextureReleasesNoAllocation) {
+  device_.registerNextTexture();
+  Texture registered = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "registered", Extent2d{2, 2}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
+  device_.registerNextTexture();
+  Texture registeredBacking = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "registered", Extent2d{2, 2}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
+
+  ASSERT_THAT(device_.destroyTexture(std::move(registered)), IsOk());
+  ASSERT_THAT(device_.destroyTextureBacking(std::move(registeredBacking)), IsOk());
+  device_.poll();
+
+  EXPECT_THAT(observer_.events, Eq(ObservedEvents{}))
+      << "naming a texture the device does not own allocated nothing, so dropping it releases "
+         "nothing";
+}
+
 TEST_F(DeviceObserverTests, ATextureWriteReportsWhatTheBackendUploaded) {
   const std::vector<uint8_t> bytes(256 + 16);
   ASSERT_THAT(
@@ -404,7 +448,7 @@ TEST_F(DeviceObserverTests, ABackendsOwnQueueSubmissionCarriesNoBuffersOrDraws) 
 }
 
 TEST_F(DeviceObserverTests, ADifferentObserverIsRefusedAndTheInstalledOneKeepsReporting) {
-  RecordingObserver other;
+  RecordingDeviceObserver other;
   EXPECT_THAT(device_.installObserver(other),
               IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("another observer")));
   EXPECT_THAT(device_.observer(), Eq(&observer_));
@@ -427,7 +471,7 @@ TEST_F(DeviceObserverTests, InstallingTheInstalledObserverAgainChangesNothing) {
 }
 
 TEST_F(DeviceObserverTests, OnlyTheInstalledObserverCanBeRemoved) {
-  RecordingObserver other;
+  RecordingDeviceObserver other;
   device_.removeObserver(other);
   EXPECT_THAT(device_.observer(), Eq(&observer_)) << "removing another observer changes nothing";
 
@@ -455,7 +499,7 @@ TEST_F(DeviceObserverTests, RemovingTheObserverStopsReports) {
 
 TEST(DeviceObserverRecordingDeviceTests, TheRecordingBackendReportsTheCallersSpan) {
   RecordingDevice device;
-  RecordingObserver observer;
+  RecordingDeviceObserver observer;
   ASSERT_THAT(device.installObserver(observer), IsOk());
   const Texture texture = GetResultOrFail(device.createTexture(TextureDescriptor{
       "texture", Extent2d{2, 2}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));

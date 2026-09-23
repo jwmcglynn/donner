@@ -44,26 +44,11 @@
 namespace donner::svg {
 namespace {
 
+using test::CountNonTransparentPixels;
 using test::PixelAt;
 
 /// Hermetic test fonts, relative to the runfiles root.
 constexpr std::string_view kFontsRunfilesPath = "third_party/resvg-test-suite/fonts";
-
-/// Pixels with a non-zero alpha. Used as the liveness signal: every counter
-/// assertion here is paired with one so a "fix" that stops drawing the text
-/// cannot pass.
-size_t nonTransparentPixels(const RendererBitmap& bitmap) {
-  size_t count = 0;
-  for (int y = 0; y < bitmap.dimensions.y; ++y) {
-    const uint8_t* row = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
-    for (int x = 0; x < bitmap.dimensions.x; ++x) {
-      if (row[x * 4 + 3] != 0) {
-        ++count;
-      }
-    }
-  }
-  return count;
-}
 
 class GeodeGlyphInstancingTest : public ::testing::Test {
 protected:
@@ -128,12 +113,12 @@ TEST_F(GeodeGlyphInstancingTest, ZoomRefinesGlyphEncodesAndReusesTheScaleBucket)
   const Frame zoomed = render(renderer, document);
   EXPECT_THAT(zoomed.counters.glyphResidencyUploads, testing::Eq(1u));
   EXPECT_THAT(zoomed.counters.pathEncodes, testing::Eq(1u));
-  EXPECT_THAT(nonTransparentPixels(zoomed.bitmap), testing::Gt(0u));
+  EXPECT_THAT(CountNonTransparentPixels(zoomed.bitmap), testing::Gt(0u));
   text->setAttribute("transform", "scale(25)");
   const Frame sameBucket = render(renderer, document);
   EXPECT_THAT(sameBucket.counters.glyphResidencyUploads, testing::Eq(0u));
   EXPECT_THAT(sameBucket.counters.pathEncodes, testing::Eq(0u));
-  EXPECT_THAT(nonTransparentPixels(sameBucket.bitmap), testing::Gt(0u));
+  EXPECT_THAT(CountNonTransparentPixels(sameBucket.bitmap), testing::Gt(0u));
 }
 
 /// A run repeats a handful of outlines across many occurrences. The first frame
@@ -150,7 +135,7 @@ TEST_F(GeodeGlyphInstancingTest, RepeatedGlyphsShareOneResidentOutline) {
 
   RendererGeode renderer(sharedDevice());
   const Frame first = render(renderer, document);
-  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u) << "Text did not render at all.";
+  ASSERT_GT(CountNonTransparentPixels(first.bitmap), 0u) << "Text did not render at all.";
 
   EXPECT_EQ(first.counters.glyphResidencyUploads, 1u)
       << "Four occurrences of one outline must upload exactly one resident glyph.";
@@ -164,7 +149,7 @@ TEST_F(GeodeGlyphInstancingTest, RepeatedGlyphsShareOneResidentOutline) {
   EXPECT_EQ(second.counters.glyphResidencyHits, 4u)
       << "Every occurrence of an unchanged frame comes from residency.";
   EXPECT_EQ(second.counters.pathEncodes, 0u) << "An unchanged text frame must re-encode nothing.";
-  EXPECT_EQ(nonTransparentPixels(second.bitmap), nonTransparentPixels(first.bitmap))
+  EXPECT_EQ(CountNonTransparentPixels(second.bitmap), CountNonTransparentPixels(first.bitmap))
       << "The resident second frame must draw the same coverage as the first.";
 }
 
@@ -189,7 +174,7 @@ TEST_F(GeodeGlyphInstancingTest, OverlappingTextElementsCompositeInPaintOrder) {
 
   RendererGeode renderer(sharedDevice());
   const Frame first = render(renderer, document);
-  const size_t covered = nonTransparentPixels(first.bitmap);
+  const size_t covered = CountNonTransparentPixels(first.bitmap);
   ASSERT_GT(covered, 0u) << "Text did not render at all.";
 
   // One outline serves all four occurrences across the two elements.
@@ -216,7 +201,7 @@ TEST_F(GeodeGlyphInstancingTest, OverlappingTextElementsCompositeInPaintOrder) {
   EXPECT_EQ(second.counters.glyphResidencyUploads, 0u);
   EXPECT_EQ(second.counters.pathEncodes, 0u)
       << "Two elements' worth of glyphs must all come from residency on an unchanged frame.";
-  EXPECT_EQ(nonTransparentPixels(second.bitmap), covered);
+  EXPECT_EQ(CountNonTransparentPixels(second.bitmap), covered);
 
   if (RendererGeode::sceneBatchingEnabledForTesting()) {
     EXPECT_LT(second.counters.drawCalls, 4u)
@@ -237,7 +222,7 @@ TEST_F(GeodeGlyphInstancingTest, EvictionUnderPressureKeepsRenderingCorrect) {
 
   RendererGeode renderer(sharedDevice());
   const Frame unbudgeted = render(renderer, document);
-  const size_t covered = nonTransparentPixels(unbudgeted.bitmap);
+  const size_t covered = CountNonTransparentPixels(unbudgeted.bitmap);
   ASSERT_GT(covered, 0u) << "Text did not render at all.";
   ASSERT_GT(renderer.residentGlyphCountForTesting(document), 2u)
       << "This document needs more distinct glyphs than the budget below to create pressure.";
@@ -251,14 +236,14 @@ TEST_F(GeodeGlyphInstancingTest, EvictionUnderPressureKeepsRenderingCorrect) {
       << "A budget below the working set must drop entries.";
   EXPECT_LE(renderer.residentGlyphCountForTesting(document), 2u)
       << "The current frame must not repopulate the cache past its admission limit.";
-  EXPECT_EQ(nonTransparentPixels(squeezed.bitmap), covered)
+  EXPECT_EQ(CountNonTransparentPixels(squeezed.bitmap), covered)
       << "Eviction must not change what the frame draws.";
 
   // Still correct once the budget is lifted again: the entries that survived
   // the squeeze are still usable, not left half-released.
   renderer.setGlyphResidencyBudgetForTesting(/*maxEntries=*/1024, /*maxRetainedBytes=*/1u << 30);
   const Frame restored = render(renderer, document);
-  EXPECT_EQ(nonTransparentPixels(restored.bitmap), covered);
+  EXPECT_EQ(CountNonTransparentPixels(restored.bitmap), covered);
 }
 
 TEST_F(GeodeGlyphInstancingTest, FirstFrameAdmissionHonorsResidencyEntryBudget) {
@@ -274,7 +259,7 @@ TEST_F(GeodeGlyphInstancingTest, FirstFrameAdmissionHonorsResidencyEntryBudget) 
                                              /*maxRetainedBytes=*/1u << 30);
 
   const Frame frame = render(renderer, document);
-  ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u) << "Text did not render at all.";
+  ASSERT_GT(CountNonTransparentPixels(frame.bitmap), 0u) << "Text did not render at all.";
   EXPECT_LE(renderer.residentGlyphCountForTesting(document), kMaximumEntries)
       << "A single frame must not retain more glyph entries than the configured admission cap.";
 }
@@ -330,7 +315,7 @@ TEST_F(GeodeGlyphInstancingTest, MaterializationBudgetIsSharedAcrossOffscreenRen
   ASSERT_NE(offscreen, nullptr);
 
   const Frame first = render(renderer, firstDocument);
-  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u);
+  ASSERT_GT(CountNonTransparentPixels(first.bitmap), 0u);
   offscreen->draw(secondDocument);
 
   const RendererResourceStats stats = renderer.resourceStats();
@@ -351,7 +336,7 @@ TEST_F(GeodeGlyphInstancingTest, ResidentGlyphHitsStillRequireGeometrySubmission
 
   RendererGeode renderer(sharedDevice());
   const Frame first = render(renderer, document);
-  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u);
+  ASSERT_GT(CountNonTransparentPixels(first.bitmap), 0u);
   ASSERT_EQ(renderer.residentGlyphCountForTesting(document), 1u);
 
   renderer.setGeometryBudgetForTesting(/*maximumDraws=*/0u, /*maximumItems=*/1u << 20,
@@ -362,7 +347,7 @@ TEST_F(GeodeGlyphInstancingTest, ResidentGlyphHitsStillRequireGeometrySubmission
   EXPECT_EQ(rejected.counters.glyphResidencyHits, 1u)
       << "The second frame must exercise the resident-cache hit path.";
   EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected);
-  EXPECT_EQ(nonTransparentPixels(rejected.bitmap), 0u)
+  EXPECT_EQ(CountNonTransparentPixels(rejected.bitmap), 0u)
       << "A resident hit must not bypass a rejected geometry submission.";
 }
 
@@ -379,7 +364,7 @@ TEST_F(GeodeGlyphInstancingTest, SceneBatchChargesEachLogicalGlyphExactlyOnce) {
                                        /*maximumCacheBytes=*/64u << 20,
                                        /*maximumResidentBytes=*/64u << 20);
   const Frame exact = render(renderer, document);
-  ASSERT_GT(nonTransparentPixels(exact.bitmap), 0u);
+  ASSERT_GT(CountNonTransparentPixels(exact.bitmap), 0u);
   EXPECT_EQ(renderer.resourceStats().geometryDraws, 4u);
   EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected)
       << "The final batch draw must consume the four append-time reservations, not charge again.";
@@ -391,7 +376,7 @@ TEST_F(GeodeGlyphInstancingTest, SceneBatchChargesEachLogicalGlyphExactlyOnce) {
   const Frame capPlusOne = render(renderer, document);
   EXPECT_EQ(renderer.resourceStats().geometryDraws, 3u);
   EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected);
-  EXPECT_GT(nonTransparentPixels(capPlusOne.bitmap), 0u)
+  EXPECT_GT(CountNonTransparentPixels(capPlusOne.bitmap), 0u)
       << "Accepted glyphs must remain drawable when the cap+1 occurrence is rejected.";
 }
 
@@ -407,7 +392,7 @@ TEST_F(GeodeGlyphInstancingTest, FontSizeChangeInvalidatesResidentGlyphGeometry)
 
   RendererGeode renderer(sharedDevice());
   const Frame small = render(renderer, document);
-  const size_t smallCovered = nonTransparentPixels(small.bitmap);
+  const size_t smallCovered = CountNonTransparentPixels(small.bitmap);
   ASSERT_GT(smallCovered, 0u) << "Text did not render at all.";
   ASSERT_EQ(renderer.residentGlyphCountForTesting(document), 1u);
 
@@ -420,7 +405,7 @@ TEST_F(GeodeGlyphInstancingTest, FontSizeChangeInvalidatesResidentGlyphGeometry)
       << "A scale change must build a new outline rather than reuse the old entry.";
   EXPECT_EQ(renderer.residentGlyphCountForTesting(document), 2u)
       << "The two sizes are distinct glyph identities and must not share an entry.";
-  EXPECT_GT(nonTransparentPixels(large.bitmap), smallCovered * 3u)
+  EXPECT_GT(CountNonTransparentPixels(large.bitmap), smallCovered * 3u)
       << "The larger font must cover substantially more of the canvas; serving the cached "
          "small outline would keep the coverage the same.";
 
@@ -433,7 +418,7 @@ TEST_F(GeodeGlyphInstancingTest, FontSizeChangeInvalidatesResidentGlyphGeometry)
   // is what pins.
   text->setAttribute("font-size", "24");
   const Frame backToSmall = render(renderer, document);
-  EXPECT_EQ(nonTransparentPixels(backToSmall.bitmap), smallCovered)
+  EXPECT_EQ(CountNonTransparentPixels(backToSmall.bitmap), smallCovered)
       << "Returning to the original size must render the original geometry.";
 }
 
@@ -449,7 +434,7 @@ TEST_F(GeodeGlyphInstancingTest, WholeRunRotationCostsOneResidentOutlinePerAngle
 
   RendererGeode renderer(sharedDevice());
   const Frame first = render(renderer, document);
-  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u) << "Rotated text did not render at all.";
+  ASSERT_GT(CountNonTransparentPixels(first.bitmap), 0u) << "Rotated text did not render at all.";
 
   EXPECT_EQ(first.counters.glyphResidencyUploads, 1u)
       << "Four occurrences of one glyph at one angle must build one outline.";
@@ -459,7 +444,7 @@ TEST_F(GeodeGlyphInstancingTest, WholeRunRotationCostsOneResidentOutlinePerAngle
   EXPECT_EQ(second.counters.glyphResidencyUploads, 0u);
   EXPECT_EQ(second.counters.pathEncodes, 0u)
       << "An unchanged rotated text frame must re-encode nothing.";
-  EXPECT_EQ(nonTransparentPixels(second.bitmap), nonTransparentPixels(first.bitmap));
+  EXPECT_EQ(CountNonTransparentPixels(second.bitmap), CountNonTransparentPixels(first.bitmap));
 }
 
 /// Angle is part of the key, so glyphs that differ ONLY in rotation must not
@@ -474,7 +459,7 @@ TEST_F(GeodeGlyphInstancingTest, DistinctRotationsTakeDistinctResidentOutlines) 
 
   RendererGeode renderer(sharedDevice());
   const Frame first = render(renderer, document);
-  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u) << "Rotated text did not render at all.";
+  ASSERT_GT(CountNonTransparentPixels(first.bitmap), 0u) << "Rotated text did not render at all.";
 
   EXPECT_EQ(renderer.residentGlyphCountForTesting(document), 3u)
       << "One glyph at three angles is three glyph identities.";
@@ -513,7 +498,7 @@ TEST_F(GeodeGlyphInstancingTest, RepeatedMutationKeepsResidencyBounded) {
     // glyph geometry stays identical.
     text->setAttribute("fill", (round % 2) == 0 ? "#101010" : "#202020");
     const Frame frame = render(renderer, document);
-    ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u)
+    ASSERT_GT(CountNonTransparentPixels(frame.bitmap), 0u)
         << "Text stopped rendering at mutation round " << round;
     totalEvictions += frame.counters.glyphResidencyEvictions;
     if (round > 0) {
@@ -559,7 +544,7 @@ TEST_F(GeodeGlyphInstancingTest, GlyphChurnStaysBoundedByEviction) {
     // round's glyphs are new identities and the previous round's are dead.
     text->setAttribute("font-size", std::to_string(20 + round));
     const Frame frame = render(renderer, document);
-    ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u)
+    ASSERT_GT(CountNonTransparentPixels(frame.bitmap), 0u)
         << "Text stopped rendering at mutation round " << round;
     totalEvictions += frame.counters.glyphResidencyEvictions;
 
@@ -602,7 +587,7 @@ TEST_F(GeodeGlyphInstancingTest, ResidentGlyphOccurrencesChargeTheFrameTheirReco
   RendererGeode renderer(sharedDevice());
   renderer.setGeometryBudgetForTesting(kUnlimited, kUnlimited, kNineRecords, kUnlimitedBytes,
                                        kUnlimitedBytes);
-  EXPECT_GT(nonTransparentPixels(render(renderer, fits).bitmap), 0u);
+  EXPECT_GT(CountNonTransparentPixels(render(renderer, fits).bitmap), 0u);
   EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected)
       << "Nine occurrences of one resident outline must cost the frame nine records.";
 
@@ -628,7 +613,7 @@ TEST_F(GeodeGlyphInstancingTest, ResidentGlyphOccurrencesStillCountTheirItems) {
 
   SVGDocument one = parseRun("e");
   RendererGeode measure(sharedDevice());
-  ASSERT_GT(nonTransparentPixels(render(measure, one).bitmap), 0u);
+  ASSERT_GT(CountNonTransparentPixels(render(measure, one).bitmap), 0u);
   const std::size_t itemsPerOccurrence = measure.resourceStats().geometryItems;
   ASSERT_GT(itemsPerOccurrence, 0u);
 
@@ -658,7 +643,7 @@ TEST_F(GeodeGlyphInstancingTest, LoweredGlyphCapShrinksTheCacheEvenWhenItRejects
       </svg>)svg");
 
   RendererGeode renderer(sharedDevice());
-  ASSERT_GT(nonTransparentPixels(render(renderer, document).bitmap), 0u);
+  ASSERT_GT(CountNonTransparentPixels(render(renderer, document).bitmap), 0u);
   ASSERT_EQ(renderer.residentGlyphCountForTesting(document), 10u);
 
   renderer.setMaximumGlyphs(2);
@@ -714,7 +699,7 @@ TEST_F(GeodeGlyphInstancingTest, ResidentGlyphsStayWithinTheConfiguredGlyphCap) 
   for (int round = 0; round < 6; ++round) {
     text->setAttribute("font-size", std::to_string(20 + round));
     const Frame frame = render(renderer, document);
-    ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u)
+    ASSERT_GT(CountNonTransparentPixels(frame.bitmap), 0u)
         << "Text stopped rendering at mutation round " << round;
     totalEvictions += frame.counters.glyphResidencyEvictions;
     EXPECT_LE(renderer.residentGlyphCountForTesting(document), kMaximumGlyphs)
@@ -739,14 +724,14 @@ TEST_F(GeodeGlyphInstancingTest, RepositioningTextReusesEveryResidentGlyph) {
 
   RendererGeode renderer(sharedDevice());
   const Frame first = render(renderer, document);
-  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u) << "Text did not render at all.";
+  ASSERT_GT(CountNonTransparentPixels(first.bitmap), 0u) << "Text did not render at all.";
   const size_t residentAfterFirst = renderer.residentGlyphCountForTesting(document);
   ASSERT_GT(residentAfterFirst, 0u) << "No glyphs became resident; the loop below proves nothing.";
 
   for (int round = 0; round < 16; ++round) {
     text->setAttribute("x", std::to_string(10 + round));
     const Frame frame = render(renderer, document);
-    ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u)
+    ASSERT_GT(CountNonTransparentPixels(frame.bitmap), 0u)
         << "Text stopped rendering at drag step " << round;
 
     EXPECT_EQ(frame.counters.glyphResidencyUploads, 0u)
@@ -775,19 +760,20 @@ TEST_F(GeodeGlyphInstancingTest, FontFamilyChangeTakesNewGlyphIdentities) {
 
   RendererGeode renderer(sharedDevice());
   const Frame sans = render(renderer, document);
-  const size_t sansPixels = nonTransparentPixels(sans.bitmap);
+  const size_t sansPixels = CountNonTransparentPixels(sans.bitmap);
   ASSERT_GT(sansPixels, 0u) << "Text did not render at all.";
   const size_t sansResident = renderer.residentGlyphCountForTesting(document);
   ASSERT_GT(sansResident, 0u);
 
   text->setAttribute("font-family", "Noto Serif");
   const Frame serif = render(renderer, document);
-  EXPECT_GT(nonTransparentPixels(serif.bitmap), 0u) << "Text stopped rendering after the swap.";
+  EXPECT_GT(CountNonTransparentPixels(serif.bitmap), 0u)
+      << "Text stopped rendering after the swap.";
   EXPECT_GT(serif.counters.glyphResidencyUploads, 0u)
       << "A different font must build its own outlines rather than reusing the previous font's.";
   EXPECT_GT(renderer.residentGlyphCountForTesting(document), sansResident)
       << "The serif glyphs are additional identities, not the sans ones renamed.";
-  EXPECT_NE(nonTransparentPixels(serif.bitmap), sansPixels)
+  EXPECT_NE(CountNonTransparentPixels(serif.bitmap), sansPixels)
       << "The serif face drew exactly the sans coverage; the font swap did not reach the glyphs.";
 }
 

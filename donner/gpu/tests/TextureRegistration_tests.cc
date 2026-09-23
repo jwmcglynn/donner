@@ -21,6 +21,7 @@
 #include "donner/gpu/Device.h"
 #include "donner/gpu/RecordingDevice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/tests/RecordingDeviceObserver.h"
 #include "donner/gpu/tests/SharingTestDevice.h"
 
 using testing::Eq;
@@ -208,6 +209,88 @@ TEST_F(TextureRegistrationTest, ADeferredBackingReleaseHappensWhenTheLastHolderL
   EXPECT_THAT(native_.deferredBackingReleases.load(), Eq(1));
   EXPECT_THAT(native_.liveTextures.load(), Eq(0));
   EXPECT_THAT(producer_->sharedTextureTailBytes(), Eq(0u));
+}
+
+/// A producer's ownership of an exported texture ends when it releases its backing, though its own
+/// last use of the texture is still running and a registration keeps the allocation alive past
+/// both. Its observer hears that once, on the producer's thread, at the release; the tail gauge
+/// counts the bytes the registration still holds; and neither the producer's later recycle of the
+/// slot nor the registration's final release reports it again. The consumer's registration is not
+/// an allocation of the consumer, so its observer hears nothing.
+TEST_F(TextureRegistrationTest, AProducersBackingReleaseEndsItsOwnershipOnceWhileItIsStillHeld) {
+  tests::RecordingDeviceObserver producerObserver;
+  tests::RecordingDeviceObserver consumerObserver;
+  const tests::ScopedObserverInstallation producerObserving(*producer_, producerObserver);
+  const tests::ScopedObserverInstallation consumerObserving(*consumer_, consumerObserver);
+  ASSERT_THAT(producerObserving.status(), IsOk());
+  ASSERT_THAT(consumerObserving.status(), IsOk());
+  Texture owned = MakeSharedTexture(*producer_);
+  Texture registered =
+      GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
+  producer_->holdCompletion();
+  ASSERT_THAT(SubmitSharedTextureRead(*producer_, owned), HasResult());
+
+  ASSERT_THAT(producer_->destroyTextureBacking(std::move(owned)), IsOk());
+  EXPECT_THAT(producerObserver.events.textureReleases, Eq(1u))
+      << "the producer's ownership ended at its release, although its own read is still running "
+         "and the registration keeps the allocation alive";
+  EXPECT_THAT(native_.liveTextures.load(), Eq(1));
+  EXPECT_THAT(producer_->sharedTextureTailBytes(), Eq(kTextureBytes));
+
+  producer_->releaseCompletion();
+  producer_->poll();
+  EXPECT_THAT(producerObserver.events.textureReleases, Eq(1u))
+      << "recycling the slot ends no ownership";
+
+  ASSERT_THAT(consumer_->destroyTexture(std::move(registered)), IsOk());
+  consumer_->poll();
+  EXPECT_THAT(native_.liveTextures.load(), Eq(0));
+  EXPECT_THAT(producer_->sharedTextureTailBytes(), Eq(0u));
+  EXPECT_THAT(producerObserver.events.textureReleases, Eq(1u))
+      << "the registration's final release frees an allocation the producer no longer owns";
+  EXPECT_THAT(producerObserver.events.textureCreates, Eq(1u));
+  EXPECT_THAT(consumerObserver.events, Eq(tests::ObservedEvents{}))
+      << "registering another device's texture and releasing it allocates and releases nothing";
+}
+
+/// When the producer drops its handle instead, its ownership ends when the slot is recycled after
+/// its last use completes, reported once there, while the registration keeps the allocation alive.
+/// Until that recycle, the tail gauge already counts the bytes the registration holds while the
+/// producer's ownership has not been reported ended, so the two overlap.
+TEST_F(TextureRegistrationTest, AProducersDroppedHandleEndsItsOwnershipOnceWhileItIsStillHeld) {
+  tests::RecordingDeviceObserver producerObserver;
+  tests::RecordingDeviceObserver consumerObserver;
+  const tests::ScopedObserverInstallation producerObserving(*producer_, producerObserver);
+  const tests::ScopedObserverInstallation consumerObserving(*consumer_, consumerObserver);
+  ASSERT_THAT(producerObserving.status(), IsOk());
+  ASSERT_THAT(consumerObserving.status(), IsOk());
+  Texture owned = MakeSharedTexture(*producer_);
+  Texture registered =
+      GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
+  producer_->holdCompletion();
+  ASSERT_THAT(SubmitSharedTextureRead(*producer_, owned), HasResult());
+
+  ASSERT_THAT(producer_->destroyTexture(std::move(owned)), IsOk());
+  EXPECT_THAT(producerObserver.events.textureReleases, Eq(0u))
+      << "the producer's own read is still running, so it still owns the allocation";
+  EXPECT_THAT(producer_->sharedTextureTailBytes(), Eq(kTextureBytes))
+      << "the tail gauge counts the held bytes from the producer's retirement, before its "
+         "ownership is reported ended at the recycle";
+
+  producer_->releaseCompletion();
+  producer_->poll();
+  EXPECT_THAT(producerObserver.events.textureReleases, Eq(1u));
+  EXPECT_THAT(native_.liveTextures.load(), Eq(1));
+  EXPECT_THAT(producer_->sharedTextureTailBytes(), Eq(kTextureBytes));
+
+  ASSERT_THAT(consumer_->destroyTexture(std::move(registered)), IsOk());
+  consumer_->poll();
+  EXPECT_THAT(native_.liveTextures.load(), Eq(0));
+  EXPECT_THAT(producer_->sharedTextureTailBytes(), Eq(0u));
+  EXPECT_THAT(producerObserver.events.textureReleases, Eq(1u));
+  EXPECT_THAT(producerObserver.events.textureCreates, Eq(1u));
+  EXPECT_THAT(consumerObserver.events, Eq(tests::ObservedEvents{}))
+      << "registering another device's texture and releasing it allocates and releases nothing";
 }
 
 /// A plain destroy of a shared texture is not a request to release its backing early.

@@ -59,6 +59,89 @@ std::array<uint8_t, 4> PixelAt(const Bitmap& bitmap, int x, int y,
           bitmap.pixels[offset + 3]};
 }
 
+/**
+ * Whether \p bitmap holds every pixel of its extent, failing the calling test once at the caller's
+ * line when it does not: naming the snapshot as empty when it holds no pixels, and naming the
+ * shortfall when its pixel buffer ends before the last pixel of its extent.
+ *
+ * A renderer that could not read its frame back returns an empty snapshot. A helper that walks a
+ * snapshot by its own extent visits no pixel of an empty one, so it counts no pixels and finds two
+ * empty snapshots identical, which an assertion about absent or unchanged content accepts. A
+ * truncated one would instead fail once for every pixel past the end. Every helper that reads a
+ * whole snapshot, or a region of one, asks this first.
+ *
+ * @param bitmap Snapshot about to be read; rows are \c rowBytes apart, or tightly packed when that
+ *   is zero.
+ * @param caller Where the read was made; defaults to the call site.
+ * @return True when \p bitmap holds every pixel of its extent.
+ */
+template <typename Bitmap>
+bool ExpectSnapshotHasPixels(const Bitmap& bitmap,
+                             std::source_location caller = std::source_location::current()) {
+  if (bitmap.dimensions.x <= 0 || bitmap.dimensions.y <= 0 || bitmap.pixels.empty()) {
+    ADD_FAILURE_AT(caller.file_name(), caller.line())
+        << "read an empty " << bitmap.dimensions.x << "x" << bitmap.dimensions.y
+        << " snapshot: the renderer returned no pixels, so the frame was not read back";
+    return false;
+  }
+  const size_t rowPixelBytes = static_cast<size_t>(bitmap.dimensions.x) * 4u;
+  const size_t rowBytes =
+      bitmap.rowBytes != 0 ? static_cast<size_t>(bitmap.rowBytes) : rowPixelBytes;
+  const size_t neededBytes =
+      static_cast<size_t>(bitmap.dimensions.y - 1) * rowBytes + rowPixelBytes;
+  if (bitmap.pixels.size() < neededBytes) {
+    ADD_FAILURE_AT(caller.file_name(), caller.line())
+        << "read a " << bitmap.dimensions.x << "x" << bitmap.dimensions.y << " snapshot whose "
+        << bitmap.pixels.size() << " bytes end before the " << neededBytes
+        << " its extent needs: the frame was not read back whole";
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Counts the pixels of \p bitmap whose RGBA satisfies \p predicate, reading each through
+ * \ref PixelAt. An empty or truncated snapshot fails the calling test once (see
+ * \ref ExpectSnapshotHasPixels) and counts nothing, rather than counting as a snapshot with no
+ * such pixels.
+ *
+ * @param bitmap Snapshot to count.
+ * @param predicate Called with each pixel's RGBA; true counts the pixel.
+ * @param caller Where the count was made; defaults to the call site.
+ * @return Pixels satisfying \p predicate.
+ */
+template <typename Bitmap, typename Predicate>
+size_t CountPixelsWhere(const Bitmap& bitmap, const Predicate& predicate,
+                        std::source_location caller = std::source_location::current()) {
+  if (!ExpectSnapshotHasPixels(bitmap, caller)) {
+    return 0;
+  }
+  size_t count = 0;
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    for (int x = 0; x < bitmap.dimensions.x; ++x) {
+      if (predicate(PixelAt(bitmap, x, y, caller))) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+/**
+ * Pixels of \p bitmap with a non-zero alpha: the liveness signal that something rendered. An
+ * empty snapshot fails the calling test instead of counting as one that rendered nothing.
+ *
+ * @param bitmap Snapshot to count.
+ * @param caller Where the count was made; defaults to the call site.
+ * @return Pixels whose alpha is not zero.
+ */
+template <typename Bitmap>
+size_t CountNonTransparentPixels(const Bitmap& bitmap,
+                                 std::source_location caller = std::source_location::current()) {
+  return CountPixelsWhere(
+      bitmap, [](const std::array<uint8_t, 4>& pixel) { return pixel[3] != 0; }, caller);
+}
+
 /// Matches a pixel whose channels each satisfy their own sub-matcher.
 ///
 /// Prefer this over four separate channel expectations: a mismatch on any channel prints all four

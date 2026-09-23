@@ -298,7 +298,7 @@ std::shared_ptr<geode::GeodeDevice> SharedGeodeDevice() {
 }
 
 std::unique_ptr<ImGuiRuntimeRenderer> InstallTestUiRenderer(
-    geode::GeodeWgpuAdapterDevice& device, std::unique_ptr<UiTextureRegistry>* registry) {
+    gpu::Device& device, std::unique_ptr<UiTextureRegistry>* registry) {
   *registry = std::make_unique<UiTextureRegistry>(device);
   gpu::Result<std::unique_ptr<ImGuiRuntimeRenderer>> created =
       ImGuiRuntimeRenderer::Create(device, **registry, gpu::TextureFormat::RGBA8Unorm);
@@ -425,7 +425,7 @@ TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesBordersAcrossStagingChunkBo
   ASSERT_NE(device, nullptr);
   GlTextureCache cache(device);
   const std::uint64_t createsBefore = device->lifetimeTextureCreates();
-  const uint64_t submittedBefore = device->adapterDevice().lastSubmittedSerial();
+  const uint64_t submittedBefore = device->runtimeDevice().lastSubmittedSerial();
   geode::GeodeCounters counters;
   device->setCounters(&counters);
 
@@ -437,7 +437,7 @@ TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesBordersAcrossStagingChunkBo
   ASSERT_NE(snapshot, nullptr);
   EXPECT_THAT(snapshot->allocationDimensions(), testing::Eq(Vector2i(512, 1024)));
   EXPECT_THAT(device->lifetimeTextureCreates(), testing::Eq(createsBefore + 1u));
-  EXPECT_THAT(device->adapterDevice().lastSubmittedSerial(), testing::Eq(submittedBefore));
+  EXPECT_THAT(device->runtimeDevice().lastSubmittedSerial(), testing::Eq(submittedBefore));
   EXPECT_THAT(counters.textureCreates, testing::Eq(1u));
   EXPECT_THAT(counters.textureWriteBytes, testing::Eq(512u * 1024u * 4u));
   EXPECT_THAT(counters.submits, testing::Eq(0u));
@@ -544,6 +544,9 @@ RenderResult::CompositedPreview SingleSnapshotTilePreview(
 TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
+  if (!device->hasTransitionalAdapter()) {
+    GTEST_SKIP() << "reads the transitional adapter's wgpu backing-destroy counter";
+  }
   // Start from an empty mailbox, so backing released by earlier cases is not counted here.
   device->drainDeferredTextureBackings();
   int firstDestructionCount = 0;
@@ -555,7 +558,7 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
     ImGuiContext* context = ImGui::CreateContext();
     std::unique_ptr<UiTextureRegistry> registry;
     std::unique_ptr<ImGuiRuntimeRenderer> renderer =
-        InstallTestUiRenderer(device->adapterDevice(), &registry);
+        InstallTestUiRenderer(device->runtimeDevice(), &registry);
     ASSERT_NE(renderer, nullptr);
 
     GlTextureCache cache(device);
@@ -614,10 +617,10 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
 }
 
 TEST(GlTextureCacheTest, RegisteredBackingSurvivesUntilItsExactRetirementIsReleased) {
-  ImGuiContext* context = ImGui::CreateContext();
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
-  geode::GeodeWgpuAdapterDevice& runtimeDevice = device->adapterDevice();
+  ImGuiContext* context = ImGui::CreateContext();
+  gpu::Device& runtimeDevice = device->runtimeDevice();
   UiTextureRegistry registry(runtimeDevice);
   gpu::Result<std::unique_ptr<ImGuiRuntimeRenderer>> created =
       ImGuiRuntimeRenderer::Create(runtimeDevice, registry, gpu::TextureFormat::RGBA8Unorm);
@@ -651,12 +654,12 @@ TEST(GlTextureCacheTest, RegisteredBackingSurvivesUntilItsExactRetirementIsRelea
 }
 
 TEST(GlTextureCacheTest, RegisteredBackingIsDestroyedIfRendererUninstallsBeforeCache) {
-  ImGuiContext* context = ImGui::CreateContext();
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
+  ImGuiContext* context = ImGui::CreateContext();
   std::unique_ptr<UiTextureRegistry> registry;
   std::unique_ptr<ImGuiRuntimeRenderer> renderer =
-      InstallTestUiRenderer(device->adapterDevice(), &registry);
+      InstallTestUiRenderer(device->runtimeDevice(), &registry);
   ASSERT_NE(renderer, nullptr);
   int destructionCount = 0;
   {
@@ -677,7 +680,7 @@ TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures)
   ImGuiContext* context = ImGui::CreateContext();
   std::unique_ptr<UiTextureRegistry> registry;
   std::unique_ptr<ImGuiRuntimeRenderer> renderer =
-      InstallTestUiRenderer(device->adapterDevice(), &registry);
+      InstallTestUiRenderer(device->runtimeDevice(), &registry);
   ASSERT_NE(renderer, nullptr);
 
   int firstDestructionCount = 0;

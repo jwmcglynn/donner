@@ -91,7 +91,7 @@ RendererGeodeTextureSnapshot createTestSnapshot(const std::shared_ptr<geode::Geo
     std::copy_n(premultipliedTestPixels().begin() + static_cast<size_t>(y) * kWidth * 4u,
                 kWidth * 4u, rows.begin() + static_cast<size_t>(y) * gpu::kTexelRowPitchAlignment);
   }
-  const gpu::Status written = device->adapterDevice().writeTexture(
+  const gpu::Status written = device->runtimeDevice().writeTexture(
       texture, rows, {0, gpu::kTexelRowPitchAlignment, kHeight}, {kWidth, kHeight});
   if (written.hasError()) {
     ADD_FAILURE() << "could not upload the readback source: " << written.error();
