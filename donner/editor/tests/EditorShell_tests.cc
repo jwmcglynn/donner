@@ -5676,7 +5676,7 @@ TEST(EditorShellTest, ToolbarEyedropperButtonArmsWithoutSamplingItsActivationCli
                          /*mouseDown=*/false);
   RenderToolPaletteFrame(window, shell, paneOrigin, contentRegion, eyedropperCenter,
                          /*mouseDown=*/true);
-  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(false));
   RenderToolPaletteFrame(window, shell, paneOrigin, contentRegion, eyedropperCenter,
                          /*mouseDown=*/false);
   EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
@@ -5700,10 +5700,10 @@ TEST(EditorShellTest, StrokeColorPopupEyedropperButtonTargetsStroke) {
   ASSERT_THAT(popupButton, testing::Optional(testing::_));
   RenderToolbarFrame(window, shell, kWidgetCursor, *popupButton, /*mouseDown=*/false);
   RenderToolbarFrame(window, shell, kWidgetCursor, *popupButton, /*mouseDown=*/true);
-  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
-  EXPECT_THAT(EditorShellTestAccess::EyedropperTargetsStroke(shell), testing::Eq(true));
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(false));
   RenderToolbarFrame(window, shell, kWidgetCursor, *popupButton, /*mouseDown=*/false);
   EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
+  EXPECT_THAT(EditorShellTestAccess::EyedropperTargetsStroke(shell), testing::Eq(true));
 }
 
 TEST(EditorShellTest, SampledFillChangesSelectedStylesInOneUndoAndDefaultsNewText) {
