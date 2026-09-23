@@ -2062,22 +2062,26 @@ struct VulkanDevice::Impl {
                                 BindGroupRecord& record, VkWriteDescriptorSet& write);
 };
 
-std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
-  return CreateImpl(false, false);
+std::unique_ptr<VulkanDevice> VulkanDevice::Create(std::shared_ptr<DeviceLostState> lostState) {
+  return CreateImpl(false, false, {}, std::move(lostState));
 }
 
-std::unique_ptr<VulkanDevice> VulkanDevice::CreateWithTimelineSemaphoreForTest() {
-  return CreateImpl(true, false);
+std::unique_ptr<VulkanDevice> VulkanDevice::CreateWithTimelineSemaphoreForTest(
+    std::shared_ptr<DeviceLostState> lostState) {
+  return CreateImpl(true, false, {}, std::move(lostState));
 }
 
 std::unique_ptr<VulkanDevice> VulkanDevice::CreateWithPresentationSupport(
-    std::span<const char* const> requiredInstanceExtensions) {
-  return CreateImpl(false, true, requiredInstanceExtensions);
+    std::span<const char* const> requiredInstanceExtensions,
+    std::shared_ptr<DeviceLostState> lostState) {
+  return CreateImpl(false, true, requiredInstanceExtensions, std::move(lostState));
 }
 
 std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(
     bool enableTimelineSemaphoreForTest, bool enablePresentation,
-    std::span<const char* const> requiredInstanceExtensions) {
+    std::span<const char* const> requiredInstanceExtensions,
+    std::shared_ptr<DeviceLostState> lostState) {
+  (void)lostState;
   Impl::AdmissionGate& gate = Impl::admissionGate();
   const std::lock_guard admission(gate.mutex);
   if (gate.closed) {

@@ -119,12 +119,17 @@ public:
    * VK_LAYER_KHRONOS_validation only when the loader enumerates it), the first physical device
    * exposing a graphics queue family, and a single VkDevice + VkQueue. Returns nullptr if no
    * Vulkan 1.1 instance or graphics-capable physical device is available.
+   *
+   * @param lostState Loss condition of the backend root this device opens over, shared with every
+   *   other device over that root. A device given none keeps a private condition.
    */
-  static std::unique_ptr<VulkanDevice> Create();
+  static std::unique_ptr<VulkanDevice> Create(std::shared_ptr<DeviceLostState> lostState = nullptr);
 
   /// Creates a device with VK_KHR_timeline_semaphore enabled solely for test-owned host gates.
   /// Returns nullptr if the test extension/feature is unavailable; ordinary Create needs neither.
-  static std::unique_ptr<VulkanDevice> CreateWithTimelineSemaphoreForTest();
+  /// @param lostState Loss condition of the root the device opens over, as for \ref Create.
+  static std::unique_ptr<VulkanDevice> CreateWithTimelineSemaphoreForTest(
+      std::shared_ptr<DeviceLostState> lostState = nullptr);
 
   /**
    * Creates a device that can present: an instance with the surface extensions the loader offers
@@ -141,9 +146,11 @@ public:
    *   the returned instance. The span and each non-null, NUL-terminated name it contains are
    *   borrowed synchronously and must remain readable until this call returns. Creation fails
    *   when the count does not fit Vulkan's uint32_t field or the loader does not offer a name.
+   * @param lostState Loss condition of the root the device opens over, as for \ref Create.
    */
   static std::unique_ptr<VulkanDevice> CreateWithPresentationSupport(
-      std::span<const char* const> requiredInstanceExtensions = {});
+      std::span<const char* const> requiredInstanceExtensions = {},
+      std::shared_ptr<DeviceLostState> lostState = nullptr);
 
   /// Whether this device was created with presentation support. Test accessor, so a suite can
   /// say which device it is looking at rather than inferring it from a refusal.
@@ -420,9 +427,12 @@ private:
   /// the surface/swapchain extensions presentation needs.
   /// @param enableTimelineSemaphoreForTest Whether to request VK_KHR_timeline_semaphore.
   /// @param enablePresentation Whether to request the surface and swapchain extensions.
+  /// @param requiredInstanceExtensions Surface extensions the embedder needs on the instance.
+  /// @param lostState Loss condition of the root the device opens over; null for a private one.
   static std::unique_ptr<VulkanDevice> CreateImpl(
       bool enableTimelineSemaphoreForTest, bool enablePresentation,
-      std::span<const char* const> requiredInstanceExtensions = {});
+      std::span<const char* const> requiredInstanceExtensions,
+      std::shared_ptr<DeviceLostState> lostState);
 
   /// Constructs an empty device; \ref Create attaches the Vulkan instance/device.
   VulkanDevice();
