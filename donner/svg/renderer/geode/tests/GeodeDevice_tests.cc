@@ -998,4 +998,22 @@ TEST_F(OrderedRegistrationTest, AProducerThatFailsIsNotDeclaredOnTheConsumer) {
   EXPECT_THAT(consumerLost_->timedOutSite.load(), Eq(gpu::DeviceLostWaitSite::None));
 }
 
+/// A wait that spends its whole bound is the one failure the helper treats as a hang: the
+/// producer's queue stopped answering, so the consumer's condition is declared lost with the
+/// queue-idle site and the wait that actually ran, and the producer's condition is left to its own
+/// waits.
+TEST_F(OrderedRegistrationTest, AWaitThatSpendsItsWholeBoundDeclaresAQueueIdleTimeout) {
+  const gpu::Texture owned = gpu::MakeSharedTexture(producer_);
+  producer_.holdCompletion();
+  ASSERT_THAT(gpu::SubmitSharedTextureRead(producer_, owned), gpu::HasResult());
+  const gpu::TextureExport exported = gpu::GetResultOrFail(producer_.exportTexture(owned));
+
+  constexpr std::chrono::milliseconds kBound{20};
+  EXPECT_THAT(RegisterOrderedTexture(consumer_, exported, kBound),
+              gpu::IsGpuError(gpu::GpuErrorType::DeviceLost));
+  EXPECT_THAT(consumerLost_->timedOutSite.load(), Eq(gpu::DeviceLostWaitSite::QueueIdle));
+  EXPECT_THAT(consumerLost_->timedOutElapsedMs.load(), Ge(kBound.count()));
+  EXPECT_THAT(producer_.isLost(), IsFalse());
+}
+
 }  // namespace donner::geode

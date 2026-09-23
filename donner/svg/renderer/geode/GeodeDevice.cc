@@ -550,24 +550,31 @@ void GeodeDevice::finishSnapshotCapture(GeodeDevice& context) {
 }
 
 gpu::Result<gpu::Texture> RegisterOrderedTexture(gpu::Device& consumer,
-                                                 const gpu::TextureExport& source) {
+                                                 const gpu::TextureExport& source,
+                                                 std::chrono::milliseconds bound) {
+  UTILS_RELEASE_ASSERT_MSG(bound > std::chrono::milliseconds::zero(),
+                           "RegisterOrderedTexture: a zero bound asks rather than waits, so its "
+                           "answer could not tell a hang from work still running");
   gpu::Result<gpu::Texture> registered = consumer.registerTexture(source);
   if (registered.hasError()) {
     return registered;
   }
   const auto waitStart = std::chrono::steady_clock::now();
-  if (consumer.waitForTextureSource(
-          registered.result(), std::chrono::duration<double>(kDefaultGpuWaitTimeout).count())) {
+  if (consumer.waitForTextureSource(registered.result(),
+                                    std::chrono::duration<double>(bound).count())) {
     return registered;
   }
-  if (consumer.isLost()) {
+  const auto waited = std::chrono::steady_clock::now() - waitStart;
+  // The source wait gives up early only on loss or a producer failure, and those belong to the
+  // device they happened to. Only a wait that spent its whole bound is this consumer's evidence
+  // of a hang, and the measured wait is what it reports.
+  if (consumer.isLost() || waited < bound) {
     return gpu::GpuError{gpu::GpuErrorType::DeviceLost,
-                         "the device producing a registered texture is lost"};
+                         "a registered texture's producer failed or one of the two devices is "
+                         "lost"};
   }
   consumer.markLostAfterWaitTimeout(
-      GpuWaitSite::QueueIdle,
-      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                            waitStart),
+      GpuWaitSite::QueueIdle, std::chrono::duration_cast<std::chrono::milliseconds>(waited),
       "the work producing a registered texture did not complete within the bounded wait");
   return gpu::GpuError{gpu::GpuErrorType::DeviceLost,
                        "the work producing a registered texture did not complete"};

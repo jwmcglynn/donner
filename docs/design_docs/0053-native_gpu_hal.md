@@ -294,6 +294,13 @@ Loss:
 - The registration path never declares loss into the consumer's condition on the producer's
   behalf, so each condition keeps the attribution of the wait that first declared it. Contexts
   over one selected root share one condition.
+- Geode's two consumers, cross-context snapshot drawing and UI texture registration, register
+  through one helper whose wait, up to the default GPU wait bound, is the consumer's own. It
+  follows the policy of every bounded wait over a Geode root: only a wait that spent its whole
+  bound declares the consumer's condition lost, with the queue-idle wait site and the measured
+  wait, so a producer queue that stopped answering fails later frames at once instead of stalling
+  each one. A wait that ends sooner, because a device is lost or the producer failed, declares
+  nothing and fails with `DeviceLost`, and a producer already lost is refused at registration.
 
 Backends:
 

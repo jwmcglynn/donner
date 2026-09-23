@@ -156,15 +156,25 @@ struct SnapshotReadbackResources {
  *
  * For a context that draws the registration in a frame rather than capturing it: on a backend
  * whose contexts share one queue it returns at once, and otherwise it blocks this thread for the
- * producer's frame. A wait that reaches \ref kDefaultGpuWaitTimeout declares the backend root
- * lost with the queue-idle attribution, like every other bounded wait over this root, and fails.
+ * producer's frame.
+ *
+ * Loss policy. The runtime's source wait declares nothing when its budget runs out; this helper
+ * is the consumer's own bounded wait and applies the policy of every other bounded wait over a
+ * Geode root. A wait that spent all of \p bound means the producer's queue stopped answering: the
+ * consumer's condition is declared lost with the queue-idle wait site and the measured wait, so
+ * later frames fail at once instead of stalling again. A wait that ended sooner did so because a
+ * device is lost or the producer failed, which is not this consumer's to report: the helper fails
+ * with `DeviceLost` and declares nothing. A producer already lost is refused at registration the
+ * same way.
  *
  * @param consumer Runtime device of the context that will name the texture.
  * @param source Export of the producer's texture.
+ * @param bound Longest to wait for the producer's work; must be positive.
  * @return The registration, or why it was refused or could not be ordered.
  */
-gpu::Result<gpu::Texture> RegisterOrderedTexture(gpu::Device& consumer,
-                                                 const gpu::TextureExport& source);
+gpu::Result<gpu::Texture> RegisterOrderedTexture(
+    gpu::Device& consumer, const gpu::TextureExport& source,
+    std::chrono::milliseconds bound = kDefaultGpuWaitTimeout);
 
 /**
  * Owns (or wraps) a WebGPU device/queue pair for GPU rendering.
