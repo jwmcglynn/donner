@@ -33,6 +33,7 @@
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"  // IWYU pragma: keep - provides UnpremultiplyRgba
 #include "donner/svg/renderer/PlacedTextGeometry.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -6376,6 +6377,132 @@ TEST_F(RendererGeodeTest, IsolatedReadbackPoolRemainsBoundedAcrossSizes) {
   const auto retained = device->consumeReadbackStats();
   EXPECT_THAT(retained.poolEntries, testing::Eq(4u));
   EXPECT_THAT(retained.poolBytes, testing::Eq(42496u));
+}
+
+/// Copies the `size` rectangle at `origin` out of `bitmap` into a tightly packed bitmap, so content
+/// drawn into part of a larger target can be compared with the same content drawn on its own. A
+/// rectangle that does not lie inside `bitmap` fails the test and yields an empty bitmap.
+RendererBitmap CopyBitmapRegion(const RendererBitmap& bitmap, Vector2i origin, Vector2i size) {
+  if (origin.x < 0 || origin.y < 0 || size.x < 0 || size.y < 0 ||
+      origin.x + size.x > bitmap.dimensions.x || origin.y + size.y > bitmap.dimensions.y) {
+    ADD_FAILURE() << "region at " << origin << " of size " << size << " is outside the "
+                  << bitmap.dimensions << " bitmap";
+    return RendererBitmap();
+  }
+  RendererBitmap region;
+  region.dimensions = size;
+  region.rowBytes = static_cast<std::size_t>(size.x) * 4u;
+  region.alphaType = bitmap.alphaType;
+  region.pixels.resize(region.rowBytes * static_cast<std::size_t>(size.y));
+  for (int y = 0; y < size.y; ++y) {
+    const uint8_t* source = bitmap.pixels.data() +
+                            static_cast<std::size_t>(origin.y + y) * bitmap.rowBytes +
+                            static_cast<std::size_t>(origin.x) * 4u;
+    std::copy_n(source, region.rowBytes,
+                region.pixels.data() + static_cast<std::size_t>(y) * region.rowBytes);
+  }
+  return region;
+}
+
+/// One fill case for the placement tests: an SVG body drawn over a 16-unit view box, and a pixel
+/// of the 20 px render whose center lies exactly on one of its edges.
+struct PixelCenterEdgeCase {
+  std::string_view name;
+  std::string_view body;
+  Vector2i edgePixel;
+};
+
+/// Each case runs a different fill pipeline: a solo solid fill, a cross-entity batch of two
+/// paints, slanted edges, a gradient, a path clip rendered through the mask pipeline, and a
+/// pattern. At 20 px over a 16-unit view box (scale 1.25) their edges fall at 2.5 and 17.5, on
+/// pixel centers, and the triangle's slanted edges pass through pixel centers as well.
+constexpr std::array<PixelCenterEdgeCase, 6> kPixelCenterEdgeCases = {{
+    {"solid", R"svg(<rect x="2" y="2" width="12" height="12" fill="#000"/>)svg", {2, 8}},
+    {"abutting_paints",
+     R"svg(<rect x="2" y="2" width="6" height="12" fill="#000"/>)svg"
+     R"svg(<rect x="8" y="2" width="6" height="12" fill="#fff"/>)svg",
+     {2, 8}},
+    {"slanted_edges", R"svg(<path d="M8 2 L14 14 L2 14 Z" fill="#000"/>)svg", {4, 13}},
+    {"linear_gradient",
+     R"svg(<defs><linearGradient id="g"><stop offset="0" stop-color="#000"/>)svg"
+     R"svg(<stop offset="1" stop-color="#3973ad"/></linearGradient></defs>)svg"
+     R"svg(<rect x="2" y="2" width="12" height="12" fill="url(#g)"/>)svg",
+     {2, 8}},
+    {"clip_mask",
+     R"svg(<defs><clipPath id="c"><path d="M8 2 L14 14 L2 14 Z"/></clipPath></defs>)svg"
+     R"svg(<rect width="16" height="16" fill="#000" clip-path="url(#c)"/>)svg",
+     {4, 13}},
+    {"pattern",
+     R"svg(<defs><pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse">)svg"
+     R"svg(<rect width="4" height="4" fill="#b75d23"/><rect width="2" height="2" fill="#31ba55"/>)svg"
+     R"svg(</pattern></defs><rect x="2" y="2" width="12" height="12" fill="url(#p)"/>)svg",
+     {2, 8}},
+}};
+
+/// Parses one of the placement cases as a 20 px document over a 16-unit view box.
+std::optional<SVGDocument> ParsePixelCenterEdgeCase(const PixelCenterEdgeCase& testCase) {
+  const std::string source =
+      std::string(R"(<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20")"
+                  R"( viewBox="0 0 16 16">)") +
+      std::string(testCase.body) + "</svg>";
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  if (parsed.hasError()) {
+    return std::nullopt;
+  }
+  return std::move(parsed.result());
+}
+
+// Coverage at a pixel whose center lies exactly on a path edge or vertex is decided by the sample
+// position alone: the half-open ownership rule gives the edge to exactly one side of the ray, and
+// a half-covered pixel sits on the 127.5 rounding boundary. That position must not depend on where
+// the draw lands in its target or how large the target is, or the same shape renders differently
+// in an atlas tile than on its own, which is the contract `RenderDocumentsToAtlasBitmap` offers.
+TEST_F(RendererGeodeTest, PixelCenterEdgeCoverageDoesNotDependOnPlacement) {
+  struct Placement {
+    Vector2i targetSize;
+    Vector2i origin;
+  };
+  constexpr std::array<Placement, 3> kPlacements = {{
+      {{97, 53}, {0, 0}},
+      {{97, 53}, {41, 17}},
+      {{64, 64}, {3, 29}},
+  }};
+  constexpr Vector2i kTileSize(20, 20);
+
+  for (const PixelCenterEdgeCase& testCase : kPixelCenterEdgeCases) {
+    SCOPED_TRACE(testCase.name);
+    std::optional<SVGDocument> standaloneDocument = ParsePixelCenterEdgeCase(testCase);
+    ASSERT_THAT(standaloneDocument, testing::Optional(testing::_));
+    RendererGeode standaloneRenderer = createRenderer();
+    standaloneRenderer.draw(*standaloneDocument);
+    const RendererBitmap standalone = standaloneRenderer.takeSnapshot();
+    ASSERT_EQ(standalone.dimensions, kTileSize);
+    const uint8_t edgeAlpha =
+        standalone.pixels[static_cast<std::size_t>(testCase.edgePixel.y) * standalone.rowBytes +
+                          static_cast<std::size_t>(testCase.edgePixel.x) * 4u + 3u];
+    EXPECT_THAT(edgeAlpha, testing::AllOf(testing::Gt(0), testing::Lt(255)))
+        << "pixel " << testCase.edgePixel
+        << " should be partially covered: its center is on an edge";
+
+    for (const Placement& placement : kPlacements) {
+      std::optional<SVGDocument> atlasDocument = ParsePixelCenterEdgeCase(testCase);
+      ASSERT_THAT(atlasDocument, testing::Optional(testing::_));
+      RendererGeode atlasRenderer = createRenderer();
+      const std::array<AtlasDocumentPlacement, 1> placements = {
+          {AtlasDocumentPlacement{&*atlasDocument, placement.origin}}};
+      const RendererBitmap atlas =
+          RenderDocumentsToAtlasBitmap(atlasRenderer, placements, placement.targetSize);
+      ASSERT_EQ(atlas.dimensions, placement.targetSize);
+      const std::string label =
+          std::string("pixel_center_edges_") + std::string(testCase.name) + "_" +
+          std::to_string(placement.targetSize.x) + "x" + std::to_string(placement.targetSize.y) +
+          "_at_" + std::to_string(placement.origin.x) + "_" + std::to_string(placement.origin.y);
+      editor::tests::CompareBitmapToBitmap(CopyBitmapRegion(atlas, placement.origin, kTileSize),
+                                           standalone, label,
+                                           editor::tests::PixelmatchIdentityParams());
+    }
+  }
 }
 
 }  // namespace
