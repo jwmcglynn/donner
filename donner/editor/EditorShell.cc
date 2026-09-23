@@ -180,8 +180,40 @@ bool BrowserEyedropperControlEnabledForTesting() {
   return enabled;
 }
 
+struct EyedropperSelectedTestFields {
+  std::string style;
+  std::string text;
+};
+
+EyedropperSelectedTestFields ReadEyedropperSelectedTestFields(const svg::SVGElement& selected) {
+  EyedropperSelectedTestFields fields;
+  selected.withReadAccess([&](svg::DocumentReadAccess&, EntityHandle) {
+    if (const std::optional<RcString> style = selected.getAttribute("style")) {
+      fields.style = std::string(std::string_view(*style).substr(0, kEyedropperTestFieldMaxBytes));
+    }
+    if (selected.type() == svg::ElementType::Text) {
+      const RcString content = selected.cast<svg::SVGTextElement>().textContent();
+      fields.text = std::string(std::string_view(content).substr(0, kEyedropperTestFieldMaxBytes));
+      for (std::optional<svg::SVGElement> child = selected.firstChild(); child.has_value();
+           child = child->nextSibling()) {
+        if (child->type() == svg::ElementType::TSpan) {
+          const std::size_t remaining = kEyedropperTestFieldMaxBytes - fields.text.size();
+          if (remaining == 0u) {
+            break;
+          }
+          const RcString childText = child->cast<svg::SVGTSpanElement>().textContent();
+          fields.text += std::string(std::string_view(childText).substr(0, remaining));
+        }
+      }
+    }
+  });
+  return fields;
+}
+
 void PublishEyedropperTestState(std::string_view activeFill, std::string_view activeStroke,
-                                std::string_view selectedStyle, std::string_view selectedText) {
+                                std::string_view selectedStyle, std::string_view selectedText,
+                                bool strokeActive, bool sourcePaneFocused,
+                                bool sourceSelectionActive) {
   const std::string fill(activeFill.substr(0, kEyedropperTestFieldMaxBytes));
   const std::string stroke(activeStroke.substr(0, kEyedropperTestFieldMaxBytes));
   const std::string style(selectedStyle.substr(0, kEyedropperTestFieldMaxBytes));
@@ -194,9 +226,13 @@ void PublishEyedropperTestState(std::string_view activeFill, std::string_view ac
           'activeStroke' : UTF8ToString($1),
           'selectedStyle' : UTF8ToString($2),
           'selectedText' : UTF8ToString($3),
+          'activePaintTarget' : $4 ? 'stroke' : 'fill',
+          'sourcePaneFocused' : !!$5,
+          'sourceSelectionActive' : !!$6,
         });
       },
-      fill.c_str(), stroke.c_str(), style.c_str(), text.c_str());
+      fill.c_str(), stroke.c_str(), style.c_str(), text.c_str(), strokeActive,
+      sourcePaneFocused, sourceSelectionActive);
   // clang-format on
 }
 
@@ -527,6 +563,7 @@ constexpr float kReferenceChipRadius = 6.0f;
 constexpr float kReferenceChipGapFromAabb = 30.0f;
 constexpr float kReferenceChipMinFontSize = 15.0f;
 constexpr float kToolPaletteButtonSize = 32.0f;
+constexpr float kToolPalettePaintWidgetHeight = 44.0f;
 constexpr float kToolPaletteGap = 4.0f;
 constexpr float kToolPalettePadding = 8.0f;
 constexpr float kToolPalettePaintWidgetWidth = 120.0f;
@@ -3380,7 +3417,10 @@ Box2d EditorShell::toolPaletteScreenRect(const ImVec2& paneOrigin,
   const float gapCount = adaptiveUiLayout_.showPaintControls ? kButtonCount : kButtonCount - 1.0f;
   const float width = kToolPalettePadding * 2.0f + buttonSize * kButtonCount + paintWidth +
                       kToolPaletteGap * gapCount;
-  const float height = kToolPalettePadding * 2.0f + buttonSize;
+  const float height =
+      kToolPalettePadding * 2.0f + (adaptiveUiLayout_.showPaintControls
+                                        ? std::max(buttonSize, kToolPalettePaintWidgetHeight)
+                                        : buttonSize);
   float visibleContentWidth = contentRegion.x;
   if (const std::optional<Box2d> panelRect = compactPanelScreenRect();
       panelRect.has_value() && adaptiveUiLayout_.panelPlacement == CompactPanelPlacement::Right) {
@@ -3436,16 +3476,44 @@ std::optional<Entity> EditorShell::toolbarPaintSelectionIdentity(
   return app_.selectedElements().front().unsafeEntityHandle().entity();
 }
 
+void EditorShell::setActivePaintTarget(PaintTarget target) {
+  if (activePaintTarget_ == target) {
+    return;
+  }
+  if (activeTool_ == ActiveTool::Eyedropper) {
+    cancelEyedropper(true);
+  }
+  activePaintTarget_ = target;
+  window_.wakeEventLoop();
+}
+
+void EditorShell::handlePaintSwatchClicked(PaintTarget target, bool canOpenPopup) {
+  if (activePaintTarget_ != target) {
+    setActivePaintTarget(target);
+    return;
+  }
+  if (canOpenPopup) {
+    ImGui::OpenPopup(target == PaintTarget::Fill ? "##fill_color_picker" : "##stroke_color_picker");
+  }
+}
+
+bool EditorShell::canArmEyedropper() const {
+  return app_.hasDocument() && !selectTool_.isDragging() && !selectTool_.isMarqueeing() &&
+         !penTool_.isDraggingAnchor() && !textTool_.isDraggingBox() &&
+         !textTool_.isAdjustingFrame() && !interactionController_.panning();
+}
+
 bool EditorShell::armEyedropper(PaintTarget target) {
-  if (!app_.hasDocument() || selectTool_.isDragging() || selectTool_.isMarqueeing() ||
-      penTool_.isDraggingAnchor() || textTool_.isDraggingBox() || textTool_.isAdjustingFrame() ||
-      interactionController_.panning()) {
+  if (!canArmEyedropper()) {
     return false;
   }
   if (activeTool_ == ActiveTool::Eyedropper) {
-    eyedropperTarget_ = target;
-    return true;
+    if (eyedropperTarget_ == target) {
+      return true;
+    }
+    cancelEyedropper(true);
   }
+  setActivePaintTarget(target);
   if (penTool_.commitOpenPath(app_)) {
     flushQueuedMutationAndRefreshOverlay();
   }
@@ -3478,7 +3546,7 @@ bool EditorShell::handleEyedropperGlobalShortcut(bool sourcePaneFocused, bool an
                                                  bool cmd) {
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
       ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false)) {
-    armEyedropper(PaintTarget::Fill);
+    armEyedropper(activePaintTarget_);
   }
   if (!anyPopupOpen && activeTool_ == ActiveTool::Eyedropper &&
       ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false)) {
@@ -3496,7 +3564,7 @@ void EditorShell::commitTextToolIfNeeded() {
 
 void EditorShell::onToolbarToolClicked(ActiveTool tool) {
   if (tool == ActiveTool::Eyedropper) {
-    armEyedropper(PaintTarget::Fill);
+    armEyedropper(activePaintTarget_);
     return;
   }
   if (tool != ActiveTool::Pen && penTool_.commitOpenPath(app_)) {
@@ -3563,35 +3631,16 @@ void EditorShell::publishEyedropperTestStateIfEnabled() {
   if (!BrowserEyedropperControlEnabledForTesting() || renderCoordinator_.asyncRenderer().isBusy()) {
     return;
   }
-  std::string selectedStyle;
-  std::string selectedText;
+  EyedropperSelectedTestFields selectedFields;
   if (app_.hasSelection()) {
-    const svg::SVGElement& selected = app_.selectedElements().front();
-    selected.withReadAccess([&](svg::DocumentReadAccess&, EntityHandle) {
-      if (const std::optional<RcString> style = selected.getAttribute("style")) {
-        selectedStyle =
-            std::string(std::string_view(*style).substr(0, kEyedropperTestFieldMaxBytes));
-      }
-      if (selected.type() == svg::ElementType::Text) {
-        const RcString content = selected.cast<svg::SVGTextElement>().textContent();
-        selectedText =
-            std::string(std::string_view(content).substr(0, kEyedropperTestFieldMaxBytes));
-        for (std::optional<svg::SVGElement> child = selected.firstChild(); child.has_value();
-             child = child->nextSibling()) {
-          if (child->type() == svg::ElementType::TSpan) {
-            const std::size_t remaining = kEyedropperTestFieldMaxBytes - selectedText.size();
-            if (remaining == 0u) {
-              break;
-            }
-            const RcString childText = child->cast<svg::SVGTSpanElement>().textContent();
-            selectedText += std::string(std::string_view(childText).substr(0, remaining));
-          }
-        }
-      }
-    });
+    selectedFields = ReadEyedropperSelectedTestFields(app_.selectedElements().front());
   }
+  const bool sourcePaneFocused =
+      !adaptiveUiLayout_.compactTouch() && sourcePaneVisible_ && textEditor_.isFocused();
   PublishEyedropperTestState(app_.activePaintStyle().fill, app_.activePaintStyle().stroke,
-                             selectedStyle, selectedText);
+                             selectedFields.style, selectedFields.text,
+                             activePaintTarget_ == PaintTarget::Stroke, sourcePaneFocused,
+                             sourcePaneFocused && textEditor_.hasSelection());
 }
 #endif
 
@@ -3720,11 +3769,9 @@ void EditorShell::renderEyedropperLoupe(const Vector2d& pointerScreen, const Box
   drawList->PopClipRect();
 }
 
-void EditorShell::renderFillStrokeToolbarWidget() {
-  const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
-  const bool canvasInteractionActive = selectTool_.isDragging() || selectTool_.isMarqueeing() ||
-                                       penTool_.isDraggingAnchor() || textTool_.isDraggingBox() ||
-                                       textTool_.isAdjustingFrame();
+ToolbarPaintState EditorShell::toolbarPaintStateForFrame(bool rendererBusy,
+                                                         bool canvasInteractionActive,
+                                                         bool* canEditPaint) {
   svg::SVGDocumentHandle currentPaintDocument;
   std::optional<Entity> currentPaintSelection;
   if (app_.hasDocument()) {
@@ -3736,11 +3783,11 @@ void EditorShell::renderFillStrokeToolbarWidget() {
       toolbarPaintSnapshotSelection_ == currentPaintSelection;
   const FillStrokeWidgetInteractionState interactionState = ResolveFillStrokeWidgetInteractionState(
       app_.hasDocument(), rendererBusy, canvasInteractionActive, paintSnapshotMatchesSelection);
-  const bool canEditPaint = interactionState.canEdit;
+  *canEditPaint = interactionState.canEdit;
   std::string editorSource;
   std::string documentSource;
   std::optional<std::string_view> sourceForRanges;
-  if (canEditPaint) {
+  if (*canEditPaint) {
     editorSource = textEditor_.getText();
     documentSource = CanonicalizeForTextEditor(app_.document().document().source());
     if (editorSource == documentSource) {
@@ -3751,212 +3798,217 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   // alternate between busy and idle as previews land. Preserve one paint and
   // enabled-state presentation for the entire canvas interaction instead of
   // letting the swap arrow and selected swatches oscillate with worker state.
-  ToolbarPaintState paintState;
   if (interactionState.refreshPaintSnapshot) {
-    paintState = ToolbarPaintStateForApp(app_, sourceForRanges);
+    ToolbarPaintState paintState = ToolbarPaintStateForApp(app_, sourceForRanges);
     toolbarPaintSnapshot_ = std::make_unique<ToolbarPaintState>(paintState);
     toolbarPaintSnapshotDocument_ = std::move(currentPaintDocument);
     toolbarPaintSnapshotSelection_ = currentPaintSelection;
-  } else if (paintSnapshotMatchesSelection) {
-    paintState = *toolbarPaintSnapshot_;
-  } else {
-    paintState = ToolbarPaintStateForActivePaint(app_.activePaintStyle());
+    return paintState;
   }
-  ImGui::BeginDisabled(!canEditPaint);
-  ImGui::InvisibleButton("##fill_stroke_widget",
-                         ImVec2(kToolPalettePaintWidgetWidth, kToolPaletteButtonSize));
-  const ImVec2 min = ImGui::GetItemRectMin();
-  const ImVec2 max = ImGui::GetItemRectMax();
-  const ImVec2 mouse = ImGui::GetMousePos();
-  const FillStrokeWidgetLayout layout = ComputeFillStrokeWidgetLayout(min, max);
-  ImDrawList* drawList = ImGui::GetWindowDrawList();
-  // Overlap layout: stroke swatch behind, fill swatch in front.
-  DrawFillStrokeSwatch(drawList, layout.strokeMin, layout.strokeMax, paintState.stroke,
-                       /*front=*/false);
-  DrawFillStrokeSwatch(drawList, layout.fillMin, layout.fillMax, paintState.fill, /*front=*/true);
-  DrawSwapAffordance(drawList, layout.swapMin, layout.swapMax, canEditPaint);
-  DrawNoneAffordance(drawList, layout.strokeNoneMin, layout.strokeNoneMax, /*fillVariant=*/false,
-                     paintState.stroke.isNone);
-  DrawNoneAffordance(drawList, layout.fillNoneMin, layout.fillNoneMax, /*fillVariant=*/true,
-                     paintState.fill.isNone);
+  return paintSnapshotMatchesSelection ? *toolbarPaintSnapshot_
+                                       : ToolbarPaintStateForActivePaint(app_.activePaintStyle());
+}
 
-  const auto fitChipLabel = [](std::string label, float maxWidth) {
-    if (ImGui::CalcTextSize(label.c_str()).x <= maxWidth) {
-      return label;
-    }
-
-    std::string base = std::move(label);
-    while (base.size() > 1u) {
-      base.pop_back();
-      const std::string candidate = base + "...";
-      if (ImGui::CalcTextSize(candidate.c_str()).x <= maxWidth) {
-        return candidate;
-      }
-    }
-    return std::string("...");
-  };
-  const auto renderChip = [&](std::string_view prefix, const ToolbarPaintSlotState& slot,
-                              const ImVec2& rectMin, const ImVec2& rectMax) {
-    if (!slot.isCustom) {
-      return;
-    }
-
-    const bool actionable = slot.reference.has_value() && slot.reference->sourceRange.has_value();
-    const EditorTheme& theme = EditorTheme::Active();
-    const ImU32 fillColor =
-        actionable ? WithAlpha(theme.accentDefault, 210) : WithAlpha(theme.surfaceActive, 230);
-    const ImU32 borderColor = actionable ? theme.accentHover : theme.borderStrong;
-    drawList->AddRectFilled(rectMin, rectMax, fillColor, theme.radiusControl);
-    drawList->AddRect(rectMin, rectMax, borderColor, theme.radiusControl, 0, 1.0f);
-
-    const std::string label =
-        fitChipLabel(PaintChipLabel(prefix, slot), rectMax.x - rectMin.x - 8.0f);
-    const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
-    drawList->AddText(
-        ImVec2(rectMin.x + 4.0f, rectMin.y + (rectMax.y - rectMin.y - textSize.y) * 0.5f - 0.5f),
-        actionable ? theme.accentInk : theme.textPrimary, label.c_str());
-  };
-  renderChip("S", paintState.stroke, layout.strokeChipMin, layout.strokeChipMax);
-  renderChip("F", paintState.fill, layout.fillChipMin, layout.fillChipMax);
-
-  const FillStrokeWidgetRegion region =
-      HitTestFillStrokeWidget(layout, mouse, paintState.fill.isCustom, paintState.stroke.isCustom);
-
-  // Swap fill and stroke on the authoring defaults and, when a selection is
-  // present, on the selected element. Authoring defaults swap verbatim; the
-  // selection swaps the resolved SVG paint strings so referenced/none paints
-  // round-trip correctly.
-  const auto performPaintSwap = [&]() {
-    if (app_.hasSelection()) {
-      const std::string fillStr = SvgPaintStringForSlot(paintState.fill);
-      const std::string strokeStr = SvgPaintStringForSlot(paintState.stroke);
-      app_.setActiveFill(strokeStr);
-      app_.setActiveStroke(fillStr);
-      if (toolbarPaintSnapshot_ != nullptr) {
-        std::swap(toolbarPaintSnapshot_->fill, toolbarPaintSnapshot_->stroke);
-      }
-      const std::string sourceBefore(app_.document().document().source());
-      const std::pair<std::string_view, std::string_view> paints[] = {{"fill", strokeStr},
-                                                                      {"stroke", fillStr}};
-      const bool changed = app_.setStylePropertiesOnSelection(paints);
-      if (changed) {
-        // The swap is one user-visible edit: record one undo entry spanning every
-        // selected element before the queued style writes flush.
-        app_.recordDocumentSourceUndoOnNextFlush("Swap fill and stroke",
-                                                 app_.selectedElements().front(), sourceBefore);
-        flushQueuedMutationAndRefreshOverlay();
-      } else {
-        window_.wakeEventLoop();
-      }
-    } else {
-      const ActivePaintStyle current = app_.activePaintStyle();
-      app_.setActiveFill(current.stroke);
-      app_.setActiveStroke(current.fill);
-      window_.wakeEventLoop();
-    }
-  };
-  const auto setPaintNone = [&](std::string_view attrName) {
-    if (attrName == "fill") {
-      app_.setActiveFill("none");
-    } else {
-      app_.setActiveStroke("none");
-    }
+void EditorShell::swapToolbarPaint(const ToolbarPaintState& paintState, bool canEditPaint) {
+  if (!canEditPaint) {
+    return;
+  }
+  if (app_.hasSelection()) {
+    const std::string fillStr = SvgPaintStringForSlot(paintState.fill);
+    const std::string strokeStr = SvgPaintStringForSlot(paintState.stroke);
+    app_.setActiveFill(strokeStr);
+    app_.setActiveStroke(fillStr);
     if (toolbarPaintSnapshot_ != nullptr) {
-      ToolbarPaintSlotState& slot =
-          attrName == "fill" ? toolbarPaintSnapshot_->fill : toolbarPaintSnapshot_->stroke;
-      slot = ToolbarPaintSlotStateForActiveAttribute("none");
+      std::swap(toolbarPaintSnapshot_->fill, toolbarPaintSnapshot_->stroke);
     }
-    const bool changed = app_.hasSelection() && app_.setStylePropertyOnSelection(attrName, "none");
-    if (changed) {
+    const std::string sourceBefore(app_.document().document().source());
+    const std::pair<std::string_view, std::string_view> paints[] = {{"fill", strokeStr},
+                                                                    {"stroke", fillStr}};
+    if (app_.setStylePropertiesOnSelection(paints)) {
+      app_.recordDocumentSourceUndoOnNextFlush("Swap fill and stroke",
+                                               app_.selectedElements().front(), sourceBefore);
       flushQueuedMutationAndRefreshOverlay();
     } else {
       window_.wakeEventLoop();
     }
-  };
-  const auto revealChipSource = [&](const ToolbarPaintSlotState& slot) {
-    if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
-      revealSourceRange(*slot.reference->sourceRange);
-    }
-  };
+    return;
+  }
+  const ActivePaintStyle current = app_.activePaintStyle();
+  app_.setActiveFill(current.stroke);
+  app_.setActiveStroke(current.fill);
+  window_.wakeEventLoop();
+}
 
-  if (canEditPaint && ImGui::IsItemClicked()) {
-    switch (region) {
-      case FillStrokeWidgetRegion::Swap: performPaintSwap(); break;
-      case FillStrokeWidgetRegion::FillNone: setPaintNone("fill"); break;
-      case FillStrokeWidgetRegion::StrokeNone: setPaintNone("stroke"); break;
-      case FillStrokeWidgetRegion::FillChip: revealChipSource(paintState.fill); break;
-      case FillStrokeWidgetRegion::StrokeChip: revealChipSource(paintState.stroke); break;
-      case FillStrokeWidgetRegion::StrokeSwatch: ImGui::OpenPopup("##stroke_color_picker"); break;
-      case FillStrokeWidgetRegion::FillSwatch:
-      case FillStrokeWidgetRegion::None: ImGui::OpenPopup("##fill_color_picker"); break;
+void EditorShell::setActivePaintNone() {
+  const bool fillIsActive = activePaintTarget_ == PaintTarget::Fill;
+  const std::string_view attrName = fillIsActive ? "fill" : "stroke";
+  if (fillIsActive) {
+    app_.setActiveFill("none");
+  } else {
+    app_.setActiveStroke("none");
+  }
+  if (toolbarPaintSnapshot_ != nullptr) {
+    ToolbarPaintSlotState& slot =
+        fillIsActive ? toolbarPaintSnapshot_->fill : toolbarPaintSnapshot_->stroke;
+    slot = ToolbarPaintSlotStateForActiveAttribute("none");
+  }
+  if (app_.hasSelection()) {
+    const std::string sourceBefore(app_.document().document().source());
+    if (app_.setStylePropertyOnSelection(attrName, "none")) {
+      app_.recordDocumentSourceUndoOnNextFlush(
+          fillIsActive ? "Set fill to none" : "Set stroke to none", app_.selectedElements().front(),
+          sourceBefore, /*preserveSelection=*/true);
+      flushQueuedMutationAndRefreshOverlay();
+      return;
     }
   }
-  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-    switch (region) {
-      case FillStrokeWidgetRegion::Swap: ImGui::SetTooltip("Swap fill and stroke"); break;
-      case FillStrokeWidgetRegion::FillNone: ImGui::SetTooltip("Set fill to none"); break;
-      case FillStrokeWidgetRegion::StrokeNone: ImGui::SetTooltip("Set stroke to none"); break;
-      case FillStrokeWidgetRegion::FillChip:
-      case FillStrokeWidgetRegion::StrokeChip: {
-        const bool isFill = region == FillStrokeWidgetRegion::FillChip;
-        const char* name = isFill ? "Fill" : "Stroke";
-        const ToolbarPaintSlotState& slot = isFill ? paintState.fill : paintState.stroke;
-        if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
-          ImGui::SetTooltip("%s paint server %s. Click to show source.", name,
-                            slot.reference->href.c_str());
-        } else if (slot.reference.has_value() && slot.reference->external) {
-          ImGui::SetTooltip("%s uses external paint server %s.", name,
-                            slot.reference->href.c_str());
-        } else if (slot.reference.has_value()) {
-          ImGui::SetTooltip("%s uses unresolved paint server %s.", name,
-                            slot.reference->href.c_str());
-        } else {
-          ImGui::SetTooltip("%s uses custom paint %s.", name, slot.customLabel.c_str());
-        }
-        break;
+  window_.wakeEventLoop();
+}
+
+void EditorShell::revealToolbarPaintChipSource(const ToolbarPaintSlotState& slot) {
+  if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
+    revealSourceRange(*slot.reference->sourceRange);
+  }
+}
+
+void EditorShell::handleFillStrokeWidgetClick(FillStrokeWidgetRegion region,
+                                              const ToolbarPaintState& paintState,
+                                              bool canEditPaint) {
+  switch (region) {
+    case FillStrokeWidgetRegion::Swap: swapToolbarPaint(paintState, canEditPaint); break;
+    case FillStrokeWidgetRegion::SetNone:
+      if (canEditPaint) {
+        setActivePaintNone();
       }
-      case FillStrokeWidgetRegion::StrokeSwatch:
-        ImGui::SetTooltip("%s", canEditPaint ? "Stroke color" : "Open an SVG document");
-        break;
-      case FillStrokeWidgetRegion::FillSwatch:
-        ImGui::SetTooltip("%s", canEditPaint ? "Fill color" : "Open an SVG document");
-        break;
-      case FillStrokeWidgetRegion::None:
-        ImGui::SetTooltip("%s", canEditPaint ? "Fill / stroke" : "Open an SVG document");
-        break;
-    }
+      break;
+    case FillStrokeWidgetRegion::FillChip:
+    case FillStrokeWidgetRegion::StrokeChip:
+      if (canEditPaint) {
+        revealToolbarPaintChipSource(
+            region == FillStrokeWidgetRegion::FillChip ? paintState.fill : paintState.stroke);
+      }
+      break;
+    case FillStrokeWidgetRegion::StrokeSwatch:
+      handlePaintSwatchClicked(PaintTarget::Stroke, canEditPaint);
+      break;
+    case FillStrokeWidgetRegion::FillSwatch:
+      handlePaintSwatchClicked(PaintTarget::Fill, canEditPaint);
+      break;
+    case FillStrokeWidgetRegion::None: break;
+  }
+}
+
+void EditorShell::showToolbarPaintChipTooltip(bool isFill, const ToolbarPaintSlotState& slot) {
+  const char* name = isFill ? "Fill" : "Stroke";
+  if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
+    ImGui::SetTooltip("%s paint server %s. Click to show source.", name,
+                      slot.reference->href.c_str());
+  } else if (slot.reference.has_value() && slot.reference->external) {
+    ImGui::SetTooltip("%s uses external paint server %s.", name, slot.reference->href.c_str());
+  } else if (slot.reference.has_value()) {
+    ImGui::SetTooltip("%s uses unresolved paint server %s.", name, slot.reference->href.c_str());
+  } else {
+    ImGui::SetTooltip("%s uses custom paint %s.", name, slot.customLabel.c_str());
+  }
+}
+
+void EditorShell::showPaintSwatchTooltip(PaintTarget target, bool canSelectPaint,
+                                         bool canEditPaint) {
+  const bool fill = target == PaintTarget::Fill;
+  const char* tooltip = !canSelectPaint ? "Open an SVG document"
+                        : activePaintTarget_ != target
+                            ? (fill ? "Activate Fill" : "Activate Stroke")
+                        : canEditPaint ? (fill ? "Fill color" : "Stroke color")
+                                       : (fill ? "Fill selected" : "Stroke selected");
+  ImGui::SetTooltip("%s", tooltip);
+}
+
+void EditorShell::showFillStrokeWidgetTooltip(FillStrokeWidgetRegion region,
+                                              const ToolbarPaintState& paintState,
+                                              bool canSelectPaint, bool canEditPaint) {
+  switch (region) {
+    case FillStrokeWidgetRegion::Swap: ImGui::SetTooltip("Swap fill and stroke"); break;
+    case FillStrokeWidgetRegion::SetNone:
+      ImGui::SetTooltip("Set active %s to none",
+                        activePaintTarget_ == PaintTarget::Fill ? "fill" : "stroke");
+      break;
+    case FillStrokeWidgetRegion::FillChip:
+      showToolbarPaintChipTooltip(true, paintState.fill);
+      break;
+    case FillStrokeWidgetRegion::StrokeChip:
+      showToolbarPaintChipTooltip(false, paintState.stroke);
+      break;
+    case FillStrokeWidgetRegion::StrokeSwatch:
+      showPaintSwatchTooltip(PaintTarget::Stroke, canSelectPaint, canEditPaint);
+      break;
+    case FillStrokeWidgetRegion::FillSwatch:
+      showPaintSwatchTooltip(PaintTarget::Fill, canSelectPaint, canEditPaint);
+      break;
+    case FillStrokeWidgetRegion::None:
+      ImGui::SetTooltip("%s", canSelectPaint ? "Fill / stroke" : "Open an SVG document");
+      break;
+  }
+}
+
+void EditorShell::renderToolbarPaintPopup(const char* popupId, const char* pickerId,
+                                          std::string_view attrName,
+                                          const ToolbarPaintSlotState& slot) {
+  if (!ImGui::BeginPopup(popupId)) {
+    return;
+  }
+  float pickerColor[4] = {
+      ColorChannelToFloat(slot.color.r),
+      ColorChannelToFloat(slot.color.g),
+      ColorChannelToFloat(slot.color.b),
+      ColorChannelToFloat(slot.color.a),
+  };
+  constexpr ImGuiColorEditFlags kFlags = ImGuiColorEditFlags_AlphaBar |
+                                         ImGuiColorEditFlags_AlphaPreviewHalf |
+                                         ImGuiColorEditFlags_NoSidePreview;
+  if (ImGui::Button(attrName == "fill" ? "Pick from document##fill"
+                                       : "Pick from document##stroke")) {
+    ImGui::CloseCurrentPopup();
+    armEyedropper(attrName == "fill" ? PaintTarget::Fill : PaintTarget::Stroke);
+  }
+  if (ImGui::ColorPicker4(pickerId, pickerColor, kFlags)) {
+    applyPaintColor(attrName == "fill" ? PaintTarget::Fill : PaintTarget::Stroke,
+                    ColorFromPicker(pickerColor), /*recordUndo=*/false);
+  }
+  ImGui::EndPopup();
+}
+
+void EditorShell::renderFillStrokeToolbarWidget() {
+  const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
+  const bool canvasInteractionActive = selectTool_.isDragging() || selectTool_.isMarqueeing() ||
+                                       penTool_.isDraggingAnchor() || textTool_.isDraggingBox() ||
+                                       textTool_.isAdjustingFrame();
+  bool canEditPaint = false;
+  const ToolbarPaintState paintState =
+      toolbarPaintStateForFrame(rendererBusy, canvasInteractionActive, &canEditPaint);
+  const bool canSelectPaint = app_.hasDocument() && !canvasInteractionActive;
+  ImGui::BeginDisabled(!canSelectPaint);
+  ImGui::InvisibleButton("##fill_stroke_widget",
+                         ImVec2(kToolPalettePaintWidgetWidth, kToolPalettePaintWidgetHeight));
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  const ImVec2 mouse = ImGui::GetMousePos();
+  const FillStrokeWidgetLayout layout = ComputeFillStrokeWidgetLayout(min, max);
+  const bool fillIsActive = activePaintTarget_ == PaintTarget::Fill;
+  DrawFillStrokeWidget(ImGui::GetWindowDrawList(), layout, paintState, fillIsActive, canEditPaint);
+
+  const FillStrokeWidgetRegion region = HitTestFillStrokeWidget(
+      layout, mouse, paintState.fill.isCustom, paintState.stroke.isCustom, fillIsActive);
+
+  if (canSelectPaint && ImGui::IsItemClicked()) {
+    handleFillStrokeWidgetClick(region, paintState, canEditPaint);
+  }
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    showFillStrokeWidgetTooltip(region, paintState, canSelectPaint, canEditPaint);
   }
   ImGui::EndDisabled();
 
-  auto renderColorPopup = [&](const char* popupId, const char* pickerId, std::string_view attrName,
-                              const ToolbarPaintSlotState& slot) {
-    if (!ImGui::BeginPopup(popupId)) {
-      return;
-    }
-
-    float pickerColor[4] = {
-        ColorChannelToFloat(slot.color.r),
-        ColorChannelToFloat(slot.color.g),
-        ColorChannelToFloat(slot.color.b),
-        ColorChannelToFloat(slot.color.a),
-    };
-    constexpr ImGuiColorEditFlags kFlags = ImGuiColorEditFlags_AlphaBar |
-                                           ImGuiColorEditFlags_AlphaPreviewHalf |
-                                           ImGuiColorEditFlags_NoSidePreview;
-    if (ImGui::Button(attrName == "fill" ? "Pick from document##fill"
-                                         : "Pick from document##stroke")) {
-      ImGui::CloseCurrentPopup();
-      armEyedropper(attrName == "fill" ? PaintTarget::Fill : PaintTarget::Stroke);
-    }
-    if (ImGui::ColorPicker4(pickerId, pickerColor, kFlags)) {
-      applyPaintColor(attrName == "fill" ? PaintTarget::Fill : PaintTarget::Stroke,
-                      ColorFromPicker(pickerColor), /*recordUndo=*/false);
-    }
-    ImGui::EndPopup();
-  };
-
-  renderColorPopup("##fill_color_picker", "##fill_picker", "fill", paintState.fill);
-  renderColorPopup("##stroke_color_picker", "##stroke_picker", "stroke", paintState.stroke);
+  renderToolbarPaintPopup("##fill_color_picker", "##fill_picker", "fill", paintState.fill);
+  renderToolbarPaintPopup("##stroke_color_picker", "##stroke_picker", "stroke", paintState.stroke);
 }
 
 void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion) {

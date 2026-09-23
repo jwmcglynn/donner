@@ -676,37 +676,36 @@ TEST(EditorShellInternalTest, ReferencedPaintSerializerRetainsUnresolvedFallback
 
 TEST(EditorShellInternalTest, FillStrokeWidgetLayoutAndHitTestClassifyRegions) {
   const ImVec2 widgetMin(100.0f, 200.0f);
-  const ImVec2 widgetMax(widgetMin.x + 118.0f, widgetMin.y + 30.0f);
+  const ImVec2 widgetMax(widgetMin.x + 120.0f, widgetMin.y + 44.0f);
   const internal::FillStrokeWidgetLayout layout =
       internal::ComputeFillStrokeWidgetLayout(widgetMin, widgetMax);
 
   const auto center = [](const ImVec2& a, const ImVec2& b) {
     return ImVec2((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f);
   };
-  const auto hit = [&](const ImVec2& p, bool fillCustom, bool strokeCustom) {
-    return internal::HitTestFillStrokeWidget(layout, p, fillCustom, strokeCustom);
+  const auto hit = [&](const ImVec2& p, bool fillCustom, bool strokeCustom, bool fillActive) {
+    return internal::HitTestFillStrokeWidget(layout, p, fillCustom, strokeCustom, fillActive);
   };
 
-  EXPECT_EQ(hit(center(layout.swapMin, layout.swapMax), false, false),
+  EXPECT_EQ(hit(center(layout.swapMin, layout.swapMax), false, false, true),
             internal::FillStrokeWidgetRegion::Swap);
-  EXPECT_EQ(hit(center(layout.fillNoneMin, layout.fillNoneMax), false, false),
-            internal::FillStrokeWidgetRegion::FillNone);
-  EXPECT_EQ(hit(center(layout.strokeNoneMin, layout.strokeNoneMax), false, false),
-            internal::FillStrokeWidgetRegion::StrokeNone);
+  EXPECT_EQ(hit(center(layout.noneMin, layout.noneMax), false, false, true),
+            internal::FillStrokeWidgetRegion::SetNone);
 
-  // Fill sits in front of stroke, so it owns the overlap region.
-  EXPECT_EQ(hit(center(layout.fillMin, layout.fillMax), false, false),
-            internal::FillStrokeWidgetRegion::FillSwatch);
-  // The stroke swatch's upper-right corner is clear of the front fill swatch.
-  const ImVec2 strokeOnly(layout.strokeMax.x - 2.0f, layout.strokeMin.y + 2.0f);
-  EXPECT_EQ(hit(strokeOnly, false, false), internal::FillStrokeWidgetRegion::StrokeSwatch);
+  const ImVec2 overlap(layout.fillMax.x - 3.0f, layout.fillMax.y - 3.0f);
+  EXPECT_EQ(hit(overlap, false, false, true), internal::FillStrokeWidgetRegion::FillSwatch);
+  EXPECT_EQ(hit(overlap, false, false, false), internal::FillStrokeWidgetRegion::StrokeSwatch);
+  const ImVec2 fillOnly(layout.fillMin.x + 4.0f, layout.fillMin.y + 4.0f);
+  const ImVec2 strokeOnly(layout.strokeMax.x - 4.0f, layout.strokeMax.y - 4.0f);
+  EXPECT_EQ(hit(fillOnly, false, false, false), internal::FillStrokeWidgetRegion::FillSwatch);
+  EXPECT_EQ(hit(strokeOnly, false, false, true), internal::FillStrokeWidgetRegion::StrokeSwatch);
 
   // Chips only classify when their slot carries custom paint (only then drawn).
   const ImVec2 fillChip = center(layout.fillChipMin, layout.fillChipMax);
-  EXPECT_EQ(hit(fillChip, false, false), internal::FillStrokeWidgetRegion::None);
-  EXPECT_EQ(hit(fillChip, true, false), internal::FillStrokeWidgetRegion::FillChip);
+  EXPECT_EQ(hit(fillChip, false, false, true), internal::FillStrokeWidgetRegion::None);
+  EXPECT_EQ(hit(fillChip, true, false, true), internal::FillStrokeWidgetRegion::FillChip);
   const ImVec2 strokeChip = center(layout.strokeChipMin, layout.strokeChipMax);
-  EXPECT_EQ(hit(strokeChip, false, true), internal::FillStrokeWidgetRegion::StrokeChip);
+  EXPECT_EQ(hit(strokeChip, false, true, true), internal::FillStrokeWidgetRegion::StrokeChip);
 }
 
 TEST(EditorShellInternalTest, FillStrokeWidgetInteractionStateIgnoresBusyHandoffsDuringDrag) {
@@ -1403,6 +1402,10 @@ public:
 
   static bool EyedropperTargetsStroke(const EditorShell& shell) {
     return shell.eyedropperTarget_ == EditorShell::PaintTarget::Stroke;
+  }
+
+  static bool ActivePaintTargetIsStroke(const EditorShell& shell) {
+    return shell.activePaintTarget_ == EditorShell::PaintTarget::Stroke;
   }
 
   static bool EyedropperCaptureEnabled(const EditorShell& shell) {
@@ -3826,11 +3829,11 @@ TEST(EditorShellTest, FillStrokeToolbarMouseHitTestingCoversChipsSwatchesAndTool
   };
 
   constexpr ImVec2 kCursor(20.0f, 40.0f);
-  constexpr ImVec2 kStrokeChip(70.0f, 47.0f);
-  constexpr ImVec2 kFillChip(70.0f, 63.0f);
-  constexpr ImVec2 kStrokeSwatchOnly(50.0f, 47.0f);
-  constexpr ImVec2 kFillSwatchOnly(30.0f, 65.0f);
-  constexpr ImVec2 kWidgetBackground(58.0f, 70.0f);
+  constexpr ImVec2 kStrokeChip(98.0f, 72.0f);
+  constexpr ImVec2 kFillChip(98.0f, 49.0f);
+  constexpr ImVec2 kStrokeSwatchOnly(57.0f, 76.0f);
+  constexpr ImVec2 kFillSwatchOnly(28.0f, 48.0f);
+  constexpr ImVec2 kWidgetBackground(88.0f, 80.0f);
 
   selectById("local");
   RunFramesUntilDisplayedSelectionBounds(window, shell);
@@ -5394,6 +5397,23 @@ void WriteEyedropperScreenshot(const svg::RendererBitmap& bitmap, std::string_vi
       bitmap.rowBytes / 4u));
 }
 
+svg::RendererBitmap CapturePaintWidgetFrame(gui::EditorWindow& window, EditorShell& shell,
+                                            const ImVec2& cursor) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddMousePosEvent(-1.0f, -1.0f);
+  io.AddMouseButtonEvent(0, false);
+  window.beginFrame();
+  constexpr ImGuiWindowFlags kHostFlags =
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings;
+  ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(220.0f, 100.0f), ImGuiCond_Always);
+  ImGui::Begin("EditorShellPaintWidgetCaptureHost", nullptr, kHostFlags);
+  ImGui::SetCursorScreenPos(cursor);
+  EditorShellTestAccess::RenderFillStrokeToolbarWidget(shell);
+  ImGui::End();
+  return window.endFrameAndReadPixels();
+}
+
 /// Hover, press, and release at @p pos; ImGui buttons fire on release.
 void ClickAt(gui::EditorWindow& window, EditorShell& shell, const ImVec2& pos) {
   RunFrameWithMouse(window, shell, pos, /*mouseDown=*/false);
@@ -5814,7 +5834,9 @@ TEST(EditorShellTest, StrokeColorPopupEyedropperButtonTargetsStroke) {
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_THAT(shell.valid(), testing::Eq(true));
   constexpr ImVec2 kWidgetCursor(20.0f, 40.0f);
-  constexpr ImVec2 kStrokeSwatch(50.0f, 47.0f);
+  constexpr ImVec2 kStrokeSwatch(57.0f, 76.0f);
+  ClickToolbar(window, shell, kWidgetCursor, kStrokeSwatch);
+  EXPECT_THAT(EditorShellTestAccess::ActivePaintTargetIsStroke(shell), testing::Eq(true));
   ClickToolbar(window, shell, kWidgetCursor, kStrokeSwatch);
   const std::optional<ImVec2> popupButton = CurrentPopupFirstButtonCenter();
   ASSERT_THAT(popupButton, testing::Optional(testing::_));
@@ -5824,6 +5846,129 @@ TEST(EditorShellTest, StrokeColorPopupEyedropperButtonTargetsStroke) {
   RenderToolbarFrame(window, shell, kWidgetCursor, *popupButton, /*mouseDown=*/false);
   EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
   EXPECT_THAT(EditorShellTestAccess::EyedropperTargetsStroke(shell), testing::Eq(true));
+}
+
+TEST(EditorShellTest, ActivePaintSwatchRoutesToolbarAndShortcutWithoutChangingSource) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  constexpr std::string_view kSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+<rect id="target" x="4" y="4" width="40" height="40" fill="red" stroke="blue"/>
+</svg>)";
+  EditorShell shell(window, OptionsWithSource(kSource));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  app.setSelection(*target);
+  const std::string sourceBefore(app.document().document().source());
+  constexpr ImVec2 kWidgetCursor(20.0f, 40.0f);
+  constexpr ImVec2 kStrokeOnly(57.0f, 76.0f);
+  constexpr ImVec2 kFillOnly(28.0f, 48.0f);
+
+  EXPECT_THAT(EditorShellTestAccess::ActivePaintTargetIsStroke(shell), testing::Eq(false));
+  ClickToolbar(window, shell, kWidgetCursor, kStrokeOnly);
+  EXPECT_THAT(EditorShellTestAccess::ActivePaintTargetIsStroke(shell), testing::Eq(true));
+  EXPECT_THAT(CurrentPopupFirstButtonCenter(), testing::Eq(std::nullopt));
+  EXPECT_THAT(std::string(app.document().document().source()), testing::Eq(sourceBefore));
+  EXPECT_THAT(app.canUndo(), testing::Eq(false));
+
+  const ImVec2 paneOrigin(0.0f, 0.0f);
+  const ImVec2 contentRegion(640.0f, 480.0f);
+  const Box2d palette =
+      EditorShellTestAccess::ToolPaletteScreenRect(shell, paneOrigin, contentRegion);
+  const float buttonSize = EditorShellTestAccess::AdaptiveUiLayout(shell).toolButtonSize;
+  const ImVec2 eyedropperCenter(
+      static_cast<float>(palette.topLeft.x) + 8.0f + 3.0f * (buttonSize + 4.0f) + buttonSize * 0.5f,
+      static_cast<float>(palette.topLeft.y) + 8.0f + buttonSize * 0.5f);
+  RenderToolPaletteFrame(window, shell, paneOrigin, contentRegion, eyedropperCenter, false);
+  RenderToolPaletteFrame(window, shell, paneOrigin, contentRegion, eyedropperCenter, true);
+  RenderToolPaletteFrame(window, shell, paneOrigin, contentRegion, eyedropperCenter, false);
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
+  EXPECT_THAT(EditorShellTestAccess::EyedropperTargetsStroke(shell), testing::Eq(true));
+
+  ClickToolbar(window, shell, kWidgetCursor, kFillOnly);
+  EXPECT_THAT(EditorShellTestAccess::ActivePaintTargetIsStroke(shell), testing::Eq(false));
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(false));
+  EXPECT_THAT(EditorShellTestAccess::EyedropperCaptureEnabled(shell), testing::Eq(false));
+  EXPECT_THAT(std::string(app.document().document().source()), testing::Eq(sourceBefore));
+  EXPECT_THAT(app.canUndo(), testing::Eq(false));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_I});
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
+  EXPECT_THAT(EditorShellTestAccess::EyedropperTargetsStroke(shell), testing::Eq(false));
+  DriveGlobalShortcut(shell, {ImGuiKey_Escape});
+  EXPECT_THAT(EditorShellTestAccess::ActivePaintTargetIsStroke(shell), testing::Eq(false));
+}
+
+TEST(EditorShellTest, SingleNoneControlClearsActiveSelectedStrokeWithOneUndo) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  constexpr std::string_view kSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+<rect id="first" x="4" y="4" width="20" height="20" fill="red" stroke="blue"/>
+<rect id="second" x="30" y="4" width="20" height="20" fill="green" stroke="black"/>
+</svg>)";
+  EditorShell shell(window, OptionsWithSource(kSource));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  svg::SVGDocument& document = app.document().document();
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_THAT(first, testing::Optional(testing::_));
+  ASSERT_THAT(second, testing::Optional(testing::_));
+  app.setSelection(std::vector<svg::SVGElement>{*first, *second});
+  const std::string before(document.source());
+  const std::string fillBefore = app.activePaintStyle().fill;
+  constexpr ImVec2 kWidgetCursor(20.0f, 40.0f);
+  ClickToolbar(window, shell, kWidgetCursor, ImVec2(57.0f, 76.0f));
+  ASSERT_THAT(EditorShellTestAccess::ActivePaintTargetIsStroke(shell), testing::Eq(true));
+  ClickToolbar(window, shell, kWidgetCursor, ImVec2(76.0f, 73.0f));
+  EXPECT_THAT(app.activePaintStyle().stroke, testing::Eq("none"));
+  EXPECT_THAT(app.activePaintStyle().fill, testing::Eq(fillBefore));
+  EXPECT_THAT(app.selectedElements(), testing::SizeIs(2));
+  EXPECT_THAT(std::string(document.source()), testing::Ne(before));
+  EXPECT_THAT(std::string(*first->getAttribute("style")), testing::HasSubstr("stroke: none"));
+  EXPECT_THAT(std::string(*second->getAttribute("style")), testing::HasSubstr("stroke: none"));
+  ASSERT_THAT(app.undoTimeline().nextUndoLabel(),
+              testing::Optional(testing::Eq("Set stroke to none")));
+  app.undo();
+  app.flushFrame();
+  EXPECT_THAT(std::string(document.source()), testing::Eq(before));
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(2));
+  EXPECT_THAT(std::string(app.selectedElements()[0].id()), testing::Eq("first"));
+  EXPECT_THAT(std::string(app.selectedElements()[1].id()), testing::Eq("second"));
+  app.redo();
+  app.flushFrame();
+  EXPECT_THAT(std::string(document.source()), testing::Ne(before));
+  EXPECT_THAT(EditorShellTestAccess::ActivePaintTargetIsStroke(shell), testing::Eq(true));
+}
+
+TEST(EditorShellTest, FillAndStrokeForegroundWidgetScreenshots) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Fill and Stroke foreground screenshots",
+      .initialWidth = 640,
+      .initialHeight = 480,
+      .visible = false,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+  constexpr ImVec2 kWidgetCursor(20.0f, 40.0f);
+  WriteEyedropperScreenshot(CapturePaintWidgetFrame(window, shell, kWidgetCursor),
+                            "fill_stroke_fill_active.png");
+  ClickToolbar(window, shell, kWidgetCursor, ImVec2(57.0f, 76.0f));
+  ASSERT_THAT(EditorShellTestAccess::ActivePaintTargetIsStroke(shell), testing::Eq(true));
+  WriteEyedropperScreenshot(CapturePaintWidgetFrame(window, shell, kWidgetCursor),
+                            "fill_stroke_stroke_active.png");
 }
 
 TEST(EditorShellTest, SampledFillChangesSelectedStylesInOneUndoAndDefaultsNewText) {

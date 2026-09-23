@@ -78,7 +78,9 @@ class DocumentPresentationCompositor;
 
 namespace internal {
 struct ToolbarPaintState;
-}
+struct ToolbarPaintSlotState;
+enum class FillStrokeWidgetRegion;
+}  // namespace internal
 
 #ifdef DONNER_EDITOR_WGPU
 class FramebufferCheckerboardRenderer;
@@ -494,8 +496,27 @@ private:
   [[nodiscard]] std::optional<Entity> toolbarPaintSelectionIdentity(
       bool rendererBusy, const svg::SVGDocumentHandle& currentPaintDocument);
   void renderFillStrokeToolbarWidget();
+  [[nodiscard]] internal::ToolbarPaintState toolbarPaintStateForFrame(bool rendererBusy,
+                                                                      bool canvasInteractionActive,
+                                                                      bool* canEditPaint);
+  void swapToolbarPaint(const internal::ToolbarPaintState& paintState, bool canEditPaint);
+  void setActivePaintNone();
+  void revealToolbarPaintChipSource(const internal::ToolbarPaintSlotState& slot);
+  void handleFillStrokeWidgetClick(internal::FillStrokeWidgetRegion region,
+                                   const internal::ToolbarPaintState& paintState,
+                                   bool canEditPaint);
+  void showFillStrokeWidgetTooltip(internal::FillStrokeWidgetRegion region,
+                                   const internal::ToolbarPaintState& paintState,
+                                   bool canSelectPaint, bool canEditPaint);
+  void showToolbarPaintChipTooltip(bool isFill, const internal::ToolbarPaintSlotState& slot);
+  void renderToolbarPaintPopup(const char* popupId, const char* pickerId, std::string_view attrName,
+                               const internal::ToolbarPaintSlotState& slot);
   enum class ActiveTool : std::uint8_t;
   enum class PaintTarget : std::uint8_t { Fill, Stroke };
+  void showPaintSwatchTooltip(PaintTarget target, bool canSelectPaint, bool canEditPaint);
+  [[nodiscard]] bool canArmEyedropper() const;
+  void setActivePaintTarget(PaintTarget target);
+  void handlePaintSwatchClicked(PaintTarget target, bool canOpenPopup);
   bool armEyedropper(PaintTarget target);
   void cancelEyedropper(bool restorePreviousTool);
   void applyPaintColor(PaintTarget target, const css::RGBA& color, bool recordUndo);
@@ -635,6 +656,7 @@ private:
   };
   ActiveTool activeTool_ = ActiveTool::Select;
   ActiveTool previousEyedropperTool_ = ActiveTool::Select;
+  PaintTarget activePaintTarget_ = PaintTarget::Fill;
   PaintTarget eyedropperTarget_ = PaintTarget::Fill;
   std::uint64_t eyedropperDocumentGeneration_ = 0;
   std::vector<svg::SVGElement> eyedropperSelection_;
