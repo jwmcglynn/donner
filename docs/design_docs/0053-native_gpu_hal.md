@@ -328,12 +328,11 @@ snapshot suites and `geode_perf_tests` pass on the transitional adapter, includi
 cancelled after its readback was queued, which must release its source once the readback
 completes. On native Metal, the Metal registration suite passes and snapshot readback returns the
 rendered pixels. `renderer_geode_tests` runs natively without the cases whose fixtures still
-reach the transitional adapter directly, since reaching it aborts, and the rest pass except for
-cases that assert submission, allocation or wgpu-only counters the native backend does not report
-yet, and one loss case that needs the native buffer mapping to honor a loss declared on the shared
-root. `geode_snapshot_readback_tests` does not run natively: its fixture uploads the test texture
-through the transitional adapter, and the first case that reaches it aborts the suite. `geode_perf_tests` fails on native Metal for the same missing
-counters.
+reach the transitional adapter directly, since reaching it aborts, and the rest pass except one
+that asserts a wgpu-only destroy counter. `geode_snapshot_readback_tests` does not run natively:
+its fixture uploads the test texture through the transitional adapter, and the first case that
+reaches it aborts the suite. `geode_perf_tests` passes on native Metal except one case that counts
+wgpu handle releases.
 
 ### Resource plumbing and uploads
 
