@@ -218,8 +218,8 @@ TEST_F(TextureRegistrationTest, ADeferredBackingReleaseHappensWhenTheLastHolderL
 /// slot nor the registration's final release reports it again. The consumer's registration is not
 /// an allocation of the consumer, so its observer hears nothing.
 TEST_F(TextureRegistrationTest, AProducersBackingReleaseEndsItsOwnershipOnceWhileItIsStillHeld) {
-  tests::RecordingObserver producerObserver;
-  tests::RecordingObserver consumerObserver;
+  tests::RecordingDeviceObserver producerObserver;
+  tests::RecordingDeviceObserver consumerObserver;
   const tests::ScopedObserverInstallation producerObserving(*producer_, producerObserver);
   const tests::ScopedObserverInstallation consumerObserving(*consumer_, consumerObserver);
   ASSERT_THAT(producerObserving.status(), IsOk());
@@ -258,8 +258,8 @@ TEST_F(TextureRegistrationTest, AProducersBackingReleaseEndsItsOwnershipOnceWhil
 /// Until that recycle, the tail gauge already counts the bytes the registration holds while the
 /// producer's ownership has not been reported ended, so the two overlap.
 TEST_F(TextureRegistrationTest, AProducersDroppedHandleEndsItsOwnershipOnceWhileItIsStillHeld) {
-  tests::RecordingObserver producerObserver;
-  tests::RecordingObserver consumerObserver;
+  tests::RecordingDeviceObserver producerObserver;
+  tests::RecordingDeviceObserver consumerObserver;
   const tests::ScopedObserverInstallation producerObserving(*producer_, producerObserver);
   const tests::ScopedObserverInstallation consumerObserving(*consumer_, consumerObserver);
   ASSERT_THAT(producerObserving.status(), IsOk());

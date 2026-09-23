@@ -31,7 +31,7 @@ namespace {
 
 using tests::ObservedEvents;
 using tests::ObservedSubmission;
-using tests::RecordingObserver;
+using tests::RecordingDeviceObserver;
 
 /// A step the scripted backend can refuse after validation accepted it.
 enum class BackendStep {
@@ -229,7 +229,7 @@ protected:
   }
 
   ScriptedBackendDevice device_;
-  RecordingObserver observer_;
+  RecordingDeviceObserver observer_;
   Texture target_;
   TextureView targetView_;
   Buffer vertexBuffer_;
@@ -437,7 +437,7 @@ TEST_F(DeviceObserverTests, ABackendsOwnQueueSubmissionCarriesNoBuffersOrDraws) 
 }
 
 TEST_F(DeviceObserverTests, ADifferentObserverIsRefusedAndTheInstalledOneKeepsReporting) {
-  RecordingObserver other;
+  RecordingDeviceObserver other;
   EXPECT_THAT(device_.installObserver(other),
               IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("another observer")));
   EXPECT_THAT(device_.observer(), Eq(&observer_));
@@ -460,7 +460,7 @@ TEST_F(DeviceObserverTests, InstallingTheInstalledObserverAgainChangesNothing) {
 }
 
 TEST_F(DeviceObserverTests, OnlyTheInstalledObserverCanBeRemoved) {
-  RecordingObserver other;
+  RecordingDeviceObserver other;
   device_.removeObserver(other);
   EXPECT_THAT(device_.observer(), Eq(&observer_)) << "removing another observer changes nothing";
 
@@ -488,7 +488,7 @@ TEST_F(DeviceObserverTests, RemovingTheObserverStopsReports) {
 
 TEST(DeviceObserverRecordingDeviceTests, TheRecordingBackendReportsTheCallersSpan) {
   RecordingDevice device;
-  RecordingObserver observer;
+  RecordingDeviceObserver observer;
   ASSERT_THAT(device.installObserver(observer), IsOk());
   const Texture texture = GetResultOrFail(device.createTexture(TextureDescriptor{
       "texture", Extent2d{2, 2}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));

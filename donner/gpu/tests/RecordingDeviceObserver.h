@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// \c donner::gpu::tests::RecordingObserver - a \ref donner::gpu::DeviceObserver that records
+/// \c donner::gpu::tests::RecordingDeviceObserver - a \ref donner::gpu::DeviceObserver that records
 /// every notification as one comparable value, for tests of what a device reports.
 
 #include <gtest/gtest.h>
@@ -54,7 +54,7 @@ inline void PrintTo(const ObservedEvents& value, std::ostream* os) {
 }
 
 /// Observer that records every notification it receives.
-class RecordingObserver final : public DeviceObserver {
+class RecordingDeviceObserver final : public DeviceObserver {
 public:
   void onBufferCreated() override { ++events.bufferCreates; }
   void onTextureCreated() override { ++events.textureCreates; }
