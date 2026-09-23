@@ -2,9 +2,12 @@
 /// @file
 
 #include <gmock/gmock.h>
+#include <gtest/gtest.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <source_location>
 #include <string>
 
 namespace donner::svg::test {
@@ -12,6 +15,48 @@ namespace donner::svg::test {
 /// Render an RGBA pixel as "{r, g, b, a}" for matcher messages.
 inline std::string FormatRgba(const std::array<uint8_t, 4>& px) {
   return testing::PrintToString(std::array<int, 4>{px[0], px[1], px[2], px[3]});
+}
+
+/**
+ * The four bytes of the pixel at (\p x, \p y) of a snapshot bitmap whose rows are \c rowBytes
+ * apart, or tightly packed when that is zero (a \c RendererBitmap or anything shaped like one).
+ *
+ * A read outside the bitmap fails the calling test at the caller's line, naming the bitmap's
+ * extent, and an empty bitmap is named as one: a renderer that could not read its frame back
+ * returns an empty snapshot, and a read that quietly answered zeros there reported the missing
+ * readback as a transparent pixel, which looks like a rendering defect. The read still answers
+ * zeros so the caller's own assertion runs and prints what it expected.
+ *
+ * @param bitmap Bitmap to read.
+ * @param x Column. @param y Row.
+ * @param caller Where the read was made; defaults to the call site.
+ */
+template <typename Bitmap>
+std::array<uint8_t, 4> PixelAt(const Bitmap& bitmap, int x, int y,
+                               std::source_location caller = std::source_location::current()) {
+  const bool inside = x >= 0 && y >= 0 && x < bitmap.dimensions.x && y < bitmap.dimensions.y;
+  const size_t rowBytes = bitmap.rowBytes != 0 ? static_cast<size_t>(bitmap.rowBytes)
+                                               : static_cast<size_t>(bitmap.dimensions.x) * 4u;
+  const size_t offset = static_cast<size_t>(y) * rowBytes + static_cast<size_t>(x) * 4u;
+  if (!inside || bitmap.pixels.size() < offset + 4u) {
+    if (bitmap.pixels.empty()) {
+      ADD_FAILURE_AT(caller.file_name(), caller.line())
+          << "read pixel (" << x << ", " << y << ") of an empty snapshot: the renderer returned no "
+          << "pixels, so the frame was not read back";
+    } else if (!inside) {
+      ADD_FAILURE_AT(caller.file_name(), caller.line())
+          << "read pixel (" << x << ", " << y << ") outside a " << bitmap.dimensions.x << "x"
+          << bitmap.dimensions.y << " snapshot";
+    } else {
+      ADD_FAILURE_AT(caller.file_name(), caller.line())
+          << "read pixel (" << x << ", " << y << ") of a " << bitmap.dimensions.x << "x"
+          << bitmap.dimensions.y << " snapshot whose " << bitmap.pixels.size()
+          << " bytes end before it";
+    }
+    return {0, 0, 0, 0};
+  }
+  return {bitmap.pixels[offset], bitmap.pixels[offset + 1], bitmap.pixels[offset + 2],
+          bitmap.pixels[offset + 3]};
 }
 
 /// Matches a pixel whose channels each satisfy their own sub-matcher.

@@ -8,10 +8,13 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
@@ -21,6 +24,10 @@
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
+
+#if defined(__APPLE__)
+#include "donner/gpu/metal/MetalDevice.h"
+#endif
 
 namespace donner::geode {
 
@@ -590,9 +597,13 @@ TEST(GeodeDeviceLost, ATeardownDrainThatOverrunsDoesNotDeclareTheRootLost) {
   ASSERT_NE(context, nullptr);
   ASSERT_FALSE(context->isDeviceLost());
 
-  std::unique_ptr<GeodeWgpuAdapterDevice> sibling =
-      context->physicalDeviceOwner()->createLogicalDevice();
-  ASSERT_NE(sibling, nullptr);
+  GeodeRuntimeDevice siblingRuntime = context->physicalDeviceOwner()->createLogicalDevice();
+  ASSERT_NE(siblingRuntime.device, nullptr);
+  ASSERT_THAT(siblingRuntime.transitionalAdapter, NotNull())
+      << "this case holds work through the transitional adapter's test seam";
+  // The adapter view names the same device, so ownership moves to it without a conversion.
+  (void)siblingRuntime.device.release();
+  std::unique_ptr<GeodeWgpuAdapterDevice> sibling(siblingRuntime.transitionalAdapter);
   const uint64_t submitted = SubmitEmptyCommandBuffer(*sibling);
   ASSERT_THAT(submitted, testing::Gt(0u));
   sibling->holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(1));
@@ -722,5 +733,153 @@ TEST(GeodeDeviceLost, ExternalConfigSharesLostState) {
   // outlives the wrapper.
   external.reset();
 }
+
+#if defined(__APPLE__)
+
+/// Why a native Metal case could not start: the host has no Metal device to select.
+constexpr const char* kNoMetalDevice = "no Metal device is available on this host";
+
+/// A context over a native Metal root. These cases are about that backend, so they select it by
+/// name rather than taking whatever the process selects by default.
+std::unique_ptr<GeodeDevice> CreateNativeMetalContext() {
+  GpuRootSelection selection;
+  selection.label = "GeodeNativeMetalTest";
+  selection.backend = GpuBackendKind::NativeMetal;
+  std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
+  if (root == nullptr) {
+    return nullptr;
+  }
+  return GeodeDevice::CreateOverSelectedRoot(std::move(root), gpu::TextureFormat::RGBA8Unorm);
+}
+
+/// Milliseconds elapsed since \p start, as an integer a failure message prints.
+/// @param start When the measured span began.
+int64_t MillisecondsSince(std::chrono::steady_clock::time_point start) {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                               start)
+      .count();
+}
+
+/// A native root reports the texture limit its device reports, not the 8,192-texel fallback a
+/// root uses when it has no device to ask. The renderer refuses images, filter regions and layers
+/// past this limit, so a root that reports the fallback on a device that allocates more drops
+/// content the device can draw. The device also allocates a texture at the limit its root reports.
+TEST(GeodeNativeMetalRoot, ReportsTheTextureLimitItsDeviceReports) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeMetalContext();
+  ASSERT_THAT(context, NotNull()) << kNoMetalDevice;
+  const std::optional<gpu::metal::MetalDevice::SystemCapabilities> device =
+      gpu::metal::MetalDevice::QuerySystemCapabilities();
+  ASSERT_TRUE(device.has_value()) << kNoMetalDevice;
+
+  const uint32_t limit = context->maxTextureDimension2D();
+  EXPECT_THAT(limit, Eq(device->maxTextureDimension2D))
+      << "the root reports a texture limit other than the one its Metal device reports";
+  EXPECT_THAT(
+      context->runtimeDevice().createTexture(gpu::TextureDescriptor{"AtTheReportedLimit",
+                                                                    {limit, 1},
+                                                                    gpu::TextureFormat::RGBA8Unorm,
+                                                                    gpu::TextureUsage::Sampled}),
+      gpu::HasResult())
+      << "the device refused a texture at the limit its root reports, " << limit << " texels";
+}
+
+/// A native backend has no poll that reports an empty queue: the queue is idle exactly when the
+/// last submission has retired. Held work is the case that tells a real wait apart from one that
+/// returns early, and the bound is what keeps a driver that stopped answering from costing more
+/// than one deadline. Spending the budget is the observation the wait was there to make, so it is
+/// published as a loss attributed to the queue drain, as the transitional adapter's drain does.
+TEST(GeodeNativeMetalRoot, QueueIdleOnHeldWorkSpendsItsBudgetThenDeclaresTheLoss) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeMetalContext();
+  ASSERT_THAT(context, NotNull()) << kNoMetalDevice;
+  // The root selected the native backend, so its runtime device is the Metal device.
+  auto& metal = static_cast<gpu::metal::MetalDevice&>(context->runtimeDevice());
+  ASSERT_THAT(metal.pauseSubmissionsForTest(), gpu::IsOk());
+  const uint64_t submitted = SubmitEmptyCommandBuffer(metal);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+
+  constexpr std::chrono::milliseconds kBudget(200);
+  const auto start = std::chrono::steady_clock::now();
+  const GpuWaitResult result = context->waitForQueueIdle(kBudget);
+  const int64_t elapsedMs = MillisecondsSince(start);
+
+  EXPECT_THAT(result, Eq(GpuWaitResult::TimedOut))
+      << "the last submission was held incomplete, so reporting the queue idle means the wait "
+         "returned before the work retired";
+  EXPECT_THAT(metal.completedSerial(), Lt(submitted))
+      << "the held submission retired anyway, so this case observed no held work";
+  EXPECT_THAT(elapsedMs, Ge(kBudget.count())) << "the wait gave up before its budget was spent";
+  // Well under the 5 s default budget, so a wait that spends a budget other than the caller's
+  // fails here rather than passing.
+  EXPECT_THAT(elapsedMs, Lt(kBudget.count() + 1000))
+      << "the wait outlived its budget, so a driver that stopped answering costs more than one "
+         "deadline";
+  EXPECT_TRUE(context->isDeviceLost()) << "a drain that spent its deadline must publish the loss";
+  EXPECT_THAT(context->consumeReadbackStats().timedOutWaitSite, Eq(GpuWaitSite::QueueIdle));
+
+  metal.resumeSubmissionsForTest();
+}
+
+/// The drain returns once the last submission retires and not before. The submission is held
+/// when the wait starts and released from another thread while it is under way, so a wait that
+/// reports the queue idle while the work is still held is visible in the completed serial at the
+/// moment it returns. The seam's release only signals a shared event, which Metal allows from any
+/// thread, and the waiting thread reads nothing but completion state meanwhile.
+TEST(GeodeNativeMetalRoot, QueueIdleReturnsOnceTheLastSubmissionRetires) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeMetalContext();
+  ASSERT_THAT(context, NotNull()) << kNoMetalDevice;
+  auto& metal = static_cast<gpu::metal::MetalDevice&>(context->runtimeDevice());
+  ASSERT_THAT(metal.pauseSubmissionsForTest(), gpu::IsOk());
+  const uint64_t submitted = SubmitEmptyCommandBuffer(metal);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+
+  std::thread releaser([&metal] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    metal.resumeSubmissionsForTest();
+  });
+  const GpuWaitResult result = context->waitForQueueIdle();
+  const uint64_t completedAtReturn = metal.completedSerial();
+  releaser.join();
+
+  EXPECT_THAT(result, Eq(GpuWaitResult::Complete));
+  EXPECT_THAT(completedAtReturn, Ge(submitted))
+      << "the wait reported the queue idle while its last submission was still held";
+  EXPECT_FALSE(context->isDeviceLost()) << "a drain that completed observed nothing to declare";
+}
+
+/// A loss declared while the drain waits is reported as that loss rather than as the drain's own
+/// timeout: the drain did not observe the device stop answering, so it must not claim it did.
+/// The submission stays held, and the loss is declared from another thread partway through the
+/// wait, as a driver-reported loss on the shared root would be.
+TEST(GeodeNativeMetalRoot, QueueIdleReportsALossDeclaredDuringTheWait) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeMetalContext();
+  ASSERT_THAT(context, NotNull()) << kNoMetalDevice;
+  auto& metal = static_cast<gpu::metal::MetalDevice&>(context->runtimeDevice());
+  ASSERT_THAT(metal.pauseSubmissionsForTest(), gpu::IsOk());
+  const uint64_t submitted = SubmitEmptyCommandBuffer(metal);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+
+  // The loss comes early in a long budget, so a loaded host that delays the declaring thread
+  // still declares it well before the drain could give up on its own.
+  constexpr std::chrono::milliseconds kBudget(1500);
+  std::thread declarer([&context] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    context->markDeviceLost("test-injected loss during a queue drain");
+  });
+  const auto start = std::chrono::steady_clock::now();
+  const GpuWaitResult result = context->waitForQueueIdle(kBudget);
+  const int64_t elapsedMs = MillisecondsSince(start);
+  declarer.join();
+
+  EXPECT_THAT(result, Eq(GpuWaitResult::DeviceLost))
+      << "a loss declared during the drain is reported as the loss, not as a drain timeout";
+  EXPECT_THAT(elapsedMs, Lt(kBudget.count() + 1000))
+      << "the drain outlived its own budget after the loss was declared";
+  EXPECT_THAT(context->consumeReadbackStats().timedOutWaitSite, Eq(GpuWaitSite::None))
+      << "the drain must not attribute a loss it did not observe to its own deadline";
+
+  metal.resumeSubmissionsForTest();
+}
+
+#endif  // defined(__APPLE__)
 
 }  // namespace donner::geode

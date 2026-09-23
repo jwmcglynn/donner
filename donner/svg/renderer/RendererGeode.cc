@@ -1478,6 +1478,35 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::unordered_map<const RendererGeodeTextureSnapshot::Backing*, gpu::Texture>
       frameSnapshotImports;
 
+  /**
+   * The texture \p source names, as a texture of this renderer's context: a registration of
+   * \p owner's texture, made the first time the frame draws it and reused for the rest of the
+   * frame. Naming another context's texture is a registration only the transitional adapter
+   * performs so far, so a native context refuses.
+   *
+   * @param owner Context that owns \p source.
+   * @param source Live texture of \p owner.
+   * @param key Snapshot backing the registration is kept under until the frame boundary.
+   * @return The registration, or null to refuse the draw.
+   */
+  const gpu::Texture* registerFrameSnapshotSource(
+      const geode::GeodeDevice& owner, const gpu::Texture& source,
+      const RendererGeodeTextureSnapshot::Backing* key) {
+    const auto found = frameSnapshotImports.find(key);
+    if (found != frameSnapshotImports.end()) {
+      return &found->second;
+    }
+    if (!device->hasTransitionalAdapter() || !owner.hasTransitionalAdapter()) {
+      return nullptr;
+    }
+    gpu::Result<gpu::Texture> imported =
+        device->adapterDevice().importTextureFrom(owner.adapterDevice(), source);
+    if (imported.hasError()) {
+      return nullptr;
+    }
+    return &frameSnapshotImports.emplace(key, std::move(imported).result()).first->second;
+  }
+
   /// Opens a runtime view over an already-named texture, valid for the rest of the frame. Views
   /// cover the whole texture, so this addresses exactly the texels any other full-texture view of
   /// the same texture would.
@@ -5139,7 +5168,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Bounded, and skipped once the device is lost, so renderer teardown never blocks on a hung
   /// driver.
   void waitForQueueIdleAtTeardown() {
-    if (device && device->adapterDevice().root().device()) {
+    if (device && device->physicalDeviceOwner()->root().hasBackendDevice()) {
       device->waitForQueueIdle();
     }
   }
@@ -6877,17 +6906,11 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
   const gpu::Texture* source = geodeTexture->runtimeTexture();
   UTILS_RELEASE_ASSERT(source != nullptr);
   if (source->deviceId() != impl_->device->runtimeDevice().deviceId()) {
-    const auto key = geodeTexture->backing_.get();
-    auto found = impl_->frameSnapshotImports.find(key);
-    if (found == impl_->frameSnapshotImports.end()) {
-      gpu::Result<gpu::Texture> imported = impl_->device->adapterDevice().importTextureFrom(
-          geodeTexture->device_->adapterDevice(), *source);
-      if (imported.hasError()) {
-        return false;
-      }
-      found = impl_->frameSnapshotImports.emplace(key, std::move(imported).result()).first;
+    source = impl_->registerFrameSnapshotSource(*geodeTexture->device_, *source,
+                                                geodeTexture->backing_.get());
+    if (source == nullptr) {
+      return false;
     }
-    source = &found->second;
   }
   impl_->encoder->drawTexture(*source, targetRect, sourceUv, opacity, pixelated,
                               geodeTexture->alphaType() == AlphaType::Premultiplied);

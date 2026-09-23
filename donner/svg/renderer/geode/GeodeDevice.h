@@ -50,6 +50,7 @@ class GeodeMaskPipeline;
 class GeodeFilterEngine;
 class GeodeGpuRoot;
 struct GeodeEmbedConfig;
+struct GeodeRuntimeDevice;
 class GeodeWgpuAdapterDevice;
 class GeodeSnapshotReadbackPipeline;
 
@@ -62,19 +63,6 @@ class GeodeSnapshotReadbackPipeline;
  */
 class GeodePhysicalDeviceOwner {
 public:
-  /**
-   * Retains the selected runtime device and the backend root it drives.
-   *
-   * Both come from the one selection factory, which is what keeps a caller from assembling a
-   * half-populated root by hand.
-   *
-   * @param root Backend root the selection produced or adopted; must not be null.
-   * @param device Runtime device over \p root from the same selection; must not be null.
-   * @return The owner, or null when either argument is null.
-   */
-  static std::shared_ptr<GeodePhysicalDeviceOwner> Create(
-      std::shared_ptr<GeodeGpuRoot> root, std::unique_ptr<GeodeWgpuAdapterDevice> device);
-
   ~GeodePhysicalDeviceOwner();
 
   GeodePhysicalDeviceOwner(const GeodePhysicalDeviceOwner&) = delete;
@@ -88,13 +76,26 @@ public:
   const std::shared_ptr<GeodeDeviceLostState>& lostState() const UTILS_LIFETIME_BOUND;
 
   /// A runtime device of its own over this owner's backend root, for a second logical context.
-  /// Two contexts are two runtime devices: separate handle tables, serials and counters over the
-  /// one root they share.
-  std::unique_ptr<GeodeWgpuAdapterDevice> createLogicalDevice() const;
+  /// Two contexts are two runtime devices: separate handle tables and serials over the one root
+  /// they share.
+  GeodeRuntimeDevice createLogicalDevice() const;
 
 private:
-  GeodePhysicalDeviceOwner(std::shared_ptr<GeodeGpuRoot> root,
-                           std::unique_ptr<GeodeWgpuAdapterDevice> device);
+  /// Only a context builds an owner, from a root and the device \ref CreateGpuDeviceOver opened
+  /// over it, so a device can never be paired with a root of another backend.
+  friend class GeodeDevice;
+
+  /**
+   * Retains the selected runtime device and the backend root it drives.
+   *
+   * @param root Backend root the selection produced or adopted; must not be null.
+   * @param device Runtime device \ref CreateGpuDeviceOver opened over \p root.
+   * @return The owner, or null when either is missing.
+   */
+  static std::shared_ptr<GeodePhysicalDeviceOwner> Create(std::shared_ptr<GeodeGpuRoot> root,
+                                                          GeodeRuntimeDevice device);
+
+  GeodePhysicalDeviceOwner(std::shared_ptr<GeodeGpuRoot> root, std::unique_ptr<gpu::Device> device);
 
   /// Declared first so the backend root outlives every runtime device built over it.
   std::shared_ptr<GeodeGpuRoot> root_;
@@ -254,10 +255,15 @@ public:
    * not report queue-idle, and browser device hangs surface through the
    * readback map deadline and the browser's own device-loss reporting.
    *
+   * On a native backend there is no poll that reports an empty queue: the
+   * wait is for this context's last submitted serial to complete, within the
+   * same budget, and so observes only this context's own submissions.
+   *
    * @param timeout Wait budget; defaults to the shared generous bound.
    * @return `Complete` when the queue drained, `TimedOut` when the deadline
    *   expired (the device is now marked lost), `DeviceLost` when the device
-   *   was already lost and no wait was performed.
+   *   was already lost and no wait was performed, or, on a native backend,
+   *   when a loss was declared while the wait was running.
    */
   GpuWaitResult waitForQueueIdle(std::chrono::milliseconds timeout = kDefaultGpuWaitTimeout) const;
 
@@ -775,10 +781,16 @@ public:
   /// exist.
   gpu::Device& runtimeDevice() const UTILS_LIFETIME_BOUND;
 
+  /// Whether this context renders through the transitional adapter, so \ref adapterDevice names
+  /// a device. False on a native backend, where the operations that accessor exists for have no
+  /// wgpu object to reach.
+  bool hasTransitionalAdapter() const;
+
   /// The TEMPORARY transition adapter implementing \c donner::gpu::Device over this
   /// device's wgpu objects. The same object \ref runtimeDevice returns, named by its concrete
   /// type for the callers that still use operations the runtime contract does not carry yet; see
-  /// GeodeWgpuAdapterDevice.h for the removal gates.
+  /// GeodeWgpuAdapterDevice.h for the removal gates. Halts when this context renders through a
+  /// native backend; \ref hasTransitionalAdapter is what a caller that can serve both asks first.
   GeodeWgpuAdapterDevice& adapterDevice() const UTILS_LIFETIME_BOUND;
 
   /// The recording context Geode's encoders record a frame against: this device's GPU runtime
@@ -837,12 +849,14 @@ private:
    * @param runtimeDevice Runtime device to render through; either the owner's root device, which
    *   the context created together with the owner takes, or one of its own from
    *   \ref GeodePhysicalDeviceOwner::createLogicalDevice.
+   * @param transitionalAdapter \p runtimeDevice named as the transitional adapter, as
+   *   \ref CreateGpuDeviceOver recorded it; null on a native backend.
    * @param ownedRuntimeDevice Non-null when \p runtimeDevice is this context's own, so the
    *   context releases it; null when it is the owner's.
    */
-  GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice,
-              GeodeWgpuAdapterDevice& runtimeDevice,
-              std::unique_ptr<GeodeWgpuAdapterDevice> ownedRuntimeDevice);
+  GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice, gpu::Device& runtimeDevice,
+              GeodeWgpuAdapterDevice* transitionalAdapter,
+              std::unique_ptr<gpu::Device> ownedRuntimeDevice);
 
   /// Builds a logical context with a runtime device of its own over \p physicalDevice's root.
   /// @param physicalDevice Owner whose root the new context renders through.
@@ -862,12 +876,17 @@ private:
   /// Held only when this context created its own runtime device; null when it renders through the
   /// owner's. Declared before \ref impl_ so the pipelines and pooled resources there, which
   /// release their handles through this device, are destroyed while it still exists.
-  std::unique_ptr<GeodeWgpuAdapterDevice> ownedRuntimeDevice_;
+  std::unique_ptr<gpu::Device> ownedRuntimeDevice_;
 
   /// This context's runtime device: \ref ownedRuntimeDevice_, or the owner's root device. Never
   /// null once construction has finished, and kept out of \ref impl_ so teardown can still drain
   /// the queue after the logical resources are gone.
-  GeodeWgpuAdapterDevice* runtimeDevice_ = nullptr;
+  gpu::Device* runtimeDevice_ = nullptr;
+
+  /// \ref runtimeDevice_ named by its concrete type when this context renders through the
+  /// transitional adapter, and null on a native backend, where the operations that accessor
+  /// exists for have no wgpu object to reach.
+  GeodeWgpuAdapterDevice* transitionalAdapter_ = nullptr;
 
   struct Impl;
   std::unique_ptr<Impl> impl_;

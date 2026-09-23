@@ -802,6 +802,7 @@
         "getConstMappedRange",
         "mapAsync",
         "poll",
+        "release",
         "submit",
         "unmap"
       ],
@@ -951,6 +952,7 @@
         "getConstMappedRange",
         "mapAsync",
         "poll",
+        "release",
         "submit",
         "unmap",
         "writeTexture"

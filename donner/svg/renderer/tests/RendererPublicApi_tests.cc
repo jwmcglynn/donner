@@ -20,10 +20,13 @@
 #include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/FontManager.h"
 
 namespace donner::svg {
 namespace {
+
+using test::PixelAt;
 
 using ::testing::_;
 using ::testing::AllOf;
@@ -665,12 +668,6 @@ TEST(RendererTinySkiaSecurityTest, RetainedClipEpochMasksHaveAFrameSurfaceEnvelo
 }
 
 // -- Pixel access and custom matchers --
-
-/// Return RGBA pixel at (x,y) from a normalized snapshot.
-std::array<uint8_t, 4> PixelAt(const RendererBitmap& snap, int x, int y) {
-  const size_t idx = static_cast<size_t>(y) * snap.rowBytes + static_cast<size_t>(x) * 4u;
-  return {snap.pixels[idx], snap.pixels[idx + 1], snap.pixels[idx + 2], snap.pixels[idx + 3]};
-}
 
 MATCHER_P4(Rgba, rMatcher, gMatcher, bMatcher, aMatcher, "has RGBA channels") {
   const std::array<int, 4> channels = {static_cast<int>(arg[0]), static_cast<int>(arg[1]),

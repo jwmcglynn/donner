@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -94,6 +95,41 @@ public:
     ForceNonUnified,
   };
 
+  /// What the system default Metal device supports, which every device \ref Create opens shares.
+  struct SystemCapabilities {
+    /// Largest width or height of a 2D texture the device allocates, from its GPU family and
+    /// capped at \ref kMaxTextureDimension, the largest extent the runtime accepts.
+    uint32_t maxTextureDimension2D = 0;
+  };
+
+  /// The GPU families a Metal device belongs to, as far as its 2D texture limit depends on them.
+  struct GpuFamilies {
+    /// Any Mac family. Every Metal device on macOS is in one, Apple silicon included.
+    bool mac = false;
+    /// Apple family 3 or later.
+    bool apple3OrLater = false;
+  };
+
+  /**
+   * Largest width or height of a 2D texture a device of \p families allocates, from Metal's
+   * feature set tables: 16,384 for every Mac family and for Apple family 3 onward, and 8,192 for
+   * the earlier Apple families. Capped at \ref kMaxTextureDimension.
+   *
+   * @param families Families the device belongs to.
+   */
+  static uint32_t MaxTextureDimension2DFor(GpuFamilies families);
+
+  /**
+   * Asks the system default Metal device, the one \ref Create opens, what it supports without
+   * opening a runtime device over it.
+   *
+   * A backend root is selected before any device over it exists, and its limits have to be the
+   * device's own rather than a portable fallback.
+   *
+   * @return The capabilities, or empty when no Metal device is available.
+   */
+  static std::optional<SystemCapabilities> QuerySystemCapabilities();
+
   /**
    * Creates a device on the system default Metal device. Returns nullptr if no Metal device is
    * available (for example on a CI host without a GPU).
@@ -104,11 +140,15 @@ public:
    *   Zero is invalid and returns nullptr. Each individual batch also fits \ref kMaxBufferByteSize.
    * @param unalignedWriteTimeout Maximum CPU wait for an unaligned write to a busy buffer.
    *   Must be between zero and five seconds; invalid budgets return nullptr.
+   * @param lostState Loss condition to share with every other device selected over the same
+   *   backend, or null for a private one. The device reports it through \ref Device::isLost;
+   *   the loss is declared by whoever observes it, such as a context's bounded wait.
    */
   static std::unique_ptr<MetalDevice> Create(
       MemoryModel memoryModel = MemoryModel::Detected,
       uint64_t uploadStagingByteBudget = kMaxBufferByteSize,
-      std::chrono::milliseconds unalignedWriteTimeout = std::chrono::seconds(5));
+      std::chrono::milliseconds unalignedWriteTimeout = std::chrono::seconds(5),
+      std::shared_ptr<DeviceLostState> lostState = nullptr);
 
   /// Whether this device's resources are built for unified memory. Test accessor.
   [[nodiscard]] bool usesUnifiedMemoryForTest() const;

@@ -392,6 +392,7 @@ donner_cc_test(
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -419,6 +420,7 @@ donner_cc_test(
         ":renderer_test_backend",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/renderer",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/resources:font_manager",
         "@com_google_gtest//:gtest_main",
     ],

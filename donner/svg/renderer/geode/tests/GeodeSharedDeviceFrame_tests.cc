@@ -43,9 +43,12 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::svg {
 namespace {
+
+using test::PixelAt;
 
 /// A flat "gradient" (both stops the same blue) so a paint-block rewrite is a
 /// whole-pixel color change rather than a subtle ramp shift. Gradient fill is
@@ -69,12 +72,6 @@ SVGDocument parseDocument(std::string_view svgSource) {
   auto parsed = parser::SVGParser::ParseSVG(svgSource, sink);
   EXPECT_FALSE(parsed.hasError()) << (parsed.hasError() ? parsed.error().reason : "");
   return std::move(parsed.result());
-}
-
-std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
-  const uint8_t* pixel =
-      bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4;
-  return {pixel[0], pixel[1], pixel[2], pixel[3]};
 }
 
 bool isBlue(const std::array<uint8_t, 4>& px) {
@@ -257,7 +254,7 @@ TEST_F(GeodeSharedDeviceFrameTest, MidFrameOffscreenRenderKeepsRecordedGradientP
   {
     const RendererBitmap baseline = outer.takeSnapshot();
     ASSERT_FALSE(baseline.empty());
-    const auto px = pixelAt(baseline, 40, 40);
+    const auto px = PixelAt(baseline, 40, 40);
     ASSERT_TRUE(isBlue(px)) << "Baseline gradient rect must render blue, got rgba(" << int(px[0])
                             << "," << int(px[1]) << "," << int(px[2]) << "," << int(px[3]) << ")";
   }
@@ -319,7 +316,7 @@ TEST_F(GeodeSharedDeviceFrameTest, MidFrameOffscreenRenderKeepsRecordedGradientP
 
   const RendererBitmap result = outer.takeSnapshot();
   ASSERT_FALSE(result.empty());
-  const auto px = pixelAt(result, 40, 40);
+  const auto px = PixelAt(result, 40, 40);
   EXPECT_TRUE(isBlue(px)) << "Outer frame recorded the gradient as blue before the offscreen "
                              "render; a green pixel means the inner frame rewrote the paint "
                              "block the recorded draw reads at submit. Got rgba("
@@ -331,7 +328,7 @@ TEST_F(GeodeSharedDeviceFrameTest, MidFrameOffscreenRenderKeepsRecordedGradientP
   // the outer's blue is preservation, not a stale inner pass.
   const RendererBitmap innerResult = static_cast<RendererGeode*>(inner.get())->takeSnapshot();
   ASSERT_FALSE(innerResult.empty());
-  const auto innerPx = pixelAt(innerResult, 40, 40);
+  const auto innerPx = PixelAt(innerResult, 40, 40);
   EXPECT_TRUE(innerPx[1] > 200 && innerPx[0] < 60 && innerPx[2] < 60)
       << "Offscreen render must show the animated green gradient, got rgba(" << int(innerPx[0])
       << "," << int(innerPx[1]) << "," << int(innerPx[2]) << "," << int(innerPx[3]) << ")";

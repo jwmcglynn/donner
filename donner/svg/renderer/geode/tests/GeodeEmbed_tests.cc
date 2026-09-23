@@ -22,16 +22,11 @@
 namespace donner::svg {
 namespace {
 
+using test::PixelAt;
+
 constexpr double kViewportSize = 32.0;
 
 using test::IsTransparent;
-
-/// RGBA pixel at (x, y) in a tightly packed snapshot bitmap.
-std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
-  const size_t off = static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4u;
-  return {bitmap.pixels[off], bitmap.pixels[off + 1], bitmap.pixels[off + 2],
-          bitmap.pixels[off + 3]};
-}
 
 // ---------------------------------------------------------------------------
 // GeodeDevice::CreateFromExternal
@@ -96,7 +91,7 @@ TEST(GeodeEmbed, DestroyingAnEmbeddedContextLeavesTheHostDeviceRendering) {
   ASSERT_FALSE(snapshot.empty())
       << "the host could not complete a submission and readback after the context borrowing its "
          "backend objects was destroyed";
-  EXPECT_THAT(pixelAt(snapshot, 16, 16), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 16, 16), IsTransparent());
 }
 
 /// Null device should produce a null return, not a crash.
@@ -160,7 +155,7 @@ TEST_F(GeodeEmbedTest, EmptyFrameIsTransparent) {
   EXPECT_EQ(snap.dimensions.x, static_cast<int>(kViewportSize));
   EXPECT_EQ(snap.dimensions.y, static_cast<int>(kViewportSize));
 
-  auto pixel = pixelAt(snap, 16, 16);
+  auto pixel = PixelAt(snap, 16, 16);
   EXPECT_THAT(pixel, IsTransparent()) << "Empty frame should be transparent";
 }
 
@@ -211,7 +206,7 @@ TEST_F(GeodeEmbedTest, SetTargetTextureRendersIntoHostTexture) {
   EXPECT_EQ(snap.dimensions.x, static_cast<int>(kSize));
   EXPECT_EQ(snap.dimensions.y, static_cast<int>(kSize));
 
-  auto pixel = pixelAt(snap, 16, 16);
+  auto pixel = PixelAt(snap, 16, 16);
   EXPECT_THAT(pixel, IsTransparent()) << "Empty frame should be transparent";
 
   renderer.clearTargetTexture();

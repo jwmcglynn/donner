@@ -39,9 +39,12 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGlyphResidency.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::svg {
 namespace {
+
+using test::PixelAt;
 
 /// Hermetic test fonts, relative to the runfiles root.
 constexpr std::string_view kFontsRunfilesPath = "third_party/resvg-test-suite/fonts";
@@ -60,23 +63,6 @@ size_t nonTransparentPixels(const RendererBitmap& bitmap) {
     }
   }
   return count;
-}
-
-/// Straight-alpha RGBA at (x, y).
-struct Pixel {
-  uint8_t r = 0;
-  uint8_t g = 0;
-  uint8_t b = 0;
-  uint8_t a = 0;
-};
-
-Pixel pixelAt(const RendererBitmap& bitmap, int x, int y) {
-  const size_t offset = static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4u;
-  if (offset + 4 > bitmap.pixels.size()) {
-    return Pixel{};
-  }
-  return Pixel{bitmap.pixels[offset], bitmap.pixels[offset + 1], bitmap.pixels[offset + 2],
-               bitmap.pixels[offset + 3]};
 }
 
 class GeodeGlyphInstancingTest : public ::testing::Test {
@@ -214,11 +200,11 @@ TEST_F(GeodeGlyphInstancingTest, OverlappingTextElementsCompositeInPaintOrder) {
   bool foundOpaque = false;
   for (int y = 0; y < first.bitmap.dimensions.y && !foundOpaque; ++y) {
     for (int x = 0; x < first.bitmap.dimensions.x; ++x) {
-      const Pixel pixel = pixelAt(first.bitmap, x, y);
-      if (pixel.a == 255) {
-        EXPECT_LT(pixel.r, 16) << "Red shows through at (" << x << ", " << y
-                               << "); the later element must win in painter order.";
-        EXPECT_GT(pixel.b, 200) << "Blue is missing at (" << x << ", " << y << ").";
+      const std::array<uint8_t, 4> pixel = PixelAt(first.bitmap, x, y);
+      if (pixel[3] == 255) {
+        EXPECT_LT(pixel[0], 16) << "Red shows through at (" << x << ", " << y
+                                << "); the later element must win in painter order.";
+        EXPECT_GT(pixel[2], 200) << "Blue is missing at (" << x << ", " << y << ").";
         foundOpaque = true;
         break;
       }

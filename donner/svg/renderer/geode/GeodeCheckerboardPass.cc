@@ -8,7 +8,6 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::geode {
 
@@ -50,13 +49,13 @@ struct PreparedTargetPass {
 std::optional<PreparedTargetPass> PrepareTargetPass(
     GeodeDevice& device, const gpu::Texture& target,
     GeodeCheckerboardPipeline::BlendMode blendMode) {
-  GeodeWgpuAdapterDevice& adapterDevice = device.adapterDevice();
-  gpu::Result<gpu::TextureView> targetView = adapterDevice.createTextureView(
+  gpu::Device& runtimeDevice = device.runtimeDevice();
+  gpu::Result<gpu::TextureView> targetView = runtimeDevice.createTextureView(
       target, gpu::TextureViewDescriptor{"GeodeCheckerboardTargetView"});
   if (targetView.hasError()) {
     return std::nullopt;
   }
-  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder = adapterDevice.createCommandEncoder();
+  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder = runtimeDevice.createCommandEncoder();
   if (encoder.hasError()) {
     return std::nullopt;
   }
@@ -86,9 +85,9 @@ bool GeodeCheckerboardPass::ensureResources(GeodeDevice& device,
   }
   bindGroup_ = gpu::BindGroup();
 
-  GeodeWgpuAdapterDevice& adapterDevice = device.adapterDevice();
+  gpu::Device& runtimeDevice = device.runtimeDevice();
   if (!uniformBuffer_.isValid()) {
-    gpu::Result<gpu::Buffer> uniformBuffer = adapterDevice.createBuffer(gpu::BufferDescriptor{
+    gpu::Result<gpu::Buffer> uniformBuffer = runtimeDevice.createBuffer(gpu::BufferDescriptor{
         "GeodeCheckerboardUniforms", sizeof(GeodeCheckerboardPipeline::Uniforms),
         gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
     if (uniformBuffer.hasError()) {
@@ -97,7 +96,7 @@ bool GeodeCheckerboardPass::ensureResources(GeodeDevice& device,
     uniformBuffer_ = std::move(uniformBuffer).result();
   }
 
-  gpu::Result<gpu::BindGroup> bindGroup = adapterDevice.createBindGroup(gpu::BindGroupDescriptor{
+  gpu::Result<gpu::BindGroup> bindGroup = runtimeDevice.createBindGroup(gpu::BindGroupDescriptor{
       "GeodeCheckerboardBG",
       pipeline.bindGroupLayout(),
       {gpu::BindGroupEntry{
@@ -120,7 +119,7 @@ bool GeodeCheckerboardPass::draw(GeodeDevice& device, const gpu::Texture& target
   }
 
   const gpu::Result<gpu::TextureDescriptor> targetDesc =
-      device.adapterDevice().textureDescriptor(target);
+      device.runtimeDevice().textureDescriptor(target);
   if (targetDesc.hasError() ||
       targetDesc.result().size != gpu::Extent2d{static_cast<std::uint32_t>(targetSizePx.x),
                                                 static_cast<std::uint32_t>(targetSizePx.y)}) {
@@ -142,8 +141,8 @@ bool GeodeCheckerboardPass::draw(GeodeDevice& device, const gpu::Texture& target
                          static_cast<float>(params.originOffsetPx.y)},
       .padding = {0.0f, 0.0f},
   };
-  GeodeWgpuAdapterDevice& adapterDevice = device.adapterDevice();
-  if (adapterDevice
+  gpu::Device& runtimeDevice = device.runtimeDevice();
+  if (runtimeDevice
           .writeBuffer(uniformBuffer_, 0,
                        std::span(reinterpret_cast<const uint8_t*>(&uniforms), sizeof(uniforms)))
           .hasError()) {
@@ -161,7 +160,7 @@ bool GeodeCheckerboardPass::draw(GeodeDevice& device, const gpu::Texture& target
   if (commandBuffer.hasError()) {
     return false;
   }
-  return !adapterDevice.submit(std::move(commandBuffer).result()).hasError();
+  return !runtimeDevice.submit(std::move(commandBuffer).result()).hasError();
 }
 
 }  // namespace donner::geode
