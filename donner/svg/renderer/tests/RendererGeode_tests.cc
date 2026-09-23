@@ -6709,5 +6709,66 @@ TEST_F(RendererGeodeTest, PlacementExactCoverageAtLargePathCoordinates) {
                               Transform2d(), kPlacements);
 }
 
+// A transform without an inverse maps the path onto a line, which covers no area, so nothing may
+// be drawn. The host gives such a draw an all-zero pixel-to-path mapping. The GPU builds the draw's
+// enclosure from float32 axes that pick up rounding from the clip-space mapping, so the enclosure
+// is not necessarily degenerate and can rasterize a sliver of pixels; the shaders must still cover
+// none of them. Each case puts the path-space origin inside the geometry, where a zero mapping
+// would otherwise read full coverage, and runs a different pipeline: a solo fill, a cross-entity
+// batch of two paints, a gradient, a clip mask and a pattern.
+TEST_F(RendererGeodeTest, TransformWithoutInverseDrawsNothing) {
+  constexpr std::array<std::string_view, 3> kSingularTransforms = {
+      "matrix(1 3 3 9 13 29)",
+      "matrix(2 1 4 2 40 20)",
+      "matrix(0.25 0.75 0.5 1.5 48.5 26.5)",
+  };
+  constexpr std::array<std::string_view, 5> kBodies = {
+      R"svg(<rect x="-5" y="-5" width="10" height="10" transform="TRANSFORM"/>)svg",
+      R"svg(<g transform="TRANSFORM"><rect x="-5" y="-5" width="5" height="10" fill="#000"/>)svg"
+      R"svg(<rect x="0" y="-5" width="5" height="10" fill="#3973ad"/></g>)svg",
+      R"svg(<defs><linearGradient id="g"><stop offset="0" stop-color="#000"/>)svg"
+      R"svg(<stop offset="1" stop-color="#3973ad"/></linearGradient></defs>)svg"
+      R"svg(<rect x="-5" y="-5" width="10" height="10" fill="url(#g)" transform="TRANSFORM"/>)svg",
+      R"svg(<defs><clipPath id="c"><rect x="-5" y="-5" width="10" height="10")svg"
+      R"svg( transform="TRANSFORM"/></clipPath></defs>)svg"
+      R"svg(<rect width="97" height="53" fill="#000" clip-path="url(#c)"/>)svg",
+      R"svg(<defs><pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse">)svg"
+      R"svg(<rect width="4" height="4" fill="#b75d23"/></pattern></defs>)svg"
+      R"svg(<rect x="-5" y="-5" width="10" height="10" fill="url(#p)" transform="TRANSFORM"/>)svg",
+  };
+  constexpr Vector2i kTargetSize(97, 53);
+
+  for (std::string_view transform : kSingularTransforms) {
+    for (std::string_view bodyTemplate : kBodies) {
+      std::string body(bodyTemplate);
+      const std::size_t marker = body.find("TRANSFORM");
+      ASSERT_NE(marker, std::string::npos);
+      body.replace(marker, std::string_view("TRANSFORM").size(), transform);
+      SCOPED_TRACE(body);
+      const std::string source =
+          R"(<svg xmlns="http://www.w3.org/2000/svg" width="97" height="53">)" + body + "</svg>";
+      const std::optional<RendererBitmap> rendered = RenderDocumentPlaced(
+          sharedDevice(), source, kTargetSize, Vector2i::Zero(), 1.0, Transform2d());
+      ASSERT_THAT(rendered, testing::Optional(testing::_));
+      ASSERT_EQ(rendered->dimensions, kTargetSize);
+      int drawnPixels = 0;
+      Vector2i firstDrawn;
+      for (int y = 0; y < kTargetSize.y; ++y) {
+        for (int x = 0; x < kTargetSize.x; ++x) {
+          const uint8_t alpha = rendered->pixels[static_cast<std::size_t>(y) * rendered->rowBytes +
+                                                 static_cast<std::size_t>(x) * 4u + 3u];
+          if (alpha != 0) {
+            if (drawnPixels == 0) {
+              firstDrawn = Vector2i(x, y);
+            }
+            ++drawnPixels;
+          }
+        }
+      }
+      EXPECT_EQ(drawnPixels, 0) << "first drawn pixel " << firstDrawn;
+    }
+  }
+}
+
 }  // namespace
 }  // namespace donner::svg
