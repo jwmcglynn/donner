@@ -7732,12 +7732,21 @@ void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
       });
 }
 
-void EditorShell::applyDeferredRenderRequest() {
+void EditorShell::queueIdleRenderRefreshIfNeeded() {
   const std::optional<float> canvasCommitWake =
       renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds();
   if (canvasCommitWake.has_value() && *canvasCommitWake <= 0.0f) {
     requestRenderAtEndOfFrame_ = true;
   }
+  if (app_.hasDocument() && viewportInitialized_ &&
+      renderCoordinator_.presentationRefreshPending() &&
+      !renderCoordinator_.asyncRenderer().isBusy()) {
+    requestRenderAtEndOfFrame_ = true;
+  }
+}
+
+void EditorShell::applyDeferredRenderRequest() {
+  queueIdleRenderRefreshIfNeeded();
   if (!requestRenderAtEndOfFrame_) {
     return;
   }

@@ -1409,6 +1409,15 @@ public:
     return shell.renderCoordinator_.documentPixelCaptureEnabled();
   }
 
+  static void RestartEyedropperCapture(EditorShell& shell) {
+    shell.renderCoordinator_.setDocumentPixelCaptureEnabled(false);
+    shell.renderCoordinator_.setDocumentPixelCaptureEnabled(true);
+  }
+
+  static bool EyedropperCaptureRequestPending(const EditorShell& shell) {
+    return shell.renderCoordinator_.requestedPixelCapture_.has_value();
+  }
+
   static void SetExpiredEyedropperCanvasCommitWake(EditorShell& shell) {
     shell.renderCoordinator_.pixelCaptureCanvasCommitDue_ =
         std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
@@ -5729,6 +5738,47 @@ TEST(EditorShellTest, IdleEyedropperArmingAndCanvasCommitWakeDispatchRender) {
   shell.asyncRendererForReplay().cancelInFlight();
   ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
       std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+}
+
+TEST(EditorShellTest, CancelledIdleEyedropperCaptureRepostsThroughShellFrame) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+  ASSERT_THAT(EditorShellTestAccess::ArmEyedropper(shell, /*stroke=*/false), testing::Eq(true));
+  const DocumentPixelCapture* capture = nullptr;
+  for (int attempt = 0; attempt < 4 && capture == nullptr; ++attempt) {
+    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+        std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+    capture = EditorShellTestAccess::PixelCapture(shell);
+  }
+  ASSERT_NE(capture, nullptr);
+
+  EditorShellTestAccess::RestartEyedropperCapture(shell);
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  shell.asyncRendererForReplay().setReplayRenderDelayForTesting(std::chrono::milliseconds(500));
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+  ASSERT_THAT(EditorShellTestAccess::EyedropperCaptureRequestPending(shell), testing::Eq(true));
+  ASSERT_THAT(EditorShellTestAccess::RendererBusy(shell), testing::Eq(true));
+
+  shell.asyncRendererForReplay().cancelInFlight();
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+  EXPECT_THAT(EditorShellTestAccess::RendererBusy(shell), testing::Eq(true))
+      << "A cancelled same-identity capture must repost from the completion-woken shell frame.";
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+  EXPECT_NE(EditorShellTestAccess::PixelCapture(shell), nullptr);
 }
 
 TEST(EditorShellTest, ToolbarEyedropperButtonArmsWithoutSamplingItsActivationClick) {

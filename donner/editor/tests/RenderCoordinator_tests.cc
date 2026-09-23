@@ -991,8 +991,8 @@ TEST(RenderCoordinatorTest, DelayedCanvasSizeCommitInvalidatesSameVersionPixelCa
   ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr));
   EXPECT_EQ(coordinator.documentPixelCaptureFor(app, viewport), nullptr)
       << "A raster made before the semantic canvas commit cannot become Ready during debounce.";
-  EXPECT_THAT(coordinator.nextPixelCaptureCanvasCommitWakeSeconds(),
-              ::testing::Optional(::testing::Ge(0.0f)));
+  EXPECT_FALSE(coordinator.nextPixelCaptureCanvasCommitWakeSeconds().has_value())
+      << "Worker completion wakes the shell; no timer should spin while it is busy.";
 
   RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
   ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
@@ -1002,6 +1002,8 @@ TEST(RenderCoordinatorTest, DelayedCanvasSizeCommitInvalidatesSameVersionPixelCa
   coordinator.asyncRenderer().cancelInFlight();
   ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
       std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  EXPECT_THAT(coordinator.nextPixelCaptureCanvasCommitWakeSeconds(),
+              ::testing::Optional(::testing::Eq(0.0f)));
   coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr);
   EXPECT_EQ(coordinator.documentCanvasCommitTotal(), 1u);
   EXPECT_EQ(app.document().currentFrameVersion(), versionBefore);

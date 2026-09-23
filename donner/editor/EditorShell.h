@@ -449,6 +449,7 @@ private:
   [[gnu::noinline]] void snapshotReproFrame();
 #endif
   [[gnu::noinline]] void renderMenuBarAndDialogs(bool compactUi);
+  void queueIdleRenderRefreshIfNeeded();
   [[gnu::noinline]] void applyDeferredRenderRequest();
   [[gnu::noinline]] void recordFrameTelemetry(
       const FrameCostBreakdown::MainFrame& mainFrameCost,
