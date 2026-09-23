@@ -1,7 +1,7 @@
 # Design: Editor Document Eyedropper
 
-**Status:** Implementing. The requester confirmed the interaction and pixel-source design.
-Implementation and native/browser validation are in progress.
+**Status:** Implementing. The editor code and focused native Geode tests are complete. Browser
+validation, final qualification, and publication remain pending.
 **Author:** GPT-6 Sol
 **Created:** 2026-09-22
 **Related:** [Issue #1304](https://github.com/jwmcglynn/donner/issues/1304)
@@ -42,24 +42,25 @@ selection handles, the transparency checkerboard, another window, or pixels outs
 
 ## Next Steps
 
-1. Implement the interaction and worker capture with focused tests.
-2. Prove native and browser document-pixel correspondence and the showcase journey.
-3. Complete independent review and publication gates for the exact candidate.
+1. Run the browser WebGPU journeys and verify document color and alpha against the visible output.
+2. Complete the affected qualification and independent review at the final source revision.
+3. Publish the reviewed change and drive its checks green.
 
 ## Implementation Plan
 
-- [ ] Paint and tool interaction
-  - [ ] Add eyedropper tool identity, toolbar/popup entry points, shortcut capture, and cancellation.
-  - [ ] Share the color application path with the picker and record one selection undo entry.
-  - [ ] Render the loupe and pending/unavailable feedback without hover mutations.
-- [ ] Worker-owned document capture
-  - [ ] Request a bounded composed CPU snapshot when armed or the accepted frame changes.
-  - [ ] Bind capture to the accepted document, font, viewport, and session identities.
-  - [ ] Validate RGBA layout, alpha conversion, memory cap, and edge sampling.
+- [x] Paint and tool interaction
+  - [x] Add eyedropper tool identity, toolbar/popup entry points, shortcut capture, and cancellation.
+  - [x] Share the color application path with the picker and record one selection undo entry.
+  - [x] Render the loupe and pending/unavailable feedback without hover mutations.
+- [x] Worker-owned document capture
+  - [x] Request a bounded composed CPU snapshot when armed or the accepted frame changes.
+  - [x] Bind capture to the accepted document, font, viewport, and session identities.
+  - [x] Validate RGBA layout, alpha conversion, memory cap, and edge sampling.
 - [ ] Validation and delivery
-  - [ ] Add focused native tests for paint, input, capture freshness, and pixel mapping.
-  - [ ] Add native Geode replay and browser WebGPU journey/pixel regressions.
-  - [ ] Run affected gates, inspect exact evidence, complete independent review, and publish.
+  - [x] Add focused native tests for paint, input, capture freshness, and pixel mapping.
+  - [x] Add native Geode window and browser WebGPU journey/pixel regressions.
+  - [ ] Execute the browser target and confirm the captured SVG style and visible pixels.
+  - [ ] Run final affected gates, inspect exact evidence, complete independent review, and publish.
 
 ## Background and Constraints
 
