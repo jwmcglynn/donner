@@ -194,6 +194,70 @@ TEST(BrowserDeviceRequest, NoBridgeIsAlreadyFailed) {
               IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("never begun")));
 }
 
+TEST(BrowserDeviceRequest, SettlingGivesTheBrowserTheThreadUntilTheRequestSettles) {
+  auto bridge = std::make_unique<FakeBrowserBridge>();
+  bridge->requestState = BrowserDeviceRequestState::Pending;
+  FakeBrowserBridge* raw = bridge.get();
+  // The browser settles the request on its own event loop, which it only gets while the wait
+  // hands the thread over; the third time it does, the request is ready.
+  raw->onYield = [raw] {
+    if (raw->yieldCount == 3) {
+      raw->requestState = BrowserDeviceRequestState::Ready;
+    }
+  };
+
+  BrowserDeviceRequest request = BrowserDeviceRequest::Begin(std::move(bridge));
+  EXPECT_THAT(request.settle(5.0), BrowserDeviceRequestState::Ready);
+  EXPECT_THAT(raw->yieldCount, 3u);
+  EXPECT_THAT(raw->yieldedSeconds, testing::Le(0.0031))
+      << "each slice must be short, so a request that settles early is not waited out";
+  EXPECT_THAT(std::move(request).take(), HasResult());
+}
+
+TEST(BrowserDeviceRequest, SettlingGivesUpWhenTheBudgetRunsOut) {
+  auto bridge = std::make_unique<FakeBrowserBridge>();
+  bridge->requestState = BrowserDeviceRequestState::Pending;
+  FakeBrowserBridge* raw = bridge.get();
+
+  BrowserDeviceRequest request = BrowserDeviceRequest::Begin(std::move(bridge));
+  EXPECT_THAT(request.settle(0.02), BrowserDeviceRequestState::Pending);
+  EXPECT_THAT(raw->yieldCount, testing::Gt(0u));
+  EXPECT_THAT(std::move(request).take(),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("has not settled")));
+}
+
+TEST(BrowserDeviceRequest, SettlingARequestThatAlreadySettledHandsNothingOver) {
+  auto bridge = std::make_unique<FakeBrowserBridge>();
+  bridge->requestState = BrowserDeviceRequestState::Failed;
+  FakeBrowserBridge* raw = bridge.get();
+
+  BrowserDeviceRequest request = BrowserDeviceRequest::Begin(std::move(bridge));
+  EXPECT_THAT(request.settle(5.0), BrowserDeviceRequestState::Failed);
+  EXPECT_THAT(raw->yieldCount, 0u);
+}
+
+TEST(BrowserDevice, DeclaresALossTheBrowserReportsIntoTheConditionItShares) {
+  const auto lostState = std::make_shared<DeviceLostState>();
+  auto first = std::make_unique<FakeBrowserBridge>();
+  FakeBrowserBridge* firstBridge = first.get();
+  Result<std::unique_ptr<BrowserDevice>> firstDevice =
+      BrowserDeviceRequest::Begin(std::move(first)).take(lostState);
+  ASSERT_THAT(firstDevice, HasResult());
+  auto second = std::make_unique<FakeBrowserBridge>(firstBridge->gpuDevice);
+  Result<std::unique_ptr<BrowserDevice>> secondDevice =
+      BrowserDeviceRequest::Begin(std::move(second)).take(lostState);
+  ASSERT_THAT(secondDevice, HasResult());
+  EXPECT_THAT(secondDevice.result()->isLost(), testing::IsFalse());
+
+  // The browser reports its device lost; the first device to notice declares the condition every
+  // device over it shares, so the other stops waiting on a device that will not answer too.
+  firstBridge->gpuDevice->lost = true;
+  EXPECT_THAT(firstDevice.result()->createBuffer(SimpleBuffer(BufferUsage::Vertex)),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("was lost")));
+  EXPECT_THAT(lostState->lost.load(), testing::IsTrue());
+  EXPECT_THAT(secondDevice.result()->isLost(), testing::IsTrue());
+}
+
 TEST(BrowserDevice, CreatesResourcesThroughTheBridgeWithEncodedValues) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());

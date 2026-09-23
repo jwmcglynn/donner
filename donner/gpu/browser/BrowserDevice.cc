@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/gpu/DeviceLost.h"
 #include "donner/gpu/browser/BrowserWireCodes.h"
 
 namespace donner::gpu::browser {
@@ -74,6 +75,10 @@ double ClampYieldSeconds(double seconds, double maxSeconds) {
   }
   return seconds < maxSeconds ? seconds : maxSeconds;
 }
+
+/// Longest a device request's wait hands the thread over for at a time. Short, because the wait
+/// looks again after each slice and a request usually settles within a few browser tasks.
+constexpr double kSettleSliceSeconds = 0.001;
 
 /// Success, or the error \p status stands for. @param status Status the bridge returned.
 /// @param operation Operation name for the message.
@@ -263,7 +268,27 @@ RcString BrowserDeviceRequest::error() const {
   return bridge_->deviceRequestError();
 }
 
-Result<std::unique_ptr<BrowserDevice>> BrowserDeviceRequest::take() && {
+BrowserDeviceRequestState BrowserDeviceRequest::settle(double timeoutSeconds) {
+  const std::chrono::steady_clock::time_point deadline =
+      std::chrono::steady_clock::now() +
+      std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+          std::chrono::duration<double>(timeoutSeconds > 0.0 ? timeoutSeconds : 0.0));
+  for (;;) {
+    const BrowserDeviceRequestState current = state();
+    if (current != BrowserDeviceRequestState::Pending || bridge_ == nullptr) {
+      return current;
+    }
+    const double remainingSeconds =
+        std::chrono::duration<double>(deadline - std::chrono::steady_clock::now()).count();
+    if (!(remainingSeconds > 0.0)) {
+      return current;
+    }
+    bridge_->yieldToBrowser(ClampYieldSeconds(remainingSeconds, kSettleSliceSeconds));
+  }
+}
+
+Result<std::unique_ptr<BrowserDevice>> BrowserDeviceRequest::take(
+    std::shared_ptr<DeviceLostState> lostState) && {
   if (!beginError_.empty()) {
     return Err(GpuErrorType::InvalidState,
                std::format("BrowserDeviceRequest::take: the request was never begun: {}",
@@ -290,13 +315,28 @@ Result<std::unique_ptr<BrowserDevice>> BrowserDeviceRequest::take() && {
                              bridge->deviceRequestError().str()));
   }
 
-  return std::unique_ptr<BrowserDevice>(new BrowserDevice(std::move(bridge)));
+  return std::unique_ptr<BrowserDevice>(new BrowserDevice(std::move(bridge), std::move(lostState)));
 }
 
-BrowserDevice::BrowserDevice(std::unique_ptr<BrowserBridge> bridge)
+BrowserDevice::BrowserDevice(std::unique_ptr<BrowserBridge> bridge,
+                             std::shared_ptr<DeviceLostState> lostState)
     : bridge_(std::move(bridge)),
       ownerThread_(std::this_thread::get_id()),
-      sharedDeviceIdentity_(bridge_->sharedDeviceIdentity()) {}
+      sharedLoss_(lostState != nullptr ? std::move(lostState)
+                                       : std::make_shared<DeviceLostState>()),
+      sharedDeviceIdentity_(bridge_->sharedDeviceIdentity()) {
+  adoptLostState(sharedLoss_);
+}
+
+bool BrowserDevice::observeBrowserLoss() const {
+  if (!bridge_->isDeviceLost()) {
+    return false;
+  }
+  if (DeclareDeviceLost(*sharedLoss_)) {
+    LogDeclaredDeviceLoss("the browser reported its GPU device lost");
+  }
+  return true;
+}
 
 BrowserDevice::~BrowserDevice() {
   // Destroying a device from inside its own wait would free this object while the wait is still
@@ -332,7 +372,7 @@ uint64_t BrowserDevice::completedSerial() const {
 }
 
 bool BrowserDevice::isDeviceLost() const {
-  return bridge_->isDeviceLost();
+  return observeBrowserLoss();
 }
 
 RcString BrowserDevice::deviceLostReason() const {
@@ -350,7 +390,7 @@ bool BrowserDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
       std::chrono::duration_cast<std::chrono::steady_clock::duration>(
           std::chrono::duration<double>(timeoutSeconds));
   for (;;) {
-    if (bridge_->isDeviceLost()) {
+    if (observeBrowserLoss()) {
       return false;
     }
     if (bridge_->completedSerial() >= serial) {
@@ -388,7 +428,7 @@ Status BrowserDevice::checkUsable(std::string_view operation) const {
     return Err(GpuErrorType::InvalidState,
                std::format("{}: the browser device belongs to another worker", operation));
   }
-  if (bridge_->isDeviceLost()) {
+  if (observeBrowserLoss()) {
     return Err(GpuErrorType::InvalidState,
                std::format("{}: the browser device was lost: {}", operation,
                            bridge_->deviceLostReason().str()));
@@ -1251,7 +1291,7 @@ MapSliceReport BrowserDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, doub
   // device reaches by handing the thread over and asking again afterwards. There is no signal it
   // can block on, so every slice here is a polled one.
   constexpr MapWaitKind kWaitKind = MapWaitKind::Polled;
-  if (bridge_->isDeviceLost()) {
+  if (observeBrowserLoss()) {
     return MapSliceReport{.state = MapSliceState::DeviceLost, .waitKind = kWaitKind};
   }
   const std::optional<BrowserObjectId> mappingId =
@@ -1406,7 +1446,7 @@ Result<SurfaceStatus> BrowserDevice::onAcquireCurrentTexture(uint32_t slotIndex,
   if (Status usable = checkUsable(kOperation); usable.hasError()) {
     // A lost device has no frame to give, and the runtime's own status vocabulary says so
     // precisely, so the caller learns it without having to read an error message.
-    if (bridge_->isDeviceLost()) {
+    if (observeBrowserLoss()) {
       return SurfaceStatus::DeviceLost;
     }
     return std::move(usable).error();

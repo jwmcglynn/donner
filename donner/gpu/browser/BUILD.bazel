@@ -33,6 +33,7 @@ donner_cc_library(
     deps = [
         "//donner/base",
         "//donner/gpu",
+        "//donner/gpu:device_lost",
     ],
 )
 
