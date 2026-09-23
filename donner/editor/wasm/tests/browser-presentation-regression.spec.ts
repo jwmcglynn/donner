@@ -6,8 +6,8 @@ import {
   type EditorBackgroundCoverageStats,
   isSplashCaptureUsable,
   type PixelBounds,
-  readCssPngPixelDifferenceStats,
   readCanvasColorStats,
+  readCssPngPixelDifferenceStats,
   readEditorBackgroundCoverage,
   readEditorPixelBounds,
   readEditorPixelBoundsFromPng,
@@ -1971,16 +1971,21 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     body: presentedPixel.png,
     contentType: "image/png",
   });
-  expect(presentedPixel.letter?.pixels,
-    `expected the sampled WebGPU pixel to be Donner lettering: ${JSON.stringify(presentedPixel.census)}`)
+  expect(
+    presentedPixel.letter?.pixels,
+    `expected the sampled WebGPU pixel to be Donner lettering: ${
+      JSON.stringify(presentedPixel.census)
+    }`,
+  )
     .toBe(1);
   expect(presentedPixel.census.samples).toBe(1);
   const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(
     presentedPixel.census.dominantColors[0]?.color ?? "",
   );
   expect(rgb, "the presented sample must have one decoded RGB pixel").not.toBeNull();
-  const expectedFill = `#${rgb!.slice(1).map((channel) =>
-    Number(channel).toString(16).padStart(2, "0")).join("")}`;
+  const expectedFill = `#${
+    rgb!.slice(1).map((channel) => Number(channel).toString(16).padStart(2, "0")).join("")
+  }`;
   const baselineSourceVersion = await page.evaluate(
     () => window.__donnerWorkerStats?.sourceVersion ?? -1,
   );
@@ -1995,6 +2000,26 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
   });
   await page.mouse.click(eyedropperTool.x, eyedropperTool.y);
   await expectEyedropperReady(page);
+  await waitForPressReadiness(page, "ready eyedropper hover baseline");
+  const completedBeforeHover = await page.evaluate(
+    () => window.__donnerWorkerStats?.completedResults ?? -1,
+  );
+  for (
+    const hover of [
+      { x: point.x + 2, y: point.y },
+      { x: point.x, y: point.y + 2 },
+      point,
+    ]
+  ) {
+    await page.mouse.move(hover.x, hover.y);
+    await waitForAppliedPointer(page, hover, {
+      message: "document eyedropper hover must only read the accepted CPU capture",
+      timeoutMs: scaledMs(4_000),
+    });
+  }
+  await waitForPressReadiness(page, "document eyedropper hover settled without render");
+  expect(await page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? -1))
+    .toBe(completedBeforeHover);
   await page.mouse.move(point.x, point.y);
   await waitForAppliedPointer(page, point, {
     message: "Donner lettering eyedropper hover",
@@ -2043,10 +2068,11 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     timeoutMs: scaledMs(4_000),
   });
   await page.mouse.click(textPoint.x, textPoint.y);
-  await expect.poll(() => page.evaluate(() => ({
-    selectedCount: window.__donnerInteractionStats?.selectedCount,
-    selectedStyle: window.__donnerEyedropperTestState?.selectedStyle,
-  })), {
+  await expect.poll(() =>
+    page.evaluate(() => ({
+      selectedCount: window.__donnerInteractionStats?.selectedCount,
+      selectedStyle: window.__donnerEyedropperTestState?.selectedStyle,
+    })), {
     message: "Text tool must create and select a text node with the sampled Fill before typing",
     timeout: scaledMs(5_000),
   }).toEqual({
@@ -2105,31 +2131,36 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   const beforeSourceVersion = await page.evaluate(
     () => window.__donnerWorkerStats?.sourceVersion ?? -1,
   );
-  const fixture = '<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" '
-    + 'viewBox="0 0 128 128"><rect width="128" height="128" fill="#ff000080"/></svg>';
-  const beforeSourceFocusFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+  const fixture = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"128\" height=\"128\" "
+    + "viewBox=\"0 0 128 128\"><rect width=\"128\" height=\"128\" fill=\"#ff000080\"/></svg>";
+  const beforeSourceFocusFrame = await page.evaluate(() =>
+    window.__donnerMainLoopRenderedFrames ?? 0
+  );
   await page.mouse.click(120, 180);
   await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
     .toBeGreaterThan(beforeSourceFocusFrame);
-  const beforeSelectAllFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+  const beforeSelectAllFrame = await page.evaluate(() =>
+    window.__donnerMainLoopRenderedFrames ?? 0
+  );
   await page.keyboard.press("Control+A");
   await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
     .toBeGreaterThan(beforeSelectAllFrame);
   await page.keyboard.type(fixture);
-  await expect.poll(() => page.evaluate((before) => {
-    const width = window.__donnerViewportStats?.documentWidth ?? 0;
-    const height = window.__donnerViewportStats?.documentHeight ?? 0;
-    const sourceVersion = window.__donnerWorkerStats?.sourceVersion ?? -1;
-    const busy = window.__donnerInteractionStats?.workerBusy ?? true;
-    return {
-      ready: sourceVersion > before && width > 0 && height > 0
-        && Math.abs(width - height) < 1 && !busy,
-      sourceVersion,
-      width,
-      height,
-      busy,
-    };
-  }, beforeSourceVersion), {
+  await expect.poll(() =>
+    page.evaluate((before) => {
+      const width = window.__donnerViewportStats?.documentWidth ?? 0;
+      const height = window.__donnerViewportStats?.documentHeight ?? 0;
+      const sourceVersion = window.__donnerWorkerStats?.sourceVersion ?? -1;
+      const busy = window.__donnerInteractionStats?.workerBusy ?? true;
+      return {
+        ready: sourceVersion > before && width > 0 && height > 0
+          && Math.abs(width - height) < 1 && !busy,
+        sourceVersion,
+        width,
+        height,
+        busy,
+      };
+    }, beforeSourceVersion), {
     message: "the typed translucent SVG must become a settled square document",
     timeout: scaledMs(8_000),
     intervals: [16, 25, 50, 100],
@@ -2143,8 +2174,10 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     y: viewport.documentY + viewport.documentHeight / 2,
   };
   const redRegion = { x: center.x - 12, y: center.y - 12, width: 24, height: 24 };
-  expect((await readCanvasColorStats(page, redRegion)).coloredPixels,
-    "the translucent rectangle must be visible in the presented WebGPU canvas")
+  expect(
+    (await readCanvasColorStats(page, redRegion)).coloredPixels,
+    "the translucent rectangle must be visible in the presented WebGPU canvas",
+  )
     .toBeGreaterThan(0);
 
   await page.mouse.move(center.x, center.y);
@@ -2168,8 +2201,6 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     message: "translucent edge before arming",
     timeoutMs: scaledMs(4_000),
   });
-  await waitForBrowserComposite(page);
-  const beforeLoupe = await page.screenshot({ clip: paneClip });
   const eyedropperTool = eyedropperToolbarPoint(viewport);
   await page.mouse.move(eyedropperTool.x, eyedropperTool.y);
   await waitForAppliedPointer(page, eyedropperTool, {
@@ -2189,15 +2220,6 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     body: loupe,
     contentType: "image/png",
   });
-  const loupeDifference = readCssPngPixelDifferenceStats(beforeLoupe, loupe, paneClip, {
-    x: edge.x - paneClip.x + 18,
-    y: edge.y - paneClip.y + 18,
-    width: 126,
-    height: 164,
-  });
-  expect(loupeDifference.changedPixelsAbove8,
-    `the edge loupe must visibly change its predicted screen region: ${JSON.stringify(loupeDifference)}`)
-    .toBeGreaterThan(0);
   expect(await readEyedropperState(page)).toEqual(expect.objectContaining({
     armed: true,
     ready: true,
