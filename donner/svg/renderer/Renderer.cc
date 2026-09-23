@@ -631,6 +631,14 @@ bool Renderer::debugGeometryOverlay() const {
   return impl_->debugGeometryOverlay();
 }
 
+void Renderer::setMaximumGlyphs(std::size_t maximumGlyphs) {
+  impl_->setMaximumGlyphs(maximumGlyphs);
+}
+
+std::size_t Renderer::maximumGlyphs() const {
+  return impl_->maximumGlyphs();
+}
+
 bool Renderer::save(const char* filename) {
   const RendererBitmap snapshot = takeSnapshot();
   if (snapshot.empty()) {

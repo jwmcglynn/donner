@@ -225,6 +225,8 @@ donner_cc_test(
         "//conditions:default": [],
     }),
     opens_gpu_device = True,
+    # Keep the software-GPU editor cases below the per-target timeout.
+    shard_count = 4,
     variants = ["geode"],
     deps = [
         "//donner/editor/gui:editor_window",

@@ -357,6 +357,12 @@ public:
   /// Whether the active backend's geometry debug overlay is enabled.
   [[nodiscard]] bool debugGeometryOverlay() const override;
 
+  /// Forwards \ref RendererInterface::setMaximumGlyphs to the active backend.
+  void setMaximumGlyphs(std::size_t maximumGlyphs) override;
+
+  /// The active backend's glyph cap.
+  [[nodiscard]] std::size_t maximumGlyphs() const override;
+
   /**
    * Saves the last rendered frame to a PNG file.
    *

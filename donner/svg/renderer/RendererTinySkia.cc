@@ -82,6 +82,16 @@ std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
                                                  .bytes = commandBytes + pointBytes,
                                                  .decodeWork = complexity.work};
 }
+
+/// Whether any glyph of this text can be stroked: the element or one of its spans has a stroke
+/// paint. Width alone is not evidence, since it defaults to 1 whether or not anything strokes.
+bool TextMayStroke(const components::ComputedTextComponent& text,
+                   const components::ResolvedPaintServer& elementStroke) {
+  return !std::holds_alternative<PaintServer::None>(elementStroke) ||
+         std::any_of(text.spans.begin(), text.spans.end(), [](const auto& span) {
+           return !std::holds_alternative<PaintServer::None>(span.resolvedStroke);
+         });
+}
 #endif
 
 const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
@@ -1400,28 +1410,8 @@ struct RendererTinySkia::DashedPathWorkBudget {
   bool rejected = false;
 };
 
-struct RendererTinySkia::TextGlyphWorkBudget {
-  void reset() {
-    glyphs = 0;
-    rejected = false;
-  }
-
-  [[nodiscard]] bool canReserve(std::size_t count) const {
-    return !rejected && glyphs <= maximumGlyphs && count <= maximumGlyphs - glyphs;
-  }
-
-  void commit(std::size_t count) { glyphs += count; }
-  void reject() { rejected = true; }
-
-  std::size_t maximumGlyphs = RendererDrawBudget::kMaximumDrawCalls / 2;
-  std::size_t glyphs = 0;
-  bool rejected = false;
-};
-
 RendererTinySkia::RendererTinySkia(bool verbose)
-    : verbose_(verbose),
-      textGlyphWorkBudget_(std::make_shared<TextGlyphWorkBudget>()),
-      dashedPathWorkBudget_(std::make_shared<DashedPathWorkBudget>()) {}
+    : verbose_(verbose), dashedPathWorkBudget_(std::make_shared<DashedPathWorkBudget>()) {}
 
 RendererTinySkia::~RendererTinySkia() = default;
 RendererTinySkia::RendererTinySkia(RendererTinySkia&&) noexcept = default;
@@ -1470,7 +1460,6 @@ void RendererTinySkia::prepareRetainedClipEpochBudget(int pixelWidth, int pixelH
 void RendererTinySkia::resetOwnedFrameBudgets() {
   if (ownsDrawBudget_) {
     drawBudget_->reset();
-    textGlyphWorkBudget_->reset();
     dashedPathWorkBudget_->reset();
   }
   if (ownsTextMaterializationBudget_) {
@@ -2754,23 +2743,26 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
 }
 
 #ifdef DONNER_TEXT_ENABLED
-bool RendererTinySkia::admitTextGlyphBatch(const std::vector<TextRun>& runs) {
-  constexpr std::size_t kMaximumGlyphs = RendererDrawBudget::kMaximumDrawCalls / 2;
+bool RendererTinySkia::admitTextGlyphBatch(const std::vector<TextRun>& runs, bool stroked) {
+  // Each glyph reserves a fill draw call, and a stroke draw call when the text can be stroked.
+  const std::size_t drawCallsPerGlyph = stroked ? 2u : 1u;
+  constexpr std::size_t kMaximumCountableGlyphs = std::numeric_limits<std::size_t>::max() / 2;
   std::size_t glyphCount = 0;
   for (const TextRun& run : runs) {
-    if (run.glyphs.size() > kMaximumGlyphs - glyphCount) {
+    if (run.glyphs.size() > kMaximumCountableGlyphs - glyphCount) {
+      textMaterializationBudget_->reject();
       drawBudget_->reject();
       return false;
     }
     glyphCount += run.glyphs.size();
   }
-  if (!textGlyphWorkBudget_->canReserve(glyphCount) ||
-      !drawBudget_->reserve({.drawCalls = glyphCount * 2})) {
-    textGlyphWorkBudget_->reject();
+  // A failed reservation marks its own budget rejected; the draw budget also stops the frame's
+  // remaining glyphs.
+  if (!textMaterializationBudget_->reserveGlyphOccurrences(glyphCount) ||
+      !drawBudget_->reserve({.drawCalls = glyphCount * drawCallsPerGlyph})) {
     drawBudget_->reject();
     return false;
   }
-  textGlyphWorkBudget_->commit(glyphCount);
   return true;
 }
 
@@ -2829,7 +2821,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   std::vector<TextRun>& runs = drawGeometry.runs;
   const Box2d& textBounds = drawGeometry.elementBounds;
 
-  (void)admitTextGlyphBatch(runs);
+  (void)admitTextGlyphBatch(runs, TextMayStroke(text, paint_.stroke));
   if (currentPixmap().width() == 0 || currentPixmap().height() == 0) {
     return;
   }
@@ -3403,7 +3395,6 @@ std::unique_ptr<RendererInterface> RendererTinySkia::createOffscreenInstance() c
   renderer->ownsDrawBudget_ = false;
   renderer->surfaceBudget_ = surfaceBudget_;
   renderer->ownsSurfaceBudget_ = false;
-  renderer->textGlyphWorkBudget_ = textGlyphWorkBudget_;
   renderer->dashedPathWorkBudget_ = dashedPathWorkBudget_;
   renderer->textMaterializationBudget_ = textMaterializationBudget_;
   renderer->ownsTextMaterializationBudget_ = false;
@@ -3423,9 +3414,20 @@ void RendererTinySkia::setGradientStopBudgetForTesting(std::size_t maximumStops)
   drawBudget_->setGradientStopLimitForTesting(maximumStops);
 }
 
-void RendererTinySkia::setTextGlyphBudgetForTesting(std::size_t maximumGlyphs) {
-  textGlyphWorkBudget_->maximumGlyphs =
-      std::min(textGlyphWorkBudget_->maximumGlyphs, maximumGlyphs);
+void RendererTinySkia::setMaximumGlyphs(std::size_t maximumGlyphs) {
+#ifdef DONNER_TEXT_ENABLED
+  textMaterializationBudget_->setMaximumGlyphs(maximumGlyphs);
+#else
+  (void)maximumGlyphs;
+#endif
+}
+
+std::size_t RendererTinySkia::maximumGlyphs() const {
+#ifdef DONNER_TEXT_ENABLED
+  return textMaterializationBudget_->maximumGlyphs();
+#else
+  return 0;
+#endif
 }
 
 void RendererTinySkia::setTextMaterializationBudgetForTesting(
@@ -3454,6 +3456,7 @@ RendererResourceStats RendererTinySkia::resourceStats() const {
       .textMaterializationPoints = textMaterializationBudget_->points(),
       .textMaterializationBytes = textMaterializationBudget_->bytes(),
       .textGlyphDecodeWork = textMaterializationBudget_->decodeWork(),
+      .textGlyphOccurrences = textMaterializationBudget_->glyphOccurrences(),
       .textMaterializationBudgetRejected = textMaterializationBudget_->rejected(),
   };
 }

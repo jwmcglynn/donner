@@ -3299,6 +3299,26 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   bool canEncodeGeometry() const override { return !geometryBudget->rejected(); }
 
+  /// A resident instance retains its record for the frame, not a copy of the geometry, which the
+  /// document's resident budget already holds.
+  bool admitResidentInstance(const geode::EncodedPath& encoded) override {
+    if (encoded.rejected()) {
+      geometryBudget->reject();
+      return false;
+    }
+    if (encoded.empty()) {
+      return true;
+    }
+    return geometryBudget->reserve(1u, encoded.geometryItemCount(), sizeof(geode::InstanceRecord));
+  }
+
+  void releaseResidentInstance(const geode::EncodedPath& encoded) override {
+    if (encoded.empty() || encoded.rejected()) {
+      return;
+    }
+    geometryBudget->release(1u, encoded.geometryItemCount(), sizeof(geode::InstanceRecord));
+  }
+
   void releaseGeometry(const geode::EncodedPath& encoded, std::size_t logicalDraws) override {
     if (encoded.empty() || encoded.rejected() || logicalDraws == 0u) {
       return;
@@ -3438,11 +3458,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return slot.recordSlot.buffer.isValid();
   }
 
-  /// Glyph-residency budget, in distinct cached outlines and summed retained
-  /// outline plus encode bytes. Defaults come from `GeodeGlyphCache`; a test shrinks them to reach
-  /// eviction without building a font-sized working set.
-  size_t glyphCacheMaxEntries = geode::GeodeGlyphCache::kDefaultMaxEntries;
+  /// Glyph-residency budget, in distinct cached outlines and summed retained outline plus encode
+  /// bytes. The entry cap follows the shared glyph cap and the byte cap defaults from
+  /// `GeodeGlyphCache`; a test shrinks them to reach eviction without building a font-sized
+  /// working set.
+  size_t glyphCacheMaxEntriesForTesting = std::numeric_limits<size_t>::max();
   uint64_t glyphCacheMaxRetainedBytes = geode::GeodeGlyphCache::kDefaultMaxRetainedBytes;
+
+  /// Distinct glyph outlines one document may keep resident.
+  size_t glyphCacheMaxEntries() const {
+    return std::min(glyphCacheMaxEntriesForTesting, textMaterializationBudget->maximumGlyphs());
+  }
 
   /// Non-cached glyphs needed after the document cache reaches its admission cap. The deque keeps
   /// entry addresses stable for the frame's pending scene batches; beginFrame clears it only after
@@ -3474,7 +3500,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     // covers the multi-document tile paths that never reach `draw()`.
     device->countGlyphResidencyEvictions(
         cache->beginFrame(currentFrameIndex, device->oldestOpenFrameGeneration(),
-                          glyphCacheMaxEntries, glyphCacheMaxRetainedBytes));
+                          glyphCacheMaxEntries(), glyphCacheMaxRetainedBytes));
     return cache;
   }
 
@@ -3573,7 +3599,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// for) is still cached, so that miss also costs one backend call per
   /// document rather than one per occurrence per frame.
 #ifdef DONNER_TEXT_ENABLED
-  void admitTextRuns(std::vector<TextRun>& runs) {
+  void admitTextRuns(Registry& registry, std::vector<TextRun>& runs) {
+    // Trim the document's glyph cache before admission can reject the runs, so a lowered glyph
+    // cap also shrinks the cache on frames whose text it rejects.
+    (void)glyphCache(registry);
     std::size_t glyphOccurrences = 0;
     for (const TextRun& run : runs) {
       if (run.glyphs.size() > std::numeric_limits<std::size_t>::max() - glyphOccurrences) {
@@ -3595,6 +3624,37 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return TransformPath(outline, glyphFromLocal);
   }
 
+  /**
+   * Charges one glyph-cache miss against the frame's text budget before its outline is decoded:
+   * the font's predecode bound when it reports one (an untrusted font must), and the entry the miss
+   * keeps for the rest of the frame, cached or not. The entry is all an outline-less glyph costs,
+   * so it is what bounds misses on those.
+   *
+   * @param fontManager Font source for the complexity bound and trust.
+   * @param font Font of the missed glyph.
+   * @param glyphIndex Glyph index within \p font.
+   * @param[out] hasComplexity Whether the font reported a predecode bound.
+   * @return False when the budget rejects the miss.
+   */
+  bool admitGlyphMiss(FontManager& fontManager, FontHandle font, int glyphIndex,
+                      bool& hasComplexity) {
+    const std::optional<FontManager::GlyphOutlineComplexity> complexity =
+        fontManager.glyphOutlineComplexity(font, glyphIndex);
+    hasComplexity = complexity.has_value();
+    if (complexity.has_value()) {
+      const std::optional<RendererTextMaterializationBudget::Cost> cost =
+          GlyphPredecodeCost(*complexity);
+      if (!cost.has_value() || !textMaterializationBudget->reserve(*cost)) {
+        return false;
+      }
+    } else if (!fontManager.isTrustedFont(font)) {
+      textMaterializationBudget->reject();
+      return false;
+    }
+    return textMaterializationBudget->reserve(
+        {.bytes = geode::GeodeGlyphCache::kEntryOverheadBytes});
+  }
+
   template <typename BuildOutlineFn>
   geode::GeodeGlyphResidentEntry* residentGlyphEntry(Registry& registry, FontManager& fontManager,
                                                      FontHandle font, int glyphIndex,
@@ -3608,16 +3668,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (entry != nullptr) {
       device->countGlyphResidencyHit();
     } else {
-      const std::optional<FontManager::GlyphOutlineComplexity> complexity =
-          fontManager.glyphOutlineComplexity(font, glyphIndex);
-      if (complexity.has_value()) {
-        const std::optional<RendererTextMaterializationBudget::Cost> cost =
-            GlyphPredecodeCost(*complexity);
-        if (!cost.has_value() || !textMaterializationBudget->reserve(*cost)) {
-          return nullptr;
-        }
-      } else if (!fontManager.isTrustedFont(font)) {
-        textMaterializationBudget->reject();
+      bool hasComplexity = false;
+      if (!admitGlyphMiss(fontManager, font, glyphIndex, hasComplexity)) {
         return nullptr;
       }
 
@@ -3626,18 +3678,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       // one frame; entries touched by that open frame are intentionally ineligible for eviction.
       // Reclaim only entries no open frame can still reference, then fail closed if the new entry
       // still would exceed the configured count cap.
-      bool cacheAdmissionAvailable = glyphCacheMaxEntries != 0u;
-      if (cacheAdmissionAvailable && cache->size() >= glyphCacheMaxEntries) {
-        const size_t evicted =
-            cache->evictToBudget(device->oldestOpenFrameGeneration(), glyphCacheMaxEntries - 1u,
-                                 glyphCacheMaxRetainedBytes);
+      const size_t maxEntries = glyphCacheMaxEntries();
+      bool cacheAdmissionAvailable = maxEntries != 0u && cache->admissionOpen();
+      if (cacheAdmissionAvailable && cache->size() >= maxEntries) {
+        const size_t evicted = cache->evictToBudget(device->oldestOpenFrameGeneration(),
+                                                    maxEntries - 1u, glyphCacheMaxRetainedBytes);
         device->countGlyphResidencyEvictions(evicted);
-        if (cache->size() >= glyphCacheMaxEntries) {
+        if (cache->size() >= maxEntries) {
+          cache->closeAdmission();
           cacheAdmissionAvailable = false;
         }
       }
       Path outline = buildOutline();
-      if (!complexity.has_value() && !outline.empty()) {
+      if (!hasComplexity && !outline.empty()) {
         const std::optional<std::size_t> retainedBytes = outline.retainedBytes();
         if (!retainedBytes.has_value() ||
             !textMaterializationBudget->reserve({.uniqueOutlines = 1,
@@ -3658,7 +3711,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       if (cacheAdmissionAvailable) {
         size_t evicted = 0;
         entry = cache->insertWithinBudget(key, std::move(outline), std::move(encoded),
-                                          device->oldestOpenFrameGeneration(), glyphCacheMaxEntries,
+                                          device->oldestOpenFrameGeneration(), maxEntries,
                                           glyphCacheMaxRetainedBytes, &evicted);
         device->countGlyphResidencyEvictions(evicted);
         if (entry != nullptr) {
@@ -5276,6 +5329,22 @@ void RendererGeode::setDebugGeometryOverlay(bool enabled) {
   impl_->debugGeometryOverlay = enabled;
 }
 
+void RendererGeode::setMaximumGlyphs(std::size_t maximumGlyphs) {
+#ifdef DONNER_TEXT_ENABLED
+  impl_->textMaterializationBudget->setMaximumGlyphs(maximumGlyphs);
+#else
+  (void)maximumGlyphs;
+#endif
+}
+
+std::size_t RendererGeode::maximumGlyphs() const {
+#ifdef DONNER_TEXT_ENABLED
+  return impl_->textMaterializationBudget->maximumGlyphs();
+#else
+  return 0;
+#endif
+}
+
 bool RendererGeode::debugGeometryOverlay() const {
   return impl_->debugGeometryOverlay;
 }
@@ -5383,7 +5452,7 @@ bool RendererGeode::sceneBatchingEnabledForTesting() {
 
 void RendererGeode::setGlyphResidencyBudgetForTesting(size_t maxEntries,
                                                       uint64_t maxRetainedBytes) {
-  impl_->glyphCacheMaxEntries = maxEntries;
+  impl_->glyphCacheMaxEntriesForTesting = maxEntries;
   impl_->glyphCacheMaxRetainedBytes = maxRetainedBytes;
 }
 
@@ -6847,7 +6916,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   std::vector<TextRun>& runs = drawGeometry.runs;
   const Box2d& textBounds = drawGeometry.elementBounds;
 
-  impl_->admitTextRuns(runs);
+  impl_->admitTextRuns(registry, runs);
 
   const Path textBoundsPath =
       textBounds.isEmpty() ? Path() : PathBuilder().addRect(textBounds).build();

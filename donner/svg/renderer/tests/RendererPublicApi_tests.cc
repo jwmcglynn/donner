@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <functional>
@@ -290,11 +291,11 @@ TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeM
            <text x="2" y="14">A</text><text x="24" y="14">A</text>
          </svg>)");
   RendererTinySkia limitedRenderer;
-  limitedRenderer.setTextGlyphBudgetForTesting(1);
+  limitedRenderer.setMaximumGlyphs(1);
   limitedRenderer.draw(limitedDocument);
 
   const RendererResourceStats limitedStats = limitedRenderer.resourceStats();
-  EXPECT_EQ(limitedStats.drawCalls, 2u);
+  EXPECT_EQ(limitedStats.drawCalls, 1u);
   EXPECT_TRUE(limitedStats.drawBudgetRejected);
   EXPECT_EQ(limitedRenderer.frameCounters().textGlyphMaterializations, 1u);
 
@@ -303,7 +304,7 @@ TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeM
            <text x="2" y="14">A</text>
          </svg>)");
   RendererTinySkia referenceRenderer;
-  referenceRenderer.setTextGlyphBudgetForTesting(1);
+  referenceRenderer.setMaximumGlyphs(1);
   referenceRenderer.draw(referenceDocument);
   EXPECT_EQ(referenceRenderer.frameCounters().textGlyphMaterializations, 1u);
 
@@ -313,6 +314,156 @@ TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeM
   ASSERT_FALSE(referenceSnapshot.empty());
   EXPECT_EQ(limitedSnapshot.dimensions, referenceSnapshot.dimensions);
   EXPECT_THAT(limitedSnapshot.pixels, testing::ContainerEq(referenceSnapshot.pixels));
+}
+
+TEST(RendererTinySkiaSecurityTest, TextReservesAStrokeDrawCallOnlyWhenStroked) {
+  RendererTinySkia renderer;
+  SVGDocument filled = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="60" height="20">
+           <text x="2" y="14">AB</text>
+         </svg>)");
+  renderer.draw(filled);
+  EXPECT_EQ(renderer.resourceStats().drawCalls, 2u) << "One fill draw per glyph.";
+
+  SVGDocument stroked = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="60" height="20">
+           <text x="2" y="14" stroke="black">AB</text>
+         </svg>)");
+  renderer.draw(stroked);
+  EXPECT_EQ(renderer.resourceStats().drawCalls, 4u) << "A fill and a stroke draw per glyph.";
+
+  SVGDocument spanStroked = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="60" height="20">
+           <text x="2" y="14">A<tspan stroke="black">B</tspan></text>
+         </svg>)");
+  renderer.draw(spanStroked);
+  EXPECT_EQ(renderer.resourceStats().drawCalls, 4u) << "A span's stroke paint counts too.";
+}
+
+/// Pixels with non-zero alpha inside the half-open rect [x0, x1) x [y0, y1), clipped to the
+/// snapshot.
+std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1, int y1) {
+  const RendererBitmap normalized = NormalizeSnapshot(snapshot);
+  std::size_t covered = 0;
+  for (int y = std::max(y0, 0); y < std::min(y1, normalized.dimensions.y); ++y) {
+    for (int x = std::max(x0, 0); x < std::min(x1, normalized.dimensions.x); ++x) {
+      const std::size_t offset =
+          static_cast<std::size_t>(y) * normalized.rowBytes + static_cast<std::size_t>(x) * 4u + 3u;
+      if (normalized.pixels[offset] != 0) {
+        ++covered;
+      }
+    }
+  }
+  return covered;
+}
+
+/// 52 letters at 26 font sizes: 1352 glyph occurrences and 1352 distinct outlines in one frame,
+/// then a sentinel glyph alone in the bottom-right corner.
+std::string ManyDistinctGlyphsDocument() {
+  std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">)";
+  for (int i = 0; i < 26; ++i) {
+    svg += "<text x=\"0\" y=\"" + std::to_string(10 + 7 * i) + "\" font-size=\"" +
+           std::to_string(8 + i) + "\">abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ</text>";
+  }
+  svg += R"(<text x="350" y="390" font-size="40">H</text></svg>)";
+  return svg;
+}
+
+TEST(RendererPublicApiTest, TextPastOneThousandTwentyFourDistinctGlyphsStillDraws) {
+  SVGDocument document = ParseDocument(ManyDistinctGlyphsDocument());
+  Renderer renderer;
+  renderer.draw(document);
+
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_FALSE(stats.textMaterializationBudgetRejected);
+  EXPECT_FALSE(stats.drawBudgetRejected);
+  EXPECT_THAT(stats.textUniqueOutlines, Gt(1024u));
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_EQ(snapshot.dimensions, Vector2i(400, 400));
+  EXPECT_THAT(CoveredPixels(snapshot, 340, 340, 400, 400), Gt(0u))
+      << "The sentinel glyph after the first 1352 was not drawn.";
+}
+
+/// Ten dense pages of text: 300 lines of 100 glyphs at 12px, 30,000 occurrences in one frame,
+/// overprinted in 22 rows above a sentinel glyph alone in the bottom-right corner.
+std::string TenPagesOfTextDocument() {
+  const std::string_view pangram = "Thequickbrownfoxjumpsoverthelazydog";
+  std::string line;
+  while (line.size() < 100) {
+    line += pangram;
+  }
+  line.resize(100);
+
+  std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">)";
+  for (int i = 0; i < 300; ++i) {
+    svg += "<text x=\"0\" y=\"" + std::to_string(12 + 14 * (i % 22)) + "\" font-size=\"12\">" +
+           line + "</text>";
+  }
+  svg += R"(<text x="350" y="390" font-size="40">H</text></svg>)";
+  return svg;
+}
+
+TEST(RendererPublicApiTest, TenPagesOfTextFitTheTextBudget) {
+  SVGDocument document = ParseDocument(TenPagesOfTextDocument());
+  Renderer renderer;
+  renderer.draw(document);
+
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_FALSE(stats.textMaterializationBudgetRejected)
+      << "Text budget: " << stats.textMaterializationBytes << " bytes, "
+      << stats.textMaterializationCommands << " commands, " << stats.textMaterializationPoints
+      << " points, " << stats.textGlyphDecodeWork << " decode work.";
+  EXPECT_FALSE(stats.drawBudgetRejected) << stats.drawCalls << " draw calls.";
+  EXPECT_EQ(stats.textGlyphOccurrences, 30'001u);
+  EXPECT_FALSE(stats.geometryBudgetRejected)
+      << "Geometry budget: " << stats.geometryDraws << " draws, " << stats.geometryItems
+      << " items, " << stats.geometryRetainedBytes << " bytes.";
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_EQ(snapshot.dimensions, Vector2i(400, 400));
+  EXPECT_THAT(CoveredPixels(snapshot, 340, 340, 400, 400), Gt(0u))
+      << "The sentinel glyph after 30,000 others was not drawn.";
+}
+
+TEST(RendererPublicApiTest, GlyphCapIsConfigurableAndSharedWithOffscreenInstances) {
+  SVGDocument document = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="90" height="30">
+           <text x="2" y="20" font-size="20">A</text>
+           <text x="32" y="20" font-size="20">A</text>
+           <text x="62" y="20" font-size="20">A</text>
+         </svg>)");
+  Renderer renderer;
+  EXPECT_EQ(renderer.maximumGlyphs(), RendererTextMaterializationBudget::kDefaultMaximumGlyphs);
+
+  std::unique_ptr<RendererInterface> offscreen = renderer.createOffscreenInstance();
+  ASSERT_NE(offscreen, nullptr);
+  offscreen->setMaximumGlyphs(2);
+  EXPECT_EQ(renderer.maximumGlyphs(), 2u) << "The offscreen instance must share the parent's cap.";
+
+  renderer.draw(document);
+  const RendererResourceStats capped = renderer.resourceStats();
+  EXPECT_EQ(capped.textGlyphOccurrences, 2u);
+  EXPECT_TRUE(capped.textMaterializationBudgetRejected);
+  const RendererBitmap cappedSnapshot = renderer.takeSnapshot();
+  ASSERT_EQ(cappedSnapshot.dimensions, Vector2i(90, 30));
+  EXPECT_THAT(CoveredPixels(cappedSnapshot, 30, 0, 60, 30), Gt(0u));
+  EXPECT_EQ(CoveredPixels(cappedSnapshot, 60, 0, 90, 30), 0u)
+      << "The glyph past the cap was drawn.";
+
+  renderer.setMaximumGlyphs(3);
+  EXPECT_EQ(offscreen->maximumGlyphs(), 3u);
+  renderer.draw(document);
+  const RendererResourceStats raised = renderer.resourceStats();
+  EXPECT_EQ(raised.textGlyphOccurrences, 3u);
+  EXPECT_FALSE(raised.textMaterializationBudgetRejected);
+  EXPECT_THAT(CoveredPixels(renderer.takeSnapshot(), 60, 0, 90, 30), Gt(0u));
+}
+#else
+TEST(RendererPublicApiTest, GlyphCapIsZeroWithoutText) {
+  Renderer renderer;
+  renderer.setMaximumGlyphs(5);
+  EXPECT_EQ(renderer.maximumGlyphs(), 0u) << "A build without text must report no glyph cap.";
 }
 #endif
 
@@ -1098,6 +1249,12 @@ TEST(RendererPublicApiTest, DrawBitmapDefaultSkipsEmptyAndInvalidRowData) {
   invalidRows.pixels.resize(8);
   renderer.drawBitmap(invalidRows, params);
   EXPECT_EQ(renderer.drawImageCount, 0);
+}
+
+TEST(RendererPublicApiTest, GlyphCapDefaultsReportNoTextSupport) {
+  DefaultMethodRenderer renderer;
+  renderer.setMaximumGlyphs(7);
+  EXPECT_EQ(renderer.maximumGlyphs(), 0u);
 }
 
 TEST(RendererPublicApiTest, ResolvedClipCopyAssignmentCopiesClipState) {

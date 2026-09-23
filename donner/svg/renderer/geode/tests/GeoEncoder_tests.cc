@@ -55,10 +55,21 @@ public:
     releasedDraws += logicalDraws;
   }
 
+  bool admitResidentInstance(const EncodedPath& /*encoded*/) override {
+    ++admittedResidentInstances;
+    return allow;
+  }
+
+  void releaseResidentInstance(const EncodedPath& /*encoded*/) override {
+    ++releasedResidentInstances;
+  }
+
   bool allow = true;
   bool encodeOpen = true;
   std::size_t admittedDraws = 0;
   std::size_t releasedDraws = 0;
+  std::size_t admittedResidentInstances = 0;
+  std::size_t releasedResidentInstances = 0;
 };
 
 /// Test fixture: shares a process-wide device and creates per-test render
@@ -391,11 +402,14 @@ TEST_F(GeoEncoderTest, PreparedSceneAdmissionCanBeRefundedBeforeSingletonFallbac
       slot, encoded, GeoEncoder::ScenePaint{css::RGBA(255, 0, 0, 255)}, FillRule::NonZero,
       Transform2d(), nullptr, nullptr, &recordState));
   ASSERT_EQ(encoder.pendingSceneAdmissionsForTesting(), 1u);
-  ASSERT_EQ(admission.admittedDraws, 1u);
+  ASSERT_EQ(admission.admittedResidentInstances, 1u);
+  EXPECT_EQ(admission.admittedDraws, 0u)
+      << "A scene record draws resident geometry and must not be charged a geometry copy.";
 
   encoder.releasePreparedSceneAdmission(encoded);
   EXPECT_EQ(encoder.pendingSceneAdmissionsForTesting(), 0u);
-  EXPECT_EQ(admission.releasedDraws, 1u);
+  EXPECT_EQ(admission.releasedResidentInstances, 1u);
+  EXPECT_EQ(admission.releasedDraws, 0u);
   encoder.finish();
 }
 

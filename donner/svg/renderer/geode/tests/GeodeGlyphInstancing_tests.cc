@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -36,6 +37,7 @@
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGlyphResidency.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 
 namespace donner::svg {
@@ -256,7 +258,7 @@ TEST_F(GeodeGlyphInstancingTest, EvictionUnderPressureKeepsRenderingCorrect) {
   EXPECT_EQ(unbudgeted.counters.glyphResidencyEvictions, 0u)
       << "The default budget must not evict a ten-glyph document.";
 
-  renderer.setGlyphResidencyBudgetForTesting(/*maxEntries=*/2, /*maxEncodedBytes=*/1u << 30);
+  renderer.setGlyphResidencyBudgetForTesting(/*maxEntries=*/2, /*maxRetainedBytes=*/1u << 30);
 
   const Frame squeezed = render(renderer, document);
   EXPECT_GT(squeezed.counters.glyphResidencyEvictions, 0u)
@@ -268,7 +270,7 @@ TEST_F(GeodeGlyphInstancingTest, EvictionUnderPressureKeepsRenderingCorrect) {
 
   // Still correct once the budget is lifted again: the entries that survived
   // the squeeze are still usable, not left half-released.
-  renderer.setGlyphResidencyBudgetForTesting(/*maxEntries=*/1024, /*maxEncodedBytes=*/1u << 30);
+  renderer.setGlyphResidencyBudgetForTesting(/*maxEntries=*/1024, /*maxRetainedBytes=*/1u << 30);
   const Frame restored = render(renderer, document);
   EXPECT_EQ(nonTransparentPixels(restored.bitmap), covered);
 }
@@ -283,7 +285,7 @@ TEST_F(GeodeGlyphInstancingTest, FirstFrameAdmissionHonorsResidencyEntryBudget) 
   RendererGeode renderer(sharedDevice());
   constexpr size_t kMaximumEntries = 2u;
   renderer.setGlyphResidencyBudgetForTesting(kMaximumEntries,
-                                             /*maxEncodedBytes=*/1u << 30);
+                                             /*maxRetainedBytes=*/1u << 30);
 
   const Frame frame = render(renderer, document);
   ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u) << "Text did not render at all.";
@@ -562,7 +564,7 @@ TEST_F(GeodeGlyphInstancingTest, GlyphChurnStaysBoundedByEviction) {
   constexpr size_t kMaxEntries = 16u;
   constexpr size_t kDistinctGlyphsPerFrame = 4u;
   constexpr size_t kCeiling = kMaxEntries + kDistinctGlyphsPerFrame;
-  renderer.setGlyphResidencyBudgetForTesting(kMaxEntries, /*maxEncodedBytes=*/1u << 30);
+  renderer.setGlyphResidencyBudgetForTesting(kMaxEntries, /*maxRetainedBytes=*/1u << 30);
 
   uint64_t totalEvictions = 0;
   size_t settledCount = 0;
@@ -593,6 +595,146 @@ TEST_F(GeodeGlyphInstancingTest, GlyphChurnStaysBoundedByEviction) {
       << "Glyph churn must be reclaimed by eviction, not accumulated. If this fails while "
          "the ceiling assertion passes, the churn stopped happening and this test is now "
          "measuring nothing.";
+}
+
+/// A batched occurrence draws its glyph from resident geometry, so the frame retains only its
+/// instance record: nine occurrences fit a frame budget of exactly nine records.
+TEST_F(GeodeGlyphInstancingTest, ResidentGlyphOccurrencesChargeTheFrameTheirRecord) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Occurrences draw solo without scene batching and charge their geometry.";
+  }
+  constexpr std::string_view kNineOccurrences = R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="24">
+        <text x="10" y="60" fill="black">eeeeeeeee</text>
+      </svg>)svg";
+  constexpr std::uint64_t kNineRecords = 9u * sizeof(geode::InstanceRecord);
+  constexpr std::size_t kUnlimited = std::numeric_limits<std::size_t>::max();
+  constexpr std::uint64_t kUnlimitedBytes = std::numeric_limits<std::uint64_t>::max();
+
+  SVGDocument fits = parse(kNineOccurrences);
+  RendererGeode renderer(sharedDevice());
+  renderer.setGeometryBudgetForTesting(kUnlimited, kUnlimited, kNineRecords, kUnlimitedBytes,
+                                       kUnlimitedBytes);
+  EXPECT_GT(nonTransparentPixels(render(renderer, fits).bitmap), 0u);
+  EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected)
+      << "Nine occurrences of one resident outline must cost the frame nine records.";
+
+  SVGDocument overflows = parse(kNineOccurrences);
+  RendererGeode tighter(sharedDevice());
+  tighter.setGeometryBudgetForTesting(kUnlimited, kUnlimited, kNineRecords - 1u, kUnlimitedBytes,
+                                      kUnlimitedBytes);
+  (void)render(tighter, overflows);
+  EXPECT_TRUE(tighter.resourceStats().geometryBudgetRejected)
+      << "One byte less than nine records must not fit nine occurrences.";
+}
+
+/// Every occurrence still evaluates its outline on the GPU, so each one keeps counting the
+/// outline's items toward the frame's work bound even though its geometry is shared.
+TEST_F(GeodeGlyphInstancingTest, ResidentGlyphOccurrencesStillCountTheirItems) {
+  constexpr std::size_t kUnlimited = std::numeric_limits<std::size_t>::max();
+  constexpr std::uint64_t kUnlimitedBytes = std::numeric_limits<std::uint64_t>::max();
+  const auto parseRun = [&](std::string_view glyphs) {
+    return parse(std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+        font-family="Noto Sans" font-size="24"><text x="10" y="60" fill="black">)svg") +
+                 std::string(glyphs) + "</text></svg>");
+  };
+
+  SVGDocument one = parseRun("e");
+  RendererGeode measure(sharedDevice());
+  ASSERT_GT(nonTransparentPixels(render(measure, one).bitmap), 0u);
+  const std::size_t itemsPerOccurrence = measure.resourceStats().geometryItems;
+  ASSERT_GT(itemsPerOccurrence, 0u);
+
+  SVGDocument fits = parseRun("eeeeeeeee");
+  RendererGeode renderer(sharedDevice());
+  renderer.setGeometryBudgetForTesting(kUnlimited, 9u * itemsPerOccurrence, kUnlimitedBytes,
+                                       kUnlimitedBytes, kUnlimitedBytes);
+  (void)render(renderer, fits);
+  EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected);
+
+  SVGDocument overflows = parseRun("eeeeeeeee");
+  RendererGeode tighter(sharedDevice());
+  tighter.setGeometryBudgetForTesting(kUnlimited, 9u * itemsPerOccurrence - 1u, kUnlimitedBytes,
+                                      kUnlimitedBytes, kUnlimitedBytes);
+  (void)render(tighter, overflows);
+  EXPECT_TRUE(tighter.resourceStats().geometryBudgetRejected)
+      << "Nine occurrences must be charged nine times their outline's items.";
+}
+
+/// Lowering the glyph cap shrinks a document's resident outlines on the next frame, even when the
+/// lower cap rejects all of that frame's text before any glyph is looked up.
+TEST_F(GeodeGlyphInstancingTest, LoweredGlyphCapShrinksTheCacheEvenWhenItRejectsTheText) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="24">
+        <text x="10" y="60" fill="black">abcdefghij</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  ASSERT_GT(nonTransparentPixels(render(renderer, document).bitmap), 0u);
+  ASSERT_EQ(renderer.residentGlyphCountForTesting(document), 10u);
+
+  renderer.setMaximumGlyphs(2);
+  (void)render(renderer, document);
+  EXPECT_TRUE(renderer.resourceStats().textMaterializationBudgetRejected);
+  EXPECT_LE(renderer.residentGlyphCountForTesting(document), 2u);
+}
+
+/// A glyph with no outline still costs an entry. Distinct outline-less keys, here non-breaking
+/// spaces at distinct rotations, must be bounded by the frame's byte budget rather than only by
+/// the glyph count.
+TEST_F(GeodeGlyphInstancingTest, OutlineLessGlyphMissesAreChargedTheirEntry) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="24">
+        <text x="10" y="60" rotate="1 2 3 4 5 6">&#160;&#160;&#160;&#160;&#160;&#160;</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  constexpr uint64_t kThreeEntries = 3u * geode::GeodeGlyphCache::kEntryOverheadBytes;
+  renderer.setTextMaterializationBudgetForTesting(
+      {.uniqueOutlines = RendererTextMaterializationBudget::kDefaultMaximumGlyphs,
+       .commands = RendererTextMaterializationBudget::kMaximumCommands,
+       .points = RendererTextMaterializationBudget::kMaximumPoints,
+       .bytes = kThreeEntries,
+       .decodeWork = RendererTextMaterializationBudget::kMaximumDecodeWork},
+      RendererTextMaterializationBudget::kDefaultMaximumGlyphs);
+
+  (void)render(renderer, document);
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.textGlyphOccurrences, 6u);
+  EXPECT_EQ(stats.textMaterializationBytes, kThreeEntries);
+  EXPECT_TRUE(stats.textMaterializationBudgetRejected);
+  EXPECT_EQ(renderer.residentGlyphCountForTesting(document), 3u);
+}
+
+/// The public glyph cap also caps resident outlines: churn that mints four new outlines per frame
+/// settles at the cap instead of growing, and every frame still draws.
+TEST_F(GeodeGlyphInstancingTest, ResidentGlyphsStayWithinTheConfiguredGlyphCap) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <text id="t" x="10" y="120" font-family="Noto Sans" font-size="24"
+              fill="black">Hello</text>
+      </svg>)svg");
+  auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  RendererGeode renderer(sharedDevice());
+  constexpr size_t kMaximumGlyphs = 8u;
+  renderer.setMaximumGlyphs(kMaximumGlyphs);
+
+  uint64_t totalEvictions = 0;
+  for (int round = 0; round < 6; ++round) {
+    text->setAttribute("font-size", std::to_string(20 + round));
+    const Frame frame = render(renderer, document);
+    ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u)
+        << "Text stopped rendering at mutation round " << round;
+    totalEvictions += frame.counters.glyphResidencyEvictions;
+    EXPECT_LE(renderer.residentGlyphCountForTesting(document), kMaximumGlyphs)
+        << "Residency exceeded the glyph cap at mutation round " << round;
+  }
+  EXPECT_GT(totalEvictions, 0u) << "Six rounds of four new outlines must overflow a cap of eight.";
 }
 
 /// The narrowest statement of the same invariant, on the mutation an editor

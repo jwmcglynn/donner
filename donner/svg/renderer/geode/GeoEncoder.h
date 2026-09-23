@@ -64,6 +64,17 @@ public:
 
   /** Release a successful reservation when submission preparation cannot complete. */
   virtual void releaseGeometry(const EncodedPath& encoded, std::size_t logicalDraws) = 0;
+
+  /**
+   * Reserve one instance that draws `encoded` from resident geometry. The frame retains only the
+   * instance record, but each instance still evaluates the geometry, so its items still count.
+   */
+  virtual bool admitResidentInstance(const EncodedPath& encoded) {
+    return admitGeometry(encoded, 1u);
+  }
+
+  /** Release a reservation made by \ref admitResidentInstance. */
+  virtual void releaseResidentInstance(const EncodedPath& encoded) { releaseGeometry(encoded, 1u); }
 };
 
 class GeodeBufferPool;

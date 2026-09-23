@@ -140,16 +140,66 @@ TEST(GeodeGlyphCacheTest, RetainedByteAdmissionRejectsBeforeTakingOutlineOwnersh
   EXPECT_EQ(cache.retainedBytes(), 0u);
 }
 
+TEST(GeodeGlyphCacheTest, EmptyOutlineEntriesCountAgainstTheByteCap) {
+  GeodeGlyphCache cache(/*deviceId=*/1u);
+  constexpr uint64_t kTwoEntries = 2u * GeodeGlyphCache::kEntryOverheadBytes;
+  for (uint32_t glyphIndex = 1; glyphIndex <= 3; ++glyphIndex) {
+    (void)cache.insertWithinBudget(MakeKey(glyphIndex), Path(), EncodedPath(),
+                                   /*oldestOpenFrame=*/1, /*maxEntries=*/1000,
+                                   /*maxRetainedBytes=*/kTwoEntries);
+  }
+
+  EXPECT_EQ(cache.size(), 2u)
+      << "An entry with no outline still retains memory; the byte cap has to bound it.";
+  EXPECT_EQ(cache.retainedBytes(), kTwoEntries);
+}
+
+/// Once eviction finds only entries an open frame still uses, every later miss in that frame
+/// would rescan the whole cache and fail, so admission stays closed until the next frame.
+TEST(GeodeGlyphCacheTest, CacheFullOfOpenFrameEntriesClosesAdmissionUntilTheNextFrame) {
+  GeodeGlyphCache cache(/*deviceId=*/1u);
+  constexpr uint64_t kTwoEntries = 2u * GeodeGlyphCache::kEntryOverheadBytes;
+  constexpr uint64_t kFourEntries = 2u * kTwoEntries;
+  (void)cache.beginFrame(/*frameIndex=*/5, /*oldestOpenFrame=*/5, /*maxEntries=*/1000, kTwoEntries);
+  for (uint32_t glyphIndex = 1; glyphIndex <= 2; ++glyphIndex) {
+    GeodeGlyphResidentEntry* entry =
+        cache.insertWithinBudget(MakeKey(glyphIndex), Path(), EncodedPath(),
+                                 /*oldestOpenFrame=*/5, /*maxEntries=*/1000, kTwoEntries);
+    ASSERT_NE(entry, nullptr);
+    entry->lastUsedFrame = 5;
+  }
+  ASSERT_TRUE(cache.admissionOpen());
+
+  EXPECT_EQ(cache.insertWithinBudget(MakeKey(/*glyphIndex=*/3), Path(), EncodedPath(),
+                                     /*oldestOpenFrame=*/5, /*maxEntries=*/1000, kTwoEntries),
+            nullptr);
+  EXPECT_FALSE(cache.admissionOpen());
+  EXPECT_EQ(cache.insertWithinBudget(MakeKey(/*glyphIndex=*/3), Path(), EncodedPath(),
+                                     /*oldestOpenFrame=*/5, /*maxEntries=*/1000, kFourEntries),
+            nullptr)
+      << "Admission must stay closed for the rest of the frame even when room appears.";
+
+  (void)cache.beginFrame(/*frameIndex=*/6, /*oldestOpenFrame=*/6, /*maxEntries=*/1000,
+                         kFourEntries);
+  EXPECT_TRUE(cache.admissionOpen());
+  EXPECT_NE(cache.insertWithinBudget(MakeKey(/*glyphIndex=*/3), Path(), EncodedPath(),
+                                     /*oldestOpenFrame=*/6, /*maxEntries=*/1000, kFourEntries),
+            nullptr);
+  EXPECT_EQ(cache.size(), 3u);
+}
+
 TEST(GeodeGlyphCacheTest, SharedDocumentFamilyRejectsSecondSubdocumentAtCapPlusOne) {
   Path firstOutline = MakeOutlineWithPoints(128u);
-  const std::optional<std::size_t> entryBytes = firstOutline.retainedBytes();
-  ASSERT_TRUE(entryBytes.has_value());
+  const std::optional<std::size_t> outlineBytes = firstOutline.retainedBytes();
+  ASSERT_TRUE(outlineBytes.has_value());
   Path secondOutline = MakeOutlineWithPoints(128u);
-  ASSERT_EQ(secondOutline.retainedBytes(), entryBytes);
+  ASSERT_EQ(secondOutline.retainedBytes(), outlineBytes);
+  const uint64_t entryBytes =
+      GeodeGlyphCache::kEntryOverheadBytes + static_cast<uint64_t>(*outlineBytes);
 
   svg::components::DocumentResourceFamilyBudget::Limits familyLimits;
-  familyLimits.geometryBytes = *entryBytes * 2u - 1u;
-  familyLimits.maximumTotalRetainedBytes = *entryBytes * 2u - 1u;
+  familyLimits.geometryBytes = entryBytes * 2u - 1u;
+  familyLimits.maximumTotalRetainedBytes = entryBytes * 2u - 1u;
   auto family = std::make_shared<svg::components::DocumentResourceFamilyBudget>(familyLimits);
   auto firstDocument = std::make_shared<GeodeDocumentGeometryBudget>(family);
   auto secondDocument = std::make_shared<GeodeDocumentGeometryBudget>(family);
@@ -160,7 +210,7 @@ TEST(GeodeGlyphCacheTest, SharedDocumentFamilyRejectsSecondSubdocumentAtCapPlusO
     ASSERT_NE(firstCache.insert(MakeKey(/*glyphIndex=*/1), std::move(firstOutline), EncodedPath()),
               nullptr);
     EXPECT_EQ(family->retainedBytes(svg::components::DocumentResourceFamilyBudget::Kind::Geometry),
-              *entryBytes);
+              entryBytes);
 
     EXPECT_EQ(
         secondCache.insert(MakeKey(/*glyphIndex=*/2), std::move(secondOutline), EncodedPath()),
@@ -223,7 +273,7 @@ TEST(GeodeGlyphCacheTest, EntryCountBudgetDropsTheLeastRecentlyUsedFirst) {
   InsertUsed(cache, newest, /*curveCount=*/1, /*frame=*/3);
 
   EXPECT_EQ(cache.evictToBudget(/*oldestOpenFrame=*/4, /*maxEntries=*/2,
-                                /*maxEncodedBytes=*/1u << 20),
+                                /*maxRetainedBytes=*/1u << 20),
             1u);
   EXPECT_EQ(cache.size(), 2u);
   EXPECT_EQ(cache.find(oldest), nullptr);
@@ -238,9 +288,11 @@ TEST(GeodeGlyphCacheTest, ByteBudgetDropsEntriesUntilItFits) {
   InsertUsed(cache, MakeKey(/*glyphIndex=*/2), /*curveCount=*/4, /*frame=*/2);
   InsertUsed(cache, MakeKey(/*glyphIndex=*/3), /*curveCount=*/4, /*frame=*/3);
   ASSERT_EQ(cache.encodedBytes(), 12u * curveBytes);
+  const uint64_t entryBytes = GeodeGlyphCache::kEntryOverheadBytes + 4u * curveBytes;
+  ASSERT_EQ(cache.retainedBytes(), 3u * entryBytes);
 
   EXPECT_EQ(cache.evictToBudget(/*oldestOpenFrame=*/4, /*maxEntries=*/100,
-                                /*maxEncodedBytes=*/5u * curveBytes),
+                                /*maxRetainedBytes=*/entryBytes + curveBytes),
             2u);
   EXPECT_EQ(cache.size(), 1u);
   EXPECT_EQ(cache.encodedBytes(), 4u * curveBytes);
@@ -257,7 +309,7 @@ TEST(GeodeGlyphCacheTest, EntriesAnUnsubmittedFrameTouchedSurviveAnOverBudgetTri
   InsertUsed(cache, MakeKey(/*glyphIndex=*/3), /*curveCount=*/1, /*frame=*/9);
 
   EXPECT_EQ(cache.evictToBudget(/*oldestOpenFrame=*/9, /*maxEntries=*/1,
-                                /*maxEncodedBytes=*/1u << 20),
+                                /*maxRetainedBytes=*/1u << 20),
             0u);
   EXPECT_EQ(cache.size(), 3u);
 }
@@ -267,7 +319,7 @@ TEST(GeodeGlyphCacheTest, TrimIsSkippedWhenTheCacheAlreadyFits) {
   InsertUsed(cache, MakeKey(/*glyphIndex=*/1), /*curveCount=*/1, /*frame=*/1);
 
   EXPECT_EQ(cache.evictToBudget(/*oldestOpenFrame=*/2, /*maxEntries=*/4,
-                                /*maxEncodedBytes=*/1u << 20),
+                                /*maxRetainedBytes=*/1u << 20),
             0u);
   EXPECT_EQ(cache.size(), 1u);
 }
@@ -279,17 +331,17 @@ TEST(GeodeGlyphCacheTest, BeginFrameTrimsAtMostOncePerFrame) {
   InsertUsed(cache, MakeKey(/*glyphIndex=*/3), /*curveCount=*/1, /*frame=*/1);
 
   EXPECT_EQ(cache.beginFrame(/*frameIndex=*/2, /*oldestOpenFrame=*/2, /*maxEntries=*/2,
-                             /*maxEncodedBytes=*/1u << 20),
+                             /*maxRetainedBytes=*/1u << 20),
             1u);
   // A second touch of the same frame must not trim again, even though the
   // renderer calls the accessor once per glyph occurrence.
   EXPECT_EQ(cache.beginFrame(/*frameIndex=*/2, /*oldestOpenFrame=*/2, /*maxEntries=*/1,
-                             /*maxEncodedBytes=*/1u << 20),
+                             /*maxRetainedBytes=*/1u << 20),
             0u);
   EXPECT_EQ(cache.size(), 2u);
 
   EXPECT_EQ(cache.beginFrame(/*frameIndex=*/3, /*oldestOpenFrame=*/3, /*maxEntries=*/1,
-                             /*maxEncodedBytes=*/1u << 20),
+                             /*maxRetainedBytes=*/1u << 20),
             1u);
   EXPECT_EQ(cache.size(), 1u);
 }

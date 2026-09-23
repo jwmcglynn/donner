@@ -250,8 +250,7 @@ TEST_F(RendererDriverTest, EmitsClipPathsWhenPresent) {
 }
 
 TEST_F(RendererDriverTest, ClipGeometryAdmissionStopsBeforeCopyingTheFirstOverCapShape) {
-  constexpr std::size_t kMaximumClipShapes =
-      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  constexpr std::size_t kMaximumClipShapes = RendererDriver::kMaximumClipGeometryPaths;
   const auto makeManyShapeClipDocument = [&](std::size_t shapeCount) {
     std::string svg = R"svg(<defs><clipPath id="clip">)svg";
     for (std::size_t i = 0; i < shapeCount; ++i) {
@@ -278,8 +277,7 @@ TEST_F(RendererDriverTest, ClipGeometryAdmissionStopsBeforeCopyingTheFirstOverCa
 }
 
 TEST_F(RendererDriverTest, ClipGeometryAdmissionAggregatesAcrossTheTraversal) {
-  constexpr std::size_t kMaximumClipShapes =
-      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  constexpr std::size_t kMaximumClipShapes = RendererDriver::kMaximumClipGeometryPaths;
   std::string svg = R"svg(<defs><clipPath id="exact">)svg";
   for (std::size_t i = 0; i < kMaximumClipShapes; ++i) {
     svg += R"svg(<path d="M0 0L1 1"/>)svg";
@@ -302,8 +300,7 @@ TEST_F(RendererDriverTest, ClipGeometryAdmissionAggregatesAcrossTheTraversal) {
 }
 
 TEST_F(RendererDriverTest, ClipGeometryAdmissionPersistsAcrossCurrentFrameSubTraversals) {
-  constexpr std::size_t kMaximumClipShapes =
-      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  constexpr std::size_t kMaximumClipShapes = RendererDriver::kMaximumClipGeometryPaths;
   std::string svg = R"svg(<defs><clipPath id="exact">)svg";
   for (std::size_t i = 0; i < kMaximumClipShapes; ++i) {
     svg += R"svg(<path d="M0 0L1 1"/>)svg";
@@ -354,8 +351,7 @@ TEST_F(RendererDriverTest, ClipGeometryAdmissionPersistsAcrossCurrentFrameSubTra
 }
 
 TEST_F(RendererDriverTest, RepeatedOverCapClipStopsPreflightAfterFirstRejection) {
-  constexpr std::size_t kMaximumClipShapes =
-      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  constexpr std::size_t kMaximumClipShapes = RendererDriver::kMaximumClipGeometryPaths;
   std::string svg = R"svg(<defs><clipPath id="over">)svg";
   for (std::size_t i = 0; i < kMaximumClipShapes + 1u; ++i) {
     svg += R"svg(<path d="M0 0L1 1"/>)svg";
@@ -382,8 +378,7 @@ TEST_F(RendererDriverTest, SharedFilterBudgetStillResetsClipDiagnosticsPerDriver
   RendererFilterPreparationBudget sharedFilterBudget;
   ON_CALL(renderer, filterPreparationBudget()).WillByDefault(testing::Return(&sharedFilterBudget));
 
-  constexpr std::size_t kMaximumClipShapes =
-      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  constexpr std::size_t kMaximumClipShapes = RendererDriver::kMaximumClipGeometryPaths;
   std::string overSvg = R"svg(<defs><clipPath id="over">)svg";
   for (std::size_t i = 0; i < kMaximumClipShapes + 1u; ++i) {
     overSvg += R"svg(<path d="M0 0L1 1"/>)svg";
