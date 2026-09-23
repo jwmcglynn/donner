@@ -459,6 +459,12 @@ TEST(RendererPublicApiTest, GlyphCapIsConfigurableAndSharedWithOffscreenInstance
   EXPECT_FALSE(raised.textMaterializationBudgetRejected);
   EXPECT_THAT(CoveredPixels(renderer.takeSnapshot(), 60, 0, 90, 30), Gt(0u));
 }
+#else
+TEST(RendererPublicApiTest, GlyphCapIsZeroWithoutText) {
+  Renderer renderer;
+  renderer.setMaximumGlyphs(5);
+  EXPECT_EQ(renderer.maximumGlyphs(), 0u) << "A build without text must report no glyph cap.";
+}
 #endif
 
 void SetStrokePaint(RendererInterface& renderer) {

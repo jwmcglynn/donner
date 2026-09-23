@@ -662,6 +662,25 @@ TEST_F(GeodeGlyphInstancingTest, ResidentGlyphOccurrencesStillCountTheirItems) {
       << "Nine occurrences must be charged nine times their outline's items.";
 }
 
+/// Lowering the glyph cap shrinks a document's resident outlines on the next frame, even when the
+/// lower cap rejects all of that frame's text before any glyph is looked up.
+TEST_F(GeodeGlyphInstancingTest, LoweredGlyphCapShrinksTheCacheEvenWhenItRejectsTheText) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="24">
+        <text x="10" y="60" fill="black">abcdefghij</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  ASSERT_GT(nonTransparentPixels(render(renderer, document).bitmap), 0u);
+  ASSERT_EQ(renderer.residentGlyphCountForTesting(document), 10u);
+
+  renderer.setMaximumGlyphs(2);
+  (void)render(renderer, document);
+  EXPECT_TRUE(renderer.resourceStats().textMaterializationBudgetRejected);
+  EXPECT_LE(renderer.residentGlyphCountForTesting(document), 2u);
+}
+
 /// A glyph with no outline still costs an entry. Distinct outline-less keys, here non-breaking
 /// spaces at distinct rotations, must be bounded by the frame's byte budget rather than only by
 /// the glyph count.
