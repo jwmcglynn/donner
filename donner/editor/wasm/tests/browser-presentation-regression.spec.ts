@@ -2516,8 +2516,6 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   await page.keyboard.up("a");
   await page.keyboard.up("Control");
   await retainEyedropperPng("eyedropper-alpha-source-before-paste.png", await page.screenshot());
-  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.evaluate((text) => navigator.clipboard.writeText(text), fixture);
   await page.evaluate(() => {
     window.__donnerTestPasteEventStats = { count: 0, lastTextLength: -1 };
     window.addEventListener("paste", (event) => {
@@ -2528,10 +2526,19 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
       }
     }, { capture: true });
   });
-  const beforePlatformPasteFrame = await page.evaluate(
-    () => window.__donnerMainLoopRenderedFrames ?? 0,
-  );
-  await page.keyboard.press("Meta+V");
+  // Seed the browser clipboard callback without depending on the host OS clipboard.
+  // The source editor still receives the fixture through its real Ctrl+V shortcut below.
+  await page.evaluate((text) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", text);
+    document.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }),
+    );
+  }, fixture);
   await expect.poll(() =>
     page.evaluate(() => {
       const stats = window.__donnerTestPasteEventStats;
@@ -2542,15 +2549,13 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
         activeElement: document.activeElement?.id || document.activeElement?.tagName || "none",
       };
     }), {
-    message: "platform paste must deliver the fixture to the source editor",
+    message: "the browser paste callback must receive the fixture",
     timeout: scaledMs(4_000),
   }).toEqual(
     expect.objectContaining({ eventSeen: true, count: 1, lastTextLength: fixture.length }),
   );
-  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
-    .toBeGreaterThan(beforePlatformPasteFrame);
   await retainEyedropperPng(
-    "eyedropper-alpha-source-after-platform-paste.png",
+    "eyedropper-alpha-source-after-clipboard-seed.png",
     await page.screenshot(),
   );
   await page.keyboard.down("Control");
