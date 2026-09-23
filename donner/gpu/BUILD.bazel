@@ -217,6 +217,19 @@ donner_cc_library(
     ],
 )
 
+# Device observer that records every notification as one comparable value, shared by the tests of
+# what a device reports.
+donner_cc_library(
+    name = "recording_device_observer",
+    testonly = 1,
+    hdrs = ["tests/RecordingDeviceObserver.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 # Test backend whose runtime devices can register each other's textures, shared by the runtime's
 # registration tests and by tests of code layered on registration in other packages.
 donner_cc_library(
@@ -440,6 +453,7 @@ donner_cc_test(
         ":gpu",
         ":recording_device",
         ":gpu_test_utils",
+        ":recording_device_observer",
         ":sharing_test_device",
         # For the static_assert tying the runtime's compute caps to the shader IR's copy.
         "//donner/gpu/shader",
