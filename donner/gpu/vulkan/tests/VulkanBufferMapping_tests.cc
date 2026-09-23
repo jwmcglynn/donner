@@ -1,11 +1,12 @@
 /// @file
 /// Host buffer mapping executed on Vulkan: a mapping waits for the submission that fills its
 /// buffer, reads exactly the range it named, and fails closed once it is released, its buffer is
-/// destroyed, or the range does not fit.
+/// destroyed, the range does not fit, or the device is declared lost.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <memory>
 #include <span>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/DeviceLost.h"
 #include "donner/gpu/tests/BufferMappingScene.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
@@ -164,6 +166,95 @@ TEST_F(VulkanBufferMappingTest, AMappingReadsWhatTheReadbackAccessorReads) {
   EXPECT_THAT(std::vector<uint8_t>(mapped.begin(), mapped.end()),
               testing::ElementsAreArray(expected))
       << "Mapping and the readback accessor must report the same bytes";
+  EXPECT_THAT(device_->unmapBuffer(std::move(mapping)), IsOk());
+}
+
+// A bounded wait that gives up declares the device's loss condition without the device itself
+// recording an error, so these cases declare the loss the same way.
+
+TEST_F(VulkanBufferMappingTest, ALossDeclaredOnTheDeviceEndsAPendingMappingWithinASlice) {
+  std::unique_ptr<VulkanDevice> gated = VulkanDevice::CreateWithTimelineSemaphoreForTest();
+  ASSERT_THAT(gated, testing::NotNull())
+      << "the queue gate that holds the mapped submission open needs VK_KHR_timeline_semaphore";
+
+  // The scene is built before the gate closes: writeTexture submits and waits on its own fence,
+  // which a gated queue would never let complete.
+  MappingScene scene;
+  ASSERT_NO_FATAL_FAILURE(gpu::tests::BuildMappingScene(*gated, scene));
+  ASSERT_THAT(gated->waitForSerial(scene.serial, 30.0), testing::IsTrue())
+      << gated->lastErrorForTest();
+
+  tests::NativeQueueGate gate(gated->nativeContextForTest());
+  ASSERT_NO_FATAL_FAILURE(gate.start());
+
+  // A second copy of the scene, which the gate holds open, fills the buffer the mapping names.
+  const Buffer held = gpu::tests::MakeReadbackBuffer(*gated);
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(gated->createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToBuffer(
+                  TexelCopyTextureInfo{scene.texture}, held,
+                  TexelCopyBufferLayout{0, gpu::tests::kMappingSceneBytesPerRow,
+                                        gpu::tests::kMappingSceneExtent},
+                  Extent2d{gpu::tests::kMappingSceneExtent, gpu::tests::kMappingSceneExtent}),
+              IsOk());
+  (void)GetResultOrFail(gated->submit(GetResultOrFail(encoder->finish())));
+  BufferMapping mapping =
+      GetResultOrFail(gated->mapBufferAsync(held, MapMode::Read, 0, kMappingSceneByteSize));
+
+  gated->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
+                                  "a bounded wait on this device gave up");
+
+  // A budget far longer than one slice, so a wait that ran it out cannot pass as prompt.
+  const auto waitStart = std::chrono::steady_clock::now();
+  const MapWaitReport report =
+      GetResultOrFail(gated->waitForMapping(mapping, MapWaitParams{0.001, 5.0}, {}));
+  const auto waitedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - waitStart)
+                            .count();
+  EXPECT_THAT(report.outcome, testing::Eq(MapWaitOutcome::DeviceLost))
+      << "a mapping on a lost device can never complete, so waiting out its budget would report "
+         "a permanent failure as a slow one";
+  EXPECT_THAT(waitedMs, testing::Lt(1000)) << "the loss must end the wait at its first check";
+  EXPECT_THAT(gated->mappedBytes(mapping), IsGpuError(GpuErrorType::InvalidState))
+      << "a mapping that never completed has no bytes to read";
+
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  EXPECT_THAT(gated->unmapBuffer(std::move(mapping)), IsOk());
+}
+
+TEST_F(VulkanBufferMappingTest, ALossDeclaredOnTheDeviceOutranksACompletedSubmission) {
+  MappingScene scene;
+  ASSERT_NO_FATAL_FAILURE(gpu::tests::BuildMappingScene(*device_, scene));
+  ASSERT_THAT(device_->waitForSerial(scene.serial, 30.0), testing::IsTrue())
+      << device_->lastErrorForTest();
+  BufferMapping mapping = GetResultOrFail(
+      device_->mapBufferAsync(scene.readback, MapMode::Read, 0, kMappingSceneByteSize));
+
+  device_->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
+                                    "a bounded wait on this device gave up");
+
+  EXPECT_THAT(GetResultOrFail(device_->waitForMapping(mapping, SceneWaitParams(), {})).outcome,
+              testing::Eq(MapWaitOutcome::DeviceLost))
+      << "a completed serial does not make bytes trustworthy once the device is lost";
+  EXPECT_THAT(device_->mappedBytes(mapping), IsGpuError(GpuErrorType::InvalidState))
+      << "a mapping that never completed has no bytes to read";
+  EXPECT_THAT(device_->unmapBuffer(std::move(mapping)), IsOk());
+}
+
+TEST_F(VulkanBufferMappingTest, ALossDeclaredOnTheDeviceEndsReadsThroughACompletedMapping) {
+  MappingScene scene;
+  ASSERT_NO_FATAL_FAILURE(gpu::tests::BuildMappingScene(*device_, scene));
+  BufferMapping mapping = GetResultOrFail(
+      device_->mapBufferAsync(scene.readback, MapMode::Read, 0, kMappingSceneByteSize));
+  ASSERT_THAT(GetResultOrFail(device_->waitForMapping(mapping, SceneWaitParams(), {})).outcome,
+              testing::Eq(MapWaitOutcome::Ready))
+      << device_->lastErrorForTest();
+  ASSERT_THAT(device_->mappedBytes(mapping), HasResult());
+
+  device_->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
+                                    "a bounded wait on this device gave up");
+
+  EXPECT_THAT(device_->mappedBytes(mapping), IsGpuError(GpuErrorType::DeviceLost))
+      << "reads through a mapping end once the device is lost";
   EXPECT_THAT(device_->unmapBuffer(std::move(mapping)), IsOk());
 }
 
