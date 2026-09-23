@@ -81,6 +81,7 @@ playwright_bin.playwright_test(
         "playwright.bazel.config.js",
         "playwright.config.js",
         "remote-webserver.mjs",
+        "surface-frame-probe.ts",
         ":node_modules/@playwright/test",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright//:chromium",
