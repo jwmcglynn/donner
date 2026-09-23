@@ -27,7 +27,6 @@
 
 namespace donner::geode {
 
-class GeodeDevice;
 class GeodeWgpuAdapterDevice;
 
 /// The backend objects one wgpu device is reached through, and who releases them.
@@ -311,16 +310,6 @@ public:
   const GeodeGpuRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
 
   /**
-   * Installs the logical context this device's allocations and submissions are counted against.
-   *
-   * Non-owning, and cleared by passing null. The context owns this device, so it outlives the
-   * attribution it installed.
-   *
-   * @param context Context to attribute to, or null to stop counting.
-   */
-  void setCounterSink(GeodeDevice* context) { counterSink_ = context; }
-
-  /**
    * Polls the backend device, bracketed for ASYNCIFY suspend attribution.
    *
    * Under Emscripten, emdawnwebgpu implements `poll` by yielding the Asyncify-enabled thread for
@@ -536,22 +525,6 @@ private:
   /// @return True once this device has completed \p serial.
   bool waitForSerialBounded(uint64_t serial, double timeoutSeconds, LossOnTimeout onTimeout);
 
-  /**
-   * Reports one counted event to the logical context installed as this device's counter sink.
-   *
-   * One null check in one place: the sink is absent for a device nothing has claimed yet, and
-   * every counted site would otherwise repeat the same guard.
-   *
-   * @param report Counting member of \ref GeodeDevice to call.
-   * @param args Arguments that member takes.
-   */
-  template <typename Report, typename... Args>
-  void count(Report report, Args... args) const {
-    if (counterSink_ != nullptr) {
-      (counterSink_->*report)(args...);
-    }
-  }
-
   /// Ends a serial wait that observed no completion, declaring the backend root lost when the
   /// wait had a real budget to spend.
   ///
@@ -622,6 +595,9 @@ protected:
                              const gpu::TexelCopyBufferLayout& dataLayout,
                              const gpu::Extent2d& writeSize,
                              const gpu::Origin2d& destinationOrigin) override;
+  /// The bytes \ref onWriteTexture handed the queue for the write it just accepted: the caller's
+  /// span, or the repacked rows when the span ends at a minimal final row.
+  uint64_t onTextureWriteByteCount(std::span<const uint8_t> data) const override;
   gpu::Status onSubmit(uint64_t submissionSerial,
                        std::span<const gpu::SubmittedCommandBuffer> commandBuffers) override;
 
@@ -763,9 +739,9 @@ private:
   /// them: members are destroyed in reverse declaration order.
   std::shared_ptr<GeodeGpuRoot> root_;
 
-  /// Logical context this device's allocations and submissions are counted against, or null.
-  /// Non-owning; see \ref setCounterSink.
-  GeodeDevice* counterSink_ = nullptr;
+  /// Bytes the most recent accepted \ref onWriteTexture handed the queue; see
+  /// \ref onTextureWriteByteCount.
+  uint64_t lastTextureUploadBytes_ = 0;
 
   /// State of one pending or completed host mapping.
   ///

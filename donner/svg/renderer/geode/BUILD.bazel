@@ -865,6 +865,42 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+# A native Metal root only exists on macOS, so the case is macOS-only on top of the Geode gate.
+donner_cc_test(
+    name = "geode_native_counters_tests_impl",
+    srcs = ["tests/GeodeNativeCounters_tests.cc"],
+    # The gate fails closed on an automated lane rather than skipping, so the lane markers have to
+    # reach the test through Bazel's scrubbed environment.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
+    target_compatible_with = _GEODE_ONLY + select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":geode_device",
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+        "//donner/css:core",
+        "//donner/gpu/metal/tests:metal_device_gate",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:stroke_params",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_native_counters_tests",
+    size = "small",
+    testonly = 1,
+    dep = ":geode_native_counters_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
+
 donner_cc_test(
     name = "geode_filter_engine_tests_impl",
     # Filter graphs built and executed on a real device: 54 s uninstrumented on a

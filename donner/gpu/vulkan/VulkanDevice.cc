@@ -2238,6 +2238,13 @@ VulkanSurfaceContext VulkanDevice::surfaceContextForTeardownTest() const {
 }
 
 VulkanDevice::~VulkanDevice() {
+  // A surface can outlive this object when teardown cannot prove its work finished, so none may
+  // call back into it from here on.
+  for (const std::unique_ptr<VulkanSwapchain>& surface : impl_->surfaces) {
+    if (surface != nullptr) {
+      surface->setQueueSubmissionCallback({});
+    }
+  }
   Impl::AdmissionGate& gate = Impl::admissionGate();
   const std::lock_guard admission(gate.mutex);
   if (!impl_->prepareForDestruction() || !impl_->teardown()) {
@@ -3727,8 +3734,7 @@ Status VulkanDevice::Impl::encodeDrawIndexed(EncodingState& state, const DrawInd
   if (Status status = bindDrawDescriptorSets(state, "drawIndexed"); status.hasError()) {
     return status;
   }
-  // The encoder records zero-count draws; no backend issues a native draw for them.
-  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+  if (IsEmptyIndexedDraw(draw)) {
     return OkStatus();
   }
   // The encoder bounded this draw's index range inside the binding, so the offset is in range.
@@ -4258,7 +4264,11 @@ Status VulkanDevice::onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor
     return std::move(surface).error();
   }
 
-  SetSlot(impl_->surfaces, slotIndex, std::move(surface).result());
+  std::unique_ptr<VulkanSwapchain> swapchain = std::move(surface).result();
+  // Ending a frame submits on the queue from inside the swapchain, outside `submit`; the observer
+  // still sees it, as it sees every other submission this device makes.
+  swapchain->setQueueSubmissionCallback([this] { notifyObserverOfBackendSubmission(); });
+  SetSlot(impl_->surfaces, slotIndex, std::move(swapchain));
   SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>());
   return OkStatus();
 }

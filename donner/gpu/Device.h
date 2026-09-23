@@ -18,6 +18,7 @@
 #include "donner/gpu/Commands.h"
 #include "donner/gpu/Descriptors.h"
 #include "donner/gpu/DeviceLost.h"
+#include "donner/gpu/DeviceObserver.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/GpuResult.h"
 #include "donner/gpu/Handles.h"
@@ -810,6 +811,33 @@ public:
    */
   bool waitForSerial(uint64_t serial, double timeoutSeconds);
 
+  /**
+   * Installs \p observer to be notified of the work this device accepts (see
+   * \ref DeviceObserver).
+   *
+   * A device carries at most one observer. Installing the one already installed is accepted;
+   * installing a different one while another is installed is refused with
+   * \ref GpuErrorType::InvalidState and changes nothing, because replacing it would leave its
+   * owner counting nothing while every bound checked against those counts passed.
+   *
+   * Non-owning: the caller keeps \p observer alive until it removes it with \ref removeObserver.
+   * With none installed, each operation costs one null check.
+   *
+   * @param observer Observer to notify.
+   */
+  [[nodiscard]] Status installObserver(DeviceObserver& observer);
+
+  /**
+   * Removes \p observer when it is the installed one and otherwise changes nothing, so an owner
+   * can only ever remove its own.
+   *
+   * @param observer Observer its owner installed.
+   */
+  void removeObserver(const DeviceObserver& observer);
+
+  /// The installed observer, or null when there is none.
+  const DeviceObserver* observer() const { return observer_; }
+
 protected:
   /// Constructor for backends; assigns the process-unique device identity.
   Device();
@@ -906,10 +934,13 @@ protected:
   /**
    * Backend hook: whether \p slotIndex holds backing this device allocated.
    *
-   * Asked only for a slot the public \ref ownsTextureBacking has already validated and already
-   * found not to be a surface's acquired frame, so the default is true: every other texture a
-   * backend holds is one it created. A backend that can also name memory belonging to someone
-   * else - a registration of a host-owned object, say - overrides this and says which is which.
+   * Asked for a validated slot that is not a surface's acquired frame, from two places: the
+   * public \ref ownsTextureBacking, and \ref createTexture immediately after \ref onCreateTexture
+   * accepted the slot, to decide whether the creation is an allocation an observer counts. The
+   * answer must therefore already hold when \ref onCreateTexture returns. The default is true:
+   * every texture a backend holds is one it created. A backend that can also name memory
+   * belonging to someone else - a registration of a host-owned object, say - overrides this and
+   * says which is which.
    *
    * @param slotIndex Validated live texture slot.
    */
@@ -1078,6 +1109,21 @@ protected:
    */
   virtual Status onSubmit(uint64_t submissionSerial,
                           std::span<const SubmittedCommandBuffer> commandBuffers) = 0;
+
+  /**
+   * Backend hook: the bytes the write \ref onWriteTexture just accepted handed the backend's
+   * queue, which \ref DeviceObserver::onTextureWritten reports. Asked only when an observer is
+   * installed, immediately after \ref onWriteTexture returned success. The default is the
+   * caller's whole span; a backend that repacks the rows before uploading reports the repacked
+   * size.
+   *
+   * @param data The caller's span.
+   */
+  virtual uint64_t onTextureWriteByteCount(std::span<const uint8_t> data) const;
+
+  /// Reports a queue submission the backend made on its own, outside \ref submit, to the
+  /// installed observer as a submission of no command buffers and no draws.
+  void notifyObserverOfBackendSubmission() const;
 
 private:
   friend class CommandEncoder;
@@ -1498,6 +1544,9 @@ private:
 
   uint64_t deviceId_ = 0;
   uint64_t lastSubmittedSerial_ = 0;
+
+  /// Notified of accepted operations; see \ref installObserver. Non-owning.
+  DeviceObserver* observer_ = nullptr;
 
   /// Sticky loss condition of the backend root, shared with every other device over it. Created
   /// here so a device whose backend never shares one still has somewhere to publish a loss.

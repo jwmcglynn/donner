@@ -23,13 +23,18 @@ namespace donner::gpu::metal {
  * object, compile error, encoder failure) fails closed with a \ref donner::gpu::GpuError; the
  * backend never crashes on such failures.
  *
- * Scope: host-visible buffers and textures, MSL shader modules, render pipelines with a single
- * vertex buffer layout at slot 0 and bind group 0 only, render passes with color attachments,
- * compute pipelines and compute passes, and texture-to-buffer readback copies. Bindings follow
- * the deterministic argument-table mapping in
- * `donner/gpu/shader/MslBindingMap.h`: buffer binding `b` maps to Metal buffer index `1 + b`,
- * texture and sampler bindings map directly, and stage-in vertex data occupies vertex buffer
- * index 30.
+ * Scope: host-visible buffers and textures, MSL shader modules, render pipelines with up to
+ * \ref kMaxVertexBuffers vertex buffer layouts stepped per vertex or per instance, render passes
+ * with color attachments, scissors and viewports, non-indexed and indexed (16- and 32-bit) draws
+ * with instancing and base vertex, compute pipelines and passes over sampled and storage
+ * textures, texture-to-buffer and texture-to-texture copies, queue writes, host buffer mapping,
+ * and surface presentation. Resources bind through bind group 0 only; a submission that sets any
+ * other group is refused. Bindings follow the deterministic argument-table mapping in
+ * `donner/gpu/shader/MslBindingMap.h`: buffer binding `b` maps to Metal buffer index `1 + b`, and
+ * texture and sampler bindings map directly. Vertex buffer layouts take the highest free
+ * vertex-stage argument indices at or below 30, in slot order, skipping the length table and every
+ * vertex-visible resource buffer; a pipeline whose vertex buffers do not fit is refused at
+ * creation.
  *
  * Generated runtime-array reads use the exact declared binding sizes in a fixed length table.
  * Metal buffer index 0 is reserved for that table, so raw MSL this backend accepts must leave

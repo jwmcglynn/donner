@@ -1761,7 +1761,7 @@ bool GeodeWgpuAdapterDevice::finishMapWaitSlice(uint32_t mappingSlotIndex,
       !isLost()) {
     // A browser can defer pending map completion until another queue submission arrives.
     root_->queue().submit(0, nullptr);
-    count(&GeodeDevice::countSubmit);
+    notifyObserverOfBackendSubmission();
   }
   return true;
 }
@@ -1869,8 +1869,6 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBuffer(uint32_t slotIndex,
                     std::format("wgpu buffer allocation of {} bytes failed for '{}'",
                                 descriptor.byteSize, std::string_view(descriptor.label))};
   }
-  count(&GeodeDevice::countBuffer);
-
   SetSlot(slotBuffers_, slotIndex, ScopedWgpuHandle<wgpu::Buffer>(buffer));
   return OkStatus();
 }
@@ -1901,8 +1899,6 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateTexture(uint32_t slotIndex,
         std::format("wgpu texture allocation ({}x{}) failed for '{}'", descriptor.size.width,
                     descriptor.size.height, std::string_view(descriptor.label))};
   }
-  count(&GeodeDevice::countTexture);
-
   SetSlot(slotTextures_, slotIndex, TextureSlot{ScopedWgpuHandle<wgpu::Texture>(texture), texture});
   return OkStatus();
 }
@@ -2039,7 +2035,6 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBindGroup(uint32_t slotIndex,
                     std::format("wgpu bind group creation failed for '{}'",
                                 std::string_view(descriptor.label))};
   }
-  count(&GeodeDevice::countBindGroup);
 
   SetSlot(slotBindGroups_, slotIndex, ScopedWgpuHandle<wgpu::BindGroup>(group));
   return OkStatus();
@@ -2288,7 +2283,6 @@ gpu::Status GeodeWgpuAdapterDevice::onWriteBuffer(uint32_t slotIndex, uint64_t o
   }
 
   root_->queue().writeBuffer(buffer, offsetBytes, data.data(), data.size());
-  count(&GeodeDevice::countBufferWrite, data.size());
   return OkStatus();
 }
 
@@ -2322,8 +2316,12 @@ gpu::Status GeodeWgpuAdapterDevice::onWriteTexture(uint32_t slotIndex,
   layout.rowsPerImage = uploadLayout.rowsPerImage;
   const wgpu::Extent3D extent = {writeSize.width, writeSize.height, 1u};
   root_->queue().writeTexture(destination, uploadData.data(), uploadData.size(), layout, extent);
-  count(&GeodeDevice::countTextureWrite, uploadData.size());
+  lastTextureUploadBytes_ = uploadData.size();
   return OkStatus();
+}
+
+uint64_t GeodeWgpuAdapterDevice::onTextureWriteByteCount(std::span<const uint8_t> /*data*/) const {
+  return lastTextureUploadBytes_;
 }
 
 gpu::Status GeodeWgpuAdapterDevice::encodeBeginRenderPass(
@@ -2437,7 +2435,6 @@ gpu::Status GeodeWgpuAdapterDevice::encodeDraw(EncodingState& state, const gpu::
     return GpuError{GpuErrorType::InvalidState, "draw outside a render pass"};
   }
   state.pass.get().draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
-  count(&GeodeDevice::countDraw);
   return OkStatus();
 }
 
@@ -2446,13 +2443,11 @@ gpu::Status GeodeWgpuAdapterDevice::encodeDrawIndexed(EncodingState& state,
   if (!state.pass) {
     return GpuError{GpuErrorType::InvalidState, "drawIndexed outside a render pass"};
   }
-  // The encoder records zero-count draws; no backend issues a native draw for them.
-  if (draw.indexCount == 0 || draw.instanceCount == 0) {
+  if (gpu::IsEmptyIndexedDraw(draw)) {
     return OkStatus();
   }
   state.pass.get().drawIndexed(draw.indexCount, draw.instanceCount, draw.firstIndex,
                                draw.baseVertex, draw.firstInstance);
-  count(&GeodeDevice::countDraw);
   return OkStatus();
 }
 
@@ -2716,8 +2711,6 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(
   }
   completionState_->record(submissionSerial);
   root_->queue().submit(rawCommandBuffers);
-  count(&GeodeDevice::countSubmit);
-  count(&GeodeDevice::countCommandBuffers, rawCommandBuffers.size());
 
   completeWhenQueueDrains(submissionSerial);
   return OkStatus();

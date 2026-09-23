@@ -987,6 +987,9 @@ Status VulkanSwapchain::finishHandoverSubmission(VkResult result, const SurfaceW
   if (result == VK_SUCCESS) {
     associateHandoverWithAcquireRing(submission.fence);
     pending_.push_back(submission);
+    if (queueSubmissionCallback_) {
+      queueSubmissionCallback_();
+    }
     return OkStatus();
   }
   if (IsDefinitePreEnqueueFailure(result)) {

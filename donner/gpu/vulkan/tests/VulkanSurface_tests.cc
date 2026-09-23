@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/DeviceObserver.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
@@ -1183,6 +1184,45 @@ INSTANTIATE_TEST_SUITE_P(PreEnqueueResults, PresentOomOwnershipTest,
                          testing::Values(VK_ERROR_OUT_OF_HOST_MEMORY,
                                          VK_ERROR_OUT_OF_DEVICE_MEMORY));
 
+TEST(VulkanPresentationCreationTest, ReportsEachHandoverSubmissionTheQueueAccepted) {
+  TeardownRecorder recorder;
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  int reported = 0;
+
+  // Presenting submits the handover barrier on the queue before handing the frame over.
+  auto presented = VulkanSwapchainTestAccess::MakePresentableSurface(&api);
+  presented->setQueueSubmissionCallback([&reported] { ++reported; });
+  EXPECT_THAT(VulkanSwapchainTestAccess::Present(*presented), HasResult());
+  EXPECT_EQ(reported, 1);
+
+  // Abandoning submits one too, to consume the frame's acquisition wait.
+  auto abandoned = VulkanSwapchainTestAccess::MakePresentableSurface(&api);
+  abandoned->setQueueSubmissionCallback([&reported] { ++reported; });
+  EXPECT_THAT(abandoned->abandon(), IsOk());
+  EXPECT_EQ(reported, 2);
+
+  presented.reset();
+  abandoned.reset();
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, DoesNotReportAHandoverSubmissionTheQueueRefused) {
+  TeardownRecorder recorder;
+  recorder.submissionResult = VK_ERROR_OUT_OF_HOST_MEMORY;
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  int reported = 0;
+  auto surface = VulkanSwapchainTestAccess::MakePresentableSurface(&api);
+  surface->setQueueSubmissionCallback([&reported] { ++reported; });
+
+  EXPECT_THAT(VulkanSwapchainTestAccess::Present(*surface), Not(HasResult()));
+  EXPECT_EQ(reported, 0);
+
+  surface.reset();
+  gTeardownRecorder = nullptr;
+}
+
 TEST(VulkanPresentationCreationTest, UnknownPresentAssociationBlocksPreparation) {
   TeardownRecorder recorder;
   recorder.presentResult = VK_ERROR_VALIDATION_FAILED_EXT;
@@ -1656,6 +1696,44 @@ TEST_F(VulkanSurfaceTest, StaysInBoundsWhenARebuildShrinksTheAcquisitionRing) {
   EXPECT_LT(acquisition.frameRingSlot, acquisition.ringSize)
       << "The retry used a slot the rebuilt ring does not have";
   EXPECT_THAT(device_->abandonCurrentTexture(surface), IsOk());
+}
+
+/// Counts the submissions a device reports, and the command buffers they carried.
+class SubmissionCounter final : public DeviceObserver {
+public:
+  void onBufferCreated() override {}
+  void onTextureCreated() override {}
+  void onBindGroupCreated() override {}
+  void onBufferWritten(uint64_t /*byteCount*/) override {}
+  void onTextureWritten(uint64_t /*byteCount*/) override {}
+  void onSubmitted(uint64_t commandBufferCount, uint64_t /*drawCount*/) override {
+    ++submissions;
+    commandBuffers += commandBufferCount;
+  }
+
+  uint64_t submissions = 0;     //!< Submissions reported.
+  uint64_t commandBuffers = 0;  //!< Command buffers they carried.
+};
+
+TEST_F(VulkanSurfaceTest, AnObserverSeesTheQueueSubmissionThatEndsEachFrame) {
+  const Surface surface = configuredSurface();
+  SubmissionCounter counter;
+  ASSERT_THAT(device_->installObserver(counter), IsOk());
+
+  // Nothing is submitted through `submit` here: the only queue work is the swapchain's own
+  // handover barrier, once for the presented frame and once for the abandoned one.
+  SurfaceTexture frame = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_TRUE(frame.texture.isValid());
+  EXPECT_EQ(unwrap(device_->presentSurface(surface), "presentSurface"), SurfaceStatus::Success);
+  EXPECT_EQ(counter.submissions, 1u);
+
+  SurfaceTexture next = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_TRUE(next.texture.isValid());
+  EXPECT_THAT(device_->abandonCurrentTexture(surface), IsOk());
+  EXPECT_EQ(counter.submissions, 2u);
+  EXPECT_EQ(counter.commandBuffers, 0u) << "a backend's own submission carries no caller buffers";
+
+  device_->removeObserver(counter);
 }
 
 TEST_F(VulkanSurfaceTest, AbandonsMoreFramesThanTheSwapchainHoldsImages) {

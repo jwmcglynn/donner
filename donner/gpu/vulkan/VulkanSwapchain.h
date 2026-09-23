@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -200,6 +201,18 @@ public:
   /// recreation that reclaims it.
   Status abandon();
 
+  /**
+   * Has \p callback called after each queue submission of the swapchain's own that the queue
+   * accepted. That is the handover barrier that ends a frame, presented or abandoned, including
+   * the one that only consumes an acquisition nothing drew into. The owning device reports each as
+   * queue work it did not submit through `Device::submit`.
+   *
+   * @param callback Callback, or empty for none.
+   */
+  void setQueueSubmissionCallback(std::function<void()> callback) {
+    queueSubmissionCallback_ = std::move(callback);
+  }
+
   /// Makes the next acquisition report the swapchain as out of date, before it asks for an image.
   ///
   /// Test seam. A presentation engine decides on its own when a swapchain has been outgrown, and
@@ -344,6 +357,9 @@ private:
 
   /// Releases the swapchain, its per-image semaphores, and the acquire ring.
   void destroySwapchain();
+
+  /// See \ref setQueueSubmissionCallback.
+  std::function<void()> queueSubmissionCallback_;
 
   VulkanSurfaceContext context_;           //!< Borrowed device objects.
   VkSurfaceKHR surface_ = VK_NULL_HANDLE;  //!< The surface presented to.

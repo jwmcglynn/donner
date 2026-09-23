@@ -196,6 +196,26 @@ uint64_t GeodeDevice::AllocateBufferId() {
   return g_nextBufferId.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
+class GeodeDevice::RuntimeCounterObserver final : public gpu::DeviceObserver {
+public:
+  /// @param context Context whose counters receive the notifications; outlives this observer.
+  explicit RuntimeCounterObserver(const GeodeDevice& context) : context_(context) {}
+
+  void onBufferCreated() override { context_.countBuffer(); }
+  void onTextureCreated() override { context_.countTexture(); }
+  void onBindGroupCreated() override { context_.countBindGroup(); }
+  void onBufferWritten(uint64_t byteCount) override { context_.countBufferWrite(byteCount); }
+  void onTextureWritten(uint64_t byteCount) override { context_.countTextureWrite(byteCount); }
+  void onSubmitted(uint64_t commandBufferCount, uint64_t drawCount) override {
+    context_.countSubmit();
+    context_.countCommandBuffers(commandBufferCount);
+    context_.countDraws(drawCount);
+  }
+
+private:
+  const GeodeDevice& context_;
+};
+
 GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice,
                          gpu::Device& runtimeDevice, GeodeWgpuAdapterDevice* transitionalAdapter,
                          std::unique_ptr<gpu::Device> ownedRuntimeDevice)
@@ -216,11 +236,14 @@ GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevic
   transitionalAdapter_ = transitionalAdapter;
   impl_->runtimeDevice = &runtimeDevice;
   impl_->runtimeDeviceId = runtimeDevice.deviceId();
-  if (transitionalAdapter_ != nullptr) {
-    // Allocations and submissions this context makes through the runtime are counted against it,
-    // which is what keeps two contexts over one root from sharing a per-frame ceiling.
-    transitionalAdapter_->setCounterSink(this);
-  }
+  // Allocations and submissions this context makes through the runtime are counted against it,
+  // which is what keeps two contexts over one root from sharing a per-frame ceiling.
+  runtimeCounterObserver_ = std::make_unique<RuntimeCounterObserver>(*this);
+  // Every factory gives each context a runtime device of its own, and a device reports to one
+  // observer at most, so a refusal here means a factory built a second context over one device.
+  const gpu::Status installed = runtimeDevice.installObserver(*runtimeCounterObserver_);
+  UTILS_RELEASE_ASSERT_MSG(!installed.hasError(),
+                           "GeodeDevice: its runtime device already reports to another context");
 }
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateLogicalContext(
@@ -244,9 +267,7 @@ GeodeDevice::SnapshotCaptureLease::~SnapshotCaptureLease() {
 GeodeDevice::~GeodeDevice() {
   // The owner's root device outlives a context that rendered through it, so stop attributing to a
   // context that is going away.
-  if (transitionalAdapter_ != nullptr) {
-    transitionalAdapter_->setCounterSink(nullptr);
-  }
+  runtimeDevice_->removeObserver(*runtimeCounterObserver_);
   // Release all resources that were created from the device before releasing the
   // root queue/device/adapter/instance handles. `webgpu.hpp` handles are raw
   // wrappers: their destructors do not release native references.
@@ -865,6 +886,10 @@ void GeodeDevice::initSharedBindSlotResources() {
 
 const GeodeGpuContext& GeodeDevice::gpuContext() const {
   return impl_->gpuContext;
+}
+
+gpu::DeviceObserver& GeodeDevice::runtimeCounterObserverForTesting() const {
+  return *runtimeCounterObserver_;
 }
 
 void GeodeGpuContext::countBuffer() const {
