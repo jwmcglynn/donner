@@ -58,7 +58,8 @@ public:
   /**
    * Releases the allocation at once, for a producer that asked to give its backing back while
    * another device still read it. Called exactly once, by whichever thread drops the last holder,
-   * after the producer has released its handle; nothing names the texture afterwards.
+   * after the producer has released its handle and outside every runtime lock; nothing names the
+   * texture afterwards.
    *
    * The default does nothing, which is right for a backend whose allocation goes away with its
    * last reference.
@@ -190,10 +191,17 @@ public:
   bool heldElsewhere() const;
 
 private:
-  /// Adds or removes this texture's bytes from the tail gauge when the tail condition changed,
-  /// and releases the allocation once a requested release has no holder left to wait for.
+  /// Applies \p change to the holding state under \ref mutex_, then releases the allocation if
+  /// that change left a requested release with no holder to wait for. The backend's release runs
+  /// after the lock is dropped, so backend code never runs under this share's lock.
+  /// @param change Mutation of the state \ref mutex_ guards.
+  template <typename Change>
+  void update(Change&& change);
+
+  /// Adds or removes this texture's bytes from the tail gauge when the tail condition changed.
   /// Requires \ref mutex_.
-  void updateTailLocked();
+  /// @return Whether the allocation's requested release is now due; true at most once.
+  [[nodiscard]] bool updateTailLocked();
 
   const TextureDescriptor descriptor_;
   const uint64_t producerDeviceId_;

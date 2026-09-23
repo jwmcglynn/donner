@@ -59,29 +59,36 @@ void TextureShare::noteWritesCarried(uint64_t serial) {
   writePending_.store(false, std::memory_order_release);
 }
 
+template <typename Change>
+void TextureShare::update(Change&& change) {
+  bool releaseBacking = false;
+  {
+    std::lock_guard lock(mutex_);
+    change();
+    releaseBacking = updateTailLocked();
+  }
+  if (releaseBacking) {
+    backend_.backing->releaseBackingNow();
+  }
+}
+
 void TextureShare::acquire() {
-  std::lock_guard lock(mutex_);
-  ++holders_;
-  updateTailLocked();
+  update([this] { ++holders_; });
 }
 
 void TextureShare::release() {
-  std::lock_guard lock(mutex_);
-  UTILS_RELEASE_ASSERT(holders_ > 0);
-  --holders_;
-  updateTailLocked();
+  update([this] {
+    UTILS_RELEASE_ASSERT(holders_ > 0);
+    --holders_;
+  });
 }
 
 void TextureShare::releaseProducer() {
-  std::lock_guard lock(mutex_);
-  producerReleased_ = true;
-  updateTailLocked();
+  update([this] { producerReleased_ = true; });
 }
 
 void TextureShare::requestBackingRelease() {
-  std::lock_guard lock(mutex_);
-  releaseRequested_ = true;
-  updateTailLocked();
+  update([this] { releaseRequested_ = true; });
 }
 
 bool TextureShare::producerReleased() const {
@@ -94,7 +101,7 @@ bool TextureShare::heldElsewhere() const {
   return holders_ > 0;
 }
 
-void TextureShare::updateTailLocked() {
+bool TextureShare::updateTailLocked() {
   const bool inTail = producerReleased_ && holders_ > 0;
   if (inTail != countedInTail_) {
     if (inTail) {
@@ -104,10 +111,12 @@ void TextureShare::updateTailLocked() {
     }
     countedInTail_ = inTail;
   }
+  // Claimed under the lock so exactly one caller releases; that caller releases after unlocking.
   if (releaseRequested_ && producerReleased_ && holders_ == 0 && !backingReleased_) {
     backingReleased_ = true;
-    backend_.backing->releaseBackingNow();
+    return true;
   }
+  return false;
 }
 
 TextureShareLease::TextureShareLease(std::shared_ptr<TextureShare> share)
