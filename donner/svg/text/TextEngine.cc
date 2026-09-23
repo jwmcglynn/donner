@@ -2480,6 +2480,7 @@ Box2d TextEngine::computedObjectBoundingBox(EntityHandle handle) const {
   Box2d result;
   bool initialized = false;
   for (const auto& spanBounds : cache.spanBounds) {
+    ++objectBoundingBoxSpanVisits_;
     if (isDescendantOf(registry_, spanBounds.sourceEntity, handle.entity())) {
       addBox(result, initialized, spanBounds.emBox);
     }

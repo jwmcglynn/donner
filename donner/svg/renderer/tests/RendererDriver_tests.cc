@@ -36,6 +36,7 @@
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#include "donner/svg/text/TextEngine.h"
 
 using ::testing::_;
 using ::testing::AllOf;
@@ -1751,6 +1752,26 @@ TEST_F(RendererDriverTest, EffectSpansResolveStylesOncePerTextElement) {
   driver.draw(document);
   EXPECT_EQ(driver.textPreparationStatsForTesting().fullElementStylePasses, 2u);
   EXPECT_EQ(driver.textPreparationStatsForTesting().spanStyleVisits, 26u);
+}
+
+TEST_F(RendererDriverTest, FilteredTextSpansBoundObjectBoxWorkPerRoot) {
+  constexpr int kSpanCount = 16;
+  std::string body = R"svg(
+    <defs><filter id="f" filterUnits="objectBoundingBox"><feFlood/></filter></defs>
+    <text x="10" y="60" font-family="sans-serif" font-size="20">)svg";
+  for (int span = 0; span < kSpanCount; ++span) {
+    body += R"svg(<tspan filter="url(#f)">S</tspan>)svg";
+  }
+  body += "</text>";
+  SVGDocument document = makeDocument(body, Vector2i(400, 100));
+
+  driver.draw(document);
+
+  const auto& textEngine = document.registry().ctx().get<TextEngine>();
+  EXPECT_GE(textEngine.objectBoundingBoxSpanVisitsForTesting(),
+            static_cast<std::size_t>(kSpanCount));
+  EXPECT_LE(textEngine.objectBoundingBoxSpanVisitsForTesting(),
+            static_cast<std::size_t>(kSpanCount * 4));
 }
 
 TEST_F(RendererDriverTest, PatternFilledEffectSpansPreserveOuterTextPreparation) {
