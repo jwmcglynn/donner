@@ -210,13 +210,13 @@ and payload completeness before reading. The sampled color remains local to the 
 diagnostics should not log bitmap bytes or sampled document content.
 
 The browser regression URL may explicitly opt into `testControl=eyedropper`. Only that URL
-publishes active Fill/Stroke, the active paint role, source-pane focus and selection booleans, and
-the first selected element's style/text to the same page for assertions. Each string field is
-capped at 512 bytes before copying; the bridge publishes no whole SVG source or bitmap. Ordinary
-editor URLs expose no eyedropper test-state object. The browser test target below checks that
-negative boundary. The same opt-in URL may publish bounded, content-free shortcut-gate snapshots
-to diagnose whether a browser key reached the editor before a focus or popup gate; ordinary URLs
-expose no such probe.
+publishes active Fill/Stroke, the active paint role, source-pane focus and selection booleans,
+current undo-entry count, and the first selected element's style/text to the same page for
+assertions. Each string field is capped at 512 bytes before copying; the bridge publishes no whole
+SVG source or bitmap. Ordinary editor URLs expose no eyedropper test-state object; the browser test
+checks this negative boundary. The same opt-in URL may publish bounded, content-free shortcut-gate
+snapshots to diagnose whether a browser key reached the editor before a focus or popup gate.
+Ordinary URLs expose no such probe.
 
 Negative tests should exercise an empty bitmap, truncated rows, zero/overflowing dimensions,
 premultiplied and straight alpha, document replacement, selection change, focus loss, stale

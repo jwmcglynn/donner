@@ -77,6 +77,7 @@ declare global {
       sourcePaneFocused: boolean;
       sourceSelectionActive: boolean;
       activePaintTarget: "fill" | "stroke";
+      undoEntryCount: number;
     };
     __donnerEyedropperShortcutProbe?: {
       current: EyedropperShortcutGate;
@@ -1977,7 +1978,7 @@ async function readPaintTargetState(page: Page) {
     stroke: window.__donnerEyedropperTestState?.activeStroke ?? "unpublished",
     selectedCount: window.__donnerInteractionStats?.selectedCount ?? -1,
     sourceVersion: window.__donnerWorkerStats?.sourceVersion ?? -1,
-    undoEntries: window.__donnerWorkerStats?.undoEntryCount ?? -1,
+    undoEntries: window.__donnerEyedropperTestState?.undoEntryCount ?? -1,
     eyedropperArmed: window.__donnerInteractionStats?.eyedropperArmed ?? false,
   }));
 }
@@ -2143,7 +2144,7 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
   }).toBe(expectedFill);
 
   const beforeTextUndo = await page.evaluate(() =>
-    window.__donnerWorkerStats?.undoEntryCount ?? -1
+    window.__donnerEyedropperTestState?.undoEntryCount ?? -1
   );
   const textTool = { x: eyedropperTool.x - 36, y: eyedropperTool.y };
   await page.mouse.move(textTool.x, textTool.y);
@@ -2180,7 +2181,7 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
   await expectBrowserKeyFrame(page, beforeEscapeFrame, "Escape must wake a browser editor frame");
   await expect.poll(() =>
     page.evaluate(() => ({
-      undoEntries: window.__donnerWorkerStats?.undoEntryCount ?? -1,
+      undoEntries: window.__donnerEyedropperTestState?.undoEntryCount ?? -1,
       shortcutProbe: window.__donnerEyedropperShortcutProbe ?? null,
     })), {
     message: "Escape must commit the newly created SVG text as one document edit",
@@ -2497,7 +2498,9 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   await page.mouse.click(center.x, center.y);
   await expect.poll(() => page.evaluate(() => window.__donnerInteractionStats?.selectedCount))
     .toBe(1);
-  const beforeUndo = await page.evaluate(() => window.__donnerWorkerStats?.undoEntryCount ?? -1);
+  const beforeUndo = await page.evaluate(() =>
+    window.__donnerEyedropperTestState?.undoEntryCount ?? -1
+  );
   const edge = { x: viewport.documentX + 1, y: viewport.documentY + 1 };
   const paneClip = {
     x: viewport.paneX,
@@ -2548,7 +2551,9 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     activeFill: "#ff000080",
     selectedStyle: expect.stringContaining("#ff000080"),
   }));
-  await expect.poll(() => page.evaluate(() => window.__donnerWorkerStats?.undoEntryCount ?? -1))
+  await expect.poll(() =>
+    page.evaluate(() => window.__donnerEyedropperTestState?.undoEntryCount ?? -1)
+  )
     .toBe(beforeUndo + 1);
   expect(failures).toEqual([]);
 });

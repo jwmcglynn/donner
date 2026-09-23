@@ -213,7 +213,7 @@ EyedropperSelectedTestFields ReadEyedropperSelectedTestFields(const svg::SVGElem
 void PublishEyedropperTestState(std::string_view activeFill, std::string_view activeStroke,
                                 std::string_view selectedStyle, std::string_view selectedText,
                                 bool strokeActive, bool sourcePaneFocused,
-                                bool sourceSelectionActive) {
+                                bool sourceSelectionActive, std::size_t undoEntryCount) {
   const std::string fill(activeFill.substr(0, kEyedropperTestFieldMaxBytes));
   const std::string stroke(activeStroke.substr(0, kEyedropperTestFieldMaxBytes));
   const std::string style(selectedStyle.substr(0, kEyedropperTestFieldMaxBytes));
@@ -229,10 +229,11 @@ void PublishEyedropperTestState(std::string_view activeFill, std::string_view ac
           'activePaintTarget' : $4 ? 'stroke' : 'fill',
           'sourcePaneFocused' : !!$5,
           'sourceSelectionActive' : !!$6,
+          'undoEntryCount' : Number($7),
         });
       },
       fill.c_str(), stroke.c_str(), style.c_str(), text.c_str(), strokeActive,
-      sourcePaneFocused, sourceSelectionActive);
+      sourcePaneFocused, sourceSelectionActive, undoEntryCount);
   // clang-format on
 }
 
@@ -244,7 +245,7 @@ void PublishEyedropperShortcutProbe(bool wantTextInput, bool popupOpen, bool sou
   MAIN_THREAD_EM_ASM(
       {
         const previous = window['__donnerEyedropperShortcutProbe'] || {};
-        const gate = {
+        const gate = ({
           'wantTextInput' : !!$0,
           'popupOpen' : !!$1,
           'sourcePaneFocused' : !!$2,
@@ -255,10 +256,10 @@ void PublishEyedropperShortcutProbe(bool wantTextInput, bool popupOpen, bool sou
           'iPressed' : !!$7,
           'escapeDown' : !!$8,
           'escapePressed' : !!$9,
-          'domActiveElementId' : String(document.activeElement?.id || '').slice(0, 64),
-          'domActiveElementTag' : String(document.activeElement?.tagName || '').slice(0, 32),
+          'domActiveElementId' : String((document.activeElement && document.activeElement.id) || '').slice(0, 64),
+          'domActiveElementTag' : String((document.activeElement && document.activeElement.tagName) || '').slice(0, 32),
           'frameNumber' : Number(window['__donnerMainLoopRenderedFrames'] || 0),
-        };
+        });
         previous['current'] = gate;
         if (gate['iPressed']) {
           previous['iPressCount'] = Number(previous['iPressCount'] || 0) + 1;
@@ -3691,10 +3692,10 @@ void EditorShell::publishEyedropperTestStateIfEnabled() {
   }
   const bool sourcePaneFocused =
       !adaptiveUiLayout_.compactTouch() && sourcePaneVisible_ && textEditor_.isFocused();
-  PublishEyedropperTestState(app_.activePaintStyle().fill, app_.activePaintStyle().stroke,
-                             selectedFields.style, selectedFields.text,
-                             activePaintTarget_ == PaintTarget::Stroke, sourcePaneFocused,
-                             sourcePaneFocused && textEditor_.hasSelection());
+  PublishEyedropperTestState(
+      app_.activePaintStyle().fill, app_.activePaintStyle().stroke, selectedFields.style,
+      selectedFields.text, activePaintTarget_ == PaintTarget::Stroke, sourcePaneFocused,
+      sourcePaneFocused && textEditor_.hasSelection(), app_.undoTimeline().entryCount());
 }
 #endif
 
