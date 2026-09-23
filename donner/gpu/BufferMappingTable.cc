@@ -48,14 +48,14 @@ MapSliceState BufferMappingTable::readiness(const Entry* entry) const {
   // Loss is answered before readiness on purpose. A backend can retire the submission serial of
   // work that did not actually execute correctly, so a terminal failure has to outrank a serial
   // that merely looks complete; otherwise the bytes handed back are whatever the failed work left
-  // behind.
+  // behind. The serial is read first: a backend publishes a failure before the serial that
+  // completes it, so a serial seen complete brings its failure with it, while reading the loss
+  // first would let a failure published between the two reads pass as a clean completion.
+  const bool completed = host_.completedSubmissionSerial() >= entry->readySerial;
   if (host_.deviceLost()) {
     return MapSliceState::DeviceLost;
   }
-  if (host_.completedSubmissionSerial() >= entry->readySerial) {
-    return MapSliceState::Ready;
-  }
-  return MapSliceState::Pending;
+  return completed ? MapSliceState::Ready : MapSliceState::Pending;
 }
 
 MapSliceReport BufferMappingTable::waitSlice(uint32_t mappingSlotIndex, double sliceSeconds) {

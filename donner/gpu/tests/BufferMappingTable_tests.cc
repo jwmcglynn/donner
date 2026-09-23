@@ -8,6 +8,7 @@
 
 #include <limits>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "donner/gpu/tests/GpuTestUtils.h"
@@ -24,9 +25,16 @@ class FakeMappingHost final : public BufferMappingHost {
 public:
   /// Bytes of each buffer slot; an empty entry stands for a slot with no live allocation.
   std::vector<std::vector<uint8_t>> buffers;
-  uint64_t completedSerial = 0;  //!< What the device reports as completed.
-  bool lost = false;             //!< Whether the device has taken a terminal failure.
-  int waitCalls = 0;             //!< How many slices the table asked the backend to wait out.
+  /// What the device reports as completed. Mutable so \ref failBetweenReads can publish it from a
+  /// read.
+  mutable uint64_t completedSerial = 0;
+  mutable bool lost = false;  //!< Whether the device has taken a terminal failure.
+  /// Serial that failed work completes at, published together with the loss right after the
+  /// first read of this host's completion or loss state: that read sees the state before the
+  /// failure and every later read sees both. Models a completion handler that runs on another
+  /// thread while the table is checking readiness. Absent means no such handler runs.
+  mutable std::optional<uint64_t> failBetweenReads;
+  int waitCalls = 0;  //!< How many slices the table asked the backend to wait out.
   /// Serial the backend starts reporting as completed once a wait runs, modelling work that
   /// finishes while the caller is blocked. Absent means a wait changes nothing.
   std::optional<uint64_t> completeOnWait;
@@ -44,7 +52,11 @@ public:
     return buffers[bufferSlotIndex];
   }
 
-  uint64_t completedSubmissionSerial() const override { return completedSerial; }
+  uint64_t completedSubmissionSerial() const override {
+    const uint64_t observed = completedSerial;
+    publishFailureBetweenReads();
+    return observed;
+  }
 
   MapWaitKind waitForSubmission(uint64_t /*serial*/, double /*sliceSeconds*/) override {
     ++waitCalls;
@@ -58,7 +70,20 @@ public:
     return waitKind;
   }
 
-  bool deviceLost() const override { return lost; }
+  bool deviceLost() const override {
+    const bool observed = lost;
+    publishFailureBetweenReads();
+    return observed;
+  }
+
+private:
+  /// Publishes \ref failBetweenReads, once.
+  void publishFailureBetweenReads() const {
+    if (failBetweenReads.has_value()) {
+      lost = true;
+      completedSerial = *std::exchange(failBetweenReads, std::nullopt);
+    }
+  }
 };
 
 class BufferMappingTableTests : public testing::Test {
@@ -78,6 +103,17 @@ protected:
   FakeMappingHost host_;
   BufferMappingTable table_{host_};
 };
+
+TEST_F(BufferMappingTableTests, FailedWorkCompletingDuringTheCheckIsNeverReady) {
+  ASSERT_THAT(mapWholeBuffer(7), IsOk());
+  // The failed submission's handler publishes the loss and serial 7 between two of the table's
+  // reads.
+  host_.failBetweenReads = 7;
+
+  EXPECT_EQ(table_.waitSlice(0, 0.01).state, MapSliceState::DeviceLost)
+      << "a serial seen complete must not outrank a failure published with it";
+  EXPECT_THAT(table_.bytes(0), IsGpuError(GpuErrorType::DeviceLost));
+}
 
 TEST_F(BufferMappingTableTests, AMappingWhoseWorkAlreadyCompletedIsReadyWithoutWaiting) {
   host_.completedSerial = 7;

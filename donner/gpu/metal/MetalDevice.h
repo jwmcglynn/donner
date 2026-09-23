@@ -52,8 +52,10 @@ namespace donner::gpu::metal {
  * configured extent. Presenting waits for the frame's own submission to complete and then hands
  * the drawable over, because a drawable presented from a command buffer is shown when that
  * buffer is scheduled rather than when it completes, which would show a frame the GPU is still
- * drawing. The layer hands out a small fixed number of drawables, so a frame that is neither
- * presented nor abandoned stalls the next acquisition until the layer gives up waiting.
+ * drawing. A frame whose work cannot finish because the root is lost is abandoned, and the
+ * present reports \ref SurfaceStatus::DeviceLost. The layer hands out a small fixed number of
+ * drawables, so a frame that is neither presented nor abandoned stalls the next acquisition until
+ * the layer gives up waiting.
  *
  * Queue writes update idle resources directly. Writes to resources an earlier submission still
  * uses are copied into bounded host storage and uploaded at the beginning of the next ordinary
@@ -80,8 +82,19 @@ namespace donner::gpu::metal {
  *
  * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity. The one
  * exception is command-buffer completion handlers, which Metal invokes on an internal queue;
- * they touch only atomics and a mutex-protected error string, observable through
- * \ref completedSerial, \ref Device::waitForSerial, and \ref lastErrorForTest.
+ * they touch only atomics, mutex-protected completion state (the error string and the ordered
+ * completion watermark), and the root's shared loss condition, observable through
+ * \ref completedSerial, \ref Device::waitForSerial, \ref Device::isLost, and
+ * \ref lastErrorForTest. A handler that saw work fail also writes one diagnostic line to stderr,
+ * after it has published everything a waiter reads.
+ *
+ * Every command buffer of a submission reports its outcome, and the submission completes once all
+ * of them have. When any of them failed on the GPU, the submission failed: the root is declared
+ * lost, with no wait site because the backend reported it, before the submission's serial is
+ * reported complete. The completed serial advances only in serial order, so a serial seen complete
+ * carries the outcome of every submission through it, whatever order their handlers ran in.
+ * Mappings answer loss before readiness and serial waits give up at once, whichever device over
+ * the root declared the loss, so teardown after a hang does not wait it out.
  *
  * The header is pure C++ (Objective-C state lives behind a pimpl) so it is includable from C++
  * tests; the implementation is Objective-C++.
@@ -146,8 +159,9 @@ public:
    * @param unalignedWriteTimeout Maximum CPU wait for an unaligned write to a busy buffer.
    *   Must be between zero and five seconds; invalid budgets return nullptr.
    * @param lostState Loss condition to share with every other device selected over the same
-   *   backend, or null for a private one. The device reports it through \ref Device::isLost;
-   *   the loss is declared by whoever observes it, such as a context's bounded wait.
+   *   backend, or null for a private one only this device can set. The device reports it through
+   *   \ref Device::isLost; the loss is declared by whoever observes it, such as a failed command
+   *   buffer of this device or a context's bounded wait.
    */
   static std::unique_ptr<MetalDevice> Create(
       MemoryModel memoryModel = MemoryModel::Detected,
@@ -191,6 +205,31 @@ public:
 
   /// Releases the event installed by \ref pauseSubmissionsForTest. Safe when no pause is active.
   void resumeSubmissionsForTest();
+
+  /**
+   * Makes one command buffer of the next submission report an execution error when it completes,
+   * as a command buffer the GPU faulted on does, through the same completion path. A deterministic
+   * test seam: a real fault cannot be produced on demand without hanging or corrupting the GPU.
+   *
+   * @param commandBufferIndex Index of the failing buffer within the submission; its last buffer
+   *   when absent or past the end.
+   */
+  void failNextSubmissionForTest(std::optional<size_t> commandBufferIndex = std::nullopt);
+
+  /// Parks the completion of the next submission when its handler runs, as a GPU that has not
+  /// finished that work yet looks: the handler records its outcome but publishes nothing until
+  /// \ref releaseHeldCompletionForTest. Later submissions complete normally meanwhile.
+  void holdNextCompletionForTest();
+
+  /// Publishes the completion \ref holdNextCompletionForTest parked, from the calling thread, or
+  /// lets it publish normally when its handler has not run yet. Safe when nothing is held.
+  void releaseHeldCompletionForTest();
+
+  /// Waits until \p count submissions have had all their completion handlers run on this device,
+  /// parked ones included. Test seam for ordering completions deterministically.
+  /// @param count Submissions to wait for. @param timeoutSeconds Longest to wait.
+  /// @return True once that many have.
+  [[nodiscard]] bool waitForCompletionHandlersForTest(uint64_t count, double timeoutSeconds) const;
 
   /// Destructor; releases all Metal objects still alive.
   ~MetalDevice() override;

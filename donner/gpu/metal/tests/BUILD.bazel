@@ -559,6 +559,32 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "metal_device_loss_tests",
+    srcs = ["MetalDeviceLoss_tests.cc"],
+    env = {
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+    },
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_device_gate",
+        "//donner/gpu",
+        "//donner/gpu:buffer_mapping_scene",
+        "//donner/gpu:device_lost",
+        "//donner/gpu:gpu_limits",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/metal:metal_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "metal_ui_renderer_tests",
     srcs = ["MetalUiRenderer_tests.cc"],
     env_inherit = [

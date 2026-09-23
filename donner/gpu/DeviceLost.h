@@ -9,12 +9,13 @@
 /// any one runtime device, because several runtime devices routinely drive one root and a root
 /// that stopped answering has stopped answering all of them.
 ///
-/// This header is deliberately free of the runtime's descriptors and handles (atomics and chrono
-/// only) so a wait loop can publish a loss without pulling the device in.
+/// This header is deliberately free of the runtime's descriptors and handles (atomics, chrono and
+/// an ostream declaration only) so a wait loop can publish a loss without pulling the device in.
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <iosfwd>
 
 namespace donner::gpu {
 
@@ -35,6 +36,9 @@ enum class DeviceLostWaitSite : std::uint8_t {
   /// completion).
   QueueIdle,
 };
+
+/// Ostream output operator, e.g. `QueueIdle`. @param os Output stream. @param site Value to output.
+std::ostream& operator<<(std::ostream& os, DeviceLostWaitSite site);
 
 /**
  * Sticky device-loss condition of one backend root.
