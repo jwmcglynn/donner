@@ -14,7 +14,9 @@
 #include <thread>
 
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/DeviceLost.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/tests/SharingTestDevice.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
@@ -35,7 +37,9 @@ using svg::test::RgbaEq;
 using testing::Eq;
 using testing::Ge;
 using testing::HasSubstr;
+using testing::IsFalse;
 using testing::IsNull;
+using testing::IsTrue;
 using testing::Lt;
 using testing::Not;
 using testing::NotNull;
@@ -950,5 +954,48 @@ TEST(GeodeNativeMetalRoot, QueueIdleReportsALossDeclaredDuringTheWait) {
 }
 
 #endif  // defined(__APPLE__)
+
+/// Two runtime devices on separate queues whose loss conditions are their own, as over an embedder
+/// root with private loss states, so every declaration shows up on exactly the device it names.
+class OrderedRegistrationTest : public testing::Test {
+protected:
+  gpu::FakeNativeDevice native_;
+  std::shared_ptr<gpu::DeviceLostState> producerLost_ = std::make_shared<gpu::DeviceLostState>();
+  std::shared_ptr<gpu::DeviceLostState> consumerLost_ = std::make_shared<gpu::DeviceLostState>();
+  gpu::SharingDevice producer_{native_, gpu::SharingOptions{.lostState = producerLost_}};
+  gpu::SharingDevice consumer_{native_, gpu::SharingOptions{.lostState = consumerLost_}};
+};
+
+/// A producer already lost is refused at registration, and nothing is declared on the consumer.
+TEST_F(OrderedRegistrationTest, AnAlreadyLostProducerIsRefusedWithoutDeclaringTheConsumer) {
+  const gpu::Texture owned = gpu::MakeSharedTexture(producer_);
+  const gpu::TextureExport exported = gpu::GetResultOrFail(producer_.exportTexture(owned));
+  ASSERT_TRUE(gpu::DeclareDeviceLost(*producerLost_));
+
+  EXPECT_THAT(RegisterOrderedTexture(consumer_, exported),
+              gpu::IsGpuError(gpu::GpuErrorType::DeviceLost));
+  EXPECT_THAT(consumer_.isLost(), IsFalse());
+}
+
+/// A producer whose work failed ends the wait at once. The failure is the producer's: the source
+/// wait declares it on the producer with no wait site, and the helper fails with `DeviceLost`
+/// without writing the consumer's condition, least of all with a wait site no deadline produced.
+TEST_F(OrderedRegistrationTest, AProducerThatFailsIsNotDeclaredOnTheConsumer) {
+  const gpu::Texture owned = gpu::MakeSharedTexture(producer_);
+  producer_.holdCompletion();
+  ASSERT_THAT(gpu::SubmitSharedTextureRead(producer_, owned), gpu::HasResult());
+  const gpu::TextureExport exported = gpu::GetResultOrFail(producer_.exportTexture(owned));
+  producer_.failExecution();
+
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_THAT(RegisterOrderedTexture(consumer_, exported),
+              gpu::IsGpuError(gpu::GpuErrorType::DeviceLost));
+  EXPECT_THAT(std::chrono::steady_clock::now() - start, Lt(std::chrono::seconds(1)));
+  EXPECT_THAT(producerLost_->lost.load(), IsTrue());
+  EXPECT_THAT(producerLost_->timedOutSite.load(), Eq(gpu::DeviceLostWaitSite::None));
+  EXPECT_THAT(consumer_.isLost(), IsFalse())
+      << "the consumer's wait never reached its bound, so it has no hang to report";
+  EXPECT_THAT(consumerLost_->timedOutSite.load(), Eq(gpu::DeviceLostWaitSite::None));
+}
 
 }  // namespace donner::geode
