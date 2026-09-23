@@ -2477,6 +2477,7 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   }).toEqual(expect.objectContaining({ coversAll: true }));
   await page.keyboard.up("a");
   await page.keyboard.up("Control");
+  await retainEyedropperPng("eyedropper-alpha-source-before-paste.png", await page.screenshot());
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.evaluate((text) => navigator.clipboard.writeText(text), fixture);
   await page.evaluate(() => {
@@ -2510,16 +2511,50 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   );
   await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
     .toBeGreaterThan(beforePlatformPasteFrame);
+  await retainEyedropperPng(
+    "eyedropper-alpha-source-after-platform-paste.png",
+    await page.screenshot(),
+  );
+  await page.keyboard.down("Control");
+  await page.keyboard.down("a");
   await expect.poll(() =>
-    page.evaluate(() => ({
-      replaced: window.__donnerEyedropperTestState?.sourceSelectionActive === false,
-      sourceBytes: window.__donnerEyedropperTestState?.sourceBufferByteLength ?? -1,
-      pasteEvents: window.__donnerTestPasteEventStats ?? null,
-      activeElement: document.activeElement?.id || document.activeElement?.tagName || "none",
-    })), {
-    message: "the single platform paste must replace the selected source",
+    page.evaluate(() => {
+      const state = window.__donnerEyedropperTestState;
+      return {
+        coversAll: (state?.sourceBufferByteLength ?? 0) > 0
+          && state?.sourceSelectionByteLength === state?.sourceBufferByteLength,
+        sourceBytes: state?.sourceBufferByteLength ?? -1,
+        selectedBytes: state?.sourceSelectionByteLength ?? -1,
+      };
+    }), {
+    message: "select the complete current source before the editor paste shortcut",
     timeout: scaledMs(4_000),
-  }).toEqual(expect.objectContaining({ replaced: true, sourceBytes: fixture.length }));
+  }).toEqual(expect.objectContaining({ coversAll: true }));
+  await page.keyboard.up("a");
+  await page.keyboard.up("Control");
+  const beforeEditorPasteFrame = await page.evaluate(
+    () => window.__donnerMainLoopRenderedFrames ?? 0,
+  );
+  await page.keyboard.down("Control");
+  await page.keyboard.down("v");
+  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
+    message: "the editor paste shortcut must reach an app frame",
+    timeout: scaledMs(4_000),
+  }).toBeGreaterThan(beforeEditorPasteFrame);
+  await page.keyboard.up("v");
+  await page.keyboard.up("Control");
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const state = window.__donnerEyedropperTestState;
+      return {
+        sourceBytes: state?.sourceBufferByteLength ?? -1,
+        selectedBytes: state?.sourceSelectionByteLength ?? -1,
+        pasteEvents: window.__donnerTestPasteEventStats ?? null,
+      };
+    }), {
+    message: "Ctrl+V must replace the selected intermediate source with the full SVG fixture",
+    timeout: scaledMs(4_000),
+  }).toEqual(expect.objectContaining({ sourceBytes: fixture.length, selectedBytes: 0 }));
   await retainEyedropperPng("eyedropper-alpha-source-after-paste.png", await page.screenshot());
   await expect.poll(() =>
     page.evaluate((before) => {
