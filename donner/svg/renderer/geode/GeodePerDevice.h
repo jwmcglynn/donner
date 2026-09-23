@@ -29,8 +29,10 @@ struct GeodeDeviceKey {
  * second device must neither reuse it nor replace it: replacing it would destroy the first
  * device's state on the second device's thread and make the first device rebuild it on its next
  * frame. Each device gets its own entry instead. An entry whose context has gone away (its
- * retirement is closed or destroyed) is dropped the next time an entry is looked up, which is safe
- * on any thread because the entry's state hands its handles to that retirement.
+ * retirement is closed or destroyed) is dropped the next time an entry is looked up, or by
+ * \ref dropGone. That is safe on any thread: the entry's state hands its handles to a closed
+ * retirement, which keeps them, or, once that retirement is destroyed, drops them after their
+ * device is gone, when releasing them does nothing.
  *
  * Values are held by pointer, so a reference to one stays valid while other devices' entries come
  * and go.
@@ -53,7 +55,7 @@ public:
   /// contexts that are gone first.
   /// @param device Device the entry belongs to.
   T& forDevice(const GeodeDeviceKey& device) {
-    std::erase_if(entries_, [](const Entry& entry) { return ContextGone(entry); });
+    (void)dropGone();
     for (Entry& entry : entries_) {
       if (entry.deviceId == device.deviceId) {
         return *entry.value;
@@ -61,6 +63,12 @@ public:
     }
     entries_.push_back(Entry{device.deviceId, device.handleRetirement, std::make_unique<T>()});
     return *entries_.back().value;
+  }
+
+  /// Drops the entries of contexts that are gone.
+  /// @return Number of entries dropped.
+  size_t dropGone() {
+    return std::erase_if(entries_, [](const Entry& entry) { return ContextGone(entry); });
   }
 
   /// The entry for the device \p deviceId, or null when it has none.

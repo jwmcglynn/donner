@@ -189,5 +189,19 @@ TEST(GeodePerDeviceTest, AGoneContextsEntryIsDroppedAtTheNextLookup) {
   EXPECT_THAT(perDevice.find(3), NotNull());
 }
 
+TEST(GeodePerDeviceTest, DroppingGoneContextsReportsHowManyWent) {
+  const auto closing = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
+  const auto live = std::make_shared<GeodeHandleRetirement>(/*runtimeDeviceId=*/0u);
+  GeodePerDevice<int> perDevice;
+  (void)perDevice.forDevice(GeodeDeviceKey{1, closing});
+  (void)perDevice.forDevice(GeodeDeviceKey{2, live});
+
+  EXPECT_THAT(perDevice.dropGone(), Eq(0u));
+  closing->close();
+  EXPECT_THAT(perDevice.dropGone(), Eq(1u));
+  EXPECT_THAT(perDevice.dropGone(), Eq(0u)) << "each gone context is reported once";
+  EXPECT_THAT(perDevice.size(), Eq(1u));
+}
+
 }  // namespace
 }  // namespace donner::geode

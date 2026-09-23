@@ -1327,6 +1327,26 @@ struct DocumentDeviceResidency {
   std::shared_ptr<geode::GeodeGlyphCache> glyphs;      //!< Resident glyph outlines.
 };
 
+/**
+ * Drops, from every entity of \p registry, the residence slots of devices that are gone.
+ *
+ * An entity's slots are otherwise dropped only when a device next looks the entity up, and an
+ * entity no remaining device draws would keep a gone device's slots, and through them its slabs
+ * and their charge to the document's geometry budget, for as long as the document lives. Called
+ * when a gone device's document-level residence is dropped, so once per gone device.
+ *
+ * @param registry Registry of the document.
+ */
+void DropGoneDevicesFromEntities(Registry& registry) {
+  for (auto&& [entity, component] : registry.view<geode::GeodeResidentPathComponent>().each()) {
+    (void)component.devices.dropGone();
+  }
+  for (auto&& [entity, component] :
+       registry.view<geode::GeodeTextInstanceResidencyComponent>().each()) {
+    (void)component.devices.dropGone();
+  }
+}
+
 /// Residence of every device that draws a document, kept in the document's registry context.
 ///
 /// A document can be drawn by renderers on several devices - an editor's render worker and its
@@ -3894,7 +3914,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       residencyPtr = &registry.ctx().emplace<std::shared_ptr<DocumentResidency>>(
           std::make_shared<DocumentResidency>());
     }
-    return (*residencyPtr)->devices.forDevice(deviceKey());
+    geode::GeodePerDevice<DocumentDeviceResidency>& devices = (*residencyPtr)->devices;
+    if (devices.dropGone() != 0) {
+      DropGoneDevicesFromEntities(registry);
+    }
+    return devices.forDevice(deviceKey());
   }
 
   /// This device's residence slots on \p source, created empty on first use.

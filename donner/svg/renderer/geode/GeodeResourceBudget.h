@@ -125,9 +125,21 @@ public:
     releaseFamily(released);
   }
 
+  /**
+   * Charges \p bytes of GPU residence, the chunks of every device's slabs for this document,
+   * unless that would take the document past its resident limit.
+   *
+   * Residence is a cache the renderer can do without: a refused chunk leaves its geometry on the
+   * per-frame upload path. So each request is judged on the bytes charged at that moment, and a
+   * refusal does not refuse later requests: once a device's residence is released, another
+   * device can become resident again. \ref rejected still reports that a request was refused.
+   *
+   * @param bytes Bytes to charge.
+   * @return Whether they were charged.
+   */
   [[nodiscard]] bool reserveResidentBytes(std::uint64_t bytes) {
-    if (residentRejected_ || residentBytes_ > limits_.residentBytes ||
-        bytes > limits_.residentBytes - residentBytes_ || !reserveFamily(bytes)) {
+    if (residentBytes_ > limits_.residentBytes || bytes > limits_.residentBytes - residentBytes_ ||
+        !reserveFamily(bytes)) {
       residentRejected_ = true;
       return false;
     }
@@ -148,6 +160,7 @@ public:
 
   [[nodiscard]] std::uint64_t cacheBytes() const { return cacheBytes_; }
   [[nodiscard]] std::uint64_t residentBytes() const { return residentBytes_; }
+  /// Whether a cache or resident request has ever been refused.
   [[nodiscard]] bool rejected() const { return cacheRejected_ || residentRejected_; }
 
 private:
