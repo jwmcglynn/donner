@@ -43,7 +43,7 @@ uint64_t SegmentTileId(Entity left, Entity right) {
 
 // Sets a layer payload from a drawn offscreen. Returns false, keeping the previous payload, when
 // the snapshot failed: a null texture snapshot, which leaves the offscreen's drawn target
-// attached, or an empty bitmap from a failed readback.
+// attached, or an empty bitmap from a failed readback or a refused target.
 bool SetLayerPayloadFromOffscreen(CompositorLayer& layer, RendererInterface& offscreen,
                                   const Transform2d& surfaceFromEntity) {
   if (!offscreen.requiresTextureSnapshotPresentation()) {
@@ -64,7 +64,7 @@ bool SetLayerPayloadFromOffscreen(CompositorLayer& layer, RendererInterface& off
 
 // Sets a static-segment payload from a drawn offscreen. Returns false, keeping the previous
 // payload, when the snapshot failed: a null texture snapshot, which leaves the offscreen's drawn
-// target attached, or an empty bitmap from a failed readback.
+// target attached, or an empty bitmap from a failed readback or a refused target.
 bool SetSegmentPayloadFromOffscreen(RendererBitmap& segment,
                                     std::shared_ptr<const RendererTextureSnapshot>& segmentTexture,
                                     RendererInterface& offscreen) {

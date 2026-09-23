@@ -875,9 +875,10 @@ public:
     /// without sampling the exact re-rasterize frame.
     int offscreenCreateTotal = 0;
     int offscreenRecycleTotal = 0;
-    /// Tile rasterizations whose GPU texture allocation failed this frame. The tile stays dirty
-    /// for the next frame, or switches to direct compose after two first-of-frame budget
-    /// rejections at the same canvas size.
+    /// Tile rasterizations whose payload snapshot failed this frame: a null texture snapshot, or
+    /// an empty bitmap from a failed readback or a refused target. The tile stays dirty for the
+    /// next frame, or switches to direct compose after two first-of-frame budget rejections at the
+    /// same canvas size.
     int textureAllocationFailureCount = 0;
     /// Controller-lifetime total of `textureAllocationFailureCount`.
     int textureAllocationFailureTotal = 0;
@@ -1078,15 +1079,16 @@ private:
 
   /// Return a cleanly-finished offscreen renderer to the single-slot pool.
   void recycleOffscreen(std::unique_ptr<RendererInterface> offscreen);
-  /// Records a failed texture allocation for `offscreen` and destroys it: a snapshot that
-  /// failed left the drawn target attached, which the pool contract excludes. Returns true
-  /// when the failure was a surface-budget rejection, which latches for the rest of the frame.
+  /// Records a failed payload snapshot for `offscreen` and destroys it: a failed texture
+  /// snapshot leaves the drawn target attached, which the pool contract excludes, and an offscreen
+  /// whose readback failed is not reused either. Returns true when the failure was a
+  /// surface-budget rejection, which latches for the rest of the frame.
   bool discardFailedOffscreen(std::unique_ptr<RendererInterface> offscreen);
   /// Returns true when `layer` must not allocate this frame: it is presented directly after two
   /// budget rejections at `canvasSize`, or the frame's budget has already latched a rejection.
   bool skipRasterizeUnderBudget(CompositorLayer& layer, const ImmediateLayerPlan& previousPlan,
                                 const Vector2i& canvasSize);
-  /// Discards the offscreen whose texture snapshot failed for `layer` and, on a budget
+  /// Discards the offscreen whose payload snapshot failed for `layer` and, on a budget
   /// rejection, records the strike on the layer's plan (switching to direct compose on the
   /// second strike at the same canvas size).
   void recordLayerAllocationFailure(CompositorLayer& layer, const ImmediateLayerPlan& previousPlan,
