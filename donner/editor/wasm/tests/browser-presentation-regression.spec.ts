@@ -132,6 +132,10 @@ interface EyedropperShortcutGate {
   iPressed: boolean;
   escapeDown: boolean;
   escapePressed: boolean;
+  canArm: boolean;
+  appFocusLost: boolean;
+  mouseLeftClicked: boolean;
+  mouseLeftDown: boolean;
   domActiveElementId: string;
   domActiveElementTag: string;
   frameNumber: number;
@@ -2017,7 +2021,10 @@ async function readEyedropperState(page: Page) {
     sourceVersion: window.__donnerWorkerStats?.sourceVersion ?? -1,
     sourcePaneFocused: window.__donnerEyedropperTestState?.sourcePaneFocused ?? false,
     activeElement: document.activeElement?.id || document.activeElement?.tagName || "none",
+    documentHasFocus: document.hasFocus(),
+    visibilityState: document.visibilityState,
     renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
+    shortcutProbe: window.__donnerEyedropperShortcutProbe ?? null,
   }));
 }
 

@@ -250,8 +250,9 @@ void PublishEyedropperTestState(std::string_view activeFill, std::string_view ac
 
 void PublishEyedropperShortcutProbe(bool wantTextInput, bool popupOpen, bool sourcePaneFocused,
                                     bool textToolActive, bool textEditing, bool eyedropperActive,
-                                    bool iDown, bool iPressed, bool escapeDown,
-                                    bool escapePressed) {
+                                    bool iDown, bool iPressed, bool escapeDown, bool escapePressed,
+                                    bool canArm, bool appFocusLost, bool mouseLeftClicked,
+                                    bool mouseLeftDown) {
   // clang-format off
   MAIN_THREAD_EM_ASM(
       {
@@ -267,6 +268,10 @@ void PublishEyedropperShortcutProbe(bool wantTextInput, bool popupOpen, bool sou
           'iPressed' : !!$7,
           'escapeDown' : !!$8,
           'escapePressed' : !!$9,
+          'canArm' : !!$10,
+          'appFocusLost' : !!$11,
+          'mouseLeftClicked' : !!$12,
+          'mouseLeftDown' : !!$13,
           'domActiveElementId' : String((document.activeElement && document.activeElement.id) || '').slice(0, 64),
           'domActiveElementTag' : String((document.activeElement && document.activeElement.tagName) || '').slice(0, 32),
           'frameNumber' : Number(window['__donnerMainLoopRenderedFrames'] || 0),
@@ -283,7 +288,8 @@ void PublishEyedropperShortcutProbe(bool wantTextInput, bool popupOpen, bool sou
         window['__donnerEyedropperShortcutProbe'] = previous;
       },
       wantTextInput, popupOpen, sourcePaneFocused, textToolActive, textEditing,
-      eyedropperActive, iDown, iPressed, escapeDown, escapePressed);
+      eyedropperActive, iDown, iPressed, escapeDown, escapePressed, canArm,
+      appFocusLost, mouseLeftClicked, mouseLeftDown);
   // clang-format on
 }
 
@@ -3690,7 +3696,8 @@ void EditorShell::publishEyedropperShortcutProbeIfEnabled(bool anyPopupOpen,
       io.WantTextInput, anyPopupOpen, sourcePaneFocused, activeTool_ == ActiveTool::Text,
       textTool_.isEditing(), activeTool_ == ActiveTool::Eyedropper, ImGui::IsKeyDown(ImGuiKey_I),
       ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false), ImGui::IsKeyDown(ImGuiKey_Escape),
-      ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false));
+      ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false), canArmEyedropper(), io.AppFocusLost,
+      ImGui::IsMouseClicked(ImGuiMouseButton_Left), ImGui::IsMouseDown(ImGuiMouseButton_Left));
 }
 
 void EditorShell::publishEyedropperTestStateIfEnabled() {
