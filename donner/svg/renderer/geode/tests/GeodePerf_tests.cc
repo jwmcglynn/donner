@@ -34,6 +34,7 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::svg {
 namespace {
@@ -1144,20 +1145,6 @@ bool bitmapsEqual(const RendererBitmap& a, const RendererBitmap& b) {
   return true;
 }
 
-// Count pixels with non-zero alpha - a cheap "did anything render" check.
-size_t nonTransparentPixels(const RendererBitmap& bmp) {
-  size_t count = 0;
-  for (int y = 0; y < bmp.dimensions.y; ++y) {
-    const uint8_t* row = bmp.pixels.data() + static_cast<size_t>(y) * bmp.rowBytes;
-    for (int x = 0; x < bmp.dimensions.x; ++x) {
-      if (row[x * 4 + 3] != 0) {
-        ++count;
-      }
-    }
-  }
-  return count;
-}
-
 TEST_F(GeodePerfTest, GpuResidence_ReUploadsWhenDeviceChanges) {
   // Two INDEPENDENT headless devices (not the shared fixture device): this is
   // the "document crosses devices" scenario.
@@ -1188,7 +1175,7 @@ TEST_F(GeodePerfTest, GpuResidence_ReUploadsWhenDeviceChanges) {
   rendererA.draw(document);  // frame index 2: steady residence, lastResidentFrame=2.
   const RendererBitmap referenceA = rendererA.takeSnapshot();
   ASSERT_FALSE(referenceA.empty()) << "device A produced no snapshot";
-  ASSERT_GT(nonTransparentPixels(referenceA), 0u)
+  ASSERT_GT(test::CountNonTransparentPixels(referenceA), 0u)
       << "device A rendered nothing - fixture no longer exercises solid fills";
 
   // Device B (fresh renderer, frame index 1) renders the SAME document. Pre-fix,
@@ -1205,8 +1192,8 @@ TEST_F(GeodePerfTest, GpuResidence_ReUploadsWhenDeviceChanges) {
       << "device B output diverged from device A: resident GPU resources from "
          "device A leaked into device B's render pass (cross-device residence). "
          "device A non-transparent px="
-      << nonTransparentPixels(referenceA)
-      << ", device B non-transparent px=" << nonTransparentPixels(resultB);
+      << test::CountNonTransparentPixels(referenceA)
+      << ", device B non-transparent px=" << test::CountNonTransparentPixels(resultB);
 
   // A render back on device A must still match, from device A's own residence.
   RendererGeode rendererA2(deviceA);

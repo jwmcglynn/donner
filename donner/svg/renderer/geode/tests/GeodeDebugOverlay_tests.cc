@@ -11,11 +11,14 @@
 ///  3. Overlay ON emits one frame-final wireframe draw; turning it back off
 ///     restores byte-identical output (no sticky state).
 
+#include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <source_location>
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
@@ -151,36 +154,23 @@ bool bitmapsIdentical(const RendererBitmap& a, const RendererBitmap& b) {
   return a.dimensions == b.dimensions && a.rowBytes == b.rowBytes && a.pixels == b.pixels;
 }
 
-/// Count pixels in the overlay's magenta family. The frame-final wireframe
-/// is opaque magenta, while antialiasing over arbitrary content keeps R and
-/// B high and G low near its edges.
-int countMagentaFamilyPixels(const RendererBitmap& bitmap) {
-  int count = 0;
-  for (int y = 0; y < bitmap.dimensions.y; ++y) {
-    const uint8_t* row = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
-    for (int x = 0; x < bitmap.dimensions.x; ++x) {
-      const uint8_t* px = row + static_cast<size_t>(x) * 4;
-      if (px[0] > 150 && px[2] > 150 && px[1] < 80) {
-        ++count;
-      }
-    }
-  }
-  return count;
+/// A renderer that could not read its frame back returns an empty snapshot. Two of them hold the
+/// same no pixels, so a check that the overlay leaves output unchanged would accept them.
+TEST(GeodeDebugOverlayHelpersTest, EmptySnapshotsAreNotIdenticalOutput) {
+  EXPECT_NONFATAL_FAILURE(bitmapsIdentical(RendererBitmap{}, RendererBitmap{}),
+                          "empty 0x0 snapshot");
 }
 
-int countNonTransparentPixels(const RendererBitmap& bitmap) {
-  int count = 0;
-  for (int y = 0; y < bitmap.dimensions.y; ++y) {
-    const uint8_t* row = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
-    for (int x = 0; x < bitmap.dimensions.x; ++x) {
-      count += row[static_cast<size_t>(x) * 4 + 3] != 0 ? 1 : 0;
-    }
-  }
-  return count;
-}
-
+/// Whether \p pixel is in the overlay's magenta family. The frame-final wireframe is opaque
+/// magenta, while antialiasing over arbitrary content keeps R and B high and G low near its edges.
 bool isMagentaFamily(const std::array<uint8_t, 4>& pixel) {
   return pixel[0] > 150 && pixel[2] > 150 && pixel[1] < 80;
+}
+
+/// Count pixels in the overlay's magenta family.
+size_t countMagentaFamilyPixels(const RendererBitmap& bitmap,
+                                std::source_location caller = std::source_location::current()) {
+  return test::CountPixelsWhere(bitmap, isMagentaFamily, caller);
 }
 
 bool hasMagentaFamilyPixel(const RendererBitmap& bitmap, int x0, int y0, int x1, int y1) {
@@ -263,8 +253,8 @@ TEST_F(GeodeDebugOverlayTest, OnDrawsActualTriangleEdgesWithoutTintingInterior) 
   // The bounding-quad wireframe is magenta; at least a hairline's worth
   // of pixels must land in the magenta family. Overlay-off must have none
   // (the fixture palette has no magenta).
-  EXPECT_EQ(countMagentaFamilyPixels(off), 0);
-  EXPECT_GT(countMagentaFamilyPixels(on), 50);
+  EXPECT_EQ(countMagentaFamilyPixels(off), 0u);
+  EXPECT_GT(countMagentaFamilyPixels(on), 50u);
 
   // The rectangle's four bounding vertices encode a two-triangle fan over
   // (20,20)-(90,90). The overlay applies the vertex shader's dynamic dilation,
@@ -292,10 +282,10 @@ TEST_F(GeodeDebugOverlayTest, TextGlyphSlugTrianglesAreIncluded) {
   // Prove the fixture produced glyph pixels before using it to test the
   // overlay. With no background, every non-transparent baseline pixel comes
   // from the glyph itself.
-  EXPECT_GT(countNonTransparentPixels(off), 200);
+  EXPECT_GT(test::CountNonTransparentPixels(off), 200u);
   EXPECT_FALSE(bitmapsIdentical(off, on))
       << "Geometry debug mode must capture Slug submissions made by drawText.";
-  EXPECT_GT(countMagentaFamilyPixels(on), 20)
+  EXPECT_GT(countMagentaFamilyPixels(on), 20u)
       << "The text glyph's emitted Slug triangle edges must be visible.";
 }
 

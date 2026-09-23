@@ -125,5 +125,26 @@ TEST(ImageComparisonTestFixtureTests, TextFullOnlyRunsUseDisabledGtestNameInSimp
 }
 #endif
 
+/// A 2x2 opaque red bitmap: the side of the comparisons below that has pixels.
+RendererBitmap OpaqueRedBitmap() {
+  RendererBitmap bitmap;
+  bitmap.dimensions = Vector2i(2, 2);
+  bitmap.rowBytes = 8;
+  bitmap.pixels = {255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255};
+  return bitmap;
+}
+
+/// A renderer that could not read its frame back returns an empty bitmap. That render has no
+/// pixels to compare, so it is never identical to another render, not even to another empty one:
+/// an equivalence test whose two renders both failed must not pass.
+TEST(ImageComparisonTestFixtureTests, AnEmptyBitmapIsNeverIdentical) {
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsIdentical(OpaqueRedBitmap(), RendererBitmap{}, "e"),
+                          "e: the expected bitmap is empty");
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsIdentical(RendererBitmap{}, OpaqueRedBitmap(), "a"),
+                          "a: the actual bitmap is empty");
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsIdentical(RendererBitmap{}, RendererBitmap{}, "both"),
+                          "both: the actual and expected bitmaps are empty");
+}
+
 }  // namespace
 }  // namespace donner::svg

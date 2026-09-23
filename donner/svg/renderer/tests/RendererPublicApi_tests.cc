@@ -1,4 +1,5 @@
 #include <gmock/gmock.h>
+#include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -358,6 +359,12 @@ std::size_t CoveredPixels(const RendererBitmap& snapshot, int x0, int y0, int x1
     }
   }
   return covered;
+}
+
+/// A renderer that could not read its frame back returns an empty snapshot, which covers no pixel
+/// of any region; a region that must stay uncovered would otherwise accept it.
+TEST(RendererPublicApiTest, CoveredPixelsOfAnEmptySnapshotFails) {
+  EXPECT_NONFATAL_FAILURE(CoveredPixels(RendererBitmap{}, 0, 0, 1, 1), "empty 0x0 snapshot");
 }
 
 /// 52 letters at 26 font sizes: 1352 glyph occurrences and 1352 distinct outlines in one frame,

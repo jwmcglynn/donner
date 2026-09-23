@@ -247,6 +247,18 @@ void ExpectVisibleBitmap(const RendererBitmap& bitmap, std::string_view label) {
   EXPECT_THAT(differences.size(), testing::Eq(1)) << "Expected visible rendered content";
 }
 
+/// A renderer that could not read its frame back returns an empty bitmap, which has no content to
+/// be visible, to differ, or to count. Each guard above must reject one, because an equivalence
+/// or extent test whose renders all came back empty would otherwise pass.
+TEST(RendererRegressionHelpersTest, AnEmptyRenderIsNeitherVisibleNorDifferentNorCounted) {
+  EXPECT_NONFATAL_FAILURE(CountOpaqueInRow(RendererBitmap{}, 0), "empty 0x0 snapshot");
+  EXPECT_NONFATAL_FAILURE(CountOpaqueInColumn(RendererBitmap{}, 0), "empty 0x0 snapshot");
+  EXPECT_NONFATAL_FAILURE(FirstOpaqueRunLengthInRow(RendererBitmap{}, 0, 0), "empty 0x0 snapshot");
+  EXPECT_NONFATAL_FAILURE(ExpectVisibleBitmap(RendererBitmap{}, "visible"), "empty 0x0 snapshot");
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsDiffer(RendererBitmap{}, RendererBitmap{}, "differ"),
+                          "empty 0x0 snapshot");
+}
+
 /// Renders \p body at 200x200 with the hermetic test fonts, through the backend this build is
 /// configured around.
 RendererBitmap RenderTextOpacityCase(std::string_view body) {

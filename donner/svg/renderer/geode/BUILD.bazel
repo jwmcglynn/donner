@@ -707,6 +707,7 @@ donner_cc_test(
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
     ],
 )
 
@@ -758,6 +759,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer/tests:image_comparison_test_fixture",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/resources:sandboxed_file_resource_loader",
     ],
 )
