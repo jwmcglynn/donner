@@ -2,7 +2,10 @@
 /// One document drawn by renderers on two devices. Each device keeps its own GPU residence for the
 /// document, so drawing on one device neither releases nor rebuilds the other's, nothing one device
 /// owns is released on another device's thread, a document may outlive a device that drew it, and
-/// a device that goes stops counting against the document's geometry budget.
+/// a device that goes stops counting against the document's geometry budget. A renderer also lets
+/// go of everything it borrowed from a document when the frame that drew it ends, while the
+/// document is still held, so nothing it does afterwards touches a document another thread may be
+/// changing or destroying.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -10,6 +13,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -70,6 +74,17 @@ constexpr std::string_view kTextSvg = R"(
     <text x="10" y="140" fill="#36c">donner</text>
   </svg>)";
 
+/// One text element drawn three times, itself and twice through `<use>`. A repeat may not rewrite
+/// the records that an earlier drawing's batch in the same frame reads, so each repeat borrows
+/// records for the frame.
+constexpr std::string_view kRepeatedTextSvg = R"(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"
+       font-family="Noto Sans" font-size="24">
+    <text id="words" x="10" y="40" fill="black">repeated words</text>
+    <use href="#words" y="50"/>
+    <use href="#words" y="100"/>
+  </svg>)";
+
 /// Hermetic test fonts, relative to the runfiles root, so glyph identity does not depend on the
 /// host's installed fonts.
 constexpr std::string_view kFontsRunfilesPath = "third_party/resvg-test-suite/fonts";
@@ -81,9 +96,10 @@ SVGDocument ParseShapes() {
   return std::move(parsed.result());
 }
 
-SVGDocument ParseText() {
+/// Parses \p svg with the hermetic test fonts registered. @param svg Document source.
+SVGDocument ParseText(std::string_view svg = kTextSvg) {
   ParseWarningSink sink = ParseWarningSink::Disabled();
-  auto parsed = parser::SVGParser::ParseSVG(kTextSvg, sink);
+  auto parsed = parser::SVGParser::ParseSVG(svg, sink);
   EXPECT_FALSE(parsed.hasError()) << parsed.error().reason;
   SVGDocument document = std::move(parsed.result());
   TrustDocumentFontFacesForTesting(document);
@@ -119,6 +135,24 @@ ResidencyWork DrawAndMeasure(RendererGeode& renderer, SVGDocument& document) {
                        counters.bufferWriteBytes};
 }
 
+/// Draws \p document through the driver's interruptible entry point, as an editor's render worker
+/// does, rather than through `RendererGeode::draw`.
+///
+/// @param driver Driver over the renderer to draw with.
+/// @param document Document to draw, whole, at 200 by 200 pixels.
+/// @return Whether the frame completed.
+bool DrawLikeARenderWorker(RendererDriver& driver, SVGDocument& document) {
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 200);
+  return driver.drawInterruptibly(document, viewport, Transform2d(), [] { return false; });
+}
+
+/// Admit one glyph outline to \p renderer's glyph cache, so each frame makes every other glyph
+/// resident for that frame only. @param renderer Renderer to limit.
+void AdmitOneCachedGlyph(RendererGeode& renderer) {
+  renderer.setGlyphResidencyBudgetForTesting(1u, std::numeric_limits<uint64_t>::max());
+}
+
 /// The geometry budget of \p document, which every device's residence for it is charged to, or
 /// null before any renderer has drawn it.
 std::shared_ptr<geode::GeodeDocumentGeometryBudget> DocumentBudgetOf(SVGDocument& document) {
@@ -152,9 +186,6 @@ void DrawOnTwoThreads(const std::shared_ptr<geode::GeodeDevice>& worker,
   // document's write access, so the two threads only ever touch the document one at a time.
   document.setThreadingMode(ThreadingMode::ConcurrentDom);
   constexpr int kFrames = 8;
-  RenderViewport viewport;
-  viewport.size = Vector2d(200, 200);
-  const auto neverCancel = [] { return false; };
 
   std::mutex turnMutex;
   std::condition_variable turnChanged;
@@ -170,7 +201,7 @@ void DrawOnTwoThreads(const std::shared_ptr<geode::GeodeDevice>& worker,
         std::unique_lock<std::mutex> lock(turnMutex);
         turnChanged.wait(lock, [&] { return workerFramesAllowed > frame; });
       }
-      if (!driver.drawInterruptibly(document, viewport, Transform2d(), neverCancel)) {
+      if (!DrawLikeARenderWorker(driver, document)) {
         ++workerIncompleteFrames;
       }
       {
@@ -187,7 +218,7 @@ void DrawOnTwoThreads(const std::shared_ptr<geode::GeodeDevice>& worker,
   int uiIncompleteFrames = 0;
   for (int frame = 0; frame < kFrames; ++frame) {
     // A thumbnail: drawn, then read, so the frame's work has finished on the GPU.
-    if (!uiDriver.drawInterruptibly(document, viewport, Transform2d(), neverCancel)) {
+    if (!DrawLikeARenderWorker(uiDriver, document)) {
       ++uiIncompleteFrames;
     }
     EXPECT_THAT(onUi.takeSnapshot().empty(), IsFalse());
@@ -432,6 +463,124 @@ TEST_F(GeodeDocumentResidencyTest, ADocumentBudgetRefusalRecoversWhenTheDeviceHo
 
   EXPECT_THAT(third->liveResidentBytesForTesting(), Gt(int64_t{0}))
       << "an earlier refusal must not refuse residence once the budget has room again";
+}
+
+TEST_F(GeodeDocumentResidencyTest, RecordsARepeatBorrowedGoWithTheDocumentOnceItsFrameEnds) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and borrows no records.";
+  }
+  std::optional<SVGDocument> document = ParseText(kRepeatedTextSvg);
+  RendererGeode renderer(first_);
+  renderer.draw(*document);
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(*document);
+  ASSERT_THAT(budget, NotNull());
+  ASSERT_THAT(budget->residentBytes(), Gt(0u));
+
+  // The renderer draws nothing more. Had it kept the records its repeats borrowed until its next
+  // frame, they would keep the document's record slab, and its charge, after the document went.
+  document.reset();
+  EXPECT_THAT(budget->residentBytes(), Eq(0u))
+      << "the records the repeats borrowed must go back when the frame ends";
+}
+
+TEST_F(GeodeDocumentResidencyTest, GlyphsPastTheCacheGoWithTheDocumentOnceItsFrameEnds) {
+  std::optional<SVGDocument> document = ParseText();
+  RendererGeode renderer(first_);
+  AdmitOneCachedGlyph(renderer);
+  renderer.draw(*document);
+  ASSERT_THAT(renderer.residentGlyphCountForTesting(*document), Eq(1u))
+      << "the text's other glyphs must be resident for the frame only";
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(*document);
+  ASSERT_THAT(budget, NotNull());
+
+  document.reset();
+  EXPECT_THAT(budget->residentBytes(), Eq(0u))
+      << "a glyph resident for one frame must give its geometry back when the frame ends";
+  EXPECT_THAT(budget->cacheBytes(), Eq(0u)) << "and the bytes its encode was charged";
+}
+
+TEST_F(GeodeDocumentResidencyTest, ARendererKeepsNoDocumentBudgetOnceItsFrameEnds) {
+  std::optional<SVGDocument> document = ParseShapes();
+  RendererGeode renderer(first_);
+  renderer.draw(*document);
+  const std::weak_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(*document);
+  ASSERT_THAT(budget.expired(), IsFalse());
+  const RendererResourceStats atFrameEnd = renderer.resourceStats();
+  ASSERT_THAT(atFrameEnd.geometryRetainedBytes, Gt(0u));
+
+  document.reset();
+  EXPECT_THAT(budget.expired(), IsTrue())
+      << "the renderer must not hold the budget of a document whose frame has ended";
+  EXPECT_THAT(renderer.resourceStats().geometryRetainedBytes, Eq(atFrameEnd.geometryRetainedBytes))
+      << "a frame's figures describe the frame, whatever becomes of its documents afterwards";
+}
+
+TEST_F(GeodeDocumentResidencyTest, ARenderWorkerReusesTheRecordsItsRepeatsBorrowed) {
+  if (!RendererGeode::sceneBatchingEnabledForTesting()) {
+    GTEST_SKIP() << "Without scene batching a repeat draws solo and borrows no records.";
+  }
+  SVGDocument document = ParseText(kRepeatedTextSvg);
+  RendererGeode renderer(first_);
+  RendererDriver driver(renderer);
+  ASSERT_THAT(DrawLikeARenderWorker(driver, document), IsTrue());
+  ASSERT_THAT(DrawLikeARenderWorker(driver, document), IsTrue());
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
+  ASSERT_THAT(budget, NotNull());
+  const uint64_t steadyResidentBytes = budget->residentBytes();
+
+  // The repeats borrow a record for each glyph they draw, every frame. Over this many frames that
+  // is more records than the first record buffer holds.
+  constexpr int kFrames = 64;
+  for (int frame = 0; frame < kFrames; ++frame) {
+    ASSERT_THAT(DrawLikeARenderWorker(driver, document), IsTrue());
+  }
+  EXPECT_THAT(budget->residentBytes(), Eq(steadyResidentBytes))
+      << "each frame must reuse the records earlier frames borrowed, not keep borrowing more";
+}
+
+TEST_F(GeodeDocumentResidencyTest, ADocumentDestroyedWhileItsRendererDrawsTheNextIsLeftAlone) {
+  std::optional<SVGDocument> document = ParseText(kRepeatedTextSvg);
+  document->setThreadingMode(ThreadingMode::ConcurrentDom);
+  RendererGeode renderer(first_);
+  // Both kinds of per-frame loan: records for the repeats and glyphs past the cache.
+  AdmitOneCachedGlyph(renderer);
+
+  std::atomic<bool> drawn = false;
+  std::thread worker([&] {
+    RendererDriver driver(renderer);
+    EXPECT_THAT(DrawLikeARenderWorker(driver, *document), IsTrue());
+    drawn.store(true, std::memory_order_release);
+    // The next document, drawn the ordinary way. Nothing of the first may be touched from here.
+    SVGDocument next = ParseShapes();
+    renderer.draw(next);
+  });
+  while (!drawn.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  // The editor's shape: the UI thread replaces the document while the render worker moves on.
+  // Nothing orders the two, and nothing needs to.
+  document.reset();
+  worker.join();
+  EXPECT_THAT(renderer.deviceLost(), IsFalse());
+}
+
+TEST_F(GeodeDocumentResidencyTest, AFramesResourceStatsNeedNoDocumentAccess) {
+  SVGDocument document = ParseShapes();
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+  RendererGeode onFirst(first_);
+  RendererDriver firstDriver(onFirst);
+  ASSERT_THAT(DrawLikeARenderWorker(firstDriver, document), IsTrue());
+
+  // Another device draws the document, charging its residence to the document's budget, while
+  // this renderer reports on its finished frame without holding the document.
+  std::thread other([&] {
+    RendererGeode onSecond(second_);
+    RendererDriver secondDriver(onSecond);
+    EXPECT_THAT(DrawLikeARenderWorker(secondDriver, document), IsTrue());
+  });
+  const RendererResourceStats stats = onFirst.resourceStats();
+  other.join();
+  EXPECT_THAT(stats.geometryRetainedBytes, Gt(0u));
 }
 
 TEST_F(GeodeSharedRootResidencyTest, EachRetirementOutlivesTheDeviceItReleasesInto) {

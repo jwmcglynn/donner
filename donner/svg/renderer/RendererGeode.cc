@@ -1440,18 +1440,89 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::size_t frameResourceScopeDepth = 0;
   std::shared_ptr<geode::GeodeDocumentGeometryBudget::Limits> documentGeometryLimits =
       std::make_shared<geode::GeodeDocumentGeometryBudget::Limits>();
+  /// The documents' geometry budgets, as `resourceStats` reports them for the frame.
   struct DocumentGeometryFrameState {
-    std::vector<std::shared_ptr<geode::GeodeDocumentGeometryBudget>> touched;
+    using Budget = geode::GeodeDocumentGeometryBudget;
 
-    void reset() { touched.clear(); }
+    /// Budgets of the documents an open frame is drawing. Held only until that frame ends: see
+    /// `settle`.
+    std::vector<std::shared_ptr<Budget>> touched;
 
-    void touch(const std::shared_ptr<geode::GeodeDocumentGeometryBudget>& budget) {
+    /// What a document's budget reported when the last frame that drew it ended.
+    struct Settled {
+      /// Which budget. Compared by owner and never locked, so the budget is not kept alive.
+      std::weak_ptr<Budget> budget;
+      std::uint64_t retainedBytes = 0;  //!< Cache plus resident bytes.
+      bool rejected = false;            //!< Whether it had refused a request.
+    };
+    std::vector<Settled> settled;
+
+    /// The documents' retained bytes and whether any refused a request.
+    struct Figures {
+      std::uint64_t retainedBytes = 0;  //!< Summed, saturating.
+      bool rejected = false;            //!< Whether any budget had refused a request.
+    };
+
+    void reset() {
+      touched.clear();
+      settled.clear();
+    }
+
+    void touch(const std::shared_ptr<Budget>& budget) {
       const auto existing = std::find_if(touched.begin(), touched.end(), [&](const auto& value) {
         return value.get() == budget.get();
       });
       if (existing == touched.end()) {
         touched.push_back(budget);
       }
+    }
+
+    /// Record what each touched budget reports and let go of it. Call when a frame ends, while the
+    /// documents it drew are still held: afterwards the renderer neither reads those budgets
+    /// without holding their documents nor drops the last reference to one on its own thread.
+    void settle() {
+      for (const std::shared_ptr<Budget>& budget : touched) {
+        Settled figures{budget, budget->cacheBytes() + budget->residentBytes(), budget->rejected()};
+        const auto existing =
+            std::find_if(settled.begin(), settled.end(),
+                         [&](const Settled& value) { return SameBudget(value.budget, budget); });
+        if (existing != settled.end()) {
+          *existing = std::move(figures);
+        } else {
+          settled.push_back(std::move(figures));
+        }
+      }
+      touched.clear();
+    }
+
+    /// Settled figures for documents no open frame is drawing, live ones for those it is.
+    Figures figures() const {
+      Figures result;
+      const auto add = [&result](std::uint64_t bytes, bool rejected) {
+        result.retainedBytes =
+            bytes > std::numeric_limits<std::uint64_t>::max() - result.retainedBytes
+                ? std::numeric_limits<std::uint64_t>::max()
+                : result.retainedBytes + bytes;
+        result.rejected = result.rejected || rejected;
+      };
+      for (const Settled& document : settled) {
+        const bool drawing = std::any_of(touched.begin(), touched.end(), [&](const auto& budget) {
+          return SameBudget(document.budget, budget);
+        });
+        if (!drawing) {
+          add(document.retainedBytes, document.rejected);
+        }
+      }
+      for (const std::shared_ptr<Budget>& budget : touched) {
+        add(budget->cacheBytes() + budget->residentBytes(), budget->rejected());
+      }
+      return result;
+    }
+
+  private:
+    static bool SameBudget(const std::weak_ptr<Budget>& settledBudget,
+                           const std::shared_ptr<Budget>& budget) {
+      return !settledBudget.owner_before(budget) && !budget.owner_before(settledBudget);
     }
   };
   std::shared_ptr<DocumentGeometryFrameState> documentGeometryFrameState =
@@ -3255,8 +3326,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Record-slab slots allocated this frame for same-entity repeat draws
   /// (markers, repeated `<use>`): one record per draw, so earlier recorded
-  /// batches keep their own content at submit time. Freed (deferred) at
-  /// the next frame's draw(); the slab merges the frees at beginFrame.
+  /// batches keep their own content at submit time. Freed (deferred) when
+  /// the frame ends, by `releaseFrameLoans`; the slab merges the frees at
+  /// its next frame.
   /// Temporary per-frame record slots for same-frame repeat draws. A deque
   /// keeps element addresses stable (callers hold a pointer to the newest
   /// entry while later draws append), and each entry carries the slab it
@@ -3299,8 +3371,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Allocate a record slot that lives only for this frame, retained in
-  /// `sceneTempRecordSlots` so its address stays valid until the next
-  /// `draw()` returns it to `slab`. Returns null when `slab` is absent or the
+  /// `sceneTempRecordSlots` so its address stays valid until the frame ends
+  /// and returns it to `slab`. Returns null when `slab` is absent or the
   /// device cannot back the allocation.
   const geode::GeodeRecordSlab::Slot* allocateTempRecordSlot(
       const std::shared_ptr<geode::GeodeRecordSlab>& slab) {
@@ -3509,6 +3581,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       residency.records = std::make_shared<geode::GeodeRecordSlab>(
           device->deviceId(), device->handleRetirement(), std::move(documentBudget));
     }
+    // Take back the records freed before this frame, at most once per frame, as `residentSlab`
+    // does for geometry. Doing it here rather than in draw() covers the driver entry points a
+    // render worker uses, which never pass through draw(). A frame that opened inside another
+    // frame on this device, as an offscreen pass does, leaves them for later: the enclosing frame
+    // has not submitted yet, so a record freed while it was open may still be one its batches read.
+    if (device->oldestOpenFrameGeneration() >= currentFrameIndex) {
+      residency.records->beginFrame(currentFrameIndex);
+    }
     return residency.records;
   }
 
@@ -3547,8 +3627,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Non-cached glyphs needed after the document cache reaches its admission cap. The deque keeps
-  /// entry addresses stable for the frame's pending scene batches; beginFrame clears it only after
-  /// the previous frame has submitted and its pending batch has been discarded.
+  /// entry addresses stable for the frame's pending scene batches; `releaseFrameLoans` clears it
+  /// once the frame has submitted and its pending batch has flushed.
   std::deque<geode::GeodeGlyphResidentEntry> transientGlyphEntries;
 
   /// This device's glyph-outline residency for the document in \p registry. One per device per
@@ -5008,6 +5088,24 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     entries.clear();
   }
 
+  /// Give back what this frame borrowed from the documents it drew: the records that same-frame
+  /// repeats took (`sceneTempRecordSlots`) and the glyphs made resident for this frame only
+  /// (`transientGlyphEntries`). Both free into the documents' per-device slabs, and a glyph also
+  /// gives back what it charged to its document's budget.
+  ///
+  /// `endFrame` calls this once the frame has submitted, while whoever drives the frame still holds
+  /// its documents. Left for the next frame, it would run while the renderer holds another
+  /// document, or none, against a thread that may be editing or destroying these. The documents'
+  /// budgets are settled at the same point, for the same reason.
+  void releaseFrameLoans() {
+    for (const SceneTempRecordSlot& tempSlot : sceneTempRecordSlots) {
+      tempSlot.slab->freeSlot(tempSlot.slot);
+    }
+    sceneTempRecordSlots.clear();
+    transientGlyphEntries.clear();
+    documentGeometryFrameState->settle();
+  }
+
   void resetForBeginFrame(const RenderViewport& nextViewport) {
     borrowedTargetSnapshot.reset();
     if (device) {
@@ -5056,7 +5154,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     lastDrawSourceEntity = entt::null;
     pendingBatch.reset();
-    transientGlyphEntries.clear();
+    // Nothing to give back after an endFrame. A frame that never reached one gives its loans back
+    // here.
+    releaseFrameLoans();
     transientTextEncodes.clear();
   }
 
@@ -5530,15 +5630,6 @@ void RendererGeode::draw(SVGDocument& document) {
   impl_->residentSlab(document.registry())->beginFrame(impl_->currentFrameIndex);
   impl_->recordSlab(document.registry())->beginFrame(impl_->currentFrameIndex);
 
-  // Release the previous frame's temporary record slots (same-frame
-  // repeat draws). freeSlot defers to the NEXT beginFrame, so freeing
-  // here makes them reusable starting the frame after this one - the
-  // batches recorded against them last frame have long submitted.
-  for (const auto& tempSlot : impl_->sceneTempRecordSlots) {
-    tempSlot.slab->freeSlot(tempSlot.slot);
-  }
-  impl_->sceneTempRecordSlots.clear();
-
   RendererDriver driver(*this, impl_->verbose);
   driver.draw(document);
 }
@@ -5588,16 +5679,10 @@ void RendererGeode::injectScenePreparationFailureAfterForTesting(
 }
 
 RendererResourceStats RendererGeode::resourceStats() const {
-  std::uint64_t documentBytes = 0;
-  bool documentRejected = false;
-  for (const std::shared_ptr<geode::GeodeDocumentGeometryBudget>& document :
-       impl_->documentGeometryFrameState->touched) {
-    const std::uint64_t retained = document->cacheBytes() + document->residentBytes();
-    documentBytes = retained > std::numeric_limits<std::uint64_t>::max() - documentBytes
-                        ? std::numeric_limits<std::uint64_t>::max()
-                        : documentBytes + retained;
-    documentRejected = documentRejected || document->rejected();
-  }
+  const Impl::DocumentGeometryFrameState::Figures documents =
+      impl_->documentGeometryFrameState->figures();
+  const std::uint64_t documentBytes = documents.retainedBytes;
+  const bool documentRejected = documents.rejected;
   const std::uint64_t geometryBytes = impl_->geometryBudget->retainedBytes();
   const std::uint64_t totalGeometryBytes =
       documentBytes > std::numeric_limits<std::uint64_t>::max() - geometryBytes
@@ -5740,6 +5825,9 @@ void RendererGeode::endFrame() {
   // submits, so acquiring these on the next frame will schedule the
   // new writes after the previous submit's GPU work completes.
   impl_->drainPendingReleases();
+
+  // The documents the frame drew are still held, so give back what it borrowed from them now.
+  impl_->releaseFrameLoans();
 
   impl_->deviceFromLocalTransform = Transform2d();
   impl_->deviceFromLocalTransformStack.clear();

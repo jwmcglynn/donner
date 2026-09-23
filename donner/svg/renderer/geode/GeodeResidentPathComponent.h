@@ -458,12 +458,10 @@ class GeodeDevice;
  * or replaces another's.
  *
  * Not thread-safe: allocate/free/beginFrame mutate the free list and bump
- * cursors without locking. The callers that reach it through the document
- * hold the document, which serializes them. A renderer can also keep a slot or
- * slab of the last document it drew and touch it at its next frame without
- * holding that document. Nothing orders that against another thread holding
- * the document, one resetting slots after an edit or destroying the document,
- * so that is a known unguarded case. Destroying it releases nothing on the calling
+ * cursors without locking. Every caller holds the document, which serializes
+ * them. A renderer is one of them: the slots it borrows for a frame go back
+ * when that frame ends, while the document is still held, and it keeps none
+ * past the frame. Destroying it releases nothing on the calling
  * thread: its buffers and bind groups go to the owning context's retirement
  * (see the constructor), because the device's own thread may be using its
  * tables.
