@@ -2286,8 +2286,12 @@ Result<SurfaceStatus> MetalDevice::onPresentSurface(uint32_t slotIndex) {
   // anything else between drawing the frame and presenting it.
   const std::optional<uint32_t> textureSlot = GetSlot(impl_->surfaceTextureSlots, slotIndex);
   const uint64_t frameSerial = textureSlot.has_value() ? lastTextureUseSerial(*textureSlot) : 0;
-  if (frameSerial > completedSerial() &&
-      !waitForSerial(frameSerial, kPresentCompletionTimeoutSeconds)) {
+  const bool frameFinished = frameSerial <= completedSerial() ||
+                             waitForSerial(frameSerial, kPresentCompletionTimeoutSeconds);
+  // A lost root is checked after the wait, and whether or not there was one: a submission that
+  // failed on the GPU declares the loss and then completes its serial, so a frame whose own work
+  // failed reads as finished.
+  if (!frameFinished || isLost()) {
     // The frame is the layer's either way; the caller is told the frame it drew is not showing.
     surface->abandon();
     impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
