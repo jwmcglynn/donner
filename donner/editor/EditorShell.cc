@@ -1604,16 +1604,19 @@ void EditorShell::applyReplayActionForTesting(const repro::ReproAction& action) 
         if (textTool_.commit(app_)) {
           refreshAfterToolDrivenFlush();
         }
+        cancelEyedropper(false);
         activeTool_ = ActiveTool::Select;
       } else if (action.tool == "pen") {
         if (textTool_.commit(app_)) {
           refreshAfterToolDrivenFlush();
         }
+        cancelEyedropper(false);
         activeTool_ = ActiveTool::Pen;
       } else if (action.tool == "text") {
         if (penTool_.commitOpenPath(app_)) {
           flushQueuedMutationAndRefreshOverlay();
         }
+        cancelEyedropper(false);
         activeTool_ = ActiveTool::Text;
       }
       break;

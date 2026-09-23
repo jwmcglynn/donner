@@ -204,6 +204,8 @@ public:
   void requestPresentationRefresh() { pendingPresentationRefresh_ = true; }
   /// Arm or disarm the worker-owned document pixel capture.
   void setDocumentPixelCaptureEnabled(bool enabled);
+  /// Whether an editor session currently retains or requests document pixels.
+  [[nodiscard]] bool documentPixelCaptureEnabled() const { return documentPixelCaptureEnabled_; }
   /// Current capture, or null when the worker result has not matched the live presentation.
   [[nodiscard]] const DocumentPixelCapture* documentPixelCaptureFor(
       const EditorApp& app, const ViewportState& viewport) const;

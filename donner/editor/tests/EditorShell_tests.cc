@@ -1405,6 +1405,10 @@ public:
     return shell.eyedropperTarget_ == EditorShell::PaintTarget::Stroke;
   }
 
+  static bool EyedropperCaptureEnabled(const EditorShell& shell) {
+    return shell.renderCoordinator_.documentPixelCaptureEnabled();
+  }
+
   static const DocumentPixelCapture* PixelCapture(const EditorShell& shell) {
     return shell.renderCoordinator_.documentPixelCaptureFor(shell.app_,
                                                             shell.viewportForReadback());
@@ -5657,6 +5661,26 @@ TEST(EditorShellTest, EyedropperShortcutRespectsTextInputAndRestoresPreviousTool
   EXPECT_THAT(EditorShellTestAccess::ActiveToolIsSelect(shell), testing::Eq(true));
 }
 
+TEST(EditorShellTest, ReplayToolSwitchCancelsEyedropperCapture) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+  for (const std::string_view tool : {"pen", "text", "select"}) {
+    ASSERT_THAT(EditorShellTestAccess::ArmEyedropper(shell, /*stroke=*/false), testing::Eq(true));
+    ASSERT_THAT(EditorShellTestAccess::EyedropperCaptureEnabled(shell), testing::Eq(true));
+    EditorShellTestAccess::ApplyReplayAction(shell,
+                                             repro::ReproAction{
+                                                 .kind = repro::ReproAction::Kind::SetActiveTool,
+                                                 .tool = std::string(tool),
+                                             });
+    EXPECT_THAT(EditorShellTestAccess::EyedropperCaptureEnabled(shell), testing::Eq(false));
+    EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(false));
+  }
+}
+
 TEST(EditorShellTest, ToolbarEyedropperButtonArmsWithoutSamplingItsActivationClick) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -5689,10 +5713,6 @@ TEST(EditorShellTest, StrokeColorPopupEyedropperButtonTargetsStroke) {
   }
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_THAT(shell.valid(), testing::Eq(true));
-  RunShellFrame(window, shell);
-  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
-  RunShellFrame(window, shell);
   constexpr ImVec2 kWidgetCursor(20.0f, 40.0f);
   constexpr ImVec2 kStrokeSwatch(50.0f, 47.0f);
   ClickToolbar(window, shell, kWidgetCursor, kStrokeSwatch);
@@ -5805,7 +5825,12 @@ TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
   ASSERT_THAT(color, testing::Optional(testing::_));
   EXPECT_THAT(color->toHexString(), testing::Eq("#53c4f1"));
 
-  const Vector2d edgeScreen = viewport.documentToScreen(Vector2d(0.1, 0.1));
+  const Vector2d edgeScreen = viewport.documentToScreen(Vector2d(2.0, 2.0));
+  const std::optional<Vector2i> edgePixel =
+      DocumentPixelIndexAtScreenPoint(viewport, capture->identity.rasterViewport, edgeScreen);
+  ASSERT_THAT(edgePixel, testing::Optional(testing::_));
+  EXPECT_THAT(edgePixel->x, testing::Lt(5));
+  EXPECT_THAT(edgePixel->y, testing::Lt(5));
   const svg::RendererBitmap screenshot = CaptureFrameWithMouse(
       window, shell, ImVec2(static_cast<float>(edgeScreen.x), static_cast<float>(edgeScreen.y)));
   WriteEyedropperScreenshot(screenshot, "eyedropper_loupe_document_edge.png");
