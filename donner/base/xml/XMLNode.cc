@@ -66,7 +66,7 @@ bool HasElementChildren(const XMLNode& node) {
 }
 
 XMLSourceStore* GetSourceStore(EntityHandle handle) {
-  return handle.registry()->ctx().get<XMLDocumentContext>().sourceStore.get();
+  return handle.registry()->ctx().get<XMLDocumentContext>().sourceStoreHolder->store.get();
 }
 
 void InvalidateAnchors(XMLSourceStore& sourceStore, SourceAnchorSpan span) {

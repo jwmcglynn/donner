@@ -268,6 +268,13 @@ public:
    *
    * Programmatically-created documents may not have source text; in that case this returns an
    * empty view.
+   *
+   * This, \ref sourceVersion and \ref hasSourceStore report the document's current source store,
+   * including one that \ref xml::XMLDocument::setSource installed through \ref xmlDocument after
+   * the document was built. They do not touch the registry, so the thread that edits the source
+   * may call them without document access while another thread holds write access; any other
+   * thread needs read access. The view is valid until the source next changes, through a source
+   * edit or \ref xml::XMLDocument::setSource; copy it to keep it longer.
    */
   std::string_view source() const;
 

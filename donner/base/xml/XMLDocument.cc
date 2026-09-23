@@ -2587,7 +2587,7 @@ EntityHandle XMLDocument::rootEntityHandle() const {
 }
 
 bool XMLDocument::hasSourceStore() const {
-  return registry_->ctx().get<XMLDocumentContext>().sourceStore != nullptr;
+  return registry_->ctx().get<XMLDocumentContext>().sourceStoreHolder->store != nullptr;
 }
 
 std::string_view XMLDocument::source() const {
@@ -2609,11 +2609,11 @@ bool XMLDocument::declaresDoctypeInternalSubset() const {
 }
 
 XMLSourceStore* XMLDocument::sourceStore() {
-  return registry_->ctx().get<XMLDocumentContext>().sourceStore.get();
+  return registry_->ctx().get<XMLDocumentContext>().sourceStoreHolder->store.get();
 }
 
 const XMLSourceStore* XMLDocument::sourceStore() const {
-  return registry_->ctx().get<XMLDocumentContext>().sourceStore.get();
+  return registry_->ctx().get<XMLDocumentContext>().sourceStoreHolder->store.get();
 }
 
 void XMLDocument::setSourceEditTreeLimits(std::size_t maximumTreeNodes,
@@ -3329,7 +3329,8 @@ ApplySourceEditResult XMLDocument::setElementText(XMLNode element, std::string_v
 
 void XMLDocument::setSource(std::string source, std::size_t maximumSourceSize) {
   XMLDocumentContext& context = registry_->ctx().get<XMLDocumentContext>();
-  context.sourceStore = std::make_shared<XMLSourceStore>(std::move(source), maximumSourceSize);
+  context.sourceStoreHolder->store =
+      std::make_shared<XMLSourceStore>(std::move(source), maximumSourceSize);
   context.unreparsedSpans.clear();
   context.declaredDoctypeInternalSubset = false;
 }
