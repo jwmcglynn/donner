@@ -236,6 +236,45 @@ void PublishEyedropperTestState(std::string_view activeFill, std::string_view ac
   // clang-format on
 }
 
+void PublishEyedropperShortcutProbe(bool wantTextInput, bool popupOpen, bool sourcePaneFocused,
+                                    bool textToolActive, bool textEditing, bool eyedropperActive,
+                                    bool iDown, bool iPressed, bool escapeDown,
+                                    bool escapePressed) {
+  // clang-format off
+  MAIN_THREAD_EM_ASM(
+      {
+        const previous = window['__donnerEyedropperShortcutProbe'] || {};
+        const gate = {
+          'wantTextInput' : !!$0,
+          'popupOpen' : !!$1,
+          'sourcePaneFocused' : !!$2,
+          'textToolActive' : !!$3,
+          'textEditing' : !!$4,
+          'eyedropperActive' : !!$5,
+          'iDown' : !!$6,
+          'iPressed' : !!$7,
+          'escapeDown' : !!$8,
+          'escapePressed' : !!$9,
+          'domActiveElementId' : String(document.activeElement?.id || '').slice(0, 64),
+          'domActiveElementTag' : String(document.activeElement?.tagName || '').slice(0, 32),
+          'frameNumber' : Number(window['__donnerMainLoopRenderedFrames'] || 0),
+        };
+        previous['current'] = gate;
+        if (gate['iPressed']) {
+          previous['iPressCount'] = Number(previous['iPressCount'] || 0) + 1;
+          previous['lastIPress'] = gate;
+        }
+        if (gate['escapePressed']) {
+          previous['escapePressCount'] = Number(previous['escapePressCount'] || 0) + 1;
+          previous['lastEscapePress'] = gate;
+        }
+        window['__donnerEyedropperShortcutProbe'] = previous;
+      },
+      wantTextInput, popupOpen, sourcePaneFocused, textToolActive, textEditing,
+      eyedropperActive, iDown, iPressed, escapeDown, escapePressed);
+  // clang-format on
+}
+
 // The app runs on a pthread in the browser build, where `window` and
 // `document` do not exist; every publish below proxies to the browser main
 // thread. Fire-and-forget: none of these are read back by the app.
@@ -2840,6 +2879,9 @@ void EditorShell::handleGlobalShortcuts() {
                             ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, /*repeat=*/false);
   const bool sourcePaneFocused =
       !adaptiveUiLayout_.compactTouch() && sourcePaneVisible_ && textEditor_.isFocused();
+#ifdef __EMSCRIPTEN__
+  publishEyedropperShortcutProbeIfEnabled(anyPopupOpen, sourcePaneFocused);
+#endif
 
   // An in-canvas text editing session captures the keyboard: typing, caret
   // movement, style toggles, and Escape all act on the session, and no
@@ -3626,6 +3668,19 @@ void EditorShell::setEyedropperCursorIfEligible(bool toolEligible) {
 }
 
 #ifdef __EMSCRIPTEN__
+void EditorShell::publishEyedropperShortcutProbeIfEnabled(bool anyPopupOpen,
+                                                          bool sourcePaneFocused) {
+  if (!BrowserEyedropperControlEnabledForTesting()) {
+    return;
+  }
+  const ImGuiIO& io = ImGui::GetIO();
+  PublishEyedropperShortcutProbe(
+      io.WantTextInput, anyPopupOpen, sourcePaneFocused, activeTool_ == ActiveTool::Text,
+      textTool_.isEditing(), activeTool_ == ActiveTool::Eyedropper, ImGui::IsKeyDown(ImGuiKey_I),
+      ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false), ImGui::IsKeyDown(ImGuiKey_Escape),
+      ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false));
+}
+
 void EditorShell::publishEyedropperTestStateIfEnabled() {
   if (!BrowserEyedropperControlEnabledForTesting() || renderCoordinator_.asyncRenderer().isBusy()) {
     return;

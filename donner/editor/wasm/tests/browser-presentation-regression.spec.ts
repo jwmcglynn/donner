@@ -78,6 +78,13 @@ declare global {
       sourceSelectionActive: boolean;
       activePaintTarget: "fill" | "stroke";
     };
+    __donnerEyedropperShortcutProbe?: {
+      current: EyedropperShortcutGate;
+      iPressCount?: number;
+      escapePressCount?: number;
+      lastIPress?: EyedropperShortcutGate;
+      lastEscapePress?: EyedropperShortcutGate;
+    };
     __donnerSampleThumbnailStats?: {
       publishedAtMs?: number;
       publicationGeneration?: number;
@@ -105,6 +112,22 @@ declare global {
     __donnerViewportStats?: ViewportStats;
     __donnerEditorFrameRequested?: boolean;
   }
+}
+
+interface EyedropperShortcutGate {
+  wantTextInput: boolean;
+  popupOpen: boolean;
+  sourcePaneFocused: boolean;
+  textToolActive: boolean;
+  textEditing: boolean;
+  eyedropperActive: boolean;
+  iDown: boolean;
+  iPressed: boolean;
+  escapeDown: boolean;
+  escapePressed: boolean;
+  domActiveElementId: string;
+  domActiveElementTag: string;
+  frameNumber: number;
 }
 
 // Where the render pane and the presented document sit on screen, published by
@@ -946,6 +969,7 @@ test("browser overlay control stays disabled after a normal editor frame", async
   expect(after?.compositorTileOverlay).toBe(before.overlays?.compositorTileOverlay);
   expect(after?.geometryDebugOverlay).toBe(before.overlays?.geometryDebugOverlay);
   expect(await page.evaluate(() => window.__donnerEyedropperTestState)).toBeUndefined();
+  expect(await page.evaluate(() => window.__donnerEyedropperShortcutProbe)).toBeUndefined();
   expect(failures).toEqual([]);
 });
 
@@ -1978,7 +2002,31 @@ async function readEyedropperState(page: Page) {
     unavailable: window.__donnerInteractionStats?.eyedropperUnavailable ?? false,
     busy: window.__donnerInteractionStats?.workerBusy ?? true,
     sourceVersion: window.__donnerWorkerStats?.sourceVersion ?? -1,
+    sourcePaneFocused: window.__donnerEyedropperTestState?.sourcePaneFocused ?? false,
+    activeElement: document.activeElement?.id || document.activeElement?.tagName || "none",
+    renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
   }));
+}
+
+async function readBrowserKeyState(page: Page, beforeFrames: number) {
+  return page.evaluate((before) => {
+    const renderedFrames = window.__donnerMainLoopRenderedFrames ?? 0;
+    return {
+      frameAdvanced: renderedFrames > before,
+      renderedFrames,
+      activeElement: document.activeElement?.id || document.activeElement?.tagName || "none",
+      sourcePaneFocused: window.__donnerEyedropperTestState?.sourcePaneFocused ?? false,
+      armed: window.__donnerInteractionStats?.eyedropperArmed ?? false,
+      shortcutProbe: window.__donnerEyedropperShortcutProbe ?? null,
+    };
+  }, beforeFrames);
+}
+
+async function expectBrowserKeyFrame(page: Page, beforeFrames: number, message: string) {
+  await expect.poll(() => readBrowserKeyState(page, beforeFrames), {
+    message,
+    timeout: scaledMs(2_000),
+  }).toEqual(expect.objectContaining({ frameAdvanced: true }));
 }
 
 async function expectEyedropperReady(page: Page): Promise<void> {
@@ -2127,11 +2175,17 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     message: "typed SVG text must reach the selected DOM element before the commit key",
     timeout: scaledMs(5_000),
   }).toBe("SVG");
+  const beforeEscapeFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
   await page.keyboard.down("Escape");
-  await expect.poll(() => page.evaluate(() => window.__donnerWorkerStats?.undoEntryCount ?? -1), {
+  await expectBrowserKeyFrame(page, beforeEscapeFrame, "Escape must wake a browser editor frame");
+  await expect.poll(() =>
+    page.evaluate(() => ({
+      undoEntries: window.__donnerWorkerStats?.undoEntryCount ?? -1,
+      shortcutProbe: window.__donnerEyedropperShortcutProbe ?? null,
+    })), {
     message: "Escape must commit the newly created SVG text as one document edit",
     timeout: scaledMs(5_000),
-  }).toBe(beforeTextUndo + 1);
+  }).toEqual(expect.objectContaining({ undoEntries: beforeTextUndo + 1 }));
   await page.keyboard.up("Escape");
   await expect.poll(() => page.evaluate(() => window.__donnerEyedropperTestState), {
     message: "new text must inherit the eyedropper Fill through the DOM/source path",
@@ -2319,7 +2373,13 @@ test("WebGPU eyedropper Escape and an outside-document click cancel a ready capt
   await page.keyboard.down("i");
   await expectEyedropperReady(page);
   await page.keyboard.up("i");
+  const beforeCancelFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
   await page.keyboard.down("Escape");
+  await expectBrowserKeyFrame(
+    page,
+    beforeCancelFrame,
+    "Escape must wake an eyedropper cancel frame",
+  );
   await expect.poll(() => readEyedropperState(page)).toEqual(expect.objectContaining({
     armed: false,
     sourceVersion,
@@ -2349,6 +2409,12 @@ test("WebGPU eyedropper Escape and an outside-document click cancel a ready capt
 test("WebGPU eyedropper copies translucent document alpha, not checkerboard alpha", async ({ page }) => {
   const failures = await openEditor(page, "eyedropper");
   await openDonnerSplash(page);
+  const revealRail = { x: 16, y: 180 };
+  await clickAppliedPoint(page, revealRail, "show the hidden source pane through its reveal rail");
+  await expect.poll(() => page.evaluate(() => window.__donnerViewportStats?.paneX ?? 0), {
+    message: "the source pane reveal must move the render pane before source editing",
+    timeout: scaledMs(4_000),
+  }).toBeGreaterThan(500);
   const beforeSourceVersion = await page.evaluate(
     () => window.__donnerWorkerStats?.sourceVersion ?? -1,
   );

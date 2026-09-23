@@ -529,6 +529,7 @@ private:
   void handleEyedropperCanvasClick(bool toolEligible, bool spaceHeld, bool overCanvasScrollbar);
   void setEyedropperCursorIfEligible(bool toolEligible);
 #ifdef __EMSCRIPTEN__
+  void publishEyedropperShortcutProbeIfEnabled(bool anyPopupOpen, bool sourcePaneFocused);
   void publishEyedropperTestStateIfEnabled();
 #endif
   void renderCompactTopBar();
