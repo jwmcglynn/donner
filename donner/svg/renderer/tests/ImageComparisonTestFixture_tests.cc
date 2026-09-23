@@ -146,5 +146,28 @@ TEST(ImageComparisonTestFixtureTests, AnEmptyBitmapIsNeverIdentical) {
                           "both: the actual and expected bitmaps are empty");
 }
 
+/// A check that a change alters output must not pass because a render was not read back: the
+/// empty side fails on its own, once, rather than inside the comparison, where its failure would
+/// read as a difference.
+TEST(ImageComparisonTestFixtureTests, AnEmptyBitmapNeverDiffers) {
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsDiffer(OpaqueRedBitmap(), RendererBitmap{}, "e"),
+                          "empty 0x0 snapshot");
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsDiffer(RendererBitmap{}, RendererBitmap{}, "both"),
+                          "empty 0x0 snapshot");
+}
+
+TEST(ImageComparisonTestFixtureTests, IdenticalBitmapsFailTheDifferCheck) {
+  EXPECT_NONFATAL_FAILURE(ExpectBitmapsDiffer(OpaqueRedBitmap(), OpaqueRedBitmap(), "same"),
+                          "same: expected the renders to differ, but they are pixel-identical");
+}
+
+TEST(ImageComparisonTestFixtureTests, OnePixelOfDifferencePassesTheDifferCheck) {
+  RendererBitmap oneBluePixel = OpaqueRedBitmap();
+  oneBluePixel.pixels[0] = 0;
+  oneBluePixel.pixels[2] = 255;
+
+  ExpectBitmapsDiffer(oneBluePixel, OpaqueRedBitmap(), "one_blue_pixel");
+}
+
 }  // namespace
 }  // namespace donner::svg

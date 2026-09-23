@@ -237,25 +237,6 @@ ImageComparisonParams GoldenParams() {
   return params;
 }
 
-/// Uses the existing pixelmatch assertion to require that two renders are NOT identical, so an
-/// equivalence test cannot pass by having neither side render the thing under test. An empty
-/// render fails here, outside the captured comparison, because its failure there would read as a
-/// difference.
-void ExpectBitmapsDiffer(const RendererBitmap& actual, const RendererBitmap& expected,
-                         std::string_view label,
-                         std::source_location caller = std::source_location::current()) {
-  if (!ExpectSnapshotHasPixels(actual, caller) || !ExpectSnapshotHasPixels(expected, caller)) {
-    return;
-  }
-  testing::TestPartResultArray differences;
-  {
-    testing::ScopedFakeTestPartResultReporter capture(
-        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
-    ExpectBitmapsIdentical(actual, expected, label);
-  }
-  EXPECT_THAT(differences.size(), testing::Ge(1)) << label << ": expected the renders to differ";
-}
-
 /// Uses the existing pixelmatch assertion to reject a vacuous empty-bitmap identity result. An
 /// empty render fails here, outside the captured comparison, because its failure there would read
 /// as visible content.
@@ -276,8 +257,8 @@ void ExpectVisibleBitmap(const RendererBitmap& bitmap, std::string_view label,
 }
 
 /// A renderer that could not read its frame back returns an empty bitmap, which has no content to
-/// be visible, to differ, or to count. Each guard above must reject one, because an equivalence
-/// or extent test whose renders all came back empty would otherwise pass.
+/// be visible, to differ, or to count. Each guard this suite uses must reject one, because an
+/// equivalence or extent test whose renders all came back empty would otherwise pass.
 TEST(RendererRegressionHelpersTest, AnEmptyRenderIsNeitherVisibleNorDifferentNorCounted) {
   EXPECT_NONFATAL_FAILURE(CountOpaqueInRow(RendererBitmap{}, 0), "empty 0x0 snapshot");
   EXPECT_NONFATAL_FAILURE(CountOpaqueInColumn(RendererBitmap{}, 0), "empty 0x0 snapshot");

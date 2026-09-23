@@ -1,5 +1,6 @@
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 
+#include <gtest/gtest-spi.h>
 #include <pixelmatch/pixelmatch.h>
 
 #include <algorithm>
@@ -26,6 +27,7 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/FontMetadata.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
@@ -672,6 +674,24 @@ void ExpectBitmapsIdentical(const RendererBitmap& actual, const RendererBitmap& 
                                             diffImage, width, height, strideInPixels);
   ADD_FAILURE() << label << ": " << mismatched << " pixels differ (expected identical). Diff: "
                 << (outDir / ("diff_" + flat + ".png")).string();
+}
+
+void ExpectBitmapsDiffer(const RendererBitmap& actual, const RendererBitmap& expected,
+                         std::string_view label, std::source_location caller) {
+  if (!test::ExpectSnapshotHasPixels(actual, caller) ||
+      !test::ExpectSnapshotHasPixels(expected, caller)) {
+    return;
+  }
+  testing::TestPartResultArray differences;
+  {
+    testing::ScopedFakeTestPartResultReporter capture(
+        testing::ScopedFakeTestPartResultReporter::INTERCEPT_ONLY_CURRENT_THREAD, &differences);
+    ExpectBitmapsIdentical(actual, expected, label);
+  }
+  if (differences.size() == 0) {
+    ADD_FAILURE_AT(caller.file_name(), caller.line())
+        << label << ": expected the renders to differ, but they are pixel-identical";
+  }
 }
 
 std::string RenderTerminalComparisonGridForTesting(const TerminalImageView& actual,
