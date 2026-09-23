@@ -1648,6 +1648,7 @@ ResolvedTextFont TextEngine::resolveUsedFont(EntityHandle styleOwner, const Box2
 
 std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent& text,
                                         const TextLayoutParams& params) {
+  ++layoutCallCount_;
   // ── Resolve base font ─────────────────────────────────────────────────────────
   FontHandle font = FindFirstAvailableFont(fontManager_, params.fontFamilies);
   if (!font) {

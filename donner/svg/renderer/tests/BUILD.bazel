@@ -310,6 +310,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/tests:parser_test_utils",
+        "//donner/svg/text:text_engine",
     ],
 )
 
@@ -326,8 +327,12 @@ donner_cc_test(
         ":mock_renderer_interface",
         "//donner/svg",
         "//donner/svg/parser",
+        "//donner/svg/renderer:placed_text_geometry",
         "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/resources:font_manager",
         "//donner/svg/tests:parser_test_utils",
+        "//third_party/public-sans",
+        "//third_party/roboto",
         "@com_google_gtest//:gtest_main",
     ],
 )

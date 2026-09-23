@@ -23,6 +23,8 @@
 
 namespace donner::svg {
 
+struct RendererDriverTextFrameCache;
+
 /**
  * Backend-agnostic renderer driver that prepares documents for rendering and
  * emits drawing commands through a \ref RendererInterface implementation.
@@ -58,6 +60,19 @@ public:
     components::FontResourceGraphCache::Stats nestedFontResources;
   };
 
+  /// CPU preparation work performed by this driver, for text-effect regression tests.
+  struct TextPreparationStats {
+    /// Full text-root layout/style preparations across rendered frames.
+    std::size_t fullElementStylePasses = 0;
+    /// Span entries visited while resolving renderer-facing paints and decoration.
+    std::size_t spanStyleVisits = 0;
+  };
+
+  /// Cumulative text preparation work for this driver's lifetime.
+  [[nodiscard]] TextPreparationStats textPreparationStatsForTesting() const {
+    return textPreparationStats_;
+  }
+
   /**
    * Create a renderer driver that will forward traversal output to the given
    * backend implementation.
@@ -68,6 +83,8 @@ public:
    */
   explicit RendererDriver(RendererInterface& renderer, bool verbose = false,
                           SecurityStats* securityStats = nullptr);
+
+  ~RendererDriver();
 
   /**
    * Render the given \ref SVGDocument using the configured backend.
@@ -400,6 +417,8 @@ private:
   /// `TightBoundsRotatedEllipseWithRotatingGradient`.
   Transform2d surfaceFromCanvasTransform_;
   Vector2i renderingSize_ = Vector2i::Zero();
+  TextPreparationStats textPreparationStats_;
+  std::unique_ptr<RendererDriverTextFrameCache> textFrameCache_;
 
   /// Recursion guard for feImage fragment rendering. Tracks entity IDs currently being rendered
   /// as feImage fragments to prevent infinite recursion. Shared across nested RendererDriver

@@ -22,6 +22,7 @@
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#include "donner/svg/text/TextEngine.h"
 
 namespace donner::svg {
 namespace {
@@ -609,6 +610,62 @@ TEST_F(RendererRegressionTests, TextOpacityAppliesOnceLikeGroupOpacity) {
   ExpectVisibleBitmap(textOpacity, "text_opacity_visible");
   ExpectBitmapsDiffer(textOpacity, opaque, "text_opacity_differs_from_opaque");
   ExpectBitmapsIdentical(textOpacity, groupOpacity, "text_opacity_matches_group_opacity");
+}
+
+TEST_F(RendererRegressionTests, EffectSpanLayoutRunsOncePerTextElement) {
+  std::string body =
+      R"svg(<defs><clipPath id="clip"><rect width="200" height="200"/></clipPath></defs>
+                         <text x="10" y="150" font-family="Noto Sans" font-size="120">)svg";
+  for (int span = 0; span < 12; ++span) {
+    body += R"svg(<tspan clip-path="url(#clip)">S</tspan>)svg";
+  }
+  body += "</text>";
+  SVGDocument document = instantiateSubtree(body, parser::SVGParser::Options(), Vector2i(200, 200));
+  RegisterFontsFromDirectoryForTesting(document, ResvgResourceRoot() / "fonts");
+
+  const RendererBitmap bitmap = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  ExpectVisibleBitmap(bitmap, "effect_span_layout_visible");
+  const auto* textEngine = document.registry().ctx().find<TextEngine>();
+  ASSERT_NE(textEngine, nullptr);
+  EXPECT_EQ(textEngine->layoutCallCountForTesting(), 1u);
+
+  const RendererBitmap second = RenderDocumentWithBackend(document, ActiveRendererBackend());
+  ExpectBitmapsIdentical(second, bitmap, "effect_span_second_frame_matches_first");
+  EXPECT_EQ(textEngine->layoutCallCountForTesting(), 2u);
+}
+
+TEST_F(RendererRegressionTests, ExternalTextEffectContextPaintIsResolvedForEachUse) {
+  const std::filesystem::path testdata = "donner/svg/renderer/testdata/regressions";
+  SVGDocument shared = loadSVG(
+      "donner/svg/renderer/testdata/regressions/use-external-text-effect-context-shared.svg",
+      testdata);
+  SVGDocument separate = loadSVG(
+      "donner/svg/renderer/testdata/regressions/use-external-text-effect-context-separate.svg",
+      testdata);
+  RegisterFontsFromDirectoryForTesting(shared, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(separate, ResvgResourceRoot() / "fonts");
+
+  const RendererBitmap actual = RenderDocumentWithBackend(shared, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(separate, ActiveRendererBackend());
+  ExpectVisibleBitmap(expected, "external_text_effect_context_visible");
+  ExpectBitmapsIdentical(actual, expected, "external_text_effect_context_per_use");
+}
+
+TEST_F(RendererRegressionTests, EffectOwnerContextPaintOverridesTheTextRootPaint) {
+  const std::filesystem::path testdata = "donner/svg/renderer/testdata/regressions";
+  SVGDocument context =
+      loadSVG("donner/svg/renderer/testdata/regressions/use-external-text-effect-owner-context.svg",
+              testdata);
+  SVGDocument explicitPaint = loadSVG(
+      "donner/svg/renderer/testdata/regressions/use-external-text-effect-owner-explicit.svg",
+      testdata);
+  RegisterFontsFromDirectoryForTesting(context, ResvgResourceRoot() / "fonts");
+  RegisterFontsFromDirectoryForTesting(explicitPaint, ResvgResourceRoot() / "fonts");
+
+  const RendererBitmap actual = RenderDocumentWithBackend(context, ActiveRendererBackend());
+  const RendererBitmap expected = RenderDocumentWithBackend(explicitPaint, ActiveRendererBackend());
+  ExpectVisibleBitmap(expected, "effect_owner_context_paint_visible");
+  ExpectBitmapsIdentical(actual, expected, "effect_owner_context_paint_matches_explicit_red");
 }
 
 TEST_F(RendererRegressionTests, TextOpacityWithSpanWrapperAppliesOnceLikeGroupOpacity) {

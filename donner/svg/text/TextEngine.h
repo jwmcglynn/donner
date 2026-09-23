@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <span>
@@ -61,6 +62,9 @@ public:
   /// Lay out all spans, returning positioned glyph runs.
   std::vector<TextRun> layout(const components::ComputedTextComponent& text,
                               const TextLayoutParams& params);
+
+  /// Number of full text layouts performed by this engine, for CPU-work regression tests.
+  [[nodiscard]] std::size_t layoutCallCountForTesting() const { return layoutCallCount_; }
 
   /// Resolve a style owner's face and adjusted used size for declaring-element font metrics.
   ResolvedTextFont resolveUsedFont(EntityHandle styleOwner, const Box2d& viewBox,
@@ -160,6 +164,7 @@ private:
   std::unique_ptr<TextBackend> backend_;
   size_t registeredFontFaceCount_ = 0;
   uint64_t observedFontResourceRevision_ = 0;
+  std::size_t layoutCallCount_ = 0;
 };
 
 }  // namespace donner::svg

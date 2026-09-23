@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/RenderSnapshot.h"
 
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <unordered_map>
 #include <utility>
@@ -16,6 +17,7 @@
 #include "donner/svg/components/paint/RadialGradientComponent.h"
 
 #ifdef DONNER_TEXT_ENABLED
+#include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
 #endif
@@ -105,10 +107,46 @@ struct DrawImageCommand {
   ImageParams params;
 };
 
+#ifdef DONNER_TEXT_ENABLED
+struct SnapshotFontPayload {
+  std::vector<uint8_t> bytes;
+  FontDataTrust trust = FontDataTrust::Untrusted;
+};
+
+using SnapshotFont = std::shared_ptr<const SnapshotFontPayload>;
+#endif
+
+/// Each source registry keeps its own font entity namespace and font-loading budget on replay.
+struct SnapshotReplayFontState {
+  struct Domain {
+    Registry registry;
+#ifdef DONNER_TEXT_ENABLED
+    std::unordered_map<const SnapshotFontPayload*, FontHandle> handles;
+#endif
+  };
+
+  Domain& domain(size_t index) {
+    if (index >= domains.size()) {
+      domains.resize(index + 1);
+    }
+    if (!domains[index]) {
+      domains[index] = std::make_unique<Domain>();
+    }
+    return *domains[index];
+  }
+
+  std::vector<std::unique_ptr<Domain>> domains;
+};
+
 struct DrawTextCommand {
   components::ComputedTextComponent text;
   TextParams params;
   std::vector<css::FontFace> fontFaces;
+  size_t fontDomain = 0;
+#ifdef DONNER_TEXT_ENABLED
+  std::vector<SnapshotFont> preparedFonts;
+  std::vector<SnapshotFont> decorationFonts;
+#endif
 };
 
 using RenderCommand =
@@ -147,6 +185,9 @@ class SnapshotResourceMapper {
 public:
   explicit SnapshotResourceMapper(Registry& registry) : registry_(registry) {}
 
+  void setMaximumCapturedFontBytes(size_t maximum) { maximumCapturedFontBytes_ = maximum; }
+  bool fontPayloadLimitExceeded() const { return fontPayloadLimitExceeded_; }
+
   components::ResolvedPaintServer mapPaint(components::ResolvedPaintServer paint) {
     if (auto* ref = std::get_if<components::PaintResolvedReference>(&paint)) {
       *ref = mapPaintReference(*ref);
@@ -171,6 +212,48 @@ public:
     }
     return text;
   }
+
+  size_t captureTextDomain(Registry& sourceRegistry) {
+    if (const auto it = textDomains_.find(&sourceRegistry); it != textDomains_.end()) {
+      return it->second;
+    }
+    const size_t domain = textDomains_.size();
+    textDomains_.emplace(&sourceRegistry, domain);
+    return domain;
+  }
+
+#ifdef DONNER_TEXT_ENABLED
+  SnapshotFont captureFont(Registry& sourceRegistry, FontHandle handle) {
+    if (!handle) {
+      return {};
+    }
+    // Entity IDs can collide across subdocuments; capture bytes once per source font.
+    const SourceEntityKey key{&sourceRegistry, handle.entity()};
+    if (const auto it = capturedFonts_.find(key); it != capturedFonts_.end()) {
+      return it->second;
+    }
+    const auto* manager = sourceRegistry.ctx().find<FontManager>();
+    if (manager == nullptr) {
+      return {};
+    }
+    const std::span<const uint8_t> bytes = manager->fontData(handle);
+    if (bytes.empty()) {
+      return {};
+    }
+    if (fontPayloadLimitExceeded_ || capturedFontBytes_ > maximumCapturedFontBytes_ ||
+        bytes.size() > maximumCapturedFontBytes_ - capturedFontBytes_) {
+      fontPayloadLimitExceeded_ = true;
+      return {};
+    }
+    auto payload = std::make_shared<SnapshotFontPayload>();
+    payload->bytes.assign(bytes.begin(), bytes.end());
+    payload->trust =
+        manager->isTrustedFont(handle) ? FontDataTrust::Trusted : FontDataTrust::Untrusted;
+    capturedFonts_.emplace(key, payload);
+    capturedFontBytes_ += bytes.size();
+    return payload;
+  }
+#endif
 
   ResolvedClip mapClip(ResolvedClip clip) {
     if (clip.mask.has_value()) {
@@ -244,6 +327,15 @@ private:
 
   Registry& registry_;
   std::unordered_map<SourceEntityKey, Entity, SourceEntityKeyHash> mappedEntities_;
+  std::unordered_map<Registry*, size_t> textDomains_;
+  size_t maximumCapturedFontBytes_ = RenderSnapshot::kMaximumCapturedFontBytes;
+#ifdef DONNER_TEXT_ENABLED
+  size_t capturedFontBytes_ = 0;
+#endif
+  bool fontPayloadLimitExceeded_ = false;
+#ifdef DONNER_TEXT_ENABLED
+  std::unordered_map<SourceEntityKey, SnapshotFont, SourceEntityKeyHash> capturedFonts_;
+#endif
 };
 
 std::size_t CountReferenceToRegistry(const EntityHandle& handle, const Registry& registry) {
@@ -313,8 +405,23 @@ std::size_t CountReferenceToRegistry(const RenderCommand& command, const Registr
                     command);
 }
 
+#ifdef DONNER_TEXT_ENABLED
+FontHandle LoadSnapshotFont(FontManager& manager, const SnapshotFont& font,
+                            SnapshotReplayFontState::Domain& domain) {
+  if (!font) {
+    return FontHandle();
+  }
+  const auto [it, inserted] = domain.handles.try_emplace(font.get());
+  if (inserted) {
+    it->second = manager.loadFontData(
+        std::span<const uint8_t>(font->bytes.data(), font->bytes.size()), font->trust);
+  }
+  return it->second;
+}
+#endif
+
 void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
-                   Registry& textRegistry) {
+                   SnapshotReplayFontState& replayFonts) {
   std::visit(
       Overloaded{
           [&](const BeginFrameCommand& value) { renderer.beginFrame(value.viewport); },
@@ -351,6 +458,8 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
           },
           [&](const DrawImageCommand& value) { renderer.drawImage(value.image, value.params); },
           [&](const DrawTextCommand& value) {
+            auto& domain = replayFonts.domain(value.fontDomain);
+            Registry& textRegistry = domain.registry;
 #ifdef DONNER_TEXT_ENABLED
             auto& fontManager = textRegistry.ctx().contains<FontManager>()
                                     ? textRegistry.ctx().get<FontManager>()
@@ -366,7 +475,30 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
             params.fontFaces =
                 std::span<const css::FontFace>(value.fontFaces.data(), value.fontFaces.size());
             params.textRootEntity = entt::null;
+#ifdef DONNER_TEXT_ENABLED
+            if (params.preparedTextDraw) {
+              auto prepared = std::make_shared<PreparedTextDraw>(*params.preparedTextDraw);
+              for (size_t i = 0; i < prepared->runs.size(); ++i) {
+                prepared->runs[i].font =
+                    i < value.preparedFonts.size()
+                        ? LoadSnapshotFont(fontManager, value.preparedFonts[i], domain)
+                        : FontHandle();
+              }
+              params.preparedTextDraw = std::move(prepared);
+            }
+            components::ComputedTextComponent text = value.text;
+            for (size_t i = 0; i < text.spans.size(); ++i) {
+              if (text.spans[i].decorationFont) {
+                text.spans[i].decorationFont->font =
+                    i < value.decorationFonts.size()
+                        ? LoadSnapshotFont(fontManager, value.decorationFonts[i], domain)
+                        : FontHandle();
+              }
+            }
+            renderer.drawText(textRegistry, text, params);
+#else
             renderer.drawText(textRegistry, value.text, params);
+#endif
           },
       },
       command);
@@ -409,8 +541,12 @@ std::size_t RenderSnapshot::liveRegistryReferenceCountForTesting(const Registry&
   return count;
 }
 
+bool RenderSnapshot::fontPayloadLimitExceeded() const {
+  return impl_->resourceMapper.fontPayloadLimitExceeded();
+}
+
 void RenderSnapshot::replay(RendererInterface& renderer) const {
-  Registry textRegistry;
+  SnapshotReplayFontState replayFonts;
   std::size_t rejectedPatternDepth = 0;
   for (const RenderCommand& command : impl_->commands) {
     if (const auto* beginPattern = std::get_if<BeginPatternTileCommand>(&command)) {
@@ -433,7 +569,7 @@ void RenderSnapshot::replay(RendererInterface& renderer) const {
     if (rejectedPatternDepth > 0) {
       continue;
     }
-    ReplayCommand(command, renderer, textRegistry);
+    ReplayCommand(command, renderer, replayFonts);
   }
 }
 
@@ -442,8 +578,11 @@ void RenderSnapshot::setSourceRevision(std::uint64_t revision) {
 }
 
 RenderSnapshotRecorder::RenderSnapshotRecorder(RenderSnapshot& snapshot,
-                                               RendererInterface& offscreenFactory)
-    : snapshot_(snapshot), offscreenFactory_(offscreenFactory) {}
+                                               RendererInterface& offscreenFactory,
+                                               std::size_t maximumCapturedFontBytes)
+    : snapshot_(snapshot), offscreenFactory_(offscreenFactory) {
+  snapshot_.impl_->resourceMapper.setMaximumCapturedFontBytes(maximumCapturedFontBytes);
+}
 
 void RenderSnapshotRecorder::draw(SVGDocument&) {}
 
@@ -556,7 +695,8 @@ void RenderSnapshotRecorder::drawImage(const ImageResource& image, const ImagePa
   snapshot_.impl_->commands.push_back(DrawImageCommand{image, std::move(snapshotParams)});
 }
 
-void RenderSnapshotRecorder::drawText(Registry&, const components::ComputedTextComponent& text,
+void RenderSnapshotRecorder::drawText(Registry& sourceRegistry,
+                                      const components::ComputedTextComponent& text,
                                       const TextParams& params) {
   DrawTextCommand command;
   command.text = snapshot_.impl_->resourceMapper.mapComputedText(text);
@@ -564,6 +704,30 @@ void RenderSnapshotRecorder::drawText(Registry&, const components::ComputedTextC
   command.params.fontFaces = {};
   command.params.textRootEntity = entt::null;
   command.fontFaces.assign(params.fontFaces.begin(), params.fontFaces.end());
+  command.fontDomain = snapshot_.impl_->resourceMapper.captureTextDomain(sourceRegistry);
+#ifdef DONNER_TEXT_ENABLED
+  if (params.preparedTextDraw) {
+    // Keep the placed glyphs, but replace every source-registry font handle on replay.
+    auto prepared = std::make_shared<PreparedTextDraw>(*params.preparedTextDraw);
+    command.preparedFonts.reserve(prepared->runs.size());
+    for (TextRun& run : prepared->runs) {
+      command.preparedFonts.push_back(
+          snapshot_.impl_->resourceMapper.captureFont(sourceRegistry, run.font));
+      run.font = FontHandle();
+    }
+    command.params.preparedTextDraw = std::move(prepared);
+  }
+  command.decorationFonts.reserve(command.text.spans.size());
+  for (auto& span : command.text.spans) {
+    command.decorationFonts.push_back(
+        span.decorationFont
+            ? snapshot_.impl_->resourceMapper.captureFont(sourceRegistry, span.decorationFont->font)
+            : SnapshotFont());
+    if (span.decorationFont) {
+      span.decorationFont->font = FontHandle();
+    }
+  }
+#endif
   snapshot_.impl_->commands.push_back(std::move(command));
 }
 

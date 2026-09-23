@@ -4,8 +4,47 @@
 #include <limits>
 
 #include "donner/base/MathUtils.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::svg {
+
+TextLayoutParams ToTextLayoutParams(const TextParams& params) {
+  TextLayoutParams layoutParams;
+  layoutParams.fontFamilies = params.fontFamilies;
+  layoutParams.fontSize = params.fontSize;
+  layoutParams.viewBox = params.viewBox;
+  layoutParams.fontMetrics = params.fontMetrics;
+  layoutParams.textAnchor = params.textAnchor;
+  layoutParams.writingMode = params.writingMode;
+  layoutParams.letterSpacingPx = params.letterSpacingPx;
+  layoutParams.wordSpacingPx = params.wordSpacingPx;
+  layoutParams.textLength = params.textLength;
+  layoutParams.lengthAdjust = params.lengthAdjust;
+  layoutParams.inlineSizePx = params.inlineSizePx;
+  return layoutParams;
+}
+
+TextDrawGeometry PrepareTextDrawGeometry(Registry& registry,
+                                         const components::ComputedTextComponent& text,
+                                         const TextParams& params, TextEngine& textEngine) {
+  TextDrawGeometry geometry;
+  if (params.preparedTextDraw) {
+    geometry.runs = params.preparedTextDraw->runs;
+  } else if (params.textRootEntity != entt::null) {
+    if (const auto* cached =
+            registry.try_get<components::ComputedTextGeometryComponent>(params.textRootEntity)) {
+      geometry.runs = cached->runs;
+    }
+  }
+  if (geometry.runs.empty() && !params.preparedTextDraw) {
+    geometry.runs = textEngine.layout(text, ToTextLayoutParams(params));
+  }
+  geometry.elementBounds = params.preparedTextDraw ? params.preparedTextDraw->elementBounds
+                                                   : ComputeTextBounds(textEngine, geometry.runs);
+  ClearUnpaintedSpanGlyphs(text, params.spanEffectOwner, geometry.runs);
+  return geometry;
+}
 
 Path TransformPath(const Path& path, const Transform2d& transform) {
   PathBuilder builder;

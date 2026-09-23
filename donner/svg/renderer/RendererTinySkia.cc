@@ -32,7 +32,6 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererTinySkiaCache.h"
 #ifdef DONNER_TEXT_ENABLED
-#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
@@ -58,22 +57,6 @@ std::optional<int> CheckedPixelDimension(double logicalDimension, double deviceP
 }
 
 #ifdef DONNER_TEXT_ENABLED
-TextLayoutParams toTextLayoutParams(const TextParams& params) {
-  TextLayoutParams layoutParams;
-  layoutParams.fontFamilies = params.fontFamilies;
-  layoutParams.fontSize = params.fontSize;
-  layoutParams.viewBox = params.viewBox;
-  layoutParams.fontMetrics = params.fontMetrics;
-  layoutParams.textAnchor = params.textAnchor;
-  layoutParams.writingMode = params.writingMode;
-  layoutParams.letterSpacingPx = params.letterSpacingPx;
-  layoutParams.wordSpacingPx = params.wordSpacingPx;
-  layoutParams.textLength = params.textLength;
-  layoutParams.lengthAdjust = params.lengthAdjust;
-  layoutParams.inlineSizePx = params.inlineSizePx;
-  return layoutParams;
-}
-
 std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
     const FontManager::GlyphOutlineComplexity& complexity) {
   constexpr std::size_t kCommandCopiesPerVertex = 6;
@@ -248,13 +231,6 @@ std::optional<Bitmap> AdmitBitmapGlyph(std::optional<Bitmap> bitmap,
   return bitmap;
 }
 
-std::vector<TextRun> CachedTextRuns(Registry& registry, Entity textRootEntity) {
-  if (textRootEntity == entt::null) {
-    return {};
-  }
-  const auto* cache = registry.try_get<components::ComputedTextGeometryComponent>(textRootEntity);
-  return cache ? cache->runs : std::vector<TextRun>();
-}
 #endif
 
 tiny_skia::Color toTinyColor(const css::RGBA& rgba) {
@@ -2848,24 +2824,9 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   auto& textEngine = registry.ctx().get<TextEngine>();
   auto& fontManager = registry.ctx().get<FontManager>();
 
-  // Use cached layout runs from ComputedTextGeometryComponent when available.
-  std::vector<TextRun> runs = CachedTextRuns(registry, params.textRootEntity);
-  if (runs.empty()) {
-    const TextLayoutParams layoutParams = toTextLayoutParams(params);
-    runs = textEngine.layout(text, layoutParams);
-  }
-
-  // Text bounding box for objectBoundingBox gradient/pattern mapping - the same
-  // shared computation RendererGeode::drawText uses, so the two backends can't
-  // drift on the bbox. Per the SVG spec it uses
-  // em-box cells from font v-metrics (ascent above baseline, |descent| below),
-  // not the raw font size. Every draw of this element sees the same box, so it is taken across all
-  // spans, before the ones this draw does not paint are dropped.
-  const Box2d textBounds = ComputeTextBounds(textEngine, runs);
-
-  // Drop the spans this draw is not responsible for before charging the glyph budget, so a text
-  // whose spans own effects is not charged once per draw for the glyphs it does not paint.
-  ClearUnpaintedSpanGlyphs(text, params.spanEffectOwner, runs);
+  TextDrawGeometry drawGeometry = PrepareTextDrawGeometry(registry, text, params, textEngine);
+  std::vector<TextRun>& runs = drawGeometry.runs;
+  const Box2d& textBounds = drawGeometry.elementBounds;
 
   (void)admitTextGlyphBatch(runs);
   if (currentPixmap().width() == 0 || currentPixmap().height() == 0) {
