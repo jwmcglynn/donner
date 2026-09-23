@@ -86,15 +86,15 @@ ImTextureID RegisterUiSnapshotTexture(const svg::RendererTextureSnapshot& snapsh
   }
 
   // Rendered on a different device than the interface is drawn on, so it reaches the interface
-  // only by being registered on the drawing device - which needs the producing device to still
-  // own it, and is why a snapshot that only borrows a frame target cannot be registered here.
+  // only by being registered on the drawing device, from the export the snapshot took on its
+  // producer's thread. This thread never touches the producing device, which another thread may be
+  // rendering on; a snapshot that only borrows a frame target has no export and is refused.
   geode::GeodeWgpuAdapterDevice* importDevice = ImportDeviceFor(*renderer);
-  const std::shared_ptr<geode::GeodeDevice>& owner = geodeSnapshot.owningDevice();
-  if (importDevice == nullptr || owner == nullptr) {
+  const gpu::TextureExport* exported = geodeSnapshot.textureExport();
+  if (importDevice == nullptr || exported == nullptr) {
     return 0;
   }
-  gpu::Result<gpu::Texture> imported =
-      importDevice->importTextureFrom(owner->adapterDevice(), *runtimeTexture);
+  gpu::Result<gpu::Texture> imported = geode::RegisterOrderedTexture(*importDevice, *exported);
   if (imported.hasError()) {
     return 0;
   }

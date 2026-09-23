@@ -414,27 +414,6 @@ public:
                                                   gpu::TextureUsage usage);
 
   /**
-   * Registers a texture \p owner holds as a texture of this adapter, so code recording against
-   * this adapter can name it.
-   *
-   * Two adapters driving the same backend device and queue are separate runtime devices, and a
-   * texture of one is not a texture of the other: this registration is what makes it reachable
-   * here. It is refused when \p owner drives a different backend device or queue - nothing this
-   * adapter records could sample or copy that memory - and when \p texture is not a live texture
-   * of \p owner, so a stale or forged handle cannot bridge whatever now occupies its slot. The
-   * extent, format and capabilities come from \p owner's record of the texture, so a caller
-   * cannot describe it differently than its owner does.
-   *
-   * This adapter does NOT take ownership: destroying the returned handle only forgets the
-   * registration, and \p owner must keep the texture alive for as long as it is registered.
-   *
-   * @param owner Adapter that owns \p texture.
-   * @param texture Live texture handle of \p owner.
-   */
-  gpu::Result<gpu::Texture> importTextureFrom(const GeodeWgpuAdapterDevice& owner,
-                                              const gpu::Texture& texture);
-
-  /**
    * TEMPORARY escape hatch (deleted with the presentation migration): the public form of this
    * adapter's handle-to-backend resolution, for the presentation call sites that still hand a
    * backend texture to something outside the runtime. Returns a null handle if \p texture does not
@@ -596,9 +575,32 @@ protected:
   /// @param slotIndex Validated live texture slot.
   void onDestroyTextureBacking(uint32_t slotIndex) override;
 
-  /// Whether \p slotIndex holds a texture this adapter allocated, rather than a borrowed one
-  /// named through \ref registerBorrowedTexture. @param slotIndex Validated live texture slot.
+  /// Whether \p slotIndex holds a texture this adapter allocated, rather than a borrowed one named
+  /// through \ref registerBorrowedTexture or \ref onRegisterTexture.
+  /// @param slotIndex Validated live texture slot.
   [[nodiscard]] bool onOwnsTextureBacking(uint32_t slotIndex) const override;
+
+  /// Identifies the wgpu device this adapter records against.
+  gpu::BackendDeviceIdentity backendDeviceIdentity() const override;
+
+  /**
+   * Exports the texture in \p slotIndex, taking a reference on the wgpu texture and on the root
+   * so the texture outlives this adapter if a registration does. Every adapter over one root
+   * submits to the root's one queue, so registrations are ordered by submission order alone.
+   *
+   * @param slotIndex Validated live texture slot.
+   */
+  gpu::Result<gpu::BackendTextureExport> onExportTexture(uint32_t slotIndex) override;
+
+  /**
+   * Names a sibling adapter's exported texture in \p slotIndex, refusing one whose adapter
+   * submits to a different queue. Nothing is allocated or counted.
+   *
+   * @param slotIndex Slot the registration occupies.
+   * @param backing The producer's export.
+   */
+  gpu::Status onRegisterTexture(uint32_t slotIndex,
+                                const gpu::ExportedTextureBacking& backing) override;
   gpu::Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const override;
   void onUnmapBuffer(uint32_t mappingSlotIndex) override;
 

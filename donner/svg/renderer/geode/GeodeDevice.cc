@@ -420,6 +420,7 @@ GeodeDevice::ReadbackStats GeodeDevice::consumeReadbackStats() {
       .submits = readbackSubmits_.exchange(0, std::memory_order_relaxed),
       .poolEntries = readbackPoolEntries_.load(std::memory_order_relaxed),
       .poolBytes = readbackPoolBytes_.load(std::memory_order_relaxed),
+      .sharedTextureTailBytes = runtimeDevice_->sharedTextureTailBytes(),
   };
 }
 
@@ -505,18 +506,24 @@ GeodeDevice::SnapshotCaptureLease GeodeDevice::acquireSnapshotCapture(
   return lease;
 }
 
-gpu::Result<gpu::Texture> GeodeDevice::registerCaptureSource(const GeodeDevice& producer,
-                                                             const gpu::Texture& texture) {
+gpu::Result<gpu::Texture> GeodeDevice::registerCaptureSource(const gpu::TextureExport& source) {
   UTILS_RELEASE_ASSERT(readbackOnly_);
-  if (transitionalAdapter_ == nullptr || !producer.hasTransitionalAdapter()) {
-    return gpu::GpuError{gpu::GpuErrorType::Unsupported,
-                         "registerCaptureSource: the native backend cannot yet name a texture of "
-                         "another runtime device"};
+  return runtimeDevice_->registerTexture(source);
+}
+
+void GeodeDevice::pollIdleSnapshotCaptureContext() {
+  // The capture context is used only under its lease, from whatever thread captures; an owner
+  // that finds it busy leaves the poll to that capture's own end.
+  std::unique_lock lock(impl_->snapshotCaptureMutex, std::try_to_lock);
+  if (lock.owns_lock() && impl_->snapshotCaptureContext) {
+    impl_->snapshotCaptureContext->runtimeDevice().poll();
   }
-  return transitionalAdapter_->importTextureFrom(producer.adapterDevice(), texture);
 }
 
 void GeodeDevice::finishSnapshotCapture(GeodeDevice& context) {
+  // A capture that ended before its readback completed still names its source in retirement;
+  // recycling what has completed is what lets the source's owner release the texture.
+  context.runtimeDevice().poll();
   const ReadbackStats stats = context.consumeReadbackStats();
   readbackCount_.fetch_add(stats.count, std::memory_order_relaxed);
   readbackPollIterations_.fetch_add(stats.pollIterations, std::memory_order_relaxed);
@@ -540,6 +547,37 @@ void GeodeDevice::finishSnapshotCapture(GeodeDevice& context) {
   }
   readbackPoolEntries_.store(context.impl_->snapshotReadbackPool.size(), std::memory_order_relaxed);
   readbackPoolBytes_.store(poolBytes, std::memory_order_relaxed);
+}
+
+gpu::Result<gpu::Texture> RegisterOrderedTexture(gpu::Device& consumer,
+                                                 const gpu::TextureExport& source,
+                                                 std::chrono::milliseconds bound) {
+  UTILS_RELEASE_ASSERT_MSG(bound > std::chrono::milliseconds::zero(),
+                           "RegisterOrderedTexture: a zero bound asks rather than waits, so its "
+                           "answer could not tell a hang from work still running");
+  gpu::Result<gpu::Texture> registered = consumer.registerTexture(source);
+  if (registered.hasError()) {
+    return registered;
+  }
+  const auto waitStart = std::chrono::steady_clock::now();
+  if (consumer.waitForTextureSource(registered.result(),
+                                    std::chrono::duration<double>(bound).count())) {
+    return registered;
+  }
+  const auto waited = std::chrono::steady_clock::now() - waitStart;
+  // The source wait gives up early only on loss or a producer failure, and those belong to the
+  // device they happened to. Only a wait that spent its whole bound is this consumer's evidence
+  // of a hang, and the measured wait is what it reports.
+  if (consumer.isLost() || waited < bound) {
+    return gpu::GpuError{gpu::GpuErrorType::DeviceLost,
+                         "a registered texture's producer failed or one of the two devices is "
+                         "lost"};
+  }
+  consumer.markLostAfterWaitTimeout(
+      GpuWaitSite::QueueIdle, std::chrono::duration_cast<std::chrono::milliseconds>(waited),
+      "the work producing a registered texture did not complete within the bounded wait");
+  return gpu::GpuError{gpu::GpuErrorType::DeviceLost,
+                       "the work producing a registered texture did not complete"};
 }
 
 namespace {
@@ -1031,6 +1069,7 @@ void GeodeDevice::drainDeferredTextureBackings() {
   if (!impl_) {
     return;
   }
+  pollIdleSnapshotCaptureContext();
   std::vector<gpu::Texture> retired;
   {
     std::lock_guard lock(impl_->textureBackingRetirementMutex);
@@ -1064,6 +1103,14 @@ bool GeodeDevice::retirementOutlivesOwnedRuntimeDeviceForTesting() const {
 bool GeodePhysicalDeviceOwner::rootRetirementOutlivesRootDeviceForTesting() const {
   // See GeodeDevice::retirementOutlivesOwnedRuntimeDeviceForTesting.
   return static_cast<const void*>(&rootDeviceRetirement_) < static_cast<const void*>(&rootDevice_);
+}
+
+GpuWaitResult GeodeDevice::waitForSnapshotCaptureIdleForTesting(std::chrono::milliseconds timeout) {
+  std::lock_guard lock(impl_->snapshotCaptureMutex);
+  if (!impl_->snapshotCaptureContext) {
+    return GpuWaitResult::Complete;
+  }
+  return impl_->snapshotCaptureContext->waitForQueueIdle(timeout);
 }
 
 void GeodeDevice::drainDeferredDestroys() {

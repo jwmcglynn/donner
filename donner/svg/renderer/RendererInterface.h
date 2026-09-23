@@ -134,6 +134,9 @@ struct RendererReadbackStats {
   /// Idle pooled readback sets and their logical backing bytes.
   std::uint64_t poolEntries = 0;
   std::uint64_t poolBytes = 0;
+  /// Bytes of this renderer's released textures still resident because another context still
+  /// reads them. Allocation accounting no longer counts them, so a working set adds these.
+  std::uint64_t sharedTextureTailBytes = 0;
 };
 
 /** Aggregate budget for render targets, layers, masks, clips, and pattern tiles. */

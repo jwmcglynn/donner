@@ -150,6 +150,33 @@ struct SnapshotReadbackResources {
 };
 
 /**
+ * Registers a texture another context exported as a texture of \p consumer, and waits until the
+ * producer's work on it has completed, so what \p consumer records against it next may be
+ * submitted.
+ *
+ * For a context that draws the registration in a frame rather than capturing it: on a backend
+ * whose contexts share one queue it returns at once, and otherwise it blocks this thread for the
+ * producer's frame.
+ *
+ * Loss policy. The runtime's source wait declares nothing when its budget runs out; this helper
+ * is the consumer's own bounded wait and applies the policy of every other bounded wait over a
+ * Geode root. A wait that spent all of \p bound means the producer's queue stopped answering: the
+ * consumer's condition is declared lost with the queue-idle wait site and the measured wait, so
+ * later frames fail at once instead of stalling again. A wait that ended sooner did so because a
+ * device is lost or the producer failed, which is not this consumer's to report: the helper fails
+ * with `DeviceLost` and declares nothing. A producer already lost is refused at registration the
+ * same way.
+ *
+ * @param consumer Runtime device of the context that will name the texture.
+ * @param source Export of the producer's texture.
+ * @param bound Longest to wait for the producer's work; must be positive.
+ * @return The registration, or why it was refused or could not be ordered.
+ */
+gpu::Result<gpu::Texture> RegisterOrderedTexture(
+    gpu::Device& consumer, const gpu::TextureExport& source,
+    std::chrono::milliseconds bound = kDefaultGpuWaitTimeout);
+
+/**
  * Owns (or wraps) a WebGPU device/queue pair for GPU rendering.
  *
  * GeodeDevice is the entry point to the Geode rendering backend. In **headless
@@ -349,6 +376,10 @@ public:
     /// Idle pooled resource sets and their logical backing bytes after the latest capture.
     uint64_t poolEntries = 0;
     uint64_t poolBytes = 0;
+    /// Bytes of this context's textures still resident because another context registered them
+    /// or an export of them is alive, after this context released its own handle. No context
+    /// counts that memory as its allocation, so a working set has to add it.
+    uint64_t sharedTextureTailBytes = 0;
   };
 
   /// Override the total capture budget for deterministic cancellation/deadline tests.
@@ -446,6 +477,17 @@ public:
   /// Number of texture backings waiting for the next frame-boundary destroy pass.
   /// Exposed to pin resource-retirement behavior in renderer regression tests.
   [[nodiscard]] std::size_t deferredTextureDestroyCountForTesting() const;
+
+  /**
+   * Waits until the snapshot capture context's queue has no submitted work left, so a test can
+   * check what the owner's next release point frees once every capture has finished on the GPU,
+   * without polling for it. Waits for a capture in progress to end first.
+   *
+   * @param timeout Bound on the queue wait; a timeout is declared like any queue-idle wait.
+   * @return \ref GpuWaitResult::Complete when the queue is idle or no capture context exists.
+   */
+  [[nodiscard]] GpuWaitResult waitForSnapshotCaptureIdleForTesting(
+      std::chrono::milliseconds timeout = kDefaultGpuWaitTimeout);
 
   /**
    * Key identifying a scene-batch bind group by its exact buffer bindings:
@@ -871,25 +913,35 @@ private:
                                               std::chrono::steady_clock::time_point deadline);
 
   /**
-   * Registers \p texture, which \p producer owns, as a texture of this capture context.
+   * Registers a texture the producer exported as a texture of this capture context.
    *
    * A capture context is a runtime device of its own, so a texture of the producer is not a
-   * texture of the capture until it is named here. The registration is borrowed: it describes the
-   * texture the way its producer does, takes no ownership of the allocation, and is forgotten
-   * when the returned handle goes away. It is refused for a producer over a different backend
-   * device, and for a handle its producer no longer resolves. Only a capture context may
-   * register a source.
+   * texture of the capture until it is named here. The export was made on the producer's thread,
+   * so registering it never reads the producer's tables. The registration describes the texture
+   * the way its producer does, never owns the allocation, and is forgotten when the returned
+   * handle goes away; the runtime refuses it for a producer over a different backend device, for a
+   * texture its producer has released, and on a backend that cannot share textures. Only a
+   * capture context may register a source.
    *
-   * @param producer Context that owns \p texture.
-   * @param texture Live texture handle of \p producer.
+   * @param source Export of the texture to capture.
    */
-  gpu::Result<gpu::Texture> registerCaptureSource(const GeodeDevice& producer,
-                                                  const gpu::Texture& texture);
+  gpu::Result<gpu::Texture> registerCaptureSource(const gpu::TextureExport& source);
 
   SnapshotCaptureStatus waitForSnapshotCapture(std::unique_lock<std::timed_mutex>& lock,
                                                const std::function<bool()>& shouldCancel,
                                                std::chrono::steady_clock::time_point deadline);
   void finishSnapshotCapture(GeodeDevice& context);
+
+  /**
+   * Recycles what the snapshot capture context has retired and the GPU has finished with, when no
+   * capture holds the context.
+   *
+   * A capture that ends before its readback completes (cancelled, past its deadline, or failed)
+   * retires its registration of the source texture with that readback in flight, and only a poll
+   * of the capture context recycles it. Until then the registration holds the texture, so the
+   * owner could not release it. The owner calls this before releasing textures.
+   */
+  void pollIdleSnapshotCaptureContext();
   void recordSnapshotCaptureTimeout();
   void notifySnapshotReadbackPhaseForTesting(SnapshotReadbackPhase phase) const;
   GeodeSnapshotReadbackPipeline& snapshotReadbackPipeline() const;

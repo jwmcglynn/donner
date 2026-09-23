@@ -114,8 +114,14 @@ bool SnapshotTextureIsSampleable(const gpu::Device& owner, const gpu::Texture& t
 struct RendererGeodeTextureSnapshot::Backing {
   std::shared_ptr<geode::GeodeDevice> device;
   gpu::Texture runtimeTexture;
+  /// Made on the producer's thread at adoption, so another context can register the texture
+  /// without reading the producer's tables. Empty on a backend that cannot share textures.
+  gpu::TextureExport exported;
 
   ~Backing() {
+    // Released before the texture is handed back, so a texture nothing else holds keeps its
+    // immediate backing release.
+    exported = gpu::TextureExport();
     if (runtimeTexture.isValid() && device) {
       UTILS_RELEASE_ASSERT(device->deferDestroyTextureBacking(std::move(runtimeTexture)));
     }
@@ -138,10 +144,16 @@ RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
       !SnapshotExtentFits(dimensions, SnapshotAllocationExtent(descriptor.result().size))) {
     return result;
   }
+  // A failed export leaves the snapshot usable on its own device; only naming it on another
+  // context, including a capture, is refused.
+  gpu::Result<gpu::TextureExport> exported = device->runtimeDevice().exportTexture(texture);
   result.device_ = std::move(device);
   result.backing_ = std::make_shared<Backing>();
   result.backing_->device = result.device_;
   result.backing_->runtimeTexture = std::move(texture);
+  if (exported.hasResult()) {
+    result.backing_->exported = std::move(exported).result();
+  }
   result.allocationDimensions_ = SnapshotAllocationExtent(descriptor.result().size);
   result.runtimeFormat_ = runtimeFormat;
   result.dimensions_ = dimensions;
@@ -168,6 +180,10 @@ const gpu::Texture* RendererGeodeTextureSnapshot::runtimeTexture() const {
 
 gpu::Texture RendererGeodeTextureSnapshot::takeRuntimeRegistrationForTesting() {
   return backing_ ? std::move(backing_->runtimeTexture) : gpu::Texture();
+}
+
+const gpu::TextureExport* RendererGeodeTextureSnapshot::textureExport() const {
+  return backing_ != nullptr && backing_->exported.isValid() ? &backing_->exported : nullptr;
 }
 
 uint64_t RendererGeodeTextureSnapshot::deviceId() const {
@@ -1533,33 +1549,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::unordered_map<const RendererGeodeTextureSnapshot::Backing*, gpu::Texture>
       frameSnapshotImports;
 
-  /**
-   * The texture \p source names, as a texture of this renderer's context: a registration of
-   * \p owner's texture, made the first time the frame draws it and reused for the rest of the
-   * frame. Naming another context's texture is a registration only the transitional adapter
-   * performs so far, so a native context refuses.
-   *
-   * @param owner Context that owns \p source.
-   * @param source Live texture of \p owner.
-   * @param key Snapshot backing the registration is kept under until the frame boundary.
-   * @return The registration, or null to refuse the draw.
-   */
-  const gpu::Texture* registerFrameSnapshotSource(
-      const geode::GeodeDevice& owner, const gpu::Texture& source,
-      const RendererGeodeTextureSnapshot::Backing* key) {
-    const auto found = frameSnapshotImports.find(key);
-    if (found != frameSnapshotImports.end()) {
-      return &found->second;
+  /// This context's registration of another context's snapshot for the rest of the frame, made
+  /// from the export the snapshot took on its producer's thread, or null when it is refused.
+  /// @param key Backing the registration is cached under for the frame.
+  /// @param exported The snapshot's export.
+  const gpu::Texture* registerFrameSnapshot(const RendererGeodeTextureSnapshot::Backing* key,
+                                            const gpu::TextureExport& exported) {
+    auto found = frameSnapshotImports.find(key);
+    if (found == frameSnapshotImports.end()) {
+      gpu::Result<gpu::Texture> registered =
+          geode::RegisterOrderedTexture(device->runtimeDevice(), exported);
+      if (registered.hasError()) {
+        return nullptr;
+      }
+      found = frameSnapshotImports.emplace(key, std::move(registered).result()).first;
     }
-    if (!device->hasTransitionalAdapter() || !owner.hasTransitionalAdapter()) {
-      return nullptr;
-    }
-    gpu::Result<gpu::Texture> imported =
-        device->adapterDevice().importTextureFrom(owner.adapterDevice(), source);
-    if (imported.hasError()) {
-      return nullptr;
-    }
-    return &frameSnapshotImports.emplace(key, std::move(imported).result()).first->second;
+    return &found->second;
   }
 
   /// Opens a runtime view over an already-named texture, valid for the rest of the frame. Views
@@ -6930,9 +6935,11 @@ bool RendererGeodeTextureSnapshot::canSampleWith(const geode::GeodeDevice& devic
   }
   // Reaching another context means registering this texture there, which needs it to still be
   // alive when that registration is made. A frame-local borrow gives no such promise - the
-  // producer takes its target back at the frame boundary - so only an owning lease may cross.
-  return backing_ != nullptr && device_ != nullptr &&
-         SnapshotTextureIsSampleable(device_->runtimeDevice(), *runtime);
+  // producer takes its target back at the frame boundary - so only an owning lease may cross. The
+  // export describes the texture as the producer does, so the producer's tables are not read here.
+  return backing_ != nullptr && backing_->exported.isValid() &&
+         IsSnapshotFormat(backing_->exported.descriptor().format) &&
+         gpu::HasAllFlags(backing_->exported.descriptor().usage, gpu::TextureUsage::Sampled);
 }
 
 bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
@@ -6971,8 +6978,8 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
   const gpu::Texture* source = geodeTexture->runtimeTexture();
   UTILS_RELEASE_ASSERT(source != nullptr);
   if (source->deviceId() != impl_->device->runtimeDevice().deviceId()) {
-    source = impl_->registerFrameSnapshotSource(*geodeTexture->device_, *source,
-                                                geodeTexture->backing_.get());
+    source = impl_->registerFrameSnapshot(geodeTexture->backing_.get(),
+                                          geodeTexture->backing_->exported);
     if (source == nullptr) {
       return false;
     }
@@ -7923,24 +7930,21 @@ bool RecordGpuReadback(geode::GeodeDevice& context,
   return !runtime.submit(std::move(commands).result()).hasError();
 }
 
-/// The descriptor a snapshot readback may run against, or nothing when \p texture is not a
-/// readable snapshot of \p device at \p dimensions.
-/// @param device Device that owns the texture. @param texture Texture to read.
+/// The descriptor a snapshot readback may run against, or nothing when \p source is not a
+/// readable snapshot at \p dimensions. Read from the export, never from the producer's tables.
+/// @param source Export of the texture to read.
 /// @param dimensions Content extent to read, anchored at the texture origin.
-std::optional<gpu::TextureDescriptor> ReadableSnapshotDescriptor(
-    const std::shared_ptr<geode::GeodeDevice>& device, const gpu::Texture& texture,
-    Vector2i dimensions) {
-  if (!device) {
+std::optional<gpu::TextureDescriptor> ReadableSnapshotDescriptor(const gpu::TextureExport& source,
+                                                                 Vector2i dimensions) {
+  if (!source.isValid()) {
     return std::nullopt;
   }
-  gpu::Result<gpu::TextureDescriptor> descriptor =
-      device->runtimeDevice().textureDescriptor(texture);
-  if (descriptor.hasError() || descriptor.result().sampleCount != 1 ||
-      !IsSnapshotFormat(descriptor.result().format) ||
-      !SnapshotExtentFits(dimensions, SnapshotAllocationExtent(descriptor.result().size))) {
+  const gpu::TextureDescriptor& descriptor = source.descriptor();
+  if (descriptor.sampleCount != 1 || !IsSnapshotFormat(descriptor.format) ||
+      !SnapshotExtentFits(dimensions, SnapshotAllocationExtent(descriptor.size))) {
     return std::nullopt;
   }
-  return std::move(descriptor).result();
+  return descriptor;
 }
 
 bool CanUnpremultiplySnapshotOnGpu(const gpu::TextureDescriptor& descriptor, AlphaType alphaType) {
@@ -8097,10 +8101,27 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureCpu(
   return readMappedTexture(context, mapped.mapping, width, height, format, alphaType, control);
 }
 
+bool RendererGeodeTextureSnapshot::waitForCaptureSource(geode::GeodeDevice& context,
+                                                        const gpu::Texture& source,
+                                                        ReadbackControl& control) {
+  // On a backend whose contexts submit to separate queues, nothing recorded here may reach the
+  // queue before the producer's work on the texture has completed. Sliced so the capture's own
+  // cancellation and deadline still apply.
+  while (!context.runtimeDevice().waitForTextureSource(source, kReadbackWaitSliceSeconds)) {
+    if (context.isDeviceLost()) {
+      control.status = ReadbackMapStatus::DeviceLost;
+      return false;
+    }
+    if (control.stopped()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 RendererBitmap RendererGeodeTextureSnapshot::readTextureWithContext(
-    geode::GeodeDevice& context, geode::GeodeDevice& owner, const gpu::Texture& texture,
-    Vector2i dimensions, const gpu::TextureDescriptor& descriptor, AlphaType alphaType,
-    ReadbackControl& control) {
+    geode::GeodeDevice& context, const gpu::TextureExport& exported, Vector2i dimensions,
+    const gpu::TextureDescriptor& descriptor, AlphaType alphaType, ReadbackControl& control) {
   if (control.stopped()) {
     return {};
   }
@@ -8109,13 +8130,16 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureWithContext(
     return {};
   }
   // The capture context is its own runtime device, so the producer's texture has to be
-  // registered there before anything recorded here may name it. The registration is borrowed and
-  // lasts exactly as long as this capture: the producer keeps the allocation.
-  gpu::Result<gpu::Texture> registered = context.registerCaptureSource(owner, texture);
+  // registered there before anything recorded here may name it. The registration never owns the
+  // allocation and lasts exactly as long as this capture.
+  gpu::Result<gpu::Texture> registered = context.registerCaptureSource(exported);
   if (registered.hasError()) {
     return {};
   }
   const gpu::Texture source = std::move(registered).result();
+  if (!waitForCaptureSource(context, source, control)) {
+    return {};
+  }
   const uint32_t width = static_cast<uint32_t>(dimensions.x);
   const uint32_t height = static_cast<uint32_t>(dimensions.y);
   if (CanUnpremultiplySnapshotOnGpu(descriptor, alphaType)) {
@@ -8138,7 +8162,7 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureWithContext(
 }
 
 RendererBitmap RendererGeodeTextureSnapshot::readTexture(std::shared_ptr<geode::GeodeDevice> device,
-                                                         const gpu::Texture& texture,
+                                                         const gpu::TextureExport& exported,
                                                          Vector2i dimensions, AlphaType alphaType,
                                                          const std::function<bool()>& shouldCancel,
                                                          std::shared_ptr<Backing> backing) {
@@ -8164,7 +8188,7 @@ RendererBitmap RendererGeodeTextureSnapshot::readTexture(std::shared_ptr<geode::
     return {};
   }
   const std::optional<gpu::TextureDescriptor> descriptor =
-      ReadableSnapshotDescriptor(device, texture, dimensions);
+      ReadableSnapshotDescriptor(exported, dimensions);
   if (!descriptor || !SnapshotHasReadbackRoute(*descriptor, alphaType)) {
     return {};
   }
@@ -8175,7 +8199,7 @@ RendererBitmap RendererGeodeTextureSnapshot::readTexture(std::shared_ptr<geode::
   if (capture.status != geode::GeodeDevice::SnapshotCaptureStatus::Ready) {
     return {};
   }
-  RendererBitmap bitmap = readTextureWithContext(*capture.context, *device, texture, dimensions,
+  RendererBitmap bitmap = readTextureWithContext(*capture.context, exported, dimensions,
                                                  *descriptor, alphaType, control);
   if (control.status == ReadbackMapStatus::Cancelled) {
     device->readbackCaptureCancellations_.fetch_add(1, std::memory_order_relaxed);
@@ -8186,10 +8210,10 @@ RendererBitmap RendererGeodeTextureSnapshot::readTexture(std::shared_ptr<geode::
 }
 
 RendererBitmap RendererGeodeTextureSnapshot::takeSnapshot() const {
-  if (!isValid()) {
+  if (!isValid() || backing_ == nullptr) {
     return {};
   }
-  return readTexture(device_, *runtimeTexture(), dimensions_, alphaType_,
+  return readTexture(device_, backing_->exported, dimensions_, alphaType_,
                      /*shouldCancel=*/{}, backing_);
 }
 
@@ -8199,7 +8223,14 @@ RendererBitmap RendererGeode::takeSnapshotInterruptibly(
       impl_->pixelHeight <= 0) {
     return RendererBitmap{};
   }
-  return RendererGeodeTextureSnapshot::readTexture(impl_->device, impl_->target,
+  // Exported here, on the renderer's own thread, which is the only thread that may read its
+  // tables; the capture registers the export on its own context.
+  gpu::Result<gpu::TextureExport> exported =
+      impl_->device->runtimeDevice().exportTexture(impl_->target);
+  if (exported.hasError()) {
+    return RendererBitmap{};
+  }
+  return RendererGeodeTextureSnapshot::readTexture(impl_->device, exported.result(),
                                                    Vector2i(impl_->pixelWidth, impl_->pixelHeight),
                                                    AlphaType::Premultiplied, shouldCancel);
 }
@@ -8283,6 +8314,7 @@ RendererReadbackStats RendererGeode::consumeReadbackStats() {
       .submits = stats.submits,
       .poolEntries = stats.poolEntries,
       .poolBytes = stats.poolBytes,
+      .sharedTextureTailBytes = stats.sharedTextureTailBytes,
   };
 }
 

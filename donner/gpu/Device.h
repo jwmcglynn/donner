@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -22,6 +23,7 @@
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/GpuResult.h"
 #include "donner/gpu/Handles.h"
+#include "donner/gpu/TextureExport.h"
 
 namespace donner::gpu {
 
@@ -507,6 +509,91 @@ public:
    */
   [[nodiscard]] bool ownsTextureBacking(const Texture& texture) const;
 
+  /**
+   * Exports \p texture so another runtime device over the same backend device can register it.
+   *
+   * Runs on this device's thread, like every other operation that reads its table: the handle is
+   * resolved here, so a null or stale handle fails with \ref GpuErrorType::InvalidHandle and one of
+   * another device with \ref GpuErrorType::DeviceMismatch. Nothing is allocated from the backend,
+   * nothing is submitted, and nothing waits.
+   *
+   * The token holds the texture's allocation: it stays alive while the token, or any registration
+   * made from it, is alive, including after this device releases its handle.
+   *
+   * A frame a surface currently has out goes back to that surface when it is presented. It is
+   * exported only by a backend whose registrations submit to this device's own queue
+   * (\ref SourceOrdering::SharedQueue): a reader's work recorded before the present then runs
+   * before it. The caller must not record reads of such a registration after the frame is
+   * presented. A backend whose readers have their own queues refuses the frame with
+   * \ref GpuErrorType::InvalidState, because their reads could land after the surface took it
+   * back.
+   *
+   * Also refused with \ref GpuErrorType::InvalidState for a registration of another device's
+   * texture, which is exported from the device that allocated it; with
+   * \ref GpuErrorType::DeviceLost once this device is lost; and with
+   * \ref GpuErrorType::Unsupported by a backend whose runtime devices never share a native
+   * device.
+   *
+   * @param texture Live texture of this device.
+   */
+  Result<TextureExport> exportTexture(const Texture& texture);
+
+  /**
+   * Registers a texture another runtime device exported, as a read-only texture of this one.
+   *
+   * Runs on this device's thread and reads only \p source, never the producer device. The
+   * registration describes the texture as the producer does, except that its usage is limited to
+   * \ref TextureUsage::Sampled and \ref TextureUsage::CopySrc: a consumer reads what the producer
+   * wrote and never writes it. It never owns the allocation (\ref ownsTextureBacking is false) but
+   * holds it until this device recycles the registration's slot, which is after the last of this
+   * device's submissions naming it has completed.
+   *
+   * Work this device submits that names the registration is ordered after every submission the
+   * producer had made referencing the texture before this call, and after the queued writes those
+   * submissions carried. On a backend whose devices do not share one native queue, \ref submit
+   * refuses such work until that producer work has completed; \ref waitForTextureSource is the
+   * bounded wait for it.
+   *
+   * Refused with \ref GpuErrorType::InvalidHandle for an empty token or one whose producer has
+   * released its handle; \ref GpuErrorType::InvalidState for this device's own export or while a
+   * producer write to the texture is queued and not yet submitted; \ref
+   * GpuErrorType::DeviceMismatch for another backend or native device; \ref
+   * GpuErrorType::UsageMismatch when the texture can be neither sampled nor copied from; \ref
+   * GpuErrorType::DeviceLost when either device is lost; and
+   * \ref GpuErrorType::Unsupported by a backend that cannot name another device's textures.
+   *
+   * @param source Token from the producer's \ref exportTexture.
+   */
+  Result<Texture> registerTexture(const TextureExport& source);
+
+  /**
+   * Waits until the producer work \p registration is ordered after has completed, the budget runs
+   * out, or either device is lost, and reports whether that work completed.
+   *
+   * Returns true at once for a texture this device allocated and for a registration whose
+   * producer shares this device's native queue: submission order already orders them. A wait that
+   * spends its budget declares nothing, like \ref waitForSerial; the caller's deadline is its own
+   * policy. A producer whose backend reports a terminal execution failure is declared lost with no
+   * wait site, because the backend reported it and no deadline expired.
+   *
+   * @param registration Live texture of this device.
+   * @param timeoutSeconds Longest to wait, in seconds; clamped like \ref waitForSerial.
+   * @return True once the producer work is known to have completed.
+   */
+  bool waitForTextureSource(const Texture& registration, double timeoutSeconds);
+
+  /**
+   * Bytes of this device's exported textures that are still held by an export token or a
+   * registration after this device released its own handle.
+   *
+   * That memory is still resident, and no other device counts it as its allocation, so a working
+   * set measured from allocation accounting alone would miss it. Readable from any thread. The
+   * gauge belongs to this device: bytes still held after this device is destroyed are counted in a
+   * gauge nothing reads any more, so a holder that outlives its producer device is a working-set
+   * blind spot.
+   */
+  [[nodiscard]] uint64_t sharedTextureTailBytes() const;
+
   /// Creates a command encoder recording against this device. The encoder must not outlive the
   /// device.
   Result<std::unique_ptr<CommandEncoder>> createCommandEncoder();
@@ -945,6 +1032,50 @@ protected:
    * @param slotIndex Validated live texture slot.
    */
   [[nodiscard]] virtual bool onOwnsTextureBacking(uint32_t slotIndex) const;
+
+  /**
+   * Backend hook: which backend family this device belongs to and which native device it records
+   * against, for matching an export against a registering device.
+   *
+   * The default names nothing, which is the answer for a backend whose runtime devices never share
+   * a native device.
+   */
+  [[nodiscard]] virtual BackendDeviceIdentity backendDeviceIdentity() const;
+
+  /**
+   * Backend hook: export the texture in \p slotIndex, which the runtime has already validated as a
+   * live texture this device allocated and no surface has out.
+   *
+   * The default refuses with \ref GpuErrorType::Unsupported: a backend that reaches each native
+   * device through exactly one runtime device has no other device that could name the texture.
+   *
+   * @param slotIndex Validated live texture slot.
+   */
+  virtual Result<BackendTextureExport> onExportTexture(uint32_t slotIndex);
+
+  /**
+   * Backend hook: name another device's exported texture in \p slotIndex.
+   *
+   * Called only after the runtime has matched \p backing's device identity against
+   * \ref backendDeviceIdentity, so a backend may treat \p backing as its own export type. The
+   * backend must hold the native object until \ref onDestroyResource for the slot, and must not
+   * report it as an allocation of this device.
+   *
+   * @param slotIndex Slot the registration occupies.
+   * @param backing The producer backend's export.
+   */
+  virtual Status onRegisterTexture(uint32_t slotIndex, const ExportedTextureBacking& backing);
+
+  /**
+   * Backend hook: whether the write \ref writeTexture just accepted for \p slotIndex is waiting
+   * for this device's next submission, rather than complete or ordered on the queue already.
+   *
+   * Asked only for an exported texture. The default, false, is right for a backend whose writes
+   * either finish before returning or are ordered on the one queue every consumer shares.
+   *
+   * @param slotIndex Validated live texture slot.
+   */
+  [[nodiscard]] virtual bool onTextureWritePending(uint32_t slotIndex) const;
 
   /**
    * Backend hook: \ref waitForSerial with a budget already clamped to zero or more.
@@ -1539,6 +1670,81 @@ private:
   /// @param commands Validated commands in recording order.
   CommandBuffer registerCommandBuffer(std::vector<Command>&& commands);
 
+  /// What this device holds for a texture slot that names another device's texture.
+  struct TextureRegistration {
+    /// This registration's holder of the producer's share.
+    std::shared_ptr<const details::TextureShareLease> lease;
+    /// Producer serial whose completion consumer work naming this texture must follow.
+    uint64_t orderAfterSerial = 0;
+  };
+  // Lives in a growing vector, so reallocation must move it without throwing.
+  static_assert(std::is_nothrow_move_constructible_v<TextureRegistration>);
+
+  /// Releases a texture's allocation at once, or, while an export or another device's
+  /// registration still holds it, when the last holder lets go. @param slotIndex Texture slot.
+  void releaseTextureBackingOrDefer(uint32_t slotIndex);
+
+  /// Refuses exporting a texture of a lost device or a registration.
+  /// @param texture Already-resolved texture. @param descriptor Its record, for the message.
+  Status checkTextureExportable(const Texture& texture, const TextureDescriptor& descriptor) const;
+
+  /// Refuses exporting a frame a surface has out unless its registrations share this device's
+  /// queue. @param texture Already-resolved texture. @param descriptor Its record, for the
+  /// message. @param created The backend's export of it, or why there is none.
+  Status checkSurfaceFrameExport(
+      const Texture& texture, const TextureDescriptor& descriptor,
+      const Result<std::shared_ptr<details::TextureShare>>& created) const;
+
+  /// Asks the backend to export a texture and records the share every token will hold.
+  /// @param slotIndex Exportable texture slot. @param descriptor Its record.
+  Result<std::shared_ptr<details::TextureShare>> createTextureShare(
+      uint32_t slotIndex, const TextureDescriptor& descriptor);
+
+  /// Refuses an export this device cannot name: another backend family or native device, or a
+  /// backend without cross-device naming. @param share Share the export holds.
+  Status checkRegistrationIdentity(const details::TextureShare& share) const;
+
+  /// Refuses registering an export of this device, of a lost or released texture, of another
+  /// backend or native device, or of a texture with a write still queued.
+  /// @param share Share the export holds.
+  Status checkRegistrationSource(const details::TextureShare& share) const;
+
+  /// Whether the producer work a registration follows has settled: true once it completed, false
+  /// once either device is lost or the producer failed (declaring that failure), and nothing
+  /// while it is still running. @param entry Registration to check.
+  std::optional<bool> textureSourceState(const TextureRegistration& entry) const;
+
+  /// The share of an exported texture of this device, or null. @param slotIndex Texture slot.
+  details::TextureShare* textureShareOf(uint32_t slotIndex) const;
+
+  /// The registration in a texture slot, or null. @param slotIndex Texture slot.
+  const TextureRegistration* textureRegistrationOf(uint32_t slotIndex) const;
+
+  /// Refuses one registration a submission names when its producer work has not completed or
+  /// either device is lost or failed. @param entry Registration. @param slotIndex Its slot.
+  Status checkTextureSourceReady(const TextureRegistration& entry, uint32_t slotIndex) const;
+
+  /// Refuses a submission naming a registration whose producer work has not completed, or whose
+  /// producer or this device is lost. @param uses Resources the submission references.
+  Status checkSubmissionTextureSources(std::span<const SubmissionUse> uses) const;
+
+  /// Records an accepted submission in the shares of the exported textures it referenced, and
+  /// marks queued writes to exported textures as carried by it.
+  /// @param uses Resources the submission referenced. @param submissionSerial Accepted serial.
+  void noteSubmittedTextureShares(std::span<const SubmissionUse> uses, uint64_t submissionSerial);
+
+  /// Records an accepted write to an exported texture that is waiting for the next submission.
+  /// @param slotIndex Written texture slot.
+  void noteTextureWriteForShares(uint32_t slotIndex);
+
+  /// The texture slot's handle was released: the producer stops holding its share.
+  /// @param slotIndex Retired texture slot.
+  void releaseTextureShare(uint32_t slotIndex);
+
+  /// The texture slot is being recycled: a registration in it stops holding the producer's share.
+  /// @param slotIndex Recycled texture slot.
+  void releaseTextureRegistration(uint32_t slotIndex);
+
   /// Returns the next process-unique device id.
   static uint64_t NextDeviceId();
 
@@ -1573,6 +1779,19 @@ private:
   details::SlotTable<RenderPipelineRecord> renderPipelines_;
   details::SlotTable<ComputePipelineRecord> computePipelines_;
   details::SlotTable<CommandBufferRecord> commandBuffers_;
+
+  /// Share of each exported texture of this device, by texture slot; null for a texture never
+  /// exported. Cleared when the producer releases the handle.
+  std::vector<std::shared_ptr<details::TextureShare>> textureShares_;
+  /// Registration held by each texture slot that names another device's texture. Cleared when
+  /// the slot is recycled, so the producer's allocation outlives this device's last use of it.
+  std::vector<std::optional<TextureRegistration>> textureRegistrations_;
+  /// Texture slots of exported textures with a write waiting for the next submission.
+  std::vector<uint32_t> pendingSharedTextureWrites_;
+  /// See \ref sharedTextureTailBytes. Shared with every share this device exports, so a holder
+  /// that outlives this device still settles its bytes.
+  std::shared_ptr<std::atomic<uint64_t>> sharedTextureTailBytes_ =
+      std::make_shared<std::atomic<uint64_t>>(0);
 };
 
 template <typename Record, typename HandleLike>

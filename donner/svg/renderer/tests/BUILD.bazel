@@ -775,6 +775,55 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+# Captures of a renderer whose target is the frame a surface has out, over a real Core Animation
+# layer. Objective-C++ for the layer, so macOS only.
+objc_library(
+    name = "renderer_geode_surface_target_tests_lib",
+    testonly = True,
+    srcs = ["RendererGeodeSurfaceTarget_tests.mm"],
+    sdk_frameworks = [
+        "Foundation",
+        "QuartzCore",
+    ],
+    target_compatible_with = ["@platforms//os:macos"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/css:core",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:stroke_params",
+        "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
+        "@com_google_gtest//:gtest",
+    ],
+    alwayslink = True,
+)
+
+donner_cc_test(
+    name = "renderer_geode_surface_target_tests_impl",
+    target_compatible_with = ["@platforms//os:macos"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":renderer_geode_surface_target_tests_lib",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "renderer_geode_surface_target_tests",
+    testonly = 1,
+    dep = ":renderer_geode_surface_target_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
+
 donner_cc_test(
     name = "renderer_driver_tests",
     srcs = [

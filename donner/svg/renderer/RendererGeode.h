@@ -20,6 +20,7 @@
 #include "donner/base/Utils.h"
 #include "donner/gpu/Descriptors.h"
 #include "donner/gpu/Handles.h"
+#include "donner/gpu/TextureExport.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
@@ -87,9 +88,11 @@ public:
   /// Runtime identity of the texture this snapshot names, or null when it names nothing.
   /// The returned handle borrows this snapshot's lifetime and must never be consumed.
   [[nodiscard]] const gpu::Texture* runtimeTexture() const UTILS_LIFETIME_BOUND;
-  /// Device that owns the texture this snapshot names, or null when the snapshot only borrows a
-  /// producer's frame target. A consumer on another device needs this to register the texture.
-  [[nodiscard]] const std::shared_ptr<geode::GeodeDevice>& owningDevice() const { return device_; }
+  /// The export another context registers this snapshot's texture through, taken on the
+  /// producer's thread when the snapshot was adopted, or null when the snapshot only borrows a
+  /// producer's frame target or its backend cannot share textures. Registering it never touches
+  /// the producing device, so a consumer on any thread may use it.
+  [[nodiscard]] const gpu::TextureExport* textureExport() const UTILS_LIFETIME_BOUND;
   /// Identity of the runtime device the named texture belongs to, or zero when this snapshot
   /// names nothing.
   [[nodiscard]] uint64_t deviceId() const;
@@ -136,12 +139,18 @@ private:
   struct Backing;
   struct ReadbackControl;
   static RendererBitmap readTexture(std::shared_ptr<geode::GeodeDevice> device,
-                                    const gpu::Texture& texture, Vector2i dimensions,
+                                    const gpu::TextureExport& exported, Vector2i dimensions,
                                     AlphaType alphaType, const std::function<bool()>& shouldCancel,
                                     std::shared_ptr<Backing> backing = {});
+  /// Waits, in slices the capture's cancellation and deadline can stop, until the producer work
+  /// \p source follows has completed. False when the capture ends first or a device is lost.
+  /// @param context Capture context. @param source Registration of the captured texture.
+  /// @param control The capture's cancellation, deadline and outcome.
+  static bool waitForCaptureSource(geode::GeodeDevice& context, const gpu::Texture& source,
+                                   ReadbackControl& control);
   static RendererBitmap readTextureWithContext(geode::GeodeDevice& context,
-                                               geode::GeodeDevice& owner,
-                                               const gpu::Texture& texture, Vector2i dimensions,
+                                               const gpu::TextureExport& exported,
+                                               Vector2i dimensions,
                                                const gpu::TextureDescriptor& descriptor,
                                                AlphaType alphaType, ReadbackControl& control);
   static RendererBitmap readTextureGpu(geode::GeodeDevice& context, const gpu::Texture& texture,
@@ -290,7 +299,10 @@ public:
    * - Be at least as large as the viewport (in device pixels).
    *
    * If the texture also has `CopySrc` usage, `takeSnapshot()` can read it back.
-   * If it lacks `CopySrc`, `takeSnapshot()` returns an empty bitmap.
+   * If it lacks `CopySrc`, `takeSnapshot()` returns an empty bitmap. A frame a surface has out is
+   * read back where the device's contexts share one queue (the transitional adapter), before the
+   * frame is presented; a native backend gives the readback its own queue, whose read could land
+   * after the present, so there `takeSnapshot()` returns an empty bitmap for such a frame.
    *
    * Only the identity is kept, so the caller retains ownership and the texture must remain live
    * from `beginFrame()` through `endFrame()`. A host that holds its target as a backend texture

@@ -558,6 +558,41 @@ donner_cc_test(
     ],
 )
 
+# Cross-device texture registration on Metal: two runtime devices over the system device, each on
+# its own command queue. Covers reading what the producer rendered, ordering behind a gated
+# producer queue, a registration outliving its producer, separate loss conditions, and a queued
+# host write. Metal API validation is enabled so validation issues abort loudly.
+donner_cc_test(
+    name = "metal_texture_registration_tests",
+    srcs = ["MetalTextureRegistration_tests.cc"],
+    env = {
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
+        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
+        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
+        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
+    },
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_device_gate",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/metal:metal_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "metal_device_loss_tests",
     srcs = ["MetalDeviceLoss_tests.cc"],

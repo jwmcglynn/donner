@@ -47,6 +47,7 @@ donner_cc_library(
         "CommandEncoder.cc",
         "Device.cc",
         "GpuError.cc",
+        "TextureExport.cc",
     ],
     hdrs = [
         "BufferMappingTable.h",
@@ -57,6 +58,7 @@ donner_cc_library(
         "DeviceObserver.h",
         "GpuError.h",
         "GpuResult.h",
+        "TextureExport.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
@@ -211,6 +213,20 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+# Test backend whose runtime devices can register each other's textures, shared by the runtime's
+# registration tests and by tests of code layered on registration in other packages.
+donner_cc_library(
+    name = "sharing_test_device",
+    testonly = 1,
+    hdrs = ["tests/SharingTestDevice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
         "@com_google_gtest//:gtest",
     ],
 )
@@ -418,11 +434,13 @@ donner_cc_test(
         "tests/RecordingDevice_tests.cc",
         "tests/ResourceLifetime_tests.cc",
         "tests/SubmissionSpan_tests.cc",
+        "tests/TextureRegistration_tests.cc",
     ],
     deps = [
         ":gpu",
         ":recording_device",
         ":gpu_test_utils",
+        ":sharing_test_device",
         # For the static_assert tying the runtime's compute caps to the shader IR's copy.
         "//donner/gpu/shader",
         "@com_google_gtest//:gtest_main",

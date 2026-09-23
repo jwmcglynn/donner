@@ -1343,6 +1343,51 @@ TEST_F(RendererGeodeTest, InterruptibleSnapshotCancelsPromptlyAfterGpuSubmit) {
       << "Cancellation should be observed before entering the GPU poll loop";
 }
 
+/// A capture cancelled after its readback reached the queue still names the source texture on its
+/// capture context until that readback completes. Once it has, the owner must find nothing else
+/// holding the texture when it releases it: no bytes stay resident on the owner's behalf, and on
+/// the transitional adapter the backing is destroyed explicitly, as for any released target.
+///
+/// The capture context submits to its own queue on a native backend, so the owner's queue going
+/// idle does not mean the capture's readback has. The test waits for the capture queue itself,
+/// then runs the owner's release point once.
+TEST_F(RendererGeodeTest, ACancelledCaptureStopsHoldingItsSourceOnceItsWorkCompletes) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(device, nullptr);
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  std::atomic<bool> cancel{false};
+  device->setSnapshotReadbackHookForTesting([&](geode::GeodeDevice::SnapshotReadbackPhase phase) {
+    if (phase == geode::GeodeDevice::SnapshotReadbackPhase::MapRequested) {
+      cancel.store(true, std::memory_order_relaxed);
+    }
+  });
+  EXPECT_TRUE(
+      renderer.takeSnapshotInterruptibly([&] { return cancel.load(std::memory_order_relaxed); })
+          .empty());
+  device->setSnapshotReadbackHookForTesting({});
+
+  const std::uint64_t destroysBefore =
+      geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting();
+  std::shared_ptr<const RendererTextureSnapshot> snapshot = renderer.takeTextureSnapshot();
+  ASSERT_NE(snapshot, nullptr);
+  snapshot.reset();
+  ASSERT_EQ(device->waitForQueueIdle(), geode::GpuWaitResult::Complete);
+  ASSERT_EQ(device->waitForSnapshotCaptureIdleForTesting(), geode::GpuWaitResult::Complete);
+  device->drainDeferredTextureBackings();
+
+  EXPECT_EQ(renderer.consumeReadbackStats().sharedTextureTailBytes, 0u)
+      << "no bytes may stay resident on the owner's behalf once every reader has finished";
+  if (device->hasTransitionalAdapter()) {
+    EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
+              destroysBefore + 1u)
+        << "the cancelled capture's registration must not keep the released target's backing "
+           "alive after its readback completed";
+  }
+}
+
 TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);

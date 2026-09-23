@@ -8,7 +8,7 @@ share lifetime and loss while preserving independent logical runtime state. Sele
 ownership, backend-neutral renderer services, presentation cutover, and dependency removal remain
 open.\
 **Created:** 2026-07-05\
-**Updated:** 2026-09-18\
+**Updated:** 2026-09-22\
 **Author:** Claude Fable 5.1\
 **Drafted by:** GPT-5.6 Sol
 
@@ -189,12 +189,156 @@ commits and their fixes together in a focused reviewable change.
       Detached and frame-borrowed lifetime, producer teardown and retirement contracts are covered
       by the renderer snapshot tests.
       [PR #1141](https://github.com/jwmcglynn/donner/pull/1141) is merged.
-- [ ] Remove transitional cross-context registrations from presentation and readback as device
-      ownership migrates. The current bridge requires matching physical device and queue identities;
-      capture uses an isolated readback context and retains source backing. This intermediate path
-      does not complete the native mapping or no-reimport cutover.
+- [x] Register a texture of one runtime device on another through the runtime contract instead of
+      a transitional adapter operation. The contract is below. Metal and the transitional adapter
+      implement it; Vulkan and the browser backend refuse it by name until their runtime devices
+      can share a native device. Snapshot capture, cross-context snapshot drawing and UI snapshot
+      registration all register the export a snapshot takes on its producer's thread at adoption,
+      so no consumer reads the producer's tables, and the adapter's cross-device import is gone.
+      Host-supplied render targets still enter through the adapter's external-texture import;
+      removing that re-import belongs to the raw target binding item below.
 - [ ] Replace raw target binding in `RendererGeode` and `EditorShellPresentation` with validated
       runtime textures or acquired surface textures, retaining embedder ownership where applicable.
+
+#### Cross-device texture registration
+
+Geode reads snapshots back on a capture context: a second runtime device over the same backend
+device, so a capture cannot disturb the producer's handle table, submission serials or per-frame
+limits. The editor also draws and registers textures one runtime device produced on another. A
+texture of one runtime device is not a texture of another until it is registered there, and the
+two devices may be driven from different threads and may submit to different native queues.
+
+The operation spans both threads, so it has a producer half and a consumer half:
+
+- `Device::exportTexture(texture)` runs on the producer's thread. It resolves the handle against
+  the producer's own table and returns a `TextureExport`: an immutable, copyable token carrying the
+  producer's descriptor, the identity of the backend device the memory belongs to, a reference to
+  the allocation, and a thread-safe view of the producer's completion. It never blocks, never
+  submits and allocates nothing a counter sees.
+- `Device::registerTexture(export)` runs on the consumer's thread and reads only the token. It
+  never touches the producer device, which is what keeps each device single-threaded.
+- `Device::waitForTextureSource(registration, timeoutSeconds)` is the consumer's bounded wait for
+  the producer work the registration is ordered after.
+
+Identity:
+
+- Export resolves the handle like every other operation: a null or stale handle fails with
+  `InvalidHandle` and another device's handle with `DeviceMismatch`. A texture that is itself a
+  registration cannot be exported.
+- A frame a surface has out goes back to the surface at present. It is exported only where readers
+  submit to the producer's own queue (the transitional adapter), so reads recorded before the
+  present run before it; that is what lets a renderer capture a surface target it drew. Where a
+  reader has its own queue (Metal), its read could land after the present, so the frame is refused.
+  The runtime releases a frame's export when the surface takes the frame back, so the slot's next
+  frame never exports as the previous one.
+- Registration is refused for another backend, another native device (Metal additionally requires
+  the texture's `MTLDevice` to be the consumer's own), the consumer's own export, and a texture
+  whose producer has released its handle since the export.
+- A registration occupies a fresh slot and generation of the consumer; stale registrations fail
+  closed like any stale handle.
+
+Lifetime:
+
+- The token and every registration hold a reference to the native allocation, so a registration
+  cannot outlive its backing, and the last reference can be released on any thread after either
+  device is gone.
+- A registration never owns backing: `ownsTextureBacking` is false and releasing its backing
+  frees nothing. Its reference is dropped when the consumer recycles the slot, after the
+  consumer's last submission naming it has completed.
+- On the producer, `destroyTextureBacking` releases the allocation at once only while no token or
+  registration is outstanding. Otherwise the release is recorded and runs when the last holder
+  lets go, because a consumer's in-flight read must never see freed memory.
+- A capture that ends before its readback completes (cancelled, past its deadline, or failed)
+  still holds its source until that readback is recycled. The capture context is polled when each
+  capture ends and whenever its owner releases textures, so the owner's release finds no stale
+  holder once the GPU is done.
+- That tail is still resident but no longer anyone's allocation, so the producer reports it:
+  `Device::sharedTextureTailBytes` counts the bytes of its released textures that a token or
+  registration still holds, and Geode surfaces it as `sharedTextureTailBytes` in the readback
+  statistics, which working-set measurements add to allocation accounting.
+- Registrations are read-only: their usage is the producer's intersected with sampled and copy
+  source.
+
+Ordering:
+
+- Consumer work that names a registration runs after the producer work that registration covers:
+  every producer submission accepted before the registration that referenced the texture, and the
+  producer's queue writes those submissions carried. The runtime keeps that serial current after
+  export, so a texture adopted before it is written is still covered. A registration is refused
+  while a producer write to the texture is queued and not yet carried by a submission; the
+  runtime does not submit on the producer's behalf.
+- Where the producer and consumer feed one native queue (the transitional adapter), submission
+  order is sufficient and nothing waits.
+- Where they do not (Metal gives each runtime device its own command queue, and submission order
+  on one queue says nothing about another), `submit` refuses a submission that names a
+  registration whose producer work has not completed, and `waitForTextureSource` is the bounded
+  wait that satisfies it. The property relied on is that a completed command buffer's writes are
+  visible to command buffers committed afterwards on another queue of the same device; the Metal
+  ordering test below checks it on hardware. With the refusal bypassed, the same test reads the
+  texture on the consumer's queue while the producer's queue is still held, and gets transparent
+  texels: Metal does not order the two queues on its own. A device-side wait on a shared event can
+  replace the host wait later without changing this contract.
+- Known cost of the host wait: a consumer that registers a texture the producer is still
+  rendering waits for that frame on its own thread. Snapshot capture does no extra GPU work, but on
+  a backend with a queue per context it can no longer queue its readback behind the producer's
+  frame: it waits on the host first, a small added latency. Cross-context snapshot drawing and UI
+  texture registration in the editor run on the UI thread, where the wait can stall a frame by up
+  to one producer frame; the editor presentation migration owns that cost and the device-side
+  upgrade that removes it.
+- Producer work accepted after the registration is not ordered before the consumer. A producer
+  must not write an exported texture while a registration of it may still be read, and must finish
+  writing a texture before handing it to another thread. Detached snapshots are never rewritten,
+  and a live-target capture runs on the renderer's own thread.
+
+Loss:
+
+- Export and registration fail with `DeviceLost` when the producer's or the consumer's loss
+  condition is set, and the source wait returns false at once.
+- A producer execution failure observed by the source wait declares the producer's condition lost
+  without a wait site, because the backend reported it and no deadline expired. A wait that spends
+  its budget declares nothing; the caller's deadline is policy, as with `waitForSerial`.
+- The registration path never declares loss into the consumer's condition on the producer's
+  behalf, so each condition keeps the attribution of the wait that first declared it. Contexts
+  over one selected root share one condition.
+- Geode's two consumers, cross-context snapshot drawing and UI texture registration, register
+  through one helper whose wait, up to the default GPU wait bound, is the consumer's own. It
+  follows the policy of every bounded wait over a Geode root: only a wait that spent its whole
+  bound declares the consumer's condition lost, with the queue-idle wait site and the measured
+  wait, so a producer queue that stopped answering fails later frames at once instead of stalling
+  each one. A wait that ends sooner, because a device is lost or the producer failed, declares
+  nothing and fails with `DeviceLost`, and a producer already lost is refused at registration.
+
+Backends:
+
+| Backend              | Registration                            | Reason                                                                                                                                                                                            |
+| -------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transitional adapter | Implemented; one shared queue orders it | Re-expresses the adapter's existing sibling registration; stale and foreign refusals keep their error types.                                                                                      |
+| Metal                | Implemented; host-side source wait      | Separate command queues per runtime device over one `MTLDevice`.                                                                                                                                  |
+| Vulkan               | Refused with `Unsupported`              | Each runtime device opens its own `VkDevice`; sharing needs several runtime devices over one `VkDevice`, with a shared image-layout record and either one serialized queue or semaphore ordering. |
+| Browser              | Refused with `Unsupported`              | One runtime device per browser GPU device, and WebGPU cannot share a texture across GPU devices. The browser keeps its single-context alias.                                                      |
+
+Accounting: exporting, registering and waiting perform no allocation, bind group or submission on
+either device, so a native snapshot readback does exactly the work the adapter does, on the same
+device: one registration, the pooled staging resources, one bind group and one submission, all on
+the capture context.
+
+Verification: `//donner/gpu:gpu_tests` (`TextureRegistration_tests.cc`) covers identity,
+generation, read-only registration, lifetime across producer release and teardown, the tail
+gauge, the submit refusal, content tracking after export, queued writes, loss attribution and
+registration from a second thread, over a test backend whose completion the test drives.
+`//donner/gpu/metal/tests:metal_texture_registration_tests` runs under Metal API and shader
+validation and checks ordering on hardware by holding the producer's queue at a gate: the
+consumer is refused and its wait times out without declaring loss, then the consumer reads the
+producer's pixels once the gate opens. The adapter's own registration tests, the renderer
+snapshot suites and `geode_perf_tests` pass on the transitional adapter, including a capture
+cancelled after its readback was queued, which must release its source once the readback
+completes. On native Metal, the Metal registration suite passes and snapshot readback returns the
+rendered pixels. `renderer_geode_tests` runs natively without the cases whose fixtures still
+reach the transitional adapter directly, since reaching it aborts, and the rest pass except one
+that asserts a wgpu-only destroy counter. `geode_snapshot_readback_tests` does not run natively:
+its fixture uploads the test texture through the transitional adapter, and the first case that
+reaches it aborts the suite. `geode_perf_tests` passes on native Metal except one case that counts
+wgpu handle releases.
 
 ### Resource plumbing and uploads
 

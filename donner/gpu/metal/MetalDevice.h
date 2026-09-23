@@ -272,6 +272,32 @@ public:
   std::string adapterName() const;
 
 protected:
+  /// Identifies the `MTLDevice` this device records against, so a sibling device over the same
+  /// `MTLDevice` can register its textures.
+  BackendDeviceIdentity backendDeviceIdentity() const override;
+
+  /**
+   * Exports the texture in \p slotIndex. Every device over the system device submits to its own
+   * command queue, so registrations are ordered by waiting for this device's work to complete;
+   * the export carries the completion counter and error flag the command-buffer handlers set.
+   *
+   * @param slotIndex Validated live texture slot.
+   */
+  Result<BackendTextureExport> onExportTexture(uint32_t slotIndex) override;
+
+  /**
+   * Names another device's exported texture in \p slotIndex, refusing one created by a different
+   * `MTLDevice` object, which Metal would not accept in this device's command buffers.
+   *
+   * @param slotIndex Slot the registration occupies.
+   * @param backing The producer's export.
+   */
+  Status onRegisterTexture(uint32_t slotIndex, const ExportedTextureBacking& backing) override;
+
+  /// Whether the write just accepted for \p slotIndex was queued for the next submission because
+  /// earlier work still used the texture. @param slotIndex Validated live texture slot.
+  bool onTextureWritePending(uint32_t slotIndex) const override;
+
   Status onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) override;
   Status onCreateTexture(uint32_t slotIndex, const TextureDescriptor& descriptor) override;
   Status onCreateTextureView(uint32_t slotIndex, uint32_t textureSlotIndex,

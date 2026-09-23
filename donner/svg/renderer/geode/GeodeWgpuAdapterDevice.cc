@@ -1336,24 +1336,73 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Te
                                  gpu::TextureDescriptor{"externalTexture", size, format, usage});
 }
 
-gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importTextureFrom(
-    const GeodeWgpuAdapterDevice& owner, const gpu::Texture& texture) {
-  if (static_cast<WGPUDevice>(owner.root_->device()) != static_cast<WGPUDevice>(root_->device()) ||
-      static_cast<WGPUQueue>(owner.root_->queue()) != static_cast<WGPUQueue>(root_->queue())) {
-    return GpuError{GpuErrorType::DeviceMismatch,
-                    "importTextureFrom: the owning device drives a different backend device"};
+namespace {
+
+/// Address that identifies this adapter in a \ref gpu::BackendDeviceIdentity. Its value differs
+/// from every other backend's tag so no constant merging can give two backends one address.
+constexpr char kWgpuTextureShareFamily = 'W';
+
+/// A wgpu texture exported to a sibling adapter over the same root. It holds a reference of its
+/// own on the texture, and on the root so the wgpu device outlives that reference, because the
+/// last registration may be released after the exporting adapter is gone.
+class WgpuExportedTexture final : public gpu::ExportedTextureBacking {
+public:
+  WgpuExportedTexture(wgpu::Texture texture, std::shared_ptr<GeodeGpuRoot> root)
+      : root_(std::move(root)), texture_(AddedReference(std::move(texture))) {}
+
+  /// Destroys the texture's backing, for an owner that released its backing while a sibling still
+  /// read it; the sibling has let go by the time this runs.
+  void releaseBackingNow() const override { texture_.destroyBackingAndReset(); }
+
+  /// The exported texture; borrowed, this object holds the reference.
+  const wgpu::Texture& texture() const UTILS_LIFETIME_BOUND { return texture_.get(); }
+  /// The root the exporting adapter records against.
+  const GeodeGpuRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
+
+private:
+  /// \p texture with a reference of its own taken. @param texture Texture to reference.
+  static wgpu::Texture AddedReference(wgpu::Texture texture) {
+    texture.addRef();
+    return texture;
   }
 
-  gpu::Result<gpu::TextureDescriptor> descriptor = owner.textureDescriptor(texture);
-  if (descriptor.hasError()) {
-    return std::move(descriptor).error();
-  }
-  const wgpu::Texture backend = owner.liveBackendTexture(texture);
-  if (!backend) {
+  std::shared_ptr<GeodeGpuRoot> root_;
+  /// Mutable because the release above runs through the const handle every holder shares, once,
+  /// after every other holder is gone.
+  mutable ScopedWgpuHandle<wgpu::Texture> texture_;
+};
+
+}  // namespace
+
+gpu::BackendDeviceIdentity GeodeWgpuAdapterDevice::backendDeviceIdentity() const {
+  return {&kWgpuTextureShareFamily, static_cast<WGPUDevice>(root_->device())};
+}
+
+gpu::Result<gpu::BackendTextureExport> GeodeWgpuAdapterDevice::onExportTexture(uint32_t slotIndex) {
+  const wgpu::Texture texture =
+      slotIndex < slotTextures_.size() ? slotTextures_[slotIndex].texture : wgpu::Texture();
+  if (!texture) {
     return GpuError{GpuErrorType::InvalidHandle,
-                    "importTextureFrom: the owning device has no backend texture for this handle"};
+                    "exportTexture: the adapter has no backend texture for this handle"};
   }
-  return registerBorrowedTexture(backend, descriptor.result());
+  gpu::BackendTextureExport exported;
+  exported.backing = std::make_shared<const WgpuExportedTexture>(texture, root_);
+  exported.ordering = gpu::SourceOrdering::SharedQueue;
+  return exported;
+}
+
+gpu::Status GeodeWgpuAdapterDevice::onRegisterTexture(uint32_t slotIndex,
+                                                      const gpu::ExportedTextureBacking& backing) {
+  const auto& exported = static_cast<const WgpuExportedTexture&>(backing);
+  if (static_cast<WGPUQueue>(exported.root().queue()) != static_cast<WGPUQueue>(root_->queue())) {
+    return GpuError{GpuErrorType::DeviceMismatch,
+                    "registerTexture: the owning adapter submits to a different queue"};
+  }
+  // A registration names the texture without allocating it, so nothing is counted, and the empty
+  // owned handle is what makes onOwnsTextureBacking report it as borrowed.
+  SetSlot(slotTextures_, slotIndex,
+          TextureSlot{ScopedWgpuHandle<wgpu::Texture>(), exported.texture()});
+  return OkStatus();
 }
 
 wgpu::Texture GeodeWgpuAdapterDevice::liveBackendTexture(const gpu::Texture& texture) const {

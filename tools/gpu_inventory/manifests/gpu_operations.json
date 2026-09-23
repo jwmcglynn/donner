@@ -453,6 +453,7 @@
         "createSampler",
         "createTexture",
         "destroy",
+        "poll",
         "writeBuffer",
         "writeTexture"
       ],
