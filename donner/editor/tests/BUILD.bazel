@@ -868,6 +868,7 @@ donner_cc_test(
     name = "select_tool_tests",
     srcs = ["SelectTool_tests.cc"],
     deps = [
+        "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/editor:editor_app",
         "//donner/editor:select_tool",

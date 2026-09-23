@@ -2,11 +2,16 @@
 
 #include <gmock/gmock.h>
 
+#include <atomic>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectionAabb.h"
@@ -1942,6 +1947,59 @@ TEST_F(SelectToolTest, RotateAfterScaleUsesDocumentCenter) {
   EXPECT_NEAR(localCenter.y, 40.0, 1e-6);
   EXPECT_NEAR(localTopRight.x, 60.0, 1e-6);
   EXPECT_NEAR(localTopRight.y, 60.0, 1e-6);
+}
+
+/// Component storage of its own type per \p Index, so a writer adding many of them makes the
+/// registry grow its table of storage pools.
+template <int Index>
+struct WriterStorage {
+  int value = Index;
+};
+
+/// Adds one \ref WriterStorage per index to \p entity.
+template <int... Indices>
+void AddWriterStorage(Registry& registry, Entity entity,
+                      std::integer_sequence<int, Indices...> /*indices*/) {
+  (registry.emplace<WriterStorage<Indices>>(entity), ...);
+}
+
+/// The editor reads the active drag preview on its UI thread every frame without document access.
+/// Meanwhile the render worker holds write access and, when it promotes the dragged element to a
+/// layer of its own, adds component storage to the document's registry.
+TEST_F(SelectToolTest, DragPreviewNeedsNoDocumentAccessWhileAWriterAddsStorage) {
+  const svg::SVGElement r1 = elementById("#r1");
+  const Entity expectedEntity = r1.entityHandle().entity();
+  app.setSelection(r1);
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(50.0, 35.0), /*buttonHeld=*/true);
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+
+  svg::SVGDocument document = app.document().document();
+  document.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  std::atomic<bool> readerStarted = false;
+  std::atomic<bool> writerDone = false;
+  std::thread writer([document, &readerStarted, &writerDone]() mutable {
+    while (!readerStarted.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+    document.withWriteAccess([](svg::DocumentWriteAccess& access) {
+      Registry& registry = access.registry();
+      AddWriterStorage(registry, registry.create(), std::make_integer_sequence<int, 64>{});
+    });
+    writerDone.store(true, std::memory_order_release);
+  });
+
+  int mismatches = 0;
+  readerStarted.store(true, std::memory_order_release);
+  do {
+    const std::optional<SelectTool::ActiveDragPreview> preview = tool.activeDragPreview();
+    if (!preview.has_value() || preview->entity != expectedEntity) {
+      ++mismatches;
+    }
+  } while (!writerDone.load(std::memory_order_acquire));
+  writer.join();
+
+  EXPECT_EQ(mismatches, 0);
 }
 
 }  // namespace
