@@ -102,3 +102,197 @@ test("a second logical device joins the worker's browser device instead of being
     "each logical device asked the browser for a GPU device of its own",
   );
 });
+
+/** The protocol's encoding of rgba8unorm, and of a sampled, copyable texture. */
+const kRgba8Unorm = 1;
+const kTextureSampledCopySrc = 2 | 4;
+
+/** Creates a 4x4 texture on `handle` under `id`. */
+function createTexture(bridge, handle, id) {
+  return bridge.entryPoints.donner_gpu_create_texture(
+    handle,
+    id,
+    4,
+    4,
+    kRgba8Unorm,
+    kTextureSampledCopySrc,
+  );
+}
+
+/** Shares texture `id` of `handle` and returns the share identifier, failing on a refusal. */
+function share(bridge, handle, id) {
+  const out = bridge.outParameter();
+  assert.equal(
+    bridge.entryPoints.donner_gpu_share_texture(handle, id, out),
+    bridge.state.kSuccess,
+    `texture ${id} of logical device ${handle} could not be shared`,
+  );
+  return bridge.read(out);
+}
+
+/** Two ready logical devices over one browser device. */
+async function twoDevices() {
+  const bridge = loadLibrary();
+  await beginReady(bridge, kFirst);
+  await beginReady(bridge, kSecond);
+  return bridge;
+}
+
+test("each logical device numbers its identifiers on its own", async () => {
+  const bridge = await twoDevices();
+  const { entryPoints, state } = bridge;
+  assert.equal(entryPoints.donner_gpu_create_buffer(kFirst, 1, 64, kBufferCopyDst), state.kSuccess);
+  assert.equal(
+    entryPoints.donner_gpu_create_buffer(kSecond, 1, 64, kBufferCopyDst),
+    state.kSuccess,
+  );
+  assert.notEqual(bridge.objects(kFirst).get(1).object, bridge.objects(kSecond).get(1).object);
+
+  assert.equal(
+    entryPoints.donner_gpu_destroy_object(kSecond, state.kBuffer, 1),
+    state.kSuccess,
+  );
+  assert.equal(bridge.objects(kFirst).get(1).object.destroyed, false);
+  assert.equal(bridge.objects(kSecond).has(1), false);
+});
+
+test("each logical device reports the completion of its own submissions", async () => {
+  const bridge = await twoDevices();
+  const { entryPoints, state } = bridge;
+  assert.equal(entryPoints.donner_gpu_begin_command_buffer(kFirst, 1, 0), state.kSuccess);
+  assert.equal(entryPoints.donner_gpu_end_command_buffer(kFirst, 1), state.kSuccess);
+  assert.equal(entryPoints.donner_gpu_submit_command_buffers(kFirst, 1), state.kSuccess);
+  await until(
+    () => entryPoints.donner_gpu_completed_serial(kFirst) === 1,
+    "the first logical device's submission reported done",
+  );
+
+  assert.equal(entryPoints.donner_gpu_completed_serial(kSecond), 0);
+  // A recording is its logical device's own: the second one has nothing open to finish.
+  assert.equal(entryPoints.donner_gpu_end_command_buffer(kSecond, 1), state.kFailed);
+});
+
+test("a shared texture registers on another logical device as an alias of the same texture", async () => {
+  const bridge = await twoDevices();
+  const { entryPoints, state } = bridge;
+  assert.equal(createTexture(bridge, kFirst, 5), state.kSuccess);
+  const texture = bridge.objects(kFirst).get(5).object;
+
+  const held = share(bridge, kFirst, 5);
+  assert.equal(entryPoints.donner_gpu_register_shared_texture(kSecond, 9, held), state.kSuccess);
+  assert.equal(entryPoints.donner_gpu_create_texture_view(kSecond, 10, 9), state.kSuccess);
+  assert.equal(bridge.objects(kSecond).get(10).object.texture, texture);
+  assert.equal(texture.views, 1);
+});
+
+test("a shared texture outlives its producer's release until the share is released", async () => {
+  const bridge = await twoDevices();
+  const { entryPoints, state } = bridge;
+  assert.equal(createTexture(bridge, kFirst, 5), state.kSuccess);
+  const texture = bridge.objects(kFirst).get(5).object;
+  const held = share(bridge, kFirst, 5);
+  assert.equal(entryPoints.donner_gpu_register_shared_texture(kSecond, 9, held), state.kSuccess);
+
+  assert.equal(entryPoints.donner_gpu_destroy_object(kFirst, state.kTexture, 5), state.kSuccess);
+  assert.equal(texture.destroyed, false, "the producer's release destroyed a shared texture");
+  assert.equal(entryPoints.donner_gpu_destroy_object(kSecond, state.kTexture, 9), state.kSuccess);
+  assert.equal(texture.destroyed, false, "releasing an alias destroyed the texture it names");
+
+  entryPoints.donner_gpu_release_texture_share(held);
+  assert.equal(texture.destroyed, true, "the texture outlived its last holder");
+});
+
+test("a share released first leaves the texture to its producer", async () => {
+  const bridge = await twoDevices();
+  const { entryPoints, state } = bridge;
+  assert.equal(createTexture(bridge, kFirst, 5), state.kSuccess);
+  const texture = bridge.objects(kFirst).get(5).object;
+  entryPoints.donner_gpu_release_texture_share(share(bridge, kFirst, 5));
+  assert.equal(texture.destroyed, false);
+
+  assert.equal(entryPoints.donner_gpu_destroy_object(kFirst, state.kTexture, 5), state.kSuccess);
+  assert.equal(texture.destroyed, true);
+});
+
+test("a texture is shared once, from the logical device that allocated it", async () => {
+  const bridge = await twoDevices();
+  const { entryPoints, state } = bridge;
+  assert.equal(createTexture(bridge, kFirst, 5), state.kSuccess);
+  const held = share(bridge, kFirst, 5);
+  const out = bridge.outParameter();
+  assert.equal(entryPoints.donner_gpu_share_texture(kFirst, 5, out), state.kFailed);
+
+  assert.equal(entryPoints.donner_gpu_register_shared_texture(kSecond, 9, held), state.kSuccess);
+  assert.equal(entryPoints.donner_gpu_share_texture(kSecond, 9, out), state.kFailed);
+  assert.equal(
+    entryPoints.donner_gpu_register_shared_texture(kSecond, 10, held + 1000),
+    state.kUnknownObject,
+  );
+});
+
+test("a share of a canvas frame never destroys the canvas's texture", async () => {
+  const bridge = await twoDevices();
+  const { entryPoints, state } = bridge;
+  bridge.addCanvas("#canvas");
+  const name = bridge.string("#canvas");
+  assert.equal(
+    entryPoints.donner_gpu_create_surface(kFirst, 1, name.pointer, name.length),
+    state.kSuccess,
+  );
+  assert.equal(
+    entryPoints.donner_gpu_configure_surface(kFirst, 1, 2, 1, 8, 8, state.kAlphaModeOpaque),
+    state.kSuccess,
+  );
+  const status = bridge.outParameter();
+  assert.equal(
+    entryPoints.donner_gpu_acquire_current_texture(kFirst, 1, 2, status),
+    state.kSuccess,
+  );
+  const frame = bridge.objects(kFirst).get(2).object;
+  const held = share(bridge, kFirst, 2);
+
+  assert.equal(entryPoints.donner_gpu_abandon_current_texture(kFirst, 1), state.kSuccess);
+  entryPoints.donner_gpu_release_texture_share(held);
+  assert.equal(frame.destroyed, false, "releasing the share destroyed the canvas's own texture");
+});
+
+test("the browser device goes with the last logical device over it", async () => {
+  const bridge = await twoDevices();
+  const { entryPoints } = bridge;
+  entryPoints.donner_gpu_release_device(kFirst);
+  assert.equal(entryPoints.donner_gpu_owns_device(kSecond), 1);
+  entryPoints.donner_gpu_release_device(kSecond);
+
+  const kThird = 3;
+  await beginReady(bridge, kThird);
+  assert.equal(bridge.adapterRequests, 2, "a later request inherited the released device");
+});
+
+test("losing the browser device loses every logical device over it", async () => {
+  const bridge = await twoDevices();
+  const { entryPoints, state } = bridge;
+  bridge.lose({ reason: "destroyed", message: "the tab was discarded" });
+  await until(
+    () => entryPoints.donner_gpu_is_device_lost(kFirst) === 1,
+    "the device reported lost",
+  );
+  assert.equal(entryPoints.donner_gpu_is_device_lost(kSecond), 1);
+  assert.equal(
+    entryPoints.donner_gpu_create_buffer(kSecond, 1, 64, kBufferCopyDst),
+    state.kDeviceLost,
+  );
+});
+
+test("a handle this worker never opened owns nothing here", async () => {
+  const bridge = loadLibrary();
+  const { entryPoints, state } = bridge;
+  await beginReady(bridge, kFirst);
+  const kElsewhere = 99;
+  assert.equal(entryPoints.donner_gpu_owns_device(kElsewhere), 0);
+  assert.equal(entryPoints.donner_gpu_device_identity(kElsewhere), 0);
+  assert.equal(
+    entryPoints.donner_gpu_create_buffer(kElsewhere, 1, 64, kBufferCopyDst),
+    state.kNotOwner,
+  );
+  assert.equal(entryPoints.donner_gpu_device_identity(kFirst), kFirst);
+});

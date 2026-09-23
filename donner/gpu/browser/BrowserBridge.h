@@ -20,12 +20,14 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string_view>
 #include <vector>
 
 #include "donner/base/RcString.h"
 #include "donner/gpu/Descriptors.h"
+#include "donner/gpu/TextureExport.h"
 #include "donner/gpu/browser/BrowserObjectTable.h"
 
 namespace donner::gpu::browser {
@@ -181,16 +183,46 @@ struct BrowserSurfaceCapabilities {
   std::vector<uint32_t> alphaModeCodes;    //!< Encoded \ref SurfaceAlphaMode values.
 };
 
+/// Identifier of a texture one logical device holds for the others over the same browser device.
+/// The browser side draws these from a space it never reuses.
+using BrowserTextureShareId = uint32_t;
+
+/**
+ * A texture one logical device has shared with the others over the same browser device.
+ *
+ * This is the backend half of an exported texture (\ref ExportedTextureBacking). The runtime keeps
+ * it for as long as an export token or a registration made from the export is alive, and the
+ * browser texture lives at least that long: the producer releasing its own identifier does not
+ * destroy a texture a share still holds, and the implementation lets the browser side go of it when
+ * this object is destroyed. Browser objects belong to the worker that obtained the device, so that
+ * release happens only on the thread that made the share; one dropped elsewhere leaves the texture
+ * to the browser device's own teardown.
+ */
+class BrowserSharedTexture : public ExportedTextureBacking {
+public:
+  /// The share, as the browser side names it.
+  [[nodiscard]] virtual BrowserTextureShareId shareId() const = 0;
+
+  /// Identity of the browser device the texture belongs to, as
+  /// \ref BrowserBridge::sharedDeviceIdentity reports it for every bridge over that device.
+  [[nodiscard]] virtual const void* sharedDeviceIdentity() const = 0;
+};
+
 /**
  * The browser's GPU service, as the runtime uses it.
  *
- * One instance stands for one browser device. Implementations perform no validation of their own
- * beyond the identifier, kind and ownership checks each call documents: everything else arrives
- * already validated by \ref donner::gpu::Device.
+ * One instance stands for one logical device: the state one runtime device keeps on the browser
+ * side, which is its identifiers, its host mappings, its recording and the serial of its last
+ * finished submission. Several logical devices in one worker share that worker's one browser
+ * device and its queue, the way a renderer and the snapshot capture context beside it do, and
+ * none of them may refuse, overwrite or release another's state. Implementations perform no
+ * validation of their own beyond the identifier, kind and ownership checks each call documents:
+ * everything else arrives already validated by \ref donner::gpu::Device.
  */
 class BrowserBridge {
 public:
-  /// Destructor; releases the browser device and every object still registered with it.
+  /// Destructor; releases this logical device's state on the browser side. The browser device
+  /// itself goes once no logical device over it is left.
   virtual ~BrowserBridge();
 
   BrowserBridge(const BrowserBridge&) = delete;
@@ -201,7 +233,9 @@ public:
   // Device acquisition. A browser supplies a device asynchronously, so the request is begun and
   // then polled; nothing else on this interface may be called before the request is Ready.
 
-  /// Asks the browser for a GPU device. Begins the request; it settles asynchronously.
+  /// Asks for this logical device's browser GPU device. The first logical device in a worker to
+  /// ask begins the browser's request, which settles asynchronously; every later one joins the
+  /// device that request obtains.
   virtual BridgeStatus beginDeviceRequest() = 0;
 
   /// How far the request begun by \ref beginDeviceRequest has progressed.
@@ -222,8 +256,40 @@ public:
   /// What the browser said when it reported the device lost. Empty while the device is alive.
   virtual RcString deviceLostReason() const = 0;
 
-  /// Serial of the most recent submission the browser has reported finished (0 if none).
+  /// Serial of this logical device's most recent submission the browser has reported finished
+  /// (0 if none). Each logical device numbers its submissions on its own.
   virtual uint64_t completedSerial() const = 0;
+
+  // Sharing between the logical devices over one browser device. They submit to its one queue, in
+  // order, from the thread that owns it, so a registration is ordered after the producer's work by
+  // submission order alone.
+
+  /**
+   * Identity of the browser device this logical device runs on: the same for every bridge over
+   * that device and different for every other, including a device obtained after this one was
+   * released. Null until the request is Ready.
+   */
+  virtual const void* sharedDeviceIdentity() const = 0;
+
+  /**
+   * Holds the texture \p textureId for the other logical devices over the same browser device.
+   *
+   * @param textureId Texture of this logical device; refused if it is a registration or is
+   *   already shared.
+   * @param shared Receives the share on success.
+   */
+  virtual BridgeStatus shareTexture(BrowserObjectId textureId,
+                                    std::shared_ptr<const BrowserSharedTexture>& shared) = 0;
+
+  /**
+   * Registers the texture \p shared names under \p id, as a read-only alias in this logical device.
+   * Destroying the alias releases nothing but the identifier.
+   *
+   * @param id Identifier to register the alias under.
+   * @param shared Share another logical device over the same browser device made.
+   */
+  virtual BridgeStatus registerSharedTexture(BrowserObjectId id,
+                                             const BrowserSharedTexture& shared) = 0;
 
   // Resource creation. The caller mints the identifier; the browser side registers the object it
   // creates under that identifier and refuses one that is already in use.
@@ -280,7 +346,8 @@ public:
   virtual BridgeStatus createComputePipeline(BrowserObjectId id,
                                              const BrowserComputePipelineRequest& request) = 0;
 
-  /// Releases a browser object and unregisters its identifier, which is never reissued.
+  /// Releases a browser object and unregisters its identifier, which is never reissued. A texture
+  /// a share still holds is not destroyed until the share is released.
   /// @param kind Kind the identifier must name. @param id Identifier to release.
   virtual BridgeStatus destroyObject(BrowserObjectKind kind, BrowserObjectId id) = 0;
 

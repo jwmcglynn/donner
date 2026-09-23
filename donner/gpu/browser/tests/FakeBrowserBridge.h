@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -49,9 +50,76 @@ public:
     return it != textures_.end() && !it->second;
   }
 
+  /// Holds \p texture for the other logical devices and returns the share naming the hold.
+  /// @param texture Texture to hold.
+  BrowserTextureShareId holdTexture(uint64_t texture) {
+    const BrowserTextureShareId share = nextShare_++;
+    shares_[share] = Share{texture, false};
+    return share;
+  }
+
+  /// The texture \p share holds, or nullopt once the share is released.
+  /// @param share Share to look up.
+  [[nodiscard]] std::optional<uint64_t> sharedTexture(BrowserTextureShareId share) const {
+    const auto it = shares_.find(share);
+    if (it == shares_.end()) {
+      return std::nullopt;
+    }
+    return it->second.texture;
+  }
+
+  /// Records that the producer released its identifier for the texture \p share holds, which is
+  /// then destroyed when the share is released rather than now.
+  /// @param share Share whose producer let go.
+  void releaseProducer(BrowserTextureShareId share) { shares_[share].producerReleased = true; }
+
+  /// Releases \p share, destroying its texture if the producer has already let go of it.
+  /// @param share Share to release.
+  void releaseShare(BrowserTextureShareId share) {
+    const auto it = shares_.find(share);
+    if (it == shares_.end()) {
+      return;
+    }
+    if (it->second.producerReleased) {
+      destroyTexture(it->second.texture);
+    }
+    shares_.erase(it);
+    ++releasedShares;
+  }
+
+  /// How many shares have been released.
+  uint64_t releasedShares = 0;
+
 private:
+  /// A texture held for the other logical devices.
+  struct Share {
+    uint64_t texture = 0;           //!< Texture held.
+    bool producerReleased = false;  //!< Whether the producer has let go of its identifier.
+  };
+
   uint64_t nextTexture_ = 1;
   std::map<uint64_t, bool> textures_;  //!< Texture number to whether it was destroyed.
+  BrowserTextureShareId nextShare_ = 1;
+  std::map<BrowserTextureShareId, Share> shares_;
+};
+
+/// A share the fake browser device made, released on that device when the runtime drops it.
+class FakeSharedTexture final : public BrowserSharedTexture {
+public:
+  /// Constructs the share \p share of \p gpuDevice. @param gpuDevice Device the share belongs to.
+  /// @param share Share identifier.
+  FakeSharedTexture(std::shared_ptr<FakeBrowserGpuDevice> gpuDevice, BrowserTextureShareId share)
+      : gpuDevice_(std::move(gpuDevice)), share_(share) {}
+
+  /// Destructor; releases the share on its device.
+  ~FakeSharedTexture() override { gpuDevice_->releaseShare(share_); }
+
+  BrowserTextureShareId shareId() const override { return share_; }
+  const void* sharedDeviceIdentity() const override { return gpuDevice_.get(); }
+
+private:
+  std::shared_ptr<FakeBrowserGpuDevice> gpuDevice_;
+  BrowserTextureShareId share_;
 };
 
 /**
@@ -192,6 +260,50 @@ public:
 
   uint64_t completedSerial() const override { return completed; }
 
+  const void* sharedDeviceIdentity() const override {
+    return requestState == BrowserDeviceRequestState::Ready ? gpuDevice.get() : nullptr;
+  }
+
+  BridgeStatus shareTexture(BrowserObjectId textureId,
+                            std::shared_ptr<const BrowserSharedTexture>& shared) override {
+    const std::string line = std::format("shareTexture texture={}", textureId);
+    if (const BridgeStatus status = guard(line); status != BridgeStatus::Success) {
+      return status;
+    }
+    if (const BridgeStatus status = require(BrowserObjectKind::Texture, textureId);
+        status != BridgeStatus::Success) {
+      return status;
+    }
+    const auto native = nativeTextures_.find(textureId);
+    // A registration is shared from the device that allocated it, and a texture is shared once, as
+    // on the browser side.
+    if (native == nativeTextures_.end() || aliases_.contains(textureId) ||
+        sharedAs_.contains(textureId)) {
+      return BridgeStatus::Failed;
+    }
+    const BrowserTextureShareId share = gpuDevice->holdTexture(native->second);
+    sharedAs_[textureId] = share;
+    calls->push_back(std::format("{} share={}", line, share));
+    shared = std::make_shared<const FakeSharedTexture>(gpuDevice, share);
+    return BridgeStatus::Success;
+  }
+
+  BridgeStatus registerSharedTexture(BrowserObjectId id,
+                                     const BrowserSharedTexture& shared) override {
+    const std::optional<uint64_t> native = gpuDevice->sharedTexture(shared.shareId());
+    if (!native.has_value()) {
+      return BridgeStatus::UnknownObject;
+    }
+    const BridgeStatus status =
+        create(BrowserObjectKind::Texture, id,
+               std::format("registerSharedTexture id={} share={}", id, shared.shareId()));
+    if (status == BridgeStatus::Success) {
+      nativeTextures_[id] = *native;
+      aliases_.insert(id);
+    }
+    return status;
+  }
+
   BridgeStatus createBuffer(BrowserObjectId id, uint64_t byteSize, uint32_t usageBits) override {
     return create(BrowserObjectKind::Buffer, id,
                   std::format("createBuffer id={} byteSize={} usage={}", id, byteSize, usageBits));
@@ -326,7 +438,20 @@ public:
     mappings_.erase(id);
     textureImages_.erase(id);
     if (const auto native = nativeTextures_.find(id); native != nativeTextures_.end()) {
-      gpuDevice->destroyTexture(native->second);
+      // An alias names another logical device's texture, and a texture a share still holds goes
+      // when the share does; only a texture no one else holds is destroyed here.
+      const bool alias = aliases_.erase(id) != 0;
+      const auto shared = sharedAs_.find(id);
+      const bool held =
+          shared != sharedAs_.end() && gpuDevice->sharedTexture(shared->second).has_value();
+      if (held) {
+        gpuDevice->releaseProducer(shared->second);
+      } else if (!alias) {
+        gpuDevice->destroyTexture(native->second);
+      }
+      if (shared != sharedAs_.end()) {
+        sharedAs_.erase(shared);
+      }
       nativeTextures_.erase(native);
     }
     if (kind == BrowserObjectKind::Surface) {
@@ -940,6 +1065,10 @@ private:
   std::map<BrowserObjectId, BrowserObjectId> frames_;
   /// Device texture each texture identifier of this bridge names.
   std::map<BrowserObjectId, uint64_t> nativeTextures_;
+  /// Texture identifiers of this bridge that are registrations of another logical device's texture.
+  std::set<BrowserObjectId> aliases_;
+  /// Share each texture this bridge shared was held under.
+  std::map<BrowserObjectId, BrowserTextureShareId> sharedAs_;
   bool encoderOpen_ = false;
   bool passOpen_ = false;
   uint64_t recordingSerial_ = 0;

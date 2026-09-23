@@ -221,6 +221,12 @@ export function loadLibrary() {
     device,
     lose,
     words,
+    /** The identifiers the logical device `handle` holds, or fails the test if it holds none. */
+    objects(handle) {
+      const record = state.logical?.get(handle);
+      assert.ok(record, `logical device ${handle} is not open`);
+      return record.objects;
+    },
     /** How many times the library asked the browser for an adapter. */
     get adapterRequests() {
       return adapterRequests;

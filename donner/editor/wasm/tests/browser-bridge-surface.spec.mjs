@@ -17,16 +17,21 @@ import { loadLibrary, until } from "./bridge-library-harness.mjs";
 // than guessed at.
 const kUnassignedCode = 4000;
 
+// The logical device every call here names. The runtime mints these handles; one is all a surface
+// needs.
+const kDevice = 1;
+
 /** Loads the library and drives it to a ready device, the state every surface call needs. */
 async function readyBridge() {
   const bridge = loadLibrary();
-  assert.equal(bridge.entryPoints.donner_gpu_begin_device_request(), bridge.state.kSuccess);
+  assert.equal(bridge.entryPoints.donner_gpu_begin_device_request(kDevice), bridge.state.kSuccess);
   await until(
-    () => bridge.entryPoints.donner_gpu_device_request_state() !== bridge.state.kRequestPending,
+    () =>
+      bridge.entryPoints.donner_gpu_device_request_state(kDevice) !== bridge.state.kRequestPending,
     "a settled device request",
   );
   assert.equal(
-    bridge.entryPoints.donner_gpu_device_request_state(),
+    bridge.entryPoints.donner_gpu_device_request_state(kDevice),
     bridge.state.kRequestReady,
     bridge.state.requestError,
   );
@@ -39,7 +44,7 @@ async function surfaceBridge({ selector = "#canvas", id = 1 } = {}) {
   const canvas = bridge.addCanvas(selector);
   const name = bridge.string(selector);
   assert.equal(
-    bridge.entryPoints.donner_gpu_create_surface(id, name.pointer, name.length),
+    bridge.entryPoints.donner_gpu_create_surface(kDevice, id, name.pointer, name.length),
     bridge.state.kSuccess,
   );
   return { bridge, canvas, id };
@@ -48,6 +53,7 @@ async function surfaceBridge({ selector = "#canvas", id = 1 } = {}) {
 /** Configures the named surface at a size with one alpha mode. */
 function configure(bridge, id, size, alphaModeCode) {
   return bridge.entryPoints.donner_gpu_configure_surface(
+    kDevice,
     id,
     bridge.state.formatCode("bgra8unorm"),
     bridge.state.kUsageRenderAttachment,
@@ -85,18 +91,18 @@ test("the usage and alpha mode names stand for the numbers the protocol table se
 
 test("a surface takes the WebGPU context of the canvas its selector names", async () => {
   const { bridge, canvas, id } = await surfaceBridge();
-  assert.equal(bridge.state.objects.get(id).kind, bridge.state.kSurface);
-  assert.equal(bridge.state.objects.get(id).object.context, canvas.context);
+  assert.equal(bridge.objects(kDevice).get(id).kind, bridge.state.kSurface);
+  assert.equal(bridge.objects(kDevice).get(id).object.context, canvas.context);
 });
 
 test("a selector naming no canvas is refused rather than registered", async () => {
   const bridge = await readyBridge();
   const name = bridge.string("#missing");
   assert.equal(
-    bridge.entryPoints.donner_gpu_create_surface(1, name.pointer, name.length),
+    bridge.entryPoints.donner_gpu_create_surface(kDevice, 1, name.pointer, name.length),
     bridge.state.kFailed,
   );
-  assert.equal(bridge.state.objects.has(1), false);
+  assert.equal(bridge.objects(kDevice).has(1), false);
 });
 
 test("capabilities report the canvas's preferred format and what a frame can be used for", async () => {
@@ -104,7 +110,7 @@ test("capabilities report the canvas's preferred format and what a frame can be 
   const format = bridge.outParameter();
   const usage = bridge.outParameter();
   assert.equal(
-    bridge.entryPoints.donner_gpu_surface_capabilities(id, format, usage),
+    bridge.entryPoints.donner_gpu_surface_capabilities(kDevice, id, format, usage),
     bridge.state.kSuccess,
   );
   assert.equal(bridge.read(format), bridge.state.formatCode("bgra8unorm"));
@@ -125,14 +131,24 @@ test("the alpha modes reported are the ones the canvas context can be configured
     ]
   ) {
     assert.equal(
-      bridge.entryPoints.donner_gpu_surface_supports_alpha_mode(id, alphaModeCode, supported),
+      bridge.entryPoints.donner_gpu_surface_supports_alpha_mode(
+        kDevice,
+        id,
+        alphaModeCode,
+        supported,
+      ),
       bridge.state.kSuccess,
     );
     assert.equal(bridge.read(supported), 1);
   }
 
   assert.equal(
-    bridge.entryPoints.donner_gpu_surface_supports_alpha_mode(id, kUnassignedCode, supported),
+    bridge.entryPoints.donner_gpu_surface_supports_alpha_mode(
+      kDevice,
+      id,
+      kUnassignedCode,
+      supported,
+    ),
     bridge.state.kSuccess,
   );
   assert.equal(bridge.read(supported), 0);
@@ -170,26 +186,29 @@ test("a frame is taken from the canvas and abandoning it gives the identifier ba
 
   const status = bridge.outParameter();
   assert.equal(
-    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 2, status),
+    bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 2, status),
     bridge.state.kSuccess,
   );
   assert.equal(bridge.read(status), bridge.state.kSurfaceSuccess);
-  assert.equal(bridge.state.objects.get(2).kind, bridge.state.kTexture);
+  assert.equal(bridge.objects(kDevice).get(2).kind, bridge.state.kTexture);
   assert.equal(canvas.context.frames, 1);
 
-  assert.equal(bridge.entryPoints.donner_gpu_abandon_current_texture(id), bridge.state.kSuccess);
-  assert.deepEqual([...bridge.state.objects.keys()], [id]);
+  assert.equal(
+    bridge.entryPoints.donner_gpu_abandon_current_texture(kDevice, id),
+    bridge.state.kSuccess,
+  );
+  assert.deepEqual([...bridge.objects(kDevice).keys()], [id]);
 });
 
 test("acquiring before the context is configured reports the canvas as lost", async () => {
   const { bridge, id } = await surfaceBridge();
   const status = bridge.outParameter();
   assert.equal(
-    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 2, status),
+    bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 2, status),
     bridge.state.kSuccess,
   );
   assert.equal(bridge.read(status), bridge.state.kSurfaceLost);
-  assert.equal(bridge.state.objects.has(2), false);
+  assert.equal(bridge.objects(kDevice).has(2), false);
 });
 
 test("destroying a surface unconfigures the canvas context it held", async () => {
@@ -200,11 +219,11 @@ test("destroying a surface unconfigures the canvas context it held", async () =>
   );
 
   assert.equal(
-    bridge.entryPoints.donner_gpu_destroy_object(bridge.state.kSurface, id),
+    bridge.entryPoints.donner_gpu_destroy_object(kDevice, bridge.state.kSurface, id),
     bridge.state.kSuccess,
   );
   assert.equal(canvas.context.unconfigureCount, 1);
-  assert.equal(bridge.state.objects.has(id), false);
+  assert.equal(bridge.objects(kDevice).has(id), false);
 });
 
 test("destroying a surface drops a frame identifier it still named", async () => {
@@ -215,16 +234,16 @@ test("destroying a surface drops a frame identifier it still named", async () =>
   );
   const status = bridge.outParameter();
   assert.equal(
-    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 2, status),
+    bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 2, status),
     bridge.state.kSuccess,
   );
 
   assert.equal(
-    bridge.entryPoints.donner_gpu_destroy_object(bridge.state.kSurface, id),
+    bridge.entryPoints.donner_gpu_destroy_object(kDevice, bridge.state.kSurface, id),
     bridge.state.kSuccess,
   );
-  assert.equal(bridge.state.objects.has(2), false);
-  assert.equal(bridge.state.objects.size, 0);
+  assert.equal(bridge.objects(kDevice).has(2), false);
+  assert.equal(bridge.objects(kDevice).size, 0);
 });
 
 test("a surface identifier is refused once it names nothing, and so is one of another kind", async () => {
@@ -232,21 +251,21 @@ test("a surface identifier is refused once it names nothing, and so is one of an
   const format = bridge.outParameter();
   const usage = bridge.outParameter();
   assert.equal(
-    bridge.entryPoints.donner_gpu_destroy_object(bridge.state.kSurface, id),
+    bridge.entryPoints.donner_gpu_destroy_object(kDevice, bridge.state.kSurface, id),
     bridge.state.kSuccess,
   );
   assert.equal(
-    bridge.entryPoints.donner_gpu_surface_capabilities(id, format, usage),
+    bridge.entryPoints.donner_gpu_surface_capabilities(kDevice, id, format, usage),
     bridge.state.kUnknownObject,
   );
 
   const name = bridge.string("#canvas");
   assert.equal(
-    bridge.entryPoints.donner_gpu_create_surface(3, name.pointer, name.length),
+    bridge.entryPoints.donner_gpu_create_surface(kDevice, 3, name.pointer, name.length),
     bridge.state.kSuccess,
   );
   assert.equal(
-    bridge.entryPoints.donner_gpu_destroy_object(bridge.state.kTexture, 3),
+    bridge.entryPoints.donner_gpu_destroy_object(kDevice, bridge.state.kTexture, 3),
     bridge.state.kWrongObjectKind,
   );
 });
@@ -259,7 +278,7 @@ test("reconfiguring gives up the frame the canvas had handed over", async () => 
   );
   const status = bridge.outParameter();
   assert.equal(
-    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 2, status),
+    bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 2, status),
     bridge.state.kSuccess,
   );
 
@@ -269,14 +288,14 @@ test("reconfiguring gives up the frame the canvas had handed over", async () => 
     configure(bridge, id, { width: 16, height: 16 }, bridge.state.kAlphaModeOpaque),
     bridge.state.kSuccess,
   );
-  assert.deepEqual([...bridge.state.objects.keys()], [id]);
+  assert.deepEqual([...bridge.objects(kDevice).keys()], [id]);
   assert.equal(canvas.width, 16);
 
   assert.equal(
-    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 3, status),
+    bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 3, status),
     bridge.state.kSuccess,
   );
-  assert.deepEqual([...bridge.state.objects.keys()], [id, 3]);
+  assert.deepEqual([...bridge.objects(kDevice).keys()], [id, 3]);
 });
 
 test("a second frame inside one frame is refused rather than replacing the first", async () => {
@@ -287,17 +306,17 @@ test("a second frame inside one frame is refused rather than replacing the first
   );
   const status = bridge.outParameter();
   assert.equal(
-    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 2, status),
+    bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 2, status),
     bridge.state.kSuccess,
   );
 
   // The first identifier still names the canvas's frame; replacing it would leave nothing able to
   // give that frame back.
   assert.equal(
-    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 3, status),
+    bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 3, status),
     bridge.state.kFailed,
   );
-  assert.deepEqual([...bridge.state.objects.keys()], [id, 2]);
+  assert.deepEqual([...bridge.objects(kDevice).keys()], [id, 2]);
 });
 
 test("a lost device refuses another frame but still takes back the one it handed over", async () => {
@@ -308,25 +327,28 @@ test("a lost device refuses another frame but still takes back the one it handed
   );
   const status = bridge.outParameter();
   assert.equal(
-    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 2, status),
+    bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 2, status),
     bridge.state.kSuccess,
   );
 
   bridge.lose({ reason: "destroyed", message: "the tab was discarded" });
   await until(
-    () => bridge.entryPoints.donner_gpu_is_device_lost() === 1,
+    () => bridge.entryPoints.donner_gpu_is_device_lost(kDevice) === 1,
     "the device reported lost",
   );
 
   assert.equal(
-    bridge.entryPoints.donner_gpu_acquire_current_texture(id, 3, status),
+    bridge.entryPoints.donner_gpu_acquire_current_texture(kDevice, id, 3, status),
     bridge.state.kDeviceLost,
   );
-  assert.equal(bridge.entryPoints.donner_gpu_abandon_current_texture(id), bridge.state.kSuccess);
-  assert.equal(bridge.state.objects.has(2), false);
   assert.equal(
-    bridge.entryPoints.donner_gpu_destroy_object(bridge.state.kSurface, id),
+    bridge.entryPoints.donner_gpu_abandon_current_texture(kDevice, id),
     bridge.state.kSuccess,
   );
-  assert.equal(bridge.state.objects.size, 0);
+  assert.equal(bridge.objects(kDevice).has(2), false);
+  assert.equal(
+    bridge.entryPoints.donner_gpu_destroy_object(kDevice, bridge.state.kSurface, id),
+    bridge.state.kSuccess,
+  );
+  assert.equal(bridge.objects(kDevice).size, 0);
 });

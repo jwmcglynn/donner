@@ -118,6 +118,16 @@ private:
  * throughout. Widening this back out is a change to the descriptor's own documentation and belongs
  * with the unit that owns it.
  *
+ * Several devices can run over one browser device in one worker, each through a bridge of its own
+ * with its own identifiers, mappings and submission serials; that is how a snapshot capture
+ * context sits beside the renderer it reads back. A texture of one is registered on another as a
+ * read-only alias of the same browser texture (\ref Device::exportTexture,
+ * \ref Device::registerTexture). They submit to the browser device's one queue, in order, from the
+ * thread that owns it, so a registration is ordered after the producer's work by submission order
+ * alone and nothing waits. WebGPU cannot share a texture across browser devices, so an export of
+ * another browser device is refused with \ref GpuErrorType::DeviceMismatch, and loss of the browser
+ * device is loss for every device over it.
+ *
  * The compiled WGSL projection is what this backend accepts, matching the browser's own shading
  * language.
  *
@@ -218,6 +228,12 @@ protected:
   Result<SurfaceStatus> onPresentSurface(uint32_t slotIndex) override;
   void onAbandonCurrentTexture(uint32_t slotIndex) override;
   void onDestroySurface(uint32_t slotIndex) override;
+
+  /// Names the browser backend and the browser device this device runs on. Fixed when the device
+  /// is constructed, so the runtime may ask from any thread without reaching the browser.
+  [[nodiscard]] BackendDeviceIdentity backendDeviceIdentity() const override;
+  Result<BackendTextureExport> onExportTexture(uint32_t slotIndex) override;
+  Status onRegisterTexture(uint32_t slotIndex, const ExportedTextureBacking& backing) override;
 
 private:
   friend class BrowserDeviceRequest;
@@ -433,6 +449,11 @@ private:
   /// Thread that obtained the browser device. Browser objects are unusable off it, so every
   /// operation checks it rather than relying on the runtime's documented affinity alone.
   std::thread::id ownerThread_;
+
+  /// Identity of the browser device this device runs on, read from the bridge once, on the owning
+  /// thread, when the device is constructed. Null when the bridge names none, which makes the
+  /// device refuse to share textures rather than claim a device it cannot name.
+  const void* sharedDeviceIdentity_ = nullptr;
 };
 
 }  // namespace donner::gpu::browser
