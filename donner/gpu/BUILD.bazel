@@ -216,6 +216,20 @@ donner_cc_library(
     ],
 )
 
+# Test backend whose runtime devices can register each other's textures, shared by the runtime's
+# registration tests and by tests of code layered on registration in other packages.
+donner_cc_library(
+    name = "sharing_test_device",
+    testonly = 1,
+    hdrs = ["tests/SharingTestDevice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 donner_cc_library(
     name = "reflected_compute_slice",
     testonly = 1,
@@ -425,6 +439,7 @@ donner_cc_test(
         ":gpu",
         ":recording_device",
         ":gpu_test_utils",
+        ":sharing_test_device",
         # For the static_assert tying the runtime's compute caps to the shader IR's copy.
         "//donner/gpu/shader",
         "@com_google_gtest//:gtest_main",

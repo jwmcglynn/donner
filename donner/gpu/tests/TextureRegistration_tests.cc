@@ -21,6 +21,7 @@
 #include "donner/gpu/Device.h"
 #include "donner/gpu/RecordingDevice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/tests/SharingTestDevice.h"
 
 using testing::Eq;
 using testing::HasSubstr;
@@ -31,221 +32,8 @@ using testing::Lt;
 namespace donner::gpu {
 namespace {
 
-/// Backend families: only devices of one family may name each other's textures.
-constexpr char kSharingFamily = 0;
-constexpr char kOtherFamily = 1;
-
-/// A native device two runtime devices can share, counting the native textures still alive and
-/// the explicit releases a producer deferred until nothing else held the texture.
-struct FakeNativeDevice {
-  std::atomic<int> liveTextures{0};
-  std::atomic<int> deferredBackingReleases{0};
-};
-
-/// One native texture allocation; alive while any device slot, export or registration holds it.
-class FakeNativeTexture {
-public:
-  explicit FakeNativeTexture(FakeNativeDevice& device) : device_(device) {
-    device_.liveTextures.fetch_add(1);
-  }
-  ~FakeNativeTexture() { device_.liveTextures.fetch_sub(1); }
-
-  FakeNativeTexture(const FakeNativeTexture&) = delete;
-  FakeNativeTexture& operator=(const FakeNativeTexture&) = delete;
-
-private:
-  FakeNativeDevice& device_;
-};
-
-/// The test backend's export: the only strong reference to the native texture outside its
-/// producer, so the allocation outlives the producer only if the runtime keeps the export alive.
-class FakeExportedTexture final : public ExportedTextureBacking {
-public:
-  FakeExportedTexture(std::shared_ptr<FakeNativeTexture> native, FakeNativeDevice& device)
-      : native(std::move(native)), device_(device) {}
-
-  void releaseBackingNow() const override { device_.deferredBackingReleases.fetch_add(1); }
-
-  std::shared_ptr<FakeNativeTexture> native;
-
-private:
-  FakeNativeDevice& device_;
-};
-
-/// Completion the test drives, shared with every export of the device that owns it.
-class FakeCompletion final : public SubmissionCompletion {
-public:
-  uint64_t completedSerial() const override { return completed.load(); }
-  bool failed() const override { return failedFlag.load(); }
-
-  std::atomic<uint64_t> completed{0};
-  std::atomic<bool> failedFlag{false};
-};
-
-/// What a test device is built with.
-struct SharingOptions {
-  const void* family = &kSharingFamily;                     //!< Backend family tag.
-  SourceOrdering ordering = SourceOrdering::WaitForSource;  //!< Ordering its exports report.
-  std::shared_ptr<DeviceLostState> lostState;               //!< Shared loss condition, or null.
-};
-
-/**
- * Test backend whose devices can share textures over one \ref FakeNativeDevice. Submissions
- * complete at once unless the test holds them, and the test decides whether a texture write waits
- * for the next submission.
- */
-class SharingDevice final : public Device {
-public:
-  SharingDevice(FakeNativeDevice& native, SharingOptions options = {})
-      : native_(native), options_(std::move(options)) {
-    adoptLostState(options_.lostState);
-  }
-
-  /// Submissions stop completing until \ref releaseCompletion.
-  void holdCompletion() { held_ = true; }
-  /// Completes everything submitted so far, and later submissions as they arrive.
-  void releaseCompletion() {
-    held_ = false;
-    completion_->completed.store(lastSubmittedSerial());
-  }
-  /// Reports a terminal execution failure, as a backend does for a failed command buffer.
-  void failExecution() { completion_->failedFlag.store(true); }
-  /// Whether texture writes wait for the next submission.
-  void setWritesPending(bool pending) { writesPending_ = pending; }
-  /// How many explicit backing releases reached this backend.
-  int explicitBackingReleases() const { return explicitBackingReleases_; }
-
-  uint64_t completedSerial() const override { return completion_->completed.load(); }
-
-protected:
-  BackendDeviceIdentity backendDeviceIdentity() const override {
-    return {options_.family, &native_};
-  }
-  Result<BackendTextureExport> onExportTexture(uint32_t slotIndex) override {
-    BackendTextureExport exported;
-    exported.backing =
-        std::make_shared<const FakeExportedTexture>(textures_.at(slotIndex).owned, native_);
-    exported.ordering = options_.ordering;
-    exported.completion = completion_;
-    exported.writePending = queuedWrite_;
-    return exported;
-  }
-  Status onRegisterTexture(uint32_t slotIndex, const ExportedTextureBacking& backing) override {
-    // A borrowed name, like the transitional adapter's: the registration's lifetime has to come
-    // from the runtime's hold on the export, not from this slot.
-    slot(slotIndex).alias = static_cast<const FakeExportedTexture&>(backing).native.get();
-    return OkStatus();
-  }
-  bool onTextureWritePending(uint32_t) const override { return writesPending_; }
-  void onDestroyTextureBacking(uint32_t slotIndex) override {
-    ++explicitBackingReleases_;
-    slot(slotIndex) = {};
-  }
-
-  Status onCreateBuffer(uint32_t, const BufferDescriptor&) override { return OkStatus(); }
-  Status onCreateTexture(uint32_t slotIndex, const TextureDescriptor&) override {
-    slot(slotIndex).owned = std::make_shared<FakeNativeTexture>(native_);
-    return OkStatus();
-  }
-  Status onCreateTextureView(uint32_t, uint32_t, const TextureViewDescriptor&) override {
-    return OkStatus();
-  }
-  Status onCreateSampler(uint32_t, const SamplerDescriptor&) override { return OkStatus(); }
-  Status onCreateBindGroupLayout(uint32_t, const BindGroupLayoutDescriptor&) override {
-    return OkStatus();
-  }
-  Status onCreateBindGroup(uint32_t, const BindGroupDescriptor&) override { return OkStatus(); }
-  Status onCreatePipelineLayout(uint32_t, const PipelineLayoutDescriptor&) override {
-    return OkStatus();
-  }
-  Status onCreateShaderModule(uint32_t, const ShaderModuleDescriptor&) override {
-    return OkStatus();
-  }
-  Status onCreateRenderPipeline(uint32_t, const RenderPipelineDescriptor&) override {
-    return OkStatus();
-  }
-  Status onCreateComputePipeline(uint32_t, const ComputePipelineDescriptor&) override {
-    return OkStatus();
-  }
-  void onDestroyResource(std::string_view resourceName, uint32_t slotIndex) override {
-    if (resourceName == TextureTag::kName) {
-      slot(slotIndex) = {};
-    }
-  }
-  Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
-  Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,
-                        const Extent2d&, const Origin2d&) override {
-    queuedWrite_ = queuedWrite_ || writesPending_;
-    return OkStatus();
-  }
-  Status onSubmit(uint64_t submissionSerial, std::span<const SubmittedCommandBuffer>) override {
-    queuedWrite_ = false;
-    if (!held_) {
-      completion_->completed.store(submissionSerial);
-    }
-    return OkStatus();
-  }
-
-private:
-  /// One texture slot: the allocation this device made, or a borrowed name for another's.
-  struct TextureSlot {
-    std::shared_ptr<FakeNativeTexture> owned;  //!< Allocation this device made, or null.
-    FakeNativeTexture* alias = nullptr;        //!< Registration of another device's texture.
-  };
-
-  TextureSlot& slot(uint32_t slotIndex) {
-    if (slotIndex >= textures_.size()) {
-      textures_.resize(slotIndex + 1);
-    }
-    return textures_[slotIndex];
-  }
-
-  FakeNativeDevice& native_;
-  SharingOptions options_;
-  std::shared_ptr<FakeCompletion> completion_ = std::make_shared<FakeCompletion>();
-  std::vector<TextureSlot> textures_;
-  bool held_ = false;
-  bool writesPending_ = false;
-  bool queuedWrite_ = false;  //!< A write waits for the next submission.
-  int explicitBackingReleases_ = 0;
-};
-
-constexpr Extent2d kExtent{4, 4};
+/// Bytes of one test texture.
 constexpr uint64_t kTextureBytes = 4u * 4u * 4u;
-constexpr TextureUsage kProducerUsage = TextureUsage::RenderAttachment | TextureUsage::Sampled |
-                                        TextureUsage::CopySrc | TextureUsage::CopyDst;
-
-/// Creates a readable, writable test texture on \p device.
-/// @param device Device to allocate on. @param usage Usage to create with.
-Texture MakeTexture(Device& device, TextureUsage usage = kProducerUsage) {
-  return GetResultOrFail(
-      device.createTexture(TextureDescriptor{"shared", kExtent, TextureFormat::RGBA8Unorm, usage}));
-}
-
-/// Submits one copy of \p texture into a fresh buffer, which is a submission that reads it.
-/// @param device Device \p texture belongs to. @param texture Texture to read.
-Result<uint64_t> SubmitRead(Device& device, const Texture& texture) {
-  Result<Buffer> buffer = device.createBuffer(BufferDescriptor{
-      "readback", 256u * kExtent.height, BufferUsage::CopyDst | BufferUsage::MapRead});
-  if (buffer.hasError()) {
-    return std::move(buffer).error();
-  }
-  Result<std::unique_ptr<CommandEncoder>> encoder = device.createCommandEncoder();
-  if (encoder.hasError()) {
-    return std::move(encoder).error();
-  }
-  if (Status copied = encoder.result()->copyTextureToBuffer(
-          TexelCopyTextureInfo{texture}, buffer.result(),
-          TexelCopyBufferLayout{0, 256, kExtent.height}, kExtent);
-      copied.hasError()) {
-    return std::move(copied).error();
-  }
-  Result<CommandBuffer> commands = encoder.result()->finish();
-  if (commands.hasError()) {
-    return std::move(commands).error();
-  }
-  return device.submit(std::move(commands).result());
-}
 
 class TextureRegistrationTest : public testing::Test {
 protected:
@@ -259,20 +47,20 @@ protected:
 TEST_F(TextureRegistrationTest, ExportResolvesTheHandleAgainstTheProducersTable) {
   EXPECT_THAT(producer_->exportTexture(Texture()), IsGpuError(GpuErrorType::InvalidHandle));
 
-  Texture retired = MakeTexture(*producer_);
+  Texture retired = MakeSharedTexture(*producer_);
   const Texture stale =
       Texture::CreateForBackend(retired.slotIndex(), retired.generation(), retired.deviceId());
   ASSERT_THAT(producer_->destroyTexture(std::move(retired)), IsOk());
   EXPECT_THAT(producer_->exportTexture(stale), IsGpuError(GpuErrorType::InvalidHandle));
 
-  const Texture consumers = MakeTexture(*consumer_);
+  const Texture consumers = MakeSharedTexture(*consumer_);
   EXPECT_THAT(producer_->exportTexture(consumers), IsGpuError(GpuErrorType::DeviceMismatch));
 }
 
 /// A registration is exported from the device that allocated it, never passed along, and a lost
 /// device has nothing whose contents can be trusted.
 TEST_F(TextureRegistrationTest, ExportRefusesARegistrationAndALostProducer) {
-  const Texture owned = MakeTexture(*producer_);
+  const Texture owned = MakeSharedTexture(*producer_);
   const Texture registered =
       GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
   EXPECT_THAT(consumer_->exportTexture(registered), IsGpuError(GpuErrorType::InvalidState));
@@ -286,11 +74,11 @@ TEST_F(TextureRegistrationTest, ExportRefusesARegistrationAndALostProducer) {
 /// is what the recording backend, like the Vulkan and browser backends, inherits.
 TEST_F(TextureRegistrationTest, ABackendThatCannotShareRefusesByName) {
   RecordingDevice recording;
-  const Texture texture = MakeTexture(recording);
+  const Texture texture = MakeSharedTexture(recording);
   EXPECT_THAT(recording.exportTexture(texture),
               IsGpuErrorWithMessage(GpuErrorType::Unsupported, HasSubstr("one runtime device")));
 
-  const Texture owned = MakeTexture(*producer_);
+  const Texture owned = MakeSharedTexture(*producer_);
   const TextureExport exported = GetResultOrFail(producer_->exportTexture(owned));
   EXPECT_THAT(recording.registerTexture(exported), IsGpuError(GpuErrorType::Unsupported));
 }
@@ -299,7 +87,7 @@ TEST_F(TextureRegistrationTest, ABackendThatCannotShareRefusesByName) {
 TEST_F(TextureRegistrationTest, RegistrationRefusesWhatItCannotName) {
   EXPECT_THAT(consumer_->registerTexture(TextureExport()), IsGpuError(GpuErrorType::InvalidHandle));
 
-  Texture owned = MakeTexture(*producer_);
+  Texture owned = MakeSharedTexture(*producer_);
   const TextureExport exported = GetResultOrFail(producer_->exportTexture(owned));
   EXPECT_THAT(producer_->registerTexture(exported), IsGpuError(GpuErrorType::InvalidState))
       << "a device's own texture is named by its own handle";
@@ -319,7 +107,7 @@ TEST_F(TextureRegistrationTest, RegistrationRefusesWhatItCannotName) {
 
 /// Either device's loss ends registration: nothing read through it could be trusted.
 TEST_F(TextureRegistrationTest, RegistrationRefusesALostProducerOrConsumer) {
-  const Texture owned = MakeTexture(*producer_);
+  const Texture owned = MakeSharedTexture(*producer_);
   const TextureExport exported = GetResultOrFail(producer_->exportTexture(owned));
 
   consumer_->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds(1),
@@ -335,23 +123,23 @@ TEST_F(TextureRegistrationTest, RegistrationRefusesALostProducerOrConsumer) {
 /// A registration describes what the producer describes, limited to reading it: a consumer
 /// reads what the producer wrote and never writes it, and it never owns the allocation.
 TEST_F(TextureRegistrationTest, ARegistrationIsAReadOnlyDescriptionOfTheProducersTexture) {
-  const Texture owned = MakeTexture(*producer_);
+  const Texture owned = MakeSharedTexture(*producer_);
   const Texture registered =
       GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
 
   const TextureDescriptor described = GetResultOrFail(consumer_->textureDescriptor(registered));
-  EXPECT_THAT(described.size, Eq(kExtent));
+  EXPECT_THAT(described.size, Eq(kSharedTextureExtent));
   EXPECT_THAT(described.format, Eq(TextureFormat::RGBA8Unorm));
   EXPECT_THAT(described.label, Eq(RcString("shared")));
   EXPECT_THAT(described.usage, Eq(TextureUsage::Sampled | TextureUsage::CopySrc));
   EXPECT_THAT(consumer_->ownsTextureBacking(registered), IsFalse());
 
   const std::array<uint8_t, 256 * 4> texels{};
-  EXPECT_THAT(consumer_->writeTexture(registered, texels, {0, 256, 4}, kExtent),
+  EXPECT_THAT(consumer_->writeTexture(registered, texels, {0, 256, 4}, kSharedTextureExtent),
               IsGpuError(GpuErrorType::UsageMismatch));
 
   const Texture writeOnly =
-      MakeTexture(*producer_, TextureUsage::RenderAttachment | TextureUsage::CopyDst);
+      MakeSharedTexture(*producer_, TextureUsage::RenderAttachment | TextureUsage::CopyDst);
   EXPECT_THAT(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(writeOnly))),
               IsGpuError(GpuErrorType::UsageMismatch));
 }
@@ -359,7 +147,7 @@ TEST_F(TextureRegistrationTest, ARegistrationIsAReadOnlyDescriptionOfTheProducer
 /// The allocation lives exactly as long as its last holder: the producer's explicit release gives
 /// up only the producer's hold while a registration still reads it.
 TEST_F(TextureRegistrationTest, AnAllocationLivesAsLongAsItsLastHolder) {
-  Texture owned = MakeTexture(*producer_);
+  Texture owned = MakeSharedTexture(*producer_);
   std::optional<TextureExport> exported = GetResultOrFail(producer_->exportTexture(owned));
   Texture registered = GetResultOrFail(consumer_->registerTexture(*exported));
 
@@ -377,7 +165,7 @@ TEST_F(TextureRegistrationTest, AnAllocationLivesAsLongAsItsLastHolder) {
 
 /// Sharing changes nothing for a texture nobody else holds: its explicit release is immediate.
 TEST_F(TextureRegistrationTest, AnUnsharedTextureStillReleasesItsBackingAtOnce) {
-  Texture owned = MakeTexture(*producer_);
+  Texture owned = MakeSharedTexture(*producer_);
   { const TextureExport exported = GetResultOrFail(producer_->exportTexture(owned)); }
 
   ASSERT_THAT(producer_->destroyTextureBacking(std::move(owned)), IsOk());
@@ -388,7 +176,7 @@ TEST_F(TextureRegistrationTest, AnUnsharedTextureStillReleasesItsBackingAtOnce) 
 /// An export token alone keeps the allocation alive after the producer released its handle, and
 /// lets it go with the token.
 TEST_F(TextureRegistrationTest, AnExportTokenAloneKeepsTheAllocationAlive) {
-  Texture owned = MakeTexture(*producer_);
+  Texture owned = MakeSharedTexture(*producer_);
   std::optional<TextureExport> exported = GetResultOrFail(producer_->exportTexture(owned));
 
   ASSERT_THAT(producer_->destroyTexture(std::move(owned)), IsOk());
@@ -401,11 +189,11 @@ TEST_F(TextureRegistrationTest, AnExportTokenAloneKeepsTheAllocationAlive) {
 /// A producer that asks for its backing back while another device reads it gets the release
 /// when that reader lets go: deferred, never dropped.
 TEST_F(TextureRegistrationTest, ADeferredBackingReleaseHappensWhenTheLastHolderLetsGo) {
-  Texture owned = MakeTexture(*producer_);
+  Texture owned = MakeSharedTexture(*producer_);
   Texture registered =
       GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
   consumer_->holdCompletion();
-  ASSERT_THAT(SubmitRead(*consumer_, registered), HasResult());
+  ASSERT_THAT(SubmitSharedTextureRead(*consumer_, registered), HasResult());
 
   ASSERT_THAT(producer_->destroyTextureBacking(std::move(owned)), IsOk());
   EXPECT_THAT(producer_->explicitBackingReleases(), Eq(0));
@@ -424,7 +212,7 @@ TEST_F(TextureRegistrationTest, ADeferredBackingReleaseHappensWhenTheLastHolderL
 
 /// A plain destroy of a shared texture is not a request to release its backing early.
 TEST_F(TextureRegistrationTest, DestroyingASharedTextureRequestsNoEarlyRelease) {
-  Texture owned = MakeTexture(*producer_);
+  Texture owned = MakeSharedTexture(*producer_);
   Texture registered =
       GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
   ASSERT_THAT(producer_->destroyTexture(std::move(owned)), IsOk());
@@ -436,12 +224,12 @@ TEST_F(TextureRegistrationTest, DestroyingASharedTextureRequestsNoEarlyRelease) 
 /// A registration holds the allocation until the consumer's last submission naming it completes,
 /// not merely until its handle is dropped.
 TEST_F(TextureRegistrationTest, ARegistrationIsHeldUntilTheConsumersLastUseCompletes) {
-  Texture owned = MakeTexture(*producer_);
+  Texture owned = MakeSharedTexture(*producer_);
   Texture registered =
       GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
 
   consumer_->holdCompletion();
-  ASSERT_THAT(SubmitRead(*consumer_, registered), HasResult());
+  ASSERT_THAT(SubmitSharedTextureRead(*consumer_, registered), HasResult());
   ASSERT_THAT(producer_->destroyTexture(std::move(owned)), IsOk());
   ASSERT_THAT(consumer_->destroyTexture(std::move(registered)), IsOk());
   EXPECT_THAT(native_.liveTextures.load(), Eq(1)) << "the consumer's read has not completed";
@@ -453,13 +241,13 @@ TEST_F(TextureRegistrationTest, ARegistrationIsHeldUntilTheConsumersLastUseCompl
 
 /// A registration keeps working after the producer device is gone.
 TEST_F(TextureRegistrationTest, ARegistrationOutlivesItsProducerDevice) {
-  const Texture owned = MakeTexture(*producer_);
+  const Texture owned = MakeSharedTexture(*producer_);
   Texture registered =
       GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
 
   producer_.reset();
   EXPECT_THAT(native_.liveTextures.load(), Eq(1));
-  EXPECT_THAT(SubmitRead(*consumer_, registered), HasResult());
+  EXPECT_THAT(SubmitSharedTextureRead(*consumer_, registered), HasResult());
 
   ASSERT_THAT(consumer_->destroyTexture(std::move(registered)), IsOk());
   EXPECT_THAT(native_.liveTextures.load(), Eq(0));
@@ -468,7 +256,7 @@ TEST_F(TextureRegistrationTest, ARegistrationOutlivesItsProducerDevice) {
 /// Memory that outlives the producer's handle is still resident, and the producer's gauge says
 /// how much, until the last holder lets go.
 TEST_F(TextureRegistrationTest, TheTailGaugeCountsWhatOutlivesTheProducersHandle) {
-  Texture owned = MakeTexture(*producer_);
+  Texture owned = MakeSharedTexture(*producer_);
   std::optional<TextureExport> exported = GetResultOrFail(producer_->exportTexture(owned));
   Texture registered = GetResultOrFail(consumer_->registerTexture(*exported));
   EXPECT_THAT(producer_->sharedTextureTailBytes(), Eq(0u)) << "the producer still holds it";
@@ -488,13 +276,13 @@ TEST_F(TextureRegistrationTest, TheTailGaugeCountsWhatOutlivesTheProducersHandle
 /// producer work it follows has completed: submitting early is refused, the bounded wait says
 /// so without declaring anything, and once the producer completes both succeed.
 TEST_F(TextureRegistrationTest, ConsumerWorkWaitsForTheProducerWorkItFollows) {
-  const Texture owned = MakeTexture(*producer_);
+  const Texture owned = MakeSharedTexture(*producer_);
   producer_->holdCompletion();
-  ASSERT_THAT(SubmitRead(*producer_, owned), HasResult());
+  ASSERT_THAT(SubmitSharedTextureRead(*producer_, owned), HasResult());
   const Texture registered =
       GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
 
-  EXPECT_THAT(SubmitRead(*consumer_, registered),
+  EXPECT_THAT(SubmitSharedTextureRead(*consumer_, registered),
               IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("waitForTextureSource")));
   EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.0), IsFalse());
   EXPECT_THAT(consumer_->isLost(), IsFalse());
@@ -502,17 +290,17 @@ TEST_F(TextureRegistrationTest, ConsumerWorkWaitsForTheProducerWorkItFollows) {
 
   producer_->releaseCompletion();
   EXPECT_THAT(consumer_->waitForTextureSource(registered, 1.0), IsTrue());
-  EXPECT_THAT(SubmitRead(*consumer_, registered), HasResult());
+  EXPECT_THAT(SubmitSharedTextureRead(*consumer_, registered), HasResult());
 }
 
 /// A registration follows the producer's work as of the registration, not as of the export: a
 /// texture exported before it was written is still ordered after the write.
 TEST_F(TextureRegistrationTest, ARegistrationFollowsProducerWorkAcceptedAfterTheExport) {
-  const Texture owned = MakeTexture(*producer_);
+  const Texture owned = MakeSharedTexture(*producer_);
   const TextureExport exported = GetResultOrFail(producer_->exportTexture(owned));
 
   producer_->holdCompletion();
-  ASSERT_THAT(SubmitRead(*producer_, owned), HasResult());
+  ASSERT_THAT(SubmitSharedTextureRead(*producer_, owned), HasResult());
   const Texture registered = GetResultOrFail(consumer_->registerTexture(exported));
 
   EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.0), IsFalse())
@@ -525,18 +313,18 @@ TEST_F(TextureRegistrationTest, ARegistrationFollowsProducerWorkAcceptedAfterThe
 /// texture cannot be registered until a submission carries it; the registration then follows
 /// that submission. The runtime never submits on the producer's behalf.
 TEST_F(TextureRegistrationTest, AQueuedProducerWriteRefusesRegistrationUntilItIsSubmitted) {
-  const Texture owned = MakeTexture(*producer_);
+  const Texture owned = MakeSharedTexture(*producer_);
   const TextureExport exported = GetResultOrFail(producer_->exportTexture(owned));
   producer_->setWritesPending(true);
   const std::array<uint8_t, 256 * 4> texels{};
-  ASSERT_THAT(producer_->writeTexture(owned, texels, {0, 256, 4}, kExtent), IsOk());
+  ASSERT_THAT(producer_->writeTexture(owned, texels, {0, 256, 4}, kSharedTextureExtent), IsOk());
 
   EXPECT_THAT(consumer_->registerTexture(exported), IsGpuError(GpuErrorType::InvalidState));
   EXPECT_THAT(producer_->lastSubmittedSerial(), Eq(0u));
 
   producer_->holdCompletion();
-  const Texture unrelated = MakeTexture(*producer_);
-  ASSERT_THAT(SubmitRead(*producer_, unrelated), HasResult());
+  const Texture unrelated = MakeSharedTexture(*producer_);
+  ASSERT_THAT(SubmitSharedTextureRead(*producer_, unrelated), HasResult());
   const Texture registered = GetResultOrFail(consumer_->registerTexture(exported));
   EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.0), IsFalse());
   producer_->releaseCompletion();
@@ -546,15 +334,15 @@ TEST_F(TextureRegistrationTest, AQueuedProducerWriteRefusesRegistrationUntilItIs
 /// A write the backend queued before the texture was exported is just as unordered: the export
 /// reports it, and the next producer submission carries it.
 TEST_F(TextureRegistrationTest, AWriteQueuedBeforeTheExportIsCarriedByTheNextSubmission) {
-  const Texture owned = MakeTexture(*producer_);
+  const Texture owned = MakeSharedTexture(*producer_);
   producer_->setWritesPending(true);
   const std::array<uint8_t, 256 * 4> texels{};
-  ASSERT_THAT(producer_->writeTexture(owned, texels, {0, 256, 4}, kExtent), IsOk());
+  ASSERT_THAT(producer_->writeTexture(owned, texels, {0, 256, 4}, kSharedTextureExtent), IsOk());
   const TextureExport exported = GetResultOrFail(producer_->exportTexture(owned));
   EXPECT_THAT(consumer_->registerTexture(exported), IsGpuError(GpuErrorType::InvalidState));
 
-  const Texture unrelated = MakeTexture(*producer_);
-  ASSERT_THAT(SubmitRead(*producer_, unrelated), HasResult());
+  const Texture unrelated = MakeSharedTexture(*producer_);
+  ASSERT_THAT(SubmitSharedTextureRead(*producer_, unrelated), HasResult());
   EXPECT_THAT(consumer_->registerTexture(exported), HasResult());
 }
 
@@ -562,22 +350,22 @@ TEST_F(TextureRegistrationTest, AWriteQueuedBeforeTheExportIsCarriedByTheNextSub
 TEST_F(TextureRegistrationTest, ASharedQueueRegistrationNeedsNoWait) {
   SharingDevice producer(native_, SharingOptions{.ordering = SourceOrdering::SharedQueue});
   SharingDevice consumer(native_, SharingOptions{.ordering = SourceOrdering::SharedQueue});
-  const Texture owned = MakeTexture(producer);
+  const Texture owned = MakeSharedTexture(producer);
   producer.holdCompletion();
-  ASSERT_THAT(SubmitRead(producer, owned), HasResult());
+  ASSERT_THAT(SubmitSharedTextureRead(producer, owned), HasResult());
   const Texture registered =
       GetResultOrFail(consumer.registerTexture(GetResultOrFail(producer.exportTexture(owned))));
 
   EXPECT_THAT(consumer.waitForTextureSource(registered, 0.0), IsTrue());
-  EXPECT_THAT(SubmitRead(consumer, registered), HasResult());
+  EXPECT_THAT(SubmitSharedTextureRead(consumer, registered), HasResult());
 }
 
 /// Loss ends the wait at once rather than spending its budget, and ends submissions naming the
 /// registration.
 TEST_F(TextureRegistrationTest, TheSourceWaitEndsAtOnceOnLoss) {
-  const Texture owned = MakeTexture(*producer_);
+  const Texture owned = MakeSharedTexture(*producer_);
   producer_->holdCompletion();
-  ASSERT_THAT(SubmitRead(*producer_, owned), HasResult());
+  ASSERT_THAT(SubmitSharedTextureRead(*producer_, owned), HasResult());
   const Texture registered =
       GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
 
@@ -586,7 +374,8 @@ TEST_F(TextureRegistrationTest, TheSourceWaitEndsAtOnceOnLoss) {
   const auto start = std::chrono::steady_clock::now();
   EXPECT_THAT(consumer_->waitForTextureSource(registered, 5.0), IsFalse());
   EXPECT_THAT(std::chrono::steady_clock::now() - start, Lt(std::chrono::seconds(1)));
-  EXPECT_THAT(SubmitRead(*consumer_, registered), IsGpuError(GpuErrorType::DeviceLost));
+  EXPECT_THAT(SubmitSharedTextureRead(*consumer_, registered),
+              IsGpuError(GpuErrorType::DeviceLost));
 }
 
 /// A producer whose backend reported an execution failure is declared lost by the wait that sees
@@ -595,9 +384,9 @@ TEST_F(TextureRegistrationTest, TheSourceWaitEndsAtOnceOnLoss) {
 TEST_F(TextureRegistrationTest, AProducerFailureIsDeclaredWithoutAWaitSite) {
   const auto producerLost = std::make_shared<DeviceLostState>();
   SharingDevice producer(native_, SharingOptions{.lostState = producerLost});
-  const Texture owned = MakeTexture(producer);
+  const Texture owned = MakeSharedTexture(producer);
   producer.holdCompletion();
-  ASSERT_THAT(SubmitRead(producer, owned), HasResult());
+  ASSERT_THAT(SubmitSharedTextureRead(producer, owned), HasResult());
   const Texture registered =
       GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer.exportTexture(owned))));
 
@@ -608,15 +397,16 @@ TEST_F(TextureRegistrationTest, AProducerFailureIsDeclaredWithoutAWaitSite) {
   EXPECT_THAT(producerLost->lost.load(), IsTrue());
   EXPECT_THAT(producerLost->timedOutSite.load(), Eq(DeviceLostWaitSite::None));
   EXPECT_THAT(consumer_->isLost(), IsFalse());
-  EXPECT_THAT(SubmitRead(*consumer_, registered), IsGpuError(GpuErrorType::DeviceLost));
+  EXPECT_THAT(SubmitSharedTextureRead(*consumer_, registered),
+              IsGpuError(GpuErrorType::DeviceLost));
 }
 
 /// A wait that spends its budget reports that and nothing more: the budget is the caller's
 /// policy, not evidence that the device stopped answering.
 TEST_F(TextureRegistrationTest, ATimedOutSourceWaitDeclaresNothing) {
-  const Texture owned = MakeTexture(*producer_);
+  const Texture owned = MakeSharedTexture(*producer_);
   producer_->holdCompletion();
-  ASSERT_THAT(SubmitRead(*producer_, owned), HasResult());
+  ASSERT_THAT(SubmitSharedTextureRead(*producer_, owned), HasResult());
   const Texture registered =
       GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
 
@@ -627,9 +417,9 @@ TEST_F(TextureRegistrationTest, ATimedOutSourceWaitDeclaresNothing) {
 
 /// A texture of the device itself needs no source wait.
 TEST_F(TextureRegistrationTest, ADevicesOwnTextureNeedsNoSourceWait) {
-  const Texture owned = MakeTexture(*producer_);
+  const Texture owned = MakeSharedTexture(*producer_);
   producer_->holdCompletion();
-  ASSERT_THAT(SubmitRead(*producer_, owned), HasResult());
+  ASSERT_THAT(SubmitSharedTextureRead(*producer_, owned), HasResult());
   EXPECT_THAT(producer_->waitForTextureSource(owned, 0.0), IsTrue());
 }
 
@@ -644,7 +434,7 @@ TEST_F(TextureRegistrationTest, RegisteringOnAnotherThreadNeverTouchesTheProduce
   std::vector<Texture> owned;
   std::vector<TextureExport> exports;
   for (int i = 0; i < kTextures; ++i) {
-    owned.push_back(MakeTexture(*producer_));
+    owned.push_back(MakeSharedTexture(*producer_));
     exports.push_back(GetResultOrFail(producer_->exportTexture(owned.back())));
   }
 
@@ -655,14 +445,16 @@ TEST_F(TextureRegistrationTest, RegisteringOnAnotherThreadNeverTouchesTheProduce
     for (int round = 0; !consumerDone.load(); ++round) {
       const size_t index = static_cast<size_t>(round) % owned.size();
       if (owned[index].isValid()) {
-        EXPECT_THAT(SubmitRead(*producer_, owned[index]), HasResult());
-        EXPECT_THAT(producer_->writeTexture(owned[index], texels, {0, 256, 4}, kExtent), IsOk());
+        EXPECT_THAT(SubmitSharedTextureRead(*producer_, owned[index]), HasResult());
+        EXPECT_THAT(
+            producer_->writeTexture(owned[index], texels, {0, 256, 4}, kSharedTextureExtent),
+            IsOk());
         if (round % 7 == 3) {
           EXPECT_THAT(producer_->destroyTexture(std::move(owned[index])), IsOk());
         }
       }
-      Texture churn = MakeTexture(*producer_);
-      EXPECT_THAT(SubmitRead(*producer_, churn), HasResult());
+      Texture churn = MakeSharedTexture(*producer_);
+      EXPECT_THAT(SubmitSharedTextureRead(*producer_, churn), HasResult());
       EXPECT_THAT(producer_->destroyTexture(std::move(churn)), IsOk());
     }
   });
@@ -677,7 +469,7 @@ TEST_F(TextureRegistrationTest, RegisteringOnAnotherThreadNeverTouchesTheProduce
           continue;
         }
         EXPECT_THAT(consumer_->waitForTextureSource(registered.result(), 1.0), IsTrue());
-        EXPECT_THAT(SubmitRead(*consumer_, registered.result()), HasResult());
+        EXPECT_THAT(SubmitSharedTextureRead(*consumer_, registered.result()), HasResult());
         EXPECT_THAT(consumer_->destroyTexture(std::move(registered).result()), IsOk());
       }
     }
