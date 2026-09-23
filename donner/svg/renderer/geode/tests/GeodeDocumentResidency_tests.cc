@@ -9,20 +9,26 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <ostream>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/RcString.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGPathElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererGeode.h"
@@ -32,6 +38,7 @@
 #include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 
 namespace donner::svg {
 namespace {
@@ -51,11 +58,35 @@ constexpr std::string_view kShapesSvg = R"(
     <ellipse cx="100" cy="150" rx="50" ry="20" fill="#fc3" opacity="0.8"/>
   </svg>)";
 
+/// Two text runs, so a device's glyph cache and every text element's occurrence records hold
+/// residence of their own.
+constexpr std::string_view kTextSvg = R"(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200"
+       font-family="Noto Sans" font-size="32">
+    <text x="10" y="60" fill="black">eeee</text>
+    <text x="10" y="140" fill="#36c">donner</text>
+  </svg>)";
+
+/// Hermetic test fonts, relative to the runfiles root, so glyph identity does not depend on the
+/// host's installed fonts.
+constexpr std::string_view kFontsRunfilesPath = "third_party/resvg-test-suite/fonts";
+
 SVGDocument ParseShapes() {
   ParseWarningSink sink = ParseWarningSink::Disabled();
   auto parsed = parser::SVGParser::ParseSVG(kShapesSvg, sink);
   EXPECT_FALSE(parsed.hasError()) << parsed.error().reason;
   return std::move(parsed.result());
+}
+
+SVGDocument ParseText() {
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kTextSvg, sink);
+  EXPECT_FALSE(parsed.hasError()) << parsed.error().reason;
+  SVGDocument document = std::move(parsed.result());
+  TrustDocumentFontFacesForTesting(document);
+  RegisterFontsFromDirectoryForTesting(
+      document, Runfiles::instance().Rlocation(std::string(kFontsRunfilesPath)));
+  return document;
 }
 
 /// The GPU work a frame spends establishing residence: what a frame that finds its geometry,
@@ -83,6 +114,21 @@ ResidencyWork DrawAndMeasure(RendererGeode& renderer, SVGDocument& document) {
   const geode::GeodeCounters counters = renderer.lastFrameTimings().counters;
   return ResidencyWork{counters.bufferCreates, counters.bindgroupCreates, counters.bufferWrites,
                        counters.bufferWriteBytes};
+}
+
+/// Identical dimensions and identical visible pixels, and not empty.
+bool BitmapsEqual(const RendererBitmap& a, const RendererBitmap& b) {
+  if (a.dimensions != b.dimensions || a.empty()) {
+    return false;
+  }
+  for (int y = 0; y < a.dimensions.y; ++y) {
+    const uint8_t* rowA = a.pixels.data() + static_cast<size_t>(y) * a.rowBytes;
+    const uint8_t* rowB = b.pixels.data() + static_cast<size_t>(y) * b.rowBytes;
+    if (std::memcmp(rowA, rowB, static_cast<size_t>(a.dimensions.x) * 4u) != 0) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /// A second logical context over the physical root \p root holds, the way an editor's UI context
@@ -287,11 +333,124 @@ TEST_F(GeodeDocumentResidencyTest, ADocumentOutlivesADeviceThatDrewIt) {
   EXPECT_THAT(second_->liveResidentBytesForTesting(), Gt(int64_t{0}));
 }
 
+TEST_F(GeodeDocumentResidencyTest, TextKeepsItsResidenceWhenAnotherDeviceDrawsIt) {
+  SVGDocument document = ParseText();
+  RendererGeode onFirst(first_);
+  (void)DrawAndMeasure(onFirst, document);
+  (void)DrawAndMeasure(onFirst, document);
+  const ResidencyWork steady = DrawAndMeasure(onFirst, document);
+  const size_t firstGlyphs = onFirst.residentGlyphCountForTesting(document);
+  ASSERT_THAT(firstGlyphs, Gt(0u)) << "the text must make its glyph outlines resident";
+
+  RendererGeode onSecond(second_);
+  onSecond.draw(document);
+  EXPECT_THAT(onSecond.residentGlyphCountForTesting(document), Eq(firstGlyphs))
+      << "the second device keeps glyph outlines of its own";
+
+  EXPECT_THAT(onFirst.residentGlyphCountForTesting(document), Eq(firstGlyphs));
+  EXPECT_THAT(DrawAndMeasure(onFirst, document), Eq(steady))
+      << "the glyph cache and the text records on this device must survive another device "
+         "drawing the text";
+}
+
+TEST_F(GeodeDocumentResidencyTest, AnEditOnOneDeviceReachesTheOtherDevicesResidence) {
+  SVGDocument document = ParseShapes();
+  RendererGeode onFirst(first_);
+  RendererGeode onSecond(second_);
+  onFirst.draw(document);
+  onSecond.draw(document);
+
+  std::optional<SVGElement> curve = document.querySelector("#curve");
+  ASSERT_TRUE(curve.has_value());
+  curve->cast<SVGPathElement>().setD(RcString("M20 20 L180 180"));
+
+  // The first device draws the edit first; the second must not keep drawing its old upload.
+  onFirst.draw(document);
+  const RendererBitmap onFirstAfterEdit = onFirst.takeSnapshot();
+  onSecond.draw(document);
+  const RendererBitmap onSecondAfterEdit = onSecond.takeSnapshot();
+
+  EXPECT_THAT(BitmapsEqual(onFirstAfterEdit, onSecondAfterEdit), IsTrue())
+      << "both devices must draw the edited path";
+}
+
 TEST_F(GeodeSharedRootResidencyTest, EachRetirementOutlivesTheDeviceItReleasesInto) {
   // A retirement destroyed before its device would let a document destroyed on another thread
   // meanwhile drop that device's handles in place, into tables the device's own thread is using.
   EXPECT_THAT(logical_->retirementOutlivesOwnedRuntimeDeviceForTesting(), IsTrue());
   EXPECT_THAT(root_->physicalDeviceOwner()->rootRetirementOutlivesRootDeviceForTesting(), IsTrue());
+}
+
+TEST_F(GeodeSharedRootResidencyTest, TheEditorsTwoContextsShareOneDocumentOnTwoThreads) {
+  SVGDocument document = ParseShapes();
+  // The render worker draws through the root context, the UI through the logical one.
+  DrawOnTwoThreads(/*worker=*/root_, /*ui=*/logical_, document);
+}
+
+TEST_F(GeodeSharedRootResidencyTest, TheEditorsTwoContextsShareOneTextDocumentOnTwoThreads) {
+  SVGDocument document = ParseText();
+  DrawOnTwoThreads(/*worker=*/root_, /*ui=*/logical_, document);
+}
+
+TEST_F(GeodeSharedRootResidencyTest, AContextGoesWhileAnotherThreadDestroysADocumentItDrew) {
+  std::optional<SVGDocument> document = ParseShapes();
+  {
+    RendererGeode onRoot(root_);
+    onRoot.draw(*document);
+    RendererGeode onLogical(logical_);
+    onLogical.draw(*document);
+  }
+
+  // One thread lets the logical context go while another destroys the document holding its
+  // residence: the document's slabs retire into the logical context's retirement as it closes.
+  std::atomic<int> started = 0;
+  const auto startTogether = [&started] {
+    started.fetch_add(1, std::memory_order_acq_rel);
+    while (started.load(std::memory_order_acquire) < 2) {
+      std::this_thread::yield();
+    }
+  };
+  std::thread contextGoes([&] {
+    startTogether();
+    logical_.reset();
+  });
+  std::thread documentGoes([&] {
+    startTogether();
+    document.reset();
+  });
+  contextGoes.join();
+  documentGoes.join();
+
+  // The root context, which drew the same document, is unaffected.
+  RendererGeode onRoot(root_);
+  SVGDocument next = ParseShapes();
+  onRoot.draw(next);
+  EXPECT_THAT(onRoot.deviceLost(), IsFalse());
+  EXPECT_THAT(onRoot.takeSnapshot().empty(), IsFalse());
+}
+
+TEST_F(GeodeSharedRootResidencyTest, TheRootContextGoingLeavesALogicalContextDrawing) {
+  SVGDocument document = ParseShapes();
+  const std::shared_ptr<geode::GeodePhysicalDeviceOwner> owner = root_->physicalDeviceOwner();
+  {
+    RendererGeode onRoot(root_);
+    onRoot.draw(document);
+  }
+  RendererGeode onLogical(logical_);
+  (void)DrawAndMeasure(onLogical, document);
+  (void)DrawAndMeasure(onLogical, document);
+  const ResidencyWork steady = DrawAndMeasure(onLogical, document);
+
+  // The root context goes; the root device stays, held by the owner the logical context keeps.
+  root_.reset();
+  EXPECT_THAT(DrawAndMeasure(onLogical, document), Eq(steady))
+      << "the logical context's residence is its own";
+  EXPECT_THAT(onLogical.deviceLost(), IsFalse());
+
+  // That draw dropped the gone context's residence. Its handles wait in the retirement the owner
+  // holds, and go only with the owner, after the root device.
+  EXPECT_THAT(owner->rootDeviceHandleRetirement()->closed(), IsTrue());
+  EXPECT_THAT(owner->rootDeviceHandleRetirement()->heldCountsForTesting().buffers, Gt(0u));
 }
 
 }  // namespace

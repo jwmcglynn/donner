@@ -966,6 +966,8 @@ donner_multi_transitioned_test(
     dep = ":geode_document_residency_tests_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
+    # The text cases need the text backend; without it a text element draws nothing.
+    text = "true",
 )
 
 donner_cc_test(
