@@ -60,34 +60,50 @@ std::array<uint8_t, 4> PixelAt(const Bitmap& bitmap, int x, int y,
 }
 
 /**
- * Whether \p bitmap holds pixels to read, failing the calling test at the caller's line, naming
- * the snapshot as empty, when it holds none.
+ * Whether \p bitmap holds every pixel of its extent, failing the calling test once at the caller's
+ * line when it does not: naming the snapshot as empty when it holds no pixels, and naming the
+ * shortfall when its pixel buffer ends before the last pixel of its extent.
  *
  * A renderer that could not read its frame back returns an empty snapshot. A helper that walks a
  * snapshot by its own extent visits no pixel of an empty one, so it counts no pixels and finds two
- * empty snapshots identical, which an assertion about absent or unchanged content accepts. Every
- * helper that reads a whole snapshot, or a region of one, asks this first.
+ * empty snapshots identical, which an assertion about absent or unchanged content accepts. A
+ * truncated one would instead fail once for every pixel past the end. Every helper that reads a
+ * whole snapshot, or a region of one, asks this first.
  *
- * @param bitmap Snapshot about to be read.
+ * @param bitmap Snapshot about to be read; rows are \c rowBytes apart, or tightly packed when that
+ *   is zero.
  * @param caller Where the read was made; defaults to the call site.
- * @return True when \p bitmap has pixels.
+ * @return True when \p bitmap holds every pixel of its extent.
  */
 template <typename Bitmap>
 bool ExpectSnapshotHasPixels(const Bitmap& bitmap,
                              std::source_location caller = std::source_location::current()) {
-  if (bitmap.dimensions.x > 0 && bitmap.dimensions.y > 0 && !bitmap.pixels.empty()) {
-    return true;
+  if (bitmap.dimensions.x <= 0 || bitmap.dimensions.y <= 0 || bitmap.pixels.empty()) {
+    ADD_FAILURE_AT(caller.file_name(), caller.line())
+        << "read an empty " << bitmap.dimensions.x << "x" << bitmap.dimensions.y
+        << " snapshot: the renderer returned no pixels, so the frame was not read back";
+    return false;
   }
-  ADD_FAILURE_AT(caller.file_name(), caller.line())
-      << "read an empty " << bitmap.dimensions.x << "x" << bitmap.dimensions.y
-      << " snapshot: the renderer returned no pixels, so the frame was not read back";
-  return false;
+  const size_t rowPixelBytes = static_cast<size_t>(bitmap.dimensions.x) * 4u;
+  const size_t rowBytes =
+      bitmap.rowBytes != 0 ? static_cast<size_t>(bitmap.rowBytes) : rowPixelBytes;
+  const size_t neededBytes =
+      static_cast<size_t>(bitmap.dimensions.y - 1) * rowBytes + rowPixelBytes;
+  if (bitmap.pixels.size() < neededBytes) {
+    ADD_FAILURE_AT(caller.file_name(), caller.line())
+        << "read a " << bitmap.dimensions.x << "x" << bitmap.dimensions.y << " snapshot whose "
+        << bitmap.pixels.size() << " bytes end before the " << neededBytes
+        << " its extent needs: the frame was not read back whole";
+    return false;
+  }
+  return true;
 }
 
 /**
  * Counts the pixels of \p bitmap whose RGBA satisfies \p predicate, reading each through
- * \ref PixelAt. An empty snapshot fails the calling test (see \ref ExpectSnapshotHasPixels) and
- * counts nothing, rather than counting as a snapshot with no such pixels.
+ * \ref PixelAt. An empty or truncated snapshot fails the calling test once (see
+ * \ref ExpectSnapshotHasPixels) and counts nothing, rather than counting as a snapshot with no
+ * such pixels.
  *
  * @param bitmap Snapshot to count.
  * @param predicate Called with each pixel's RGBA; true counts the pixel.
