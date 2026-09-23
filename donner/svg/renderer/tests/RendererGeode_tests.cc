@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <latch>
 #include <limits>
 #include <memory>
@@ -6356,22 +6357,48 @@ TEST_F(RendererGeodeTest, IsolatedReadbackWaitHonorsCancellationAndDeadlineWitho
   ASSERT_THAT(snapshot, testing::NotNull());
   beginFrame(renderer);
   renderer.endFrame();
-  std::latch acquired(1);
+  // True once the worker's capture holds the readback context, false when its capture returned
+  // without ever acquiring one, as it does when the backend cannot register the snapshot's texture
+  // on the capture context. The wait is also bounded well inside the per-case budget, but the case
+  // cannot end a worker whose capture never returns: it names the stall before joining it.
+  std::promise<bool> acquiredSignal;
+  std::future<bool> acquired = acquiredSignal.get_future();
   std::latch release(1);
   std::atomic<bool> first{true};
   std::atomic<bool> cancelWaiter{false};
   device->setSnapshotReadbackHookForTesting([&](geode::GeodeDevice::SnapshotReadbackPhase phase) {
     if (phase == geode::GeodeDevice::SnapshotReadbackPhase::ContextAcquired &&
         first.exchange(false)) {
-      acquired.count_down();
+      acquiredSignal.set_value(true);
       release.wait();
     } else if (phase == geode::GeodeDevice::SnapshotReadbackPhase::WaitingForContext) {
       cancelWaiter.store(true, std::memory_order_relaxed);
     }
   });
   RendererBitmap captured;
-  std::thread worker([&] { captured = snapshot->takeSnapshot(); });
-  acquired.wait();
+  std::thread worker([&] {
+    captured = snapshot->takeSnapshot();
+    if (first.exchange(false)) {
+      acquiredSignal.set_value(false);
+    }
+  });
+  if (acquired.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
+    // Reported before the join, which waits for the stalled capture however long it takes.
+    ADD_FAILURE() << "the worker's capture neither acquired its readback context nor returned "
+                     "within 10 s";
+    release.count_down();
+    worker.join();
+    device->setSnapshotReadbackHookForTesting({});
+    return;
+  }
+  if (!acquired.get()) {
+    release.count_down();
+    worker.join();
+    device->setSnapshotReadbackHookForTesting({});
+    FAIL() << "the worker's capture returned without acquiring its readback context, so the "
+              "contention this case measures never happened (its snapshot came back "
+           << (captured.empty() ? "empty" : "with pixels") << ")";
+  }
   device->setSnapshotReadbackBudgetForTesting(std::chrono::milliseconds(1));
   EXPECT_THAT(renderer.takeSnapshot().empty(), testing::IsTrue());
   device->setSnapshotReadbackBudgetForTesting(geode::kReadbackMapTimeout);
