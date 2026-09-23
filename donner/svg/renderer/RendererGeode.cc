@@ -3576,6 +3576,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       residency.records = std::make_shared<geode::GeodeRecordSlab>(
           device->deviceId(), device->handleRetirement(), std::move(documentBudget));
     }
+    // Take back the records freed before this frame, at most once per frame, as `residentSlab`
+    // does for geometry. Doing it here rather than in draw() covers the driver entry points a
+    // render worker uses, which never pass through draw(). A frame that opened inside another
+    // frame on this device, as an offscreen pass does, leaves them for later: the enclosing frame
+    // has not submitted yet, so a record freed while it was open may still be one its batches read.
+    if (device->oldestOpenFrameGeneration() >= currentFrameIndex) {
+      residency.records->beginFrame(currentFrameIndex);
+    }
     return residency.records;
   }
 
