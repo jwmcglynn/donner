@@ -3060,12 +3060,14 @@ TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
             Vector2i(static_cast<int>(kViewportSize), static_cast<int>(kViewportSize)));
 }
 
-TEST_F(RendererGeodeTest, BgraTargetSnapshotReturnsStraightRgba) {
-  std::shared_ptr<geode::GeodeDevice> bgraContext =
-      geode::GeodeDevice::CreateHeadless(gpu::TextureFormat::BGRA8Unorm);
-  ASSERT_NE(bgraContext, nullptr);
-  RendererGeode renderer(bgraContext);
-  beginFrame(renderer);
+/// Draws an opaque cyan-blue square through \p context, whose target is BGRA, and requires the
+/// snapshot to read back as straight, logical RGBA.
+void ExpectBgraTargetSnapshotIsStraightRgba(const std::shared_ptr<geode::GeodeDevice>& context) {
+  RendererGeode renderer(context);
+  RenderViewport viewport;
+  viewport.size = Vector2d(kViewportSize, kViewportSize);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
   renderer.setPaint(solidFill(css::RGBA(0, 200, 255, 255)));
   renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
   renderer.endFrame();
@@ -3077,6 +3079,30 @@ TEST_F(RendererGeodeTest, BgraTargetSnapshotReturnsStraightRgba) {
   const std::array<uint8_t, 4> center = PixelAt(actual, 32, 32);
   EXPECT_THAT(center, Rgba(testing::Le(2), Near(200, 2), Near(255, 2), testing::Eq(255)))
       << "BGRA readback must be converted back to logical RGBA";
+}
+
+TEST_F(RendererGeodeTest, BgraTargetSnapshotReturnsStraightRgba) {
+  std::shared_ptr<geode::GeodeDevice> bgraContext =
+      geode::GeodeDevice::CreateHeadless(gpu::TextureFormat::BGRA8Unorm);
+  ASSERT_NE(bgraContext, nullptr);
+  ExpectBgraTargetSnapshotIsStraightRgba(bgraContext);
+}
+
+/// A BGRA target an embedding host hands over reads back the same way. Embedding hands over wgpu
+/// objects, so the host selects the transitional adapter.
+TEST_F(RendererGeodeTest, EmbeddedBgraTargetSnapshotReturnsStraightRgba) {
+  std::shared_ptr<geode::GeodeDevice> host =
+      geode::CreateTransitionalAdapterContext("an embedding host hands over wgpu objects");
+  ASSERT_NE(host, nullptr);
+
+  geode::GeodeEmbedConfig config;
+  config.device = host->adapterDevice().root().device();
+  config.queue = host->adapterDevice().root().queue();
+  config.adapter = host->adapterDevice().root().adapter();
+  config.textureFormat = wgpu::TextureFormat::BGRA8Unorm;
+  std::shared_ptr<geode::GeodeDevice> embedded = geode::GeodeDevice::CreateFromExternal(config);
+  ASSERT_NE(embedded, nullptr);
+  ExpectBgraTargetSnapshotIsStraightRgba(embedded);
 }
 
 /// Filling a path with a solid red paint should produce red pixels at the
