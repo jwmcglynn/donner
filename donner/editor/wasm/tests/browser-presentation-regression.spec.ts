@@ -2446,13 +2446,30 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   await expect.poll(
     () => page.evaluate(() => window.__donnerEyedropperTestState?.sourceSelectionActive),
     {
-      message: "Control+A must select the existing SVG source before typing the fixture",
+      message: "Control+A must select the existing SVG source before pasting the fixture",
       timeout: scaledMs(4_000),
     },
   ).toBe(true);
   await page.keyboard.up("a");
   await page.keyboard.up("Control");
-  await page.keyboard.type(fixture);
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.evaluate((text) => navigator.clipboard.writeText(text), fixture);
+  const beforePasteFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+  await page.keyboard.down("Control");
+  await page.keyboard.down("v");
+  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
+    message: "the real source-pane paste must reach an editor frame",
+    timeout: scaledMs(4_000),
+  }).toBeGreaterThan(beforePasteFrame);
+  await page.keyboard.up("v");
+  await page.keyboard.up("Control");
+  await expect.poll(
+    () => page.evaluate(() => window.__donnerEyedropperTestState?.sourceSelectionActive),
+    {
+      message: "atomic SVG paste must replace the selected source",
+      timeout: scaledMs(4_000),
+    },
+  ).toBe(false);
   await expect.poll(() =>
     page.evaluate((before) => {
       const width = window.__donnerViewportStats?.documentWidth ?? 0;
@@ -2471,7 +2488,7 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
         completedResults: window.__donnerWorkerStats?.completedResults ?? -1,
       };
     }, beforeSourceVersion), {
-    message: "the typed translucent SVG must become a settled square document",
+    message: "the pasted translucent SVG must become a settled square document",
     timeout: scaledMs(5_000),
     intervals: [16, 25, 50, 100],
   }).toEqual(expect.objectContaining({ ready: true }));
