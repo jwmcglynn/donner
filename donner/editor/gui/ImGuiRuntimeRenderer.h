@@ -21,10 +21,6 @@ namespace donner::gpu::shader {
 struct CompiledShaderView;
 }  // namespace donner::gpu::shader
 
-namespace donner::geode {
-class GeodeWgpuAdapterDevice;
-}  // namespace donner::geode
-
 namespace donner::editor {
 
 /**
@@ -134,23 +130,7 @@ public:
   void install();
 
   /// Stops publishing this renderer on the current ImGui context, if it is the published one.
-  /// Also forgets the import device, so the two can never be observed out of step.
   void uninstall();
-
-  /**
-   * Records the device a backend texture is imported into before it can be sampled by the UI.
-   *
-   * Held here rather than beside the published pointer so that publishing a renderer and knowing
-   * where its imports go are one fact: two separate globals can desynchronise while two windows
-   * overlap. Importing is specific to the transition adapter and this build has no RTTI, so the
-   * embedder that owns the backend states it instead of it being cast out of the device.
-   *
-   * @param device Device to import through, or null when this renderer has no import path.
-   */
-  void setImportDevice(geode::GeodeWgpuAdapterDevice* device) { importDevice_ = device; }
-
-  /// Device backend textures are imported into, or null when there is none.
-  geode::GeodeWgpuAdapterDevice* importDevice() const { return importDevice_; }
 
   /// Identifier of the registered font atlas, null until \ref buildFontAtlas succeeds.
   UiTextureId fontAtlasTexture() const { return fontAtlasTexture_; }
@@ -263,7 +243,6 @@ private:
 
   gpu::Device* device_;
   UiTextureRegistry* registry_;
-  geode::GeodeWgpuAdapterDevice* importDevice_ = nullptr;
 
   gpu::ShaderModule shaderModule_;
   gpu::BindGroupLayout bindGroupLayout_;

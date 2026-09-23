@@ -12,10 +12,6 @@ namespace donner::svg {
 class RendererTextureSnapshot;
 }  // namespace donner::svg
 
-namespace donner::geode {
-class GeodeWgpuAdapterDevice;
-}  // namespace donner::geode
-
 namespace donner::editor {
 
 /**
