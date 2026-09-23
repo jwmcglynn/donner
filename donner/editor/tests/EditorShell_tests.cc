@@ -5894,9 +5894,17 @@ TEST(EditorShellTest, ToolPaletteButtonsReachTheCenteredBottomEdge) {
       EditorShellTestAccess::ToolPaletteScreenRect(shell, kPaneOrigin, kContentRegion);
   const float buttonSize = EditorShellTestAccess::AdaptiveUiLayout(shell).toolButtonSize;
   ASSERT_THAT(buttonSize, testing::Lt(44.0f));
-  const ImVec2 penButtonNearBottom(
-      static_cast<float>(palette.topLeft.x) + 8.0f + buttonSize + 4.0f + buttonSize * 0.5f,
-      static_cast<float>(palette.bottomRight.y) - 8.0f - 2.0f - (44.0f - buttonSize) * 0.5f);
+  const float paletteCenterY =
+      (static_cast<float>(palette.topLeft.y) + static_cast<float>(palette.bottomRight.y)) * 0.5f;
+  const float penButtonCenterX =
+      static_cast<float>(palette.topLeft.x) + 8.0f + buttonSize + 4.0f + buttonSize * 0.5f;
+  const ImVec2 abovePenButton(penButtonCenterX, paletteCenterY - buttonSize * 0.5f - 2.0f);
+  const ImVec2 penButtonNearBottom(penButtonCenterX, paletteCenterY + buttonSize * 0.5f - 2.0f);
+
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, abovePenButton, false);
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, abovePenButton, true);
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, abovePenButton, false);
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsSelect(shell), testing::Eq(true));
 
   RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, penButtonNearBottom, false);
   RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, penButtonNearBottom, true);

@@ -4106,8 +4106,10 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
       ImVec2(static_cast<float>(rect.bottomRight.x), static_cast<float>(rect.bottomRight.y)),
       WithAlpha(theme.borderStrong, 220), theme.radiusContainer);
 
+  const float paletteCenterY =
+      (static_cast<float>(rect.topLeft.y) + static_cast<float>(rect.bottomRight.y)) * 0.5f;
   ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(rect.topLeft.x) + kToolPalettePadding,
-                                   static_cast<float>(rect.topLeft.y) + kToolPalettePadding));
+                                   paletteCenterY - adaptiveUiLayout_.toolButtonSize * 0.5f));
   ImGui::PushID("tool_palette");
   ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme.radiusControl);
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
@@ -4173,6 +4175,9 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
                eyedropperTooltip.c_str());
   if (adaptiveUiLayout_.showPaintControls) {
     ImGui::SameLine(0.0f, kToolPaletteGap);
+    const ImVec2 paintCursor = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(
+        ImVec2(paintCursor.x, paletteCenterY - kToolPalettePaintWidgetHeight * 0.5f));
     renderFillStrokeToolbarWidget();
   }
 
