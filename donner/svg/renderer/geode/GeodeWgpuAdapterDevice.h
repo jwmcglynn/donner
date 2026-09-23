@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -362,7 +363,9 @@ public:
    * Test seam: a healthy device completes everything in microseconds, so the bounded waits and
    * their deadlines are otherwise unreachable. Both knobs describe real driver shapes, and the
    * waits must tell them apart: a driver that blocks in poll spends the wait's budget, while one
-   * that returns from poll at once spends none of it and only exhausts the wait's own poll bound.
+   * that returns from poll at once exhausts the wait's poll bound first and then waits for a
+   * completion to be delivered. Lifting the ceiling, from any thread, delivers the held
+   * completions the way a callback does, waking a wait that is waiting for them.
    *
    * @param completedSerialCeiling Highest serial \ref completedSerial may report;
    *   \ref kNoCompletedSerialCeiling restores what the backend reports.
@@ -371,10 +374,7 @@ public:
    *   backend's poll timing alone.
    */
   void holdSubmittedWorkForTesting(uint64_t completedSerialCeiling,
-                                   std::chrono::milliseconds pollCost) {
-    completedSerialCeiling_.store(completedSerialCeiling, std::memory_order_relaxed);
-    serialWaitPollCostMsForTesting_.store(pollCost.count(), std::memory_order_relaxed);
-  }
+                                   std::chrono::milliseconds pollCost);
 
   /// Ceiling value that leaves \ref completedSerial reporting what the backend reports.
   static constexpr uint64_t kNoCompletedSerialCeiling = std::numeric_limits<uint64_t>::max();
@@ -385,6 +385,13 @@ public:
   ///
   /// @param seconds Budget in seconds.
   void setTeardownDrainBudgetForTesting(double seconds) { teardownDrainSeconds_ = seconds; }
+
+  /// Polls a serial wait makes before it stops polling, in place of \ref kMaxSerialWaitPolls.
+  /// Lowered by tests so a wait reaches its poll bound on a poll that also carries it past its
+  /// deadline, which twenty thousand polls cannot do deterministically. Test seam.
+  ///
+  /// @param polls Poll bound for this device's later serial waits.
+  void setSerialWaitPollBoundForTesting(int polls) { serialWaitPollBound_ = polls; }
 
   /**
    * TEMPORARY escape hatch (deleted with the presentation migration): registers an
@@ -500,10 +507,16 @@ private:
    */
   wgpu::Texture liveBackendTexture(const gpu::Texture& texture) const;
 
-  /// Second bound on \ref waitForSerialBounded, for a driver whose poll returns without either
-  /// progressing or costing wall time. It keeps such a wait from spinning a core; it is not a
-  /// deadline, and reaching it with the budget unspent says nothing about the device.
+  /// Polls \ref waitForSerialBounded makes before it stops polling and waits for a completion to
+  /// be delivered instead. A poll that returns at once without the work completing means another
+  /// thread's poll collected the completion callback and has yet to run it, or a driver that does
+  /// not block in poll; either way repeating it only spins a core. It is not a deadline, and
+  /// reaching it with the budget unspent says nothing about the device.
   static constexpr int kMaxSerialWaitPolls = 20000;
+
+  /// Longest a wait past its poll bound sleeps before checking again for a loss, which is not
+  /// signalled, and polling once without blocking in case nothing else is driving the queue.
+  static constexpr std::chrono::milliseconds kDeliveredCompletionSlice{1};
 
   /// Whether a wait that spends its whole budget without the work retiring declares the backend
   /// root lost.
@@ -517,13 +530,29 @@ private:
   };
 
   /// Drives \ref pollForSerialCompletion until \ref completedSerial reaches \p serial, the
-  /// device is lost, the budget elapses, or the poll bound above is reached.
+  /// device is lost, or the budget elapses. Past the poll bound above, and only with budget left,
+  /// it stops polling in a loop and waits for the completion to be delivered
+  /// (\ref waitForDeliveredCompletion). A wait whose last poll carries it past its deadline has
+  /// spent its budget polling, so it ends as any such wait does.
   ///
   /// @param serial Submission serial to wait for.
   /// @param timeoutSeconds Longest to wait, in seconds.
-  /// @param onTimeout What a wait that spends its whole budget publishes.
+  /// @param onTimeout What a wait that spends its whole budget polling publishes.
   /// @return True once this device has completed \p serial.
   bool waitForSerialBounded(uint64_t serial, double timeoutSeconds, LossOnTimeout onTimeout);
+
+  /**
+   * The rest of a serial wait whose polls stopped blocking before its work completed: waits for
+   * the completion callback to be delivered, by whichever thread's poll collected it, until
+   * \p deadline. A deadline that passes here declares nothing, because polls that return at once
+   * observed nothing about whether the device is still answering.
+   *
+   * @param serial Submission serial to wait for.
+   * @param deadline When the wait's budget runs out.
+   * @return True once this device has completed \p serial; false on a lost device or at the
+   *   deadline.
+   */
+  bool waitForDeliveredCompletion(uint64_t serial, std::chrono::steady_clock::time_point deadline);
 
   /// Ends a serial wait that observed no completion, declaring the backend root lost when the
   /// wait had a real budget to spend.
@@ -547,6 +576,10 @@ private:
   /// Wall time each poll inside a serial wait costs on top of the backend's own, in milliseconds;
   /// see \ref holdSubmittedWorkForTesting.
   std::atomic<std::chrono::milliseconds::rep> serialWaitPollCostMsForTesting_{0};
+
+  /// Polls a serial wait makes before it stops polling; see
+  /// \ref setSerialWaitPollBoundForTesting.
+  int serialWaitPollBound_ = kMaxSerialWaitPolls;
 
   /// Budget \ref ~GeodeWgpuAdapterDevice spends draining submitted work. Generous: a healthy
   /// device drains in microseconds, so it only trips on a driver that has effectively hung, and
@@ -621,12 +654,17 @@ private:
 
     /// Records a queued submission. @param serial Logical serial.
     void record(uint64_t serial);
-    /// Completes exactly one queued range and publishes the contiguous completed prefix.
+    /// Completes exactly one queued range, publishes the contiguous completed prefix and wakes
+    /// the waits for it.
     /// @param ticket Unique first serial of the completed range.
     void complete(uint64_t ticket);
+    /// Wakes every wait for a delivered completion, after whatever it reads has been published.
+    void notifyProgress();
 
     std::atomic<uint64_t> completedSerial{0};  //!< Highest serial with no unfinished predecessor.
-    std::mutex mutex;                 //!< Protects ranges and their completed high-water mark.
+    std::mutex mutex;  //!< Protects ranges and their completed high-water mark.
+    /// Signalled with \ref mutex whenever a completion is delivered.
+    std::condition_variable progressed;
     SmallVector<Pending, 4> pending;  //!< Includes queued ranges until their callbacks run.
     uint64_t completedHighWater = 0;  //!< Highest serial seen by a completed callback.
   };

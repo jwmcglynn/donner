@@ -532,11 +532,13 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitTimeoutDeclaresLossWithWaitAttribution) {
                                       std::chrono::milliseconds(0));
 }
 
-/// A wait that ends by exhausting its own poll bound has spent none of its budget: the driver
-/// returned from every poll without blocking and without progressing. That says something about
-/// how this driver implements poll, not that submitted work stopped completing, and declaring a
-/// permanent loss from it fails every later caller on a device that is merely idle.
-TEST(GeodeDeviceLost, RuntimeSerialWaitExhaustingOnlyItsPollBoundLeavesTheDeviceHealthy) {
+/// A wait whose polls return at once without its work completing has observed nothing about the
+/// device: another context's poll can have collected this wait's completion callback, or the driver
+/// may not block in poll at all. So once its poll bound is spent it waits, without polling in a
+/// tight loop, for a completion to be delivered, and a deadline that passes while it does declares
+/// nothing: declaring a permanent loss from it would fail every later caller on a device that is
+/// merely idle. The wait still ends by its own deadline.
+TEST(GeodeDeviceLost, RuntimeSerialWaitWhosePollsNeverBlockKeepsItsBudgetAndDeclaresNothing) {
   auto device = GeodeDevice::CreateHeadless();
   ASSERT_NE(device, nullptr);
   ASSERT_FALSE(device->isDeviceLost());
@@ -544,26 +546,93 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitExhaustingOnlyItsPollBoundLeavesTheDevice
   GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
   const uint64_t submitted = SubmitEmptyCommandBuffer(runtime);
   ASSERT_THAT(submitted, testing::Gt(0u));
-  // The same work held incomplete, but a poll that returns at once. The budget is far past
-  // anything this wait can spend, so only the poll bound can end it.
+  // The same work held incomplete, but a poll that returns at once: the poll bound is reached in
+  // milliseconds, far inside the budget.
   runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(0));
 
-  constexpr double kUnreachableBudgetSeconds = 120.0;
+  constexpr double kBudgetSeconds = 0.5;
   const auto start = std::chrono::steady_clock::now();
-  EXPECT_THAT(runtime.waitForSerial(submitted, kUnreachableBudgetSeconds), testing::IsFalse());
+  EXPECT_THAT(runtime.waitForSerial(submitted, kBudgetSeconds), testing::IsFalse());
   const double elapsedSeconds =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 
-  // Bounded well under the per-case budget rather than merely under the wait's: the poll bound is
-  // reached in milliseconds when poll returns without blocking, which is the only shape this case
-  // is about, and a wait that took seconds here ended some other way.
-  ASSERT_THAT(elapsedSeconds, Lt(5.0))
-      << "the poll bound, not the deadline, has to be what ended this wait";
+  EXPECT_THAT(elapsedSeconds, Ge(kBudgetSeconds))
+      << "the wait gave up with most of its budget unspent, so a completion delivered after its "
+         "poll bound is missed";
+  EXPECT_THAT(elapsedSeconds, Lt(kBudgetSeconds + 1.0)) << "the wait outlived its own budget";
   EXPECT_FALSE(device->isDeviceLost())
-      << "a wait that spent none of its budget observed nothing to declare";
+      << "a wait whose polls never blocked observed nothing to declare";
 
   runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
                                       std::chrono::milliseconds(0));
+}
+
+/// The poll bound and the deadline can fall on the same poll: a device whose polls block long
+/// enough reaches its bound on the very poll that carries the wait past its deadline. That wait
+/// spent its budget polling, so it must declare the loss with the same attribution as any wait that
+/// did; only a wait with budget left goes on to wait for a delivered completion. The bound is
+/// lowered to one poll that costs twice the budget, which makes the two coincide deterministically.
+TEST(GeodeDeviceLost,
+     RuntimeSerialWaitWhoseLastPollSpendsItsBudgetDeclaresLossWithWaitAttribution) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+  ASSERT_FALSE(device->isDeviceLost());
+
+  GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
+  const uint64_t submitted = SubmitEmptyCommandBuffer(runtime);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+  const auto budgetMs = static_cast<int>(kSerialWaitBudgetSeconds * 1000.0);
+  runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(2 * budgetMs));
+  runtime.setSerialWaitPollBoundForTesting(1);
+
+  EXPECT_THAT(runtime.waitForSerial(submitted, kSerialWaitBudgetSeconds), testing::IsFalse());
+
+  EXPECT_TRUE(device->isDeviceLost())
+      << "a wait whose last poll before its bound spent its budget must publish the loss it "
+         "observed, as a wait that reached its deadline sooner does";
+
+  const GeodeDevice::ReadbackStats stats = device->consumeReadbackStats();
+  EXPECT_THAT(stats.timedOutWaitSite, Eq(GpuWaitSite::QueueIdle));
+  EXPECT_THAT(stats.timedOutWaitMs, Ge(budgetMs - 1))
+      << "the attribution has to report the budget the wait actually spent";
+
+  runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
+                                      std::chrono::milliseconds(0));
+}
+
+/// Contexts over one root drive its queue from different threads, and a completion callback runs
+/// on whichever thread's poll collected it. A wait can therefore find its polls returning at once
+/// while its own completion is still to be delivered by another thread, which is slow to do so
+/// under load. The wait must see that completion rather than give up with its budget unspent. The
+/// completion is held back and released from another thread well after the wait's poll bound is
+/// spent, which makes that interleaving deterministic.
+TEST(GeodeDeviceLost, RuntimeSerialWaitSeesACompletionAnotherThreadDeliversLate) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
+  const uint64_t submitted = SubmitEmptyCommandBuffer(runtime);
+  ASSERT_THAT(submitted, testing::Gt(0u));
+  runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(0));
+
+  constexpr double kBudgetSeconds = 5.0;
+  std::thread deliverer([&runtime] {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
+                                        std::chrono::milliseconds(0));
+  });
+  const auto start = std::chrono::steady_clock::now();
+  const bool completed = runtime.waitForSerial(submitted, kBudgetSeconds);
+  const double elapsedSeconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  deliverer.join();
+
+  EXPECT_TRUE(completed) << "the wait for serial " << submitted << " gave up after "
+                         << elapsedSeconds << " s of a " << kBudgetSeconds
+                         << " s budget, before another thread delivered its completion";
+  EXPECT_THAT(elapsedSeconds, Lt(kBudgetSeconds))
+      << "the wait did not return when the completion was delivered";
+  EXPECT_FALSE(device->isDeviceLost());
 }
 
 /// A budget of zero is a question about what is already known rather than a wait, so its negative
