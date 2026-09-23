@@ -1342,6 +1342,50 @@ void addBox(Box2d& accum, bool& initialized, const Box2d& box) {
   }
 }
 
+void AddTextObjectBounds(components::ComputedTextGeometryComponent& cache, Entity sourceEntity,
+                         const Box2d& bounds) {
+  if (bounds.isEmpty()) {
+    return;
+  }
+  auto [stored, inserted] = cache.objectBoundsByEntity.try_emplace(sourceEntity, bounds);
+  if (!inserted) {
+    stored->second.addBox(bounds);
+  }
+}
+
+void BuildTextObjectBoundsIndex(Registry& registry, Entity textRootEntity,
+                                components::ComputedTextGeometryComponent& cache) {
+  if (cache.objectBoundsByEntity.empty()) {
+    return;
+  }
+
+  std::vector<Entity> subtreeEntities{textRootEntity};
+  for (size_t index = 0; index < subtreeEntities.size(); ++index) {
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(subtreeEntities[index]);
+    if (!tree) {
+      continue;
+    }
+    for (Entity child = tree->firstChild(); child != entt::null;
+         child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+      subtreeEntities.push_back(child);
+    }
+  }
+
+  // Reverse parent-first order lets each subtree reach its parent before that parent propagates.
+  for (auto it = subtreeEntities.rbegin(); it != subtreeEntities.rend(); ++it) {
+    if (*it == textRootEntity) {
+      continue;
+    }
+    const auto bounds = cache.objectBoundsByEntity.find(*it);
+    if (bounds == cache.objectBoundsByEntity.end()) {
+      continue;
+    }
+    const Box2d childBounds = bounds->second;
+    const Entity parent = registry.get<donner::components::TreeComponent>(*it).parent();
+    AddTextObjectBounds(cache, parent, childBounds);
+  }
+}
+
 std::vector<const components::ComputedTextGeometryComponent::CharacterGeometry*> filteredCharacters(
     Registry& registry, EntityHandle handle,
     const components::ComputedTextGeometryComponent& cache) {
@@ -2367,7 +2411,8 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
             Vector2d(glyph.xPosition + glyph.xAdvance, glyph.yPosition + emBottom));
       }
       addBox(cache.emBoxBounds, hasEmBoxBounds, runEmBounds);
-      cache.spanBounds.push_back({span.sourceEntity, runEmBounds});
+      ++objectBoundingBoxSpanVisits_;
+      AddTextObjectBounds(cache, span.sourceEntity, runEmBounds);
     }
 
     for (const auto& glyph : PaintedSpanGlyphs(span, run)) {
@@ -2423,6 +2468,8 @@ const components::ComputedTextGeometryComponent& TextEngine::ensureComputedTextG
     }
   }
 
+  BuildTextObjectBoundsIndex(registry_, textRootEntity, cache);
+
   cache.runs = runs;
 
   return registry_.emplace_or_replace<components::ComputedTextGeometryComponent>(textRootEntity,
@@ -2474,18 +2521,9 @@ Box2d TextEngine::computedObjectBoundingBox(EntityHandle handle) const {
     return cache.emBoxBounds;
   }
 
-  // SVG defines the object bounding box of a text content element as the union of its glyphs' full
-  // cells, advance width by the font's full ascent and descent, for a span the same as for the
-  // root. Accumulate only the spans this element contributes.
-  Box2d result;
-  bool initialized = false;
-  for (const auto& spanBounds : cache.spanBounds) {
-    ++objectBoundingBoxSpanVisits_;
-    if (isDescendantOf(registry_, spanBounds.sourceEntity, handle.entity())) {
-      addBox(result, initialized, spanBounds.emBox);
-    }
-  }
-  return result;
+  // The index stores the union of each span's glyph cells and all contributing descendants.
+  const auto bounds = cache.objectBoundsByEntity.find(handle.entity());
+  return bounds != cache.objectBoundsByEntity.end() ? bounds->second : Box2d();
 }
 
 long TextEngine::getNumberOfChars(EntityHandle handle) const {

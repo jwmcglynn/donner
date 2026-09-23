@@ -1765,13 +1765,41 @@ TEST_F(RendererDriverTest, FilteredTextSpansBoundObjectBoxWorkPerRoot) {
   body += "</text>";
   SVGDocument document = makeDocument(body, Vector2i(400, 100));
 
+  EXPECT_CALL(renderer, pushFilterLayer(_, _)).Times(kSpanCount);
   driver.draw(document);
 
   const auto& textEngine = document.registry().ctx().get<TextEngine>();
-  EXPECT_GE(textEngine.objectBoundingBoxSpanVisitsForTesting(),
+  EXPECT_EQ(textEngine.objectBoundingBoxSpanVisitsForTesting(),
             static_cast<std::size_t>(kSpanCount));
-  EXPECT_LE(textEngine.objectBoundingBoxSpanVisitsForTesting(),
-            static_cast<std::size_t>(kSpanCount * 4));
+}
+
+TEST_F(RendererDriverTest, NestedTextSpanObjectBoxesIncludeOnlyTheirSubtrees) {
+  SVGDocument document = makeDocument(R"svg(
+    <text x="10" y="60" font-family="sans-serif" font-size="20"><tspan id="outer">A<tspan
+      id="inner">B</tspan></tspan><tspan id="sibling" x="200">C</tspan><tspan
+      id="empty"/></text>
+  )svg",
+                                      Vector2i(400, 100));
+
+  driver.draw(document);
+
+  const auto outerElement = document.querySelector("#outer");
+  const auto innerElement = document.querySelector("#inner");
+  const auto siblingElement = document.querySelector("#sibling");
+  const auto emptyElement = document.querySelector("#empty");
+  ASSERT_THAT(outerElement, ::testing::Optional(_));
+  ASSERT_THAT(innerElement, ::testing::Optional(_));
+  ASSERT_THAT(siblingElement, ::testing::Optional(_));
+  ASSERT_THAT(emptyElement, ::testing::Optional(_));
+
+  const auto& textEngine = document.registry().ctx().get<TextEngine>();
+  const Box2d outer = textEngine.computedObjectBoundingBox(outerElement->unsafeEntityHandle());
+  const Box2d inner = textEngine.computedObjectBoundingBox(innerElement->unsafeEntityHandle());
+  const Box2d sibling = textEngine.computedObjectBoundingBox(siblingElement->unsafeEntityHandle());
+  EXPECT_LT(outer.topLeft.x, inner.topLeft.x);
+  EXPECT_EQ(outer.bottomRight.x, inner.bottomRight.x);
+  EXPECT_LT(outer.bottomRight.x, sibling.topLeft.x);
+  EXPECT_EQ(textEngine.computedObjectBoundingBox(emptyElement->unsafeEntityHandle()), Box2d());
 }
 
 TEST_F(RendererDriverTest, PatternFilledEffectSpansPreserveOuterTextPreparation) {
