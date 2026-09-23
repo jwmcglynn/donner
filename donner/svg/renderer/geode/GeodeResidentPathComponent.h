@@ -157,7 +157,7 @@ public:
   /// Park a bind group a slot is dropping until the next frame boundary.
   ///
   /// A slot's cached bind group can be dropped mid-frame (geometry re-upload, component removal,
-  /// device change) while draws recorded earlier in the frame still name it and have not reached
+  /// encode change) while draws recorded earlier in the frame still name it and have not reached
   /// the backend yet. Destroying it there fails those draws closed, so it is held here and
   /// released at the next \ref beginFrame, by which point the frame that recorded them has been
   /// submitted.
@@ -458,10 +458,14 @@ class GeodeDevice;
  * or replaces another's.
  *
  * Not thread-safe: allocate/free/beginFrame mutate the free list and bump
- * cursors without locking. Every caller holds the document it belongs to, which
- * serializes them. Destroying it releases nothing on the calling thread: its
- * buffers and bind groups go to the owning context's retirement (see the
- * constructor), because the device's own thread may be using its tables.
+ * cursors without locking. The callers that reach it through the document
+ * hold the document, which serializes them. A renderer can also keep a slot or
+ * slab of the last document it drew and touch it at its next frame without
+ * holding that document; that is serialized only by the renderer's device
+ * being the slab's device. Destroying it releases nothing on the calling
+ * thread: its buffers and bind groups go to the owning context's retirement
+ * (see the constructor), because the device's own thread may be using its
+ * tables.
  */
 class GeodeResidentSlab {
 public:
@@ -690,7 +694,7 @@ public:
   /// Park a bind group a slot is dropping until the next frame boundary.
   ///
   /// A slot's cached bind group can be dropped mid-frame (geometry re-upload, component removal,
-  /// device change) while draws recorded earlier in the frame still name it and have not reached
+  /// encode change) while draws recorded earlier in the frame still name it and have not reached
   /// the backend yet. Destroying it there fails those draws closed, so it is held here and
   /// released at the next \ref beginFrame, by which point the frame that recorded them has been
   /// submitted.
@@ -766,10 +770,10 @@ struct GeodeResidentSlot {
   /// cache key has to name the chunk by this id rather than by the handle
   /// address, which the allocator recycles once the slab is destroyed.
   uint64_t bufferId = 0;
-  /// Slab that owns `buffer`; null until residence is established. Held
-  /// by shared_ptr so a device change (which swaps the registry's slab)
-  /// cannot leave a slot referencing a destroyed slab: old slots keep the
-  /// old slab alive until their own reset drops the reference.
+  /// Slab that owns `buffer`, this device's geometry slab for the
+  /// document; null until residence is established. Held by shared_ptr so
+  /// the slab outlives every slot allocated from it, whichever of the two
+  /// the document lets go of first.
   std::shared_ptr<GeodeResidentSlab> slab;
   /// Whole-slot allocation inside the slab, returned via `free` on reset.
   uint64_t allocationOffset = 0;
@@ -815,8 +819,8 @@ struct GeodeResidentSlot {
   /// (binding 7). Solo draws bind the slot's own range; cross-entity
   /// batches bind a span of consecutive slots and index by slot index.
   GeodeRecordSlab::Slot recordSlot;
-  /// Record slab that owns `recordSlot`; mirrors the geometry slab's
-  /// device-change lifetime handling.
+  /// Record slab that owns `recordSlot`, this device's record slab for the
+  /// document; held by shared_ptr for the same reason as `slab`.
   std::shared_ptr<GeodeRecordSlab> recordSlab;
 
   uint32_t vertexCount = 0;  ///< Triangle-fan draw count generated from vertex_index.
@@ -833,14 +837,12 @@ struct GeodeResidentSlot {
   uint64_t lastResidentFrame = ~uint64_t{0};
 
   /// Process-unique id (see `GeodeDevice::deviceId()`) of the device that
-  /// created `buffer` / `bindGroup`. A document's ECS residence components
-  /// can outlive the device that filled them and later be rendered by a
-  /// second `RendererGeode` / `GeodeDevice`; WebGPU rejects a bind group or
-  /// buffer from device A inside device B's render pass. When this id does
-  /// not match the current device at draw time the slot is treated as
-  /// non-resident and re-uploaded onto the current device (the stale handles
-  /// are released without touching the old device). `0` means "no device
-  /// owns this slot yet".
+  /// created `buffer` / `bindGroup`. Every device keeps its own slots (see
+  /// `GeodeResidentPathComponent`), so this always names the device drawing
+  /// the slot. The draw path still checks it and treats a mismatch as
+  /// non-resident, re-uploading, as a defensive cross-check: WebGPU rejects a
+  /// bind group or buffer from one device inside another's render pass. `0`
+  /// means "no device owns this slot yet".
   uint64_t owningDeviceId = 0;
 
   /// Frame index in which this slot's record was last referenced by a
@@ -987,12 +989,13 @@ struct GeodeResidentSlot {
     // The record slot survives geometry re-uploads: its painter-ordered
     // index is allocation-order data, not geometry data, and keeping it
     // preserves cross-entity batch contiguity across unchanged frames.
-    // It is only freed by the destructor (component removal) or replaced
-    // by the renderer's record-slab wiring on a device change.
+    // It is only freed by the destructor (component removal or the device's
+    // entry being dropped), or replaced by the renderer's record-slab wiring
+    // when the slot has no record in this device's slab yet.
     // The slab pointers themselves are intentionally kept: they outlive
-    // any one residence (they are owned by the registry context), and the
-    // re-upload path needs them right after reset(). The slot getters
-    // refresh them when the document crosses devices.
+    // any one residence (this device's residence for the document, in the
+    // registry context, owns them), and the re-upload path needs them right
+    // after reset().
     allocationOffset = 0;
     allocationSize = 0;
     buffer = gpu::BufferRef();
@@ -1056,10 +1059,10 @@ struct GeodeResidentGradientSlot {
   /// returning the allocation matches the owning chunk by identity rather
   /// than by a handle address the allocator can recycle.
   uint64_t bufferId = 0;
-  /// Slab that owns `buffer`; null until residence is established. Held
-  /// by shared_ptr so a device change (which swaps the registry's slab)
-  /// cannot leave a slot referencing a destroyed slab: old slots keep the
-  /// old slab alive until their own reset drops the reference.
+  /// Slab that owns `buffer`, this device's geometry slab for the
+  /// document; null until residence is established. Held by shared_ptr so
+  /// the slab outlives every slot allocated from it, whichever of the two
+  /// the document lets go of first.
   std::shared_ptr<GeodeResidentSlab> slab;
   /// Whole-slot allocation inside the slab, returned via `free` on reset.
   uint64_t allocationOffset = 0;
@@ -1172,9 +1175,9 @@ struct GeodeResidentGradientSlot {
       slab->free(alloc);
     }
     // The slab pointers themselves are intentionally kept: they outlive
-    // any one residence (they are owned by the registry context), and the
-    // re-upload path needs them right after reset(). The slot getters
-    // refresh them when the document crosses devices.
+    // any one residence (this device's residence for the document, in the
+    // registry context, owns them), and the re-upload path needs them right
+    // after reset().
     allocationOffset = 0;
     allocationSize = 0;
     buffer = gpu::BufferRef();

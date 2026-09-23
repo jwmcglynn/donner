@@ -535,15 +535,14 @@ public:
    * Process-unique identity for this device instance, assigned at
    * construction from a monotonic counter (never reused, starts at 1).
    *
-   * Used by GPU-residence slots to detect when a
-   * cached buffer / bind group belongs to a DIFFERENT device than the one
-   * now rendering: a document (and its ECS `GeodeResidentPathComponent`s)
-   * can outlive the device that filled them and later be rendered by a
-   * second `RendererGeode` / `GeodeDevice`. WebGPU rejects cross-device
-   * resources inside a render pass, so a slot whose stored id does not match
-   * `deviceId()` is treated as non-resident and re-uploaded. A monotonic
-   * counter (rather than a raw `this` pointer) avoids the ABA hazard of a
-   * freed device's address being recycled by a later allocation.
+   * Keys the GPU residence a document keeps per device (see
+   * `GeodePerDevice`), so each device that draws a document finds its own
+   * slabs and slots and never another's. Residence slots also record it, and
+   * the draw path treats a slot whose id does not match as non-resident, a
+   * defensive cross-check since WebGPU rejects cross-device resources inside
+   * a render pass. A monotonic counter (rather than a raw `this` pointer)
+   * avoids the ABA hazard of a freed device's address being recycled by a
+   * later allocation.
    */
   uint64_t deviceId() const { return deviceId_; }
 

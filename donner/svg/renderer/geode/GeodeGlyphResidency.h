@@ -456,8 +456,8 @@ struct GeodeTextInstanceRecordComponent {
   /// Owners may move when the vector grows, but each separately allocated
   /// occurrence stays put while a pending batch holds pointers into it.
   std::vector<OccurrenceOwner> occurrences;
-  /// Slab the slots were allocated from; also keeps that slab alive so a
-  /// device change cannot leave the slots pointing at a destroyed slab.
+  /// Slab the slots were allocated from, this device's record slab for the
+  /// document; also keeps that slab alive for as long as the slots are.
   std::shared_ptr<GeodeRecordSlab> recordSlab;
   /// Device-scoped frame generation of the last draw that wrote these slots.
   /// Zero means "never written": generations start at 1, and the guard reads
