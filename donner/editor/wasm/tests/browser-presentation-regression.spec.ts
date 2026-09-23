@@ -86,6 +86,7 @@ declare global {
       lastIPress?: EyedropperShortcutGate;
       lastEscapePress?: EyedropperShortcutGate;
     };
+    __donnerTestPasteEventStats?: { count: number; lastTextLength: number };
     __donnerSampleThumbnailStats?: {
       publishedAtMs?: number;
       publicationGeneration?: number;
@@ -2454,6 +2455,46 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   await page.keyboard.up("Control");
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.evaluate((text) => navigator.clipboard.writeText(text), fixture);
+  await page.evaluate(() => {
+    window.__donnerTestPasteEventStats = { count: 0, lastTextLength: -1 };
+    window.addEventListener("paste", (event) => {
+      const stats = window.__donnerTestPasteEventStats;
+      if (stats) {
+        stats.count += 1;
+        stats.lastTextLength = event.clipboardData?.getData("text/plain").length ?? -1;
+      }
+    }, { capture: true });
+  });
+  const beforePlatformPasteFrame = await page.evaluate(
+    () => window.__donnerMainLoopRenderedFrames ?? 0,
+  );
+  await page.keyboard.press("Meta+V");
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const stats = window.__donnerTestPasteEventStats;
+      return {
+        eventSeen: (stats?.count ?? 0) > 0,
+        count: stats?.count ?? 0,
+        lastTextLength: stats?.lastTextLength ?? -1,
+        activeElement: document.activeElement?.id || document.activeElement?.tagName || "none",
+      };
+    }), {
+    message: "platform paste must deliver the fixture to GLFW's browser clipboard cache",
+    timeout: scaledMs(4_000),
+  }).toEqual(expect.objectContaining({ eventSeen: true, lastTextLength: fixture.length }));
+  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
+    .toBeGreaterThan(beforePlatformPasteFrame);
+  await waitForPressReadiness(page, "platform paste seeded clipboard without editing source");
+  expect(
+    await page.evaluate(() => ({
+      sourceSelectionActive: window.__donnerEyedropperTestState?.sourceSelectionActive,
+      sourceVersion: window.__donnerWorkerStats?.sourceVersion ?? -1,
+      pasteEvents: window.__donnerTestPasteEventStats ?? null,
+    })),
+  ).toEqual(expect.objectContaining({
+    sourceSelectionActive: true,
+    sourceVersion: beforeSourceVersion,
+  }));
   const beforePasteFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
   await page.keyboard.down("Control");
   await page.keyboard.down("v");
@@ -2463,13 +2504,15 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
   }).toBeGreaterThan(beforePasteFrame);
   await page.keyboard.up("v");
   await page.keyboard.up("Control");
-  await expect.poll(
-    () => page.evaluate(() => window.__donnerEyedropperTestState?.sourceSelectionActive),
-    {
-      message: "atomic SVG paste must replace the selected source",
-      timeout: scaledMs(4_000),
-    },
-  ).toBe(false);
+  await expect.poll(() =>
+    page.evaluate(() => ({
+      replaced: window.__donnerEyedropperTestState?.sourceSelectionActive === false,
+      pasteEvents: window.__donnerTestPasteEventStats ?? null,
+      activeElement: document.activeElement?.id || document.activeElement?.tagName || "none",
+    })), {
+    message: "atomic SVG paste must replace the selected source",
+    timeout: scaledMs(4_000),
+  }).toEqual(expect.objectContaining({ replaced: true }));
   await expect.poll(() =>
     page.evaluate((before) => {
       const width = window.__donnerViewportStats?.documentWidth ?? 0;
