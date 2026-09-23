@@ -36,10 +36,12 @@ public:
    * The device's ownership of a texture allocation it made ended: its backing was released
    * through \ref Device::destroyTextureBacking, or the texture was destroyed and the last
    * submission using it completed and its slot was recycled. Reported at most once per owned
-   * allocation, while the observer is installed, on the thread using the device: an allocation
-   * made before the observer was installed, one still owned when the device is destroyed, and
-   * one whose retired slot is never recycled are not reported. Releasing a registration of a
-   * texture the device does not own ends no ownership and is not reported.
+   * allocation, on the thread using the device, to the observer installed at that moment. That
+   * includes an allocation made before this observer was installed, whose creation it never
+   * heard, so an observer installed late can count more releases than creations. An allocation
+   * still owned when the device is destroyed, and one whose retired slot is never recycled, are
+   * not reported. Releasing a registration of a texture the device does not own ends no ownership
+   * and is not reported.
    *
    * The allocation itself may outlive the report: an export of the texture keeps it alive until
    * its last holder lets go, and \ref Device::sharedTextureTailBytes counts those bytes meanwhile.

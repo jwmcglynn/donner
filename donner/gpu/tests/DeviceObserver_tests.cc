@@ -397,6 +397,17 @@ TEST_F(DeviceObserverTests, DestroyingATexturesBackingReportsItsReleaseOnce) {
   EXPECT_THAT(observer_.events, Eq(ObservedEvents{.textureCreates = 1, .textureReleases = 1}));
 }
 
+/// The fixture's target was created before the observer was installed, so the observer never heard
+/// of its creation. Its release still ends an allocation the device owns, and goes to the observer
+/// installed when it happens.
+TEST_F(DeviceObserverTests, ATextureCreatedBeforeTheObserverReportsItsReleaseToIt) {
+  ASSERT_THAT(device_.destroyTexture(std::move(target_)), IsOk());
+  device_.poll();
+
+  EXPECT_THAT(observer_.events, Eq(ObservedEvents{.textureReleases = 1}))
+      << "a creation and a release each go to the observer installed when they happen";
+}
+
 TEST_F(DeviceObserverTests, ReleasingARegisteredTextureReleasesNoAllocation) {
   device_.registerNextTexture();
   Texture registered = GetResultOrFail(device_.createTexture(TextureDescriptor{

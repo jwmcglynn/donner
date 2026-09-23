@@ -1306,10 +1306,14 @@ private:
   /// Validated per-texture state.
   struct TextureRecord {
     TextureDescriptor descriptor;  //!< Creation descriptor.
-    /// Whether the backing is an allocation this device made and still owns. Cleared when that
-    /// ownership ends, through \ref destroyTextureBacking or the slot's recycle, so an observer
-    /// hears about it exactly once whichever comes first. An export can keep the allocation alive
-    /// after this device's ownership ends; \ref sharedTextureTailBytes counts those bytes.
+    /// Whether the backing is an allocation this device made and still owns, set at creation
+    /// whether or not an observer is installed. \ref destroyTextureBacking reports the end of that
+    /// ownership and clears it, so the slot's later recycle reports nothing more. Otherwise the
+    /// texture's retirement, which drops this record, carries the value to the slot's recycle,
+    /// which reports it, at once or from \ref PendingDestroy after the last submission using the
+    /// texture completes. So the end is reported at most once, and only to an observer installed
+    /// when it happens. An export can keep the allocation alive after this device's ownership
+    /// ends; \ref sharedTextureTailBytes counts those bytes.
     bool ownsAllocation = false;
   };
   /// Validated per-view state. Consumers re-resolve the viewed texture through
