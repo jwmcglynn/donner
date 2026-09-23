@@ -1,8 +1,11 @@
 import { expect, test } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 
 const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 
 type BootSample = {
+  /** Page clock when the animation frame ran, so a failure shows the cadence. */
+  atMs: number;
   firstFrame: boolean;
   covered: boolean;
   canvasCount: number;
@@ -15,7 +18,12 @@ type BootSample = {
 };
 type BootWindow = Window & {
   __donnerFirstFramePresented?: boolean;
-  __bootPresentationProbe: { running: boolean; samples: BootSample[] };
+  __bootPresentationProbe: {
+    running: boolean;
+    samples: BootSample[];
+    // A hidden page gets no frames, so a gap in the cadence needs this beside it.
+    visibility: Array<{ atMs: number; state: DocumentVisibilityState }>;
+  };
 };
 
 test("delayed startup never exposes an unconfigured canvas", async ({ page }, testInfo) => {
@@ -33,7 +41,17 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
   });
   await page.addInitScript(() => {
     const state = window as BootWindow;
-    state.__bootPresentationProbe = { running: true, samples: [] };
+    state.__bootPresentationProbe = {
+      running: true,
+      samples: [],
+      visibility: [{ atMs: performance.now(), state: document.visibilityState }],
+    };
+    document.addEventListener("visibilitychange", () => {
+      state.__bootPresentationProbe.visibility.push({
+        atMs: performance.now(),
+        state: document.visibilityState,
+      });
+    });
     const sample = () => {
       if (!state.__bootPresentationProbe.running) return;
       const canvas = document.querySelector("canvas");
@@ -42,6 +60,7 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
         const style = getComputedStyle(loader);
         const bounds = loader.getBoundingClientRect();
         state.__bootPresentationProbe.samples.push({
+          atMs: performance.now(),
           firstFrame: state.__donnerFirstFramePresented === true,
           covered: !loader.hidden && style.display !== "none" && style.visibility === "visible"
             && Number(style.opacity) === 1 && bounds.left <= 0 && bounds.top <= 0
@@ -66,13 +85,17 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
       await expect(page.locator("#loading-screen")).toBeVisible();
       await expect(page.locator("canvas")).toHaveCount(1);
       await page.setViewportSize({ width: 1390, height: 1121 });
-      await expect.poll(() =>
-        page.evaluate(() =>
-          (window as BootWindow).__bootPresentationProbe.samples.filter((sample) =>
-            sample.viewportWidth === 1390 && sample.viewportHeight === 1121
-          ).length
-        )
-      ).toBeGreaterThanOrEqual(5);
+      // One covered frame at the new size suffices: nothing changes while startup is held.
+      await expect.poll(
+        () =>
+          page.evaluate(() =>
+            (window as BootWindow).__bootPresentationProbe.samples.filter((sample) =>
+              sample.viewportWidth === 1390 && sample.viewportHeight === 1121 && sample.covered
+              && !sample.firstFrame
+            ).length
+          ),
+        { message: "the page never drew a covered frame at the resized viewport" },
+      ).toBeGreaterThanOrEqual(1);
       expect(await page.evaluate(() => (window as BootWindow).__donnerFirstFramePresented === true))
         .toBe(false);
     } finally {
@@ -128,6 +151,7 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
         if (probe) probe.running = false;
         return {
           samples: probe?.samples ?? [],
+          visibility: probe?.visibility ?? [],
           framesAwaitingPresentedFrame: state.__donnerFramesAwaitingPresentedFrame,
           loader: document.getElementById("loading-screen")?.outerHTML,
           canvas: document.querySelector("canvas")?.outerHTML,
@@ -137,8 +161,11 @@ test("delayed startup never exposes an unconfigured canvas", async ({ page }, te
         timer = setTimeout(() => resolve({ error: "diagnostic capture timed out" }), 5000);
       }),
     ]).finally(() => clearTimeout(timer));
+    // A file survives a failed run; a body-only attachment is neither printed nor kept.
+    const diagnosticsPath = testInfo.outputPath("boot-presentation-samples.json");
+    await writeFile(diagnosticsPath, JSON.stringify({ diagnostics, errors }, null, 2));
     await testInfo.attach("boot-presentation-samples", {
-      body: JSON.stringify({ diagnostics, errors }, null, 2),
+      path: diagnosticsPath,
       contentType: "application/json",
     });
   }
