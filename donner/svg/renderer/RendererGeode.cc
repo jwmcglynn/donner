@@ -3250,8 +3250,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   /// Record-slab slots allocated this frame for same-entity repeat draws
   /// (markers, repeated `<use>`): one record per draw, so earlier recorded
-  /// batches keep their own content at submit time. Freed (deferred) at
-  /// the next frame's draw(); the slab merges the frees at beginFrame.
+  /// batches keep their own content at submit time. Freed (deferred) when
+  /// the frame ends, by `releaseFrameLoans`; the slab merges the frees at
+  /// its next frame.
   /// Temporary per-frame record slots for same-frame repeat draws. A deque
   /// keeps element addresses stable (callers hold a pointer to the newest
   /// entry while later draws append), and each entry carries the slab it
@@ -3294,8 +3295,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Allocate a record slot that lives only for this frame, retained in
-  /// `sceneTempRecordSlots` so its address stays valid until the next
-  /// `draw()` returns it to `slab`. Returns null when `slab` is absent or the
+  /// `sceneTempRecordSlots` so its address stays valid until the frame ends
+  /// and returns it to `slab`. Returns null when `slab` is absent or the
   /// device cannot back the allocation.
   const geode::GeodeRecordSlab::Slot* allocateTempRecordSlot(
       const std::shared_ptr<geode::GeodeRecordSlab>& slab) {
@@ -3542,8 +3543,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   }
 
   /// Non-cached glyphs needed after the document cache reaches its admission cap. The deque keeps
-  /// entry addresses stable for the frame's pending scene batches; beginFrame clears it only after
-  /// the previous frame has submitted and its pending batch has been discarded.
+  /// entry addresses stable for the frame's pending scene batches; `releaseFrameLoans` clears it
+  /// once the frame has submitted and its pending batch has flushed.
   std::deque<geode::GeodeGlyphResidentEntry> transientGlyphEntries;
 
   /// This device's glyph-outline residency for the document in \p registry. One per device per
@@ -5003,6 +5004,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     entries.clear();
   }
 
+  /// Give back what this frame borrowed from the documents it drew: the records that same-frame
+  /// repeats took (`sceneTempRecordSlots`) and the glyphs made resident for this frame only
+  /// (`transientGlyphEntries`). Both free into the documents' per-device slabs, and a glyph also
+  /// gives back what it charged to its document's budget.
+  ///
+  /// `endFrame` calls this once the frame has submitted, while whoever drives the frame still holds
+  /// its documents. Left for the next frame, it would run while the renderer holds another
+  /// document, or none, against a thread that may be editing or destroying these.
+  void releaseFrameLoans() {
+    for (const SceneTempRecordSlot& tempSlot : sceneTempRecordSlots) {
+      tempSlot.slab->freeSlot(tempSlot.slot);
+    }
+    sceneTempRecordSlots.clear();
+    transientGlyphEntries.clear();
+  }
+
   void resetForBeginFrame(const RenderViewport& nextViewport) {
     borrowedTargetSnapshot.reset();
     if (device) {
@@ -5051,7 +5068,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     lastDrawSourceEntity = entt::null;
     pendingBatch.reset();
-    transientGlyphEntries.clear();
+    // Nothing to give back after an endFrame. A frame that never reached one gives its loans back
+    // here.
+    releaseFrameLoans();
     transientTextEncodes.clear();
   }
 
@@ -5525,15 +5544,6 @@ void RendererGeode::draw(SVGDocument& document) {
   impl_->residentSlab(document.registry())->beginFrame(impl_->currentFrameIndex);
   impl_->recordSlab(document.registry())->beginFrame(impl_->currentFrameIndex);
 
-  // Release the previous frame's temporary record slots (same-frame
-  // repeat draws). freeSlot defers to the NEXT beginFrame, so freeing
-  // here makes them reusable starting the frame after this one - the
-  // batches recorded against them last frame have long submitted.
-  for (const auto& tempSlot : impl_->sceneTempRecordSlots) {
-    tempSlot.slab->freeSlot(tempSlot.slot);
-  }
-  impl_->sceneTempRecordSlots.clear();
-
   RendererDriver driver(*this, impl_->verbose);
   driver.draw(document);
 }
@@ -5735,6 +5745,9 @@ void RendererGeode::endFrame() {
   // submits, so acquiring these on the next frame will schedule the
   // new writes after the previous submit's GPU work completes.
   impl_->drainPendingReleases();
+
+  // The documents the frame drew are still held, so give back what it borrowed from them now.
+  impl_->releaseFrameLoans();
 
   impl_->deviceFromLocalTransform = Transform2d();
   impl_->deviceFromLocalTransformStack.clear();
