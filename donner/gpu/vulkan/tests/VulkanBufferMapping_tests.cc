@@ -174,8 +174,9 @@ TEST_F(VulkanBufferMappingTest, AMappingReadsWhatTheReadbackAccessorReads) {
 
 TEST_F(VulkanBufferMappingTest, ALossDeclaredOnTheDeviceEndsAPendingMappingWithinASlice) {
   std::unique_ptr<VulkanDevice> gated = VulkanDevice::CreateWithTimelineSemaphoreForTest();
-  ASSERT_THAT(gated, testing::NotNull())
-      << "the queue gate that holds the mapped submission open needs VK_KHR_timeline_semaphore";
+  if (!gated) {
+    GTEST_SKIP() << "Device lacks VK_KHR_timeline_semaphore; the queue gate needs it";
+  }
 
   // The scene is built before the gate closes: writeTexture submits and waits on its own fence,
   // which a gated queue would never let complete.
@@ -199,6 +200,9 @@ TEST_F(VulkanBufferMappingTest, ALossDeclaredOnTheDeviceEndsAPendingMappingWithi
   (void)GetResultOrFail(gated->submit(GetResultOrFail(encoder->finish())));
   BufferMapping mapping =
       GetResultOrFail(gated->mapBufferAsync(held, MapMode::Read, 0, kMappingSceneByteSize));
+  // An error of the device's own would end the mapping the same way, so only the declared loss
+  // may be what ends it here.
+  ASSERT_THAT(gated->lastErrorForTest(), testing::IsEmpty());
 
   gated->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
                                   "a bounded wait on this device gave up");
@@ -219,6 +223,8 @@ TEST_F(VulkanBufferMappingTest, ALossDeclaredOnTheDeviceEndsAPendingMappingWithi
 
   ASSERT_EQ(gate.release(), VK_SUCCESS);
   EXPECT_THAT(gated->unmapBuffer(std::move(mapping)), IsOk());
+  EXPECT_THAT(gated->lastErrorForTest(), testing::IsEmpty())
+      << "the declared loss must be the only thing that went wrong on this device";
 }
 
 TEST_F(VulkanBufferMappingTest, ALossDeclaredOnTheDeviceOutranksACompletedSubmission) {
