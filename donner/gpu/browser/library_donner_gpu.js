@@ -213,6 +213,46 @@ var LibraryDonnerGpu = {
       }
     },
 
+    // Asks the browser for this worker's device and installs it when it arrives, unless the device
+    // it was asked for has been let go by then.
+    requestBrowserDevice: function() {
+      DonnerGpu.requestState = DonnerGpu.kRequestPending;
+      var generation = DonnerGpu.requestGeneration;
+      navigator.gpu.requestAdapter()
+        .then(function(adapter) {
+          if (!adapter) {
+            throw new Error('no GPU adapter is available');
+          }
+          return adapter.requestDevice();
+        })
+        .then(function(device) {
+          if (generation === DonnerGpu.requestGeneration) {
+            DonnerGpu.installDevice(device);
+          }
+        })
+        .catch(function(e) {
+          if (generation === DonnerGpu.requestGeneration) {
+            DonnerGpu.requestError = String(e && e.message ? e.message : e);
+            DonnerGpu.requestState = DonnerGpu.kRequestFailed;
+          }
+        });
+    },
+
+    installDevice: function(device) {
+      DonnerGpu.device = device;
+      DonnerGpu.queue = device.queue;
+      // Loss is permanent, and the runtime refuses everything once it is observed, so the only
+      // thing to do here is record it where the next call will see it - unless the device has been
+      // let go since, and the loss describes a device nothing here names any more.
+      device.lost.then(function(info) {
+        if (DonnerGpu.device === device) {
+          DonnerGpu.lost = true;
+          DonnerGpu.lostReason = String(info.reason) + ': ' + String(info.message);
+        }
+      });
+      DonnerGpu.requestState = DonnerGpu.kRequestReady;
+    },
+
     releaseSharedDevice: function() {
       DonnerGpu.device = null;
       DonnerGpu.queue = null;
@@ -620,39 +660,7 @@ var LibraryDonnerGpu = {
       DonnerGpu.requestState = DonnerGpu.kRequestUnavailable;
       return DonnerGpu.kSuccess;
     }
-    DonnerGpu.requestState = DonnerGpu.kRequestPending;
-    var generation = DonnerGpu.requestGeneration;
-    navigator.gpu.requestAdapter()
-      .then(function(adapter) {
-        if (!adapter) {
-          throw new Error('no GPU adapter is available');
-        }
-        return adapter.requestDevice();
-      })
-      .then(function(device) {
-        if (generation !== DonnerGpu.requestGeneration) {
-          return;
-        }
-        DonnerGpu.device = device;
-        DonnerGpu.queue = device.queue;
-        // Loss is permanent, and the runtime refuses everything once it is observed, so the only
-        // thing to do here is record it where the next call will see it - unless the device has
-        // been let go since, and the loss describes a device nothing here names any more.
-        device.lost.then(function(info) {
-          if (DonnerGpu.device === device) {
-            DonnerGpu.lost = true;
-            DonnerGpu.lostReason = String(info.reason) + ': ' + String(info.message);
-          }
-        });
-        DonnerGpu.requestState = DonnerGpu.kRequestReady;
-      })
-      .catch(function(e) {
-        if (generation !== DonnerGpu.requestGeneration) {
-          return;
-        }
-        DonnerGpu.requestError = String(e && e.message ? e.message : e);
-        DonnerGpu.requestState = DonnerGpu.kRequestFailed;
-      });
+    DonnerGpu.requestBrowserDevice();
     return DonnerGpu.kSuccess;
   },
 

@@ -77,9 +77,10 @@ int donner_gpu_render_pipeline_vertex_attribute(unsigned int device, unsigned in
                                                 unsigned int offsetBytes,
                                                 unsigned int shaderLocation);
 int donner_gpu_render_pipeline_color_target(
-    unsigned int formatCode, unsigned int blendEnabled, unsigned int colorSrcFactor,
-    unsigned int colorDstFactor, unsigned int colorOperation, unsigned int alphaSrcFactor,
-    unsigned int alphaDstFactor, unsigned int alphaOperation, unsigned int writeMaskBits);
+    unsigned int device, unsigned int formatCode, unsigned int blendEnabled,
+    unsigned int colorSrcFactor, unsigned int colorDstFactor, unsigned int colorOperation,
+    unsigned int alphaSrcFactor, unsigned int alphaDstFactor, unsigned int alphaOperation,
+    unsigned int writeMaskBits);
 int donner_gpu_render_pipeline_finish(unsigned int device, unsigned int id);
 
 int donner_gpu_create_compute_pipeline(unsigned int device, unsigned int id, unsigned int layoutId,
