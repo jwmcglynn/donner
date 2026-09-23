@@ -16,9 +16,10 @@ namespace donner::editor {
 /// The editor's interactive tools. Mirrors `EditorShell::ActiveTool` one-to-one;
 /// kept as a standalone enum so the keybinding mapping is testable in isolation.
 enum class ToolId : std::uint8_t {
-  Select,  ///< Selection / Arrow tool.
-  Pen,     ///< Pen (path) tool.
-  Text,    ///< Type / Text tool.
+  Select,      ///< Selection / Arrow tool.
+  Pen,         ///< Pen (path) tool.
+  Text,        ///< Type / Text tool.
+  Eyedropper,  ///< Document pixel picker.
 };
 
 /// Display label and single-key shortcut for a tool. `key` is the binding
@@ -32,10 +33,11 @@ struct ToolKeybinding {
 /// The full toolbar tool list in display (top-to-bottom) order. The single
 /// source of truth shared by the toolbar buttons, the tooltip text, and the
 /// keyboard shortcut handler.
-inline constexpr std::array<ToolId, 3> kToolbarTools = {
+inline constexpr std::array<ToolId, 4> kToolbarTools = {
     ToolId::Select,
     ToolId::Pen,
     ToolId::Text,
+    ToolId::Eyedropper,
 };
 
 /// Map a tool to its display label and standard shortcut key.
@@ -44,6 +46,7 @@ inline constexpr std::array<ToolId, 3> kToolbarTools = {
     case ToolId::Select: return ToolKeybinding{"Selection", 'V'};
     case ToolId::Pen: return ToolKeybinding{"Pen", 'P'};
     case ToolId::Text: return ToolKeybinding{"Type", 'T'};
+    case ToolId::Eyedropper: return ToolKeybinding{"Eyedropper", 'I'};
   }
   return ToolKeybinding{"", '\0'};
 }

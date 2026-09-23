@@ -1,7 +1,7 @@
 # Design: Editor Document Eyedropper
 
-**Status:** Draft. The interaction and pixel-source design awaits requester confirmation. No
-implementation has started.
+**Status:** Implementing. The requester confirmed the interaction and pixel-source design.
+Implementation and native/browser validation are in progress.
 **Author:** GPT-6 Sol
 **Created:** 2026-09-22
 **Related:** [Issue #1304](https://github.com/jwmcglynn/donner/issues/1304)
@@ -42,18 +42,24 @@ selection handles, the transparency checkerboard, another window, or pixels outs
 
 ## Next Steps
 
-1. Confirm the goals, interaction, alpha behavior, and pixel-source tradeoff with the requester.
-2. After confirmation, expand the candidate outcomes below into actionable implementation steps.
-3. Prove native and browser document-pixel correspondence and the showcase journey before
-   treating the feature as complete.
+1. Implement the interaction and worker capture with focused tests.
+2. Prove native and browser document-pixel correspondence and the showcase journey.
+3. Complete independent review and publication gates for the exact candidate.
 
 ## Implementation Plan
 
-Detailed tasks remain gated on confirmation of this design. Candidate delivery outcomes are:
-
-- [ ] Confirmed interaction and paint-state behavior, including cancellation and undo.
-- [ ] Worker-owned, epoch-bound document pixel capture with a bounded loupe presentation.
-- [ ] Native and browser regression coverage for the rendered-pixel and showcase flows.
+- [ ] Paint and tool interaction
+  - [ ] Add eyedropper tool identity, toolbar/popup entry points, shortcut capture, and cancellation.
+  - [ ] Share the color application path with the picker and record one selection undo entry.
+  - [ ] Render the loupe and pending/unavailable feedback without hover mutations.
+- [ ] Worker-owned document capture
+  - [ ] Request a bounded composed CPU snapshot when armed or the accepted frame changes.
+  - [ ] Bind capture to the accepted document, font, viewport, and session identities.
+  - [ ] Validate RGBA layout, alpha conversion, memory cap, and edge sampling.
+- [ ] Validation and delivery
+  - [ ] Add focused native tests for paint, input, capture freshness, and pixel mapping.
+  - [ ] Add native Geode replay and browser WebGPU journey/pixel regressions.
+  - [ ] Run affected gates, inspect exact evidence, complete independent review, and publish.
 
 ## Background and Constraints
 

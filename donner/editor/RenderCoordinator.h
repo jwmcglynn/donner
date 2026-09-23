@@ -14,6 +14,7 @@
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/AsyncSVGDocument.h"
 #include "donner/editor/CompositedPresentation.h"
+#include "donner/editor/DocumentPixelSampler.h"
 #include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/OverlayRenderer.h"
@@ -28,6 +29,22 @@ class GeodeDevice;
 namespace donner::editor {
 
 class SelectTool;
+
+/// Identity shared by a worker pixel request and its accepted presentation.
+struct DocumentPixelCaptureIdentity {
+  std::uint64_t sessionId = 0;
+  std::uint64_t documentGeneration = 0;
+  std::uint64_t version = 0;
+  std::uint64_t fontResourceRevision = 0;
+  EditorRasterViewport rasterViewport;
+  ViewportState viewport;
+};
+
+/// One immutable document-only pixel capture retained while the picker is armed.
+struct DocumentPixelCapture {
+  DocumentPixelCaptureIdentity identity;
+  svg::RendererBitmap bitmap;
+};
 
 /**
  * Return true when a composited preview may be presented against the current viewport.
@@ -185,6 +202,13 @@ public:
   }
   /// Request one worker render even when document and viewport epochs are already current.
   void requestPresentationRefresh() { pendingPresentationRefresh_ = true; }
+  /// Arm or disarm the worker-owned document pixel capture.
+  void setDocumentPixelCaptureEnabled(bool enabled);
+  /// Current capture, or null when the worker result has not matched the live presentation.
+  [[nodiscard]] const DocumentPixelCapture* documentPixelCaptureFor(
+      const EditorApp& app, const ViewportState& viewport) const;
+  /// True when the current capture attempt completed without a usable bitmap.
+  [[nodiscard]] bool documentPixelCaptureUnavailable() const { return captureUnavailable_; }
   /// Whether a renderer-presentation setting still needs a worker frame.
   [[nodiscard]] bool presentationRefreshPending() const { return pendingPresentationRefresh_; }
   /// Clear the per-frame cost accumulator before a new UI frame starts.
@@ -469,6 +493,11 @@ private:
   bool pendingDocumentMutationOverviewRefresh_ = false;
   /// Renderer-only state changed and must be represented by the next accepted worker frame.
   bool pendingPresentationRefresh_ = false;
+  bool documentPixelCaptureEnabled_ = false;
+  bool captureUnavailable_ = false;
+  std::uint64_t documentPixelCaptureSessionId_ = 0;
+  std::optional<DocumentPixelCaptureIdentity> requestedPixelCapture_;
+  std::optional<DocumentPixelCapture> documentPixelCapture_;
   FrameCostBreakdown lastFrameCostBreakdown_;
   /// Cumulative canvas-size commits; see `documentCanvasCommitTotal`.
   std::uint64_t documentCanvasCommitTotal_ = 0;

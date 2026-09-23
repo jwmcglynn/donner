@@ -1375,6 +1375,29 @@ public:
     return shell.activeTool_ == EditorShell::ActiveTool::Text;
   }
 
+  static bool ActiveToolIsEyedropper(const EditorShell& shell) {
+    return shell.activeTool_ == EditorShell::ActiveTool::Eyedropper;
+  }
+
+  static bool ArmEyedropper(EditorShell& shell, bool stroke) {
+    return shell.armEyedropper(stroke ? EditorShell::PaintTarget::Stroke
+                                      : EditorShell::PaintTarget::Fill);
+  }
+
+  static void CancelEyedropper(EditorShell& shell, bool restorePreviousTool) {
+    shell.cancelEyedropper(restorePreviousTool);
+  }
+
+  static void ApplySampledColor(EditorShell& shell, bool stroke, const css::RGBA& color) {
+    shell.applyPaintColor(
+        stroke ? EditorShell::PaintTarget::Stroke : EditorShell::PaintTarget::Fill, color,
+        /*recordUndo=*/true);
+  }
+
+  static bool EyedropperTargetsStroke(const EditorShell& shell) {
+    return shell.eyedropperTarget_ == EditorShell::PaintTarget::Stroke;
+  }
+
   static bool TextToolIsEditing(const EditorShell& shell) { return shell.textTool_.isEditing(); }
 
   static std::size_t TextToolCaretIndex(const EditorShell& shell) {
@@ -5566,5 +5589,101 @@ TEST(EditorShellTest, ToolbarSwapUpdatesEverySelectedElementInOneUndoStep) {
   app.redo();
   app.flushFrame();
   EXPECT_EQ(document.source(), afterSecondSwap);
+}
+
+TEST(EditorShellTest, EyedropperShortcutRespectsTextInputAndRestoresPreviousTool) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_I}, /*ctrl=*/false, /*shift=*/false, /*super=*/false,
+                      /*textInputActive=*/true);
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsSelect(shell), testing::Eq(true));
+  ImGui::GetIO().WantTextInput = false;
+  DriveGlobalShortcut(shell, {ImGuiKey_P});
+  DriveGlobalShortcut(shell, {ImGuiKey_I});
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
+  DriveGlobalShortcut(shell, {ImGuiKey_Escape});
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsPen(shell), testing::Eq(true));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_I});
+  DriveGlobalShortcut(shell, {ImGuiKey_V});
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsSelect(shell), testing::Eq(true));
+}
+
+TEST(EditorShellTest, ToolbarEyedropperButtonArmsWithoutSamplingItsActivationClick) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+  const ImVec2 paneOrigin(0.0f, 0.0f);
+  const ImVec2 contentRegion(640.0f, 480.0f);
+  const Box2d palette =
+      EditorShellTestAccess::ToolPaletteScreenRect(shell, paneOrigin, contentRegion);
+  const ImVec2 eyedropperCenter(static_cast<float>(palette.topLeft.x) + 8.0f + 3.0f * 36.0f + 16.0f,
+                                static_cast<float>(palette.topLeft.y) + 8.0f + 16.0f);
+  RenderToolPaletteFrame(window, shell, paneOrigin, contentRegion, eyedropperCenter,
+                         /*mouseDown=*/false);
+  RenderToolPaletteFrame(window, shell, paneOrigin, contentRegion, eyedropperCenter,
+                         /*mouseDown=*/true);
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
+  RenderToolPaletteFrame(window, shell, paneOrigin, contentRegion, eyedropperCenter,
+                         /*mouseDown=*/false);
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsEyedropper(shell), testing::Eq(true));
+}
+
+TEST(EditorShellTest, SampledFillChangesSelectedStylesInOneUndoAndDefaultsNewText) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  constexpr std::string_view kSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+<rect id="first" x="2" y="2" width="20" height="20" fill="red"/>
+<rect id="second" x="30" y="2" width="20" height="20" fill="blue"/>
+</svg>)";
+  EditorShell shell(window, OptionsWithSource(kSource));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  svg::SVGDocument& document = app.document().document();
+  const auto first = document.querySelector("#first");
+  const auto second = document.querySelector("#second");
+  ASSERT_THAT(first, testing::Optional(testing::_));
+  ASSERT_THAT(second, testing::Optional(testing::_));
+  app.setSelection(std::vector<svg::SVGElement>{*first, *second});
+  const std::string before(document.source());
+
+  EditorShellTestAccess::ApplySampledColor(shell, /*stroke=*/false, css::RGBA(51, 102, 153, 128));
+  EXPECT_THAT(app.activePaintStyle().fill, testing::Eq("#33669980"));
+  EXPECT_THAT(app.selectedElements(), testing::SizeIs(2));
+  EXPECT_THAT(std::string(*first->getAttribute("style")), testing::HasSubstr("fill: #33669980"));
+  EXPECT_THAT(std::string(*second->getAttribute("style")), testing::HasSubstr("fill: #33669980"));
+  ASSERT_THAT(app.undoTimeline().nextUndoLabel(), testing::Optional(testing::_));
+  EXPECT_THAT(*app.undoTimeline().nextUndoLabel(), testing::Eq("Sample document color"));
+  app.undo();
+  app.flushFrame();
+  EXPECT_THAT(std::string(document.source()), testing::Eq(before));
+}
+
+TEST(EditorShellTest, StrokeTargetUpdatesAuthoringDefaultWithoutDocumentUndo) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+  const std::string before(shell.documentSourceForReadback().value_or(""));
+  ASSERT_THAT(EditorShellTestAccess::ArmEyedropper(shell, /*stroke=*/true), testing::Eq(true));
+  EXPECT_THAT(EditorShellTestAccess::EyedropperTargetsStroke(shell), testing::Eq(true));
+  EditorShellTestAccess::ApplySampledColor(shell, /*stroke=*/true, css::RGBA(17, 34, 51, 255));
+  EditorShellTestAccess::CancelEyedropper(shell, /*restorePreviousTool=*/true);
+  EXPECT_THAT(EditorShellTestAccess::App(shell).activePaintStyle().stroke, testing::Eq("#112233"));
+  EXPECT_THAT(shell.documentSourceForReadback(), testing::Optional(testing::Eq(before)));
+  EXPECT_THAT(EditorShellTestAccess::App(shell).canUndo(), testing::Eq(false));
 }
 }  // namespace donner::editor

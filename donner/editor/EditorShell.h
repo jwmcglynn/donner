@@ -493,6 +493,11 @@ private:
   [[nodiscard]] std::optional<Entity> toolbarPaintSelectionIdentity(
       bool rendererBusy, const svg::SVGDocumentHandle& currentPaintDocument);
   void renderFillStrokeToolbarWidget();
+  enum class PaintTarget : std::uint8_t { Fill, Stroke };
+  bool armEyedropper(PaintTarget target);
+  void cancelEyedropper(bool restorePreviousTool);
+  void applyPaintColor(PaintTarget target, const css::RGBA& color, bool recordUndo);
+  void renderEyedropperLoupe(const Vector2d& pointerScreen, const Box2d& paneRect);
   void renderCompactTopBar();
   void renderSidebars();
   /// Poll every auxiliary result through one lifetime/generation-aware handler.
@@ -614,8 +619,13 @@ private:
     Select,
     Pen,
     Text,
+    Eyedropper,
   };
   ActiveTool activeTool_ = ActiveTool::Select;
+  ActiveTool previousEyedropperTool_ = ActiveTool::Select;
+  PaintTarget eyedropperTarget_ = PaintTarget::Fill;
+  std::uint64_t eyedropperDocumentGeneration_ = 0;
+  std::vector<svg::SVGElement> eyedropperSelection_;
   TextEditor textEditor_;
   SourceDiagnosticsPanel sourceDiagnosticsPanel_;
   std::optional<svg::SVGElement> sourceStructuralDragElement_;

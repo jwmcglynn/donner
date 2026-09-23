@@ -50,6 +50,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "document_pixel_sampler_tests",
+    srcs = ["DocumentPixelSampler_tests.cc"],
+    deps = [
+        "//donner/editor:document_pixel_sampler",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "editor_shell_layout_tests",
     srcs = ["EditorShellLayout_tests.cc"],
     deps = [

@@ -9,7 +9,7 @@ namespace {
 using ::testing::ElementsAre;
 
 // Each tool maps to the single-key binding design-tool users expect:
-// Selection = V, Pen = P, Type = T. The toolbar tooltips and the keyboard
+// Selection = V, Pen = P, Type = T, Eyedropper = I. The toolbar tooltips and the keyboard
 // shortcut handler both read this table, so pinning it keeps the on-screen
 // "(V/P/T)" hints truthful.
 TEST(ToolKeybinding, MapsEachToolToItsStandardKey) {
@@ -21,12 +21,14 @@ TEST(ToolKeybinding, MapsEachToolToItsStandardKey) {
 
   EXPECT_EQ(KeybindingForTool(ToolId::Text).label, "Type");
   EXPECT_EQ(KeybindingForTool(ToolId::Text).key, 'T');
+
+  EXPECT_EQ(KeybindingForTool(ToolId::Eyedropper).label, "Eyedropper");
+  EXPECT_EQ(KeybindingForTool(ToolId::Eyedropper).key, 'I');
 }
 
-// The toolbar exposes Select, Pen, and Text - in that order - so the Text tool
-// has a dedicated button rather than being keyboard-only.
-TEST(ToolKeybinding, ToolbarIncludesTextToolInOrder) {
-  EXPECT_THAT(kToolbarTools, ElementsAre(ToolId::Select, ToolId::Pen, ToolId::Text));
+TEST(ToolKeybinding, ToolbarIncludesEyedropperAfterText) {
+  EXPECT_THAT(kToolbarTools,
+              ElementsAre(ToolId::Select, ToolId::Pen, ToolId::Text, ToolId::Eyedropper));
 }
 
 }  // namespace

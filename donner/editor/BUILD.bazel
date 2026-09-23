@@ -110,6 +110,18 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "document_pixel_sampler",
+    srcs = ["DocumentPixelSampler.cc"],
+    hdrs = ["DocumentPixelSampler.h"],
+    deps = [
+        ":viewport_state",
+        "//donner/base",
+        "//donner/css",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
 # Geometry for the render pane's emulated canvas scrollbars: rails/thumbs
 # representing the document extent relative to the viewport. Pure math over
 # ViewportState — unit-testable headlessly.
@@ -1040,6 +1052,7 @@ donner_cc_library(
     deps = [
         ":async_renderer",
         ":composited_presentation",
+        ":document_pixel_sampler",
         ":frame_cost_breakdown",
         ":gl_texture_cache",
         ":overlay_renderer",
@@ -1094,6 +1107,7 @@ donner_cc_library(
         ":compositor_debug_panel",
         ":dialog_presenter",
         ":disclosure_chevron",
+        ":document_pixel_sampler",
         ":document_presentation_compositor",
         ":document_presenter",
         ":document_save",
@@ -1403,6 +1417,7 @@ embed_resources(
         "kToolSelectIconSvg": "art/tool_select_icon.svg",
         "kToolPenIconSvg": "art/tool_pen_icon.svg",
         "kToolTextIconSvg": "art/tool_text_icon.svg",
+        "kToolEyedropperIconSvg": "art/tool_eyedropper_icon.svg",
     },
 )
 
