@@ -9,6 +9,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -17,6 +18,41 @@
 #include "donner/gpu/browser/BrowserWireCodes.h"
 
 namespace donner::gpu::browser {
+
+/**
+ * The browser GPU device several fake bridges share, as the logical devices of one worker do.
+ *
+ * It holds what belongs to the device rather than to any one logical device over it: whether the
+ * device is lost, and the textures it has allocated, each with whether it has been destroyed. A
+ * bridge keeps identifiers of its own and names these textures through them, so a test can see
+ * that two logical devices name one texture, and exactly when that texture goes away.
+ */
+class FakeBrowserGpuDevice {
+public:
+  /// Whether the browser has reported this device lost, for every logical device over it.
+  bool lost = false;
+
+  /// Allocates a texture and returns the number naming it on this device.
+  uint64_t allocateTexture() {
+    const uint64_t texture = nextTexture_++;
+    textures_[texture] = false;
+    return texture;
+  }
+
+  /// Destroys the texture \p texture names. @param texture Texture to destroy.
+  void destroyTexture(uint64_t texture) { textures_[texture] = true; }
+
+  /// Whether \p texture names a texture this device allocated and has not destroyed.
+  /// @param texture Texture to check.
+  [[nodiscard]] bool isTextureLive(uint64_t texture) const {
+    const auto it = textures_.find(texture);
+    return it != textures_.end() && !it->second;
+  }
+
+private:
+  uint64_t nextTexture_ = 1;
+  std::map<uint64_t, bool> textures_;  //!< Texture number to whether it was destroyed.
+};
 
 /**
  * A \ref BrowserBridge that behaves like the browser side without being one.
@@ -34,8 +70,14 @@ namespace donner::gpu::browser {
  */
 class FakeBrowserBridge final : public BrowserBridge {
 public:
-  /// Constructs a bridge whose device request is already settled and ready.
+  /// Constructs a bridge whose device request is already settled and ready, over a browser
+  /// device of its own.
   FakeBrowserBridge() = default;
+
+  /// Constructs a bridge over \p gpuDevice, as a further logical device of the worker that holds
+  /// it. @param gpuDevice Browser device the bridge shares with the others over it.
+  explicit FakeBrowserBridge(std::shared_ptr<FakeBrowserGpuDevice> gpuDevice)
+      : gpuDevice(std::move(gpuDevice)) {}
 
   /// Destructor.
   ~FakeBrowserBridge() override = default;
@@ -51,7 +93,8 @@ public:
   BridgeStatus beginStatus = BridgeStatus::Success;
   /// Whether the calling context owns the device.
   bool owned = true;
-  /// Whether the browser has reported the device lost.
+  /// Whether the browser has reported the device lost to this logical device. The shared device's
+  /// own \ref FakeBrowserGpuDevice::lost reports it to every logical device over it.
   bool lost = false;
   /// What the browser said when it reported the loss.
   RcString lostReason;
@@ -79,6 +122,19 @@ public:
   /// what device teardown released needs the registry to outlive the bridge that kept it.
   std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects =
       std::make_shared<std::map<BrowserObjectId, BrowserObjectKind>>();
+
+  /// The browser device this bridge's logical device runs on, which other bridges may share.
+  std::shared_ptr<FakeBrowserGpuDevice> gpuDevice = std::make_shared<FakeBrowserGpuDevice>();
+
+  /// The device texture \p textureId names, or nullopt when it names no texture here.
+  /// @param textureId Identifier in this bridge's own space.
+  std::optional<uint64_t> nativeTextureOf(BrowserObjectId textureId) const {
+    const auto it = nativeTextures_.find(textureId);
+    if (it == nativeTextures_.end()) {
+      return std::nullopt;
+    }
+    return it->second;
+  }
 
   /// Marks the mapping \p mappingId as holding \p bytes and ready to read.
   /// @param mappingId Mapping to complete. @param bytes Bytes the host will see.
@@ -130,7 +186,7 @@ public:
 
   bool ownsDevice() const override { return owned; }
 
-  bool isDeviceLost() const override { return lost; }
+  bool isDeviceLost() const override { return lost || gpuDevice->lost; }
 
   RcString deviceLostReason() const override { return lostReason; }
 
@@ -148,6 +204,7 @@ public:
                std::format("createTexture id={} size={}x{} format={} usage={}", id, width, height,
                            formatCode, usageBits));
     if (status == BridgeStatus::Success) {
+      nativeTextures_[id] = gpuDevice->allocateTexture();
       if (const uint32_t texelBytes = BytesPerTexel(formatCode); texelBytes != 0) {
         textureImages_[id] =
             TextureImage{width, height, texelBytes,
@@ -268,6 +325,10 @@ public:
     objects->erase(id);
     mappings_.erase(id);
     textureImages_.erase(id);
+    if (const auto native = nativeTextures_.find(id); native != nativeTextures_.end()) {
+      gpuDevice->destroyTexture(native->second);
+      nativeTextures_.erase(native);
+    }
     if (kind == BrowserObjectKind::Surface) {
       // A surface destroyed while it still names a frame gives that frame up with it: the canvas
       // owns the texture, so nothing is left to name it once its surface is gone.
@@ -687,7 +748,7 @@ private:
     if (!owned) {
       return BridgeStatus::NotOwner;
     }
-    if (lost) {
+    if (isDeviceLost()) {
       return BridgeStatus::DeviceLost;
     }
     if (!failOperation.empty() && line.starts_with(failOperation)) {
@@ -877,6 +938,8 @@ private:
   std::map<BrowserObjectId, Mapping> mappings_;
   std::map<BrowserObjectId, TextureImage> textureImages_;
   std::map<BrowserObjectId, BrowserObjectId> frames_;
+  /// Device texture each texture identifier of this bridge names.
+  std::map<BrowserObjectId, uint64_t> nativeTextures_;
   bool encoderOpen_ = false;
   bool passOpen_ = false;
   uint64_t recordingSerial_ = 0;

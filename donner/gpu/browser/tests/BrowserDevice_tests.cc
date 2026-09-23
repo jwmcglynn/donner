@@ -34,8 +34,11 @@ struct BrowserFixture {
 };
 
 /// Builds a device over a ready fake bridge, failing the test if the request does not settle.
-BrowserFixture MakeDevice() {
-  auto bridge = std::make_unique<FakeBrowserBridge>();
+/// @param gpuDevice Browser device the bridge runs on; a new one of its own when null, or one
+///   another fixture's bridge already runs on, as a further logical device of the same worker.
+BrowserFixture MakeDevice(std::shared_ptr<FakeBrowserGpuDevice> gpuDevice = nullptr) {
+  auto bridge = gpuDevice != nullptr ? std::make_unique<FakeBrowserBridge>(std::move(gpuDevice))
+                                     : std::make_unique<FakeBrowserBridge>();
   FakeBrowserBridge* raw = bridge.get();
 
   BrowserDeviceRequest request = BrowserDeviceRequest::Begin(std::move(bridge));
@@ -1552,6 +1555,189 @@ TEST(BrowserDevice, RejectsOutOfBoundsTextureWriteBeforeTheBridge) {
         IsGpuError(GpuErrorType::OutOfBounds));
     EXPECT_THAT(*fixture.bridge->calls, testing::ElementsAreArray(callsBefore));
   }
+}
+
+// Texture sharing between runtime devices over one browser device. A worker drawing through the
+// browser backend reads every tile back through a capture context: a second runtime device over
+// the same browser device, on the same thread, that registers the texture the renderer drew. The
+// fixtures below stand two devices over one fake browser device for that, and one over another for
+// the refusals.
+
+namespace {
+
+/// Extent of the texture \ref ShareableTexture describes.
+constexpr Extent2d kShareableExtent{4, 4};
+
+/// A texture that can be sampled and copied from, as a snapshot target is.
+TextureDescriptor ShareableTexture() {
+  return TextureDescriptor{
+      RcString("snapshot"), kShareableExtent, TextureFormat::RGBA8Unorm,
+      TextureUsage::RenderAttachment | TextureUsage::Sampled | TextureUsage::CopySrc, 1};
+}
+
+}  // namespace
+
+TEST(BrowserDeviceSharing, ExportsATextureForAnotherDeviceOverTheSameBrowserDevice) {
+  BrowserFixture producer = MakeDevice();
+  ASSERT_THAT(producer.device, testing::NotNull());
+  Result<Texture> texture = producer.device->createTexture(ShareableTexture());
+  ASSERT_THAT(texture, HasResult());
+
+  Result<TextureExport> exported = producer.device->exportTexture(texture.result());
+  ASSERT_THAT(exported, HasResult());
+  EXPECT_THAT(exported.result().descriptor().size, kShareableExtent);
+  EXPECT_THAT(producer.bridge->gpuDevice->isTextureLive(*producer.bridge->nativeTextureOf(1)),
+              testing::IsTrue());
+}
+
+TEST(BrowserDeviceSharing, RegistersAnExportAsAReadOnlyAliasOfTheSameBrowserTexture) {
+  BrowserFixture producer = MakeDevice();
+  ASSERT_THAT(producer.device, testing::NotNull());
+  BrowserFixture consumer = MakeDevice(producer.bridge->gpuDevice);
+  ASSERT_THAT(consumer.device, testing::NotNull());
+
+  Result<Texture> texture = producer.device->createTexture(ShareableTexture());
+  ASSERT_THAT(texture, HasResult());
+  Result<TextureExport> exported = producer.device->exportTexture(texture.result());
+  ASSERT_THAT(exported, HasResult());
+
+  const size_t consumerCallsBefore = consumer.bridge->calls->size();
+  Result<Texture> registration = consumer.device->registerTexture(exported.result());
+  ASSERT_THAT(registration, HasResult());
+
+  // Each logical device numbers its own identifiers; the registration's names the texture the
+  // producer allocated, and allocates nothing of its own.
+  EXPECT_THAT(consumer.bridge->nativeTextureOf(1), producer.bridge->nativeTextureOf(1));
+  EXPECT_THAT(consumer.device->ownsTextureBacking(registration.result()), testing::IsFalse());
+  const std::vector<std::string> registrationCalls(
+      consumer.bridge->calls->begin() + static_cast<ptrdiff_t>(consumerCallsBefore),
+      consumer.bridge->calls->end());
+  EXPECT_THAT(registrationCalls, Not(Contains(testing::StartsWith("createTexture "))));
+
+  // The consumer reads what the producer drew through its own identifier.
+  BufferDescriptor readbackDescriptor = SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead);
+  readbackDescriptor.byteSize = 1024;
+  Result<Buffer> readback = consumer.device->createBuffer(readbackDescriptor);
+  ASSERT_THAT(readback, HasResult());
+  Result<std::unique_ptr<CommandEncoder>> encoder = consumer.device->createCommandEncoder();
+  ASSERT_THAT(encoder, HasResult());
+  std::unique_ptr<CommandEncoder> commands = std::move(encoder).result();
+  ASSERT_THAT(commands->copyTextureToBuffer(TexelCopyTextureInfo{TextureRef(registration.result())},
+                                            readback.result(), TexelCopyBufferLayout{0, 256, 4},
+                                            Extent2d{4, 4}),
+              IsOk());
+  Result<CommandBuffer> commandBuffer = commands->finish();
+  ASSERT_THAT(commandBuffer, HasResult());
+  EXPECT_THAT(consumer.device->submit(std::move(commandBuffer).result()), HasResult());
+  EXPECT_THAT(*consumer.bridge->calls,
+              Contains("copyTextureToBuffer texture=1 buffer=2 offset=0 bytesPerRow=256 "
+                       "rowsPerImage=4 size=4x4"));
+}
+
+TEST(BrowserDeviceSharing, KeepsTheBrowserTextureUntilItsLastHolderLetsGo) {
+  BrowserFixture producer = MakeDevice();
+  ASSERT_THAT(producer.device, testing::NotNull());
+  BrowserFixture consumer = MakeDevice(producer.bridge->gpuDevice);
+  ASSERT_THAT(consumer.device, testing::NotNull());
+  const std::shared_ptr<FakeBrowserGpuDevice> gpuDevice = producer.bridge->gpuDevice;
+
+  Result<Texture> texture = producer.device->createTexture(ShareableTexture());
+  ASSERT_THAT(texture, HasResult());
+  const uint64_t native = *producer.bridge->nativeTextureOf(1);
+  Result<TextureExport> exported = producer.device->exportTexture(texture.result());
+  ASSERT_THAT(exported, HasResult());
+  Result<Texture> registration = consumer.device->registerTexture(exported.result());
+  ASSERT_THAT(registration, HasResult());
+
+  EXPECT_THAT(producer.device->destroyTexture(std::move(texture).result()), IsOk());
+  EXPECT_THAT(gpuDevice->isTextureLive(native), testing::IsTrue())
+      << "the producer's release destroyed a texture the consumer still reads";
+
+  EXPECT_THAT(consumer.device->destroyTexture(std::move(registration).result()), IsOk());
+  EXPECT_THAT(gpuDevice->isTextureLive(native), testing::IsTrue())
+      << "releasing a registration destroyed a texture the export token still holds";
+
+  exported = TextureExport();
+  EXPECT_THAT(gpuDevice->isTextureLive(native), testing::IsFalse())
+      << "the texture outlived its last holder";
+}
+
+TEST(BrowserDeviceSharing, AnUnsharedTextureIsStillDestroyedWhenItsDeviceReleasesIt) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  Result<Texture> texture = fixture.device->createTexture(ShareableTexture());
+  ASSERT_THAT(texture, HasResult());
+  const uint64_t native = *fixture.bridge->nativeTextureOf(1);
+
+  EXPECT_THAT(fixture.device->destroyTexture(std::move(texture).result()), IsOk());
+  EXPECT_THAT(fixture.bridge->gpuDevice->isTextureLive(native), testing::IsFalse());
+}
+
+TEST(BrowserDeviceSharing, ARegistrationOutlivesItsProducerDevice) {
+  BrowserFixture producer = MakeDevice();
+  ASSERT_THAT(producer.device, testing::NotNull());
+  BrowserFixture consumer = MakeDevice(producer.bridge->gpuDevice);
+  ASSERT_THAT(consumer.device, testing::NotNull());
+  const std::shared_ptr<FakeBrowserGpuDevice> gpuDevice = producer.bridge->gpuDevice;
+
+  Result<Texture> texture = producer.device->createTexture(ShareableTexture());
+  ASSERT_THAT(texture, HasResult());
+  const uint64_t native = *producer.bridge->nativeTextureOf(1);
+  Result<Texture> registration = Texture();
+  {
+    Result<TextureExport> exported = producer.device->exportTexture(texture.result());
+    ASSERT_THAT(exported, HasResult());
+    registration = consumer.device->registerTexture(exported.result());
+  }
+  ASSERT_THAT(registration, HasResult());
+
+  producer.device.reset();
+  EXPECT_THAT(gpuDevice->isTextureLive(native), testing::IsTrue())
+      << "tearing the producer down destroyed a texture the consumer still reads";
+  EXPECT_THAT(consumer.device->createTextureView(registration.result(),
+                                                 TextureViewDescriptor{RcString("view")}),
+              HasResult());
+
+  consumer.device.reset();
+  EXPECT_THAT(gpuDevice->isTextureLive(native), testing::IsFalse());
+}
+
+TEST(BrowserDeviceSharing, RefusesATextureOfAnotherBrowserDevice) {
+  BrowserFixture producer = MakeDevice();
+  ASSERT_THAT(producer.device, testing::NotNull());
+  BrowserFixture elsewhere = MakeDevice();
+  ASSERT_THAT(elsewhere.device, testing::NotNull());
+
+  Result<Texture> texture = producer.device->createTexture(ShareableTexture());
+  ASSERT_THAT(texture, HasResult());
+  Result<TextureExport> exported = producer.device->exportTexture(texture.result());
+  ASSERT_THAT(exported, HasResult());
+
+  // WebGPU cannot share a texture across GPU devices, so a device over another one refuses it
+  // with the runtime's own reason.
+  EXPECT_THAT(elsewhere.device->registerTexture(exported.result()),
+              IsGpuErrorWithMessage(GpuErrorType::DeviceMismatch,
+                                    HasSubstr("belongs to a different native device")));
+}
+
+TEST(BrowserDeviceSharing, RefusesARegistrationFromAThreadThatDoesNotOwnTheDevice) {
+  BrowserFixture producer = MakeDevice();
+  ASSERT_THAT(producer.device, testing::NotNull());
+  BrowserFixture consumer = MakeDevice(producer.bridge->gpuDevice);
+  ASSERT_THAT(consumer.device, testing::NotNull());
+
+  Result<Texture> texture = producer.device->createTexture(ShareableTexture());
+  ASSERT_THAT(texture, HasResult());
+  Result<TextureExport> exported = producer.device->exportTexture(texture.result());
+  ASSERT_THAT(exported, HasResult());
+
+  Result<Texture> registration = Texture();
+  std::thread elsewhere(
+      [&] { registration = consumer.device->registerTexture(exported.result()); });
+  elsewhere.join();
+  EXPECT_THAT(registration, IsGpuErrorWithMessage(GpuErrorType::InvalidState,
+                                                  HasSubstr("cannot be used from another thread")));
+  EXPECT_THAT(consumer.bridge->objectCount(), 0u);
 }
 
 }  // namespace donner::gpu::browser
