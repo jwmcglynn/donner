@@ -63,6 +63,11 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  * are freed. Vulkan requires this lost-device idle wait to return finitely, but the wait has no
  * caller-configured deadline. Later host accesses and submissions return the latched error.
  *
+ * A device takes part in the loss condition of the root it opens over (see \ref Create). A
+ * device-lost result from the driver declares that condition, as a backend-reported loss, before
+ * the error is latched; serial waits and mappings end as soon as any device over the root has
+ * declared it.
+ *
  * Which allocation a buffer is bound into is the allocator's decision, behind the seam in
  * VulkanBufferAllocator.h: one dedicated allocation per buffer today, with a suballocating
  * implementation replaceable there rather than at every call site, once measurement says the

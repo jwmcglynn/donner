@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <cstring>
@@ -29,6 +30,7 @@
 
 #include "donner/base/Utils.h"
 #include "donner/gpu/BufferMappingTable.h"
+#include "donner/gpu/DeviceLost.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/vulkan/VulkanBufferAllocator.h"
 #include "donner/gpu/vulkan/VulkanLoader.h"
@@ -1263,7 +1265,7 @@ struct VulkanDevice::Impl {
         break;
       }
       if (status == VK_ERROR_DEVICE_LOST) {
-        recordError("upload fence reported device loss");
+        recordDeviceLoss("upload fence reported device loss");
       }
       releaseUpload(*it);
       it = pendingUploads.erase(it);
@@ -1284,6 +1286,22 @@ struct VulkanDevice::Impl {
 
   /// Records the first failure (fence wait/poll error or validation error).
   void recordError(std::string message) { errorState->record(std::move(message)); }
+
+  /// Loss condition of the root this device opens over, which the base device reports through
+  /// `isLost()`; shared with every other device over that root.
+  std::shared_ptr<DeviceLostState> rootLoss = std::make_shared<DeviceLostState>();
+
+  /// Records a device loss the driver reported. The root is declared lost first, as a
+  /// backend-reported loss with no wait site, and the error only then, so a waiter that sees the
+  /// error also sees the loss and cannot give up first and record a timeout of its own.
+  /// @param message Diagnostic for the device error and for the loss log line.
+  void recordDeviceLoss(const std::string& message) {
+    const bool declared = DeclareDeviceLost(*rootLoss);
+    recordError(message);
+    if (declared) {
+      LogDeclaredDeviceLoss(message.c_str());
+    }
+  }
 
   /// Whether a child failed to prove its native work complete.
   bool surfaceLifetimeUnproven() const {
@@ -1350,7 +1368,7 @@ struct VulkanDevice::Impl {
     if (result != VK_ERROR_DEVICE_LOST) {
       return false;
     }
-    recordError(std::format("{} failed with {}", operation, VkResultToString(result)));
+    recordDeviceLoss(std::format("{} failed with {}", operation, VkResultToString(result)));
     // Only device loss permits this otherwise unbounded wait: the lost-device wait is finite.
     if (!CompletionWasProven(api->vkDeviceWaitIdle(device))) {
       return false;
@@ -1404,7 +1422,7 @@ struct VulkanDevice::Impl {
       const VkResult status = api->vkGetFenceStatus(device, submission.fence);
       if (CompletionWasProven(status)) {
         if (status == VK_ERROR_DEVICE_LOST) {
-          recordError("submission fence reported device loss");
+          recordDeviceLoss("submission fence reported device loss");
         }
         releaseSubmission(submission);
         completedSerialValue = submission.serial;
@@ -1418,6 +1436,55 @@ struct VulkanDevice::Impl {
     }
     if (releasedCount > 0) {
       inFlight.erase(inFlight.begin(), inFlight.begin() + static_cast<ptrdiff_t>(releasedCount));
+    }
+  }
+
+  /// The earliest in-flight submission whose completion covers \p serial, or null when no
+  /// submission through that serial is in flight. @param serial Serial to cover.
+  const InFlightSubmission* firstInFlightThrough(uint64_t serial) const {
+    const auto found = std::ranges::find_if(
+        inFlight,
+        [serial](const InFlightSubmission& submission) { return submission.serial >= serial; });
+    return found == inFlight.end() ? nullptr : &*found;
+  }
+
+  /// Waits for \p fence for up to \p timeoutSeconds, in steps of at most 10 ms so that a loss
+  /// another device over the root declares while the wait is blocked ends it too. A failed wait is
+  /// recorded, as a device loss when the driver reports one.
+  /// @param fence Fence to wait for.
+  /// @param timeoutSeconds Budget; the runtime has already clamped it to its maximum wait.
+  /// @return True when the fence signalled within the budget and the root was not lost.
+  bool waitForFenceUnlessLost(VkFence fence, double timeoutSeconds) {
+    constexpr std::chrono::nanoseconds kLossCheckInterval = std::chrono::milliseconds(10);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              std::chrono::duration<double>(std::max(timeoutSeconds, 0.0)));
+    while (true) {
+      const std::chrono::nanoseconds remaining =
+          std::max(std::chrono::nanoseconds::zero(), deadline - std::chrono::steady_clock::now());
+      const std::chrono::nanoseconds step = std::min(remaining, kLossCheckInterval);
+      const VkResult result =
+          api->vkWaitForFences(device, 1, &fence, VK_TRUE, static_cast<uint64_t>(step.count()));
+      if (result == VK_SUCCESS) {
+        return true;
+      }
+      if (result != VK_TIMEOUT) {
+        recordFenceWaitFailure(result);
+        return false;
+      }
+      if (rootLoss->lost.load(std::memory_order_acquire) || remaining <= step) {
+        return false;
+      }
+    }
+  }
+
+  /// Records a fence wait that failed with \p result. @param result Native result of the wait.
+  void recordFenceWaitFailure(VkResult result) {
+    std::string message = std::format("vkWaitForFences failed with {}", VkResultToString(result));
+    if (result == VK_ERROR_DEVICE_LOST) {
+      recordDeviceLoss(message);
+    } else {
+      recordError(std::move(message));
     }
   }
 
@@ -2081,7 +2148,6 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(
     bool enableTimelineSemaphoreForTest, bool enablePresentation,
     std::span<const char* const> requiredInstanceExtensions,
     std::shared_ptr<DeviceLostState> lostState) {
-  (void)lostState;
   Impl::AdmissionGate& gate = Impl::admissionGate();
   const std::lock_guard admission(gate.mutex);
   if (gate.closed) {
@@ -2136,6 +2202,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(
 
   std::unique_ptr<VulkanDevice> result(new VulkanDevice());
   Impl& impl = *result->impl_;
+  if (lostState) {
+    impl.rootLoss = lostState;
+    result->adoptLostState(std::move(lostState));
+  }
   impl.loader = loader;
   impl.api = &loader->api();
   impl.instance = instance;
@@ -2159,7 +2229,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(
   return result;
 }
 
-VulkanDevice::VulkanDevice() : impl_(std::make_unique<Impl>()) {}
+VulkanDevice::VulkanDevice() : impl_(std::make_unique<Impl>()) {
+  adoptLostState(impl_->rootLoss);
+}
 
 std::unique_ptr<VulkanDevice> VulkanDevice::CreateForTeardownTest(
     const VulkanApi* api, uint64_t instanceHandle, uint64_t deviceHandle,
@@ -2301,27 +2373,17 @@ bool VulkanDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
   if (impl.completedSerialValue >= serial) {
     return true;
   }
-
-  const Impl::InFlightSubmission* target = nullptr;
-  for (const Impl::InFlightSubmission& submission : impl.inFlight) {
-    if (submission.serial >= serial) {
-      target = &submission;
-      break;
-    }
+  // A root that any device over it declared lost will not finish this work: say so now rather
+  // than spend the budget, which is also what keeps a caller from recording its own timeout.
+  if (isLost()) {
+    return false;
   }
+
+  const Impl::InFlightSubmission* target = impl.firstInFlightThrough(serial);
   if (target == nullptr) {
     return false;  // Serial was never submitted.
   }
-
-  const double clampedSeconds = timeoutSeconds > 0.0 ? timeoutSeconds : 0.0;
-  const uint64_t timeoutNs = static_cast<uint64_t>(clampedSeconds * 1e9);
-  const VkResult result =
-      impl_->api->vkWaitForFences(impl.device, 1, &target->fence, VK_TRUE, timeoutNs);
-  if (result == VK_TIMEOUT) {
-    return false;
-  }
-  if (result != VK_SUCCESS) {
-    impl.recordError(std::format("vkWaitForFences failed with {}", VkResultToString(result)));
+  if (!impl.waitForFenceUnlessLost(target->fence, timeoutSeconds)) {
     return false;
   }
   impl.pollCompleted();
@@ -3303,7 +3365,7 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
           api->vkWaitForFences(device, 1, &fence, VK_TRUE, kUploadFenceTimeoutNs);
       result != VK_SUCCESS) {
     if (result == VK_ERROR_DEVICE_LOST) {
-      recordError("vkWaitForFences (writeTexture) reported device loss");
+      recordDeviceLoss("vkWaitForFences (writeTexture) reported device loss");
       return VkError("vkWaitForFences (writeTexture)", result);
     }
     // A failed wait does not prove completion; retain ownership until polling or teardown does.
@@ -4166,7 +4228,8 @@ MapWaitKind VulkanDevice::Impl::MappingHost::waitForSubmission(uint64_t serial,
 }
 
 bool VulkanDevice::Impl::MappingHost::deviceLost() const {
-  // A bounded wait that gave up declares the loss condition without recording an error here.
+  // A loss any device over the root declares, including a bounded wait that gave up, ends a
+  // mapping whether or not this device recorded an error of its own.
   return impl_.hasError() || device_.isLost();
 }
 
@@ -4206,9 +4269,8 @@ MapSliceReport VulkanDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, doubl
 }
 
 Result<std::span<const uint8_t>> VulkanDevice::onMappedBytes(uint32_t mappingSlotIndex) const {
-  if (impl_->hasError()) {
-    return GpuError{GpuErrorType::InvalidState, impl_->errorMessage()};
-  }
+  // No error check here: the mapping table answers a failed or lost device as a device loss,
+  // which is what a read after the driver reported one must see.
   if (!impl_->mappingTable) {
     return GpuError{GpuErrorType::InvalidHandle, "mappedBytes: this device has no open mappings"};
   }
