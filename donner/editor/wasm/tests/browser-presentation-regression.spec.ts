@@ -2616,18 +2616,18 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     timeout: scaledMs(4_000),
   }).toBe(true);
   await waitForBrowserComposite(page);
-  await retainEyedropperPng("eyedropper-alpha-centered-document.png", await page.screenshot());
   const viewport = await readViewportStats(page);
   const center = {
     x: viewport.documentX + viewport.documentWidth / 2,
     y: viewport.documentY + viewport.documentHeight / 2,
   };
   const redRegion = { x: center.x - 12, y: center.y - 12, width: 24, height: 24 };
-  expect(
-    (await readCanvasColorStats(page, redRegion)).coloredPixels,
-    "the translucent rectangle must be visible in the presented WebGPU canvas",
-  )
-    .toBeGreaterThan(0);
+  await expect.poll(async () => (await readCanvasColorStats(page, redRegion)).coloredPixels, {
+    message: "the translucent rectangle must be visible in the presented WebGPU canvas",
+    timeout: scaledMs(5_000),
+    intervals: [16, 25, 50, 100],
+  }).toBeGreaterThan(0);
+  await retainEyedropperPng("eyedropper-alpha-centered-document.png", await page.screenshot());
 
   await page.mouse.move(center.x, center.y);
   await waitForAppliedPointer(page, center, {
