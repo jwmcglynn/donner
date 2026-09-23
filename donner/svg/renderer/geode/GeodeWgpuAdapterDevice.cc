@@ -1199,8 +1199,10 @@ bool GeodeWgpuAdapterDevice::waitForSerialBounded(uint64_t serial, double timeou
   const auto deadline = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
                                     std::chrono::duration<double>(timeoutSeconds));
   // Bounded like GeodeDevice's queue drain: poll(true) blocks until pending work progresses
-  // (yielding through Asyncify on Emscripten), so iterations are cheap when idle.
-  for (int pollIter = 0; pollIter < serialWaitPollBound_; ++pollIter) {
+  // (yielding through Asyncify on Emscripten), so iterations are cheap when idle. The checks run
+  // once more after the last poll, so a wait whose last poll carried it past its deadline ends as
+  // any wait that spent its budget polling does.
+  for (int pollIter = 0;; ++pollIter) {
     if (completedSerial() >= serial) {
       return true;
     }
@@ -1212,9 +1214,12 @@ bool GeodeWgpuAdapterDevice::waitForSerialBounded(uint64_t serial, double timeou
     if (std::chrono::steady_clock::now() >= deadline) {
       return giveUpOnSerialWait(start, timeoutSeconds, onTimeout);
     }
+    if (pollIter == serialWaitPollBound_) {
+      break;
+    }
     pollForSerialCompletion();
   }
-  // The poll cap rather than the deadline. Polls that return at once without the work completing
+  // The poll cap with budget left. Polls that return at once without the work completing
   // mean another context's poll, on another thread, collected this wait's completion callback and
   // has not run it yet, or a driver that does not block in poll. Neither says the device stopped
   // answering, so the rest of the budget is spent waiting for the completion to be delivered.
