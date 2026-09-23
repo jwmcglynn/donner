@@ -58,7 +58,6 @@ extern "C" {
 #include "donner/editor/gui/UiTextureRegistration.h"
 #include "donner/editor/gui/UiTextureRegistry.h"
 #include "donner/gpu/CommandEncoder.h"
-#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
@@ -184,87 +183,6 @@ void CopyMappedSurfaceToBitmap(const uint8_t* mapped, uint32_t width, uint32_t h
   }
 }
 
-void CopySurfaceTextureToReadbackBuffer(const wgpu::Texture& texture, const wgpu::Buffer& buffer,
-                                        uint32_t width, uint32_t height, uint32_t bytesPerRow,
-                                        wgpu::CommandEncoder& encoder) {
-  wgpu::TexelCopyTextureInfo src = {};
-  src.texture = texture;
-  src.mipLevel = 0;
-  src.origin = {0, 0, 0};
-
-  wgpu::TexelCopyBufferInfo dst = {};
-  dst.buffer = buffer;
-  dst.layout.bytesPerRow = bytesPerRow;
-  dst.layout.rowsPerImage = height;
-
-  const wgpu::Extent3D copySize = {width, height, 1u};
-  encoder.copyTextureToBuffer(src, dst, copySize);
-}
-
-bool MapReadbackBuffer(const wgpu::Device& device, const wgpu::Buffer& buffer, uint64_t size,
-                       const std::shared_ptr<donner::geode::GeodeDevice>& geodeDevice) {
-  if (geodeDevice && geodeDevice->isDeviceLost()) {
-    // A lost device will never deliver the map; fail fast instead of
-    // spending another full wait bound on the editor thread.
-    return false;
-  }
-  // AllowSpontaneous + a bounded poll loop: a timed waitAny cannot complete
-  // on the browser main thread, and the wait bailing out means the callback
-  // can fire after this frame returns, so the state must be heap-retained
-  // until the callback consumes it.
-  struct MapState {
-    std::atomic<bool> done = false;
-    std::atomic<bool> ok = false;
-  };
-  auto mapState = std::make_shared<MapState>();
-
-  wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
-  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
-                      void* /*userdata2*/) {
-    const std::shared_ptr<MapState> state =
-        donner::geode::takeWgpuCallbackState<MapState>(userdata1);
-    state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
-    state->done.store(true, std::memory_order_release);
-  };
-  mapCb.userdata1 = donner::geode::retainWgpuCallbackState(mapState);
-  mapCb.userdata2 = nullptr;
-  mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
-  buffer.mapAsync(wgpu::MapMode::Read, 0, size, mapCb);
-
-#ifdef __EMSCRIPTEN__
-  // Browser: `poll` yields the thread for one browser task, so the loop is
-  // already bounded in time by the iteration cap.
-  int pollCount = 0;
-  while (!mapState->done.load(std::memory_order_acquire)) {
-    device.poll(true, nullptr);
-    ++pollCount;
-    if (pollCount > 2000) {
-      break;
-    }
-  }
-#else
-  // Native: never ask the driver to block until the map completes; a hung
-  // driver would wedge the editor thread forever (worst case in
-  // uninterruptible kernel sleep). Poll non-blocking with a deadline and
-  // declare the device lost when the deadline expires.
-  const auto surfaceWaitStart = std::chrono::steady_clock::now();
-  const donner::geode::GpuWaitResult waitResult = donner::geode::BoundedGpuWait(
-      [&] {
-        device.poll(false, nullptr);
-        return mapState->done.load(std::memory_order_acquire);
-      },
-      donner::geode::kDefaultGpuWaitTimeout);
-  if (waitResult != donner::geode::GpuWaitResult::Complete && geodeDevice) {
-    geodeDevice->markDeviceLostAfterWaitTimeout(
-        donner::geode::GpuWaitSite::ReadbackMap,
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                              surfaceWaitStart),
-        "editor surface readback map did not complete within the bound");
-  }
-#endif
-  return mapState->done.load(std::memory_order_acquire) &&
-         mapState->ok.load(std::memory_order_relaxed);
-}
 #endif
 
 void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
@@ -767,6 +685,41 @@ struct AsyncSmokeReadback {
   std::shared_ptr<std::atomic_uint> consecutiveFailures;
 };
 
+/// Copies this frame into \p buffer for the asynchronous diagnostic readback.
+///
+/// Recorded on the root's wgpu device rather than through the runtime: that readback completes
+/// from the backend's map callback on a later browser task, and the runtime has no map completion
+/// a caller can observe without waiting for it, which the browser's main thread cannot do. The
+/// runtime submits to the same queue, so the copy is ordered after the frame it reads.
+///
+/// @param root Root the frame's device records against.
+/// @param target The frame's backend texture. @param buffer Destination, sized for the copy.
+/// @param width Copy width in pixels. @param height Copy height in pixels.
+/// @param bytesPerRow Destination row pitch.
+/// @return Whether the copy was submitted.
+bool SubmitSmokeReadbackCopy(const geode::GeodeGpuRoot& root, const wgpu::Texture& target,
+                             const wgpu::Buffer& buffer, uint32_t width, uint32_t height,
+                             uint32_t bytesPerRow) {
+  geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(root.device().createCommandEncoder());
+  if (!encoder) {
+    return false;
+  }
+  wgpu::TexelCopyTextureInfo source = {};
+  source.texture = target;
+  wgpu::TexelCopyBufferInfo destination = {};
+  destination.buffer = buffer;
+  destination.layout.bytesPerRow = bytesPerRow;
+  destination.layout.rowsPerImage = height;
+  const wgpu::Extent3D copySize = {width, height, 1u};
+  encoder.get().copyTextureToBuffer(source, destination, copySize);
+  geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
+  if (!commands) {
+    return false;
+  }
+  root.queue().submit(1, &commands.get());
+  return true;
+}
+
 void BeginAsyncSmokeReadback(geode::ScopedWgpuHandle<wgpu::Buffer> buffer, uint64_t size,
                              uint32_t width, uint32_t height, uint32_t bytesPerRow,
                              gpu::TextureFormat surfaceFormat, int requestId,
@@ -825,6 +778,38 @@ void BeginAsyncSmokeReadback(geode::ScopedWgpuHandle<wgpu::Buffer> buffer, uint6
   mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
   MarkWgpuReadbackCaptureStarted(requestId);
   callbackState->buffer.get().mapAsync(wgpu::MapMode::Read, 0, size, mapCb);
+}
+
+/// Copies this frame into a buffer of its own and starts the asynchronous diagnostic readback of
+/// it; see \ref SubmitSmokeReadbackCopy for why the copy is not recorded through the runtime.
+///
+/// @param root Root the frame's device records against.
+/// @param target The frame's backend texture, or a null handle when it has none.
+/// @param width Frame width in pixels. @param height Frame height in pixels.
+/// @param surfaceFormat Format of \p target. @param requestId Diagnostic request being served.
+/// @param inFlight Set while the map is outstanding. @param alive Cleared when the window goes.
+/// @param consecutiveFailures Failures since the last completed request.
+/// @return Whether the map callback now owns the request; false when setup failed first.
+bool StartAsyncSmokeReadback(const geode::GeodeGpuRoot& root, const wgpu::Texture& target,
+                             uint32_t width, uint32_t height, gpu::TextureFormat surfaceFormat,
+                             int requestId, const std::shared_ptr<std::atomic_bool>& inFlight,
+                             const std::shared_ptr<std::atomic_bool>& alive,
+                             const std::shared_ptr<std::atomic_uint>& consecutiveFailures) {
+  const uint32_t bytesPerRow = AlignTextureCopyBytesPerRow(width * 4u);
+  const uint64_t size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
+  wgpu::BufferDescriptor descriptor = {};
+  descriptor.label = geode::wgpuLabel("EditorWindowSurfaceReadback");
+  descriptor.size = size;
+  descriptor.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+  geode::ScopedWgpuHandle<wgpu::Buffer> buffer(root.device().createBuffer(descriptor));
+  if (!target || !buffer ||
+      !SubmitSmokeReadbackCopy(root, target, buffer.get(), width, height, bytesPerRow)) {
+    return false;
+  }
+  inFlight->store(true, std::memory_order_release);
+  BeginAsyncSmokeReadback(std::move(buffer), size, width, height, bytesPerRow, surfaceFormat,
+                          requestId, inFlight, alive, consecutiveFailures);
+  return true;
 }
 #endif
 #endif
@@ -1360,6 +1345,37 @@ void BeginUiFrame(UiTextureRegistry* registry, ImGuiRuntimeRenderer* renderer) {
     std::fprintf(stderr, "EditorWindow: UI font atlas rebuild failed: %s\n",
                  rebuilt.error().toString().c_str());
   }
+}
+
+/// Clears \p target to \p clearColor as a submission of its own, so what the frame draws next
+/// lands on the window's clear color rather than on whatever the target held.
+/// @param device Device \p target belongs to.
+/// @param target Frame's color target, a live texture of \p device.
+/// @param clearColor Premultiplied color the target is cleared to.
+/// @return Whether the clear was submitted.
+bool ClearFrameTarget(gpu::Device& device, const gpu::Texture& target,
+                      const std::array<double, 4>& clearColor) {
+  gpu::Result<gpu::TextureView> view =
+      device.createTextureView(target, gpu::TextureViewDescriptor{"editorFrameClear"});
+  if (view.hasError()) {
+    return false;
+  }
+  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder = device.createCommandEncoder();
+  if (encoder.hasError()) {
+    return false;
+  }
+  gpu::Result<gpu::RenderPassEncoder*> pass =
+      encoder.result()->beginRenderPass(gpu::RenderPassDescriptor{
+          "editorFrameClear",
+          {{view.result(), gpu::LoadOp::Clear, gpu::StoreOp::Store, clearColor}}});
+  if (pass.hasError() || pass.result()->end().hasError()) {
+    return false;
+  }
+  gpu::Result<gpu::CommandBuffer> commands = encoder.result()->finish();
+  if (commands.hasError()) {
+    return false;
+  }
+  return device.submit(std::move(commands).result()).hasResult();
 }
 
 /// Records and submits one frame of UI draw data into \p target through the runtime.
@@ -2193,44 +2209,16 @@ bool EditorWindow::configureFrameTarget(int displayW, int displayH) {
   return true;
 }
 
-bool EditorWindow::drawFrameBelowUi(const wgpu::Texture& target, const gpu::Texture& frameTarget,
-                                    Vector2i framebufferSizePx,
+bool EditorWindow::drawFrameBelowUi(const gpu::Texture& frameTarget, Vector2i framebufferSizePx,
                                     const Vector2d& framebufferFromLogicalScale, bool hasUnderlay,
                                     bool hasDirect, EditorWindowFrameTiming& timing) {
   if (hasUnderlay || hasDirect) {
     const auto underlayStart = std::chrono::steady_clock::now();
-    donner::geode::ScopedWgpuHandle<wgpu::TextureView> clearView(target.createView());
-    if (!clearView) {
+    if (!ClearFrameTarget(wgpuState_->framebufferGeodeDevice->runtimeDevice(), frameTarget,
+                          {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+                           options_.clearColor[3]})) {
       return false;
     }
-    donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> clearEncoder(
-        wgpuState_->root->device().createCommandEncoder());
-    if (!clearEncoder) {
-      return false;
-    }
-    wgpu::RenderPassColorAttachment clearColor = {};
-    clearColor.view = clearView.get();
-    clearColor.loadOp = wgpu::LoadOp::Clear;
-    clearColor.storeOp = wgpu::StoreOp::Store;
-    clearColor.clearValue = {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
-                             options_.clearColor[3]};
-    clearColor.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-
-    wgpu::RenderPassDescriptor clearPassDesc = {};
-    clearPassDesc.colorAttachmentCount = 1;
-    clearPassDesc.colorAttachments = &clearColor;
-    donner::geode::ScopedWgpuHandle<wgpu::RenderPassEncoder> clearPass(
-        clearEncoder.get().beginRenderPass(clearPassDesc));
-    if (!clearPass) {
-      return false;
-    }
-    clearPass.get().end();
-    clearPass.reset();
-    donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> clearCommands(clearEncoder.get().finish());
-    if (!clearCommands) {
-      return false;
-    }
-    wgpuState_->root->queue().submit(1, &clearCommands.get());
 
     if (hasUnderlay) {
       EditorWindowWgpuRenderTarget underlayTarget{
@@ -2285,41 +2273,74 @@ bool EditorWindow::recordFrameUi(const gpu::Texture& frameTarget, Vector2i frame
   return true;
 }
 
-bool EditorWindow::recordFrameReadback(const wgpu::Texture& target, const wgpu::Buffer& buffer,
+bool EditorWindow::recordFrameReadback(const gpu::Texture& frameTarget, const gpu::Buffer& buffer,
                                        uint32_t width, uint32_t height, uint32_t bytesPerRow,
                                        EditorWindowFrameTiming& timing) {
   const auto readbackStart = std::chrono::steady_clock::now();
-  donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
-      wgpuState_->root->device().createCommandEncoder());
-  if (!encoder) {
+  gpu::Device& device = wgpuState_->framebufferGeodeDevice->runtimeDevice();
+  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder = device.createCommandEncoder();
+  if (encoder.hasError()) {
     return false;
   }
-  CopySurfaceTextureToReadbackBuffer(target, buffer, width, height, bytesPerRow, encoder.get());
-  donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
-  if (!commands) {
+  if (encoder.result()
+          ->copyTextureToBuffer(gpu::TexelCopyTextureInfo{frameTarget}, buffer,
+                                gpu::TexelCopyBufferLayout{0, bytesPerRow, height},
+                                gpu::Extent2d{width, height})
+          .hasError()) {
     return false;
   }
-  wgpuState_->root->queue().submit(1, &commands.get());
+  gpu::Result<gpu::CommandBuffer> commands = encoder.result()->finish();
+  if (commands.hasError() || device.submit(std::move(commands).result()).hasError()) {
+    return false;
+  }
   timing.readbackMs += ElapsedMs(readbackStart);
   return true;
 }
 
-void EditorWindow::readFrameReadback(const wgpu::Buffer& buffer, uint64_t byteSize, uint32_t width,
+void EditorWindow::readFrameReadback(const gpu::Buffer& buffer, uint64_t byteSize, uint32_t width,
                                      uint32_t height, uint32_t bytesPerRow,
                                      svg::RendererBitmap* destination,
                                      EditorWindowFrameTiming& timing) {
-  if (!MapReadbackBuffer(wgpuState_->root->device(), buffer, byteSize,
-                         wgpuState_->framebufferGeodeDevice)) {
+  const geode::GeodeDevice& context = *wgpuState_->framebufferGeodeDevice;
+  if (context.isDeviceLost()) {
+    // A lost device never completes the map, so asking would only spend the wait's bound on the
+    // editor thread.
     return;
   }
-  const auto readbackStart = std::chrono::steady_clock::now();
-  const uint8_t* mapped = static_cast<const uint8_t*>(buffer.getConstMappedRange(0, byteSize));
-  if (mapped != nullptr) {
-    CopyMappedSurfaceToBitmap(mapped, width, height, bytesPerRow, wgpuState_->surfaceFormat,
-                              destination);
+  gpu::Device& device = context.runtimeDevice();
+  gpu::Result<gpu::BufferMapping> mapping =
+      device.mapBufferAsync(buffer, gpu::MapMode::Read, 0, byteSize);
+  if (mapping.hasError()) {
+    return;
   }
-  buffer.unmap();
-  timing.readbackMs += ElapsedMs(readbackStart);
+  const auto waitStart = std::chrono::steady_clock::now();
+  const gpu::Result<gpu::MapWaitReport> waited = device.waitForMapping(
+      mapping.result(),
+      gpu::MapWaitParams{
+          std::chrono::duration<double>(geode::kGpuWaitPollInterval).count(),
+          std::chrono::duration<double>(geode::kDefaultGpuWaitTimeout).count(),
+      },
+      /*shouldCancel=*/{});
+  const gpu::MapWaitOutcome outcome =
+      waited.hasError() ? gpu::MapWaitOutcome::Failed : waited.result().outcome;
+  if (outcome == gpu::MapWaitOutcome::TimedOut) {
+    // The runtime leaves a spent budget to its caller. This bound is the editor's, and a map that
+    // outlasts it means the device stopped answering, so later frames fail at once instead.
+    context.markDeviceLostAfterWaitTimeout(
+        geode::GpuWaitSite::ReadbackMap,
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                              waitStart),
+        "editor surface readback map did not complete within the bound");
+  } else if (outcome == gpu::MapWaitOutcome::Ready) {
+    const auto readbackStart = std::chrono::steady_clock::now();
+    const gpu::Result<std::span<const uint8_t>> mapped = device.mappedBytes(mapping.result());
+    if (mapped.hasResult()) {
+      CopyMappedSurfaceToBitmap(mapped.result().data(), width, height, bytesPerRow,
+                                wgpuState_->surfaceFormat, destination);
+    }
+    timing.readbackMs += ElapsedMs(readbackStart);
+  }
+  (void)device.unmapBuffer(std::move(mapping).result());
 }
 #else
 void EditorWindow::endFrameGl(svg::RendererBitmap* readback, int displayW, int displayH,
@@ -2509,63 +2530,46 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   // frame below draws into it, so everything downstream names it rather than owning it.
   const gpu::Texture& frameTarget =
       wgpuState_->presentation != nullptr ? acquiredFrame : wgpuState_->offscreenTexture;
-  // The clear and readback passes below still bind the frame as a backend texture; moving the
-  // window's own surface handling onto the runtime is what carries it as a handle throughout.
-  const wgpu::Texture target =
-      wgpuState_->framebufferGeodeDevice->adapterDevice().wgpuTextureOf(frameTarget);
-  if (!target) {
-    return;
-  }
   internal::SurfacePresentGuard presentGuard(wgpuState_->presentation.get());
-  const bool shouldReadback =
-      SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage) && (targetReadback != nullptr
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-                                                                 || requestAsyncSmokeReadback
-#endif
-                                                                );
+  const bool canReadBack = SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage);
   const uint32_t readbackWidth = static_cast<uint32_t>(displayW);
   const uint32_t readbackHeight = static_cast<uint32_t>(displayH);
-  const uint32_t readbackBytesPerRow = AlignTextureCopyBytesPerRow(readbackWidth * 4u);
-  const uint64_t readbackBufferSize =
-      static_cast<uint64_t>(readbackBytesPerRow) * static_cast<uint64_t>(readbackHeight);
-  donner::geode::ScopedWgpuHandle<wgpu::Buffer> readbackBuffer;
-  if (shouldReadback) {
-    wgpu::BufferDescriptor readbackDesc = {};
-    readbackDesc.label = donner::geode::wgpuLabel("EditorWindowSurfaceReadback");
-    readbackDesc.size = readbackBufferSize;
-    readbackDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-    readbackBuffer.reset(wgpuState_->root->device().createBuffer(readbackDesc));
-  }
 
   const bool hasUnderlayRenderCallback = static_cast<bool>(wgpuUnderlayRenderCallback_);
   const bool hasDirectRenderCallback = static_cast<bool>(wgpuDirectRenderCallback_);
   const bool hasPreImGuiFramebufferContent = hasUnderlayRenderCallback || hasDirectRenderCallback;
-  if (!drawFrameBelowUi(target, frameTarget, Vector2i(displayW, displayH),
-                        framebufferFromLogicalScale, hasUnderlayRenderCallback,
-                        hasDirectRenderCallback, timing)) {
+  if (!drawFrameBelowUi(frameTarget, Vector2i(displayW, displayH), framebufferFromLogicalScale,
+                        hasUnderlayRenderCallback, hasDirectRenderCallback, timing)) {
     return;
   }
   if (!recordFrameUi(frameTarget, Vector2i(displayW, displayH), hasPreImGuiFramebufferContent,
                      timing)) {
     return;
   }
-  if (readbackBuffer && !recordFrameReadback(target, readbackBuffer.get(), readbackWidth,
-                                             readbackHeight, readbackBytesPerRow, timing)) {
-    return;
-  }
-  if (targetReadback != nullptr && readbackBuffer) {
-    readFrameReadback(readbackBuffer.get(), readbackBufferSize, readbackWidth, readbackHeight,
-                      readbackBytesPerRow, targetReadback, timing);
+  if (targetReadback != nullptr && canReadBack) {
+    const uint32_t readbackBytesPerRow = AlignTextureCopyBytesPerRow(readbackWidth * 4u);
+    const uint64_t readbackBufferSize =
+        static_cast<uint64_t>(readbackBytesPerRow) * static_cast<uint64_t>(readbackHeight);
+    gpu::Result<gpu::Buffer> readbackBuffer =
+        wgpuState_->framebufferGeodeDevice->runtimeDevice().createBuffer(
+            gpu::BufferDescriptor{"EditorWindowSurfaceReadback", readbackBufferSize,
+                                  gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead});
+    if (readbackBuffer.hasResult() &&
+        recordFrameReadback(frameTarget, readbackBuffer.result(), readbackWidth, readbackHeight,
+                            readbackBytesPerRow, timing)) {
+      readFrameReadback(readbackBuffer.result(), readbackBufferSize, readbackWidth, readbackHeight,
+                        readbackBytesPerRow, targetReadback, timing);
+    }
   }
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-  if (requestAsyncSmokeReadback && readbackBuffer) {
-    wgpuState_->smokeReadbackInFlight->store(true, std::memory_order_release);
+  if (requestAsyncSmokeReadback && canReadBack &&
+      StartAsyncSmokeReadback(
+          *wgpuState_->root,
+          wgpuState_->framebufferGeodeDevice->adapterDevice().wgpuTextureOf(frameTarget),
+          readbackWidth, readbackHeight, wgpuState_->surfaceFormat, smokeReadbackRequestId,
+          wgpuState_->smokeReadbackInFlight, wgpuState_->smokeReadbackAlive,
+          wgpuState_->smokeReadbackConsecutiveFailures)) {
     smokeReadbackHandedOffToMapCallback = true;
-    BeginAsyncSmokeReadback(std::move(readbackBuffer), readbackBufferSize, readbackWidth,
-                            readbackHeight, readbackBytesPerRow, wgpuState_->surfaceFormat,
-                            smokeReadbackRequestId, wgpuState_->smokeReadbackInFlight,
-                            wgpuState_->smokeReadbackAlive,
-                            wgpuState_->smokeReadbackConsecutiveFailures);
   }
   if (publishSmokeReadbackStats && targetReadback != nullptr && !targetReadback->empty()) {
     PublishWgpuReadbackStatsForSmokeTests(*targetReadback);

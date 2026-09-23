@@ -814,35 +814,36 @@ private:
   /// window's clear color, then the document underlay and the selection and path chrome are
   /// drawn over it, in that order. A frame with neither callback set is left for the UI pass to
   /// clear.
-  /// @param target Frame's color target. @param frameTarget The same target, named on the
-  ///   framebuffer device, which is what the callbacks are handed.
+  /// @param frameTarget Frame's color target, named on the framebuffer device, which is also
+  ///   what the callbacks are handed.
   /// @param framebufferSizePx Framebuffer extent in pixels.
   /// @param framebufferFromLogicalScale Physical pixels per ImGui logical pixel this frame.
   /// @param hasUnderlay Whether the underlay callback is set.
   /// @param hasDirect Whether the chrome callback is set.
   /// @param timing Frame timing to record their costs in.
   /// @return Whether the frame is still drawable.
-  [[nodiscard]] bool drawFrameBelowUi(const wgpu::Texture& target, const gpu::Texture& frameTarget,
-                                      Vector2i framebufferSizePx,
+  [[nodiscard]] bool drawFrameBelowUi(const gpu::Texture& frameTarget, Vector2i framebufferSizePx,
                                       const Vector2d& framebufferFromLogicalScale, bool hasUnderlay,
                                       bool hasDirect, EditorWindowFrameTiming& timing);
 
   /// Records and submits the copy that puts this frame's pixels in \p buffer.
-  /// @param target Frame's color target. @param buffer Destination, already sized for the copy.
+  /// @param frameTarget Frame's color target, named on the framebuffer device.
+  /// @param buffer Destination on the framebuffer device, already sized for the copy.
   /// @param width Copy width in pixels. @param height Copy height in pixels.
   /// @param bytesPerRow Destination row pitch. @param timing Frame timing to record the cost in.
   /// @return Whether the copy was submitted.
-  [[nodiscard]] bool recordFrameReadback(const wgpu::Texture& target, const wgpu::Buffer& buffer,
+  [[nodiscard]] bool recordFrameReadback(const gpu::Texture& frameTarget, const gpu::Buffer& buffer,
                                          uint32_t width, uint32_t height, uint32_t bytesPerRow,
                                          EditorWindowFrameTiming& timing);
 
-  /// Waits for \p buffer and unpacks it into \p destination, leaving \p destination untouched
-  /// when the map never completed.
+  /// Waits for \p buffer, within the editor's bound for a readback map, and unpacks it into
+  /// \p destination, leaving \p destination untouched when the map never completed. A map that
+  /// outlasts the bound declares the framebuffer device lost.
   /// @param buffer Buffer the frame was copied into. @param byteSize Bytes to map.
   /// @param width Frame width in pixels. @param height Frame height in pixels.
   /// @param bytesPerRow Row pitch in \p buffer. @param destination Bitmap to fill.
   /// @param timing Frame timing to record the cost in.
-  void readFrameReadback(const wgpu::Buffer& buffer, uint64_t byteSize, uint32_t width,
+  void readFrameReadback(const gpu::Buffer& buffer, uint64_t byteSize, uint32_t width,
                          uint32_t height, uint32_t bytesPerRow, svg::RendererBitmap* destination,
                          EditorWindowFrameTiming& timing);
 
