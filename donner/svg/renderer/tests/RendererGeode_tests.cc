@@ -1344,8 +1344,8 @@ TEST_F(RendererGeodeTest, InterruptibleSnapshotCancelsPromptlyAfterGpuSubmit) {
 /// the transitional adapter the backing is destroyed explicitly, as for any released target.
 ///
 /// The capture context submits to its own queue on a native backend, so the owner's queue going
-/// idle does not mean the capture's readback has; the owner's release point is retried until it
-/// has, within a bound.
+/// idle does not mean the capture's readback has. The test waits for the capture queue itself,
+/// then runs the owner's release point once.
 TEST_F(RendererGeodeTest, ACancelledCaptureStopsHoldingItsSourceOnceItsWorkCompletes) {
   std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
   ASSERT_NE(device, nullptr);
@@ -1370,19 +1370,10 @@ TEST_F(RendererGeodeTest, ACancelledCaptureStopsHoldingItsSourceOnceItsWorkCompl
   ASSERT_NE(snapshot, nullptr);
   snapshot.reset();
   ASSERT_EQ(device->waitForQueueIdle(), geode::GpuWaitResult::Complete);
+  ASSERT_EQ(device->waitForSnapshotCaptureIdleForTesting(), geode::GpuWaitResult::Complete);
+  device->drainDeferredTextureBackings();
 
-  std::uint64_t tailBytes = 0;
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-  do {
-    device->drainDeferredTextureBackings();
-    tailBytes = renderer.consumeReadbackStats().sharedTextureTailBytes;
-    if (tailBytes == 0) {
-      break;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  } while (std::chrono::steady_clock::now() < deadline);
-
-  EXPECT_EQ(tailBytes, 0u)
+  EXPECT_EQ(renderer.consumeReadbackStats().sharedTextureTailBytes, 0u)
       << "no bytes may stay resident on the owner's behalf once every reader has finished";
   if (device->hasTransitionalAdapter()) {
     EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),

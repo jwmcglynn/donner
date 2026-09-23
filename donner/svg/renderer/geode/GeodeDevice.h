@@ -479,6 +479,17 @@ public:
   [[nodiscard]] std::size_t deferredTextureDestroyCountForTesting() const;
 
   /**
+   * Waits until the snapshot capture context's queue has no submitted work left, so a test can
+   * check what the owner's next release point frees once every capture has finished on the GPU,
+   * without polling for it. Waits for a capture in progress to end first.
+   *
+   * @param timeout Bound on the queue wait; a timeout is declared like any queue-idle wait.
+   * @return \ref GpuWaitResult::Complete when the queue is idle or no capture context exists.
+   */
+  [[nodiscard]] GpuWaitResult waitForSnapshotCaptureIdleForTesting(
+      std::chrono::milliseconds timeout = kDefaultGpuWaitTimeout);
+
+  /**
    * Key identifying a scene-batch bind group by its exact buffer bindings:
    * the shared batch uniform allocation, the geometry slab chunk, and the
    * record span. The dummy texture/sampler bindings are device-owned

@@ -1105,6 +1105,14 @@ bool GeodePhysicalDeviceOwner::rootRetirementOutlivesRootDeviceForTesting() cons
   return static_cast<const void*>(&rootDeviceRetirement_) < static_cast<const void*>(&rootDevice_);
 }
 
+GpuWaitResult GeodeDevice::waitForSnapshotCaptureIdleForTesting(std::chrono::milliseconds timeout) {
+  std::lock_guard lock(impl_->snapshotCaptureMutex);
+  if (!impl_->snapshotCaptureContext) {
+    return GpuWaitResult::Complete;
+  }
+  return impl_->snapshotCaptureContext->waitForQueueIdle(timeout);
+}
+
 void GeodeDevice::drainDeferredDestroys() {
   drainDeferredTextureBackings();
   releaseRetiredHandles();
