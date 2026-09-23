@@ -130,7 +130,6 @@ public:
   void install();
 
   /// Stops publishing this renderer on the current ImGui context, if it is the published one.
-  /// Also forgets the import device, so the two can never be observed out of step.
   void uninstall();
 
   /// Identifier of the registered font atlas, null until \ref buildFontAtlas succeeds.
