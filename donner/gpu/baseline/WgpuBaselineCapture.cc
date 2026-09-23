@@ -245,7 +245,8 @@ WgpuBaselineCapturer::~WgpuBaselineCapturer() = default;
 std::unique_ptr<WgpuBaselineCapturer> WgpuBaselineCapturer::Create() {
   // The oracle is the transitional adapter's renderer, so it is selected by name whatever backend
   // the process selects by default.
-  std::unique_ptr<geode::GeodeDevice> device = geode::CreateTransitionalAdapterContext();
+  std::unique_ptr<geode::GeodeDevice> device = geode::CreateTransitionalAdapterContext(
+      "the baseline oracle is the transitional adapter's renderer");
   if (!device) {
     return nullptr;
   }

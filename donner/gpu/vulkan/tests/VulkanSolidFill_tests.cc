@@ -84,7 +84,8 @@ constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte 
 std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
   // The reference is the transitional adapter's renderer, selected by name whatever the process
   // default is.
-  auto device = geode::CreateTransitionalAdapterContext();
+  auto device =
+      geode::CreateTransitionalAdapterContext("the reference render is the transitional adapter's");
   if (!device) {
     return std::nullopt;
   }

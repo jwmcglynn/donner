@@ -85,6 +85,16 @@ TEST(GeodeCallbackState, CallbackOwnsStateAfterCallerReturns) {
   EXPECT_TRUE(weakState.expired());
 }
 
+/// Why a case below selects the transitional adapter by name rather than the process default.
+constexpr std::string_view kInspectsTheWgpuRoot =
+    "inspects the wgpu objects a transitional root holds";
+constexpr std::string_view kWgpuLossCallback = "the device-lost callback is a wgpu registration";
+constexpr std::string_view kBorrowsWgpuRootObjects =
+    "borrows the wgpu root objects an embedding host hands over";
+constexpr std::string_view kNamesTheAdapter = "pins the adapter accessor to the runtime device";
+constexpr std::string_view kHoldsAdapterWork =
+    "holds submitted work through the adapter's test seam";
+
 /// Smoke test: can we instantiate a headless device at all, on the backend the process selects?
 /// If this fails, the entire Geode backend is non-functional.
 TEST(GeodeDevice, CreateHeadlessSucceeds) {
@@ -97,7 +107,7 @@ TEST(GeodeDevice, CreateHeadlessSucceeds) {
 
 /// A transitional root holds the wgpu objects every runtime device over it records against.
 TEST(GeodeDevice, ATransitionalRootHoldsTheWgpuObjectsItSelected) {
-  auto device = CreateTransitionalAdapterContext();
+  auto device = CreateTransitionalAdapterContext(kInspectsTheWgpuRoot);
   ASSERT_NE(device, nullptr) << "no wgpu adapter is available on this host";
 
   EXPECT_TRUE(static_cast<bool>(device->adapterDevice().root().device()));
@@ -109,7 +119,7 @@ TEST(GeodeDevice, ATransitionalRootHoldsTheWgpuObjectsItSelected) {
 TEST(GeodeDevice, DestructionConsumesDeviceLostCallbackState) {
   const std::size_t before = GeodeDevice::outstandingDeviceLostCallbacksForTesting();
   {
-    auto device = CreateTransitionalAdapterContext();
+    auto device = CreateTransitionalAdapterContext(kWgpuLossCallback);
     ASSERT_NE(device, nullptr);
     EXPECT_EQ(GeodeDevice::outstandingDeviceLostCallbacksForTesting(), before + 1u);
   }
@@ -159,9 +169,9 @@ constexpr auto kEmbedConfigConflictArms = std::to_array<EmbedConfigConflictArm>(
 /// refused for each field independently, and accepted when the repeated roots agree.
 TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingRoots) {
   // The conflicting roots are wgpu objects, so both contexts are transitional-adapter contexts.
-  auto ownerContext = CreateTransitionalAdapterContext();
+  auto ownerContext = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
   ASSERT_NE(ownerContext, nullptr);
-  auto foreignContext = CreateTransitionalAdapterContext();
+  auto foreignContext = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
   ASSERT_NE(foreignContext, nullptr);
   // Each root the arms below borrow has to be non-null, because the comparison skips a field the
   // config leaves empty. A headless context imported from the browser leaves its adapter on the
@@ -196,7 +206,7 @@ TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingRoots) {
 }
 
 TEST(GeodeDevice, LegacyBorrowedAggregateConfigurationRemainsSupported) {
-  auto ownerContext = CreateTransitionalAdapterContext();
+  auto ownerContext = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
   ASSERT_NE(ownerContext, nullptr);
 
   GeodeEmbedConfig config{ownerContext->adapterDevice().root().instance(),
@@ -209,7 +219,7 @@ TEST(GeodeDevice, LegacyBorrowedAggregateConfigurationRemainsSupported) {
 }
 
 TEST(GeodeDevice, SharedPhysicalOwnerRejectsAlreadyLostDevice) {
-  auto ownerContext = CreateTransitionalAdapterContext();
+  auto ownerContext = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
   ASSERT_NE(ownerContext, nullptr);
 
   auto lostState = std::make_shared<GeodeDeviceLostState>();
@@ -303,7 +313,7 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
 /// remaining raw callers would validate them against another, so a handle would go foreign for no
 /// visible reason. Pin the identity while both accessors exist.
 TEST(GeodeDevice, RuntimeAndAdapterAccessorsNameOneDevice) {
-  auto device = CreateTransitionalAdapterContext();
+  auto device = CreateTransitionalAdapterContext(kNamesTheAdapter);
   ASSERT_NE(device, nullptr);
 
   EXPECT_THAT(device->runtimeDevice().deviceId(), Eq(device->adapterDevice().deviceId()));
@@ -447,7 +457,7 @@ constexpr double kSerialWaitBudgetSeconds = 0.25;
 /// caller its own full budget on a device that can no longer complete anything, and leaves a
 /// renderer unable to tell "slow" from "gone".
 TEST(GeodeDeviceLost, RuntimeSerialWaitTimeoutDeclaresLossWithWaitAttribution) {
-  auto device = CreateTransitionalAdapterContext();
+  auto device = CreateTransitionalAdapterContext(kHoldsAdapterWork);
   ASSERT_NE(device, nullptr);
   ASSERT_FALSE(device->isDeviceLost());
 
@@ -480,7 +490,7 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitTimeoutDeclaresLossWithWaitAttribution) {
 /// nothing: declaring a permanent loss from it would fail every later caller on a device that is
 /// merely idle. The wait still ends by its own deadline.
 TEST(GeodeDeviceLost, RuntimeSerialWaitWhosePollsNeverBlockKeepsItsBudgetAndDeclaresNothing) {
-  auto device = CreateTransitionalAdapterContext();
+  auto device = CreateTransitionalAdapterContext(kHoldsAdapterWork);
   ASSERT_NE(device, nullptr);
   ASSERT_FALSE(device->isDeviceLost());
 
@@ -515,7 +525,7 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitWhosePollsNeverBlockKeepsItsBudgetAndDecl
 /// lowered to one poll that costs twice the budget, which makes the two coincide deterministically.
 TEST(GeodeDeviceLost,
      RuntimeSerialWaitWhoseLastPollSpendsItsBudgetDeclaresLossWithWaitAttribution) {
-  auto device = CreateTransitionalAdapterContext();
+  auto device = CreateTransitionalAdapterContext(kHoldsAdapterWork);
   ASSERT_NE(device, nullptr);
   ASSERT_FALSE(device->isDeviceLost());
 
@@ -548,7 +558,7 @@ TEST(GeodeDeviceLost,
 /// completion is held back and released from another thread well after the wait's poll bound is
 /// spent, which makes that interleaving deterministic.
 TEST(GeodeDeviceLost, RuntimeSerialWaitSeesACompletionAnotherThreadDeliversLate) {
-  auto device = CreateTransitionalAdapterContext();
+  auto device = CreateTransitionalAdapterContext(kHoldsAdapterWork);
   ASSERT_NE(device, nullptr);
 
   GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
@@ -579,7 +589,7 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitSeesACompletionAnotherThreadDeliversLate)
 /// A budget of zero is a question about what is already known rather than a wait, so its negative
 /// answer says nothing about the device's health and must not declare it lost.
 TEST(GeodeDeviceLost, RuntimeSerialWaitWithNoBudgetLeavesTheDeviceHealthy) {
-  auto device = CreateTransitionalAdapterContext();
+  auto device = CreateTransitionalAdapterContext(kHoldsAdapterWork);
   ASSERT_NE(device, nullptr);
 
   GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
@@ -603,7 +613,7 @@ TEST(GeodeDeviceLost, RuntimeSerialWaitWithNoBudgetLeavesTheDeviceHealthy) {
 /// Declaring the root lost from it would make every one of them refuse to present, map or wait,
 /// and would leak the whole root, because a root declared lost is deliberately not released.
 TEST(GeodeDeviceLost, ATeardownDrainThatOverrunsDoesNotDeclareTheRootLost) {
-  auto context = CreateTransitionalAdapterContext();
+  auto context = CreateTransitionalAdapterContext(kHoldsAdapterWork);
   ASSERT_NE(context, nullptr);
   ASSERT_FALSE(context->isDeviceLost());
 
@@ -714,7 +724,7 @@ TEST(GeodeDeviceLost, TeardownAfterLossSkipsGpuWaits) {
 /// the wrapper, and a loss marked through the wrapper is visible to the
 /// embedder: the flag converges both directions.
 TEST(GeodeDeviceLost, ExternalConfigSharesLostState) {
-  auto headless = CreateTransitionalAdapterContext();
+  auto headless = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
   ASSERT_NE(headless, nullptr);
 
   auto lostState = std::make_shared<GeodeDeviceLostState>();

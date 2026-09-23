@@ -447,6 +447,7 @@ donner_cc_library(
     deps = [
         ":geode_device",
         "//donner/gpu",
+        "@com_google_gtest//:gtest",
     ],
 )
 

@@ -69,6 +69,12 @@ uint32_t ReflectedWorkgroupWidth(const CompiledShaderView& shader) {
 /// Marker printed by GeodeDevice's uncaptured-error callback (see GeodeDevice.cc).
 constexpr const char* kErrorMarker = "Uncaptured error";
 
+/// A context over the transitional adapter, whose WGSL validator this suite exercises.
+std::unique_ptr<donner::geode::GeodeDevice> ValidatorContext() {
+  return donner::geode::CreateTransitionalAdapterContext(
+      "feeds WGSL to the transitional adapter's validator");
+}
+
 /// Creates a shader module from WGSL text; mirrors Geode's own createShaderFromWgsl.
 wgpu::ShaderModule CreateModuleFromWgsl(const wgpu::Device& device, const std::string& wgsl) {
   wgpu::ShaderSourceWGSL wgslSource{wgpu::Default};
@@ -244,7 +250,7 @@ void CreateSolidFillPipeline(const wgpu::Device& device, const wgpu::ShaderModul
 }
 
 TEST(WgslEmitterGeodeValidation, CheckerboardPipelinesPassRendererValidation) {
-  auto device = donner::geode::CreateTransitionalAdapterContext();
+  auto device = ValidatorContext();
   ASSERT_NE(device, nullptr) << "Checkerboard validation requires the selected WebGPU device";
   testing::internal::CaptureStderr();
   const bool replaceValid = device->checkerboardPipeline().valid();
@@ -256,7 +262,7 @@ TEST(WgslEmitterGeodeValidation, CheckerboardPipelinesPassRendererValidation) {
 }
 
 TEST(WgslEmitterGeodeValidation, FloatStorageTexturePassesRendererPipelineValidation) {
-  auto device = donner::geode::CreateTransitionalAdapterContext();
+  auto device = ValidatorContext();
   if (!device) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -279,7 +285,7 @@ TEST(WgslEmitterGeodeValidation, FloatStorageTexturePassesRendererPipelineValida
 }
 
 TEST(WgslEmitterGeodeValidation, EmittedSolidFillPassesRendererValidation) {
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -305,7 +311,7 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsPipelineMismatch) {
   // a deliberately mismatched bind group layout (binding 7 declared fragment-only while the
   // shader reads instanceTransforms in the vertex stage) must trip the error marker at
   // createRenderPipeline.
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -383,7 +389,7 @@ void CreateColorMatrixComputePipeline(
 }
 
 TEST(WgslEmitterGeodeValidation, EmittedColorMatrixComputePassesRendererValidation) {
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -407,7 +413,7 @@ TEST(WgslEmitterGeodeValidation, EmittedColorMatrixComputePassesRendererValidati
 TEST(WgslEmitterGeodeValidation, NegativeControlDetectsComputeStorageAccessMismatch) {
   // Compute-pipeline errors must also be observable: a layout declaring the output storage
   // texture read-only contradicts the shader's write-only declaration and must trip the marker.
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -527,7 +533,7 @@ void CreateSubregionClipComputePipeline(
 }
 
 TEST(WgslEmitterGeodeValidation, EmittedFloodComputePassesRendererValidation) {
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -549,7 +555,7 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsFloodStorageAccessMismatc
   // The flood layout has no sampled entry to get wrong, so its detection evidence is the storage
   // access: a read-only declaration contradicts the shader's write-only one and must trip the
   // marker.
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -569,7 +575,7 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsFloodStorageAccessMismatc
 }
 
 TEST(WgslEmitterGeodeValidation, EmittedSubregionClipComputePassesRendererValidation) {
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -590,7 +596,7 @@ TEST(WgslEmitterGeodeValidation, EmittedSubregionClipComputePassesRendererValida
 TEST(WgslEmitterGeodeValidation, NegativeControlDetectsSubregionClipSampleTypeMismatch) {
   // The detection evidence for this layout is its sampled entry: declaring the source as an
   // integer texture contradicts the shader's texture_2d<f32> and must trip the marker.
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -661,7 +667,7 @@ void CreateFilterColorMatrixComputePipeline(
 }
 
 TEST(WgslEmitterGeodeValidation, EmittedFilterColorMatrixPassesRendererValidation) {
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -684,7 +690,7 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsFilterColorMatrixStorageA
   // The acceptance above is only evidence if this layout can report a fault at all: a read-only
   // declaration of the destination contradicts the shader's write-only one and must trip the
   // marker.
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -755,7 +761,7 @@ void CreateOffsetComputePipeline(
 }
 
 TEST(WgslEmitterGeodeValidation, EmittedOffsetComputePassesRendererValidation) {
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -777,7 +783,7 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsOffsetParamsBufferTypeMis
   // The detection evidence for this layout is its buffer entry, an axis no other program's
   // control covers: declaring the parameters as a read-only storage buffer contradicts the
   // shader's var<uniform> and must trip the marker.
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -1060,7 +1066,7 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
   // The table is where the rounding rule is decided: it carries exact halves in both signs, the
   // values where WGSL's round-half-to-even and the CPU path's std::round land a whole pixel
   // apart, along with a shift that clears the destination entirely and one that leaves it alone.
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -1150,7 +1156,7 @@ void ClipBlurReference(tiny_skia::filter::FloatPixmap& pixels) {
 }
 
 TEST(WgslEmitterGeodeValidation, BlurMatchesCpuGaussianAndAsymmetricBoxReference) {
-  auto device = donner::geode::CreateTransitionalAdapterContext();
+  auto device = ValidatorContext();
   if (!device) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -1213,7 +1219,7 @@ TEST(WgslEmitterGeodeValidation, BlurMatchesCpuGaussianAndAsymmetricBoxReference
 }
 
 TEST(WgslEmitterGeodeValidation, MorphologyMatchesNeighborhoodMinMaxAndTransparentEdges) {
-  auto device = donner::geode::CreateTransitionalAdapterContext();
+  auto device = ValidatorContext();
   if (!device) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -1260,7 +1266,7 @@ TEST(WgslEmitterGeodeValidation, MorphologyMatchesNeighborhoodMinMaxAndTranspare
 }
 
 TEST(WgslEmitterGeodeValidation, TileWrapsSignedOriginsAndClampsSourceEdges) {
-  auto device = donner::geode::CreateTransitionalAdapterContext();
+  auto device = ValidatorContext();
   if (!device) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -1298,7 +1304,7 @@ TEST(WgslEmitterGeodeValidation, TileWrapsSignedOriginsAndClampsSourceEdges) {
 }
 
 TEST(WgslEmitterGeodeValidation, TilePreservesFloatStorageWithoutQuantization) {
-  auto geode = donner::geode::CreateTransitionalAdapterContext();
+  auto geode = ValidatorContext();
   if (!geode) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -1411,7 +1417,7 @@ void CreateColorSpaceConvertComputePipeline(
 }
 
 TEST(WgslEmitterGeodeValidation, EmittedColorSpaceConvertPassesRendererValidation) {
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -1434,7 +1440,7 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsColorSpaceConvertStorageF
   // The detection evidence for this layout is the storage texture's format, an axis no other
   // program's control covers: a half-float destination contradicts the shader's rgba8unorm one
   // while leaving its access and dimension right, and must still trip the marker.
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -1498,7 +1504,7 @@ TEST(WgslEmitterGeodeValidation, ColorSpaceConvertRunsOnTheDeviceAndMatchesTheCp
   // sRGB-encoded one falls between the bytes 10 and 11, the linear one between 0 and 1. A
   // breakpoint written a decimal place off would send the middle of the range through the wrong
   // segment, which is a whole different answer rather than a last-digit one.
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -1565,7 +1571,7 @@ void ExpectColorTransferBoundaries(bool resolve) {
       pixels->data()[offset + 3] = alpha;
     }
   }
-  auto geode = donner::geode::CreateTransitionalAdapterContext();
+  auto geode = ValidatorContext();
   ASSERT_THAT(geode, testing::NotNull());
   const auto wgsl = [&]() -> ShaderResult<std::string> {
     if (resolve) {
@@ -1668,7 +1674,7 @@ TEST(WgslEmitterGeodeValidation, ColorSpaceConvertLeavesATransparentTexelTranspa
   // A fully transparent texel has no straight-alpha color to recover. The program divides by
   // alpha only where there is one, so this is the arm that a missing guard would turn into a
   // division by zero.
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -1830,7 +1836,7 @@ TEST(WgslEmitterGeodeValidation, RoundHalfAwayFromZeroRunsOnTheDeviceAndMatchesT
   // renderer's device and comparing every texel to std::round is what makes that a fact about
   // the shader rather than about a formula written twice, and it covers the vector forms of
   // sign and floor and both forms of pow at the same time.
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }
@@ -1864,7 +1870,7 @@ TEST(WgslEmitterGeodeValidation, RoundHalfAwayFromZeroRunsOnTheDeviceAndMatchesT
 TEST(WgslEmitterGeodeValidation, NegativeControlDetectsInvalidWgsl) {
   // Proves the detection mechanism: intentionally broken WGSL must trip the uncaptured-error
   // marker this fixture greps for.
-  auto geodeDevice = donner::geode::CreateTransitionalAdapterContext();
+  auto geodeDevice = ValidatorContext();
   if (!geodeDevice) {
     GTEST_SKIP() << "No WebGPU-capable device available";
   }

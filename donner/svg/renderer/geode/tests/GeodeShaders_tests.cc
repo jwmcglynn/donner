@@ -144,7 +144,8 @@ protected:
   /// The probes are hand-assembled WGSL compiled and dispatched through the wgpu device, so the
   /// fixture selects the transitional adapter by name.
   static std::shared_ptr<GeodeDevice> device() {
-    static std::shared_ptr<GeodeDevice> result = CreateTransitionalAdapterContext();
+    static std::shared_ptr<GeodeDevice> result =
+        CreateTransitionalAdapterContext("dispatches hand-assembled WGSL through wgpu");
     return result;
   }
 

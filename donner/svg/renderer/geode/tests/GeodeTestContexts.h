@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 #include "donner/gpu/Device.h"
@@ -18,13 +19,16 @@ namespace donner::geode {
  *
  * For fixtures and cases whose subject is the adapter itself, or the wgpu objects a host hands an
  * embedded context: they exercise that backend by definition, so they name it and run the same
- * under every `DONNER_GPU_BACKEND`.
+ * under every `DONNER_GPU_BACKEND`. When that variable selects another backend, the log names the
+ * running case and \p reason, so a run on the other backend shows which cases did not run on it
+ * and why.
  *
+ * @param reason Why the caller exercises the adapter rather than the selected backend.
  * @param textureFormat Format the context's render targets and pipelines are built for.
  * @return The context, or null when no wgpu adapter or device is available on this host.
  */
 std::unique_ptr<GeodeDevice> CreateTransitionalAdapterContext(
-    gpu::TextureFormat textureFormat = gpu::TextureFormat::RGBA8Unorm);
+    std::string_view reason, gpu::TextureFormat textureFormat = gpu::TextureFormat::RGBA8Unorm);
 
 /**
  * Reads \p texture back through \p device's runtime contract: a texture-to-buffer copy, a mapping

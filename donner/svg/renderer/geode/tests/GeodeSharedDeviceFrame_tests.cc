@@ -165,7 +165,8 @@ TEST_F(GeodeSharedDeviceFrameTest, ALossOneContextsWaitObservesIsSharedByTheOthe
   // A private root: this case declares the physical device lost, which is sticky, so it must not
   // reach the shared device the rest of the file renders through. It holds work through the
   // transitional adapter's test seam, so it selects that backend by name.
-  std::unique_ptr<geode::GeodeDevice> root = geode::CreateTransitionalAdapterContext();
+  std::unique_ptr<geode::GeodeDevice> root = geode::CreateTransitionalAdapterContext(
+      "holds submitted work through the adapter's test seam");
   ASSERT_NE(root, nullptr) << "no wgpu adapter is available on this host";
   std::unique_ptr<geode::GeodeDevice> sibling = siblingContextOf(*root);
   ASSERT_NE(sibling, nullptr);

@@ -1780,7 +1780,7 @@ TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
 /// that selects that backend by name.
 TEST_F(RendererGeodeTest, OwnedTextureSnapshotExplicitlyDestroysBackingWhenOwnerDrains) {
   const std::shared_ptr<geode::GeodeDevice> adapterContext =
-      geode::CreateTransitionalAdapterContext();
+      geode::CreateTransitionalAdapterContext("reads the wgpu backing-destroy counter");
   ASSERT_THAT(adapterContext, testing::NotNull());
   RendererGeode renderer(adapterContext);
   beginFrame(renderer);
@@ -1804,7 +1804,7 @@ TEST_F(RendererGeodeTest, OwnedTextureSnapshotExplicitlyDestroysBackingWhenOwner
 /// Observed through the transitional adapter's wgpu handle counter, as the case above is.
 TEST_F(RendererGeodeTest, BorrowedTextureSnapshotNeverDestroysBacking) {
   const std::shared_ptr<geode::GeodeDevice> adapterContext =
-      geode::CreateTransitionalAdapterContext();
+      geode::CreateTransitionalAdapterContext("reads the wgpu backing-destroy counter");
   ASSERT_THAT(adapterContext, testing::NotNull());
   RendererGeode renderer(adapterContext);
   beginFrame(renderer);
@@ -3024,7 +3024,8 @@ TEST_F(RendererGeodeTest, GeometryEditKeepsSiblingResidentPaintsIntact) {
 
 TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
   // An embedding host hands over wgpu objects, so the host selects the transitional adapter.
-  std::shared_ptr<geode::GeodeDevice> host = geode::CreateTransitionalAdapterContext();
+  std::shared_ptr<geode::GeodeDevice> host =
+      geode::CreateTransitionalAdapterContext("an embedding host hands over wgpu objects");
   ASSERT_TRUE(host != nullptr);
 
   geode::GeodeEmbedConfig config;
@@ -5634,7 +5635,8 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsStaleIdentityWithoutTouchingItsR
 /// The borrowed registration is the transitional adapter's host-import escape hatch, so the case
 /// selects that backend by name.
 TEST_F(RendererGeodeTest, RuntimeSnapshotCannotAdoptABorrowedHostRegistration) {
-  const std::shared_ptr<geode::GeodeDevice> host = geode::CreateTransitionalAdapterContext();
+  const std::shared_ptr<geode::GeodeDevice> host =
+      geode::CreateTransitionalAdapterContext("registers a host wgpu texture through the adapter");
   ASSERT_THAT(host, testing::NotNull());
   gpu::Device& runtime = host->runtimeDevice();
   auto& adapter = host->adapterDevice();

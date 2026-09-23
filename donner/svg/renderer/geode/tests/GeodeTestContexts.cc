@@ -1,9 +1,13 @@
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 
+#include <gtest/gtest.h>
+
 #include <algorithm>
 #include <cstddef>
+#include <iostream>
 #include <span>
 #include <sstream>
+#include <string>
 #include <utility>
 
 #include "donner/gpu/CommandEncoder.h"
@@ -11,7 +15,29 @@
 
 namespace donner::geode {
 
-std::unique_ptr<GeodeDevice> CreateTransitionalAdapterContext(gpu::TextureFormat textureFormat) {
+namespace {
+
+/// The running test's full name, or a note that no test is running.
+std::string CurrentTestName() {
+  const testing::TestInfo* test = testing::UnitTest::GetInstance()->current_test_info();
+  if (test == nullptr) {
+    return "code outside a test";
+  }
+  return std::string(test->test_suite_name()) + "." + test->name();
+}
+
+}  // namespace
+
+std::unique_ptr<GeodeDevice> CreateTransitionalAdapterContext(std::string_view reason,
+                                                              gpu::TextureFormat textureFormat) {
+  // Only a request for another backend makes this worth saying. A malformed request is reported
+  // by the selections that read it; this one names its backend instead.
+  if (const gpu::Result<GpuBackendKind> processDefault = ProcessDefaultGpuBackendKind();
+      !processDefault.hasError() && processDefault.result() != GpuBackendKind::TransitionalWgpu) {
+    std::cerr << "[Geode] " << CurrentTestName()
+              << " runs on the transitional wgpu adapter, not the process default "
+              << processDefault.result() << ": " << reason << "\n";
+  }
   GpuRootSelection selection;
   selection.label = "GeodeTransitionalAdapterTest";
   selection.backend = GpuBackendKind::TransitionalWgpu;
