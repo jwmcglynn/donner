@@ -130,6 +130,15 @@ TEST_F(TextToolTest, NewTextKeepsCurrentForegroundFill) {
   EXPECT_THAT(attr(text(), "style"), Eq("fill: #31c6b3"));
 }
 
+TEST_F(TextToolTest, NewSvgTextKeepsSampledTranslucentFill) {
+  app.setActiveFill("#33669980");
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("SVG");
+
+  EXPECT_THAT(attr(text(), "style"), Eq("fill: #33669980"));
+  EXPECT_THAT(std::string(text().textContent()), Eq("SVG"));
+}
+
 TEST_F(TextToolTest, QueuedPointTextCharactersFlushAsOneBatch) {
   doubleClickAt(Vector2d(20.0, 30.0));
   const std::uint64_t versionBefore = app.document().currentFrameVersion();

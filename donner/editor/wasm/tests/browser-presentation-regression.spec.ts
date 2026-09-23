@@ -6,6 +6,7 @@ import {
   type EditorBackgroundCoverageStats,
   isSplashCaptureUsable,
   type PixelBounds,
+  readCanvasColorStats,
   readCssPngPixelDifferenceStats,
   readEditorBackgroundCoverage,
   readEditorPixelBounds,
@@ -39,6 +40,8 @@ declare global {
     __donnerWorkerStats?: {
       cachedTileCount?: number;
       completedResults: number;
+      sourceVersion?: number;
+      undoEntryCount?: number;
       offscreenCreateCount?: number;
       offscreenCreateTotal?: number;
       offscreenRecycleCount?: number;
@@ -62,7 +65,33 @@ declare global {
       workerBusy: boolean;
       pointerX: number;
       pointerY: number;
+      eyedropperArmed: boolean;
+      eyedropperReady: boolean;
+      eyedropperUnavailable: boolean;
     };
+    __donnerEyedropperTestState?: {
+      activeFill: string;
+      activeStroke: string;
+      selectedStyle: string;
+      selectedText: string;
+      sourcePaneFocused: boolean;
+      sourceSelectionActive: boolean;
+      activePaintTarget: "fill" | "stroke";
+      undoEntryCount: number;
+      documentGeneration: number;
+      sourceBufferByteLength: number;
+      sourceSelectionByteLength: number;
+      sourceDiagnosticCount: number;
+      textSyncWakePending: boolean;
+    };
+    __donnerEyedropperShortcutProbe?: {
+      current: EyedropperShortcutGate;
+      iPressCount?: number;
+      escapePressCount?: number;
+      lastIPress?: EyedropperShortcutGate;
+      lastEscapePress?: EyedropperShortcutGate;
+    };
+    __donnerTestPasteEventStats?: { count: number; lastTextLength: number };
     __donnerSampleThumbnailStats?: {
       publishedAtMs?: number;
       publicationGeneration?: number;
@@ -90,6 +119,26 @@ declare global {
     __donnerViewportStats?: ViewportStats;
     __donnerEditorFrameRequested?: boolean;
   }
+}
+
+interface EyedropperShortcutGate {
+  wantTextInput: boolean;
+  popupOpen: boolean;
+  sourcePaneFocused: boolean;
+  textToolActive: boolean;
+  textEditing: boolean;
+  eyedropperActive: boolean;
+  iDown: boolean;
+  iPressed: boolean;
+  escapeDown: boolean;
+  escapePressed: boolean;
+  canArm: boolean;
+  appFocusLost: boolean;
+  mouseLeftClicked: boolean;
+  mouseLeftDown: boolean;
+  domActiveElementId: string;
+  domActiveElementTag: string;
+  frameNumber: number;
 }
 
 // Where the render pane and the presented document sit on screen, published by
@@ -565,7 +614,10 @@ async function readPressSelectionState(
   }));
 }
 
-async function openEditor(page: Page, enableOverlayControl = false): Promise<string[]> {
+async function openEditor(
+  page: Page,
+  testControl: false | "overlay" | "eyedropper" = false,
+): Promise<string[]> {
   const failures: string[] = [];
   page.on("console", (message) => {
     if (
@@ -581,8 +633,8 @@ async function openEditor(page: Page, enableOverlayControl = false): Promise<str
   consoleFailuresByPage.set(page, failures);
 
   const editorUrl = new URL(kBaseUrl);
-  if (enableOverlayControl) {
-    editorUrl.searchParams.set("testControl", "overlay");
+  if (testControl) {
+    editorUrl.searchParams.set("testControl", testControl);
   }
   await page.goto(editorUrl.toString(), { waitUntil: "domcontentloaded" });
   await expect.poll(() => page.evaluate(() => window.__donnerCanStartWasm)).toBe(true);
@@ -927,11 +979,13 @@ test("browser overlay control stays disabled after a normal editor frame", async
   });
   expect(after?.compositorTileOverlay).toBe(before.overlays?.compositorTileOverlay);
   expect(after?.geometryDebugOverlay).toBe(before.overlays?.geometryDebugOverlay);
+  expect(await page.evaluate(() => window.__donnerEyedropperTestState)).toBeUndefined();
+  expect(await page.evaluate(() => window.__donnerEyedropperShortcutProbe)).toBeUndefined();
   expect(failures).toEqual([]);
 });
 
 test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ page }) => {
-  const failures = await openEditor(page, true);
+  const failures = await openEditor(page, "overlay");
   const { canvasBounds, documentClip } = await openBasicShapes(page);
   const rejectedControlInputs = await page.evaluate(() => {
     const control = window.Module?._donner_set_overlay_state;
@@ -1906,6 +1960,782 @@ async function openDonnerSplash(page: Page): Promise<{
   await waitForBrowserComposite(page);
   return { editorBounds };
 }
+
+const kToolPaletteWidth = 4 * 32 + 120 + 4 * 4 + 2 * 8;
+
+function eyedropperToolbarPoint(viewport: ViewportStats): { x: number; y: number } {
+  return {
+    x: viewport.paneX + (viewport.paneWidth - kToolPaletteWidth) / 2 + 8 + 3 * (32 + 4) + 16,
+    y: viewport.paneY + 12 + 8 + 16,
+  };
+}
+
+function paintWidgetPoint(
+  viewport: ViewportStats,
+  offset: { x: number; y: number },
+): { x: number; y: number } {
+  const paletteLeft = viewport.paneX + (viewport.paneWidth - kToolPaletteWidth) / 2;
+  return {
+    x: paletteLeft + 8 + 4 * (32 + 4) + offset.x,
+    y: viewport.paneY + 12 + 8 + offset.y,
+  };
+}
+
+async function readPaintTargetState(page: Page) {
+  return page.evaluate(() => ({
+    target: window.__donnerEyedropperTestState?.activePaintTarget ?? "unpublished",
+    fill: window.__donnerEyedropperTestState?.activeFill ?? "unpublished",
+    stroke: window.__donnerEyedropperTestState?.activeStroke ?? "unpublished",
+    selectedCount: window.__donnerInteractionStats?.selectedCount ?? -1,
+    sourceVersion: window.__donnerWorkerStats?.sourceVersion ?? -1,
+    undoEntries: window.__donnerEyedropperTestState?.undoEntryCount ?? -1,
+    eyedropperArmed: window.__donnerInteractionStats?.eyedropperArmed ?? false,
+  }));
+}
+
+async function clickAppliedPoint(
+  page: Page,
+  point: { x: number; y: number },
+  message: string,
+): Promise<void> {
+  await page.mouse.move(point.x, point.y);
+  await waitForAppliedPointer(page, point, {
+    message,
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(point.x, point.y);
+}
+
+async function retainEyedropperPng(name: string, png: Buffer): Promise<void> {
+  const path = test.info().outputPath(name);
+  await writeFile(path, png);
+  await test.info().attach(name, { path, contentType: "image/png" });
+}
+
+async function readEyedropperState(page: Page) {
+  return page.evaluate(() => ({
+    armed: window.__donnerInteractionStats?.eyedropperArmed ?? false,
+    ready: window.__donnerInteractionStats?.eyedropperReady ?? false,
+    unavailable: window.__donnerInteractionStats?.eyedropperUnavailable ?? false,
+    busy: window.__donnerInteractionStats?.workerBusy ?? true,
+    sourceVersion: window.__donnerWorkerStats?.sourceVersion ?? -1,
+    sourcePaneFocused: window.__donnerEyedropperTestState?.sourcePaneFocused ?? false,
+    activeElement: document.activeElement?.id || document.activeElement?.tagName || "none",
+    documentHasFocus: document.hasFocus(),
+    visibilityState: document.visibilityState,
+    renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
+    shortcutProbe: window.__donnerEyedropperShortcutProbe ?? null,
+  }));
+}
+
+async function readBrowserKeyState(page: Page, beforeFrames: number) {
+  return page.evaluate((before) => {
+    const renderedFrames = window.__donnerMainLoopRenderedFrames ?? 0;
+    return {
+      frameAdvanced: renderedFrames > before,
+      renderedFrames,
+      activeElement: document.activeElement?.id || document.activeElement?.tagName || "none",
+      sourcePaneFocused: window.__donnerEyedropperTestState?.sourcePaneFocused ?? false,
+      armed: window.__donnerInteractionStats?.eyedropperArmed ?? false,
+      shortcutProbe: window.__donnerEyedropperShortcutProbe ?? null,
+    };
+  }, beforeFrames);
+}
+
+async function expectBrowserKeyFrame(page: Page, beforeFrames: number, message: string) {
+  await expect.poll(() => readBrowserKeyState(page, beforeFrames), {
+    message,
+    timeout: scaledMs(2_000),
+  }).toEqual(expect.objectContaining({ frameAdvanced: true }));
+}
+
+async function expectEyedropperReady(page: Page): Promise<void> {
+  await expect.poll(() => readEyedropperState(page), {
+    message: "the real eyedropper activation must accept a current document capture",
+    timeout: scaledMs(5_000),
+    intervals: [16, 25, 50, 100],
+  }).toEqual(expect.objectContaining({
+    armed: true,
+    ready: true,
+    unavailable: false,
+    busy: false,
+  }));
+}
+
+test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", async ({ page }) => {
+  const failures = await openEditor(page, "eyedropper");
+  await openDonnerSplash(page);
+  const viewport = await readViewportStats(page);
+  const stem = splashDocumentToPage(viewport, kSplashLetterD.stemPress);
+  const point = { x: Math.floor(stem.x) + 0.5, y: Math.floor(stem.y) + 0.5 };
+  const stemRegion = { x: point.x - 4, y: point.y - 4, width: 8, height: 8 };
+  expect(
+    (await readEditorPixelBounds(page, stemRegion, "splash-yellow"))?.pixels ?? 0,
+    "the sample point must visibly lie on the Donner lettering",
+  ).toBeGreaterThan(0);
+  const pixelRegion = { x: point.x - 0.5, y: point.y - 0.5, width: 1, height: 1 };
+  const presentedPixel = await captureSplashPresentationFrame(page, pixelRegion, pixelRegion);
+  await retainEyedropperPng("eyedropper-donner-reference.png", presentedPixel.png);
+  expect(
+    presentedPixel.letter?.pixels,
+    `expected the sampled WebGPU pixel to be Donner lettering: ${
+      JSON.stringify(presentedPixel.census)
+    }`,
+  )
+    .toBe(1);
+  expect(presentedPixel.census.samples).toBe(1);
+  const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(
+    presentedPixel.census.dominantColors[0]?.color ?? "",
+  );
+  expect(rgb, "the presented sample must have one decoded RGB pixel").not.toBeNull();
+  const expectedFill = `#${
+    rgb!.slice(1).map((channel) => Number(channel).toString(16).padStart(2, "0")).join("")
+  }`;
+  const baselineSourceVersion = await page.evaluate(
+    () => window.__donnerWorkerStats?.sourceVersion ?? -1,
+  );
+  expect(baselineSourceVersion, "the Splash worker must publish a source version")
+    .toBeGreaterThanOrEqual(0);
+
+  const eyedropperTool = eyedropperToolbarPoint(viewport);
+  await page.mouse.move(eyedropperTool.x, eyedropperTool.y);
+  await waitForAppliedPointer(page, eyedropperTool, {
+    message: "eyedropper toolbar activation",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(eyedropperTool.x, eyedropperTool.y);
+  await expectEyedropperReady(page);
+  await waitForPressReadiness(page, "ready eyedropper hover baseline");
+  const completedBeforeHover = await page.evaluate(
+    () => window.__donnerWorkerStats?.completedResults ?? -1,
+  );
+  for (
+    const hover of [
+      { x: point.x + 2, y: point.y },
+      { x: point.x, y: point.y + 2 },
+      point,
+    ]
+  ) {
+    await page.mouse.move(hover.x, hover.y);
+    await waitForAppliedPointer(page, hover, {
+      message: "document eyedropper hover must only read the accepted CPU capture",
+      timeoutMs: scaledMs(4_000),
+    });
+  }
+  await waitForPressReadiness(page, "document eyedropper hover settled without render");
+  expect(await page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? -1))
+    .toBe(completedBeforeHover);
+  await page.mouse.move(point.x, point.y);
+  await waitForAppliedPointer(page, point, {
+    message: "Donner lettering eyedropper hover",
+    timeoutMs: scaledMs(4_000),
+  });
+  await waitForBrowserComposite(page);
+  const loupe = await page.screenshot({
+    clip: {
+      x: viewport.paneX,
+      y: viewport.paneY,
+      width: viewport.paneWidth,
+      height: viewport.paneHeight,
+    },
+  });
+  await retainEyedropperPng("eyedropper-donner-loupe.png", loupe);
+  expect(await readEyedropperState(page)).toEqual(expect.objectContaining({
+    armed: true,
+    ready: true,
+    sourceVersion: baselineSourceVersion,
+  }));
+
+  await page.mouse.click(point.x, point.y);
+  await expect.poll(() => readEyedropperState(page)).toEqual(expect.objectContaining({
+    armed: false,
+    sourceVersion: baselineSourceVersion,
+  }));
+  await expect.poll(() => page.evaluate(() => window.__donnerEyedropperTestState?.activeFill), {
+    message: "the sampled Fill must equal the independently presented glyph pixel",
+    timeout: scaledMs(5_000),
+  }).toBe(expectedFill);
+
+  const beforeTextUndo = await page.evaluate(() =>
+    window.__donnerEyedropperTestState?.undoEntryCount ?? -1
+  );
+  const textTool = { x: eyedropperTool.x - 36, y: eyedropperTool.y };
+  await page.mouse.move(textTool.x, textTool.y);
+  await waitForAppliedPointer(page, textTool, {
+    message: "Text tool after sampled Fill",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(textTool.x, textTool.y);
+  const textPoint = splashDocumentToPage(viewport, { x: 735, y: 400 });
+  await page.mouse.move(textPoint.x, textPoint.y);
+  await waitForAppliedPointer(page, textPoint, {
+    message: "new SVG text placement",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.dblclick(textPoint.x, textPoint.y);
+  await expect.poll(() =>
+    page.evaluate(() => ({
+      selectedCount: window.__donnerInteractionStats?.selectedCount,
+      selectedStyle: window.__donnerEyedropperTestState?.selectedStyle,
+    })), {
+    message: "Text tool must create and select a text node with the sampled Fill before typing",
+    timeout: scaledMs(5_000),
+  }).toEqual({
+    selectedCount: 1,
+    selectedStyle: expect.stringContaining(expectedFill),
+  });
+  await page.keyboard.type("SVG");
+  await expect.poll(() => page.evaluate(() => window.__donnerEyedropperTestState?.selectedText), {
+    message: "typed SVG text must reach the selected DOM element before the commit key",
+    timeout: scaledMs(5_000),
+  }).toBe("SVG");
+  const beforeEscapeFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+  await page.keyboard.down("Escape");
+  await expectBrowserKeyFrame(page, beforeEscapeFrame, "Escape must wake a browser editor frame");
+  await expect.poll(() =>
+    page.evaluate(() => ({
+      undoEntries: window.__donnerEyedropperTestState?.undoEntryCount ?? -1,
+      shortcutProbe: window.__donnerEyedropperShortcutProbe ?? null,
+    })), {
+    message: "Escape must commit the newly created SVG text as one document edit",
+    timeout: scaledMs(5_000),
+  }).toEqual(expect.objectContaining({ undoEntries: beforeTextUndo + 1 }));
+  await page.keyboard.up("Escape");
+  await expect.poll(() => page.evaluate(() => window.__donnerEyedropperTestState), {
+    message: "new text must inherit the eyedropper Fill through the DOM/source path",
+    timeout: scaledMs(5_000),
+  }).toEqual(expect.objectContaining({
+    activeFill: expectedFill,
+    selectedText: "SVG",
+    selectedStyle: expect.stringContaining(expectedFill),
+  }));
+  await waitForBrowserComposite(page);
+  await retainEyedropperPng(
+    "eyedropper-new-svg-text.png",
+    await page.screenshot({
+      clip: {
+        x: viewport.paneX,
+        y: viewport.paneY,
+        width: viewport.paneWidth,
+        height: viewport.paneHeight,
+      },
+    }),
+  );
+  expect(failures).toEqual([]);
+});
+
+test("WebGPU eyedropper follows the active paint swatch through Stroke, None, and Fill", async ({ page }) => {
+  const failures = await openEditor(page, "eyedropper");
+  await openDonnerSplash(page);
+  await waitForPressReadiness(page, "active paint swatch baseline");
+  const viewport = await readViewportStats(page);
+  const baseline = await readPaintTargetState(page);
+  const resultsBeforeStrokeSwitch = await page.evaluate(
+    () => window.__donnerWorkerStats?.completedResults ?? -1,
+  );
+  expect(baseline).toEqual(expect.objectContaining({ target: "fill", selectedCount: 0 }));
+  expect(baseline.sourceVersion).toBeGreaterThanOrEqual(0);
+  expect(baseline.undoEntries).toBeGreaterThanOrEqual(0);
+
+  const stem = splashDocumentToPage(viewport, kSplashLetterD.stemPress);
+  const point = { x: Math.floor(stem.x) + 0.5, y: Math.floor(stem.y) + 0.5 };
+  const pixelRegion = { x: point.x - 0.5, y: point.y - 0.5, width: 1, height: 1 };
+  const reference = await captureSplashPresentationFrame(page, pixelRegion, pixelRegion);
+  expect(
+    reference.letter?.pixels,
+    `the paint-target probe must start on Donner lettering: ${JSON.stringify(reference.census)}`,
+  )
+    .toBe(1);
+  expect(reference.census.samples).toBe(1);
+  const rgb = /^rgb\((\d+),(\d+),(\d+)\)$/.exec(
+    reference.census.dominantColors[0]?.color ?? "",
+  );
+  expect(rgb, "the presented lettering pixel must decode as RGB").not.toBeNull();
+  const sampledColor = `#${
+    rgb!.slice(1).map((channel) => Number(channel).toString(16).padStart(2, "0")).join("")
+  }`;
+
+  const strokeSwatch = paintWidgetPoint(viewport, { x: 37, y: 36 });
+  await clickAppliedPoint(page, strokeSwatch, "activate the rear Stroke swatch");
+  await expect.poll(() => readPaintTargetState(page), {
+    message: "choosing Stroke must only change the active paint target",
+  }).toEqual(expect.objectContaining({
+    target: "stroke",
+    fill: baseline.fill,
+    stroke: baseline.stroke,
+    selectedCount: 0,
+    sourceVersion: baseline.sourceVersion,
+    undoEntries: baseline.undoEntries,
+    eyedropperArmed: false,
+  }));
+  await waitForPressReadiness(page, "Stroke target switch settled without a document render");
+  expect(await page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? -1))
+    .toBe(resultsBeforeStrokeSwitch);
+  expect(await readPaintTargetState(page)).toEqual(expect.objectContaining({
+    sourceVersion: baseline.sourceVersion,
+    undoEntries: baseline.undoEntries,
+  }));
+
+  await clickAppliedPoint(
+    page,
+    eyedropperToolbarPoint(viewport),
+    "Stroke eyedropper toolbar button",
+  );
+  await expectEyedropperReady(page);
+  await page.mouse.move(point.x, point.y);
+  await waitForAppliedPointer(page, point, {
+    message: "Stroke document-pixel preview",
+    timeoutMs: scaledMs(4_000),
+  });
+  await waitForBrowserComposite(page);
+  await retainEyedropperPng(
+    "eyedropper-active-stroke-loupe.png",
+    await page.screenshot({
+      clip: {
+        x: viewport.paneX,
+        y: viewport.paneY,
+        width: viewport.paneWidth,
+        height: viewport.paneHeight,
+      },
+    }),
+  );
+  await page.mouse.click(point.x, point.y);
+  await expect.poll(() => readPaintTargetState(page), {
+    message: "toolbar eyedropper must write the sampled pixel to Stroke only",
+  }).toEqual(expect.objectContaining({
+    target: "stroke",
+    fill: baseline.fill,
+    stroke: sampledColor,
+    selectedCount: 0,
+    sourceVersion: baseline.sourceVersion,
+    undoEntries: baseline.undoEntries,
+    eyedropperArmed: false,
+  }));
+
+  const noneSquare = paintWidgetPoint(viewport, { x: 58, y: 33 });
+  await clickAppliedPoint(page, noneSquare, "active Stroke None control");
+  await expect.poll(() => readPaintTargetState(page), {
+    message: "the single None control must clear the active Stroke slot",
+  }).toEqual(expect.objectContaining({
+    target: "stroke",
+    fill: baseline.fill,
+    stroke: "none",
+    selectedCount: 0,
+    sourceVersion: baseline.sourceVersion,
+    undoEntries: baseline.undoEntries,
+  }));
+
+  const resultsBeforeFillSwitch = await page.evaluate(
+    () => window.__donnerWorkerStats?.completedResults ?? -1,
+  );
+  const fillSwatch = paintWidgetPoint(viewport, { x: 8, y: 8 });
+  await clickAppliedPoint(page, fillSwatch, "switch foreground to Fill");
+  await expect.poll(() => readPaintTargetState(page), {
+    message: "choosing Fill must not mutate either paint value or the document",
+  }).toEqual(expect.objectContaining({
+    target: "fill",
+    fill: baseline.fill,
+    stroke: "none",
+    selectedCount: 0,
+    sourceVersion: baseline.sourceVersion,
+    undoEntries: baseline.undoEntries,
+    eyedropperArmed: false,
+  }));
+  await waitForPressReadiness(page, "Fill target switch settled without a document render");
+  expect(await page.evaluate(() => window.__donnerWorkerStats?.completedResults ?? -1))
+    .toBe(resultsBeforeFillSwitch);
+  expect(await readPaintTargetState(page)).toEqual(expect.objectContaining({
+    sourceVersion: baseline.sourceVersion,
+    undoEntries: baseline.undoEntries,
+  }));
+  expect(await page.evaluate(() => window.__donnerEyedropperTestState?.sourcePaneFocused))
+    .toBe(false);
+
+  await page.keyboard.down("i");
+  await expectEyedropperReady(page);
+  await page.keyboard.up("i");
+  await clickAppliedPoint(page, point, "Fill document-pixel sample after target switch");
+  await expect.poll(() => readPaintTargetState(page), {
+    message: "I shortcut must sample into active Fill while Stroke remains None",
+  }).toEqual(expect.objectContaining({
+    target: "fill",
+    fill: sampledColor,
+    stroke: "none",
+    selectedCount: 0,
+    sourceVersion: baseline.sourceVersion,
+    undoEntries: baseline.undoEntries,
+    eyedropperArmed: false,
+  }));
+  expect(failures).toEqual([]);
+});
+
+test("WebGPU eyedropper Escape and an outside-document click cancel a ready capture", async ({ page }) => {
+  const failures = await openEditor(page, "eyedropper");
+  await openDonnerSplash(page);
+  const viewport = await readViewportStats(page);
+  const sourceVersion = await page.evaluate(() => window.__donnerWorkerStats?.sourceVersion ?? -1);
+
+  const focusPoint = {
+    x: viewport.paneX + viewport.paneWidth / 2,
+    y: viewport.paneY + viewport.paneHeight - 20,
+  };
+  await page.bringToFront();
+  await page.mouse.move(focusPoint.x, focusPoint.y);
+  await waitForAppliedPointer(page, focusPoint, {
+    message: "render pane focus before eyedropper shortcut",
+    timeoutMs: scaledMs(4_000),
+  });
+  const beforeMouseDownFrame = await page.evaluate(
+    () => window.__donnerEyedropperShortcutProbe?.current?.frameNumber ?? 0,
+  );
+  await page.mouse.down();
+  await expect.poll(() =>
+    page.evaluate((before) => {
+      const gate = window.__donnerEyedropperShortcutProbe?.current;
+      return {
+        down: gate?.mouseLeftDown ?? false,
+        renderedAfterGate:
+          (window.__donnerMainLoopRenderedFrames ?? 0) > (gate?.frameNumber ?? Infinity),
+        newGate: (gate?.frameNumber ?? 0) > before,
+      };
+    }, beforeMouseDownFrame), {
+    message: "render pane mouse-down must finish an editor frame before release",
+    timeout: scaledMs(4_000),
+  }).toEqual({ down: true, renderedAfterGate: true, newGate: true });
+  const beforeMouseUpFrame = await page.evaluate(
+    () => window.__donnerEyedropperShortcutProbe?.current?.frameNumber ?? 0,
+  );
+  await page.mouse.up();
+  await expect.poll(() =>
+    page.evaluate((before) => {
+      const gate = window.__donnerEyedropperShortcutProbe?.current;
+      return {
+        down: gate?.mouseLeftDown ?? true,
+        renderedAfterGate:
+          (window.__donnerMainLoopRenderedFrames ?? 0) > (gate?.frameNumber ?? Infinity),
+        newGate: (gate?.frameNumber ?? 0) > before,
+      };
+    }, beforeMouseUpFrame), {
+    message: "render pane mouse release must finish an editor frame before I",
+    timeout: scaledMs(4_000),
+  }).toEqual({ down: false, renderedAfterGate: true, newGate: true });
+  await expect.poll(
+    () => page.evaluate(() => window.__donnerEyedropperTestState?.sourcePaneFocused),
+    {
+      message: "render pane must own focus before the I shortcut",
+      timeout: scaledMs(4_000),
+    },
+  ).toBe(false);
+
+  await page.keyboard.down("i");
+  await expectEyedropperReady(page);
+  await page.keyboard.up("i");
+  const beforeCancelFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+  await page.keyboard.down("Escape");
+  await expectBrowserKeyFrame(
+    page,
+    beforeCancelFrame,
+    "Escape must wake an eyedropper cancel frame",
+  );
+  await expect.poll(() => readEyedropperState(page)).toEqual(expect.objectContaining({
+    armed: false,
+    sourceVersion,
+  }));
+  await page.keyboard.up("Escape");
+
+  await page.keyboard.down("i");
+  await expectEyedropperReady(page);
+  await page.keyboard.up("i");
+  const outside = {
+    x: viewport.paneX + viewport.paneWidth / 2,
+    y: viewport.paneY + viewport.paneHeight - 20,
+  };
+  await page.mouse.move(outside.x, outside.y);
+  await waitForAppliedPointer(page, outside, {
+    message: "outside-document eyedropper cancellation",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(outside.x, outside.y);
+  await expect.poll(() => readEyedropperState(page)).toEqual(expect.objectContaining({
+    armed: false,
+    sourceVersion,
+  }));
+  expect(failures).toEqual([]);
+});
+
+test("WebGPU eyedropper copies translucent document alpha, not checkerboard alpha", async ({ page }) => {
+  const failures = await openEditor(page, "eyedropper");
+  await openDonnerSplash(page);
+  const revealRail = { x: 16, y: 180 };
+  await clickAppliedPoint(page, revealRail, "show the hidden source pane through its reveal rail");
+  await expect.poll(() => page.evaluate(() => window.__donnerViewportStats?.paneX ?? 0), {
+    message: "the source pane reveal must move the render pane before source editing",
+    timeout: scaledMs(4_000),
+  }).toBeGreaterThan(500);
+  const beforeDocumentGeneration = await page.evaluate(
+    () => window.__donnerEyedropperTestState?.documentGeneration ?? -1,
+  );
+  expect(beforeDocumentGeneration).toBeGreaterThanOrEqual(0);
+  const fixture = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"128\" height=\"128\" "
+    + "viewBox=\"0 0 128 128\"><rect width=\"128\" height=\"128\" fill=\"#ff000080\"/></svg>";
+  const sourcePoint = { x: 120, y: 180 };
+  await page.mouse.move(sourcePoint.x, sourcePoint.y);
+  await waitForAppliedPointer(page, sourcePoint, {
+    message: "source editor focus point",
+    timeoutMs: scaledMs(4_000),
+  });
+  const beforeSourceFocusFrame = await page.evaluate(() =>
+    window.__donnerMainLoopRenderedFrames ?? 0
+  );
+  await page.mouse.down();
+  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0))
+    .toBeGreaterThan(beforeSourceFocusFrame);
+  await page.mouse.up();
+  await expect.poll(
+    () => page.evaluate(() => window.__donnerEyedropperTestState?.sourcePaneFocused),
+    {
+      message: "source editor must own keyboard focus before replacing its text",
+      timeout: scaledMs(4_000),
+    },
+  ).toBe(true);
+  await page.keyboard.down("Control");
+  await page.keyboard.down("a");
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const state = window.__donnerEyedropperTestState;
+      return {
+        coversAll: (state?.sourceBufferByteLength ?? 0) > 0
+          && state?.sourceSelectionByteLength === state?.sourceBufferByteLength,
+        selectedBytes: state?.sourceSelectionByteLength ?? -1,
+        sourceBytes: state?.sourceBufferByteLength ?? -1,
+      };
+    }), {
+    message: "Control+A must select the entire existing SVG source before pasting the fixture",
+    timeout: scaledMs(4_000),
+  }).toEqual(expect.objectContaining({ coversAll: true }));
+  await page.keyboard.up("a");
+  await page.keyboard.up("Control");
+  await retainEyedropperPng("eyedropper-alpha-source-before-paste.png", await page.screenshot());
+  await page.evaluate(() => {
+    window.__donnerTestPasteEventStats = { count: 0, lastTextLength: -1 };
+    window.addEventListener("paste", (event) => {
+      const stats = window.__donnerTestPasteEventStats;
+      if (stats) {
+        stats.count += 1;
+        stats.lastTextLength = event.clipboardData?.getData("text/plain").length ?? -1;
+      }
+    }, { capture: true });
+  });
+  // Seed the browser clipboard callback without depending on the host OS clipboard.
+  // The source editor still receives the fixture through its real Ctrl+V shortcut below.
+  await page.evaluate((text) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", text);
+    document.dispatchEvent(
+      new ClipboardEvent("paste", {
+        bubbles: true,
+        cancelable: true,
+        clipboardData,
+      }),
+    );
+  }, fixture);
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const stats = window.__donnerTestPasteEventStats;
+      return {
+        eventSeen: (stats?.count ?? 0) > 0,
+        count: stats?.count ?? 0,
+        lastTextLength: stats?.lastTextLength ?? -1,
+        activeElement: document.activeElement?.id || document.activeElement?.tagName || "none",
+      };
+    }), {
+    message: "the browser paste callback must receive the fixture",
+    timeout: scaledMs(4_000),
+  }).toEqual(
+    expect.objectContaining({ eventSeen: true, count: 1, lastTextLength: fixture.length }),
+  );
+  await retainEyedropperPng(
+    "eyedropper-alpha-source-after-clipboard-seed.png",
+    await page.screenshot(),
+  );
+  await page.keyboard.down("Control");
+  await page.keyboard.down("a");
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const state = window.__donnerEyedropperTestState;
+      return {
+        coversAll: (state?.sourceBufferByteLength ?? 0) > 0
+          && state?.sourceSelectionByteLength === state?.sourceBufferByteLength,
+        sourceBytes: state?.sourceBufferByteLength ?? -1,
+        selectedBytes: state?.sourceSelectionByteLength ?? -1,
+      };
+    }), {
+    message: "select the complete current source before the editor paste shortcut",
+    timeout: scaledMs(4_000),
+  }).toEqual(expect.objectContaining({ coversAll: true }));
+  await page.keyboard.up("a");
+  await page.keyboard.up("Control");
+  const beforeEditorPasteFrame = await page.evaluate(
+    () => window.__donnerMainLoopRenderedFrames ?? 0,
+  );
+  await page.keyboard.down("Control");
+  await page.keyboard.down("v");
+  await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
+    message: "the editor paste shortcut must reach an app frame",
+    timeout: scaledMs(4_000),
+  }).toBeGreaterThan(beforeEditorPasteFrame);
+  await page.keyboard.up("v");
+  await page.keyboard.up("Control");
+  await retainEyedropperPng("eyedropper-alpha-source-after-paste.png", await page.screenshot());
+  await expect.poll(() =>
+    page.evaluate(() => {
+      const state = window.__donnerEyedropperTestState;
+      return {
+        sourceBytes: state?.sourceBufferByteLength ?? -1,
+        selectedBytes: state?.sourceSelectionByteLength ?? -1,
+        pasteEvents: window.__donnerTestPasteEventStats ?? null,
+      };
+    }), {
+    message: "Ctrl+V must replace the selected intermediate source with the full SVG fixture",
+    timeout: scaledMs(4_000),
+  }).toEqual(expect.objectContaining({ sourceBytes: fixture.length, selectedBytes: 0 }));
+  await expect.poll(() =>
+    page.evaluate((before) => {
+      const width = window.__donnerViewportStats?.documentWidth ?? 0;
+      const height = window.__donnerViewportStats?.documentHeight ?? 0;
+      const sourceVersion = window.__donnerWorkerStats?.sourceVersion ?? -1;
+      const busy = window.__donnerInteractionStats?.workerBusy ?? true;
+      const sourceState = window.__donnerEyedropperTestState;
+      const worker = window.__donnerWorkerStats;
+      return {
+        ready: (sourceState?.documentGeneration ?? -1) > before && width > 0 && height > 0
+          && Math.abs(width - height) < 1 && !busy
+          && worker?.documentGeneration === sourceState?.documentGeneration
+          && worker?.acceptedForPresentation === true && worker?.presentedAtMs !== undefined,
+        documentGeneration: sourceState?.documentGeneration ?? -1,
+        workerGeneration: worker?.documentGeneration ?? -1,
+        acceptedForPresentation: worker?.acceptedForPresentation ?? false,
+        presentedAtMs: worker?.presentedAtMs ?? -1,
+        sourceVersion,
+        width,
+        height,
+        busy,
+        sourcePaneFocused: sourceState?.sourcePaneFocused ?? false,
+        sourceSelectionActive: sourceState?.sourceSelectionActive ?? false,
+        sourceBytes: sourceState?.sourceBufferByteLength ?? -1,
+        selectionBytes: sourceState?.sourceSelectionByteLength ?? -1,
+        diagnostics: sourceState?.sourceDiagnosticCount ?? -1,
+        textSyncWakePending: sourceState?.textSyncWakePending ?? false,
+        completedResults: window.__donnerWorkerStats?.completedResults ?? -1,
+      };
+    }, beforeDocumentGeneration), {
+    message: "the pasted translucent SVG must become a settled square document",
+    timeout: scaledMs(5_000),
+    intervals: [16, 25, 50, 100],
+  }).toEqual(expect.objectContaining({ ready: true }));
+  const sourceVersion = await page.evaluate(() => window.__donnerWorkerStats?.sourceVersion ?? -1);
+  expect(sourceVersion).toBeGreaterThanOrEqual(0);
+  const offscreenViewport = await readViewportStats(page);
+  expect(Math.abs(offscreenViewport.documentWidth - offscreenViewport.documentHeight)).toBeLessThan(
+    1,
+  );
+  await waitForBrowserComposite(page);
+  await retainEyedropperPng("eyedropper-alpha-settled-document.png", await page.screenshot());
+  // Source replacement preserves the old document's pan. Use the editor's
+  // visible 100% control to center this new, much smaller viewBox in the pane.
+  const resetZoom = {
+    x: offscreenViewport.paneX + 34,
+    y: offscreenViewport.paneY + offscreenViewport.paneHeight - 24,
+  };
+  await clickAppliedPoint(page, resetZoom, "center the replacement SVG with the 100% control");
+  await expect.poll(async () => {
+    const current = await readViewportStats(page);
+    const x = current.documentX + current.documentWidth / 2;
+    const y = current.documentY + current.documentHeight / 2;
+    return x >= current.paneX && x < current.paneX + current.paneWidth
+      && y >= current.paneY && y < current.paneY + current.paneHeight;
+  }, {
+    message: "the new SVG document center must be inside the render pane after reset",
+    timeout: scaledMs(4_000),
+  }).toBe(true);
+  await waitForBrowserComposite(page);
+  const viewport = await readViewportStats(page);
+  const center = {
+    x: viewport.documentX + viewport.documentWidth / 2,
+    y: viewport.documentY + viewport.documentHeight / 2,
+  };
+  const redRegion = { x: center.x - 12, y: center.y - 12, width: 24, height: 24 };
+  await expect.poll(async () => (await readCanvasColorStats(page, redRegion)).coloredPixels, {
+    message: "the translucent rectangle must be visible in the presented WebGPU canvas",
+    timeout: scaledMs(5_000),
+    intervals: [16, 25, 50, 100],
+  }).toBeGreaterThan(0);
+  await retainEyedropperPng("eyedropper-alpha-centered-document.png", await page.screenshot());
+
+  await page.mouse.move(center.x, center.y);
+  await waitForAppliedPointer(page, center, {
+    message: "translucent rectangle selection",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(center.x, center.y);
+  await expect.poll(() => page.evaluate(() => window.__donnerInteractionStats?.selectedCount))
+    .toBe(1);
+  const beforeUndo = await page.evaluate(() =>
+    window.__donnerEyedropperTestState?.undoEntryCount ?? -1
+  );
+  const edge = { x: viewport.documentX + 1, y: viewport.documentY + 1 };
+  const paneClip = {
+    x: viewport.paneX,
+    y: viewport.paneY,
+    width: viewport.paneWidth,
+    height: viewport.paneHeight,
+  };
+  await page.mouse.move(edge.x, edge.y);
+  await waitForAppliedPointer(page, edge, {
+    message: "translucent edge before arming",
+    timeoutMs: scaledMs(4_000),
+  });
+  const eyedropperTool = eyedropperToolbarPoint(viewport);
+  await page.mouse.move(eyedropperTool.x, eyedropperTool.y);
+  await waitForAppliedPointer(page, eyedropperTool, {
+    message: "translucent fixture eyedropper toolbar activation",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(eyedropperTool.x, eyedropperTool.y);
+  await expectEyedropperReady(page);
+  await page.mouse.move(edge.x, edge.y);
+  await waitForAppliedPointer(page, edge, {
+    message: "translucent document edge loupe",
+    timeoutMs: scaledMs(4_000),
+  });
+  await waitForBrowserComposite(page);
+  const loupe = await page.screenshot({ clip: paneClip });
+  await retainEyedropperPng("eyedropper-alpha-edge-loupe.png", loupe);
+  expect(await readEyedropperState(page)).toEqual(expect.objectContaining({
+    armed: true,
+    ready: true,
+    sourceVersion,
+  }));
+  await page.mouse.move(center.x, center.y);
+  await waitForAppliedPointer(page, center, {
+    message: "translucent document sample",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.click(center.x, center.y);
+  await expect.poll(() => page.evaluate(() => window.__donnerEyedropperTestState), {
+    message: "the rendered half-alpha red pixel must reach the selected element style",
+    timeout: scaledMs(5_000),
+    intervals: [16, 25, 50, 100],
+  }).toEqual(expect.objectContaining({
+    activeFill: "#ff000080",
+    selectedStyle: expect.stringContaining("#ff000080"),
+  }));
+  await expect.poll(() =>
+    page.evaluate(() => window.__donnerEyedropperTestState?.undoEntryCount ?? -1)
+  )
+    .toBe(beforeUndo + 1);
+  expect(failures).toEqual([]);
+});
 
 // Whether the presented document covers the whole probe region.
 //

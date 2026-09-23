@@ -188,6 +188,8 @@ struct RenderRequest {
   /// Geode normally publishes GPU texture tiles without readback. Diagnostics, replay tools, and
   /// pixel-asserting tests set this flag when they explicitly need a bitmap.
   bool captureCpuSnapshot = false;
+  /// Nonzero identity for an explicit editor pixel capture; echoed in the result.
+  std::uint64_t cpuSnapshotRequestId = 0;
 };
 
 /// Final full-canvas snapshot work needed after compositor rendering.
@@ -385,6 +387,8 @@ struct RenderResult {
   /// True when this result should update only retained overview infill.
   bool overviewInfillOnly = false;
   std::uint64_t version = 0;
+  /// Nonzero identity of an explicit editor pixel capture.
+  std::uint64_t cpuSnapshotRequestId = 0;
   /// Document generation captured by the render request.
   std::uint64_t documentGeneration = 0;
   std::uint64_t fontResourceRevision = 0;

@@ -29,6 +29,41 @@
 // (raw GL), which is unreachable from this contextless unit harness.
 
 namespace donner::editor {
+
+struct RenderCoordinatorTestAccess {
+  static void seedPreCommitPixelCapture(RenderCoordinator& coordinator, const EditorApp& app,
+                                        const ViewportState& viewport) {
+    coordinator.documentPixelCaptureEnabled_ = true;
+    coordinator.documentPixelCaptureSessionId_ = 1;
+    const DocumentPixelCaptureIdentity identity{
+        .sessionId = 1,
+        .documentGeneration = app.document().documentGeneration(),
+        .version = app.document().currentFrameVersion(),
+        .fontResourceRevision = app.document().fontResourceRevision(),
+        .canvasCommitGeneration = coordinator.documentCanvasCommitTotal_,
+        .rasterViewport = viewport.rasterViewport(),
+        .viewport = viewport,
+    };
+    coordinator.documentPixelCapture_ = DocumentPixelCapture{.identity = identity};
+    coordinator.requestedPixelCapture_ = identity;
+    coordinator.pendingCanvasSize_ = viewport.rasterViewport().semanticCanvasSizePx;
+    coordinator.pendingCanvasSizeSince_ = std::chrono::steady_clock::now();
+  }
+
+  static void makeCanvasCommitDue(RenderCoordinator& coordinator) {
+    coordinator.pendingCanvasSizeSince_ =
+        std::chrono::steady_clock::now() - std::chrono::milliseconds(200);
+  }
+
+  static std::optional<std::uint64_t> requestedCommitGeneration(
+      const RenderCoordinator& coordinator) {
+    if (!coordinator.requestedPixelCapture_.has_value()) {
+      return std::nullopt;
+    }
+    return coordinator.requestedPixelCapture_->canvasCommitGeneration;
+  }
+};
+
 namespace {
 
 using ::testing::IsEmpty;
@@ -882,6 +917,104 @@ TEST(RenderCoordinatorTest, MaybeRequestRenderDispatchesWithoutTextureCache) {
   }
   EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
   EXPECT_EQ(app.document().document().canvasSize(), viewport.desiredCanvasSize());
+}
+
+TEST(RenderCoordinatorTest, CancelledPixelCaptureRepostsWithoutDocumentOrViewportChange) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  app.setSelection(QuerySelector(app, "#r1"));
+  coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(100));
+  coordinator.setDocumentPixelCaptureEnabled(true);
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+
+  coordinator.asyncRenderer().cancelInFlight();
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  ASSERT_FALSE(coordinator.asyncRenderer().isBusy());
+  coordinator.pollRenderResult(app, viewport, textures);
+  EXPECT_TRUE(coordinator.presentationRefreshPending());
+  EXPECT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+      << "A dropped worker result must not leave a same-epoch picker permanently pending.";
+
+  coordinator.asyncRenderer().cancelInFlight();
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
+}
+
+TEST(RenderCoordinatorTest, SelectedPixelCaptureRepostsAfterPanCancelsInFlightResult) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  ViewportState viewport = MakeViewport(app);
+  app.setSelection(QuerySelector(app, "#r1"));
+  coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(100));
+  coordinator.setDocumentPixelCaptureEnabled(true);
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+
+  viewport.panScreenPoint.x += 20.0;
+  coordinator.asyncRenderer().cancelInFlight();
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  ASSERT_FALSE(coordinator.asyncRenderer().isBusy());
+  coordinator.pollRenderResult(app, viewport, textures);
+  EXPECT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+
+  coordinator.asyncRenderer().cancelInFlight();
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
+}
+
+TEST(RenderCoordinatorTest, DelayedCanvasSizeCommitInvalidatesSameVersionPixelCapture) {
+  constexpr std::string_view kPercentSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%">
+           <rect id="percent" width="50%" height="50%" fill="red"/></svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kPercentSvg));
+  app.document().document().setCanvasSize(100, 100);
+  const std::uint64_t versionBefore = app.document().currentFrameVersion();
+  ViewportState viewport = MakeViewport(app);
+  viewport.zoom = 2.0;
+  RenderCoordinator coordinator;
+  SelectTool selectTool;
+  coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(500));
+  RenderCoordinatorTestAccess::seedPreCommitPixelCapture(coordinator, app, viewport);
+  ASSERT_NE(coordinator.documentPixelCaptureFor(app, viewport), nullptr);
+
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr));
+  EXPECT_EQ(coordinator.documentPixelCaptureFor(app, viewport), nullptr)
+      << "A raster made before the semantic canvas commit cannot become Ready during debounce.";
+  EXPECT_FALSE(coordinator.nextPixelCaptureCanvasCommitWakeSeconds().has_value())
+      << "Worker completion wakes the shell; no timer should spin while it is busy.";
+
+  RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
+  ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
+  EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr));
+  EXPECT_EQ(coordinator.documentPixelCaptureFor(app, viewport), nullptr)
+      << "An elapsed deadline cannot expose the stale raster while the worker delays commit.";
+  coordinator.asyncRenderer().cancelInFlight();
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  EXPECT_THAT(coordinator.nextPixelCaptureCanvasCommitWakeSeconds(),
+              ::testing::Optional(::testing::Eq(0.0f)));
+  coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr);
+  EXPECT_EQ(coordinator.documentCanvasCommitTotal(), 1u);
+  EXPECT_EQ(app.document().currentFrameVersion(), versionBefore);
+  EXPECT_EQ(coordinator.documentPixelCaptureFor(app, viewport), nullptr);
+  EXPECT_THAT(RenderCoordinatorTestAccess::requestedCommitGeneration(coordinator),
+              ::testing::Optional(1u))
+      << "The post-commit request must name the new layout even when frame version is unchanged.";
+
+  coordinator.asyncRenderer().cancelInFlight();
+  ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
 }
 
 }  // namespace

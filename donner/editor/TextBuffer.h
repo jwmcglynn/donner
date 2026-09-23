@@ -191,6 +191,15 @@ public:
     return result;
   }
 
+  /// Byte count of the joined text without constructing a copy of it.
+  std::size_t byteLength() const {
+    std::size_t result = lines_.empty() ? 0u : lines_.size() - 1u;
+    for (const Line& line : lines_) {
+      result += line.size();
+    }
+    return result;
+  }
+
   /**
    * Get the text in [start, end), inclusive of start and exclusive of end,
    * or adapt as needed for your coordinate conventions.

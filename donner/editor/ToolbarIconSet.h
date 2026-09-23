@@ -22,17 +22,19 @@ namespace donner::editor {
 /// order; kept standalone so the registry-coverage test can iterate it without
 /// a live ImGui context.
 enum class ToolbarIcon : std::uint8_t {
-  Select,  ///< Selection / arrow tool.
-  Pen,     ///< Pen (path) tool.
-  Text,    ///< Type / text tool.
+  Select,      ///< Selection / arrow tool.
+  Pen,         ///< Pen (path) tool.
+  Text,        ///< Type / text tool.
+  Eyedropper,  ///< Document pixel picker.
 };
 
 /// Every toolbar icon, in palette order. The single source of truth for the
 /// icon registry and its coverage test.
-inline constexpr std::array<ToolbarIcon, 3> kToolbarIcons = {
+inline constexpr std::array<ToolbarIcon, 4> kToolbarIcons = {
     ToolbarIcon::Select,
     ToolbarIcon::Pen,
     ToolbarIcon::Text,
+    ToolbarIcon::Eyedropper,
 };
 
 /// An uploaded icon texture plus the valid payload UV range (icon bitmaps may

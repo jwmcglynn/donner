@@ -1814,6 +1814,7 @@ void AsyncRenderer::workerLoop() {
           done.result.viewport = request.viewport;
           done.result.overviewInfillOnly = request.overviewInfillOnly;
           done.result.version = request.version;
+          done.result.cpuSnapshotRequestId = request.cpuSnapshotRequestId;
           done.result.documentGeneration = request.documentGeneration;
           done.result.fontResourceRevision = request.fontResourceRevision;
           done.result.fontDependencies = std::move(fontDependencies);

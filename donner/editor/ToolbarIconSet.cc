@@ -20,6 +20,7 @@ std::span<const unsigned char> ToolbarIconSvg(ToolbarIcon icon) {
     case ToolbarIcon::Select: return embedded::kToolSelectIconSvg;
     case ToolbarIcon::Pen: return embedded::kToolPenIconSvg;
     case ToolbarIcon::Text: return embedded::kToolTextIconSvg;
+    case ToolbarIcon::Eyedropper: return embedded::kToolEyedropperIconSvg;
   }
   return embedded::kToolSelectIconSvg;
 }
@@ -30,6 +31,7 @@ std::uint64_t ToolbarIconTextureKey(ToolbarIcon icon) {
     case ToolbarIcon::Select: return kIconTextureKeyBase + 1u;
     case ToolbarIcon::Pen: return kIconTextureKeyBase + 2u;
     case ToolbarIcon::Text: return kIconTextureKeyBase + 3u;
+    case ToolbarIcon::Eyedropper: return kIconTextureKeyBase + 4u;
   }
   return kIconTextureKeyBase;
 }
@@ -39,6 +41,8 @@ std::span<const EmbeddedSvgIconRequest> ToolbarIconPrewarmRequests() {
       {ToolbarIconSvg(ToolbarIcon::Select), kToolbarIconRasterSizePx, /*tintableMask=*/false},
       {ToolbarIconSvg(ToolbarIcon::Pen), kToolbarIconRasterSizePx, /*tintableMask=*/false},
       {ToolbarIconSvg(ToolbarIcon::Text), kToolbarIconRasterSizePx, /*tintableMask=*/false},
+      {ToolbarIconSvg(ToolbarIcon::Eyedropper), kToolbarIconRasterSizePx,
+       /*tintableMask=*/false},
   }};
   return kRequests;
 }
@@ -58,6 +62,11 @@ const std::optional<svg::RendererBitmap>& CachedToolbarIconBitmap(ToolbarIcon ic
     case ToolbarIcon::Text: {
       static const std::optional<svg::RendererBitmap> bitmap =
           RenderEmbeddedSvgArtwork(ToolbarIconSvg(ToolbarIcon::Text), kToolbarIconRasterSizePx);
+      return bitmap;
+    }
+    case ToolbarIcon::Eyedropper: {
+      static const std::optional<svg::RendererBitmap> bitmap = RenderEmbeddedSvgArtwork(
+          ToolbarIconSvg(ToolbarIcon::Eyedropper), kToolbarIconRasterSizePx);
       return bitmap;
     }
   }

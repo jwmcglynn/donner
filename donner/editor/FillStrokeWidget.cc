@@ -9,34 +9,31 @@ namespace donner::editor::internal {
 
 namespace {
 
-// Widget sub-layout constants, relative to the widget's top-left. The widget is
-// laid out as: an overlapping swatch pair on the left (fill in front / lower
-// left, stroke behind / upper right), a compact affordance column (swap over a
-// pair of "set none" buttons), then the custom-paint label chips.
-constexpr float kSwatchSize = 21.0f;
+// Widget sub-layout constants, relative to the widget's top-left. Fill stays
+// upper-left and Stroke lower-right; draw order alone changes the foreground.
+// The right column holds the angled swap arrow above one active-role None
+// button, then optional custom-paint label chips.
+constexpr float kSwatchSize = 28.0f;
 constexpr float kFillLeft = 3.0f;
-constexpr float kFillTop = 8.0f;
+constexpr float kFillTop = 2.0f;
 constexpr float kStrokeLeft = 14.0f;
-constexpr float kStrokeTop = 1.0f;
+constexpr float kStrokeTop = 13.0f;
 
-constexpr float kSwapLeft = 40.0f;
-constexpr float kSwapTop = 1.0f;
-constexpr float kSwapWidth = 15.0f;
-constexpr float kSwapHeight = 13.0f;
+constexpr float kSwapLeft = 44.0f;
+constexpr float kSwapTop = 2.0f;
+constexpr float kSwapWidth = 19.0f;
+constexpr float kSwapHeight = 18.0f;
 
-constexpr float kNoneTop = 17.0f;
-constexpr float kNoneBottom = 28.0f;
-constexpr float kStrokeNoneLeft = 40.0f;
-constexpr float kStrokeNoneRight = 47.0f;
-constexpr float kFillNoneLeft = 48.0f;
-constexpr float kFillNoneRight = 55.0f;
+constexpr float kNoneLeft = 46.0f;
+constexpr float kNoneTop = 24.0f;
+constexpr float kNoneSize = 19.0f;
 
-constexpr float kChipLeft = 59.0f;
+constexpr float kChipLeft = 72.0f;
 constexpr float kChipRightInset = 3.0f;
-constexpr float kStrokeChipTop = 1.0f;
-constexpr float kStrokeChipBottom = 14.0f;
-constexpr float kFillChipTop = 16.0f;
-constexpr float kFillChipBottom = 29.0f;
+constexpr float kFillChipTop = 2.0f;
+constexpr float kFillChipBottom = 20.0f;
+constexpr float kStrokeChipTop = 24.0f;
+constexpr float kStrokeChipBottom = 42.0f;
 
 [[nodiscard]] bool Contains(const ImVec2& min, const ImVec2& max, const ImVec2& p) {
   return p.x >= min.x && p.x <= max.x && p.y >= min.y && p.y <= max.y;
@@ -44,6 +41,40 @@ constexpr float kFillChipBottom = 29.0f;
 
 [[nodiscard]] ImU32 SwatchColorU32(const css::RGBA& c) {
   return IM_COL32(c.r, c.g, c.b, c.a);
+}
+
+[[nodiscard]] std::string FitChipLabel(std::string label, float maxWidth) {
+  if (ImGui::CalcTextSize(label.c_str()).x <= maxWidth) {
+    return label;
+  }
+  while (label.size() > 1u) {
+    label.pop_back();
+    const std::string candidate = label + "...";
+    if (ImGui::CalcTextSize(candidate.c_str()).x <= maxWidth) {
+      return candidate;
+    }
+  }
+  return "...";
+}
+
+void DrawPaintChip(ImDrawList* drawList, std::string_view prefix, const ToolbarPaintSlotState& slot,
+                   const ImVec2& rectMin, const ImVec2& rectMax) {
+  if (!slot.isCustom) {
+    return;
+  }
+  const bool actionable = slot.reference.has_value() && slot.reference->sourceRange.has_value();
+  const EditorTheme& theme = EditorTheme::Active();
+  const ImU32 fillColor =
+      actionable ? WithAlpha(theme.accentDefault, 210) : WithAlpha(theme.surfaceActive, 230);
+  const ImU32 borderColor = actionable ? theme.accentHover : theme.borderStrong;
+  drawList->AddRectFilled(rectMin, rectMax, fillColor, theme.radiusControl);
+  drawList->AddRect(rectMin, rectMax, borderColor, theme.radiusControl, 0, 1.0f);
+  const std::string label =
+      FitChipLabel(PaintChipLabel(prefix, slot), rectMax.x - rectMin.x - 8.0f);
+  const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
+  drawList->AddText(
+      ImVec2(rectMin.x + 4.0f, rectMin.y + (rectMax.y - rectMin.y - textSize.y) * 0.5f - 0.5f),
+      actionable ? theme.accentInk : theme.textPrimary, label.c_str());
 }
 
 }  // namespace
@@ -69,10 +100,8 @@ FillStrokeWidgetLayout ComputeFillStrokeWidgetLayout(const ImVec2& widgetMin,
   layout.strokeMax = ImVec2(x + kStrokeLeft + kSwatchSize, y + kStrokeTop + kSwatchSize);
   layout.swapMin = ImVec2(x + kSwapLeft, y + kSwapTop);
   layout.swapMax = ImVec2(x + kSwapLeft + kSwapWidth, y + kSwapTop + kSwapHeight);
-  layout.strokeNoneMin = ImVec2(x + kStrokeNoneLeft, y + kNoneTop);
-  layout.strokeNoneMax = ImVec2(x + kStrokeNoneRight, y + kNoneBottom);
-  layout.fillNoneMin = ImVec2(x + kFillNoneLeft, y + kNoneTop);
-  layout.fillNoneMax = ImVec2(x + kFillNoneRight, y + kNoneBottom);
+  layout.noneMin = ImVec2(x + kNoneLeft, y + kNoneTop);
+  layout.noneMax = ImVec2(x + kNoneLeft + kNoneSize, y + kNoneTop + kNoneSize);
   layout.strokeChipMin = ImVec2(x + kChipLeft, y + kStrokeChipTop);
   layout.strokeChipMax = ImVec2(widgetMax.x - kChipRightInset, y + kStrokeChipBottom);
   layout.fillChipMin = ImVec2(x + kChipLeft, y + kFillChipTop);
@@ -82,17 +111,14 @@ FillStrokeWidgetLayout ComputeFillStrokeWidgetLayout(const ImVec2& widgetMin,
 
 FillStrokeWidgetRegion HitTestFillStrokeWidget(const FillStrokeWidgetLayout& layout,
                                                const ImVec2& point, bool fillIsCustom,
-                                               bool strokeIsCustom) {
+                                               bool strokeIsCustom, bool fillIsActive) {
   // Small explicit affordances win over the larger swatches / chips they sit
   // beside so they stay clickable.
   if (Contains(layout.swapMin, layout.swapMax, point)) {
     return FillStrokeWidgetRegion::Swap;
   }
-  if (Contains(layout.strokeNoneMin, layout.strokeNoneMax, point)) {
-    return FillStrokeWidgetRegion::StrokeNone;
-  }
-  if (Contains(layout.fillNoneMin, layout.fillNoneMax, point)) {
-    return FillStrokeWidgetRegion::FillNone;
+  if (Contains(layout.noneMin, layout.noneMax, point)) {
+    return FillStrokeWidgetRegion::SetNone;
   }
   if (strokeIsCustom && Contains(layout.strokeChipMin, layout.strokeChipMax, point)) {
     return FillStrokeWidgetRegion::StrokeChip;
@@ -100,11 +126,15 @@ FillStrokeWidgetRegion HitTestFillStrokeWidget(const FillStrokeWidgetLayout& lay
   if (fillIsCustom && Contains(layout.fillChipMin, layout.fillChipMax, point)) {
     return FillStrokeWidgetRegion::FillChip;
   }
-  // Fill is drawn in front, so it owns the overlapping region.
-  if (Contains(layout.fillMin, layout.fillMax, point)) {
+  const bool fillHit = Contains(layout.fillMin, layout.fillMax, point);
+  const bool strokeHit = Contains(layout.strokeMin, layout.strokeMax, point);
+  if (fillHit && strokeHit) {
+    return fillIsActive ? FillStrokeWidgetRegion::FillSwatch : FillStrokeWidgetRegion::StrokeSwatch;
+  }
+  if (fillHit) {
     return FillStrokeWidgetRegion::FillSwatch;
   }
-  if (Contains(layout.strokeMin, layout.strokeMax, point)) {
+  if (strokeHit) {
     return FillStrokeWidgetRegion::StrokeSwatch;
   }
   return FillStrokeWidgetRegion::None;
@@ -133,11 +163,11 @@ void SwapActivePaint(ActivePaintStyle& style) {
 }
 
 void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
-                          const ToolbarPaintSlotState& state, bool front) {
+                          const ToolbarPaintSlotState& state, bool fillRole, bool active) {
   constexpr float kRounding = 2.5f;
   const ImU32 color = SwatchColorU32(state.color);
 
-  if (front) {
+  if (fillRole) {
     // Fill role: solid filled square.
     drawList->AddRectFilled(min, max, color, kRounding);
   } else {
@@ -160,12 +190,12 @@ void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2&
     drawList->PopClipRect();
   }
 
-  // Outlines: a light inner keyline plus a role-colored outer border. W8 routes
-  // the custom-paint accent and the "none" slash through the theme so this
-  // extracted widget tracks the Signal Teal palette with the rest of the shell.
+  // A light inner keyline and accent outer border distinguish the active role
+  // while keeping custom paint and the none slash legible against the theme.
   const EditorTheme& theme = EditorTheme::Active();
   drawList->AddRect(min, max, IM_COL32(255, 255, 255, 210), kRounding, 0, 1.0f);
-  drawList->AddRect(min, max, state.isCustom ? theme.accentDefault : IM_COL32(0, 0, 0, 210),
+  drawList->AddRect(min, max,
+                    active || state.isCustom ? theme.accentDefault : IM_COL32(0, 0, 0, 210),
                     kRounding, 0, 1.6f);
 
   if (state.isNone) {
@@ -176,40 +206,44 @@ void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2&
 
 void DrawSwapAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, bool enabled) {
   const ImU32 tint = enabled ? IM_COL32(215, 222, 232, 255) : IM_COL32(120, 126, 134, 255);
-  const float w = max.x - min.x;
-  const float h = max.y - min.y;
-  const float cx = min.x + w * 0.5f;
-  const float cy = min.y + h * 0.5f;
-  // A bent double-headed arrow: horizontal shaft with a head on each end, one
-  // pointing left, one pointing right, evoking "swap".
-  const float shaftHalf = w * 0.34f;
-  const float arm = h * 0.24f;
-  const ImVec2 leftTip(cx - shaftHalf, cy);
-  const ImVec2 rightTip(cx + shaftHalf, cy);
-  drawList->AddLine(leftTip, rightTip, tint, 1.4f);
-  // Left head.
-  drawList->AddLine(leftTip, ImVec2(leftTip.x + arm, leftTip.y - arm), tint, 1.4f);
-  drawList->AddLine(leftTip, ImVec2(leftTip.x + arm, leftTip.y + arm), tint, 1.4f);
-  // Right head.
-  drawList->AddLine(rightTip, ImVec2(rightTip.x - arm, rightTip.y - arm), tint, 1.4f);
-  drawList->AddLine(rightTip, ImVec2(rightTip.x - arm, rightTip.y + arm), tint, 1.4f);
+  const ImVec2 leftTip(min.x + 2.0f, min.y + 5.0f);
+  const ImVec2 bend(max.x - 6.0f, leftTip.y);
+  const ImVec2 downTip(bend.x, max.y - 2.0f);
+  drawList->AddLine(leftTip, bend, tint, 1.6f);
+  drawList->AddLine(bend, downTip, tint, 1.6f);
+  drawList->AddLine(leftTip, ImVec2(leftTip.x + 3.0f, leftTip.y - 3.0f), tint, 1.6f);
+  drawList->AddLine(leftTip, ImVec2(leftTip.x + 3.0f, leftTip.y + 3.0f), tint, 1.6f);
+  drawList->AddLine(downTip, ImVec2(downTip.x - 3.0f, downTip.y - 3.0f), tint, 1.6f);
+  drawList->AddLine(downTip, ImVec2(downTip.x + 3.0f, downTip.y - 3.0f), tint, 1.6f);
 }
 
 void DrawNoneAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
-                        bool fillVariant, bool active) {
-  const ImU32 border = active ? IM_COL32(232, 236, 242, 255) : IM_COL32(150, 156, 164, 255);
-  if (fillVariant) {
-    // Solid (fill) motif: filled white square.
-    drawList->AddRectFilled(min, max, IM_COL32(238, 240, 244, 255), 1.5f);
-    drawList->AddRect(min, max, border, 1.5f, 0, 1.0f);
+                        bool alreadyNone) {
+  const ImU32 border = alreadyNone ? IM_COL32(232, 236, 242, 255) : IM_COL32(150, 156, 164, 255);
+  drawList->AddRectFilled(min, max, IM_COL32(238, 240, 244, 255), 1.5f);
+  drawList->AddRect(min, max, border, 1.5f, 0, 1.3f);
+  drawList->AddLine(ImVec2(min.x + 3.0f, max.y - 3.0f), ImVec2(max.x - 3.0f, min.y + 3.0f),
+                    IM_COL32(230, 40, 40, 255), 2.2f);
+}
+
+void DrawFillStrokeWidget(ImDrawList* drawList, const FillStrokeWidgetLayout& layout,
+                          const ToolbarPaintState& paintState, bool fillIsActive, bool canEdit) {
+  if (fillIsActive) {
+    DrawFillStrokeSwatch(drawList, layout.strokeMin, layout.strokeMax, paintState.stroke,
+                         /*fillRole=*/false, /*active=*/false);
+    DrawFillStrokeSwatch(drawList, layout.fillMin, layout.fillMax, paintState.fill,
+                         /*fillRole=*/true, /*active=*/true);
   } else {
-    // Hollow (stroke) motif: ring.
-    drawList->AddRect(min, max, IM_COL32(238, 240, 244, 255), 1.5f, 0, 1.6f);
-    drawList->AddRect(min, max, border, 1.5f, 0, 1.0f);
+    DrawFillStrokeSwatch(drawList, layout.fillMin, layout.fillMax, paintState.fill,
+                         /*fillRole=*/true, /*active=*/false);
+    DrawFillStrokeSwatch(drawList, layout.strokeMin, layout.strokeMax, paintState.stroke,
+                         /*fillRole=*/false, /*active=*/true);
   }
-  // Red "none" slash across the badge.
-  drawList->AddLine(ImVec2(min.x + 1.0f, max.y - 1.0f), ImVec2(max.x - 1.0f, min.y + 1.0f),
-                    IM_COL32(230, 40, 40, 255), 1.6f);
+  DrawSwapAffordance(drawList, layout.swapMin, layout.swapMax, canEdit);
+  DrawNoneAffordance(drawList, layout.noneMin, layout.noneMax,
+                     fillIsActive ? paintState.fill.isNone : paintState.stroke.isNone);
+  DrawPaintChip(drawList, "F", paintState.fill, layout.fillChipMin, layout.fillChipMax);
+  DrawPaintChip(drawList, "S", paintState.stroke, layout.strokeChipMin, layout.strokeChipMax);
 }
 
 }  // namespace donner::editor::internal

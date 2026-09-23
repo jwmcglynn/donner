@@ -78,7 +78,9 @@ class DocumentPresentationCompositor;
 
 namespace internal {
 struct ToolbarPaintState;
-}
+struct ToolbarPaintSlotState;
+enum class FillStrokeWidgetRegion;
+}  // namespace internal
 
 #ifdef DONNER_EDITOR_WGPU
 class FramebufferCheckerboardRenderer;
@@ -449,6 +451,7 @@ private:
   [[gnu::noinline]] void snapshotReproFrame();
 #endif
   [[gnu::noinline]] void renderMenuBarAndDialogs(bool compactUi);
+  void queueIdleRenderRefreshIfNeeded();
   [[gnu::noinline]] void applyDeferredRenderRequest();
   [[gnu::noinline]] void recordFrameTelemetry(
       const FrameCostBreakdown::MainFrame& mainFrameCost,
@@ -493,6 +496,42 @@ private:
   [[nodiscard]] std::optional<Entity> toolbarPaintSelectionIdentity(
       bool rendererBusy, const svg::SVGDocumentHandle& currentPaintDocument);
   void renderFillStrokeToolbarWidget();
+  [[nodiscard]] internal::ToolbarPaintState toolbarPaintStateForFrame(bool rendererBusy,
+                                                                      bool canvasInteractionActive,
+                                                                      bool* canEditPaint);
+  void swapToolbarPaint(const internal::ToolbarPaintState& paintState, bool canEditPaint);
+  void setActivePaintNone();
+  void revealToolbarPaintChipSource(const internal::ToolbarPaintSlotState& slot);
+  void handleFillStrokeWidgetClick(internal::FillStrokeWidgetRegion region,
+                                   const internal::ToolbarPaintState& paintState,
+                                   bool canEditPaint);
+  void showFillStrokeWidgetTooltip(internal::FillStrokeWidgetRegion region,
+                                   const internal::ToolbarPaintState& paintState,
+                                   bool canSelectPaint, bool canEditPaint);
+  void showToolbarPaintChipTooltip(bool isFill, const internal::ToolbarPaintSlotState& slot);
+  void renderToolbarPaintPopup(const char* popupId, const char* pickerId, std::string_view attrName,
+                               const internal::ToolbarPaintSlotState& slot);
+  enum class ActiveTool : std::uint8_t;
+  enum class PaintTarget : std::uint8_t { Fill, Stroke };
+  void showPaintSwatchTooltip(PaintTarget target, bool canSelectPaint, bool canEditPaint);
+  [[nodiscard]] bool canArmEyedropper() const;
+  void setActivePaintTarget(PaintTarget target);
+  void handlePaintSwatchClicked(PaintTarget target, bool canOpenPopup);
+  bool armEyedropper(PaintTarget target);
+  void cancelEyedropper(bool restorePreviousTool);
+  void applyPaintColor(PaintTarget target, const css::RGBA& color, bool recordUndo);
+  void renderEyedropperLoupe(const Vector2d& pointerScreen, const Box2d& paneRect);
+  bool handleEyedropperGlobalShortcut(bool sourcePaneFocused, bool anyPopupOpen, bool cmd);
+  void commitTextToolIfNeeded();
+  void onToolbarToolClicked(ActiveTool tool);
+  void cancelEyedropperForSessionChange();
+  void handleRenderPaneRightClick(bool canvasHovered, const Vector2d& documentPoint);
+  void handleEyedropperCanvasClick(bool toolEligible, bool spaceHeld, bool overCanvasScrollbar);
+  void setEyedropperCursorIfEligible(bool toolEligible);
+#ifdef __EMSCRIPTEN__
+  void publishEyedropperShortcutProbeIfEnabled(bool anyPopupOpen, bool sourcePaneFocused);
+  void publishEyedropperTestStateIfEnabled();
+#endif
   void renderCompactTopBar();
   void renderSidebars();
   /// Poll every auxiliary result through one lifetime/generation-aware handler.
@@ -614,8 +653,14 @@ private:
     Select,
     Pen,
     Text,
+    Eyedropper,
   };
   ActiveTool activeTool_ = ActiveTool::Select;
+  ActiveTool previousEyedropperTool_ = ActiveTool::Select;
+  PaintTarget activePaintTarget_ = PaintTarget::Fill;
+  PaintTarget eyedropperTarget_ = PaintTarget::Fill;
+  std::uint64_t eyedropperDocumentGeneration_ = 0;
+  std::vector<svg::SVGElement> eyedropperSelection_;
   TextEditor textEditor_;
   SourceDiagnosticsPanel sourceDiagnosticsPanel_;
   std::optional<svg::SVGElement> sourceStructuralDragElement_;

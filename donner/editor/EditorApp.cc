@@ -2021,11 +2021,15 @@ bool EditorApp::unbundleCompoundPath(std::optional<svg::SVGElement> target) {
 
 void EditorApp::recordDocumentSourceUndoOnNextFlush(std::string label,
                                                     svg::SVGElement anchorElement,
-                                                    std::string beforeSource) {
+                                                    std::string beforeSource,
+                                                    bool preserveSelection) {
   pendingDocumentSourceUndo_ = PendingDocumentSourceUndo{
       .label = std::move(label),
       .before = captureDocumentSourceSnapshot(anchorElement, beforeSource),
   };
+  if (preserveSelection) {
+    pendingDocumentSourceUndo_->before.selectionTargets = CaptureSelectionTargets(selection_);
+  }
 }
 
 void EditorApp::refreshFirstSelectionCache() {
