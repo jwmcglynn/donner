@@ -633,6 +633,13 @@ public:
     return lifetimeTextureCreates_ +
            readbackLifetimeTextureCreates_.load(std::memory_order_relaxed);
   }
+  /// Record that this context's runtime device gave up its ownership of a texture allocation.
+  void countTextureRelease() const { ++lifetimeTextureReleases_; }
+  /// Texture allocations whose ownership this context's runtime device has given up since the
+  /// context was created (see `gpu::DeviceObserver::onTextureReleased`), on every backend. It
+  /// excludes the snapshot-capture context, whose creations `lifetimeTextureCreates()` includes, so
+  /// creates minus releases is not a live count.
+  uint64_t lifetimeTextureReleases() const { return lifetimeTextureReleases_; }
   /// Cumulative number of `countBuffer()` calls since this `GeodeDevice`
   /// was created. Same caveat as `lifetimeTextureCreates()`.
   uint64_t lifetimeBufferCreates() const {
@@ -1028,6 +1035,7 @@ private:
   // because `countTexture()` / `countBuffer()` are logically const
   // (the caller is reporting, not mutating visible state).
   mutable uint64_t lifetimeTextureCreates_ = 0;
+  mutable uint64_t lifetimeTextureReleases_ = 0;
   mutable uint64_t lifetimeBufferCreates_ = 0;
 
   std::atomic<int> readbackCount_{0};

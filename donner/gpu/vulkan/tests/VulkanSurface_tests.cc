@@ -1703,6 +1703,7 @@ class SubmissionCounter final : public DeviceObserver {
 public:
   void onBufferCreated() override {}
   void onTextureCreated() override {}
+  void onTextureReleased() override {}
   void onBindGroupCreated() override {}
   void onBufferWritten(uint64_t /*byteCount*/) override {}
   void onTextureWritten(uint64_t /*byteCount*/) override {}

@@ -31,6 +31,15 @@ public:
   /// does not own is not an allocation and is not reported.
   virtual void onTextureCreated() = 0;
 
+  /**
+   * A texture allocation the device owns went back to its backend: its backing was destroyed at
+   * once through \ref Device::destroyTextureBacking, or the texture was destroyed and the last
+   * submission using it completed. Reported once for each allocation \ref onTextureCreated
+   * reports; releasing a registration of a texture the device does not own releases no allocation
+   * and is not reported.
+   */
+  virtual void onTextureReleased() = 0;
+
   /// A bind group was created.
   virtual void onBindGroupCreated() = 0;
 

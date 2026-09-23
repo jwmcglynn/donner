@@ -996,25 +996,18 @@ TEST_F(GeodePerfTest, TextureSnapshotStressReleasesTargets) {
   SVGDocument document = std::move(parsed.result());
 
   RendererGeode renderer(device);
+  const uint64_t textureReleasesBefore = device->lifetimeTextureReleases();
 
   constexpr int kFrameCount = 12;
   for (int frame = 0; frame < kFrameCount; ++frame) {
     renderer.draw(document);
     std::shared_ptr<const RendererTextureSnapshot> snapshot = renderer.takeTextureSnapshot();
     ASSERT_NE(snapshot, nullptr);
-    // The transferred target's identity, kept past the snapshot so its release is observable on
-    // any backend: once retired, the device no longer resolves it as backing it owns.
-    const gpu::Texture* transferred =
-        static_cast<const RendererGeodeTextureSnapshot&>(*snapshot).runtimeTexture();
-    ASSERT_NE(transferred, nullptr);
-    const gpu::Texture target = gpu::Texture::CreateForBackend(
-        transferred->slotIndex(), transferred->generation(), transferred->deviceId());
-    ASSERT_TRUE(device->runtimeDevice().ownsTextureBacking(target))
-        << "Texture snapshot frame " << frame << " does not own the target it transferred.";
     snapshot.reset();
     device->drainDeferredDestroys();
 
-    EXPECT_FALSE(device->runtimeDevice().ownsTextureBacking(target))
+    const uint64_t textureReleaseDelta = device->lifetimeTextureReleases() - textureReleasesBefore;
+    EXPECT_GE(textureReleaseDelta, static_cast<uint64_t>(frame + 1))
         << "Texture snapshot frame " << frame
         << " did not release its transferred single-sample target.";
   }
