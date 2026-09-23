@@ -3473,7 +3473,7 @@ TEST(EditorShellTest, ShellGeometryHelpersClampToViewportAndSelectionCache) {
       shell, ImVec2(0.0f, compactLandscape.topBarHeight),
       ImVec2(844.0f, 390.0f - compactLandscape.topBarHeight));
   EXPECT_LE(compactPalette.bottomRight.x, compactLandscape.panelX);
-  EXPECT_FLOAT_EQ(compactPalette.width(), 156.0f);
+  EXPECT_FLOAT_EQ(compactPalette.width(), 204.0f);
 }
 
 TEST(EditorShellTest, PendingPreviewRetriesWhenAdmissionWakePrecedesResultPolling) {
@@ -5364,9 +5364,8 @@ svg::RendererBitmap CaptureFrameWithMouse(gui::EditorWindow& window, EditorShell
 
 void WriteEyedropperScreenshot(const svg::RendererBitmap& bitmap, std::string_view name) {
   const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
-  if (outputDir == nullptr || bitmap.empty()) {
-    return;
-  }
+  ASSERT_NE(outputDir, nullptr);
+  ASSERT_FALSE(bitmap.empty());
   const std::filesystem::path path = std::filesystem::path(outputDir) / name;
   EXPECT_TRUE(svg::RendererImageIO::writeRgbaPixelsToPngFile(
       path.string().c_str(), bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
@@ -5669,8 +5668,10 @@ TEST(EditorShellTest, ToolbarEyedropperButtonArmsWithoutSamplingItsActivationCli
   const ImVec2 contentRegion(640.0f, 480.0f);
   const Box2d palette =
       EditorShellTestAccess::ToolPaletteScreenRect(shell, paneOrigin, contentRegion);
-  const ImVec2 eyedropperCenter(static_cast<float>(palette.topLeft.x) + 8.0f + 3.0f * 36.0f + 16.0f,
-                                static_cast<float>(palette.topLeft.y) + 8.0f + 16.0f);
+  const float buttonSize = EditorShellTestAccess::AdaptiveUiLayout(shell).toolButtonSize;
+  const ImVec2 eyedropperCenter(
+      static_cast<float>(palette.topLeft.x) + 8.0f + 3.0f * (buttonSize + 4.0f) + buttonSize * 0.5f,
+      static_cast<float>(palette.topLeft.y) + 8.0f + buttonSize * 0.5f);
   RenderToolPaletteFrame(window, shell, paneOrigin, contentRegion, eyedropperCenter,
                          /*mouseDown=*/false);
   RenderToolPaletteFrame(window, shell, paneOrigin, contentRegion, eyedropperCenter,
@@ -5688,6 +5689,10 @@ TEST(EditorShellTest, StrokeColorPopupEyedropperButtonTargetsStroke) {
   }
   EditorShell shell(window, OptionsWithSource(kInitialSvg));
   ASSERT_THAT(shell.valid(), testing::Eq(true));
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  RunShellFrame(window, shell);
   constexpr ImVec2 kWidgetCursor(20.0f, 40.0f);
   constexpr ImVec2 kStrokeSwatch(50.0f, 47.0f);
   ClickToolbar(window, shell, kWidgetCursor, kStrokeSwatch);
@@ -5765,6 +5770,8 @@ TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
       .initialWidth = 1600,
       .initialHeight = 900,
       .visible = false,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
   });
   if (!window.valid()) {
     GTEST_SKIP() << "Hidden editor window is unavailable on this host";
@@ -5833,13 +5840,20 @@ TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
   const svg::SVGElement& newText = EditorShellTestAccess::App(shell).selectedElements().front();
   EXPECT_THAT(newText.type(), testing::Eq(svg::ElementType::Text));
   EXPECT_THAT(std::string(newText.id()), testing::Ne("donner"));
-  EXPECT_THAT(std::string(newText.cast<svg::SVGTextElement>().textContent()), testing::Eq("SVG"));
+  const std::string newTextContent =
+      newText.withReadAccess([&newText](svg::DocumentReadAccess&, EntityHandle) {
+        return std::string(newText.cast<svg::SVGTextElement>().textContent());
+      });
+  EXPECT_THAT(newTextContent, testing::Eq("SVG"));
   ASSERT_THAT(newText.getAttribute("style"), testing::Optional(testing::_));
   EXPECT_THAT(std::string(*newText.getAttribute("style")), testing::HasSubstr("fill: #53c4f1"));
   const std::optional<svg::SVGElement> originalDonner =
       EditorShellTestAccess::App(shell).document().document().querySelector("#donner");
   ASSERT_THAT(originalDonner, testing::Optional(testing::_));
-  EXPECT_THAT(std::string(originalDonner->cast<svg::SVGTextElement>().textContent()),
-              testing::Eq("Donner"));
+  const std::string originalContent =
+      originalDonner->withReadAccess([&originalDonner](svg::DocumentReadAccess&, EntityHandle) {
+        return std::string(originalDonner->cast<svg::SVGTextElement>().textContent());
+      });
+  EXPECT_THAT(originalContent, testing::Eq("Donner"));
 }
 }  // namespace donner::editor
