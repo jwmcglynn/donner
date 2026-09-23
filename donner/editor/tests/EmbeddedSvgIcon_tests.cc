@@ -1,7 +1,8 @@
 /// @file
 /// Tests for the embedded-SVG icon rasterizer. Beyond mask correctness, pins
-/// that CPU-bound icon generation never creates a Geode device or pays a GPU
-/// readback during editor startup.
+/// that icon generation renders through the editor's configured renderer, or
+/// one shared fallback renderer, instead of standing up a Geode device per
+/// icon, and that atlas batching does not change any icon's pixels.
 
 #include "donner/editor/EmbeddedSvgIcon.h"
 
@@ -158,15 +159,35 @@ TEST(EmbeddedSvgIcon, RejectsMalformedSvg) {
 
 #ifdef DONNER_GEODE_BACKEND_AVAILABLE
 TEST(EmbeddedSvgIcon, RepeatedRendersDoNotCreateGeodeDevices) {
+  // With no editor renderer configured, icons share one fallback renderer that acquires its
+  // device on first use, whichever case renders first. Take that acquisition before counting.
+  const int creationsBeforeFirstRender = geode::GeodeDevice::headlessCreationCountForTesting();
+  ASSERT_THAT(RenderEmbeddedSvgIcon(BytesOf(kSquareIconSvg), 16),
+              ::testing::Optional(::testing::_));
+  EXPECT_THAT(geode::GeodeDevice::headlessCreationCountForTesting() - creationsBeforeFirstRender,
+              ::testing::Le(1))
+      << "The shared fallback icon renderer stands up at most one device, on first use.";
+
+  struct IconRender {
+    std::string_view svg;
+    int sizePx;
+  };
+  constexpr std::array<IconRender, 4> kRepeatedRenders = {{
+      {kSquareIconSvg, 16},
+      {kCircleIconSvg, 16},
+      {kSquareIconSvg, 24},
+      {kCircleIconSvg, 24},
+  }};
   const int creationsBeforeRendering = geode::GeodeDevice::headlessCreationCountForTesting();
-  ASSERT_TRUE(RenderEmbeddedSvgIcon(BytesOf(kSquareIconSvg), 16).has_value());
-  ASSERT_TRUE(RenderEmbeddedSvgIcon(BytesOf(kCircleIconSvg), 16).has_value());
-  ASSERT_TRUE(RenderEmbeddedSvgIcon(BytesOf(kSquareIconSvg), 24).has_value());
-  ASSERT_TRUE(RenderEmbeddedSvgIcon(BytesOf(kCircleIconSvg), 24).has_value());
+  for (const IconRender& render : kRepeatedRenders) {
+    ASSERT_THAT(RenderEmbeddedSvgIcon(BytesOf(render.svg), render.sizePx),
+                ::testing::Optional(::testing::_))
+        << render.sizePx << " px render";
+  }
 
   EXPECT_EQ(geode::GeodeDevice::headlessCreationCountForTesting(), creationsBeforeRendering)
-      << "Embedded icons are CPU bitmaps and must stay on TinySkia instead of creating or "
-         "synchronously reading back a Geode device.";
+      << "Repeated embedded icon renders must reuse the shared icon renderer instead of standing "
+         "up another WebGPU instance/adapter/device.";
 }
 #endif
 
