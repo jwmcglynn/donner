@@ -33,6 +33,15 @@
 #include "donner/gpu/metal/MetalSurface.h"
 #include "donner/gpu/shader/MslBindingMap.h"
 
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define DONNER_METAL_TSAN 1
+#endif
+#endif
+#if defined(DONNER_METAL_TSAN)
+#include <sanitizer/tsan_interface.h>
+#endif
+
 namespace donner::gpu::metal {
 
 namespace {
@@ -235,6 +244,35 @@ struct SubmissionOutcome {
   std::mutex mutex;                      //!< Guards firstError.
   NSError* firstError = nil;             //!< First execution error any buffer reported.
 };
+
+/**
+ * Tells ThreadSanitizer that attaching a submission's completion handlers happens before Metal runs
+ * them.
+ *
+ * `addCompletedHandler:` copies the handler block, and the block's copy of the state it captured is
+ * written on the submitting thread. Metal runs the handler on its own completion thread, once the
+ * command buffer has completed. Metal orders the two: a handler has to be added before `commit`,
+ * and the completion thread only runs the handlers a committed buffer was given. Metal is not
+ * instrumented, so ThreadSanitizer cannot see that order, and it reported the handler's first read
+ * of the captured state as a race. The submitting thread releases a token for the submission once
+ * every handler is attached, and each handler acquires it before reading anything else. Outside
+ * ThreadSanitizer builds both compile to nothing.
+ *
+ * @param token Address identifying the submission; the same on both sides.
+ */
+void PublishCompletionHandoff([[maybe_unused]] const void* token) {
+#if defined(DONNER_METAL_TSAN)
+  __tsan_release(const_cast<void*>(token));
+#endif
+}
+
+/// Counterpart of \ref PublishCompletionHandoff, called first in a completion handler.
+/// @param token The submission's token.
+void ReceiveCompletionHandoff([[maybe_unused]] const void* token) {
+#if defined(DONNER_METAL_TSAN)
+  __tsan_acquire(const_cast<void*>(token));
+#endif
+}
 
 /// The execution error an injected command-buffer failure reports.
 NSError* InjectedCommandBufferFailure() {
@@ -1998,8 +2036,13 @@ void MetalDevice::Impl::attachCompletionHandler(std::span<EncodingState> states,
   // last of them has, whatever order their handlers run in: a frame is several buffers, and a
   // failure in any one of them is the submission's failure.
   auto outcome = std::make_shared<SubmissionOutcome>(states.size());
+  // The handoff token. A plain pointer is copied into each handler without an instrumented copy
+  // helper, so the handler can read it before the acquire and then read the rest of what it
+  // captured.
+  const SubmissionOutcome* const handoff = outcome.get();
   for (size_t index = 0; index < states.size(); ++index) {
     [states[index].commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
+      ReceiveCompletionHandoff(handoff);
       NSError* bufferError = completedBuffer.error;
       if (bufferError == nil && injectedFailureIndex == index) {
         bufferError = InjectedCommandBufferFailure();
@@ -2008,6 +2051,9 @@ void MetalDevice::Impl::attachCompletionHandler(std::span<EncodingState> states,
                           payloadBytes);
     }];
   }
+  // Every handler is attached and none can run before its buffer is committed, which the caller
+  // does next.
+  PublishCompletionHandoff(handoff);
 }
 
 void MetalDevice::Impl::requireHostSync(EncodingState& state, id<MTLBuffer> buffer) {
