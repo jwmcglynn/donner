@@ -2528,6 +2528,135 @@ TEST_F(CompositorControllerTest, NullTextureSnapshotLeavesSegmentsDirtyForRetry)
   EXPECT_FALSE(anyDirtyAfterRetry) << "retry must complete all dirty segments";
 }
 
+// On a backend whose tiles are CPU bitmaps, an offscreen that could not read its frame back (a
+// failed or timed-out mapping, a lost device, a refused target) returns an empty snapshot. That is
+// the same failure the texture path reports as a null snapshot, and it follows the same contract:
+// the tile keeps no empty payload, stays dirty, and the next frame retries.
+class CompositorControllerCpuSnapshotTest : public CompositorControllerTest {
+protected:
+  /// Installs CPU-bitmap offscreens whose snapshot is empty while `*failSnapshot` is true.
+  void configureMockForCpuSnapshots(std::shared_ptr<bool> failSnapshot) {
+    ON_CALL(renderer_, takeSnapshot()).WillByDefault([]() {
+      return MockRendererInterface::makeDummyBitmap();
+    });
+    ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([failSnapshot]() {
+      auto offscreen = std::make_unique<NiceMock<MockRendererInterface>>();
+      ON_CALL(*offscreen, takeSnapshot()).WillByDefault([failSnapshot]() {
+        if (*failSnapshot) {
+          return RendererBitmap{};
+        }
+        return MockRendererInterface::makeDummyBitmap();
+      });
+      ON_CALL(*offscreen, createOffscreenInstance()).WillByDefault([]() { return nullptr; });
+      return offscreen;
+    });
+  }
+};
+
+TEST_F(CompositorControllerCpuSnapshotTest, EmptySnapshotLeavesLayerDirtyForRetry) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="100" height="100" fill="white" />
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  auto failSnapshot = std::make_shared<bool>(true);
+  configureMockForCpuSnapshots(failSnapshot);
+  CompositorConfig config;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterFailure = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterFailure.size(), 1u);
+  EXPECT_FALSE(rowsAfterFailure.front().hasValidBitmap)
+      << "an empty snapshot must not become the layer's payload";
+  EXPECT_TRUE(rowsAfterFailure.front().dirty)
+      << "an empty snapshot must leave the layer dirty so the next frame retries";
+
+  *failSnapshot = false;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterRetry = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterRetry.size(), 1u);
+  EXPECT_TRUE(rowsAfterRetry.front().hasValidBitmap);
+  EXPECT_FALSE(rowsAfterRetry.front().dirty);
+}
+
+TEST_F(CompositorControllerCpuSnapshotTest, EmptySnapshotKeepsTheLayersPreviousPayload) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="100" height="100" fill="white" />
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  auto failSnapshot = std::make_shared<bool>(false);
+  configureMockForCpuSnapshots(failSnapshot);
+  CompositorConfig config;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterFirst = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterFirst.size(), 1u);
+  ASSERT_TRUE(rowsAfterFirst.front().hasValidBitmap);
+  const uint64_t generationAfterFirst = rowsAfterFirst.front().generation;
+
+  // A canvas size change re-rasterizes every tile; this time the readback fails.
+  *failSnapshot = true;
+  compositor.renderFrame(
+      RenderViewport{Vector2i(kTestSvgDefaultSize.x / 2, kTestSvgDefaultSize.y / 2)});
+  const auto rowsAfterFailure = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterFailure.size(), 1u);
+  EXPECT_TRUE(rowsAfterFailure.front().hasValidBitmap)
+      << "a failed readback must keep the layer's last good payload rather than replace it with "
+         "nothing";
+  EXPECT_EQ(rowsAfterFailure.front().generation, generationAfterFirst)
+      << "a failed readback publishes no new payload";
+  EXPECT_TRUE(rowsAfterFailure.front().dirty)
+      << "a failed readback must leave the layer dirty so the next frame retries";
+}
+
+TEST_F(CompositorControllerCpuSnapshotTest, EmptySnapshotLeavesSegmentsDirtyForRetry) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="100" height="100" fill="white" />
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  auto failSnapshot = std::make_shared<bool>(true);
+  configureMockForCpuSnapshots(failSnapshot);
+  CompositorConfig config;
+  config.immediateStaticSpans = false;
+  config.dynamicImmediateStaticSpans = false;
+  CompositorController compositor(document, renderer_, config);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto segmentsAfterFailure = compositor.snapshotSegmentInspectorRows();
+  const bool anyDirtyAfterFailure =
+      std::any_of(segmentsAfterFailure.begin(), segmentsAfterFailure.end(),
+                  [](const auto& row) { return row.dirty; });
+  EXPECT_TRUE(anyDirtyAfterFailure)
+      << "an empty snapshot must leave its segment dirty so the next frame retries";
+
+  *failSnapshot = false;
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto segmentsAfterRetry = compositor.snapshotSegmentInspectorRows();
+  const bool anyDirtyAfterRetry = std::any_of(segmentsAfterRetry.begin(), segmentsAfterRetry.end(),
+                                              [](const auto& row) { return row.dirty; });
+  EXPECT_FALSE(anyDirtyAfterRetry) << "retry must complete all dirty segments";
+}
+
 // A null device (offscreen creation always fails) latches offscreen support
 // off and falls back to flat presentation instead of aborting. The probe in
 // `warmFirstFrameCaches` / `renderFrameImpl` retains this latch, so there is
