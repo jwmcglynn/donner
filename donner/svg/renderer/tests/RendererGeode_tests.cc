@@ -6760,7 +6760,9 @@ TEST_F(RendererGeodeTest, PlacementExactCoverageAtLargePathCoordinates) {
 // is not necessarily degenerate and can rasterize a sliver of pixels; the shaders must still cover
 // none of them. Each case puts the path-space origin inside the geometry, where a zero mapping
 // would otherwise read full coverage, and runs a different pipeline: a solo fill, a cross-entity
-// batch of two paints, a gradient, a clip mask and a pattern.
+// batch of two paints, a gradient, a clip mask and a pattern. Every render must be identical to a
+// fully transparent target; none of the paints is white, which pixelmatch could not tell from
+// transparent because it compares colours composited over white.
 TEST_F(RendererGeodeTest, TransformWithoutInverseDrawsNothing) {
   constexpr std::array<std::string_view, 3> kSingularTransforms = {
       "matrix(1 3 3 9 13 29)",
@@ -6783,12 +6785,14 @@ TEST_F(RendererGeodeTest, TransformWithoutInverseDrawsNothing) {
   };
   constexpr Vector2i kTargetSize(97, 53);
 
-  for (std::string_view transform : kSingularTransforms) {
-    for (std::string_view bodyTemplate : kBodies) {
-      std::string body(bodyTemplate);
+  for (std::size_t transformIndex = 0; transformIndex < kSingularTransforms.size();
+       ++transformIndex) {
+    for (std::size_t bodyIndex = 0; bodyIndex < kBodies.size(); ++bodyIndex) {
+      std::string body(kBodies[bodyIndex]);
       const std::size_t marker = body.find("TRANSFORM");
       ASSERT_NE(marker, std::string::npos);
-      body.replace(marker, std::string_view("TRANSFORM").size(), transform);
+      body.replace(marker, std::string_view("TRANSFORM").size(),
+                   kSingularTransforms[transformIndex]);
       SCOPED_TRACE(body);
       const std::string source =
           R"(<svg xmlns="http://www.w3.org/2000/svg" width="97" height="53">)" + body + "</svg>";
@@ -6796,21 +6800,17 @@ TEST_F(RendererGeodeTest, TransformWithoutInverseDrawsNothing) {
           sharedDevice(), source, kTargetSize, Vector2i::Zero(), 1.0, Transform2d());
       ASSERT_THAT(rendered, testing::Optional(testing::_));
       ASSERT_EQ(rendered->dimensions, kTargetSize);
-      int drawnPixels = 0;
-      Vector2i firstDrawn;
-      for (int y = 0; y < kTargetSize.y; ++y) {
-        for (int x = 0; x < kTargetSize.x; ++x) {
-          const uint8_t alpha = rendered->pixels[static_cast<std::size_t>(y) * rendered->rowBytes +
-                                                 static_cast<std::size_t>(x) * 4u + 3u];
-          if (alpha != 0) {
-            if (drawnPixels == 0) {
-              firstDrawn = Vector2i(x, y);
-            }
-            ++drawnPixels;
-          }
-        }
-      }
-      EXPECT_EQ(drawnPixels, 0) << "first drawn pixel " << firstDrawn;
+
+      RendererBitmap transparent;
+      transparent.dimensions = rendered->dimensions;
+      transparent.rowBytes = rendered->rowBytes;
+      transparent.alphaType = rendered->alphaType;
+      transparent.pixels.assign(rendered->pixels.size(), 0u);
+      editor::tests::CompareBitmapToBitmap(*rendered, transparent,
+                                           "transform_without_inverse_" +
+                                               std::to_string(transformIndex) + "_" +
+                                               std::to_string(bodyIndex),
+                                           editor::tests::PixelmatchIdentityParams());
     }
   }
 }
