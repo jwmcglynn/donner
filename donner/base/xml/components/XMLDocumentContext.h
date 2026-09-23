@@ -23,6 +23,18 @@ class XMLSourceStore;
 namespace donner::xml::components {
 
 /**
+ * Holds the source store of a document for as long as the document exists.
+ *
+ * \ref XMLDocument::setSource puts its new store in this holder rather than replacing the holder,
+ * so anything that keeps the holder sees the replacement on its next read. An SVG document keeps
+ * it outside the registry, to read its source without document access.
+ */
+struct XMLSourceStoreHolder {
+  /// The document's current source store, or null for a document without source text.
+  std::shared_ptr<XMLSourceStore> store;
+};
+
+/**
  * Holds global state of an XML document, such as the root element.
  *
  * One instance of this class is created per XML document.
@@ -61,8 +73,10 @@ public:
   /// Root entity of the document.
   Entity rootEntity = entt::null;
 
-  /// Optional source store for parsed documents that own their source projection.
-  std::shared_ptr<XMLSourceStore> sourceStore;
+  /// Source store for parsed documents that own their source projection. The holder is created
+  /// with the context and never replaced; only the store inside it is.
+  const std::shared_ptr<XMLSourceStoreHolder> sourceStoreHolder =
+      std::make_shared<XMLSourceStoreHolder>();
 
   /// Whether the parse that built this document resolved a DOCTYPE internal subset. Set by the
   /// XML parser while it consumes the DOCTYPE, and cleared only when whole new source is

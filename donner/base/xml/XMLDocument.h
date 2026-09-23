@@ -309,11 +309,23 @@ public:
   ApplySourceEditResult setElementText(XMLNode element, std::string_view text);
 
   /**
-   * Install owned source text for this document.
+   * Install owned source text for this document, replacing its source store if it has one.
    *
    * Pending unreparsed spans are cleared: the caller takes responsibility for rebuilding
    * the tree against the new bytes (as the XML parser does), after which the tree matches
    * the source again.
+   *
+   * Every reader sees the new source on its next call: \ref source, \ref sourceVersion and
+   * \ref hasSourceStore here, and the same accessors of an SVG document built on this tree. The
+   * replaced source is released, so a view from \ref source or a pointer from \ref sourceStore
+   * taken before this call must not be used after it, just as a view must not be kept across a
+   * source edit. The new source's version starts again at 0, so a version recorded before this
+   * call does not identify the source after it.
+   *
+   * The XML parser calls this before any other code can reach the document. On a document other
+   * code can reach, call it as a source edit is made: for an SVG document, under its write access
+   * and on the thread that edits its source, the one thread that may read the source without
+   * document access.
    *
    * @param source XML source text to own.
    * @param maximumSourceSize Maximum source size retained after later structured edits.

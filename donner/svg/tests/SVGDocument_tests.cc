@@ -3,12 +3,15 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleElement.h"
@@ -172,6 +175,54 @@ TEST(SVGDocument, SourceBackedAccessorsReflectParsedXmlSource) {
   EXPECT_TRUE(document.hasSourceStore());
   EXPECT_THAT(document.source(), testing::HasSubstr(R"(<rect id="r"/>)"));
   EXPECT_EQ(document.sourceVersion(), 0u);
+}
+
+/// Installing new source text through the document's XML facade replaces its source store. The
+/// document's own source accessors, which the editor reads without document access, must then
+/// report the new store rather than the one the document was parsed with.
+TEST(SVGDocument, SourceAccessorsReportSourceInstalledThroughTheXmlDocument) {
+  SVGDocument document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r"/></svg>)");
+  // One edit first, so the parsed store's version differs from that of a new store.
+  std::optional<SVGElement> rect = document.querySelector("#r");
+  ASSERT_TRUE(rect.has_value());
+  ASSERT_TRUE(document.setElementAttribute(*rect, "width", "4").applied);
+  ASSERT_EQ(document.sourceVersion(), 1u);
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  constexpr std::string_view kReplacement =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><circle r="2"/></svg>)";
+  document.withWriteAccess([&document, kReplacement](DocumentWriteAccess& /*access*/) {
+    document.xmlDocument().setSource(std::string(kReplacement));
+  });
+
+  EXPECT_TRUE(document.hasSourceStore());
+  EXPECT_THAT(document.source(), Eq(kReplacement));
+  EXPECT_EQ(document.sourceVersion(), document.xmlDocument().sourceVersion());
+}
+
+/// A document built from an XML tree without source text has no source store until source text is
+/// installed through its XML facade, and its source accessors must report the store from then on.
+TEST(SVGDocument, SourceAccessorsReportSourceInstalledOnADocumentBuiltWithoutSource) {
+  xml::XMLDocument xmlTree;
+  xml::XMLNode svg = xml::XMLNode::CreateElementNode(xmlTree, "svg");
+  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  xmlTree.root().appendChild(svg);
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseXMLDocument(std::move(xmlTree), disabled);
+  ASSERT_THAT(parsed, NoParseError());
+  SVGDocument document = std::move(parsed).result();
+  ASSERT_FALSE(document.hasSourceStore());
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  constexpr std::string_view kSource = R"(<svg xmlns="http://www.w3.org/2000/svg"/>)";
+  document.withWriteAccess([&document, kSource](DocumentWriteAccess& /*access*/) {
+    document.xmlDocument().setSource(std::string(kSource));
+  });
+
+  EXPECT_TRUE(document.hasSourceStore());
+  EXPECT_THAT(document.source(), Eq(kSource));
+  EXPECT_EQ(document.sourceVersion(), document.xmlDocument().sourceVersion());
 }
 
 TEST(SVGDocument, PendingRenderInvalidationRequiresBuiltRenderTree) {
