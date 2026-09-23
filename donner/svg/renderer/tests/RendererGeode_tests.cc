@@ -267,6 +267,28 @@ protected:
     renderer.beginFrame(viewport);
   }
 
+  /**
+   * Draws an opaque cyan-blue square through \p context and requires the snapshot to read back
+   * as straight, logical RGBA.
+   *
+   * @param context Context whose target is BGRA.
+   */
+  void expectBgraTargetSnapshotIsStraightRgba(const std::shared_ptr<geode::GeodeDevice>& context) {
+    RendererGeode renderer(context);
+    beginFrame(renderer);
+    renderer.setPaint(solidFill(css::RGBA(0, 200, 255, 255)));
+    renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+    renderer.endFrame();
+
+    const RendererBitmap actual = renderer.takeSnapshot();
+    ASSERT_FALSE(actual.empty());
+    EXPECT_EQ(actual.alphaType, AlphaType::Unpremultiplied);
+
+    const std::array<uint8_t, 4> center = PixelAt(actual, 32, 32);
+    EXPECT_THAT(center, Rgba(testing::Le(2), Near(200, 2), Near(255, 2), testing::Eq(255)))
+        << "BGRA readback must be converted back to logical RGBA";
+  }
+
   /// Take the finished frame's target texture, so the checkerboard pass can draw onto content the
   /// renderer already composed and the result can be read back.
   std::shared_ptr<const RendererTextureSnapshot> takeFinishedFrame(RendererGeode& renderer) {
@@ -3060,32 +3082,11 @@ TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
             Vector2i(static_cast<int>(kViewportSize), static_cast<int>(kViewportSize)));
 }
 
-/// Draws an opaque cyan-blue square through \p context, whose target is BGRA, and requires the
-/// snapshot to read back as straight, logical RGBA.
-void ExpectBgraTargetSnapshotIsStraightRgba(const std::shared_ptr<geode::GeodeDevice>& context) {
-  RendererGeode renderer(context);
-  RenderViewport viewport;
-  viewport.size = Vector2d(kViewportSize, kViewportSize);
-  viewport.devicePixelRatio = 1.0;
-  renderer.beginFrame(viewport);
-  renderer.setPaint(solidFill(css::RGBA(0, 200, 255, 255)));
-  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
-  renderer.endFrame();
-
-  const RendererBitmap actual = renderer.takeSnapshot();
-  ASSERT_FALSE(actual.empty());
-  EXPECT_EQ(actual.alphaType, AlphaType::Unpremultiplied);
-
-  const std::array<uint8_t, 4> center = PixelAt(actual, 32, 32);
-  EXPECT_THAT(center, Rgba(testing::Le(2), Near(200, 2), Near(255, 2), testing::Eq(255)))
-      << "BGRA readback must be converted back to logical RGBA";
-}
-
 TEST_F(RendererGeodeTest, BgraTargetSnapshotReturnsStraightRgba) {
   std::shared_ptr<geode::GeodeDevice> bgraContext =
       geode::GeodeDevice::CreateHeadless(gpu::TextureFormat::BGRA8Unorm);
   ASSERT_NE(bgraContext, nullptr);
-  ExpectBgraTargetSnapshotIsStraightRgba(bgraContext);
+  expectBgraTargetSnapshotIsStraightRgba(bgraContext);
 }
 
 /// A BGRA target an embedding host hands over reads back the same way. Embedding hands over wgpu
@@ -3102,7 +3103,7 @@ TEST_F(RendererGeodeTest, EmbeddedBgraTargetSnapshotReturnsStraightRgba) {
   config.textureFormat = wgpu::TextureFormat::BGRA8Unorm;
   std::shared_ptr<geode::GeodeDevice> embedded = geode::GeodeDevice::CreateFromExternal(config);
   ASSERT_NE(embedded, nullptr);
-  ExpectBgraTargetSnapshotIsStraightRgba(embedded);
+  expectBgraTargetSnapshotIsStraightRgba(embedded);
 }
 
 /// Filling a path with a solid red paint should produce red pixels at the

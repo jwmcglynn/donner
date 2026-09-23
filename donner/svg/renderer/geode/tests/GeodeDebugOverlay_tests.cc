@@ -216,7 +216,7 @@ TEST_F(GeodeDebugOverlayTest, OffscreenInstanceDoesNotInheritDebugGeometryOverla
       << "Resource and compositor offscreens must not bake debug geometry into cached pixels";
 }
 
-TEST_F(GeodeDebugOverlayTest, OffIsByteIdenticalToDefault) {
+TEST_F(GeodeDebugOverlayTest, OffIsPixelIdenticalToDefault) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
