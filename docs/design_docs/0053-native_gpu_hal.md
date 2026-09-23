@@ -6,10 +6,11 @@ checkerboard targeting, texture-cache uploads, compositor-debug uploads and shar
 ownership are merged and qualified. Root selection now takes a backend kind and can serve the
 native Metal backend on request; the transitional adapter stays the production path on every
 platform until that platform's suites pass natively (see [Native parity](#native-parity)).
-Native backend conformance, cross-device texture registration, presentation cutover, the
-per-platform default flips, and dependency removal remain open.\
+Cross-device texture registration is implemented on Metal and the transitional adapter. Native
+backend conformance, presentation cutover, the per-platform default flips, and dependency removal
+remain open.\
 **Created:** 2026-07-05\
-**Updated:** 2026-09-22\
+**Updated:** 2026-09-23\
 **Author:** Claude Fable 5.1\
 **Drafted by:** GPT-5.6 Sol
 
@@ -68,8 +69,8 @@ migrations continue in dependency order.
 | ----- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Existing UI, shader linkage, filter, checkerboard, upload, and compositor units - **complete** | PRs #1267, #1279, #1284, #1298, #1299, #1300, and #1302 are merged and qualified. Preserve their batching, identity, lifetime, and retirement contracts.               |
 | 2     | Shared physical-device ownership - **complete**                                                | #1303 is merged. Preserve distinct logical state, borrowed external ownership, and the browser alias.                                                                  |
-| 3     | Selected runtime-device ownership - **in progress**                                            | #1356 is merged; selection takes a backend kind and contexts hold the runtime device. Move counters and shared renderer services behind backend-neutral ownership.     |
-| 3a    | Native Metal parity                                                                            | Metal conformance, cross-device texture registration and editor presentation, until the Geode, renderer and editor suites pass with `DONNER_GPU_BACKEND=metal`.        |
+| 3     | Selected runtime-device ownership - **in progress**                                            | #1356, #1366 and #1371 are merged: contexts hold the device selected by kind, which counts its own work. Move the remaining services behind backend-neutral ownership. |
+| 3a    | Native Metal parity                                                                            | Metal conformance and editor presentation, until the Geode, renderer and editor suites pass with `DONNER_GPU_BACKEND=metal`.                                           |
 | 4     | Snapshot, target, and readback identity                                                        | Remove transitional registrations and raw target binding; use validated runtime or acquired-surface textures through readback and presentation.                        |
 | 5     | `EditorWindow` surface integration                                                             | Connect platform windows to acquired runtime textures and cover resize, minimized, outdated/lost, timeout, device-loss, and invalidation behavior.                     |
 | 6     | Browser production bridge cutover                                                              | Select the merged browser backend in the WebAssembly editor path and remove the C WebGPU wrapper only after its final consumer moves.                                  |
@@ -77,8 +78,10 @@ migrations continue in dependency order.
 | 8     | Dependency removal and final audits                                                            | Remove transitional adapter and Rust-built native GPU dependencies, then close source, dependency, memory, performance, artifact, and integrated qualification audits. |
 
 The merged units through compositor-debug upload are complete, as are shared physical-root
-ownership ([#1303](https://github.com/jwmcglynn/donner/pull/1303)) and a selected device that owns
-the backend it was selected from ([#1356](https://github.com/jwmcglynn/donner/pull/1356)).
+ownership ([#1303](https://github.com/jwmcglynn/donner/pull/1303)), a selected device that owns
+the backend it was selected from ([#1356](https://github.com/jwmcglynn/donner/pull/1356)),
+selection by backend kind ([#1366](https://github.com/jwmcglynn/donner/pull/1366)), and counters
+that follow the same rules on every backend ([#1371](https://github.com/jwmcglynn/donner/pull/1371)).
 Native parity, snapshot/readback, backend-neutral services, presentation, browser selection, and
 dependency removal remain active in dependency order.
 
@@ -91,19 +94,23 @@ the native backend, and a separate change then flips that platform's default. Un
 - `DONNER_GPU_BACKEND` (`wgpu` or `metal`) sets the backend for every selection that does not name
   one, so a whole suite runs end to end on a backend that is not yet the default. A value that
   names no backend, or a requested backend the host cannot provide, halts instead of falling
-  back, and each process logs the backend it selected, so a run shows which backend executed.
+  back, and a process that asks for a backend logs the one it selected, so a run shows which
+  backend executed.
 - A native Metal root reports the device's own limits and drains its queue with a bounded wait for
-  the last submitted serial. Contexts hold the runtime device; the adapter accessor resolves only
-  on the adapter.
+  the last submitted serial, and a Metal device reports failed work as the loss of the root it
+  shares. Contexts hold the runtime device and count what it accepts and releases through its
+  observer; the adapter accessor resolves only on the adapter.
 - The Geode, renderer and GPU-shader fixtures run on whichever backend the process selects. Cases
   whose subject is the adapter, or wgpu objects an embedder hands over, select the adapter by
-  name and run under any override; cases that install the editor's UI renderer skip by name on a
-  native backend until presentation moves.
+  name, run under any override, and log why when the process default is another backend; cases
+  that install the editor's UI renderer skip by name on a native backend until presentation
+  moves. A snapshot that was not read back fails every pixel read, count and comparison instead
+  of reading as transparent, blank or identical.
 
-On Metal, the remaining parity work is backend conformance for what Geode records (counters,
-frame splitting and snapshots), registering a texture across runtime devices (cross-context
-snapshot drawing and capture readback), and editor presentation. Vulkan and the browser follow
-the same sequence.
+On Metal, the remaining parity work is backend conformance for what Geode records, and editor
+presentation. Snapshot capture and cross-context snapshot drawing register their source across
+runtime devices (see [Cross-device texture registration](#cross-device-texture-registration)).
+Vulkan and the browser follow the same sequence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
 paths now use their reviewed runtime resource boundaries. Cross-context readback and presentation
@@ -137,9 +144,8 @@ lifetime, synchronization, memory-residency, security or privacy requirements.
 
 ## Next Steps
 
-1. Reach native Metal parity: backend conformance for what Geode records, texture registration
-   across runtime devices, and editor presentation, measured by running the suites with
-   `DONNER_GPU_BACKEND=metal`.
+1. Reach native Metal parity: backend conformance for what Geode records and editor presentation,
+   measured by running the suites with `DONNER_GPU_BACKEND=metal`.
 2. Move counters and the remaining shared renderer services behind backend-neutral ownership
    without merging logical tables, serials, caches, or retirement.
 3. Remove transitional snapshot/readback registrations and raw presentation-target binding, then
@@ -282,7 +288,10 @@ Lifetime:
 - That tail is still resident but no longer anyone's allocation, so the producer reports it:
   `Device::sharedTextureTailBytes` counts the bytes of its released textures that a token or
   registration still holds, and Geode surfaces it as `sharedTextureTailBytes` in the readback
-  statistics, which working-set measurements add to allocation accounting.
+  statistics, which working-set measurements add to allocation accounting. The producer's
+  `DeviceObserver::onTextureReleased` fires once, on the producer's thread, when its own
+  ownership ends, whether the backend frees the allocation then or a holder keeps it alive; the
+  holder's final release reports nothing.
 - Registrations are read-only: their usage is the producer's intersected with sampled and copy
   source.
 
@@ -498,20 +507,22 @@ wgpu handle releases.
 - [ ] Make the selected `gpu::Device` the backend owner. Turn `GeodeDevice` into backend-neutral
       renderer services for counters, caches, dummy resources, and deferred retirement; update
       headless and embedded construction. The selected device owns its backend root
-      ([#1356](https://github.com/jwmcglynn/donner/pull/1356)) and contexts hold `gpu::Device`;
-      counters and the remaining services are open.
+      ([#1356](https://github.com/jwmcglynn/donner/pull/1356)) and contexts hold `gpu::Device`,
+      whose observer feeds the counters on every backend
+      ([#1371](https://github.com/jwmcglynn/donner/pull/1371)); the remaining services are open.
 - [x] Select the backend by kind through the one root selection. A caller may name a kind;
       otherwise `DONNER_GPU_BACKEND` sets the process default, which fails closed on an
-      unrecognized value or a backend the host cannot provide, and each process logs the backend
-      it selected. A native Metal root takes its limits from the device through
-      `MetalDevice::QuerySystemCapabilities` and drains its queue with a bounded serial wait.
-      Covered by the `GeodeGpuRootSelection` and `GeodeNativeMetalRoot` cases.
-- [x] Run the Geode, renderer and GPU-shader fixtures on whichever backend the process selects;
-      adapter-specific cases select the adapter by name, and pixel reads fail loudly on an empty
-      snapshot.
-- [ ] Bring the native Metal backend to conformance with what Geode records, and register a
-      texture across runtime devices, until the Geode and renderer suites pass with
-      `DONNER_GPU_BACKEND=metal`.
+      unrecognized value or a backend the host cannot provide, and a process that asks for a
+      backend logs the one it selected. A native Metal root takes its limits from the device
+      through `MetalDevice::QuerySystemCapabilities` and drains its queue with a bounded serial
+      wait. Covered by the `GeodeGpuRootSelection` and `GeodeNativeMetalRoot` cases;
+      [#1366](https://github.com/jwmcglynn/donner/pull/1366) is merged.
+- [x] Run the Geode, renderer and GPU-shader fixtures on whichever backend the process selects.
+      Adapter-specific cases select the adapter by name and log why under another default; every
+      pixel read, count and comparison fails loudly on an empty snapshot; and texture releases are
+      counted through the device observer, so release checks hold on every backend.
+- [ ] Bring the native Metal backend to conformance with what Geode records, until the Geode and
+      renderer suites pass with `DONNER_GPU_BACKEND=metal`.
 - [ ] Flip each platform's default to its native backend in a separate change after that
       platform's suites, including the editor's, pass on it: Metal, then Vulkan, then the
       browser.
