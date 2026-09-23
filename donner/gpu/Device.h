@@ -520,11 +520,19 @@ public:
    * The token holds the texture's allocation: it stays alive while the token, or any registration
    * made from it, is alive, including after this device releases its handle.
    *
-   * Refused with \ref GpuErrorType::InvalidState for a texture a surface currently has out, which
-   * belongs to that surface, and for a registration of another device's texture, which is
-   * exported from the device that allocated it; with \ref GpuErrorType::DeviceLost once this
-   * device is lost; and with \ref GpuErrorType::Unsupported by a backend whose runtime devices
-   * never share a native device.
+   * A frame a surface currently has out goes back to that surface when it is presented. It is
+   * exported only by a backend whose registrations submit to this device's own queue
+   * (\ref SourceOrdering::SharedQueue): a reader's work recorded before the present then runs
+   * before it. The caller must not record reads of such a registration after the frame is
+   * presented. A backend whose readers have their own queues refuses the frame with
+   * \ref GpuErrorType::InvalidState, because their reads could land after the surface took it
+   * back.
+   *
+   * Also refused with \ref GpuErrorType::InvalidState for a registration of another device's
+   * texture, which is exported from the device that allocated it; with
+   * \ref GpuErrorType::DeviceLost once this device is lost; and with
+   * \ref GpuErrorType::Unsupported by a backend whose runtime devices never share a native
+   * device.
    *
    * @param texture Live texture of this device.
    */
@@ -1676,9 +1684,16 @@ private:
   /// registration still holds it, when the last holder lets go. @param slotIndex Texture slot.
   void releaseTextureBackingOrDefer(uint32_t slotIndex);
 
-  /// Refuses exporting a texture of a lost device, a registration, or a surface's frame.
+  /// Refuses exporting a texture of a lost device or a registration.
   /// @param texture Already-resolved texture. @param descriptor Its record, for the message.
   Status checkTextureExportable(const Texture& texture, const TextureDescriptor& descriptor) const;
+
+  /// Refuses exporting a frame a surface has out unless its registrations share this device's
+  /// queue. @param texture Already-resolved texture. @param descriptor Its record, for the
+  /// message. @param created The backend's export of it, or why there is none.
+  Status checkSurfaceFrameExport(
+      const Texture& texture, const TextureDescriptor& descriptor,
+      const Result<std::shared_ptr<details::TextureShare>>& created) const;
 
   /// Asks the backend to export a texture and records the share every token will hold.
   /// @param slotIndex Exportable texture slot. @param descriptor Its record.

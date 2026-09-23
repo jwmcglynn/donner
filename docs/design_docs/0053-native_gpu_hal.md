@@ -223,8 +223,14 @@ The operation spans both threads, so it has a producer half and a consumer half:
 Identity:
 
 - Export resolves the handle like every other operation: a null or stale handle fails with
-  `InvalidHandle` and another device's handle with `DeviceMismatch`. A texture a surface has
-  acquired and a texture that is itself a registration cannot be exported.
+  `InvalidHandle` and another device's handle with `DeviceMismatch`. A texture that is itself a
+  registration cannot be exported.
+- A frame a surface has out goes back to the surface at present. It is exported only where readers
+  submit to the producer's own queue (the transitional adapter), so reads recorded before the
+  present run before it; that is what lets a renderer capture a surface target it drew. Where a
+  reader has its own queue (Metal), its read could land after the present, so the frame is refused.
+  The runtime releases a frame's export when the surface takes the frame back, so the slot's next
+  frame never exports as the previous one.
 - Registration is refused for another backend, another native device (Metal additionally requires
   the texture's `MTLDevice` to be the consumer's own), the consumer's own export, and a texture
   whose producer has released its handle since the export.

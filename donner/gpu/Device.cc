@@ -1968,6 +1968,10 @@ void Device::releaseAcquiredSurfaceTextureBySlot(uint32_t slotIndex, uint32_t ge
     return;
   }
   if (textures_.find(record->acquired.slotIndex(), record->acquired.generation()) != nullptr) {
+    // The surface takes the frame back here, bypassing the serial-deferred retirement other
+    // textures take, so an export of it is released here too: the slot's next frame must never
+    // be handed the old frame's share.
+    releaseTextureShare(record->acquired.slotIndex());
     textures_.release(record->acquired.slotIndex());
   }
   record->acquired = TextureRef();
@@ -2551,13 +2555,21 @@ Status Device::checkTextureExportable(const Texture& texture,
                            "texture; export it from the device that allocated it",
                            descriptor.label.str()));
   }
-  if (namesAcquiredSurfaceFrame(texture)) {
-    return Err(GpuErrorType::InvalidState,
-               std::format("exportTexture: texture \"{}\" is the frame a surface has out, which "
-                           "belongs to that surface",
-                           descriptor.label.str()));
-  }
   return OkStatus();
+}
+
+Status Device::checkSurfaceFrameExport(
+    const Texture& texture, const TextureDescriptor& descriptor,
+    const Result<std::shared_ptr<details::TextureShare>>& created) const {
+  if (!namesAcquiredSurfaceFrame(texture) ||
+      (created.hasResult() && created.result()->ordering() == SourceOrdering::SharedQueue)) {
+    return OkStatus();
+  }
+  return Err(GpuErrorType::InvalidState,
+             std::format("exportTexture: texture \"{}\" is the frame a surface has out, and a "
+                         "reader on another queue could still be reading it after the surface "
+                         "takes it back at present",
+                         descriptor.label.str()));
 }
 
 Result<std::shared_ptr<details::TextureShare>> Device::createTextureShare(
@@ -2596,6 +2608,9 @@ Result<TextureExport> Device::exportTexture(const Texture& texture) {
   if (share == nullptr) {
     Result<std::shared_ptr<details::TextureShare>> created =
         createTextureShare(texture.slotIndex(), descriptor);
+    if (Status frame = checkSurfaceFrameExport(texture, descriptor, created); frame.hasError()) {
+      return std::move(frame).error();
+    }
     if (created.hasError()) {
       return std::move(created).error();
     }
