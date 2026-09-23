@@ -1161,6 +1161,55 @@ TEST(RenderCoordinatorTest, RenderWithNothingToPresentIsNotRepostedEveryFrame) {
   EXPECT_EQ(coordinator.displayedDocVersionForDiagnostics(), 0u);
 }
 
+// A renderer setting changes what the worker draws without changing the document or the raster:
+// the composited mode, the geometry debug pass, arming the eyedropper. Each asks for a presentation
+// refresh, and the request made for it is not the request whose retries ran out.
+TEST(RenderCoordinatorTest, PresentationRefreshIsPostedAfterRetriesRunOut) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
+  for (const std::chrono::milliseconds delay : NothingToPresentRetry::kRetryDelays) {
+    RenderCoordinatorTestAccess::advanceFakeRetryClock(delay);
+    ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
+  }
+  ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 0)
+      << "the failed request is held once its retries run out";
+
+  coordinator.requestPresentationRefresh();
+  EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1)
+      << "a renderer-setting change must reach the worker even after the retries ran out";
+}
+
+// When a retry falls due, the idle loop has already woken for it, and the next frame that asks for
+// a render posts it. A frame that cannot ask for one, such as while the sample picker is open, must
+// not be told to wake again at once, or the idle loop spins until the user acts.
+TEST(RenderCoordinatorTest, DueRetryDoesNotKeepTheIdleLoopAwake) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
+  ASSERT_THAT(coordinator.nextNothingToPresentRetryWakeSeconds(),
+              ::testing::Optional(::testing::FloatNear(0.1f, 1e-4f)));
+
+  RenderCoordinatorTestAccess::advanceFakeRetryClock(NothingToPresentRetry::kRetryDelays.front());
+  coordinator.pollRenderResult(app, viewport, textures);
+  EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt)
+      << "a due retry must not ask the idle loop to wake again";
+  EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 1), 1)
+      << "the next frame that asks for a render posts the due retry";
+}
+
 // Pacing holds back only the request that failed. A new document version, or a replaced document,
 // is a different request and is posted at once.
 TEST(RenderCoordinatorTest, NothingToPresentRetryStartsOverForANewVersionOrDocument) {
