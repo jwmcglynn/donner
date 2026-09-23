@@ -1,7 +1,8 @@
 /// @file
 /// One document drawn by renderers on two devices. Each device keeps its own GPU residence for the
 /// document, so drawing on one device neither releases nor rebuilds the other's, nothing one device
-/// owns is released on another device's thread, and a document may outlive a device that drew it.
+/// owns is released on another device's thread, a document may outlive a device that drew it, and
+/// a device that goes stops counting against the document's geometry budget.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -30,6 +31,7 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -37,6 +39,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
+#include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 
@@ -129,6 +132,14 @@ bool BitmapsEqual(const RendererBitmap& a, const RendererBitmap& b) {
     }
   }
   return true;
+}
+
+/// The geometry budget of \p document, which every device's residence for it is charged to, or
+/// null before any renderer has drawn it.
+std::shared_ptr<geode::GeodeDocumentGeometryBudget> DocumentBudgetOf(SVGDocument& document) {
+  auto* budget =
+      document.registry().ctx().find<std::shared_ptr<geode::GeodeDocumentGeometryBudget>>();
+  return budget != nullptr ? *budget : nullptr;
 }
 
 /// A second logical context over the physical root \p root holds, the way an editor's UI context
@@ -372,6 +383,67 @@ TEST_F(GeodeDocumentResidencyTest, AnEditOnOneDeviceReachesTheOtherDevicesReside
 
   EXPECT_THAT(BitmapsEqual(onFirstAfterEdit, onSecondAfterEdit), IsTrue())
       << "both devices must draw the edited path";
+}
+
+TEST_F(GeodeDocumentResidencyTest, ADeviceThatGoesStopsCountingAgainstTheDocumentBudget) {
+  SVGDocument document = ParseShapes();
+  std::optional<SVGElement> box = document.querySelector("#box");
+  ASSERT_TRUE(box.has_value());
+  constexpr Vector2i kThumbnailSizePx(64, 64);
+
+  // The first device draws only one element, as a thumbnail pass does.
+  Renderer thumbnails(first_);
+  ASSERT_THAT(thumbnails.renderElement(*box, kThumbnailSizePx).empty(), IsFalse());
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
+  ASSERT_THAT(budget, NotNull());
+  const uint64_t firstShare = budget->residentBytes();
+  ASSERT_THAT(firstShare, Gt(0u));
+
+  // The second device draws all of it, and then goes.
+  {
+    RendererGeode onSecond(second_);
+    onSecond.draw(document);
+  }
+  ASSERT_THAT(budget->residentBytes(), Gt(firstShare));
+  second_.reset();
+
+  // The next draw finds the second device gone. Elements the first device never draws still held
+  // the second device's slots; they must not keep its residence charged to the document.
+  ASSERT_THAT(thumbnails.renderElement(*box, kThumbnailSizePx).empty(), IsFalse());
+  EXPECT_THAT(budget->residentBytes(), Eq(firstShare));
+}
+
+TEST_F(GeodeDocumentResidencyTest, ADocumentBudgetRefusalRecoversWhenTheDeviceHoldingItGoes) {
+  SVGDocument document = ParseShapes();
+  std::optional<RendererGeode> onFirst(std::in_place, first_);
+  onFirst->draw(document);
+  const std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = DocumentBudgetOf(document);
+  ASSERT_THAT(budget, NotNull());
+  const uint64_t firstShare = budget->residentBytes();
+  ASSERT_THAT(firstShare, Gt(0u));
+  // Room for exactly one device's residence.
+  budget->setLimitsForTesting({.cacheBytes = geode::GeodeDocumentGeometryBudget::kMaximumCacheBytes,
+                               .residentBytes = firstShare});
+
+  // A second device finds the budget full and draws without residence.
+  {
+    RendererGeode onSecond(second_);
+    onSecond.draw(document);
+    EXPECT_THAT(onSecond.deviceLost(), IsFalse());
+  }
+  ASSERT_THAT(second_->liveResidentBytesForTesting(), Eq(int64_t{0}));
+  ASSERT_THAT(budget->rejected(), IsTrue());
+
+  // The device holding the budget goes, and a third device draws the document.
+  onFirst.reset();
+  first_.reset();
+  const std::shared_ptr<geode::GeodeDevice> third = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(third, NotNull());
+  RendererGeode onThird(third);
+  onThird.draw(document);
+
+  EXPECT_THAT(third->liveResidentBytesForTesting(), Gt(int64_t{0}))
+      << "an earlier refusal must not refuse residence once the budget has room again";
 }
 
 TEST_F(GeodeSharedRootResidencyTest, EachRetirementOutlivesTheDeviceItReleasesInto) {

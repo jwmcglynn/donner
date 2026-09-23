@@ -744,6 +744,22 @@ TEST(GeodeResourceBudgetTest, ResidentRejectionPreservesCpuCacheFallback) {
   EXPECT_EQ(budget->residentBytes(), 0u);
 }
 
+TEST(GeodeResourceBudgetTest, AResidentRefusalLastsOnlyUntilBytesAreReleased) {
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  budget->setLimitsForTesting({.cacheBytes = 100u, .residentBytes = 100u});
+  ASSERT_TRUE(budget->reserveResidentBytes(80u));
+
+  EXPECT_FALSE(budget->reserveResidentBytes(40u)) << "past the limit";
+  EXPECT_TRUE(budget->rejected());
+
+  // Another device's residence goes away. Residence is a cache, so the next request is judged on
+  // the bytes charged now, not refused because an earlier one was.
+  budget->releaseResidentBytes(80u);
+  EXPECT_TRUE(budget->reserveResidentBytes(40u));
+  EXPECT_EQ(budget->residentBytes(), 40u);
+  EXPECT_TRUE(budget->rejected()) << "the refusal is still reported";
+}
+
 TEST(GeodeResourceBudgetTest, StrokeCacheReplacementIncludesRetainedDashCapacity) {
   GeodePathCacheComponent::StrokeSlot previous;
   previous.strokeKey.dashArray.reserve(1u);
