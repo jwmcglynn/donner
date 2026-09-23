@@ -1,8 +1,8 @@
 # Design: Editor Document Eyedropper
 
-**Status:** Implementing. The editor code and focused native Geode tests are complete, and
-[PR #1376](https://github.com/jwmcglynn/donner/pull/1376) is open for review. Browser validation,
-full qualification, and green CI remain pending.
+**Status:** Implementing. The document sampler and focused native Geode tests pass, and
+[PR #1376](https://github.com/jwmcglynn/donner/pull/1376) is open for review. The active Fill/Stroke
+toolbar control, browser validation, full qualification, and green CI remain pending.
 **Author:** GPT-6 Sol
 **Created:** 2026-09-22
 **Related:** [Issue #1304](https://github.com/jwmcglynn/donner/issues/1304)
@@ -19,8 +19,10 @@ selection handles, the transparency checkerboard, another window, or pixels outs
 
 ## Goals
 
-- Give Fill a toolbar eyedropper with shortcut `I`. An eyedropper action inside the Fill or Stroke
-  color popup explicitly targets that slot.
+- Make Fill or Stroke the active foreground toolbar paint. The toolbar eyedropper and `I` sample
+  into that role; a popup eyedropper explicitly activates and targets its own role.
+- Let the overlapping paint control select a role without changing the document, swap paint values,
+  and set the active role to `none` through one button.
 - Preview the document pixel under the pointer with a legible loupe, without changing paint on
   hover.
 - Apply one sampled RGBA value to the active authoring paint and, when there is a selection, to that
@@ -36,7 +38,8 @@ selection handles, the transparency checkerboard, another window, or pixels outs
 - Operating-system, desktop, browser EyeDropper API, other-window, or outside-canvas sampling.
 - Copying an SVG element's specified style, gradient definition, `opacity`, CSS inheritance, or
   object identity. The sampled value is a rendered pixel, including overlap and antialiasing.
-- Changing target element opacity, stroke width, fill/stroke role, selection, or document geometry.
+- Changing target element opacity, stroke width, selection, or document geometry.
+- The reference image's default-colors reset, gradient, and drawing-mode controls.
 - Continuous painting, dragging to sample a range, averaging pixels, or color management changes.
 - A new general-purpose GPU region-readback API or a second document compositor solely for this
   feature unless validation shows the existing worker snapshot cannot meet the contract.
@@ -53,6 +56,11 @@ selection handles, the transparency checkerboard, another window, or pixels outs
   - [x] Add eyedropper tool identity, toolbar/popup entry points, shortcut capture, and cancellation.
   - [x] Share the color application path with the picker and record one selection undo entry.
   - [x] Render the loupe and pending/unavailable feedback without hover mutations.
+- [ ] Active Fill/Stroke foreground control
+  - [ ] Anchor Fill upper-left and Stroke lower-right; draw and hit-test the active role in front.
+  - [ ] Make the first click on the rear swatch activate it, and an active-swatch click open its picker.
+  - [ ] Draw the angled swap arrow and one None control that clears the active role.
+  - [ ] Route toolbar and shortcut sampling through the active role, with popup-specific targeting.
 - [x] Worker-owned document capture
   - [x] Request a bounded composed CPU snapshot when armed or the accepted frame changes.
   - [x] Bind capture to the accepted document, font, viewport, canvas commit, and session identities.
@@ -92,10 +100,22 @@ the finally presented tiles still require proof.
 
 ### Interaction and paint target
 
-The toolbar presents Eyedropper beside the existing tools; `I` arms it for Fill. The shortcut uses
+The toolbar presents Eyedropper beside the existing tools. Fill is initially active for an editor
+session. The paired paint widget anchors Fill upper-left and Stroke lower-right, following the
+reference control; their colors never trade slots merely because the foreground changes. The
+active role is drawn above the rear swatch and wins their overlap hit test. Clicking the rear
+swatch brings that role forward without opening a popup, changing source, or recording undo;
+clicking the already-active swatch opens its existing color picker. The angled top-right swap
+arrow retains the existing action of swapping Fill and Stroke paint values while leaving the active
+role unchanged. One None button below it clears whichever role is active; the reference image's
+default-colors reset and gradient/drawing-mode controls are outside this feature.
+
+The toolbar eyedropper and `I` arm for the active role. The shortcut uses
 the existing keyboard ownership checks: it cannot arm while source editing, in-canvas text editing,
 or an ImGui text field captures typing. A button inside each existing color popup arms it for that
-popup's Fill or Stroke role and closes the popup so the canvas can receive input. The action stores
+popup's Fill or Stroke role, makes that role active, and closes the popup so the canvas can receive
+input. Choosing a different foreground role during sampling cancels the old capture first and keeps
+the new role active; late worker results cannot affect it. The action stores
 the previous idle tool and target role. Switching away from an active Pen or Text session follows
 the existing visible commit policy; activation is refused while a transform or another gesture
 cannot be safely completed. No session is committed silently.
@@ -190,10 +210,11 @@ and payload completeness before reading. The sampled color remains local to the 
 diagnostics should not log bitmap bytes or sampled document content.
 
 The browser regression URL may explicitly opt into `testControl=eyedropper`. Only that URL
-publishes active Fill/Stroke and the first selected element's style/text to the same page for
-assertions. Each field is capped at 512 bytes before copying; the bridge publishes no whole SVG
-source or bitmap. Ordinary editor URLs expose no eyedropper test-state object. The browser test
-target below checks that negative boundary.
+publishes active Fill/Stroke, the active paint role, source-pane focus and selection booleans, and
+the first selected element's style/text to the same page for assertions. Each string field is
+capped at 512 bytes before copying; the bridge publishes no whole SVG source or bitmap. Ordinary
+editor URLs expose no eyedropper test-state object. The browser test target below checks that
+negative boundary.
 
 Negative tests should exercise an empty bitmap, truncated rows, zero/overflowing dimensions,
 premultiplied and straight alpha, document replacement, selection change, focus loss, stale
