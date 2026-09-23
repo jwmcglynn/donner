@@ -347,8 +347,8 @@ TEST(GeodeTestContextsTest, AnAdapterSelectionUnderAnotherDefaultLogsTheCaseAndI
     ASSERT_THAT(context, testing::NotNull()) << "no wgpu adapter is available on this host";
     EXPECT_THAT(log,
                 HasSubstr("GeodeTestContextsTest."
-                          "AnAdapterSelectionUnderAnotherDefaultLogsTheCaseAndItsReason runs on "
-                          "the transitional wgpu adapter, not the process default native "
+                          "AnAdapterSelectionUnderAnotherDefaultLogsTheCaseAndItsReason uses a "
+                          "transitional wgpu adapter context, not the process default native "
                           "Metal: the reason under test"));
   }
   {

@@ -111,9 +111,9 @@ the native backend, and a separate change then flips that platform's default. Un
 
 On Metal, snapshot capture and cross-context snapshot drawing register their source across
 runtime devices (see [Cross-device texture registration](#cross-device-texture-registration)).
-The Geode and renderer suites now pass with `DONNER_GPU_BACKEND=metal` except one renderer case
-whose foreign-device construction registers natively, and editor presentation remains. Vulkan and
-the browser follow the same sequence.
+Every Geode target and `renderer_geode_tests` now pass with `DONNER_GPU_BACKEND=metal`. The
+renderer's other suites have not been qualified natively yet, and editor presentation remains.
+Vulkan and the browser follow the same sequence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
 paths now use their reviewed runtime resource boundaries. Cross-context readback and presentation
@@ -373,10 +373,11 @@ snapshot suites and `geode_perf_tests` pass on the transitional adapter, includi
 cancelled after its readback was queued, which must release its source once the readback
 completes. On native Metal, the Metal registration suite passes and snapshot readback returns the
 rendered pixels. With the fixtures on the selected backend, every Geode target, including
-`geode_snapshot_readback_tests` and `geode_perf_tests`, passes on native Metal, and
-`renderer_geode_tests` passes except `ForeignRuntimeSnapshotIsRejectedBeforeRecording`. Its
-owner is a second headless device, which is foreign only on the transitional adapter: on Metal
-it shares the consumer's `MTLDevice`, so its snapshot registers and draws.
+`geode_snapshot_readback_tests` and `geode_perf_tests`, passes on native Metal, and so does
+`renderer_geode_tests`. Its foreign-snapshot case builds the foreign owner from a device
+registration refuses on the selected backend: a second headless device on the transitional
+adapter, and an adapter context on Metal, where a second headless device shares the consumer's
+`MTLDevice` and registers.
 
 ### Resource plumbing and uploads
 

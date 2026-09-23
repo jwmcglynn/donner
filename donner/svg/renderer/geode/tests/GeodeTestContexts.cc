@@ -35,7 +35,7 @@ std::unique_ptr<GeodeDevice> CreateTransitionalAdapterContext(std::string_view r
   if (const gpu::Result<GpuBackendKind> processDefault = ProcessDefaultGpuBackendKind();
       !processDefault.hasError() && processDefault.result() != GpuBackendKind::TransitionalWgpu) {
     std::cerr << "[Geode] " << CurrentTestName()
-              << " runs on the transitional wgpu adapter, not the process default "
+              << " uses a transitional wgpu adapter context, not the process default "
               << processDefault.result() << ": " << reason << "\n";
   }
   GpuRootSelection selection;

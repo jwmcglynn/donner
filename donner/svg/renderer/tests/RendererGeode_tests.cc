@@ -5804,22 +5804,59 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotContentAlphaAndBothByteFormatsRemainExa
   }
 }
 
-TEST_F(RendererGeodeTest, ForeignRuntimeSnapshotIsRejectedBeforeRecording) {
-  auto owner = std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
-  ASSERT_THAT(owner, testing::NotNull());
-  auto created = owner->runtimeDevice().createTexture(
+std::shared_ptr<geode::GeodeDevice> CreateSharedBackendContext(
+    const std::shared_ptr<geode::GeodeDevice>& device);
+
+/// An owning 4x4 snapshot of a texture \p owner creates, sampleable and copyable.
+/// @param owner Device the texture belongs to.
+RendererGeodeTextureSnapshot MakeOwnedSnapshot(const std::shared_ptr<geode::GeodeDevice>& owner) {
+  gpu::Texture texture = gpu::GetResultOrFail(owner->runtimeDevice().createTexture(
       {"snapshot",
        {4, 4},
        gpu::TextureFormat::RGBA8Unorm,
-       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
-  ASSERT_FALSE(created.hasError()) << created.error();
-  gpu::Texture texture = std::move(created).result();
-  auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc}));
+  return RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
       owner, std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm, AlphaType::Premultiplied);
-  ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
+}
+
+/// A snapshot whose owner the renderer's device refuses to register is rejected before anything
+/// is recorded. The owner has to be one registration genuinely refuses on the selected backend. On
+/// the transitional adapter a second headless device is another native device. On a native
+/// backend it shares the native device and registers, so there the owner is an adapter context,
+/// which registration refuses as another backend. The refusal's reason is asserted, and the same
+/// snapshot from a device registration accepts draws on the same renderer, so the owner is the only
+/// thing the renderer refused.
+TEST_F(RendererGeodeTest, ForeignRuntimeSnapshotIsRejectedBeforeRecording) {
+  const bool onTransitionalAdapter = sharedDevice()->hasTransitionalAdapter();
+  const std::shared_ptr<geode::GeodeDevice> owner =
+      onTransitionalAdapter
+          ? std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless())
+          : std::shared_ptr<geode::GeodeDevice>(geode::CreateTransitionalAdapterContext(
+                "registration refuses another backend, so an adapter context is a foreign "
+                "owner on a native backend"));
+  ASSERT_THAT(owner, testing::NotNull());
+  const RendererGeodeTextureSnapshot foreign = MakeOwnedSnapshot(owner);
+  ASSERT_THAT(foreign.isValid(), testing::IsTrue());
+  EXPECT_THAT(
+      sharedDevice()->runtimeDevice().registerTexture(
+          gpu::GetResultOrFail(owner->runtimeDevice().exportTexture(*foreign.runtimeTexture()))),
+      gpu::IsGpuErrorWithMessage(
+          gpu::GpuErrorType::DeviceMismatch,
+          testing::HasSubstr(onTransitionalAdapter ? "belongs to a different native device"
+                                                   : "belongs to a device of another backend")));
+
+  const std::shared_ptr<geode::GeodeDevice> sibling = CreateSharedBackendContext(sharedDevice());
+  ASSERT_THAT(sibling, testing::NotNull());
+  const RendererGeodeTextureSnapshot registrable = MakeOwnedSnapshot(sibling);
+  ASSERT_THAT(registrable.isValid(), testing::IsTrue());
+
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
-  EXPECT_THAT(renderer.drawTextureSnapshot(snapshot, Box2d({0, 0}, {4, 4}), 1, true),
+  EXPECT_THAT(renderer.drawTextureSnapshot(registrable, Box2d({0, 0}, {4, 4}), 1, true),
+              testing::IsTrue())
+      << "the same snapshot from a device registration accepts must draw, so the owner is the "
+         "only thing the renderer refuses";
+  EXPECT_THAT(renderer.drawTextureSnapshot(foreign, Box2d({0, 0}, {4, 4}), 1, true),
               testing::IsFalse());
   renderer.endFrame();
 }
