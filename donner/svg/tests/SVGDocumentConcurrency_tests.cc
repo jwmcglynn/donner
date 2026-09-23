@@ -4,9 +4,13 @@
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
+#include "donner/base/EcsRegistry.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
 #include "donner/base/RcStringOrRef.h"
 #include "donner/base/Transform.h"
@@ -36,6 +40,7 @@
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/SVGUseElement.h"
+#include "donner/svg/parser/SVGParser.h"
 
 namespace donner::svg {
 namespace {
@@ -73,6 +78,59 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesDocumentLevelWrites) {
             initialRevision + static_cast<std::uint64_t>(kThreadCount * kIterations));
   EXPECT_GT(document.canvasSize().x, 0);
   EXPECT_GT(document.canvasSize().y, 0);
+}
+
+/// A registry-context entry of its own type per \p Index, so a writer adding many of them makes the
+/// context's map grow and move its entries.
+template <int Index>
+struct WriterContextEntry {
+  int value = Index;
+};
+
+/// Adds one \ref WriterContextEntry per index to \p registry's context.
+template <int... Indices>
+void AddWriterContextEntries(Registry& registry,
+                             std::integer_sequence<int, Indices...> /*indices*/) {
+  (registry.ctx().emplace<WriterContextEntry<Indices>>(), ...);
+}
+
+/// The editor reads a document's source on its UI thread without document access while a render
+/// worker, holding write access, prepares the same document and adds to its registry context.
+TEST(SVGDocumentConcurrencyTests, SourceReadsNeedNoAccessWhileAWriterReshapesTheRegistry) {
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>)", warnings);
+  ASSERT_FALSE(parsed.hasError()) << parsed.error().reason;
+  SVGDocument document = std::move(parsed.result());
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+  const std::string expectedSource(document.source());
+  const std::uint64_t expectedVersion = document.sourceVersion();
+  ASSERT_TRUE(document.hasSourceStore());
+  ASSERT_FALSE(expectedSource.empty());
+
+  std::atomic<bool> readerStarted = false;
+  std::atomic<bool> writerDone = false;
+  std::thread writer([document, &readerStarted, &writerDone]() mutable {
+    while (!readerStarted.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
+    }
+    document.withWriteAccess([](DocumentWriteAccess& access) {
+      AddWriterContextEntries(access.registry(), std::make_integer_sequence<int, 64>{});
+    });
+    writerDone.store(true, std::memory_order_release);
+  });
+
+  int mismatches = 0;
+  readerStarted.store(true, std::memory_order_release);
+  do {
+    if (!document.hasSourceStore() || document.source() != expectedSource ||
+        document.sourceVersion() != expectedVersion) {
+      ++mismatches;
+    }
+  } while (!writerDone.load(std::memory_order_acquire));
+  writer.join();
+
+  EXPECT_EQ(mismatches, 0);
 }
 
 TEST(SVGDocumentConcurrencyTests, AccessGuardsExposeRegistry) {

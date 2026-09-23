@@ -12,7 +12,9 @@ donner_cc_test(
         "SVGDocumentConcurrency_tests.cc",
     ],
     deps = [
+        "//donner/base",
         "//donner/svg",
+        "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",
     ],
 )

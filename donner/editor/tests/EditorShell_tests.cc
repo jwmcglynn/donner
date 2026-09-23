@@ -28,6 +28,7 @@
 #include "donner/editor/InMemoryClipboard.h"
 #include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/gui/EditorWindow.h"
+#include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -3899,6 +3900,40 @@ TEST(EditorShellTest, FillStrokeToolbarKeepsChosenPaintVisibleWhileRendererIsBus
       << "A busy frame must not replace the selected fill with the authoring fill";
 
   renderer.cancelInFlight();
+  EXPECT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                           std::chrono::seconds(2)));
+  std::ignore = renderer.pollResult();
+  renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
+}
+
+TEST(EditorShellTest, ReplayCostEstimatesReadTheDocumentWhileTheWorkerRendersIt) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  AsyncRenderer& renderer =
+      EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(20));
+  ASSERT_TRUE(renderer.isBusy());
+
+  // The replay harness estimates every frame's cost on this thread while the render worker
+  // prepares the same document for its frame, so the estimate has to read the document the way
+  // any other reader does.
+  int estimates = 0;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  do {
+    const repro::ReplayInputFrameCost cost =
+        shell.estimateReplayInputCostForTesting(repro::ReproFrame{});
+    EXPECT_TRUE(cost.valid);
+    ++estimates;
+    std::this_thread::sleep_for(std::chrono::microseconds(200));
+  } while (!renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now()) &&
+           std::chrono::steady_clock::now() < deadline);
+
+  EXPECT_THAT(estimates, testing::Gt(0));
   EXPECT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
                                                            std::chrono::seconds(2)));
   std::ignore = renderer.pollResult();
