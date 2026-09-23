@@ -400,7 +400,7 @@ bool IsSwitchProcessedElementType(ElementType type) {
 /**
  * Selection score for one `<switch>` child. Ineligible children (wrong element type, failing
  * non-language conditionals, or unmatched `systemLanguage`) never render. Eligible children
- * either carry a language rank or are unconditional fallbacks.
+ * either carry a language rank or match unconditionally at their document position.
  */
 struct SwitchChildScore {
   bool eligible = false;
@@ -917,8 +917,7 @@ public:
     if (prepared->traverseChildren) {
       const auto& tree = registry_.get<donner::components::TreeComponent>(treeEntity);
       if (prepared->selectSwitchChild) {
-        // <switch> renders only its selected child: the best language match, else the first
-        // unconditional fallback.
+        // <switch> ranks language matches up to the first unconditional child.
         if (const Entity selectedChild = selectSwitchChild(tree); selectedChild != entt::null) {
           traverseTree(selectedChild);
         }
@@ -945,10 +944,9 @@ public:
   }
 
   /**
-   * Select the direct child of a \ref xml_switch to render: the language-conditioned child
-   * matching the highest-priority user language, or the first unconditional child when no
-   * language-conditioned child matches. Language matches at the same priority tie-break by
-   * document order, as do unconditional fallbacks.
+   * Select the direct child of a \ref xml_switch to render. Language-conditioned children before
+   * the first unconditional child are ranked by user preference, with document order breaking
+   * ties. An unconditional child matches at its document position, so later children cannot win.
    *
    * Non-element children (comments, text) and children that are not directly-rendered element
    * types (descriptive elements, `defs`, `symbol`, unknown elements) are never selected.
@@ -960,7 +958,6 @@ public:
    * @return The selected child entity, or `entt::null` if no child matches.
    */
   Entity selectSwitchChild(const donner::components::TreeComponent& switchTree) const {
-    Entity fallbackChild = entt::null;
     Entity bestChild = entt::null;
     std::optional<size_t> bestRank;
 
@@ -972,10 +969,7 @@ public:
       }
 
       if (!score.hasLanguage) {
-        if (fallbackChild == entt::null) {
-          fallbackChild = cur;
-        }
-        continue;
+        return bestChild != entt::null ? bestChild : cur;
       }
 
       if (!bestRank.has_value() || score.languageRank < *bestRank) {
@@ -984,7 +978,7 @@ public:
       }
     }
 
-    return bestChild != entt::null ? bestChild : fallbackChild;
+    return bestChild;
   }
 
   bool collectClipPaths(EntityHandle clipPathHandle,
