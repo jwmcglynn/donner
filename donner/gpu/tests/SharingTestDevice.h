@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -176,7 +177,37 @@ protected:
     return OkStatus();
   }
 
+  // A surface that hands out one frame at a time, allocated when acquired and dropped when the
+  // frame goes back, as a swapchain's own texture is.
+  Status onCreateSurface(uint32_t, const SurfaceDescriptor&) override { return OkStatus(); }
+  Result<SurfaceCapabilities> onSurfaceCapabilities(uint32_t) const override {
+    return SurfaceCapabilities{
+        {TextureFormat::RGBA8Unorm},
+        TextureUsage::RenderAttachment | TextureUsage::Sampled | TextureUsage::CopySrc,
+        {PresentMode::Fifo},
+        {SurfaceAlphaMode::Opaque}};
+  }
+  Status onConfigureSurface(uint32_t, const SurfaceConfiguration&) override { return OkStatus(); }
+  Result<SurfaceStatus> onAcquireCurrentTexture(uint32_t, uint32_t textureSlot) override {
+    frameSlot_ = textureSlot;
+    slot(textureSlot).owned = std::make_shared<FakeNativeTexture>(native_);
+    return SurfaceStatus::Success;
+  }
+  Result<SurfaceStatus> onPresentSurface(uint32_t) override {
+    returnFrame();
+    return SurfaceStatus::Success;
+  }
+  void onAbandonCurrentTexture(uint32_t) override { returnFrame(); }
+
 private:
+  /// The surface takes its frame back; only an export can keep the allocation alive past this.
+  void returnFrame() {
+    if (frameSlot_.has_value()) {
+      slot(*frameSlot_) = {};
+      frameSlot_.reset();
+    }
+  }
+
   /// One texture slot: the allocation this device made, or a borrowed name for another's.
   struct TextureSlot {
     std::shared_ptr<FakeNativeTexture> owned;  //!< Allocation this device made, or null.
@@ -194,6 +225,7 @@ private:
   SharingOptions options_;
   std::shared_ptr<FakeCompletion> completion_ = std::make_shared<FakeCompletion>();
   std::vector<TextureSlot> textures_;
+  std::optional<uint32_t> frameSlot_;  //!< Texture slot of the frame the surface has out.
   bool held_ = false;
   bool writesPending_ = false;
   bool queuedWrite_ = false;  //!< A write waits for the next submission.

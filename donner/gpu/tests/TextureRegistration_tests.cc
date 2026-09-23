@@ -415,6 +415,70 @@ TEST_F(TextureRegistrationTest, ATimedOutSourceWaitDeclaresNothing) {
   EXPECT_THAT(consumer_->isLost(), IsFalse());
 }
 
+/// A surface of \p device whose frames can be sampled and copied from.
+/// @param device Device to create it on. @param layer Stand-in for the platform layer.
+Surface ConfiguredSurface(Device& device, int& layer) {
+  SurfaceDescriptor descriptor;
+  descriptor.label = "window";
+  descriptor.native.kind = NativeSurfaceKind::MetalLayer;
+  descriptor.native.display = &layer;
+  Surface surface = GetResultOrFail(device.createSurface(descriptor));
+  EXPECT_THAT(device.configureSurface(
+                  surface, SurfaceConfiguration{TextureFormat::RGBA8Unorm,
+                                                TextureUsage::RenderAttachment |
+                                                    TextureUsage::Sampled | TextureUsage::CopySrc,
+                                                kSharedTextureExtent, PresentMode::Fifo,
+                                                SurfaceAlphaMode::Opaque}),
+              IsOk());
+  return surface;
+}
+
+/// A frame a surface has out goes back to the surface when it is presented. Where readers submit
+/// to the producer's own queue, what they record before the present runs before it, so the frame
+/// can be exported, as a capture of a surface target needs. Where a reader has its own queue, its
+/// read could land after the surface took the frame back, so the frame is refused by name.
+TEST_F(TextureRegistrationTest, ASurfaceFrameIsExportedOnlyWhereItsReadersShareItsQueue) {
+  int layer = 0;
+  SharingDevice sharedProducer(native_, SharingOptions{.ordering = SourceOrdering::SharedQueue});
+  SharingDevice sharedConsumer(native_, SharingOptions{.ordering = SourceOrdering::SharedQueue});
+  const Surface shared = ConfiguredSurface(sharedProducer, layer);
+  const SurfaceTexture frame = GetResultOrFail(sharedProducer.acquireCurrentTexture(shared));
+  const TextureExport exported = GetResultOrFail(sharedProducer.exportTexture(frame.texture));
+  EXPECT_THAT(sharedConsumer.registerTexture(exported), HasResult());
+  EXPECT_THAT(sharedProducer.presentSurface(shared), HasResult());
+
+  const Surface separate = ConfiguredSurface(*producer_, layer);
+  const SurfaceTexture held = GetResultOrFail(producer_->acquireCurrentTexture(separate));
+  EXPECT_THAT(
+      producer_->exportTexture(held.texture),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("the frame a surface has out")));
+  EXPECT_THAT(producer_->abandonCurrentTexture(separate), IsOk());
+}
+
+/// The surface takes a presented frame back without the retirement other textures go through,
+/// so its export has to be released there too. An export that outlives the present holds the
+/// frame's allocation and counts it as released by the producer, and the slot's next frame
+/// exports as itself rather than as the frame before it.
+TEST_F(TextureRegistrationTest, APresentedFramesExportNeverStandsInForTheNextFrame) {
+  int layer = 0;
+  SharingDevice producer(native_, SharingOptions{.ordering = SourceOrdering::SharedQueue});
+  const Surface surface = ConfiguredSurface(producer, layer);
+  const SurfaceTexture first = GetResultOrFail(producer.acquireCurrentTexture(surface));
+  std::optional<TextureExport> firstExport = GetResultOrFail(producer.exportTexture(first.texture));
+  ASSERT_THAT(producer.presentSurface(surface), HasResult());
+  EXPECT_THAT(producer.sharedTextureTailBytes(), Eq(kTextureBytes))
+      << "the presented frame is held only by its export";
+
+  const SurfaceTexture second = GetResultOrFail(producer.acquireCurrentTexture(surface));
+  const TextureExport secondExport = GetResultOrFail(producer.exportTexture(second.texture));
+  firstExport.reset();
+  EXPECT_THAT(native_.liveTextures.load(), Eq(1))
+      << "dropping the first frame's export frees it, so the second frame's export holds its own "
+         "allocation";
+  EXPECT_THAT(producer.sharedTextureTailBytes(), Eq(0u));
+  EXPECT_THAT(producer.abandonCurrentTexture(surface), IsOk());
+}
+
 /// A texture of the device itself needs no source wait.
 TEST_F(TextureRegistrationTest, ADevicesOwnTextureNeedsNoSourceWait) {
   const Texture owned = MakeSharedTexture(*producer_);
