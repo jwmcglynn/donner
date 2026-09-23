@@ -1,7 +1,8 @@
 # Design: Editor Document Eyedropper
 
-**Status:** Implementing. The editor code and focused native Geode tests are complete. Browser
-validation, final qualification, and publication remain pending.
+**Status:** Implementing. The editor code and focused native Geode tests are complete, and
+[PR #1376](https://github.com/jwmcglynn/donner/pull/1376) is open for review. Browser validation,
+full qualification, and green CI remain pending.
 **Author:** GPT-6 Sol
 **Created:** 2026-09-22
 **Related:** [Issue #1304](https://github.com/jwmcglynn/donner/issues/1304)
@@ -44,7 +45,7 @@ selection handles, the transparency checkerboard, another window, or pixels outs
 
 1. Run the browser WebGPU journeys and verify document color and alpha against the visible output.
 2. Complete the affected qualification and independent review at the final source revision.
-3. Publish the reviewed change and drive its checks green.
+3. Resolve review and CI findings within the open pull request.
 
 ## Implementation Plan
 
@@ -59,8 +60,9 @@ selection handles, the transparency checkerboard, another window, or pixels outs
 - [ ] Validation and delivery
   - [x] Add focused native tests for paint, input, capture freshness, and pixel mapping.
   - [x] Add native Geode window and browser WebGPU journey/pixel regressions.
+  - [x] Publish the reviewed change as [PR #1376](https://github.com/jwmcglynn/donner/pull/1376).
   - [ ] Execute the browser target and confirm the captured SVG style and visible pixels.
-  - [ ] Run final affected gates, inspect exact evidence, complete independent review, and publish.
+  - [ ] Run final affected gates, inspect exact evidence, resolve review comments, and drive CI green.
 
 ## Background and Constraints
 
