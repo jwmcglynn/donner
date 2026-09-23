@@ -83,6 +83,18 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
         cls.workflow = _read(".github/workflows/coverage.yml")
         cls.decision = cls._extract_decision(cls.workflow)
         cls.classifier = _runfile("tools/coverage_instrumentable_targets.py")
+        # The stubs are identical for every case, so they are written once. The first run of a newly
+        # written executable can wait on a host security scan (on macOS, seconds under load), and
+        # writing them per case paid that often enough to exhaust the target's timeout.
+        stub_directory = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(stub_directory.cleanup)
+        cls.bin_dir = Path(stub_directory.name)
+        stub = cls.bin_dir / "bazelisk"
+        stub.write_text(_STUB_BAZELISK, encoding="utf-8")
+        stub.chmod(0o755)
+        python = cls.bin_dir / "python3"
+        python.write_text('#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
+        python.chmod(0o755)
 
     @staticmethod
     def _extract_decision(workflow):
@@ -112,14 +124,6 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             root = Path(temp_dir)
             (root / "tools").mkdir()
             shutil.copy(self.classifier, root / "tools")
-            bin_dir = root / "bin"
-            bin_dir.mkdir()
-            stub = bin_dir / "bazelisk"
-            stub.write_text(_STUB_BAZELISK, encoding="utf-8")
-            stub.chmod(0o755)
-            python = bin_dir / "python3"
-            python.write_text('#!/bin/sh\nexec "$FIXTURE_PYTHON" "$@"\n')
-            python.chmod(0o755)
 
             scratch = root / "scratch"
             scratch.mkdir()
@@ -149,7 +153,7 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             fixture.chmod(0o755)
 
             env = os.environ.copy()
-            env["PATH"] = "%s:%s" % (bin_dir, env["PATH"])
+            env["PATH"] = "%s:%s" % (self.bin_dir, env["PATH"])
             env["STUB_CQUERY_OUTPUT"] = str(compat_file)
             env["FIXTURE_PYTHON"] = sys.executable
             if cquery_fails:
