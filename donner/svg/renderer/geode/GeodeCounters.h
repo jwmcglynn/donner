@@ -42,6 +42,17 @@ struct GeodeCounters {
   /// repeat-render at the same size.
   uint64_t textureCreates = 0;
 
+  /// Isolated layers retired without a matching pop in this beginFrame-to-endFrame window.
+  /// Cleanup during beginFrame counts scopes left by the preceding unfinished frame; endFrame
+  /// adds any scopes left by the current frame.
+  uint64_t unclosedLayerScopes = 0;
+
+  /// Filter layers retired without a matching pop at a frame boundary.
+  uint64_t unclosedFilterScopes = 0;
+
+  /// Masks retired without a matching pop at a frame boundary.
+  uint64_t unclosedMaskScopes = 0;
+
   /// `wgpu::Queue::submit` calls. Steady-state target with the frame's command
   /// buffers submitted together: `== 1` per frame regardless of layer / filter /
   /// mask push depth. A frame that reaches the most command buffers one

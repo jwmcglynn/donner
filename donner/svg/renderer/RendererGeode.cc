@@ -4790,6 +4790,62 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     entries.clear();
   }
 
+  void retireOpenLayerStack(bool submitRecordedWork) {
+    for (LayerStackFrame& frame : layerStack) {
+      if (submitRecordedWork) {
+        retireFinishedEncoder(std::move(frame.savedEncoder));
+      }
+      releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+    }
+    layerStack.clear();
+  }
+
+  void retireOpenFilterStack(bool submitRecordedWork) {
+    for (FilterStackFrame& frame : filterStack) {
+      if (submitRecordedWork && frame.savedEncoder) {
+        if (frame.allocationRejected) {
+          frame.savedEncoder->finish();
+        }
+        retireFinishedEncoder(std::move(frame.savedEncoder));
+      }
+      releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+      releaseClipStackTexturesAtFrameEnd(frame.savedClipStack);
+      filterExecutionBudget->release(frame.filterReservation);
+    }
+    filterStack.clear();
+    rejectedFilterDepth = 0;
+  }
+
+  void retireOpenMaskStack(bool submitRecordedWork) {
+    for (MaskStackFrame& frame : maskStack) {
+      if (submitRecordedWork) {
+        retireFinishedEncoder(std::move(frame.savedEncoder));
+      }
+      releaseTextureAtFrameEnd(std::move(frame.maskTexture), frame.maskDesc);
+      releaseTextureAtFrameEnd(std::move(frame.contentTexture), frame.contentDesc);
+    }
+    maskStack.clear();
+  }
+
+  /// Drop unclosed offscreen scopes without compositing their contents into the root target.
+  /// Recorded encoders remain alive through submission; an abandoned frame can discard them.
+  void retireOpenFrameStacksAtBoundary(bool submitRecordedWork) {
+    releaseClipStackTexturesAtFrameEnd(clipStack);
+    if (layerStack.empty() && filterStack.empty() && maskStack.empty()) {
+      return;
+    }
+
+    counters.unclosedLayerScopes += layerStack.size();
+    counters.unclosedFilterScopes += filterStack.size();
+    counters.unclosedMaskScopes += maskStack.size();
+    retireOpenLayerStack(submitRecordedWork);
+    retireOpenFilterStack(submitRecordedWork);
+    retireOpenMaskStack(submitRecordedWork);
+
+    geometryDebugEdges.clear();
+    target = hostTarget.isValid() ? aliasOf(hostTarget) : aliasOf(ownedTarget);
+  }
+
   static void releaseClipStackTextures(std::vector<ClipStackEntry>& entries) {
     for (ClipStackEntry& entry : entries) {
       for (PendingRelease& release : entry.maskLayerTextures) {
@@ -4807,6 +4863,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (device) {
       device->drainDeferredDestroys();
     }
+    counters.reset();
     viewport = nextViewport;
     const Vector2i pixelSize = CheckedViewportPixels(nextViewport).value_or(Vector2i::Zero());
     pixelWidth = pixelSize.x;
@@ -4817,11 +4874,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     encoder.reset();
     frameFinishedEncoders.clear();
     discardFrameGpuEncoder();
-    // An unfinished frame can leave pattern tiles, clips, and pending releases behind. Retire
-    // them before resetting their budget. Unsubmitted work returns to the pool; resources whose
-    // submission is uncertain stay retained until device teardown.
+    // An unfinished frame can leave pattern tiles, clips, open scopes, and pending releases
+    // behind. Retire them before resetting their budget. Unsubmitted work returns to the pool;
+    // resources whose submission is uncertain stay retained until device teardown.
     retireUnconsumedPatternTilesAtFrameEnd(OuterPatternState::kDrop);
-    releaseClipStackTexturesAtFrameEnd(clipStack);
+    retireOpenFrameStacksAtBoundary(/*submitRecordedWork=*/false);
     if (frameRecordingAbandoned) {
       retainPendingFrameReleasesAfterFailure();
     } else {
@@ -4851,7 +4908,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     pendingBatch.reset();
     transientGlyphEntries.clear();
     transientTextEncodes.clear();
-    counters.reset();
   }
 
   void resetOwnedFrameBudgets() {
@@ -5459,7 +5515,8 @@ void RendererGeode::endFrame() {
   // Before anything is submitted, so a submission failure retains these tiles along with the
   // rest of what the frame named rather than returning them to a pool.
   impl_->retireUnconsumedPatternTilesAtFrameEnd(Impl::OuterPatternState::kRestore);
-  impl_->releaseClipStackTexturesAtFrameEnd(impl_->clipStack);
+  impl_->retireOpenFrameStacksAtBoundary(impl_->frameRecordingOpen &&
+                                         !impl_->frameRecordingAbandoned);
 
   if (impl_->encoder) {
     // Ends the open render pass without submitting - shared-mode.
