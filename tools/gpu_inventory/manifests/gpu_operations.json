@@ -170,21 +170,12 @@
       "operations": [
         "configure",
         "createBuffer",
+        "createTexture",
         "draw",
         "present"
       ],
-      "wgpuCFunctions": [
-        "wgpuLabel"
-      ],
-      "wgpuCTypes": [
-        "WGPUDevice",
-        "WGPUQueue"
-      ],
       "wgpuCppTokens": [
         "Adapter",
-        "Buffer",
-        "BufferDescriptor",
-        "BufferUsage",
         "Instance",
         "Surface"
       ]
