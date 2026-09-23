@@ -5849,9 +5849,9 @@ RendererGeodeTextureSnapshot MakeOwnedSnapshot(const std::shared_ptr<geode::Geod
 /// is recorded. The owner has to be one registration genuinely refuses on the selected backend. On
 /// the transitional adapter a second headless device is another native device. On a native
 /// backend it shares the native device and registers, so there the owner is an adapter context,
-/// which registration refuses as another backend. The refusal's reason is asserted, and the same
-/// snapshot from a device registration accepts draws on the same renderer, so the owner is the only
-/// thing the renderer refused.
+/// which registration refuses as another backend. The refusal's reason is asserted, and an
+/// identical snapshot made on a sibling device, which registration accepts, draws on the same
+/// renderer, so the owner is the only thing the renderer refused.
 TEST_F(RendererGeodeTest, ForeignRuntimeSnapshotIsRejectedBeforeRecording) {
   const bool onTransitionalAdapter = sharedDevice()->hasTransitionalAdapter();
   const std::shared_ptr<geode::GeodeDevice> owner =
@@ -5880,8 +5880,8 @@ TEST_F(RendererGeodeTest, ForeignRuntimeSnapshotIsRejectedBeforeRecording) {
   beginFrame(renderer);
   EXPECT_THAT(renderer.drawTextureSnapshot(registrable, Box2d({0, 0}, {4, 4}), 1, true),
               testing::IsTrue())
-      << "the same snapshot from a device registration accepts must draw, so the owner is the "
-         "only thing the renderer refuses";
+      << "an identical snapshot made on a sibling device, which registration accepts, must "
+         "draw, so the owner is the only thing the renderer refuses";
   EXPECT_THAT(renderer.drawTextureSnapshot(foreign, Box2d({0, 0}, {4, 4}), 1, true),
               testing::IsFalse());
   renderer.endFrame();
