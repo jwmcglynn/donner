@@ -20,6 +20,7 @@
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
+#include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::svg {
@@ -80,6 +81,18 @@ public:
   /// they share.
   GeodeRuntimeDevice createLogicalDevice() const;
 
+  /// Retirement for the context that renders through this owner's root device (see
+  /// \ref GeodeDevice::handleRetirement). The owner keeps it because the root device outlives that
+  /// context.
+  const std::shared_ptr<GeodeHandleRetirement>& rootDeviceHandleRetirement() const
+      UTILS_LIFETIME_BOUND {
+    return rootDeviceRetirement_;
+  }
+
+  /// Whether the root context's retirement is destroyed after the root device: true when
+  /// \c rootDeviceRetirement_ is declared before \c rootDevice_. Test accessor.
+  [[nodiscard]] bool rootRetirementOutlivesRootDeviceForTesting() const;
+
 private:
   /// Only a context builds an owner, from a root and the device \ref CreateGpuDeviceOver opened
   /// over it, so a device can never be paired with a root of another backend.
@@ -99,6 +112,10 @@ private:
 
   /// Declared first so the backend root outlives every runtime device built over it.
   std::shared_ptr<GeodeGpuRoot> root_;
+  /// Retirement of the context that renders through \ref rootDevice_. Held here and declared before
+  /// it so that handles retired after that context closed go only once the device is gone
+  /// (checked by \ref rootRetirementOutlivesRootDeviceForTesting).
+  std::shared_ptr<GeodeHandleRetirement> rootDeviceRetirement_;
   /// The selected runtime device, held for its lifetime rather than read through here: the
   /// logical context created together with this owner is what renders through it, and every
   /// later context over the same root gets its own from \ref createLogicalDevice.
@@ -394,6 +411,28 @@ public:
   void drainDeferredTextureBackings();
 
   /**
+   * Where state kept for this context on another thread's behalf - a document's resident slabs,
+   * say - hands back this context's buffers and bind groups when it is destroyed, so they are
+   * released on this context's thread (see \ref GeodeHandleRetirement). Shared so that state can
+   * tell whether this context still exists: it is closed when the context is destroyed.
+   */
+  const std::shared_ptr<GeodeHandleRetirement>& handleRetirement() const UTILS_LIFETIME_BOUND {
+    return handleRetirement_;
+  }
+
+  /// Releases the handles other threads retired to this context. Call on this context's thread;
+  /// the renderer does at every frame boundary.
+  void releaseRetiredHandles();
+
+  /// Handles retired to this context and not yet released. Test accessor.
+  [[nodiscard]] GeodeHandleRetirement::HeldCounts retiredHandleCountsForTesting() const;
+
+  /// Whether this context's retirement is destroyed after the runtime device it created, as
+  /// \ref handleRetirement requires: true when \c handleRetirement_ is declared before
+  /// \c ownedRuntimeDevice_. Test accessor.
+  [[nodiscard]] bool retirementOutlivesOwnedRuntimeDeviceForTesting() const;
+
+  /**
    * Drop all deferred-destroy handles, releasing their GPU resources.
    *
    * Called at the top of each frame (before new allocations) so resources
@@ -496,15 +535,14 @@ public:
    * Process-unique identity for this device instance, assigned at
    * construction from a monotonic counter (never reused, starts at 1).
    *
-   * Used by GPU-residence slots to detect when a
-   * cached buffer / bind group belongs to a DIFFERENT device than the one
-   * now rendering: a document (and its ECS `GeodeResidentPathComponent`s)
-   * can outlive the device that filled them and later be rendered by a
-   * second `RendererGeode` / `GeodeDevice`. WebGPU rejects cross-device
-   * resources inside a render pass, so a slot whose stored id does not match
-   * `deviceId()` is treated as non-resident and re-uploaded. A monotonic
-   * counter (rather than a raw `this` pointer) avoids the ABA hazard of a
-   * freed device's address being recycled by a later allocation.
+   * Keys the GPU residence a document keeps per device (see
+   * `GeodePerDevice`), so each device that draws a document finds its own
+   * slabs and slots and never another's. Residence slots also record it, and
+   * the draw path treats a slot whose id does not match as non-resident, a
+   * defensive cross-check since WebGPU rejects cross-device resources inside
+   * a render pass. A monotonic counter (rather than a raw `this` pointer)
+   * avoids the ABA hazard of a freed device's address being recycled by a
+   * later allocation.
    */
   uint64_t deviceId() const { return deviceId_; }
 
@@ -888,6 +926,13 @@ private:
 
   // Declared before every logical resource so it is destroyed last.
   std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice_;
+
+  /// See \ref handleRetirement: the owner's root-device retirement when this context renders
+  /// through the root device, else one of its own. Closed at teardown while the runtime device
+  /// still exists, and declared before \ref ownedRuntimeDevice_ so an own retirement, and the
+  /// handles retired to it after it closed, go only once that device is gone (checked by
+  /// \ref retirementOutlivesOwnedRuntimeDeviceForTesting).
+  std::shared_ptr<GeodeHandleRetirement> handleRetirement_;
 
   /// Held only when this context created its own runtime device; null when it renders through the
   /// owner's. Declared before \ref impl_ so the pipelines and pooled resources there, which

@@ -1875,9 +1875,8 @@ void GeoEncoder::Impl::populateInstanceRecord(InstanceRecord& r, const EncodedPa
 }
 
 void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded) {
-  // Drop any previous residence (first upload, a re-upload after the stroke
-  // slot rebuilt in place, or a re-upload because a DIFFERENT device now
-  // renders this document). Releases the old handles and settles the
+  // Drop any previous residence (first upload, or a re-upload after the stroke
+  // slot rebuilt in place or the encode changed). Releases the old handles and settles the
   // live-bytes gauge before we account the new allocation. `reset()` never
   // calls `Buffer::destroy()`: an earlier draw in the open command encoder
   // may still reference the old buffer, and releasing our handle lets WebGPU
@@ -2132,9 +2131,10 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
   // Ensure the geometry is resident and current AND owned by THIS device.
   // Component removal is the primary invalidation; the pointer + fingerprint
   // guard catches the in-place stroke-slot rebuild (which replaces the encode
-  // contents without removing the component); the device-id guard catches a
-  // second device rendering a document whose residence was filled by a
-  // now-different device (WebGPU rejects cross-device buffers / bind groups).
+  // contents without removing the component). Every device keeps its own
+  // slots, so the device-id guard no longer fires in normal operation; it is
+  // a defensive cross-check, because WebGPU rejects cross-device buffers and
+  // bind groups.
   const uint64_t fingerprint = residentFingerprint(encoded);
   const bool needUpload = !slot.resident || !slot.buffer.isValid() || slot.encodedKey != &encoded ||
                           slot.encodedFingerprint != fingerprint ||
@@ -2338,10 +2338,10 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
   // recorded draw reads at submit. Frame stamps are device-scoped
   // generations, so the claim compares against the device's oldest open
   // generation; the gate still applies only when the slot is resident ON
-  // THIS device, because a stamp carried over from a DIFFERENT device that
-  // previously rendered this document is not a live claim and must
-  // re-upload (submitResidentFillDraw re-uploads on the device-id
-  // mismatch) rather than fall back.
+  // THIS device. Every device keeps its own slots, so a slot resident on
+  // another device is not reachable here; the check is a defensive
+  // cross-check, and a mismatch re-uploads (submitResidentFillDraw
+  // re-uploads on the device-id mismatch) rather than falling back.
   // A repeat whose slot was re-uploaded mid-frame (an in-place stroke
   // rebuild clears the device id) is NOT gated here: the re-upload took a
   // fresh slab range with its own uniform region, and a solo resident draw

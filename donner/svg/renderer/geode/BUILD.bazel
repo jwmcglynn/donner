@@ -142,6 +142,32 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Handles let go of on a thread other than their device's, released on that device's own thread,
+# and the per-device container a document keeps its GPU residence in. No WebGPU dependency, so it
+# builds and is tested regardless of the enable_geode flag.
+donner_cc_library(
+    name = "geode_handle_retirement",
+    srcs = ["GeodeHandleRetirement.cc"],
+    hdrs = [
+        "GeodeHandleRetirement.h",
+        "GeodePerDevice.h",
+    ],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = ["//donner/gpu"],
+)
+
+donner_cc_test(
+    name = "geode_handle_retirement_tests",
+    srcs = ["tests/GeodeHandleRetirement_tests.cc"],
+    deps = [
+        ":geode_handle_retirement",
+        "//donner/base:gtest_timeout_main",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
+    ],
+)
+
 # Bounded CPU-side waits on GPU progress plus the shared device-lost flag.
 # Pure chrono/functional code with no WebGPU dependency, so the timeout
 # policy is unit-testable without a GPU and builds regardless of the
@@ -220,11 +246,13 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        "//donner/base",
         "//donner/gpu/shader:slug_fill_api",
         # The slabs stamp every buffer they create with
         # `GeodeDevice::AllocateBufferId`, which is defined out of line, so
         # this is a link dependency and not just an include.
         ":geode_device",
+        ":geode_handle_retirement",
         ":geode_resource_budget",
     ],
 )
@@ -238,6 +266,7 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_device",
+        ":geode_handle_retirement",
         ":geode_path_encoder",
         ":geode_resident_path_component",
         "//donner/base",
@@ -385,6 +414,7 @@ donner_cc_library(
                ":checkerboard_pipeline",
                ":geode_counters",
                ":geode_gpu_wait",
+               ":geode_handle_retirement",
                ":geode_shader_selection",
                ":geode_shaders",
                ":geode_wgpu_util",
@@ -611,6 +641,7 @@ donner_cc_test(
         ":geo_encoder",
         ":geode_device",
         ":geode_gpu_wait",
+        ":geode_handle_retirement",
         ":geode_path_cache_component",
         ":geode_resource_budget",
         ":geode_wgpu_util",
@@ -899,6 +930,45 @@ donner_multi_transitioned_test(
     dep = ":geode_native_counters_tests_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
+)
+
+# One document drawn by renderers on two devices, including from two threads, the way a render
+# worker and a UI-thread thumbnail pass share an editor document.
+donner_cc_test(
+    name = "geode_document_residency_tests_impl",
+    srcs = ["tests/GeodeDocumentResidency_tests.cc"],
+    data = ["//third_party/resvg-test-suite:fonts"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_counters",
+        ":geode_device",
+        ":geode_handle_retirement",
+        ":geode_resource_budget",
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/base:gtest_timeout_main",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:image_comparison_test_fixture",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_document_residency_tests",
+    size = "small",
+    testonly = 1,
+    dep = ":geode_document_residency_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+    # The text cases need the text backend; without it a text element draws nothing.
+    text = "true",
 )
 
 donner_cc_test(

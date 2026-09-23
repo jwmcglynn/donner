@@ -1110,8 +1110,9 @@ TEST_F(GeodePerfTest, GpuResidence_SteadyAcrossRepeatedRenders) {
 // later rendered by a SECOND `RendererGeode` backed by a DIFFERENT
 // `GeodeDevice`, the resident buffer + bind group created by the first device
 // must NOT be bound into the second device's render pass - WebGPU rejects
-// cross-device resources. The fix scopes residence to the owning device
-// (`GeodeDevice::deviceId()`) and forces a re-upload when the device changes.
+// cross-device resources. Residence is kept per device
+// (`GeodeDevice::deviceId()`): the second device uploads its own and never
+// binds the first one's.
 //
 // Regression: on the pre-fix branch tip device B binds device A's stale
 // handles, so its output diverges from device A's (dropped draw / validation
@@ -1188,8 +1189,8 @@ TEST_F(GeodePerfTest, GpuResidence_ReUploadsWhenDeviceChanges) {
   // Device B (fresh renderer, frame index 1) renders the SAME document. Pre-fix,
   // the resident slots still hold device A's buffer + bind group; binding those
   // into device B's pass is a cross-device violation and the draws are dropped,
-  // so the output diverges. With the fix the device-id mismatch forces a
-  // re-upload onto device B and the output matches.
+  // so the output diverges. Device B uploads its own residence instead, and the
+  // output matches.
   RendererGeode rendererB(deviceB);
   rendererB.draw(document);  // frame index 1 != lastResidentFrame(2): resident path.
   const RendererBitmap resultB = rendererB.takeSnapshot();
@@ -1202,7 +1203,7 @@ TEST_F(GeodePerfTest, GpuResidence_ReUploadsWhenDeviceChanges) {
       << nonTransparentPixels(referenceA)
       << ", device B non-transparent px=" << nonTransparentPixels(resultB);
 
-  // A render back on device A must still match (residence re-homes to A).
+  // A render back on device A must still match, from device A's own residence.
   RendererGeode rendererA2(deviceA);
   rendererA2.draw(document);
   const RendererBitmap reReferenceA = rendererA2.takeSnapshot();

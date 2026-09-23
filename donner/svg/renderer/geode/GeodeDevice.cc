@@ -24,7 +24,10 @@ namespace donner::geode {
 
 GeodePhysicalDeviceOwner::GeodePhysicalDeviceOwner(std::shared_ptr<GeodeGpuRoot> root,
                                                    std::unique_ptr<gpu::Device> device)
-    : root_(std::move(root)), rootDevice_(std::move(device)) {
+    : root_(std::move(root)),
+      rootDeviceRetirement_(
+          std::make_shared<GeodeHandleRetirement>(device != nullptr ? device->deviceId() : 0)),
+      rootDevice_(std::move(device)) {
   UTILS_RELEASE_ASSERT(root_ != nullptr && rootDevice_ != nullptr);
 }
 
@@ -231,6 +234,11 @@ GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevic
   UTILS_RELEASE_ASSERT(transitionalAdapter == nullptr ||
                        (static_cast<gpu::Device*>(transitionalAdapter) == &runtimeDevice &&
                         &transitionalAdapter->root() == &physicalDevice_->root()));
+  // A context rendering through the owner's root device retires into the owner's retirement,
+  // which lives as long as that device does; one with a device of its own has its own.
+  handleRetirement_ = ownedRuntimeDevice != nullptr
+                          ? std::make_shared<GeodeHandleRetirement>(runtimeDevice.deviceId())
+                          : physicalDevice_->rootDeviceHandleRetirement();
   ownedRuntimeDevice_ = std::move(ownedRuntimeDevice);
   runtimeDevice_ = &runtimeDevice;
   transitionalAdapter_ = transitionalAdapter;
@@ -268,6 +276,11 @@ GeodeDevice::~GeodeDevice() {
   // The owner's root device outlives a context that rendered through it, so stop attributing to a
   // context that is going away.
   runtimeDevice_->removeObserver(*runtimeCounterObserver_);
+  // Release what other threads retired to this context while its runtime device still exists, and
+  // tell state kept for it that it is gone. The drain below releases, here, anything retired in
+  // between; anything retired later stays in the retirement until it is destroyed, which is after
+  // the device (see handleRetirement_).
+  handleRetirement_->close();
   // Release all resources that were created from the device before releasing the
   // root queue/device/adapter/instance handles. `webgpu.hpp` handles are raw
   // wrappers: their destructors do not release native references.
@@ -1033,8 +1046,29 @@ std::size_t GeodeDevice::deferredTextureDestroyCountForTesting() const {
   return impl_->textureBackingsAwaitingRetirement.size();
 }
 
+void GeodeDevice::releaseRetiredHandles() {
+  handleRetirement_->release();
+}
+
+GeodeHandleRetirement::HeldCounts GeodeDevice::retiredHandleCountsForTesting() const {
+  return handleRetirement_->heldCountsForTesting();
+}
+
+bool GeodeDevice::retirementOutlivesOwnedRuntimeDeviceForTesting() const {
+  // Members are destroyed in reverse declaration order, and of two members with the same access
+  // the later-declared one has the higher address.
+  return static_cast<const void*>(&handleRetirement_) <
+         static_cast<const void*>(&ownedRuntimeDevice_);
+}
+
+bool GeodePhysicalDeviceOwner::rootRetirementOutlivesRootDeviceForTesting() const {
+  // See GeodeDevice::retirementOutlivesOwnedRuntimeDeviceForTesting.
+  return static_cast<const void*>(&rootDeviceRetirement_) < static_cast<const void*>(&rootDevice_);
+}
+
 void GeodeDevice::drainDeferredDestroys() {
   drainDeferredTextureBackings();
+  releaseRetiredHandles();
   pendingBindGroups_.clear();
 }
 
