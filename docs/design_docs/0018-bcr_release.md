@@ -68,11 +68,10 @@ file, executable mode, source tree and digest with the committed Git archive. A 
 provenance accompany the archive. The consumer matrix resolves this archive through a disposable
 registry from a separate module; no Donner checkout override participates.
 
-The v0.8 archive requires root `LICENSE` and `NOTICE`. The committed `NOTICE` matches
+Source archives require root `LICENSE` and `NOTICE`. The committed `NOTICE` matches
 `//third_party/licenses:notice_default` byte-for-byte and describes the default tiny-skia
-variant; other build variants use their own generated notices. The current source verifier
-rejects older archives without `NOTICE`, so verify a historical release with the tooling from
-its matching tag. The release dependency/license review still checks the final shipped closure.
+variant; other build variants use their own generated notices. The release dependency/license
+review checks the final shipped closure.
 
 Preflight generates the real entry with `bazel-contrib/publish-to-bcr@v1.5.0` and executes the current
 upstream BCR validator. The entry retains the stable release URL. Only the source download transport
