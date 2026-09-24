@@ -5,17 +5,23 @@ on:
     branches: [main]
   pull_request:
     paths:
+      - .bazelignore
+      - .bazelrc
+      - .bazelversion
       - .bcr/**
       - .gitattributes
       - .github/workflows/bcr_preflight.yml
       - .github/workflows/publish_bcr.yml
       - .github/workflows/release.yml
+      - BUILD.bazel
       - MODULE.bazel
+      - MODULE.bazel.lock
       - build_defs/**
       - config/**
       - donner/**
       - examples/bazel_consumer/**
       - third_party/**
+      - tools/BUILD.bazel
       - tools/bcr_*.py
       - "tools/ci/**"
       - tools/release_cli*.py
