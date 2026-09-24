@@ -19,7 +19,8 @@ namespace donner::svg::details {
  * of its own, so a renderer torn down and rebuilt reuses a device instead of opening another.
  *
  * A device is handed out as a lease: releasing the last reference to what \ref acquire returned
- * puts the device back, unless it has been lost. A lost device is never handed out again.
+ * puts the device back. A lost device is never handed out again; it is destroyed at once when the
+ * releasing thread may destroy it, or kept until its creator next acquires from the cache.
  *
  * A device bound to the thread that opened it, as a browser device is to its worker, is handed
  * back only to that thread, and only that thread may destroy it: a browser device destroyed
@@ -139,15 +140,19 @@ private:
     Idle idle;                 //!< Device handed out.
   };
 
-  /// Keeps \p released for a later \ref acquire unless it is lost. While the cache is over its
-  /// bound it gives up idle devices this thread may destroy, oldest first, which may include
-  /// \p released itself, and destroys them here, outside the lock.
+  /// Keeps \p released for a later \ref acquire. A lost device is destroyed now only if this
+  /// thread may destroy it; otherwise its creator discards it on the next acquire. While the cache
+  /// is over its bound it gives up idle devices this thread may destroy, oldest first, which may
+  /// include \p released itself, and destroys them here, outside the lock.
   /// @param released Device a lease released.
   void release(Idle released) {
-    if (!released.device || released.device->isDeviceLost()) {
+    if (!released.device) {
       return;
     }
     const uint64_t here = ThisThreadToken();
+    if (released.device->isDeviceLost() && released.usableFrom(here)) {
+      return;
+    }
     std::vector<Idle> givenUp;
     {
       const std::lock_guard lock(mutex_);

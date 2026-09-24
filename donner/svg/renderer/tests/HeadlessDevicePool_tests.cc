@@ -102,6 +102,50 @@ TEST(HeadlessDevicePool, NeverHandsOutALostDevice) {
   EXPECT_THAT(cache.opened, 2);
 }
 
+TEST(HeadlessDevicePool, AForeignReleaseOfALostBoundDeviceWaitsForItsCreatorToDestroyIt) {
+  FakePool cache(4);
+  std::promise<void> creatorReady;
+  std::promise<void> creatorMayContinue;
+  std::future<void> continueOnCreator = creatorMayContinue.get_future();
+  std::shared_ptr<FakeDevice> foreignLease;
+  std::thread::id creatorThread;
+  int lostSerial = 0;
+  int replacementSerial = 0;
+  std::thread creator([&] {
+    std::shared_ptr<FakeDevice> device = cache.pool.acquire();
+    if (device) {
+      device->bound = true;
+      lostSerial = device->serial;
+      creatorThread = std::this_thread::get_id();
+      foreignLease = std::move(device);
+    }
+    creatorReady.set_value();
+    continueOnCreator.wait();
+    if (lostSerial != 0) {
+      std::shared_ptr<FakeDevice> replacement = cache.pool.acquire();
+      replacementSerial = replacement ? replacement->serial : 0;
+    }
+  });
+  creatorReady.get_future().wait();
+
+  if (foreignLease) {
+    foreignLease->lost = true;
+    std::thread releaser([&] { foreignLease.reset(); });
+    releaser.join();
+    EXPECT_THAT(cache.log->threadThatDestroyed(lostSerial), testing::Eq(std::nullopt))
+        << "the releasing thread destroyed a device bound to another thread";
+    EXPECT_THAT(cache.pool.idleCount(), testing::Eq(1u))
+        << "the lost bound device must wait for its creator to discard it";
+  }
+  creatorMayContinue.set_value();
+  creator.join();
+
+  ASSERT_THAT(lostSerial, testing::Ne(0));
+  EXPECT_THAT(cache.log->threadThatDestroyed(lostSerial),
+              testing::Eq(std::optional(creatorThread)));
+  EXPECT_THAT(replacementSerial, testing::Eq(2));
+}
+
 TEST(HeadlessDevicePool, KeepsNoMoreIdleDevicesThanItsBound) {
   FakePool cache(2);
   {
