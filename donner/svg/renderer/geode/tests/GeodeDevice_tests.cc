@@ -1028,10 +1028,11 @@ TEST(GeodeNativeVulkanRoot, ConcurrentRuntimeDevicesSubmitThroughTheSharedQueue)
   first.join();
   second.join();
   EXPECT_TRUE(bothReady);
-  for (const WorkerResult& result : results) {
-    EXPECT_TRUE(result.opened);
-    EXPECT_TRUE(result.submitted);
-    EXPECT_TRUE(result.completed);
+  for (size_t index = 0; index < results.size(); ++index) {
+    SCOPED_TRACE(::testing::Message() << "worker " << index);
+    EXPECT_THAT(results[index].opened, IsTrue());
+    EXPECT_THAT(results[index].submitted, IsTrue());
+    EXPECT_THAT(results[index].completed, IsTrue());
   }
 }
 
