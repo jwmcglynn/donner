@@ -148,22 +148,42 @@ constexpr int kMaxMouseButtons = 5;
 /// Snapshot of the editor viewport used to map window coordinates into
 /// SVG-document coordinates.
 struct ReproViewport {
+  /// Horizontal origin of the editor pane in logical window coordinates.
   double paneOriginX = 0.0;
+  /// Vertical origin of the editor pane in logical window coordinates.
   double paneOriginY = 0.0;
+  /// Editor pane width in logical window coordinates.
   double paneSizeW = 0.0;
+  /// Editor pane height in logical window coordinates.
   double paneSizeH = 0.0;
+  /// Physical pixels per logical window pixel.
   double devicePixelRatio = 1.0;
+  /// Scale from document coordinates to logical window coordinates.
   double zoom = 1.0;
+  /// Document-space horizontal coordinate anchored at \ref panScreenX.
   double panDocX = 0.0;
+  /// Document-space vertical coordinate anchored at \ref panScreenY.
   double panDocY = 0.0;
+  /// Logical window X coordinate of \ref panDocX.
   double panScreenX = 0.0;
+  /// Logical window Y coordinate of \ref panDocY.
   double panScreenY = 0.0;
+  /// Horizontal origin of the document viewBox.
   double viewBoxX = 0.0;
+  /// Vertical origin of the document viewBox.
   double viewBoxY = 0.0;
+  /// Width of the document viewBox.
   double viewBoxW = 0.0;
+  /// Height of the document viewBox.
   double viewBoxH = 0.0;
 
-  friend bool operator==(const ReproViewport&, const ReproViewport&) = default;
+  /**
+   * Compare two recorded viewport snapshots.
+   * @param lhs First snapshot.
+   * @param rhs Second snapshot.
+   * @return True when every recorded field matches.
+   */
+  friend bool operator==(const ReproViewport& lhs, const ReproViewport& rhs) = default;
 };
 
 /// Hit-test checkpoint captured at mouse-down time.
@@ -177,13 +197,20 @@ struct ReproHit {
   /// True when the click landed on empty space.
   bool empty = false;
 
-  friend bool operator==(const ReproHit&, const ReproHit&) = default;
+  /**
+   * Compare two recorded hit-test checkpoints.
+   * @param lhs First checkpoint.
+   * @param rhs Second checkpoint.
+   * @return True when every recorded field matches.
+   */
+  friend bool operator==(const ReproHit& lhs, const ReproHit& rhs) = default;
 };
 
 /// One semantic editor action that fired within a frame. MCP-generated repros
 /// use actions for deterministic operations that are not raw pointer input,
 /// such as selecting the Pen tool or changing active paint.
 struct ReproAction {
+  /// Semantic action types supported by the replay format.
   enum class Kind {
     SetActiveTool,
     SetStyleProperty,
@@ -192,14 +219,20 @@ struct ReproAction {
 
   /// Action kind.
   Kind kind = Kind::SetActiveTool;
-  /// Tool id for \ref Kind::SetActiveTool, e.g. `"select"` or `"pen"`.
+  /// Tool id for the \ref ReproAction::Kind `SetActiveTool` action, e.g. `"select"` or `"pen"`.
   std::string tool;
-  /// CSS property name for \ref Kind::SetStyleProperty, e.g. `"fill"`.
+  /// CSS property name for the \ref ReproAction::Kind `SetStyleProperty` action, e.g. `"fill"`.
   std::string propertyName;
-  /// CSS property value for \ref Kind::SetStyleProperty, e.g. `"#ff0000"`.
+  /// CSS property value for the \ref ReproAction::Kind `SetStyleProperty` action, e.g. `"#ff0000"`.
   std::string propertyValue;
 
-  friend bool operator==(const ReproAction&, const ReproAction&) = default;
+  /**
+   * Compare two recorded semantic actions.
+   * @param lhs First action.
+   * @param rhs Second action.
+   * @return True when the kinds and payloads match.
+   */
+  friend bool operator==(const ReproAction& lhs, const ReproAction& rhs) = default;
 };
 
 /// One discrete event that fired within a frame. Frame-state
@@ -208,6 +241,7 @@ struct ReproAction {
 /// continuous state (key presses, character input, wheel deltas,
 /// resizes).
 struct ReproEvent {
+  /// Discrete input event types supported by the replay format.
   enum class Kind {
     MouseDown,
     MouseUp,
@@ -218,24 +252,25 @@ struct ReproEvent {
     Resize,
     Focus,
   };
+  /// Type of this discrete event.
   Kind kind = Kind::MouseDown;
-  // Mouse button index for MouseDown / MouseUp. 0 = left, 1 = right, 2 = middle.
+  /// Mouse button index for MouseDown/MouseUp: 0 left, 1 right, 2 middle.
   int mouseButton = 0;
-  // ImGui key enum value for KeyDown / KeyUp. Preserved as int to avoid
-  // importing imgui.h in this header.
+  /// ImGui key enum value for KeyDown/KeyUp, stored as an int without including imgui.h.
   int key = 0;
-  // Modifier flags (Ctrl/Shift/Alt/Super) packed as a bitmask matching
-  // ImGui's `ImGuiKey_ModXxx` bits.
+  /// Ctrl/Shift/Alt/Super flags packed into bits 0-3, respectively.
   int modifiers = 0;
-  // UTF-32 code point for Char events.
+  /// UTF-32 code point for Char events.
   std::uint32_t codepoint = 0;
-  // Wheel delta (x, y) for Wheel events.
+  /// Horizontal wheel delta for Wheel events.
   float wheelDeltaX = 0.0f;
+  /// Vertical wheel delta for Wheel events.
   float wheelDeltaY = 0.0f;
-  // Window width / height for Resize events (logical, pre-DPI).
+  /// Logical window width for Resize events, before DPI scaling.
   int width = 0;
+  /// Logical window height for Resize events, before DPI scaling.
   int height = 0;
-  // Focus on/off for Focus events.
+  /// Focus on/off for Focus events.
   bool focusOn = true;
   /// Hit-test checkpoint for `MouseDown` events.
   std::optional<ReproHit> hit;
@@ -253,9 +288,11 @@ struct ReproFrame {
   double deltaMs = 0.0;
   /// Current mouse position in logical window coordinates.
   double mouseX = 0.0;
+  /// Current vertical mouse position in logical window coordinates.
   double mouseY = 0.0;
   /// Current mouse position in SVG-document coordinates.
   std::optional<double> mouseDocX;
+  /// Current vertical mouse position in SVG-document coordinates.
   std::optional<double> mouseDocY;
   /// Bitmask of currently-held mouse buttons. Bit N set means button N down.
   int mouseButtonMask = 0;
@@ -280,7 +317,13 @@ struct ReproExpectedCrop {
   /// Height in pixels.
   int height = 0;
 
-  friend bool operator==(const ReproExpectedCrop&, const ReproExpectedCrop&) = default;
+  /**
+   * Compare two recorded crop rectangles.
+   * @param lhs First crop.
+   * @param rhs Second crop.
+   * @return True when all four crop fields match.
+   */
+  friend bool operator==(const ReproExpectedCrop& lhs, const ReproExpectedCrop& rhs) = default;
 };
 
 /// What a curated replay fixture is expected to prove.
@@ -322,7 +365,13 @@ struct ReproExpectation {
   /// Status substring that must not persist through the assertion window.
   std::optional<std::string> forbiddenStatusSubstring;
 
-  friend bool operator==(const ReproExpectation&, const ReproExpectation&) = default;
+  /**
+   * Compare two curated replay expectations.
+   * @param lhs First expectation.
+   * @param rhs Second expectation.
+   * @return True when every expected field matches.
+   */
+  friend bool operator==(const ReproExpectation& lhs, const ReproExpectation& rhs) = default;
 };
 
 /// Session-level metadata captured at recording start.
@@ -343,6 +392,7 @@ struct ReproMetadata {
   std::optional<std::string> svgSource;
   /// Logical window size at start. Replayer sets this on its mock window.
   int windowWidth = 0;
+  /// Logical window height at start, before DPI scaling.
   int windowHeight = 0;
   /// HiDPI display scale at start (`io.DisplayFramebufferScale.x`).
   double displayScale = 1.0;
@@ -357,7 +407,9 @@ struct ReproMetadata {
 
 /// In-memory form of a loaded or in-progress recording.
 struct ReproFile {
+  /// Session metadata recorded before the first frame.
   ReproMetadata metadata;
+  /// Ordered input frames and semantic actions.
   std::vector<ReproFrame> frames;
 };
 
