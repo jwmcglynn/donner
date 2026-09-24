@@ -2165,7 +2165,6 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     message: "Text tool after sampled Fill",
     timeoutMs: scaledMs(4_000),
   });
-  await waitForPressReadiness(page, "Text tool toolbar activation after eyedropper sampling");
   await page.mouse.click(textTool.x, textTool.y);
   const textPoint = splashDocumentToPage(viewport, { x: 735, y: 400 });
   await page.mouse.move(textPoint.x, textPoint.y);
