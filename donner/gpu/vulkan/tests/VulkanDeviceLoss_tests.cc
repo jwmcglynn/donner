@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -169,6 +170,22 @@ TEST_F(VulkanDeviceLossTest, ADeviceLostSubmissionDeclaresTheRootLostAsABackendR
   device_->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
                                     "a later queue drain");
   EXPECT_THAT(rootLoss_->timedOutSite.load(), Eq(DeviceLostWaitSite::None));
+}
+
+TEST_F(VulkanDeviceLossTest, ADeclaredRootLossRefusesRepeatedSubmissionsBeforeFlight) {
+  // Prepare valid work before the sibling's declaration, so encoder admission does not mask the
+  // submission gate. A logical loss leaves the native Vulkan device usable by the driver.
+  std::array<CommandBuffer, 3> prepared{
+      GetResultOrFail(GetResultOrFail(device_->createCommandEncoder())->finish()),
+      GetResultOrFail(GetResultOrFail(device_->createCommandEncoder())->finish()),
+      GetResultOrFail(GetResultOrFail(device_->createCommandEncoder())->finish())};
+  ASSERT_THAT(DeclareDeviceLost(*rootLoss_), IsTrue());
+  for (CommandBuffer& buffer : prepared) {
+    EXPECT_THAT(device_->submit(std::move(buffer)), IsGpuError(GpuErrorType::DeviceLost));
+    EXPECT_THAT(device_->lastSubmittedSerial(), Eq(0u))
+        << "work over the lost root must never be accepted into flight";
+  }
+  EXPECT_THAT(device_->bufferWriteStatsForTest().inFlightBytes, Eq(0u));
 }
 
 TEST_F(VulkanDeviceLossTest, ADriverReportedLossRefusesReadsThroughAReadyMappingAsALoss) {
