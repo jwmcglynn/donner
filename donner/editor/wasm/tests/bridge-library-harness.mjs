@@ -81,8 +81,9 @@ function createCommandEncoder() {
 }
 
 /**
- * A GPU device the stub adapter hands out, with a loss promise the test resolves itself. Its queue
- * reports submitted work done once the test lets it, so a completed serial can be observed.
+ * A GPU device the stub adapter hands out, a fresh one for every request, with a loss promise the
+ * test resolves itself. Its queue reports submitted work done once the test lets it, so a completed
+ * serial can be observed.
  */
 export function createDevice() {
   let lose = () => {};
@@ -139,9 +140,18 @@ export async function until(reached, description) {
 }
 
 /**
+ * Lets every callback the stubs have settled so far run. They all settle in microtasks, which run
+ * before the next turn of the event loop, so one turn is enough. For asserting that something did
+ * not happen, where there is no state to wait for.
+ */
+export async function drain() {
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
  * Evaluates the library with a stub browser around it and returns what a test drives it through:
- * its entry points, its shared state, the canvases it can resolve, the device the stub adapter
- * hands out and how many times one was asked for, and a heap to pass strings and out-parameters
+ * its entry points, its shared state, the canvases it can resolve, the devices the stub adapter has
+ * handed out and how many times one was asked for, and a heap to pass strings and out-parameters
  * through.
  */
 export function loadLibrary() {
@@ -158,7 +168,7 @@ export function loadLibrary() {
   };
 
   const canvases = new Map();
-  const { device, lose } = createDevice();
+  const handedOut = [];
   let adapterRequests = 0;
   const sandbox = {
     HEAPU8: bytes,
@@ -196,7 +206,13 @@ export function loadLibrary() {
         getPreferredCanvasFormat: () => "bgra8unorm",
         requestAdapter: async () => {
           adapterRequests += 1;
-          return { requestDevice: async () => device };
+          return {
+            requestDevice: async () => {
+              const created = createDevice();
+              handedOut.push(created);
+              return created.device;
+            },
+          };
         },
       },
     },
@@ -218,9 +234,20 @@ export function loadLibrary() {
   return {
     entryPoints,
     state,
-    device,
-    lose,
     words,
+    /** The device the stub adapter handed out last, or null before any request settles. */
+    get device() {
+      return handedOut.length === 0 ? null : handedOut[handedOut.length - 1].device;
+    },
+    /** Every device the stub adapter has handed out, in order. */
+    get devices() {
+      return handedOut.map((created) => created.device);
+    },
+    /** Reports the device handed out last lost, with `info` as the browser's reason. */
+    lose(info) {
+      assert.ok(handedOut.length > 0, "no device has been handed out to lose");
+      handedOut[handedOut.length - 1].lose(info);
+    },
     /** The identifiers the logical device `handle` holds, or fails the test if it holds none. */
     objects(handle) {
       const record = state.logical?.get(handle);

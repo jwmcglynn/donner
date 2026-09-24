@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { loadLibrary, until } from "./bridge-library-harness.mjs";
+import { drain, loadLibrary, until } from "./bridge-library-harness.mjs";
 
 // Logical-device handles. The runtime mints them and never reuses one; the library only keys its
 // state by them.
@@ -101,6 +101,63 @@ test("a second logical device joins the worker's browser device instead of being
     1,
     "each logical device asked the browser for a GPU device of its own",
   );
+});
+
+/** Waits for the request of the logical device `handle` to settle, and returns its state. */
+async function settled(bridge, handle) {
+  const { entryPoints, state } = bridge;
+  await until(
+    () => entryPoints.donner_gpu_device_request_state(handle) !== state.kRequestPending,
+    `a settled request on logical device ${handle}`,
+  );
+  return entryPoints.donner_gpu_device_request_state(handle);
+}
+
+test("logical devices that begin before the browser answers share its one request", async () => {
+  const bridge = loadLibrary();
+  const { entryPoints, state } = bridge;
+  assert.equal(entryPoints.donner_gpu_begin_device_request(kFirst), state.kSuccess);
+  assert.equal(entryPoints.donner_gpu_begin_device_request(kSecond), state.kSuccess);
+
+  assert.equal(await settled(bridge, kFirst), state.kRequestReady);
+  assert.equal(await settled(bridge, kSecond), state.kRequestReady);
+  assert.equal(bridge.adapterRequests, 1, "a logical device that joined asked for its own device");
+  assert.equal(state.device, bridge.device);
+});
+
+test("a request let go before the browser answers installs nothing, and the next starts over", async () => {
+  const bridge = loadLibrary();
+  const { entryPoints, state } = bridge;
+  assert.equal(entryPoints.donner_gpu_begin_device_request(kFirst), state.kSuccess);
+  entryPoints.donner_gpu_release_device(kFirst);
+  await drain();
+
+  assert.equal(bridge.devices.length, 1, "the browser was never asked for the device");
+  assert.equal(
+    state.device,
+    null,
+    "a request that settled after its device was let go installed it",
+  );
+
+  const kThird = 3;
+  await beginReady(bridge, kThird);
+  assert.equal(bridge.adapterRequests, 2);
+  assert.equal(state.device, bridge.devices[1], "the next request inherited the abandoned device");
+  assert.equal(entryPoints.donner_gpu_device_identity(kThird), kThird);
+});
+
+test("a pending request survives the logical device that began it while another has joined", async () => {
+  const bridge = loadLibrary();
+  const { entryPoints, state } = bridge;
+  assert.equal(entryPoints.donner_gpu_begin_device_request(kFirst), state.kSuccess);
+  assert.equal(entryPoints.donner_gpu_begin_device_request(kSecond), state.kSuccess);
+  entryPoints.donner_gpu_release_device(kFirst);
+
+  assert.equal(await settled(bridge, kSecond), state.kRequestReady);
+  assert.equal(entryPoints.donner_gpu_owns_device(kSecond), 1);
+  assert.equal(bridge.adapterRequests, 1);
+  // The browser device keeps the identity of the request that obtained it.
+  assert.equal(entryPoints.donner_gpu_device_identity(kSecond), kFirst);
 });
 
 /** The protocol's encoding of rgba8unorm, and of a sampled, copyable texture. */
