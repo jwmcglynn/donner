@@ -19,23 +19,44 @@ namespace donner::svg::components {
 /** Aggregate stylesheet cascade and selector traversal budget for one style-computation pass. */
 class StyleResourceBudget {
 public:
+  /// Default maximum rule-to-element matches in one computation pass.
   static constexpr std::size_t kMaximumRuleElementMatches = 1024 * 1024;
+  /// Default maximum declaration applications in one pass.
   static constexpr std::size_t kMaximumDeclarationApplications = 1024 * 1024;
+  /// Default maximum aggregate declaration component work units.
   static constexpr std::size_t kMaximumDeclarationComponentWork = 16 * 1024 * 1024;
+  /// Default maximum aggregate declaration source bytes charged.
   static constexpr std::size_t kMaximumDeclarationByteWork = 16 * 1024 * 1024;
+  /// Default maximum retained complex-property bytes.
   static constexpr std::size_t kMaximumComplexPropertyBytes = 64 * 1024 * 1024;
 
+  /// Independent cascade, traversal, and retained-property limits.
   struct Limits {
+    /// Maximum rule-to-element matches.
     std::size_t ruleElementMatches = kMaximumRuleElementMatches;
+    /// Maximum declaration applications.
     std::size_t declarationApplications = kMaximumDeclarationApplications;
+    /// Maximum aggregate declaration component work units.
     std::size_t declarationComponentWork = kMaximumDeclarationComponentWork;
+    /// Maximum aggregate declaration source bytes charged.
     std::size_t declarationByteWork = kMaximumDeclarationByteWork;
+    /// Maximum retained complex-property bytes for this budget.
     std::size_t complexPropertyBytes = kMaximumComplexPropertyBytes;
+    /// Maximum selector traversal steps.
     std::size_t selectorTraversalSteps = css::SelectorTraversalBudget::kMaximumSteps;
   };
 
+  /**
+   * Construct a style budget with default limits.
+   * @param family Optional shared document-family envelope for retained style bytes.
+   */
   explicit StyleResourceBudget(std::shared_ptr<DocumentResourceFamilyBudget> family = nullptr)
       : family_(std::move(family)) {}
+  /**
+   * Construct a style budget with caller-supplied limits.
+   * @param limits Cascade, traversal, and retained-property ceilings.
+   * @param family Optional shared document-family envelope for retained style bytes.
+   */
   explicit StyleResourceBudget(Limits limits,
                                std::shared_ptr<DocumentResourceFamilyBudget> family = nullptr)
       : limits_(limits),
@@ -49,6 +70,10 @@ public:
 
   StyleResourceBudget(const StyleResourceBudget&) = delete;
   StyleResourceBudget& operator=(const StyleResourceBudget&) = delete;
+  /**
+   * Transfer counters and retained-property reservations from another budget.
+   * @param other Budget whose family charge moves to this instance.
+   */
   StyleResourceBudget(StyleResourceBudget&& other) noexcept
       : limits_(other.limits_),
         selectorTraversal_(std::move(other.selectorTraversal_)),
@@ -64,6 +89,7 @@ public:
   }
   StyleResourceBudget& operator=(StyleResourceBudget&&) = delete;
 
+  /// Reset traversal, match/declaration counters and local refusal; retained bytes remain.
   void reset() {
     selectorTraversal_.reset();
     ruleElementMatches_ = 0;
@@ -73,6 +99,7 @@ public:
     rejected_ = false;
   }
 
+  /// Charge one rule-to-element match, or latch rejection when a limit has been reached.
   [[nodiscard]] bool reserveRuleElementMatch() {
     if (rejected_ || selectorTraversal_.rejected() ||
         ruleElementMatches_ >= limits_.ruleElementMatches) {
@@ -83,6 +110,12 @@ public:
     return true;
   }
 
+  /**
+   * Charge one declaration application and its associated component and source work.
+   * @param componentCount Component work units for this application.
+   * @param sourceBytes Source bytes charged for this application.
+   * @return True when all charges fit; false after a prior or current refusal.
+   */
   [[nodiscard]] bool reserveDeclarationApplication(std::size_t componentCount = 0,
                                                    std::size_t sourceBytes = 0) {
     if (rejected_ || selectorTraversal_.rejected() ||
@@ -100,6 +133,12 @@ public:
     return true;
   }
 
+  /**
+   * Set an entity's retained complex-property charge, releasing bytes on reductions.
+   * @param entity Entity whose property charge changes.
+   * @param byteCount New retained byte count for this entity.
+   * @return True for a reduction or an admitted increase; false for a refused increase.
+   */
   [[nodiscard]] bool reserveComplexPropertyBytes(Entity entity, std::size_t byteCount) {
     const std::size_t previous = reservations_[entity];
     if (byteCount <= previous) {
@@ -125,6 +164,10 @@ public:
     return true;
   }
 
+  /**
+   * Release one entity's retained complex-property bytes, if it has a reservation.
+   * @param entity Entity whose reservation is removed.
+   */
   void release(Entity entity) {
     const auto it = reservations_.find(entity);
     if (it == reservations_.end()) {
@@ -138,6 +181,7 @@ public:
     }
   }
 
+  /// Release all retained complex-property bytes without resetting other counters.
   void releaseAll() {
     if (family_) {
       family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, complexPropertyBytes_);
@@ -146,16 +190,25 @@ public:
     complexPropertyBytes_ = 0;
   }
 
+  /// Return the mutable selector traversal budget for this computation pass.
   [[nodiscard]] css::SelectorTraversalBudget& selectorTraversal() { return selectorTraversal_; }
+  /// Return the selector traversal budget for this computation pass.
   [[nodiscard]] const css::SelectorTraversalBudget& selectorTraversal() const {
     return selectorTraversal_;
   }
+  /// Return the number of rule-to-element matches charged.
   [[nodiscard]] std::size_t ruleElementMatches() const { return ruleElementMatches_; }
+  /// Return the number of declaration applications charged.
   [[nodiscard]] std::size_t declarationApplications() const { return declarationApplications_; }
+  /// Return aggregate declaration component work units charged.
   [[nodiscard]] std::size_t declarationComponentWork() const { return declarationComponentWork_; }
+  /// Return aggregate declaration source bytes charged.
   [[nodiscard]] std::size_t declarationByteWork() const { return declarationByteWork_; }
+  /// Return retained complex-property bytes charged to this budget.
   [[nodiscard]] std::size_t complexPropertyBytes() const { return complexPropertyBytes_; }
+  /// Return whether this budget or its selector traversal budget refused work.
   [[nodiscard]] bool rejected() const { return rejected_ || selectorTraversal_.rejected(); }
+  /// Return the active cascade, traversal, and retained-property ceilings.
   [[nodiscard]] const Limits& limits() const { return limits_; }
 
 private:

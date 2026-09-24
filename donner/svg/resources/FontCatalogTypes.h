@@ -17,7 +17,7 @@ namespace donner::svg {
 /**
  * Where a font family in the \ref FontCatalog originates.
  *
- * The picker groups families by source, and resolution prefers \ref Bundled over \ref System
+ * The picker groups families by source, and resolution prefers `Bundled` over `System`
  * (see \ref FontCatalog and \ref FontManager).
  */
 enum class FontSource {
@@ -27,7 +27,7 @@ enum class FontSource {
 
 /**
  * Coarse style bucket for a font family, used to give the picker variety and (later) to inform
- * generic-family fallback. Best-effort: \ref Unknown is used when a provider cannot classify a
+ * generic-family fallback. Best-effort: `Unknown` is used when a provider cannot classify a
  * family.
  */
 enum class FontCategory {
@@ -83,14 +83,25 @@ enum class FontAssetState { Unavailable, Absent, Queued, Fetching, Ready, Failed
 
 /// Nonblocking metadata for a face. Empty contentId preserves legacy synchronous providers.
 struct FontFaceAvailability {
+  /// Current availability of the shared encoded bytes.
   FontAssetState state = FontAssetState::Unavailable;
+  /// Encoded file format, independent of transport state.
   FontFileFormat format = FontFileFormat::Unknown;
+  /// Opaque encoded-content identity; empty for legacy synchronous providers.
   std::string contentId;
+  /// Generation of the encoded content for cache invalidation.
   uint64_t contentGeneration = 0;
+  /// Expected encoded payload length in bytes.
   size_t encodedBytes = 0;
+  /// Expected decoded font payload length in bytes.
   size_t decodedBytes = 0;
 
-  bool operator==(const FontFaceAvailability&) const = default;
+  /**
+   * Compare two face-availability snapshots.
+   * @param other Snapshot to compare.
+   * @return True when every availability field matches.
+   */
+  bool operator==(const FontFaceAvailability& other) const = default;
 };
 
 /// State of one consumer's resolution, distinct from the availability of shared encoded bytes.
@@ -102,14 +113,25 @@ enum class FontFaceWaitReason { None, SharedDecodeSlot, RetainedBudget };
 
 /// Copyable dependency record suitable for handing off before a temporary document is destroyed.
 struct FontFaceDependency {
+  /// Requested CSS family name.
   std::string family;
+  /// Requested weight, style, and stretch.
   FontFaceRequest request;
+  /// Shared encoded-byte availability observed for this request.
   FontFaceAvailability availability;
+  /// Current resolution state for this consumer.
   FontFaceLoadState state = FontFaceLoadState::WaitingForBytes;
+  /// Reason admission is deferred or failed, if one applies.
   FontFaceWaitReason waitReason = FontFaceWaitReason::None;
+  /// Consumer retained-budget revision used to recheck eligibility.
   uint64_t consumerBudgetRevision = 0;
 
-  bool operator==(const FontFaceDependency&) const = default;
+  /**
+   * Compare two consumer dependency snapshots.
+   * @param other Dependency to compare.
+   * @return True when every dependency field matches.
+   */
+  bool operator==(const FontFaceDependency& other) const = default;
 };
 
 /// Diagnostic output for dependency-bearing test failures and application logs.
@@ -122,6 +144,12 @@ inline std::ostream& operator<<(std::ostream& os, const FontFaceAvailability& av
             << ", decodedBytes=" << availability.decodedBytes << ")";
 }
 
+/**
+ * Print a dependency for diagnostic output.
+ * @param os Stream receiving the diagnostic.
+ * @param dependency Dependency to print.
+ * @return The output stream.
+ */
 inline std::ostream& operator<<(std::ostream& os, const FontFaceDependency& dependency) {
   return os << "FontFaceDependency(family=" << dependency.family << ", " << dependency.request
             << ", " << dependency.availability << ", state=" << static_cast<int>(dependency.state)
