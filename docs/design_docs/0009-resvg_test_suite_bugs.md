@@ -152,7 +152,7 @@ goldens above.
   `golden/*.png` glob in
   [`testdata/BUILD.bazel`](../../donner/svg/renderer/testdata/BUILD.bazel) picks it
   up automatically.
-- Per [project policy](../../CLAUDE.md), never overwrite a golden without explicit
-  approval — these encode deliberate spec/quality judgments.
+- Never overwrite a golden without explicit approval; these images encode deliberate
+  spec and quality judgments.
 - When a `Skip`'d gap in [0021](0021-resvg_feature_gaps.md) is fixed, check whether
   it needs an override here too.

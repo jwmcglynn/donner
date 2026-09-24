@@ -16,7 +16,7 @@ treat it as directional until reconciled with the roadmap.
 
 Release checklist and implementation plan for shipping Donner **v1.0** — the production release.
 This doc is the execution counterpart to the v1.0 section of
-[`docs/ProjectRoadmap.md`](../ProjectRoadmap.md#v10--production-release-in-progress), which
+[`docs/ProjectRoadmap.md`](../ProjectRoadmap.md#v10-production-release-future), which
 remains the public-facing summary.
 
 v1.0 bundles every workstream that was deferred out of v0.5 plus the retrospective items captured
@@ -81,7 +81,7 @@ re-scoped down later if the schedule demands it.
 ## Goals
 
 - Ship v1.0 with every item listed in the [v1.0 ProjectRoadmap
-  section](../ProjectRoadmap.md#v10--production-release-in-progress) closed or explicitly
+  section](../ProjectRoadmap.md#v10-production-release-future) closed or explicitly
   deferred with a follow-up tracking issue.
 - Meet all **Release Criteria** from the ProjectRoadmap v1.0 section:
   - Stable public API for rendering, editing, and authoring.

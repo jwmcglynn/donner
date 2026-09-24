@@ -127,8 +127,7 @@ regression, and both comparison modes pass; do not restore the category-level di
 
 These tests **pass**, but only because `maxMismatchedPixels` was raised far above
 the suite default (100). pixelmatch already excludes anti-aliased pixels, so a
-multi-thousand-px diff on the CPU backend is a _real_ rendering difference. Per
-[CLAUDE.md §"Anti-Aliasing Is Never the Root Cause"](../../CLAUDE.md), "AA drift"
+multi-thousand-px diff on the CPU backend is a _real_ rendering difference. "AA drift"
 is not a valid reason for these magnitudes. The full audit list lives in the test
 file. **B6 (feImage resampling) is now fixed** — see [Recently fixed](#recently-fixed-prs-608611);
 the real cause was a bilinear-vs-bicubic kernel, not the suspected transform bug, and

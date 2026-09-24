@@ -247,7 +247,7 @@ properties, rendering hints, clipping, masking, image sampling, and affine non-s
 also intentionally omits features SVG 2 removed or deprecated. The general rule for an unsupported
 feature is that it is ignored quietly: the document still parses, and the affected element either
 renders without that feature or does not render at all. You rarely get a hard error. See the
-[README feature matrix](../README.md#presentation-attributes-and-css-properties) for the current
+[README feature matrix](https://github.com/jwmcglynn/donner#presentation-attributes-and-css-properties) for the current
 support summary.
 
 Removed or deprecated in SVG 2, and intentionally not implemented:
@@ -343,8 +343,8 @@ for (const ParseDiagnostic& w : warnings.warnings()) {
 Both `ParseResult::error()` and each `ParseDiagnostic` stream a human-readable message with the
 exact line and column, so the location in the source is explicit. To turn diagnostics off, pass
 `ParseWarningSink::Disabled()`; it discards warnings without paying the cost of formatting them.
-Before disabling warnings on a document that does not render correctly, read \ref faq-not-rendered:
-the namespace and ignored-attribute cases that cause silent non-rendering are reported here and
+Before disabling warnings on a document that does not render correctly, read \ref faq-not-rendered.
+The namespace and ignored-attribute cases that cause silent non-rendering are reported here and
 nowhere else.
 
 ## How do I embed Donner without dragging in the editor? {#faq-embed}
