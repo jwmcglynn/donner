@@ -111,6 +111,19 @@ public:
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
 
   /**
+   * Captures a CPU-readable copy of this texture, as \ref takeSnapshot does, but gives up when
+   * \p shouldCancel returns true. It is polled while the capture waits for the device's readback
+   * context and while that context waits for the copy and its mapping, as \ref
+   * RendererGeode::takeSnapshotInterruptibly polls it. Creating the readback context, the first
+   * time a device captures, is not interrupted.
+   *
+   * @param shouldCancel Polled on the capturing thread; empty never cancels.
+   * @return CPU-readable bitmap, or an empty bitmap when the capture failed or was cancelled.
+   */
+  [[nodiscard]] RendererBitmap takeSnapshotInterruptibly(
+      const std::function<bool()>& shouldCancel) const;
+
+  /**
    * Re-point the snapshot at a different content extent inside the same backing texture.
    *
    * Uploaders that keep an oversized allocation alive across re-uploads call this after

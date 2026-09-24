@@ -8300,11 +8300,15 @@ RendererBitmap RendererGeodeTextureSnapshot::readTexture(std::shared_ptr<geode::
 }
 
 RendererBitmap RendererGeodeTextureSnapshot::takeSnapshot() const {
+  return takeSnapshotInterruptibly(/*shouldCancel=*/{});
+}
+
+RendererBitmap RendererGeodeTextureSnapshot::takeSnapshotInterruptibly(
+    const std::function<bool()>& shouldCancel) const {
   if (!isValid() || backing_ == nullptr) {
     return {};
   }
-  return readTexture(device_, backing_->exported, dimensions_, alphaType_,
-                     /*shouldCancel=*/{}, backing_);
+  return readTexture(device_, backing_->exported, dimensions_, alphaType_, shouldCancel, backing_);
 }
 
 RendererBitmap RendererGeode::takeSnapshotInterruptibly(
