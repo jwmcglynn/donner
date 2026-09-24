@@ -14,8 +14,8 @@ function argument(name) {
 
 const port = Number.parseInt(argument("--port"), 10);
 const root = path.resolve(argument("--dir"));
-if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-  throw new Error("--port must be an integer from 1 through 65535");
+if (!Number.isInteger(port) || port < 0 || port > 65535) {
+  throw new Error("--port must be an integer from 0 through 65535");
 }
 
 const contentTypes = new Map([
@@ -87,4 +87,16 @@ const server = createServer(async (request, response) => {
   }
 });
 
-server.listen(port, "127.0.0.1");
+// Playwright keeps this pipe open while its test process is alive. If that
+// process is killed, EOF reaches the server even when its launcher shell is
+// reparented and cannot perform normal teardown.
+process.stdin.once("end", () => process.exit(0));
+process.stdin.resume();
+
+server.listen(port, "127.0.0.1", () => {
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("remote-webserver did not bind a TCP port");
+  }
+  console.log(`DONNER_WASM_BASE_URL=http://127.0.0.1:${address.port}`);
+});

@@ -368,6 +368,15 @@ js_test(
 )
 
 js_test(
+    name = "remote_webserver_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = ["remote-webserver.mjs"],
+    entry_point = "remote-webserver.spec.mjs",
+    node_options = ["--test"],
+)
+
+js_test(
     name = "browser_matrix_tests",
     size = "small",
     copy_data_to_bin = False,

@@ -62,6 +62,19 @@ test("Bazel config supplies a writable per-test Chromium crash database", (t) =>
   assert.equal(environment.BREAKPAD_DUMP_LOCATION, "/unwritable-caller-home/crashes");
 });
 
+test("Bazel web server binds an OS-selected port and exports its URL", (t) => {
+  const { temporary, environment, baseConfig } = fixture(t);
+  const config = evaluateConfig("playwright.bazel.config.js", baseConfig, environment, temporary);
+  assert.match(config.webServer.command, /--port 0(?: |$)/);
+  assert.equal(config.webServer.url, undefined);
+  assert.equal(config.webServer.reuseExistingServer, undefined);
+  const ready = config.webServer.wait.stdout.exec(
+    "DONNER_WASM_BASE_URL=http://127.0.0.1:49152",
+  );
+  assert.equal(ready?.groups?.DONNER_WASM_BASE_URL, "http://127.0.0.1:49152");
+  assert.equal(environment.DONNER_WASM_BASE_URL, undefined);
+});
+
 test("Bazel browser launch preserves caller environment and launch options", (t) => {
   const { temporary, environment, baseConfig } = fixture(t);
   const config = evaluateConfig("playwright.bazel.config.js", baseConfig, environment, temporary);
