@@ -15,7 +15,7 @@ runbook. This def is the map of where truth lives.
 
 ## Source of truth — always read these first
 
-- `docs/release_checklist.md` — the canonical pre/during/post release checklist template. Every
+- `docs/release_checklists/release_checklist.md` — the canonical pre/during/post release checklist template. Every
   release copies this section.
 - `docs/ProjectRoadmap.md` — authoritative next-release scope. §"v0.8" defines the current
   milestone and its release criteria.
@@ -33,12 +33,12 @@ runbook. This def is the map of where truth lives.
   are **frozen** (see guardrail below).
 - `tools/generate_build_report.py` + `tools/generate_build_report_tests.py` — build report
   infrastructure.
-- `.bcr/` + `.github/workflows/release.yml` — BCR publish templates and the tag-triggered release
-  workflow.
+- `.bcr/`, `.github/workflows/bcr_preflight.yml`, and `.github/workflows/publish_bcr.yml` —
+  BCR templates, candidate qualification, and manual fork preparation.
 
 ## Release checklist — gates you must not skip
 
-The checklist (`docs/release_checklist.md`) enforces real invariants. Don't let users shortcut:
+The checklist (`docs/release_checklists/release_checklist.md`) enforces real invariants. Don't let users shortcut:
 
 1. **Warning-clean build** across `//donner/...`.
 2. **Doxygen warning-free** — run `tools/doxygen.sh` with output captured to a log, verify its exit
@@ -63,9 +63,8 @@ The checklist (`docs/release_checklist.md`) enforces real invariants. Don't let 
    lands after every other blocking change (including the `RELEASE_NOTES.md` update), contains
    nothing else, and must be CI-green. The tag never moves retroactively; post-tag fixes are a
    point-release.
-9. **GitHub Release** — `gh release create vX.Y.Z` with the notes body; verify binary artifacts
-   (e.g. `donner-svg_darwin_arm64`, `donner-svg_linux_x86_64`) built by the tag-triggered release
-   workflow are attached.
+9. **GitHub Release** — `gh release create vX.Y.Z` with the notes body and exact preflight attempt;
+   verify the release workflow attaches the qualified Linux and macOS binaries without rebuilding.
 
 Always remind users: a release is **done** when every box is checked, not when the code is
 "ready".
@@ -100,16 +99,17 @@ check `LicenseEntry` candidates and the fallback tables in `generate_build_repor
 
 ## BCR publishing
 
-The flow is **automated**, not a hand-crafted PR. `docs/design_docs/0018-bcr_release.md` is the
-runbook. Key points:
+`docs/design_docs/0018-bcr_release.md` is the runbook. Key points:
 
 - Stamp `MODULE.bazel` first — bump `module(version = ...)` to the release string. There's a
   ReleaseBot-addressed comment at the top of `MODULE.bazel` marking this step (currently
   `0.8.0-pre` → final `0.8.0` at stamp time). Module version must match the git tag.
-- Pushing the tag triggers `.github/workflows/release.yml`, whose `publish-to-bcr` job calls the
-  `bazel-contrib/publish-to-bcr` reusable workflow (`@v1.4.1`, `BCR_PUBLISH_TOKEN` secret). It
-  reads the `.bcr/` templates (`config.yml`, `metadata.template.json`, `source.template.json`,
-  `presubmit.yml`) and opens the BCR PR automatically from the `jwmcglynn` fork.
+- Qualify the exact main commit with `BCR Preflight` before release. The Release workflow attaches
+  its qualified source archive and CLI binaries by digest. It does not publish to BCR.
+- After the Release succeeds, obtain approval for the specific source commit and archive SHA-256,
+  then manually dispatch `.github/workflows/publish_bcr.yml`. It generates and verifies the BCR
+  entry before a create-only push to the owned fork. Inspect the fork diff, title and body, and obtain
+  separate explicit approval before opening any upstream BCR PR.
 - `third_party/bazel/non_bcr_deps.bzl` is a `dev_dependency` extension hiding non-BCR repos
   (harfbuzz, woff2, wgpu-native) from downstream BCR consumers — this is why text-full and Geode
   are not BCR-published configs.
@@ -136,7 +136,7 @@ those notes are frozen; mention it in the v0.8 section instead.
 **"What's left for v0.8?"** — read `docs/ProjectRoadmap.md` §"v0.8" and
 `docs/design_docs/0047-v0_8_showcase.md` and report. Do not trust your memory — the docs move.
 
-**"How do I cut a release?"** — walk them through `docs/release_checklist.md` top to bottom (the
+**"How do I cut a release?"** — walk them through `docs/release_checklists/release_checklist.md` top to bottom (the
 `donner-release` skill covers the same ground procedurally). Don't skip steps because "the last
 release didn't need it", and read the v0.5 retrospective in 0011 for known process bugs.
 

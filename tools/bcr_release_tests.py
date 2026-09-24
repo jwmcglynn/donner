@@ -2,7 +2,9 @@
 
 import base64
 import json
+from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -258,7 +260,7 @@ class SubmissionTest(unittest.TestCase):
                                                                  verify, existing):
         run = run_record(path=release.RELEASE_PATH, event="release")
         published = {"tagName": "v1.0.0", "isDraft": False, "isPrerelease": False}
-        gh.side_effect = [run, published, [{"type": "non_fast_forward"}]]
+        gh.side_effect = [run, published]
         self.assertEqual(release.plan_submission("12", SHA, "c" * 64)["prepare"], "true")
         existing.assert_called_once()
 
@@ -269,10 +271,6 @@ class SubmissionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "published source digest differs"):
             release.plan_submission("12", SHA, "d" * 64)
 
-        gh.side_effect = [run, published, []]
-        with self.assertRaisesRegex(ValueError, "non-fast-forward protection"):
-            release.plan_submission("12", SHA, "c" * 64)
-
     @mock.patch.object(release, "gh_json")
     def test_malformed_approval_fails_before_any_api_call(self, gh):
         with self.assertRaisesRegex(ValueError, "approved source"):
@@ -280,6 +278,89 @@ class SubmissionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "approved source"):
             release.plan_submission("12", SHA, "not-a-digest")
         gh.assert_not_called()
+
+
+class GeneratedEntryTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.registry = Path(self.temp.name) / "registry"
+        self.source = Path(self.temp.name) / "source"
+        self.registry.mkdir()
+        (self.source / ".bcr").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(self.registry)], check=True)
+        subprocess.run(["git", "-C", str(self.registry), "-c", "user.name=Test",
+                        "-c", "user.email=test@example.com", "commit", "--allow-empty",
+                        "-qm", "base"], check=True)
+        entry = self.registry / "modules/donner/1.0.0"
+        entry.mkdir(parents=True)
+        (self.source / "MODULE.bazel").write_text("module(name='donner')\n", encoding="utf-8")
+        (self.source / ".bcr/presubmit.yml").write_text("tasks: []\n", encoding="utf-8")
+        template = {"homepage": "https://github.com/jwmcglynn/donner",
+                    "maintainers": [{"github": "jwmcglynn"}],
+                    "repository": ["github:jwmcglynn/donner"],
+                    "versions": [], "yanked_versions": {}}
+        (self.source / ".bcr/metadata.template.json").write_text(json.dumps(template), encoding="utf-8")
+        (self.registry / "modules/donner/metadata.json").write_text(
+            json.dumps(dict(template, versions=["1.0.0"])), encoding="utf-8")
+        (entry / "MODULE.bazel").write_bytes((self.source / "MODULE.bazel").read_bytes())
+        (entry / "presubmit.yml").write_bytes((self.source / ".bcr/presubmit.yml").read_bytes())
+        expected = {"url": release.bcr_source.source_url("1.0.0"),
+                    "strip_prefix": "donner-1.0.0",
+                    "integrity": "sha256-" + base64.b64encode(bytes.fromhex("c" * 64)).decode()}
+        (entry / "source.json").write_text(json.dumps(expected), encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.registry), "add", "--", "modules/donner"], check=True)
+        self.entry = entry
+
+    def verify(self):
+        release.verify_generated_entry(self.registry, self.source, "1.0.0", "c" * 64)
+
+    def test_exact_generated_entry_matches_approved_source(self):
+        self.verify()
+
+    def test_changed_source_integrity_or_module_bytes_fail(self):
+        with self.assertRaisesRegex(ValueError, "approved source archive"):
+            release.verify_generated_entry(self.registry, self.source, "1.0.0", "d" * 64)
+        (self.entry / "MODULE.bazel").write_text("different\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.registry), "add", "--", "modules/donner"], check=True)
+        with self.assertRaisesRegex(ValueError, "approved module files"):
+            self.verify()
+
+    def test_unstaged_change_does_not_change_verified_commit_bytes(self):
+        (self.entry / "MODULE.bazel").write_text("unstaged\n", encoding="utf-8")
+        self.verify()
+
+    def test_changed_metadata_history_or_maintainer_fails(self):
+        metadata_file = self.registry / "modules/donner/metadata.json"
+        metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+        metadata["versions"] = ["0.9.0", "1.0.0"]
+        metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.registry), "add", "--", "modules/donner"], check=True)
+        with self.assertRaisesRegex(ValueError, "initial history"):
+            self.verify()
+        metadata["versions"] = ["1.0.0"]
+        metadata["maintainers"] = []
+        metadata_file.write_text(json.dumps(metadata), encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.registry), "add", "--", "modules/donner"], check=True)
+        with self.assertRaisesRegex(ValueError, "maintainer fields"):
+            self.verify()
+
+    def test_committed_entry_is_verified_against_its_base(self):
+        base = subprocess.check_output(
+            ["git", "-C", str(self.registry), "rev-parse", "HEAD"], text=True).strip()
+        subprocess.run(["git", "-C", str(self.registry), "-c", "user.name=Test",
+                        "-c", "user.email=test@example.com", "commit", "-qm", "entry"], check=True)
+        commit = subprocess.check_output(
+            ["git", "-C", str(self.registry), "rev-parse", "HEAD"], text=True).strip()
+        subprocess.run(["git", "-C", str(self.registry), "checkout", "--detach", "-q", base],
+                       check=True)
+        release.verify_generated_entry(self.registry, self.source, "1.0.0", "c" * 64, commit)
+
+    def test_unexpected_staged_file_fails_closed(self):
+        (self.registry / "modules/donner/unexpected").write_text("other", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.registry), "add", "--", "modules/donner"], check=True)
+        with self.assertRaisesRegex(ValueError, "unexpected staged files"):
+            self.verify()
 
 
 if __name__ == "__main__":

@@ -105,9 +105,12 @@ rejection paths.
    archive SHA-256. This authorizes fork preparation only, not an upstream PR.
 5. Manually dispatch `Prepare BCR submission` on `main` with those three values. It rechecks the
    Release event, tag/source identity, published source bytes and preflight attempt before using
-   the fork-scoped token. It also requires an active non-fast-forward rule on the exact fork
-   release branch. The pinned publisher pushes a fork branch with
-   `open_pull_request: false` and prints a compare URL; it never files upstream.
+   the fork-scoped token. A tokenless job runs the pinned entry generator, verifies the staged
+   source integrity, module files and metadata, and retains a bounded Git bundle. A separate
+   protected job verifies the bundle digest, base, commit tree and entry bytes before receiving
+   the fork token. A Git push with an empty-expected ref lease creates the branch only while absent;
+   it cannot replace or advance an existing branch. The job prints a compare URL,
+   proposed title and body; it never files upstream.
    `//tools:bcr_release_tests` covers these gates and submission recovery;
    `//tools:security_workflow_policy_tests` checks the manual-only, no-PR workflow policy.
 6. Inspect the actual fork diff, proposed upstream PR title and body, source integrity, module
@@ -124,11 +127,11 @@ rejection paths.
   preflight attempt named in the release event; it never builds a replacement. Missing, expired, or
   ambiguous artifacts stop publication. Requalify a new candidate before release approval; after
   publication, do not silently substitute a later preflight attempt.
-- If fork preparation fails before a branch push, rerun with the same approved Release run ID,
-  source commit and archive SHA-256. If the branch exists, do not rerun the pinned publisher: it
-  uses `git push --force` by design. The fork ruleset prevents non-fast-forward rewrites at push
-  time, including a branch created while environment approval waits. Inspect the branch and its
-  proposed PR manually instead.
+- If fork preparation fails before a branch push, start a new manual dispatch with the same
+  approved Release run ID, source commit and archive SHA-256, or rerun all jobs. A failed-jobs-only
+  rerun cannot find the entry bundle retained under the original run attempt. A competing branch
+  fails the empty-expected ref lease even if its tip could be fast-forwarded. Inspect that branch
+  and its proposed PR manually instead.
 - A matching existing fork branch and open/merged PR is a successful no-op. A conflicting branch,
   closed unmerged PR, or branch without a PR requires manual inspection and is not overwritten.
 - Repair a registry-only error in its existing BCR PR when the released bytes are correct. Keep
@@ -137,23 +140,17 @@ rejection paths.
 ### Maintainer setup
 
 1. Maintain the fork `jwmcglynn/bazel-central-registry`.
-2. Install an active fork ruleset for `refs/heads/donner-v*` with a `non_fast_forward` rule and no
-   bypass for the fork-push token. Verify the effective rule for the intended branch with the
-   GitHub branch-rules API, and rehearse a rejected non-fast-forward push on a disposable branch
-   under the same rule and token before enabling preparation. Without this protection, the
-   pinned publisher's force-push step is unsafe; the planner refuses to prepare a branch.
-3. Configure the `bcr-fork-preparation` environment with required reviewers before dispatch.
+2. Configure the `bcr-fork-preparation` environment with required reviewers before dispatch.
    Store an environment secret named `PUBLISH_TOKEN`: a fine-grained token with contents-write
-   access only to the owned registry fork. The caller passes its repository-scoped
-   `GITHUB_TOKEN` as a placeholder required by the reusable workflow; GitHub gives the called
-   job's environment secret precedence. Without that environment secret, the placeholder cannot
-   push the separate fork. Remove the old broad repository `BCR_PUBLISH_TOKEN` before enabling
-   this path. The fork token is available only after the environment's protection rules pass;
-   it is never passed to preflight or Release.
+   access only to the owned registry fork. The push step fails if the secret is absent; it is
+   unavailable to the entry generator, preflight and Release. Remove the old broad repository
+   `BCR_PUBLISH_TOKEN` before enabling this path. A fork ruleset that blocks force pushes is
+   useful defense in depth; the workflow's empty-expected lease never permits a rewrite or
+   update of an existing fork branch.
    The upstream PR is opened separately from a maintainer's GitHub session after exact approval.
-4. `.bcr/config.yml` declares the module root. `.bcr/metadata.template.json` records the maintainer's
+3. `.bcr/config.yml` declares the module root. `.bcr/metadata.template.json` records the maintainer's
    GitHub login and numeric ID. `.bcr/source.template.json` names the stable asset and strip prefix.
-5. Review `.bcr/presubmit.yml` when public targets or supported Bazel/platform versions change.
+4. Review `.bcr/presubmit.yml` when public targets or supported Bazel/platform versions change.
 
 ## Common failures and fixes
 
