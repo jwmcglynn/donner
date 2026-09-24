@@ -777,6 +777,129 @@ TEST(EditorControlSessionTest, SelectsBySelectorAndDragsThroughCompositedPreview
   EXPECT_TRUE(sawCompositedPreview);
 }
 
+TEST(EditorControlSessionTest, DocumentDragMovesWorldBoundsByTheRequestedDelta) {
+  constexpr std::array<std::string_view, 2> kScenes = {
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
+<rect id="target" x="20" y="30" width="40" height="20" fill="red"/></svg>)svg",
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
+<g transform="translate(40 20) rotate(30) scale(1.5 0.75)">
+<rect id="target" x="20" y="30" width="40" height="20" fill="red"/></g></svg>)svg",
+  };
+
+  for (const std::string_view source : kScenes) {
+    SCOPED_TRACE(source);
+    EditorControlSession session;
+    const ToolCallResult load =
+        session.handleToolCall("load_svg", json{{"svg_source", source},
+                                                {"canvas_width", 300},
+                                                {"canvas_height", 200},
+                                                {"render_after_load", false}});
+    ASSERT_FALSE(load.isError) << load.body.dump(2);
+    const auto bounds = [&session]() {
+      return session.handleToolCall("select_by_selector",
+                                    json{{"selector", "#target"}, {"render", false}});
+    };
+    const ToolCallResult before = bounds();
+    ASSERT_FALSE(before.isError) << before.body.dump(2);
+    ASSERT_TRUE(before.body["selection_bounds_doc"].is_object());
+
+    const ToolCallResult drag =
+        session.handleToolCall("drag_selector", json{{"selector", "#target"},
+                                                     {"delta_x", 50.0},
+                                                     {"delta_y", 30.0},
+                                                     {"frames", 2},
+                                                     {"render_mouse_down", false},
+                                                     {"include_final_frame", false}});
+    ASSERT_FALSE(drag.isError) << drag.body.dump(2);
+    const ToolCallResult after = bounds();
+    ASSERT_FALSE(after.isError) << after.body.dump(2);
+    ASSERT_TRUE(after.body["selection_bounds_doc"].is_object());
+
+    const json& initial = before.body["selection_bounds_doc"]["center"];
+    const json& final = after.body["selection_bounds_doc"]["center"];
+    EXPECT_NEAR(final["x"].get<double>() - initial["x"].get<double>(), 50.0, 1e-6)
+        << before.body.dump(2) << after.body.dump(2);
+    EXPECT_NEAR(final["y"].get<double>() - initial["y"].get<double>(), 30.0, 1e-6)
+        << before.body.dump(2) << after.body.dump(2);
+  }
+}
+
+TEST(EditorControlSessionTest, ScreenSpaceReplayConvertsDragDistanceByViewportZoom) {
+  constexpr std::string_view kScene = R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+    width="300" height="200"><rect id="target" x="20" y="30" width="40" height="20"/>
+</svg>)svg";
+  repro::ReproViewport viewport;
+  viewport.paneSizeW = 300;
+  viewport.paneSizeH = 200;
+  viewport.zoom = 1.15;
+  viewport.panDocX = 150;
+  viewport.panDocY = 100;
+  viewport.panScreenX = 150;
+  viewport.panScreenY = 100;
+  viewport.viewBoxW = 300;
+  viewport.viewBoxH = 200;
+
+  for (const double dpr : {1.0, 2.0}) {
+    for (const bool documentInput : {false, true}) {
+      SCOPED_TRACE(dpr);
+      SCOPED_TRACE(documentInput);
+      viewport.devicePixelRatio = dpr;
+      repro::ReproFile replay;
+      replay.metadata.svgPath = "drag_distance.svg";
+      replay.metadata.svgSource = std::string(kScene);
+      replay.metadata.windowWidth = 300;
+      replay.metadata.windowHeight = 200;
+      replay.metadata.displayScale = dpr;
+      constexpr std::array<double, 4> kScreenX = {23.5, 48.5, 73.5, 73.5};
+      constexpr std::array<double, 4> kScreenY = {31.0, 46.0, 61.0, 61.0};
+      constexpr std::array<double, 4> kDocumentX = {40.0, 65.0, 90.0, 90.0};
+      constexpr std::array<double, 4> kDocumentY = {40.0, 55.0, 70.0, 70.0};
+      for (std::uint64_t index = 0; index < kScreenX.size(); ++index) {
+        repro::ReproFrame frame;
+        frame.index = index;
+        frame.timestampSeconds = static_cast<double>(index) / 60.0;
+        frame.deltaMs = 1000.0 / 60.0;
+        frame.mouseX = kScreenX[index];
+        frame.mouseY = kScreenY[index];
+        frame.mouseButtonMask = index < 3 ? 1 : 0;
+        frame.viewport = viewport;
+        if (documentInput) {
+          frame.mouseDocX = kDocumentX[index];
+          frame.mouseDocY = kDocumentY[index];
+        }
+        if (index == 0) {
+          repro::ReproEvent down;
+          down.kind = repro::ReproEvent::Kind::MouseDown;
+          down.hit = repro::ReproHit{.id = "target", .tag = "rect"};
+          frame.events.push_back(std::move(down));
+        } else if (index == 3) {
+          frame.events.push_back({.kind = repro::ReproEvent::Kind::MouseUp});
+        }
+        replay.frames.push_back(std::move(frame));
+      }
+
+      const std::filesystem::path path =
+          TestScratchDir() / ("drag_distance_" + std::to_string(static_cast<int>(dpr)) +
+                              (documentInput ? "_doc.rnr" : "_screen.rnr"));
+      ASSERT_TRUE(repro::WriteReproFile(path, replay));
+      EditorControlSession session;
+      const ToolCallResult result =
+          session.handleToolCall("replay_rnr", json{{"rnr_path", path.string()},
+                                                    {"render_each_frame", false},
+                                                    {"include_frame_results", false}});
+      ASSERT_FALSE(result.isError) << "drag replay failed";
+      const ToolCallResult selection = session.handleToolCall(
+          "select_by_selector", json{{"selector", "#target"}, {"render", false}});
+      ASSERT_FALSE(selection.isError) << selection.body.dump(2);
+      const json& center = selection.body["selection_bounds_doc"]["center"];
+      const double expectedX = documentInput ? 90.0 : 40.0 + 50.0 / viewport.zoom;
+      const double expectedY = documentInput ? 70.0 : 40.0 + 30.0 / viewport.zoom;
+      EXPECT_NEAR(center["x"].get<double>(), expectedX, 1e-6) << selection.body.dump(2);
+      EXPECT_NEAR(center["y"].get<double>(), expectedY, 1e-6) << selection.body.dump(2);
+    }
+  }
+}
+
 TEST(EditorControlSessionTest, TransformSelectorResizesThroughHandleAndExposesAffinePreview) {
   constexpr std::string_view kScene = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 80" width="100" height="80">
