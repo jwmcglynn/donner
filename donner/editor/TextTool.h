@@ -10,8 +10,9 @@
 /// Backspace/Delete, and caret movement edit the live `<text>` element
 /// through the DOM mutation seam; box text wraps greedily to the box width
 /// using the engine's measured character geometry. Cmd/Ctrl+B/I/U toggle
-/// bold, italic, and underline on the element. Escape, clicking away, or
-/// switching tools commits the session as a single undoable operation (an
+/// bold, italic, and underline at the caret or over a selected range.
+/// Escape, clicking away, or switching tools commits the session as a single
+/// undoable operation (an
 /// empty session on a newly created element deletes it, leaving the document
 /// unchanged; emptying an existing element deletes it as an undoable edit).
 
@@ -95,6 +96,13 @@ public:
     std::size_t end = 0;
 
     bool operator==(const SelectionRange&) const = default;
+  };
+
+  /// Effective B/I/U formatting for the active typing position.
+  struct ActiveStyle {
+    bool bold = false;
+    bool italic = false;
+    bool underline = false;
   };
 
   /// Drag-to-create preview chrome (document space): the live box being
@@ -188,12 +196,14 @@ public:
   /// Select the full logical contents of the active session.
   void selectAll();
 
-  /// Toggle `font-weight: bold` on the session's text element.
+  /// Toggle bold for subsequent typing or the selected character range.
   void toggleBold(EditorApp& editor);
-  /// Toggle `font-style: italic` on the session's text element.
+  /// Toggle italic for subsequent typing or the selected character range.
   void toggleItalic(EditorApp& editor);
-  /// Toggle `text-decoration: underline` on the session's text element.
+  /// Toggle underline for subsequent typing or the selected character range.
   void toggleUnderline(EditorApp& editor);
+  /// Formatting shown by the toolbar while this tool owns the caret.
+  [[nodiscard]] ActiveStyle activeStyle() const;
 
   /// Commit the active session as one undoable operation. An empty session
   /// deletes the created element, restoring the pre-session document and
@@ -261,6 +271,10 @@ private:
   /// Delete the active text range and collapse the caret to its start.
   /// Returns true when content was removed.
   bool deleteSelection();
+  /// Apply a B/I/U bit to the selection or the active typing style.
+  void toggleStyle(EditorApp& editor, unsigned char bit);
+  /// Derive typing style from text adjacent to the caret after navigation.
+  void updateActiveStyleFromCaret();
   /// The session frame in the text's local space: the authored box for box
   /// text, or the font em-box bounds for point text. Nullopt when no glyph
   /// geometry exists and no box is authored.
@@ -346,6 +360,12 @@ private:
   Vector2d originText_ = Vector2d::Zero();
   /// Logical content with '\n' hard breaks, in code points.
   std::u32string content_;
+  /// Effective B/I/U bits per code point, including hard breaks.
+  std::vector<unsigned char> characterStyles_;
+  /// Formatting inherited from the root <text> element.
+  unsigned char baseStyle_ = 0;
+  /// Formatting applied to newly inserted characters.
+  unsigned char activeStyle_ = 0;
   /// Caret position in code points (0..content_.size()).
   std::size_t caretIndex_ = 0;
   /// Fixed end of an active range. The moving end is `caretIndex_`.

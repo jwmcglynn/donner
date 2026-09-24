@@ -416,24 +416,114 @@ TEST_F(TextToolTest, DeletingNewlineCollapsesBackToSingleTextNode) {
   EXPECT_EQ(text().textContent(), "AB");
 }
 
-TEST_F(TextToolTest, ToggleBoldItalicUnderlineSetAndRemoveAttributes) {
+TEST_F(TextToolTest, FormattingAtCaretAppliesOnlyToSubsequentTyping) {
   doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");
 
   tool.toggleBold(app);
-  EXPECT_THAT(attr(text(), "font-weight"), Eq("bold"));
-  tool.toggleBold(app);
+  tool.toggleItalic(app);
+  tool.toggleUnderline(app);
+  type("!");
   EXPECT_THAT(attr(text(), "font-weight"), Eq(""));
-
-  tool.toggleItalic(app);
-  EXPECT_THAT(attr(text(), "font-style"), Eq("italic"));
-  tool.toggleItalic(app);
   EXPECT_THAT(attr(text(), "font-style"), Eq(""));
-
-  tool.toggleUnderline(app);
-  EXPECT_THAT(attr(text(), "text-decoration"), Eq("underline"));
-  tool.toggleUnderline(app);
   EXPECT_THAT(attr(text(), "text-decoration"), Eq(""));
+  EXPECT_THAT(tool.sessionContent(), Eq(U"Hi!"));
+  ASSERT_EQ(tspanCount(), 2);
+  svg::SVGElement plain = *text().firstChild();
+  svg::SVGElement styled = *plain.nextSibling();
+  EXPECT_THAT(plain.cast<svg::SVGTSpanElement>().textContent(), Eq("Hi"));
+  EXPECT_THAT(styled.cast<svg::SVGTSpanElement>().textContent(), Eq("!"));
+  EXPECT_THAT(attr(styled, "font-weight"), Eq("bold"));
+  EXPECT_THAT(attr(styled, "font-style"), Eq("italic"));
+  EXPECT_THAT(attr(styled, "text-decoration"), Eq("underline"));
+
+  tool.toggleBold(app);
+  type("?");
+  EXPECT_THAT(tool.sessionContent(), Eq(U"Hi!?"));
+  EXPECT_THAT(attr(*text().firstChild()->nextSibling()->nextSibling(), "font-weight"), Eq(""));
+}
+
+TEST_F(TextToolTest, SelectedFormattingSurvivesTypingAndReopening) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("ABCD");
+  tool.moveCaret(app, TextTool::CaretMove::LineStart);
+  tool.moveCaret(app, TextTool::CaretMove::Right);
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extendSelection=*/true);
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extendSelection=*/true);
+  ASSERT_THAT(tool.selectionRange(), Optional(TextTool::SelectionRange{1u, 3u}));
+
+  tool.toggleBold(app);
+  ASSERT_THAT(tool.selectionRange(), Optional(TextTool::SelectionRange{1u, 3u}));
+  ASSERT_EQ(tspanCount(), 3);
+  svg::SVGElement first = *text().firstChild();
+  svg::SVGElement middle = *first.nextSibling();
+  svg::SVGElement last = *middle.nextSibling();
+  EXPECT_THAT(first.cast<svg::SVGTSpanElement>().textContent(), Eq("A"));
+  EXPECT_THAT(middle.cast<svg::SVGTSpanElement>().textContent(), Eq("BC"));
+  EXPECT_THAT(last.cast<svg::SVGTSpanElement>().textContent(), Eq("D"));
+  EXPECT_THAT(attr(middle, "font-weight"), Eq("bold"));
+  EXPECT_THAT(attr(first, "font-weight"), Eq(""));
+  EXPECT_THAT(attr(last, "font-weight"), Eq(""));
+
+  tool.insertCodepoint(app, U'x');
+  EXPECT_THAT(tool.sessionContent(), Eq(U"AxD"));
+  ASSERT_EQ(tspanCount(), 3);
+  EXPECT_THAT(attr(*text().firstChild()->nextSibling(), "font-weight"), Eq("bold"));
+  ASSERT_TRUE(tool.commit(app));
+  EXPECT_THAT(std::string(app.document().document().source()),
+              testing::HasSubstr("font-weight=\"bold\""));
+
+  const Vector2d glyphStart = text().getStartPositionOfChar(1);
+  const Vector2d glyphEnd = text().getEndPositionOfChar(1);
+  clickAt(Vector2d(glyphStart.x + (glyphEnd.x - glyphStart.x) * 0.75, glyphStart.y));
+  ASSERT_TRUE(tool.isEditing());
+  EXPECT_THAT(tool.sessionContent(), Eq(U"AxD"));
+  EXPECT_TRUE(tool.activeStyle().bold);
+}
+
+TEST_F(TextToolTest, StyledBoxTextKeepsSoftWrapOnReopen) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 120.0));
+  type("MMMM MMMM");
+  ASSERT_GE(tspanCount(), 2);
+
+  for (int i = 0; i < 4; ++i) {
+    tool.moveCaret(app, TextTool::CaretMove::Left, /*extendSelection=*/true);
+  }
+  tool.toggleItalic(app);
+  ASSERT_THAT(tool.selectionRange(), Optional(TextTool::SelectionRange{5u, 9u}));
+  EXPECT_THAT(tool.sessionContent(), Eq(U"MMMM MMMM"));
+  ASSERT_TRUE(tool.commit(app));
+
+  svg::SVGTextElement element = text();
+  EXPECT_EQ(element.getNumberOfChars(), 9);
+  const Vector2d glyphStart = element.getStartPositionOfChar(8);
+  const Vector2d glyphEnd = element.getEndPositionOfChar(8);
+  clickAt(Vector2d(glyphStart.x + (glyphEnd.x - glyphStart.x) * 0.75, glyphStart.y));
+  ASSERT_TRUE(tool.isEditing());
+  EXPECT_THAT(tool.sessionContent(), Eq(U"MMMM MMMM"));
+  EXPECT_TRUE(tool.activeStyle().italic);
+}
+
+TEST_F(TextToolTest, PointerCaretUsesFormattingAtNewPosition) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("A");
+  tool.toggleBold(app);
+  type("B");
+  ASSERT_TRUE(tool.activeStyle().bold);
+
+  svg::SVGTextElement element = text();
+  const Vector2d firstStart = element.getStartPositionOfChar(0);
+  const Vector2d firstEnd = element.getEndPositionOfChar(0);
+  clickAt(Vector2d(firstStart.x + (firstEnd.x - firstStart.x) * 0.75, firstStart.y));
+  ASSERT_EQ(tool.caretIndex(), 1u);
+  EXPECT_FALSE(tool.activeStyle().bold);
+  type("x");
+  EXPECT_THAT(tool.sessionContent(), Eq(U"AxB"));
+  ASSERT_EQ(tspanCount(), 2);
+  EXPECT_THAT(text().firstChild()->cast<svg::SVGTSpanElement>().textContent(), Eq("Ax"));
+  EXPECT_THAT(attr(*text().firstChild()->nextSibling(), "font-weight"), Eq("bold"));
 }
 
 TEST_F(TextToolTest, CommitKeepsTextAndEndsSession) {
@@ -949,6 +1039,122 @@ TEST_F(TextToolExistingTextTest, ExistingTspanLinesReconstructAsHardBreaks) {
 
   EXPECT_TRUE(tool.isEditing());
   EXPECT_EQ(tool.sessionContent(), U"One\nTwo");
+}
+
+TEST_F(TextToolExistingTextTest, SelectionCanDisableInheritedBold) {
+  constexpr std::string_view kBoldTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif"
+                 font-weight="bold">Hello</text>
+         </svg>)";
+  ASSERT_TRUE(app.loadFromString(kBoldTextSvg));
+  clickAt(pointInChar(2, /*rightHalf=*/true));
+  tool.selectAll();
+  tool.toggleBold(app);
+
+  EXPECT_THAT(attr(text(), "font-weight"), Eq("bold"));
+  ASSERT_EQ(tspanCount(), 1);
+  EXPECT_THAT(attr(*text().firstChild(), "font-weight"), Eq("normal"));
+  EXPECT_FALSE(tool.activeStyle().bold);
+  EXPECT_THAT(tool.sessionContent(), Eq(U"Hello"));
+}
+
+TEST_F(TextToolExistingTextTest, NumericWeightObliqueAndCombinedDecorationAreActive) {
+  constexpr std::string_view kStyledTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif"
+                 font-weight="700" font-style="oblique"
+                 text-decoration="underline overline">Hello</text>
+         </svg>)";
+  ASSERT_TRUE(app.loadFromString(kStyledTextSvg));
+  clickAt(pointInChar(2, /*rightHalf=*/true));
+
+  EXPECT_TRUE(tool.activeStyle().bold);
+  EXPECT_TRUE(tool.activeStyle().italic);
+  EXPECT_TRUE(tool.activeStyle().underline);
+}
+
+TEST_F(TextToolExistingTextTest, ClassAndInlineStylesRemainActiveInEditedRuns) {
+  constexpr std::string_view kCssTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+           <style>.styled { font-weight: 700; font-style: oblique; }</style>
+           <text id="t" class="styled" x="50" y="80" font-size="20"
+                 style="text-decoration: underline overline">Hello</text>
+         </svg>)";
+  ASSERT_TRUE(app.loadFromString(kCssTextSvg));
+  clickAt(pointInChar(2, /*rightHalf=*/true));
+  EXPECT_TRUE(tool.activeStyle().bold);
+  EXPECT_TRUE(tool.activeStyle().italic);
+  EXPECT_TRUE(tool.activeStyle().underline);
+
+  tool.selectAll();
+  tool.toggleBold(app);
+  EXPECT_FALSE(tool.activeStyle().bold);
+  EXPECT_TRUE(tool.activeStyle().italic);
+  EXPECT_THAT(attr(*text().firstChild(), "font-weight"), Eq("normal"));
+  ASSERT_TRUE(tool.commit(app));
+  clickAt(pointInChar(2, /*rightHalf=*/true));
+  EXPECT_FALSE(tool.activeStyle().bold);
+  EXPECT_TRUE(tool.activeStyle().italic);
+  EXPECT_TRUE(tool.activeStyle().underline);
+}
+
+TEST_F(TextToolExistingTextTest, PartialUnderlineToggleKeepsOtherDecorationLines) {
+  constexpr std::string_view kDecoratedTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif"
+                 style="text-decoration: underline overline">Hello</text>
+         </svg>)";
+  ASSERT_TRUE(app.loadFromString(kDecoratedTextSvg));
+  clickAt(pointInChar(0, /*rightHalf=*/false));
+  tool.moveCaret(app, TextTool::CaretMove::Right);
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extendSelection=*/true);
+  tool.moveCaret(app, TextTool::CaretMove::Right, /*extendSelection=*/true);
+  ASSERT_THAT(tool.selectionRange(), Optional(TextTool::SelectionRange{1u, 3u}));
+  tool.toggleUnderline(app);
+
+  EXPECT_FALSE(tool.activeStyle().underline);
+  ASSERT_EQ(tspanCount(), 3);
+  svg::SVGElement first = *text().firstChild();
+  svg::SVGElement middle = *first.nextSibling();
+  svg::SVGElement last = *middle.nextSibling();
+  EXPECT_THAT(attr(first, "text-decoration"), Eq("underline"));
+  EXPECT_THAT(attr(middle, "text-decoration"), Eq(""));
+  EXPECT_THAT(attr(last, "text-decoration"), Eq("underline"));
+  EXPECT_THAT(text().getComputedStyle().textDecoration.get(),
+              Optional(svg::TextDecoration::Overline));
+}
+
+TEST_F(TextToolExistingTextTest, ExistingTspanOverrideWinsOverRootStyle) {
+  constexpr std::string_view kSpanOverrideSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif"
+                 style="font-weight: 700; font-style: oblique"
+             ><tspan style="font-weight: normal; font-style: normal">Hi</tspan></text>
+         </svg>)";
+  ASSERT_TRUE(app.loadFromString(kSpanOverrideSvg));
+  clickAt(pointInChar(0, /*rightHalf=*/true));
+
+  EXPECT_FALSE(tool.activeStyle().bold);
+  EXPECT_FALSE(tool.activeStyle().italic);
+  EXPECT_THAT(tool.sessionContent(), Eq(U"Hi"));
+}
+
+TEST_F(TextToolExistingTextTest, PositionedStyledTspanIsNotDestructivelyRebuilt) {
+  constexpr std::string_view kRichTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+           <style>.accent { font-family: serif; }</style>
+           <text id="t" x="50" y="80" font-size="20"
+             ><tspan id="segment" x="90" dx="2" fill="red" class="accent">Hi</tspan></text>
+         </svg>)";
+  ASSERT_TRUE(app.loadFromString(kRichTextSvg));
+  const std::string before(app.document().document().source());
+  clickAt(pointInChar(0, /*rightHalf=*/true));
+
+  EXPECT_FALSE(tool.isEditing());
+  EXPECT_THAT(std::string(app.document().document().source()), Eq(before));
+  EXPECT_TRUE(app.document().document().querySelector("#segment").has_value());
+  EXPECT_EQ(app.document().queue().size(), 0u);
 }
 
 TEST_F(TextToolExistingTextTest, TransformedTextClickMapsThroughElementTransform) {
