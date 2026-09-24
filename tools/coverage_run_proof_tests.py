@@ -98,6 +98,15 @@ class CoverageRunProofTest(unittest.TestCase):
         self.assertEqual(result["line_universe"], [
             {"source_file": "donner/editor/repro/ReplayResourceBudget.h", "lines": [1, 2]}
         ])
+        self.assertEqual(result["file_coverage"], [{
+            "source_file": "donner/editor/repro/ReplayResourceBudget.h",
+            "executable_lines": 2,
+            "fully_covered_lines": 0,
+            "partial_lines": 1,
+            "missed_lines": 1,
+            "branches_hit": 1,
+            "branches_found": 2,
+        }])
         self.assertNotIn(_SECRET_URI, json.dumps(result))
         self.assertIn("Complete main baseline", proof.summary_markdown(result))
 

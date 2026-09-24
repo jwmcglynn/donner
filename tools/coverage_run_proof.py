@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import sys
 
-from lcov_metrics import collect_lcov_metrics
+from lcov_metrics import LcovMetrics, collect_lcov_metrics
 
 
 _PATTERN = re.compile(r"[@A-Za-z0-9_./:+*=\-]+\Z")
@@ -187,6 +187,24 @@ def _line_universe(report: Path) -> list[dict[str, object]]:
     return sorted(files, key=lambda entry: entry["source_file"])
 
 
+def _file_coverage(metrics: LcovMetrics, universe: list[dict[str, object]]) -> list[dict[str, object]]:
+    files = sorted(metrics.files, key=lambda file: file.source_file)
+    if [file.source_file for file in files] != [entry["source_file"] for entry in universe]:
+        raise ValueError("filtered LCOV file counters do not match the public file universe")
+    return [
+        {
+            "source_file": file.source_file,
+            "executable_lines": file.codecov_lines.total,
+            "fully_covered_lines": file.codecov_lines.hits,
+            "partial_lines": file.codecov_lines.partials,
+            "missed_lines": file.codecov_lines.misses,
+            "branches_hit": file.branches.hit,
+            "branches_found": file.branches.found,
+        }
+        for file in files
+    ]
+
+
 def _selection_scope(
     *,
     reason: str,
@@ -258,6 +276,7 @@ def make_proof(
         "skipped_targets": skipped,
         "test_counts": dict(sorted(Counter(test["status"] for test in tests).items())),
         "line_universe": universe,
+        "file_coverage": _file_coverage(metrics, universe),
         "report": {
             "source_files": len(metrics.files),
             "executable_lines": metrics.codecov_lines.total,
@@ -299,8 +318,8 @@ def summary_markdown(proof: dict[str, object]) -> str:
             f"{report['executable_lines']} executable lines; "
             f"fully covered {report['fully_covered_lines']}, "
             f"partial {report['partial_lines']}, missed {report['missed_lines']}.",
-            "The retained proof artifact contains each BEP test status and the exact file and "
-            "line universe; raw runner paths are excluded.",
+            "The retained proof artifact contains BEP test status, the exact file and line "
+            "universe, and per-file line/branch counters; raw runner paths are excluded.",
             "",
         ]
     )
