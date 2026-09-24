@@ -15,20 +15,29 @@ namespace donner::editor::repro {
 
 /** Estimated work performed by one semantic replay action. */
 struct ReplaySemanticActionCost {
+  /** Number of semantic actions charged by this estimate. */
   std::size_t actions = 1;
+  /** Number of selected-element mutations charged by this action. */
   std::size_t selectionMutations = 0;
+  /** Estimated source and payload work in bytes. */
   std::size_t weightedWorkBytes = 0;
+  /** False when arithmetic overflow made the estimate unusable. */
   bool valid = true;
 };
 
 /** Estimated source-mutation work from raw replay input dispatched for one frame. */
 struct ReplayInputFrameCost {
+  /** Number of input mutations, including held-key repeats. */
   std::size_t inputMutations = 0;
+  /** Number of candidate scans and selected-shape mutations. */
   std::size_t selectionMutations = 0;
+  /** Estimated source, selection, and input work in bytes. */
   std::size_t weightedWorkBytes = 0;
+  /** False when arithmetic overflow made the estimate unusable. */
   bool valid = true;
 };
 
+/** Aggregate limit for selection mutations during one replay. */
 inline constexpr std::size_t kMaximumReplaySelectionMutations = 8'192;
 
 /**
@@ -41,6 +50,11 @@ inline constexpr std::size_t kMaximumReplaySelectionMutations = 8'192;
  */
 class ReplayHeldMutationKeyState {
 public:
+  /**
+   * Update held keys from a recorded frame and return its repeated source-rewrite count.
+   * @param frame Recorded key edges and modifier snapshot for this frame.
+   * @return Number of repeated source rewrites to charge.
+   */
   [[nodiscard]] std::size_t advanceFrame(const ReproFrame& frame) {
     std::array<bool, kTrackedKeyCount> pressedThisFrame{};
     std::array<bool, kTrackedKeyCount> releasedThisFrame{};
@@ -155,6 +169,13 @@ private:
 
 namespace detail {
 
+/**
+ * Add two size values without wrapping; leave result unchanged on overflow.
+ * @param left First value.
+ * @param right Second value.
+ * @param result Receives the sum only when it fits.
+ * @return True when the sum fits in std::size_t.
+ */
 [[nodiscard]] inline bool CheckedAdd(std::size_t left, std::size_t right, std::size_t* result) {
   if (right > std::numeric_limits<std::size_t>::max() - left) {
     return false;
@@ -163,6 +184,13 @@ namespace detail {
   return true;
 }
 
+/**
+ * Multiply two size values without wrapping; leave result unchanged on overflow.
+ * @param left First value.
+ * @param right Second value.
+ * @param result Receives the product only when it fits.
+ * @return True when the product fits in std::size_t.
+ */
 [[nodiscard]] inline bool CheckedMultiply(std::size_t left, std::size_t right,
                                           std::size_t* result) {
   if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left) {
@@ -380,13 +408,24 @@ namespace detail {
 /** Aggregate runtime budget for replay frames and semantic actions. */
 class ReplayExecutionResourceBudget {
 public:
+  /** Maximum number of playback frames in one replay. */
   static constexpr std::size_t kMaximumPlaybackFrames = 1'024;
+  /** Maximum cumulative physical pixels across playback frames. */
   static constexpr std::size_t kMaximumPixelFrames = 128 * 1024 * 1024;
+  /** Maximum cumulative semantic actions. */
   static constexpr std::size_t kMaximumActions = 4'096;
+  /** Maximum cumulative selection mutations. */
   static constexpr std::size_t kMaximumSelectionMutations = kMaximumReplaySelectionMutations;
+  /** Maximum cumulative raw-input mutations. */
   static constexpr std::size_t kMaximumInputMutations = 8'192;
+  /** Maximum cumulative estimated replay work in bytes. */
   static constexpr std::size_t kMaximumWeightedWorkBytes = 128 * 1024 * 1024;
 
+  /**
+   * Reserve one frame and its physical pixel count before rendering it.
+   * @param physicalPixels Width times height in physical pixels.
+   * @return True when accepted; false after a prior refusal or an over-limit charge.
+   */
   [[nodiscard]] bool reserveFrame(std::size_t physicalPixels) {
     if (rejected_ || frames_ >= kMaximumPlaybackFrames ||
         physicalPixels > kMaximumPixelFrames - pixelFrames_) {
@@ -398,6 +437,11 @@ public:
     return true;
   }
 
+  /**
+   * Reserve a semantic action before invoking its mutation callback.
+   * @param cost Estimated action, selection, and weighted work charges.
+   * @return True when accepted; false after a prior refusal, invalid cost, or over-limit charge.
+   */
   [[nodiscard]] bool reserveAction(const ReplaySemanticActionCost& cost) {
     if (rejected_ || !cost.valid || cost.actions > kMaximumActions - actions_ ||
         cost.selectionMutations > kMaximumSelectionMutations - selectionMutations_ ||
@@ -411,6 +455,11 @@ public:
     return true;
   }
 
+  /**
+   * Reserve raw-input work before dispatching the input frame.
+   * @param cost Estimated input, selection, and weighted work charges.
+   * @return True when accepted; false after a prior refusal, invalid cost, or over-limit charge.
+   */
   [[nodiscard]] bool reserveInput(const ReplayInputFrameCost& cost) {
     if (rejected_ || !cost.valid ||
         cost.inputMutations > kMaximumInputMutations - inputMutations_ ||
@@ -425,12 +474,19 @@ public:
     return true;
   }
 
+  /** Return the number of reserved playback frames. */
   [[nodiscard]] std::size_t frames() const { return frames_; }
+  /** Return the cumulative reserved physical pixel count. */
   [[nodiscard]] std::size_t pixelFrames() const { return pixelFrames_; }
+  /** Return the number of reserved semantic actions. */
   [[nodiscard]] std::size_t actions() const { return actions_; }
+  /** Return the cumulative reserved selection mutations. */
   [[nodiscard]] std::size_t selectionMutations() const { return selectionMutations_; }
+  /** Return the cumulative reserved input mutations. */
   [[nodiscard]] std::size_t inputMutations() const { return inputMutations_; }
+  /** Return the cumulative estimated work in bytes. */
   [[nodiscard]] std::size_t weightedWorkBytes() const { return weightedWorkBytes_; }
+  /** Return whether any reservation has been refused. */
   [[nodiscard]] bool rejected() const { return rejected_; }
 
 private:
@@ -512,12 +568,23 @@ template <typename ActionRange, typename EstimateActionCallback, typename ApplyA
 /** Aggregate retained-memory budget for replay diagnostics. */
 class ReplayDiagnosticsResourceBudget {
 public:
+  /** Maximum total retained diagnostics bytes. */
   static constexpr std::size_t kMaximumBytes = 16 * 1024 * 1024;
+  /** Maximum total retained diagnostics items. */
   static constexpr std::size_t kMaximumItems = 65'536;
+  /** Declared per-string byte limit; \ref reserve enforces only aggregate limits. */
   static constexpr std::size_t kMaximumStringBytes = 4 * 1024;
+  /** Declared per-vector readback item limit; \ref reserve enforces only aggregate limits. */
   static constexpr std::size_t kMaximumReadbackItemsPerVector = 4'096;
+  /** Declared readback text-node limit; \ref reserve enforces only aggregate limits. */
   static constexpr std::size_t kMaximumReadbackTextNodes = 4'096;
 
+  /**
+   * Reserve diagnostics storage; a refusal permanently rejects later reservations.
+   * @param bytes Additional retained bytes to charge.
+   * @param items Additional retained items to charge.
+   * @return True when accepted; false after a prior refusal or an over-limit charge.
+   */
   [[nodiscard]] bool reserve(std::size_t bytes, std::size_t items) {
     if (rejected_ || bytes > kMaximumBytes - bytes_ || items > kMaximumItems - items_) {
       rejected_ = true;
@@ -528,8 +595,11 @@ public:
     return true;
   }
 
+  /** Return the cumulative reserved diagnostics bytes. */
   [[nodiscard]] std::size_t bytes() const { return bytes_; }
+  /** Return the cumulative reserved diagnostics items. */
   [[nodiscard]] std::size_t items() const { return items_; }
+  /** Return whether any diagnostics reservation has been refused. */
   [[nodiscard]] bool rejected() const { return rejected_; }
 
 private:
