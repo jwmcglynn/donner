@@ -198,7 +198,7 @@ test("a shared texture outlives its producer's release until the share is releas
   assert.equal(entryPoints.donner_gpu_destroy_object(kSecond, state.kTexture, 9), state.kSuccess);
   assert.equal(texture.destroyed, false, "releasing an alias destroyed the texture it names");
 
-  entryPoints.donner_gpu_release_texture_share(held);
+  entryPoints.donner_gpu_release_texture_share(kFirst, held);
   assert.equal(texture.destroyed, true, "the texture outlived its last holder");
 });
 
@@ -207,7 +207,7 @@ test("a share released first leaves the texture to its producer", async () => {
   const { entryPoints, state } = bridge;
   assert.equal(createTexture(bridge, kFirst, 5), state.kSuccess);
   const texture = bridge.objects(kFirst).get(5).object;
-  entryPoints.donner_gpu_release_texture_share(share(bridge, kFirst, 5));
+  entryPoints.donner_gpu_release_texture_share(kFirst, share(bridge, kFirst, 5));
   assert.equal(texture.destroyed, false);
 
   assert.equal(entryPoints.donner_gpu_destroy_object(kFirst, state.kTexture, 5), state.kSuccess);
@@ -252,8 +252,90 @@ test("a share of a canvas frame never destroys the canvas's texture", async () =
   const held = share(bridge, kFirst, 2);
 
   assert.equal(entryPoints.donner_gpu_abandon_current_texture(kFirst, 1), state.kSuccess);
-  entryPoints.donner_gpu_release_texture_share(held);
+  entryPoints.donner_gpu_release_texture_share(kFirst, held);
   assert.equal(frame.destroyed, false, "releasing the share destroyed the canvas's own texture");
+});
+
+/** Configures a canvas surface on `handle` under `surfaceId` and takes its frame as `frameId`. */
+function acquireFrame(bridge, handle, surfaceId, frameId) {
+  const { entryPoints, state } = bridge;
+  bridge.addCanvas("#canvas");
+  const name = bridge.string("#canvas");
+  assert.equal(
+    entryPoints.donner_gpu_create_surface(handle, surfaceId, name.pointer, name.length),
+    state.kSuccess,
+  );
+  assert.equal(
+    entryPoints.donner_gpu_configure_surface(handle, surfaceId, 2, 1, 8, 8, state.kAlphaModeOpaque),
+    state.kSuccess,
+  );
+  const status = bridge.outParameter();
+  assert.equal(
+    entryPoints.donner_gpu_acquire_current_texture(handle, surfaceId, frameId, status),
+    state.kSuccess,
+  );
+  return bridge.objects(handle).get(frameId).object;
+}
+
+test("no share outlives the last logical device, and the textures shares held go with it", async () => {
+  const bridge = await twoDevices();
+  const { entryPoints, state } = bridge;
+  assert.equal(createTexture(bridge, kFirst, 5), state.kSuccess);
+  const texture = bridge.objects(kFirst).get(5).object;
+  const frame = acquireFrame(bridge, kFirst, 1, 2);
+  // Neither share is released: a holder dropped on a thread that does not own the device cannot
+  // reach this worker to release it.
+  share(bridge, kFirst, 5);
+  share(bridge, kFirst, 2);
+  assert.equal(entryPoints.donner_gpu_destroy_object(kFirst, state.kTexture, 5), state.kSuccess);
+
+  entryPoints.donner_gpu_release_device(kFirst);
+  entryPoints.donner_gpu_release_device(kSecond);
+  assert.equal(state.shares.size, 0, "a share outlived the browser device it belongs to");
+  assert.equal(texture.destroyed, true, "a texture a share held outlived its browser device");
+  assert.equal(frame.destroyed, false, "the device's teardown destroyed the canvas's own texture");
+});
+
+test("a share of an earlier browser device is refused on the next one", async () => {
+  const bridge = await twoDevices();
+  const { entryPoints, state } = bridge;
+  assert.equal(createTexture(bridge, kFirst, 5), state.kSuccess);
+  const stale = share(bridge, kFirst, 5);
+  entryPoints.donner_gpu_release_device(kFirst);
+  entryPoints.donner_gpu_release_device(kSecond);
+
+  const kThird = 3;
+  await beginReady(bridge, kThird);
+  assert.equal(
+    entryPoints.donner_gpu_register_shared_texture(kThird, 1, stale),
+    state.kUnknownObject,
+    "a share of the released browser device registered on its successor",
+  );
+  assert.equal(bridge.objects(kThird).has(1), false);
+});
+
+test("a share is released only by the logical device that made it", async () => {
+  // Two workers, each with its own copy of the library. Share numbers are each worker's own, while
+  // logical-device handles are unique across workers.
+  const workerA = loadLibrary();
+  const workerB = loadLibrary();
+  await beginReady(workerA, kFirst);
+  await beginReady(workerB, kSecond);
+  assert.equal(createTexture(workerA, kFirst, 5), workerA.state.kSuccess);
+  assert.equal(createTexture(workerB, kSecond, 5), workerB.state.kSuccess);
+  const shareA = share(workerA, kFirst, 5);
+  const shareB = share(workerB, kSecond, 5);
+  assert.equal(shareA, shareB, "the case needs both workers' shares to carry the same number");
+
+  // Worker A's share is dropped on a thread that reaches worker B's library instead.
+  workerB.entryPoints.donner_gpu_release_texture_share(kFirst, shareA);
+  assert.equal(
+    workerB.state.shares.has(shareB),
+    true,
+    "releasing another worker's share released this worker's share of the same number",
+  );
+  workerB.entryPoints.donner_gpu_release_texture_share(kSecond, shareB);
+  assert.equal(workerB.state.shares.has(shareB), false);
 });
 
 test("the browser device goes with the last logical device over it", async () => {
