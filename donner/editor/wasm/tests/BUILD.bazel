@@ -367,6 +367,50 @@ js_test(
     node_options = ["--test"],
 )
 
+# Launch both browser archives on the supported CI platforms, so a fresh fetch
+# is followed by an actual browser start instead of only an unzip action.
+js_test(
+    name = "linux_browser_archive_tests",
+    size = "medium",
+    copy_data_to_bin = False,
+    data = [
+        ":node_modules/@playwright/test",
+        "@playwright//:chromium",
+        "@playwright//:chromium-headless-shell",
+    ],
+    entry_point = "browser-archive-check.mjs",
+    env = {
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    node_options = ["--test"],
+    target_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+)
+
+js_test(
+    name = "mac_browser_archive_tests",
+    size = "medium",
+    copy_data_to_bin = False,
+    data = [
+        ":node_modules/@playwright/test",
+        "@playwright//:chromium",
+        "@playwright//:chromium-headless-shell",
+    ],
+    entry_point = "browser-archive-check.mjs",
+    env = {
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    node_options = ["--test"],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)
+
 js_test(
     name = "remote_webserver_tests",
     size = "small",

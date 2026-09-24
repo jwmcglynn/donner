@@ -188,6 +188,26 @@ playwright.repo(
     integrity_path_map = {
         "builds/firefox/1538/firefox-mac-arm64.zip": "sha256-t7jgaPsXdt7oq/62Sa1jE/nsj2u6ozPY3ADQE8w4klY=",
         "builds/chromium/1234/chromium-linux-arm64.zip": "sha256-ta19j+cPIws0GY3bVibXF8AW2y9ifLRLkiurvK80ebk=",
+        "builds/chromium/1234/chromium-headless-shell-linux-arm64.zip": "sha256-sDRD4eGmDQbge2zf5lC4wr/Ls9tJfStlL3PcaRL0rhU=",
+        "builds/firefox/1538/firefox-debian-12-arm64.zip": "sha256-OZeBnVfJ2kDzT3+czIHTJzkHg56YbOuWRcTQj3G+ELI=",
+        "builds/firefox/1538/firefox-debian-12.zip": "sha256-BLDT2G90cru+vOG3xTaQDQXg62O8/bIs0dqTK16il+c=",
+        "builds/firefox/1538/firefox-mac.zip": "sha256-mE8DUAYtL8x6yedzatPvLYwV2zPuj+PRnFfybiT5p2Y=",
+        "builds/firefox/1538/firefox-ubuntu-20.04-arm64.zip": "sha256-iDkSlDTOgjpnT8PrJs7tAMoqOWdaNqlgW2R+KnDR/MU=",
+        "builds/firefox/1538/firefox-ubuntu-20.04.zip": "sha256-JrwM5t34++qUQ9YYcPcWoYae6QZ0SVcalpfjg93A0aQ=",
+        "builds/firefox/1538/firefox-ubuntu-22.04-arm64.zip": "sha256-BhzXkEKlbDggKv93fACWhtAdF95aPVlcj3HblzEw0bg=",
+        "builds/firefox/1538/firefox-ubuntu-22.04.zip": "sha256-+X3l6xabQcu8ZP2XbidIbteUpYk5LQ0SovZNEnyroH4=",
+        "builds/firefox/1538/firefox-ubuntu-24.04-arm64.zip": "sha256-7AYApAvY+LoiG9jpUq6u+yOqBrWiOYkcDnHGAhCdow4=",
+        "builds/firefox/1538/firefox-ubuntu-24.04.zip": "sha256-SSCNPtdOUlV17KQdBTCCkCuIkz4xlDoJHSUIC9/PyyU=",
+        "builds/webkit/2251/webkit-mac-14-arm64.zip": "sha256-J1Tspbq4dzprExVSjn2PNCl3rOeZs6kTFOG+DLMk7kk=",
+        "builds/webkit/2251/webkit-mac-14.zip": "sha256-UM5dcAQnSwGxBt2lzu5nAwE7e9DQOERXzZOlJM7TQgI=",
+        "builds/webkit/2336/webkit-debian-12-arm64.zip": "sha256-4SxwOqwZBGqNf4FWEKW7oJFjE6v4JDz8fnZBtqESMfQ=",
+        "builds/webkit/2336/webkit-debian-12.zip": "sha256-ldh+7fVUYgAV45KAW+XXGu2727Zd+mxiyUdTz440QG4=",
+        "builds/webkit/2336/webkit-mac-15-arm64.zip": "sha256-zmpuj/J836LbTpJdp3f1/PgKeFwYVBVF5X/+jW/c+qI=",
+        "builds/webkit/2336/webkit-mac-15.zip": "sha256-wH4MS6nffYtV/6Igp9FoNjvXrgyXXsN6VXyVuDwzKrs=",
+        "builds/webkit/2336/webkit-ubuntu-22.04-arm64.zip": "sha256-HPTRpDa5t4WlCY4EKTtHLLtf3ECUUCUulSgFtQ0ArT8=",
+        "builds/webkit/2336/webkit-ubuntu-22.04.zip": "sha256-7WkKCg7Oyl7lnxb6qIy1KYtLbJutN8W3ITyi9oH1qgw=",
+        "builds/webkit/2336/webkit-ubuntu-24.04-arm64.zip": "sha256-Z9oVLHLUUxmqgyju3cGu2cJrHUKGM5WGQgsJqrSyzrg=",
+        "builds/webkit/2336/webkit-ubuntu-24.04.zip": "sha256-NXzV1S8HcPAahsHg4uGTtc/bdgRS/HZuJutcjuOVE0U=",
     },
 )
 
@@ -201,11 +221,79 @@ http_file(
     urls = ["https://cdn.playwright.dev/builds/cft/151.0.7922.34/mac-arm64/chrome-mac-arm64.zip"],
 )
 
+# rules_playwright 0.5.3 also uses retired Chromium paths on Linux x64.
+# Playwright 1.62.1 fetches these Chrome for Testing archives instead.
+http_file(
+    name = "playwright_chromium_linux_x64",
+    dev_dependency = True,
+    integrity = "sha256-roc2rCi8aSeFUVAPIZ/HSVdWSCY8Q+xZkHSe/0O5/Pg=",
+    urls = ["https://cdn.playwright.dev/builds/cft/151.0.7922.34/linux64/chrome-linux64.zip"],
+)
+
+http_file(
+    name = "playwright_chromium_headless_linux_x64",
+    dev_dependency = True,
+    integrity = "sha256-PPwr0A0br8+KaNx0yckrtxUN3I0mrelIp3YxbhzsTxQ=",
+    urls = ["https://cdn.playwright.dev/builds/cft/151.0.7922.34/linux64/chrome-headless-shell-linux64.zip"],
+)
+
+http_file(
+    name = "playwright_chromium_mac_x64",
+    dev_dependency = True,
+    integrity = "sha256-abzIU9uXWiOAdn6f822hfx17eC+74ZGiEPZ20tWWfT4=",
+    urls = ["https://cdn.playwright.dev/builds/cft/151.0.7922.34/mac-x64/chrome-mac-x64.zip"],
+)
+
+http_file(
+    name = "playwright_chromium_headless_mac_arm64",
+    dev_dependency = True,
+    integrity = "sha256-y0ajNtvj1vEznFA5wwg+Tl3Y5DeXEHkONPj0qGXiRS0=",
+    urls = ["https://cdn.playwright.dev/builds/cft/151.0.7922.34/mac-arm64/chrome-headless-shell-mac-arm64.zip"],
+)
+
+http_file(
+    name = "playwright_chromium_headless_mac_x64",
+    dev_dependency = True,
+    integrity = "sha256-YI4rWxgVtF6L9ZyaOBQSti3zzjbywYK8BOIvzwStU+o=",
+    urls = ["https://cdn.playwright.dev/builds/cft/151.0.7922.34/mac-x64/chrome-headless-shell-mac-x64.zip"],
+)
+
 override_repo(
     playwright,
     **{
+        "playwright-chromium-mac10.13": "playwright_chromium_mac_x64",
+        "playwright-chromium-mac10.14": "playwright_chromium_mac_x64",
+        "playwright-chromium-mac10.15": "playwright_chromium_mac_x64",
+        "playwright-chromium-mac11": "playwright_chromium_mac_x64",
+        "playwright-chromium-mac11-arm64": "playwright_chromium_mac_arm64",
+        "playwright-chromium-mac12": "playwright_chromium_mac_x64",
+        "playwright-chromium-mac12-arm64": "playwright_chromium_mac_arm64",
+        "playwright-chromium-mac13": "playwright_chromium_mac_x64",
+        "playwright-chromium-mac13-arm64": "playwright_chromium_mac_arm64",
+        "playwright-chromium-mac14": "playwright_chromium_mac_x64",
         "playwright-chromium-mac14-arm64": "playwright_chromium_mac_arm64",
+        "playwright-chromium-mac15": "playwright_chromium_mac_x64",
         "playwright-chromium-mac15-arm64": "playwright_chromium_mac_arm64",
+        "playwright-chromium-headless-shell-mac11": "playwright_chromium_headless_mac_x64",
+        "playwright-chromium-headless-shell-mac11-arm64": "playwright_chromium_headless_mac_arm64",
+        "playwright-chromium-headless-shell-mac12": "playwright_chromium_headless_mac_x64",
+        "playwright-chromium-headless-shell-mac12-arm64": "playwright_chromium_headless_mac_arm64",
+        "playwright-chromium-headless-shell-mac13": "playwright_chromium_headless_mac_x64",
+        "playwright-chromium-headless-shell-mac13-arm64": "playwright_chromium_headless_mac_arm64",
+        "playwright-chromium-headless-shell-mac14": "playwright_chromium_headless_mac_x64",
+        "playwright-chromium-headless-shell-mac14-arm64": "playwright_chromium_headless_mac_arm64",
+        "playwright-chromium-headless-shell-mac15": "playwright_chromium_headless_mac_x64",
+        "playwright-chromium-headless-shell-mac15-arm64": "playwright_chromium_headless_mac_arm64",
+        "playwright-chromium-debian11-x64": "playwright_chromium_linux_x64",
+        "playwright-chromium-debian12-x64": "playwright_chromium_linux_x64",
+        "playwright-chromium-ubuntu20.04-x64": "playwright_chromium_linux_x64",
+        "playwright-chromium-ubuntu22.04-x64": "playwright_chromium_linux_x64",
+        "playwright-chromium-ubuntu24.04-x64": "playwright_chromium_linux_x64",
+        "playwright-chromium-headless-shell-debian11-x64": "playwright_chromium_headless_linux_x64",
+        "playwright-chromium-headless-shell-debian12-x64": "playwright_chromium_headless_linux_x64",
+        "playwright-chromium-headless-shell-ubuntu20.04-x64": "playwright_chromium_headless_linux_x64",
+        "playwright-chromium-headless-shell-ubuntu22.04-x64": "playwright_chromium_headless_linux_x64",
+        "playwright-chromium-headless-shell-ubuntu24.04-x64": "playwright_chromium_headless_linux_x64",
     }
 )
 
