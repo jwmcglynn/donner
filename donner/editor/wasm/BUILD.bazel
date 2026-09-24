@@ -187,11 +187,23 @@ editor_wasm_geode_only_guard(
 cc_binary(
     name = "_editor_wasm_binary",
     srcs = ["//donner/editor:main.cc"],
-    additional_linker_inputs = _EMDAWNWEBGPU_JS_LIBS + [":_geode_only_guard"],
+    additional_linker_inputs = _EMDAWNWEBGPU_JS_LIBS + [":_geode_only_guard"] + select({
+        "//donner/svg/renderer/geode:browser_backend_enabled": [
+            "//donner/gpu/browser:library_donner_gpu.js",
+        ],
+        "//conditions:default": [],
+    }),
     copts = [
         "-pthread",
     ],
-    linkopts = _EDITOR_LINKOPTS,
+    # The browser backend's bridge calls into its own JavaScript library, which only a build that
+    # links the bridge carries.
+    linkopts = _EDITOR_LINKOPTS + select({
+        "//donner/svg/renderer/geode:browser_backend_enabled": [
+            "--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)",
+        ],
+        "//conditions:default": [],
+    }),
     tags = [
         "manual",
         "wasm",
@@ -255,10 +267,26 @@ editor_wasm_geode_transitioned_target(
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
 
+# The same package with the browser backend selected for headless work, which the browser tests
+# serve beside the production one until the browser backend is the default.
+editor_wasm_geode_transitioned_target(
+    name = "_wasm_web_package_browser_backend_for_serve",
+    browser_backend = True,
+    dep = ":wasm_web_package",
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+)
+
 configured_dependency_audit_test(
     name = "wasm_dependency_audit_test",
     size = "small",
     forbidden = [
+        # The browser backend links only into the package built with it selected, below.
+        "//donner/gpu/browser:browser_device",
+        "//donner/gpu/browser:emscripten_browser_bridge",
         "//donner/svg/renderer:renderer_tiny_skia",
         "//third_party/google_fonts:google_fonts_data",
         "@tracy//:tracy_client",
@@ -276,6 +304,18 @@ configured_dependency_audit_test(
         "//third_party/fira-code:fira-code",
     ],
     target = ":_wasm_web_package_for_serve",
+)
+
+# The package that selects the browser backend for headless work links the backend and its bridge.
+configured_dependency_audit_test(
+    name = "wasm_browser_backend_dependency_audit_test",
+    size = "small",
+    required = [
+        "//donner/editor/wasm:_editor_wasm_binary",
+        "//donner/gpu/browser:browser_device",
+        "//donner/gpu/browser:emscripten_browser_bridge",
+    ],
+    target = ":_wasm_web_package_browser_backend_for_serve",
 )
 
 genquery(

@@ -13,6 +13,7 @@ To enable:
         //donner/svg/renderer/geode/...
 """
 
+load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:package.bzl", "donner_package")
@@ -48,6 +49,35 @@ bool_flag(
 config_setting(
     name = "geode_enabled",
     flag_values = {":enable_geode": "True"},
+    visibility = ["//visibility:public"],
+)
+
+# Build setting that selects the Donner GPU runtime's browser backend for headless work: selections
+# with no surface to present to, such as the editor's raster worker and the snapshot capture
+# contexts beside it. The window stays on the transitional adapter. WebAssembly only; it links the
+# browser bridge into geode_device, and a binary that sets it links the bridge's JavaScript library
+# (see //donner/gpu/browser:emscripten_browser_bridge).
+bool_flag(
+    name = "browser_backend",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+# Public because a config_setting_group's members must be visible wherever the group is selected on.
+config_setting(
+    name = "browser_backend_requested",
+    flag_values = {":browser_backend": "True"},
+    visibility = ["//visibility:public"],
+)
+
+# The setting takes effect only in a WebAssembly build; on any other platform it links nothing and
+# selects nothing, because there is no browser to select.
+selects.config_setting_group(
+    name = "browser_backend_enabled",
+    match_all = [
+        ":browser_backend_requested",
+        "@platforms//cpu:wasm32",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -399,6 +429,10 @@ donner_cc_library(
         ],
         "//conditions:default": [],
     }),
+    local_defines = select({
+        ":browser_backend_enabled": ["DONNER_GEODE_BROWSER_BACKEND=1"],
+        "//conditions:default": [],
+    }),
     target_compatible_with = _GEODE_ONLY,
     visibility = [
         "//donner/editor:__pkg__",
@@ -428,6 +462,12 @@ donner_cc_library(
            ] + select({
                "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
                "@platforms//os:linux": ["//donner/gpu/vulkan:vulkan_device"],
+               "//conditions:default": [],
+           }) + select({
+               ":browser_backend_enabled": [
+                   "//donner/gpu/browser:browser_device",
+                   "//donner/gpu/browser:emscripten_browser_bridge",
+               ],
                "//conditions:default": [],
            }) + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) +
            shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES) +

@@ -262,6 +262,10 @@ public:
   /// (0 if none). Each logical device numbers its submissions on its own.
   virtual uint64_t completedSerial() const = 0;
 
+  /// Largest width or height of a 2D texture the browser device supports, as its limits report
+  /// it, or 0 when this logical device holds no device or the browser reports no such limit.
+  virtual uint32_t maxTextureDimension2D() const = 0;
+
   // Sharing between the logical devices over one browser device. They submit to its one queue, in
   // order, from the thread that owns it, so a registration is ordered after the producer's work by
   // submission order alone.

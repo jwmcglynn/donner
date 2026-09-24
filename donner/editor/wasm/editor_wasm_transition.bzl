@@ -8,8 +8,9 @@ def _append_once(values, value):
         result.append(value)
     return result
 
-def _editor_wasm_geode_transition_impl(settings, _attr):
+def _editor_wasm_geode_transition_impl(settings, attr):
     return {
+        "//donner/svg/renderer/geode:browser_backend": attr.browser_backend,
         "//build_defs:disable_perf_opt_transition": True,
         "//donner/editor/wasm:enable_wasm": True,
         "//donner/svg/renderer/wasm:enable_wasm": True,
@@ -53,6 +54,7 @@ _editor_wasm_geode_transition = transition(
         "//donner/svg/renderer:text",
         "//donner/svg/renderer:text_full",
         "//donner/svg/renderer/geode:enable_geode",
+        "//donner/svg/renderer/geode:browser_backend",
         "//command_line_option:compilation_mode",
         "//command_line_option:copt",
         "//command_line_option:cxxopt",
@@ -72,6 +74,9 @@ def _editor_wasm_geode_transitioned_target_impl(ctx):
 editor_wasm_geode_transitioned_target = rule(
     implementation = _editor_wasm_geode_transitioned_target_impl,
     attrs = {
+        # Whether the package selects the browser backend for headless work; see
+        # //donner/svg/renderer/geode:browser_backend.
+        "browser_backend": attr.bool(default = False),
         "dep": attr.label(
             cfg = _editor_wasm_geode_transition,
             mandatory = True,

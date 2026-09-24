@@ -302,6 +302,14 @@ donner_cc_library(
     ],
 )
 
+# The cache of idle headless devices renderers without a device of their own draw from. A template
+# over the device type, so its handout rules are tested without a GPU.
+donner_cc_library(
+    name = "headless_device_pool",
+    hdrs = ["HeadlessDevicePool.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+)
+
 donner_cc_library(
     name = "pattern_tile",
     srcs = ["PatternTile.cc"],
@@ -403,6 +411,7 @@ donner_cc_library(
     }),
     visibility = ["//visibility:public"],
     deps = [
+        ":headless_device_pool",
         ":pattern_tile",
         ":renderer_driver",
         ":renderer_interface",

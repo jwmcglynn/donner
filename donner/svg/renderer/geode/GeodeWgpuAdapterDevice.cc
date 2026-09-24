@@ -41,6 +41,10 @@
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #endif
+#if defined(__EMSCRIPTEN__) && defined(DONNER_GEODE_BROWSER_BACKEND)
+#include "donner/gpu/browser/BrowserDevice.h"
+#include "donner/gpu/browser/EmscriptenBrowserBridge.h"
+#endif
 
 namespace donner::geode {
 
@@ -524,6 +528,93 @@ std::shared_ptr<GeodeGpuRoot> SelectNativeMetalRoot(
 #endif
 }
 
+#if defined(__EMSCRIPTEN__) && defined(DONNER_GEODE_BROWSER_BACKEND)
+/// Longest a browser device request may take to settle before the selection or the device that
+/// asked gives up. The first request in a worker waits for the browser to hand over an adapter
+/// and a device; every later one joins the device the root holds and settles at once.
+constexpr double kBrowserDeviceSettleSeconds = 10.0;
+
+/// Opens one runtime device on this worker's browser GPU device, asking the browser for that
+/// device if no runtime device in the worker holds it yet.
+///
+/// The browser settles the request from a promise callback, so the wait hands the thread over in
+/// short slices rather than holding it, and gives up after \ref kBrowserDeviceSettleSeconds.
+///
+/// @param lostState Loss condition the device shares with the others over its root.
+/// @return The device, or an error naming why the browser did not supply one.
+gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> OpenBrowserDevice(
+    std::shared_ptr<gpu::DeviceLostState> lostState) {
+  gpu::browser::BrowserDeviceRequest request = gpu::browser::BrowserDeviceRequest::Begin(
+      std::make_unique<gpu::browser::EmscriptenBrowserBridge>());
+  if (request.settle(kBrowserDeviceSettleSeconds) ==
+      gpu::browser::BrowserDeviceRequestState::Pending) {
+    return gpu::GpuError{
+        gpu::GpuErrorType::InvalidState,
+        std::format("the browser did not settle its GPU device request within {} seconds",
+                    kBrowserDeviceSettleSeconds)};
+  }
+  return std::move(request).take(std::move(lostState));
+}
+#endif
+
+/// Selects the browser backend: the root holds one runtime device over this worker's browser GPU
+/// device, which keeps that device open for as long as any runtime device over the root, so each
+/// of them joins it instead of asking the browser for another. Offered only for headless work,
+/// and refused elsewhere rather than falling back to the transitional adapter.
+///
+/// @param options Caller-supplied inputs. A selection constrained to a wgpu surface is refused
+///   before its surface provider runs: the browser backend presents to no wgpu surface.
+/// @param lostState Loss condition every runtime device over this root shares, and which the
+///   browser reporting its device lost declares.
+/// @return The selected root, or null for a surface-constrained selection, in a build without the
+///   browser backend, or when the browser supplied no device.
+std::shared_ptr<GeodeGpuRoot> SelectBrowserRoot(const GpuRootSelection& options,
+                                                std::shared_ptr<gpu::DeviceLostState> lostState) {
+#if defined(__EMSCRIPTEN__) && defined(DONNER_GEODE_BROWSER_BACKEND)
+  if (options.compatibleSurface) {
+    std::fprintf(stderr,
+                 "[Geode/browser] Selection constrained by a wgpu surface is not served by the "
+                 "browser backend.\n");
+    return nullptr;
+  }
+  gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> hold = OpenBrowserDevice(lostState);
+  if (hold.hasError()) {
+    std::fprintf(stderr, "[Geode/browser] No browser GPU device: %s\n",
+                 hold.error().message.c_str());
+    return nullptr;
+  }
+  GeodeGpuRootCapabilities capabilities;
+  capabilities.backend = GpuBackendKind::Browser;
+  capabilities.maxTextureDimension2D = hold.result()->maxTextureDimension2D();
+  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState),
+                                        std::shared_ptr<const void>(std::move(hold).result()));
+#else
+  (void)options;
+  (void)lostState;
+  std::fprintf(stderr, "[Geode] No browser backend in this build.\n");
+  return nullptr;
+#endif
+}
+
+/// Opens one runtime device on the browser backend \p root names.
+/// @param root Root whose loss condition the device shares.
+/// @return The device, or null when the browser supplied none.
+std::unique_ptr<gpu::Device> CreateBrowserDeviceOver(const GeodeGpuRoot& root) {
+#if defined(__EMSCRIPTEN__) && defined(DONNER_GEODE_BROWSER_BACKEND)
+  gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> device =
+      OpenBrowserDevice(root.lostState());
+  if (device.hasError()) {
+    std::fprintf(stderr, "[Geode/browser] No runtime device over the browser GPU device: %s\n",
+                 device.error().message.c_str());
+    return nullptr;
+  }
+  return std::move(device).result();
+#else
+  (void)root;
+  return nullptr;
+#endif
+}
+
 /// Opens one runtime device on the native Metal backend \p root names.
 /// @param root Root whose loss condition the device shares.
 /// @return The device, or null when no Metal device could be opened.
@@ -614,10 +705,12 @@ std::size_t OutstandingDeviceLostCallbacks() {
 }
 
 GeodeGpuRoot::GeodeGpuRoot(GeodeWgpuRoots handles, GeodeGpuRootCapabilities capabilities,
-                           std::shared_ptr<gpu::DeviceLostState> lostState)
+                           std::shared_ptr<gpu::DeviceLostState> lostState,
+                           std::shared_ptr<const void> backendHold)
     : handles_(std::move(handles)),
       capabilities_(capabilities),
-      lostState_(lostState ? std::move(lostState) : std::make_shared<gpu::DeviceLostState>()) {}
+      lostState_(lostState ? std::move(lostState) : std::make_shared<gpu::DeviceLostState>()),
+      backendHold_(std::move(backendHold)) {}
 
 GeodeGpuRoot::~GeodeGpuRoot() {
   if (!handles_.owned) {
@@ -648,6 +741,7 @@ std::string_view GpuBackendKindName(GpuBackendKind kind) {
     case GpuBackendKind::TransitionalWgpu: return "transitional wgpu adapter";
     case GpuBackendKind::NativeMetal: return "native Metal";
     case GpuBackendKind::NativeVulkan: return "native Vulkan";
+    case GpuBackendKind::Browser: return "browser";
   }
   UTILS_UNREACHABLE();
 }
@@ -666,9 +760,19 @@ std::string_view ProcessBackendRequest() {
 
 /// What asked for the backend a selection produced.
 enum class BackendRequestSource : uint8_t {
-  Caller,       //!< The caller named it.
-  Environment,  //!< `DONNER_GPU_BACKEND` named it.
-  Default,      //!< Nothing named one, so the process default applied.
+  Caller,        //!< The caller named it.
+  Environment,   //!< `DONNER_GPU_BACKEND` named it.
+  BuildSetting,  //!< The build selects it for headless work.
+  Default,       //!< Nothing named one, so the process default applied.
+};
+
+/// How many \ref BackendRequestSource values there are.
+constexpr uint32_t kBackendRequestSourceCount = 4;
+
+/// A resolved backend and what asked for it.
+struct ResolvedBackend {
+  GpuBackendKind kind = GpuBackendKind::TransitionalWgpu;       //!< Backend to select.
+  BackendRequestSource source = BackendRequestSource::Default;  //!< What asked for it.
 };
 
 /// The backend \p request names, as `DONNER_GPU_BACKEND` spells it.
@@ -713,7 +817,8 @@ void ReportSelectedBackendOnce(GpuBackendKind kind, BackendRequestSource source,
     return;
   }
   static std::atomic<uint32_t> reported{0};
-  const uint32_t pair = 1u << (static_cast<uint32_t>(kind) * 3u + static_cast<uint32_t>(source));
+  const uint32_t pair = 1u << (static_cast<uint32_t>(kind) * kBackendRequestSourceCount +
+                               static_cast<uint32_t>(source));
   if ((reported.fetch_or(pair, std::memory_order_relaxed) & pair) != 0) {
     return;
   }
@@ -728,6 +833,12 @@ void ReportSelectedBackendOnce(GpuBackendKind kind, BackendRequestSource source,
                    static_cast<int>(name.size()), name.data(), static_cast<int>(request.size()),
                    request.data());
       break;
+    case BackendRequestSource::BuildSetting:
+      std::fprintf(stderr,
+                   "[Geode] GPU backend: %.*s, selected by the build setting "
+                   "//donner/svg/renderer/geode:browser_backend for headless work.\n",
+                   static_cast<int>(name.size()), name.data());
+      break;
     case BackendRequestSource::Default: break;
   }
 }
@@ -736,6 +847,51 @@ void ReportSelectedBackendOnce(GpuBackendKind kind, BackendRequestSource source,
 
 gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind() {
   return ParseBackendRequest(ProcessBackendRequest());
+}
+
+std::optional<GpuBackendKind> BuildDefaultGpuBackendKind() {
+#if defined(__EMSCRIPTEN__) && defined(DONNER_GEODE_BROWSER_BACKEND)
+  return GpuBackendKind::Browser;
+#else
+  return std::nullopt;
+#endif
+}
+
+namespace {
+
+/// The backend \p options resolves to and what asked for it, in the order
+/// \ref ResolveGpuBackendKind documents.
+/// @param options Caller-supplied inputs. @param request Value of `DONNER_GPU_BACKEND`.
+/// @param buildDefault Backend the build selects for headless work.
+gpu::Result<ResolvedBackend> ResolveBackend(const GpuRootSelection& options,
+                                            std::string_view request,
+                                            std::optional<GpuBackendKind> buildDefault) {
+  if (options.backend.has_value()) {
+    return ResolvedBackend{*options.backend, BackendRequestSource::Caller};
+  }
+  if (!request.empty()) {
+    gpu::Result<GpuBackendKind> requested = ParseBackendRequest(request);
+    if (requested.hasError()) {
+      return std::move(requested).error();
+    }
+    return ResolvedBackend{requested.result(), BackendRequestSource::Environment};
+  }
+  if (buildDefault.has_value() && !options.compatibleSurface) {
+    return ResolvedBackend{*buildDefault, BackendRequestSource::BuildSetting};
+  }
+  return ResolvedBackend{GpuBackendKind::TransitionalWgpu, BackendRequestSource::Default};
+}
+
+}  // namespace
+
+gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& options,
+                                                  std::string_view request,
+                                                  std::optional<GpuBackendKind> buildDefault) {
+  gpu::Result<ResolvedBackend> resolved = ResolveBackend(options, request, buildDefault);
+  if (resolved.hasError()) {
+    return std::move(resolved).error();
+  }
+  return resolved.result().kind;
 }
 
 bool GeodeGpuRoot::hasBackendDevice() const {
@@ -859,6 +1015,7 @@ std::shared_ptr<GeodeGpuRoot> SelectRootOfKind(GpuBackendKind kind,
     case GpuBackendKind::NativeMetal: return SelectNativeMetalRoot(selection, std::move(lostState));
     case GpuBackendKind::NativeVulkan:
       return SelectNativeVulkanRoot(selection, std::move(lostState));
+    case GpuBackendKind::Browser: return SelectBrowserRoot(selection, std::move(lostState));
   }
   UTILS_UNREACHABLE();
 }
@@ -867,18 +1024,13 @@ std::shared_ptr<GeodeGpuRoot> SelectRootOfKind(GpuBackendKind kind,
 
 std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
   const std::string_view request = ProcessBackendRequest();
-  GpuBackendKind kind = GpuBackendKind::TransitionalWgpu;
-  BackendRequestSource source = BackendRequestSource::Caller;
-  if (options.backend.has_value()) {
-    kind = *options.backend;
-  } else {
-    gpu::Result<GpuBackendKind> processDefault = ParseBackendRequest(request);
-    if (processDefault.hasError()) {
-      HaltOnUnservableBackendRequest(processDefault.error().message);
-    }
-    kind = processDefault.result();
-    source = request.empty() ? BackendRequestSource::Default : BackendRequestSource::Environment;
+  gpu::Result<ResolvedBackend> resolved =
+      ResolveBackend(options, request, BuildDefaultGpuBackendKind());
+  if (resolved.hasError()) {
+    HaltOnUnservableBackendRequest(resolved.error().message);
   }
+  const GpuBackendKind kind = resolved.result().kind;
+  const BackendRequestSource source = resolved.result().source;
 
   // A surface provider that gives up is the caller's failure, not the backend's, so it is told
   // apart from a backend that could not be selected.
@@ -933,6 +1085,9 @@ GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
   }
   if (root->capabilities().backend == GpuBackendKind::NativeVulkan) {
     return GeodeRuntimeDevice{.device = CreateNativeVulkanDeviceOver(*root)};
+  }
+  if (root->capabilities().backend == GpuBackendKind::Browser) {
+    return GeodeRuntimeDevice{.device = CreateBrowserDeviceOver(*root)};
   }
   auto adapter = std::make_unique<GeodeWgpuAdapterDevice>(std::move(root));
   GeodeWgpuAdapterDevice* const transitionalAdapter = adapter.get();

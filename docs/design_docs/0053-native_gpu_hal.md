@@ -570,12 +570,20 @@ adapter, and an adapter context on Metal, where a second headless device shares 
       `//donner/gpu/browser:browser_tests` and by
       `//donner/editor/wasm/tests:browser_bridge_device_tests`, which drives the real JavaScript
       library.
-- [ ] Replace the C WebGPU wrapper with that bridge in the WebAssembly production path.
-      Selected-device ownership and backend selection by kind are merged, so what remains is: a
-      browser backend kind the WebAssembly build selects with a build setting (a page cannot set
-      `DONNER_GPU_BACKEND`); a headless context pool that never hands a thread-owned device to
-      another thread; and the editor window's browser surface, format, clear and readback through
-      the runtime. The Geode renderer WebAssembly module is a second consumer of the wrapper and
+- [x] Select the browser backend for headless work in a WebAssembly build with the
+      `//donner/svg/renderer/geode:browser_backend` build setting, since a page cannot set
+      `DONNER_GPU_BACKEND`. A selection that names no backend, runs with no process request and
+      has no surface provider takes it; the editor window's selection carries a surface provider
+      and stays on the transitional adapter. A browser root keeps its worker's browser device open
+      for the runtime devices over it and reports that device's texture limit; each runtime device
+      waits for the browser with a bounded settle and fails with a named reason, and a loss the
+      browser reports is declared into the loss condition the root's devices share. The headless
+      context pool never hands a thread-bound device to another thread. Chromium lanes serve a
+      package built with the setting beside the production one, and a check in both boot lanes
+      pins which backend the raster worker selected.
+- [ ] Replace the C WebGPU wrapper with that bridge in the WebAssembly production path: the
+      editor window's browser surface, format, clear and readback through the runtime, then the
+      default flip. The Geode renderer WebAssembly module is a second consumer of the wrapper and
       moves with the editor. The compiled WGSL projections remain trusted build input.
 - [ ] Run the complete browser editor path and remove emdawnwebgpu, `webgpu-cpp`, and remaining
       generated C-ABI glue when no consumer needs them.

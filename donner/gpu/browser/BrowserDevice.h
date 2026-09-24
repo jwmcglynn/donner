@@ -60,12 +60,29 @@ public:
   RcString error() const;
 
   /**
+   * Waits for the browser to settle the request, for at most \p timeoutSeconds.
+   *
+   * A browser settles the request by running a promise callback, which cannot happen while this
+   * thread holds the event loop, so the wait hands the thread to the browser in short slices and
+   * looks again after each rather than resting on it.
+   *
+   * @param timeoutSeconds Longest to wait, in seconds; a value that is not positive looks once.
+   * @return The state the request reached, which is \ref BrowserDeviceRequestState::Pending when
+   *   the budget ran out first.
+   */
+  BrowserDeviceRequestState settle(double timeoutSeconds);
+
+  /**
    * Takes the device, consuming the request.
    *
    * Fails closed unless \ref state reports \ref BrowserDeviceRequestState::Ready, so a caller
    * that skipped the wait gets a named error instead of a device that does not exist yet.
+   *
+   * @param lostState Loss condition to share with the other devices over the same browser device,
+   *   or null for one of the device's own. The device declares a loss the browser reports into it.
    */
-  Result<std::unique_ptr<BrowserDevice>> take() &&;
+  Result<std::unique_ptr<BrowserDevice>> take(
+      std::shared_ptr<DeviceLostState> lostState = nullptr) &&;
 
 private:
   /// Constructs a request over \p bridge. @param bridge Bridge the request was begun on.
@@ -150,6 +167,10 @@ public:
 
   /// What the browser said when it reported the device lost. Empty while the device is alive.
   RcString deviceLostReason() const;
+
+  /// Largest width or height of a 2D texture this device supports, as the browser reports it.
+  /// WebGPU guarantees at least 8,192, which stands in when the browser reports no limit.
+  uint32_t maxTextureDimension2D() const;
 
   /// The bridge this device speaks to the browser through. Test accessor.
   BrowserBridge& bridgeForTest() { return *bridge_; }
@@ -240,7 +261,13 @@ private:
 
   /// Constructs the device over a bridge whose device request is already Ready.
   /// @param bridge Bridge to the browser's GPU service.
-  explicit BrowserDevice(std::unique_ptr<BrowserBridge> bridge);
+  /// @param lostState Loss condition to share, or null for one of the device's own.
+  BrowserDevice(std::unique_ptr<BrowserBridge> bridge, std::shared_ptr<DeviceLostState> lostState);
+
+  /// Declares the shared loss condition once the browser has reported the device lost, so every
+  /// device over it, and the renderer above them, stop waiting on a device that will not answer.
+  /// @return Whether the browser reports the device lost.
+  bool observeBrowserLoss() const;
 
   /**
    * Fails closed unless this device can still be used from here: not lost, and called from the
@@ -449,6 +476,9 @@ private:
   /// Thread that obtained the browser device. Browser objects are unusable off it, so every
   /// operation checks it rather than relying on the runtime's documented affinity alone.
   std::thread::id ownerThread_;
+
+  /// Loss condition this device shares with the other devices over the same browser device.
+  std::shared_ptr<DeviceLostState> sharedLoss_;
 
   /// Identity of the browser device this device runs on, read from the bridge once, on the owning
   /// thread, when the device is constructed. Null when the bridge names none, which makes the

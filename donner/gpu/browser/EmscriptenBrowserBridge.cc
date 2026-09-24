@@ -43,6 +43,7 @@ int donner_gpu_owns_device(unsigned int device);
 int donner_gpu_is_device_lost(unsigned int device);
 int donner_gpu_read_lost_reason(unsigned int device, char* destination, int capacity);
 double donner_gpu_completed_serial(unsigned int device);
+unsigned int donner_gpu_max_texture_dimension_2d(unsigned int device);
 
 int donner_gpu_create_buffer(unsigned int device, unsigned int id, double byteSize,
                              unsigned int usageBits);
@@ -438,6 +439,10 @@ RcString EmscriptenBrowserBridge::deviceLostReason() const {
 uint64_t EmscriptenBrowserBridge::completedSerial() const {
   const double serial = donner_gpu_completed_serial(logicalDevice_);
   return serial > 0.0 ? static_cast<uint64_t>(serial) : 0;
+}
+
+uint32_t EmscriptenBrowserBridge::maxTextureDimension2D() const {
+  return donner_gpu_max_texture_dimension_2d(logicalDevice_);
 }
 
 const void* EmscriptenBrowserBridge::sharedDeviceIdentity() const {

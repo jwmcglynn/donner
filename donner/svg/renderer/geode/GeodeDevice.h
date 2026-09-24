@@ -326,6 +326,12 @@ public:
     return physicalDevice_->lostState()->lost.load(std::memory_order_acquire);
   }
 
+  /// Whether this device may only be used on the thread that created it: true on the browser
+  /// backend, whose objects belong to the worker that made them, and false on every backend whose
+  /// devices any thread may drive. A cache of idle devices hands a bound device back only to the
+  /// thread that created it.
+  bool isBoundToCreatingThread() const;
+
   /// Declare this device lost. Idempotent; the first call logs @p reason.
   /// Called from bounded waits on timeout, and available to embedders whose
   /// own device-lost signal is not shared via `GeodeEmbedConfig::lostState`.
