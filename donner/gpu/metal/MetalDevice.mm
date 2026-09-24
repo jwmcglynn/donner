@@ -1154,7 +1154,9 @@ Result<BackendTextureExport> MetalDevice::onExportTexture(uint32_t slotIndex) {
   exported.backing = std::make_shared<const MetalExportedTexture>(texture, impl_->completionState);
   // Each runtime device submits to its own command queue, and nothing orders one queue's work
   // after another's, so a consumer's command buffer waits on the GPU for this device's
-  // completion event to reach the serial it reads after.
+  // completion event to reach the serial it reads after. The event is signalled for failed work
+  // and on a loss of this device's root as well, so the runtime orders on the device only a
+  // consumer that shares that root's loss condition; any other consumer waits on the host.
   exported.ordering = SourceOrdering::WaitOnDevice;
   exported.completion = impl_->exportCompletion;
   // An upload carried by a submission that never named the texture is recorded only here.
@@ -2278,7 +2280,11 @@ Status MetalDevice::Impl::beginSubmission(EncodingState& state, bool encodeQueue
     // buffers reach its maximum, and a buffer this submission is still holding uncommitted can
     // never complete, so a queue no larger than the bound could block on its own work. One
     // thread submits to a device at a time, so at most one submission ever holds uncommitted
-    // buffers; every slot above the bound belongs to a committed buffer, which completes.
+    // buffers; every slot above the bound belongs to a committed buffer, which completes once the
+    // device-side waits it carries are met. A committed buffer can wait on another device's
+    // completion event, so a queue filled with buffers held behind a producer blocks here until
+    // that producer's work ends, the root is declared lost, or the system ends the stalled work;
+    // it never blocks on this submission's own buffers.
     commandQueue = [device
         newCommandQueueWithMaxCommandBufferCount:2 * Device::kMaxCommandBuffersPerSubmission];
     if (commandQueue == nil) {
@@ -2463,6 +2469,11 @@ Result<SurfaceStatus> MetalDevice::onAcquireCurrentTexture(uint32_t slotIndex,
     return GpuError{GpuErrorType::InvalidHandle,
                     std::format("surface slot {} has no Metal layer", slotIndex)};
   }
+  if (isLost()) {
+    // Nothing drawn on a lost root can be shown, so no frame is handed out, and the caller learns
+    // that from the status rather than from the present that would have refused it.
+    return SurfaceStatus::DeviceLost;
+  }
 
   Result<SurfaceStatus> status = surface->acquire();
   if (status.hasError()) {
@@ -2514,17 +2525,13 @@ Result<SurfaceStatus> MetalDevice::onPresentSurface(uint32_t slotIndex) {
   }
   // A lost root is checked after the wait, and whether or not there was one: a submission that
   // failed on the GPU declares the loss and then completes its serial, so a frame whose own work
-  // failed reads as finished.
-  if (!frameFinished || isLost()) {
+  // failed reads as finished. A frame whose work did not finish has declared the loss above, so
+  // this is every frame that cannot be shown.
+  if (isLost()) {
     // The frame is the layer's either way; the caller is told the frame it drew is not showing.
     surface->abandon();
     impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
-    if (isLost()) {
-      return SurfaceStatus::DeviceLost;
-    }
-    return GpuError{GpuErrorType::InvalidState,
-                    std::format("presentSurface: the frame's work did not complete: {}",
-                                lastErrorForTest().empty() ? "timed out" : lastErrorForTest())};
+    return SurfaceStatus::DeviceLost;
   }
 
   Result<SurfaceStatus> status = surface->present();

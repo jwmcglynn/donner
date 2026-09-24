@@ -53,9 +53,9 @@ namespace donner::gpu::metal {
  * the drawable over, because a drawable presented from a command buffer is shown when that
  * buffer is scheduled rather than when it completes, which would show a frame the GPU is still
  * drawing. A frame whose work cannot finish because the root is lost is abandoned, and the
- * present reports \ref SurfaceStatus::DeviceLost. The layer hands out a small fixed number of
- * drawables, so a frame that is neither presented nor abandoned stalls the next acquisition until
- * the layer gives up waiting.
+ * present reports \ref SurfaceStatus::DeviceLost; so does an acquire on a lost root, which hands
+ * out no frame. The layer hands out a small fixed number of drawables, so a frame that is neither
+ * presented nor abandoned stalls the next acquisition until the layer gives up waiting.
  *
  * Queue writes update idle resources directly. Writes to resources an earlier submission still
  * uses are copied into bounded host storage and uploaded at the beginning of the next ordinary
