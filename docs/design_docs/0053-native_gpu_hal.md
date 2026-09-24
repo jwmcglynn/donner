@@ -486,10 +486,14 @@ adapter, and an adapter context on Metal, where a second headless device shares 
       texture borrowed for that frame, and the surface reports its format and usage as runtime
       values. Resize, minimized windows, outdated/lost surfaces, timeout, device loss,
       frame-handle invalidation after present and abandon, and a second acquisition before either
-      are covered by `//donner/editor/tests:editor_window_tests` and its `geode` variant. The
-      window still reaches the backend's wgpu objects for the platform surface object off Apple
-      and for the browser's diagnostic readback; on Apple it opens and draws on the selected
-      native device.
+      are covered by `//donner/editor/tests:editor_window_tests` and its `geode` variant. A real
+      hidden window's resize and a declared device loss run on whichever backend the process
+      selects, on the presented and the offscreen arm on Apple (a host without a display renders
+      both offscreen); a lost surface and a minimized window are
+      driven through a scripted surface only, because no real window on the hosts these suites run
+      on produces either. The window still reaches the backend's wgpu objects for the platform
+      surface object off Apple and for the browser's diagnostic readback; on Apple it opens and
+      draws on the selected native device.
 
 ### Browser bridge
 
