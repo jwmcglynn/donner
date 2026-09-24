@@ -1728,22 +1728,7 @@ struct VulkanDevice::Impl {
     pipelineLayouts.clear();  // Releases the remaining VkPipelineLayout handles.
   }
 
-  /// Destroys every remaining native object after the complete graph passed preparation.
-  bool teardown() {
-    if (!ownsEverySurface()) {
-      return false;
-    }
-    if (device == VK_NULL_HANDLE) {
-      destroyDebugMessenger();
-      if (nativeRoot != nullptr) {
-        nativeRoot.reset();
-      } else if (instance != VK_NULL_HANDLE) {
-        api->vkDestroyInstance(instance, nullptr);
-      }
-      instance = VK_NULL_HANDLE;
-      return true;
-    }
-
+  void destroySubmissionAndUploadRecords() {
     for (InFlightSubmission& submission : inFlight) {
       releaseSubmission(submission);
     }
@@ -1752,8 +1737,9 @@ struct VulkanDevice::Impl {
       releaseUpload(upload);
     }
     pendingUploads.clear();
+  }
 
-    destroyPipelines();
+  void destroyShadersAndBindings() {
     for (VkShaderModule module : shaderModules) {
       if (module != VK_NULL_HANDLE) {
         api->vkDestroyShaderModule(device, module, nullptr);
@@ -1778,6 +1764,9 @@ struct VulkanDevice::Impl {
       }
     }
     samplers.clear();
+  }
+
+  void destroyTexturesAndBuffers() {
     for (std::optional<TextureViewRecord>& record : textureViews) {
       if (record.has_value() && record->view != VK_NULL_HANDLE) {
         api->vkDestroyImageView(device, record->view, nullptr);
@@ -1796,11 +1785,11 @@ struct VulkanDevice::Impl {
       }
     }
     buffers.clear();
+  }
 
-    // After the views and images above, because a view of a swapchain image must be destroyed
-    // before the swapchain that owns the image, and before the command pool and instance below,
-    // because a swapchain frees command buffers out of that pool and destroys its surface out of
-    // the instance.
+  /// A swapchain must release its command buffers before the pool, then its surfaces before the
+  /// instance. A failed child-lifetime proof keeps the remaining native graph alive.
+  bool destroySurfacesAndCommandPool() {
     surfaces.clear();
     while (retainedSurfaces) {
       std::unique_ptr<VulkanSwapchain> surface = std::move(retainedSurfaces);
@@ -1810,18 +1799,22 @@ struct VulkanDevice::Impl {
         surfaceLifetime->liveChildren.load(std::memory_order_acquire) != 0) {
       return false;
     }
-
     if (commandPool != VK_NULL_HANDLE) {
       api->vkDestroyCommandPool(device, commandPool, nullptr);
       commandPool = VK_NULL_HANDLE;
     }
+    return true;
+  }
+
+  void destroyNativeOwner() {
     if (nativeRoot != nullptr) {
-      // The shared native device is released only after this device's objects and every sibling
-      // that retains the root have gone. A failed preparation quarantines this hold instead.
+      // Every sibling retains the shared native device until its own objects are gone.
       destroyDebugMessenger();
       nativeRoot.reset();
     } else {
-      api->vkDestroyDevice(device, nullptr);
+      if (device != VK_NULL_HANDLE) {
+        api->vkDestroyDevice(device, nullptr);
+      }
       destroyDebugMessenger();
       if (instance != VK_NULL_HANDLE) {
         api->vkDestroyInstance(instance, nullptr);
@@ -1830,6 +1823,32 @@ struct VulkanDevice::Impl {
     device = VK_NULL_HANDLE;
     instance = VK_NULL_HANDLE;
     queue = VK_NULL_HANDLE;
+  }
+
+  /// Destroys every remaining native object after the complete graph passed preparation.
+  bool teardown() {
+    if (!ownsEverySurface()) {
+      return false;
+    }
+    if (device == VK_NULL_HANDLE) {
+      destroyNativeOwner();
+      return true;
+    }
+
+    destroySubmissionAndUploadRecords();
+    destroyPipelines();
+    destroyShadersAndBindings();
+    destroyTexturesAndBuffers();
+
+    // After the views and images above, because a view of a swapchain image must be destroyed
+    // before the swapchain that owns the image, and before the command pool and instance below,
+    // because a swapchain frees command buffers out of that pool and destroys its surface out of
+    // the instance.
+    if (!destroySurfacesAndCommandPool()) {
+      return false;
+    }
+
+    destroyNativeOwner();
     return true;
   }
 
