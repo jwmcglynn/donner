@@ -5,6 +5,7 @@
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleQuery.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::Optional;

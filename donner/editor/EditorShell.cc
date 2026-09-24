@@ -87,6 +87,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/resources/FontManager.h"
 #include "embed_resources/FiraCodeFont.h"
 #include "embed_resources/RobotoFont.h"

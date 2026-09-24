@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include "donner/base/Length.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/core/MaskUnits.h"
 

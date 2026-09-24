@@ -19,6 +19,7 @@
 #include "donner/svg/core/NonScalingStroke.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/VectorEffect.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
 

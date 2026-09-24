@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include "donner/base/Length.h"
 #include "donner/base/RcStringOrRef.h"
 #include "donner/svg/SVGElement.h"
 

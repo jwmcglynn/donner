@@ -23,6 +23,7 @@
 #include "donner/editor/UndoTimeline.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "embed_resources/BootstrapIcons.h"
 
 namespace donner::editor {

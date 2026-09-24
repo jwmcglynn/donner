@@ -16,6 +16,7 @@
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGStyleElement.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
