@@ -47,7 +47,7 @@ constexpr uint32_t kTargetApiVersion = VK_API_VERSION_1_1;
 
 /// Timeout for the synchronous internal texture-upload submission, in nanoseconds (60 s). A
 /// stuck driver fails closed with an error instead of hanging the caller forever.
-constexpr uint64_t kUploadFenceTimeoutNs = 60ull * 1000ull * 1000ull * 1000ull;
+constexpr double kUploadFenceTimeoutSeconds = 60.0;
 
 /// Bound for a host access waiting on the buffer's outstanding submission.
 constexpr double kBusyBufferAccessTimeoutSeconds = 5.0;
@@ -1451,13 +1451,26 @@ struct VulkanDevice::Impl {
     return found == inFlight.end() ? nullptr : &*found;
   }
 
+  /// How a stepped fence wait ended.
+  enum class FenceWaitEnd : uint8_t {
+    Signalled,  //!< The fence signalled.
+    TimedOut,   //!< The budget ran out first.
+    RootLost,   //!< A device over the root declared the root lost first.
+    Failed,     //!< The wait itself failed; \ref FenceWait::result says how.
+  };
+
+  /// How a stepped fence wait ended, with the native result of its last step.
+  struct FenceWait {
+    FenceWaitEnd end = FenceWaitEnd::TimedOut;  //!< How the wait ended.
+    VkResult result = VK_TIMEOUT;               //!< Native result of the last step.
+  };
+
   /// Waits for \p fence for up to \p timeoutSeconds, in steps of at most 10 ms so that a loss
-  /// another device over the root declares while the wait is blocked ends it too. A failed wait is
-  /// recorded, as a device loss when the driver reports one.
+  /// another device over the root declares while the wait is blocked ends it too. Records
+  /// nothing; each caller decides what its outcome means.
   /// @param fence Fence to wait for.
-  /// @param timeoutSeconds Budget; the runtime has already clamped it to its maximum wait.
-  /// @return True when the fence signalled within the budget and the root was not lost.
-  bool waitForFenceUnlessLost(VkFence fence, double timeoutSeconds) {
+  /// @param timeoutSeconds Budget in seconds, already bounded by the caller.
+  FenceWait waitForFenceUnlessLost(VkFence fence, double timeoutSeconds) {
     constexpr std::chrono::nanoseconds kLossCheckInterval = std::chrono::milliseconds(10);
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1469,17 +1482,19 @@ struct VulkanDevice::Impl {
       const VkResult result =
           api->vkWaitForFences(device, 1, &fence, VK_TRUE, static_cast<uint64_t>(step.count()));
       if (result == VK_SUCCESS) {
-        return true;
+        return {FenceWaitEnd::Signalled, result};
       }
       if (result != VK_TIMEOUT) {
-        recordFenceWaitFailure(result);
-        return false;
+        return {FenceWaitEnd::Failed, result};
       }
       if (fenceWaitStepHookForTest) {
         fenceWaitStepHookForTest();
       }
-      if (rootLoss->lost.load(std::memory_order_acquire) || remaining <= step) {
-        return false;
+      if (rootLoss->lost.load(std::memory_order_acquire)) {
+        return {FenceWaitEnd::RootLost, result};
+      }
+      if (remaining <= step) {
+        return {FenceWaitEnd::TimedOut, result};
       }
     }
   }
@@ -2082,6 +2097,12 @@ struct VulkanDevice::Impl {
   Status submitAndWaitTextureUpload(VkCommandBuffer commandBuffer, VkFence& fence,
                                     bool& objectsStillInUse, bool& reachedQueue);
 
+  /// Waits for the upload fence \p fence. The wait ends early when a device over the root
+  /// declares the root lost, and anything but a signalled fence leaves the upload's objects owned.
+  /// @param fence Fence of the submitted upload.
+  /// @param objectsStillInUse Set when the upload's objects must remain alive.
+  Status waitForTextureUpload(VkFence fence, bool& objectsStillInUse);
+
   /// Destroys the Vulkan buffer backing \p slotIndex, if any.
   /// @param slotIndex Buffer slot.
   void destroyBufferSlot(uint32_t slotIndex);
@@ -2409,7 +2430,11 @@ bool VulkanDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
   if (target == nullptr) {
     return false;  // Serial was never submitted.
   }
-  if (!impl.waitForFenceUnlessLost(target->fence, timeoutSeconds)) {
+  const Impl::FenceWait waited = impl.waitForFenceUnlessLost(target->fence, timeoutSeconds);
+  if (waited.end == Impl::FenceWaitEnd::Failed) {
+    impl.recordFenceWaitFailure(waited.result);
+  }
+  if (waited.end != Impl::FenceWaitEnd::Signalled) {
     return false;
   }
   impl.pollCompleted();
@@ -3421,18 +3446,30 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
                     "writeTexture: injected post-submit upload timeout"};
   }
 
-  if (const VkResult result =
-          api->vkWaitForFences(device, 1, &fence, VK_TRUE, kUploadFenceTimeoutNs);
-      result != VK_SUCCESS) {
-    if (result == VK_ERROR_DEVICE_LOST) {
-      recordDeviceLoss("vkWaitForFences (writeTexture) reported device loss");
-      return VkError("vkWaitForFences (writeTexture)", result);
-    }
-    // A failed wait does not prove completion; retain ownership until polling or teardown does.
-    objectsStillInUse = true;
-    return VkError("vkWaitForFences (writeTexture, still pending)", result);
+  return waitForTextureUpload(fence, objectsStillInUse);
+}
+
+Status VulkanDevice::Impl::waitForTextureUpload(VkFence fence, bool& objectsStillInUse) {
+  const FenceWait waited = waitForFenceUnlessLost(fence, kUploadFenceTimeoutSeconds);
+  if (waited.end == FenceWaitEnd::Signalled) {
+    return OkStatus();
   }
-  return OkStatus();
+  if (waited.end == FenceWaitEnd::Failed && waited.result == VK_ERROR_DEVICE_LOST) {
+    recordDeviceLoss("vkWaitForFences (writeTexture) reported device loss");
+    return VkError("vkWaitForFences (writeTexture)", waited.result);
+  }
+  // A wait that did not see the fence signal does not prove completion, whatever ended it, so
+  // ownership is retained until polling or teardown does.
+  objectsStillInUse = true;
+  if (waited.end == FenceWaitEnd::RootLost) {
+    // A loss another device over the root declared leaves no error here; it is still a loss.
+    if (!hasError()) {
+      return GpuError{GpuErrorType::DeviceLost,
+                      "writeTexture cannot wait for its upload: the device was lost"};
+    }
+    return GpuError{GpuErrorType::InvalidState, errorMessage()};
+  }
+  return VkError("vkWaitForFences (writeTexture, still pending)", waited.result);
 }
 
 Status VulkanDevice::Impl::finishTextureUpload(uint32_t slotIndex, VkCommandBuffer commandBuffer,
@@ -3460,6 +3497,11 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
                                     const Extent2d& writeSize, const Origin2d& destinationOrigin) {
   if (impl_->hasError()) {
     return GpuError{GpuErrorType::InvalidState, impl_->errorMessage()};
+  }
+  // A root another device over it declared lost will not run the copy, so its fence would never
+  // signal and its objects would stay pending: refuse the upload before staging anything.
+  if (isLost()) {
+    return GpuError{GpuErrorType::DeviceLost, "writeTexture cannot upload: the device was lost"};
   }
   Impl& impl = *impl_;
   Impl::TextureRecord* texture = FindRecord(impl.textures, slotIndex);

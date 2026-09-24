@@ -763,9 +763,11 @@ public:
    * VulkanDevice copy busy-buffer writes with four-byte-aligned offsets and sizes into a bounded
    * queue, flushed before the next ordinary submission, including an empty command stream.
    * Unaligned writes wait for that buffer's outstanding work and return
-   * GpuErrorType::InvalidState if the bounded wait times out. Queued writes can fail with
-   * GpuErrorType::LimitExceeded when their staging budget is exhausted. Callers must handle
-   * these errors without assuming a failed write changed the buffer.
+   * GpuErrorType::InvalidState if the bounded wait times out. On VulkanDevice, a wait that ends
+   * because another device over the same root declared it lost returns GpuErrorType::DeviceLost
+   * instead. Queued writes can fail with GpuErrorType::LimitExceeded when their staging budget
+   * is exhausted. Callers must handle these errors without assuming a failed write changed the
+   * buffer.
    *
    * @param buffer Destination buffer.
    * @param offsetBytes Destination byte offset.
@@ -782,6 +784,11 @@ public:
    * Fails closed unless the texture has \ref TextureUsage::CopyDst, \p dataLayout is 256-aligned
    * and covers \p writeSize, \p destinationOrigin plus \p writeSize fits inside the texture,
    * and the described rows fit inside \p data (all checked arithmetic).
+   *
+   * On VulkanDevice, when another device over the same root declared it lost and this device has
+   * no error of its own, a write returns GpuErrorType::DeviceLost without starting an upload, as
+   * does an upload whose wait that declaration ends. A device with an error of its own, a
+   * driver-reported loss included, returns that error as GpuErrorType::InvalidState.
    *
    * @param texture Destination texture.
    * @param data Payload bytes laid out per \p dataLayout.
