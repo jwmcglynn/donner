@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -49,6 +50,7 @@ struct VulkanSurfaceContext {
   uint32_t queueFamilyIndex = 0;                     //!< Family of \ref queue.
   VkCommandPool commandPool = VK_NULL_HANDLE;        //!< Pool the present barrier is recorded in.
   std::shared_ptr<VulkanSurfaceLifetime> lifetime;   //!< Shared owner-retention state.
+  std::mutex* queueMutex = nullptr;  //!< Shared VkQueue call lock; null for fake test contexts.
 };
 
 /// The stage an acquisition wait applies to, and therefore the earliest stage at which a frame

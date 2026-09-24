@@ -633,11 +633,10 @@ std::unique_ptr<gpu::Device> CreateNativeMetalDeviceOver(const GeodeGpuRoot& roo
 #endif
 }
 
-/// Selects the native Vulkan backend. Each runtime device over the root opens the physical device
-/// the Vulkan backend selects, so the root itself carries no handles - only the kind, the
-/// capabilities that device reports, and the loss condition its devices share, as a native Metal
-/// root does. A platform without that backend is refused rather than served by the transitional
-/// adapter, for the reason \ref SelectNativeMetalRoot gives.
+/// Selects one native Vulkan instance, device and queue for every runtime device over this root.
+/// The selected owner retains the native handles while those runtime devices keep independent
+/// command pools, serials and resource tables. A platform without the backend is refused rather
+/// than served by the transitional adapter, for the reason \ref SelectNativeMetalRoot gives.
 ///
 /// @param options Caller-supplied inputs. A selection constrained to a wgpu surface is refused
 ///   before its surface provider runs, because no native backend presents to a wgpu surface.
@@ -653,19 +652,18 @@ std::shared_ptr<GeodeGpuRoot> SelectNativeVulkanRoot(
                  "native backend.\n");
     return nullptr;
   }
-  // Asked of the physical device without opening a logical device on it, so selecting a root
-  // costs no device of its own.
-  const std::optional<gpu::vulkan::VulkanDevice::SystemCapabilities> vulkan =
-      gpu::vulkan::VulkanDevice::QuerySystemCapabilities();
-  if (!vulkan.has_value()) {
+  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeRoot =
+      gpu::vulkan::VulkanDevice::CreateSharedRoot(lostState);
+  if (nativeRoot == nullptr) {
     std::fprintf(stderr, "[Geode/vulkan] No Vulkan device available.\n");
     return nullptr;
   }
   GeodeGpuRootCapabilities capabilities;
   capabilities.backend = GpuBackendKind::NativeVulkan;
-  capabilities.maxTextureDimension2D = vulkan->maxTextureDimension2D;
+  capabilities.maxTextureDimension2D = nativeRoot->maxTextureDimension2D();
   capabilities.isVulkan = true;
-  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState));
+  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState),
+                                        nullptr, std::move(nativeRoot));
 #else
   (void)options;
   (void)lostState;
@@ -679,7 +677,8 @@ std::shared_ptr<GeodeGpuRoot> SelectNativeVulkanRoot(
 /// @return The device, or null when no Vulkan device could be opened.
 std::unique_ptr<gpu::Device> CreateNativeVulkanDeviceOver(const GeodeGpuRoot& root) {
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
-  std::unique_ptr<gpu::Device> device = gpu::vulkan::VulkanDevice::Create(root.lostState());
+  std::unique_ptr<gpu::Device> device =
+      gpu::vulkan::VulkanDevice::CreateOverSharedRoot(root.vulkanRoot());
   if (device == nullptr) {
     std::fprintf(stderr, "[Geode/vulkan] No Vulkan device available.\n");
   }
@@ -706,11 +705,13 @@ std::size_t OutstandingDeviceLostCallbacks() {
 
 GeodeGpuRoot::GeodeGpuRoot(GeodeWgpuRoots handles, GeodeGpuRootCapabilities capabilities,
                            std::shared_ptr<gpu::DeviceLostState> lostState,
-                           std::shared_ptr<const void> backendHold)
+                           std::shared_ptr<const void> backendHold,
+                           std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot)
     : handles_(std::move(handles)),
       capabilities_(capabilities),
       lostState_(lostState ? std::move(lostState) : std::make_shared<gpu::DeviceLostState>()),
-      backendHold_(std::move(backendHold)) {}
+      backendHold_(std::move(backendHold)),
+      vulkanRoot_(std::move(vulkanRoot)) {}
 
 GeodeGpuRoot::~GeodeGpuRoot() {
   if (!handles_.owned) {
@@ -895,6 +896,9 @@ gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& option
 }
 
 bool GeodeGpuRoot::hasBackendDevice() const {
+  if (capabilities_.backend == GpuBackendKind::NativeVulkan) {
+    return vulkanRoot_ != nullptr;
+  }
   if (capabilities_.backend != GpuBackendKind::TransitionalWgpu) {
     return true;
   }

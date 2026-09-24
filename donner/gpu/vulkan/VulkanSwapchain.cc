@@ -1034,8 +1034,14 @@ Status VulkanSwapchain::submitFrameHandover(const std::optional<TextureSyncState
   submitInfo.signalSemaphoreCount = signalSemaphore == VK_NULL_HANDLE ? 0u : 1u;
   submitInfo.pSignalSemaphores = signalSemaphore == VK_NULL_HANDLE ? nullptr : &signalSemaphore;
 
-  const VkResult result =
-      context_.api->vkQueueSubmit(context_.queue, 1, &submitInfo, submission.fence);
+  VkResult result;
+  {
+    std::unique_lock<std::mutex> queueLock;
+    if (context_.queueMutex != nullptr) {
+      queueLock = std::unique_lock<std::mutex>(*context_.queueMutex);
+    }
+    result = context_.api->vkQueueSubmit(context_.queue, 1, &submitInfo, submission.fence);
+  }
   return finishHandoverSubmission(result, wait, submission);
 }
 
@@ -1079,7 +1085,14 @@ Result<SurfaceStatus> VulkanSwapchain::present(const TextureSyncState& state) {
   fenceInfo.pFences = &presentFences_[imageIndex_];
   presentInfo.pNext = &fenceInfo;
 
-  const VkResult result = context_.api->vkQueuePresentKHR(context_.queue, &presentInfo);
+  VkResult result;
+  {
+    std::unique_lock<std::mutex> queueLock;
+    if (context_.queueMutex != nullptr) {
+      queueLock = std::unique_lock<std::mutex>(*context_.queueMutex);
+    }
+    result = context_.api->vkQueuePresentKHR(context_.queue, &presentInfo);
+  }
   if (!IsDefinitePreEnqueueFailure(result)) {
     presentFencePending_[imageIndex_] = true;
   }

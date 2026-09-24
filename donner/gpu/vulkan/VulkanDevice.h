@@ -18,6 +18,27 @@ struct VulkanApi;
 struct VulkanSurfaceContext;
 class VulkanSwapchain;
 
+/**
+ * One native Vulkan instance, device and graphics queue shared by runtime devices.
+ *
+ * Runtime devices keep this owner alive while each owns its command pool, handles, serials and
+ * retirement. The native queue is serialized across their submissions and presentations.
+ */
+class VulkanSharedRoot final {
+public:
+  /// Releases the native device after its last runtime device and surface have let go.
+  ~VulkanSharedRoot();
+
+  /// Largest 2D texture dimension reported by this root's physical device.
+  uint32_t maxTextureDimension2D() const;
+
+private:
+  friend class VulkanDevice;
+  struct Impl;
+  explicit VulkanSharedRoot(std::unique_ptr<Impl> impl);
+  std::unique_ptr<Impl> impl_;
+};
+
 /// Selects presentation instance extensions from the names a loader offers.
 /// Exposed for deterministic platform-companion extension tests.
 /// @param offeredExtensions NUL-terminated names offered by the loader.
@@ -140,6 +161,18 @@ public:
    *   closed after a failed shutdown.
    */
   static std::optional<SystemCapabilities> QuerySystemCapabilities();
+
+  /// Opens one headless native Vulkan root for several runtime devices.
+  /// @param lostState Shared loss condition, or null for a private new condition.
+  /// @return Root with one instance, logical device and queue, or null on selection failure.
+  static std::shared_ptr<VulkanSharedRoot> CreateSharedRoot(
+      std::shared_ptr<DeviceLostState> lostState = nullptr);
+
+  /// Opens a runtime device with independent resources and serials over \p root.
+  /// @param root Native owner every device over this root retains.
+  /// @return Runtime device, or null when creation is refused or the root is null.
+  static std::unique_ptr<VulkanDevice> CreateOverSharedRoot(
+      const std::shared_ptr<VulkanSharedRoot>& root);
 
   /**
    * Creates a headless device: a VkInstance without surface extensions (enabling
@@ -471,6 +504,12 @@ private:
   /// @param requiredInstanceExtensions Surface extensions the embedder needs on the instance.
   /// @param lostState Loss condition of the root the device opens over; null for a private one.
   static std::unique_ptr<VulkanDevice> CreateImpl(
+      bool enableTimelineSemaphoreForTest, bool enablePresentation,
+      std::span<const char* const> requiredInstanceExtensions,
+      std::shared_ptr<DeviceLostState> lostState);
+
+  /// Creates the native owner used by \ref CreateImpl and \ref CreateSharedRoot.
+  static std::shared_ptr<VulkanSharedRoot> CreateRootImpl(
       bool enableTimelineSemaphoreForTest, bool enablePresentation,
       std::span<const char* const> requiredInstanceExtensions,
       std::shared_ptr<DeviceLostState> lostState);

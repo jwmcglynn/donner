@@ -26,6 +26,10 @@
 #include "donner/gpu/Device.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
+namespace donner::gpu::vulkan {
+class VulkanSharedRoot;
+}
+
 namespace donner::geode {
 
 class GeodeWgpuAdapterDevice;
@@ -86,8 +90,9 @@ struct GeodeGpuRootCapabilities {
 /**
  * One selected backend root: the backend a set of runtime devices drives, the capabilities the
  * selection discovered, and the sticky loss condition every one of them shares. A transitional
- * root holds the wgpu objects its devices record against; a native root holds none, because each
- * runtime device over it opens the system's device itself.
+ * root holds the wgpu objects its devices record against. A native Metal root selects the
+ * system device for each runtime device; a native Vulkan root holds one instance, logical device
+ * and queue shared by all of its runtime devices.
  *
  * Retained through `shared_ptr` by each runtime device over it, so the handles outlive the last
  * of them. A browser root holds the browser device request that keeps its worker's GPU device
@@ -108,10 +113,12 @@ public:
    * @param lostState Sticky loss condition shared by every runtime device over these roots.
    * @param backendHold What the backend needs kept open for as long as any runtime device over
    *   these roots, or null for a backend that needs nothing. Released after the handles.
+   * @param vulkanRoot Native Vulkan owner, or null for another backend.
    */
   GeodeGpuRoot(GeodeWgpuRoots handles, GeodeGpuRootCapabilities capabilities,
                std::shared_ptr<gpu::DeviceLostState> lostState,
-               std::shared_ptr<const void> backendHold = nullptr);
+               std::shared_ptr<const void> backendHold = nullptr,
+               std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot = nullptr);
 
   /// Releases owned handles, or leaves borrowed ones to their embedder. A root already declared
   /// lost is deliberately leaked rather than destroyed: releasing it calls into a driver that has
@@ -137,6 +144,11 @@ public:
   /// Sticky loss condition shared by every runtime device over this root.
   const std::shared_ptr<gpu::DeviceLostState>& lostState() const UTILS_LIFETIME_BOUND {
     return lostState_;
+  }
+
+  /// Native Vulkan owner shared by runtime devices over this root, or null on other backends.
+  const std::shared_ptr<gpu::vulkan::VulkanSharedRoot>& vulkanRoot() const UTILS_LIFETIME_BOUND {
+    return vulkanRoot_;
   }
 
   /**
@@ -165,6 +177,7 @@ private:
   GeodeGpuRootCapabilities capabilities_;
   std::shared_ptr<gpu::DeviceLostState> lostState_;
   std::shared_ptr<const void> backendHold_;
+  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot_;
 };
 
 /// Caller-supplied inputs to backend-root selection. The environment-driven inputs (the backend
