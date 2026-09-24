@@ -189,6 +189,27 @@ public:
     return inspectorSnapshot_.transform;
   }
 
+  /// Screen rectangle of the stroke-width increment button from the last inspector frame.
+  [[nodiscard]] std::optional<Box2d> strokeIncrementRectForTesting() const {
+    return strokeIncrementRect_;
+  }
+
+  /// Whether the captured dash pattern fits the bounded text editor.
+  [[nodiscard]] bool dashPatternEditableForTesting() const {
+    return inspectorSnapshot_.strokeDasharray.size() < strokeDasharrayBuffer_.size();
+  }
+
+  /// Cached IDs offered by the marker selectors.
+  [[nodiscard]] std::span<const std::string> markerIdsForTesting() const { return markerCacheIds_; }
+
+  /// Number of bounded marker scans performed by this presenter.
+  [[nodiscard]] std::size_t markerScanCountForTesting() const { return markerScanCount_; }
+
+  /// Submit a dash pattern through the same validation and style mutation path as the text field.
+  bool submitDashPatternForTesting(EditorApp& app, std::string_view pattern) {
+    return submitDashPattern(app, pattern);
+  }
+
   /// Last rendered screen rectangle for one decomposed Transform field.
   /// Matrix cells are excluded because they are indexed separately.
   [[nodiscard]] std::optional<Box2d> transformFieldRectForTesting(TransformField field) const {
@@ -196,6 +217,11 @@ public:
       return std::nullopt;
     }
     return transformFieldRects_[static_cast<std::size_t>(field)];
+  }
+
+  /// Last rendered screen rectangle of one raw matrix component.
+  [[nodiscard]] std::optional<Box2d> matrixFieldRectForTesting(int index) const {
+    return matrixFieldRects_[static_cast<std::size_t>(index)];
   }
 
   // Testing hooks that drive the transform-edit state machine directly,
@@ -243,6 +269,15 @@ private:
     bool transformEditable = false;
     bool strokeEditable = false;
     float strokeWidth = 1.0f;
+    int strokeLinecap = 0;
+    int strokeLinejoin = 0;
+    float strokeMiterlimit = 4.0f;
+    std::string strokeDasharray = "none";
+    float strokeDashoffset = 0.0f;
+    std::string markerStart = "none";
+    std::string markerEnd = "none";
+    std::vector<std::string> markerIds;
+    bool markerListTruncated = false;
     std::string titleText;
     std::optional<Box2d> bounds;
     std::optional<Transform2d> transform;
@@ -291,6 +326,12 @@ private:
   /// matrix disclosure). Returns true if a mutation was queued.
   bool renderTransformPanel(EditorApp* liveApp);
 
+  /// Render SVG stroke controls from the captured selection, queuing style mutations when idle.
+  bool renderStrokeControlsPanel(EditorApp* liveApp);
+
+  /// Reject invalid SVG dash patterns before changing the selected elements' styles.
+  bool submitDashPattern(EditorApp& liveApp, std::string_view pattern);
+
   /// Render one decomposed numeric field, wiring activation, write-back, and
   /// commit. The field supports both drag adjustment and click-to-type.
   bool renderTransformFieldDrag(EditorApp* liveApp, TransformField field, const char* label,
@@ -316,6 +357,16 @@ private:
   InspectorSnapshot inspectorSnapshot_;
   std::optional<TransformEditState> transformEdit_;
   std::array<std::optional<Box2d>, 5> transformFieldRects_;
+  std::array<std::optional<Box2d>, 6> matrixFieldRects_;
+  std::optional<Box2d> strokeIncrementRect_;
+  std::array<char, 128> strokeDasharrayBuffer_{};
+  bool strokeDasharrayEditing_ = false;
+  std::optional<svg::SVGElement> markerCacheRoot_;
+  std::uint64_t markerCacheSourceVersion_ = 0;
+  std::string markerCacheSourceText_;
+  std::vector<std::string> markerCacheIds_;
+  bool markerCacheTruncated_ = false;
+  std::size_t markerScanCount_ = 0;
 
   /// Persistent tree-disclosure state, keyed by 32-bit entity id. A node is
   /// expanded iff present. Mutable because the tree renders from a const

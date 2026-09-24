@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -646,7 +647,7 @@ TEST_F(SidebarPresenterImGuiTest, InspectorRendersMultiSelectionAndSingleSelecti
   EXPECT_GT(singleDrawData->TotalVtxCount, 0);
 }
 
-TEST_F(SidebarPresenterImGuiTest, BusyFramePreservesInspectorSnapshotAppearance) {
+TEST_F(SidebarPresenterImGuiTest, BusyFrameKeepsInspectorSnapshotAppearance) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kInspectorSvg));
   app.setCleanSourceText(kInspectorSvg);
@@ -661,12 +662,139 @@ TEST_F(SidebarPresenterImGuiTest, BusyFramePreservesInspectorSnapshotAppearance)
   ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
   const std::vector<ImU32> idleColors = DrawVertexColors();
   ASSERT_FALSE(idleColors.empty());
+  const std::string title = std::string(presenter.inspectorTitleForTesting());
 
   ASSERT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindowName));
   const std::vector<ImU32> busyColors = DrawVertexColors();
   EXPECT_EQ(busyColors, idleColors)
-      << "Worker ownership must gate mutations without dimming or resetting inspector controls";
+      << "Busy frames should replay the captured inspector appearance";
+  EXPECT_EQ(presenter.inspectorTitleForTesting(), title);
+  EXPECT_THAT(presenter.inspectorXmlAttributesForTesting(),
+              ElementsAre(Pair("x", "10"), Pair("y", "20"), Pair("width", "100"),
+                          Pair("height", "50"), Pair("fill", "red"), Pair("id", "target")));
   EXPECT_FALSE(app.canUndo());
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthStepUpdatesEverySelectedElement) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  const auto peer = app.document().document().querySelector("#peer");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(peer.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*target, *peer});
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_stroke_step_test";
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+  const auto step = presenter.strokeIncrementRectForTesting();
+  ASSERT_TRUE(step.has_value());
+  const ImVec2 center(static_cast<float>((step->topLeft.x + step->bottomRight.x) * 0.5),
+                      static_cast<float>((step->topLeft.y + step->bottomRight.y) * 0.5));
+
+  RenderInspectorFrame(presenter, &app, kWindowName, center, /*mouseDown=*/true);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName, center, /*mouseDown=*/false));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_EQ(target->getAttribute("style"), "stroke-width: 2");
+  EXPECT_EQ(peer->getAttribute("style"), "stroke-width: 2");
+}
+
+TEST(SidebarPresenterTest, InvalidDashPatternDoesNotQueueStyleMutation) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  EXPECT_FALSE(presenter.submitDashPatternForTesting(app, "4 bogus"));
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_EQ(target->getAttribute("style"), std::nullopt);
+
+  ASSERT_TRUE(presenter.submitDashPatternForTesting(app, "4 2"));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->getAttribute("style"), "stroke-dasharray: 4 2");
+}
+
+TEST_F(SidebarPresenterImGuiTest, LongExistingDashPatternIsVisibleAndReadOnly) {
+  std::string pattern;
+  for (int i = 0; i < 70; ++i) {
+    if (!pattern.empty()) {
+      pattern += ' ';
+    }
+    pattern += "1 2";
+  }
+  const std::string svg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"120\" height=\"80\">"
+      "<rect id=\"target\" width=\"100\" height=\"50\" stroke=\"black\" "
+      "stroke-dasharray=\"" +
+      pattern + "\"/></svg>";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, svg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_GT(pattern.size(), 127u);
+  EXPECT_FALSE(presenter.dashPatternEditableForTesting());
+  EXPECT_FALSE(presenter.submitDashPatternForTesting(app, pattern));
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, "##long_dash_pattern"));
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_EQ(target->getAttribute("stroke-dasharray"), pattern);
+  EXPECT_EQ(target->getAttribute("style"), std::nullopt);
+}
+
+TEST(SidebarPresenterTest, MarkerIdsAreCachedAndRefreshAfterSourceMutation) {
+  constexpr std::string_view kMarkerSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <defs><marker id="arrow"><path d="M0,0 L4,2 L0,4"/></marker></defs>
+           <path id="target" d="M10,10 L100,10" stroke="black"/>
+         </svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kMarkerSvg));
+  EXPECT_THAT(presenter.markerIdsForTesting(), ElementsAre("arrow"));
+  const std::size_t scans = presenter.markerScanCountForTesting();
+  presenter.refreshSnapshot(app);
+  EXPECT_EQ(presenter.markerScanCountForTesting(), scans);
+
+  const auto marker = app.document().document().querySelector("#arrow");
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(marker.has_value());
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*marker);
+  ASSERT_TRUE(app.setAttributeOnSelection("id", "new-arrow"));
+  ASSERT_TRUE(app.flushFrame());
+  app.setSelection(*target);
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.markerIdsForTesting(), ElementsAre("new-arrow"));
+  EXPECT_EQ(presenter.markerScanCountForTesting(), scans + 1u);
+}
+
+TEST_F(SidebarPresenterImGuiTest, BusyStrokeWidthStepDoesNotQueueMutation) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  const auto peer = app.document().document().querySelector("#peer");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(peer.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*target, *peer});
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_busy_stroke_step_test";
+  ASSERT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindowName));
+  const auto step = presenter.strokeIncrementRectForTesting();
+  ASSERT_TRUE(step.has_value());
+  const ImVec2 center(static_cast<float>((step->topLeft.x + step->bottomRight.x) * 0.5),
+                      static_cast<float>((step->topLeft.y + step->bottomRight.y) * 0.5));
+
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindowName, center, /*mouseDown=*/true));
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindowName, center, /*mouseDown=*/false));
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_EQ(target->getAttribute("style"), std::nullopt);
 }
 
 TEST_F(SidebarPresenterImGuiTest, TreeViewOpensAncestorsForPendingScrollTarget) {
@@ -1030,17 +1158,17 @@ TEST_F(SidebarPresenterImGuiTest, MatrixDisclosureRendersRawComponentCells) {
 
   // Baseline frame with the disclosure collapsed.
   EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
-  const ImDrawData* collapsedDrawData = ImGui::GetDrawData();
-  ASSERT_NE(collapsedDrawData, nullptr);
-  const int collapsedVertices = collapsedDrawData->TotalVtxCount;
+  for (int index = 0; index < 6; ++index) {
+    EXPECT_FALSE(presenter.matrixFieldRectForTesting(index).has_value());
+  }
 
-  // Opening the disclosure renders the six raw matrix drag cells: strictly
-  // more geometry, still no queued mutation and no undo entry.
+  // Opening the disclosure builds all six raw matrix drag cells, still without
+  // a queued mutation or undo entry.
   EXPECT_FALSE(RenderInspectorFrameWithMatrixOpen(presenter, &app, kWindowName));
-  const ImDrawData* openDrawData = ImGui::GetDrawData();
-  ASSERT_NE(openDrawData, nullptr);
-  EXPECT_GT(openDrawData->TotalVtxCount, collapsedVertices)
-      << "The open matrix disclosure must draw the a-f component cells.";
+  for (int index = 0; index < 6; ++index) {
+    EXPECT_TRUE(presenter.matrixFieldRectForTesting(index).has_value())
+        << "Matrix component " << index << " should have an ImGui item.";
+  }
   EXPECT_FALSE(app.canUndo()) << "Rendering the matrix cells must not record undo entries.";
 
   // An in-progress matrix edit displays the edit-buffer value for its cell.
@@ -1052,9 +1180,9 @@ TEST_F(SidebarPresenterImGuiTest, MatrixDisclosureRendersRawComponentCells) {
 
   // Busy frame (no live app): the cells render disabled and stay inert.
   EXPECT_FALSE(RenderInspectorFrameWithMatrixOpen(presenter, nullptr, kWindowName));
-  const ImDrawData* busyDrawData = ImGui::GetDrawData();
-  ASSERT_NE(busyDrawData, nullptr);
-  EXPECT_GT(busyDrawData->TotalVtxCount, collapsedVertices);
+  for (int index = 0; index < 6; ++index) {
+    EXPECT_TRUE(presenter.matrixFieldRectForTesting(index).has_value());
+  }
 }
 
 TEST_F(SidebarPresenterImGuiTest, PathOperationButtonsRenderDisabledWithoutLiveApp) {
