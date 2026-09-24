@@ -1069,6 +1069,7 @@ EXCLUDE_PATTERNS       = *.py \
                          */donner/base/*.mm \
                          */donner/benchmarks/*.cc \
                          */donner/benchmarks/*.cpp \
+                         */donner/benchmarks/*.h \
                          */donner/benchmarks/*.mm \
                          */donner/css/*.cc \
                          */donner/css/*.cpp \
