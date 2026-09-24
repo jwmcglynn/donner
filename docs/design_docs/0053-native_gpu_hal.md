@@ -111,14 +111,17 @@ the native backend, and a separate change then flips that platform's default. Un
 - The editor window opens on the selected device. On Apple its Metal layer is attached before
   selection and constrains none, the surface settles BGRA8Unorm without an adapter, and the
   surface, UI renderer and UI texture registry take the runtime device. The frame clear and the
-  framebuffer readback still record on the adapter's wgpu objects, so a frame on a native backend
-  halts at the adapter accessor until they move.
+  framebuffer readback record through the runtime on every tier. Only the browser's asynchronous
+  diagnostic readback still copies and maps on the adapter's wgpu objects, because the runtime has
+  no map completion a caller can observe without waiting for it
+  ([#1410](https://github.com/jwmcglynn/donner/issues/1410)).
 
 On Metal, snapshot capture and cross-context snapshot drawing register their source across
 runtime devices (see [Cross-device texture registration](#cross-device-texture-registration)).
-Every Geode target and `renderer_geode_tests` now pass with `DONNER_GPU_BACKEND=metal`. The
-renderer's other suites have not been qualified natively yet, and editor presentation remains.
-Vulkan and the browser follow the same sequence.
+Every Geode target and `renderer_geode_tests` now pass with `DONNER_GPU_BACKEND=metal`, and so do
+the Geode editor integration targets listed under [Testing and Validation](#testing-and-validation)
+and `editor_shell_tests`, under Metal API and shader validation. The renderer's other suites have
+not been qualified natively yet. Vulkan and the browser follow the same sequence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
 paths now use their reviewed runtime resource boundaries. Cross-context readback and presentation
@@ -463,7 +466,9 @@ adapter, and an adapter context on Metal, where a second headless device shares 
       the three patches that customized it, and the duplicated copy in the examples module are
       deleted.
 - [ ] Migrate frame composition off the raw WebGPU frame encoder so the editor records its whole
-      frame through the runtime.
+      frame through the runtime. The clear, document underlay, chrome, UI and framebuffer readback
+      do on every tier; the browser's asynchronous diagnostic readback remains
+      ([#1410](https://github.com/jwmcglynn/donner/issues/1410)).
 
 ### Native surfaces
 
@@ -482,9 +487,9 @@ adapter, and an adapter context on Metal, where a second headless device shares 
       values. Resize, minimized windows, outdated/lost surfaces, timeout, device loss,
       frame-handle invalidation after present and abandon, and a second acquisition before either
       are covered by `//donner/editor/tests:editor_window_tests` and its `geode` variant. The
-      window still reaches the backend device for the platform object and for the passes that
-      have not moved to the presentation boundary; selecting a native device beneath this seam is
-      the ownership item below.
+      window still reaches the backend's wgpu objects for the platform surface object off Apple
+      and for the browser's diagnostic readback; on Apple it opens and draws on the selected
+      native device.
 
 ### Browser bridge
 

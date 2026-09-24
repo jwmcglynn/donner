@@ -73,18 +73,15 @@
     },
     "donner/editor/gui/EditorWindow.cc": {
       "operations": [
-        "beginRenderPass",
         "configure",
         "copyTextureToBuffer",
         "createBuffer",
         "createCommandEncoder",
         "createTexture",
-        "createView",
         "finish",
         "getCapabilities",
         "getConstMappedRange",
         "mapAsync",
-        "poll",
         "present",
         "release",
         "submit",
@@ -120,21 +117,14 @@
         "CommandBuffer",
         "CommandEncoder",
         "Default",
-        "Device",
         "Extent3D",
         "Instance",
-        "LoadOp",
         "MapMode",
-        "RenderPassColorAttachment",
-        "RenderPassDescriptor",
-        "RenderPassEncoder",
-        "StoreOp",
         "Surface",
         "SurfaceCapabilities",
         "TexelCopyBufferInfo",
         "TexelCopyTextureInfo",
-        "Texture",
-        "TextureView"
+        "Texture"
       ]
     },
     "donner/editor/gui/EditorWindow.h": {
@@ -145,10 +135,8 @@
       ],
       "wgpuCppTokens": [
         "Adapter",
-        "Buffer",
         "Instance",
-        "Surface",
-        "Texture"
+        "Surface"
       ]
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
