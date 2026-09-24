@@ -20,6 +20,13 @@ namespace donner::gpu::browser {
  * browser state of its own beyond the mapped bytes it copies out of the browser's heap, so what
  * exists is recorded in one place rather than in two that could disagree.
  *
+ * Each bridge is one logical device and names itself to the library by a handle it is given at
+ * construction, which every entry point takes first. Handles come from one counter shared by every
+ * worker in the process and are never reused, so a handle names one logical device anywhere, and a
+ * stale one names nothing. The library keys each logical device's identifiers, mappings, recording
+ * and completed serial by that handle while every logical device in a worker shares that worker's
+ * one browser device and queue.
+ *
  * \ref beginDeviceRequest compares \ref ProtocolCodeTable against the table the library holds
  * before asking for a device, so the two halves agree on what their numbers mean before anything
  * is built on them. See BrowserWireCodes.h for what that check covers and what it does not.
@@ -37,7 +44,9 @@ public:
   /// \ref beginDeviceRequest.
   EmscriptenBrowserBridge();
 
-  /// Destructor; releases the browser device and every object still registered under it.
+  /// Destructor; releases this logical device's state on the browser side and leaves every other
+  /// logical device's alone. The browser device, and the textures its shares still hold, go with
+  /// the last logical device over it.
   ~EmscriptenBrowserBridge() override;
 
   BridgeStatus beginDeviceRequest() override;
@@ -48,6 +57,12 @@ public:
   bool isDeviceLost() const override;
   RcString deviceLostReason() const override;
   uint64_t completedSerial() const override;
+
+  const void* sharedDeviceIdentity() const override;
+  BridgeStatus shareTexture(BrowserObjectId textureId,
+                            std::shared_ptr<const BrowserSharedTexture>& shared) override;
+  BridgeStatus registerSharedTexture(BrowserObjectId id,
+                                     const BrowserSharedTexture& shared) override;
 
   BridgeStatus createBuffer(BrowserObjectId id, uint64_t byteSize, uint32_t usageBits) override;
   BridgeStatus createTexture(BrowserObjectId id, uint32_t width, uint32_t height,
@@ -121,6 +136,14 @@ public:
   BridgeStatus abandonCurrentTexture(BrowserObjectId surfaceId) override;
 
 private:
+  /// The handle this bridge names its logical device by in every library call.
+  uint32_t logicalDevice_;
+
+  /// Identity of the browser device this logical device runs on, held once the library first
+  /// names it; shared with every bridge and every share over the same browser device in this
+  /// worker, so its address is unique for as long as anything can compare against it.
+  mutable std::shared_ptr<const void> sharedDeviceIdentity_;
+
   /// A mapping this bridge has copied out of the browser's heap.
   struct MappedRange {
     uint64_t byteCount = 0;      //!< Length the mapping was requested with.

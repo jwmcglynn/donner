@@ -348,8 +348,26 @@ js_test(
     name = "browser_bridge_surface_tests",
     size = "small",
     copy_data_to_bin = False,
-    data = ["//donner/gpu/browser:library_donner_gpu.js"],
+    data = [
+        "bridge-library-harness.mjs",
+        "//donner/gpu/browser:library_donner_gpu.js",
+    ],
     entry_point = "browser-bridge-surface.spec.mjs",
+    node_options = ["--test"],
+)
+
+# Drives the device half of the same library with several logical devices in one worker, as the
+# renderer and the snapshot capture context beside it hold: each must keep its own state and
+# never refuse, overwrite or tear down another's.
+js_test(
+    name = "browser_bridge_device_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "bridge-library-harness.mjs",
+        "//donner/gpu/browser:library_donner_gpu.js",
+    ],
+    entry_point = "browser-bridge-devices.spec.mjs",
     node_options = ["--test"],
 )
 

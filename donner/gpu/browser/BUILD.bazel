@@ -3,6 +3,7 @@ load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
+load(":pthreads_transition.bzl", "pthreads_transitioned_target")
 
 # donner::gpu::browser - the browser backend of the Donner GPU runtime.
 #
@@ -18,12 +19,14 @@ donner_cc_library(
         "BrowserBridge.cc",
         "BrowserDevice.cc",
         "BrowserObjectTable.cc",
+        "BrowserShareReleaseQueue.cc",
         "BrowserWireCodes.cc",
     ],
     hdrs = [
         "BrowserBridge.h",
         "BrowserDevice.h",
         "BrowserObjectTable.h",
+        "BrowserShareReleaseQueue.h",
         "BrowserWireCodes.h",
     ],
     visibility = donner_internal_visibility(),
@@ -105,6 +108,22 @@ wasm_cc_binary(
     # a wildcard build under the WebAssembly Geode configuration, the same way the renderer module
     # beside it is, and carries that lane's tag.
     tags = ["codeql_wasm_geode"],
+    visibility = ["//tools/ci:__pkg__"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/wasm:wasm_geode": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+# The same probe with WebAssembly threads enabled, the way the editor's module is built. The bridge
+# hands a texture share's release made on another thread to the thread that owns the share through
+# a proxying queue, which exists only in a threaded build, so only this probe compiles and links
+# that path. Reached by the same wildcard build as the probe above.
+pthreads_transitioned_target(
+    name = "browser_bridge_pthreads_link_probe",
+    dep = ":browser_bridge_link_probe",
+    tags = ["codeql_wasm_geode"],
+    visibility = ["//tools/ci:__pkg__"],
     target_compatible_with = select({
         "//donner/svg/renderer/wasm:wasm_geode": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -131,6 +150,7 @@ donner_cc_test(
     srcs = [
         "tests/BrowserDevice_tests.cc",
         "tests/BrowserObjectTable_tests.cc",
+        "tests/BrowserShareReleaseQueue_tests.cc",
         "tests/BrowserSubRectangleUpload_tests.cc",
         "tests/BrowserWireCodes_tests.cc",
     ],

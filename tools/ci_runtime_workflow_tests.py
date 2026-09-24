@@ -471,7 +471,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         prefetch = workflow.split("- id: editor-wasm-prefetch", 1)[1].split(SIZE_CHECK_STEP, 1)[0]
         build = self._size_check_step(workflow)
 
-        self.assertEqual(6, prefetch.count("bazelisk fetch"))
+        self.assertEqual(8, prefetch.count("bazelisk fetch"))
         self.assertEqual(1, prefetch.count("continue-on-error: true"))
         self.assertEqual(
             1,
@@ -480,6 +480,16 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertEqual(3, build.count("bazelisk test"))
         self.assertNotIn("continue-on-error", build)
         self.assertIn("//tools/ci:editor_wasm_size_tests", build)
+
+    def test_editor_wasm_pull_requests_link_the_browser_gpu_bridge(self):
+        """Both bridge link probes build on every pull request, in the job that fetched them."""
+        workflow = self.editor_wasm
+        build_job = workflow.split("\n  build:\n", 1)[1].split("\n  test:\n", 1)[0]
+        self.assertIn("- name: Link the browser GPU bridge", build_job)
+        link = build_job.split("- name: Link the browser GPU bridge", 1)[1]
+        self.assertIn("bazelisk build --config=wasm-geode", link)
+        self.assertIn("//tools/ci:browser_bridge_link_probes", link)
+        self.assertNotIn("continue-on-error", link)
 
     def _size_check_step(self, workflow):
         """The workflow step that builds and size-checks the editor Wasm package.

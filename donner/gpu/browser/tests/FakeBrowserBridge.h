@@ -9,14 +9,163 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
+#include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
 #include "donner/gpu/browser/BrowserBridge.h"
+#include "donner/gpu/browser/BrowserShareReleaseQueue.h"
 #include "donner/gpu/browser/BrowserWireCodes.h"
 
 namespace donner::gpu::browser {
+
+/**
+ * The browser GPU device several fake bridges share, as the logical devices of one worker do.
+ *
+ * It holds what belongs to the device rather than to any one logical device over it: whether the
+ * device is lost, and the textures it has allocated, each with whether it has been destroyed. A
+ * bridge keeps identifiers of its own and names these textures through them, so a test can see
+ * that two logical devices name one texture, and exactly when that texture goes away.
+ */
+class FakeBrowserGpuDevice {
+public:
+  /// Whether the browser has reported this device lost, for every logical device over it.
+  bool lost = false;
+
+  /// Allocates a texture and returns the number naming it on this device.
+  uint64_t allocateTexture() {
+    const uint64_t texture = nextTexture_++;
+    textures_[texture] = false;
+    return texture;
+  }
+
+  /// Destroys the texture \p texture names. @param texture Texture to destroy.
+  void destroyTexture(uint64_t texture) { textures_[texture] = true; }
+
+  /// Whether \p texture names a texture this device allocated and has not destroyed.
+  /// @param texture Texture to check.
+  [[nodiscard]] bool isTextureLive(uint64_t texture) const {
+    const auto it = textures_.find(texture);
+    return it != textures_.end() && !it->second;
+  }
+
+  /// Holds \p texture for the other logical devices and returns the share naming the hold.
+  /// @param texture Texture to hold.
+  /// @param canvasOwned Whether the texture is a canvas frame, which releasing the share never
+  ///   destroys because the canvas owns it.
+  BrowserTextureShareId holdTexture(uint64_t texture, bool canvasOwned = false) {
+    const BrowserTextureShareId share = nextShare_++;
+    shares_[share] =
+        Share{.texture = texture, .producerReleased = false, .canvasOwned = canvasOwned};
+    return share;
+  }
+
+  /// The texture \p share holds, or nullopt once the share is released.
+  /// @param share Share to look up.
+  [[nodiscard]] std::optional<uint64_t> sharedTexture(BrowserTextureShareId share) const {
+    const auto it = shares_.find(share);
+    if (it == shares_.end()) {
+      return std::nullopt;
+    }
+    return it->second.texture;
+  }
+
+  /// Records that the producer released its identifier for the texture \p share holds, which is
+  /// then destroyed when the share is released rather than now.
+  /// @param share Share whose producer let go.
+  void releaseProducer(BrowserTextureShareId share) { shares_[share].producerReleased = true; }
+
+  /// Releases \p share, destroying its texture if the producer has already let go of it and the
+  /// texture is not a canvas frame. @param share Share to release.
+  void releaseShare(BrowserTextureShareId share) {
+    const auto it = shares_.find(share);
+    if (it == shares_.end()) {
+      return;
+    }
+    if (it->second.producerReleased && !it->second.canvasOwned) {
+      destroyTexture(it->second.texture);
+    }
+    shares_.erase(it);
+    ++releasedShares;
+  }
+
+  /// How many shares have been released.
+  uint64_t releasedShares = 0;
+
+  /// Lets the device go, as the browser side does once no logical device over it is left: every
+  /// texture a share still holds is destroyed, except a canvas frame, and the shares are
+  /// forgotten, so a release that arrives afterwards finds nothing.
+  void release() {
+    for (const auto& [share, held] : shares_) {
+      if (!held.canvasOwned) {
+        destroyTexture(held.texture);
+      }
+    }
+    shares_.clear();
+  }
+
+  /// Number of shares the device still holds.
+  [[nodiscard]] size_t liveShares() const { return shares_.size(); }
+
+  /// Releases a share let go on another thread posted for this device's worker, which runs them
+  /// whenever a logical device over it hands the thread to the browser.
+  const std::shared_ptr<BrowserShareReleaseQueue> shareReleases =
+      std::make_shared<BrowserShareReleaseQueue>();
+
+  /// Runs every release posted to \ref shareReleases, as the owner does when it yields.
+  void drainShareReleases() {
+    for (const BrowserShareReleaseQueue::Release& release : shareReleases->takeAll()) {
+      releaseShare(release.share);
+    }
+  }
+
+private:
+  /// A texture held for the other logical devices.
+  struct Share {
+    uint64_t texture = 0;           //!< Texture held.
+    bool producerReleased = false;  //!< Whether the producer has let go of its identifier.
+    bool canvasOwned = false;       //!< Whether the texture is a canvas frame.
+  };
+
+  uint64_t nextTexture_ = 1;
+  std::map<uint64_t, bool> textures_;  //!< Texture number to whether it was destroyed.
+  BrowserTextureShareId nextShare_ = 1;
+  std::map<BrowserTextureShareId, Share> shares_;
+};
+
+/// A share the fake browser device made, released on that device when the runtime drops it.
+///
+/// Like the browser side's, it belongs to the worker that made it: a drop on the thread that made
+/// the share releases it there, and a drop on any other thread posts the release for that worker,
+/// which runs it the next time it yields.
+class FakeSharedTexture final : public BrowserSharedTexture {
+public:
+  /// Constructs the share \p share of \p gpuDevice. @param gpuDevice Device the share belongs to.
+  /// @param share Share identifier.
+  FakeSharedTexture(std::shared_ptr<FakeBrowserGpuDevice> gpuDevice, BrowserTextureShareId share)
+      : gpuDevice_(std::move(gpuDevice)), share_(share), ownerThread_(std::this_thread::get_id()) {}
+
+  /// Destructor; releases the share on its device, or posts the release for the thread that made
+  /// the share when dropped on another.
+  ~FakeSharedTexture() override {
+    if (std::this_thread::get_id() == ownerThread_) {
+      gpuDevice_->releaseShare(share_);
+    } else {
+      gpuDevice_->shareReleases->post({.producer = 0, .share = share_});
+    }
+  }
+
+  BrowserTextureShareId shareId() const override { return share_; }
+  const void* sharedDeviceIdentity() const override { return gpuDevice_.get(); }
+
+private:
+  std::shared_ptr<FakeBrowserGpuDevice> gpuDevice_;
+  BrowserTextureShareId share_;
+  std::thread::id ownerThread_;
+};
 
 /**
  * A \ref BrowserBridge that behaves like the browser side without being one.
@@ -34,8 +183,14 @@ namespace donner::gpu::browser {
  */
 class FakeBrowserBridge final : public BrowserBridge {
 public:
-  /// Constructs a bridge whose device request is already settled and ready.
+  /// Constructs a bridge whose device request is already settled and ready, over a browser
+  /// device of its own.
   FakeBrowserBridge() = default;
+
+  /// Constructs a bridge over \p gpuDevice, as a further logical device of the worker that holds
+  /// it. @param gpuDevice Browser device the bridge shares with the others over it.
+  explicit FakeBrowserBridge(std::shared_ptr<FakeBrowserGpuDevice> gpuDevice)
+      : gpuDevice(std::move(gpuDevice)) {}
 
   /// Destructor.
   ~FakeBrowserBridge() override = default;
@@ -51,7 +206,8 @@ public:
   BridgeStatus beginStatus = BridgeStatus::Success;
   /// Whether the calling context owns the device.
   bool owned = true;
-  /// Whether the browser has reported the device lost.
+  /// Whether the browser has reported the device lost to this logical device. The shared device's
+  /// own \ref FakeBrowserGpuDevice::lost reports it to every logical device over it.
   bool lost = false;
   /// What the browser said when it reported the loss.
   RcString lostReason;
@@ -79,6 +235,19 @@ public:
   /// what device teardown released needs the registry to outlive the bridge that kept it.
   std::shared_ptr<std::map<BrowserObjectId, BrowserObjectKind>> objects =
       std::make_shared<std::map<BrowserObjectId, BrowserObjectKind>>();
+
+  /// The browser device this bridge's logical device runs on, which other bridges may share.
+  std::shared_ptr<FakeBrowserGpuDevice> gpuDevice = std::make_shared<FakeBrowserGpuDevice>();
+
+  /// The device texture \p textureId names, or nullopt when it names no texture here.
+  /// @param textureId Identifier in this bridge's own space.
+  std::optional<uint64_t> nativeTextureOf(BrowserObjectId textureId) const {
+    const auto it = nativeTextures_.find(textureId);
+    if (it == nativeTextures_.end()) {
+      return std::nullopt;
+    }
+    return it->second;
+  }
 
   /// Marks the mapping \p mappingId as holding \p bytes and ready to read.
   /// @param mappingId Mapping to complete. @param bytes Bytes the host will see.
@@ -130,11 +299,61 @@ public:
 
   bool ownsDevice() const override { return owned; }
 
-  bool isDeviceLost() const override { return lost; }
+  bool isDeviceLost() const override { return lost || gpuDevice->lost; }
 
   RcString deviceLostReason() const override { return lostReason; }
 
   uint64_t completedSerial() const override { return completed; }
+
+  const void* sharedDeviceIdentity() const override {
+    return requestState == BrowserDeviceRequestState::Ready ? gpuDevice.get() : nullptr;
+  }
+
+  BridgeStatus shareTexture(BrowserObjectId textureId,
+                            std::shared_ptr<const BrowserSharedTexture>& shared) override {
+    const std::string line = std::format("shareTexture texture={}", textureId);
+    if (const BridgeStatus status = guard(line); status != BridgeStatus::Success) {
+      return status;
+    }
+    if (const BridgeStatus status = require(BrowserObjectKind::Texture, textureId);
+        status != BridgeStatus::Success) {
+      return status;
+    }
+    const auto native = nativeTextures_.find(textureId);
+    // A registration is shared from the device that allocated it, and a texture is shared once, as
+    // on the browser side. A frame is shared too, and stays its canvas's.
+    if (native == nativeTextures_.end() || aliases_.contains(textureId) ||
+        sharedAs_.contains(textureId)) {
+      return BridgeStatus::Failed;
+    }
+    const BrowserTextureShareId share =
+        gpuDevice->holdTexture(native->second, /*canvasOwned=*/isFrame(textureId));
+    sharedAs_[textureId] = share;
+    calls->push_back(std::format("{} share={}", line, share));
+    shared = std::make_shared<const FakeSharedTexture>(gpuDevice, share);
+    return BridgeStatus::Success;
+  }
+
+  BridgeStatus registerSharedTexture(BrowserObjectId id,
+                                     const BrowserSharedTexture& shared) override {
+    const std::string line =
+        std::format("registerSharedTexture id={} share={}", id, shared.shareId());
+    // Ownership and loss come first, as on the browser side, so a lost device reports its loss
+    // rather than whether the share still exists.
+    if (const BridgeStatus status = guard(line); status != BridgeStatus::Success) {
+      return status;
+    }
+    const std::optional<uint64_t> native = gpuDevice->sharedTexture(shared.shareId());
+    if (!native.has_value()) {
+      return BridgeStatus::UnknownObject;
+    }
+    const BridgeStatus status = create(BrowserObjectKind::Texture, id, line);
+    if (status == BridgeStatus::Success) {
+      nativeTextures_[id] = *native;
+      aliases_.insert(id);
+    }
+    return status;
+  }
 
   BridgeStatus createBuffer(BrowserObjectId id, uint64_t byteSize, uint32_t usageBits) override {
     return create(BrowserObjectKind::Buffer, id,
@@ -148,6 +367,7 @@ public:
                std::format("createTexture id={} size={}x{} format={} usage={}", id, width, height,
                            formatCode, usageBits));
     if (status == BridgeStatus::Success) {
+      nativeTextures_[id] = gpuDevice->allocateTexture();
       if (const uint32_t texelBytes = BytesPerTexel(formatCode); texelBytes != 0) {
         textureImages_[id] =
             TextureImage{width, height, texelBytes,
@@ -268,6 +488,23 @@ public:
     objects->erase(id);
     mappings_.erase(id);
     textureImages_.erase(id);
+    if (const auto native = nativeTextures_.find(id); native != nativeTextures_.end()) {
+      // An alias names another logical device's texture, and a texture a share still holds goes
+      // when the share does; only a texture no one else holds is destroyed here.
+      const bool alias = aliases_.erase(id) != 0;
+      const auto shared = sharedAs_.find(id);
+      const bool held =
+          shared != sharedAs_.end() && gpuDevice->sharedTexture(shared->second).has_value();
+      if (held) {
+        gpuDevice->releaseProducer(shared->second);
+      } else if (!alias) {
+        gpuDevice->destroyTexture(native->second);
+      }
+      if (shared != sharedAs_.end()) {
+        sharedAs_.erase(shared);
+      }
+      nativeTextures_.erase(native);
+    }
     if (kind == BrowserObjectKind::Surface) {
       // A surface destroyed while it still names a frame gives that frame up with it: the canvas
       // owns the texture, so nothing is left to name it once its surface is gone.
@@ -526,6 +763,9 @@ public:
   void yieldToBrowser(double seconds) override {
     ++yieldCount;
     yieldedSeconds += seconds;
+    // The owner runs the share releases other threads posted for it whenever it hands the thread
+    // over, as the browser side's owner does.
+    gpuDevice->drainShareReleases();
     // A browser would settle promises here. The fake stands in for that by letting a test arrange
     // what the next state is before the wait looks again.
     if (onYield) {
@@ -628,6 +868,9 @@ public:
                std::format("acquireCurrentTexture surface={} texture={}", surfaceId, textureId));
     if (created == BridgeStatus::Success) {
       frames_[surfaceId] = textureId;
+      // The canvas's texture, which the browser device can share like any other but which nothing
+      // here destroys.
+      nativeTextures_[textureId] = gpuDevice->allocateTexture();
     }
     return created;
   }
@@ -687,7 +930,7 @@ private:
     if (!owned) {
       return BridgeStatus::NotOwner;
     }
-    if (lost) {
+    if (isDeviceLost()) {
       return BridgeStatus::DeviceLost;
     }
     if (!failOperation.empty() && line.starts_with(failOperation)) {
@@ -732,8 +975,26 @@ private:
     const auto frame = frames_.find(surfaceId);
     if (frame != frames_.end()) {
       objects->erase(frame->second);
+      nativeTextures_.erase(frame->second);
+      if (const auto shared = sharedAs_.find(frame->second); shared != sharedAs_.end()) {
+        // A share of the frame outlives the surface taking it back, and still never destroys it.
+        if (gpuDevice->sharedTexture(shared->second).has_value()) {
+          gpuDevice->releaseProducer(shared->second);
+        }
+        sharedAs_.erase(shared);
+      }
       frames_.erase(frame);
     }
+  }
+
+  /// Whether \p textureId names a frame some surface has out. @param textureId Texture to check.
+  [[nodiscard]] bool isFrame(BrowserObjectId textureId) const {
+    for (const auto& [surfaceId, frameId] : frames_) {
+      if (frameId == textureId) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Records \p line for a release naming \p id of \p kind.
@@ -877,6 +1138,12 @@ private:
   std::map<BrowserObjectId, Mapping> mappings_;
   std::map<BrowserObjectId, TextureImage> textureImages_;
   std::map<BrowserObjectId, BrowserObjectId> frames_;
+  /// Device texture each texture identifier of this bridge names.
+  std::map<BrowserObjectId, uint64_t> nativeTextures_;
+  /// Texture identifiers of this bridge that are registrations of another logical device's texture.
+  std::set<BrowserObjectId> aliases_;
+  /// Share each texture this bridge shared was held under.
+  std::map<BrowserObjectId, BrowserTextureShareId> sharedAs_;
   bool encoderOpen_ = false;
   bool passOpen_ = false;
   uint64_t recordingSerial_ = 0;

@@ -16,6 +16,10 @@ namespace donner::gpu::browser {
 
 namespace {
 
+/// Names the browser backend in a \ref BackendDeviceIdentity, so the runtime tells a texture of
+/// another backend apart before this one is asked to register it.
+constexpr char kBrowserBackendFamily = 0;
+
 /// Builds an error of \p type carrying \p message. @param type Error category.
 /// @param message Failure reason.
 GpuError Err(GpuErrorType type, std::string message) {
@@ -290,7 +294,9 @@ Result<std::unique_ptr<BrowserDevice>> BrowserDeviceRequest::take() && {
 }
 
 BrowserDevice::BrowserDevice(std::unique_ptr<BrowserBridge> bridge)
-    : bridge_(std::move(bridge)), ownerThread_(std::this_thread::get_id()) {}
+    : bridge_(std::move(bridge)),
+      ownerThread_(std::this_thread::get_id()),
+      sharedDeviceIdentity_(bridge_->sharedDeviceIdentity()) {}
 
 BrowserDevice::~BrowserDevice() {
   // Destroying a device from inside its own wait would free this object while the wait is still
@@ -1487,6 +1493,67 @@ void BrowserDevice::onDestroySurface(uint32_t slotIndex) {
   // another thread left it named. What is left is the canvas context itself, which the browser
   // side keeps configured against this device for as long as an identifier names it.
   releaseObject(BrowserObjectKind::Surface, slotIndex);
+}
+
+BackendDeviceIdentity BrowserDevice::backendDeviceIdentity() const {
+  if (sharedDeviceIdentity_ == nullptr) {
+    return BackendDeviceIdentity{};
+  }
+  return BackendDeviceIdentity{&kBrowserBackendFamily, sharedDeviceIdentity_};
+}
+
+Result<BackendTextureExport> BrowserDevice::onExportTexture(uint32_t slotIndex) {
+  static constexpr std::string_view kOperation = "exportTexture";
+  if (Status status = checkUsable(kOperation); status.hasError()) {
+    return std::move(status).error();
+  }
+  Result<BrowserObjectId> textureId = objectFor(BrowserObjectKind::Texture, slotIndex, kOperation);
+  if (textureId.hasError()) {
+    return std::move(textureId).error();
+  }
+
+  std::shared_ptr<const BrowserSharedTexture> shared;
+  const BridgeStatus status = bridge_->shareTexture(textureId.result(), shared);
+  if (status != BridgeStatus::Success) {
+    return ErrorForBridgeStatus(status, kOperation);
+  }
+  if (shared == nullptr || shared->sharedDeviceIdentity() != sharedDeviceIdentity_) {
+    return Err(
+        GpuErrorType::InvalidState,
+        std::format("{}: the browser side shared the texture under another device", kOperation));
+  }
+
+  BackendTextureExport exported;
+  exported.backing = std::move(shared);
+  // Every device over one browser device submits to its one queue, in order, from the thread that
+  // owns it, so a registration is ordered after the producer's work by submission order alone.
+  exported.ordering = SourceOrdering::SharedQueue;
+  return exported;
+}
+
+Status BrowserDevice::onRegisterTexture(uint32_t slotIndex, const ExportedTextureBacking& backing) {
+  static constexpr std::string_view kOperation = "registerTexture";
+  if (Status status = checkUsable(kOperation); status.hasError()) {
+    return status;
+  }
+  // The runtime has matched the export's backend family against this device's before asking, so
+  // the backing is a browser share; its device is checked again here rather than taken on trust.
+  const auto& shared = static_cast<const BrowserSharedTexture&>(backing);
+  if (shared.sharedDeviceIdentity() != sharedDeviceIdentity_) {
+    return Err(GpuErrorType::DeviceMismatch,
+               std::format("{}: the texture belongs to another browser device", kOperation));
+  }
+
+  Result<BrowserObjectId> id = registerObject(BrowserObjectKind::Texture, slotIndex, kOperation);
+  if (id.hasError()) {
+    return std::move(id).error();
+  }
+  const BridgeStatus status = bridge_->registerSharedTexture(id.result(), shared);
+  if (status != BridgeStatus::Success) {
+    objects_.remove(BrowserObjectKind::Texture, slotIndex);
+    return ErrorForBridgeStatus(status, kOperation);
+  }
+  return OkStatus();
 }
 
 }  // namespace donner::gpu::browser

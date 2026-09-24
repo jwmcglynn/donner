@@ -6,9 +6,9 @@ checkerboard targeting, texture-cache uploads, compositor-debug uploads and shar
 ownership are merged and qualified. Root selection now takes a backend kind and can serve the
 native Metal backend on request; the transitional adapter stays the production path on every
 platform until that platform's suites pass natively (see [Native parity](#native-parity)).
-Cross-device texture registration is implemented on Metal and the transitional adapter. Native
-backend conformance, presentation cutover, the per-platform default flips, and dependency removal
-remain open.\
+Cross-device texture registration is implemented on Metal, the browser backend and the
+transitional adapter. Native backend conformance, presentation cutover, the per-platform default
+flips, and dependency removal remain open.\
 **Created:** 2026-07-05\
 **Updated:** 2026-09-23\
 **Author:** Claude Fable 5.1\
@@ -61,14 +61,14 @@ continue in dependency order.
 | [Texture-cache upload migration #1299](https://github.com/jwmcglynn/donner/pull/1299)                                                              | Merged as `fc8692a7`. Editor bitmap uploads create, update, reuse, and retire textures through validated runtime handles with bounded staging and cleared reusable backing.                                                                                       | Backend ownership and final dependency cleanup continue below.                                                                       |
 | [Checkerboard target boundary #1300](https://github.com/jwmcglynn/donner/pull/1300)                                                                | Merged as `15364179`. The shared pass accepts a validated borrowed runtime texture and extent; raw surface import remains at presentation, with device, generation, format, usage, extent, lifetime, and host-stream checks.                                      | Remaining target/readback and presentation bridges continue below.                                                                   |
 | [Compositor-debug upload migration #1302](https://github.com/jwmcglynn/donner/pull/1302)                                                           | Merged as `37716f09`. Debug-panel bitmaps upload through the shared bounded runtime path, replace registrations transactionally, and retire superseded backing after use.                                                                                         | Backend ownership and final dependency cleanup continue below.                                                                       |
-| [Shared physical-device ownership #1303](https://github.com/jwmcglynn/donner/pull/1303)                                                            | Merged as `5ab62275`. Native UI and worker contexts share one physical root and sticky loss while retaining separate tables, serials, caches, counters, and retirement. Borrowed external roots and the browser's one-context alias retain their prior contracts. | Selected `gpu::Device` ownership is a later cutover below.                                                                           |
+| [Shared physical-device ownership #1303](https://github.com/jwmcglynn/donner/pull/1303)                                                            | Merged as `5ab62275`. Native UI and worker contexts share one physical root and sticky loss while retaining separate tables, serials, caches, counters, and retirement. Borrowed roots keep their contracts, and each worker's contexts share one browser device. | Selected `gpu::Device` ownership is a later cutover below.                                                                           |
 
 ### Remaining work
 
 | Order | Unit                                                                                           | Completion boundary                                                                                                                                                    |
 | ----- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Existing UI, shader linkage, filter, checkerboard, upload, and compositor units - **complete** | PRs #1267, #1279, #1284, #1298, #1299, #1300, and #1302 are merged and qualified. Preserve their batching, identity, lifetime, and retirement contracts.               |
-| 2     | Shared physical-device ownership - **complete**                                                | #1303 is merged. Preserve distinct logical state, borrowed external ownership, and the browser alias.                                                                  |
+| 2     | Shared physical-device ownership - **complete**                                                | #1303 is merged. Preserve distinct logical state, borrowed external ownership, and one browser device per worker.                                                      |
 | 3     | Selected runtime-device ownership - **in progress**                                            | #1356, #1366 and #1371 are merged: contexts hold the device selected by kind, which counts its own work. Move the remaining services behind backend-neutral ownership. |
 | 3a    | Native Metal parity                                                                            | Metal conformance and editor presentation, until the Geode, renderer and editor suites pass with `DONNER_GPU_BACKEND=metal`.                                           |
 | 4     | Snapshot, target, and readback identity                                                        | Remove transitional registrations and raw target binding; use validated runtime or acquired-surface textures through readback and presentation.                        |
@@ -134,8 +134,12 @@ The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, a
 paths now use their reviewed runtime resource boundaries. Cross-context readback and presentation
 bridges remain transitional.
 
-Wasm-size qualification is deferred until the production RHI cutover and removal of the Rust-built
-WebGPU dependencies. Intermediate package growth does not block these migration units. Keep the
+Wasm-size qualification is deferred until the browser cutover removes the transitional WebGPU path
+from the WebAssembly build: emdawnwebgpu, a C++ implementation of the WebGPU C API over the
+browser's JavaScript API, and the adapter over it. The Rust-built libraries are native-only, so
+removing them does not change the WebAssembly payload, and the browser backend brings code and a
+JavaScript bridge of its own, so the cutover alone is not expected to return the package to its
+strict ceilings. Intermediate package growth does not block these migration units. Keep the
 measurements and existing budgets for final acceptance; this deferral does not relax functional,
 lifetime, synchronization, memory-residency, security or privacy requirements.
 
@@ -241,13 +245,13 @@ commits and their fixes together in a focused reviewable change.
       by the renderer snapshot tests.
       [PR #1141](https://github.com/jwmcglynn/donner/pull/1141) is merged.
 - [x] Register a texture of one runtime device on another through the runtime contract instead of
-      a transitional adapter operation. The contract is below. Metal and the transitional adapter
-      implement it; Vulkan and the browser backend refuse it by name until their runtime devices
-      can share a native device. Snapshot capture, cross-context snapshot drawing and UI snapshot
+      a transitional adapter operation. The contract is below. Metal, the browser backend and the
+      transitional adapter implement it; Vulkan refuses it by name until its runtime devices can
+      share a native device. Snapshot capture, cross-context snapshot drawing and UI snapshot
       registration all register the export a snapshot takes on its producer's thread at adoption,
       so no consumer reads the producer's tables, and the adapter's cross-device import is gone.
-      Host-supplied render targets still enter through the adapter's external-texture import;
-      removing that re-import belongs to the raw target binding item below.
+      Host-supplied render targets reach the renderer as runtime textures of its own device, and
+      the adapter's external-texture import is left only to the baseline counter-capture tool.
 - [ ] Replace raw target binding in `RendererGeode` and `EditorShellPresentation` with validated
       runtime textures or acquired surface textures, retaining embedder ownership where applicable.
 
@@ -397,12 +401,12 @@ Loss:
 
 Backends:
 
-| Backend              | Registration                               | Reason                                                                                                                                                                                            |
-| -------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Transitional adapter | Implemented; one shared queue orders it    | Re-expresses the adapter's existing sibling registration; stale and foreign refusals keep their error types.                                                                                      |
-| Metal                | Implemented; device-side shared-event wait | Separate command queues per runtime device over one `MTLDevice`.                                                                                                                                  |
-| Vulkan               | Refused with `Unsupported`                 | Each runtime device opens its own `VkDevice`; sharing needs several runtime devices over one `VkDevice`, with a shared image-layout record and either one serialized queue or semaphore ordering. |
-| Browser              | Refused with `Unsupported`                 | One runtime device per browser GPU device, and WebGPU cannot share a texture across GPU devices. The browser keeps its single-context alias.                                                      |
+| Backend              | Registration                               | Reason                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transitional adapter | Implemented; one shared queue orders it    | Re-expresses the adapter's existing sibling registration; stale and foreign refusals keep their error types.                                                                                                                                                                                                                                                                                                            |
+| Metal                | Implemented; device-side shared-event wait | Separate command queues per runtime device over one `MTLDevice`.                                                                                                                                                                                                                                                                                                                                                        |
+| Vulkan               | Refused with `Unsupported`                 | Each runtime device opens its own `VkDevice`; sharing needs several runtime devices over one `VkDevice`, with a shared image-layout record and either one serialized queue or semaphore ordering.                                                                                                                                                                                                                       |
+| Browser              | Implemented; one shared queue orders it    | Snapshot capture opens a second runtime device over the same browser device on the producer's thread. Every runtime device in a worker runs over that worker's one `GPUDevice` and its queue, so a registration is a read-only alias of the same `GPUTexture`, ordered by submission order. WebGPU cannot share a texture across `GPUDevice`s, so textures never cross workers; worker-to-UI handoff stays CPU bitmaps. |
 
 Accounting: exporting, registering and waiting perform no allocation, bind group or submission on
 either device, so a native snapshot readback does exactly the work the adapter does, on the same
@@ -446,8 +450,8 @@ adapter, and an adapter context on Metal, where a second headless device shares 
       source-render/filter/composite order, positive-completion retirement, terminal loss behavior,
       and sibling unsubmitted host ranges. Abandoned frames allocate and record nothing; uncertain
       accepted backing remains retained, and a browser task yield is not completion proof. Wasm-size
-      qualification remains deferred until the production cutover removes the Rust-built WebGPU
-      dependencies.
+      qualification remains deferred until the browser cutover removes the transitional WebGPU path
+      from the WebAssembly build.
 - [x] Shared fill, gradient, mask, image and snapshot pipeline resources and `GeoEncoder` use runtime
       handles and command recording.
 - [x] Move the checkerboard pass's raw target import to `EditorShellPresentation`; accept a
@@ -484,10 +488,9 @@ adapter, and an adapter context on Metal, where a second headless device shares 
       ownership question that separates an allocation from a registration, a bounded wait for a
       submission serial, and the wait kind a mapping's slices used are runtime operations
       implemented on Metal, Vulkan, the browser bridge and the transitional adapter, so the
-      renderer expresses them without naming a backend. It still binds the transitional adapter
-      type statically for the one operation that remains without a runtime equivalent
-      (`importExternalTexture`), so a native device does not yet serve production readback;
-      replacing that reference belongs with device ownership below.
+      renderer expresses them without naming a backend. The renderer no longer reaches the
+      adapter's `importExternalTexture`, whose only remaining caller is the baseline
+      counter-capture tool.
 - [ ] Verify that cancelled mappings do not reenter the reusable readback pool while still active,
       and that unmap, retirement, and loss invalidate access at the documented boundary. Native
       cancellation, device-loss and invalidation tests pass with the merged mapping hooks. Renderer
@@ -555,10 +558,25 @@ adapter, and an adapter context on Metal, where a second headless device shares 
       identifier reuse, ownership, request outcomes, mapping, device loss and command-stream
       mirroring on every host. [PR #1266](https://github.com/jwmcglynn/donner/pull/1266) is merged;
       selecting it in the production editor remains the next item.
-- [ ] Replace the C WebGPU wrapper with that bridge in the WebAssembly production path: the
-      renderer and editor Wasm targets reach WebGPU through `GeodeDevice` and the transitional
-      adapter, so selecting the browser backend is part of making the selected `gpu::Device` the
-      backend owner below. The compiled WGSL projections remain trusted build input.
+- [x] Run several runtime devices over one browser GPU device in a worker, and register a texture
+      of one on another. Snapshot capture opens exactly such a second runtime device on the
+      producer's thread for every tile the raster worker reads back. Each device keeps its own
+      identifiers, host mappings, recording and completed serial on the browser side, and all of
+      them share the browser device, its queue and its loss; a refused or released device leaves
+      the others' state alone, and the browser device goes with the last device over it. An
+      exported texture registers on another device as a read-only alias of the same browser
+      texture, ordered by the one shared queue, and the browser texture lives until the last export
+      token or registration lets go. Covered by the `BrowserDeviceSharing` cases in
+      `//donner/gpu/browser:browser_tests` and by
+      `//donner/editor/wasm/tests:browser_bridge_device_tests`, which drives the real JavaScript
+      library.
+- [ ] Replace the C WebGPU wrapper with that bridge in the WebAssembly production path.
+      Selected-device ownership and backend selection by kind are merged, so what remains is: a
+      browser backend kind the WebAssembly build selects with a build setting (a page cannot set
+      `DONNER_GPU_BACKEND`); a headless context pool that never hands a thread-owned device to
+      another thread; and the editor window's browser surface, format, clear and readback through
+      the runtime. The Geode renderer WebAssembly module is a second consumer of the wrapper and
+      moves with the editor. The compiled WGSL projections remain trusted build input.
 - [ ] Run the complete browser editor path and remove emdawnwebgpu, `webgpu-cpp`, and remaining
       generated C-ABI glue when no consumer needs them.
 
@@ -566,8 +584,8 @@ adapter, and an adapter context on Metal, where a second headless device shares 
 
 - [x] Share one physical WebGPU root and sticky loss state across native editor contexts while
       preserving their independent handle tables, serials, caches, counters, and retirement.
-      Headless creation uses the same owner; borrowed embedders retain host ownership; the browser
-      keeps its existing single-context alias.
+      Headless creation uses the same owner; borrowed embedders retain host ownership; under
+      WebAssembly each worker's contexts share the browser device that worker obtained.
 - [ ] Make the selected `gpu::Device` the backend owner. Turn `GeodeDevice` into backend-neutral
       renderer services for counters, caches, dummy resources, and deferred retirement; update
       headless and embedded construction. The selected device owns its backend root
