@@ -1005,7 +1005,8 @@ struct VulkanSharedRoot::Impl {
   bool presentationEnabled = false;
   bool headlessSurfaceEnabled = false;
   std::shared_ptr<DeviceLostState> lostState;
-  std::mutex queueMutex;  //!< Vulkan requires external synchronization of one VkQueue.
+  std::mutex executionMutex;  //!< Serializes image barrier recording through state commit.
+  std::mutex queueMutex;      //!< Vulkan requires external synchronization of one VkQueue.
 
   ~Impl() {
     if (api == nullptr) {
@@ -1078,7 +1079,15 @@ struct VulkanDevice::Impl {
 
   /// Keeps the native device and queue alive while this runtime device owns work over them.
   std::shared_ptr<VulkanSharedRoot> nativeRoot;
+  std::mutex* executionMutex = nullptr;  //!< Shared image-state order, null for fake test owners.
   std::mutex* queueMutex = nullptr;  //!< Shared queue call lock, null only for fake test owners.
+
+  /// Holds image-state order through command encoding, native submit and commit or rollback.
+  /// The native queue lock is taken only inside this lock, never the reverse.
+  [[nodiscard]] std::unique_lock<std::mutex> lockExecution() const {
+    return executionMutex != nullptr ? std::unique_lock<std::mutex>(*executionMutex)
+                                     : std::unique_lock<std::mutex>();
+  }
 
   /// Keeps the Vulkan loader library open. Every entry point this device calls is code inside
   /// that library, so it must outlive every Vulkan object below.
@@ -2428,6 +2437,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateOverSharedRoot(
   impl.rootLoss = native.lostState;
   result->adoptLostState(impl.rootLoss);
   impl.nativeRoot = root;
+  impl.executionMutex = &native.executionMutex;
   impl.queueMutex = &native.queueMutex;
   impl.loader = native.loader;
   impl.api = native.api;
@@ -3732,6 +3742,7 @@ Status VulkanDevice::Impl::finishTextureUpload(uint32_t slotIndex, VkCommandBuff
 Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                                     const TexelCopyBufferLayout& dataLayout,
                                     const Extent2d& writeSize, const Origin2d& destinationOrigin) {
+  const std::unique_lock executionLock = impl_->lockExecution();
   if (impl_->hasError()) {
     return GpuError{GpuErrorType::InvalidState, impl_->errorMessage()};
   }
@@ -4500,6 +4511,7 @@ Status VulkanDevice::Impl::encodeSubmittedCommandBuffer(EncodingState& state,
 
 Status VulkanDevice::onSubmit(uint64_t submissionSerial,
                               std::span<const SubmittedCommandBuffer> commandBuffers) {
+  const std::unique_lock executionLock = impl_->lockExecution();
   if (isLost()) {
     return GpuError{GpuErrorType::DeviceLost, "submit: the Vulkan root is lost"};
   }
@@ -4710,6 +4722,7 @@ Status VulkanDevice::onConfigureSurface(uint32_t slotIndex,
 
 Result<SurfaceStatus> VulkanDevice::onAcquireCurrentTexture(uint32_t slotIndex,
                                                             uint32_t textureSlotIndex) {
+  const std::unique_lock executionLock = impl_->lockExecution();
   if (impl_->hasError()) {
     return GpuError{GpuErrorType::InvalidState, impl_->errorMessage()};
   }
@@ -4749,6 +4762,7 @@ Result<SurfaceStatus> VulkanDevice::onAcquireCurrentTexture(uint32_t slotIndex,
 }
 
 Result<SurfaceStatus> VulkanDevice::onPresentSurface(uint32_t slotIndex) {
+  const std::unique_lock executionLock = impl_->lockExecution();
   if (impl_->hasError()) {
     return GpuError{GpuErrorType::InvalidState, impl_->errorMessage()};
   }
@@ -4787,6 +4801,7 @@ Result<SurfaceStatus> VulkanDevice::onPresentSurface(uint32_t slotIndex) {
 }
 
 void VulkanDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
+  const std::unique_lock executionLock = impl_->lockExecution();
   if (impl_->executionUncertain || impl_->surfaceLifetimeUnproven()) {
     return;
   }
