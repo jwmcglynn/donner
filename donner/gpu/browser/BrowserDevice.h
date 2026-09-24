@@ -168,6 +168,10 @@ public:
   /// What the browser said when it reported the device lost. Empty while the device is alive.
   RcString deviceLostReason() const;
 
+  /// Largest width or height of a 2D texture this device supports, as the browser reports it.
+  /// WebGPU guarantees at least 8,192, which stands in when the browser reports no limit.
+  uint32_t maxTextureDimension2D() const;
+
   /// The bridge this device speaks to the browser through. Test accessor.
   BrowserBridge& bridgeForTest() { return *bridge_; }
 

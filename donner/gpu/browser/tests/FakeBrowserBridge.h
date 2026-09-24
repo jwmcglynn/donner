@@ -223,6 +223,9 @@ public:
   /// What \ref acquireCurrentTexture reports.
   SurfaceStatus acquireStatus = SurfaceStatus::Success;
 
+  /// What \ref maxTextureDimension2D reports once the device request is Ready.
+  uint32_t maxTextureDimension = 8192u;
+
   /// Every accepted call, one deterministic line each, in order.
   ///
   /// Shared for the same reason the registry below is: the device owns the bridge, so a test that
@@ -304,6 +307,10 @@ public:
   RcString deviceLostReason() const override { return lostReason; }
 
   uint64_t completedSerial() const override { return completed; }
+
+  uint32_t maxTextureDimension2D() const override {
+    return requestState == BrowserDeviceRequestState::Ready ? maxTextureDimension : 0;
+  }
 
   const void* sharedDeviceIdentity() const override {
     return requestState == BrowserDeviceRequestState::Ready ? gpuDevice.get() : nullptr;

@@ -734,6 +734,11 @@ var LibraryDonnerGpu = {
     return record === null ? 0 : record.completedSerial;
   },
 
+  donner_gpu_max_texture_dimension_2d__deps: ['$DonnerGpu'],
+  donner_gpu_max_texture_dimension_2d: function(handle) {
+    return 0;
+  },
+
   donner_gpu_device_identity__deps: ['$DonnerGpu'],
   donner_gpu_device_identity: function(handle) {
     // Zero until the device exists: an identity handed out for a request still in flight could

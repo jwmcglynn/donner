@@ -258,6 +258,22 @@ TEST(BrowserDevice, DeclaresALossTheBrowserReportsIntoTheConditionItShares) {
   EXPECT_THAT(secondDevice.result()->isLost(), testing::IsTrue());
 }
 
+TEST(BrowserDevice, ReportsTheTextureLimitTheBrowserReports) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  // A browser device on hardware that allows more than WebGPU's guaranteed minimum, which the
+  // renderer can then use for images, filter regions and layers that large.
+  fixture.bridge->maxTextureDimension = 16384;
+  EXPECT_THAT(fixture.device->maxTextureDimension2D(), 16384u);
+}
+
+TEST(BrowserDevice, FallsBackToTheGuaranteedTextureLimitWhenTheBrowserReportsNone) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  fixture.bridge->maxTextureDimension = 0;
+  EXPECT_THAT(fixture.device->maxTextureDimension2D(), 8192u);
+}
+
 TEST(BrowserDevice, CreatesResourcesThroughTheBridgeWithEncodedValues) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());

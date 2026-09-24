@@ -106,6 +106,10 @@ export function createDevice() {
   const device = {
     queue,
     lost,
+    // More than WebGPU's guaranteed 8,192, so a limit read from the device is told apart from one
+    // assumed.
+    limits: { maxTextureDimension2D: 16384 },
+    onuncapturederror: null,
     destroy() {},
     createBuffer(descriptor) {
       return {
@@ -170,7 +174,11 @@ export function loadLibrary() {
   const canvases = new Map();
   const handedOut = [];
   let adapterRequests = 0;
+  const consoleErrors = [];
   const sandbox = {
+    console: {
+      error: (...parts) => consoleErrors.push(parts.map(String).join(" ")),
+    },
     HEAPU8: bytes,
     HEAPU32: words,
     UTF8ToString(pointer, byteCount) {
@@ -243,6 +251,8 @@ export function loadLibrary() {
     get devices() {
       return handedOut.map((created) => created.device);
     },
+    /** Every line the library wrote to the console as an error, in order. */
+    consoleErrors,
     /** Reports the device handed out last lost, with `info` as the browser's reason. */
     lose(info) {
       assert.ok(handedOut.length > 0, "no device has been handed out to lose");

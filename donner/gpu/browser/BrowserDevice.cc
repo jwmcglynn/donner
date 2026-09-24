@@ -379,6 +379,10 @@ RcString BrowserDevice::deviceLostReason() const {
   return bridge_->deviceLostReason();
 }
 
+uint32_t BrowserDevice::maxTextureDimension2D() const {
+  return 8192u;
+}
+
 bool BrowserDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
   if (checkUsable("waitForSerial").hasError()) {
     // A device this thread may not drive, or one already lost, cannot be waited on here: yielding

@@ -422,6 +422,28 @@ test("losing the browser device loses every logical device over it", async () =>
   );
 });
 
+test("the texture limit a logical device reports is the browser device's own", async () => {
+  const bridge = loadLibrary();
+  const { entryPoints } = bridge;
+  await beginReady(bridge, kFirst);
+  assert.equal(
+    entryPoints.donner_gpu_max_texture_dimension_2d(kFirst),
+    bridge.device.limits.maxTextureDimension2D,
+  );
+  const kElsewhere = 99;
+  assert.equal(entryPoints.donner_gpu_max_texture_dimension_2d(kElsewhere), 0);
+});
+
+test("an error the browser device reports outside any call reaches the console", async () => {
+  const bridge = loadLibrary();
+  await beginReady(bridge, kFirst);
+  // A validation error in recorded work is reported asynchronously, with no call to return it to,
+  // so the console is the only place it can surface.
+  assert.equal(typeof bridge.device.onuncapturederror, "function");
+  bridge.device.onuncapturederror({ error: { message: "invalid bind group" } });
+  assert.deepEqual(bridge.consoleErrors, ["[Geode/browser] Uncaptured error: invalid bind group"]);
+});
+
 test("a handle this worker never opened owns nothing here", async () => {
   const bridge = loadLibrary();
   const { entryPoints, state } = bridge;
