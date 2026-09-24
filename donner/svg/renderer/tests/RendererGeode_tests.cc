@@ -6386,9 +6386,11 @@ TEST_F(RendererGeodeTest, IsolatedReadbackWaitHonorsCancellationAndDeadlineWitho
       acquiredSignal.set_value(false);
     }
   });
-  // Well inside the 10 s a case may take, so a capture that never starts leaves the case time to
-  // abandon it, fail and let the binary continue.
-  constexpr std::chrono::seconds kAcquireBound(3);
+  // The first capture on this context also creates its readback context, a native device
+  // creation that can take seconds on a slow driver or an instrumented build, so the bound leaves
+  // room for it. It only runs out on the failure path, where it still leaves the case time to
+  // abandon the capture, fail and let the binary continue inside the 10 s a case may take.
+  constexpr std::chrono::seconds kAcquireBound(8);
   if (acquired.wait_for(kAcquireBound) != std::future_status::ready) {
     // Abandoning the capture ends its wait for the readback context, which it polls, so the join
     // returns. It cannot end the context's creation, a native device creation that takes no
