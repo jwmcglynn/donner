@@ -14,6 +14,7 @@ std::ostream& operator<<(std::ostream& os, SourceOrdering value) {
   switch (value) {
     case SourceOrdering::SharedQueue: return os << "SharedQueue";
     case SourceOrdering::WaitForSource: return os << "WaitForSource";
+    case SourceOrdering::WaitOnDevice: return os << "WaitOnDevice";
   }
   return os << "SourceOrdering(" << static_cast<int>(value) << ")";
 }
@@ -37,7 +38,7 @@ TextureShare::TextureShare(TextureDescriptor descriptor, uint64_t producerDevice
       writePending_(backend_.writePending) {
   UTILS_RELEASE_ASSERT(producerLostState_ != nullptr && backend_.backing != nullptr &&
                        tailBytes_ != nullptr);
-  UTILS_RELEASE_ASSERT(backend_.ordering != SourceOrdering::WaitForSource ||
+  UTILS_RELEASE_ASSERT(backend_.ordering == SourceOrdering::SharedQueue ||
                        backend_.completion != nullptr);
 }
 

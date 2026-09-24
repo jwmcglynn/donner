@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -36,6 +37,10 @@ using testing::HasSubstr;
 /// wide and can be read back without a padded staging step.
 constexpr uint32_t kSurfaceWidth = 64;
 constexpr uint32_t kSurfaceHeight = 48;
+
+/// A present bound short enough to reach well before the system's own timeout ends a command
+/// buffer that makes no progress, which would otherwise declare the loss first.
+constexpr std::chrono::milliseconds kShortPresentBound{250};
 
 /// Opaque red, premultiplied RGBA. Every channel is 0 or 1 so the expected bytes are exact.
 constexpr std::array<double, 4> kRedClear = {1.0, 0.0, 0.0, 1.0};
@@ -428,6 +433,114 @@ TEST_F(MetalSurfaceTest, PresentingAFrameWhoseWorkFailedReportsTheLoss) {
   ASSERT_THAT(presented, HasResult());
   EXPECT_EQ(presented.result(), SurfaceStatus::DeviceLost)
       << "a frame whose work failed must not be shown as if it had drawn";
+}
+
+/// A frame whose own work never completes cannot be shown, and a queue that holds a frame's work
+/// for the whole present bound has stopped answering. The present that spends its bound declares
+/// the root lost, once, so the frame after it fails at once instead of spending the bound again.
+TEST_F(MetalSurfaceTest, APresentThatSpendsItsBoundDeclaresTheRootLostOnce) {
+  const auto rootLoss = std::make_shared<DeviceLostState>();
+  device_ = MetalDevice::Create(MetalDevice::MemoryModel::Detected, kMaxBufferByteSize,
+                                std::chrono::seconds(5), rootLoss);
+  ASSERT_NE(device_, nullptr);
+  device_->setPresentCompletionTimeoutForTest(kShortPresentBound);
+  const Surface surface = configuredSurface();
+  SurfaceTexture frame = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_EQ(frame.status, SurfaceStatus::Success);
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  (void)renderClear(frame.texture, kRedClear, nullptr, kSurfaceWidth, kSurfaceHeight);
+
+  const Result<SurfaceStatus> presented = device_->presentSurface(surface);
+  ASSERT_THAT(presented, HasResult())
+      << "a present that spent its bound is a lost root the caller acts on, not a refusal";
+  EXPECT_EQ(presented.result(), SurfaceStatus::DeviceLost);
+  EXPECT_TRUE(device_->isLost()) << "the present spent its whole bound and declared nothing";
+  EXPECT_EQ(rootLoss->timedOutSite.load(), DeviceLostWaitSite::Present)
+      << "the loss is not attributed to the present that declared it";
+  EXPECT_GE(rootLoss->timedOutElapsedMs.load(), kShortPresentBound.count());
+
+  const auto nextStart = std::chrono::steady_clock::now();
+  const SurfaceTexture next =
+      unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  EXPECT_EQ(next.status, SurfaceStatus::DeviceLost)
+      << "a lost root handed out a frame that can never be shown";
+  EXPECT_FALSE(next.texture.isValid());
+  EXPECT_LT(std::chrono::steady_clock::now() - nextStart, kShortPresentBound)
+      << "the frame after the loss spent the present bound again";
+  device_->resumeSubmissionsForTest();
+}
+
+/// A consumer frame that reads a texture a gated producer renders is held on the consumer's queue
+/// behind the producer. Its present spends the bound and declares the root the two share lost,
+/// and that releases the held frame, so the consumer's queue drains and publishes the frame's
+/// completion. The consumer's teardown then ends at once on the lost root.
+TEST_F(MetalSurfaceTest, AFrameHeldBehindAHungProducerIsReleasedByItsPresentsLoss) {
+  const auto rootLoss = std::make_shared<DeviceLostState>();
+  device_ = MetalDevice::Create(MetalDevice::MemoryModel::Detected, kMaxBufferByteSize,
+                                std::chrono::seconds(5), rootLoss);
+  const std::unique_ptr<MetalDevice> producer = MetalDevice::Create(
+      MetalDevice::MemoryModel::Detected, kMaxBufferByteSize, std::chrono::seconds(5), rootLoss);
+  ASSERT_NE(device_, nullptr);
+  ASSERT_NE(producer, nullptr);
+  device_->setPresentCompletionTimeoutForTest(kShortPresentBound);
+
+  const Texture source = unwrap(
+      producer->createTexture(TextureDescriptor{
+          "producerFrame", Extent2d{kSurfaceWidth, kSurfaceHeight}, TextureFormat::BGRA8Unorm,
+          TextureUsage::RenderAttachment | TextureUsage::Sampled | TextureUsage::CopySrc}),
+      "createTexture");
+  ASSERT_THAT(producer->pauseSubmissionsForTest(), IsOk());
+  {
+    TextureView view =
+        unwrap(producer->createTextureView(source, TextureViewDescriptor{"producerView"}), "view");
+    std::unique_ptr<CommandEncoder> encoder = unwrap(producer->createCommandEncoder(), "encoder");
+    RenderPassDescriptor pass;
+    pass.label = "producerClear";
+    pass.colorAttachments.push_back(
+        RenderPassColorAttachment{view, LoadOp::Clear, StoreOp::Store, kRedClear});
+    RenderPassEncoder* renderPass = unwrap(encoder->beginRenderPass(pass), "beginRenderPass");
+    ASSERT_THAT(renderPass->end(), IsOk());
+    ASSERT_THAT(producer->submit(unwrap(encoder->finish(), "finish")), HasResult());
+  }
+  const Texture registered =
+      unwrap(device_->registerTexture(unwrap(producer->exportTexture(source), "export")),
+             "registerTexture");
+
+  const Surface surface = unwrap(device_->createSurface(surfaceDescriptor()), "createSurface");
+  SurfaceConfiguration copyable = configuration();
+  copyable.usage = copyable.usage | TextureUsage::CopyDst;
+  ASSERT_THAT(device_->configureSurface(surface, copyable), IsOk());
+  SurfaceTexture frame = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_EQ(frame.status, SurfaceStatus::Success);
+  uint64_t frameSerial = 0;
+  {
+    std::unique_ptr<CommandEncoder> encoder = unwrap(device_->createCommandEncoder(), "encoder");
+    ASSERT_THAT(encoder->copyTextureToTexture(registered, frame.texture,
+                                              Extent2d{kSurfaceWidth, kSurfaceHeight}),
+                IsOk());
+    frameSerial = unwrap(device_->submit(unwrap(encoder->finish(), "finish")),
+                         "the frame reading the producer's texture was refused");
+  }
+
+  const Result<SurfaceStatus> presented = device_->presentSurface(surface);
+  ASSERT_THAT(presented, HasResult());
+  EXPECT_EQ(presented.result(), SurfaceStatus::DeviceLost);
+  ASSERT_TRUE(rootLoss->lost.load()) << "the present that spent its bound declared nothing";
+  EXPECT_EQ(rootLoss->timedOutSite.load(), DeviceLostWaitSite::Present);
+
+  const auto releaseDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (device_->completedSerial() < frameSerial &&
+         std::chrono::steady_clock::now() < releaseDeadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_GE(device_->completedSerial(), frameSerial)
+      << "the consumer's frame is still held behind the producer after the loss";
+
+  const auto teardownStart = std::chrono::steady_clock::now();
+  device_.reset();
+  EXPECT_LT(std::chrono::steady_clock::now() - teardownStart, std::chrono::seconds(1))
+      << "the consumer's teardown waited on the lost root";
+  producer->resumeSubmissionsForTest();
 }
 
 }  // namespace

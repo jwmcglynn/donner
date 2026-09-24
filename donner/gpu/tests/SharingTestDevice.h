@@ -67,9 +67,11 @@ private:
 class FakeCompletion final : public SubmissionCompletion {
 public:
   uint64_t completedSerial() const override { return completed.load(); }
+  uint64_t committedSerial() const override { return committed.load(); }
   bool failed() const override { return failedFlag.load(); }
 
   std::atomic<uint64_t> completed{0};
+  std::atomic<uint64_t> committed{0};
   std::atomic<bool> failedFlag{false};
 };
 
@@ -101,6 +103,16 @@ public:
   }
   /// Reports a terminal execution failure, as a backend does for a failed command buffer.
   void failExecution() { completion_->failedFlag.store(true); }
+  /// Accepted submissions stop reaching the native queue until \ref commitDeferred, standing in
+  /// for a backend that accepts work before it hands it over.
+  void deferCommit() { commitDeferred_ = true; }
+  /// Hands every accepted submission to the native queue, and later ones as they arrive.
+  void commitDeferred() {
+    commitDeferred_ = false;
+    completion_->committed.store(lastSubmittedSerial());
+  }
+  /// Device-side waits the most recent submission carried, in the order the runtime gave them.
+  const std::vector<SourceWait>& lastSourceWaits() const { return lastSourceWaits_; }
   /// Whether texture writes wait for the next submission.
   void setWritesPending(bool pending) { writesPending_ = pending; }
   /// How many explicit backing releases reached this backend.
@@ -171,10 +183,19 @@ protected:
   }
   Status onSubmit(uint64_t submissionSerial, std::span<const SubmittedCommandBuffer>) override {
     queuedWrite_ = false;
-    if (!held_) {
+    if (!commitDeferred_) {
+      completion_->committed.store(submissionSerial);
+    }
+    if (!held_ && !commitDeferred_) {
       completion_->completed.store(submissionSerial);
     }
     return OkStatus();
+  }
+  Status onSubmitAfterSources(uint64_t submissionSerial,
+                              std::span<const SubmittedCommandBuffer> commandBuffers,
+                              std::span<const SourceWait> waits) override {
+    lastSourceWaits_.assign(waits.begin(), waits.end());
+    return onSubmit(submissionSerial, commandBuffers);
   }
 
   // A surface that hands out one frame at a time, allocated when acquired and dropped when the
@@ -227,6 +248,8 @@ private:
   std::vector<TextureSlot> textures_;
   std::optional<uint32_t> frameSlot_;  //!< Texture slot of the frame the surface has out.
   bool held_ = false;
+  bool commitDeferred_ = false;
+  std::vector<SourceWait> lastSourceWaits_;
   bool writesPending_ = false;
   bool queuedWrite_ = false;  //!< A write waits for the next submission.
   int explicitBackingReleases_ = 0;

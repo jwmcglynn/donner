@@ -960,4 +960,33 @@ TEST_F(OrderedRegistrationTest, AWaitThatSpendsItsWholeBoundDeclaresAQueueIdleTi
   EXPECT_THAT(producer_.isLost(), IsFalse());
 }
 
+/// A registration the backend orders on the device needs no host wait: between contexts over one
+/// root, with the producer's work still running, the helper returns the registration at once and
+/// declares nothing, because the consumer's submissions wait for that work on the device instead.
+TEST(DeviceOrderedRegistrationTest, TheHelperReturnsWithoutWaitingForTheProducersWork) {
+  gpu::FakeNativeDevice native;
+  const auto rootLoss = std::make_shared<gpu::DeviceLostState>();
+  gpu::SharingDevice producer(
+      native,
+      gpu::SharingOptions{.ordering = gpu::SourceOrdering::WaitOnDevice, .lostState = rootLoss});
+  gpu::SharingDevice consumer(
+      native,
+      gpu::SharingOptions{.ordering = gpu::SourceOrdering::WaitOnDevice, .lostState = rootLoss});
+  const gpu::Texture owned = gpu::MakeSharedTexture(producer);
+  producer.holdCompletion();
+  ASSERT_THAT(gpu::SubmitSharedTextureRead(producer, owned), gpu::HasResult());
+  const gpu::TextureExport exported = gpu::GetResultOrFail(producer.exportTexture(owned));
+
+  const auto start = std::chrono::steady_clock::now();
+  const gpu::Result<gpu::Texture> registered = RegisterOrderedTexture(consumer, exported);
+  const auto spent = std::chrono::steady_clock::now() - start;
+
+  EXPECT_THAT(registered, gpu::HasResult());
+  EXPECT_THAT(std::chrono::duration_cast<std::chrono::milliseconds>(spent),
+              Lt(kDefaultGpuWaitTimeout / 5))
+      << "the helper waited on the host for work the device orders";
+  EXPECT_THAT(consumer.isLost(), IsFalse());
+  EXPECT_THAT(producer.isLost(), IsFalse());
+}
+
 }  // namespace donner::geode

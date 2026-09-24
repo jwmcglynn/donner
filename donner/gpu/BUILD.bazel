@@ -439,6 +439,7 @@ donner_cc_test(
         "tests/BufferMappingTable_tests.cc",
         "tests/CommandEncoder_tests.cc",
         "tests/ComputePass_tests.cc",
+        "tests/DeviceLost_tests.cc",
         "tests/DeviceObserver_tests.cc",
         "tests/DeviceValidation_tests.cc",
         "tests/GpuResult_tests.cc",

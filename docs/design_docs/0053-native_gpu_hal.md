@@ -264,8 +264,8 @@ The operation spans both threads, so it has a producer half and a consumer half:
   submits and allocates nothing a counter sees.
 - `Device::registerTexture(export)` runs on the consumer's thread and reads only the token. It
   never touches the producer device, which is what keeps each device single-threaded.
-- `Device::waitForTextureSource(registration, timeoutSeconds)` is the consumer's bounded wait for
-  the producer work the registration is ordered after.
+- `Device::waitForTextureSource(registration, timeoutSeconds)` is the consumer's bounded host
+  wait until work naming the registration may be submitted.
 
 Identity:
 
@@ -320,21 +320,53 @@ Ordering:
 - Where the producer and consumer feed one native queue (the transitional adapter), submission
   order is sufficient and nothing waits.
 - Where they do not (Metal gives each runtime device its own command queue, and submission order
-  on one queue says nothing about another), `submit` refuses a submission that names a
-  registration whose producer work has not completed, and `waitForTextureSource` is the bounded
-  wait that satisfies it. The property relied on is that a completed command buffer's writes are
-  visible to command buffers committed afterwards on another queue of the same device; the Metal
-  ordering test below checks it on hardware. With the refusal bypassed, the same test reads the
-  texture on the consumer's queue while the producer's queue is still held, and gets transparent
-  texels: Metal does not order the two queues on its own. A device-side wait on a shared event can
-  replace the host wait later without changing this contract.
-- Known cost of the host wait: a consumer that registers a texture the producer is still
-  rendering waits for that frame on its own thread. Snapshot capture does no extra GPU work, but on
-  a backend with a queue per context it can no longer queue its readback behind the producer's
-  frame: it waits on the host first, a small added latency. Cross-context snapshot drawing and UI
-  texture registration in the editor run on the UI thread, where the wait can stall a frame by up
-  to one producer frame; the editor presentation migration owns that cost and the device-side
-  upgrade that removes it.
+  on one queue says nothing about another), the consumer's backend orders the work on the device
+  (`SourceOrdering::WaitOnDevice`). Each Metal device signals a shared event with its completed
+  serial from its completion path, failed work included, and a consumer submission that names a
+  registration whose producer work has not completed begins its first command buffer with a GPU
+  wait on that producer's event, one per producer at the latest serial it needs. `submit` accepts
+  such work at once, and `waitForTextureSource` returns at once. The property relied on is that a
+  completed command buffer's writes are visible to command buffers that run afterwards on another
+  queue of the same device; the Metal ordering test below checks it on hardware.
+- The device orders the work only when the producer shares the consumer's loss condition, as
+  contexts over one selected root do. The producer's event is signalled for failed work too, and
+  past every value when the producer's root is declared lost, so the GPU wait ends however the
+  producer's work ends. A shared condition carries that failure or loss to the consumer, whose
+  read of the result is then never trusted. A consumer over another condition would never learn
+  of it and would show whatever the failed work left behind, so it is treated like a backend that
+  cannot wait on the device: `submit` refuses the work until the producer's work has completed,
+  and refuses it as lost once that work failed.
+- A device-side wait covers only producer work already handed to the producer's queue. A wait on
+  work still being recorded could hold the consumer's queue for a host thread that is itself
+  waiting for the consumer, so `submit` refuses work naming a registration whose covered serial
+  the producer has not committed, and `waitForTextureSource` waits for the commit. Because a
+  registration covers only submissions the producer had made, and the Metal backend commits a
+  submission before accepting it, that refusal is a guard rather than a path the editor takes.
+- A backend whose contexts neither share a queue nor wait on the device refuses such a submission
+  until the producer work has completed, and `waitForTextureSource` is then the bounded wait that
+  satisfies it.
+- Cost of the device-side wait: nothing waits on the host for the producer's work, with one
+  exception. A consumer submission can sit on its queue for up to one producer frame, which the
+  consumer's later frames absorb, and snapshot
+  capture queues its readback behind the producer's frame on the GPU. A producer whose queue stops
+  answering now holds the consumer's queue instead of the UI thread, until a bounded wait declares
+  the root lost. The first such wait is usually the consumer's own present: a Metal present waits
+  up to five seconds for its frame's work, and a present that spends that whole bound declares the
+  root lost at the `Present` wait site, as the five-second queue-idle and readback-map bounds
+  already do, so the first hang costs one bounded stall and every later frame fails at once: an
+  acquire on the lost root reports `DeviceLost` and hands out no frame. This
+  also makes an ordinary GPU stall of more than five seconds at present a lost root rather than a
+  dropped frame. The system's own timeout for a command buffer that makes no progress, measured at
+  about five seconds on the hosts these suites run on, can end the hang first, and the backend
+  then reports the loss with no wait site. Declaring the loss signals every Metal device's event
+  over that root past any value a consumer can wait for, after the loss's wait site is published.
+  That releases the held command buffers, so the consumer's queue drains and publishes its
+  completions instead of staying held behind a producer that stopped answering; the consumer's
+  bounded waits and teardown end at once on a lost root either way. Later completions never lower
+  the event's value. The exception: the consumer's queue holds at most 512 uncompleted command
+  buffers, and once that many sit behind a held wait, asking the queue for another blocks the
+  consumer's thread until the producer's work ends, the root is declared lost by another thread,
+  or the system ends the stalled work.
 - Producer work accepted after the registration is not ordered before the consumer. A producer
   must not write an exported texture while a registration of it may still be read, and must finish
   writing a texture before handing it to another thread. Detached snapshots are never rewritten,
@@ -351,7 +383,8 @@ Loss:
   behalf, so each condition keeps the attribution of the wait that first declared it. Contexts
   over one selected root share one condition.
 - Geode's two consumers, cross-context snapshot drawing and UI texture registration, register
-  through one helper whose wait, up to the default GPU wait bound, is the consumer's own. It
+  through one helper whose wait, up to the default GPU wait bound, is the consumer's own; on Metal
+  it returns at once, because the device orders the work. It
   follows the policy of every bounded wait over a Geode root: only a wait that spent its whole
   bound declares the consumer's condition lost, with the queue-idle wait site and the measured
   wait, so a producer queue that stopped answering fails later frames at once instead of stalling
@@ -360,12 +393,12 @@ Loss:
 
 Backends:
 
-| Backend              | Registration                            | Reason                                                                                                                                                                                            |
-| -------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Transitional adapter | Implemented; one shared queue orders it | Re-expresses the adapter's existing sibling registration; stale and foreign refusals keep their error types.                                                                                      |
-| Metal                | Implemented; host-side source wait      | Separate command queues per runtime device over one `MTLDevice`.                                                                                                                                  |
-| Vulkan               | Refused with `Unsupported`              | Each runtime device opens its own `VkDevice`; sharing needs several runtime devices over one `VkDevice`, with a shared image-layout record and either one serialized queue or semaphore ordering. |
-| Browser              | Refused with `Unsupported`              | One runtime device per browser GPU device, and WebGPU cannot share a texture across GPU devices. The browser keeps its single-context alias.                                                      |
+| Backend              | Registration                               | Reason                                                                                                                                                                                            |
+| -------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transitional adapter | Implemented; one shared queue orders it    | Re-expresses the adapter's existing sibling registration; stale and foreign refusals keep their error types.                                                                                      |
+| Metal                | Implemented; device-side shared-event wait | Separate command queues per runtime device over one `MTLDevice`.                                                                                                                                  |
+| Vulkan               | Refused with `Unsupported`                 | Each runtime device opens its own `VkDevice`; sharing needs several runtime devices over one `VkDevice`, with a shared image-layout record and either one serialized queue or semaphore ordering. |
+| Browser              | Refused with `Unsupported`                 | One runtime device per browser GPU device, and WebGPU cannot share a texture across GPU devices. The browser keeps its single-context alias.                                                      |
 
 Accounting: exporting, registering and waiting perform no allocation, bind group or submission on
 either device, so a native snapshot readback does exactly the work the adapter does, on the same
@@ -375,12 +408,19 @@ the capture context.
 Verification: `//donner/gpu:gpu_tests` (`TextureRegistration_tests.cc`) covers identity,
 generation, read-only registration, lifetime across producer release and teardown, the tail
 gauge, the submit refusal, content tracking after export, queued writes, loss attribution and
-registration from a second thread, over a test backend whose completion the test drives.
+registration from a second thread, over a test backend whose completion the test drives. For
+device-side ordering it covers work accepted while the producer runs with the wait handed to the
+backend, one wait per texture at its latest serial, the refusal of uncommitted producer work,
+recorded-only producer work not being waited for, loss and failure still refused, and a
+producer over another loss condition waited for on the host instead; `DeviceLost_tests.cc` covers
+the releases a declared loss runs and that they see the declaring wait's site.
 `//donner/gpu/metal/tests:metal_texture_registration_tests` runs under Metal API and shader
 validation and checks ordering on hardware by holding the producer's queue at a gate: the
-consumer is refused and its wait times out without declaring loss, then the consumer reads the
-producer's pixels once the gate opens. The adapter's own registration tests, the renderer
-snapshot suites and `geode_perf_tests` pass on the transitional adapter, including a capture
+consumer's read is accepted, does not complete while the gate is closed, and reads the producer's
+pixels once it opens; with the gate still closed, declaring the shared root lost releases the
+consumer's held read, which then completes. A consumer over another loss condition has its read
+of a gated producer refused, and refused as lost once the producer's work fails. The adapter's
+own registration tests, the renderer snapshot suites and `geode_perf_tests` pass on the transitional adapter, including a capture
 cancelled after its readback was queued, which must release its source once the readback
 completes. On native Metal, the Metal registration suite passes and snapshot readback returns the
 rendered pixels. With the fixtures on the selected backend, every Geode target, including

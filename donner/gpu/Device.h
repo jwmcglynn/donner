@@ -550,9 +550,12 @@ public:
    *
    * Work this device submits that names the registration is ordered after every submission the
    * producer had made referencing the texture before this call, and after the queued writes those
-   * submissions carried. On a backend whose devices do not share one native queue, \ref submit
-   * refuses such work until that producer work has completed; \ref waitForTextureSource is the
-   * bounded wait for it.
+   * submissions carried. On a backend whose devices do not share one native queue, either the
+   * backend orders such work on the device (\ref SourceOrdering::WaitOnDevice) for a producer
+   * that shares this device's loss condition, so \ref submit accepts it once the producer has
+   * handed that work to its queue and the work waits on the device, or \ref submit refuses it
+   * until that producer work has completed. Either way \ref waitForTextureSource is the host's
+   * bounded wait until the work may be submitted.
    *
    * Refused with \ref GpuErrorType::InvalidHandle for an empty token or one whose producer has
    * released its handle; \ref GpuErrorType::InvalidState for this device's own export or while a
@@ -567,18 +570,24 @@ public:
   Result<Texture> registerTexture(const TextureExport& source);
 
   /**
-   * Waits until the producer work \p registration is ordered after has completed, the budget runs
-   * out, or either device is lost, and reports whether that work completed.
+   * Waits until work naming \p registration may be submitted, the budget runs out, or either
+   * device is lost, and reports whether it may.
    *
+   * Work may be submitted once the producer work the registration is ordered after has completed.
    * Returns true at once for a texture this device allocated and for a registration whose
-   * producer shares this device's native queue: submission order already orders them. A wait that
-   * spends its budget declares nothing, like \ref waitForSerial; the caller's deadline is its own
-   * policy. A producer whose backend reports a terminal execution failure is declared lost with no
-   * wait site, because the backend reported it and no deadline expired.
+   * producer shares this device's native queue, because submission order already orders them,
+   * and for a registration ordered on the device as soon as its producer has handed that work to
+   * its queue, because the device then orders it. A registration is ordered on the device only
+   * when its producer shares this device's loss condition: the device-side wait ends however the
+   * producer's work ends, and only a shared condition carries a failure or loss there to this
+   * device. A wait that spends its budget declares nothing,
+   * like \ref waitForSerial; the caller's deadline is its own policy. A producer whose backend
+   * reports a terminal execution failure is declared lost with no wait site, because the backend
+   * reported it and no deadline expired.
    *
    * @param registration Live texture of this device.
    * @param timeoutSeconds Longest to wait, in seconds; clamped like \ref waitForSerial.
-   * @return True once the producer work is known to have completed.
+   * @return True once work naming the registration may be submitted.
    */
   bool waitForTextureSource(const Texture& registration, double timeoutSeconds);
 
@@ -1249,6 +1258,25 @@ protected:
                           std::span<const SubmittedCommandBuffer> commandBuffers) = 0;
 
   /**
+   * Backend hook: \ref onSubmit for a submission that must also wait on the device, before any of
+   * its work runs, for producer work it names through registrations ordered on the device
+   * (\ref SourceOrdering::WaitOnDevice). Every serial in \p waits is one its producer has handed
+   * to its native queue, and each backing appears once, with the latest serial it needs.
+   *
+   * The default passes a submission with no waits to \ref onSubmit and refuses one with waits.
+   * Only a backend whose exports report \ref SourceOrdering::WaitOnDevice receives waits, since
+   * a registration's producer always belongs to the consumer's own backend, and that backend
+   * overrides this.
+   *
+   * @param submissionSerial Serial assigned to this submission.
+   * @param commandBuffers Command buffers of this submission, in execution order.
+   * @param waits Producer work the submission waits for on the device; empty when there is none.
+   */
+  virtual Status onSubmitAfterSources(uint64_t submissionSerial,
+                                      std::span<const SubmittedCommandBuffer> commandBuffers,
+                                      std::span<const SourceWait> waits);
+
+  /**
    * Backend hook: the bytes the write \ref onWriteTexture just accepted handed the backend's
    * queue, which \ref DeviceObserver::onTextureWritten reports. Asked only when an observer is
    * installed, immediately after \ref onWriteTexture returned success. The default is the
@@ -1746,10 +1774,17 @@ private:
   /// @param share Share the export holds.
   Status checkRegistrationSource(const details::TextureShare& share) const;
 
-  /// Whether the producer work a registration follows has settled: true once it completed, false
-  /// once either device is lost or the producer failed (declaring that failure), and nothing
-  /// while it is still running. @param entry Registration to check.
+  /// Whether work naming a registration may be submitted: true once the producer work it follows
+  /// completed, or, for a registration ordered on the device, once that work was handed to the
+  /// producer's queue; false once either device is lost or the producer failed (declaring that
+  /// failure); and nothing while it is still pending. @param entry Registration to check.
   std::optional<bool> textureSourceState(const TextureRegistration& entry) const;
+
+  /// Whether work naming a registration of \p share waits on the device for the producer: the
+  /// producer's backend orders it there (\ref SourceOrdering::WaitOnDevice), and the producer
+  /// shares this device's loss condition, so a failure or loss that ends the wait is this
+  /// device's loss too. @param share Share of the registered texture.
+  bool ordersOnDevice(const details::TextureShare& share) const;
 
   /// The share of an exported texture of this device, or null. @param slotIndex Texture slot.
   details::TextureShare* textureShareOf(uint32_t slotIndex) const;
@@ -1757,13 +1792,20 @@ private:
   /// The registration in a texture slot, or null. @param slotIndex Texture slot.
   const TextureRegistration* textureRegistrationOf(uint32_t slotIndex) const;
 
-  /// Refuses one registration a submission names when its producer work has not completed or
-  /// either device is lost or failed. @param entry Registration. @param slotIndex Its slot.
-  Status checkTextureSourceReady(const TextureRegistration& entry, uint32_t slotIndex) const;
+  /// Refuses one registration a submission names when either device is lost or failed, or when
+  /// its producer work has not completed and cannot be waited for on the device; records the
+  /// device-side wait when it can be.
+  /// @param entry Registration. @param slotIndex Its slot.
+  /// @param waits Device-side waits of the submission, each backing once with its latest serial.
+  Status checkTextureSourceReady(const TextureRegistration& entry, uint32_t slotIndex,
+                                 std::vector<SourceWait>& waits) const;
 
-  /// Refuses a submission naming a registration whose producer work has not completed, or whose
-  /// producer or this device is lost. @param uses Resources the submission references.
-  Status checkSubmissionTextureSources(std::span<const SubmissionUse> uses) const;
+  /// Refuses a submission naming a registration whose producer work has not completed and cannot
+  /// be waited for on the device, or whose producer or this device is lost, and collects the
+  /// device-side waits the submission needs. @param uses Resources the submission references.
+  /// @param waits Receives the device-side waits.
+  Status checkSubmissionTextureSources(std::span<const SubmissionUse> uses,
+                                       std::vector<SourceWait>& waits) const;
 
   /// Records an accepted submission in the shares of the exported textures it referenced, and
   /// marks queued writes to exported textures as carried by it.

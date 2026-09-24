@@ -53,9 +53,9 @@ namespace donner::gpu::metal {
  * the drawable over, because a drawable presented from a command buffer is shown when that
  * buffer is scheduled rather than when it completes, which would show a frame the GPU is still
  * drawing. A frame whose work cannot finish because the root is lost is abandoned, and the
- * present reports \ref SurfaceStatus::DeviceLost. The layer hands out a small fixed number of
- * drawables, so a frame that is neither presented nor abandoned stalls the next acquisition until
- * the layer gives up waiting.
+ * present reports \ref SurfaceStatus::DeviceLost; so does an acquire on a lost root, which hands
+ * out no frame. The layer hands out a small fixed number of drawables, so a frame that is neither
+ * presented nor abandoned stalls the next acquisition until the layer gives up waiting.
  *
  * Queue writes update idle resources directly. Writes to resources an earlier submission still
  * uses are copied into bounded host storage and uploaded at the beginning of the next ordinary
@@ -225,6 +225,12 @@ public:
   /// lets it publish normally when its handler has not run yet. Safe when nothing is held.
   void releaseHeldCompletionForTest();
 
+  /// Bounds how long a present waits for its frame's work, in place of the five seconds it
+  /// otherwise allows, so a case reaches the bound without spending it, and before the system's
+  /// own timeout ends a command buffer that makes no progress.
+  /// @param timeout Longest a present waits; zero or less restores the default.
+  void setPresentCompletionTimeoutForTest(std::chrono::milliseconds timeout);
+
   /// Waits until \p count submissions have had all their completion handlers run on this device,
   /// parked ones included. Test seam for ordering completions deterministically.
   /// @param count Submissions to wait for. @param timeoutSeconds Longest to wait.
@@ -324,6 +330,11 @@ protected:
                         const Origin2d& destinationOrigin) override;
   Status onSubmit(uint64_t submissionSerial,
                   std::span<const SubmittedCommandBuffer> commandBuffers) override;
+  /// Places a GPU wait on each producer's completion event at the start of the submission's
+  /// first command buffer, one per producer at the latest serial it needs, then submits.
+  Status onSubmitAfterSources(uint64_t submissionSerial,
+                              std::span<const SubmittedCommandBuffer> commandBuffers,
+                              std::span<const SourceWait> waits) override;
   Status onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor& descriptor) override;
   Result<SurfaceCapabilities> onSurfaceCapabilities(uint32_t slotIndex) const override;
   Status onConfigureSurface(uint32_t slotIndex, const SurfaceConfiguration& configuration) override;
