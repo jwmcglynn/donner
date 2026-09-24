@@ -17,6 +17,7 @@ on:
       - examples/bazel_consumer/**
       - third_party/**
       - tools/bcr_*.py
+      - "tools/ci/**"
       - tools/release_cli*.py
       - tools/release_artifact_publisher*.py
   workflow_dispatch:
@@ -169,6 +170,9 @@ jobs:
         run: sudo apt-get install -y libncurses-dev
       - name: Build and bind the Linux CLI to the preflight candidate
         run: |
+          # The repository ignores MODULE.bazel.lock. Resolve once, then prove
+          # the build is complete under that generated, retained lockfile.
+          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg
           bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg
           python3 -B -m tools.release_cli package \
             --platform linux-x86-64 --binary bazel-bin/donner/svg/tool/donner-svg \
@@ -196,6 +200,7 @@ jobs:
           bazelisk-cache: true
       - name: Build and bind the macOS CLI to the preflight candidate
         run: |
+          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg
           bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg
           python3 -B -m tools.release_cli package \
             --platform darwin-arm64 --binary bazel-bin/donner/svg/tool/donner-svg \
@@ -252,7 +257,9 @@ jobs:
           subject-path: |
             ${{ runner.temp }}/donner-bcr/source/*.tar.gz
             ${{ runner.temp }}/donner-bcr/cli-linux/donner-svg_linux_x86_64
+            ${{ runner.temp }}/donner-bcr/cli-linux/donner-svg_linux_x86_64.bazel.lock
             ${{ runner.temp }}/donner-bcr/cli-macos/donner-svg_darwin_arm64
+            ${{ runner.temp }}/donner-bcr/cli-macos/donner-svg_darwin_arm64.bazel.lock
 
   qualify:
     needs: [prepare, consumer, cli-linux, cli-macos]

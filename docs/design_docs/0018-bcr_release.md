@@ -55,7 +55,7 @@ A tag push or main-branch merge alone does not publish anything. Prereleases do 
    not an admission test. Expected BCR maintainer review is reported separately from validation
    errors, and does not imply that upstream builds have run.
 5. Confirm `donner-bcr-qualified-<attempt>` and both `donner-svg-<platform>-<commit>-<attempt>`
-   artifacts are retained. Artifact retention is 90 days; run a fresh preflight before approval if
+   artifacts, including each generated Bazel lockfile, are retained. Artifact retention is 90 days; run a fresh preflight before approval if
    any expires. Use a successful push or manual preflight on main for the exact source commit,
    never a PR or feature-branch run. Add `Release-Candidate-Preflight: <run-id>/<attempt>` as a line in the release body
    before publication. The Release workflow accepts only that named run and attempt.
@@ -76,9 +76,11 @@ remain enabled. The report records the validator revision. Live asset availabili
 release publication. BCR may change its policy before submission, so preflight is not a promise of
 future admission.
 
-Preflight builds the Linux and macOS CLI binaries from the same committed checkout using
-`--lockfile_mode=error`, then retains each binary with its SHA-256 and provenance. A separate
-preflight job verifies and signs the source archive and both CLI binaries on push or manual runs.
+Preflight builds the Linux and macOS CLI binaries from the same committed checkout. The repository
+intentionally ignores `MODULE.bazel.lock`, so each platform resolves its lockfile once with
+`--lockfile_mode=update`, then repeats the build under `--lockfile_mode=error`. It retains each
+binary, generated lockfile, SHA-256, and provenance. A separate preflight job verifies and signs
+the source archive, both CLI binaries, and both generated lockfiles on main push or manual runs.
 Qualification waits for both CLI builds and the consumer matrix, re-verifies both CLI artifacts
 from its own attempt, and records that run ID and attempt without changing the archive bytes.
 After a failed preflight, rerun **all jobs** so source, binaries, matrix and qualification share
@@ -89,8 +91,8 @@ rejection paths.
 ### Publish and observe
 
 1. After release approval, create the intended immutable tag and publish the GitHub release.
-2. Watch `Release` resolve the named preflight attempt and download its source archive and both CLI
-   binaries. It verifies their retained bytes and preflight build attestations, then uploads those exact bytes
+2. Watch `Release` resolve the named preflight attempt and download its source archive, both CLI
+   binaries, and their generated lockfiles. It verifies their retained bytes and preflight build attestations, then uploads those exact bytes
    without compiling or repackaging. The source URL is:
    `https://github.com/jwmcglynn/donner/releases/download/vX.Y.Z/donner-X.Y.Z.tar.gz`.
 3. Require server-reported SHA-256 confirmation for every uploaded asset. An existing identical asset

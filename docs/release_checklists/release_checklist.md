@@ -90,8 +90,9 @@ concern; the tag never moves retroactively.
       merge, tag or green preflight is not release approval.
 - [ ] **BCR preflight qualified**. Root and consumer module versions match. The exact final commit
       has a successful `BCR Preflight` run and its retained `donner-bcr-qualified-<attempt>` artifact
-      plus both CLI binary artifacts from the same run and attempt. Confirm the preflight build
-      attestations for the source archive and both binaries; rerun all jobs after a failed preflight.
+      plus both CLI binary artifacts and generated lockfiles from the same run and attempt. Confirm
+      the preflight build attestations for the source archive, binaries, and lockfiles; rerun all
+      jobs after a failed preflight.
       Follow the [BCR runbook](../design_docs/0018-bcr_release.md); a manual dispatch on `main`
       can supply missing preflight evidence while it still points to the exact commit.
 

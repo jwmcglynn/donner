@@ -113,7 +113,15 @@ jobs:
             --repo jwmcglynn/donner \
             --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
             --source-digest "$GITHUB_SHA" > /dev/null
+          gh attestation verify release/linux/donner-svg_linux_x86_64.bazel.lock \
+            --repo jwmcglynn/donner \
+            --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
+            --source-digest "$GITHUB_SHA" > /dev/null
           gh attestation verify release/macos/donner-svg_darwin_arm64 \
+            --repo jwmcglynn/donner \
+            --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
+            --source-digest "$GITHUB_SHA" > /dev/null
+          gh attestation verify release/macos/donner-svg_darwin_arm64.bazel.lock \
             --repo jwmcglynn/donner \
             --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
             --source-digest "$GITHUB_SHA" > /dev/null
@@ -130,7 +138,9 @@ jobs:
             release/linux/donner-svg_linux_x86_64 \
             release/linux/donner-svg_linux_x86_64.sha256 \
             release/linux/donner-svg_linux_x86_64.provenance \
+            release/linux/donner-svg_linux_x86_64.bazel.lock \
             release/macos/donner-svg_darwin_arm64 \
             release/macos/donner-svg_darwin_arm64.sha256 \
             release/macos/donner-svg_darwin_arm64.provenance \
+            release/macos/donner-svg_darwin_arm64.bazel.lock \
             release/source/*
