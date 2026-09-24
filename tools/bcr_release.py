@@ -183,25 +183,40 @@ def existing_submission(tag: str, commit: str, receipt: dict) -> str | None:
     return matching[0]["html_url"]
 
 
-def plan_submission(release_run_id: str) -> dict[str, object]:
+def require_non_force_rule(branch: str) -> None:
+    rules = gh_json("api", f"repos/{REGISTRY_FORK}/rules/branches/{branch}?per_page=100")
+    if not isinstance(rules, list) or not any(
+        isinstance(rule, dict) and rule.get("type") == "non_fast_forward" for rule in rules
+    ):
+        raise ValueError("BCR fork release branches need active non-fast-forward protection")
+
+
+def plan_submission(release_run_id: str, approved_commit: str,
+                    approved_sha256: str) -> dict[str, object]:
     if not re.fullmatch(r"[1-9][0-9]*", release_run_id):
         raise ValueError("release workflow run ID must be numeric")
+    if not bcr_source.COMMIT.fullmatch(approved_commit) or not re.fullmatch(r"[0-9a-f]{64}", approved_sha256):
+        raise ValueError("BCR submission needs an approved source commit and archive SHA-256")
     run = gh_json("api", f"repos/{REPOSITORY}/actions/runs/{release_run_id}")
     commit = run.get("head_sha", "")
     check_run(run, commit, RELEASE_PATH, {"release"})
-    if not bcr_source.COMMIT.fullmatch(commit):
-        raise ValueError("invalid release source commit")
+    if commit != approved_commit:
+        raise ValueError("Release source commit differs from the approved BCR submission")
     version = bcr_source.module_values(bcr_source.git("show", f"{commit}:MODULE.bazel"))["version"]
     tag = f"v{version}"
     release = gh_json("release", "view", tag, "--repo", REPOSITORY,
                       "--json", "tagName,isDraft,isPrerelease,assets")
     check_release(release, tag)
     if release.get("isPrerelease") or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
-        return {"publish": "false", "reason": "BCR submission is limited to stable releases"}
+        return {"prepare": "false", "reason": "BCR submission is limited to stable releases"}
     check_source(commit, tag)
     receipt = verify_published_source(commit, tag, release)
+    if receipt.get("sha256") != approved_sha256:
+        raise ValueError("published source digest differs from the approved BCR submission")
     existing = existing_submission(tag, commit, receipt)
-    return {"publish": "false" if existing else "true", "tag": tag,
+    if not existing:
+        require_non_force_rule(f"donner-{tag}")
+    return {"prepare": "false" if existing else "true", "tag": tag,
             "existing_pr": existing, "source_commit": commit}
 
 
@@ -215,13 +230,15 @@ def main() -> None:
     select.add_argument("--github-output")
     plan = commands.add_parser("plan-submission")
     plan.add_argument("--release-run-id", required=True)
+    plan.add_argument("--approved-commit", required=True)
+    plan.add_argument("--approved-sha256", required=True)
     plan.add_argument("--github-output")
     args = parser.parse_args()
     if args.command == "select-preflight":
         run_id, attempt = candidate_ref(args.release_body_file.read_text(encoding="utf-8"))
         result = select_preflight(args.commit, args.tag, run_id, attempt)
     else:
-        result = plan_submission(args.release_run_id)
+        result = plan_submission(args.release_run_id, args.approved_commit, args.approved_sha256)
     bcr_source.outputs(result, args.github_output)
 
 

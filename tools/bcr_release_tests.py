@@ -236,18 +236,50 @@ class SubmissionTest(unittest.TestCase):
     def test_prerelease_never_reaches_submission(self, gh, git, check_source, verify):
         gh.side_effect = [run_record(path=release.RELEASE_PATH, event="release"),
                           {"tagName": "v1.0.0-pre", "isDraft": False, "isPrerelease": True}]
-        self.assertEqual(release.plan_submission("12")["publish"], "false")
+        self.assertEqual(release.plan_submission("12", SHA, "c" * 64)["prepare"], "false")
         check_source.assert_not_called()
         verify.assert_not_called()
 
     @mock.patch.object(release, "gh_json", return_value=run_record(path=release.RELEASE_PATH, event="workflow_dispatch"))
     def test_non_release_workflow_cannot_authorize_publication(self, gh):
         with self.assertRaisesRegex(ValueError, "successful build"):
-            release.plan_submission("12")
+            release.plan_submission("12", SHA, "c" * 64)
 
     def test_run_id_cannot_inject_an_api_path(self):
         with self.assertRaisesRegex(ValueError, "numeric"):
-            release.plan_submission("../other")
+            release.plan_submission("../other", SHA, "c" * 64)
+
+    @mock.patch.object(release, "existing_submission", return_value=None)
+    @mock.patch.object(release, "verify_published_source", return_value={"sha256": "c" * 64})
+    @mock.patch.object(release, "check_source")
+    @mock.patch.object(release.bcr_source, "git", return_value='module(name="donner", version="1.0.0")')
+    @mock.patch.object(release, "gh_json")
+    def test_manual_submission_binds_approved_commit_and_digest(self, gh, git, check_source,
+                                                                 verify, existing):
+        run = run_record(path=release.RELEASE_PATH, event="release")
+        published = {"tagName": "v1.0.0", "isDraft": False, "isPrerelease": False}
+        gh.side_effect = [run, published, [{"type": "non_fast_forward"}]]
+        self.assertEqual(release.plan_submission("12", SHA, "c" * 64)["prepare"], "true")
+        existing.assert_called_once()
+
+        gh.side_effect = [run]
+        with self.assertRaisesRegex(ValueError, "approved BCR submission"):
+            release.plan_submission("12", FORK_SHA, "c" * 64)
+        gh.side_effect = [run, published]
+        with self.assertRaisesRegex(ValueError, "published source digest differs"):
+            release.plan_submission("12", SHA, "d" * 64)
+
+        gh.side_effect = [run, published, []]
+        with self.assertRaisesRegex(ValueError, "non-fast-forward protection"):
+            release.plan_submission("12", SHA, "c" * 64)
+
+    @mock.patch.object(release, "gh_json")
+    def test_malformed_approval_fails_before_any_api_call(self, gh):
+        with self.assertRaisesRegex(ValueError, "approved source"):
+            release.plan_submission("12", "not-a-commit", "c" * 64)
+        with self.assertRaisesRegex(ValueError, "approved source"):
+            release.plan_submission("12", SHA, "not-a-digest")
+        gh.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -31,14 +31,17 @@ Every Donner target that references one of those hidden repos must be guarded by
 ## Release protocol
 
 A maintainer approves and publishes a GitHub release. `Release` promotes its qualified source
-archive and CLI binaries; a separate `Publish to BCR` workflow then opens the registry pull request.
-A tag push or main-branch merge alone does not publish anything. Prereleases do not open BCR PRs.
+archive and CLI binaries. A separate manual workflow prepares a BCR fork branch without filing
+an upstream PR. Only after the maintainer reviews and approves the exact fork diff and proposed
+PR content does a person open the upstream PR. A completed Release, tag push or main-branch merge
+alone does not submit to BCR. Prereleases do not open BCR PRs.
 
 | Stage                    | Evidence                                                                                                                        | Credentials                                          |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
 | BCR Preflight            | Committed source archive, both lockfile-bound CLI binaries, upstream admission report, Ubuntu/macOS × Bazel 7/8 consumer matrix | Read-only build jobs; scoped OIDC/attestation signer |
 | Release                  | Exact preflight run/attempt, verified retained source and binary bytes, uploaded asset digests                                  | Release assets and attestations                      |
-| Publish to BCR           | Successful Release event, released bytes, matching remote tag and source commit                                                 | Dedicated BCR fork/PR token                          |
+| Prepare BCR fork branch  | Manual dispatch, successful Release run, approved source commit/digest, released bytes and matching remote tag                  | Fork-scoped token behind a protected environment     |
+| File upstream BCR PR     | Reviewed exact fork diff and PR title/body, separate approval of that filing                                                    | Maintainer's GitHub session                          |
 | BCR admission and builds | Upstream checks, maintainer review where required, platform matrix                                                              | BCR-owned infrastructure                             |
 | Registry availability    | Merged entry visible at `https://registry.bazel.build/modules/donner`                                                           | BCR-owned infrastructure                             |
 
@@ -98,11 +101,19 @@ rejection paths.
 3. Require server-reported SHA-256 confirmation for every uploaded asset. An existing identical asset
    is accepted; a conflicting asset stops publication. `//tools:release_artifact_publisher_tests`
    covers successful uploads, lost responses, retries and conflicts.
-4. Watch `Publish to BCR`. It rechecks the successful Release event, tag/source identity, published
-   source bytes and successful preflight attempt before passing the BCR token to the publisher.
+4. Obtain approval to prepare the fork branch from the reviewed Release run, source commit and
+   archive SHA-256. This authorizes fork preparation only, not an upstream PR.
+5. Manually dispatch `Prepare BCR submission` on `main` with those three values. It rechecks the
+   Release event, tag/source identity, published source bytes and preflight attempt before using
+   the fork-scoped token. It also requires an active non-fast-forward rule on the exact fork
+   release branch. The pinned publisher pushes a fork branch with
+   `open_pull_request: false` and prints a compare URL; it never files upstream.
    `//tools:bcr_release_tests` covers these gates and submission recovery;
-   `//tools:security_workflow_policy_tests` checks workflow credential separation.
-5. Inspect the BCR PR's admission results, review gate and build matrix separately. PR creation alone
+   `//tools:security_workflow_policy_tests` checks the manual-only, no-PR workflow policy.
+6. Inspect the actual fork diff, proposed upstream PR title and body, source integrity, module
+   file, presubmit and metadata. Obtain a separate explicit maintainer approval for that exact
+   `bazelbuild/bazel-central-registry` filing. Only then open a normal PR using the prepared URL.
+7. Inspect the BCR PR's admission results, review gate and build matrix separately. PR creation alone
    does not make a module available. Confirm the registry entry after upstream merge.
 
 ### Retry without replacing a release
@@ -113,8 +124,11 @@ rejection paths.
   preflight attempt named in the release event; it never builds a replacement. Missing, expired, or
   ambiguous artifacts stop publication. Requalify a new candidate before release approval; after
   publication, do not silently substitute a later preflight attempt.
-- For a transient BCR publisher failure, rerun `Publish to BCR` or dispatch it with the successful
-  Release workflow run ID. It validates that run through GitHub; dispatch does not create a release.
+- If fork preparation fails before a branch push, rerun with the same approved Release run ID,
+  source commit and archive SHA-256. If the branch exists, do not rerun the pinned publisher: it
+  uses `git push --force` by design. The fork ruleset prevents non-fast-forward rewrites at push
+  time, including a branch created while environment approval waits. Inspect the branch and its
+  proposed PR manually instead.
 - A matching existing fork branch and open/merged PR is a successful no-op. A conflicting branch,
   closed unmerged PR, or branch without a PR requires manual inspection and is not overwritten.
 - Repair a registry-only error in its existing BCR PR when the released bytes are correct. Keep
@@ -123,13 +137,23 @@ rejection paths.
 ### Maintainer setup
 
 1. Maintain the fork `jwmcglynn/bazel-central-registry`.
-2. Store `BCR_PUBLISH_TOKEN` as a repository Actions secret. Use a classic token with
-   `public_repo` scope, as required by Publish-to-BCR to open upstream public pull requests. A
-   fine-grained token can push the fork but is not supported by this workflow for opening the PR. Track its
-   expiry. The secret appears only in the separate BCR publication job, never preflight or Release.
-3. `.bcr/config.yml` declares the module root. `.bcr/metadata.template.json` records the maintainer's
+2. Install an active fork ruleset for `refs/heads/donner-v*` with a `non_fast_forward` rule and no
+   bypass for the fork-push token. Verify the effective rule for the intended branch with the
+   GitHub branch-rules API, and rehearse a rejected non-fast-forward push on a disposable branch
+   under the same rule and token before enabling preparation. Without this protection, the
+   pinned publisher's force-push step is unsafe; the planner refuses to prepare a branch.
+3. Configure the `bcr-fork-preparation` environment with required reviewers before dispatch.
+   Store an environment secret named `PUBLISH_TOKEN`: a fine-grained token with contents-write
+   access only to the owned registry fork. The caller passes its repository-scoped
+   `GITHUB_TOKEN` as a placeholder required by the reusable workflow; GitHub gives the called
+   job's environment secret precedence. Without that environment secret, the placeholder cannot
+   push the separate fork. Remove the old broad repository `BCR_PUBLISH_TOKEN` before enabling
+   this path. The fork token is available only after the environment's protection rules pass;
+   it is never passed to preflight or Release.
+   The upstream PR is opened separately from a maintainer's GitHub session after exact approval.
+4. `.bcr/config.yml` declares the module root. `.bcr/metadata.template.json` records the maintainer's
    GitHub login and numeric ID. `.bcr/source.template.json` names the stable asset and strip prefix.
-4. Review `.bcr/presubmit.yml` when public targets or supported Bazel/platform versions change.
+5. Review `.bcr/presubmit.yml` when public targets or supported Bazel/platform versions change.
 
 ## Common failures and fixes
 

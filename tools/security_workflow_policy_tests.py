@@ -258,17 +258,27 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("donner-bcr-qualified-${{ github.run_attempt }}", preflight)
         self.assertIn("tools.bcr_source qualify", preflight)
 
-    def test_bcr_publication_revalidates_a_successful_release(self):
+    def test_bcr_fork_preparation_requires_manual_approval_and_never_files_a_pr(self):
         workflow = self.supply_chain_files[".github/workflows/publish_bcr.yml"]
-        self.assertIn("workflows: [Release]", workflow)
-        self.assertIn("github.event.workflow_run.event == 'release'", workflow)
-        self.assertIn("github.event.workflow_run.conclusion == 'success'", workflow)
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotIn("workflow_run:", workflow)
+        self.assertIn("approved_source_commit:", workflow)
+        self.assertIn("approved_source_sha256:", workflow)
+        self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("ref: main", workflow)
         self.assertIn("tools.bcr_release plan-submission", workflow)
-        validate, publish = workflow.split("\n  publish:\n", 1)
+        self.assertIn("--approved-commit", workflow)
+        self.assertIn("--approved-sha256", workflow)
+        validate, prepare = workflow.split("\n  prepare-fork:\n", 1)
         self.assertNotIn("secrets.", validate)
-        self.assertIn("needs.validate.outputs.publish == 'true'", publish)
-        self.assertIn("secrets.BCR_PUBLISH_TOKEN", publish)
+        self.assertIn("needs.validate.outputs.prepare == 'true'", prepare)
+        self.assertIn("open_pull_request: false", prepare)
+        self.assertNotIn("open_pull_request: true", prepare)
+        self.assertIn("@ca23149e55cd4db07a6bcce69c02dea314c5a357", prepare)
+        self.assertIn("environment: bcr-fork-preparation", prepare)
+        self.assertIn("publish_token: ${{ secrets.GITHUB_TOKEN }}", prepare)
+        self.assertNotIn("secrets.BCR_FORK_PUSH_TOKEN", prepare)
+        self.assertNotIn("secrets.BCR_PUBLISH_TOKEN", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
         for path in (".github/workflows/bcr_preflight.yml", ".github/workflows/publish_bcr.yml"):
             for body in _run_bodies(self.supply_chain_files[path]):

@@ -115,9 +115,12 @@ concern; the tag never moves retroactively.
 - [ ] **Verify release artifacts**. Check that the GitHub release page shows the correct tag,
       binaries and `donner-X.Y.Z.tar.gz` with its checksum/provenance are attached, uploaded digests
       match the qualified artifacts, and the release body renders correctly.
-- [ ] **BCR submission checked**. For a stable release, the separate `Publish to BCR` workflow opens
-      or identifies the matching PR. Track admission, maintainer review, builds and registry
-      availability separately; PR creation is not publication in the registry.
+- [ ] **BCR submission checked**. For a stable release, manually dispatch `Prepare BCR submission`
+      with the reviewed Release run, source commit and archive SHA-256 to prepare the owned fork
+      branch only after the fork's no-force-push rule and protected token environment are verified.
+      Inspect its exact diff and proposed title/body; obtain separate explicit approval
+      before anyone opens the normal upstream PR. Track admission, maintainer review, builds and
+      registry availability separately; PR creation is not publication in the registry.
 
 ## Post-Release
 

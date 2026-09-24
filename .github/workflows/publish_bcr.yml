@@ -1,13 +1,18 @@
-name: Publish to BCR
+name: Prepare BCR submission
 
 on:
-  workflow_run:
-    workflows: [Release]
-    types: [completed]
   workflow_dispatch:
     inputs:
       release_run_id:
-        description: Successful Release workflow run to resume
+        description: Successful Release workflow run approved for BCR submission
+        required: true
+        type: string
+      approved_source_commit:
+        description: Reviewed full release source commit SHA
+        required: true
+        type: string
+      approved_source_sha256:
+        description: Reviewed release source archive SHA-256
         required: true
         type: string
 
@@ -23,17 +28,16 @@ jobs:
   validate:
     if: >-
       github.repository == 'jwmcglynn/donner' &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event.workflow_run.event == 'release' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_repository.full_name == github.repository))
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     outputs:
-      publish: ${{ steps.plan.outputs.publish }}
+      prepare: ${{ steps.plan.outputs.prepare }}
       tag: ${{ steps.plan.outputs.tag }}
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_RUN_ID: ${{ github.event.workflow_run.id || inputs.release_run_id }}
+      RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+      APPROVED_SOURCE_COMMIT: ${{ inputs.approved_source_commit }}
+      APPROVED_SOURCE_SHA256: ${{ inputs.approved_source_sha256 }}
     steps:
       - name: Checkout trusted publisher
         uses: actions/checkout@v7
@@ -45,21 +49,26 @@ jobs:
         id: plan
         run: |
           python3 -B -m tools.bcr_release plan-submission \
-            --release-run-id "$RELEASE_RUN_ID" --github-output "$GITHUB_OUTPUT"
+            --release-run-id "$RELEASE_RUN_ID" \
+            --approved-commit "$APPROVED_SOURCE_COMMIT" \
+            --approved-sha256 "$APPROVED_SOURCE_SHA256" \
+            --github-output "$GITHUB_OUTPUT"
 
-  publish:
+  prepare-fork:
     needs: validate
-    if: needs.validate.outputs.publish == 'true'
-    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.5.0
+    if: needs.validate.outputs.prepare == 'true'
+    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@ca23149e55cd4db07a6bcce69c02dea314c5a357 # v1.5.0
     with:
       tag_name: ${{ needs.validate.outputs.tag }}
       registry_fork: jwmcglynn/bazel-central-registry
       module_roots: .
       attest: false
       download_default_release_artifacts: false
-      open_pull_request: true
-      draft: false
+      open_pull_request: false
+      environment: bcr-fork-preparation
       author_name: Jeff McGlynn
       author_email: jeff@mcglynn.dev
     secrets:
-      publish_token: ${{ secrets.BCR_PUBLISH_TOKEN }}
+      # The called job's protected environment overrides this placeholder.
+      # Without its fork-scoped PUBLISH_TOKEN, this repo token cannot push the fork.
+      publish_token: ${{ secrets.GITHUB_TOKEN }}
