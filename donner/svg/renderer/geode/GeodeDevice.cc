@@ -587,6 +587,10 @@ namespace {
 std::atomic<int> gHeadlessCreationCount{0};
 }  // namespace
 
+bool GeodeDevice::isBoundToCreatingThread() const {
+  return physicalDevice_->root().capabilities().backend == GpuBackendKind::Browser;
+}
+
 int GeodeDevice::headlessCreationCountForTesting() {
   return gHeadlessCreationCount.load(std::memory_order_relaxed);
 }

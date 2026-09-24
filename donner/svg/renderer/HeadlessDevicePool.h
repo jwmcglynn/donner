@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -17,10 +18,16 @@ namespace donner::svg::details {
  * of its own, so a renderer torn down and rebuilt reuses a device instead of opening another.
  *
  * A device is handed out as a lease: releasing the last reference to what \ref acquire returned
- * puts the device back, unless it has been lost or the cache is full. A lost device is never
- * handed out again.
+ * puts the device back, unless it has been lost. A lost device is never handed out again, and a
+ * full cache gives up its oldest idle device to keep the one just released.
  *
- * @tparam Device Device type. It provides `bool isDeviceLost() const`.
+ * A device bound to the thread that opened it, as a browser device is to its worker, is handed
+ * back only to that thread; any other device goes to whichever thread asks. An idle device bound
+ * to a thread that has since exited can never be handed out again, which is why a full cache
+ * gives up its oldest device rather than the newest.
+ *
+ * @tparam Device Device type. It provides `bool isDeviceLost() const` and
+ *   `bool isBoundToCreatingThread() const`.
  */
 template <typename Device>
 class HeadlessDevicePool {
@@ -49,30 +56,38 @@ public:
    *   already lost.
    */
   std::shared_ptr<Device> acquire() {
-    std::shared_ptr<Device> device;
+    const std::thread::id here = std::this_thread::get_id();
+    Idle taken;
     for (;;) {
       {
         const std::lock_guard lock(mutex_);
-        if (idle_.empty()) {
+        // The most recently released device this thread may use.
+        auto usable = idle_.end();
+        for (auto it = idle_.begin(); it != idle_.end(); ++it) {
+          if (!it->device->isBoundToCreatingThread() || it->creator == here) {
+            usable = it;
+          }
+        }
+        if (usable == idle_.end()) {
           break;
         }
-        device = std::move(idle_.back());
-        idle_.pop_back();
+        taken = std::move(*usable);
+        idle_.erase(usable);
       }
-      if (device && !device->isDeviceLost()) {
+      if (!taken.device->isDeviceLost()) {
         break;
       }
-      device.reset();
+      taken = Idle{};
     }
-    if (!device) {
-      device = create_();
+    if (!taken.device) {
+      taken = Idle{create_(), here};
     }
-    if (!device || device->isDeviceLost()) {
+    if (!taken.device || taken.device->isDeviceLost()) {
       return nullptr;
     }
 
-    auto lease = std::make_shared<Lease>(this, std::move(device));
-    return std::shared_ptr<Device>(lease, lease->device.get());
+    auto lease = std::make_shared<Lease>(this, std::move(taken));
+    return std::shared_ptr<Device>(lease, lease->idle.device.get());
   }
 
   /// Number of idle devices the cache holds.
@@ -82,34 +97,45 @@ public:
   }
 
 private:
+  /// A device and the thread that opened it.
+  struct Idle {
+    std::shared_ptr<Device> device;  //!< The device.
+    std::thread::id creator;         //!< Thread that opened it.
+  };
+
   /// What a handed-out device's references share: the device, returned to the cache when the
   /// last reference goes.
   struct Lease {
-    /// @param pool Cache to return the device to. @param device Device handed out.
-    Lease(HeadlessDevicePool* pool, std::shared_ptr<Device> device)
-        : pool(pool), device(std::move(device)) {}
-    ~Lease() { pool->release(std::move(device)); }
+    /// @param pool Cache to return the device to. @param idle Device handed out.
+    Lease(HeadlessDevicePool* pool, Idle idle) : pool(pool), idle(std::move(idle)) {}
+    ~Lease() { pool->release(std::move(idle)); }
 
-    HeadlessDevicePool* pool;        //!< Cache the device returns to.
-    std::shared_ptr<Device> device;  //!< Device handed out.
+    HeadlessDevicePool* pool;  //!< Cache the device returns to.
+    Idle idle;                 //!< Device handed out.
   };
 
-  /// Keeps \p device for a later \ref acquire, unless it is lost or the cache is full.
-  /// @param device Device a lease released.
-  void release(std::shared_ptr<Device> device) {
-    if (!device || device->isDeviceLost()) {
+  /// Keeps \p released for a later \ref acquire unless it is lost, giving up the oldest idle
+  /// device when the cache is full. A device given up is destroyed here, outside the lock.
+  /// @param released Device a lease released.
+  void release(Idle released) {
+    if (!released.device || released.device->isDeviceLost() || maxIdleDevices_ == 0) {
       return;
     }
-    const std::lock_guard lock(mutex_);
-    if (idle_.size() < maxIdleDevices_) {
-      idle_.push_back(std::move(device));
+    Idle givenUp;
+    {
+      const std::lock_guard lock(mutex_);
+      if (idle_.size() >= maxIdleDevices_) {
+        givenUp = std::move(idle_.front());
+        idle_.erase(idle_.begin());
+      }
+      idle_.push_back(std::move(released));
     }
   }
 
   Factory create_;
   std::size_t maxIdleDevices_;
   mutable std::mutex mutex_;
-  std::vector<std::shared_ptr<Device>> idle_;
+  std::vector<Idle> idle_;  //!< Idle devices, oldest first.
 };
 
 }  // namespace donner::svg::details
