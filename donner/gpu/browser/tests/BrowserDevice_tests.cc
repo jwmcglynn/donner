@@ -1702,6 +1702,44 @@ TEST(BrowserDeviceSharing, ARegistrationOutlivesItsProducerDevice) {
   EXPECT_THAT(gpuDevice->isTextureLive(native), testing::IsFalse());
 }
 
+TEST(BrowserDeviceSharing, SharesASurfaceFrameWithoutEverDestroyingTheCanvasTexture) {
+  BrowserFixture producer = MakeDevice();
+  ASSERT_THAT(producer.device, testing::NotNull());
+  BrowserFixture consumer = MakeDevice(producer.bridge->gpuDevice);
+  ASSERT_THAT(consumer.device, testing::NotNull());
+  const std::shared_ptr<FakeBrowserGpuDevice> gpuDevice = producer.bridge->gpuDevice;
+
+  Result<Surface> surface = producer.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+  // A canvas configured to be read back, so a registration of its frame has a use.
+  SurfaceConfiguration configuration = CanvasConfiguration(Extent2d{8, 8});
+  configuration.usage = TextureUsage::RenderAttachment | TextureUsage::CopySrc;
+  ASSERT_THAT(producer.device->configureSurface(surface.result(), configuration), IsOk());
+  Result<SurfaceTexture> acquired = producer.device->acquireCurrentTexture(surface.result());
+  ASSERT_THAT(acquired, HasResult());
+
+  // Every device over the browser device submits to its one queue, so a frame the surface has out
+  // is shared like any other texture: a reader's work is ordered before the canvas takes it back.
+  Result<TextureExport> exported = producer.device->exportTexture(acquired.result().texture);
+  ASSERT_THAT(exported, HasResult());
+  Result<Texture> registration = consumer.device->registerTexture(exported.result());
+  ASSERT_THAT(registration, HasResult());
+  // The surface is identifier 1 on the producer and its frame 2; the registration is the
+  // consumer's first identifier.
+  const std::optional<uint64_t> frame = producer.bridge->nativeTextureOf(2);
+  ASSERT_THAT(frame.has_value(), testing::IsTrue());
+  EXPECT_THAT(consumer.bridge->nativeTextureOf(1), frame);
+
+  // The canvas owns the frame, so neither its surface taking it back nor its last holder letting
+  // go destroys it.
+  EXPECT_THAT(consumer.device->destroyTexture(std::move(registration).result()), IsOk());
+  ASSERT_THAT(producer.device->abandonCurrentTexture(surface.result()), IsOk());
+  exported = TextureExport();
+  EXPECT_THAT(gpuDevice->releasedShares, 1u);
+  EXPECT_THAT(gpuDevice->isTextureLive(*frame), testing::IsTrue())
+      << "releasing a share destroyed the canvas's own texture";
+}
+
 TEST(BrowserDeviceSharing, RefusesATextureOfAnotherBrowserDevice) {
   BrowserFixture producer = MakeDevice();
   ASSERT_THAT(producer.device, testing::NotNull());
