@@ -333,30 +333,6 @@ function splashLetterTrackingWindow(stats: ViewportStats): CssRegion {
   };
 }
 
-// Wait for the demand-driven frame loop to park.
-//
-// Reading pixels while the loop is still servicing frames is how a capture
-// comes to straddle two of them: a full-document screenshot takes longer than a
-// frame, so any capture started mid-burst mixes geometry from both sides of it.
-// The loop parks once it has presented what it was woken for, so an unchanged
-// frame counter across a browser composite is the signal that a capture can
-// describe one frame. Reports whether it parked rather than throwing, so the
-// caller's own diagnostics carry the failure.
-async function waitForParkedFrameLoop(page: Page, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  const renderedFrames = () => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
-  for (;;) {
-    const before = await renderedFrames();
-    await waitForBrowserComposite(page);
-    if (before === await renderedFrames()) {
-      return true;
-    }
-    if (Date.now() >= deadline) {
-      return false;
-    }
-  }
-}
-
 // Whether two captures describe the same presented picture.
 //
 // Both captures are scored in page CSS pixels off their own screenshot, so
@@ -445,15 +421,10 @@ async function captureSplashDragFrame(
   for (let attempt = 0; attempt < 4; ++attempt) {
     const attemptStartedAtMs = performance.now();
     console.log(`splash-capture-wait-start ${JSON.stringify({ context, attempt })}`);
-    // Only the first attempt waits for a park. If the loop is going to park it
-    // parks within that window; if it is not - the thumbnail burst again - then
-    // spending the same wait on every retry only burns the test's budget
-    // before the retries that settle this by content can run.
-    if (attempt === 0) {
-      await waitForParkedFrameLoop(page, scaledMs(2_000));
-    } else {
-      await waitForBrowserComposite(page);
-    }
+    // A continuously rendering thumbnail burst need not park. The counter
+    // across this capture or two matching captures below still prove that its
+    // pixels describe one stable presented picture.
+    await waitForBrowserComposite(page);
     console.log(`splash-capture-wait-end ${
       JSON.stringify({
         context,
@@ -533,6 +504,43 @@ async function captureSplashDragFrame(
       + `published=${JSON.stringify(published)} diagnosis=${JSON.stringify(diagnosis)}`,
   );
 }
+
+test("Splash capture accepts stable pixels while frames keep advancing", async ({ page }) => {
+  // A thumbnail-like wake can keep the frame counter moving even when the
+  // presented picture is already stable. Waiting for a parked loop on every
+  // drag step can consume the whole case budget before step 10.
+  await page.setViewportSize({ width: 128, height: 128 });
+  await page.setContent(`
+    <style>
+      html, body { margin: 0; background: rgb(13, 15, 29); }
+      .letter { position: absolute; left: 36px; top: 36px; width: 36px; height: 36px;
+                background: rgb(240, 190, 40); }
+      .outline { position: absolute; left: 34px; top: 34px; width: 40px; height: 40px;
+                 border: 3px solid rgb(49, 198, 179); }
+    </style>
+    <div class="letter"></div><div class="outline"></div>
+  `);
+  await page.evaluate(() => {
+    window.__donnerMainLoopRenderedFrames = 0;
+    const wake = () => {
+      window.__donnerMainLoopRenderedFrames = (window.__donnerMainLoopRenderedFrames || 0) + 1;
+      requestAnimationFrame(wake);
+    };
+    requestAnimationFrame(wake);
+  });
+  const framesBefore = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
+  await waitForBrowserComposite(page);
+  expect(await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0))
+    .toBeGreaterThan(framesBefore);
+
+  const startedAtMs = performance.now();
+  const region = { x: 0, y: 0, width: 128, height: 128 };
+  const frame = await captureSplashDragFrame(page, region, region, "continuous frame wake");
+  expect(frame.letter, "the stable picture lost its yellow letter").not.toBeNull();
+  expect(frame.outline, "the stable picture lost its selection outline").not.toBeNull();
+  expect(frame.census.darkBackgroundPixels).toBeGreaterThan(0);
+  expect(performance.now() - startedAtMs).toBeLessThan(scaledMs(1_000));
+});
 
 // The document's presentation progress. Since the single-canvas architecture there is no separate
 // document element and no acceptance token: a completed worker result is the
