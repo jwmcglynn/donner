@@ -1586,18 +1586,29 @@ struct VulkanDevice::Impl {
   /// Proves ordinary submissions and internal uploads complete without releasing their objects.
   bool prepareSubmissionsForDestruction() {
     for (const InFlightSubmission& submission : inFlight) {
-      if (!CompletionWasProven(api->vkWaitForFences(device, 1, &submission.fence, VK_TRUE,
-                                                    kTeardownFenceTimeoutNs))) {
+      if (!proveFenceCompleteForTeardown(submission.fence)) {
         return false;
       }
     }
     for (const PendingUpload& upload : pendingUploads) {
-      if (!CompletionWasProven(
-              api->vkWaitForFences(device, 1, &upload.fence, VK_TRUE, kTeardownFenceTimeoutNs))) {
+      if (!proveFenceCompleteForTeardown(upload.fence)) {
         return false;
       }
     }
     return true;
+  }
+
+  /// Waits for \p fence at teardown. A device-lost result proves the work will never run again,
+  /// and it is declared to the root, since it may be the first any device over the root saw of
+  /// the loss. @param fence Fence of work this device still owns.
+  /// @return True when the fence's work is proven complete.
+  bool proveFenceCompleteForTeardown(VkFence fence) {
+    const VkResult result =
+        api->vkWaitForFences(device, 1, &fence, VK_TRUE, kTeardownFenceTimeoutNs);
+    if (result == VK_ERROR_DEVICE_LOST) {
+      recordDeviceLoss("teardown fence wait reported device loss");
+    }
+    return CompletionWasProven(result);
   }
 
   /// Proves every native user complete before any part of the ownership graph is released.
@@ -2410,6 +2421,13 @@ Status VulkanDevice::waitForBufferAccess(uint64_t serial, std::string_view opera
     return OkStatus();
   }
   const std::string error = lastErrorForTest();
+  // A loss another device over the root declared leaves no error here; it is still a loss, not
+  // a timeout. An error of this device's own, a driver-reported loss included, is reported as is.
+  if (error.empty() && isLost()) {
+    return GpuError{
+        GpuErrorType::DeviceLost,
+        std::format("{} cannot wait for submission {}: the device was lost", operation, serial)};
+  }
   return GpuError{GpuErrorType::InvalidState,
                   error.empty()
                       ? std::format("{} timed out waiting for submission {}", operation, serial)
