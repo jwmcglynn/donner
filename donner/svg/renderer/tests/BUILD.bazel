@@ -278,6 +278,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "headless_device_pool_tests",
+    srcs = ["HeadlessDevicePool_tests.cc"],
+    deps = [
+        "//donner/svg/renderer:headless_device_pool",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "pattern_tile_tests",
     srcs = ["PatternTile_tests.cc"],
     deps = [

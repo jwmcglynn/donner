@@ -39,6 +39,7 @@
 #include "donner/svg/core/Gradient.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/HeadlessDevicePool.h"
 #include "donner/svg/renderer/PatternTile.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
@@ -5414,64 +5415,17 @@ void RendererGeode::Impl::onComputedPathChanged(Registry& registry, Entity entit
 
 namespace {
 
-class HeadlessGeodeDevicePool {
-public:
-  std::shared_ptr<geode::GeodeDevice> acquire() {
-    std::shared_ptr<geode::GeodeDevice> device;
-    for (;;) {
-      {
-        const std::lock_guard lock(mutex_);
-        if (idle_.empty()) {
-          break;
-        }
-        device = std::move(idle_.back());
-        idle_.pop_back();
-      }
-      if (device && !device->isDeviceLost()) {
-        break;
-      }
-      device.reset();
-    }
-    if (!device) {
-      device = std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
-    }
-    if (!device || device->isDeviceLost()) {
-      return nullptr;
-    }
+/// Most idle headless devices kept for renderers that do not bring their own.
+constexpr std::size_t kMaxIdleHeadlessDevices = 4;
 
-    auto lease = std::make_shared<Lease>(this, std::move(device));
-    return std::shared_ptr<geode::GeodeDevice>(lease, lease->device.get());
-  }
-
-private:
-  struct Lease {
-    Lease(HeadlessGeodeDevicePool* pool, std::shared_ptr<geode::GeodeDevice> device)
-        : pool(pool), device(std::move(device)) {}
-    ~Lease() { pool->release(std::move(device)); }
-
-    HeadlessGeodeDevicePool* pool;
-    std::shared_ptr<geode::GeodeDevice> device;
-  };
-
-  void release(std::shared_ptr<geode::GeodeDevice> device) {
-    if (!device || device->isDeviceLost()) {
-      return;
-    }
-    const std::lock_guard lock(mutex_);
-    if (idle_.size() < kMaxIdleDevices) {
-      idle_.push_back(std::move(device));
-    }
-  }
-
-  static constexpr std::size_t kMaxIdleDevices = 4;
-  std::mutex mutex_;
-  std::vector<std::shared_ptr<geode::GeodeDevice>> idle_;
-};
+using HeadlessGeodeDevicePool = details::HeadlessDevicePool<geode::GeodeDevice>;
 
 HeadlessGeodeDevicePool& SharedHeadlessGeodeDevicePool() {
   // Active leases retain a raw pointer to the pool. Keep the small bounded
   // cache alive through process teardown so global renderers cannot outlive it.
-  static auto* pool = new HeadlessGeodeDevicePool();
+  static auto* pool = new HeadlessGeodeDevicePool(
+      [] { return std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless()); },
+      kMaxIdleHeadlessDevices);
   return *pool;
 }
 
