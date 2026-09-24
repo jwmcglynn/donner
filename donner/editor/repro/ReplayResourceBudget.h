@@ -50,7 +50,11 @@ inline constexpr std::size_t kMaximumReplaySelectionMutations = 8'192;
  */
 class ReplayHeldMutationKeyState {
 public:
-  /** Update held keys from a recorded frame and return its repeated source-rewrite count. */
+  /**
+   * Update held keys from a recorded frame and return its repeated source-rewrite count.
+   * @param frame Recorded key edges and modifier snapshot for this frame.
+   * @return Number of repeated source rewrites to charge.
+   */
   [[nodiscard]] std::size_t advanceFrame(const ReproFrame& frame) {
     std::array<bool, kTrackedKeyCount> pressedThisFrame{};
     std::array<bool, kTrackedKeyCount> releasedThisFrame{};
@@ -165,7 +169,13 @@ private:
 
 namespace detail {
 
-/** Add two size values without wrapping; leave result unchanged on overflow. */
+/**
+ * Add two size values without wrapping; leave result unchanged on overflow.
+ * @param left First value.
+ * @param right Second value.
+ * @param result Receives the sum only when it fits.
+ * @return True when the sum fits in std::size_t.
+ */
 [[nodiscard]] inline bool CheckedAdd(std::size_t left, std::size_t right, std::size_t* result) {
   if (right > std::numeric_limits<std::size_t>::max() - left) {
     return false;
@@ -174,7 +184,13 @@ namespace detail {
   return true;
 }
 
-/** Multiply two size values without wrapping; leave result unchanged on overflow. */
+/**
+ * Multiply two size values without wrapping; leave result unchanged on overflow.
+ * @param left First value.
+ * @param right Second value.
+ * @param result Receives the product only when it fits.
+ * @return True when the product fits in std::size_t.
+ */
 [[nodiscard]] inline bool CheckedMultiply(std::size_t left, std::size_t right,
                                           std::size_t* result) {
   if (left != 0 && right > std::numeric_limits<std::size_t>::max() / left) {
@@ -405,7 +421,11 @@ public:
   /** Maximum cumulative estimated replay work in bytes. */
   static constexpr std::size_t kMaximumWeightedWorkBytes = 128 * 1024 * 1024;
 
-  /** Reserve one frame and its physical pixel count before rendering it. */
+  /**
+   * Reserve one frame and its physical pixel count before rendering it.
+   * @param physicalPixels Width times height in physical pixels.
+   * @return True when accepted; false after a prior refusal or an over-limit charge.
+   */
   [[nodiscard]] bool reserveFrame(std::size_t physicalPixels) {
     if (rejected_ || frames_ >= kMaximumPlaybackFrames ||
         physicalPixels > kMaximumPixelFrames - pixelFrames_) {
@@ -417,7 +437,11 @@ public:
     return true;
   }
 
-  /** Reserve a semantic action before invoking its mutation callback. */
+  /**
+   * Reserve a semantic action before invoking its mutation callback.
+   * @param cost Estimated action, selection, and weighted work charges.
+   * @return True when accepted; false after a prior refusal, invalid cost, or over-limit charge.
+   */
   [[nodiscard]] bool reserveAction(const ReplaySemanticActionCost& cost) {
     if (rejected_ || !cost.valid || cost.actions > kMaximumActions - actions_ ||
         cost.selectionMutations > kMaximumSelectionMutations - selectionMutations_ ||
@@ -431,7 +455,11 @@ public:
     return true;
   }
 
-  /** Reserve raw-input work before dispatching the input frame. */
+  /**
+   * Reserve raw-input work before dispatching the input frame.
+   * @param cost Estimated input, selection, and weighted work charges.
+   * @return True when accepted; false after a prior refusal, invalid cost, or over-limit charge.
+   */
   [[nodiscard]] bool reserveInput(const ReplayInputFrameCost& cost) {
     if (rejected_ || !cost.valid ||
         cost.inputMutations > kMaximumInputMutations - inputMutations_ ||
@@ -544,14 +572,19 @@ public:
   static constexpr std::size_t kMaximumBytes = 16 * 1024 * 1024;
   /** Maximum total retained diagnostics items. */
   static constexpr std::size_t kMaximumItems = 65'536;
-  /** Declared per-string byte limit; reserve() enforces only aggregate limits. */
+  /** Declared per-string byte limit; \ref reserve enforces only aggregate limits. */
   static constexpr std::size_t kMaximumStringBytes = 4 * 1024;
-  /** Declared per-vector readback item limit; reserve() enforces only aggregate limits. */
+  /** Declared per-vector readback item limit; \ref reserve enforces only aggregate limits. */
   static constexpr std::size_t kMaximumReadbackItemsPerVector = 4'096;
-  /** Declared readback text-node limit; reserve() enforces only aggregate limits. */
+  /** Declared readback text-node limit; \ref reserve enforces only aggregate limits. */
   static constexpr std::size_t kMaximumReadbackTextNodes = 4'096;
 
-  /** Reserve diagnostics storage; a refusal permanently rejects later reservations. */
+  /**
+   * Reserve diagnostics storage; a refusal permanently rejects later reservations.
+   * @param bytes Additional retained bytes to charge.
+   * @param items Additional retained items to charge.
+   * @return True when accepted; false after a prior refusal or an over-limit charge.
+   */
   [[nodiscard]] bool reserve(std::size_t bytes, std::size_t items) {
     if (rejected_ || bytes > kMaximumBytes - bytes_ || items > kMaximumItems - items_) {
       rejected_ = true;
