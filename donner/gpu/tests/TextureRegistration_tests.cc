@@ -552,6 +552,7 @@ TEST_F(DeviceOrderedRegistrationTest, ProducerWorkThatWasOnlyRecordedIsNotWaited
                   TexelCopyTextureInfo{owned}, target,
                   TexelCopyBufferLayout{0, 256, kSharedTextureExtent.height}, kSharedTextureExtent),
               IsOk());
+  // Held, never submitted.
   const CommandBuffer recorded = GetResultOrFail(encoder->finish());
   const Texture registered =
       GetResultOrFail(consumer_.registerTexture(GetResultOrFail(producer_.exportTexture(owned))));
@@ -559,7 +560,6 @@ TEST_F(DeviceOrderedRegistrationTest, ProducerWorkThatWasOnlyRecordedIsNotWaited
   ASSERT_THAT(SubmitSharedTextureRead(consumer_, registered), HasResult());
   EXPECT_THAT(consumer_.lastSourceWaits(), IsEmpty())
       << "work the producer only recorded follows the registration, so nothing waits for it";
-  EXPECT_THAT(recorded.isValid(), IsTrue());
 }
 
 TEST_F(DeviceOrderedRegistrationTest, LossAndProducerFailureAreStillRefused) {

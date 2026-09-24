@@ -471,8 +471,9 @@ TEST_F(MetalSurfaceTest, APresentThatSpendsItsBoundDeclaresTheRootLostOnce) {
 }
 
 /// A consumer frame that reads a texture a gated producer renders is held on the consumer's queue
-/// behind the producer. Its present spends the bound, declares the root the two share lost, and
-/// that releases the held frame, so the consumer's queue drains and its teardown ends at once.
+/// behind the producer. Its present spends the bound and declares the root the two share lost,
+/// and that releases the held frame, so the consumer's queue drains and publishes the frame's
+/// completion. The consumer's teardown then ends at once on the lost root.
 TEST_F(MetalSurfaceTest, AFrameHeldBehindAHungProducerIsReleasedByItsPresentsLoss) {
   const auto rootLoss = std::make_shared<DeviceLostState>();
   device_ = MetalDevice::Create(MetalDevice::MemoryModel::Detected, kMaxBufferByteSize,
@@ -527,17 +528,18 @@ TEST_F(MetalSurfaceTest, AFrameHeldBehindAHungProducerIsReleasedByItsPresentsLos
   ASSERT_TRUE(rootLoss->lost.load()) << "the present that spent its bound declared nothing";
   EXPECT_EQ(rootLoss->timedOutSite.load(), DeviceLostWaitSite::Present);
 
-  const auto declared = std::chrono::steady_clock::now();
-  const auto releaseDeadline = declared + std::chrono::seconds(2);
+  const auto releaseDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   while (device_->completedSerial() < frameSerial &&
          std::chrono::steady_clock::now() < releaseDeadline) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   EXPECT_GE(device_->completedSerial(), frameSerial)
       << "the consumer's frame is still held behind the producer after the loss";
+
+  const auto teardownStart = std::chrono::steady_clock::now();
   device_.reset();
-  EXPECT_LT(std::chrono::steady_clock::now() - declared, std::chrono::seconds(2))
-      << "the consumer's teardown waited behind its held frame";
+  EXPECT_LT(std::chrono::steady_clock::now() - teardownStart, std::chrono::seconds(1))
+      << "the consumer's teardown waited on the lost root";
   producer->resumeSubmissionsForTest();
 }
 

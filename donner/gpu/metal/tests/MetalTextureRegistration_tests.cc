@@ -310,8 +310,9 @@ TEST_F(MetalTextureRegistrationTest, AQueuedWriteRefusesRegistrationUntilItIsSub
 }
 
 /// A consumer's work held on the device behind a producer's is released when the root the two
-/// share is declared lost. A producer that stops answering must not leave the consumer's queue,
-/// and with it the consumer's own bounded waits and teardown, stuck behind that wait.
+/// share is declared lost: a producer that stops answering must not leave the consumer's queue
+/// stuck behind that wait, so the queue drains and publishes the read's completion. The
+/// consumer's bounded waits and its teardown end at once on the lost root.
 TEST_F(MetalTextureRegistrationTest, ADeclaredLossReleasesAConsumerWaitingOnTheDevice) {
   const auto rootLost = std::make_shared<DeviceLostState>();
   std::unique_ptr<MetalDevice> producer = MetalDevice::Create(
@@ -331,19 +332,25 @@ TEST_F(MetalTextureRegistrationTest, ADeclaredLossReleasesAConsumerWaitingOnTheD
       << "the read did not wait for the gated producer, so there is nothing to release";
 
   ASSERT_THAT(DeclareDeviceLost(*rootLost), IsTrue());
-  const auto declared = std::chrono::steady_clock::now();
-  EXPECT_THAT(consumer->waitForSerial(copied, 5.0), IsFalse())
-      << "a bounded wait on a lost root ends at once";
-  const auto releaseDeadline = declared + std::chrono::seconds(2);
+  // Whether the wait sees the released read complete or the loss first depends on scheduling, so
+  // only how long it takes is checked.
+  const auto waitStart = std::chrono::steady_clock::now();
+  static_cast<void>(consumer->waitForSerial(copied, 5.0));
+  EXPECT_THAT(std::chrono::steady_clock::now() - waitStart, Lt(std::chrono::seconds(1)))
+      << "a bounded wait on a lost root spent its budget";
+
+  const auto releaseDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   while (consumer->completedSerial() < copied &&
          std::chrono::steady_clock::now() < releaseDeadline) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   EXPECT_THAT(consumer->completedSerial(), Ge(copied))
       << "the consumer's read is still waiting on the device after the loss";
+
+  const auto teardownStart = std::chrono::steady_clock::now();
   consumer.reset();
-  EXPECT_THAT(std::chrono::steady_clock::now() - declared, Lt(std::chrono::seconds(2)))
-      << "the consumer's teardown waited behind the released read";
+  EXPECT_THAT(std::chrono::steady_clock::now() - teardownStart, Lt(std::chrono::seconds(1)))
+      << "the consumer's teardown waited on the lost root";
   producer->resumeSubmissionsForTest();
 }
 
