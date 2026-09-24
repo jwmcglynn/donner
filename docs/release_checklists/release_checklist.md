@@ -18,6 +18,13 @@ the version number.
       compounds.
 - [ ] **Tests pass**. `bazel test //...` is green. The `donner_cc_test` variants cover the tiny
       (tiny_skia), text-full, and Geode lanes without separate `--config` invocations.
+- [ ] **Hosted Firefox presentation gate passes on the exact candidate commit**. A green
+      `bazel test //...` does not run the Firefox-only Splash-letter drag case. Require a successful
+      `Editor WASM` test job from that commit, including its `firefox-geode-resize` lane. Manually
+      dispatch the workflow while `main` still points to that commit if no exact-commit run exists.
+      The Bazel
+      `browser_matrix_tests` target checks that the hosted lane still selects the Splash case;
+      the hosted job executes it and fails when the lane fails.
 - [ ] **Fuzzers run**. Run all fuzz targets for a reasonable duration and check for new crashes.
 - [ ] **CMake build verified**. Build and test with the CMake path.
 - [ ] **Showcase demo generates and renders**. The v0.8 showcase must generate on demand from
