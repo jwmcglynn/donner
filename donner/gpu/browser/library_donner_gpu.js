@@ -247,6 +247,13 @@ var LibraryDonnerGpu = {
     installDevice: function(device) {
       DonnerGpu.device = device;
       DonnerGpu.queue = device.queue;
+      // An error raised outside any call, such as a validation error in recorded work, has no
+      // caller to return it to, so it is reported where the adapter's import reports its own.
+      device.onuncapturederror = function(event) {
+        var error = event && event.error;
+        console.error('[Geode/browser] Uncaptured error: ' +
+                      String(error && error.message ? error.message : error));
+      };
       // Loss is permanent, and the runtime refuses everything once it is observed, so the only
       // thing to do here is record it where the next call will see it - unless the device has been
       // let go since, and the loss describes a device nothing here names any more.
@@ -736,7 +743,12 @@ var LibraryDonnerGpu = {
 
   donner_gpu_max_texture_dimension_2d__deps: ['$DonnerGpu'],
   donner_gpu_max_texture_dimension_2d: function(handle) {
-    return 0;
+    var record = DonnerGpu.logicalFor(handle);
+    if (record === null || DonnerGpu.device === null || !DonnerGpu.device.limits) {
+      return 0;
+    }
+    var limit = DonnerGpu.device.limits.maxTextureDimension2D;
+    return typeof limit === 'number' && limit > 0 ? limit >>> 0 : 0;
   },
 
   donner_gpu_device_identity__deps: ['$DonnerGpu'],

@@ -585,6 +585,7 @@ std::shared_ptr<GeodeGpuRoot> SelectBrowserRoot(const GpuRootSelection& options,
   }
   GeodeGpuRootCapabilities capabilities;
   capabilities.backend = GpuBackendKind::Browser;
+  capabilities.maxTextureDimension2D = hold.result()->maxTextureDimension2D();
   return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState),
                                         std::shared_ptr<const void>(std::move(hold).result()));
 #else

@@ -380,7 +380,11 @@ RcString BrowserDevice::deviceLostReason() const {
 }
 
 uint32_t BrowserDevice::maxTextureDimension2D() const {
-  return 8192u;
+  // WebGPU guarantees this much on every device, so it is the one answer that cannot overstate a
+  // device whose limits the browser does not report.
+  constexpr uint32_t kGuaranteedMaxTextureDimension2D = 8192u;
+  const uint32_t reported = bridge_->maxTextureDimension2D();
+  return reported != 0 ? reported : kGuaranteedMaxTextureDimension2D;
 }
 
 bool BrowserDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
