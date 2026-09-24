@@ -40,7 +40,8 @@ test("standalone Geode wasm selects the browser backend and paints SVG pixels", 
     env: {
       ...process.env,
       DONNER_ACTUAL_PNG: actual,
-      DONNER_GOLDEN_PNG: resolve(golden!),
+      // The golden helper uses this path in diff filenames; keep the runfiles path short.
+      DONNER_GOLDEN_PNG: golden!,
     },
     stdio: "inherit",
     timeout: 10000,
