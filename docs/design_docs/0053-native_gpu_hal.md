@@ -10,7 +10,7 @@ Cross-device texture registration is implemented on Metal, the browser backend a
 transitional adapter. Native backend conformance, presentation cutover, the per-platform default
 flips, and dependency removal remain open.\
 **Created:** 2026-07-05\
-**Updated:** 2026-09-23\
+**Updated:** 2026-09-24\
 **Author:** Claude Fable 5.1\
 **Drafted by:** GPT-5.6 Sol
 
@@ -100,10 +100,12 @@ the native backend, and a separate change then flips that platform's default. Un
   the last submitted serial, and a Metal device reports failed work as the loss of the root it
   shares. Contexts hold the runtime device and count what it accepts and releases through its
   observer; the adapter accessor resolves only on the adapter.
-- On Linux, a native Vulkan root reports its physical device's own limits without opening a device
-  for them, and every Vulkan device over it shares the root's loss condition. Vulkan does not
-  register textures across devices yet, so snapshot capture and cross-context snapshot drawing
-  still fail on it ([#1407](https://github.com/jwmcglynn/donner/issues/1407)).
+- On Linux, a native Vulkan root reports its physical device's own limits without opening a
+  second device for the query. Runtime devices over one selected root share its instance, logical
+  device, graphics queue and loss condition, while each keeps its own handles and serials.
+  Vulkan does not register textures across runtime devices yet, so snapshot capture and
+  cross-context snapshot drawing still fail on it
+  ([#1407](https://github.com/jwmcglynn/donner/issues/1407)).
 - The Geode, renderer and GPU-shader fixtures run on whichever backend the process selects. Cases
   whose subject is the adapter, or wgpu objects an embedder hands over, select the adapter by
   name, run under any override, and log why when the process default is another backend. The
@@ -405,7 +407,7 @@ Backends:
 | -------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Transitional adapter | Implemented; one shared queue orders it    | Re-expresses the adapter's existing sibling registration; stale and foreign refusals keep their error types.                                                                                                                                                                                                                                                                                                            |
 | Metal                | Implemented; device-side shared-event wait | Separate command queues per runtime device over one `MTLDevice`.                                                                                                                                                                                                                                                                                                                                                        |
-| Vulkan               | Refused with `Unsupported`                 | Each runtime device opens its own `VkDevice`; sharing needs several runtime devices over one `VkDevice`, with a shared image-layout record and either one serialized queue or semaphore ordering.                                                                                                                                                                                                                       |
+| Vulkan               | Refused with `Unsupported`                 | Runtime devices over one selected root share a `VkDevice` and serialized queue; registration still needs a shared image-layout record and read-only aliases of the producer image.                                                                                                                                                                                                                       |
 | Browser              | Implemented; one shared queue orders it    | Snapshot capture opens a second runtime device over the same browser device on the producer's thread. Every runtime device in a worker runs over that worker's one `GPUDevice` and its queue, so a registration is a read-only alias of the same `GPUTexture`, ordered by submission order. WebGPU cannot share a texture across `GPUDevice`s, so textures never cross workers; worker-to-UI handoff stays CPU bitmaps. |
 
 Accounting: exporting, registering and waiting perform no allocation, bind group or submission on
