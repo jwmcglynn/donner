@@ -3471,6 +3471,11 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
   if (impl_->hasError()) {
     return GpuError{GpuErrorType::InvalidState, impl_->errorMessage()};
   }
+  // A root another device over it declared lost will not run the copy, so its fence would never
+  // signal and its objects would stay pending: refuse the upload before staging anything.
+  if (isLost()) {
+    return GpuError{GpuErrorType::DeviceLost, "writeTexture cannot upload: the device was lost"};
+  }
   Impl& impl = *impl_;
   Impl::TextureRecord* texture = FindRecord(impl.textures, slotIndex);
   if (texture == nullptr) {
