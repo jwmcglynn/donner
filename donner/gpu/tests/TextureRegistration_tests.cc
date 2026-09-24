@@ -695,6 +695,19 @@ TEST_F(TextureRegistrationTest, ASurfaceFrameIsExportedOnlyWhereItsReadersShareI
   EXPECT_THAT(producer_->abandonCurrentTexture(separate), IsOk());
 }
 
+/// A backend failure while exporting a surface frame keeps its own cause, rather than the
+/// separate-queue surface-frame refusal that applies only after a share exists.
+TEST_F(TextureRegistrationTest, AFailedSurfaceFrameExportReportsTheBackendFailure) {
+  int layer = 0;
+  SharingDevice failing(native_, SharingOptions{.refuseExport = true});
+  const Surface surface = ConfiguredSurface(failing, layer);
+  const SurfaceTexture frame = GetResultOrFail(failing.acquireCurrentTexture(surface));
+  EXPECT_THAT(
+      failing.exportTexture(frame.texture),
+      IsGpuErrorWithMessage(GpuErrorType::Unsupported, HasSubstr("test backend rejected export")));
+  EXPECT_THAT(failing.abandonCurrentTexture(surface), IsOk());
+}
+
 /// The surface takes a presented frame back without the retirement other textures go through,
 /// so its export has to be released there too. An export that outlives the present holds the
 /// frame's allocation and counts it as released by the producer, and the slot's next frame
