@@ -427,6 +427,7 @@ donner_cc_library(
                "//third_party/webgpu-cpp:webgpu_cpp",
            ] + select({
                "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
+               "@platforms//os:linux": ["//donner/gpu/vulkan:vulkan_device"],
                "//conditions:default": [],
            }) + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) +
            shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES) +
@@ -497,6 +498,7 @@ donner_cc_test(
         "//donner/svg/renderer/tests:rgba_test_matchers",
     ] + select({
         "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
+        "@platforms//os:linux": ["//donner/gpu/vulkan:vulkan_device"],
         "//conditions:default": [],
     }),
 )

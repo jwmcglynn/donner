@@ -2167,6 +2167,35 @@ struct VulkanDevice::Impl {
                                 BindGroupRecord& record, VkWriteDescriptorSet& write);
 };
 
+std::optional<VulkanDevice::SystemCapabilities> VulkanDevice::QuerySystemCapabilities() {
+  // Held like a creation: once a failed shutdown has closed creation, no new native object is
+  // made, a transient instance included.
+  Impl::AdmissionGate& gate = Impl::admissionGate();
+  const std::lock_guard admission(gate.mutex);
+  if (gate.closed) {
+    return std::nullopt;
+  }
+  const InstanceSetup setup = CreateInstance();
+  if (setup.loader == nullptr) {
+    return std::nullopt;
+  }
+  const VulkanApi& api = setup.loader->api();
+
+  // The same choice Create makes, so the limits are those of the device every Create opens.
+  std::optional<SystemCapabilities> capabilities;
+  VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+  uint32_t queueFamily = 0;
+  if (SelectGraphicsPhysicalDevice(api, setup.instance, physicalDevice, queueFamily)) {
+    VkPhysicalDeviceProperties properties = {};
+    api.vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+    capabilities =
+        SystemCapabilities{.maxTextureDimension2D = std::min(properties.limits.maxImageDimension2D,
+                                                             kMaxTextureDimension)};
+  }
+  api.vkDestroyInstance(setup.instance, nullptr);
+  return capabilities;
+}
+
 std::unique_ptr<VulkanDevice> VulkanDevice::Create(std::shared_ptr<DeviceLostState> lostState) {
   return CreateImpl(false, false, {}, std::move(lostState));
 }

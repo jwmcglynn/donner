@@ -38,6 +38,9 @@
 #if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
 #include "donner/gpu/metal/MetalDevice.h"
 #endif
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#include "donner/gpu/vulkan/VulkanDevice.h"
+#endif
 
 namespace donner::geode {
 
@@ -539,6 +542,63 @@ std::unique_ptr<gpu::Device> CreateNativeMetalDeviceOver(const GeodeGpuRoot& roo
 #endif
 }
 
+/// Selects the native Vulkan backend. Each runtime device over the root opens the physical device
+/// the Vulkan backend selects, so the root itself carries no handles - only the kind, the
+/// capabilities that device reports, and the loss condition its devices share, as a native Metal
+/// root does. A platform without that backend is refused rather than served by the transitional
+/// adapter, for the reason \ref SelectNativeMetalRoot gives.
+///
+/// @param options Caller-supplied inputs. A selection constrained to a wgpu surface is refused
+///   before its surface provider runs, because no native backend presents to a wgpu surface.
+/// @param lostState Loss condition every runtime device over this root shares.
+/// @return The selected root, or null for a surface-constrained selection, on a platform with no
+///   native Vulkan backend, or on a host with no Vulkan device.
+std::shared_ptr<GeodeGpuRoot> SelectNativeVulkanRoot(
+    const GpuRootSelection& options, std::shared_ptr<gpu::DeviceLostState> lostState) {
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+  if (options.compatibleSurface) {
+    std::fprintf(stderr,
+                 "[Geode/vulkan] Selection constrained by a wgpu surface is not served by the "
+                 "native backend.\n");
+    return nullptr;
+  }
+  // Asked of the physical device without opening a logical device on it, so selecting a root
+  // costs no device of its own.
+  const std::optional<gpu::vulkan::VulkanDevice::SystemCapabilities> vulkan =
+      gpu::vulkan::VulkanDevice::QuerySystemCapabilities();
+  if (!vulkan.has_value()) {
+    std::fprintf(stderr, "[Geode/vulkan] No Vulkan device available.\n");
+    return nullptr;
+  }
+  GeodeGpuRootCapabilities capabilities;
+  capabilities.backend = GpuBackendKind::NativeVulkan;
+  capabilities.maxTextureDimension2D = vulkan->maxTextureDimension2D;
+  capabilities.isVulkan = true;
+  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState));
+#else
+  (void)options;
+  (void)lostState;
+  std::fprintf(stderr, "[Geode] No native Vulkan backend on this platform.\n");
+  return nullptr;
+#endif
+}
+
+/// Opens one runtime device on the native Vulkan backend \p root names.
+/// @param root Root whose loss condition the device shares.
+/// @return The device, or null when no Vulkan device could be opened.
+std::unique_ptr<gpu::Device> CreateNativeVulkanDeviceOver(const GeodeGpuRoot& root) {
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+  std::unique_ptr<gpu::Device> device = gpu::vulkan::VulkanDevice::Create(root.lostState());
+  if (device == nullptr) {
+    std::fprintf(stderr, "[Geode/vulkan] No Vulkan device available.\n");
+  }
+  return device;
+#else
+  (void)root;
+  return nullptr;
+#endif
+}
+
 }  // namespace
 
 std::size_t OutstandingSelectionInstances() {
@@ -587,6 +647,7 @@ std::string_view GpuBackendKindName(GpuBackendKind kind) {
   switch (kind) {
     case GpuBackendKind::TransitionalWgpu: return "transitional wgpu adapter";
     case GpuBackendKind::NativeMetal: return "native Metal";
+    case GpuBackendKind::NativeVulkan: return "native Vulkan";
   }
   UTILS_UNREACHABLE();
 }
@@ -624,10 +685,13 @@ gpu::Result<GpuBackendKind> ParseBackendRequest(std::string_view request) {
   if (StringUtils::EqualsLowercase(request, "metal"sv)) {
     return GpuBackendKind::NativeMetal;
   }
-  return gpu::GpuError{
-      gpu::GpuErrorType::InvalidDescriptor,
-      std::format("DONNER_GPU_BACKEND={} names no GPU backend; accepted values: wgpu, metal",
-                  request)};
+  if (StringUtils::EqualsLowercase(request, "vulkan"sv)) {
+    return GpuBackendKind::NativeVulkan;
+  }
+  return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor,
+                       std::format("DONNER_GPU_BACKEND={} names no GPU backend; accepted values: "
+                                   "wgpu, metal, vulkan",
+                                   request)};
 }
 
 /// Halts on a backend request this process cannot serve. A refused selection would read to its
@@ -782,6 +846,23 @@ std::shared_ptr<GeodeGpuRoot> SelectTransitionalRoot(
   return std::make_shared<GeodeGpuRoot>(std::move(handles), capabilities, std::move(lostState));
 }
 
+/// Selects a root of \p kind, or null when that backend cannot be selected here.
+/// @param kind Backend the selection resolved to.
+/// @param selection Caller-supplied inputs.
+/// @param lostState Loss condition every runtime device over the root shares.
+std::shared_ptr<GeodeGpuRoot> SelectRootOfKind(GpuBackendKind kind,
+                                               const GpuRootSelection& selection,
+                                               std::shared_ptr<gpu::DeviceLostState> lostState) {
+  switch (kind) {
+    case GpuBackendKind::TransitionalWgpu:
+      return SelectTransitionalRoot(selection, std::move(lostState));
+    case GpuBackendKind::NativeMetal: return SelectNativeMetalRoot(selection, std::move(lostState));
+    case GpuBackendKind::NativeVulkan:
+      return SelectNativeVulkanRoot(selection, std::move(lostState));
+  }
+  UTILS_UNREACHABLE();
+}
+
 }  // namespace
 
 std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
@@ -814,9 +895,7 @@ std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
   }
 
   auto lostState = std::make_shared<gpu::DeviceLostState>();
-  std::shared_ptr<GeodeGpuRoot> root =
-      kind == GpuBackendKind::NativeMetal ? SelectNativeMetalRoot(selection, std::move(lostState))
-                                          : SelectTransitionalRoot(selection, std::move(lostState));
+  std::shared_ptr<GeodeGpuRoot> root = SelectRootOfKind(kind, selection, std::move(lostState));
   if (root == nullptr) {
     if (source == BackendRequestSource::Environment && !surfaceProviderGaveUp) {
       HaltOnUnservableBackendRequest(
@@ -851,6 +930,9 @@ GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
   UTILS_RELEASE_ASSERT(root != nullptr);
   if (root->capabilities().backend == GpuBackendKind::NativeMetal) {
     return GeodeRuntimeDevice{.device = CreateNativeMetalDeviceOver(*root)};
+  }
+  if (root->capabilities().backend == GpuBackendKind::NativeVulkan) {
+    return GeodeRuntimeDevice{.device = CreateNativeVulkanDeviceOver(*root)};
   }
   auto adapter = std::make_unique<GeodeWgpuAdapterDevice>(std::move(root));
   GeodeWgpuAdapterDevice* const transitionalAdapter = adapter.get();

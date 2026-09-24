@@ -50,6 +50,8 @@ enum class GpuBackendKind : uint8_t {
   TransitionalWgpu,
   /// The native Metal backend of the Donner GPU runtime. Apple platforms only.
   NativeMetal,
+  /// The native Vulkan backend of the Donner GPU runtime. Linux only.
+  NativeVulkan,
 };
 
 /// Human-readable name of \p kind, for diagnostics.
@@ -196,7 +198,7 @@ struct GpuRootSelection {
  * Selects a backend root: the backend a caller names, or the process default. For the
  * transitional adapter it creates an instance, requests an adapter and a device, and takes the
  * default queue; for the native Metal backend it asks the system Metal device for its
- * capabilities.
+ * capabilities, and for the native Vulkan backend the physical device a Vulkan device selects.
  *
  * The one selection every caller shares. Headless, editor and embedded construction differ only
  * in \p options, so the adapter retries under load, the backend requests, the force-fallback
@@ -261,7 +263,8 @@ GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
 
 /**
  * The backend a selection that names none builds from: the kind `DONNER_GPU_BACKEND` names
- * (`wgpu` or `metal`, in any letter case), or the transitional adapter when it is unset or empty.
+ * (`wgpu`, `metal` or `vulkan`, in any letter case), or the transitional adapter when it is unset
+ * or empty.
  *
  * One process-wide request so a suite can be run end to end against a backend that is not yet the
  * default, without a second copy of every target.
