@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -215,6 +216,53 @@ TEST(HeadlessDevicePool, AFullCacheNeverDestroysAnotherThreadsBoundDevice) {
       << "the cache destroyed another thread's bound device on this thread";
   EXPECT_THAT(cache.log->threadThatDestroyed(ownSerial), std::optional(std::this_thread::get_id()));
   EXPECT_THAT(cache.pool.idleCount(), 1u);
+}
+
+TEST(HeadlessDevicePool, AReleaseGivesUpEveryDeviceItMayDestroyUntilTheCacheIsBackAtItsBound) {
+  FakePool cache(1);
+  std::promise<void> ownerReleasedFirst;
+  std::promise<void> foreignDeviceReleased;
+  std::shared_future<void> releaseSecond = foreignDeviceReleased.get_future().share();
+  std::thread::id ownerThread;
+  int firstSerial = 0;
+  int secondSerial = 0;
+  std::thread owner([&] {
+    ownerThread = std::this_thread::get_id();
+    std::shared_ptr<FakeDevice> first = cache.pool.acquire();
+    std::shared_ptr<FakeDevice> second = cache.pool.acquire();
+    ASSERT_THAT(second, testing::NotNull());
+    first->bound = true;
+    second->bound = true;
+    firstSerial = first->serial;
+    secondSerial = second->serial;
+    first.reset();
+    ownerReleasedFirst.set_value();
+    releaseSecond.wait();
+    second.reset();
+  });
+  ownerReleasedFirst.get_future().wait();
+
+  // A third thread's bound device let go here, where it cannot be destroyed, takes the cache past
+  // its bound.
+  std::shared_ptr<FakeDevice> foreign;
+  std::thread third([&] {
+    foreign = cache.pool.acquire();
+    ASSERT_THAT(foreign, testing::NotNull());
+    foreign->bound = true;
+  });
+  third.join();
+  const int foreignSerial = foreign->serial;
+  foreign.reset();
+  ASSERT_THAT(cache.pool.idleCount(), 2u);
+
+  // The owner's next release gives up both of its devices, not only the oldest, so the excess does
+  // not linger past a release that could have cleared it.
+  foreignDeviceReleased.set_value();
+  owner.join();
+  EXPECT_THAT(cache.pool.idleCount(), 1u);
+  EXPECT_THAT(cache.log->threadThatDestroyed(firstSerial), std::optional(ownerThread));
+  EXPECT_THAT(cache.log->threadThatDestroyed(secondSerial), std::optional(ownerThread));
+  EXPECT_THAT(cache.log->threadThatDestroyed(foreignSerial).has_value(), testing::IsFalse());
 }
 
 TEST(HeadlessDevicePool, AFactoryThatOpensNothingHandsOutNothing) {

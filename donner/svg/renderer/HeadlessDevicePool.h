@@ -24,12 +24,17 @@ namespace donner::svg::details {
  * A device bound to the thread that opened it, as a browser device is to its worker, is handed
  * back only to that thread, and only that thread may destroy it: a browser device destroyed
  * elsewhere cannot release what it made. Any other device goes to, and may be destroyed by,
- * whichever thread asks. A full cache therefore gives up the oldest idle device the releasing
- * thread may destroy, which is the device just released when every older one belongs to another
- * thread. An idle device bound to a thread that has since exited can never be handed out again,
- * which is why the oldest goes rather than the newest. The cache holds more than its bound only
- * while every idle device belongs to a thread other than the one releasing, which that release
- * cannot destroy.
+ * whichever thread asks. A release that leaves the cache over its bound therefore gives up idle
+ * devices the releasing thread may destroy, oldest first, until the cache is back at its bound or
+ * none is left that this thread may destroy, which can include the device just released. The
+ * cache holds more than its bound only while the excess belongs to threads other than the one
+ * releasing.
+ *
+ * An idle device bound to a thread that has since exited can be handed out to, and destroyed by,
+ * no live thread, so it is never given up and keeps its slot for the life of the cache. Once such
+ * devices fill the bound, every release gives up the device it released and the cache stops
+ * caching; the waste is bounded by those stranded devices, at most one bound's worth per exited
+ * thread that left any. Reclaiming them would need the exited thread's own teardown.
  *
  * @tparam Device Device type. It provides `bool isDeviceLost() const` and
  *   `bool isBoundToCreatingThread() const`.
@@ -134,26 +139,25 @@ private:
     Idle idle;                 //!< Device handed out.
   };
 
-  /// Keeps \p released for a later \ref acquire unless it is lost. When the cache is full it gives
-  /// up the oldest idle device this thread may destroy, which may be \p released itself, and
-  /// destroys it here, outside the lock.
+  /// Keeps \p released for a later \ref acquire unless it is lost. While the cache is over its
+  /// bound it gives up idle devices this thread may destroy, oldest first, which may include
+  /// \p released itself, and destroys them here, outside the lock.
   /// @param released Device a lease released.
   void release(Idle released) {
     if (!released.device || released.device->isDeviceLost()) {
       return;
     }
     const uint64_t here = ThisThreadToken();
-    Idle givenUp;
+    std::vector<Idle> givenUp;
     {
       const std::lock_guard lock(mutex_);
       idle_.push_back(std::move(released));
-      if (idle_.size() > maxIdleDevices_) {
-        for (auto it = idle_.begin(); it != idle_.end(); ++it) {
-          if (it->usableFrom(here)) {
-            givenUp = std::move(*it);
-            idle_.erase(it);
-            break;
-          }
+      for (auto it = idle_.begin(); idle_.size() > maxIdleDevices_ && it != idle_.end();) {
+        if (it->usableFrom(here)) {
+          givenUp.push_back(std::move(*it));
+          it = idle_.erase(it);
+        } else {
+          ++it;
         }
       }
     }
