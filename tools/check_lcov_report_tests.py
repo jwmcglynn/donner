@@ -2,6 +2,7 @@
 """Tests for check_lcov_report.py."""
 
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -51,6 +52,23 @@ end_of_record
 
         with self.assertRaisesRegex(ValueError, "no executable line data"):
             check_lcov_report.validate_lcov_report(report)
+
+    def test_rejects_private_source_without_echoing_it(self) -> None:
+        private_source = "/private/runner-host/secret/Foo.cc"
+        report = self._write_report(
+            f"SF:{private_source}\nDA:10,1\nLF:1\nLH:1\nend_of_record\n"
+        )
+
+        result = subprocess.run(
+            [sys.executable, str(Path(check_lcov_report.__file__)), str(report)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(private_source, result.stdout + result.stderr)
+        self.assertIn("non-public source path", result.stderr)
 
     def _write_report(self, contents: str) -> Path:
         report = Path(self._tmpdir.name) / "report.dat"

@@ -4,6 +4,7 @@
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import sys
 
 
@@ -16,6 +17,31 @@ class LcovStats:
     line_entries: int
     found_lines: int
     hit_lines: int
+
+
+def _validate_source_path(source: str) -> None:
+    source_path = Path(source)
+    if (
+        not re.fullmatch(r"donner/[A-Za-z0-9_./+\-]+", source)
+        or source_path.is_absolute()
+        or ".." in source_path.parts
+    ):
+        raise ValueError("Coverage report contains a non-public source path")
+
+
+def _line_counters(line: str) -> tuple[int, int, int, int, int]:
+    if line.startswith("SF:"):
+        _validate_source_path(line[3:].strip())
+        return 0, 1, 0, 0, 0
+    if line.startswith("DA:"):
+        return 0, 0, 1, 0, 0
+    if line.startswith("LF:"):
+        return 0, 0, 0, _parse_counter(line, "LF:"), 0
+    if line.startswith("LH:"):
+        return 0, 0, 0, 0, _parse_counter(line, "LH:")
+    if line == "end_of_record":
+        return 1, 0, 0, 0, 0
+    return 0, 0, 0, 0, 0
 
 
 def collect_lcov_stats(path: Path) -> LcovStats:
@@ -35,17 +61,12 @@ def collect_lcov_stats(path: Path) -> LcovStats:
 
     with path.open(encoding="utf-8", errors="replace") as lcov_file:
         for raw_line in lcov_file:
-            line = raw_line.rstrip("\n")
-            if line.startswith("SF:"):
-                source_files += 1
-            elif line.startswith("DA:"):
-                line_entries += 1
-            elif line.startswith("LF:"):
-                found_lines += _parse_counter(line, "LF:")
-            elif line.startswith("LH:"):
-                hit_lines += _parse_counter(line, "LH:")
-            elif line == "end_of_record":
-                records += 1
+            record, source, line_entry, found, hit = _line_counters(raw_line.rstrip("\n"))
+            records += record
+            source_files += source
+            line_entries += line_entry
+            found_lines += found
+            hit_lines += hit
 
     return LcovStats(
         records=records,
@@ -87,15 +108,6 @@ def _parse_counter(line: str, prefix: str) -> int:
         return 0
 
 
-def _print_report_preview(path: Path, max_lines: int = 60) -> None:
-    print("First LCOV lines:", file=sys.stderr)
-    with path.open(encoding="utf-8", errors="replace") as lcov_file:
-        for index, line in enumerate(lcov_file):
-            if index >= max_lines:
-                break
-            print(line.rstrip("\n"), file=sys.stderr)
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path, help="LCOV report to validate")
@@ -108,7 +120,6 @@ def main() -> int:
         return 1
     except ValueError as error:
         print(f"ERROR: {error}", file=sys.stderr)
-        _print_report_preview(args.report)
         return 1
 
     print(

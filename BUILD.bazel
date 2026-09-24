@@ -72,6 +72,7 @@ exports_files(
         "geode_splash.svg",
         "BUILD.bazel",
         "MODULE.bazel",
+        "codecov.yml",
         ".github/actions/apt-install/action.yml",
         ".github/actions/re-turnstile/action.yml",
         ".github/actions/re-turnstile/admission.py",
