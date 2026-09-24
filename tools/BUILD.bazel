@@ -265,6 +265,18 @@ py_test(
 )
 
 py_library(
+    name = "bcr_dependency_closure",
+    srcs = ["bcr_dependency_closure.py"],
+)
+
+py_test(
+    name = "bcr_dependency_closure_tests",
+    size = "small",
+    srcs = ["bcr_dependency_closure_tests.py"],
+    deps = [":bcr_dependency_closure"],
+)
+
+py_library(
     name = "bcr_release",
     srcs = ["bcr_release.py"],
     deps = [
