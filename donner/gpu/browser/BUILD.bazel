@@ -18,12 +18,14 @@ donner_cc_library(
         "BrowserBridge.cc",
         "BrowserDevice.cc",
         "BrowserObjectTable.cc",
+        "BrowserShareReleaseQueue.cc",
         "BrowserWireCodes.cc",
     ],
     hdrs = [
         "BrowserBridge.h",
         "BrowserDevice.h",
         "BrowserObjectTable.h",
+        "BrowserShareReleaseQueue.h",
         "BrowserWireCodes.h",
     ],
     visibility = donner_internal_visibility(),
@@ -131,6 +133,7 @@ donner_cc_test(
     srcs = [
         "tests/BrowserDevice_tests.cc",
         "tests/BrowserObjectTable_tests.cc",
+        "tests/BrowserShareReleaseQueue_tests.cc",
         "tests/BrowserSubRectangleUpload_tests.cc",
         "tests/BrowserWireCodes_tests.cc",
     ],

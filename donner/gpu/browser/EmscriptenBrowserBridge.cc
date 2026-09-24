@@ -1,10 +1,15 @@
 #include "donner/gpu/browser/EmscriptenBrowserBridge.h"
 
 #include <emscripten/emscripten.h>
+#ifdef __EMSCRIPTEN_PTHREADS__
+#include <emscripten/proxying.h>
+#include <pthread.h>
+#endif
 
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -15,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/gpu/browser/BrowserShareReleaseQueue.h"
 #include "donner/gpu/browser/BrowserWireCodes.h"
 
 namespace donner::gpu::browser {
@@ -194,16 +200,79 @@ std::shared_ptr<const void> WorkerDeviceIdentity(uint32_t device) {
 }
 
 /**
+ * The share releases other threads posted for the calling thread, which owns the shares it made.
+ *
+ * Made on the thread's first use and closed when the thread exits, so a release posted after that
+ * is refused and does nothing. On a thread-enabled build a post also wakes the owner through the
+ * system proxying queue, so the release runs the next time the owner returns to its event loop or
+ * hands the thread to the browser, even if it makes no bridge call before then.
+ */
+class ThreadShareReleases {
+public:
+  ThreadShareReleases()
+      : queue_(std::make_shared<BrowserShareReleaseQueue>())
+#ifdef __EMSCRIPTEN_PTHREADS__
+        ,
+        thread_(pthread_self())
+#endif
+  {
+  }
+
+  /// Closes the queue as the thread exits: a post that arrives afterwards finds it closed.
+  ~ThreadShareReleases() { queue_->close(); }
+
+  ThreadShareReleases(const ThreadShareReleases&) = delete;
+  ThreadShareReleases& operator=(const ThreadShareReleases&) = delete;
+
+  /// The calling thread's queue.
+  static ThreadShareReleases& ForThisThread() {
+    thread_local ThreadShareReleases releases;
+    return releases;
+  }
+
+  /// The queue, for a share made here to post into from elsewhere.
+  const std::shared_ptr<BrowserShareReleaseQueue>& queue() const { return queue_; }
+
+#ifdef __EMSCRIPTEN_PTHREADS__
+  /// The thread that owns the queue, for waking it.
+  pthread_t thread() const { return thread_; }
+#endif
+
+private:
+  std::shared_ptr<BrowserShareReleaseQueue> queue_;
+#ifdef __EMSCRIPTEN_PTHREADS__
+  pthread_t thread_;
+#endif
+};
+
+/// Runs every share release other threads posted for the calling thread.
+void DrainThreadShareReleases() {
+  for (const BrowserShareReleaseQueue::Release& release :
+       ThreadShareReleases::ForThisThread().queue()->takeAll()) {
+    donner_gpu_release_texture_share(release.producer, release.share);
+  }
+}
+
+#ifdef __EMSCRIPTEN_PTHREADS__
+/// Proxied to an owner thread after a post, so it drains without waiting for its next bridge call.
+/// Reads the queue of whichever thread runs it, so it cannot reach a queue that has gone.
+void DrainThreadShareReleasesProxied(void* /*unused*/) {
+  DrainThreadShareReleases();
+}
+#endif
+
+/**
  * A texture this worker's library holds for the other logical devices over one browser device.
  *
  * Releasing it lets the library go of the texture, which it destroys then if the producer has
  * already released its own identifier. Browser objects belong to the worker that made them, so the
- * release happens only on the thread that made the share. One dropped on another thread keeps its
- * texture until the last logical device over the browser device is released, which destroys every
- * texture a share still holds. The release names the logical device that made the share as well.
- * A thread identifier can be reused once its thread has exited, so a release can run on a later
- * thread of another worker, whose share numbers are its own; the producer's handle is unique
- * across workers, so none of that worker's shares answers to it.
+ * release runs only on the thread that made the share: one let go there releases at once, and one
+ * let go on another thread posts its release to the owner's queue, which the owner drains the next
+ * time it yields to the browser, makes a share call or runs its proxied work. If the owner thread
+ * has exited, its queue is closed and the release does nothing; the worker's browser state went
+ * with it. The release names the logical device that made the share as well: share numbers are
+ * each worker's own while logical-device handles are unique across workers, so a release run in
+ * the wrong worker finds no share of that producer there.
  */
 class EmscriptenSharedTexture final : public BrowserSharedTexture {
 public:
@@ -215,13 +284,31 @@ public:
       : identity_(std::move(identity)),
         producer_(producer),
         share_(share),
-        ownerThread_(std::this_thread::get_id()) {}
+        ownerThread_(std::this_thread::get_id()),
+        ownerReleases_(ThreadShareReleases::ForThisThread().queue())
+#ifdef __EMSCRIPTEN_PTHREADS__
+        ,
+        ownerPthread_(ThreadShareReleases::ForThisThread().thread())
+#endif
+  {
+  }
 
-  /// Destructor; releases the share on the thread that made it.
+  /// Destructor; releases the share on the thread that made it, or posts the release there.
   ~EmscriptenSharedTexture() override {
     if (std::this_thread::get_id() == ownerThread_) {
       donner_gpu_release_texture_share(producer_, share_);
+      return;
     }
+    std::function<void()> wake;
+#ifdef __EMSCRIPTEN_PTHREADS__
+    const pthread_t owner = ownerPthread_;
+    wake = [owner] {
+      emscripten_proxy_async(emscripten_proxy_get_system_queue(), owner,
+                             &DrainThreadShareReleasesProxied, nullptr);
+    };
+#endif
+    // A queue the owner closed as it exited refuses the post, and the release does nothing.
+    (void)ownerReleases_->post({.producer = producer_, .share = share_}, wake);
   }
 
   BrowserTextureShareId shareId() const override { return share_; }
@@ -232,6 +319,10 @@ private:
   uint32_t producer_;
   BrowserTextureShareId share_;
   std::thread::id ownerThread_;
+  std::shared_ptr<BrowserShareReleaseQueue> ownerReleases_;
+#ifdef __EMSCRIPTEN_PTHREADS__
+  pthread_t ownerPthread_;
+#endif
 };
 
 /// Translates a status the browser side returned. A code this protocol assigns no meaning becomes
@@ -324,6 +415,9 @@ EmscriptenBrowserBridge::EmscriptenBrowserBridge()
     : logicalDevice_(gNextLogicalDevice.fetch_add(1, std::memory_order_relaxed)) {}
 
 EmscriptenBrowserBridge::~EmscriptenBrowserBridge() {
+  // Releases other threads posted for this one run first, while this logical device still keeps
+  // the browser device, and the shares they name, open.
+  DrainThreadShareReleases();
   // Release this logical device's state and nothing else: another logical device in this worker,
   // such as the renderer a capture context sat beside, goes on with its own. The library lets the
   // browser device go once no logical device over it is left, so a later bridge then starts from
@@ -386,6 +480,7 @@ BridgeStatus EmscriptenBrowserBridge::shareTexture(
   if (sharedDeviceIdentity() == nullptr) {
     return BridgeStatus::NotOwner;
   }
+  DrainThreadShareReleases();
   unsigned int share = 0;
   const BridgeStatus status =
       StatusFromBrowser(donner_gpu_share_texture(logicalDevice_, textureId, &share));
@@ -399,6 +494,7 @@ BridgeStatus EmscriptenBrowserBridge::shareTexture(
 
 BridgeStatus EmscriptenBrowserBridge::registerSharedTexture(BrowserObjectId id,
                                                             const BrowserSharedTexture& shared) {
+  DrainThreadShareReleases();
   return StatusFromBrowser(
       donner_gpu_register_shared_texture(logicalDevice_, id, shared.shareId()));
 }
@@ -722,6 +818,9 @@ void EmscriptenBrowserBridge::yieldToBrowser(double seconds) {
     milliseconds = kMaxSleepMilliseconds;
   }
   emscripten_sleep(static_cast<unsigned int>(milliseconds));
+  // Handing the thread over is where the owner runs the share releases other threads posted for
+  // it, so a release let go elsewhere waits at most until the next wait here.
+  DrainThreadShareReleases();
 }
 
 BridgeStatus EmscriptenBrowserBridge::mappedBytes(BrowserObjectId mappingId,

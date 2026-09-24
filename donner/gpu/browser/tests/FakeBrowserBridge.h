@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "donner/gpu/browser/BrowserBridge.h"
+#include "donner/gpu/browser/BrowserShareReleaseQueue.h"
 #include "donner/gpu/browser/BrowserWireCodes.h"
 
 namespace donner::gpu::browser {
@@ -109,6 +110,18 @@ public:
   /// Number of shares the device still holds.
   [[nodiscard]] size_t liveShares() const { return shares_.size(); }
 
+  /// Releases a share let go on another thread posted for this device's worker, which runs them
+  /// whenever a logical device over it hands the thread to the browser.
+  const std::shared_ptr<BrowserShareReleaseQueue> shareReleases =
+      std::make_shared<BrowserShareReleaseQueue>();
+
+  /// Runs every release posted to \ref shareReleases, as the owner does when it yields.
+  void drainShareReleases() {
+    for (const BrowserShareReleaseQueue::Release& release : shareReleases->takeAll()) {
+      releaseShare(release.share);
+    }
+  }
+
 private:
   /// A texture held for the other logical devices.
   struct Share {
@@ -126,7 +139,8 @@ private:
 /// A share the fake browser device made, released on that device when the runtime drops it.
 ///
 /// Like the browser side's, it belongs to the worker that made it: a drop on the thread that made
-/// the share releases it there, and a drop on any other thread does not reach the device.
+/// the share releases it there, and a drop on any other thread posts the release for that worker,
+/// which runs it the next time it yields.
 class FakeSharedTexture final : public BrowserSharedTexture {
 public:
   /// Constructs the share \p share of \p gpuDevice. @param gpuDevice Device the share belongs to.
@@ -134,10 +148,13 @@ public:
   FakeSharedTexture(std::shared_ptr<FakeBrowserGpuDevice> gpuDevice, BrowserTextureShareId share)
       : gpuDevice_(std::move(gpuDevice)), share_(share), ownerThread_(std::this_thread::get_id()) {}
 
-  /// Destructor; releases the share on its device when dropped on the thread that made it.
+  /// Destructor; releases the share on its device, or posts the release for the thread that made
+  /// the share when dropped on another.
   ~FakeSharedTexture() override {
     if (std::this_thread::get_id() == ownerThread_) {
       gpuDevice_->releaseShare(share_);
+    } else {
+      gpuDevice_->shareReleases->post({.producer = 0, .share = share_});
     }
   }
 
@@ -746,6 +763,9 @@ public:
   void yieldToBrowser(double seconds) override {
     ++yieldCount;
     yieldedSeconds += seconds;
+    // The owner runs the share releases other threads posted for it whenever it hands the thread
+    // over, as the browser side's owner does.
+    gpuDevice->drainShareReleases();
     // A browser would settle promises here. The fake stands in for that by letting a test arrange
     // what the next state is before the wait looks again.
     if (onYield) {

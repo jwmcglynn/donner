@@ -195,9 +195,10 @@ using BrowserTextureShareId = uint32_t;
  * browser texture lives at least that long: the producer releasing its own identifier does not
  * destroy a texture a share still holds, and the implementation lets the browser side go of it when
  * this object is destroyed. Browser objects belong to the worker that obtained the device, so that
- * release happens only on the thread that made the share. One dropped elsewhere keeps its texture
- * until the browser device goes with the last logical device over it, which destroys every texture
- * a share still holds.
+ * release runs only on the thread that made the share: one destroyed elsewhere hands its release to
+ * that thread, which runs it the next time it yields to the browser. A share whose thread has
+ * exited goes with its browser device, which destroys every texture a share still holds when the
+ * last logical device over it is released.
  */
 class BrowserSharedTexture : public ExportedTextureBacking {
 public:

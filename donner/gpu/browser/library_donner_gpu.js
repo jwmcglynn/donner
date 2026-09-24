@@ -23,9 +23,10 @@
  * texture. The share holds it: the producer releasing its identifier does not destroy a texture a
  * share still holds, and releasing the share destroys it then if the producer already has. Only the
  * logical device that made a share releases it, and a share names the browser device it was made
- * on. Shares go with that browser device, which destroys the textures they still hold, so a share
- * whose holder could not release it keeps its texture only until then, and a later device finds
- * nothing under its number.
+ * on. The runtime hands a release made on another thread to the one that made the share, so a
+ * share is released here when its last holder goes. Shares also go with their browser device,
+ * which destroys the textures they still hold, so a share whose owning thread has exited keeps its
+ * texture only until then, and a later device finds nothing under its number.
  *
  * One check is deliberately not mirrored here: the runtime refuses to destroy a texture that is
  * some surface's frame, because the canvas owns that texture. Answering the same question on this
@@ -259,9 +260,9 @@ var LibraryDonnerGpu = {
     },
 
     // Lets the browser device go once no logical device is left over it. The shares go with it: no
-    // logical device is left to register one, and a holder dropped on another thread could never
-    // reach this worker to release its share, so the textures they still hold are destroyed here
-    // rather than kept for the life of the worker. A frame is the canvas's, and is left to it.
+    // logical device is left to register one, and a share whose owning thread exited before its
+    // holder let go was never released, so the textures they still hold are destroyed here rather
+    // than kept for the life of the worker. A frame is the canvas's, and is left to it.
     releaseSharedDevice: function() {
       DonnerGpu.shares.forEach(function(held) {
         if (!held.canvasOwned) {
