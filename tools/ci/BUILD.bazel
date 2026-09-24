@@ -7,6 +7,12 @@ exports_files([
 
 # Manual suites select existing tests without adding new wildcard configurations.
 test_suite(
+    name = "image_loader_production_soak",
+    tags = ["manual"],
+    tests = ["//donner/svg/resources:image_loader_production_fuzzer_soak"],
+)
+
+test_suite(
     name = "editor_geode",
     tags = ["manual"],
     tests = [

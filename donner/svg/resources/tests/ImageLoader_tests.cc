@@ -3,12 +3,15 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include "donner/base/tests/Runfiles.h"
 #include "donner/svg/resources/NullResourceLoader.h"
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
@@ -52,8 +55,9 @@ std::vector<uint8_t> PngHeaderWithDimensions(int width, int height) {
 }
 
 void ExpectImageLoaderError(const ImageLoader::Result& result, UrlLoaderError error) {
-  ASSERT_TRUE(std::holds_alternative<UrlLoaderError>(result));
-  EXPECT_EQ(std::get<UrlLoaderError>(result), error);
+  const auto* actual = std::get_if<UrlLoaderError>(&result);
+  ASSERT_NE(actual, nullptr) << "Result alternative index: " << result.index();
+  EXPECT_EQ(*actual, error);
 }
 
 TEST(ImageLoader, CorruptRasterDataUrlReturnsDataCorrupt) {
@@ -210,6 +214,52 @@ TEST(ImageLoader, RejectsDecodedImageBeforeAllocationWhenOverConfiguredLimit) {
   ImageLoader imageLoader(resourceLoader, UrlLoader::kDefaultMaximumResourceSize, nullptr, 3);
 
   ExpectImageLoaderError(imageLoader.fromUri("one-pixel.png"), UrlLoaderError::ResourceTooLarge);
+}
+
+TEST(ImageLoader, RejectsTinyGifWithProductionDecodeAmplification) {
+  const std::string path = Runfiles::instance().Rlocation(
+      "donner/svg/resources/tests/image_loader_corpus/regression-gif-declared-canvas.gif");
+  std::ifstream input(path, std::ios::binary);
+  ASSERT_TRUE(input.is_open()) << path;
+  const std::vector<uint8_t> gif(std::istreambuf_iterator<char>{input}, {});
+  ASSERT_EQ(gif.size(), 77u);
+
+  StaticResourceLoader resourceLoader(gif);
+  ImageLoader imageLoader(resourceLoader);
+  ExpectImageLoaderError(imageLoader.fromUri("declared-canvas.gif"),
+                         UrlLoaderError::ResourceTooLarge);
+}
+
+TEST(ImageLoader, AmplificationBudgetDoesNotRoundUpToConfiguredLimit) {
+  std::vector<uint8_t> png = PngHeaderWithDimensions(513, 512);
+  png.resize(256, 0);
+  StaticResourceLoader resourceLoader(png);
+  ImageLoader imageLoader(resourceLoader, UrlLoader::kDefaultMaximumResourceSize, nullptr,
+                          513u * 512u * 4u);
+
+  ExpectImageLoaderError(imageLoader.fromUri("declared-canvas.png"),
+                         UrlLoaderError::ResourceTooLarge);
+}
+
+TEST(ImageLoader, ProductionBudgetDecodesLargeValidPng) {
+  const std::string path = Runfiles::instance().Rlocation(
+      "donner/svg/resources/tests/image_loader_production_corpus/valid-2048x2048-uniform.png");
+  std::ifstream input(path, std::ios::binary);
+  ASSERT_TRUE(input.is_open()) << path;
+  const std::vector<uint8_t> png(std::istreambuf_iterator<char>{input}, {});
+  ASSERT_EQ(png.size(), 16375u);
+
+  StaticResourceLoader resourceLoader(png);
+  ImageLoader productionLoader(resourceLoader);
+  const auto result = productionLoader.fromUri("large-valid.png");
+  const auto* image = std::get_if<ImageResource>(&result);
+  ASSERT_NE(image, nullptr) << "Result alternative index: " << result.index();
+  EXPECT_EQ(image->data.size(), 16u * 1024u * 1024u);
+
+  ImageLoader fastFuzzBudgetLoader(resourceLoader, UrlLoader::kDefaultMaximumResourceSize, nullptr,
+                                   1u * 1024u * 1024u);
+  ExpectImageLoaderError(fastFuzzBudgetLoader.fromUri("large-valid.png"),
+                         UrlLoaderError::ResourceTooLarge);
 }
 
 TEST(ImageLoader, ChargesRawAndDecodedBytesToSharedBudget) {
