@@ -2623,12 +2623,14 @@ Status VulkanDevice::onCreateTextureView(uint32_t slotIndex, uint32_t textureSlo
                     std::format("texture slot {} has no Vulkan image", textureSlotIndex)};
   }
 
-  // Vulkan accepts a view only of an image it can sample, store to or render to. A view of any
-  // other texture keeps its slot with no native view, and binding it is refused before it gets
-  // here.
-  constexpr TextureUsage kViewableUsage =
-      TextureUsage::Sampled | TextureUsage::StorageBinding | TextureUsage::RenderAttachment;
-  if ((texture->usage & kViewableUsage) == TextureUsage::None) {
+  // Vulkan accepts a view only of an image created with one of these usages
+  // (VUID-VkImageViewCreateInfo-image-04441). A view of any other texture keeps its slot with no
+  // native view, and binding it is refused before it gets here.
+  constexpr VkImageUsageFlags kViewableImageUsage =
+      VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+      VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+  if ((ToVkImageUsage(texture->usage) & kViewableImageUsage) == 0) {
     SetSlot(impl_->textureViews, slotIndex,
             std::optional<Impl::TextureViewRecord>(
                 Impl::TextureViewRecord{VK_NULL_HANDLE, textureSlotIndex}));
@@ -3630,10 +3632,14 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
     const RenderPassColorAttachment& attachment = attachmentDescriptors[i];
     const TextureViewRecord* view = FindRecord(textureViews, attachment.view.slotIndex());
     TextureRecord* texture = view != nullptr ? FindRecord(textures, view->textureSlot) : nullptr;
-    if (view == nullptr || texture == nullptr || view->view == VK_NULL_HANDLE) {
+    if (view == nullptr || texture == nullptr) {
       return GpuError{
           GpuErrorType::InvalidState,
           std::format("render pass attachment {} does not resolve to a Vulkan image", i)};
+    }
+    if (view->view == VK_NULL_HANDLE) {
+      return GpuError{GpuErrorType::InvalidState,
+                      std::format("render pass attachment {} has no native image view", i)};
     }
 
     // Explicit transition to the attachment layout; the pass then begins and ends in

@@ -67,7 +67,7 @@ TEST_F(VulkanTextureViewTest, AViewOfATextureThatCanBeViewedHasANativeView) {
   for (const TextureUsage usage :
        {TextureUsage::Sampled, TextureUsage::StorageBinding, TextureUsage::RenderAttachment,
         TextureUsage::Sampled | TextureUsage::CopySrc}) {
-    SCOPED_TRACE(testing::Message() << "usage " << static_cast<uint32_t>(usage));
+    SCOPED_TRACE(testing::Message() << "usage " << usage);
     const Texture texture = makeTexture(usage);
     const TextureView view =
         GetResultOrFail(device_->createTextureView(texture, TextureViewDescriptor{"viewable"}));
