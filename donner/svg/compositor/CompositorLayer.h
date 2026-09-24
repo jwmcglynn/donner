@@ -206,6 +206,16 @@ public:
   /// offscreen.
   void setCanvasOffset(const Vector2d& offset) { canvasOffset_ = offset; }
 
+  /// Raster a payload was drawn under.
+  struct PayloadRaster {
+    Vector2i canvasSize = Vector2i::Zero();  //!< Canvas size in device pixels.
+    Transform2d surfaceFromCanvas;           //!< The frame's canvas-to-surface transform.
+  };
+
+  /// Raster the current payload was drawn under, or nullopt when the layer holds no payload. Each
+  /// payload setter records it with the payload.
+  [[nodiscard]] const std::optional<PayloadRaster>& payloadRaster() const { return payloadRaster_; }
+
   /// Returns the entity's absolute transform at the moment the cached
   /// bitmap was rasterized, if any. The compositor uses this to decide
   /// whether a subsequent DOM transform mutation can reuse the bitmap
@@ -251,6 +261,7 @@ public:
   void releasePayload() {
     bitmap_ = RendererBitmap{};
     textureSnapshot_.reset();
+    payloadRaster_.reset();
   }
 
   /// Record that the main renderer declined to draw this layer's texture payload; returns the
@@ -274,9 +285,14 @@ public:
   /// Bumps `generation_` so the editor can tell a fresh rasterization
   /// from a preserved-across-remap cache via `CompositorTile::
   /// generation` and skip redundant GL texture uploads.
-  void setBitmap(RendererBitmap bitmap, const Transform2d& worldFromEntityTransform) {
+  ///
+  /// `raster` is the raster the bitmap was drawn under, recorded with it
+  /// so a later frame can tell whether the payload is still valid.
+  void setBitmap(RendererBitmap bitmap, const Transform2d& worldFromEntityTransform,
+                 const PayloadRaster& raster) {
     bitmap_ = std::move(bitmap);
     textureSnapshot_.reset();
+    payloadRaster_ = raster;
     bitmapEntityFromWorldTransform_ = worldFromEntityTransform;
     // Reset the compose offset: the new bitmap captures the entity at
     // `worldFromEntityTransform` (its CURRENT world position), so no
@@ -300,11 +316,13 @@ public:
     ++rasterizeCount_;
   }
 
-  /// Set the cached GPU texture for this layer.
+  /// Set the cached GPU texture for this layer, drawn under `raster`. See `setBitmap`.
   void setTextureSnapshot(std::shared_ptr<const RendererTextureSnapshot> texture,
-                          const Transform2d& worldFromEntityTransform) {
+                          const Transform2d& worldFromEntityTransform,
+                          const PayloadRaster& raster) {
     bitmap_ = RendererBitmap{};
     textureSnapshot_ = std::move(texture);
+    payloadRaster_ = raster;
     bitmapEntityFromWorldTransform_ = worldFromEntityTransform;
     canvasFromBitmap_ = Transform2d();
     dirty_ = false;
@@ -405,6 +423,8 @@ private:
   uint8_t composeDeclines_ = 0;
   double lastRasterizeMs_ = 0.0;
   Vector2d canvasOffset_ = Vector2d::Zero();
+  /// Raster the payload was drawn under; set and reset with the payload.
+  std::optional<PayloadRaster> payloadRaster_;
   ImmediateLayerPlan immediatePlan_;
 };
 

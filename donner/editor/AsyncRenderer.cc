@@ -1530,6 +1530,8 @@ void AsyncRenderer::workerLoop() {
         tile.layerEntity = ct.layerEntity;
         tile.generation = ct.generation;
         tile.bitmapDimsPx = ct.bitmapDims;
+        // The compositor publishes only payloads drawn under this frame's raster, up to a
+        // translation its compose offset carries, so the request's canvas is the payload's.
         tile.rasterCanvasSize = outputCanvasSize;
         tile.canvasOffsetDoc = outputPointToPresentedDoc(ct.canvasOffsetPx);
         tile.bitmapDimsDoc = outputVectorToDoc(
