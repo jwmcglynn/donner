@@ -8,18 +8,19 @@ namespace donner::svg {
 /**
  * @page xml_switch &lt;switch&gt;
  *
- * Conditional processing container: renders only the direct child whose `systemLanguage`
- * best matches the user's preferred languages, or the first unconditional child when nothing
- * matches.
+ * Conditional processing container: renders the first matching direct child, ranking any
+ * language-conditioned children before it by the user's preferred languages.
  *
  * - DOM object: SVGSwitchElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/struct.html#SwitchElement
  *
  * The `<switch>` element ranks its direct children carrying `systemLanguage` by the priority
  * order configured with `SVGDocument::setUserLanguages` (matching SVG2's allowReorder=yes
- * behavior) and renders the best match, tie-breaking by document order. Children without
- * `systemLanguage` are fallbacks: the first one renders when no language-conditioned child
- * matches. Unknown (non-SVG) child elements are never selected.
+ * behavior) and renders the best match, tie-breaking by document order. A child without
+ * `systemLanguage` matches at its document position; later children cannot displace it. Authors
+ * can place an unconditional child last to use it as a fallback. The SVG 2 rule applies whether
+ * or not the historical `allowReorder` attribute is present. Unknown (non-SVG) child elements
+ * are never selected.
  *
  * Donner evaluates `systemLanguage` against the user's preferred languages (default `en`, see
  * `SVGDocument::setUserLanguages`), treats a non-empty `requiredExtensions` list as

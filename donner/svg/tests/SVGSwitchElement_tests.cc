@@ -465,10 +465,9 @@ TEST(SVGSwitchElementTests, SystemLanguageHonorsUserLanguagePriority) {
 }
 
 /**
- * A `systemLanguage` match beats an unconditional child regardless of document order: the
- * unconditional child is a fallback, selected only when no language-conditioned child matches.
+ * An unconditional child before a language-conditioned child matches at its document position.
  */
-TEST(SVGSwitchElementTests, SystemLanguageMatchBeatsUnconditionalFallback) {
+TEST(SVGSwitchElementTests, UnconditionalChildBeforeLanguageMatchWins) {
   SVGDocument document = instantiateSubtree(R"(
     <svg width="16" height="16">
       <switch>
@@ -479,7 +478,29 @@ TEST(SVGSwitchElementTests, SystemLanguageMatchBeatsUnconditionalFallback) {
   )");
   document.setUserLanguages({RcString("fr")});
 
-  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(std::move(document)).matches(kLeftHalfFilled));
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(std::move(document)).matches(kAllFilled));
+}
+
+/**
+ * SVG 2 evaluates languages as if allowReorder were yes whether or not the attribute is written.
+ * The trailing unconditional child remains a fallback in either case.
+ */
+TEST(SVGSwitchElementTests, AllowReorderPresenceDoesNotChangeLanguagePriority) {
+  for (const std::string_view attribute : {"", " allowReorder=\"yes\""}) {
+    SVGDocument document = instantiateSubtree(std::string(R"(
+      <svg width="16" height="16">
+        <switch)") + std::string(attribute) + R"(>
+          <rect x="0" y="0" width="16" height="16" fill="black" systemLanguage="en"/>
+          <rect x="0" y="0" width="8" height="16" fill="black" systemLanguage="fr"/>
+          <rect x="0" y="0" width="16" height="16" fill="black"/>
+        </switch>
+      </svg>
+    )");
+    document.setUserLanguages({RcString("fr"), RcString("en")});
+
+    EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(std::move(document)).matches(kLeftHalfFilled))
+        << attribute;
+  }
 }
 
 /**
