@@ -21,7 +21,11 @@
  *
  * A texture one logical device shares is registered on another as an alias of the same browser
  * texture. The share holds it: the producer releasing its identifier does not destroy a texture a
- * share still holds, and releasing the share destroys it then if the producer already has.
+ * share still holds, and releasing the share destroys it then if the producer already has. Only the
+ * logical device that made a share releases it, and a share names the browser device it was made
+ * on. Shares go with that browser device, which destroys the textures they still hold, so a share
+ * whose holder could not release it keeps its texture only until then, and a later device finds
+ * nothing under its number.
  *
  * One check is deliberately not mirrored here: the runtime refuses to destroy a texture that is
  * some surface's frame, because the canvas owns that texture. Answering the same question on this
@@ -114,7 +118,8 @@ var LibraryDonnerGpu = {
     deviceIdentity: 0,
 
     logical: null,  // Map from logical-device handle to its own state; see openLogical.
-    shares: null,  // Map from share identifier to the texture it holds; see donner_gpu_share_texture.
+    // Map from share identifier to the texture it holds; see donner_gpu_share_texture.
+    shares: null,
     nextShare: 1,
 
     // The protocol table, in the order BrowserWireCodes.cc builds it. This is the artifact the two
@@ -253,7 +258,21 @@ var LibraryDonnerGpu = {
       DonnerGpu.requestState = DonnerGpu.kRequestReady;
     },
 
+    // Lets the browser device go once no logical device is left over it. The shares go with it: no
+    // logical device is left to register one, and a holder dropped on another thread could never
+    // reach this worker to release its share, so the textures they still hold are destroyed here
+    // rather than kept for the life of the worker. A frame is the canvas's, and is left to it.
     releaseSharedDevice: function() {
+      DonnerGpu.shares.forEach(function(held) {
+        if (!held.canvasOwned) {
+          try {
+            held.texture.destroy();
+          } catch (e) {
+            // Nothing names the texture any more, so there is no caller to report a refusal to.
+          }
+        }
+      });
+      DonnerGpu.shares.clear();
       DonnerGpu.device = null;
       DonnerGpu.queue = null;
       DonnerGpu.requestStarted = false;
@@ -852,6 +871,11 @@ var LibraryDonnerGpu = {
       texture: entry.object,
       // A frame belongs to the canvas that handed it out, so releasing its share never destroys it.
       canvasOwned: entry.frame,
+      // The browser device the texture belongs to; a share is registered only on a logical device
+      // over the same one.
+      deviceIdentity: DonnerGpu.deviceIdentity,
+      // The logical device that made the share, and the only one that may release it. Handles are
+      // unique across workers, while share numbers are this worker's own.
       producer: handle,
       producerId: textureId,
       producerReleased: false,
@@ -869,7 +893,9 @@ var LibraryDonnerGpu = {
       return status;
     }
     var held = DonnerGpu.shares.get(share);
-    if (held === undefined) {
+    // A share of another browser device names nothing here. The shares go with their device, so a
+    // stale one is not listed at all; comparing the identity keeps that true for any share that is.
+    if (held === undefined || held.deviceIdentity !== DonnerGpu.deviceIdentity) {
       return DonnerGpu.kUnknownObject;
     }
     var registered = DonnerGpu.register(record, DonnerGpu.kTexture, id, held.texture);
@@ -880,10 +906,13 @@ var LibraryDonnerGpu = {
   },
 
   donner_gpu_release_texture_share__deps: ['$DonnerGpu'],
-  donner_gpu_release_texture_share: function(share) {
+  donner_gpu_release_texture_share: function(handle, share) {
     DonnerGpu.ensureTables();
     var held = DonnerGpu.shares.get(share);
-    if (held === undefined) {
+    // A release names the logical device that made the share. Share numbers are this worker's own,
+    // so a share of another worker can carry the same number; the handle cannot, which leaves this
+    // worker's share alone when a release reaches the wrong worker.
+    if (held === undefined || held.producer !== handle) {
       return;
     }
     DonnerGpu.shares.delete(share);

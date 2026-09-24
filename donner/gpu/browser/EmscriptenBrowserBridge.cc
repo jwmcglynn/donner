@@ -159,7 +159,7 @@ int donner_gpu_abandon_current_texture(unsigned int device, unsigned int surface
 unsigned int donner_gpu_device_identity(unsigned int device);
 int donner_gpu_share_texture(unsigned int device, unsigned int textureId, unsigned int* share);
 int donner_gpu_register_shared_texture(unsigned int device, unsigned int id, unsigned int share);
-void donner_gpu_release_texture_share(unsigned int share);
+void donner_gpu_release_texture_share(unsigned int device, unsigned int share);
 
 }  // extern "C"
 
@@ -198,20 +198,29 @@ std::shared_ptr<const void> WorkerDeviceIdentity(uint32_t device) {
  *
  * Releasing it lets the library go of the texture, which it destroys then if the producer has
  * already released its own identifier. Browser objects belong to the worker that made them, so the
- * release happens only on the thread that made the share; one dropped on another thread leaves the
- * texture to the browser device's own teardown rather than asking a worker that does not hold it.
+ * release happens only on the thread that made the share. One dropped on another thread keeps its
+ * texture until the last logical device over the browser device is released, which destroys every
+ * texture a share still holds. The release names the logical device that made the share as well.
+ * A thread identifier can be reused once its thread has exited, so a release can run on a later
+ * thread of another worker, whose share numbers are its own; the producer's handle is unique
+ * across workers, so none of that worker's shares answers to it.
  */
 class EmscriptenSharedTexture final : public BrowserSharedTexture {
 public:
   /// Constructs the share. @param identity Identity of the browser device it belongs to.
+  /// @param producer Handle of the logical device that made the share.
   /// @param share The library's identifier for the share.
-  EmscriptenSharedTexture(std::shared_ptr<const void> identity, BrowserTextureShareId share)
-      : identity_(std::move(identity)), share_(share), ownerThread_(std::this_thread::get_id()) {}
+  EmscriptenSharedTexture(std::shared_ptr<const void> identity, uint32_t producer,
+                          BrowserTextureShareId share)
+      : identity_(std::move(identity)),
+        producer_(producer),
+        share_(share),
+        ownerThread_(std::this_thread::get_id()) {}
 
   /// Destructor; releases the share on the thread that made it.
   ~EmscriptenSharedTexture() override {
     if (std::this_thread::get_id() == ownerThread_) {
-      donner_gpu_release_texture_share(share_);
+      donner_gpu_release_texture_share(producer_, share_);
     }
   }
 
@@ -220,6 +229,7 @@ public:
 
 private:
   std::shared_ptr<const void> identity_;
+  uint32_t producer_;
   BrowserTextureShareId share_;
   std::thread::id ownerThread_;
 };
@@ -382,7 +392,8 @@ BridgeStatus EmscriptenBrowserBridge::shareTexture(
   if (status != BridgeStatus::Success) {
     return status;
   }
-  shared = std::make_shared<const EmscriptenSharedTexture>(sharedDeviceIdentity_, share);
+  shared =
+      std::make_shared<const EmscriptenSharedTexture>(sharedDeviceIdentity_, logicalDevice_, share);
   return BridgeStatus::Success;
 }
 
