@@ -10,6 +10,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
+#include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
@@ -214,7 +215,9 @@ public:
 
   /// Raster the current payload was drawn under, or nullopt when the layer holds no payload. Each
   /// payload setter records it with the payload.
-  [[nodiscard]] const std::optional<PayloadRaster>& payloadRaster() const { return payloadRaster_; }
+  [[nodiscard]] const std::optional<PayloadRaster>& payloadRaster() const UTILS_LIFETIME_BOUND {
+    return payloadRaster_;
+  }
 
   /// Returns the entity's absolute transform at the moment the cached
   /// bitmap was rasterized, if any. The compositor uses this to decide
