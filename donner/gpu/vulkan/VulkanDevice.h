@@ -438,6 +438,10 @@ public:
 protected:
   Status onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) override;
   Status onCreateTexture(uint32_t slotIndex, const TextureDescriptor& descriptor) override;
+  [[nodiscard]] bool onOwnsTextureBacking(uint32_t slotIndex) const override;
+  [[nodiscard]] BackendDeviceIdentity backendDeviceIdentity() const override;
+  Result<BackendTextureExport> onExportTexture(uint32_t slotIndex) override;
+  Status onRegisterTexture(uint32_t slotIndex, const ExportedTextureBacking& backing) override;
   Status onCreateTextureView(uint32_t slotIndex, uint32_t textureSlotIndex,
                              const TextureViewDescriptor& descriptor) override;
   Status onCreateSampler(uint32_t slotIndex, const SamplerDescriptor& descriptor) override;

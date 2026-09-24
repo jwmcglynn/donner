@@ -45,6 +45,9 @@ namespace {
 /// Vulkan API version this backend targets (see the class comment: 1.1 core only).
 constexpr uint32_t kTargetApiVersion = VK_API_VERSION_1_1;
 
+/// Stable family tag for runtime devices that can alias images over one Vulkan root.
+constexpr char kVulkanTextureShareFamily = 0;
+
 /// Timeout for the synchronous internal texture-upload submission, in nanoseconds (60 s). A
 /// stuck driver fails closed with an error instead of hanging the caller forever.
 constexpr double kUploadFenceTimeoutSeconds = 60.0;
@@ -1023,6 +1026,28 @@ uint32_t VulkanSharedRoot::maxTextureDimension2D() const {
   return impl_->maxTextureDimension2D;
 }
 
+/// Owns a native image until every producer, registration, token and in-flight use releases it.
+/// The retained root keeps the VkDevice, its entry points and the loader alive on any thread.
+struct VulkanImageAllocation {
+  VulkanImageAllocation(std::shared_ptr<VulkanSharedRoot> rootIn, const VulkanApi* apiIn,
+                        VkDevice deviceIn, VkImage imageIn, VkDeviceMemory memoryIn)
+      : root(std::move(rootIn)), api(apiIn), device(deviceIn), image(imageIn), memory(memoryIn) {}
+
+  VulkanImageAllocation(const VulkanImageAllocation&) = delete;
+  VulkanImageAllocation& operator=(const VulkanImageAllocation&) = delete;
+
+  ~VulkanImageAllocation() {
+    api->vkDestroyImage(device, image, nullptr);
+    api->vkFreeMemory(device, memory, nullptr);
+  }
+
+  std::shared_ptr<VulkanSharedRoot> root;
+  const VulkanApi* api;
+  VkDevice device;
+  VkImage image;
+  VkDeviceMemory memory;
+};
+
 /// Vulkan state of a VulkanDevice: instance/device/queue handles plus per-resource slot tables
 /// mirroring the validated slot indices handed to the `on*` hooks.
 struct VulkanDevice::Impl {
@@ -1088,14 +1113,24 @@ struct VulkanDevice::Impl {
   /// submission reached the queue. Tracking at encode time is valid because submissions execute
   /// in order on the single queue.
   struct TextureRecord {
-    VkImage image = VK_NULL_HANDLE;                    //!< Image handle.
-    VkDeviceMemory memory = VK_NULL_HANDLE;            //!< Dedicated allocation.
-    TextureFormat format = TextureFormat::RGBA8Unorm;  //!< RHI format (for copy texel math).
-    Extent2d size;                                     //!< Extent in texels.
-    TextureUsage usage = TextureUsage::None;           //!< RHI usage flags.
+    VkImage image = VK_NULL_HANDLE;                     //!< Image handle.
+    VkDeviceMemory memory = VK_NULL_HANDLE;             //!< Dedicated allocation.
+    std::shared_ptr<VulkanImageAllocation> allocation;  //!< Keeps an exported image alive.
+    TextureFormat format = TextureFormat::RGBA8Unorm;   //!< RHI format (for copy texel math).
+    Extent2d size;                                      //!< Extent in texels.
+    TextureUsage usage = TextureUsage::None;            //!< RHI usage flags.
     /// False for a frame acquired from a surface: the swapchain owns those images and destroys
     /// them with itself, so destroying one here would destroy an image this device never made.
     bool ownsImage = true;
+    bool registered = false;  //!< This runtime device did not allocate the image.
+  };
+
+  struct ExportedImage final : ExportedTextureBacking {
+    ExportedImage(TextureRecord recordIn, TextureSyncStateTable::SharedStateHandle stateIn)
+        : record(std::move(recordIn)), state(std::move(stateIn)) {}
+
+    TextureRecord record;
+    TextureSyncStateTable::SharedStateHandle state;
   };
 
   /// A view of a texture slot; the VkImageView is created once at view creation.
@@ -1621,6 +1656,12 @@ struct VulkanDevice::Impl {
 
   /// Destroys a texture record's Vulkan objects.
   void destroyTextureRecord(TextureRecord& record) {
+    if (record.allocation) {
+      record.allocation.reset();
+      record.image = VK_NULL_HANDLE;
+      record.memory = VK_NULL_HANDLE;
+      return;
+    }
     if (!record.ownsImage) {
       record.image = VK_NULL_HANDLE;
       return;
@@ -2776,7 +2817,60 @@ Status VulkanDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor
     return VkError("vkBindImageMemory", result);
   }
 
+  record.allocation = std::make_shared<VulkanImageAllocation>(
+      impl.nativeRoot, impl.api, impl.device, record.image, record.memory);
+  record.ownsImage = false;  // The shared allocation now owns both native handles.
+  record.memory = VK_NULL_HANDLE;
   SetSlot(impl.textures, slotIndex, std::optional<Impl::TextureRecord>(std::move(record)));
+  return OkStatus();
+}
+
+bool VulkanDevice::onOwnsTextureBacking(uint32_t slotIndex) const {
+  const Impl::TextureRecord* record = FindRecord(impl_->textures, slotIndex);
+  return record != nullptr && record->allocation != nullptr && !record->registered;
+}
+
+BackendDeviceIdentity VulkanDevice::backendDeviceIdentity() const {
+  return impl_->nativeRoot != nullptr
+             ? BackendDeviceIdentity{&kVulkanTextureShareFamily, impl_->nativeRoot.get()}
+             : BackendDeviceIdentity{};
+}
+
+Result<BackendTextureExport> VulkanDevice::onExportTexture(uint32_t slotIndex) {
+  const Impl::TextureRecord* record = FindRecord(impl_->textures, slotIndex);
+  if (record == nullptr || record->registered) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "exportTexture: the Vulkan slot does not own a live image"};
+  }
+  if (record->allocation == nullptr) {
+    // A swapchain retains its acquired images and may recycle one at presentation. E6's owned
+    // image path cannot promise that a sibling alias outlives the frame.
+    return GpuError{GpuErrorType::Unsupported,
+                    "exportTexture: a Vulkan surface frame cannot be registered"};
+  }
+  BackendTextureExport exported;
+  exported.backing =
+      std::make_shared<Impl::ExportedImage>(*record, impl_->syncStates.share(slotIndex));
+  exported.ordering = SourceOrdering::SharedQueue;
+  return exported;
+}
+
+Status VulkanDevice::onRegisterTexture(uint32_t slotIndex, const ExportedTextureBacking& backing) {
+  const auto& exported = static_cast<const Impl::ExportedImage&>(backing);
+  if (exported.record.allocation == nullptr ||
+      exported.record.allocation->root != impl_->nativeRoot) {
+    return GpuError{GpuErrorType::DeviceMismatch,
+                    "registerTexture: the Vulkan image belongs to a different native root"};
+  }
+  if (!impl_->syncStates.alias(slotIndex, exported.state)) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "registerTexture: the Vulkan export has no image layout state"};
+  }
+  Impl::TextureRecord registered = exported.record;
+  registered.registered = true;
+  registered.ownsImage = false;
+  registered.memory = VK_NULL_HANDLE;
+  SetSlot(impl_->textures, slotIndex, std::optional<Impl::TextureRecord>(std::move(registered)));
   return OkStatus();
 }
 
