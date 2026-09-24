@@ -160,6 +160,19 @@ jobs:
             @donner//donner/base:base @donner//donner/css:css \
             @donner//donner/svg:svg @donner//donner/svg/renderer:renderer
 
+          # Scope this query to the production renderer. The consumer test has
+          # its own GoogleTest/pixelmatch dev deps, which must not mask Donner's
+          # production dependency boundary.
+          test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" = "$SOURCE_COMMIT"
+          bazelisk cquery --lockfile_mode=off \
+            --registry="file://${RUNNER_TEMP}/donner-bcr/consumer-test/registry" \
+            --registry=https://bcr.bazel.build \
+            'deps(@donner//donner/svg/renderer:renderer)' --output=label \
+            > "$RUNNER_TEMP/donner-bcr/renderer-closure.labels"
+          python3 -B "$GITHUB_WORKSPACE/tools/bcr_dependency_closure.py" \
+            --module "$GITHUB_WORKSPACE/MODULE.bazel" \
+            --labels "$RUNNER_TEMP/donner-bcr/renderer-closure.labels"
+
   cli-linux:
     needs: prepare
     runs-on: ubuntu-24.04
