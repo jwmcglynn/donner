@@ -63,5 +63,22 @@ TEST(RgbaTestMatchersTest, CountingATruncatedSnapshotFailsOnce) {
   EXPECT_THAT(count, testing::Eq(0u));
 }
 
+/// A row stride shorter than one row of pixels makes later rows overlap earlier ones, so adding up
+/// rows by that stride asks for fewer bytes than the extent holds, and a snapshot that was not read
+/// back whole would pass. Counting it fails once, naming the stride, and counts nothing.
+TEST(RgbaTestMatchersTest, CountingASnapshotWithAnUndersizedRowStrideFailsOnce) {
+  RendererBitmap overlapping;
+  overlapping.dimensions = Vector2i(2, 2);
+  overlapping.rowBytes = 4;
+  overlapping.pixels = std::vector<uint8_t>(12, 255);
+
+  size_t count = 0;
+  EXPECT_NONFATAL_FAILURE(
+      count = CountNonTransparentPixels(overlapping),
+      "2x2 snapshot whose rows are 4 bytes apart, less than the 8 bytes a row of "
+      "its pixels needs");
+  EXPECT_THAT(count, testing::Eq(0u));
+}
+
 }  // namespace
 }  // namespace donner::svg::test
