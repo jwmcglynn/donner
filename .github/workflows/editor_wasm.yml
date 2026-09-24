@@ -59,6 +59,9 @@ jobs:
             //tools/ci:wasm_size_tests
           bazelisk fetch --config=editor-wasm \
             //tools/ci:editor_wasm_size_tests
+          bazelisk fetch --config=wasm-geode \
+            //donner/gpu/browser:browser_bridge_link_probe \
+            //donner/gpu/browser:browser_bridge_pthreads_link_probe
 
       - name: Retry Editor WASM dependency prefetch
         if: steps.editor-wasm-prefetch.outcome == 'failure'
@@ -69,6 +72,9 @@ jobs:
             //tools/ci:wasm_size_tests
           bazelisk fetch --config=editor-wasm \
             //tools/ci:editor_wasm_size_tests
+          bazelisk fetch --config=wasm-geode \
+            //donner/gpu/browser:browser_bridge_link_probe \
+            //donner/gpu/browser:browser_bridge_pthreads_link_probe
 
       - name: Build and size-check Geode editor Wasm package
         run: |
@@ -108,6 +114,16 @@ jobs:
           path: ${{ steps.stage-package.outputs.handoff_dir }}
           if-no-files-found: error
           retention-days: 3
+
+      # The browser GPU bridge's link probes resolve every entry point the bridge declares against
+      # its JavaScript library, once without threads and once with them, as the editor's module is
+      # built. The editor does not link the bridge yet, so nothing else on a pull request catches an
+      # entry point one half no longer declares, or a threaded path that no longer builds.
+      - name: Link the browser GPU bridge
+        run: |
+          bazelisk build --config=wasm-geode \
+            //donner/gpu/browser:browser_bridge_link_probe \
+            //donner/gpu/browser:browser_bridge_pthreads_link_probe
 
   test:
     runs-on: macos-26

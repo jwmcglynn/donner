@@ -21,12 +21,16 @@ struct ThreadQueue {
   }
 };
 
+/// Whether the calling thread has made its holder. Trivially destructible, like the flag above.
+thread_local bool tThreadQueueMade = false;
+
 /// The calling thread's holder, made on first use, or null once the thread has destroyed it.
 ThreadQueue* ThisThreadQueue() {
   if (tThreadQueueGone) {
     return nullptr;
   }
   thread_local ThreadQueue holder;
+  tThreadQueueMade = true;
   return &holder;
 }
 
@@ -69,6 +73,11 @@ std::shared_ptr<BrowserShareReleaseQueue> BrowserShareReleaseQueue::ForThisThrea
 }
 
 void BrowserShareReleaseQueue::DrainThisThread(const std::function<void(const Release&)>& run) {
+  // A thread that never made a share has no queue for another thread to post to, so there is
+  // nothing to run and no reason to make one here.
+  if (!tThreadQueueMade) {
+    return;
+  }
   ThreadQueue* holder = ThisThreadQueue();
   if (holder == nullptr) {
     return;

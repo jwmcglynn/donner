@@ -97,5 +97,17 @@ TEST(BrowserShareReleaseQueue, AnObjectTheThreadDestroysAfterItsQueueFindsNoQueu
   EXPECT_THAT(outcome.load(), 1);
 }
 
+TEST(BrowserShareReleaseQueue, DrainingAThreadWithNoQueueRunsNothing) {
+  bool ran = false;
+  bool drained = false;
+  std::thread worker([&] {
+    BrowserShareReleaseQueue::DrainThisThread([&](const Release&) { ran = true; });
+    drained = true;
+  });
+  worker.join();
+  EXPECT_TRUE(drained);
+  EXPECT_FALSE(ran);
+}
+
 }  // namespace
 }  // namespace donner::gpu::browser
