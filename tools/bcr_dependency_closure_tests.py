@@ -73,6 +73,15 @@ class DependencyClosureTest(unittest.TestCase):
             with self.subTest(label=label), self.assertRaisesRegex(ValueError, "Rust"):
                 closure.check_closure(BASE_LABELS | {label}, self.dev)
 
+    def test_rejects_in_tree_test_packages_and_targets(self) -> None:
+        for label in (
+            "@donner//donner/svg/renderer/tests:pilot_corpus_manifest",
+            "@donner//third_party/stb/tests/pngsuite:sample",
+            "@donner//donner/svg/renderer:renderer_tests",
+        ):
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, "test targets"):
+                closure.check_closure(BASE_LABELS | {label}, self.dev)
+
     def test_rejects_missing_backend_or_base_text(self) -> None:
         for label in (
             "@donner//donner/svg/renderer:renderer_tiny_skia",

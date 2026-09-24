@@ -30,7 +30,6 @@ FORBIDDEN_PACKAGES = (
     "//donner/gpu",
     "//donner/svg/renderer/geode",
     "//third_party/webgpu-cpp",
-    "//donner/editor/tests",
 )
 
 
@@ -142,6 +141,12 @@ def forbidden_package(target: str) -> bool:
                for package in FORBIDDEN_PACKAGES for separator in (":", "/"))
 
 
+def test_target(target: str) -> bool:
+    package, _, name = target[2:].partition(":")
+    return (any(part in {"tests", "testdata"} for part in package.split("/"))
+            or name.endswith(("_test", "_tests")) or name.startswith("test_"))
+
+
 def check_backend(labels: set[str]) -> None:
     donner_labels = {label for label in labels if "donner" in repository_parts(label)}
     targets = {local_target(label) for label in donner_labels}
@@ -150,7 +155,9 @@ def check_backend(labels: set[str]) -> None:
     if not any("tiny-skia-cpp" in repository_parts(label)
                and local_target(label) == "//src:tiny_skia_lib" for label in labels):
         raise ValueError("default renderer has no tiny-skia library")
-    if targets & FORBIDDEN_TARGETS or any(forbidden_package(target) for target in targets):
+    if targets & FORBIDDEN_TARGETS or any(
+        forbidden_package(target) or test_target(target) for target in targets
+    ):
         raise ValueError("default renderer includes Geode, WebGPU, full-text, or test targets")
     if any(RUST_NAME.search(target) for target in targets):
         raise ValueError("default renderer includes an in-tree Rust target")
