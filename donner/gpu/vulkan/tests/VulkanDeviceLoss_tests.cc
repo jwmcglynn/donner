@@ -13,7 +13,6 @@
 #include <functional>
 #include <memory>
 #include <string_view>
-#include <thread>
 #include <utility>
 
 #include "donner/gpu/CommandEncoder.h"
@@ -30,10 +29,16 @@ using gpu::tests::kMappingSceneByteSize;
 using gpu::tests::MappingScene;
 using gpu::tests::SceneWaitParams;
 using testing::Eq;
+using testing::IsEmpty;
 using testing::IsFalse;
 using testing::IsTrue;
 using testing::Lt;
 using testing::NotNull;
+
+/// Why a case that holds the queue open is skipped on a device without the test-only extension:
+/// VK_KHR_timeline_semaphore is optional on a conforming Vulkan 1.1 driver.
+constexpr std::string_view kNoQueueGate =
+    "Device lacks VK_KHR_timeline_semaphore; the queue gate needs it";
 
 /// A Vulkan device sharing its loss condition with every other device over the same root, which
 /// is how a selected backend opens its devices.
@@ -91,8 +96,9 @@ protected:
 
 TEST_F(VulkanDeviceLossTest, ALossASiblingDeclaresEndsAPendingMappingWithinASlice) {
   const std::unique_ptr<VulkanDevice> gated = openGatedDeviceOverTheRoot();
-  ASSERT_THAT(gated, NotNull())
-      << "the queue gate that holds the mapped submission open needs VK_KHR_timeline_semaphore";
+  if (!gated) {
+    GTEST_SKIP() << kNoQueueGate;
+  }
 
   // The scene is built before the gate closes: writeTexture submits and waits on its own fence,
   // which a gated queue would never let complete.
@@ -115,6 +121,9 @@ TEST_F(VulkanDeviceLossTest, ALossASiblingDeclaresEndsAPendingMappingWithinASlic
   (void)GetResultOrFail(gated->submit(GetResultOrFail(encoder->finish())));
   BufferMapping mapping =
       GetResultOrFail(gated->mapBufferAsync(held, MapMode::Read, 0, kMappingSceneByteSize));
+  // An error of the gated device's own would end the mapping the same way, so only the sibling's
+  // declaration may be what ends it here.
+  ASSERT_THAT(gated->lastErrorForTest(), IsEmpty());
 
   // Another device over the same root gives up on its own bounded wait.
   device_->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
@@ -134,6 +143,8 @@ TEST_F(VulkanDeviceLossTest, ALossASiblingDeclaresEndsAPendingMappingWithinASlic
 
   ASSERT_EQ(gate.release(), VK_SUCCESS);
   EXPECT_THAT(gated->unmapBuffer(std::move(mapping)), IsOk());
+  EXPECT_THAT(gated->lastErrorForTest(), IsEmpty())
+      << "the sibling's declaration must be the only thing that went wrong on this device";
 }
 
 TEST_F(VulkanDeviceLossTest, ADeviceLostSubmissionDeclaresTheRootLostAsABackendReport) {
@@ -149,6 +160,8 @@ TEST_F(VulkanDeviceLossTest, ADeviceLostSubmissionDeclaresTheRootLostAsABackendR
   EXPECT_THAT(sibling->isLost(), IsTrue()) << "the loss belongs to the root, not to one device";
   EXPECT_THAT(rootLoss_->timedOutSite.load(), Eq(DeviceLostWaitSite::None))
       << "the driver reported this loss; no wait gave up";
+  EXPECT_THAT(device_->waitForSerial(device_->lastSubmittedSerial(), 1.0), IsFalse())
+      << "the wait a Geode context's queue drain makes must fail on a lost device";
 
   // A queue drain that gives up afterwards, as a Geode context's does, is a consequence of the
   // loss and must not claim it.
@@ -178,11 +191,13 @@ TEST_F(VulkanDeviceLossTest, ADriverReportedLossRefusesReadsThroughAReadyMapping
 
 TEST_F(VulkanDeviceLossTest, AWaitEndsAtOnceWhenASiblingHasDeclaredTheRootLost) {
   const std::unique_ptr<VulkanDevice> gated = openGatedDeviceOverTheRoot();
-  ASSERT_THAT(gated, NotNull())
-      << "the queue gate that holds the waited submission open needs VK_KHR_timeline_semaphore";
+  if (!gated) {
+    GTEST_SKIP() << kNoQueueGate;
+  }
   tests::NativeQueueGate gate(gated->nativeContextForTest());
   ASSERT_NO_FATAL_FAILURE(gate.start());
   const uint64_t serial = SubmitEmptyWork(*gated);
+  ASSERT_THAT(gated->lastErrorForTest(), IsEmpty());
 
   device_->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
                                     "a sibling's queue drain gave up");
@@ -194,31 +209,40 @@ TEST_F(VulkanDeviceLossTest, AWaitEndsAtOnceWhenASiblingHasDeclaredTheRootLost) 
   EXPECT_THAT(waitedMs, Lt(1000)) << "a wait on a lost root must not spend its budget";
 
   ASSERT_EQ(gate.release(), VK_SUCCESS);
+  EXPECT_THAT(gated->lastErrorForTest(), IsEmpty());
 }
 
 TEST_F(VulkanDeviceLossTest, AWaitEndsWhenASiblingDeclaresTheRootLostWhileItWaits) {
   const std::unique_ptr<VulkanDevice> gated = openGatedDeviceOverTheRoot();
-  ASSERT_THAT(gated, NotNull())
-      << "the queue gate that holds the waited submission open needs VK_KHR_timeline_semaphore";
+  if (!gated) {
+    GTEST_SKIP() << kNoQueueGate;
+  }
   tests::NativeQueueGate gate(gated->nativeContextForTest());
   ASSERT_NO_FATAL_FAILURE(gate.start());
   const uint64_t serial = SubmitEmptyWork(*gated);
+  ASSERT_THAT(gated->lastErrorForTest(), IsEmpty());
 
-  // The sibling gives up while this device is already blocked in its wait.
-  std::thread sibling([this] {
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    device_->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
-                                      "a sibling's queue drain gave up");
+  // The sibling gives up after the first step of this device's fence wait has timed out, so the
+  // wait is known to be blocked when the loss is declared.
+  int steps = 0;
+  gated->setFenceWaitStepHookForTest([&] {
+    if (++steps == 1) {
+      device_->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
+                                        "a sibling's queue drain gave up");
+    }
   });
   bool completed = true;
   const int64_t waitedMs =
       MillisecondsTaken([&] { completed = gated->waitForSerial(serial, 5.0); });
-  sibling.join();
+  gated->setFenceWaitStepHookForTest({});
   EXPECT_THAT(completed, IsFalse());
+  EXPECT_THAT(steps, Eq(1))
+      << "the wait must end at the check after the step during which the loss was declared";
   EXPECT_THAT(waitedMs, Lt(1000))
       << "a wait must notice a loss declared after it started, not only one declared before";
 
   ASSERT_EQ(gate.release(), VK_SUCCESS);
+  EXPECT_THAT(gated->lastErrorForTest(), IsEmpty());
 }
 
 }  // namespace

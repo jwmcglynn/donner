@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstring>
 #include <format>
+#include <functional>
 #include <limits>
 #include <map>
 #include <memory>
@@ -1240,6 +1241,8 @@ struct VulkanDevice::Impl {
   std::vector<PendingUpload> pendingUploads;  //!< Uploads awaiting fence-confirmed cleanup.
 
   bool deferUploadPolling = false;  //!< Test-only deferral of upload completion observations.
+  /// Test-only observer of each timed-out step of a serial wait's fence wait.
+  std::function<void()> fenceWaitStepHookForTest;
 
   /// Releases one completed upload and its optional retired destination.
   void releaseUpload(PendingUpload& upload) {
@@ -1471,6 +1474,9 @@ struct VulkanDevice::Impl {
       if (result != VK_TIMEOUT) {
         recordFenceWaitFailure(result);
         return false;
+      }
+      if (fenceWaitStepHookForTest) {
+        fenceWaitStepHookForTest();
       }
       if (rootLoss->lost.load(std::memory_order_acquire) || remaining <= step) {
         return false;
@@ -2351,6 +2357,10 @@ void VulkanDevice::setBufferWriteByteBudgetForTest(uint64_t byteBudget) {
 
 void VulkanDevice::failNextSubmissionForTest(bool deviceLost) {
   impl_->nextSubmissionFailure = deviceLost ? VK_ERROR_DEVICE_LOST : VK_ERROR_OUT_OF_HOST_MEMORY;
+}
+
+void VulkanDevice::setFenceWaitStepHookForTest(std::function<void()> hook) {
+  impl_->fenceWaitStepHookForTest = std::move(hook);
 }
 
 VulkanDevice::NativeContextForTest VulkanDevice::nativeContextForTest() const {

@@ -3,6 +3,7 @@
 /// \c donner::gpu::vulkan::VulkanDevice - the Vulkan backend for the Donner GPU runtime.
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -333,6 +334,12 @@ public:
   /// Makes the next native submission fail before it reaches the queue, after encoding finishes.
   /// @param deviceLost Whether to inject terminal device loss instead of recoverable host OOM.
   void failNextSubmissionForTest(bool deviceLost = false);
+
+  /// Calls \p hook each time a step of a serial wait's fence wait times out, before the wait
+  /// checks the root's loss condition, so a test can declare a loss while a wait is known to be
+  /// blocked. Test accessor; an empty function removes the hook.
+  /// @param hook Called on the waiting thread.
+  void setFenceWaitStepHookForTest(std::function<void()> hook);
 
   /// Makes the next acquisition on the surface at \p surfaceSlotIndex report the swapchain as
   /// out of date, so its rebuild-and-retry path runs. Test seam; see the swapchain's own note for
