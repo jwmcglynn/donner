@@ -116,6 +116,10 @@ public:
   const std::vector<SourceWait>& lastSourceWaits() const { return lastSourceWaits_; }
   /// Whether texture writes wait for the next submission.
   void setWritesPending(bool pending) { writesPending_ = pending; }
+  /// Pretend the backend queued a native write before an export.
+  void queueNativeWriteForTest() { queuedWrite_ = true; }
+  /// Pretend the backend discarded that write with an abandoned frame.
+  void discardNativeWriteForTest() { queuedWrite_ = false; }
   /// How many explicit backing releases reached this backend.
   int explicitBackingReleases() const { return explicitBackingReleases_; }
 

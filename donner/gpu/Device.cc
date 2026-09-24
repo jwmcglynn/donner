@@ -2622,9 +2622,6 @@ Result<std::shared_ptr<details::TextureShare>> Device::createTextureShare(
   }
   // Submissions this device accepted before the export are recorded only here, not in the share.
   backend.contentSerial = std::max(backend.contentSerial, textures_.lastUseOf(slotIndex));
-  if (backend.writePending) {
-    pendingSharedTextureWrites_.push_back(slotIndex);
-  }
   return std::make_shared<details::TextureShare>(descriptor, deviceId_, identity, lostState_,
                                                  std::move(backend), sharedTextureTailBytes_);
 }
@@ -2650,6 +2647,9 @@ Result<TextureExport> Device::exportTexture(const Texture& texture) {
       return std::move(frame).error();
     }
     share = std::move(created).result();
+    if (share->writePending()) {
+      pendingSharedTextureWrites_.push_back(texture.slotIndex());
+    }
   }
   return TextureExport(std::make_shared<const details::TextureShareLease>(share));
 }
