@@ -443,6 +443,8 @@ async function captureSplashDragFrame(
   let last: SplashPresentationFrame | null = null;
   let previousUsable: SplashPresentationFrame | null = null;
   for (let attempt = 0; attempt < 4; ++attempt) {
+    const attemptStartedAtMs = performance.now();
+    console.log(`splash-capture-wait-start ${JSON.stringify({ context, attempt })}`);
     // Only the first attempt waits for a park. If the loop is going to park it
     // parks within that window; if it is not - the thumbnail burst again - then
     // spending the same wait on every retry only burns the test's budget
@@ -452,9 +454,38 @@ async function captureSplashDragFrame(
     } else {
       await waitForBrowserComposite(page);
     }
+    console.log(`splash-capture-wait-end ${
+      JSON.stringify({
+        context,
+        attempt,
+        waitMs: Math.round(performance.now() - attemptStartedAtMs),
+      })
+    }`);
     const before = await readDocumentPresentationState(page);
+    const captureStartedAtMs = performance.now();
+    console.log(`splash-capture-start ${JSON.stringify({ context, attempt, before })}`);
     const frame = await captureSplashPresentationFrame(page, region, letterWindow);
+    const captureFinishedAtMs = performance.now();
+    console.log(`splash-capture-finished ${
+      JSON.stringify({
+        context,
+        attempt,
+        captureMs: Math.round(captureFinishedAtMs - captureStartedAtMs),
+      })
+    }`);
+    const postReadStartedAtMs = performance.now();
     const after = await readDocumentPresentationState(page);
+    console.log(`splash-capture-end ${
+      JSON.stringify({
+        context,
+        attempt,
+        waitMs: Math.round(captureStartedAtMs - attemptStartedAtMs),
+        captureMs: Math.round(captureFinishedAtMs - captureStartedAtMs),
+        readbackMs: Math.round(performance.now() - postReadStartedAtMs),
+        usable: isSplashCaptureUsable(frame.census),
+        after,
+      })
+    }`);
     last = frame;
     if (!isSplashCaptureUsable(frame.census)) {
       previousUsable = null;
@@ -509,13 +540,30 @@ async function captureSplashDragFrame(
 interface DocumentPresentationState {
   completedResults: number;
   renderedFrames: number;
+  frameLoop: {
+    callbacks: number;
+    inputTriggeredFrames: number;
+    workerTriggeredFrames: number;
+    lastFrameAtMs: number;
+  } | null;
 }
 
 async function readDocumentPresentationState(page: Page): Promise<DocumentPresentationState> {
-  return page.evaluate(() => ({
-    completedResults: window.__donnerWorkerStats?.completedResults || 0,
-    renderedFrames: window.__donnerMainLoopRenderedFrames || 0,
-  }));
+  return page.evaluate(() => {
+    const loop = window.__donnerFrameLoopStats;
+    return {
+      completedResults: window.__donnerWorkerStats?.completedResults || 0,
+      renderedFrames: window.__donnerMainLoopRenderedFrames || 0,
+      frameLoop: loop
+        ? {
+          callbacks: loop.callbacks,
+          inputTriggeredFrames: loop.inputTriggeredFrames,
+          workerTriggeredFrames: loop.workerTriggeredFrames,
+          lastFrameAtMs: loop.lastFrameAtMs ?? 0,
+        }
+        : null,
+    };
+  });
 }
 
 // The worker's device health, published alongside the frame counter every
@@ -1465,6 +1513,7 @@ test("the surface frame probe reports canvas work submitted after its task ended
 
 test("Firefox never exposes the checkerboard while dragging a Splash letter", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox", "Firefox Geode regression");
+  const caseStartedAtMs = performance.now();
   const failures = await openEditor(page);
   // Open through the shared helper so the sample's first document render has to
   // complete before anything is measured. Clicking the picker and going straight
@@ -1637,13 +1686,30 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   // sample.
   let previousLetterMinX = letterAtRest.minX;
   for (let step = 1; step <= kSplashDragSteps; ++step) {
+    const stepStartedAtMs = performance.now();
     const framesBeforeMove = await page.evaluate(
       () => window.__donnerMainLoopRenderedFrames || 0,
     );
+    const moveSentAtMs = performance.now();
+    console.log(`splash-step-move ${
+      JSON.stringify({
+        step,
+        elapsedCaseMs: Math.round(moveSentAtMs - caseStartedAtMs),
+        framesBeforeMove,
+      })
+    }`);
     await page.mouse.move(
       dragStart.x + step * kSplashDragStep.x,
       dragStart.y + step * kSplashDragStep.y,
     );
+    const moveFinishedAtMs = performance.now();
+    console.log(`splash-step-move-complete ${
+      JSON.stringify({
+        step,
+        moveMs: Math.round(moveFinishedAtMs - moveSentAtMs),
+        elapsedCaseMs: Math.round(moveFinishedAtMs - caseStartedAtMs),
+      })
+    }`);
     await expect
       .poll(async () => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0), {
         message: `expected a Splash drag-preview frame for step ${step}`,
@@ -1651,7 +1717,23 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThan(framesBeforeMove);
+    const frameAdvancedAtMs = performance.now();
+    console.log(`splash-step-frame ${
+      JSON.stringify({
+        step,
+        moveMs: Math.round(moveFinishedAtMs - moveSentAtMs),
+        frameWaitMs: Math.round(frameAdvancedAtMs - moveFinishedAtMs),
+        elapsedCaseMs: Math.round(frameAdvancedAtMs - caseStartedAtMs),
+      })
+    }`);
+    console.log(`splash-step-composite-start ${JSON.stringify({ step })}`);
     await waitForBrowserComposite(page);
+    console.log(`splash-step-composite-end ${
+      JSON.stringify({
+        step,
+        compositeMs: Math.round(performance.now() - frameAdvancedAtMs),
+      })
+    }`);
     let frame = await captureSplashDragFrame(
       page,
       documentRegion,
@@ -1663,13 +1745,27 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
     // reads can trail it. Retake, bounded, while the letter still reports the
     // previous step's position.
     const stepDeadline = Date.now() + scaledMs(750);
+    let retakes = 0;
     while (
       frame.letter !== null && frame.letter.minX >= previousLetterMinX
       && Date.now() < stepDeadline
     ) {
+      console.log(`splash-step-retake-start ${JSON.stringify({ step, retakes })}`);
       await waitForBrowserComposite(page);
+      console.log(`splash-step-retake-composite-end ${JSON.stringify({ step, retakes })}`);
       frame = await captureSplashDragFrame(page, documentRegion, letterWindow, `drag step ${step}`);
+      ++retakes;
     }
+    console.log(`splash-step-complete ${
+      JSON.stringify({
+        step,
+        captureAndCompositeMs: Math.round(performance.now() - frameAdvancedAtMs),
+        stepMs: Math.round(performance.now() - stepStartedAtMs),
+        elapsedCaseMs: Math.round(performance.now() - caseStartedAtMs),
+        renderedFrames: frame.renderedFrames,
+        retakes,
+      })
+    }`);
     samples.push({
       census: frame.census,
       letter: frame.letter,
