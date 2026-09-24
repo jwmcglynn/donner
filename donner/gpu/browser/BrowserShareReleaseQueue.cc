@@ -6,17 +6,28 @@ namespace donner::gpu::browser {
 
 namespace {
 
+/// Set once the calling thread has destroyed its queue's holder. Trivially destructible, so it
+/// can still be read by any thread-local object the thread destroys after the holder, which is
+/// every one made before it.
+thread_local bool tThreadQueueGone = false;
+
 /// The calling thread's queue, closed when the thread destroys its thread-local objects.
 struct ThreadQueue {
   std::shared_ptr<BrowserShareReleaseQueue> queue = std::make_shared<BrowserShareReleaseQueue>();
 
-  ~ThreadQueue() { queue->close(); }
+  ~ThreadQueue() {
+    queue->close();
+    tThreadQueueGone = true;
+  }
 };
 
-/// The calling thread's holder, made on first use.
-ThreadQueue& ThisThreadQueue() {
+/// The calling thread's holder, made on first use, or null once the thread has destroyed it.
+ThreadQueue* ThisThreadQueue() {
+  if (tThreadQueueGone) {
+    return nullptr;
+  }
   thread_local ThreadQueue holder;
-  return holder;
+  return &holder;
 }
 
 }  // namespace
@@ -53,11 +64,16 @@ bool BrowserShareReleaseQueue::closed() const {
 }
 
 std::shared_ptr<BrowserShareReleaseQueue> BrowserShareReleaseQueue::ForThisThread() {
-  return ThisThreadQueue().queue;
+  ThreadQueue* holder = ThisThreadQueue();
+  return holder != nullptr ? holder->queue : nullptr;
 }
 
 void BrowserShareReleaseQueue::DrainThisThread(const std::function<void(const Release&)>& run) {
-  for (const Release& release : ThisThreadQueue().queue->takeAll()) {
+  ThreadQueue* holder = ThisThreadQueue();
+  if (holder == nullptr) {
+    return;
+  }
+  for (const Release& release : holder->queue->takeAll()) {
     run(release);
   }
 }

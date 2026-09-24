@@ -199,61 +199,29 @@ std::shared_ptr<const void> WorkerDeviceIdentity(uint32_t device) {
   return identity;
 }
 
-/**
- * The share releases other threads posted for the calling thread, which owns the shares it made.
- *
- * Made on the thread's first use and closed when the thread exits, so a release posted after that
- * is refused and does nothing. On a thread-enabled build a post also wakes the owner through the
- * system proxying queue, so the release runs the next time the owner returns to its event loop or
- * hands the thread to the browser, even if it makes no bridge call before then.
- */
-class ThreadShareReleases {
-public:
-  ThreadShareReleases()
-      : queue_(std::make_shared<BrowserShareReleaseQueue>())
-#ifdef __EMSCRIPTEN_PTHREADS__
-        ,
-        thread_(pthread_self())
-#endif
-  {
-  }
-
-  /// Closes the queue as the thread exits: a post that arrives afterwards finds it closed.
-  ~ThreadShareReleases() { queue_->close(); }
-
-  ThreadShareReleases(const ThreadShareReleases&) = delete;
-  ThreadShareReleases& operator=(const ThreadShareReleases&) = delete;
-
-  /// The calling thread's queue.
-  static ThreadShareReleases& ForThisThread() {
-    thread_local ThreadShareReleases releases;
-    return releases;
-  }
-
-  /// The queue, for a share made here to post into from elsewhere.
-  const std::shared_ptr<BrowserShareReleaseQueue>& queue() const { return queue_; }
-
-#ifdef __EMSCRIPTEN_PTHREADS__
-  /// The thread that owns the queue, for waking it.
-  pthread_t thread() const { return thread_; }
-#endif
-
-private:
-  std::shared_ptr<BrowserShareReleaseQueue> queue_;
-#ifdef __EMSCRIPTEN_PTHREADS__
-  pthread_t thread_;
-#endif
-};
-
-/// Runs every share release other threads posted for the calling thread.
+/// Runs every share release other threads posted for the calling thread. Does nothing once the
+/// thread's queue has gone with it.
 void DrainThreadShareReleases() {
-  for (const BrowserShareReleaseQueue::Release& release :
-       ThreadShareReleases::ForThisThread().queue()->takeAll()) {
+  BrowserShareReleaseQueue::DrainThisThread([](const BrowserShareReleaseQueue::Release& release) {
     donner_gpu_release_texture_share(release.producer, release.share);
-  }
+  });
 }
 
 #ifdef __EMSCRIPTEN_PTHREADS__
+/**
+ * The proxying queue that wakes an owner thread to run the share releases posted for it.
+ *
+ * A queue of its own rather than the system queue: work on the system queue must not block,
+ * because a thread that waits on a futex runs it, while a drain takes the release queue's lock and
+ * calls the library. Work here runs only when the owner returns to its event loop, which it does
+ * whenever it hands the thread to the browser. Never destroyed, because work may be queued on it
+ * until the process ends.
+ */
+em_proxying_queue* ShareReleaseWakeQueue() {
+  static em_proxying_queue* const queue = em_proxying_queue_create();
+  return queue;
+}
+
 /// Proxied to an owner thread after a post, so it drains without waiting for its next bridge call.
 /// Reads the queue of whichever thread runs it, so it cannot reach a queue that has gone.
 void DrainThreadShareReleasesProxied(void* /*unused*/) {
@@ -268,11 +236,13 @@ void DrainThreadShareReleasesProxied(void* /*unused*/) {
  * already released its own identifier. Browser objects belong to the worker that made them, so the
  * release runs only on the thread that made the share: one let go there releases at once, and one
  * let go on another thread posts its release to the owner's queue, which the owner drains the next
- * time it yields to the browser, makes a share call or runs its proxied work. If the owner thread
- * has exited, its queue is closed and the release does nothing; the worker's browser state went
- * with it. The release names the logical device that made the share as well: share numbers are
- * each worker's own while logical-device handles are unique across workers, so a release run in
- * the wrong worker finds no share of that producer there.
+ * time it yields to the browser, makes a share call, destroys a bridge or runs the wake-up the
+ * post proxied to it. If the owner thread has exited, its queue is closed and the release does
+ * nothing; the share then stays with its browser device, which destroys the texture when the last
+ * logical device over it is released. The release names the logical
+ * device that made the share as well: share numbers are each worker's own while logical-device
+ * handles are unique across workers, so a release run in the wrong worker finds no share of that
+ * producer there.
  */
 class EmscriptenSharedTexture final : public BrowserSharedTexture {
 public:
@@ -285,10 +255,10 @@ public:
         producer_(producer),
         share_(share),
         ownerThread_(std::this_thread::get_id()),
-        ownerReleases_(ThreadShareReleases::ForThisThread().queue())
+        ownerReleases_(BrowserShareReleaseQueue::ForThisThread())
 #ifdef __EMSCRIPTEN_PTHREADS__
         ,
-        ownerPthread_(ThreadShareReleases::ForThisThread().thread())
+        ownerPthread_(pthread_self())
 #endif
   {
   }
@@ -299,15 +269,21 @@ public:
       donner_gpu_release_texture_share(producer_, share_);
       return;
     }
+    if (ownerReleases_ == nullptr) {
+      // Made while its thread was exiting, after the thread's queue had gone; nothing can reach
+      // that thread any more.
+      return;
+    }
     std::function<void()> wake;
 #ifdef __EMSCRIPTEN_PTHREADS__
     const pthread_t owner = ownerPthread_;
     wake = [owner] {
-      emscripten_proxy_async(emscripten_proxy_get_system_queue(), owner,
-                             &DrainThreadShareReleasesProxied, nullptr);
+      emscripten_proxy_async(ShareReleaseWakeQueue(), owner, &DrainThreadShareReleasesProxied,
+                             nullptr);
     };
 #endif
-    // A queue the owner closed as it exited refuses the post, and the release does nothing.
+    // A queue the owner closed as it exited refuses the post, and the release does nothing. The
+    // wake-up runs only while the post holds the queue, so it never names a thread that has gone.
     (void)ownerReleases_->post({.producer = producer_, .share = share_}, wake);
   }
 
