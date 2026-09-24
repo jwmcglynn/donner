@@ -8,6 +8,10 @@ coverage:
         target: auto
         threshold: 1%
         informational: true
+        branches:
+          - main
+        flags:
+          - unittests
     patch:
       default:
         target: auto
@@ -23,11 +27,15 @@ coverage:
         informational: true
 
 comment:
-  layout: "header, diff, flags, files, footer"
+  # PR uploads are selected subsets. Show their explicit flag without a
+  # project-coverage header derived from that subset.
+  layout: "diff, flags, files, footer"
 
 flags:
   unittests:
     carryforward: true
+  pr-incremental:
+    carryforward: false
 
 parsers:
   gcov:

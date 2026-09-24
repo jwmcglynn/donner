@@ -832,10 +832,14 @@ jobs:
       - id: coverage
         name: Generate coverage
         shell: bash
+        env:
+          COVERAGE_SELECTION_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
+          COVERAGE_SELECTION_PATTERNS: ${{ needs.determine-targets.outputs.targets }}
+          COVERAGE_SELECTION_COUNT: ${{ needs.determine-targets.outputs.target_count }}
         run: |
           set -euo pipefail
-          read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
-          echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
+          read -r -a TARGETS <<< "$COVERAGE_SELECTION_PATTERNS"
+          echo "Coverage target selection: reason=$COVERAGE_SELECTION_REASON count=$COVERAGE_SELECTION_COUNT"
           printf "Coverage targets:\n"
           printf "  %s\n" "${TARGETS[@]}"
           echo "::group::Disk before coverage"
@@ -859,6 +863,25 @@ jobs:
             echo "report_written=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Generate coverage proof
+        if: steps.coverage.outputs.report_written == 'true'
+        shell: bash
+        env:
+          COVERAGE_SELECTION_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
+          COVERAGE_SELECTION_PATTERNS: ${{ needs.determine-targets.outputs.targets }}
+          COVERAGE_SELECTION_COUNT: ${{ needs.determine-targets.outputs.target_count }}
+        run: |
+          set -euo pipefail
+          python3 tools/coverage_run_proof.py \
+            --bep coverage-report/bep.json \
+            --report coverage-report/filtered_report.dat \
+            --reason "$COVERAGE_SELECTION_REASON" \
+            --patterns "$COVERAGE_SELECTION_PATTERNS" \
+            --expected-pattern-count "$COVERAGE_SELECTION_COUNT" \
+            --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" --revision "$GITHUB_SHA" \
+            --output coverage-report/coverage-proof.json \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
       - name: Upload coverage test failure artifacts
         if: failure() && steps.coverage.outcome == 'failure'
         uses: ./.github/actions/upload-bazel-test-artifacts
@@ -874,6 +897,15 @@ jobs:
           retention-days: 3
           if-no-files-found: ignore
 
+      - name: Upload coverage proof
+        if: steps.coverage.outputs.report_written == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-proof-${{ github.job }}-${{ github.run_attempt }}
+          path: coverage-report/coverage-proof.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload coverage to Codecov
         if: steps.coverage.outputs.report_written == 'true'
         uses: codecov/codecov-action@v7
@@ -881,7 +913,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-report/filtered_report.dat
           disable_search: true
-          flags: unittests
+          flags: ${{ github.ref == 'refs/heads/main' && 'unittests' || 'pr-incremental' }}
           fail_ci_if_error: true
           verbose: false
 
@@ -988,10 +1020,14 @@ jobs:
 
       - name: Fetch Bazel LLVM toolchain
         shell: bash
+        env:
+          COVERAGE_SELECTION_PATTERNS: ${{ needs.determine-targets.outputs.targets }}
+          COVERAGE_SELECTION_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
+          COVERAGE_SELECTION_COUNT: ${{ needs.determine-targets.outputs.target_count }}
         run: |
           set -euo pipefail
-          read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
-          echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
+          read -r -a TARGETS <<< "$COVERAGE_SELECTION_PATTERNS"
+          echo "Coverage target selection: reason=$COVERAGE_SELECTION_REASON count=$COVERAGE_SELECTION_COUNT"
           printf "Coverage targets:\n"
           printf "  %s\n" "${TARGETS[@]}"
 
@@ -1027,11 +1063,14 @@ jobs:
       - id: coverage
         name: Generate coverage
         shell: bash
+        env:
+          COVERAGE_SELECTION_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
+          COVERAGE_SELECTION_PATTERNS: ${{ needs.determine-targets.outputs.targets }}
         run: |
           set -euo pipefail
           export DONNER_CI_DIAGNOSTICS_DIR="$RUNNER_TEMP/donner-ci-diagnostics"
           echo "DONNER_CI_DIAGNOSTICS_DIR=$DONNER_CI_DIAGNOSTICS_DIR" >> "$GITHUB_ENV"
-          read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
+          read -r -a TARGETS <<< "$COVERAGE_SELECTION_PATTERNS"
           if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py "${TARGETS[@]}")"; then
             echo "::error::Failed to select remote GPU coverage targets."
             exit 1
@@ -1041,7 +1080,9 @@ jobs:
             exit 1
           fi
           read -r -a TARGETS <<< "$mapped_targets"
-          echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
+          echo "executed_targets=$mapped_targets" >> "$GITHUB_OUTPUT"
+          echo "executed_target_count=${#TARGETS[@]}" >> "$GITHUB_OUTPUT"
+          echo "Coverage target selection: reason=$COVERAGE_SELECTION_REASON count=${#TARGETS[@]}"
           tools/coverage.sh --quiet --no-html "${TARGETS[@]}"
 
           # Publish the report outcome so every consumer of the coverage
@@ -1057,6 +1098,25 @@ jobs:
             echo "report_written=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Generate coverage proof
+        if: steps.coverage.outputs.report_written == 'true'
+        shell: bash
+        env:
+          COVERAGE_SELECTION_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
+          COVERAGE_EXECUTED_PATTERNS: ${{ steps.coverage.outputs.executed_targets }}
+          COVERAGE_EXECUTED_COUNT: ${{ steps.coverage.outputs.executed_target_count }}
+        run: |
+          set -euo pipefail
+          python3 tools/coverage_run_proof.py \
+            --bep "$DONNER_CI_DIAGNOSTICS_DIR/coverage/bep.json" \
+            --report coverage-report/filtered_report.dat \
+            --reason "$COVERAGE_SELECTION_REASON" \
+            --patterns "$COVERAGE_EXECUTED_PATTERNS" \
+            --expected-pattern-count "$COVERAGE_EXECUTED_COUNT" \
+            --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF" --revision "$GITHUB_SHA" \
+            --output coverage-report/coverage-proof.json \
+            --step-summary "$GITHUB_STEP_SUMMARY"
+
       # if-no-files-found stays `error`: gated on report_written, a missing
       # report here is a real defect, not a legitimate skip.
       - name: Upload coverage artifact
@@ -1068,14 +1128,23 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: Upload coverage proof
+        if: steps.coverage.outputs.report_written == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-proof-${{ github.job }}-${{ github.run_attempt }}
+          path: coverage-report/coverage-proof.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Upload coverage diagnostics
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ci-diagnostics-${{ github.job }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/donner-ci-diagnostics/
-            coverage-report/*.log
+          # Raw BEP, profiles, and coverage logs can carry runner filesystem
+          # paths. Retain only numeric phase timing and the validated proof.
+          path: ${{ runner.temp }}/donner-ci-diagnostics/coverage/timing.txt
           retention-days: 3
           if-no-files-found: ignore
 
@@ -1106,6 +1175,6 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-report/filtered_report.dat
           disable_search: true
-          flags: unittests
+          flags: ${{ github.ref == 'refs/heads/main' && 'unittests' || 'pr-incremental' }}
           fail_ci_if_error: true
           verbose: false

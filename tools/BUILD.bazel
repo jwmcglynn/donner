@@ -105,6 +105,16 @@ py_test(
 )
 
 py_test(
+    name = "coverage_run_proof_tests",
+    size = "small",
+    srcs = [
+        "coverage_run_proof.py",
+        "coverage_run_proof_tests.py",
+        "lcov_metrics.py",
+    ],
+)
+
+py_test(
     name = "coverage_instrumentable_targets_tests",
     size = "small",
     srcs = [
@@ -182,8 +192,8 @@ py_test(
         "check_pr_body_tests.py",
     ],
     data = ["//:.github/workflows/main.yml"],
-    deps = ["@rules_python//python/runfiles"],
     imports = ["."],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 py_test(
@@ -298,7 +308,10 @@ py_test(
     name = "coverage_lane_routing_tests",
     size = "small",
     srcs = ["coverage_lane_routing_tests.py"],
-    data = ["//:.github/workflows/coverage.yml"],
+    data = [
+        "//:.github/workflows/coverage.yml",
+        "//:codecov.yml",
+    ],
     deps = ["@rules_python//python/runfiles"],
 )
 

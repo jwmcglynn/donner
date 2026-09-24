@@ -64,6 +64,13 @@ def _workflow_text():
         return handle.read()
 
 
+def _codecov_text():
+    resolver = runfiles.Create()
+    path = resolver.Rlocation("donner/codecov.yml")
+    with open(path, encoding="utf-8") as handle:
+        return handle.read()
+
+
 def _emitted_reasons(text):
     """Every reason literal passed to emit_targets, plus its fallback value."""
     emitted = set()
@@ -80,6 +87,44 @@ class CoverageLaneRoutingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.text = _workflow_text()
+        cls.codecov = _codecov_text()
+
+    def test_partial_uploads_cannot_masquerade_as_project_coverage(self):
+        upload_flags = (
+            "flags: ${{ github.ref == 'refs/heads/main' && 'unittests' "
+            "|| 'pr-incremental' }}"
+        )
+        self.assertEqual(
+            self.text.count(upload_flags), 2,
+            "hosted and self-hosted handoff uploads must route PR subsets separately",
+        )
+        project = self.codecov.split("    project:", 1)[1].split("    patch:", 1)[0]
+        self.assertIn("- main", project)
+        self.assertIn("- unittests", project)
+        self.assertRegex(self.codecov, r"pr-incremental:\s*\n\s*carryforward: false")
+        comment_layout = re.search(r'^  layout: "([^"]+)"', self.codecov, re.MULTILINE)
+        self.assertIsNotNone(comment_layout)
+        self.assertNotIn("header", comment_layout.group(1).split(", "))
+
+    def test_each_coverage_runner_retains_sanitized_proof(self):
+        self.assertEqual(self.text.count("python3 tools/coverage_run_proof.py"), 2)
+        self.assertEqual(self.text.count("path: coverage-report/coverage-proof.json"), 2)
+        self.assertEqual(self.text.count('--step-summary "$GITHUB_STEP_SUMMARY"'), 2)
+        self.assertIn('--bep coverage-report/bep.json', self.text)
+        self.assertIn('--bep "$DONNER_CI_DIAGNOSTICS_DIR/coverage/bep.json"', self.text)
+
+        self_hosted = self._job_body("coverage-self-hosted")
+        diagnostics = self_hosted.split("- name: Upload coverage diagnostics", 1)[1]
+        diagnostics = diagnostics.split("\n      - name:", 1)[0]
+        self.assertIn("coverage/timing.txt", diagnostics)
+        self.assertNotIn("donner-ci-diagnostics/\n", diagnostics)
+        self.assertNotIn("coverage/bep.json", diagnostics)
+        self.assertNotIn("coverage-report/*.log", diagnostics)
+
+        fetch = self_hosted.split("- name: Fetch Bazel LLVM toolchain", 1)[1]
+        fetch = fetch.split("\n      - ", 1)[0]
+        self.assertIn('read -r -a TARGETS <<< "$COVERAGE_SELECTION_PATTERNS"', fetch)
+        self.assertNotIn('<<< "${{ needs.determine-targets.outputs.targets }}"', fetch)
 
     def test_full_baseline_covers_the_complete_product_tree(self):
         # GPU implementation files enter reports as SVG/editor dependencies.
