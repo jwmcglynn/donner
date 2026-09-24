@@ -4292,6 +4292,9 @@ Status VulkanDevice::Impl::encodeSubmittedCommandBuffer(EncodingState& state,
 
 Status VulkanDevice::onSubmit(uint64_t submissionSerial,
                               std::span<const SubmittedCommandBuffer> commandBuffers) {
+  if (isLost()) {
+    return GpuError{GpuErrorType::DeviceLost, "submit: the Vulkan root is lost"};
+  }
   Impl& impl = *impl_;
 
   // Transient objects created while encoding; on success they move into the in-flight record
