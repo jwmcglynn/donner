@@ -52,9 +52,12 @@ public:
 
   /// Holds \p texture for the other logical devices and returns the share naming the hold.
   /// @param texture Texture to hold.
-  BrowserTextureShareId holdTexture(uint64_t texture) {
+  /// @param canvasOwned Whether the texture is a canvas frame, which releasing the share never
+  ///   destroys because the canvas owns it.
+  BrowserTextureShareId holdTexture(uint64_t texture, bool canvasOwned = false) {
     const BrowserTextureShareId share = nextShare_++;
-    shares_[share] = Share{texture, false};
+    shares_[share] =
+        Share{.texture = texture, .producerReleased = false, .canvasOwned = canvasOwned};
     return share;
   }
 
@@ -73,14 +76,14 @@ public:
   /// @param share Share whose producer let go.
   void releaseProducer(BrowserTextureShareId share) { shares_[share].producerReleased = true; }
 
-  /// Releases \p share, destroying its texture if the producer has already let go of it.
-  /// @param share Share to release.
+  /// Releases \p share, destroying its texture if the producer has already let go of it and the
+  /// texture is not a canvas frame. @param share Share to release.
   void releaseShare(BrowserTextureShareId share) {
     const auto it = shares_.find(share);
     if (it == shares_.end()) {
       return;
     }
-    if (it->second.producerReleased) {
+    if (it->second.producerReleased && !it->second.canvasOwned) {
       destroyTexture(it->second.texture);
     }
     shares_.erase(it);
@@ -95,6 +98,7 @@ private:
   struct Share {
     uint64_t texture = 0;           //!< Texture held.
     bool producerReleased = false;  //!< Whether the producer has let go of its identifier.
+    bool canvasOwned = false;       //!< Whether the texture is a canvas frame.
   };
 
   uint64_t nextTexture_ = 1;
@@ -276,12 +280,13 @@ public:
     }
     const auto native = nativeTextures_.find(textureId);
     // A registration is shared from the device that allocated it, and a texture is shared once, as
-    // on the browser side.
+    // on the browser side. A frame is shared too, and stays its canvas's.
     if (native == nativeTextures_.end() || aliases_.contains(textureId) ||
         sharedAs_.contains(textureId)) {
       return BridgeStatus::Failed;
     }
-    const BrowserTextureShareId share = gpuDevice->holdTexture(native->second);
+    const BrowserTextureShareId share =
+        gpuDevice->holdTexture(native->second, /*canvasOwned=*/isFrame(textureId));
     sharedAs_[textureId] = share;
     calls->push_back(std::format("{} share={}", line, share));
     shared = std::make_shared<const FakeSharedTexture>(gpuDevice, share);
@@ -290,13 +295,18 @@ public:
 
   BridgeStatus registerSharedTexture(BrowserObjectId id,
                                      const BrowserSharedTexture& shared) override {
+    const std::string line =
+        std::format("registerSharedTexture id={} share={}", id, shared.shareId());
+    // Ownership and loss come first, as on the browser side, so a lost device reports its loss
+    // rather than whether the share still exists.
+    if (const BridgeStatus status = guard(line); status != BridgeStatus::Success) {
+      return status;
+    }
     const std::optional<uint64_t> native = gpuDevice->sharedTexture(shared.shareId());
     if (!native.has_value()) {
       return BridgeStatus::UnknownObject;
     }
-    const BridgeStatus status =
-        create(BrowserObjectKind::Texture, id,
-               std::format("registerSharedTexture id={} share={}", id, shared.shareId()));
+    const BridgeStatus status = create(BrowserObjectKind::Texture, id, line);
     if (status == BridgeStatus::Success) {
       nativeTextures_[id] = *native;
       aliases_.insert(id);
@@ -814,6 +824,9 @@ public:
                std::format("acquireCurrentTexture surface={} texture={}", surfaceId, textureId));
     if (created == BridgeStatus::Success) {
       frames_[surfaceId] = textureId;
+      // The canvas's texture, which the browser device can share like any other but which nothing
+      // here destroys.
+      nativeTextures_[textureId] = gpuDevice->allocateTexture();
     }
     return created;
   }
@@ -918,8 +931,26 @@ private:
     const auto frame = frames_.find(surfaceId);
     if (frame != frames_.end()) {
       objects->erase(frame->second);
+      nativeTextures_.erase(frame->second);
+      if (const auto shared = sharedAs_.find(frame->second); shared != sharedAs_.end()) {
+        // A share of the frame outlives the surface taking it back, and still never destroys it.
+        if (gpuDevice->sharedTexture(shared->second).has_value()) {
+          gpuDevice->releaseProducer(shared->second);
+        }
+        sharedAs_.erase(shared);
+      }
       frames_.erase(frame);
     }
+  }
+
+  /// Whether \p textureId names a frame some surface has out. @param textureId Texture to check.
+  [[nodiscard]] bool isFrame(BrowserObjectId textureId) const {
+    for (const auto& [surfaceId, frameId] : frames_) {
+      if (frameId == textureId) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Records \p line for a release naming \p id of \p kind.
