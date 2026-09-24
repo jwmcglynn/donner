@@ -72,11 +72,12 @@ struct EditorSampleCatalogStorage {
   EditorSampleCatalogStorage()
       : samples(
             {{{"donner-splash", "Donner Splash", SourceFromEmbedded(embedded::kEditorSplashSvg)},
+              {"geode-splash", "Geode Splash", SourceFromEmbedded(embedded::kEditorGeodeSplashSvg)},
               {"basic-shapes", "Basic Shapes", kBasicShapesSvg},
               {"text-style", "Text and Style", kTextStyleSvg},
               {"gradients-clip", "Gradients and Clip", kGradientsClipSvg}}}) {}
 
-  std::array<EditorSample, 4> samples;
+  std::array<EditorSample, 5> samples;
 };
 
 const EditorSampleCatalogStorage& CatalogStorage() {

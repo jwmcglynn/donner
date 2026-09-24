@@ -1457,6 +1457,7 @@ embed_resources(
     header_output = "donner/editor/EditorSplash.h",
     resources = {
         "kEditorSplashSvg": "//:donner_splash.svg",
+        "kEditorGeodeSplashSvg": "//:geode_splash.svg",
     },
 )
 
