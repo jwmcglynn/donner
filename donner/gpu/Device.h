@@ -551,10 +551,11 @@ public:
    * Work this device submits that names the registration is ordered after every submission the
    * producer had made referencing the texture before this call, and after the queued writes those
    * submissions carried. On a backend whose devices do not share one native queue, either the
-   * backend orders such work on the device (\ref SourceOrdering::WaitOnDevice), so \ref submit
-   * accepts it once the producer has handed that work to its queue and the work waits on the
-   * device, or \ref submit refuses it until that producer work has completed. Either way
-   * \ref waitForTextureSource is the host's bounded wait until the work may be submitted.
+   * backend orders such work on the device (\ref SourceOrdering::WaitOnDevice) for a producer
+   * that shares this device's loss condition, so \ref submit accepts it once the producer has
+   * handed that work to its queue and the work waits on the device, or \ref submit refuses it
+   * until that producer work has completed. Either way \ref waitForTextureSource is the host's
+   * bounded wait until the work may be submitted.
    *
    * Refused with \ref GpuErrorType::InvalidHandle for an empty token or one whose producer has
    * released its handle; \ref GpuErrorType::InvalidState for this device's own export or while a
@@ -576,7 +577,10 @@ public:
    * Returns true at once for a texture this device allocated and for a registration whose
    * producer shares this device's native queue, because submission order already orders them,
    * and for a registration ordered on the device as soon as its producer has handed that work to
-   * its queue, because the device then orders it. A wait that spends its budget declares nothing,
+   * its queue, because the device then orders it. A registration is ordered on the device only
+   * when its producer shares this device's loss condition: the device-side wait ends however the
+   * producer's work ends, and only a shared condition carries a failure or loss there to this
+   * device. A wait that spends its budget declares nothing,
    * like \ref waitForSerial; the caller's deadline is its own policy. A producer whose backend
    * reports a terminal execution failure is declared lost with no wait site, because the backend
    * reported it and no deadline expired.
@@ -1768,6 +1772,12 @@ private:
   /// producer's queue; false once either device is lost or the producer failed (declaring that
   /// failure); and nothing while it is still pending. @param entry Registration to check.
   std::optional<bool> textureSourceState(const TextureRegistration& entry) const;
+
+  /// Whether work naming a registration of \p share waits on the device for the producer: the
+  /// producer's backend orders it there (\ref SourceOrdering::WaitOnDevice), and the producer
+  /// shares this device's loss condition, so a failure or loss that ends the wait is this
+  /// device's loss too. @param share Share of the registered texture.
+  bool ordersOnDevice(const details::TextureShare& share) const;
 
   /// The share of an exported texture of this device, or null. @param slotIndex Texture slot.
   details::TextureShare* textureShareOf(uint32_t slotIndex) const;

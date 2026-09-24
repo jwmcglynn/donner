@@ -2758,11 +2758,18 @@ std::optional<bool> Device::textureSourceState(const TextureRegistration& entry)
   if (completedSerial >= entry.orderAfterSerial) {
     return true;
   }
-  if (share.ordering() == SourceOrdering::WaitOnDevice &&
-      completion.committedSerial() >= entry.orderAfterSerial) {
+  if (ordersOnDevice(share) && completion.committedSerial() >= entry.orderAfterSerial) {
     return true;
   }
   return std::nullopt;
+}
+
+bool Device::ordersOnDevice(const details::TextureShare& share) const {
+  // A device-side wait ends when the producer's backend signals it, which it also does for work
+  // that failed and for a loss of the producer's root. Only a consumer that shares that loss
+  // condition learns of either, so any other consumer waits for the outcome on the host.
+  return share.ordering() == SourceOrdering::WaitOnDevice &&
+         &share.producerLostState() == lostState_.get();
 }
 
 bool Device::waitForTextureSource(const Texture& registration, double timeoutSeconds) {
@@ -2813,8 +2820,10 @@ void AddSourceWait(std::vector<SourceWait>& waits, const ExportedTextureBacking&
 
 /// Why a submission naming a registration whose producer work is unfinished is refused.
 /// @param share Share of the registered texture. @param slotIndex Slot of the registration.
-GpuError SourceNotReadyError(const details::TextureShare& share, uint32_t slotIndex) {
-  if (share.ordering() == SourceOrdering::WaitOnDevice) {
+/// @param onDevice Whether the device orders work naming the registration.
+GpuError SourceNotReadyError(const details::TextureShare& share, uint32_t slotIndex,
+                             bool onDevice) {
+  if (onDevice) {
     return Err(GpuErrorType::InvalidState,
                std::format("submit: registered texture \"{}\" (slot {}) follows producer work "
                            "its producer has not submitted yet; wait for it with "
@@ -2852,12 +2861,12 @@ Status Device::checkTextureSourceReady(const TextureRegistration& entry, uint32_
   }
   // Only work the producer has handed to its queue is waited for on the device. A device-side
   // wait on work still being recorded could wait for a host thread that waits for this one.
-  if (share.ordering() == SourceOrdering::WaitOnDevice &&
-      completion->committedSerial() >= entry.orderAfterSerial) {
+  const bool onDevice = ordersOnDevice(share);
+  if (onDevice && completion->committedSerial() >= entry.orderAfterSerial) {
     AddSourceWait(waits, share.backing(), entry.orderAfterSerial);
     return OkStatus();
   }
-  return SourceNotReadyError(share, slotIndex);
+  return SourceNotReadyError(share, slotIndex, onDevice);
 }
 
 Status Device::checkSubmissionTextureSources(std::span<const SubmissionUse> uses,
