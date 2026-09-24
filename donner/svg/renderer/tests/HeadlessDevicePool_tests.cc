@@ -4,10 +4,30 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <thread>
+#include <vector>
 
 namespace donner::svg::details {
 namespace {
+
+/// Where each \ref FakeDevice was destroyed, by its serial.
+struct DestructionLog {
+  std::mutex mutex;
+  std::vector<std::pair<int, std::thread::id>> destroyed;  //!< Serial and destroying thread.
+
+  /// The thread that destroyed device \p serial, if one has.
+  std::optional<std::thread::id> threadThatDestroyed(int serial) {
+    const std::lock_guard lock(mutex);
+    for (const auto& [destroyedSerial, thread] : destroyed) {
+      if (destroyedSerial == serial) {
+        return thread;
+      }
+    }
+    return std::nullopt;
+  }
+};
 
 /// A device the cache can hand out, which a test can lose.
 struct FakeDevice {
@@ -17,6 +37,16 @@ struct FakeDevice {
   bool lost = false;
   /// Whether the device may only be used on the thread that opened it, as a browser device may.
   bool bound = false;
+
+  /// Records where the device is destroyed, when set.
+  std::shared_ptr<DestructionLog> log;
+
+  ~FakeDevice() {
+    if (log != nullptr) {
+      const std::lock_guard lock(log->mutex);
+      log->destroyed.emplace_back(serial, std::this_thread::get_id());
+    }
+  }
 
   [[nodiscard]] bool isDeviceLost() const { return lost; }
   [[nodiscard]] bool isBoundToCreatingThread() const { return bound; }
@@ -30,11 +60,13 @@ struct FakePool {
             [this] {
               auto device = std::make_shared<FakeDevice>();
               device->serial = ++opened;
+              device->log = log;
               return device;
             },
             maxIdleDevices) {}
 
   int opened = 0;  //!< Devices the factory opened.
+  std::shared_ptr<DestructionLog> log = std::make_shared<DestructionLog>();  //!< Destructions.
   HeadlessDevicePool<FakeDevice> pool;
 };
 
@@ -149,6 +181,40 @@ TEST(HeadlessDevicePool, AFullCacheMakesRoomForTheDeviceReleasedLast) {
   std::shared_ptr<FakeDevice> kept = cache.pool.acquire();
   ASSERT_THAT(kept, testing::NotNull());
   EXPECT_THAT(kept->serial, newestSerial);
+}
+
+TEST(HeadlessDevicePool, AFullCacheNeverDestroysAnotherThreadsBoundDevice) {
+  FakePool cache(1);
+  int foreignSerial = 0;
+  std::thread::id foreignThread;
+  std::thread elsewhere([&] {
+    std::shared_ptr<FakeDevice> device = cache.pool.acquire();
+    ASSERT_THAT(device, testing::NotNull());
+    device->bound = true;
+    foreignSerial = device->serial;
+    foreignThread = std::this_thread::get_id();
+  });
+  elsewhere.join();
+  ASSERT_THAT(cache.pool.idleCount(), 1u);
+
+  // This thread cannot take the other thread's device, so it opens its own and releases it into a
+  // cache that is already full.
+  int ownSerial = 0;
+  {
+    std::shared_ptr<FakeDevice> own = cache.pool.acquire();
+    ASSERT_THAT(own, testing::NotNull());
+    own->bound = true;
+    ownSerial = own->serial;
+  }
+
+  // A browser device destroyed on a thread that does not own it strands every object it made, so
+  // the cache gives up the device this thread may destroy rather than the oldest.
+  const std::optional<std::thread::id> foreignDestroyedOn =
+      cache.log->threadThatDestroyed(foreignSerial);
+  EXPECT_THAT(foreignDestroyedOn.has_value(), testing::IsFalse())
+      << "the cache destroyed another thread's bound device on this thread";
+  EXPECT_THAT(cache.log->threadThatDestroyed(ownSerial), std::optional(std::this_thread::get_id()));
+  EXPECT_THAT(cache.pool.idleCount(), 1u);
 }
 
 TEST(HeadlessDevicePool, AFactoryThatOpensNothingHandsOutNothing) {
