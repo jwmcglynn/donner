@@ -2,6 +2,7 @@
 /// @file
 
 #include <entt/entity/entity.hpp>  // entt::entity, entt::null
+#include <unordered_map>
 #include <vector>
 
 #include "donner/base/Box.h"
@@ -47,22 +48,13 @@ struct ComputedTextGeometryComponent {
     bool hasExtent = false;                     ///< True if extent contains real glyph bounds.
   };
 
-  /**
-   * Glyph-cell bounds contributed by one laid-out span.
-   */
-  struct SpanBounds {
-    entt::entity sourceEntity = entt::null;  ///< Span source entity (text, tspan, or textPath).
-    Box2d emBox;                             ///< Union of the span's glyph cells, in local coords.
-  };
-
   std::vector<GlyphGeometry> glyphs;          ///< Cached glyph outlines for the text root.
   std::vector<CharacterGeometry> characters;  ///< Cached character metrics in logical order.
   std::vector<TextRun> runs;                  ///< Cached layout runs for renderer reuse.
   Box2d inkBounds;                            ///< Union of glyph ink bounds.
   Box2d emBoxBounds;                          ///< Union of em-box bounds used for text bbox.
-  /// Per-span glyph-cell bounds, so a text content element that is not the root can report its own
-  /// object bounding box.
-  std::vector<SpanBounds> spanBounds;
+  /// Glyph-cell bounds for each text content entity's complete subtree. Built once per text root.
+  std::unordered_map<entt::entity, Box2d> objectBoundsByEntity;
 };
 
 }  // namespace donner::svg::components

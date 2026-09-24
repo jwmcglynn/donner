@@ -36,6 +36,7 @@
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/tests/ParserTestUtils.h"
+#include "donner/svg/text/TextEngine.h"
 
 using ::testing::_;
 using ::testing::AllOf;
@@ -1751,6 +1752,54 @@ TEST_F(RendererDriverTest, EffectSpansResolveStylesOncePerTextElement) {
   driver.draw(document);
   EXPECT_EQ(driver.textPreparationStatsForTesting().fullElementStylePasses, 2u);
   EXPECT_EQ(driver.textPreparationStatsForTesting().spanStyleVisits, 26u);
+}
+
+TEST_F(RendererDriverTest, FilteredTextSpansBoundObjectBoxWorkPerRoot) {
+  constexpr int kSpanCount = 16;
+  std::string body = R"svg(
+    <defs><filter id="f" filterUnits="objectBoundingBox"><feFlood/></filter></defs>
+    <text x="10" y="60" font-family="sans-serif" font-size="20">)svg";
+  for (int span = 0; span < kSpanCount; ++span) {
+    body += R"svg(<tspan filter="url(#f)">S</tspan>)svg";
+  }
+  body += "</text>";
+  SVGDocument document = makeDocument(body, Vector2i(400, 100));
+
+  EXPECT_CALL(renderer, pushFilterLayer(_, _)).Times(kSpanCount);
+  driver.draw(document);
+
+  const auto& textEngine = document.registry().ctx().get<TextEngine>();
+  EXPECT_EQ(textEngine.objectBoundingBoxSpanVisitsForTesting(),
+            static_cast<std::size_t>(kSpanCount));
+}
+
+TEST_F(RendererDriverTest, NestedTextSpanObjectBoxesIncludeOnlyTheirSubtrees) {
+  SVGDocument document = makeDocument(R"svg(
+    <text x="10" y="60" font-family="sans-serif" font-size="20"><tspan id="outer">A<tspan
+      id="inner">B</tspan></tspan><tspan id="sibling" x="200">C</tspan><tspan
+      id="empty"/></text>
+  )svg",
+                                      Vector2i(400, 100));
+
+  driver.draw(document);
+
+  const auto outerElement = document.querySelector("#outer");
+  const auto innerElement = document.querySelector("#inner");
+  const auto siblingElement = document.querySelector("#sibling");
+  const auto emptyElement = document.querySelector("#empty");
+  ASSERT_THAT(outerElement, ::testing::Optional(_));
+  ASSERT_THAT(innerElement, ::testing::Optional(_));
+  ASSERT_THAT(siblingElement, ::testing::Optional(_));
+  ASSERT_THAT(emptyElement, ::testing::Optional(_));
+
+  const auto& textEngine = document.registry().ctx().get<TextEngine>();
+  const Box2d outer = textEngine.computedObjectBoundingBox(outerElement->unsafeEntityHandle());
+  const Box2d inner = textEngine.computedObjectBoundingBox(innerElement->unsafeEntityHandle());
+  const Box2d sibling = textEngine.computedObjectBoundingBox(siblingElement->unsafeEntityHandle());
+  EXPECT_LT(outer.topLeft.x, inner.topLeft.x);
+  EXPECT_EQ(outer.bottomRight.x, inner.bottomRight.x);
+  EXPECT_LT(outer.bottomRight.x, sibling.topLeft.x);
+  EXPECT_EQ(textEngine.computedObjectBoundingBox(emptyElement->unsafeEntityHandle()), Box2d());
 }
 
 TEST_F(RendererDriverTest, PatternFilledEffectSpansPreserveOuterTextPreparation) {
