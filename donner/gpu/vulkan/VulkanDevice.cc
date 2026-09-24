@@ -4162,7 +4162,8 @@ MapWaitKind VulkanDevice::Impl::MappingHost::waitForSubmission(uint64_t serial,
 }
 
 bool VulkanDevice::Impl::MappingHost::deviceLost() const {
-  return impl_.hasError();
+  // A bounded wait that gave up declares the loss condition without recording an error here.
+  return impl_.hasError() || device_.isLost();
 }
 
 Status VulkanDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,
