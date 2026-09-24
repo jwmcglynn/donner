@@ -51,6 +51,13 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def require_source_root_files(files: dict[str, tuple[str, int]]) -> None:
+    if "MODULE.bazel" not in files:
+        raise ValueError("source archive is missing MODULE.bazel")
+    if "LICENSE" not in files or "NOTICE" not in files:
+        raise ValueError("source archive is missing LICENSE or NOTICE")
+
+
 def archive_members(archive: tarfile.TarFile, prefix: str) -> dict[str, tuple[str, int]]:
     files = {}
     seen = set()
@@ -73,8 +80,7 @@ def archive_members(archive: tarfile.TarFile, prefix: str) -> dict[str, tuple[st
         name = str(PurePosixPath(*path.parts[1:]))
         with archive.extractfile(member) as stream:
             files[name] = (hashlib.file_digest(stream, "sha256").hexdigest(), member.mode)
-    if "MODULE.bazel" not in files:
-        raise ValueError("source archive is missing MODULE.bazel")
+    require_source_root_files(files)
     return files
 
 

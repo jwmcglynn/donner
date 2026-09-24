@@ -264,6 +264,20 @@ py_test(
     deps = [":bcr_source"],
 )
 
+py_test(
+    name = "default_notice_freshness_tests",
+    size = "small",
+    srcs = ["default_notice_freshness_tests.py"],
+    args = [
+        "$(location //:NOTICE)",
+        "$(location //third_party/licenses:notice_default_txt)",
+    ],
+    data = [
+        "//:NOTICE",
+        "//third_party/licenses:notice_default_txt",
+    ],
+)
+
 py_library(
     name = "bcr_release",
     srcs = ["bcr_release.py"],

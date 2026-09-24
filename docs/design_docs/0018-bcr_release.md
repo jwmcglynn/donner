@@ -68,6 +68,12 @@ file, executable mode, source tree and digest with the committed Git archive. A 
 provenance accompany the archive. The consumer matrix resolves this archive through a disposable
 registry from a separate module; no Donner checkout override participates.
 
+The v0.8 archive requires root `LICENSE` and `NOTICE`. The committed `NOTICE` matches
+`//third_party/licenses:notice_default` byte-for-byte and describes the default tiny-skia
+variant; other build variants use their own generated notices. The current source verifier
+rejects older archives without `NOTICE`, so verify a historical release with the tooling from
+its matching tag. The release dependency/license review still checks the final shipped closure.
+
 Preflight generates the real entry with `bazel-contrib/publish-to-bcr@v1.5.0` and executes the current
 upstream BCR validator. The entry retains the stable release URL. Only the source download transport
 uses the local candidate bytes, because the approved release does not exist yet. URL policy,
@@ -85,6 +91,7 @@ Qualification waits for both CLI builds and the consumer matrix, re-verifies bot
 from its own attempt, and records that run ID and attempt without changing the archive bytes.
 After a failed preflight, rerun **all jobs** so source, binaries, matrix and qualification share
 one attempt; a failed-jobs-only rerun cannot qualify with older CLI artifacts. `//tools:bcr_source_tests`,
+`//tools:default_notice_freshness_tests`,
 `//tools:release_cli_tests`, and `//tools:bcr_admission_tests` cover archive, binary, and admission
 rejection paths.
 
