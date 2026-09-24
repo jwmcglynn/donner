@@ -378,7 +378,7 @@ js_test(
         "@playwright//:chromium",
         "@playwright//:chromium-headless-shell",
     ],
-    entry_point = "browser-archive.spec.mjs",
+    entry_point = "browser-archive-check.mjs",
     env = {
         "NODE_OPTIONS": "",
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
@@ -399,7 +399,7 @@ js_test(
         "@playwright//:chromium",
         "@playwright//:chromium-headless-shell",
     ],
-    entry_point = "browser-archive.spec.mjs",
+    entry_point = "browser-archive-check.mjs",
     env = {
         "NODE_OPTIONS": "",
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
