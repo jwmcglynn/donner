@@ -182,8 +182,8 @@ py_test(
         "check_pr_body_tests.py",
     ],
     data = ["//:.github/workflows/main.yml"],
-    deps = ["@rules_python//python/runfiles"],
     imports = ["."],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 py_test(
@@ -261,6 +261,18 @@ py_library(
         ":bcr_source",
         ":release_artifact_publisher",
     ],
+)
+
+py_library(
+    name = "release_cli",
+    srcs = ["release_cli.py"],
+)
+
+py_test(
+    name = "release_cli_tests",
+    size = "small",
+    srcs = ["release_cli_tests.py"],
+    deps = [":release_cli"],
 )
 
 py_test(
