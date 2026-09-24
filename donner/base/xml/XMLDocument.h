@@ -319,8 +319,9 @@ public:
    * \ref hasSourceStore here, and the same accessors of an SVG document built on this tree. The
    * replaced source is released, so a view from \ref source or a pointer from \ref sourceStore
    * taken before this call must not be used after it, just as a view must not be kept across a
-   * source edit. The new source's version starts again at 0, so a version recorded before this
-   * call does not identify the source after it.
+   * source edit. Replacing a source store advances its version past the previous version, so
+   * edits recorded against the old source are rejected. Existing nodes lose their source
+   * locations until the caller rebuilds the tree against the new bytes.
    *
    * The XML parser calls this before any other code can reach the document. On a document other
    * code can reach, call it as a source edit is made: for an SVG document, under its write access

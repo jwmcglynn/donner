@@ -167,6 +167,54 @@ TEST_F(XMLDocumentTests, SourceDiagnosticIsEmptyForFreshDocuments) {
   EXPECT_FALSE(parsedDoc.sourceDiagnostic().has_value());
 }
 
+TEST_F(XMLDocumentTests, SetSourceRejectsIntentsFromEarlierSourceVersions) {
+  for (int editCount : {0, 2}) {
+    SCOPED_TRACE(editCount);
+    XMLDocument doc = ParseDocument("<root id=\"a\"/>");
+    const std::size_t valueOffset = doc.source().find("id=\"") + 4;
+    for (int index = 0; index < editCount; ++index) {
+      ASSERT_TRUE(doc.sourceStore()->replace(valueOffset, 1, index % 2 ? "a" : "x").has_value());
+    }
+
+    const std::uint64_t staleVersion = doc.sourceVersion();
+    const XMLEditIntent staleIntent{
+        .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 1)},
+        .replacement = "z",
+        .sourceVersion = staleVersion,
+    };
+    doc.setSource("<root id=\"b\"/>");
+    for (int index = 0; index < editCount; ++index) {
+      ASSERT_TRUE(doc.sourceStore()->replace(valueOffset, 1, index % 2 ? "b" : "y").has_value());
+    }
+
+    EXPECT_GT(doc.sourceVersion(), staleVersion);
+    const std::string sourceBefore(doc.source());
+    ApplySourceEditResult result = doc.applySourceEdit(staleIntent);
+    EXPECT_FALSE(result.applied);
+    EXPECT_THAT(result, DiagnosticReasonContains("Source version mismatch"));
+    EXPECT_EQ(doc.source(), sourceBefore);
+  }
+}
+
+TEST_F(XMLDocumentTests, SetSourceInvalidatesOldNodeSourceLocations) {
+  XMLDocument doc = ParseDocument("<root id=\"a\"><child/></root>");
+  ASSERT_TRUE(doc.root().firstChild().has_value());
+  XMLNode root = *doc.root().firstChild();
+  ASSERT_TRUE(root.firstChild().has_value());
+  XMLNode child = *root.firstChild();
+  ASSERT_TRUE(root.getNodeLocation().has_value());
+  ASSERT_TRUE(root.getAttributeSourceLocation("id").has_value());
+  ASSERT_TRUE(child.getNodeLocation().has_value());
+  child.remove();
+  ASSERT_TRUE(child.getNodeLocation().has_value());
+
+  doc.setSource("<root id=\"b\"><other/></root>");
+
+  EXPECT_FALSE(root.getNodeLocation().has_value());
+  EXPECT_FALSE(root.getAttributeSourceLocation("id").has_value());
+  EXPECT_FALSE(child.getNodeLocation().has_value());
+}
+
 TEST_F(XMLDocumentTests, SourceDiagnosticRecordsUnclassifiedEditsUntilCovered) {
   XMLDocument doc = ParseDocument("<root><child id=\"c\"/></root>");
   const std::size_t closeOffset = doc.source().find("</root>");
@@ -2523,21 +2571,18 @@ TEST_F(XMLDocumentTests, SetAttributeExistingAttributeWithMalformedFallbackRange
   EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("red")));
 }
 
-TEST_F(XMLDocumentTests, SetAttributeRejectsExistingValueWhenOffsetIsNotUtf8Boundary) {
+TEST_F(XMLDocumentTests, SetAttributeAfterSetSourceCannotUseOldAttributeRange) {
   XMLDocument doc = ParseDocument(R"(<svg><rect fill="red"/></svg>)");
   XMLNode rect = doc.root().firstChild()->firstChild().value();
-  std::string corruptSource(doc.source());
-  const std::size_t valueOffset = corruptSource.find("red");
-  ASSERT_NE(valueOffset, std::string::npos);
-  corruptSource.insert(valueOffset, std::string("\x80", 1));
-  doc.setSource(corruptSource);
+  constexpr std::string_view kReplacement = R"(<svg><rect fill="tan"/></svg>)";
+  doc.setSource(std::string(kReplacement));
 
   ApplySourceEditResult result = doc.setAttribute(rect, "fill", "blue");
 
   EXPECT_FALSE(result.applied);
-  EXPECT_THAT(result, DiagnosticReasonContains("Invalid source replacement"));
+  EXPECT_THAT(result, DiagnosticReasonContains("without a source range"));
   EXPECT_THAT(rect.getAttribute("fill"), Optional(Eq("red")));
-  EXPECT_EQ(doc.source(), corruptSource);
+  EXPECT_EQ(doc.source(), kReplacement);
 }
 
 TEST_F(XMLDocumentTests, SetAttributeOnSourcelessNodeInSourceDocumentFails) {
@@ -3497,20 +3542,18 @@ TEST_F(XMLDocumentTests, SetElementTextRejectsInvalidXmlText) {
   EXPECT_EQ(doc.source(), R"(<svg><text>hello</text></svg>)");
 }
 
-TEST_F(XMLDocumentTests, SetElementTextRejectsInsertionWhenEndOffsetIsNotUtf8Boundary) {
+TEST_F(XMLDocumentTests, SetElementTextAfterSetSourceCannotUseOldInsertionPoint) {
   XMLDocument doc = ParseDocument(R"(<svg><text/></svg>)");
   XMLNode text = doc.root().firstChild()->firstChild().value();
-  std::string corruptSource(doc.source());
-  const std::size_t selfClosingEnd = corruptSource.find("/>") + 2;
-  corruptSource.insert(selfClosingEnd, std::string("\x80", 1));
-  doc.setSource(corruptSource);
+  constexpr std::string_view kReplacement = R"(<svg><text id="n"/></svg>)";
+  doc.setSource(std::string(kReplacement));
 
   ApplySourceEditResult result = doc.setElementText(text, "hello");
 
   EXPECT_FALSE(result.applied);
-  EXPECT_THAT(result, DiagnosticReasonContains("Invalid source replacement"));
+  EXPECT_THAT(result, DiagnosticReasonContains("without a source insertion point"));
   EXPECT_FALSE(text.value().has_value());
-  EXPECT_EQ(doc.source(), corruptSource);
+  EXPECT_EQ(doc.source(), kReplacement);
 }
 
 TEST_F(XMLDocumentTests, SetElementTextRejectsExistingTextWhenOffsetIsNotUtf8Boundary) {
@@ -3806,46 +3849,45 @@ TEST_F(XMLDocumentTests, InsertNodeMoveOfCommentOnlySourceRangeFails) {
   EXPECT_EQ(doc.source(), R"(<svg><!--c--><m/><b></b></svg>)");
 }
 
-TEST_F(XMLDocumentTests, InsertNodeMoveBackwardRemovalAtNonUtf8BoundaryFails) {
+TEST_F(XMLDocumentTests, InsertNodeMoveBackwardAfterSetSourceCannotUseOldRange) {
   XMLDocument doc = ParseDocument(R"(<svg><b></b><m/></svg>)");
   XMLNode svg = doc.root().firstChild().value();
   XMLNode b = svg.firstChild().value();
   XMLNode m = b.nextSibling().value();
-  // Corrupt the source so the byte just past the moved node is a bare UTF-8 continuation
-  // byte; the removal half of the move then fails at that boundary.
-  std::string corruptSource(doc.source());
-  corruptSource.insert(corruptSource.find("<m/>") + 4, std::string("\x80", 1));
-  doc.setSource(corruptSource);
+  // Replacing the whole source invalidates the moved node's location, even if its old
+  // byte offsets happen to fall within the new source.
+  constexpr std::string_view kReplacement = R"(<svg><b></b><n/></svg>)";
+  doc.setSource(std::string(kReplacement));
 
   ApplySourceEditResult result = doc.insertNode(b, m);
 
   EXPECT_FALSE(result.applied);
-  EXPECT_THAT(result, DiagnosticReasonContains("Invalid source removal for node move"));
+  EXPECT_THAT(result, DiagnosticReasonContains("Cannot move a partially source-backed node"));
   ASSERT_TRUE(b.nextSibling().has_value());
   EXPECT_EQ(*b.nextSibling(), m);
+  EXPECT_EQ(doc.source(), kReplacement);
 }
 
-TEST_F(XMLDocumentTests, InsertNodeMoveForwardRemovalAtNonUtf8BoundaryFails) {
+TEST_F(XMLDocumentTests, InsertNodeMoveForwardWithOnlyReferenceLocationRestoredFails) {
   XMLDocument doc = ParseDocument(R"(<svg><m/><b></b></svg>)");
   XMLNode svg = doc.root().firstChild().value();
   XMLNode m = svg.firstChild().value();
   XMLNode b = m.nextSibling().value();
-  // Corrupt the source so the byte just past the moved node is a bare UTF-8 continuation
-  // byte, then restore <b>'s locations (setSource invalidated its anchors).
-  std::string corruptSource(doc.source());
-  corruptSource.insert(9, std::string("\x80", 1));
-  doc.setSource(corruptSource);
-  b.setSourceStartOffset(FileOffset::Offset(10));
-  b.setSourceEndOffset(FileOffset::Offset(17));
-  b.setClosingTagLocation(SourceRange{FileOffset::Offset(13), FileOffset::Offset(17)});
+  // Restore the reference node's location after replacing the source. The moved node's
+  // old location remains invalid, so the move must not use it.
+  constexpr std::string_view kReplacement = R"(<svg><n/><b></b></svg>)";
+  doc.setSource(std::string(kReplacement));
+  b.setSourceStartOffset(FileOffset::Offset(9));
+  b.setSourceEndOffset(FileOffset::Offset(16));
+  b.setClosingTagLocation(SourceRange{FileOffset::Offset(12), FileOffset::Offset(16)});
 
   ApplySourceEditResult result = doc.insertNode(b, m);
 
   EXPECT_FALSE(result.applied);
-  EXPECT_THAT(result, DiagnosticReasonContains("Invalid source removal for node move"));
+  EXPECT_THAT(result, DiagnosticReasonContains("Cannot move a partially source-backed node"));
   ASSERT_TRUE(svg.firstChild().has_value());
   EXPECT_EQ(*svg.firstChild(), m);
-  EXPECT_EQ(doc.source(), corruptSource);
+  EXPECT_EQ(doc.source(), kReplacement);
 }
 
 TEST_F(XMLDocumentTests, InsertNodeMoveBackwardInsertionAtNonUtf8BoundaryFails) {
@@ -4145,41 +4187,38 @@ TEST_F(XMLDocumentTests, SetAttributeInsertionWithInvalidUtf8NameFails) {
   EXPECT_EQ(doc.source(), R"(<svg><rect/></svg>)");
 }
 
-TEST_F(XMLDocumentTests, RemoveAttributeAtNonUtf8BoundaryFails) {
+TEST_F(XMLDocumentTests, RemoveAttributeAfterSetSourceCannotUseOldRange) {
   XMLDocument doc = ParseDocument(R"(<svg><rect fill="red"/></svg>)");
   XMLNode rect = doc.root().firstChild()->firstChild().value();
-  // Insert a bare continuation byte right after the closing quote; the removal range then
-  // ends at a non-boundary offset.
-  std::string corruptSource(doc.source());
-  const std::size_t afterQuote = corruptSource.find(R"("red")") + 5;
-  corruptSource.insert(afterQuote, std::string("\x80", 1));
-  doc.setSource(corruptSource);
+  // An old attribute range must not be reused after whole-source replacement, even when
+  // its offsets still fit within the new bytes.
+  constexpr std::string_view kReplacement = R"(<svg><rect fill="tan"/></svg>)";
+  doc.setSource(std::string(kReplacement));
 
   ApplySourceEditResult result = doc.removeAttribute(rect, "fill");
 
   EXPECT_FALSE(result.applied);
-  EXPECT_THAT(result, DiagnosticReasonContains("Invalid source replacement for attribute removal"));
+  EXPECT_THAT(result, DiagnosticReasonContains("Cannot remove attribute without a source range"));
   EXPECT_TRUE(rect.hasAttribute("fill"));
-  EXPECT_EQ(doc.source(), corruptSource);
+  EXPECT_EQ(doc.source(), kReplacement);
 }
 
-TEST_F(XMLDocumentTests, RemoveNodeAtNonUtf8BoundaryFails) {
+TEST_F(XMLDocumentTests, RemoveNodeAfterSetSourceCannotUseOldRange) {
   XMLDocument doc = ParseDocument(R"(<svg><rect/></svg>)");
   XMLNode svg = doc.root().firstChild().value();
   XMLNode rect = svg.firstChild().value();
-  // Insert a bare continuation byte right after the node; its removal range then ends at a
-  // non-boundary offset.
-  std::string corruptSource(doc.source());
-  corruptSource.insert(corruptSource.find("<rect/>") + 7, std::string("\x80", 1));
-  doc.setSource(corruptSource);
+  // The old node range is invalidated by the replacement, even though its offsets still
+  // fall within the new source.
+  constexpr std::string_view kReplacement = R"(<svg><circle/></svg>)";
+  doc.setSource(std::string(kReplacement));
 
   ApplySourceEditResult result = doc.removeNode(rect);
 
   EXPECT_FALSE(result.applied);
-  EXPECT_THAT(result, DiagnosticReasonContains("Invalid source replacement for node removal"));
+  EXPECT_THAT(result, DiagnosticReasonContains("Cannot remove node without a source range"));
   ASSERT_TRUE(svg.firstChild().has_value());
   EXPECT_EQ(*svg.firstChild(), rect);
-  EXPECT_EQ(doc.source(), corruptSource);
+  EXPECT_EQ(doc.source(), kReplacement);
 }
 
 TEST_F(XMLDocumentTests, SetElementTextWithReversedValueRangeClearsRangeAndAppends) {

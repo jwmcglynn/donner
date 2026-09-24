@@ -150,11 +150,14 @@ void UpdateAnchorsForReplacement(AnchorMapT& anchors, std::size_t offset, std::s
 
 }  // namespace
 
-XMLSourceStore::XMLSourceStore(std::string source, std::size_t maximumSourceSize)
-    : XMLSourceStore(std::move(source), ResourceLimits{.maximumSourceSize = maximumSourceSize}) {}
+XMLSourceStore::XMLSourceStore(std::string source, std::size_t maximumSourceSize,
+                               std::uint64_t initialSourceVersion)
+    : XMLSourceStore(std::move(source), ResourceLimits{.maximumSourceSize = maximumSourceSize},
+                     initialSourceVersion) {}
 
-XMLSourceStore::XMLSourceStore(std::string source, ResourceLimits limits)
-    : source_(std::move(source)), resourceLimits_(limits) {
+XMLSourceStore::XMLSourceStore(std::string source, ResourceLimits limits,
+                               std::uint64_t initialSourceVersion)
+    : source_(std::move(source)), resourceLimits_(limits), sourceVersion_(initialSourceVersion) {
   resourceLimits_.maximumSourceSize = std::max(resourceLimits_.maximumSourceSize, source_.size());
 }
 
@@ -250,6 +253,9 @@ void XMLSourceStore::invalidateAnchor(SourceAnchorId id) {
 
 std::optional<XMLSourceDelta> XMLSourceStore::replace(std::size_t offset, std::size_t length,
                                                       std::string_view replacement) {
+  if (sourceVersion_ == std::numeric_limits<std::uint64_t>::max()) {
+    return std::nullopt;
+  }
   if (!ReplacementRangeIsValid(source_.size(), offset, length)) {
     return std::nullopt;
   }

@@ -199,6 +199,7 @@ TEST(SVGDocument, SourceAccessorsReportSourceInstalledThroughTheXmlDocument) {
   EXPECT_TRUE(document.hasSourceStore());
   EXPECT_THAT(document.source(), Eq(kReplacement));
   EXPECT_EQ(document.sourceVersion(), document.xmlDocument().sourceVersion());
+  EXPECT_GT(document.sourceVersion(), 1u);
 }
 
 /// A document built from an XML tree without source text has no source store until source text is
