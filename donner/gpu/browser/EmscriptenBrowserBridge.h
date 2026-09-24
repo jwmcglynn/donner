@@ -44,7 +44,9 @@ public:
   /// \ref beginDeviceRequest.
   EmscriptenBrowserBridge();
 
-  /// Destructor; releases the browser device and every object still registered under it.
+  /// Destructor; releases this logical device's state on the browser side and leaves every other
+  /// logical device's alone. The browser device, and the textures its shares still hold, go with
+  /// the last logical device over it.
   ~EmscriptenBrowserBridge() override;
 
   BridgeStatus beginDeviceRequest() override;

@@ -7,8 +7,8 @@ ownership are merged and qualified. Root selection now takes a backend kind and 
 native Metal backend on request; the transitional adapter stays the production path on every
 platform until that platform's suites pass natively (see [Native parity](#native-parity)).
 Cross-device texture registration is implemented on Metal, the browser backend and the
-transitional adapter. Native backend conformance, presentation cutover, the per-platform default flips, and dependency removal
-remain open.\
+transitional adapter. Native backend conformance, presentation cutover, the per-platform default
+flips, and dependency removal remain open.\
 **Created:** 2026-07-05\
 **Updated:** 2026-09-23\
 **Author:** Claude Fable 5.1\
@@ -243,8 +243,8 @@ commits and their fixes together in a focused reviewable change.
       share a native device. Snapshot capture, cross-context snapshot drawing and UI snapshot
       registration all register the export a snapshot takes on its producer's thread at adoption,
       so no consumer reads the producer's tables, and the adapter's cross-device import is gone.
-      Host-supplied render targets still enter through the adapter's external-texture import;
-      removing that re-import belongs to the raw target binding item below.
+      Host-supplied render targets reach the renderer as runtime textures of its own device, and
+      the adapter's external-texture import is left only to the baseline counter-capture tool.
 - [ ] Replace raw target binding in `RendererGeode` and `EditorShellPresentation` with validated
       runtime textures or acquired surface textures, retaining embedder ownership where applicable.
 
