@@ -225,6 +225,12 @@ public:
   /// lets it publish normally when its handler has not run yet. Safe when nothing is held.
   void releaseHeldCompletionForTest();
 
+  /// Bounds how long a present waits for its frame's work, in place of the five seconds it
+  /// otherwise allows, so a case reaches the bound without spending it, and before the system's
+  /// own timeout ends a command buffer that makes no progress.
+  /// @param timeout Longest a present waits; zero or less restores the default.
+  void setPresentCompletionTimeoutForTest(std::chrono::milliseconds timeout);
+
   /// Waits until \p count submissions have had all their completion handlers run on this device,
   /// parked ones included. Test seam for ordering completions deterministically.
   /// @param count Submissions to wait for. @param timeoutSeconds Longest to wait.

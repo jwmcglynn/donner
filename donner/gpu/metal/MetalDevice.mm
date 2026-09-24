@@ -787,6 +787,9 @@ struct MetalDevice::Impl {
   std::optional<size_t> failedCommandBufferIndex;
   /// Set by \ref MetalDevice::holdNextCompletionForTest; consumed by the next submission.
   bool holdNextCompletion = false;
+  /// Longest a present waits for its frame's work; see
+  /// \ref MetalDevice::setPresentCompletionTimeoutForTest.
+  double presentCompletionTimeoutSeconds = kPresentCompletionTimeoutSeconds;
 
   /// Whether resources are built for unified memory; decides every storage mode below.
   bool unifiedMemory = true;
@@ -959,6 +962,12 @@ void MetalDevice::failNextSubmissionForTest(std::optional<size_t> commandBufferI
 
 void MetalDevice::holdNextCompletionForTest() {
   impl_->holdNextCompletion = true;
+}
+
+void MetalDevice::setPresentCompletionTimeoutForTest(std::chrono::milliseconds timeout) {
+  impl_->presentCompletionTimeoutSeconds = timeout > std::chrono::milliseconds::zero()
+                                               ? std::chrono::duration<double>(timeout).count()
+                                               : kPresentCompletionTimeoutSeconds;
 }
 
 void MetalDevice::releaseHeldCompletionForTest() {
@@ -2492,7 +2501,7 @@ Result<SurfaceStatus> MetalDevice::onPresentSurface(uint32_t slotIndex) {
   const std::optional<uint32_t> textureSlot = GetSlot(impl_->surfaceTextureSlots, slotIndex);
   const uint64_t frameSerial = textureSlot.has_value() ? lastTextureUseSerial(*textureSlot) : 0;
   const bool frameFinished = frameSerial <= completedSerial() ||
-                             waitForSerial(frameSerial, kPresentCompletionTimeoutSeconds);
+                             waitForSerial(frameSerial, impl_->presentCompletionTimeoutSeconds);
   // A lost root is checked after the wait, and whether or not there was one: a submission that
   // failed on the GPU declares the loss and then completes its serial, so a frame whose own work
   // failed reads as finished.
