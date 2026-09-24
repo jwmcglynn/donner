@@ -293,6 +293,18 @@ py_test(
 )
 
 py_library(
+    name = "pages_artifact",
+    srcs = ["pages_artifact.py"],
+)
+
+py_test(
+    name = "pages_artifact_tests",
+    size = "small",
+    srcs = ["pages_artifact_tests.py"],
+    deps = [":pages_artifact"],
+)
+
+py_library(
     name = "bcr_admission",
     srcs = ["bcr_admission.py"],
     deps = [":bcr_source"],
