@@ -29,7 +29,8 @@ struct UnparsedProperty {
  * and will be considered as "user units", which are equivalent to pixels. For properties set on the
  * CSS style attribute, units must be specified.
  *
- * When set to \ref AllowUserUnits, the parser will accept numbers without units, such as `15`.
+ * When set to \ref PropertyParseBehavior::AllowUserUnits, the parser will accept numbers without
+ * units, such as `15`.
  */
 enum class PropertyParseBehavior {
   /// Require units for numbers, such as `15px`, with the exception of `0` which may be unitless.

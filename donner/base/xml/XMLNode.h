@@ -89,7 +89,8 @@ public:
     /// @see https://www.w3.org/TR/xml/#sec-pi
     ProcessingInstruction,
     /// XML Declaration node, such as `<?xml ... ?>`, which is a special case of \ref
-    /// ProcessingInstruction when the type is "xml". Contents are parsed as attributes. \ref
+    /// XMLNode::Type::ProcessingInstruction when the type is "xml". Contents are parsed as
+    /// attributes. \ref
     /// tagName() is "xml" and \ref value() is empty.
     /// @see https://www.w3.org/TR/xml/#sec-prolog-dtd
     XMLDeclaration,

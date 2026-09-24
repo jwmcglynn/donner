@@ -225,7 +225,7 @@ struct Length {
    *   `std::format`'s `{:g}` specifier.
    * - `LengthUnit::None` produces a bare number with no unit suffix.
    * - `LengthUnit::Percent` uses `%`; absolute and relative units use their CSS identifiers
-   *   (see \ref operator<<(LengthUnit)).
+   *   (see `operator<<(std::ostream&, LengthUnit)`).
    *
    * Round-trips with `donner::parser::LengthParser::Parse` for every unit supported by the
    * parser.

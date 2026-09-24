@@ -51,9 +51,9 @@ struct FontFaceSource {
 /**
  * In-memory representation of a single `@font-face` rule.
  *
- * \ref FontFaceIdentityKey is total over every field below, for the reason spelled out on \ref
- * FontFaceSource: extend the key with any field added here, or two rules differing only in the new
- * field become one and the second is dropped.
+ * \ref FontFaceIdentityKey is total over every field below. As explained for
+ * \ref FontFaceSource, extend the key with any field added here; otherwise two rules differing
+ * only in the new field become one and the second is dropped.
  */
 struct FontFace {
   RcString familyName;                  ///< font-family descriptor

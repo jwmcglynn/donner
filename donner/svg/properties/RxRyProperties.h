@@ -21,7 +21,7 @@ namespace donner::svg {
  * This is used for \ref xml_rect or \ref xml_ellipse.
  *
  * Percentages resolve against the axis of the property they belong to: `rx` against the viewport
- * width (\ref Lengthd::Extent::X) and `ry` against the viewport height (\ref Lengthd::Extent::Y).
+ * width (`Lengthd::Extent::X`) and `ry` against the viewport height (`Lengthd::Extent::Y`).
  * The "auto" fallback uses the *other* property's value, which must resolve against the *other*
  * axis - so the primary and fallback extents are distinct.
  *

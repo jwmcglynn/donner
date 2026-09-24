@@ -89,8 +89,8 @@ struct XMLMutation {
 struct ApplySourceEditResult {
   /// True if the operation fully applied: source bytes changed and the tree was updated
   /// to match. A multi-step operation that fails partway still commits its completed
-  /// source replacements, so check \ref sourceDeltas for the exact record of committed
-  /// changes rather than assuming applied false means untouched bytes.
+  /// source replacements, so check `sourceDeltas` for the exact record of committed changes rather
+  /// than assuming applied false means untouched bytes.
   bool applied = false;
   ReparseScope scope = ReparseScope::Document;  ///< Reparse scope selected for the edit.
   /// Source edits committed by this operation, in order. Non-empty whenever source bytes

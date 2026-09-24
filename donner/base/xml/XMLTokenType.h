@@ -20,7 +20,7 @@ namespace donner::xml {
  * source range recovers the original input byte-for-byte. No byte is
  * covered by two tokens, and no byte is uncovered (except trailing
  * whitespace after the last element, which is emitted as
- * \ref TextContent).
+ * \ref XMLTokenType::TextContent).
  */
 enum class XMLTokenType : std::uint8_t {
   TagOpen,                ///< `<` (element open) or `</` (closing tag).

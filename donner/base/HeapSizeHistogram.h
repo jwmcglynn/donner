@@ -5,7 +5,7 @@
 /// See `HeapSizeHistogram.cc` for what this measures and how to turn it on. The
 /// header compiles and the accessors link in every configuration; without
 /// `DONNER_HEAP_SIZE_HISTOGRAM` they report an empty histogram and
-/// \ref HeapSizeHistogramEnabled returns false, so callers never need their own
+/// `HeapSizeHistogramEnabled()` returns false, so callers never need their own
 /// preprocessor guard.
 
 #include <cstddef>

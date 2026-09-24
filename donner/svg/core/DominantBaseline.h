@@ -29,9 +29,9 @@ enum class DominantBaseline : uint8_t {
   Mathematical,  ///< Align to the mathematical baseline.
   Hanging,       ///< Align to the hanging baseline.
   TextTop,       ///< Align to the top of the text. Also `text-before-edge` / `before-edge`.
-  UseScript,     ///< Deprecated SVG 1.1 keyword; behaves like \ref Auto.
+  UseScript,     ///< Deprecated SVG 1.1 keyword; behaves like \ref DominantBaseline::Auto.
   NoChange,      ///< Deprecated SVG 1.1 keyword; uses the parent's dominant baseline.
-  ResetSize,     ///< Deprecated SVG 1.1 keyword; behaves like \ref Auto.
+  ResetSize,     ///< Deprecated SVG 1.1 keyword; behaves like \ref DominantBaseline::Auto.
 };
 
 /**

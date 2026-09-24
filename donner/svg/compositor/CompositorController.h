@@ -28,7 +28,7 @@ namespace donner::svg::compositor {
 /// Maximum number of compositor layers that can be simultaneously active.
 inline constexpr int kMaxCompositorLayers = 32;
 
-/// Bitmap payload policy for \ref CompositorController::snapshotTilesForUpload.
+/// Bitmap payload policy for `CompositorController::snapshotTilesForUpload`.
 enum class CompositorTileBitmapPayload : uint8_t {
   /// Include every available tile bitmap.
   All,

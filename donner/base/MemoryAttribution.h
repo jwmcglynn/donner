@@ -24,11 +24,11 @@
 /// Two kinds of counter, because two kinds of growth need different questions
 /// asked of them:
 ///
-///   - \ref SetRetainedBytes is a level. The owner republishes its current
+///   - `SetRetainedBytes()` is a level. The owner republishes its current
 ///     total whenever it changes; the probe tracks the high water. Unbounded
 ///     retention shows up as a level that climbs and never falls.
-///   - \ref AddTransientBytes is a per-frame flow. The owner adds what it
-///     allocated during the frame; \ref SampleMemoryAttribution closes the
+///   - `AddTransientBytes()` is a per-frame flow. The owner adds what it
+///     allocated during the frame; `SampleMemoryAttribution()` closes the
 ///     window. A per-frame allocation that should have been a reuse shows up
 ///     as a flow that stays high while the level stays flat, which is exactly
 ///     the shape that inflates linear memory without leaking.

@@ -60,7 +60,8 @@ private:
  * are associated in the tree.
  *
  * By default, a space between compound selectors is a descendant combinator, e.g. `div span` is a
- * \ref Descendant combinator, while `div > span` is a \ref Child combinator.
+ * \ref Combinator::Descendant combinator, while `div > span` is a
+ * \ref Combinator::Child combinator.
  */
 enum class Combinator {
   Descendant,         ///< Space-separated, finds descendants in the tree.

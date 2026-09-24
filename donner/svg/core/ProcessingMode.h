@@ -9,7 +9,8 @@ namespace donner::svg {
  * SVG document processing mode, per SVG2 §2.7.1.
  *
  * Controls which features are available when processing a document. Sub-documents referenced by
- * `<image>` are loaded in \ref SecureStatic or \ref SecureAnimated mode to prevent external
+ * `<image>` are loaded in \ref ProcessingMode::SecureStatic or
+ * \ref ProcessingMode::SecureAnimated mode to prevent external
  * resource loading and script execution.
  */
 enum class ProcessingMode : uint8_t {

@@ -19,10 +19,10 @@ struct CffGlyphOutlineComplexity {
 
 /// Outcome of bounded CFF outline validation.
 enum class CffOutlineValidationStatus : uint8_t {
-  Complete,
-  UnsupportedVariation,
-  WorkLimitExceeded,
-  Invalid,
+  Complete,              ///< Every glyph validated within the work budget.
+  UnsupportedVariation,  ///< Variable CFF2 operators require a decoder this validator cannot bound.
+  WorkLimitExceeded,     ///< Validation exhausted the caller's work budget.
+  Invalid,               ///< The CFF data is malformed.
 };
 
 /// Per-glyph complexities returned by the bounded CFF interpreter.
@@ -38,7 +38,7 @@ struct CffOutlineValidationResult {
 /**
  * Validate CFF1 or non-variable CFF2 charstrings without materializing outlines.
  *
- * Variable CFF2 operators return \ref CffOutlineValidationStatus::UnsupportedVariation so callers
+ * Variable CFF2 operators return `CffOutlineValidationStatus::UnsupportedVariation` so callers
  * can retain directory validation while failing closed before an untrusted outline decoder.
  * Legacy CFF1 endchar composites include their resolved component costs in the returned bound.
  *
