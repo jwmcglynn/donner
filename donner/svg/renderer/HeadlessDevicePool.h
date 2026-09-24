@@ -3,11 +3,12 @@
 /// \c donner::svg::details::HeadlessDevicePool - the small cache of idle headless devices that
 /// renderers without a device of their own draw from.
 
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -18,13 +19,17 @@ namespace donner::svg::details {
  * of its own, so a renderer torn down and rebuilt reuses a device instead of opening another.
  *
  * A device is handed out as a lease: releasing the last reference to what \ref acquire returned
- * puts the device back, unless it has been lost. A lost device is never handed out again, and a
- * full cache gives up its oldest idle device to keep the one just released.
+ * puts the device back, unless it has been lost. A lost device is never handed out again.
  *
  * A device bound to the thread that opened it, as a browser device is to its worker, is handed
- * back only to that thread; any other device goes to whichever thread asks. An idle device bound
- * to a thread that has since exited can never be handed out again, which is why a full cache
- * gives up its oldest device rather than the newest.
+ * back only to that thread, and only that thread may destroy it: a browser device destroyed
+ * elsewhere cannot release what it made. Any other device goes to, and may be destroyed by,
+ * whichever thread asks. A full cache therefore gives up the oldest idle device the releasing
+ * thread may destroy, which is the device just released when every older one belongs to another
+ * thread. An idle device bound to a thread that has since exited can never be handed out again,
+ * which is why the oldest goes rather than the newest. The cache holds more than its bound only
+ * while every idle device belongs to a thread other than the one releasing, which that release
+ * cannot destroy.
  *
  * @tparam Device Device type. It provides `bool isDeviceLost() const` and
  *   `bool isBoundToCreatingThread() const`.
@@ -56,7 +61,7 @@ public:
    *   already lost.
    */
   std::shared_ptr<Device> acquire() {
-    const std::thread::id here = std::this_thread::get_id();
+    const uint64_t here = ThisThreadToken();
     Idle taken;
     for (;;) {
       {
@@ -64,7 +69,7 @@ public:
         // The most recently released device this thread may use.
         auto usable = idle_.end();
         for (auto it = idle_.begin(); it != idle_.end(); ++it) {
-          if (!it->device->isBoundToCreatingThread() || it->creator == here) {
+          if (it->usableFrom(here)) {
             usable = it;
           }
         }
@@ -97,10 +102,25 @@ public:
   }
 
 private:
+  /// A number naming the calling thread, never given to another thread in this process. A thread
+  /// identifier would do only while its thread lives: one that has exited can be reused, which
+  /// would hand the exited thread's bound devices to a new thread.
+  static uint64_t ThisThreadToken() {
+    static std::atomic<uint64_t> nextToken{1};
+    thread_local const uint64_t token = nextToken.fetch_add(1, std::memory_order_relaxed);
+    return token;
+  }
+
   /// A device and the thread that opened it.
   struct Idle {
     std::shared_ptr<Device> device;  //!< The device.
-    std::thread::id creator;         //!< Thread that opened it.
+    uint64_t creator = 0;            //!< \ref ThisThreadToken of the thread that opened it.
+
+    /// Whether the thread named \p thread may take the device, or destroy it.
+    /// @param thread \ref ThisThreadToken of the asking thread.
+    [[nodiscard]] bool usableFrom(uint64_t thread) const {
+      return !device->isBoundToCreatingThread() || creator == thread;
+    }
   };
 
   /// What a handed-out device's references share: the device, returned to the cache when the
@@ -114,21 +134,28 @@ private:
     Idle idle;                 //!< Device handed out.
   };
 
-  /// Keeps \p released for a later \ref acquire unless it is lost, giving up the oldest idle
-  /// device when the cache is full. A device given up is destroyed here, outside the lock.
+  /// Keeps \p released for a later \ref acquire unless it is lost. When the cache is full it gives
+  /// up the oldest idle device this thread may destroy, which may be \p released itself, and
+  /// destroys it here, outside the lock.
   /// @param released Device a lease released.
   void release(Idle released) {
-    if (!released.device || released.device->isDeviceLost() || maxIdleDevices_ == 0) {
+    if (!released.device || released.device->isDeviceLost()) {
       return;
     }
+    const uint64_t here = ThisThreadToken();
     Idle givenUp;
     {
       const std::lock_guard lock(mutex_);
-      if (idle_.size() >= maxIdleDevices_) {
-        givenUp = std::move(idle_.front());
-        idle_.erase(idle_.begin());
-      }
       idle_.push_back(std::move(released));
+      if (idle_.size() > maxIdleDevices_) {
+        for (auto it = idle_.begin(); it != idle_.end(); ++it) {
+          if (it->usableFrom(here)) {
+            givenUp = std::move(*it);
+            idle_.erase(it);
+            break;
+          }
+        }
+      }
     }
   }
 
