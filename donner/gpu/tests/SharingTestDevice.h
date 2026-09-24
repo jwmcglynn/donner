@@ -80,6 +80,7 @@ struct SharingOptions {
   const void* family = &kSharingFamily;                     //!< Backend family tag.
   SourceOrdering ordering = SourceOrdering::WaitForSource;  //!< Ordering its exports report.
   std::shared_ptr<DeviceLostState> lostState;               //!< Shared loss condition, or null.
+  bool refuseExport = false;                                //!< Refuse native texture export.
 };
 
 /**
@@ -125,6 +126,9 @@ protected:
     return {options_.family, &native_};
   }
   Result<BackendTextureExport> onExportTexture(uint32_t slotIndex) override {
+    if (options_.refuseExport) {
+      return GpuError{GpuErrorType::Unsupported, "test backend rejected export"};
+    }
     BackendTextureExport exported;
     exported.backing =
         std::make_shared<const FakeExportedTexture>(textures_.at(slotIndex).owned, native_);
