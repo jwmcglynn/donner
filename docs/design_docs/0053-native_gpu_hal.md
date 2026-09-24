@@ -626,9 +626,10 @@ performance and the publication gates remain open.
       Headless creation uses the same owner; borrowed embedders retain host ownership; under
       WebAssembly each worker's contexts share the browser device that worker obtained.
 - [ ] Finish Vulkan owned-image registration across runtime devices over one selected root.
-      Direct and native snapshot tests, in-flight lifetime, acquired-frame refusal, concurrent
-      sync validation and focused TSan pass. Next: wider selected-backend Geode parity,
-      root-lock performance, independent review, full qualification and PR publication.
+      Implementation is in PR #1515. Direct registration, native snapshot, in-flight lifetime,
+      acquired-frame refusal, synchronization validation, focused TSan, scoped full suite and
+      editor integration pass on the implementation code. Hosted PR gates, wider selected-backend
+      Geode parity and integrated root-lock performance acceptance remain before this closes.
 - [ ] Make the selected `gpu::Device` the backend owner. Turn `GeodeDevice` into backend-neutral
       renderer services for counters, caches, dummy resources, and deferred retirement; update
       headless and embedded construction. The selected device owns its backend root
