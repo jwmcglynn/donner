@@ -12,6 +12,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -93,6 +94,21 @@ public:
   /// How many shares have been released.
   uint64_t releasedShares = 0;
 
+  /// Lets the device go, as the browser side does once no logical device over it is left: every
+  /// texture a share still holds is destroyed, except a canvas frame, and the shares are
+  /// forgotten, so a release that arrives afterwards finds nothing.
+  void release() {
+    for (const auto& [share, held] : shares_) {
+      if (!held.canvasOwned) {
+        destroyTexture(held.texture);
+      }
+    }
+    shares_.clear();
+  }
+
+  /// Number of shares the device still holds.
+  [[nodiscard]] size_t liveShares() const { return shares_.size(); }
+
 private:
   /// A texture held for the other logical devices.
   struct Share {
@@ -108,15 +124,22 @@ private:
 };
 
 /// A share the fake browser device made, released on that device when the runtime drops it.
+///
+/// Like the browser side's, it belongs to the worker that made it: a drop on the thread that made
+/// the share releases it there, and a drop on any other thread does not reach the device.
 class FakeSharedTexture final : public BrowserSharedTexture {
 public:
   /// Constructs the share \p share of \p gpuDevice. @param gpuDevice Device the share belongs to.
   /// @param share Share identifier.
   FakeSharedTexture(std::shared_ptr<FakeBrowserGpuDevice> gpuDevice, BrowserTextureShareId share)
-      : gpuDevice_(std::move(gpuDevice)), share_(share) {}
+      : gpuDevice_(std::move(gpuDevice)), share_(share), ownerThread_(std::this_thread::get_id()) {}
 
-  /// Destructor; releases the share on its device.
-  ~FakeSharedTexture() override { gpuDevice_->releaseShare(share_); }
+  /// Destructor; releases the share on its device when dropped on the thread that made it.
+  ~FakeSharedTexture() override {
+    if (std::this_thread::get_id() == ownerThread_) {
+      gpuDevice_->releaseShare(share_);
+    }
+  }
 
   BrowserTextureShareId shareId() const override { return share_; }
   const void* sharedDeviceIdentity() const override { return gpuDevice_.get(); }
@@ -124,6 +147,7 @@ public:
 private:
   std::shared_ptr<FakeBrowserGpuDevice> gpuDevice_;
   BrowserTextureShareId share_;
+  std::thread::id ownerThread_;
 };
 
 /**

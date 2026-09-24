@@ -1758,6 +1758,68 @@ TEST(BrowserDeviceSharing, RefusesATextureOfAnotherBrowserDevice) {
                                     HasSubstr("belongs to a different native device")));
 }
 
+TEST(BrowserDeviceSharing, AnExportLetGoOnAnotherThreadIsReleasedWhenItsOwnerNextYields) {
+  BrowserFixture producer = MakeDevice();
+  ASSERT_THAT(producer.device, testing::NotNull());
+  BrowserFixture consumer = MakeDevice(producer.bridge->gpuDevice);
+  ASSERT_THAT(consumer.device, testing::NotNull());
+  const std::shared_ptr<FakeBrowserGpuDevice> gpuDevice = producer.bridge->gpuDevice;
+
+  Result<Texture> texture = producer.device->createTexture(ShareableTexture());
+  ASSERT_THAT(texture, HasResult());
+  const uint64_t native = *producer.bridge->nativeTextureOf(1);
+  Result<TextureExport> exported = producer.device->exportTexture(texture.result());
+  ASSERT_THAT(exported, HasResult());
+  // The producer device goes, so the export is the texture's last holder.
+  EXPECT_THAT(producer.device->destroyTexture(std::move(texture).result()), IsOk());
+  producer.device.reset();
+  ASSERT_THAT(gpuDevice->isTextureLive(native), testing::IsTrue());
+
+  // A token may be let go on any thread, but only the worker that made the share can reach its
+  // browser side, so the release waits for that worker rather than being lost.
+  std::thread elsewhere(
+      [token = std::move(exported).result()]() mutable { token = TextureExport(); });
+  elsewhere.join();
+  EXPECT_THAT(gpuDevice->isTextureLive(native), testing::IsTrue())
+      << "a release reached the browser device from a thread that does not own it";
+
+  consumer.bridge->yieldToBrowser(0.0);
+  EXPECT_THAT(gpuDevice->releasedShares, 1u)
+      << "the owner yielded and the share let go on another thread was still not released";
+  EXPECT_THAT(gpuDevice->isTextureLive(native), testing::IsFalse())
+      << "the texture outlived its last holder for as long as the browser device lives";
+}
+
+TEST(BrowserDeviceSharing, AReleaseThatArrivesAfterTheBrowserDeviceIsGoneDoesNothing) {
+  BrowserFixture producer = MakeDevice();
+  ASSERT_THAT(producer.device, testing::NotNull());
+  const std::shared_ptr<FakeBrowserGpuDevice> gpuDevice = producer.bridge->gpuDevice;
+  Result<Texture> texture = producer.device->createTexture(ShareableTexture());
+  ASSERT_THAT(texture, HasResult());
+  const uint64_t native = *producer.bridge->nativeTextureOf(1);
+  Result<TextureExport> onOwner = producer.device->exportTexture(texture.result());
+  ASSERT_THAT(onOwner, HasResult());
+  Result<Texture> second = producer.device->createTexture(ShareableTexture());
+  ASSERT_THAT(second, HasResult());
+  Result<TextureExport> elsewhereToken = producer.device->exportTexture(second.result());
+  ASSERT_THAT(elsewhereToken, HasResult());
+
+  // The last logical device goes, and the browser device with it, taking every texture its shares
+  // held.
+  producer.device.reset();
+  gpuDevice->release();
+  ASSERT_THAT(gpuDevice->isTextureLive(native), testing::IsFalse());
+
+  // Both late releases, on the owner's thread and on another, find nothing and do nothing.
+  onOwner = TextureExport();
+  std::thread elsewhere(
+      [token = std::move(elsewhereToken).result()]() mutable { token = TextureExport(); });
+  elsewhere.join();
+  MakeDevice(gpuDevice).bridge->yieldToBrowser(0.0);
+  EXPECT_THAT(gpuDevice->releasedShares, 0u);
+  EXPECT_THAT(gpuDevice->liveShares(), 0u);
+}
+
 TEST(BrowserDeviceSharing, RefusesARegistrationFromAThreadThatDoesNotOwnTheDevice) {
   BrowserFixture producer = MakeDevice();
   ASSERT_THAT(producer.device, testing::NotNull());
