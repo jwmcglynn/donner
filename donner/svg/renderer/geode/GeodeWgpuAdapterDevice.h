@@ -90,7 +90,11 @@ struct GeodeGpuRootCapabilities {
  * runtime device over it opens the system's device itself.
  *
  * Retained through `shared_ptr` by each runtime device over it, so the handles outlive the last
- * of them. Produced only by \ref SelectGpuRoot and \ref AdoptGpuRoot: assembling roots field by
+ * of them. A browser root holds the browser device request that keeps its worker's GPU device
+ * open between runtime devices, so each runtime device over it joins that device rather than
+ * asking the browser again.
+ *
+ * Produced only by \ref SelectGpuRoot and \ref AdoptGpuRoot: assembling roots field by
  * field is what let a half-populated set escape to a caller, and a root that exists is a root
  * that is complete.
  */
@@ -102,9 +106,12 @@ public:
    * @param handles Backend objects the selection produced or adopted.
    * @param capabilities What the selection discovered about them.
    * @param lostState Sticky loss condition shared by every runtime device over these roots.
+   * @param backendHold What the backend needs kept open for as long as any runtime device over
+   *   these roots, or null for a backend that needs nothing. Released after the handles.
    */
   GeodeGpuRoot(GeodeWgpuRoots handles, GeodeGpuRootCapabilities capabilities,
-               std::shared_ptr<gpu::DeviceLostState> lostState);
+               std::shared_ptr<gpu::DeviceLostState> lostState,
+               std::shared_ptr<const void> backendHold = nullptr);
 
   /// Releases owned handles, or leaves borrowed ones to their embedder. A root already declared
   /// lost is deliberately leaked rather than destroyed: releasing it calls into a driver that has
@@ -157,6 +164,7 @@ private:
   GeodeWgpuRoots handles_;
   GeodeGpuRootCapabilities capabilities_;
   std::shared_ptr<gpu::DeviceLostState> lostState_;
+  std::shared_ptr<const void> backendHold_;
 };
 
 /// Caller-supplied inputs to backend-root selection. The environment-driven inputs (the backend
@@ -177,7 +185,7 @@ struct GpuRootSelection {
   /// and sets none.
   std::function<std::optional<wgpu::Surface>(const wgpu::Instance&)> compatibleSurface;
 
-  /// Backend to select, or empty for the process default (see \ref ProcessDefaultGpuBackendKind).
+  /// Backend to select, or empty for the process default (see \ref ResolveGpuBackendKind).
   /// A caller that names a backend gets that one whatever the process default is, because a case
   /// about one backend must not run on another when a whole run changes its default.
   ///
@@ -199,20 +207,22 @@ struct GpuRootSelection {
 };
 
 /**
- * Selects a backend root: the backend a caller names, or the process default. For the
- * transitional adapter it creates an instance, requests an adapter and a device, and takes the
+ * Selects a backend root: the backend \ref ResolveGpuBackendKind resolves for \p options. For
+ * the transitional adapter it creates an instance, requests an adapter and a device, and takes the
  * default queue; for the native Metal backend it asks the system Metal device for its
- * capabilities, and for the native Vulkan backend the physical device a Vulkan device selects.
+ * capabilities, for native Vulkan the physical device a Vulkan device selects, and for the
+ * browser backend this worker's GPU device, kept open for runtime devices over the root.
  *
  * The one selection every caller shares. Headless, editor and embedded construction differ only
  * in \p options, so the adapter retries under load, the backend requests, the force-fallback
  * request, the device-lost callback and the uncaptured-error reporting are decided once rather
- * than per caller. Under Emscripten the browser's device is imported instead, which is the same
- * decision expressed the only way that platform allows.
+ * than per caller. Under Emscripten the transitional adapter imports the browser's device;
+ * the browser backend instead shares that worker's device through its own bridge.
  *
- * When a backend was asked for, by `DONNER_GPU_BACKEND` or by the caller, the first selection of
- * each such backend in a process names it and what asked for it on stderr, so a run that asked for
- * a backend shows which one executed. A process that asks for nothing prints nothing.
+ * When a backend was asked for, by `DONNER_GPU_BACKEND`, by the caller or by the build, the first
+ * selection of each such backend in a process names it and what asked for it on stderr, so a run
+ * that asked for a backend shows which one executed. A process that asks for nothing prints
+ * nothing.
  *
  * A backend `DONNER_GPU_BACKEND` asked for that cannot be served halts the process, as does a
  * value that names no backend. Refusing would hand the caller a null root, which callers and
