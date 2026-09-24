@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -51,6 +52,23 @@ public:
 
   /// Whether \ref close has run.
   [[nodiscard]] bool closed() const;
+
+  /**
+   * The calling thread's queue, for a share made on this thread to post its release into from
+   * elsewhere. Made on the thread's first use and closed when the thread exits.
+   *
+   * @return The queue, or null once it has been destroyed during the thread's exit, so that an
+   *   object the thread destroys after it finds no queue rather than a destroyed one.
+   */
+  static std::shared_ptr<BrowserShareReleaseQueue> ForThisThread();
+
+  /**
+   * Runs \p run for each release posted to the calling thread's queue, oldest first. Does nothing
+   * once that queue has gone with its thread: it was closed then, and held nothing to run.
+   *
+   * @param run Runs one release on this thread.
+   */
+  static void DrainThisThread(const std::function<void(const Release&)>& run);
 
 private:
   mutable std::mutex mutex_;
