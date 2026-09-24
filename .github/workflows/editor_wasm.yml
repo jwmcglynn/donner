@@ -212,7 +212,7 @@ jobs:
 
           lockfile_sha256=$(shasum -a 256 donner/editor/wasm/tests/package-lock.json | awk '{print $1}')
           printf '%s\n' \
-            "{\"source_revision\":\"${GITHUB_SHA}\",\"lockfile_sha256\":\"${lockfile_sha256}\",\"bazel_configs\":[\"editor-wasm\"],\"targets\":[\"${PACKAGE_TARGET}\"],\"renderer\":\"geode\",\"transport_encoding\":\"gzip\"}" \
+            "{\"source_revision\":\"${GITHUB_SHA}\",\"producer_run_id\":\"${GITHUB_RUN_ID}\",\"producer_attempt\":\"${GITHUB_RUN_ATTEMPT}\",\"lockfile_sha256\":\"${lockfile_sha256}\",\"bazel_configs\":[\"editor-wasm\"],\"targets\":[\"${PACKAGE_TARGET}\"],\"renderer\":\"geode\",\"transport_encoding\":\"gzip\"}" \
             > "${candidate_dir}/provenance.json"
 
           (

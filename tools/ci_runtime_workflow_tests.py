@@ -662,6 +662,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         script = "#!/bin/bash\n" + textwrap.dedent(body.split("        run: |\n", 1)[1])
         return self._run_script(script, [], cwd=root, env={
             **os.environ, "RUNNER_TEMP": str(root), "GITHUB_SHA": "a" * 40,
+            "GITHUB_RUN_ID": "12", "GITHUB_RUN_ATTEMPT": "2",
             "PACKAGE_TARGET": "//fixture:package", "GITHUB_OUTPUT": str(root / "output"),
         })
 
@@ -691,6 +692,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertEqual(checksums, expected_checksums)
             provenance = json.loads((candidate / "provenance.json").read_text())
             self.assertEqual(provenance["source_revision"], "a" * 40)
+            self.assertEqual(provenance["producer_run_id"], "12")
+            self.assertEqual(provenance["producer_attempt"], "2")
             self.assertEqual(provenance["targets"], ["//fixture:package"])
 
     def test_editor_wasm_candidate_rejects_incomplete_or_unexpected_assets(self):
