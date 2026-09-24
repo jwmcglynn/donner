@@ -534,6 +534,43 @@ async function captureSplashDragFrame(
   );
 }
 
+test("Splash capture accepts stable pixels while frames keep advancing", async ({ page }) => {
+  // A thumbnail-like wake can keep the frame counter moving even when the
+  // presented picture is already stable. Waiting for a parked loop on every
+  // drag step can consume the whole case budget before step 10.
+  await page.setViewportSize({ width: 128, height: 128 });
+  await page.setContent(`
+    <style>
+      html, body { margin: 0; background: rgb(13, 15, 29); }
+      .letter { position: absolute; left: 36px; top: 36px; width: 36px; height: 36px;
+                background: rgb(240, 190, 40); }
+      .outline { position: absolute; left: 34px; top: 34px; width: 40px; height: 40px;
+                 border: 3px solid rgb(49, 198, 179); }
+    </style>
+    <div class="letter"></div><div class="outline"></div>
+  `);
+  await page.evaluate(() => {
+    window.__donnerMainLoopRenderedFrames = 0;
+    const wake = () => {
+      window.__donnerMainLoopRenderedFrames = (window.__donnerMainLoopRenderedFrames || 0) + 1;
+      requestAnimationFrame(wake);
+    };
+    requestAnimationFrame(wake);
+  });
+  const framesBefore = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
+  await waitForBrowserComposite(page);
+  expect(await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0))
+    .toBeGreaterThan(framesBefore);
+
+  const startedAtMs = performance.now();
+  const region = { x: 0, y: 0, width: 128, height: 128 };
+  const frame = await captureSplashDragFrame(page, region, region, "continuous frame wake");
+  expect(frame.letter, "the stable picture lost its yellow letter").not.toBeNull();
+  expect(frame.outline, "the stable picture lost its selection outline").not.toBeNull();
+  expect(frame.census.darkBackgroundPixels).toBeGreaterThan(0);
+  expect(performance.now() - startedAtMs).toBeLessThan(scaledMs(1_000));
+});
+
 // The document's presentation progress. Since the single-canvas architecture there is no separate
 // document element and no acceptance token: a completed worker result is the
 // document raster, and the app thread draws it into the single canvas.
