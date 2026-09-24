@@ -1557,20 +1557,37 @@ INSTANTIATE_TEST_SUITE_P(Targets, EditorWindowBackendTest, testing::Bool(),
                          });
 
 /// A real window, presenting to its surface (false) or rendering offscreen (true), taken through
-/// what happens to a window during its life: being resized, and losing its device.
+/// what happens to a window during its life: being resized, and losing its device. Only Apple
+/// always has a surface to present to; a host without a display renders both arms offscreen.
 class EditorWindowLifecycleTest : public testing::TestWithParam<bool> {
 protected:
   /// A hidden window on the parameter's arm that reads its frames back and clears to opaque blue.
+  /// Its width leaves the readback's rows unaligned to the copy row pitch at 1x and at 2x, so
+  /// reading a frame back always repacks them.
   EditorWindowOptions options() const {
     return EditorWindowOptions{
         .title = "Window Lifecycle Test",
-        .initialWidth = 64,
+        .initialWidth = 100,
         .initialHeight = 48,
         .visible = false,
         .forceOffscreenRenderTarget = GetParam(),
         .clearColor = {0.0f, 0.0f, 1.0f, 1.0f},
         .enableFramebufferReadback = true,
     };
+  }
+
+  /// Checks \p window is on the arm the parameter asked for, where that is known: a hidden Cocoa
+  /// window still presents to its Metal layer, so on Apple only the forced arm is offscreen.
+  /// @param window Window under test.
+  void expectOnTheRequestedArm(const EditorWindow& window) const {
+#ifdef __APPLE__
+    ASSERT_THAT(window.usingOffscreenRenderTarget(), testing::Eq(GetParam()))
+        << "the window is not on the arm this case is about";
+#else
+    if (GetParam()) {
+      ASSERT_THAT(window.usingOffscreenRenderTarget(), testing::IsTrue());
+    }
+#endif
   }
 };
 
@@ -1580,13 +1597,14 @@ protected:
 TEST_P(EditorWindowLifecycleTest, AResizedWindowDrawsAndReadsBackAtItsNewExtent) {
   EditorWindow window(options());
   ASSERT_THAT(window.valid(), testing::IsTrue());
+  ASSERT_NO_FATAL_FAILURE(expectOnTheRequestedArm(window));
 
   window.beginFrame();
   const svg::RendererBitmap before = window.endFrameAndReadPixels();
   ASSERT_THAT(before.empty(), testing::IsFalse());
   ASSERT_THAT(before.dimensions, testing::Eq(window.framebufferSize()));
 
-  glfwSetWindowSize(window.rawHandle(), 96, 72);
+  glfwSetWindowSize(window.rawHandle(), 150, 72);
   window.pollEvents();
   const Vector2i resized = window.framebufferSize();
   ASSERT_THAT(resized, testing::Ne(before.dimensions)) << "the window was not resized";
@@ -1601,13 +1619,16 @@ TEST_P(EditorWindowLifecycleTest, AResizedWindowDrawsAndReadsBackAtItsNewExtent)
       << "a texel outside the old extent was not drawn at the new one";
 }
 
-/// A device declared lost stops the window drawing without stalling it. The loss reaches the
-/// window through the condition its framebuffer context shares with the runtime device it draws
-/// on, whichever backend that is, and no frame after it spends the readback bound waiting for a
-/// device that will never answer.
-TEST_P(EditorWindowLifecycleTest, FramesAfterTheDeviceIsDeclaredLostEndWithoutWaiting) {
+/// A device declared lost stops the window reading its frames back, and no frame after it spends
+/// the readback bound. The loss reaches the window through the condition its framebuffer context
+/// shares with the runtime device it draws on, whichever backend that is. The frame itself is
+/// still drawn; its readback asks nothing of a device already lost, and a map started on one would
+/// end at its first wait slice too, so this checks that the frames end within the bound with
+/// nothing read, not which of those two stops them.
+TEST_P(EditorWindowLifecycleTest, FramesAfterADeclaredLossReadBackNothingWithinTheBound) {
   EditorWindow window(options());
   ASSERT_THAT(window.valid(), testing::IsTrue());
+  ASSERT_NO_FATAL_FAILURE(expectOnTheRequestedArm(window));
 
   window.beginFrame();
   ASSERT_THAT(window.endFrameAndReadPixels().empty(), testing::IsFalse())
