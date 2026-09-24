@@ -3460,7 +3460,13 @@ void EditorShell::renderSourcePane(float paneOriginX, float paneOriginY, float p
     preserveSourceEditFocusCursor_ = sourceEditShouldPreserveCursor;
   }
   const std::vector<svg::SVGElement> selectionBeforeTextSync = app_.selectedElements();
+  const std::uint64_t documentVersionBeforeTextSync = app_.document().currentFrameVersion();
   documentSyncController_.handleTextEdits(app_, textEditor_, ImGui::GetIO().DeltaTime);
+  // Incremental source edits update the DOM directly, bypassing the queued flush render request.
+  if (app_.document().currentFrameVersion() != documentVersionBeforeTextSync &&
+      !app_.document().lastParseError().has_value()) {
+    requestRenderAtEndOfFrame_ |= !showSamplePicker_ || samplePresentationPending_;
+  }
   if (sourceEditShouldPreserveCursor && app_.selectedElements() != selectionBeforeTextSync) {
     sourceSelectionOriginatedInText_ = true;
   }
