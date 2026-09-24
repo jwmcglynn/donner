@@ -785,9 +785,10 @@ public:
    * and covers \p writeSize, \p destinationOrigin plus \p writeSize fits inside the texture,
    * and the described rows fit inside \p data (all checked arithmetic).
    *
-   * On VulkanDevice, a write over a root that a device over it declared lost returns
-   * GpuErrorType::DeviceLost without starting an upload, as does an upload whose wait that
-   * declaration ends.
+   * On VulkanDevice, when another device over the same root declared it lost and this device has
+   * no error of its own, a write returns GpuErrorType::DeviceLost without starting an upload, as
+   * does an upload whose wait that declaration ends. A device with an error of its own, a
+   * driver-reported loss included, returns that error as GpuErrorType::InvalidState.
    *
    * @param texture Destination texture.
    * @param data Payload bytes laid out per \p dataLayout.
