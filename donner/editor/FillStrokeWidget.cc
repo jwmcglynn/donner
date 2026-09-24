@@ -175,9 +175,11 @@ void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2&
     // when they carry the same color.
     constexpr float kRing = 4.0f;
     drawList->AddRectFilled(min, max, color, kRounding);
-    drawList->AddRectFilled(ImVec2(min.x + kRing, min.y + kRing),
-                            ImVec2(max.x - kRing, max.y - kRing), IM_COL32(32, 34, 38, 255),
-                            kRounding * 0.5f);
+    const ImVec2 holeMin(min.x + kRing, min.y + kRing);
+    const ImVec2 holeMax(max.x - kRing, max.y - kRing);
+    drawList->AddRectFilled(holeMin, holeMax, IM_COL32(32, 34, 38, 255), kRounding * 0.5f);
+    drawList->AddRect(holeMin, holeMax, EditorTheme::Active().textPrimary, kRounding * 0.5f, 0,
+                      1.0f);
   }
 
   if (state.isCustom) {
@@ -195,7 +197,9 @@ void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2&
   const EditorTheme& theme = EditorTheme::Active();
   drawList->AddRect(min, max, IM_COL32(255, 255, 255, 210), kRounding, 0, 1.0f);
   drawList->AddRect(min, max,
-                    active || state.isCustom ? theme.accentDefault : IM_COL32(0, 0, 0, 210),
+                    active || state.isCustom
+                        ? theme.accentDefault
+                        : (fillRole ? IM_COL32(0, 0, 0, 210) : theme.textPrimary),
                     kRounding, 0, 1.6f);
 
   if (state.isNone) {
@@ -206,15 +210,16 @@ void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2&
 
 void DrawSwapAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, bool enabled) {
   const ImU32 tint = enabled ? IM_COL32(215, 222, 232, 255) : IM_COL32(120, 126, 134, 255);
-  const ImVec2 leftTip(min.x + 2.0f, min.y + 5.0f);
-  const ImVec2 bend(max.x - 6.0f, leftTip.y);
-  const ImVec2 downTip(bend.x, max.y - 2.0f);
-  drawList->AddLine(leftTip, bend, tint, 1.6f);
-  drawList->AddLine(bend, downTip, tint, 1.6f);
-  drawList->AddLine(leftTip, ImVec2(leftTip.x + 3.0f, leftTip.y - 3.0f), tint, 1.6f);
-  drawList->AddLine(leftTip, ImVec2(leftTip.x + 3.0f, leftTip.y + 3.0f), tint, 1.6f);
-  drawList->AddLine(downTip, ImVec2(downTip.x - 3.0f, downTip.y - 3.0f), tint, 1.6f);
-  drawList->AddLine(downTip, ImVec2(downTip.x + 3.0f, downTip.y - 3.0f), tint, 1.6f);
+  const ImVec2 upperLeft(min.x + 2.0f, min.y + 5.0f);
+  const ImVec2 upperRight(max.x - 2.0f, upperLeft.y);
+  const ImVec2 lowerLeft(min.x + 2.0f, max.y - 5.0f);
+  const ImVec2 lowerRight(max.x - 2.0f, lowerLeft.y);
+  drawList->AddLine(upperLeft, upperRight, tint, 1.6f);
+  drawList->AddLine(lowerLeft, lowerRight, tint, 1.6f);
+  drawList->AddLine(upperLeft, ImVec2(upperLeft.x + 3.0f, upperLeft.y - 3.0f), tint, 1.6f);
+  drawList->AddLine(upperLeft, ImVec2(upperLeft.x + 3.0f, upperLeft.y + 3.0f), tint, 1.6f);
+  drawList->AddLine(lowerRight, ImVec2(lowerRight.x - 3.0f, lowerRight.y - 3.0f), tint, 1.6f);
+  drawList->AddLine(lowerRight, ImVec2(lowerRight.x - 3.0f, lowerRight.y + 3.0f), tint, 1.6f);
 }
 
 void DrawNoneAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
