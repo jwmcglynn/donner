@@ -403,7 +403,7 @@ TEST_F(VulkanBufferWritesTests, DeviceLossDrainsAndRejectsIdleHostAccessAndSubmi
   auto nextEncoder = GetResultOrFail(device_->createCommandEncoder());
   ASSERT_NE(nextEncoder, nullptr);
   EXPECT_THAT(device_->submit(GetResultOrFail(nextEncoder->finish())),
-              IsGpuError(GpuErrorType::InvalidState));
+              IsGpuError(GpuErrorType::DeviceLost));
   EXPECT_EQ(device_->lastSubmittedSerial(), serial);
 }
 
@@ -429,7 +429,7 @@ TEST_F(VulkanBufferWritesTests, TextureSubmissionLossDrainsAndRejectsLaterAccess
   auto encoder = GetResultOrFail(device_->createCommandEncoder());
   ASSERT_NE(encoder, nullptr);
   EXPECT_THAT(device_->submit(GetResultOrFail(encoder->finish())),
-              IsGpuError(GpuErrorType::InvalidState));
+              IsGpuError(GpuErrorType::DeviceLost));
   EXPECT_EQ(device_->lastSubmittedSerial(), 0u);
 }
 

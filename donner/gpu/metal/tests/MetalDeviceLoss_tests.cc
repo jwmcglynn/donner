@@ -134,6 +134,20 @@ TEST_F(MetalDeviceLossTest, ALossDeclaredOverTheRootEndsReadsThroughACompletedMa
   EXPECT_THAT(device_->unmapBuffer(std::move(mapping)), IsOk());
 }
 
+TEST_F(MetalDeviceLossTest, ADeclaredRootLossRefusesRepeatedSubmissionsBeforeCommit) {
+  // Prepare valid work before the sibling's declaration, so encoder admission does not mask the
+  // submission gate. A logical loss leaves the native Metal device usable by the driver.
+  std::array<CommandBuffer, 3> prepared{emptyCommandBuffer(), emptyCommandBuffer(),
+                                        emptyCommandBuffer()};
+  ASSERT_THAT(DeclareDeviceLost(*rootLoss_), IsTrue());
+  for (CommandBuffer& buffer : prepared) {
+    EXPECT_THAT(device_->submit(std::move(buffer)), IsGpuError(GpuErrorType::DeviceLost));
+    EXPECT_THAT(device_->lastSubmittedSerial(), Eq(0u))
+        << "work over the lost root must never be accepted into flight";
+  }
+  EXPECT_THAT(device_->writeStatsForTest().inFlightStagingBytes, Eq(0u));
+}
+
 TEST_F(MetalDeviceLossTest, AFailedCommandBufferDeclaresTheRootLostAsABackendReport) {
   const std::unique_ptr<MetalDevice> sibling = openDeviceOverTheRoot();
   ASSERT_THAT(sibling, NotNull());

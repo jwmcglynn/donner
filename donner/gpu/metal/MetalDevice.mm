@@ -2367,6 +2367,9 @@ Status MetalDevice::Impl::encodeSubmittedCommandBuffer(EncodingState& state,
 
 Status MetalDevice::onSubmit(uint64_t submissionSerial,
                              std::span<const SubmittedCommandBuffer> commandBuffers) {
+  if (isLost()) {
+    return GpuError{GpuErrorType::DeviceLost, "submit: the Metal root is lost"};
+  }
   // One native command buffer per submitted buffer, committed in order on the one queue this
   // device owns, rather than one native buffer carrying the whole submission: command buffers
   // committed to a queue execute in commit order, and a single very large command buffer stalls

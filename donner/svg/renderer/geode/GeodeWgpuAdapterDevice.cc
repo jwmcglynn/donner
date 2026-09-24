@@ -3034,6 +3034,8 @@ gpu::Status GeodeWgpuAdapterDevice::encodeSubmittedCommandBuffer(
 
 gpu::Status GeodeWgpuAdapterDevice::onSubmit(
     uint64_t submissionSerial, std::span<const gpu::SubmittedCommandBuffer> commandBuffers) {
+  // The transitional adapter leaves acceptance to wgpu even after the shared root reports loss;
+  // its queue can answer asynchronously. Native backends refuse a lost root before recording work.
   // Each submitted buffer gets its own encoder, so the caller's split survives to the queue; they
   // are finished but not submitted until all of them encode, and then handed over together, which
   // keeps the submission ordered and completing once.
