@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { get } from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -45,6 +46,20 @@ function startServer(t, directory) {
   return { child, url: waitForReady(child) };
 }
 
+// Keep the fixture HTTP client usable when V8 runs without JIT or WebAssembly.
+function readResponseText(url) {
+  return new Promise((resolve, reject) => {
+    const request = get(url, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => body += chunk);
+      response.once("end", () => resolve(body));
+      response.once("error", reject);
+    });
+    request.once("error", reject);
+  });
+}
+
 async function assertPortCloses(url) {
   const { port } = new URL(url);
   const deadline = Date.now() + 3_000;
@@ -74,7 +89,7 @@ test("an occupied port does not conflict with a runtime-bound server", async (t)
   const { url } = startServer(t, packageDirectory(t, "A"));
   const boundUrl = await url;
   assert.notEqual(Number(new URL(boundUrl).port), occupied.address().port);
-  assert.equal(await (await fetch(`${boundUrl}/index.html`)).text(), "package A");
+  assert.equal(await readResponseText(`${boundUrl}/index.html`), "package A");
 });
 
 test("two browser servers use distinct ports and packages", async (t) => {
@@ -82,8 +97,8 @@ test("two browser servers use distinct ports and packages", async (t) => {
   const second = startServer(t, packageDirectory(t, "second"));
   const [firstUrl, secondUrl] = await Promise.all([first.url, second.url]);
   assert.notEqual(firstUrl, secondUrl);
-  assert.equal(await (await fetch(`${firstUrl}/index.html`)).text(), "package first");
-  assert.equal(await (await fetch(`${secondUrl}/index.html`)).text(), "package second");
+  assert.equal(await readResponseText(`${firstUrl}/index.html`), "package first");
+  assert.equal(await readResponseText(`${secondUrl}/index.html`), "package second");
 });
 
 test("SIGKILL of the server owner closes its listening port", async (t) => {
@@ -103,7 +118,7 @@ test("SIGKILL of the server owner closes its listening port", async (t) => {
   });
   t.after(() => parent.kill("SIGKILL"));
   const url = await waitForReady(parent);
-  assert.equal(await (await fetch(`${url}/index.html`)).text(), "package orphan");
+  assert.equal(await readResponseText(`${url}/index.html`), "package orphan");
   parent.kill("SIGKILL");
   await assertPortCloses(url);
 });
