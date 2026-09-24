@@ -538,29 +538,29 @@ private:
   bool rejected_ = false;
 };
 
-/** Aggregate decoded-outline and path-copy budget shared by one renderer frame. */
+/** Aggregate text outline, bitmap, path-copy, and cache-storage budget for one renderer frame. */
 class RendererTextMaterializationBudget {
 public:
-  /// Default glyph cap: glyph occurrences and distinct outlines admitted per frame.
+  /// Default cap on glyph occurrences and unique glyph resources admitted per frame.
   static constexpr std::size_t kDefaultMaximumGlyphs = 64 * 1024;
   // The default aggregate limits admit about ten dense pages of text per frame on a backend that
   // charges every glyph occurrence its outline decode.
-  /// Default cap on path commands materialized per frame.
+  /// Default cap on charged path-command bounds per frame.
   static constexpr std::size_t kMaximumCommands = 16 * 1024 * 1024;
-  /// Default cap on path points materialized per frame.
+  /// Default cap on charged path-point bounds per frame.
   static constexpr std::size_t kMaximumPoints = 32 * 1024 * 1024;
-  /// Default cap on bytes materialized per frame.
+  /// Default cap on charged text storage and materialization bytes per frame.
   static constexpr std::uint64_t kMaximumBytes = 256ULL * 1024 * 1024;
-  /// Default cap on outline decode work per frame.
+  /// Default cap on charged outline-decode work per frame.
   static constexpr std::size_t kMaximumDecodeWork = 64 * 1024 * 1024;
 
-  /// Aggregate limits or work charged while materializing text paths.
+  /// Aggregate limits or conservative charges for text work and storage.
   struct Cost {
-    std::size_t uniqueOutlines = 0;  ///< Distinct outlines decoded.
-    std::size_t commands = 0;        ///< Materialized path commands.
-    std::size_t points = 0;          ///< Materialized path points.
-    std::uint64_t bytes = 0;         ///< Retained path bytes.
-    std::size_t decodeWork = 0;      ///< Outline decoding work units.
+    std::size_t uniqueOutlines = 0;  ///< Charged unique glyph admissions, outline or bitmap.
+    std::size_t commands = 0;        ///< Charged path-command bound.
+    std::size_t points = 0;          ///< Charged path-point bound.
+    std::uint64_t bytes = 0;         ///< Charged outline, bitmap, copy, and cache bytes.
+    std::size_t decodeWork = 0;      ///< Charged outline-decode work bound.
   };
 
   /// Creates a text budget with the default glyph cap and aggregate limits.
@@ -569,7 +569,7 @@ public:
   /**
    * Creates a budget with explicit limits.
    *
-   * @param limits Per-frame limits; `limits.uniqueOutlines` is also the glyph occurrence cap.
+   * @param limits Per-frame limits; `limits.uniqueOutlines` also caps glyph occurrences.
    */
   explicit RendererTextMaterializationBudget(const Cost& limits) : limits_(limits) {
     setMaximumGlyphs(limits.uniqueOutlines);
@@ -586,7 +586,7 @@ public:
     rejected_ = false;
   }
 
-  /// Charges text-path work, or latches rejection when any limit is exceeded.
+  /// Charges bounded text work and storage, or latches rejection when a limit is exceeded.
   [[nodiscard]] bool reserve(const Cost& cost) {
     if (rejected_ || uniqueOutlines_ > limits_.uniqueOutlines || commands_ > limits_.commands ||
         points_ > limits_.points || bytes_ > limits_.bytes || decodeWork_ > limits_.decodeWork ||
@@ -648,7 +648,7 @@ public:
   /**
    * Sets the glyph cap, replacing any lower limit a test installed.
    *
-   * @param maximumGlyphs Glyph occurrences and distinct outlines admitted per frame.
+   * @param maximumGlyphs Glyph occurrences and unique glyph resources admitted per frame.
    */
   void setMaximumGlyphs(std::size_t maximumGlyphs) {
     maximumGlyphs_ = maximumGlyphs;
@@ -661,15 +661,15 @@ public:
 
   /// Active per-frame text-materialization limits.
   [[nodiscard]] const Cost& limits() const { return limits_; }
-  /// Distinct outlines charged in this frame.
+  /// Unique glyph resources charged in this frame, including bitmap glyphs.
   [[nodiscard]] std::size_t uniqueOutlines() const { return uniqueOutlines_; }
-  /// Materialized path commands charged in this frame.
+  /// Charged path-command bounds in this frame.
   [[nodiscard]] std::size_t commands() const { return commands_; }
-  /// Materialized path points charged in this frame.
+  /// Charged path-point bounds in this frame.
   [[nodiscard]] std::size_t points() const { return points_; }
-  /// Retained path bytes charged in this frame.
+  /// Charged text materialization and storage bytes in this frame.
   [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
-  /// Outline decode work charged in this frame.
+  /// Charged outline-decode work bound in this frame.
   [[nodiscard]] std::size_t decodeWork() const { return decodeWork_; }
   /// Drawn glyph occurrences charged in this frame.
   [[nodiscard]] std::size_t glyphOccurrences() const { return glyphOccurrences_; }
@@ -1381,8 +1381,8 @@ public:
   }
 
   /**
-   * Sets the glyph cap: the most glyph occurrences one frame draws and the most distinct glyph
-   * outlines it decodes. Text past the cap is not drawn in that frame. Backends that keep glyph
+   * Sets the glyph cap: the most glyph occurrences one frame draws and the most unique glyph
+   * resources it admits. Text past the cap is not drawn in that frame. Backends that keep glyph
    * outlines resident across frames also cap each document's resident outlines at this count.
    *
    * The aggregate budgets still apply and can be reached first. TinySkia charges every glyph
@@ -1398,8 +1398,10 @@ public:
    * ignore the call.
    *
    * The initial cap is \ref RendererTextMaterializationBudget::kDefaultMaximumGlyphs.
+   *
+   * @param maximumGlyphs Maximum glyph occurrences and unique glyph resources admitted per frame.
    */
-  virtual void setMaximumGlyphs(std::size_t /*maximumGlyphs*/) {}
+  virtual void setMaximumGlyphs(std::size_t maximumGlyphs) { (void)maximumGlyphs; }
 
   /// The glyph cap set by \ref setMaximumGlyphs, or 0 for backends without text.
   [[nodiscard]] virtual std::size_t maximumGlyphs() const { return 0; }
