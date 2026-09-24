@@ -12,11 +12,28 @@ load(
 )
 load("//donner/editor:editor_product_dependency_tests.bzl", "editor_product_dependency_tests")
 
+exports_files(
+    [
+        "BitmapCompareCommon.cc",
+        "BitmapCompareCommon.h",
+        "BitmapGoldenCompare.h",
+        "BitmapToBitmapCompare.cc",
+    ],
+    visibility = ["//visibility:public"],
+)
+
 donner_cc_library(
     name = "bitmap_golden_compare",
     testonly = 1,
-    srcs = ["BitmapGoldenCompare.cc"],
-    hdrs = ["BitmapGoldenCompare.h"],
+    srcs = [
+        "BitmapCompareCommon.cc",
+        "BitmapGoldenCompare.cc",
+        "BitmapToBitmapCompare.cc",
+    ],
+    hdrs = [
+        "BitmapCompareCommon.h",
+        "BitmapGoldenCompare.h",
+    ],
     # //donner/gpu: the Metal and Vulkan vertical-slice tests use the one
     # blessed pixelmatch comparator for their frozen-baseline comparisons.
     visibility = [

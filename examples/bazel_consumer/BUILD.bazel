@@ -3,9 +3,17 @@ load("@rules_cc//cc:defs.bzl", "cc_test")
 cc_test(
     name = "render_svg",
     size = "small",
-    srcs = ["main.cc"],
+    srcs = [
+        "main.cc",
+        "@donner//donner/editor/tests:BitmapCompareCommon.cc",
+        "@donner//donner/editor/tests:BitmapCompareCommon.h",
+        "@donner//donner/editor/tests:BitmapGoldenCompare.h",
+        "@donner//donner/editor/tests:BitmapToBitmapCompare.cc",
+    ],
     deps = [
+        "@com_google_gtest//:gtest_main",
         "@donner//donner/svg",
         "@donner//donner/svg/renderer",
+        "@pixelmatch-cpp17",
     ],
 )
