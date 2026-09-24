@@ -939,6 +939,11 @@ TEST(GeodeNativeVulkanRoot, RuntimeDevicesShareOneNativeDeviceAndIndependentSeri
   EXPECT_THAT(secondNative.device, Eq(firstNative.device));
   EXPECT_THAT(secondNative.queue, Eq(firstNative.queue));
   EXPECT_THAT(secondNative.queueFamilyIndex, Eq(firstNative.queueFamilyIndex));
+  const gpu::Texture firstTexture = gpu::GetResultOrFail(first.createTexture(gpu::TextureDescriptor{
+      "FirstOnly", {4, 4}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::Sampled}));
+  EXPECT_THAT(second.createTextureView(firstTexture, gpu::TextureViewDescriptor{"ForeignView"}),
+              gpu::IsGpuError(gpu::GpuErrorType::DeviceMismatch))
+      << "sharing the native VkDevice must not merge the runtime handle tables";
 
   const uint64_t firstBefore = first.lastSubmittedSerial();
   const uint64_t secondBefore = second.lastSubmittedSerial();
