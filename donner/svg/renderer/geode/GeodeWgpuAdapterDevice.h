@@ -52,6 +52,10 @@ enum class GpuBackendKind : uint8_t {
   NativeMetal,
   /// The native Vulkan backend of the Donner GPU runtime. Linux only.
   NativeVulkan,
+  /// The browser backend of the Donner GPU runtime, which drives the browser's WebGPU through a
+  /// bridge of its own instead of the transitional adapter. WebAssembly builds with the
+  /// `//donner/svg/renderer/geode:browser_backend` build setting only.
+  Browser,
 };
 
 /// Human-readable name of \p kind, for diagnostics.
@@ -273,6 +277,39 @@ GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
  *   no backend.
  */
 gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind();
+
+/**
+ * The backend this build selects for headless work: the browser backend in a WebAssembly build
+ * with the `//donner/svg/renderer/geode:browser_backend` build setting, and none otherwise.
+ *
+ * It applies only where nothing else decides, see \ref ResolveGpuBackendKind.
+ *
+ * @return The kind, or empty when this build leaves headless work on the transitional adapter.
+ */
+std::optional<GpuBackendKind> BuildDefaultGpuBackendKind();
+
+/**
+ * The backend \ref SelectGpuRoot builds from for \p options. The first of these that applies
+ * decides: the backend the caller names, the one \p request names, \p buildDefault for a
+ * selection with no surface provider, and the transitional adapter.
+ *
+ * A selection with a surface provider presents to a window, and a build default moves none of
+ * them: it exists to move headless work to a backend whose presentation is not ready, while the
+ * window stays on the transitional adapter. A process request and a caller's choice both outrank
+ * it, so a run that asked for a backend still gets that one.
+ *
+ * Exposed so the order can be checked in a build that selects no backend by default.
+ *
+ * @param options Caller-supplied inputs.
+ * @param request Value of `DONNER_GPU_BACKEND`; empty when it is unset or empty.
+ * @param buildDefault Backend the build selects for headless work, as
+ *   \ref BuildDefaultGpuBackendKind reports it.
+ * @return The kind, or an error naming \p request and the accepted values when the caller names
+ *   no backend and \p request names none this build knows.
+ */
+gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& options,
+                                                  std::string_view request,
+                                                  std::optional<GpuBackendKind> buildDefault);
 
 /// Retained device-lost callback states this process has not yet seen the backend consume. A
 /// selection that gave up mid-retry strands at most one per attempt, so teardown tests assert this

@@ -187,11 +187,23 @@ editor_wasm_geode_only_guard(
 cc_binary(
     name = "_editor_wasm_binary",
     srcs = ["//donner/editor:main.cc"],
-    additional_linker_inputs = _EMDAWNWEBGPU_JS_LIBS + [":_geode_only_guard"],
+    additional_linker_inputs = _EMDAWNWEBGPU_JS_LIBS + [":_geode_only_guard"] + select({
+        "//donner/svg/renderer/geode:browser_backend_enabled": [
+            "//donner/gpu/browser:library_donner_gpu.js",
+        ],
+        "//conditions:default": [],
+    }),
     copts = [
         "-pthread",
     ],
-    linkopts = _EDITOR_LINKOPTS,
+    # The browser backend's bridge calls into its own JavaScript library, which only a build that
+    # links the bridge carries.
+    linkopts = _EDITOR_LINKOPTS + select({
+        "//donner/svg/renderer/geode:browser_backend_enabled": [
+            "--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)",
+        ],
+        "//conditions:default": [],
+    }),
     tags = [
         "manual",
         "wasm",
@@ -247,6 +259,19 @@ web_package(
 
 editor_wasm_geode_transitioned_target(
     name = "_wasm_web_package_for_serve",
+    dep = ":wasm_web_package",
+    tags = [
+        "manual",
+        "wasm",
+    ],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+)
+
+# The same package with the browser backend selected for headless work, which the browser tests
+# serve beside the production one until the browser backend is the default.
+editor_wasm_geode_transitioned_target(
+    name = "_wasm_web_package_browser_backend_for_serve",
+    browser_backend = True,
     dep = ":wasm_web_package",
     tags = [
         "manual",

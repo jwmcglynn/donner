@@ -51,6 +51,23 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
+# Build setting that selects the Donner GPU runtime's browser backend for headless work: selections
+# with no surface to present to, such as the editor's raster worker and the snapshot capture
+# contexts beside it. The window stays on the transitional adapter. WebAssembly only; it links the
+# browser bridge into geode_device, and a binary that sets it links the bridge's JavaScript library
+# (see //donner/gpu/browser:emscripten_browser_bridge).
+bool_flag(
+    name = "browser_backend",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "browser_backend_enabled",
+    flag_values = {":browser_backend": "True"},
+    visibility = ["//visibility:public"],
+)
+
 # Targets below are only compatible when --//donner/svg/renderer/geode:enable_geode=true.
 _GEODE_ONLY = select({
     ":geode_enabled": [],
@@ -399,6 +416,10 @@ donner_cc_library(
         ],
         "//conditions:default": [],
     }),
+    local_defines = select({
+        ":browser_backend_enabled": ["DONNER_GEODE_BROWSER_BACKEND=1"],
+        "//conditions:default": [],
+    }),
     target_compatible_with = _GEODE_ONLY,
     visibility = [
         "//donner/editor:__pkg__",
@@ -428,6 +449,12 @@ donner_cc_library(
            ] + select({
                "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
                "@platforms//os:linux": ["//donner/gpu/vulkan:vulkan_device"],
+               "//conditions:default": [],
+           }) + select({
+               ":browser_backend_enabled": [
+                   "//donner/gpu/browser:browser_device",
+                   "//donner/gpu/browser:emscripten_browser_bridge",
+               ],
                "//conditions:default": [],
            }) + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) +
            shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES) +

@@ -524,6 +524,17 @@ std::shared_ptr<GeodeGpuRoot> SelectNativeMetalRoot(
 #endif
 }
 
+/// Selects the browser backend, which this build does not have.
+/// @param options Caller-supplied inputs. @param lostState Loss condition for the root.
+/// @return Null.
+std::shared_ptr<GeodeGpuRoot> SelectBrowserRoot(const GpuRootSelection& options,
+                                                std::shared_ptr<gpu::DeviceLostState> lostState) {
+  (void)options;
+  (void)lostState;
+  std::fprintf(stderr, "[Geode] No browser backend in this build.\n");
+  return nullptr;
+}
+
 /// Opens one runtime device on the native Metal backend \p root names.
 /// @param root Root whose loss condition the device shares.
 /// @return The device, or null when no Metal device could be opened.
@@ -648,6 +659,7 @@ std::string_view GpuBackendKindName(GpuBackendKind kind) {
     case GpuBackendKind::TransitionalWgpu: return "transitional wgpu adapter";
     case GpuBackendKind::NativeMetal: return "native Metal";
     case GpuBackendKind::NativeVulkan: return "native Vulkan";
+    case GpuBackendKind::Browser: return "browser";
   }
   UTILS_UNREACHABLE();
 }
@@ -736,6 +748,20 @@ void ReportSelectedBackendOnce(GpuBackendKind kind, BackendRequestSource source,
 
 gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind() {
   return ParseBackendRequest(ProcessBackendRequest());
+}
+
+std::optional<GpuBackendKind> BuildDefaultGpuBackendKind() {
+  return std::nullopt;
+}
+
+gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& options,
+                                                  std::string_view request,
+                                                  std::optional<GpuBackendKind> buildDefault) {
+  (void)buildDefault;
+  if (options.backend.has_value()) {
+    return *options.backend;
+  }
+  return ParseBackendRequest(request);
 }
 
 bool GeodeGpuRoot::hasBackendDevice() const {
@@ -859,6 +885,7 @@ std::shared_ptr<GeodeGpuRoot> SelectRootOfKind(GpuBackendKind kind,
     case GpuBackendKind::NativeMetal: return SelectNativeMetalRoot(selection, std::move(lostState));
     case GpuBackendKind::NativeVulkan:
       return SelectNativeVulkanRoot(selection, std::move(lostState));
+    case GpuBackendKind::Browser: return SelectBrowserRoot(selection, std::move(lostState));
   }
   UTILS_UNREACHABLE();
 }
@@ -933,6 +960,9 @@ GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
   }
   if (root->capabilities().backend == GpuBackendKind::NativeVulkan) {
     return GeodeRuntimeDevice{.device = CreateNativeVulkanDeviceOver(*root)};
+  }
+  if (root->capabilities().backend == GpuBackendKind::Browser) {
+    return GeodeRuntimeDevice{};
   }
   auto adapter = std::make_unique<GeodeWgpuAdapterDevice>(std::move(root));
   GeodeWgpuAdapterDevice* const transitionalAdapter = adapter.get();

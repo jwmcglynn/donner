@@ -510,6 +510,89 @@ TEST(GeodeGpuRootSelectionDeathTest, AVulkanRequestTheHostCannotServeHaltsRather
                "DONNER_GPU_BACKEND=vulkan asked for the native Vulkan backend");
 }
 
+/// A selection that asks for nothing and presents nowhere, which is how headless work selects.
+GpuRootSelection HeadlessSelection() {
+  GpuRootSelection selection;
+  selection.label = "HeadlessSelection";
+  return selection;
+}
+
+/// A selection that presents to a window, which constrains it with a surface provider.
+GpuRootSelection WindowSelection() {
+  GpuRootSelection selection = HeadlessSelection();
+  selection.label = "WindowSelection";
+  selection.compatibleSurface = [](const wgpu::Instance&) -> std::optional<wgpu::Surface> {
+    return wgpu::Surface{};
+  };
+  return selection;
+}
+
+/// The backend \p options resolves to, failing the case when it resolves to none.
+/// @param options Selection to resolve. @param request Value of the process request.
+/// @param buildDefault Backend the build selects for headless work.
+GpuBackendKind ResolvedKind(const GpuRootSelection& options, std::string_view request,
+                            std::optional<GpuBackendKind> buildDefault) {
+  const gpu::Result<GpuBackendKind> kind = ResolveGpuBackendKind(options, request, buildDefault);
+  EXPECT_THAT(kind, gpu::HasResult());
+  return kind.hasResult() ? kind.result() : GpuBackendKind::TransitionalWgpu;
+}
+
+/// A build that selects a backend for headless work moves a selection with nothing to present to
+/// onto it, which is what puts the editor's raster worker on the browser backend.
+TEST(GeodeGpuBackendResolution, ABuildDefaultServesASelectionWithNothingToPresentTo) {
+  EXPECT_THAT(ResolvedKind(HeadlessSelection(), "", GpuBackendKind::Browser),
+              testing::Eq(GpuBackendKind::Browser));
+}
+
+/// The window presents through the transitional adapter until its own backend can, so a build
+/// default leaves every selection with a surface provider where it was.
+TEST(GeodeGpuBackendResolution, AWindowStaysOnTheTransitionalAdapterUnderABuildDefault) {
+  EXPECT_THAT(ResolvedKind(WindowSelection(), "", GpuBackendKind::Browser),
+              testing::Eq(GpuBackendKind::TransitionalWgpu));
+}
+
+/// A run that asks for a backend gets it, whatever the build would have chosen, and a caller that
+/// names one gets that whatever the run asked for.
+TEST(GeodeGpuBackendResolution, ARequestAndACallerBothOutrankTheBuildDefault) {
+  EXPECT_THAT(ResolvedKind(HeadlessSelection(), "wgpu", GpuBackendKind::Browser),
+              testing::Eq(GpuBackendKind::TransitionalWgpu));
+  EXPECT_THAT(ResolvedKind(HeadlessSelection(), "metal", GpuBackendKind::Browser),
+              testing::Eq(GpuBackendKind::NativeMetal));
+  GpuRootSelection named = HeadlessSelection();
+  named.backend = GpuBackendKind::NativeMetal;
+  EXPECT_THAT(ResolvedKind(named, "wgpu", GpuBackendKind::Browser),
+              testing::Eq(GpuBackendKind::NativeMetal));
+}
+
+/// Without a build default, a selection that asks for nothing stays on the transitional adapter.
+TEST(GeodeGpuBackendResolution, WithoutABuildDefaultHeadlessWorkStaysOnTheTransitionalAdapter) {
+  EXPECT_THAT(ResolvedKind(HeadlessSelection(), "", std::nullopt),
+              testing::Eq(GpuBackendKind::TransitionalWgpu));
+}
+
+/// A request that names no backend is still an error with a build default, rather than being
+/// served by it: a misspelled request would otherwise run the suite on the build's backend.
+TEST(GeodeGpuBackendResolution, AnUnrecognizedRequestIsAnErrorWhateverTheBuildDefault) {
+  EXPECT_THAT(
+      ResolveGpuBackendKind(HeadlessSelection(), "browsr", GpuBackendKind::Browser),
+      gpu::IsGpuErrorWithMessage(gpu::GpuErrorType::InvalidDescriptor,
+                                 HasSubstr("DONNER_GPU_BACKEND=browsr names no GPU backend")));
+}
+
+/// This suite runs natively, where no build selects the browser backend.
+TEST(GeodeGpuBackendResolution, ANativeBuildSelectsNoBackendByDefault) {
+  EXPECT_THAT(BuildDefaultGpuBackendKind(), testing::Eq(std::nullopt));
+  EXPECT_THAT(GpuBackendKindName(GpuBackendKind::Browser), testing::Eq("browser"));
+}
+
+/// A caller that names the browser backend where there is none gets no root, rather than the
+/// transitional adapter in its place.
+TEST(GeodeGpuRootSelection, NamingTheBrowserBackendOffTheBrowserIsRefused) {
+  GpuRootSelection selection = HeadlessSelection();
+  selection.backend = GpuBackendKind::Browser;
+  EXPECT_THAT(SelectGpuRoot(selection), testing::IsNull());
+}
+
 /// Why every context in this suite selects the transitional adapter by name.
 constexpr std::string_view kAdapterIsTheSubject =
     "the transitional adapter is this suite's subject";

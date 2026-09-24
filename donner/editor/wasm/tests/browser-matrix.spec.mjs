@@ -232,12 +232,16 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   assert.deepEqual(
     lanes.map((lane) => /name = "([^"]+)"/.exec(lane)?.[1]).sort(),
     [
+      "boot_presentation_browser_backend_test",
       "boot_presentation_test",
+      "browser_presentation_regression_browser_backend_test",
       "browser_presentation_regression_test",
       "browser_responsiveness_perf_test",
+      "catalog_font_loading_browser_backend_test",
       "catalog_font_loading_test",
       "chromium_composited_invariants_test",
       "chromium_remote_smoke",
+      "chromium_remote_smoke_browser_backend",
       "firefox_composited_invariants_test",
       "font_reference_probe",
     ],
@@ -245,6 +249,39 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   );
   for (const lane of lanes) {
     assertBrowserLane(lane);
+  }
+  // A browser-backend lane serves only the package that selects that backend, and the production
+  // package serves every other lane, so neither can stand in for the other. One of them also runs
+  // the check that the worker selected the browser backend at all.
+  const browserBackendPackage = "//donner/editor/wasm:_wasm_web_package_browser_backend_for_serve";
+  for (const lane of lanes) {
+    const laneName = /name = "([^"]+)"/.exec(lane)?.[1];
+    const browserBackendLane = /browser_backend/.test(laneName);
+    assert.equal(
+      lane.includes(`"${browserBackendPackage}"`),
+      browserBackendLane,
+      `${laneName} must serve the browser-backend package exactly when it is a browser-backend lane`,
+    );
+    if (browserBackendLane) {
+      assert.ok(
+        !lane.includes(`"//donner/editor/wasm:_wasm_web_package_for_serve"`),
+        `${laneName} must not serve the production package`,
+      );
+    }
+    // The selection check reads which backend to expect from its lane, so only a lane serving the
+    // browser-backend package may expect that one, and every other lane checks it was not chosen.
+    assert.equal(
+      lane.includes(`"DONNER_WASM_EXPECTED_HEADLESS_BACKEND": "browser"`),
+      browserBackendLane && lane.includes("$(rootpath :browser-backend-selection.spec.ts)"),
+      `${laneName} must expect the browser backend exactly when it checks the browser-backend package`,
+    );
+  }
+  for (const laneName of ["boot_presentation_test", "boot_presentation_browser_backend_test"]) {
+    const lane = lanes.find((body) => body.includes(`name = "${laneName}"`));
+    assert.ok(
+      lane?.includes("$(rootpath :browser-backend-selection.spec.ts)"),
+      `${laneName} must check which backend the raster worker selected`,
+    );
   }
   assert.match(buildFile, /"@playwright\/\/:chromium"/);
   assert.match(
