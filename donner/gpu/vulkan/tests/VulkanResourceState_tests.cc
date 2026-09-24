@@ -242,6 +242,44 @@ TEST(VulkanResourceStateTableTests, ARegisteredAliasSharesOnlyCommittedTransitio
       << "the alias retains the image state after its producer slot is retired";
 }
 
+TEST(VulkanResourceStateTableTests, TwoAliasesInOneEncodeSeeTransitionsInCommandOrder) {
+  TextureSyncStateTable table;
+  const TextureSyncState afterDraw = StateAfterUsage(TextureUsageKind::ColorAttachment);
+  const TextureSyncState afterSample = StateAfterUsage(TextureUsageKind::SampledRead);
+  const TextureSyncState afterCopy = StateAfterUsage(TextureUsageKind::TransferRead);
+  table.reset(7, afterDraw);
+  ASSERT_THAT(table.alias(19, table.share(7)), testing::IsTrue());
+
+  table.stage(19, afterSample);
+  EXPECT_EQ(table.stateOf(7), afterSample)
+      << "the second alias must encode its barrier from the first alias's staged layout";
+  table.stage(7, afterCopy);
+  EXPECT_EQ(table.stateOf(19), afterCopy)
+      << "the last recorded use, rather than slot order, determines the image layout";
+  table.commitStaged();
+  EXPECT_EQ(table.committedStateOf(7), afterCopy);
+  EXPECT_EQ(table.committedStateOf(19), afterCopy);
+}
+
+TEST(VulkanResourceStateTableTests, RetiringOneAliasKeepsItsSiblingsStagedTransition) {
+  TextureSyncStateTable table;
+  const TextureSyncState afterDraw = StateAfterUsage(TextureUsageKind::ColorAttachment);
+  const TextureSyncState afterSample = StateAfterUsage(TextureUsageKind::SampledRead);
+  table.reset(7, afterDraw);
+  ASSERT_THAT(table.alias(19, table.share(7)), testing::IsTrue());
+
+  table.stage(7, afterSample);
+  table.forget(7);
+  EXPECT_EQ(table.stateOf(19), afterSample);
+  table.commitStaged();
+  EXPECT_EQ(table.committedStateOf(19), afterSample);
+
+  table.stage(19, afterDraw);
+  table.forget(19);
+  EXPECT_FALSE(table.hasStagedChanges())
+      << "the final retired slot must not keep an orphaned transition pending";
+}
+
 TEST(VulkanResourceStateTableTests, AReusedSlotDoesNotResetAnOldAlias) {
   TextureSyncStateTable producer;
   TextureSyncStateTable consumer;

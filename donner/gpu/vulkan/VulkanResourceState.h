@@ -17,6 +17,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -182,7 +183,10 @@ public:
 
 private:
   std::map<uint32_t, SharedStateHandle> committed_;  //!< Per-slot reference to native image state.
-  std::map<uint32_t, TextureSyncState> staged_;      //!< Transitions encoded but not submitted.
+  // Counts slots in this table so retiring one alias does not discard another's staged state.
+  std::map<SharedStateHandle, size_t, std::owner_less<SharedStateHandle>> aliasCounts_;
+  // Alias slots in one table must see the same in-encode state in command order.
+  std::map<SharedStateHandle, TextureSyncState, std::owner_less<SharedStateHandle>> staged_;
 };
 
 }  // namespace donner::gpu::vulkan

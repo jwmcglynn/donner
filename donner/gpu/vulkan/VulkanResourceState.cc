@@ -156,7 +156,11 @@ struct TextureSyncStateTable::SharedState {
 };
 
 TextureSyncState TextureSyncStateTable::stateOf(uint32_t textureSlot) const {
-  if (const auto staged = staged_.find(textureSlot); staged != staged_.end()) {
+  const auto slot = committed_.find(textureSlot);
+  if (slot == committed_.end()) {
+    return TextureSyncState{};
+  }
+  if (const auto staged = staged_.find(slot->second); staged != staged_.end()) {
     return staged->second;
   }
   return committedStateOf(textureSlot);
@@ -166,26 +170,32 @@ TextureSyncStateTable::SharedStateHandle TextureSyncStateTable::share(uint32_t t
   if (const auto found = committed_.find(textureSlot); found != committed_.end()) {
     return found->second;
   }
-  return committed_.emplace(textureSlot, std::make_shared<SharedState>(TextureSyncState{}))
-      .first->second;
+  const SharedStateHandle state = std::make_shared<SharedState>(TextureSyncState{});
+  committed_.emplace(textureSlot, state);
+  aliasCounts_.emplace(state, 1);
+  return state;
 }
 
 bool TextureSyncStateTable::alias(uint32_t textureSlot, SharedStateHandle state) {
   if (state == nullptr) {
     return false;
   }
-  staged_.erase(textureSlot);
+  if (const auto slot = committed_.find(textureSlot);
+      slot != committed_.end() && slot->second == state) {
+    return true;
+  }
+  forget(textureSlot);
+  ++aliasCounts_[state];
   committed_[textureSlot] = std::move(state);
   return true;
 }
 
 void TextureSyncStateTable::stage(uint32_t textureSlot, const TextureSyncState& state) {
-  staged_[textureSlot] = state;
+  staged_[share(textureSlot)] = state;
 }
 
 void TextureSyncStateTable::commitStaged() {
-  for (const auto& [textureSlot, state] : staged_) {
-    const SharedStateHandle shared = share(textureSlot);
+  for (const auto& [shared, state] : staged_) {
     const std::lock_guard lock(shared->mutex);
     shared->committed = state;
   }
@@ -197,8 +207,17 @@ void TextureSyncStateTable::discardStaged() {
 }
 
 void TextureSyncStateTable::forget(uint32_t textureSlot) {
-  committed_.erase(textureSlot);
-  staged_.erase(textureSlot);
+  const auto slot = committed_.find(textureSlot);
+  if (slot == committed_.end()) {
+    return;
+  }
+  const SharedStateHandle old = slot->second;
+  committed_.erase(slot);
+  const auto count = aliasCounts_.find(old);
+  if (--count->second == 0) {
+    aliasCounts_.erase(count);
+    staged_.erase(old);
+  }
 }
 
 TextureSyncState TextureSyncStateTable::committedStateOf(uint32_t textureSlot) const {
@@ -211,8 +230,10 @@ TextureSyncState TextureSyncStateTable::committedStateOf(uint32_t textureSlot) c
 }
 
 void TextureSyncStateTable::reset(uint32_t textureSlot, const TextureSyncState& state) {
-  staged_.erase(textureSlot);
-  committed_[textureSlot] = std::make_shared<SharedState>(state);
+  forget(textureSlot);
+  const SharedStateHandle fresh = std::make_shared<SharedState>(state);
+  committed_[textureSlot] = fresh;
+  aliasCounts_.emplace(fresh, 1);
 }
 
 bool TextureSyncStateTable::hasStagedChanges() const {
