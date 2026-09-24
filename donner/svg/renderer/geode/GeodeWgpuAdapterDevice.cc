@@ -539,6 +539,20 @@ std::unique_ptr<gpu::Device> CreateNativeMetalDeviceOver(const GeodeGpuRoot& roo
 #endif
 }
 
+/// Selects the native Vulkan backend. No platform serves it yet, so every selection is refused
+/// rather than served by another backend.
+///
+/// @param options Caller-supplied inputs.
+/// @param lostState Loss condition every runtime device over this root would share.
+/// @return Null.
+std::shared_ptr<GeodeGpuRoot> SelectNativeVulkanRoot(
+    const GpuRootSelection& options, std::shared_ptr<gpu::DeviceLostState> lostState) {
+  (void)options;
+  (void)lostState;
+  std::fprintf(stderr, "[Geode] No native Vulkan backend on this platform.\n");
+  return nullptr;
+}
+
 }  // namespace
 
 std::size_t OutstandingSelectionInstances() {
@@ -587,6 +601,7 @@ std::string_view GpuBackendKindName(GpuBackendKind kind) {
   switch (kind) {
     case GpuBackendKind::TransitionalWgpu: return "transitional wgpu adapter";
     case GpuBackendKind::NativeMetal: return "native Metal";
+    case GpuBackendKind::NativeVulkan: return "native Vulkan";
   }
   UTILS_UNREACHABLE();
 }
@@ -782,6 +797,23 @@ std::shared_ptr<GeodeGpuRoot> SelectTransitionalRoot(
   return std::make_shared<GeodeGpuRoot>(std::move(handles), capabilities, std::move(lostState));
 }
 
+/// Selects a root of \p kind, or null when that backend cannot be selected here.
+/// @param kind Backend the selection resolved to.
+/// @param selection Caller-supplied inputs.
+/// @param lostState Loss condition every runtime device over the root shares.
+std::shared_ptr<GeodeGpuRoot> SelectRootOfKind(GpuBackendKind kind,
+                                               const GpuRootSelection& selection,
+                                               std::shared_ptr<gpu::DeviceLostState> lostState) {
+  switch (kind) {
+    case GpuBackendKind::TransitionalWgpu:
+      return SelectTransitionalRoot(selection, std::move(lostState));
+    case GpuBackendKind::NativeMetal: return SelectNativeMetalRoot(selection, std::move(lostState));
+    case GpuBackendKind::NativeVulkan:
+      return SelectNativeVulkanRoot(selection, std::move(lostState));
+  }
+  UTILS_UNREACHABLE();
+}
+
 }  // namespace
 
 std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
@@ -814,9 +846,7 @@ std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
   }
 
   auto lostState = std::make_shared<gpu::DeviceLostState>();
-  std::shared_ptr<GeodeGpuRoot> root =
-      kind == GpuBackendKind::NativeMetal ? SelectNativeMetalRoot(selection, std::move(lostState))
-                                          : SelectTransitionalRoot(selection, std::move(lostState));
+  std::shared_ptr<GeodeGpuRoot> root = SelectRootOfKind(kind, selection, std::move(lostState));
   if (root == nullptr) {
     if (source == BackendRequestSource::Environment && !surfaceProviderGaveUp) {
       HaltOnUnservableBackendRequest(

@@ -32,6 +32,9 @@
 #if defined(__APPLE__)
 #include "donner/gpu/metal/MetalDevice.h"
 #endif
+#if defined(__linux__)
+#include "donner/gpu/vulkan/VulkanDevice.h"
+#endif
 
 namespace donner::geode {
 
@@ -751,6 +754,14 @@ TEST(GeodeDeviceLost, ExternalConfigSharesLostState) {
   external.reset();
 }
 
+/// Milliseconds elapsed since \p start, as an integer a failure message prints.
+/// @param start When the measured span began.
+int64_t MillisecondsSince(std::chrono::steady_clock::time_point start) {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                               start)
+      .count();
+}
+
 #if defined(__APPLE__)
 
 /// Why a native Metal case could not start: the host has no Metal device to select.
@@ -767,14 +778,6 @@ std::unique_ptr<GeodeDevice> CreateNativeMetalContext() {
     return nullptr;
   }
   return GeodeDevice::CreateOverSelectedRoot(std::move(root), gpu::TextureFormat::RGBA8Unorm);
-}
-
-/// Milliseconds elapsed since \p start, as an integer a failure message prints.
-/// @param start When the measured span began.
-int64_t MillisecondsSince(std::chrono::steady_clock::time_point start) {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                               start)
-      .count();
 }
 
 /// A native root reports the texture limit its device reports, not the 8,192-texel fallback a
@@ -898,6 +901,93 @@ TEST(GeodeNativeMetalRoot, QueueIdleReportsALossDeclaredDuringTheWait) {
 }
 
 #endif  // defined(__APPLE__)
+
+#if defined(__linux__)
+
+/// Why a native Vulkan case could not start: the host has no Vulkan device to select.
+constexpr const char* kNoVulkanDevice = "no Vulkan device is available on this host";
+
+/// A context over a native Vulkan root, selected by name for the same reason as the native Metal
+/// cases above.
+std::unique_ptr<GeodeDevice> CreateNativeVulkanContext() {
+  GpuRootSelection selection;
+  selection.label = "GeodeNativeVulkanTest";
+  selection.backend = GpuBackendKind::NativeVulkan;
+  std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
+  if (root == nullptr) {
+    return nullptr;
+  }
+  return GeodeDevice::CreateOverSelectedRoot(std::move(root), gpu::TextureFormat::RGBA8Unorm);
+}
+
+/// A native Vulkan root reports the texture limit its physical device reports rather than the
+/// 8,192-texel fallback, for the reason given for the native Metal root, and the device allocates
+/// a texture at that limit.
+TEST(GeodeNativeVulkanRoot, ReportsTheTextureLimitItsDeviceReports) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeVulkanContext();
+  ASSERT_THAT(context, NotNull()) << kNoVulkanDevice;
+  const std::optional<gpu::vulkan::VulkanDevice::SystemCapabilities> device =
+      gpu::vulkan::VulkanDevice::QuerySystemCapabilities();
+  ASSERT_TRUE(device.has_value()) << kNoVulkanDevice;
+  // Vulkan requires every implementation to allocate at least this much.
+  EXPECT_THAT(device->maxTextureDimension2D, Ge(4096u));
+
+  const uint32_t limit = context->maxTextureDimension2D();
+  EXPECT_THAT(limit, Eq(device->maxTextureDimension2D))
+      << "the root reports a texture limit other than the one its Vulkan device reports";
+  EXPECT_THAT(
+      context->runtimeDevice().createTexture(gpu::TextureDescriptor{"AtTheReportedLimit",
+                                                                    {limit, 1},
+                                                                    gpu::TextureFormat::RGBA8Unorm,
+                                                                    gpu::TextureUsage::Sampled}),
+      gpu::HasResult())
+      << "the device refused a texture at the limit its root reports, " << limit << " texels";
+}
+
+/// On a native backend the queue is idle exactly when the last submission has retired, so a drain
+/// after ordinary work completes and declares nothing.
+TEST(GeodeNativeVulkanRoot, QueueIdleCompletesOnceTheLastSubmissionRetires) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeVulkanContext();
+  ASSERT_THAT(context, NotNull()) << kNoVulkanDevice;
+  const uint64_t submitted = SubmitEmptyCommandBuffer(context->runtimeDevice());
+  ASSERT_THAT(submitted, testing::Gt(0u));
+
+  EXPECT_THAT(context->waitForQueueIdle(), Eq(GpuWaitResult::Complete));
+  EXPECT_THAT(context->runtimeDevice().completedSerial(), Ge(submitted))
+      << "the wait reported the queue idle before its last submission retired";
+  EXPECT_FALSE(context->isDeviceLost()) << "a drain that completed observed nothing to declare";
+}
+
+/// A loss the driver reports is the driver's report, not a queue drain that gave up. After a
+/// submission fails with device loss, the context and every other device over its root report the
+/// loss, and the drain returns it at once without recording a queue-idle timeout.
+TEST(GeodeNativeVulkanRoot, QueueIdleReportsADriverReportedLossWithoutATimeout) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeVulkanContext();
+  ASSERT_THAT(context, NotNull()) << kNoVulkanDevice;
+  GeodeRuntimeDevice sibling = context->physicalDeviceOwner()->createLogicalDevice();
+  ASSERT_THAT(sibling.device, NotNull()) << kNoVulkanDevice;
+  // The root selected the native backend, so its runtime device is the Vulkan device.
+  auto& vulkan = static_cast<gpu::vulkan::VulkanDevice&>(context->runtimeDevice());
+  vulkan.failNextSubmissionForTest(/*deviceLost=*/true);
+  ASSERT_THAT(SubmitEmptyCommandBuffer(vulkan), Eq(0u))
+      << "the submission the driver refused with VK_ERROR_DEVICE_LOST must fail";
+
+  constexpr std::chrono::milliseconds kBudget(1500);
+  const auto start = std::chrono::steady_clock::now();
+  const GpuWaitResult result = context->waitForQueueIdle(kBudget);
+  const int64_t elapsedMs = MillisecondsSince(start);
+
+  EXPECT_THAT(result, Eq(GpuWaitResult::DeviceLost))
+      << "a drain after a driver-reported loss must report the loss, not a timeout";
+  EXPECT_THAT(elapsedMs, Lt(kBudget.count()))
+      << "the drain spent its budget on a device the driver had already reported lost";
+  EXPECT_TRUE(context->isDeviceLost());
+  EXPECT_TRUE(sibling.device->isLost()) << "the loss belongs to the root, not to one device";
+  EXPECT_THAT(context->consumeReadbackStats().timedOutWaitSite, Eq(GpuWaitSite::None))
+      << "the driver reported this loss; the drain must not attribute it to its own deadline";
+}
+
+#endif  // defined(__linux__)
 
 /// Two runtime devices on separate queues whose loss conditions are their own, as over an embedder
 /// root with private loss states, so every declaration shows up on exactly the device it names.

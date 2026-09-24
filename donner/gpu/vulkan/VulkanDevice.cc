@@ -2167,6 +2167,10 @@ struct VulkanDevice::Impl {
                                 BindGroupRecord& record, VkWriteDescriptorSet& write);
 };
 
+std::optional<VulkanDevice::SystemCapabilities> VulkanDevice::QuerySystemCapabilities() {
+  return std::nullopt;
+}
+
 std::unique_ptr<VulkanDevice> VulkanDevice::Create(std::shared_ptr<DeviceLostState> lostState) {
   return CreateImpl(false, false, {}, std::move(lostState));
 }

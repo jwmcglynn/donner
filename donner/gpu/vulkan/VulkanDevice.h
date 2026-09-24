@@ -120,6 +120,27 @@ public:
   /// refusal path runs on a device that has the feature. Only ever narrows the capability.
   void disableFullUint32IndexRangeForTest();
 
+  /// What the physical device \ref Create selects supports, which every device it opens shares.
+  struct SystemCapabilities {
+    /// Largest width or height of a 2D texture the physical device allocates, from its
+    /// `maxImageDimension2D` limit and capped at \ref kMaxTextureDimension, the largest extent the
+    /// runtime accepts.
+    uint32_t maxTextureDimension2D = 0;
+  };
+
+  /**
+   * Asks the physical device \ref Create selects what it supports, without creating a logical
+   * device on it: a transient instance is created, the same physical device is chosen, and its
+   * limits are read before the instance is destroyed.
+   *
+   * A backend root is selected before any device over it exists, and its limits have to be the
+   * device's own rather than a portable fallback.
+   *
+   * @return The capabilities, or empty when no Vulkan device is available or device creation is
+   *   closed after a failed shutdown.
+   */
+  static std::optional<SystemCapabilities> QuerySystemCapabilities();
+
   /**
    * Creates a headless device: a VkInstance without surface extensions (enabling
    * VK_LAYER_KHRONOS_validation only when the loader enumerates it), the first physical device

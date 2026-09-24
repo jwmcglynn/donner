@@ -50,6 +50,8 @@ enum class GpuBackendKind : uint8_t {
   TransitionalWgpu,
   /// The native Metal backend of the Donner GPU runtime. Apple platforms only.
   NativeMetal,
+  /// The native Vulkan backend of the Donner GPU runtime. Linux only.
+  NativeVulkan,
 };
 
 /// Human-readable name of \p kind, for diagnostics.
