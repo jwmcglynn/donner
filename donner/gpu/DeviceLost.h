@@ -55,8 +55,10 @@ class DeviceLossRelease {
 public:
   virtual ~DeviceLossRelease();
 
-  /// Releases what is blocked. Called at most once per registration, on the thread that declared
-  /// the loss, after the condition is set.
+  /// Releases what is blocked. Called at most once per registration, after the condition is set
+  /// and, for a timed-out wait, after its attribution is published: by the declaration, on the
+  /// thread that declared the loss, or, for a release registered after that, at once on the
+  /// registering thread.
   virtual void releaseOnLoss() = 0;
 };
 
@@ -101,6 +103,8 @@ struct DeviceLostState {
 
 private:
   friend bool DeclareDeviceLost(DeviceLostState& state);
+  friend bool DeclareDeviceLostAfterWaitTimeout(DeviceLostState& state, DeviceLostWaitSite site,
+                                                std::chrono::milliseconds elapsed);
 
   /// Runs every registered release once. Called by the declaration that set \ref lost.
   void runLossReleases();
@@ -133,6 +137,9 @@ bool DeclareDeviceLost(DeviceLostState& state);
  * own transition covers both without a check-then-set window - reading the flag and then storing
  * the site would let a driver-reported loss landing in between be relabelled as a wait timeout,
  * which is the one misattribution an empty site exists to rule out.
+ *
+ * Like \ref DeclareDeviceLost, the declaring call runs every registered release before it
+ * returns, after the attribution is written, so whatever a release lets run sees the site.
  *
  * @param state Shared device-lost record.
  * @param site Which bounded wait gave up.

@@ -64,7 +64,7 @@ bool DeclareDeviceLost(DeviceLostState& state) {
 
 bool DeclareDeviceLostAfterWaitTimeout(DeviceLostState& state, DeviceLostWaitSite site,
                                        std::chrono::milliseconds elapsed) {
-  if (!DeclareDeviceLost(state)) {
+  if (state.lost.exchange(true, std::memory_order_acq_rel)) {
     return false;
   }
   // Winning the transition makes this call the only writer of the attribution, so the stores
@@ -74,6 +74,8 @@ bool DeclareDeviceLostAfterWaitTimeout(DeviceLostState& state, DeviceLostWaitSit
   DeviceLostWaitSite unattributed = DeviceLostWaitSite::None;
   state.timedOutSite.compare_exchange_strong(unattributed, site, std::memory_order_release,
                                              std::memory_order_relaxed);
+  // Released last, so work a release lets run already sees the wait that declared the loss.
+  state.runLossReleases();
   return true;
 }
 
