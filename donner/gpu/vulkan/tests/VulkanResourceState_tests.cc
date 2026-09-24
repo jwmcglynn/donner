@@ -217,5 +217,54 @@ TEST(VulkanResourceStateTableTests, ForgettingASlotDropsBothItsViews) {
       << "a destroyed texture must not leave state a recycled slot would inherit";
 }
 
+TEST(VulkanResourceStateTableTests, ARegisteredAliasSharesOnlyCommittedTransitions) {
+  TextureSyncStateTable producer;
+  TextureSyncStateTable consumer;
+  const TextureSyncState afterDraw = StateAfterUsage(TextureUsageKind::ColorAttachment);
+  const TextureSyncState afterRead = StateAfterUsage(TextureUsageKind::SampledRead);
+  producer.stage(7, afterDraw);
+  producer.commitStaged();
+  ASSERT_THAT(consumer.alias(19, producer.share(7)), testing::IsTrue());
+
+  consumer.stage(19, afterRead);
+  EXPECT_EQ(consumer.stateOf(19), afterRead);
+  EXPECT_EQ(producer.stateOf(7), afterDraw)
+      << "an unsubmitted sibling encode cannot change the producer's committed image layout";
+  consumer.discardStaged();
+  EXPECT_EQ(consumer.stateOf(19), afterDraw);
+
+  consumer.stage(19, afterRead);
+  consumer.commitStaged();
+  EXPECT_EQ(producer.stateOf(7), afterRead)
+      << "an accepted sibling submission must update the producer's view of its image";
+  producer.forget(7);
+  EXPECT_EQ(consumer.stateOf(19), afterRead)
+      << "the alias retains the image state after its producer slot is retired";
+}
+
+TEST(VulkanResourceStateTableTests, AReusedSlotDoesNotResetAnOldAlias) {
+  TextureSyncStateTable producer;
+  TextureSyncStateTable consumer;
+  const TextureSyncState oldImage = StateAfterUsage(TextureUsageKind::TransferWrite);
+  const TextureSyncState newImage = StateAfterUsage(TextureUsageKind::ColorAttachment);
+  producer.reset(7, oldImage);
+  ASSERT_THAT(consumer.alias(19, producer.share(7)), testing::IsTrue());
+
+  producer.reset(7, newImage);
+
+  EXPECT_EQ(producer.stateOf(7), newImage);
+  EXPECT_EQ(consumer.stateOf(19), oldImage)
+      << "a recycled producer slot names a different VkImage from the retained registration";
+}
+
+TEST(VulkanResourceStateTableTests, ARejectedNullAliasDoesNotChangeAnExistingSlot) {
+  TextureSyncStateTable table;
+  const TextureSyncState afterDraw = StateAfterUsage(TextureUsageKind::ColorAttachment);
+  table.reset(7, afterDraw);
+
+  EXPECT_THAT(table.alias(7, {}), testing::IsFalse());
+  EXPECT_EQ(table.stateOf(7), afterDraw);
+}
+
 }  // namespace
 }  // namespace donner::gpu::vulkan
