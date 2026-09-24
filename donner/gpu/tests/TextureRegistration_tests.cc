@@ -708,6 +708,32 @@ TEST_F(TextureRegistrationTest, AFailedSurfaceFrameExportReportsTheBackendFailur
   EXPECT_THAT(failing.abandonCurrentTexture(surface), IsOk());
 }
 
+/// Refusing a frame export must not leave its queued write attached to the next texture that
+/// takes the frame's slot; an unrelated submission cannot become that texture's content serial.
+TEST_F(TextureRegistrationTest, ARefusedFrameExportDoesNotCarryAWriteIntoTheReusedSlot) {
+  int layer = 0;
+  const Surface surface = ConfiguredSurface(*producer_, layer);
+  const SurfaceTexture frame = GetResultOrFail(producer_->acquireCurrentTexture(surface));
+  const uint32_t refusedSlot = frame.texture.slotIndex();
+  producer_->queueNativeWriteForTest();
+  EXPECT_THAT(
+      producer_->exportTexture(frame.texture),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("the frame a surface has out")));
+  EXPECT_THAT(producer_->abandonCurrentTexture(surface), IsOk());
+  producer_->discardNativeWriteForTest();
+
+  const Texture replacement = MakeSharedTexture(*producer_);
+  ASSERT_THAT(replacement.slotIndex(), Eq(refusedSlot));
+  const TextureExport exported = GetResultOrFail(producer_->exportTexture(replacement));
+  const Texture unrelated = MakeSharedTexture(*producer_);
+  producer_->holdCompletion();
+  ASSERT_THAT(SubmitSharedTextureRead(*producer_, unrelated), HasResult());
+  const Texture registered = GetResultOrFail(consumer_->registerTexture(exported));
+  EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.0), IsTrue())
+      << "the unrelated submission must not become the replacement's content serial";
+  producer_->releaseCompletion();
+}
+
 /// The surface takes a presented frame back without the retirement other textures go through,
 /// so its export has to be released there too. An export that outlives the present holds the
 /// frame's allocation and counts it as released by the producer, and the slot's next frame
