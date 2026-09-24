@@ -2970,6 +2970,46 @@ TEST(EditorShellTest, SourceStyleDecorationsDiscardReplacedDocumentResult) {
   EXPECT_TRUE(source.sourceStyleDecorations().empty());
 }
 
+TEST(EditorShellTest, ValidStyleSourceEditRequestsCanvasRenderWithoutCanvasClick) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kStyledSvg, "styled.svg"));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  source.resetTextChanged();
+  const std::size_t declarationOffset = source.getText().find("fill: red");
+  ASSERT_THAT(declarationOffset, testing::Ne(std::string::npos));
+  const std::size_t colorOffset = declarationOffset + 6u;
+  source.setSelection(source.getCoordinatesAtByteOffset(colorOffset),
+                      source.getCoordinatesAtByteOffset(colorOffset + 3u));
+  source.insertText("blue");
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  const std::uint64_t versionBefore =
+      EditorShellTestAccess::App(shell).document().currentFrameVersion();
+
+  window.beginFrame();
+  ImGuiIO& io = ImGui::GetIO();
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+  EditorShellTestAccess::RenderSourcePane(shell, /*paneOriginY=*/0.0f, /*paneHeight=*/180.0f,
+                                          /*paneWidth=*/260.0f, io.Fonts->Fonts[0]);
+  window.endFrame();
+
+  EXPECT_THAT(EditorShellTestAccess::App(shell).document().currentFrameVersion(),
+              testing::Gt(versionBefore));
+  const auto target =
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  EXPECT_THAT(target->getComputedStyle().fill.get(),
+              testing::Optional(svg::PaintServer(
+                  svg::PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF))))));
+  EXPECT_THAT(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell), testing::Eq(true));
+}
+
 TEST(EditorShellTest, StyleFocusCursorAndPartitionGuards) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
