@@ -920,6 +920,37 @@ std::unique_ptr<GeodeDevice> CreateNativeVulkanContext() {
   return GeodeDevice::CreateOverSelectedRoot(std::move(root), gpu::TextureFormat::RGBA8Unorm);
 }
 
+/// Runtime devices over one selected Vulkan root share its native device and queue, while each
+/// retains its own submission serials and survives a sibling's teardown.
+TEST(GeodeNativeVulkanRoot, RuntimeDevicesShareOneNativeDeviceAndIndependentSerials) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeVulkanContext();
+  ASSERT_THAT(context, NotNull()) << kNoVulkanDevice;
+  GeodeRuntimeDevice sibling = context->physicalDeviceOwner()->createLogicalDevice();
+  ASSERT_THAT(sibling.device, NotNull()) << kNoVulkanDevice;
+  auto& first = static_cast<gpu::vulkan::VulkanDevice&>(context->runtimeDevice());
+  auto& second = static_cast<gpu::vulkan::VulkanDevice&>(*sibling.device);
+  const auto firstNative = first.nativeContextForTest();
+  const auto secondNative = second.nativeContextForTest();
+  ASSERT_THAT(firstNative.device, NotNull());
+  ASSERT_THAT(secondNative.device, NotNull());
+  EXPECT_THAT(secondNative.instance, Eq(firstNative.instance));
+  EXPECT_THAT(secondNative.device, Eq(firstNative.device));
+  EXPECT_THAT(secondNative.queue, Eq(firstNative.queue));
+  EXPECT_THAT(secondNative.queueFamilyIndex, Eq(firstNative.queueFamilyIndex));
+
+  const uint64_t firstBefore = first.lastSubmittedSerial();
+  const uint64_t secondBefore = second.lastSubmittedSerial();
+  const uint64_t firstSerial = SubmitEmptyCommandBuffer(first);
+  EXPECT_THAT(firstSerial, Eq(firstBefore + 1u));
+  EXPECT_THAT(second.lastSubmittedSerial(), Eq(secondBefore));
+  EXPECT_THAT(SubmitEmptyCommandBuffer(second), Eq(secondBefore + 1u));
+  EXPECT_THAT(first.lastSubmittedSerial(), Eq(firstSerial));
+
+  sibling.device.reset();
+  EXPECT_THAT(SubmitEmptyCommandBuffer(first), Eq(firstSerial + 1u))
+      << "one device's teardown must not close the shared root under its sibling";
+}
+
 /// A native Vulkan root reports the texture limit its physical device reports rather than the
 /// 8,192-texel fallback, for the reason given for the native Metal root, and the device allocates
 /// a texture at that limit.
