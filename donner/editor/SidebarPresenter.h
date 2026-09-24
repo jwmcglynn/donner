@@ -14,6 +14,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/Length.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AttributeWriteback.h"
@@ -24,6 +25,8 @@
 #include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor {
+
+struct EditorTheme;
 
 struct TreeViewState {
   std::optional<svg::SVGElement> scrollTarget;
@@ -193,6 +196,44 @@ public:
   [[nodiscard]] std::optional<Box2d> strokeIncrementRectForTesting() const {
     return strokeIncrementRect_;
   }
+  /// Last rendered width value field, for drag and unit-preservation checks.
+  [[nodiscard]] std::optional<Box2d> strokeWidthRectForTesting() const { return strokeWidthRect_; }
+
+  /// Last rendered cap/join icon rectangle, for interaction and alignment checks.
+  [[nodiscard]] std::optional<Box2d> strokeCapRectForTesting(std::size_t index) const {
+    return index < strokeCapRects_.size() ? strokeCapRects_[index] : std::nullopt;
+  }
+  [[nodiscard]] std::optional<Box2d> strokeJoinRectForTesting(std::size_t index) const {
+    return index < strokeJoinRects_.size() ? strokeJoinRects_[index] : std::nullopt;
+  }
+  /// Last rendered dashed-line toggle rectangle.
+  [[nodiscard]] std::optional<Box2d> strokeDashToggleRectForTesting() const {
+    return strokeDashToggleRect_;
+  }
+  /// Current dash-line preview and the three visual preset hit boxes.
+  [[nodiscard]] std::optional<Box2d> strokeDashPreviewRectForTesting() const {
+    return strokeDashPreviewRect_;
+  }
+  [[nodiscard]] std::optional<Box2d> strokeDashPresetRectForTesting(std::size_t index) const {
+    return index < strokeDashPresetRects_.size() ? strokeDashPresetRects_[index] : std::nullopt;
+  }
+  /// Whether the current dashed style uses a pattern outside the visual presets.
+  [[nodiscard]] bool strokeCustomDashSelectedForTesting() const {
+    return strokeCustomDashSelected_;
+  }
+  /// Whether the miter limit is shown for the selected join style.
+  [[nodiscard]] bool strokeMiterLimitVisibleForTesting() const {
+    return inspectorSnapshot_.strokeLinejoin == 0 || inspectorSnapshot_.strokeLinejoin == 1 ||
+           inspectorSnapshot_.strokeLinejoin == 4;
+  }
+  /// Last rendered sharp-join limit field, absent for rounded/beveled joins.
+  [[nodiscard]] std::optional<Box2d> strokeMiterLimitRectForTesting() const {
+    return strokeMiterLimitRect_;
+  }
+  /// Last rendered dash-offset field when its advanced row is visible.
+  [[nodiscard]] std::optional<Box2d> strokeDashOffsetRectForTesting() const {
+    return strokeDashOffsetRect_;
+  }
 
   /// Whether the captured dash pattern fits the bounded text editor.
   [[nodiscard]] bool dashPatternEditableForTesting() const {
@@ -208,6 +249,10 @@ public:
   /// Submit a dash pattern through the same validation and style mutation path as the text field.
   bool submitDashPatternForTesting(EditorApp& app, std::string_view pattern) {
     return submitDashPattern(app, pattern);
+  }
+  /// Apply a dash offset in the currently captured SVG length unit.
+  bool setStrokeDashOffsetForTesting(EditorApp& app, double value) {
+    return setStrokeDashOffset(app, value);
   }
 
   /// Last rendered screen rectangle for one decomposed Transform field.
@@ -268,12 +313,12 @@ private:
     bool hasSelection = false;
     bool transformEditable = false;
     bool strokeEditable = false;
-    float strokeWidth = 1.0f;
+    Lengthd strokeWidth = Lengthd(1.0);
     int strokeLinecap = 0;
     int strokeLinejoin = 0;
     float strokeMiterlimit = 4.0f;
     std::string strokeDasharray = "none";
-    float strokeDashoffset = 0.0f;
+    Lengthd strokeDashoffset = Lengthd(0.0);
     std::string markerStart = "none";
     std::string markerEnd = "none";
     std::vector<std::string> markerIds;
@@ -315,6 +360,11 @@ private:
 
   void captureTreeNode(const svg::SVGElement& element, std::span<const svg::SVGElement> selection,
                        TreeNodeSnapshot& out);
+  /// Populate stroke values and marker choices for the current selection.
+  void captureStrokeSnapshot(const EditorApp& app, std::span<const svg::SVGElement> selection,
+                             InspectorSnapshot& inspector);
+  /// Re-scan marker IDs only when the source or root changed.
+  void refreshMarkerCache(const EditorApp& app);
   void renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot& node, TreeViewState& state,
                       const IconTextureProvider& iconTextureProvider) const;
 
@@ -329,8 +379,47 @@ private:
   /// Render SVG stroke controls from the captured selection, queuing style mutations when idle.
   bool renderStrokeControlsPanel(EditorApp* liveApp);
 
+  enum class StrokeScalarField;
+  struct StrokeRenderContext {
+    EditorApp* app;
+    const EditorTheme& theme;
+    float rowStartX;
+    bool canMutate;
+  };
+  bool renderStrokeWidthRow(const StrokeRenderContext& context);
+  bool renderStrokeWidthField(const StrokeRenderContext& context, const Lengthd& widthLength,
+                              float* width);
+  bool renderStrokeWidthStepper(const StrokeRenderContext& context, const Lengthd& widthLength,
+                                float width);
+  bool renderStrokeCapRow(const StrokeRenderContext& context);
+  bool renderStrokeJoinRow(const StrokeRenderContext& context);
+  bool renderStrokeMiterRow(const StrokeRenderContext& context);
+  bool renderStrokeDashSection(const StrokeRenderContext& context);
+  bool renderDashPresetRow(const StrokeRenderContext& context,
+                           std::span<const float> currentLengths);
+  void renderDashPreviewRow(const StrokeRenderContext& context, std::span<const float> lengths,
+                            std::string_view pattern);
+  bool renderDashCustomEditor(const StrokeRenderContext& context, std::string_view pattern);
+  bool renderDashOffsetRow(const StrokeRenderContext& context);
+  bool renderStrokeMarkers(const StrokeRenderContext& context);
+  bool renderStrokeMarkerPicker(const StrokeRenderContext& context, const char* label,
+                                const char* property, const std::string& current);
+  /// Track activation and release of the just-rendered scalar widget.
+  void trackStrokeScalarItem(const StrokeRenderContext& context, StrokeScalarField field);
+
   /// Reject invalid SVG dash patterns before changing the selected elements' styles.
   bool submitDashPattern(EditorApp& liveApp, std::string_view pattern);
+  /// Set the offset using the captured unit, including em and percent.
+  bool setStrokeDashOffset(EditorApp& liveApp, double value);
+
+  /// Queue one style change with a source-level undo checkpoint.
+  bool applyStrokeStyle(EditorApp& liveApp, std::string_view property, std::string_view value,
+                        std::string_view undoLabel);
+
+  enum class StrokeScalarField { Width, MiterLimit, DashOffset };
+  /// Capture/commit a continuous numeric edit as one source-level undo step.
+  void beginStrokeScalarEdit(EditorApp& liveApp, StrokeScalarField field);
+  void finishStrokeScalarEdit(EditorApp& liveApp, StrokeScalarField field);
 
   /// Render one decomposed numeric field, wiring activation, write-back, and
   /// commit. The field supports both drag adjustment and click-to-type.
@@ -359,8 +448,28 @@ private:
   std::array<std::optional<Box2d>, 5> transformFieldRects_;
   std::array<std::optional<Box2d>, 6> matrixFieldRects_;
   std::optional<Box2d> strokeIncrementRect_;
+  std::optional<Box2d> strokeWidthRect_;
+  std::array<std::optional<Box2d>, 3> strokeCapRects_;
+  std::array<std::optional<Box2d>, 5> strokeJoinRects_;
+  std::optional<Box2d> strokeDashToggleRect_;
+  std::optional<Box2d> strokeDashPreviewRect_;
+  std::array<std::optional<Box2d>, 3> strokeDashPresetRects_;
+  bool strokeCustomDashSelected_ = false;
+  std::optional<Box2d> strokeMiterLimitRect_;
+  std::optional<Box2d> strokeDashOffsetRect_;
   std::array<char, 128> strokeDasharrayBuffer_{};
   bool strokeDasharrayEditing_ = false;
+  bool strokeDashDetailsOpen_ = false;
+  std::string lastDashPattern_ = "4 2";
+  std::string strokeDashError_;
+  std::string strokeMiterError_;
+  struct StrokeScalarEdit {
+    StrokeScalarField field;
+    std::string beforeSource;
+    bool changed = false;
+    bool pendingCommit = false;
+  };
+  std::optional<StrokeScalarEdit> strokeScalarEdit_;
   std::optional<svg::SVGElement> markerCacheRoot_;
   std::uint64_t markerCacheSourceVersion_ = 0;
   std::string markerCacheSourceText_;

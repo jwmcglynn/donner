@@ -3561,6 +3561,49 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
   RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
+TEST(GlRnrReplayTest, GeodeSplashPickerClickPublishesBackgroundAndWordmark) {
+  if (!UsesGeodePresentation()) {
+    GTEST_SKIP() << "Geode texture presentation is unavailable in this configuration";
+  }
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "gl_geode_splash_click";
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = RunfilePath("donner/editor/tests/geode_splash_click.rnr");
+  options.outputDir = outputDir;
+  options.captureFrames = {16};
+  options.maxFrame = 16;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.showWelcome = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+  const repro::GlRnrReplayFrameDiagnostics* frame = FindFrameDiagnostics(result, 16);
+  ASSERT_NE(frame, nullptr);
+  EXPECT_EQ(frame->displayedDocVersion, 2u);
+  EXPECT_THAT(frame->tiles, ::testing::Not(::testing::IsEmpty()));
+  EXPECT_LT(frame->rasterOutputSize.x, frame->documentCanvas.x);
+  EXPECT_LE(frame->rasterOutputSize.y, frame->documentCanvas.y);
+
+  const std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, 16);
+  ASSERT_TRUE(capture.has_value());
+  const auto pixelAt = [&](int x, int y) {
+    const std::size_t offset =
+        static_cast<std::size_t>(y) * capture->rowBytes + static_cast<std::size_t>(x) * 4u;
+    return std::array<std::uint8_t, 4>{capture->pixels[offset], capture->pixels[offset + 1],
+                                       capture->pixels[offset + 2], capture->pixels[offset + 3]};
+  };
+  ASSERT_EQ(capture->dimensions, Vector2i(3200, 1800));
+  EXPECT_THAT(pixelAt(500, 320),
+              ::testing::ElementsAre(::testing::AllOf(::testing::Ge(35), ::testing::Le(100)),
+                                     ::testing::Lt(40), ::testing::Ge(90), 255))
+      << "violet background must survive the first tiled sample render";
+  EXPECT_THAT(pixelAt(1800, 1000), ::testing::ElementsAre(::testing::Ge(170), ::testing::Ge(120),
+                                                          ::testing::Ge(200), 255))
+      << "Geode wordmark must survive the first tiled sample render";
+  RemoveDiagnosticOutputOnSuccess(outputDir);
+}
+
 TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDPathAndBoundsEveryPresentedFrame) {
   constexpr std::uint64_t kFirstZoomFrame = 31;
   constexpr std::uint64_t kLastZoomFrame = 40;

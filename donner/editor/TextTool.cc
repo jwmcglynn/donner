@@ -311,7 +311,47 @@ std::optional<Box2d> CreationBoxForDrag(const Vector2d& dragDelta,
   return box;
 }
 
+std::u32string StripHardBreak(const std::u32string& line) {
+  return !line.empty() && line.back() == U'\n' ? line.substr(0, line.size() - 1u) : line;
+}
+
 }  // namespace
+
+void TextTool::placeCaretFromPointer(std::size_t index, bool extendSelection) {
+  if (extendSelection) {
+    if (!selectionAnchorIndex_.has_value()) {
+      selectionAnchorIndex_ = caretIndex_;
+    }
+  } else {
+    selectionAnchorIndex_ = index;
+  }
+  caretIndex_ = index;
+  updateActiveStyleFromCaret();
+  selectingText_ = true;
+  resetCaretBlinkPhase();
+}
+
+bool TextTool::handleEditingMouseDown(const Vector2d& documentPoint, MouseModifiers modifiers) {
+  if (!sessionText_.has_value()) {
+    return false;
+  }
+  if (beginFrameGestureAtPoint(documentPoint, modifiers)) {
+    return true;
+  }
+  if (const std::optional<std::size_t> caret = caretIndexAtPoint(documentPoint);
+      caret.has_value()) {
+    placeCaretFromPointer(*caret, modifiers.shift);
+    return true;
+  }
+  if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
+    const Vector2d localPoint = documentFromText_.inverse().transformPosition(documentPoint);
+    if (frameLocal->contains(localPoint)) {
+      placeCaretFromPointer(content_.size(), modifiers.shift);
+      return true;
+    }
+  }
+  return false;
+}
 
 void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                            MouseModifiers modifiers) {
@@ -323,46 +363,9 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   dragToleranceDoc_ = kBoxDragScreenTolerance / std::max(modifiers.pixelsPerDocUnit, 0.000001);
 
   if (state_ == State::Editing) {
-    // A press on the frame's transform handles starts a frame gesture; a
-    // click inside the session's text moves the caret (inside the frame but
-    // off its line cells parks it at the end); a click anywhere else commits
-    // the session before the idle click rules run below.
-    if (sessionText_.has_value()) {
-      if (beginFrameGestureAtPoint(documentPoint, modifiers)) {
-        return;
-      }
-      if (const std::optional<std::size_t> caret = caretIndexAtPoint(documentPoint);
-          caret.has_value()) {
-        if (modifiers.shift) {
-          if (!selectionAnchorIndex_.has_value()) {
-            selectionAnchorIndex_ = caretIndex_;
-          }
-        } else {
-          selectionAnchorIndex_ = *caret;
-        }
-        caretIndex_ = *caret;
-        updateActiveStyleFromCaret();
-        selectingText_ = true;
-        resetCaretBlinkPhase();
-        return;
-      }
-      if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
-        const Vector2d localPoint = documentFromText_.inverse().transformPosition(documentPoint);
-        if (frameLocal->contains(localPoint)) {
-          if (modifiers.shift) {
-            if (!selectionAnchorIndex_.has_value()) {
-              selectionAnchorIndex_ = caretIndex_;
-            }
-          } else {
-            selectionAnchorIndex_ = content_.size();
-          }
-          caretIndex_ = content_.size();
-          updateActiveStyleFromCaret();
-          selectingText_ = true;
-          resetCaretBlinkPhase();
-          return;
-        }
-      }
+    // Clicks on text and its frame stay in the session; outside clicks commit it.
+    if (handleEditingMouseDown(documentPoint, modifiers)) {
+      return;
     }
     commit(editor);
   }
@@ -533,76 +536,70 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   editor.flushFrame();
 }
 
+void TextTool::loadExistingTextContentAndStyles(const svg::SVGTextElement& text) {
+  // Tool-authored soft wraps rejoin without a hard break; foreign tspans without
+  // that marker become separate logical lines.
+  content_.clear();
+  characterStyles_.clear();
+  baseStyle_ = StyleFromComputed(text, 0);
+  bool sawTspan = false;
+  for (std::optional<svg::SVGElement> child = text.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (child->type() != svg::ElementType::TSpan) {
+      continue;
+    }
+    const bool softWrap = child->getAttribute("data-donner-soft-wrap").has_value();
+    const bool sameLine = child->getAttribute("data-donner-same-line").has_value();
+    if (sawTspan && !softWrap && !sameLine) {
+      content_.push_back(U'\n');
+      characterStyles_.push_back(baseStyle_);
+    }
+    const std::u32string spanContent =
+        CodepointsFromUtf8(child->cast<svg::SVGTSpanElement>().textContent());
+    content_ += spanContent;
+    characterStyles_.insert(characterStyles_.end(), spanContent.size(),
+                            StyleFromComputed(*child, baseStyle_));
+    sawTspan = true;
+  }
+  if (!sawTspan) {
+    content_ = CodepointsFromUtf8(text.textContent());
+    characterStyles_.assign(content_.size(), baseStyle_);
+  }
+}
+
+void TextTool::loadExistingTextGeometry(const svg::SVGTextElement& text) {
+  fontSize_ = ParseNumericAttribute(text, "font-size").value_or(kDefaultFontSize);
+  const std::optional<double> xAttr = ParseNumericAttribute(text, "x");
+  const std::optional<double> yAttr = ParseNumericAttribute(text, "y");
+  originText_ = Vector2d(xAttr.value_or(0.0), yAttr.value_or(0.0));
+  if ((!xAttr.has_value() || !yAttr.has_value()) && text.getNumberOfChars() > 0) {
+    const Vector2d firstPen = text.getStartPositionOfChar(0);
+    originText_ = Vector2d(xAttr.value_or(firstPen.x), yAttr.value_or(firstPen.y));
+  }
+  boxText_.reset();
+  const std::optional<double> boxWidth = ParseNumericAttribute(text, "data-donner-text-box-width");
+  const std::optional<double> boxHeight =
+      ParseNumericAttribute(text, "data-donner-text-box-height");
+  if (boxWidth.has_value() && boxHeight.has_value()) {
+    const Vector2d legacyTopLeft(originText_.x, originText_.y - fontSize_);
+    const Vector2d topLeft(
+        ParseNumericAttribute(text, "data-donner-text-box-x").value_or(legacyTopLeft.x),
+        ParseNumericAttribute(text, "data-donner-text-box-y").value_or(legacyTopLeft.y));
+    boxText_ = Box2d(topLeft, topLeft + Vector2d(*boxWidth, *boxHeight));
+  }
+}
+
 void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGTextElement& text,
                                               const Vector2d& documentPoint) {
   beginSessionUndo(editor);
-
   previousSelection_ = editor.selectedElements();
   sessionText_ = text;
   createdBySession_ = false;
-
-  // Every DOM read below (children, text content, attributes, transforms,
-  // character geometry) requires a scoped access; one write scope covers the
-  // whole reconstruction.
+  // One write scope covers child text, attributes, transforms, and character geometry.
   text.withWriteAccess([this, &text](svg::DocumentWriteAccess&, EntityHandle) {
     documentFromText_ = text.elementFromWorld();
-
-    // Reconstruct the logical content from the DOM. Tool-authored text is
-    // either a bare text node or one <tspan> per display line, where
-    // soft-wrapped continuation lines carry `data-donner-soft-wrap` (joined
-    // back without a break - the wrap is recomputed). Foreign tspans without
-    // the marker reconstruct as hard line breaks.
-    content_.clear();
-    characterStyles_.clear();
-    baseStyle_ = StyleFromComputed(text, 0);
-    bool sawTspan = false;
-    for (std::optional<svg::SVGElement> child = text.firstChild(); child.has_value();
-         child = child->nextSibling()) {
-      if (child->type() != svg::ElementType::TSpan) {
-        continue;
-      }
-      const bool softWrap = child->getAttribute("data-donner-soft-wrap").has_value();
-      const bool sameLine = child->getAttribute("data-donner-same-line").has_value();
-      if (sawTspan && !softWrap && !sameLine) {
-        content_.push_back(U'\n');
-        characterStyles_.push_back(baseStyle_);
-      }
-      const std::u32string spanContent =
-          CodepointsFromUtf8(child->cast<svg::SVGTSpanElement>().textContent());
-      content_ += spanContent;
-      characterStyles_.insert(characterStyles_.end(), spanContent.size(),
-                              StyleFromComputed(*child, baseStyle_));
-      sawTspan = true;
-    }
-    if (!sawTspan) {
-      content_ = CodepointsFromUtf8(text.textContent());
-      characterStyles_.assign(content_.size(), baseStyle_);
-    }
-
-    fontSize_ = ParseNumericAttribute(text, "font-size").value_or(kDefaultFontSize);
-
-    const std::optional<double> xAttr = ParseNumericAttribute(text, "x");
-    const std::optional<double> yAttr = ParseNumericAttribute(text, "y");
-    originText_ = Vector2d(xAttr.value_or(0.0), yAttr.value_or(0.0));
-    if ((!xAttr.has_value() || !yAttr.has_value()) && text.getNumberOfChars() > 0) {
-      // Fall back to the first glyph's pen position for foreign text that
-      // positions itself through tspans instead of root attributes.
-      const Vector2d firstPen = text.getStartPositionOfChar(0);
-      originText_ = Vector2d(xAttr.value_or(firstPen.x), yAttr.value_or(firstPen.y));
-    }
-
-    boxText_.reset();
-    const std::optional<double> boxWidth =
-        ParseNumericAttribute(text, "data-donner-text-box-width");
-    const std::optional<double> boxHeight =
-        ParseNumericAttribute(text, "data-donner-text-box-height");
-    if (boxWidth.has_value() && boxHeight.has_value()) {
-      const Vector2d legacyTopLeft(originText_.x, originText_.y - fontSize_);
-      const Vector2d topLeft(
-          ParseNumericAttribute(text, "data-donner-text-box-x").value_or(legacyTopLeft.x),
-          ParseNumericAttribute(text, "data-donner-text-box-y").value_or(legacyTopLeft.y));
-      boxText_ = Box2d(topLeft, topLeft + Vector2d(*boxWidth, *boxHeight));
-    }
+    loadExistingTextContentAndStyles(text);
+    loadExistingTextGeometry(text);
   });
 
   dragBoxDoc_.reset();
@@ -1080,6 +1077,34 @@ void TextTool::updateActiveStyleFromCaret() {
   }
 }
 
+void TextTool::clearInheritedUnderline(EditorApp& editor) {
+  const svg::TextDecoration decoration =
+      sessionText_->getComputedStyle().textDecoration.get().value();
+  std::string remaining;
+  if (svg::hasFlag(decoration, svg::TextDecoration::Overline)) {
+    remaining = "overline";
+  }
+  if (svg::hasFlag(decoration, svg::TextDecoration::LineThrough)) {
+    if (!remaining.empty()) {
+      remaining += ' ';
+    }
+    remaining += "line-through";
+  }
+  if (remaining.empty()) {
+    remaining = "none";
+  }
+  const auto existingStyle = sessionText_->getAttribute("style");
+  std::string inlineStyle =
+      existingStyle.has_value() ? std::string(std::string_view(*existingStyle)) : std::string();
+  if (!inlineStyle.empty() && inlineStyle.back() != ';') {
+    inlineStyle += ';';
+  }
+  inlineStyle += "text-decoration: " + remaining + " !important";
+  editor.applyMutation(EditorCommand::SetAttributeCommand(*sessionText_, "style", inlineStyle));
+  editor.flushFrame();
+  baseStyle_ &= ~kUnderline;
+}
+
 void TextTool::toggleStyle(EditorApp& editor, unsigned char bit) {
   if (state_ != State::Editing || !sessionText_.has_value()) {
     return;
@@ -1089,31 +1114,7 @@ void TextTool::toggleStyle(EditorApp& editor, unsigned char bit) {
         std::all_of(characterStyles_.begin() + range->start, characterStyles_.begin() + range->end,
                     [bit](unsigned char style) { return (style & bit) != 0; });
     if (bit == kUnderline && allEnabled && (baseStyle_ & kUnderline) != 0) {
-      const svg::TextDecoration decoration =
-          sessionText_->getComputedStyle().textDecoration.get().value();
-      std::string remaining;
-      if (svg::hasFlag(decoration, svg::TextDecoration::Overline)) {
-        remaining = "overline";
-      }
-      if (svg::hasFlag(decoration, svg::TextDecoration::LineThrough)) {
-        if (!remaining.empty()) {
-          remaining += ' ';
-        }
-        remaining += "line-through";
-      }
-      if (remaining.empty()) {
-        remaining = "none";
-      }
-      const auto existingStyle = sessionText_->getAttribute("style");
-      std::string inlineStyle =
-          existingStyle.has_value() ? std::string(std::string_view(*existingStyle)) : std::string();
-      if (!inlineStyle.empty() && inlineStyle.back() != ';') {
-        inlineStyle += ';';
-      }
-      inlineStyle += "text-decoration: " + remaining + " !important";
-      editor.applyMutation(EditorCommand::SetAttributeCommand(*sessionText_, "style", inlineStyle));
-      editor.flushFrame();
-      baseStyle_ &= ~kUnderline;
+      clearInheritedUnderline(editor);
     }
     for (std::size_t i = range->start; i < range->end; ++i) {
       characterStyles_[i] = allEnabled ? characterStyles_[i] & ~bit : characterStyles_[i] | bit;
@@ -1192,111 +1193,120 @@ void TextTool::cancel() {
   pointFramePointerAnchorDoc_.reset();
 }
 
+void TextTool::applyStyleRunAttributes(svg::SVGTSpanElement& tspan, unsigned char style) const {
+  std::string inlineStyle;
+  if ((style & kBold) != (baseStyle_ & kBold)) {
+    const std::string_view value = style & kBold ? "bold" : "normal";
+    tspan.setAttribute("font-weight", value);
+    inlineStyle += "font-weight: " + std::string(value) + ";";
+  }
+  if ((style & kItalic) != (baseStyle_ & kItalic)) {
+    const std::string_view value = style & kItalic ? "italic" : "normal";
+    tspan.setAttribute("font-style", value);
+    inlineStyle += "font-style: " + std::string(value) + ";";
+  }
+  if ((style & kUnderline) != (baseStyle_ & kUnderline)) {
+    const std::string_view value = style & kUnderline ? "underline" : "none";
+    tspan.setAttribute("text-decoration", value);
+    inlineStyle += "text-decoration: " + std::string(value) + ";";
+  }
+  if (!inlineStyle.empty()) {
+    tspan.setAttribute("style", inlineStyle);
+  }
+}
+
+void TextTool::appendStyleRun(EditorApp& editor, svg::SVGDocument& document,
+                              const std::vector<std::u32string>& lines, std::size_t lineIndex,
+                              const std::u32string& visible, std::size_t runStart,
+                              std::size_t runEnd, unsigned char style, double lineHeight) {
+  svg::SVGTSpanElement tspan = svg::SVGTSpanElement::Create(document);
+  if (runStart == 0u) {
+    if (lines.size() > 1u) {
+      tspan.setAttribute("x", donner::detail::FormatNumberForSVG(originText_.x));
+    }
+    if (lineIndex > 0u) {
+      tspan.setAttribute("dy", donner::detail::FormatNumberForSVG(lineHeight));
+      const std::u32string& previous = lines[lineIndex - 1u];
+      if (previous.empty() || previous.back() != U'\n') {
+        tspan.setAttribute("data-donner-soft-wrap", "true");
+      }
+    }
+  } else {
+    tspan.setAttribute("data-donner-same-line", "true");
+  }
+  applyStyleRunAttributes(tspan, style);
+  editor.applyMutation(EditorCommand::InsertTextCommand(
+      *sessionText_, tspan, Utf8FromCodepoints(visible.substr(runStart, runEnd - runStart))));
+}
+
+void TextTool::appendStyledLine(EditorApp& editor, svg::SVGDocument& document,
+                                const std::vector<std::u32string>& lines, std::size_t lineIndex,
+                                std::size_t logicalOffset, double lineHeight) {
+  const std::u32string& line = lines[lineIndex];
+  const std::u32string visible = StripHardBreak(line);
+  std::size_t runStart = 0;
+  do {
+    const unsigned char style = logicalOffset + runStart < characterStyles_.size()
+                                    ? characterStyles_[logicalOffset + runStart]
+                                    : baseStyle_;
+    std::size_t runEnd = runStart + 1u;
+    while (runEnd < visible.size() && characterStyles_[logicalOffset + runEnd] == style) {
+      ++runEnd;
+    }
+    appendStyleRun(editor, document, lines, lineIndex, visible, runStart, runEnd, style,
+                   lineHeight);
+    runStart = runEnd;
+  } while (runStart < visible.size());
+}
+
+void TextTool::rebuildDomFromLines(EditorApp& editor, const std::vector<std::u32string>& lines) {
+  // Remove existing children; SetTextContent handles bare text.
+  std::vector<svg::SVGElement> children;
+  sessionText_->withReadAccess([this, &children](svg::DocumentReadAccess&, EntityHandle) {
+    for (std::optional<svg::SVGElement> child = sessionText_->firstChild(); child.has_value();
+         child = child->nextSibling()) {
+      children.push_back(*child);
+    }
+  });
+  for (const svg::SVGElement& child : children) {
+    editor.applyMutation(EditorCommand::DeleteElementCommand(child));
+  }
+
+  const bool hasStyleRuns =
+      std::any_of(characterStyles_.begin(), characterStyles_.end(),
+                  [this](unsigned char style) { return style != baseStyle_; });
+  if (lines.size() <= 1u && !hasStyleRuns) {
+    const std::u32string visible = lines.empty() ? std::u32string() : StripHardBreak(lines[0]);
+    editor.applyMutation(
+        EditorCommand::SetTextContentCommand(*sessionText_, Utf8FromCodepoints(visible)));
+  } else {
+    editor.applyMutation(EditorCommand::SetTextContentCommand(*sessionText_, ""));
+    svg::SVGDocument& document = editor.document().document();
+    const double lineHeight = fontSize_ * kLineHeightFactor;
+    std::size_t logicalOffset = 0;
+    for (std::size_t index = 0; index < lines.size(); ++index) {
+      appendStyledLine(editor, document, lines, index, logicalOffset, lineHeight);
+      logicalOffset += lines[index].size();
+    }
+  }
+  editor.flushFrame();
+}
+
 void TextTool::syncContentToDom(EditorApp& editor) {
   if (!sessionText_.has_value()) {
     return;
   }
-
-  const auto rebuild = [&](const std::vector<std::u32string>& lines) {
-    // Remove existing <tspan> children; SetTextContent handles bare text.
-    std::vector<svg::SVGElement> children;
-    sessionText_->withReadAccess([this, &children](svg::DocumentReadAccess&, EntityHandle) {
-      for (std::optional<svg::SVGElement> child = sessionText_->firstChild(); child.has_value();
-           child = child->nextSibling()) {
-        children.push_back(*child);
-      }
-    });
-    for (const svg::SVGElement& child : children) {
-      editor.applyMutation(EditorCommand::DeleteElementCommand(child));
-    }
-
-    const auto stripHardBreak = [](const std::u32string& line) {
-      return !line.empty() && line.back() == U'\n' ? line.substr(0, line.size() - 1u) : line;
-    };
-
-    const bool hasStyleRuns =
-        std::any_of(characterStyles_.begin(), characterStyles_.end(),
-                    [this](unsigned char style) { return style != baseStyle_; });
-    if (lines.size() <= 1u && !hasStyleRuns) {
-      const std::u32string visible = lines.empty() ? std::u32string() : stripHardBreak(lines[0]);
-      editor.applyMutation(
-          EditorCommand::SetTextContentCommand(*sessionText_, Utf8FromCodepoints(visible)));
-    } else {
-      editor.applyMutation(EditorCommand::SetTextContentCommand(*sessionText_, ""));
-      svg::SVGDocument& document = editor.document().document();
-      const double lineHeight = fontSize_ * kLineHeightFactor;
-      std::size_t logicalOffset = 0;
-      for (std::size_t i = 0; i < lines.size(); ++i) {
-        const std::u32string visible = stripHardBreak(lines[i]);
-        std::size_t runStart = 0;
-        do {
-          const unsigned char style = logicalOffset + runStart < characterStyles_.size()
-                                          ? characterStyles_[logicalOffset + runStart]
-                                          : baseStyle_;
-          std::size_t runEnd = runStart + 1u;
-          while (runEnd < visible.size() && characterStyles_[logicalOffset + runEnd] == style) {
-            ++runEnd;
-          }
-          svg::SVGTSpanElement tspan = svg::SVGTSpanElement::Create(document);
-          if (runStart == 0u) {
-            if (lines.size() > 1u) {
-              tspan.setAttribute("x", donner::detail::FormatNumberForSVG(originText_.x));
-            }
-            if (i > 0u) {
-              tspan.setAttribute("dy", donner::detail::FormatNumberForSVG(lineHeight));
-              const std::u32string& previous = lines[i - 1u];
-              if (previous.empty() || previous.back() != U'\n') {
-                tspan.setAttribute("data-donner-soft-wrap", "true");
-              }
-            }
-          } else {
-            tspan.setAttribute("data-donner-same-line", "true");
-          }
-          std::string inlineStyle;
-          if ((style & kBold) != (baseStyle_ & kBold)) {
-            const std::string_view value = style & kBold ? "bold" : "normal";
-            tspan.setAttribute("font-weight", value);
-            inlineStyle += "font-weight: " + std::string(value) + ";";
-          }
-          if ((style & kItalic) != (baseStyle_ & kItalic)) {
-            const std::string_view value = style & kItalic ? "italic" : "normal";
-            tspan.setAttribute("font-style", value);
-            inlineStyle += "font-style: " + std::string(value) + ";";
-          }
-          if ((style & kUnderline) != (baseStyle_ & kUnderline)) {
-            const std::string_view value = style & kUnderline ? "underline" : "none";
-            tspan.setAttribute("text-decoration", value);
-            inlineStyle += "text-decoration: " + std::string(value) + ";";
-          }
-          if (!inlineStyle.empty()) {
-            tspan.setAttribute("style", inlineStyle);
-          }
-          editor.applyMutation(EditorCommand::InsertTextCommand(
-              *sessionText_, tspan,
-              Utf8FromCodepoints(visible.substr(runStart, runEnd - runStart))));
-          runStart = runEnd;
-        } while (runStart < visible.size());
-        logicalOffset += lines[i].size();
-      }
-    }
-    editor.flushFrame();
-  };
-
-  // Point text does not wrap, and its caret can query the one adjacent glyph
-  // directly. Avoid the old O(n) full-run geometry scan on every keystroke.
+  // Point text can query the adjacent glyph without an O(n) full-run scan.
   const std::vector<std::u32string> lines = displayLines(editor);
-  rebuild(lines);
+  rebuildDomFromLines(editor, lines);
   if (!boxText_.has_value()) {
     cachedCharWidths_.clear();
     return;
   }
-
-  // Box text needs per-character widths for wrapping. Re-measure after the
-  // first pass and re-wrap once if the new content changed the break points.
   cachedCharWidths_ = measureCharacterWidths(editor);
   const std::vector<std::u32string> rewrapped = displayLines(editor);
   if (rewrapped != lines) {
-    rebuild(rewrapped);
+    rebuildDomFromLines(editor, rewrapped);
     cachedCharWidths_ = measureCharacterWidths(editor);
   }
 }

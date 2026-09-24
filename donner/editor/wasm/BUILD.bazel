@@ -417,16 +417,15 @@ py_test(
     args = [
         "--package-dir",
         "$(rootpath :wasm_web_package)",
-        # Measured catalog-delivery package: Wasm 9,105,242 raw / 3,026,849 gzip;
-        # JS 175,960 raw / 49,695 gzip; complete package 11,156,939 raw bytes.
-        # Keep about one percent growth room around the approximately 3 MB module goal.
-        # These raw budgets remain measurement-only until production Rust-built GPU dependencies
-        # are removed and the shipped package is remeasured.
+        # Measured editor-polish package before the browser GPU dependency cutover:
+        # Wasm 9,595,271 raw / 3,170,662 gzip; JS 172,889 raw / 49,127 gzip;
+        # complete package 11,648,015 raw bytes. Rich text style runs, visual stroke
+        # controls, shared menus, and font previews account for this allowance.
+        # These budgets remain measurement-only during the GPU dependency cutover.
         "--max-wasm-raw-bytes",
-        "9240000",
-        # The compressed ceiling is restored after the same post-Rust remeasurement.
+        "9650000",
         "--max-wasm-gzip-bytes",
-        "3100000",
+        "3205000",
         "--max-wasm-function-body-bytes",
         "46000",
         "--max-wasm-data-segments",
@@ -436,7 +435,7 @@ py_test(
         "--max-js-gzip-bytes",
         "50200",
         "--max-total-raw-bytes",
-        "11290000",
+        "11710000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # SHIP BLOCKER, tracked with the deferred WebKit decision: the WebGPU diagnostic

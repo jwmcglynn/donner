@@ -22,6 +22,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/Box.h"
@@ -30,6 +31,11 @@
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/Tool.h"
 #include "donner/svg/SVGTextElement.h"
+
+namespace donner::svg {
+class SVGDocument;
+class SVGTSpanElement;
+}  // namespace donner::svg
 
 namespace donner::editor {
 
@@ -262,6 +268,11 @@ private:
   /// text's line cells.
   void beginEditingSessionForExisting(EditorApp& editor, const svg::SVGTextElement& text,
                                       const Vector2d& documentPoint);
+  void loadExistingTextContentAndStyles(const svg::SVGTextElement& text);
+  void loadExistingTextGeometry(const svg::SVGTextElement& text);
+  [[nodiscard]] bool handleEditingMouseDown(const Vector2d& documentPoint,
+                                            MouseModifiers modifiers);
+  void placeCaretFromPointer(std::size_t index, bool extendSelection);
   /// Caret index nearest @p documentPoint inside the session's text line
   /// cells, or nullopt when a click misses every line cell. When
   /// @p clampToNearestLine is true, points outside the line bounds clamp to
@@ -273,6 +284,7 @@ private:
   bool deleteSelection();
   /// Apply a B/I/U bit to the selection or the active typing style.
   void toggleStyle(EditorApp& editor, unsigned char bit);
+  void clearInheritedUnderline(EditorApp& editor);
   /// Derive typing style from text adjacent to the caret after navigation.
   void updateActiveStyleFromCaret();
   /// The session frame in the text's local space: the authored box for box
@@ -292,6 +304,15 @@ private:
   /// width using measured character advances. Flushes so subsequent
   /// character-geometry reads see the new content.
   void syncContentToDom(EditorApp& editor);
+  void rebuildDomFromLines(EditorApp& editor, const std::vector<std::u32string>& lines);
+  void appendStyledLine(EditorApp& editor, svg::SVGDocument& document,
+                        const std::vector<std::u32string>& lines, std::size_t lineIndex,
+                        std::size_t logicalOffset, double lineHeight);
+  void appendStyleRun(EditorApp& editor, svg::SVGDocument& document,
+                      const std::vector<std::u32string>& lines, std::size_t lineIndex,
+                      const std::u32string& visible, std::size_t runStart, std::size_t runEnd,
+                      unsigned char style, double lineHeight);
+  void applyStyleRunAttributes(svg::SVGTSpanElement& tspan, unsigned char style) const;
   /// Greedy-wrap `content_` into display lines: hard breaks always split;
   /// box text also splits at word boundaries when the measured line width
   /// exceeds the box. Returns the caret's (line, column) as a side effect of

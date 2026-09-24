@@ -267,6 +267,61 @@ TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCapturesFallbackWhenTil
   EXPECT_FALSE(plan.captureTextureSnapshot);
 }
 
+class GeodeSplashReplacementTest : public ::testing::TestWithParam<bool> {};
+
+TEST_P(GeodeSplashReplacementTest, PublishesTilesAfterDocumentReplacement) {
+  svg::Renderer renderer;
+  if (!renderer.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode texture presentation is unavailable in this configuration";
+  }
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  svg::SVGDocument welcome = svg::instantiateSubtree(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400"/></svg>)");
+  welcome.setCanvasSize(640, 400);
+  svg::SVGDocument splash = svg::instantiateSubtree(source.contents);
+  splash.setCanvasSize(1536, 1024);
+
+  AsyncRenderer asyncRenderer;
+  RenderRequest initial(renderer, welcome);
+  initial.version = 1;
+  initial.documentGeneration = 1;
+  asyncRenderer.requestRender(initial);
+  ASSERT_THAT(WaitForRenderResult(asyncRenderer), ::testing::Optional(::testing::_));
+
+  if (GetParam()) {
+    asyncRenderer.setSampleThumbnailRenderDelayForTesting(std::chrono::milliseconds(100));
+    SampleThumbnailRenderRequest preview{
+        .kind = AuxiliaryPreviewKind::FontFamily,
+        .key = 1,
+        .source =
+            R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 196 24"><text x="1" y="18">Preview</text></svg>)",
+        .dimensions = Vector2i(196, 24),
+        .nativeRenderer = &renderer,
+    };
+    ASSERT_TRUE(asyncRenderer.requestSampleThumbnail(std::move(preview)));
+    for (int attempt = 0; attempt < 200 && asyncRenderer.sampleThumbnailRenderStats().started == 0;
+         ++attempt) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_GT(asyncRenderer.sampleThumbnailRenderStats().started, 0u);
+    asyncRenderer.cancelSampleThumbnailWork();
+  }
+
+  RenderRequest replacement(renderer, splash);
+  replacement.version = 2;
+  replacement.documentGeneration = 2;
+  asyncRenderer.requestRender(replacement);
+  const auto result = WaitForRenderResult(asyncRenderer);
+  ASSERT_THAT(result, ::testing::Optional(::testing::_));
+  ASSERT_THAT(result->compositedPreview, ::testing::Optional(::testing::_));
+  EXPECT_THAT(result->compositedPreview->tiles, ::testing::Not(::testing::IsEmpty()));
+}
+
+INSTANTIATE_TEST_SUITE_P(WithoutAndWithCancelledPreview, GeodeSplashReplacementTest,
+                         ::testing::Values(false, true));
+
 TEST(AsyncRendererPresentationPolicyTest, MissingTilesCaptureNothingWhenFullCanvasIsForbidden) {
   for (const bool requiresTexture : {false, true}) {
     for (const bool captureCpuSnapshot : {false, true}) {

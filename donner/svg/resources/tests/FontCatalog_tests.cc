@@ -13,6 +13,7 @@
 #include "donner/svg/resources/EmbeddedFontProvider.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/SystemFontProvider.h"
+#include "donner/svg/text/TextBackendSimple.h"
 
 namespace donner::svg {
 
@@ -224,6 +225,70 @@ TEST(FontCatalogTest, DefaultCatalogContainsEmbeddedFamilies) {
   EXPECT_TRUE(catalog.hasFamily("Inter"));
   const std::vector<FontFamilyInfo> embedded = catalog.familiesBySource(FontSource::Bundled);
   EXPECT_GE(embedded.size(), 8u);
+}
+
+TEST(FontCatalogTest, GenericSansSerifBoldAndItalicProduceDistinctOutlines) {
+  FontCatalog catalog;
+  Registry registry;
+  FontManager manager(registry);
+  manager.setFontProvider(&catalog);
+  TextBackendSimple backend(manager, registry);
+  const FontHandle regular = manager.findFont("sans-serif", 400);
+  const FontHandle bold = manager.findFont("sans-serif", 700);
+  const FontHandle italic =
+      manager.findFont("sans-serif", 400, static_cast<int>(FontStyle::Italic), 5);
+  const FontHandle boldItalic =
+      manager.findFont("sans-serif", 700, static_cast<int>(FontStyle::Italic), 5);
+  ASSERT_TRUE(regular);
+  ASSERT_TRUE(bold);
+  ASSERT_TRUE(italic);
+  ASSERT_TRUE(boldItalic);
+
+  const auto outlineFor = [&](FontHandle face) {
+    const auto shaped = backend.shapeRun(face, 64.0f, "A", 0, 1, false, FontVariant::Normal, false);
+    EXPECT_THAT(shaped.glyphs, ::testing::SizeIs(1));
+    return shaped.glyphs.empty() ? Path{}
+                                 : backend.glyphOutline(face, shaped.glyphs.front().glyphIndex,
+                                                        backend.scaleForEmToPixels(face, 64.0f));
+  };
+  const Path regularOutline = outlineFor(regular);
+  const Path boldOutline = outlineFor(bold);
+  const Path italicOutline = outlineFor(italic);
+  const Path boldItalicOutline = outlineFor(boldItalic);
+  ASSERT_FALSE(regularOutline.empty());
+  ASSERT_FALSE(boldOutline.empty());
+  ASSERT_FALSE(italicOutline.empty());
+  ASSERT_FALSE(boldItalicOutline.empty());
+  EXPECT_THAT(boldOutline.points(), Not(::testing::ElementsAreArray(regularOutline.points())));
+  EXPECT_THAT(italicOutline.points(), Not(::testing::ElementsAreArray(regularOutline.points())));
+  EXPECT_THAT(boldItalicOutline.points(), Not(::testing::ElementsAreArray(boldOutline.points())));
+  EXPECT_THAT(boldItalicOutline.points(), Not(::testing::ElementsAreArray(italicOutline.points())));
+}
+
+TEST(FontCatalogTest, IntrinsicGenericItalicIsNotSlantedTwiceInSimpleBackend) {
+  FontCatalog catalog;
+  Registry registry;
+  FontManager manager(registry);
+  manager.setFontProvider(&catalog);
+  TextBackendSimple backend(manager, registry);
+
+  const FontHandle catalogItalic =
+      manager.findFont("sans-serif", 400, static_cast<int>(FontStyle::Italic), 5);
+  ASSERT_TRUE(catalogItalic);
+  const FontHandle rawItalic =
+      manager.loadFontData(manager.fontData(catalogItalic), FontDataTrust::Trusted);
+  ASSERT_TRUE(rawItalic);
+  const auto outlineFor = [&](FontHandle face) {
+    const auto shaped = backend.shapeRun(face, 64.0f, "A", 0, 1, false, FontVariant::Normal, false);
+    EXPECT_THAT(shaped.glyphs, ::testing::SizeIs(1));
+    return shaped.glyphs.empty() ? Path{}
+                                 : backend.glyphOutline(face, shaped.glyphs.front().glyphIndex,
+                                                        backend.scaleForEmToPixels(face, 64.0f));
+  };
+  const Path catalogOutline = outlineFor(catalogItalic);
+  const Path rawOutline = outlineFor(rawItalic);
+  ASSERT_FALSE(catalogOutline.empty());
+  EXPECT_THAT(catalogOutline.points(), ::testing::ElementsAreArray(rawOutline.points()));
 }
 
 // --- SystemFontProvider (macOS only) ----------------------------------------------------------

@@ -935,6 +935,13 @@ public:
     return shell.fontPreviewBitmaps_.size();
   }
 
+  static std::vector<svg::FontFaceDependency> FontPreviewDependencies(const EditorShell& shell,
+                                                                      std::string_view family) {
+    const auto it = shell.fontPreviewIdentities_.find(std::string(family));
+    return it == shell.fontPreviewIdentities_.end() ? std::vector<svg::FontFaceDependency>{}
+                                                    : it->second.dependencies;
+  }
+
   static SampleThumbnailRenderResult PendingSampleFontResult(EditorShell& shell,
                                                              svg::FontFaceDependency dependency,
                                                              std::uint64_t wakeRevision) {
@@ -1165,6 +1172,12 @@ public:
     return shell.renderCoordinator_.displayedDocVersion();
   }
 
+  static bool SamplePresentationPending(const EditorShell& shell) {
+    return shell.samplePresentationPending_;
+  }
+
+  static std::string_view ActiveSampleId(const EditorShell& shell) { return shell.activeSampleId_; }
+
   static std::optional<std::uint64_t> ImmediateOverlayDocumentVersion(const EditorShell& shell) {
     return shell.renderCoordinator_.immediateOverlayDocumentVersionForDiagnostics();
   }
@@ -1333,6 +1346,11 @@ public:
     shell.applyMenuActions(actions);
   }
 
+  static void ApplyMenuHistoryActions(EditorShell& shell, const MenuBarActions& actions,
+                                      bool sourcePaneFocused) {
+    shell.applyMenuHistoryActions(actions, sourcePaneFocused);
+  }
+
   static void UseInMemoryShapeClipboard(EditorShell& shell) {
     shell.shapeClipboard_ = std::make_unique<InMemoryClipboard>();
   }
@@ -1440,6 +1458,16 @@ public:
   }
 
   static bool TextToolIsEditing(const EditorShell& shell) { return shell.textTool_.isEditing(); }
+
+  static FormatBarState ComputeFormatBarState(EditorShell& shell) {
+    return shell.computeFormatBarState();
+  }
+
+  static void ToggleTextBold(EditorShell& shell) { shell.textTool_.toggleBold(shell.app_); }
+  static void ToggleTextItalic(EditorShell& shell) { shell.textTool_.toggleItalic(shell.app_); }
+  static void ToggleTextUnderline(EditorShell& shell) {
+    shell.textTool_.toggleUnderline(shell.app_);
+  }
 
   static std::size_t TextToolCaretIndex(const EditorShell& shell) {
     return shell.textTool_.caretIndex();
@@ -3008,6 +3036,13 @@ TEST(EditorShellTest, ValidStyleSourceEditRequestsCanvasRenderWithoutCanvasClick
               testing::Optional(svg::PaintServer(
                   svg::PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF))))));
   EXPECT_THAT(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell), testing::Eq(true));
+
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  RunShellFrame(window, shell);
+  EXPECT_THAT(EditorShellTestAccess::DisplayedDocVersion(shell),
+              testing::Eq(EditorShellTestAccess::App(shell).document().currentFrameVersion()));
 }
 
 TEST(EditorShellTest, StyleFocusCursorAndPartitionGuards) {
@@ -3341,6 +3376,15 @@ TEST(EditorShellTest, SelectDoubleClickOnTextSwitchesToTextEditingAtClick) {
   EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
   EXPECT_TRUE(EditorShellTestAccess::TextToolIsEditing(shell));
   EXPECT_EQ(EditorShellTestAccess::TextToolCaretIndex(shell), 2u);
+  const FormatBarState before = EditorShellTestAccess::ComputeFormatBarState(shell);
+  EXPECT_TRUE(before.visible);
+  EditorShellTestAccess::ToggleTextBold(shell);
+  EditorShellTestAccess::ToggleTextItalic(shell);
+  EditorShellTestAccess::ToggleTextUnderline(shell);
+  const FormatBarState after = EditorShellTestAccess::ComputeFormatBarState(shell);
+  EXPECT_TRUE(after.bold);
+  EXPECT_TRUE(after.italic);
+  EXPECT_TRUE(after.underline);
 }
 
 TEST(EditorShellTest, DocumentSpaceReplayInputRoutesTextToolPlainClickCreatesNothing) {
@@ -3730,7 +3774,7 @@ TEST(EditorShellTest, OutputFontDemandDeduplicatesAssetsAndCancelsAfterSourceMut
   EXPECT_EQ(std::string_view(*fill), "red");
 }
 
-TEST(EditorShellTest, TextFormatBarLazilyRendersCatalogFamilyInItsOwnFace) {
+TEST(EditorShellTest, TextFormatBarPrewarmsCatalogFamilyInItsOwnFace) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
@@ -3739,7 +3783,7 @@ TEST(EditorShellTest, TextFormatBarLazilyRendersCatalogFamilyInItsOwnFace) {
   EditorShell shell(window, OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg"/>)"));
   ASSERT_TRUE(shell.valid());
   EXPECT_EQ(EditorShellTestAccess::CachedFontPreviewCount(shell), 0u)
-      << "Constructing the editor must not eagerly materialize the desktop font catalog";
+      << "Background previews must leave construction responsive";
 
   EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
   FormatBarFontPreview preview;
@@ -3754,6 +3798,55 @@ TEST(EditorShellTest, TextFormatBarLazilyRendersCatalogFamilyInItsOwnFace) {
   EXPECT_EQ(EditorShellTestAccess::CachedFontPreviewCount(shell), 1u);
   EXPECT_EQ(preview.width, 196.0f);
   EXPECT_EQ(preview.height, 24.0f);
+}
+
+TEST(EditorShellTest, FontPreviewWarmsFromDiskBeforeWorkerRender) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  const auto cachePath =
+      std::filesystem::temp_directory_path() /
+      ("donner-preview-warm-" + std::to_string(reinterpret_cast<std::uintptr_t>(&window)));
+  std::filesystem::create_directories(cachePath);
+  auto options = OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg"/>)");
+  options.editorBuildInfo = "test-build\ntest-commit\n";
+  options.fontPreviewCachePath = cachePath.string();
+  {
+    EditorShell shell(window, options);
+    ASSERT_TRUE(shell.valid());
+    EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
+    FormatBarFontPreview preview;
+    for (int attempt = 0; attempt < 500 && !preview.available(); ++attempt) {
+      EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+      preview = EditorShellTestAccess::FontPreviewForFamily(shell, "Bebas Neue");
+      if (!preview.available()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+    }
+    ASSERT_TRUE(preview.available());
+    const auto dependencies = EditorShellTestAccess::FontPreviewDependencies(shell, "Bebas Neue");
+    ASSERT_EQ(dependencies.size(), 1u);
+    EXPECT_EQ(dependencies.front().family, "bebas neue");
+    EXPECT_FALSE(dependencies.front().availability.contentId.empty());
+  }
+  std::size_t svgCount = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(cachePath)) {
+    if (entry.path().extension() == ".svg") {
+      ++svgCount;
+    }
+  }
+  EXPECT_EQ(svgCount, 1u);
+
+  {
+    EditorShell shell(window, options);
+    ASSERT_TRUE(shell.valid());
+    EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
+    EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+    EXPECT_EQ(EditorShellTestAccess::CachedFontPreviewCount(shell), 1u);
+    EXPECT_TRUE(EditorShellTestAccess::FontPreviewForFamily(shell, "Bebas Neue").available());
+  }
+  std::filesystem::remove_all(cachePath);
 }
 
 TEST(EditorShellTest, PrivateUiRenderHelpersCoverPaneToolbarAndPanelStates) {
@@ -5088,6 +5181,34 @@ TEST(EditorShellTest, MenuActionsRouteCanvasClipboardHistorySelectionAndViewStat
   EXPECT_EQ(EditorShellTestAccess::GetPerfOverlayMode(shell), PerfOverlayMode::FullGraph);
 }
 
+TEST(EditorShellTest, SourceFocusedMenuUndoAndRedoKeepDocumentHistoryUntouched) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  const std::string original = source.getText();
+  source.setSelection(Coordinates(0, 0), Coordinates(0, 0));
+  source.insertText(" ");
+  ASSERT_NE(source.getText(), original);
+  ASSERT_TRUE(source.canUndo());
+
+  MenuBarActions actions;
+  actions.undo = true;
+  EditorShellTestAccess::ApplyMenuHistoryActions(shell, actions, /*sourcePaneFocused=*/true);
+  EXPECT_EQ(source.getText(), original);
+  EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 0u);
+
+  actions = MenuBarActions{};
+  actions.redo = true;
+  EditorShellTestAccess::ApplyMenuHistoryActions(shell, actions, /*sourcePaneFocused=*/true);
+  EXPECT_NE(source.getText(), original);
+  EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 0u);
+}
+
 TEST(EditorShellTest, MenuActionsRouteDialogAndExportRequestsWithoutCurrentPath) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -5317,6 +5438,51 @@ TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames)
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), sampleCount);
 }
 
+TEST(EditorShellTest, GeodeSplashSampleClickPublishesFirstDocumentFrame) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Geode Splash sample load regression",
+      .initialWidth = 960,
+      .initialHeight = 720,
+      .visible = false,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShellOptions options = OptionsWithSource(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"/>)");
+  options.showWelcome = true;
+  EditorShell shell(window, options);
+  ASSERT_TRUE(shell.valid());
+
+  shell.prepareFrame();
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+  EditorShellTestAccess::QueueSampleLoad(shell, "geode-splash");
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+  ASSERT_EQ(EditorShellTestAccess::ActiveSampleId(shell), "geode-splash");
+  ASSERT_TRUE(EditorShellTestAccess::SamplePresentationPending(shell));
+
+  bool displayed = false;
+  for (int attempt = 0; attempt < 300; ++attempt) {
+    shell.prepareFrame();
+    window.beginFrame();
+    shell.runFrame();
+    window.endFrame();
+    if (!EditorShellTestAccess::SamplePresentationPending(shell) &&
+        EditorShellTestAccess::DisplayedDocVersion(shell) ==
+            EditorShellTestAccess::App(shell).document().currentFrameVersion()) {
+      displayed = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  EXPECT_TRUE(displayed) << "sample frame did not present: rendererBusy="
+                         << EditorShellTestAccess::RendererBusy(shell)
+                         << ", version=" << EditorShellTestAccess::DisplayedDocVersion(shell)
+                         << ", pending=" << EditorShellTestAccess::SamplePresentationPending(shell);
+}
+
 TEST(EditorShellTest, MainDocumentRenderTakesPriorityOverNewCarouselThumbnailWork) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -5494,6 +5660,25 @@ void RunFrameWithMouse(gui::EditorWindow& window, EditorShell& shell, const ImVe
   window.beginFrame();
   shell.runFrame();
   window.endFrame();
+}
+
+const DocumentPixelCapture* WaitForDocumentPixelCapture(gui::EditorWindow& window,
+                                                        EditorShell& shell) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (std::chrono::steady_clock::now() < deadline) {
+    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+      return nullptr;
+    }
+    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+    if (const DocumentPixelCapture* capture = EditorShellTestAccess::PixelCapture(shell)) {
+      return capture;
+    }
+    // The canvas-size commit debounce uses wall-clock time. Let its idle wake mature between
+    // frames instead of assuming four fast test frames are longer than that delay.
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+  }
+  return nullptr;
 }
 
 svg::RendererBitmap CaptureFrameWithMouse(gui::EditorWindow& window, EditorShell& shell,
@@ -5854,14 +6039,7 @@ TEST(EditorShellTest, IdleEyedropperArmingAndCanvasCommitWakeDispatchRender) {
   ASSERT_THAT(EditorShellTestAccess::ArmEyedropper(shell, /*stroke=*/false), testing::Eq(true));
   EXPECT_THAT(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell), testing::Eq(true))
       << "Arming on an idle canvas must submit the first capture without another input event.";
-  const DocumentPixelCapture* capture = nullptr;
-  for (int attempt = 0; attempt < 4 && capture == nullptr; ++attempt) {
-    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-        std::chrono::steady_clock::now() + std::chrono::seconds(3)));
-    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    capture = EditorShellTestAccess::PixelCapture(shell);
-  }
+  const DocumentPixelCapture* capture = WaitForDocumentPixelCapture(window, shell);
   ASSERT_NE(capture, nullptr) << "The idle arm did not produce a document pixel capture.";
 
   // Represent the next idle frame after the first capture request has cleared its one-shot flag.
@@ -5891,14 +6069,7 @@ TEST(EditorShellTest, CancelledIdleEyedropperCaptureRepostsThroughShellFrame) {
       std::chrono::steady_clock::now() + std::chrono::seconds(3)));
   RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
   ASSERT_THAT(EditorShellTestAccess::ArmEyedropper(shell, /*stroke=*/false), testing::Eq(true));
-  const DocumentPixelCapture* capture = nullptr;
-  for (int attempt = 0; attempt < 4 && capture == nullptr; ++attempt) {
-    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-        std::chrono::steady_clock::now() + std::chrono::seconds(3)));
-    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    capture = EditorShellTestAccess::PixelCapture(shell);
-  }
+  const DocumentPixelCapture* capture = WaitForDocumentPixelCapture(window, shell);
   ASSERT_NE(capture, nullptr);
 
   EditorShellTestAccess::RestartEyedropperCapture(shell);
@@ -6202,14 +6373,7 @@ TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
   RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
   ASSERT_THAT(EditorShellTestAccess::ArmEyedropper(shell, /*stroke=*/false), testing::Eq(true));
 
-  const DocumentPixelCapture* capture = nullptr;
-  for (int attempt = 0; attempt < 4 && capture == nullptr; ++attempt) {
-    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-        std::chrono::steady_clock::now() + std::chrono::seconds(3)));
-    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    capture = EditorShellTestAccess::PixelCapture(shell);
-  }
+  const DocumentPixelCapture* capture = WaitForDocumentPixelCapture(window, shell);
   ASSERT_NE(capture, nullptr) << "The composed worker readback never reached the live canvas.";
 
   const ViewportState& viewport = shell.viewportForReadback();

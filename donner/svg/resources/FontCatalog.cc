@@ -6,6 +6,11 @@
 #include "donner/base/StringUtils.h"
 #include "donner/svg/resources/EmbeddedFontProvider.h"
 #include "donner/svg/resources/SystemFontProvider.h"
+#ifdef __EMSCRIPTEN__
+#include "embed_resources/PublicSansFont.h"
+#else
+#include "embed_resources/NotoSansGenericFaces.h"
+#endif
 
 namespace donner::svg {
 
@@ -19,9 +24,40 @@ std::string toLower(std::string_view value) {
   return out;
 }
 
+/// Editor-only generic family with consistent upright, bold, and italic metrics.
+class GenericSansProvider final : public FontFamilyProvider {
+public:
+  std::vector<FontFamilyInfo> families() const override { return {}; }
+
+  bool hasFamily(std::string_view family) const override {
+    return StringUtils::Equals<StringComparison::IgnoreCase>(family,
+                                                             std::string_view("sans-serif"));
+  }
+
+  std::vector<uint8_t> loadFamilyData(std::string_view family,
+                                      const FontFaceRequest& request) const override {
+    if (!hasFamily(family)) {
+      return {};
+    }
+#ifdef __EMSCRIPTEN__
+    (void)request;
+    // Reuse the renderer's existing fallback face. The full text backend synthesizes missing
+    // bold and oblique on this upright font without adding another web font payload.
+    const std::span<const unsigned char> bytes = embedded::kPublicSansMediumOtf;
+#else
+    const std::span<const unsigned char> bytes = request.weight >= 600 ? embedded::kNotoSansBoldTtf
+                                                 : request.style != FontStyle::Normal
+                                                     ? embedded::kNotoSansItalicTtf
+                                                     : embedded::kNotoSansRegularTtf;
+#endif
+    return {bytes.begin(), bytes.end()};
+  }
+};
+
 }  // namespace
 
 FontCatalog::FontCatalog() {
+  providers_.push_back(std::make_unique<GenericSansProvider>());
   auto bundled = std::make_unique<EmbeddedFontProvider>();
   store_ = bundled->encodedStore();
   providers_.push_back(std::move(bundled));
@@ -30,6 +66,7 @@ FontCatalog::FontCatalog() {
 
 FontCatalog::FontCatalog(std::shared_ptr<CatalogEncodedFontStore> store)
     : store_(std::move(store)) {
+  providers_.push_back(std::make_unique<GenericSansProvider>());
   providers_.push_back(std::make_unique<EmbeddedFontProvider>(store_));
   providers_.push_back(std::make_unique<SystemFontProvider>());
 }

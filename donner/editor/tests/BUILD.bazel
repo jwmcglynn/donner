@@ -219,6 +219,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "font_preview_cache_tests",
+    srcs = ["FontPreviewCache_tests.cc"],
+    deps = [
+        "//donner/editor:font_preview_cache",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "menu_bar_presenter_tests",
     srcs = ["MenuBarPresenter_tests.cc"],
     deps = [
@@ -683,6 +692,7 @@ donner_cc_test(
     srcs = ["AsyncRenderer_tests.cc"],
     data = [
         "//:donner_splash.svg",
+        "//:geode_splash.svg",
     ],
     opens_gpu_device = True,
     # 75 independent gtest cases (wall-clock-sensitive cases live in the
@@ -1136,6 +1146,7 @@ donner_cc_binary(
         "drag_start_hang_repro.rnr",
         "filter_post_drag_jump.rnr",
         "geode_drag_zoom_o_pop.rnr",
+        "geode_splash_click.rnr",
         "pen-fill.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         ":zoom_out_drag_jump_rnr",
@@ -1176,6 +1187,7 @@ donner_cc_test(
     data = [
         "filter_post_drag_jump.rnr",
         "geode_drag_zoom_o_pop.rnr",
+        "geode_splash_click.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         "//:donner_splash.svg",
     ],

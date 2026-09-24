@@ -31,6 +31,27 @@ Transform2d OutputFromDocumentTransform(const Vector2d& documentTopLeft, double 
   return Transform2d::Translate(-documentTopLeft) * Transform2d::Scale(scale);
 }
 
+std::optional<Vector2d> BoundedRasterTarget(const Vector2d& fullTarget, const Vector2d& paneSize,
+                                            double devicePixelRatio) {
+  if (paneSize.x <= 0.0 || paneSize.y <= 0.0 || devicePixelRatio <= 0.0) {
+    return std::nullopt;
+  }
+  const double marginDevicePx =
+      static_cast<double>(ViewportState::kHighZoomRasterMarginScreenPx) * devicePixelRatio;
+  const Vector2d target(std::min({fullTarget.x, static_cast<double>(ViewportState::kMaxCanvasDim),
+                                  paneSize.x * devicePixelRatio + 2.0 * marginDevicePx}),
+                        std::min({fullTarget.y, static_cast<double>(ViewportState::kMaxCanvasDim),
+                                  paneSize.y * devicePixelRatio + 2.0 * marginDevicePx}));
+  if (fullTarget.x <= target.x && fullTarget.y <= target.y) {
+    return std::nullopt;
+  }
+  const bool hardCap =
+      fullTarget.x > ViewportState::kMaxCanvasDim || fullTarget.y > ViewportState::kMaxCanvasDim;
+  return hardCap || target.x * target.y < fullTarget.x * fullTarget.y
+             ? std::optional<Vector2d>(target)
+             : std::nullopt;
+}
+
 }  // namespace
 
 Vector2d ViewportState::documentToScreen(const Vector2d& docPoint) const {
@@ -82,32 +103,19 @@ EditorRasterViewport ViewportState::rasterViewport() const {
     return result;
   }
 
-  Vector2d maxTarget(static_cast<double>(kMaxCanvasDim), static_cast<double>(kMaxCanvasDim));
-  if (paneSize.x > 0.0 && paneSize.y > 0.0 && devicePixelRatio > 0.0) {
-    const double marginDevicePx =
-        static_cast<double>(kHighZoomRasterMarginScreenPx) * devicePixelRatio;
-    maxTarget.x = std::min(maxTarget.x, paneSize.x * devicePixelRatio + 2.0 * marginDevicePx);
-    maxTarget.y = std::min(maxTarget.y, paneSize.y * devicePixelRatio + 2.0 * marginDevicePx);
-  }
-
-  const bool exceedsViewportTarget = fullTarget.x > maxTarget.x || fullTarget.y > maxTarget.y;
-  const bool exceedsHardDimensionCap = fullTarget.x > static_cast<double>(kMaxCanvasDim) ||
-                                       fullTarget.y > static_cast<double>(kMaxCanvasDim);
-  const bool viewportBoundedRasterIsSmaller =
-      maxTarget.x * maxTarget.y < fullTarget.x * fullTarget.y;
-  const bool shouldViewportBound = paneSize.x > 0.0 && paneSize.y > 0.0 && devicePixelRatio > 0.0 &&
-                                   exceedsViewportTarget &&
-                                   (exceedsHardDimensionCap || viewportBoundedRasterIsSmaller);
-  if (!shouldViewportBound) {
+  const std::optional<Vector2d> boundedTarget =
+      BoundedRasterTarget(fullTarget, paneSize, devicePixelRatio);
+  if (!boundedTarget.has_value()) {
     return result;
   }
 
   const double marginScreenPx = static_cast<double>(kHighZoomRasterMarginScreenPx);
   const Vector2d outputScreenTopLeft = paneOrigin - Vector2d(marginScreenPx, marginScreenPx);
-  const Vector2i outputSizePx(
-      ClampRasterDim(paneSize.x * devicePixelRatio + 2.0 * marginScreenPx * devicePixelRatio),
-      ClampRasterDim(paneSize.y * devicePixelRatio + 2.0 * marginScreenPx * devicePixelRatio));
-  const Vector2d documentTopLeft = screenToDocument(outputScreenTopLeft);
+  const Vector2i outputSizePx(ClampRasterDim(boundedTarget->x), ClampRasterDim(boundedTarget->y));
+  const Vector2d requestedDocumentTopLeft = screenToDocument(outputScreenTopLeft);
+  const Vector2d documentTopLeft(
+      boundedTarget->x >= fullTarget.x ? documentViewBox.topLeft.x : requestedDocumentTopLeft.x,
+      boundedTarget->y >= fullTarget.y ? documentViewBox.topLeft.y : requestedDocumentTopLeft.y);
   const Vector2d documentSize(static_cast<double>(outputSizePx.x) / scale,
                               static_cast<double>(outputSizePx.y) / scale);
 
@@ -134,11 +142,14 @@ EditorRasterViewport ViewportState::selectedPrewarmRasterViewport() const {
                                   paneSize.x * kSelectedPrewarmOverdrawPaneFraction);
   const double marginY = std::max(static_cast<double>(kSelectedPrewarmMinOverdrawScreenPx),
                                   paneSize.y * kSelectedPrewarmOverdrawPaneFraction);
+  const Vector2d fullTarget = documentViewBox.size() * scale;
   const Vector2i outputSizePx(
-      ClampRasterDim(std::max(static_cast<double>(result.outputSizePx.x),
-                              paneSize.x * devicePixelRatio + 2.0 * marginX * devicePixelRatio)),
-      ClampRasterDim(std::max(static_cast<double>(result.outputSizePx.y),
-                              paneSize.y * devicePixelRatio + 2.0 * marginY * devicePixelRatio)));
+      ClampRasterDim(std::min(fullTarget.x, std::max(static_cast<double>(result.outputSizePx.x),
+                                                     paneSize.x * devicePixelRatio +
+                                                         2.0 * marginX * devicePixelRatio))),
+      ClampRasterDim(std::min(fullTarget.y, std::max(static_cast<double>(result.outputSizePx.y),
+                                                     paneSize.y * devicePixelRatio +
+                                                         2.0 * marginY * devicePixelRatio))));
   if (outputSizePx == result.outputSizePx) {
     return result;
   }
@@ -146,13 +157,19 @@ EditorRasterViewport ViewportState::selectedPrewarmRasterViewport() const {
   const Vector2d outputScreenSize(static_cast<double>(outputSizePx.x) / devicePixelRatio,
                                   static_cast<double>(outputSizePx.y) / devicePixelRatio);
   const Vector2d outputScreenTopLeft = paneOrigin - (outputScreenSize - paneSize) * 0.5;
-  const Vector2d documentTopLeft = screenToDocument(outputScreenTopLeft);
+  const Vector2d requestedDocumentTopLeft = screenToDocument(outputScreenTopLeft);
+  const Vector2d documentTopLeft(
+      static_cast<double>(outputSizePx.x) >= fullTarget.x ? documentViewBox.topLeft.x
+                                                          : requestedDocumentTopLeft.x,
+      static_cast<double>(outputSizePx.y) >= fullTarget.y ? documentViewBox.topLeft.y
+                                                          : requestedDocumentTopLeft.y);
   const Vector2d documentSize(static_cast<double>(outputSizePx.x) / scale,
                               static_cast<double>(outputSizePx.y) / scale);
 
   result.documentRect = Box2d(documentTopLeft, documentTopLeft + documentSize);
   result.outputSizePx = outputSizePx;
   result.outputFromDocument = OutputFromDocumentTransform(documentTopLeft, scale);
+  // A selected prewarm remains a tile request even when padding reaches the full document.
   result.viewportBounded = true;
   return result;
 }
