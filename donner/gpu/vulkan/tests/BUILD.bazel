@@ -444,6 +444,7 @@ donner_cc_test(
     },
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
+        ":native_queue_gate",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu/vulkan:vulkan_device",

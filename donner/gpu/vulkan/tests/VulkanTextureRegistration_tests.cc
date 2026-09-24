@@ -6,13 +6,16 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <format>
 #include <future>
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -20,6 +23,7 @@
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
+#include "donner/gpu/vulkan/tests/NativeQueueGate.h"
 
 namespace donner::gpu::vulkan {
 namespace {
@@ -121,6 +125,148 @@ TEST(VulkanTextureRegistration, ARegistrationOutlivesItsProducerAndReadsExactPix
     EXPECT_THAT(row, testing::ElementsAreArray(expectedRow));
   }
   EXPECT_THAT(consumer->lastErrorForTest(), IsEmpty());
+}
+
+/// The consumer can retire its handle and the producer can disappear while the shared image is
+/// still named by a submitted command. The gate proves that work has not reached its fence yet.
+TEST(VulkanTextureRegistration, ASubmittedReadRetainsTheImageAfterBothHandlesAreReleased) {
+  const std::shared_ptr<VulkanSharedRoot> root =
+      VulkanDevice::CreateSharedRootWithTimelineSemaphoreForTest();
+  if (!root) {
+    const char* requireVulkan = std::getenv("DONNER_REQUIRE_VULKAN");
+    if (requireVulkan != nullptr && std::string_view(requireVulkan) == "1" &&
+        VulkanDevice::CreateSharedRoot() == nullptr) {
+      FAIL() << "DONNER_REQUIRE_VULKAN=1 is set but no Vulkan 1.1 root is available";
+    }
+    GTEST_SKIP() << "VK_KHR_timeline_semaphore is unavailable for the native lifetime gate";
+  }
+  std::unique_ptr<VulkanDevice> producer = VulkanDevice::CreateOverSharedRoot(root);
+  std::unique_ptr<VulkanDevice> consumer = VulkanDevice::CreateOverSharedRoot(root);
+  ASSERT_THAT(producer, NotNull());
+  ASSERT_THAT(consumer, NotNull());
+
+  constexpr Extent2d kSize{1, 1};
+  constexpr TexelCopyBufferLayout kLayout{0, kTexelRowPitchAlignment, 1};
+  Texture source = GetResultOrFail(
+      producer->createTexture(TextureDescriptor{"in-flight", kSize, TextureFormat::RGBA8Unorm,
+                                                TextureUsage::CopySrc | TextureUsage::CopyDst}));
+  std::array<uint8_t, kTexelRowPitchAlignment> uploaded{};
+  uploaded[0] = 255;
+  uploaded[3] = 255;
+  ASSERT_THAT(producer->writeTexture(source, uploaded, kLayout, kSize), IsOk());
+  Texture registered = [&] {
+    const TextureExport exported = GetResultOrFail(producer->exportTexture(source));
+    return GetResultOrFail(consumer->registerTexture(exported));
+  }();
+
+  tests::NativeQueueGate gate(consumer->nativeContextForTest());
+  gate.start();
+  ASSERT_THAT(gate.submitted(), testing::IsTrue())
+      << "the consumer submission must remain in flight while handles retire";
+  const Buffer readback = GetResultOrFail(consumer->createBuffer(BufferDescriptor{
+      "readback", kTexelRowPitchAlignment, BufferUsage::CopyDst | BufferUsage::MapRead}));
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(consumer->createCommandEncoder());
+  ASSERT_THAT(
+      encoder->copyTextureToBuffer(TexelCopyTextureInfo{registered}, readback, kLayout, kSize),
+      IsOk());
+  const uint64_t serial = GetResultOrFail(consumer->submit(GetResultOrFail(encoder->finish())));
+  ASSERT_LT(consumer->completedSerial(), serial);
+
+  ASSERT_THAT(consumer->destroyTexture(std::move(registered)), IsOk());
+  ASSERT_THAT(producer->destroyTexture(std::move(source)), IsOk());
+  producer.reset();
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  ASSERT_THAT(consumer->waitForSerial(serial, 5.0), testing::IsTrue());
+
+  const Result<std::vector<uint8_t>> pixels = consumer->readBackBuffer(readback);
+  ASSERT_THAT(pixels, HasResult());
+  ASSERT_GE(pixels.result().size(), 4u);
+  EXPECT_THAT(std::span<const uint8_t>(pixels.result().data(), 4),
+              testing::ElementsAre(255, 0, 0, 255));
+  EXPECT_THAT(consumer->lastErrorForTest(), IsEmpty());
+}
+
+/// The root lock must cover the interval after image barriers are encoded but before the queue
+/// accepts them. Otherwise a sibling can record its barrier from state that is about to go stale.
+TEST(VulkanTextureRegistration, HoldsRootOrderFromBarrierEncodingThroughSubmission) {
+  const std::shared_ptr<VulkanSharedRoot> root = VulkanDevice::CreateSharedRoot();
+  ASSERT_THAT(root, NotNull());
+  std::promise<bool> encodedPromise;
+  std::future<bool> encoded = encodedPromise.get_future();
+  std::promise<void> resumePromise;
+  std::future<void> resume = resumePromise.get_future();
+  std::string workerError;
+
+  std::jthread worker([&] {
+    std::unique_ptr<VulkanDevice> device = VulkanDevice::CreateOverSharedRoot(root);
+    const auto fail = [&](std::string message) {
+      workerError = std::move(message);
+      encodedPromise.set_value(false);
+    };
+    if (!device) {
+      fail("runtime device could not open over the selected Vulkan root");
+      return;
+    }
+    constexpr Extent2d kSize{1, 1};
+    constexpr TexelCopyBufferLayout kLayout{0, kTexelRowPitchAlignment, 1};
+    Result<Texture> texture =
+        device->createTexture(TextureDescriptor{"encoded", kSize, TextureFormat::RGBA8Unorm,
+                                                TextureUsage::CopySrc | TextureUsage::CopyDst});
+    if (texture.hasError()) {
+      fail(texture.error().message);
+      return;
+    }
+    std::array<uint8_t, kTexelRowPitchAlignment> uploaded{};
+    uploaded[0] = 255;
+    uploaded[3] = 255;
+    if (Status written = device->writeTexture(texture.result(), uploaded, kLayout, kSize);
+        written.hasError()) {
+      fail(written.error().message);
+      return;
+    }
+    Result<Buffer> readback = device->createBuffer(BufferDescriptor{
+        "encoded readback", kTexelRowPitchAlignment, BufferUsage::CopyDst | BufferUsage::MapRead});
+    if (readback.hasError()) {
+      fail(readback.error().message);
+      return;
+    }
+    Result<std::unique_ptr<CommandEncoder>> encoder = device->createCommandEncoder();
+    if (encoder.hasError()) {
+      fail(encoder.error().message);
+      return;
+    }
+    if (Status copied = encoder.result()->copyTextureToBuffer(
+            TexelCopyTextureInfo{texture.result()}, readback.result(), kLayout, kSize);
+        copied.hasError()) {
+      fail(copied.error().message);
+      return;
+    }
+    Result<CommandBuffer> commands = encoder.result()->finish();
+    if (commands.hasError()) {
+      fail(commands.error().message);
+      return;
+    }
+    device->setBeforeQueueSubmitHookForTest([&] {
+      encodedPromise.set_value(true);
+      resume.wait();
+    });
+    Result<uint64_t> serial = device->submit(std::move(commands).result());
+    if (serial.hasError() || !device->waitForSerial(serial.result(), 5.0)) {
+      workerError = "the encoded submission did not complete";
+      return;
+    }
+    workerError = device->lastErrorForTest();
+  });
+
+  const bool reachedGate =
+      encoded.wait_for(std::chrono::seconds(5)) == std::future_status::ready && encoded.get();
+  const bool heldThroughEncoding = reachedGate && root->executionLockedForTest();
+  resumePromise.set_value();
+  worker.join();
+  EXPECT_THAT(reachedGate, testing::IsTrue()) << workerError;
+  EXPECT_THAT(heldThroughEncoding, testing::IsTrue())
+      << "a sibling could encode a barrier from uncommitted image state";
+  EXPECT_THAT(workerError, IsEmpty());
 }
 
 /// A producer upload and a sibling copy on separate runtime threads must observe whole images.

@@ -1027,6 +1027,14 @@ uint32_t VulkanSharedRoot::maxTextureDimension2D() const {
   return impl_->maxTextureDimension2D;
 }
 
+bool VulkanSharedRoot::executionLockedForTest() const {
+  if (impl_->executionMutex.try_lock()) {
+    impl_->executionMutex.unlock();
+    return false;
+  }
+  return true;
+}
+
 /// Owns a native image until every producer, registration, token and in-flight use releases it.
 /// The retained root keeps the VkDevice, its entry points and the loader alive on any thread.
 struct VulkanImageAllocation {
@@ -1328,6 +1336,7 @@ struct VulkanDevice::Impl {
   bool deferUploadPolling = false;  //!< Test-only deferral of upload completion observations.
   /// Test-only observer of each timed-out step of a serial wait's fence wait.
   std::function<void()> fenceWaitStepHookForTest;
+  std::function<void()> beforeQueueSubmitHookForTest;  //!< One-shot encode/submit test gate.
 
   /// Releases one completed upload and its optional retired destination.
   void releaseUpload(PendingUpload& upload) {
@@ -2347,6 +2356,11 @@ std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateSharedRoot(
   return CreateRootImpl(false, false, {}, std::move(lostState));
 }
 
+std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateSharedRootWithTimelineSemaphoreForTest(
+    std::shared_ptr<DeviceLostState> lostState) {
+  return CreateRootImpl(true, false, {}, std::move(lostState));
+}
+
 std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(
     bool enableTimelineSemaphoreForTest, bool enablePresentation,
     std::span<const char* const> requiredInstanceExtensions,
@@ -2592,6 +2606,10 @@ void VulkanDevice::failNextSubmissionForTest(bool deviceLost) {
 
 void VulkanDevice::setFenceWaitStepHookForTest(std::function<void()> hook) {
   impl_->fenceWaitStepHookForTest = std::move(hook);
+}
+
+void VulkanDevice::setBeforeQueueSubmitHookForTest(std::function<void()> hook) {
+  impl_->beforeQueueSubmitHookForTest = std::move(hook);
 }
 
 VulkanDevice::NativeContextForTest VulkanDevice::nativeContextForTest() const {
@@ -4549,6 +4567,10 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial,
     return failEncoding(VkError("vkCreateFence", result));
   }
 
+  if (impl.beforeQueueSubmitHookForTest) {
+    std::function<void()> hook = std::exchange(impl.beforeQueueSubmitHookForTest, {});
+    hook();
+  }
   return impl.finishSubmission(submissionSerial, state, fence);
 }
 
