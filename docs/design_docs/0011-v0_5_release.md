@@ -13,7 +13,7 @@ editor, and `.svgz` support.
 Animation (9 phases), composited rendering, and interactivity (6 phases) are scoped out of v0.5 and
 deferred to v1.0.
 
-See the [v0.5 Retrospective](#v05-retrospective) below for follow-up work to carry into the next
+See the v0.5 Retrospective below for follow-up work to carry into the next
 release.
 
 ## Goals
@@ -41,7 +41,7 @@ release.
 ## Next Steps
 
 v0.5.0 was tagged and published on 2026-04-16. Remaining post-release work is tracked in the
-[v0.5 Retrospective](#v05-retrospective) below and carried forward into v1.0.
+v0.5 Retrospective below and carried forward into v1.0.
 
 - **Deferred to v1.0:** Full per-entity recomputation beyond the current style-only dirty path,
   CSS differential restyling, float feImage fragments (Phase 10), SubregionCropRect architecture,
@@ -360,7 +360,7 @@ the build report lands:
 
 ## Release Checklist
 
-Copied from [release_checklist.md](../release_checklist.md) and filled in for v0.5.
+Copied from [release_checklist.md](../release_checklists/release_checklist.md) and filled in for v0.5.
 
 ### Pre-Release: Code Quality
 

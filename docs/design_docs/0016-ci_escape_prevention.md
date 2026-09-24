@@ -170,8 +170,8 @@ The first phase of mitigations has landed. Recap:
 - **Unmapped-dep warnings** — the generator used to silently drop external
   deps that weren't in `KNOWN_BAZEL_TO_CMAKE_DEPS`. It now warns, and fails
   hard in `--check` mode. Auto-mapping for `absl::*` patterns added.
-- **Ignore list for Bazel-internal deps** — `@bazel_tools//tools/cpp:*`,
-  `@re2//:re2` (test-only transitive), and the former full-Skia repo's internal modules.
+- **Ignore list for Bazel-internal deps** — \@bazel_tools//tools/cpp:*,
+  \@re2//:re2 (test-only transitive), and the former full-Skia repo's internal modules.
 - **`--check` mode** — generates CMakeLists.txt to the workspace, statically
   validates the output (every referenced source exists, every linked target
   is defined or external), then restores the workspace. Found 2 real pre-existing
@@ -196,7 +196,7 @@ The first phase of mitigations has landed. Recap:
 - **Handling of `select()`-valued srcs:** those targets skip lint emission
   because `select()` can't be enumerated at load time. This is rare (mostly
   backend-variant sources) and those files are still covered by clang-tidy.
-- **Cleared exceptions:** the `AddUnsigned<long long>` primitive template
+- **Cleared exceptions:** the <code>AddUnsigned&lt;long long&gt;</code> primitive template
   specialization in `MathUtils.h` and the 3 `_cv` UDL operators in test files
   are annotated with `// NOLINT(banned_patterns: reason)`.
 

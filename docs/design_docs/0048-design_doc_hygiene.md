@@ -68,17 +68,19 @@ new designs and rejects stale debt entries after a historical record is correcte
       `-2` suffix to one doc per pair (no fresh renumbering). Assignment policy: the more
       heavily / code-referenced doc keeps the bare number to minimize churn; ties fall
       back to `git log --diff-filter=A` landing order. Final result:
-    - `0025-composited_rendering.md` keeps `0025`; `editor_ux` → `0025-2-editor_ux.md`
-    - `0026-svg_conformance_testing.md` keeps `0026`; `drag_end_latency` → `0026-2-drag_end_latency.md`
-    - `0027-tight_bounded_segments.md` keeps `0027`; `scripting` → `0027-2-scripting.md`
-    - `0028-v1_0_release.md` keeps `0028`; `tinyskia_premul_internal` → `0028-2-tinyskia_premul_internal.md`
-    - `0029-ui_input_repro.md` keeps `0029`; `ci_runtime` → `0029-2-ci_runtime.md`
-  - [x] Renamed the five files with `git mv`.
-  - [x] Updated every inbound reference (doc cross-links + code comments in
-        `donner/editor/ViewportState.h`, `donner/editor/BUILD.bazel`, and the
-        `0026`/`0028`/`0031` design docs).
-  - [x] Rewrote the `README.md` Document Index rows: renumbered, dropped the
-        collision-flag notes, and reordered each bare-number keeper before its `-2` sibling.
+
+      - `0025-composited_rendering.md` keeps `0025`; `editor_ux` → `0025-2-editor_ux.md`
+      - `0026-svg_conformance_testing.md` keeps `0026`; `drag_end_latency` → `0026-2-drag_end_latency.md`
+      - `0027-tight_bounded_segments.md` keeps `0027`; `scripting` → `0027-2-scripting.md`
+      - `0028-v1_0_release.md` keeps `0028`; `tinyskia_premul_internal` → `0028-2-tinyskia_premul_internal.md`
+      - `0029-ui_input_repro.md` keeps `0029`; `ci_runtime` → `0029-2-ci_runtime.md`
+
+      - [x] Renamed the five files with `git mv`.
+      - [x] Updated every inbound reference (doc cross-links + code comments in
+            `donner/editor/ViewportState.h`, `donner/editor/BUILD.bazel`, and the
+            `0026`/`0028`/`0031` design docs).
+      - [x] Rewrote the `README.md` Document Index rows: renumbered, dropped the
+            collision-flag notes, and reordered each bare-number keeper before its `-2` sibling.
 - [x] Milestone 2: Fix the `0015` broken reference — done. History shows
       `0015-skia_filter_conformance.md` existed (created in #523) and was deleted in
       #546 "Remove full-Skia rendering backend", violating the never-delete rule.
