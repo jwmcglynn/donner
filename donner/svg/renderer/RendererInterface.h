@@ -86,13 +86,13 @@ struct RendererBitmap {
  * Backend-neutral mirror of the GPU backend's own wait vocabulary, so a
  * consumer of \ref RendererReadbackStats can distinguish the two very
  * different hangs without depending on a graphics API. Backends that never
- * block on the GPU always report \ref None.
+ * block on the GPU always report \ref GpuWaitTimeoutSite::None.
  */
 enum class GpuWaitTimeoutSite : uint8_t {
   /// No bounded wait has timed out. A device reported lost with this site was
   /// reported by the driver, not by a deadline. This is a positive claim, so
   /// never use it as a fallback for a site that could not be translated - see
-  /// \ref Unknown.
+  /// \ref GpuWaitTimeoutSite::Unknown.
   None,
   /// A buffer-map wait for GPU-to-CPU readback.
   ReadbackMap,
@@ -101,7 +101,7 @@ enum class GpuWaitTimeoutSite : uint8_t {
   /// A present's wait for its frame's own work before the frame is shown.
   Present,
   /// A backend wait this build cannot name. Reported rather than folded into
-  /// \ref None so a report never claims the driver declared a loss that one of
+  /// \ref GpuWaitTimeoutSite::None so a report never claims the driver declared a loss that one of
   /// the backend's own deadlines actually did.
   Unknown,
 };
@@ -144,20 +144,25 @@ struct RendererReadbackStats {
 /** Aggregate budget for render targets, layers, masks, clips, and pattern tiles. */
 class RendererSurfaceBudget {
 public:
+  /// Default upper bound on aggregate surface storage.
   static constexpr std::uint64_t kMaximumBytes = 256ULL * 1024 * 1024;
+  /// Default upper bound on concurrently reserved surfaces.
   static constexpr std::size_t kMaximumSurfaces = 256;
 
+  /// Per-frame limits, including any tighter limits installed by a test.
   struct Limits {
-    std::uint64_t bytes = kMaximumBytes;
-    std::size_t surfaces = kMaximumSurfaces;
+    std::uint64_t bytes = kMaximumBytes;      ///< Maximum aggregate surface bytes.
+    std::size_t surfaces = kMaximumSurfaces;  ///< Maximum active surface count.
   };
 
+  /// Clears usage counters and the sticky rejection state for a new frame.
   void reset() {
     bytes_ = 0;
     surfaces_ = 0;
     rejected_ = false;
   }
 
+  /// Reserves matching surfaces; invalid dimensions or exhausted capacity latch rejection.
   [[nodiscard]] bool reserve(int width, int height, std::size_t surfaceCount = 1,
                              std::uint64_t bytesPerPixel = 4) {
     if (rejected_ || width < 0 || height < 0 || bytesPerPixel == 0 ||
@@ -225,10 +230,14 @@ public:
     return true;
   }
 
+  /// Bytes currently reserved by active surfaces.
   [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
+  /// Number of active reserved surfaces.
   [[nodiscard]] std::size_t surfaces() const { return surfaces_; }
+  /// Whether a reservation or release has failed in this frame.
   [[nodiscard]] bool rejected() const { return rejected_; }
 
+  /// Tightens limits for a test without raising an existing limit.
   void setLimitsForTesting(Limits limits) {
     limits_.bytes = std::min(limits_.bytes, limits.bytes);
     limits_.surfaces = std::min(limits_.surfaces, limits.surfaces);
@@ -244,24 +253,33 @@ private:
 /** Aggregate filter-graph preparation and source-image materialization budget for one frame. */
 class RendererFilterPreparationBudget {
 public:
+  /// Maximum filter graph attempts in one frame.
   static constexpr std::size_t kMaximumGraphs =
       components::FilterExecutionBudget::kMaximumExecutions;
+  /// Maximum aggregate nodes across those graph attempts.
   static constexpr std::size_t kMaximumNodes =
       kMaximumGraphs * components::kMaximumFilterGraphNodes;
+  /// Maximum aggregate source-image bytes prepared in one frame.
   static constexpr std::uint64_t kMaximumImageBytes = 4ULL * 1024 * 1024;
+  /// Maximum aggregate source-image materialization bytes.
   static constexpr std::uint64_t kMaximumMaterializationBytes = 2 * kMaximumImageBytes;
+  /// Maximum aggregate retained filter payload bytes.
   static constexpr std::uint64_t kMaximumPayloadBytes = 16ULL * 1024 * 1024;
+  /// Maximum entities introduced while preparing shadow/filter resources.
   static constexpr std::size_t kMaximumShadowEntities = 4096;
 
+  /// Per-frame capacity for filter preparation.
   struct Limits {
-    std::size_t graphs = kMaximumGraphs;
-    std::size_t nodes = kMaximumNodes;
-    std::uint64_t imageBytes = kMaximumImageBytes;
-    std::uint64_t materializationBytes = kMaximumMaterializationBytes;
-    std::uint64_t payloadBytes = kMaximumPayloadBytes;
-    std::size_t shadowEntities = kMaximumShadowEntities;
+    std::size_t graphs = kMaximumGraphs;            ///< Graph attempts.
+    std::size_t nodes = kMaximumNodes;              ///< Total graph nodes.
+    std::uint64_t imageBytes = kMaximumImageBytes;  ///< Source-image bytes.
+    std::uint64_t materializationBytes =
+        kMaximumMaterializationBytes;                     ///< Materialized image bytes.
+    std::uint64_t payloadBytes = kMaximumPayloadBytes;    ///< Retained payload bytes.
+    std::size_t shadowEntities = kMaximumShadowEntities;  ///< Shadow entities.
   };
 
+  /// Clears per-frame counters and the sticky rejection state.
   void reset() {
     attempts_ = 0;
     graphs_ = 0;
@@ -273,6 +291,7 @@ public:
     rejected_ = false;
   }
 
+  /// Records one graph attempt, or latches rejection when the attempt cap is exhausted.
   [[nodiscard]] bool beginGraph() {
     if (rejected_ || attempts_ >= limits_.graphs) {
       rejected_ = true;
@@ -282,6 +301,7 @@ public:
     return true;
   }
 
+  /// Reserves graph nodes and counts a prepared graph on success.
   [[nodiscard]] bool reserveNodes(std::size_t count) {
     if (!reserveCounter(nodes_, count, limits_.nodes)) {
       return false;
@@ -290,31 +310,44 @@ public:
     return true;
   }
 
+  /// Reserves source-image bytes against the aggregate image limit.
   [[nodiscard]] bool reserveImageBytes(std::uint64_t count) {
     return reserveCounter(imageBytes_, count, limits_.imageBytes);
   }
 
+  /// Reserves bytes for source-image materialization.
   [[nodiscard]] bool reserveMaterializationBytes(std::uint64_t count) {
     return reserveCounter(materializationBytes_, count, limits_.materializationBytes);
   }
 
+  /// Reserves retained filter payload bytes.
   [[nodiscard]] bool reservePayloadBytes(std::uint64_t count) {
     return reserveCounter(payloadBytes_, count, limits_.payloadBytes);
   }
 
+  /// Reserves entities created while preparing filter shadows.
   [[nodiscard]] bool reserveShadowEntities(std::size_t count) {
     return reserveCounter(shadowEntities_, count, limits_.shadowEntities);
   }
 
+  /// Number of graph attempts in this frame.
   [[nodiscard]] std::size_t attempts() const { return attempts_; }
+  /// Number of graphs whose nodes were successfully reserved.
   [[nodiscard]] std::size_t graphs() const { return graphs_; }
+  /// Aggregate reserved graph nodes.
   [[nodiscard]] std::size_t nodes() const { return nodes_; }
+  /// Aggregate reserved source-image bytes.
   [[nodiscard]] std::uint64_t imageBytes() const { return imageBytes_; }
+  /// Aggregate reserved materialized-image bytes.
   [[nodiscard]] std::uint64_t materializationBytes() const { return materializationBytes_; }
+  /// Aggregate reserved filter payload bytes.
   [[nodiscard]] std::uint64_t payloadBytes() const { return payloadBytes_; }
+  /// Aggregate reserved shadow entities.
   [[nodiscard]] std::size_t shadowEntities() const { return shadowEntities_; }
+  /// Whether a capacity check has failed in this frame.
   [[nodiscard]] bool rejected() const { return rejected_; }
 
+  /// Tightens test limits without raising any existing capacity.
   void setLimitsForTesting(Limits limits) {
     limits_.graphs = std::min(limits_.graphs, limits.graphs);
     limits_.nodes = std::min(limits_.nodes, limits.nodes);
@@ -350,20 +383,27 @@ private:
 /** Aggregate conversion, rasterization, and upload work shared by a render frame. */
 class RendererDrawBudget {
 public:
+  /// Maximum draw operations admitted in one frame.
   static constexpr std::size_t kMaximumDrawCalls = 64 * 1024;
+  /// Maximum path commands converted or drawn in one frame.
   static constexpr std::size_t kMaximumPathCommands = 256 * 1024;
+  /// Maximum cumulative work spent measuring path geometry.
   static constexpr std::size_t kMaximumPathMeasurementWorkUnits = Path::kMaximumGeometryQueryWork;
+  /// Maximum gradient stops processed in one frame.
   static constexpr std::size_t kMaximumGradientStops = 256 * 1024;
+  /// Maximum image draw operations in one frame.
   static constexpr std::size_t kMaximumImageDraws = 128;
+  /// Maximum image bytes admitted for drawing in one frame.
   static constexpr std::uint64_t kMaximumImageBytes = 256ULL * 1024 * 1024;
 
+  /// Work charged to the shared budget by one draw operation or batch.
   struct Cost {
-    std::size_t drawCalls = 0;
-    std::size_t pathCommands = 0;
-    std::size_t pathMeasurementWorkUnits = 0;
-    std::size_t gradientStops = 0;
-    std::size_t imageDraws = 0;
-    std::uint64_t imageBytes = 0;
+    std::size_t drawCalls = 0;                 ///< Draw operations.
+    std::size_t pathCommands = 0;              ///< Path commands.
+    std::size_t pathMeasurementWorkUnits = 0;  ///< Geometry-query work units.
+    std::size_t gradientStops = 0;             ///< Gradient stops.
+    std::size_t imageDraws = 0;                ///< Image draw operations.
+    std::uint64_t imageBytes = 0;              ///< Source-image bytes.
   };
 
   /** Exclusive reservation for one bounded path-measurement query. */
@@ -382,6 +422,7 @@ public:
     std::size_t maximumWorkUnits_ = 0;
   };
 
+  /// Clears aggregate costs, any outstanding measurement reservation, and rejection.
   void reset() {
     drawCalls_ = 0;
     pathCommands_ = 0;
@@ -392,11 +433,14 @@ public:
     pathMeasurementReservationActive_ = false;
     rejected_ = false;
   }
+  /// Latches rejection after an external draw-work failure.
   void reject() { rejected_ = true; }
+  /// Tightens the gradient-stop cap for a test without raising it.
   void setGradientStopLimitForTesting(std::size_t maximum) {
     gradientStopLimit_ = std::min(gradientStopLimit_, maximum);
   }
 
+  /// Charges a draw cost, or latches rejection if any aggregate cap is exceeded.
   [[nodiscard]] bool reserve(const Cost& cost) {
     if (rejected_ || pathMeasurementReservationActive_ ||
         cost.drawCalls > kMaximumDrawCalls - drawCalls_ ||
@@ -467,12 +511,19 @@ public:
     return true;
   }
 
+  /// Draw operations charged in this frame.
   [[nodiscard]] std::size_t drawCalls() const { return drawCalls_; }
+  /// Path commands charged in this frame.
   [[nodiscard]] std::size_t pathCommands() const { return pathCommands_; }
+  /// Path-measurement work charged in this frame.
   [[nodiscard]] std::size_t pathMeasurementWorkUnits() const { return pathMeasurementWorkUnits_; }
+  /// Gradient stops charged in this frame.
   [[nodiscard]] std::size_t gradientStops() const { return gradientStops_; }
+  /// Image draw operations charged in this frame.
   [[nodiscard]] std::size_t imageDraws() const { return imageDraws_; }
+  /// Image bytes charged in this frame.
   [[nodiscard]] std::uint64_t imageBytes() const { return imageBytes_; }
+  /// Whether any draw charge or external draw work failed.
   [[nodiscard]] bool rejected() const { return rejected_; }
 
 private:
@@ -487,28 +538,29 @@ private:
   bool rejected_ = false;
 };
 
-/** Aggregate decoded-outline and path-copy budget shared by one renderer frame. */
+/** Aggregate text outline, bitmap, path-copy, and cache-storage budget for one renderer frame. */
 class RendererTextMaterializationBudget {
 public:
-  /// Default glyph cap: glyph occurrences and distinct outlines admitted per frame.
+  /// Default cap on glyph occurrences and unique glyph resources admitted per frame.
   static constexpr std::size_t kDefaultMaximumGlyphs = 64 * 1024;
   // The default aggregate limits admit about ten dense pages of text per frame on a backend that
   // charges every glyph occurrence its outline decode.
-  /// Default cap on path commands materialized per frame.
+  /// Default cap on charged path-command bounds per frame.
   static constexpr std::size_t kMaximumCommands = 16 * 1024 * 1024;
-  /// Default cap on path points materialized per frame.
+  /// Default cap on charged path-point bounds per frame.
   static constexpr std::size_t kMaximumPoints = 32 * 1024 * 1024;
-  /// Default cap on bytes materialized per frame.
+  /// Default cap on charged text storage and materialization bytes per frame.
   static constexpr std::uint64_t kMaximumBytes = 256ULL * 1024 * 1024;
-  /// Default cap on outline decode work per frame.
+  /// Default cap on charged outline-decode work per frame.
   static constexpr std::size_t kMaximumDecodeWork = 64 * 1024 * 1024;
 
+  /// Aggregate limits or conservative charges for text work and storage.
   struct Cost {
-    std::size_t uniqueOutlines = 0;
-    std::size_t commands = 0;
-    std::size_t points = 0;
-    std::uint64_t bytes = 0;
-    std::size_t decodeWork = 0;
+    std::size_t uniqueOutlines = 0;  ///< Charged unique glyph admissions, outline or bitmap.
+    std::size_t commands = 0;        ///< Charged path-command bound.
+    std::size_t points = 0;          ///< Charged path-point bound.
+    std::uint64_t bytes = 0;         ///< Charged outline, bitmap, copy, and cache bytes.
+    std::size_t decodeWork = 0;      ///< Charged outline-decode work bound.
   };
 
   /// Creates a text budget with the default glyph cap and aggregate limits.
@@ -517,12 +569,13 @@ public:
   /**
    * Creates a budget with explicit limits.
    *
-   * @param limits Per-frame limits; `limits.uniqueOutlines` is also the glyph occurrence cap.
+   * @param limits Per-frame limits; `limits.uniqueOutlines` also caps glyph occurrences.
    */
   explicit RendererTextMaterializationBudget(const Cost& limits) : limits_(limits) {
     setMaximumGlyphs(limits.uniqueOutlines);
   }
 
+  /// Clears per-frame text costs and the sticky rejection state.
   void reset() {
     uniqueOutlines_ = 0;
     commands_ = 0;
@@ -533,6 +586,7 @@ public:
     rejected_ = false;
   }
 
+  /// Charges bounded text work and storage, or latches rejection when a limit is exceeded.
   [[nodiscard]] bool reserve(const Cost& cost) {
     if (rejected_ || uniqueOutlines_ > limits_.uniqueOutlines || commands_ > limits_.commands ||
         points_ > limits_.points || bytes_ > limits_.bytes || decodeWork_ > limits_.decodeWork ||
@@ -550,8 +604,10 @@ public:
     return true;
   }
 
+  /// Latches rejection after an external text-materialization failure.
   void reject() { rejected_ = true; }
 
+  /// Reserves drawn glyph occurrences independently of distinct outlines.
   [[nodiscard]] bool reserveGlyphOccurrences(std::size_t count) {
     if (rejected_ || glyphOccurrences_ > glyphOccurrenceLimit_ ||
         count > glyphOccurrenceLimit_ - glyphOccurrences_) {
@@ -562,6 +618,7 @@ public:
     return true;
   }
 
+  /// Charges a copied path and its retained bytes to the aggregate budget.
   [[nodiscard]] bool reservePathCopy(const Path& path) {
     const std::size_t commands = path.commands().size();
     const std::size_t points = path.points().size();
@@ -574,6 +631,7 @@ public:
     return reserve({.commands = commands, .points = points, .bytes = *retainedBytes * 2});
   }
 
+  /// Tightens aggregate test limits without raising existing capacities.
   void setLimitsForTesting(Cost limits) {
     limits_.uniqueOutlines = std::min(limits_.uniqueOutlines, limits.uniqueOutlines);
     limits_.commands = std::min(limits_.commands, limits.commands);
@@ -582,6 +640,7 @@ public:
     limits_.decodeWork = std::min(limits_.decodeWork, limits.decodeWork);
   }
 
+  /// Tightens the glyph-occurrence cap for a test without raising it.
   void setGlyphOccurrenceLimitForTesting(std::size_t maximum) {
     glyphOccurrenceLimit_ = std::min(glyphOccurrenceLimit_, maximum);
   }
@@ -589,7 +648,7 @@ public:
   /**
    * Sets the glyph cap, replacing any lower limit a test installed.
    *
-   * @param maximumGlyphs Glyph occurrences and distinct outlines admitted per frame.
+   * @param maximumGlyphs Glyph occurrences and unique glyph resources admitted per frame.
    */
   void setMaximumGlyphs(std::size_t maximumGlyphs) {
     maximumGlyphs_ = maximumGlyphs;
@@ -600,13 +659,21 @@ public:
   /// The glyph cap set by \ref setMaximumGlyphs.
   [[nodiscard]] std::size_t maximumGlyphs() const { return maximumGlyphs_; }
 
+  /// Active per-frame text-materialization limits.
   [[nodiscard]] const Cost& limits() const { return limits_; }
+  /// Unique glyph resources charged in this frame, including bitmap glyphs.
   [[nodiscard]] std::size_t uniqueOutlines() const { return uniqueOutlines_; }
+  /// Charged path-command bounds in this frame.
   [[nodiscard]] std::size_t commands() const { return commands_; }
+  /// Charged path-point bounds in this frame.
   [[nodiscard]] std::size_t points() const { return points_; }
+  /// Charged text materialization and storage bytes in this frame.
   [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
+  /// Charged outline-decode work bound in this frame.
   [[nodiscard]] std::size_t decodeWork() const { return decodeWork_; }
+  /// Drawn glyph occurrences charged in this frame.
   [[nodiscard]] std::size_t glyphOccurrences() const { return glyphOccurrences_; }
+  /// Whether a materialization charge or external operation failed.
   [[nodiscard]] bool rejected() const { return rejected_; }
 
 private:
@@ -799,6 +866,7 @@ struct PathShape {
   /// erased from its storage while borrowed (see the note above this struct). Null is
   /// treated as an empty path so a default-constructed `PathShape` draws nothing.
   const Path* path = nullptr;
+  /// Fill rule used for this path's interior.
   FillRule fillRule = FillRule::NonZero;
   /// Source entity this path was derived from. Set by the driver at the `drawPath` call
   /// site (`RendererDriver::traverseRange`). Backends that cache per-entity state key
@@ -1313,8 +1381,8 @@ public:
   }
 
   /**
-   * Sets the glyph cap: the most glyph occurrences one frame draws and the most distinct glyph
-   * outlines it decodes. Text past the cap is not drawn in that frame. Backends that keep glyph
+   * Sets the glyph cap: the most glyph occurrences one frame draws and the most unique glyph
+   * resources it admits. Text past the cap is not drawn in that frame. Backends that keep glyph
    * outlines resident across frames also cap each document's resident outlines at this count.
    *
    * The aggregate budgets still apply and can be reached first. TinySkia charges every glyph
@@ -1329,10 +1397,11 @@ public:
    * Offscreen instances from \ref createOffscreenInstance share the cap. Backends without text
    * ignore the call.
    *
-   * @param maximumGlyphs Glyph cap; defaults to
-   *   \ref RendererTextMaterializationBudget::kDefaultMaximumGlyphs.
+   * The initial cap is \ref RendererTextMaterializationBudget::kDefaultMaximumGlyphs.
+   *
+   * @param maximumGlyphs Maximum glyph occurrences and unique glyph resources admitted per frame.
    */
-  virtual void setMaximumGlyphs(std::size_t /*maximumGlyphs*/) {}
+  virtual void setMaximumGlyphs(std::size_t maximumGlyphs) { (void)maximumGlyphs; }
 
   /// The glyph cap set by \ref setMaximumGlyphs, or 0 for backends without text.
   [[nodiscard]] virtual std::size_t maximumGlyphs() const { return 0; }
