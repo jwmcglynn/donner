@@ -15,6 +15,7 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <sstream>
 #include <string>
@@ -1556,10 +1557,30 @@ INSTANTIATE_TEST_SUITE_P(Targets, EditorWindowBackendTest, testing::Bool(),
                                              : std::string("WindowSurface");
                          });
 
-/// A real window, presenting to its surface (false) or rendering offscreen (true), taken through
-/// what happens to a window during its life: being resized, and losing its device. Only Apple
-/// always has a surface to present to; a host without a display renders both arms offscreen.
-class EditorWindowLifecycleTest : public testing::TestWithParam<bool> {
+/// Which of a window's configurations a lifecycle case runs on.
+struct LifecycleConfiguration {
+  /// Whether the window renders into its own offscreen target rather than presenting to a
+  /// surface.
+  bool offscreen = false;
+  /// Whether the frames the window draws into can be copied from, so reading one back returns
+  /// it. A surface that reports its frames cannot be copied from gives a window with readback
+  /// asked for the same frames as a window that never asked, which is how a case reaches it on
+  /// any host.
+  bool framesCopyable = true;
+};
+
+/// Prints \p configuration by the name its cases carry. @param configuration Value to print.
+/// @param os Stream to print to.
+void PrintTo(const LifecycleConfiguration& configuration, std::ostream* os) {
+  *os << (configuration.offscreen ? "Offscreen" : "WindowSurface")
+      << (configuration.framesCopyable ? "" : "WithoutCopyableFrames");
+}
+
+/// A real window, presenting to its surface or rendering offscreen, with frames it can or cannot
+/// copy back, taken through what happens to a window during its life: being resized, and losing
+/// its device. Only Apple always has a surface to present to; a host without a display renders
+/// both arms offscreen.
+class EditorWindowLifecycleTest : public testing::TestWithParam<LifecycleConfiguration> {
 protected:
   /// A hidden window on the parameter's arm that reads its frames back and clears to opaque blue.
   /// Its width leaves the readback's rows unaligned to the copy row pitch at 1x and at 2x, so
@@ -1570,9 +1591,9 @@ protected:
         .initialWidth = 100,
         .initialHeight = 48,
         .visible = false,
-        .forceOffscreenRenderTarget = GetParam(),
+        .forceOffscreenRenderTarget = GetParam().offscreen,
         .clearColor = {0.0f, 0.0f, 1.0f, 1.0f},
-        .enableFramebufferReadback = true,
+        .enableFramebufferReadback = GetParam().framesCopyable,
     };
   }
 
@@ -1581,10 +1602,10 @@ protected:
   /// @param window Window under test.
   void expectOnTheRequestedArm(const EditorWindow& window) const {
 #ifdef __APPLE__
-    ASSERT_THAT(window.usingOffscreenRenderTarget(), testing::Eq(GetParam()))
+    ASSERT_THAT(window.usingOffscreenRenderTarget(), testing::Eq(GetParam().offscreen))
         << "the window is not on the arm this case is about";
 #else
-    if (GetParam()) {
+    if (GetParam().offscreen) {
       ASSERT_THAT(window.usingOffscreenRenderTarget(), testing::IsTrue());
     }
 #endif
@@ -1651,11 +1672,15 @@ TEST_P(EditorWindowLifecycleTest, FramesAfterADeclaredLossReadBackNothingWithinT
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(Targets, EditorWindowLifecycleTest, testing::Bool(),
-                         [](const testing::TestParamInfo<bool>& info) {
-                           return info.param ? std::string("Offscreen")
-                                             : std::string("WindowSurface");
-                         });
+INSTANTIATE_TEST_SUITE_P(
+    Targets, EditorWindowLifecycleTest,
+    testing::Values(LifecycleConfiguration{.offscreen = false, .framesCopyable = true},
+                    LifecycleConfiguration{.offscreen = true, .framesCopyable = true},
+                    LifecycleConfiguration{.offscreen = false, .framesCopyable = false},
+                    LifecycleConfiguration{.offscreen = true, .framesCopyable = false}),
+    [](const testing::TestParamInfo<LifecycleConfiguration>& info) {
+      return testing::PrintToString(info.param);
+    });
 
 TEST(EditorWindowTest, WgpuFramebufferGeodeDeviceSharingMatchesThreadingModel) {
   EXPECT_TRUE(internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/true));
