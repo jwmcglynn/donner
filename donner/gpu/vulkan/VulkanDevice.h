@@ -26,7 +26,7 @@ class VulkanSwapchain;
  */
 class VulkanSharedRoot final {
 public:
-  /// Releases the native device after its last runtime device and surface have let go.
+  /// Releases native handles when the last holder has proved its work complete.
   ~VulkanSharedRoot();
 
   /// Largest 2D texture dimension reported by this root's physical device.
@@ -116,7 +116,8 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  * discarded rather than presented cannot be given back, so the swapchain is recreated to reclaim
  * it. Everything above is inert on a device created by \ref Create, which refuses every surface.
  *
- * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity.
+ * Threading: each runtime device is single-threaded, matching \ref donner::gpu::Device's
+ * affinity; devices over one root serialize their shared queue submissions and presentations.
  * Completion is tracked by polling per-submission fences from the owning thread; there are no
  * cross-thread callbacks. Creation is serialized against failed shutdown: if a bounded completion
  * wait cannot prove native work finished, the complete device graph is retained until process exit

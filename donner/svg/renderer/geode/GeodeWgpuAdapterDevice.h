@@ -2,9 +2,7 @@
 /// @file
 /// \c donner::geode::GeodeWgpuAdapterDevice - the wgpu-backed \c donner::gpu::Device adapter.
 ///
-/// TEMPORARY transition adapter. It is deleted per-platform as each native backend takes over
-/// production rendering, and each escape hatch below is deleted with the change that migrates its
-/// last caller.
+/// Adapter for runtime devices that currently render through wgpu.
 
 #include <atomic>
 #include <chrono>
@@ -120,10 +118,9 @@ public:
                std::shared_ptr<const void> backendHold = nullptr,
                std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot = nullptr);
 
-  /// Releases owned handles, or leaves borrowed ones to their embedder. A root already declared
-  /// lost is deliberately leaked rather than destroyed: releasing it calls into a driver that has
-  /// stopped answering, and one root's worth of driver objects is strictly better than a hung
-  /// thread.
+  /// Releases owned wgpu handles, or leaves borrowed ones to their embedder. A lost owned wgpu
+  /// root retains its driver handles rather than risking a hung driver call. A native Vulkan root
+  /// releases its handles only after its runtime devices have proved their own work complete.
   ~GeodeGpuRoot();
 
   GeodeGpuRoot(const GeodeGpuRoot&) = delete;
@@ -167,9 +164,8 @@ public:
              const wgpu::Device& device, const wgpu::Queue& queue) const;
 
   /// Whether this root names a backend a runtime device over it can record against. A
-  /// transitional root does when it holds a wgpu device and queue. A native root always does,
-  /// because each runtime device over it opens the backend itself; it says nothing about loss,
-  /// which \ref lostState reports.
+  /// transitional root needs a wgpu device and queue; a native Vulkan root needs its shared
+  /// native owner. This says nothing about loss, which \ref lostState reports.
   bool hasBackendDevice() const;
 
 private:
@@ -222,9 +218,9 @@ struct GpuRootSelection {
 /**
  * Selects a backend root: the backend \ref ResolveGpuBackendKind resolves for \p options. For
  * the transitional adapter it creates an instance, requests an adapter and a device, and takes the
- * default queue; for the native Metal backend it asks the system Metal device for its
- * capabilities, for native Vulkan the physical device a Vulkan device selects, and for the
- * browser backend this worker's GPU device, kept open for runtime devices over the root.
+ * default queue; for native Metal it queries the system Metal device's capabilities, for
+ * native Vulkan it opens one instance, logical device and queue, and for the browser backend it
+ * holds this worker's GPU device for runtime devices over the root.
  *
  * The one selection every caller shares. Headless, editor and embedded construction differ only
  * in \p options, so the adapter retries under load, the backend requests, the force-fallback
