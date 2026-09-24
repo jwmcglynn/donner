@@ -564,6 +564,27 @@ donner_perf_cc_test(
     ],
 )
 
+_ASYNC_RENDERER_TEST_DEPS = [
+    ":async_test_polling",
+    ":bitmap_golden_compare",
+    "//donner/base:base_test_utils",
+    "//donner/editor:async_renderer",
+    "//donner/editor:async_svg_document",
+    "//donner/editor:command_queue",
+    "//donner/editor:editor_app",
+    "//donner/editor:gl_texture_cache",
+    "//donner/editor:overlay_renderer",
+    "//donner/editor:presented_frame_composer",
+    "//donner/editor:render_coordinator",
+    "//donner/editor:tracy_wrapper",
+    "//donner/svg/compositor",
+    "//donner/svg/renderer",
+    "//donner/svg/renderer/tests:mock_renderer_interface",
+    "//donner/svg/renderer/tests:rgba_test_matchers",
+    "//donner/svg/tests:parser_test_utils",
+    "@com_google_gtest//:gtest_main",
+]
+
 donner_cc_test(
     name = "async_renderer_tests",
     srcs = ["AsyncRenderer_tests.cc"],
@@ -575,26 +596,7 @@ donner_cc_test(
     # separate async_renderer_wallclock_tests target); shard for parallelism.
     shard_count = 4,
     variants = ["geode"],
-    deps = [
-        ":async_test_polling",
-        ":bitmap_golden_compare",
-        "//donner/base:base_test_utils",
-        "//donner/editor:async_renderer",
-        "//donner/editor:async_svg_document",
-        "//donner/editor:command_queue",
-        "//donner/editor:editor_app",
-        "//donner/editor:gl_texture_cache",
-        "//donner/editor:overlay_renderer",
-        "//donner/editor:presented_frame_composer",
-        "//donner/editor:render_coordinator",
-        "//donner/editor:tracy_wrapper",
-        "//donner/svg/compositor",
-        "//donner/svg/renderer",
-        "//donner/svg/renderer/tests:mock_renderer_interface",
-        "//donner/svg/renderer/tests:rgba_test_matchers",
-        "//donner/svg/tests:parser_test_utils",
-        "@com_google_gtest//:gtest_main",
-    ],
+    deps = _ASYNC_RENDERER_TEST_DEPS,
 )
 
 donner_cc_test(
@@ -625,24 +627,7 @@ donner_cc_test(
         "manual",
         "perf",
     ],
-    deps = [
-        ":async_test_polling",
-        ":bitmap_golden_compare",
-        "//donner/base:base_test_utils",
-        "//donner/editor:async_renderer",
-        "//donner/editor:async_svg_document",
-        "//donner/editor:command_queue",
-        "//donner/editor:editor_app",
-        "//donner/editor:overlay_renderer",
-        "//donner/editor:presented_frame_composer",
-        "//donner/editor:render_coordinator",
-        "//donner/editor:tracy_wrapper",
-        "//donner/svg/compositor",
-        "//donner/svg/renderer",
-        "//donner/svg/renderer/tests:rgba_test_matchers",
-        "//donner/svg/tests:parser_test_utils",
-        "@com_google_gtest//:gtest_main",
-    ],
+    deps = _ASYNC_RENDERER_TEST_DEPS,
 )
 
 donner_cc_test(
