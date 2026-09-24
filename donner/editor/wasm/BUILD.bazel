@@ -284,6 +284,9 @@ configured_dependency_audit_test(
     name = "wasm_dependency_audit_test",
     size = "small",
     forbidden = [
+        # The browser backend links only into the package built with it selected, below.
+        "//donner/gpu/browser:browser_device",
+        "//donner/gpu/browser:emscripten_browser_bridge",
         "//donner/svg/renderer:renderer_tiny_skia",
         "//third_party/google_fonts:google_fonts_data",
         "@tracy//:tracy_client",
@@ -301,6 +304,18 @@ configured_dependency_audit_test(
         "//third_party/fira-code:fira-code",
     ],
     target = ":_wasm_web_package_for_serve",
+)
+
+# The package that selects the browser backend for headless work links the backend and its bridge.
+configured_dependency_audit_test(
+    name = "wasm_browser_backend_dependency_audit_test",
+    size = "small",
+    required = [
+        "//donner/editor/wasm:_editor_wasm_binary",
+        "//donner/gpu/browser:browser_device",
+        "//donner/gpu/browser:emscripten_browser_bridge",
+    ],
+    target = ":_wasm_web_package_browser_backend_for_serve",
 )
 
 genquery(

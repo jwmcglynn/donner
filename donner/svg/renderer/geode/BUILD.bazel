@@ -13,6 +13,7 @@ To enable:
         //donner/svg/renderer/geode/...
 """
 
+load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:package.bzl", "donner_package")
@@ -62,9 +63,21 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
+# Public because a config_setting_group's members must be visible wherever the group is selected on.
 config_setting(
-    name = "browser_backend_enabled",
+    name = "browser_backend_requested",
     flag_values = {":browser_backend": "True"},
+    visibility = ["//visibility:public"],
+)
+
+# The setting takes effect only in a WebAssembly build; on any other platform it links nothing and
+# selects nothing, because there is no browser to select.
+selects.config_setting_group(
+    name = "browser_backend_enabled",
+    match_all = [
+        ":browser_backend_requested",
+        "@platforms//cpu:wasm32",
+    ],
     visibility = ["//visibility:public"],
 )
 
