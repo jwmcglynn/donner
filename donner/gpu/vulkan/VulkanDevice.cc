@@ -2326,6 +2326,12 @@ std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateRootImpl(
           LoadDeviceEntryPoints(*native->loader, native->device, enablePresentation);
       status.hasError()) {
     std::fprintf(stderr, "[donner::gpu::vulkan] %s\n", status.error().message.c_str());
+    if (api.vkDestroyDevice == nullptr) {
+      // A broken loader gave us a device without a way to destroy it. Keep the entire native
+      // ownership graph, including the parent instance and loader, alive until process exit.
+      gate.closed = true;
+      native.release();
+    }
     return nullptr;
   }
   api.vkGetDeviceQueue(native->device, native->queueFamilyIndex, 0, &native->queue);
