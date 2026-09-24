@@ -120,8 +120,11 @@ On Metal, snapshot capture and cross-context snapshot drawing register their sou
 runtime devices (see [Cross-device texture registration](#cross-device-texture-registration)).
 Every Geode target and `renderer_geode_tests` now pass with `DONNER_GPU_BACKEND=metal`, and so do
 the Geode editor integration targets listed under [Testing and Validation](#testing-and-validation)
-and `editor_shell_tests`, under Metal API and shader validation. The renderer's other suites have
-not been qualified natively yet. Vulkan and the browser follow the same sequence.
+and `editor_shell_tests`, under Metal API and shader validation. So do the renderer's other suites
+with a Geode variant, among them the regression, public API, golden, text path and resvg suites:
+the same cases pass and skip, with the same logged reasons, as on the transitional adapter, and
+each image comparison differs from its reference by the same pixel count on both. Vulkan and the
+browser follow the same sequence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
 paths now use their reviewed runtime resource boundaries. Cross-context readback and presentation
@@ -538,8 +541,11 @@ adapter, and an adapter context on Metal, where a second headless device shares 
       Adapter-specific cases select the adapter by name and log why under another default; every
       pixel read, count and comparison fails loudly on an empty snapshot; and texture releases are
       counted through the device observer, so release checks hold on every backend.
-- [ ] Bring the native Metal backend to conformance with what Geode records, until the Geode and
-      renderer suites pass with `DONNER_GPU_BACKEND=metal`.
+- [x] Bring the native Metal backend to conformance with what Geode records, until the Geode and
+      renderer suites pass with `DONNER_GPU_BACKEND=metal`. Every Geode target and every renderer
+      suite with a Geode variant passes on native Metal under Metal API and shader validation,
+      with the same case counts as the transitional adapter
+      ([#1404](https://github.com/jwmcglynn/donner/issues/1404)).
 - [ ] Flip each platform's default to its native backend in a separate change after that
       platform's suites, including the editor's, pass on it: Metal, then Vulkan, then the
       browser.
