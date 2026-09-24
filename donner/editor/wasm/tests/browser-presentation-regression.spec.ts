@@ -333,30 +333,6 @@ function splashLetterTrackingWindow(stats: ViewportStats): CssRegion {
   };
 }
 
-// Wait for the demand-driven frame loop to park.
-//
-// Reading pixels while the loop is still servicing frames is how a capture
-// comes to straddle two of them: a full-document screenshot takes longer than a
-// frame, so any capture started mid-burst mixes geometry from both sides of it.
-// The loop parks once it has presented what it was woken for, so an unchanged
-// frame counter across a browser composite is the signal that a capture can
-// describe one frame. Reports whether it parked rather than throwing, so the
-// caller's own diagnostics carry the failure.
-async function waitForParkedFrameLoop(page: Page, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  const renderedFrames = () => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
-  for (;;) {
-    const before = await renderedFrames();
-    await waitForBrowserComposite(page);
-    if (before === await renderedFrames()) {
-      return true;
-    }
-    if (Date.now() >= deadline) {
-      return false;
-    }
-  }
-}
-
 // Whether two captures describe the same presented picture.
 //
 // Both captures are scored in page CSS pixels off their own screenshot, so
@@ -445,15 +421,10 @@ async function captureSplashDragFrame(
   for (let attempt = 0; attempt < 4; ++attempt) {
     const attemptStartedAtMs = performance.now();
     console.log(`splash-capture-wait-start ${JSON.stringify({ context, attempt })}`);
-    // Only the first attempt waits for a park. If the loop is going to park it
-    // parks within that window; if it is not - the thumbnail burst again - then
-    // spending the same wait on every retry only burns the test's budget
-    // before the retries that settle this by content can run.
-    if (attempt === 0) {
-      await waitForParkedFrameLoop(page, scaledMs(2_000));
-    } else {
-      await waitForBrowserComposite(page);
-    }
+    // A continuously rendering thumbnail burst need not park. The counter
+    // across this capture or two matching captures below still prove that its
+    // pixels describe one stable presented picture.
+    await waitForBrowserComposite(page);
     console.log(`splash-capture-wait-end ${
       JSON.stringify({
         context,
