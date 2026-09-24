@@ -1900,6 +1900,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       }
     }
   }
+  releaseLayerPayloadsOfAnotherRaster(currentCanvasSize, surfaceFromCanvas);
 
   // Rasterize dirty static segments. `staticSegments_` holds one bitmap
   // per paint-order slot between promoted layers (plus the ends), and

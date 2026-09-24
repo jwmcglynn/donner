@@ -1117,6 +1117,18 @@ private:
                       const Transform2d& canvasFromPayload, bool textureMode);
   /// Counts a compose payload the main renderer could not present.
   void recordComposePayloadRefusal();
+  /**
+   * Release every layer payload drawn under a raster other than this frame's, other than by a
+   * translation. A zoom or resize marks every layer dirty; a layer whose re-rasterization then
+   * failed or was not attempted still holds a payload at the old scale or canvas, which must never
+   * be published as a tile of this raster.
+   *
+   * @param canvasSize This frame's canvas size in device pixels.
+   * @param surfaceFromCanvas This frame's canvas-to-surface transform.
+   */
+  void releaseLayerPayloadsOfAnotherRaster(const Vector2i& canvasSize,
+                                           const Transform2d& surfaceFromCanvas);
+
   /// Marks tiles whose texture draw was declined dirty so the next frame re-rasterizes them.
   void markRefusedTilesDirty(const std::vector<Entity>& refusedLayers,
                              const std::vector<size_t>& refusedSegments);

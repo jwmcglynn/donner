@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/MathUtils.h"
 #include "donner/base/Utils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/editor/TracyWrapper.h"
@@ -41,24 +42,26 @@ uint64_t SegmentTileId(Entity left, Entity right) {
   return (l << 32) | r;  // bit 63 stays 0 - doesn't collide with layer ids.
 }
 
-// Sets a layer payload from a drawn offscreen. Returns false, keeping the previous payload, when
-// the snapshot failed: a null texture snapshot, which leaves the offscreen's drawn target
-// attached, or an empty bitmap from a failed readback or a refused target.
+// Sets a layer payload from an offscreen drawn under `raster`, recording that raster with it.
+// Returns false, keeping the previous payload, when the snapshot failed: a null texture snapshot,
+// which leaves the offscreen's drawn target attached, or an empty bitmap from a failed readback or
+// a refused target.
 bool SetLayerPayloadFromOffscreen(CompositorLayer& layer, RendererInterface& offscreen,
-                                  const Transform2d& surfaceFromEntity) {
+                                  const Transform2d& surfaceFromEntity,
+                                  const CompositorLayer::PayloadRaster& raster) {
   if (!offscreen.requiresTextureSnapshotPresentation()) {
     RendererBitmap bitmap = offscreen.takeSnapshot();
     if (bitmap.empty()) {
       return false;
     }
-    layer.setBitmap(std::move(bitmap), surfaceFromEntity);
+    layer.setBitmap(std::move(bitmap), surfaceFromEntity, raster);
     return true;
   }
   std::shared_ptr<const RendererTextureSnapshot> texture = offscreen.takeTextureSnapshot();
   if (texture == nullptr) {
     return false;
   }
-  layer.setTextureSnapshot(std::move(texture), surfaceFromEntity);
+  layer.setTextureSnapshot(std::move(texture), surfaceFromEntity, raster);
   return true;
 }
 
@@ -83,6 +86,22 @@ bool SetSegmentPayloadFromOffscreen(RendererBitmap& segment,
   }
   segment = RendererBitmap{};
   segmentTexture = std::move(texture);
+  return true;
+}
+
+// A payload stays valid when only the surface translation changed: the layer's compose offset
+// carries the shift. A new canvas size or a new scale, rotation or skew leaves it at another
+// raster.
+bool SameRasterUpToTranslation(const CompositorLayer::PayloadRaster& raster,
+                               const Vector2i& canvasSize, const Transform2d& surfaceFromCanvas) {
+  if (raster.canvasSize != canvasSize) {
+    return false;
+  }
+  for (size_t i = 0; i < 4; ++i) {
+    if (!NearEquals(raster.surfaceFromCanvas.data[i], surfaceFromCanvas.data[i])) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -334,7 +353,9 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
                             .worldFromEntityTransform *
                         surfaceFromCanvas;
   }
-  if (!SetLayerPayloadFromOffscreen(layer, *offscreen, surfaceFromEntity)) {
+  const CompositorLayer::PayloadRaster payloadRaster{.canvasSize = canvasSize,
+                                                     .surfaceFromCanvas = surfaceFromCanvas};
+  if (!SetLayerPayloadFromOffscreen(layer, *offscreen, surfaceFromEntity, payloadRaster)) {
     recordLayerAllocationFailure(layer, previousImmediatePlan, immediatePlan, canvasSize,
                                  std::move(offscreen));
     layer.markDirty();
@@ -1031,6 +1052,19 @@ bool CompositorController::composePayload(
     renderer().drawBitmap(*bitmap, params);
   }
   return true;
+}
+
+void CompositorController::releaseLayerPayloadsOfAnotherRaster(
+    const Vector2i& canvasSize, const Transform2d& surfaceFromCanvas) {
+  for (CompositorLayer& layer : layers_) {
+    // A layer with no recorded raster holds no payload: every payload setter records one.
+    const std::optional<CompositorLayer::PayloadRaster>& raster = layer.payloadRaster();
+    if (!raster.has_value() || SameRasterUpToTranslation(*raster, canvasSize, surfaceFromCanvas)) {
+      continue;
+    }
+    layer.releasePayload();
+    layer.markDirty();
+  }
 }
 
 void CompositorController::markRefusedTilesDirty(const std::vector<Entity>& refusedLayers,
