@@ -2,9 +2,7 @@
 /// @file
 /// \c donner::geode::GeodeWgpuAdapterDevice - the wgpu-backed \c donner::gpu::Device adapter.
 ///
-/// TEMPORARY transition adapter. It is deleted per-platform as each native backend takes over
-/// production rendering, and each escape hatch below is deleted with the change that migrates its
-/// last caller.
+/// Adapter for runtime devices that currently render through wgpu.
 
 #include <atomic>
 #include <chrono>
@@ -25,6 +23,10 @@
 #include "donner/base/SmallVector.h"
 #include "donner/gpu/Device.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+
+namespace donner::gpu::vulkan {
+class VulkanSharedRoot;
+}
 
 namespace donner::geode {
 
@@ -86,8 +88,9 @@ struct GeodeGpuRootCapabilities {
 /**
  * One selected backend root: the backend a set of runtime devices drives, the capabilities the
  * selection discovered, and the sticky loss condition every one of them shares. A transitional
- * root holds the wgpu objects its devices record against; a native root holds none, because each
- * runtime device over it opens the system's device itself.
+ * root holds the wgpu objects its devices record against. A native Metal root selects the
+ * system device for each runtime device; a native Vulkan root holds one instance, logical device
+ * and queue shared by all of its runtime devices.
  *
  * Retained through `shared_ptr` by each runtime device over it, so the handles outlive the last
  * of them. A browser root holds the browser device request that keeps its worker's GPU device
@@ -108,15 +111,16 @@ public:
    * @param lostState Sticky loss condition shared by every runtime device over these roots.
    * @param backendHold What the backend needs kept open for as long as any runtime device over
    *   these roots, or null for a backend that needs nothing. Released after the handles.
+   * @param vulkanRoot Native Vulkan owner, or null for another backend.
    */
   GeodeGpuRoot(GeodeWgpuRoots handles, GeodeGpuRootCapabilities capabilities,
                std::shared_ptr<gpu::DeviceLostState> lostState,
-               std::shared_ptr<const void> backendHold = nullptr);
+               std::shared_ptr<const void> backendHold = nullptr,
+               std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot = nullptr);
 
-  /// Releases owned handles, or leaves borrowed ones to their embedder. A root already declared
-  /// lost is deliberately leaked rather than destroyed: releasing it calls into a driver that has
-  /// stopped answering, and one root's worth of driver objects is strictly better than a hung
-  /// thread.
+  /// Releases owned wgpu handles, or leaves borrowed ones to their embedder. A lost owned wgpu
+  /// root retains its driver handles rather than risking a hung driver call. A native Vulkan root
+  /// releases its handles only after its runtime devices have proved their own work complete.
   ~GeodeGpuRoot();
 
   GeodeGpuRoot(const GeodeGpuRoot&) = delete;
@@ -139,6 +143,11 @@ public:
     return lostState_;
   }
 
+  /// Native Vulkan owner shared by runtime devices over this root, or null on other backends.
+  const std::shared_ptr<gpu::vulkan::VulkanSharedRoot>& vulkanRoot() const UTILS_LIFETIME_BOUND {
+    return vulkanRoot_;
+  }
+
   /**
    * Whether every non-null handle named here is the one this root holds.
    *
@@ -155,9 +164,8 @@ public:
              const wgpu::Device& device, const wgpu::Queue& queue) const;
 
   /// Whether this root names a backend a runtime device over it can record against. A
-  /// transitional root does when it holds a wgpu device and queue. A native root always does,
-  /// because each runtime device over it opens the backend itself; it says nothing about loss,
-  /// which \ref lostState reports.
+  /// transitional root needs a wgpu device and queue; a native Vulkan root needs its shared
+  /// native owner. This says nothing about loss, which \ref lostState reports.
   bool hasBackendDevice() const;
 
 private:
@@ -165,6 +173,7 @@ private:
   GeodeGpuRootCapabilities capabilities_;
   std::shared_ptr<gpu::DeviceLostState> lostState_;
   std::shared_ptr<const void> backendHold_;
+  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot_;
 };
 
 /// Caller-supplied inputs to backend-root selection. The environment-driven inputs (the backend
@@ -209,9 +218,9 @@ struct GpuRootSelection {
 /**
  * Selects a backend root: the backend \ref ResolveGpuBackendKind resolves for \p options. For
  * the transitional adapter it creates an instance, requests an adapter and a device, and takes the
- * default queue; for the native Metal backend it asks the system Metal device for its
- * capabilities, for native Vulkan the physical device a Vulkan device selects, and for the
- * browser backend this worker's GPU device, kept open for runtime devices over the root.
+ * default queue; for native Metal it queries the system Metal device's capabilities, for
+ * native Vulkan it opens one instance, logical device and queue, and for the browser backend it
+ * holds this worker's GPU device for runtime devices over the root.
  *
  * The one selection every caller shares. Headless, editor and embedded construction differ only
  * in \p options, so the adapter retries under load, the backend requests, the force-fallback

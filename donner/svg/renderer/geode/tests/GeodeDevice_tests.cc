@@ -6,8 +6,10 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -918,6 +920,120 @@ std::unique_ptr<GeodeDevice> CreateNativeVulkanContext() {
     return nullptr;
   }
   return GeodeDevice::CreateOverSelectedRoot(std::move(root), gpu::TextureFormat::RGBA8Unorm);
+}
+
+/// Runtime devices over one selected Vulkan root share its native device and queue, while each
+/// retains its own submission serials and survives a sibling's teardown.
+TEST(GeodeNativeVulkanRoot, RuntimeDevicesShareOneNativeDeviceAndIndependentSerials) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeVulkanContext();
+  ASSERT_THAT(context, NotNull()) << kNoVulkanDevice;
+  GeodeRuntimeDevice sibling = context->physicalDeviceOwner()->createLogicalDevice();
+  ASSERT_THAT(sibling.device, NotNull()) << kNoVulkanDevice;
+  auto& first = static_cast<gpu::vulkan::VulkanDevice&>(context->runtimeDevice());
+  auto& second = static_cast<gpu::vulkan::VulkanDevice&>(*sibling.device);
+  const auto firstNative = first.nativeContextForTest();
+  const auto secondNative = second.nativeContextForTest();
+  ASSERT_THAT(firstNative.device, NotNull());
+  ASSERT_THAT(secondNative.device, NotNull());
+  EXPECT_THAT(secondNative.instance, Eq(firstNative.instance));
+  EXPECT_THAT(secondNative.device, Eq(firstNative.device));
+  EXPECT_THAT(secondNative.queue, Eq(firstNative.queue));
+  EXPECT_THAT(secondNative.queueFamilyIndex, Eq(firstNative.queueFamilyIndex));
+  const gpu::Texture firstTexture = gpu::GetResultOrFail(first.createTexture(gpu::TextureDescriptor{
+      "FirstOnly", {4, 4}, gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::Sampled}));
+  EXPECT_THAT(second.createTextureView(firstTexture, gpu::TextureViewDescriptor{"ForeignView"}),
+              gpu::IsGpuError(gpu::GpuErrorType::DeviceMismatch))
+      << "sharing the native VkDevice must not merge the runtime handle tables";
+
+  const uint64_t firstBefore = first.lastSubmittedSerial();
+  const uint64_t secondBefore = second.lastSubmittedSerial();
+  const uint64_t firstSerial = SubmitEmptyCommandBuffer(first);
+  EXPECT_THAT(firstSerial, Eq(firstBefore + 1u));
+  EXPECT_THAT(second.lastSubmittedSerial(), Eq(secondBefore));
+  EXPECT_THAT(SubmitEmptyCommandBuffer(second), Eq(secondBefore + 1u));
+  EXPECT_THAT(first.lastSubmittedSerial(), Eq(firstSerial));
+
+  sibling.device.reset();
+  EXPECT_THAT(SubmitEmptyCommandBuffer(first), Eq(firstSerial + 1u))
+      << "one device's teardown must not close the shared root under its sibling";
+}
+
+/// A runtime device retains the native root after the context that selected it has gone away.
+TEST(GeodeNativeVulkanRoot, ASecondDeviceSurvivesItsSelectingContextsDestruction) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeVulkanContext();
+  ASSERT_THAT(context, NotNull()) << kNoVulkanDevice;
+  GeodeRuntimeDevice sibling = context->physicalDeviceOwner()->createLogicalDevice();
+  ASSERT_THAT(sibling.device, NotNull()) << kNoVulkanDevice;
+  auto& second = static_cast<gpu::vulkan::VulkanDevice&>(*sibling.device);
+  const auto nativeDevice = second.nativeContextForTest().device;
+  context.reset();
+
+  EXPECT_THAT(second.nativeContextForTest().device, Eq(nativeDevice));
+  const uint64_t serial = SubmitEmptyCommandBuffer(second);
+  ASSERT_THAT(serial, testing::Gt(0u));
+  EXPECT_TRUE(second.waitForSerial(serial, 5.0))
+      << "the surviving device's own fence must still complete after root selection is gone";
+}
+
+/// Each runtime device stays on its own thread while native submissions share one Vulkan queue.
+TEST(GeodeNativeVulkanRoot, ConcurrentRuntimeDevicesSubmitThroughTheSharedQueue) {
+  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> root =
+      gpu::vulkan::VulkanDevice::CreateSharedRoot();
+  ASSERT_THAT(root, NotNull()) << kNoVulkanDevice;
+  constexpr uint64_t kSubmissions = 32;
+  struct WorkerResult {
+    bool opened = false;
+    bool submitted = false;
+    bool completed = false;
+  };
+  std::array<WorkerResult, 2> results{};
+  std::mutex gateMutex;
+  std::condition_variable gateChanged;
+  int ready = 0;
+  bool go = false;
+  const auto run = [&](size_t index) {
+    std::unique_ptr<gpu::vulkan::VulkanDevice> device =
+        gpu::vulkan::VulkanDevice::CreateOverSharedRoot(root);
+    {
+      std::unique_lock lock(gateMutex);
+      results[index].opened = device != nullptr;
+      ++ready;
+      gateChanged.notify_all();
+      gateChanged.wait(lock, [&] { return go; });
+    }
+    if (device == nullptr) {
+      return;
+    }
+    bool submitted = true;
+    for (uint64_t expected = 1; expected <= kSubmissions; ++expected) {
+      if (SubmitEmptyCommandBuffer(*device) != expected) {
+        submitted = false;
+        break;
+      }
+    }
+    results[index].submitted = submitted;
+    if (submitted) {
+      results[index].completed = device->waitForSerial(kSubmissions, 5.0);
+    }
+  };
+  std::thread first(run, 0);
+  std::thread second(run, 1);
+  bool bothReady;
+  {
+    std::unique_lock lock(gateMutex);
+    bothReady = gateChanged.wait_for(lock, std::chrono::seconds(5), [&] { return ready == 2; });
+    go = true;
+    gateChanged.notify_all();
+  }
+  first.join();
+  second.join();
+  EXPECT_TRUE(bothReady);
+  for (size_t index = 0; index < results.size(); ++index) {
+    SCOPED_TRACE(::testing::Message() << "worker " << index);
+    EXPECT_THAT(results[index].opened, IsTrue());
+    EXPECT_THAT(results[index].submitted, IsTrue());
+    EXPECT_THAT(results[index].completed, IsTrue());
+  }
 }
 
 /// A native Vulkan root reports the texture limit its physical device reports rather than the

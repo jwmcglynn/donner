@@ -986,6 +986,43 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
   return enabledExtensions;
 }
 
+/// One physical Vulkan owner shared by independently validated runtime devices.
+struct VulkanSharedRoot::Impl {
+  std::shared_ptr<VulkanLoader> loader;  //!< Keeps every native entry point callable.
+  const VulkanApi* api = nullptr;        //!< Entry points owned by \ref loader.
+  VkInstance instance = VK_NULL_HANDLE;
+  VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+  VkDevice device = VK_NULL_HANDLE;
+  VkQueue queue = VK_NULL_HANDLE;
+  uint32_t queueFamilyIndex = 0;
+  VkPhysicalDeviceMemoryProperties memoryProperties = {};
+  uint32_t maxTextureDimension2D = 0;
+  bool fullDrawIndexUint32 = false;
+  bool debugMessengerAvailable = false;
+  bool presentationEnabled = false;
+  bool headlessSurfaceEnabled = false;
+  std::shared_ptr<DeviceLostState> lostState;
+  std::mutex queueMutex;  //!< Vulkan requires external synchronization of one VkQueue.
+
+  ~Impl() {
+    if (api == nullptr) {
+      return;
+    }
+    if (device != VK_NULL_HANDLE && api->vkDestroyDevice != nullptr) {
+      api->vkDestroyDevice(device, nullptr);
+    }
+    if (instance != VK_NULL_HANDLE && api->vkDestroyInstance != nullptr) {
+      api->vkDestroyInstance(instance, nullptr);
+    }
+  }
+};
+
+VulkanSharedRoot::VulkanSharedRoot(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+VulkanSharedRoot::~VulkanSharedRoot() = default;
+uint32_t VulkanSharedRoot::maxTextureDimension2D() const {
+  return impl_->maxTextureDimension2D;
+}
+
 /// Vulkan state of a VulkanDevice: instance/device/queue handles plus per-resource slot tables
 /// mirroring the validated slot indices handed to the `on*` hooks.
 struct VulkanDevice::Impl {
@@ -1013,6 +1050,10 @@ struct VulkanDevice::Impl {
     impl->retainedNext = gate.retained;
     gate.retained = impl.release();
   }
+
+  /// Keeps the native device and queue alive while this runtime device owns work over them.
+  std::shared_ptr<VulkanSharedRoot> nativeRoot;
+  std::mutex* queueMutex = nullptr;  //!< Shared queue call lock, null only for fake test owners.
 
   /// Keeps the Vulkan loader library open. Every entry point this device calls is code inside
   /// that library, so it must outlive every Vulkan object below.
@@ -1360,8 +1401,14 @@ struct VulkanDevice::Impl {
     submitInfo.pWaitSemaphores = wait.semaphores.empty() ? nullptr : wait.semaphores.data();
     submitInfo.pWaitDstStageMask = wait.stages.empty() ? nullptr : wait.stages.data();
     const VkResult injectedFailure = std::exchange(nextSubmissionFailure, VK_SUCCESS);
-    return injectedFailure != VK_SUCCESS ? injectedFailure
-                                         : api->vkQueueSubmit(queue, 1, &submitInfo, fence);
+    if (injectedFailure != VK_SUCCESS) {
+      return injectedFailure;
+    }
+    std::unique_lock<std::mutex> queueLock;
+    if (queueMutex != nullptr) {
+      queueLock = std::unique_lock<std::mutex>(*queueMutex);
+    }
+    return api->vkQueueSubmit(queue, 1, &submitInfo, fence);
   }
 
   /// Latches terminal native failure and drains pending work before releasing its objects.
@@ -1373,6 +1420,10 @@ struct VulkanDevice::Impl {
     }
     recordDeviceLoss(std::format("{} failed with {}", operation, VkResultToString(result)));
     // Only device loss permits this otherwise unbounded wait: the lost-device wait is finite.
+    std::unique_lock<std::mutex> queueLock;
+    if (queueMutex != nullptr) {
+      queueLock = std::unique_lock<std::mutex>(*queueMutex);
+    }
     if (!CompletionWasProven(api->vkDeviceWaitIdle(device))) {
       return false;
     }
@@ -1677,20 +1728,7 @@ struct VulkanDevice::Impl {
     pipelineLayouts.clear();  // Releases the remaining VkPipelineLayout handles.
   }
 
-  /// Destroys every remaining native object after the complete graph passed preparation.
-  bool teardown() {
-    if (!ownsEverySurface()) {
-      return false;
-    }
-    if (device == VK_NULL_HANDLE) {
-      destroyDebugMessenger();
-      if (instance != VK_NULL_HANDLE) {
-        api->vkDestroyInstance(instance, nullptr);
-        instance = VK_NULL_HANDLE;
-      }
-      return true;
-    }
-
+  void destroySubmissionAndUploadRecords() {
     for (InFlightSubmission& submission : inFlight) {
       releaseSubmission(submission);
     }
@@ -1699,8 +1737,9 @@ struct VulkanDevice::Impl {
       releaseUpload(upload);
     }
     pendingUploads.clear();
+  }
 
-    destroyPipelines();
+  void destroyShadersAndBindings() {
     for (VkShaderModule module : shaderModules) {
       if (module != VK_NULL_HANDLE) {
         api->vkDestroyShaderModule(device, module, nullptr);
@@ -1725,6 +1764,9 @@ struct VulkanDevice::Impl {
       }
     }
     samplers.clear();
+  }
+
+  void destroyTexturesAndBuffers() {
     for (std::optional<TextureViewRecord>& record : textureViews) {
       if (record.has_value() && record->view != VK_NULL_HANDLE) {
         api->vkDestroyImageView(device, record->view, nullptr);
@@ -1743,11 +1785,11 @@ struct VulkanDevice::Impl {
       }
     }
     buffers.clear();
+  }
 
-    // After the views and images above, because a view of a swapchain image must be destroyed
-    // before the swapchain that owns the image, and before the command pool and instance below,
-    // because a swapchain frees command buffers out of that pool and destroys its surface out of
-    // the instance.
+  /// A swapchain must release its command buffers before the pool, then its surfaces before the
+  /// instance. A failed child-lifetime proof keeps the remaining native graph alive.
+  bool destroySurfacesAndCommandPool() {
     surfaces.clear();
     while (retainedSurfaces) {
       std::unique_ptr<VulkanSwapchain> surface = std::move(retainedSurfaces);
@@ -1757,18 +1799,56 @@ struct VulkanDevice::Impl {
         surfaceLifetime->liveChildren.load(std::memory_order_acquire) != 0) {
       return false;
     }
-
     if (commandPool != VK_NULL_HANDLE) {
       api->vkDestroyCommandPool(device, commandPool, nullptr);
       commandPool = VK_NULL_HANDLE;
     }
-    api->vkDestroyDevice(device, nullptr);
-    device = VK_NULL_HANDLE;
-    destroyDebugMessenger();
-    if (instance != VK_NULL_HANDLE) {
-      api->vkDestroyInstance(instance, nullptr);
-      instance = VK_NULL_HANDLE;
+    return true;
+  }
+
+  void destroyNativeOwner() {
+    if (nativeRoot != nullptr) {
+      // Every sibling retains the shared native device until its own objects are gone.
+      destroyDebugMessenger();
+      nativeRoot.reset();
+    } else {
+      if (device != VK_NULL_HANDLE) {
+        api->vkDestroyDevice(device, nullptr);
+      }
+      destroyDebugMessenger();
+      if (instance != VK_NULL_HANDLE) {
+        api->vkDestroyInstance(instance, nullptr);
+      }
     }
+    device = VK_NULL_HANDLE;
+    instance = VK_NULL_HANDLE;
+    queue = VK_NULL_HANDLE;
+  }
+
+  /// Destroys every remaining native object after the complete graph passed preparation.
+  bool teardown() {
+    if (!ownsEverySurface()) {
+      return false;
+    }
+    if (device == VK_NULL_HANDLE) {
+      destroyNativeOwner();
+      return true;
+    }
+
+    destroySubmissionAndUploadRecords();
+    destroyPipelines();
+    destroyShadersAndBindings();
+    destroyTexturesAndBuffers();
+
+    // After the views and images above, because a view of a swapchain image must be destroyed
+    // before the swapchain that owns the image, and before the command pool and instance below,
+    // because a swapchain frees command buffers out of that pool and destroys its surface out of
+    // the instance.
+    if (!destroySurfacesAndCommandPool()) {
+      return false;
+    }
+
+    destroyNativeOwner();
     return true;
   }
 
@@ -1790,8 +1870,9 @@ struct VulkanDevice::Impl {
 
   /// Borrowed objects a swapchain works through.
   VulkanSurfaceContext surfaceContext() const {
-    return VulkanSurfaceContext{api,   instance,         physicalDevice, device,
-                                queue, queueFamilyIndex, commandPool,    surfaceLifetime};
+    return VulkanSurfaceContext{api,         instance,        physicalDevice,
+                                device,      queue,           queueFamilyIndex,
+                                commandPool, surfaceLifetime, queueMutex};
   }
 
   /// Waits taken from surfaces for one submission, and the surfaces they came from.
@@ -2211,7 +2292,20 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateWithPresentationSupport(
   return CreateImpl(false, true, requiredInstanceExtensions, std::move(lostState));
 }
 
+std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateSharedRoot(
+    std::shared_ptr<DeviceLostState> lostState) {
+  return CreateRootImpl(false, false, {}, std::move(lostState));
+}
+
 std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(
+    bool enableTimelineSemaphoreForTest, bool enablePresentation,
+    std::span<const char* const> requiredInstanceExtensions,
+    std::shared_ptr<DeviceLostState> lostState) {
+  return CreateOverSharedRoot(CreateRootImpl(enableTimelineSemaphoreForTest, enablePresentation,
+                                             requiredInstanceExtensions, std::move(lostState)));
+}
+
+std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateRootImpl(
     bool enableTimelineSemaphoreForTest, bool enablePresentation,
     std::span<const char* const> requiredInstanceExtensions,
     std::shared_ptr<DeviceLostState> lostState) {
@@ -2224,72 +2318,92 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(
   if (setup.loader == nullptr) {
     return nullptr;
   }
-  const std::shared_ptr<VulkanLoader>& loader = setup.loader;
-  const VulkanApi& api = loader->api();
-  const VkInstance instance = setup.instance;
 
-  // First enumerated physical device with 1.1 support and a graphics queue family.
-  VkPhysicalDevice selectedDevice = VK_NULL_HANDLE;
-  uint32_t selectedQueueFamily = 0;
-  if (!SelectGraphicsPhysicalDevice(api, instance, selectedDevice, selectedQueueFamily)) {
-    api.vkDestroyInstance(instance, nullptr);
+  std::unique_ptr<VulkanSharedRoot::Impl> native = std::make_unique<VulkanSharedRoot::Impl>();
+  native->loader = setup.loader;
+  native->api = &setup.loader->api();
+  native->instance = setup.instance;
+  native->debugMessengerAvailable = setup.debugMessengerAvailable;
+  native->presentationEnabled = enablePresentation;
+  native->headlessSurfaceEnabled = setup.headlessSurfaceAvailable;
+  native->lostState = lostState ? std::move(lostState) : std::make_shared<DeviceLostState>();
+  const VulkanApi& api = *native->api;
+
+  // Selection creates the one physical owner. Every runtime device opened over it uses the same
+  // instance, logical device, queue and loss condition.
+  if (!SelectGraphicsPhysicalDevice(api, native->instance, native->physicalDevice,
+                                    native->queueFamilyIndex)) {
     return nullptr;
   }
-
-  bool fullDrawIndexUint32 = false;
-  const VkDevice device =
-      CreateLogicalDevice(api, selectedDevice, selectedQueueFamily, setup.presentationExtensions,
-                          enableTimelineSemaphoreForTest, enablePresentation, fullDrawIndexUint32);
-  if (device == VK_NULL_HANDLE) {
-    api.vkDestroyInstance(instance, nullptr);
+  native->device = CreateLogicalDevice(api, native->physicalDevice, native->queueFamilyIndex,
+                                       setup.presentationExtensions, enableTimelineSemaphoreForTest,
+                                       enablePresentation, native->fullDrawIndexUint32);
+  if (native->device == VK_NULL_HANDLE) {
     return nullptr;
   }
-
-  // Device-level entry points come from the device itself, so every call this backend records
-  // per frame reaches the implementation directly instead of through the loader's dispatch.
-  if (const Status status = LoadDeviceEntryPoints(*loader, device, enablePresentation);
+  if (const Status status =
+          LoadDeviceEntryPoints(*native->loader, native->device, enablePresentation);
       status.hasError()) {
     std::fprintf(stderr, "[donner::gpu::vulkan] %s\n", status.error().message.c_str());
-    if (api.vkDestroyDevice != nullptr) {
-      api.vkDestroyDevice(device, nullptr);
+    if (api.vkDestroyDevice == nullptr) {
+      // A broken loader gave us a device without a way to destroy it. Keep the entire native
+      // ownership graph, including the parent instance and loader, alive until process exit.
+      gate.closed = true;
+      native.release();
     }
-    api.vkDestroyInstance(instance, nullptr);
     return nullptr;
   }
+  api.vkGetDeviceQueue(native->device, native->queueFamilyIndex, 0, &native->queue);
+  api.vkGetPhysicalDeviceMemoryProperties(native->physicalDevice, &native->memoryProperties);
+  VkPhysicalDeviceProperties properties = {};
+  api.vkGetPhysicalDeviceProperties(native->physicalDevice, &properties);
+  native->maxTextureDimension2D =
+      std::min(properties.limits.maxImageDimension2D, kMaxTextureDimension);
+  return std::shared_ptr<VulkanSharedRoot>(new VulkanSharedRoot(std::move(native)));
+}
 
+std::unique_ptr<VulkanDevice> VulkanDevice::CreateOverSharedRoot(
+    const std::shared_ptr<VulkanSharedRoot>& root) {
+  if (root == nullptr || root->impl_ == nullptr) {
+    return nullptr;
+  }
+  Impl::AdmissionGate& gate = Impl::admissionGate();
+  const std::lock_guard admission(gate.mutex);
+  if (gate.closed) {
+    return nullptr;
+  }
+  VulkanSharedRoot::Impl& native = *root->impl_;
+  const VulkanApi& api = *native.api;
   VkCommandPool commandPool = VK_NULL_HANDLE;
   VkCommandPoolCreateInfo poolInfo = {};
   poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-  poolInfo.queueFamilyIndex = selectedQueueFamily;
-  if (api.vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
-    api.vkDestroyDevice(device, nullptr);
-    api.vkDestroyInstance(instance, nullptr);
+  poolInfo.queueFamilyIndex = native.queueFamilyIndex;
+  if (api.vkCreateCommandPool(native.device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
     return nullptr;
   }
 
   std::unique_ptr<VulkanDevice> result(new VulkanDevice());
   Impl& impl = *result->impl_;
-  if (lostState) {
-    impl.rootLoss = lostState;
-    result->adoptLostState(std::move(lostState));
-  }
-  impl.loader = loader;
-  impl.api = &loader->api();
-  impl.instance = instance;
-  impl.physicalDevice = selectedDevice;
-  impl.device = device;
-  impl.queueFamilyIndex = selectedQueueFamily;
+  impl.rootLoss = native.lostState;
+  result->adoptLostState(impl.rootLoss);
+  impl.nativeRoot = root;
+  impl.queueMutex = &native.queueMutex;
+  impl.loader = native.loader;
+  impl.api = native.api;
+  impl.instance = native.instance;
+  impl.physicalDevice = native.physicalDevice;
+  impl.device = native.device;
+  impl.queue = native.queue;
+  impl.queueFamilyIndex = native.queueFamilyIndex;
   impl.commandPool = commandPool;
-  impl.fullDrawIndexUint32 = fullDrawIndexUint32;
-  impl.presentationEnabled = enablePresentation;
-  impl.headlessSurfaceEnabled = setup.headlessSurfaceAvailable;
-  api.vkGetDeviceQueue(device, selectedQueueFamily, 0, &impl.queue);
-  api.vkGetPhysicalDeviceMemoryProperties(selectedDevice, &impl.memoryProperties);
+  impl.memoryProperties = native.memoryProperties;
+  impl.fullDrawIndexUint32 = native.fullDrawIndexUint32;
+  impl.presentationEnabled = native.presentationEnabled;
+  impl.headlessSurfaceEnabled = native.headlessSurfaceEnabled;
   impl.bufferAllocator = std::make_unique<DedicatedBufferAllocator>(impl.memoryProperties);
-
-  if (setup.debugMessengerAvailable) {
+  if (native.debugMessengerAvailable) {
     const DebugMessengerHandles messenger =
-        CreateValidationMessenger(api, instance, impl.errorState.get());
+        CreateValidationMessenger(api, native.instance, impl.errorState.get());
     impl.destroyDebugMessengerFn = messenger.destroyFn;
     impl.debugMessenger = messenger.messenger;
   }
