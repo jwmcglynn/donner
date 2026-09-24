@@ -6355,17 +6355,20 @@ TEST_F(RendererGeodeTest, IsolatedReadbackWaitHonorsCancellationAndDeadlineWitho
   renderer.endFrame();
   const auto snapshot = renderer.takeTextureSnapshot();
   ASSERT_THAT(snapshot, testing::NotNull());
+  const auto& geodeSnapshot = static_cast<const RendererGeodeTextureSnapshot&>(*snapshot);
   beginFrame(renderer);
   renderer.endFrame();
   // True once the worker's capture holds the readback context, false when its capture returned
   // without ever acquiring one, as it does when the backend cannot register the snapshot's texture
-  // on the capture context. The wait is also bounded well inside the per-case budget, but the case
-  // cannot end a worker whose capture never returns: it names the stall before joining it.
+  // on the capture context.
   std::promise<bool> acquiredSignal;
   std::future<bool> acquired = acquiredSignal.get_future();
   std::latch release(1);
   std::atomic<bool> first{true};
   std::atomic<bool> cancelWaiter{false};
+  // Set when the worker's capture does not start in time, so the capture gives up and the case can
+  // join it and fail rather than wait on it.
+  std::atomic<bool> abandonWorker{false};
   device->setSnapshotReadbackHookForTesting([&](geode::GeodeDevice::SnapshotReadbackPhase phase) {
     if (phase == geode::GeodeDevice::SnapshotReadbackPhase::ContextAcquired &&
         first.exchange(false)) {
@@ -6377,15 +6380,24 @@ TEST_F(RendererGeodeTest, IsolatedReadbackWaitHonorsCancellationAndDeadlineWitho
   });
   RendererBitmap captured;
   std::thread worker([&] {
-    captured = snapshot->takeSnapshot();
+    captured = geodeSnapshot.takeSnapshotInterruptibly(
+        [&] { return abandonWorker.load(std::memory_order_relaxed); });
     if (first.exchange(false)) {
       acquiredSignal.set_value(false);
     }
   });
-  if (acquired.wait_for(std::chrono::seconds(10)) != std::future_status::ready) {
-    // Reported before the join, which waits for the stalled capture however long it takes.
+  // Well inside the 10 s a case may take, so a capture that never starts leaves the case time to
+  // abandon it, fail and let the binary continue.
+  constexpr std::chrono::seconds kAcquireBound(3);
+  if (acquired.wait_for(kAcquireBound) != std::future_status::ready) {
+    // Abandoning the capture ends its wait for the readback context, which it polls, so the join
+    // returns. It cannot end the context's creation, a native device creation that takes no
+    // cancellation: a capture stalled there still holds the join until the per-case watchdog. The
+    // failure is recorded first so that case still names the stall.
     ADD_FAILURE() << "the worker's capture neither acquired its readback context nor returned "
-                     "within 10 s";
+                     "within "
+                  << kAcquireBound.count() << " s";
+    abandonWorker.store(true, std::memory_order_relaxed);
     release.count_down();
     worker.join();
     device->setSnapshotReadbackHookForTesting({});
