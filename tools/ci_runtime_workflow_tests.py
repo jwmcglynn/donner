@@ -488,11 +488,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("- name: Link the browser GPU bridge", build_job)
         link = build_job.split("- name: Link the browser GPU bridge", 1)[1]
         self.assertIn("bazelisk build --config=wasm-geode", link)
-        for probe in (
-            "//donner/gpu/browser:browser_bridge_link_probe",
-            "//donner/gpu/browser:browser_bridge_pthreads_link_probe",
-        ):
-            self.assertIn(probe, link)
+        self.assertIn("//tools/ci:browser_bridge_link_probes", link)
         self.assertNotIn("continue-on-error", link)
 
     def _size_check_step(self, workflow):

@@ -70,6 +70,16 @@ test_suite(
     tests = ["//donner/editor/wasm:wasm_geode_package_size_tests"],
 )
 
+# The editor Wasm PR lane links both browser bridge variants before browser tests run.
+filegroup(
+    name = "browser_bridge_link_probes",
+    srcs = [
+        "//donner/gpu/browser:browser_bridge_link_probe",
+        "//donner/gpu/browser:browser_bridge_pthreads_link_probe",
+    ],
+    tags = ["manual"],
+)
+
 test_suite(
     name = "asan_geode_pr",
     tags = ["manual"],

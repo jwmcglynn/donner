@@ -60,8 +60,7 @@ jobs:
           bazelisk fetch --config=editor-wasm \
             //tools/ci:editor_wasm_size_tests
           bazelisk fetch --config=wasm-geode \
-            //donner/gpu/browser:browser_bridge_link_probe \
-            //donner/gpu/browser:browser_bridge_pthreads_link_probe
+            //tools/ci:browser_bridge_link_probes
 
       - name: Retry Editor WASM dependency prefetch
         if: steps.editor-wasm-prefetch.outcome == 'failure'
@@ -73,8 +72,7 @@ jobs:
           bazelisk fetch --config=editor-wasm \
             //tools/ci:editor_wasm_size_tests
           bazelisk fetch --config=wasm-geode \
-            //donner/gpu/browser:browser_bridge_link_probe \
-            //donner/gpu/browser:browser_bridge_pthreads_link_probe
+            //tools/ci:browser_bridge_link_probes
 
       - name: Build and size-check Geode editor Wasm package
         run: |
@@ -122,8 +120,7 @@ jobs:
       - name: Link the browser GPU bridge
         run: |
           bazelisk build --config=wasm-geode \
-            //donner/gpu/browser:browser_bridge_link_probe \
-            //donner/gpu/browser:browser_bridge_pthreads_link_probe
+            //tools/ci:browser_bridge_link_probes
 
   test:
     runs-on: macos-26

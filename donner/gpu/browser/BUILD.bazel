@@ -108,6 +108,7 @@ wasm_cc_binary(
     # a wildcard build under the WebAssembly Geode configuration, the same way the renderer module
     # beside it is, and carries that lane's tag.
     tags = ["codeql_wasm_geode"],
+    visibility = ["//tools/ci:__pkg__"],
     target_compatible_with = select({
         "//donner/svg/renderer/wasm:wasm_geode": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -122,6 +123,7 @@ pthreads_transitioned_target(
     name = "browser_bridge_pthreads_link_probe",
     dep = ":browser_bridge_link_probe",
     tags = ["codeql_wasm_geode"],
+    visibility = ["//tools/ci:__pkg__"],
     target_compatible_with = select({
         "//donner/svg/renderer/wasm:wasm_geode": [],
         "//conditions:default": ["@platforms//:incompatible"],
