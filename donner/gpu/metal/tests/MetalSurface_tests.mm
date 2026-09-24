@@ -460,12 +460,11 @@ TEST_F(MetalSurfaceTest, APresentThatSpendsItsBoundDeclaresTheRootLostOnce) {
   EXPECT_GE(rootLoss->timedOutElapsedMs.load(), kShortPresentBound.count());
 
   const auto nextStart = std::chrono::steady_clock::now();
-  const Result<SurfaceTexture> next = device_->acquireCurrentTexture(surface);
-  if (next.hasResult() && next.result().texture.isValid()) {
-    (void)device_->submit(
-        unwrap(unwrap(device_->createCommandEncoder(), "encoder")->finish(), "finish"));
-    (void)device_->presentSurface(surface);
-  }
+  const SurfaceTexture next =
+      unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  EXPECT_EQ(next.status, SurfaceStatus::DeviceLost)
+      << "a lost root handed out a frame that can never be shown";
+  EXPECT_FALSE(next.texture.isValid());
   EXPECT_LT(std::chrono::steady_clock::now() - nextStart, kShortPresentBound)
       << "the frame after the loss spent the present bound again";
   device_->resumeSubmissionsForTest();

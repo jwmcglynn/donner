@@ -960,15 +960,18 @@ TEST_F(OrderedRegistrationTest, AWaitThatSpendsItsWholeBoundDeclaresAQueueIdleTi
   EXPECT_THAT(producer_.isLost(), IsFalse());
 }
 
-/// A registration the backend orders on the device needs no host wait: with the producer's work
-/// still running, the helper returns the registration at once and declares nothing, because the
-/// consumer's submissions wait for that work on the device instead.
+/// A registration the backend orders on the device needs no host wait: between contexts over one
+/// root, with the producer's work still running, the helper returns the registration at once and
+/// declares nothing, because the consumer's submissions wait for that work on the device instead.
 TEST(DeviceOrderedRegistrationTest, TheHelperReturnsWithoutWaitingForTheProducersWork) {
   gpu::FakeNativeDevice native;
-  gpu::SharingDevice producer(native,
-                              gpu::SharingOptions{.ordering = gpu::SourceOrdering::WaitOnDevice});
-  gpu::SharingDevice consumer(native,
-                              gpu::SharingOptions{.ordering = gpu::SourceOrdering::WaitOnDevice});
+  const auto rootLoss = std::make_shared<gpu::DeviceLostState>();
+  gpu::SharingDevice producer(
+      native,
+      gpu::SharingOptions{.ordering = gpu::SourceOrdering::WaitOnDevice, .lostState = rootLoss});
+  gpu::SharingDevice consumer(
+      native,
+      gpu::SharingOptions{.ordering = gpu::SourceOrdering::WaitOnDevice, .lostState = rootLoss});
   const gpu::Texture owned = gpu::MakeSharedTexture(producer);
   producer.holdCompletion();
   ASSERT_THAT(gpu::SubmitSharedTextureRead(producer, owned), gpu::HasResult());

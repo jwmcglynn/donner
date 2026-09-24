@@ -139,9 +139,13 @@ std::vector<std::array<uint8_t, 4>> Texels(std::span<const uint8_t> bytes) {
 class MetalTextureRegistrationTest : public testing::Test {
 protected:
   void SetUp() override {
-    producer_ = MetalDevice::Create();
+    // Like two contexts over one selected root, the devices share one loss condition, which is
+    // what lets the consumer's work be ordered after the producer's on the device.
+    producer_ = MetalDevice::Create(MetalDevice::MemoryModel::Detected, kMaxBufferByteSize,
+                                    std::chrono::seconds(5), rootLoss_);
     DONNER_REQUIRE_METAL_DEVICE(producer_, "Metal cross-device texture registration");
-    consumer_ = MetalDevice::Create();
+    consumer_ = MetalDevice::Create(MetalDevice::MemoryModel::Detected, kMaxBufferByteSize,
+                                    std::chrono::seconds(5), rootLoss_);
     ASSERT_THAT(consumer_, testing::NotNull());
   }
 
@@ -155,6 +159,7 @@ protected:
     }
   }
 
+  std::shared_ptr<DeviceLostState> rootLoss_ = std::make_shared<DeviceLostState>();
   std::unique_ptr<MetalDevice> producer_;
   std::unique_ptr<MetalDevice> consumer_;
 };
@@ -236,6 +241,37 @@ TEST_F(MetalTextureRegistrationTest, SeparateLossConditionsOverOneDeviceStillSha
 
   ASSERT_THAT(DeclareDeviceLost(*producerLost), IsTrue());
   EXPECT_THAT(consumer_->registerTexture(exported), IsGpuError(GpuErrorType::DeviceLost));
+  EXPECT_THAT(consumer_->isLost(), IsFalse());
+}
+
+/// Ordering on the device is only as sound as the loss condition behind it. The producer signals
+/// the event a consumer waits on for failed work too, and past every value when its own root is
+/// declared lost, so a consumer over another condition would never learn why its wait ended and
+/// would read whatever the failed work left behind as the producer's pixels. Its read of a gated
+/// producer is refused until the producer's work completes, and refused as untrusted once that
+/// work has failed.
+TEST_F(MetalTextureRegistrationTest, AReadOfAProducerOverAnotherLossConditionWaitsForItsOutcome) {
+  const std::unique_ptr<MetalDevice> producer =
+      MetalDevice::Create(MetalDevice::MemoryModel::Detected, kMaxBufferByteSize,
+                          std::chrono::seconds(5), std::make_shared<DeviceLostState>());
+  ASSERT_THAT(producer, testing::NotNull());
+  const Texture target = MakeProducerTexture(*producer);
+  ASSERT_THAT(producer->pauseSubmissionsForTest(), IsOk());
+  producer->failNextSubmissionForTest();
+  ASSERT_THAT(SubmitGreenClear(*producer, target), HasResult());
+  const Texture registered =
+      Unwrap(consumer_->registerTexture(Unwrap(producer->exportTexture(target))));
+
+  const Buffer readback = MakeReadbackBuffer(*consumer_);
+  EXPECT_THAT(SubmitCopy(*consumer_, registered, readback), IsGpuError(GpuErrorType::InvalidState))
+      << "the read was ordered on the device behind work whose failure it would never see";
+  EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.0), IsFalse());
+
+  producer->resumeSubmissionsForTest();
+  EXPECT_THAT(consumer_->waitForTextureSource(registered, 5.0), IsFalse())
+      << "the producer's work failed, so nothing may read what it left";
+  EXPECT_THAT(producer->isLost(), IsTrue());
+  EXPECT_THAT(SubmitCopy(*consumer_, registered, readback), IsGpuError(GpuErrorType::DeviceLost));
   EXPECT_THAT(consumer_->isLost(), IsFalse());
 }
 

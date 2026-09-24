@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 
@@ -23,6 +24,24 @@ public:
   void releaseOnLoss() override { ++releases; }
 
   int releases = 0;  //!< Times \ref releaseOnLoss ran.
+};
+
+/// Records the attribution its condition carries when it is released.
+class AttributionRecordingRelease final : public DeviceLossRelease {
+public:
+  /// @param state Condition this release is registered with.
+  explicit AttributionRecordingRelease(const DeviceLostState& state) : state_(state) {}
+
+  void releaseOnLoss() override {
+    site = state_.timedOutSite.load(std::memory_order_acquire);
+    elapsedMs = state_.timedOutElapsedMs.load(std::memory_order_relaxed);
+  }
+
+  DeviceLostWaitSite site = DeviceLostWaitSite::None;  //!< Site seen by the release.
+  int elapsedMs = 0;                                   //!< Elapsed time seen by the release.
+
+private:
+  const DeviceLostState& state_;
 };
 
 TEST(DeviceLostStateTest, TheDeclarationRunsEveryRegisteredReleaseOnce) {
@@ -52,6 +71,22 @@ TEST(DeviceLostStateTest, ATimedOutWaitsDeclarationRunsTheReleasesToo) {
 
   EXPECT_THAT(release->releases, Eq(1));
   EXPECT_THAT(state.timedOutSite.load(), Eq(DeviceLostWaitSite::QueueIdle));
+}
+
+/// What a release lets run, such as a consumer's held work, can report the loss as soon as it
+/// runs, so the condition already carries the wait that declared it when the release runs.
+TEST(DeviceLostStateTest, AReleaseSeesTheWaitThatDeclaredTheLoss) {
+  DeviceLostState state;
+  const auto release = std::make_shared<AttributionRecordingRelease>(state);
+  state.addLossRelease(release);
+
+  ASSERT_THAT(DeclareDeviceLostAfterWaitTimeout(state, DeviceLostWaitSite::Present,
+                                                std::chrono::milliseconds(250)),
+              IsTrue());
+
+  EXPECT_THAT(release->site, Eq(DeviceLostWaitSite::Present))
+      << "the release ran before the loss carried its wait site";
+  EXPECT_THAT(release->elapsedMs, Eq(250));
 }
 
 TEST(DeviceLostStateTest, AReleaseRegisteredAfterTheDeclarationRunsAtOnce) {

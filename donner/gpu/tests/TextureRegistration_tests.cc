@@ -473,14 +473,18 @@ MATCHER_P(WaitsFor, serial,
   return arg.backing != nullptr && arg.serial == serial;
 }
 
-/// Two devices over one native device whose backend orders consumers on the device: work naming a
-/// registration is accepted while the producer's work still runs, and the consumer's backend is
-/// told which producer work its submission waits for. The host never waits.
+/// Two devices over one native device and one loss condition, whose backend orders consumers on
+/// the device: work naming a registration is accepted while the producer's work still runs, and
+/// the consumer's backend is told which producer work its submission waits for. The host never
+/// waits.
 class DeviceOrderedRegistrationTest : public testing::Test {
 protected:
   FakeNativeDevice native_;
-  SharingDevice producer_{native_, SharingOptions{.ordering = SourceOrdering::WaitOnDevice}};
-  SharingDevice consumer_{native_, SharingOptions{.ordering = SourceOrdering::WaitOnDevice}};
+  std::shared_ptr<DeviceLostState> rootLoss_ = std::make_shared<DeviceLostState>();
+  SharingDevice producer_{
+      native_, SharingOptions{.ordering = SourceOrdering::WaitOnDevice, .lostState = rootLoss_}};
+  SharingDevice consumer_{
+      native_, SharingOptions{.ordering = SourceOrdering::WaitOnDevice, .lostState = rootLoss_}};
 };
 
 TEST_F(DeviceOrderedRegistrationTest, WorkIsAcceptedAtOnceAndWaitsOnTheDeviceForTheProducer) {
@@ -570,6 +574,30 @@ TEST_F(DeviceOrderedRegistrationTest, LossAndProducerFailureAreStillRefused) {
   EXPECT_THAT(SubmitSharedTextureRead(consumer_, registered), IsGpuError(GpuErrorType::DeviceLost))
       << "a producer whose work failed has nothing a consumer can trust";
   EXPECT_THAT(producer_.isLost(), IsTrue());
+}
+
+/// Ordering on the device is only as sound as the loss condition behind it: a producer over
+/// another condition can fail, or be declared lost, without the consumer's condition learning of
+/// it. Work naming such a registration waits on the host for the producer's work to complete, as
+/// on a backend that cannot wait on the device, and carries no device-side wait.
+TEST_F(DeviceOrderedRegistrationTest, AProducerOverAnotherLossConditionIsNotWaitedForOnTheDevice) {
+  SharingDevice producer(native_, SharingOptions{.ordering = SourceOrdering::WaitOnDevice,
+                                                 .lostState = std::make_shared<DeviceLostState>()});
+  const Texture owned = MakeSharedTexture(producer);
+  producer.holdCompletion();
+  ASSERT_THAT(SubmitSharedTextureRead(producer, owned), HasResult());
+  const Texture registered =
+      GetResultOrFail(consumer_.registerTexture(GetResultOrFail(producer.exportTexture(owned))));
+
+  EXPECT_THAT(consumer_.waitForTextureSource(registered, 0.0), IsFalse());
+  EXPECT_THAT(SubmitSharedTextureRead(consumer_, registered),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("still being written")))
+      << "the device would release this work however the producer's work ended";
+
+  producer.releaseCompletion();
+  EXPECT_THAT(consumer_.waitForTextureSource(registered, 0.0), IsTrue());
+  ASSERT_THAT(SubmitSharedTextureRead(consumer_, registered), HasResult());
+  EXPECT_THAT(consumer_.lastSourceWaits(), IsEmpty());
 }
 
 /// Loss ends the wait at once rather than spending its budget, and ends submissions naming the
