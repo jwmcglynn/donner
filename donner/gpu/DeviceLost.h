@@ -39,6 +39,8 @@ enum class DeviceLostWaitSite : std::uint8_t {
   /// A wait for the GPU queue to drain (teardown, inter-submit serialization, submission
   /// completion).
   QueueIdle,
+  /// A present's wait for its frame's own work to finish before the frame is shown.
+  Present,
 };
 
 /// Ostream output operator, e.g. `QueueIdle`. @param os Output stream. @param site Value to output.

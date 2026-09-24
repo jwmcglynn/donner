@@ -8377,6 +8377,7 @@ GpuWaitTimeoutSite NeutralWaitSite(geode::GpuWaitSite site) {
     case geode::GpuWaitSite::None: return GpuWaitTimeoutSite::None;
     case geode::GpuWaitSite::ReadbackMap: return GpuWaitTimeoutSite::ReadbackMap;
     case geode::GpuWaitSite::QueueIdle: return GpuWaitTimeoutSite::QueueIdle;
+    case geode::GpuWaitSite::Present: return GpuWaitTimeoutSite::Present;
   }
   return GpuWaitTimeoutSite::Unknown;
 }

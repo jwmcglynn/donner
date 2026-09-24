@@ -338,9 +338,17 @@ Ordering:
   queue for up to one producer frame, which the consumer's later frames absorb, and snapshot
   capture queues its readback behind the producer's frame on the GPU. A producer whose queue stops
   answering now holds the consumer's queue instead of the UI thread, until a bounded wait declares
-  the root lost; declaring the loss signals every Metal device's event over that root past any
-  value a consumer can wait for, which releases the held command buffers so the consumer's own
-  waits and teardown end at once. Later completions never lower the event's value.
+  the root lost. The first such wait is usually the consumer's own present: a Metal present waits
+  up to five seconds for its frame's work, and a present that spends that whole bound declares the
+  root lost at the `Present` wait site, as the five-second queue-idle and readback-map bounds
+  already do, so the first hang costs one bounded stall and every later frame fails at once. This
+  also makes an ordinary GPU stall of more than five seconds at present a lost root rather than a
+  dropped frame. The system's own timeout for a command buffer that makes no progress, measured at
+  about five seconds on the hosts these suites run on, can end the hang first, and the backend
+  then reports the loss with no wait site. Declaring the loss signals every Metal device's event
+  over that root past any value a consumer can wait for, which releases the held command buffers so
+  the consumer's own waits and teardown end at once. Later completions never lower the event's
+  value.
 - Producer work accepted after the registration is not ordered before the consumer. A producer
   must not write an exported texture while a registration of it may still be read, and must finish
   writing a texture before handing it to another thread. Detached snapshots are never rewritten,

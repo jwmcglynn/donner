@@ -2500,8 +2500,18 @@ Result<SurfaceStatus> MetalDevice::onPresentSurface(uint32_t slotIndex) {
   // anything else between drawing the frame and presenting it.
   const std::optional<uint32_t> textureSlot = GetSlot(impl_->surfaceTextureSlots, slotIndex);
   const uint64_t frameSerial = textureSlot.has_value() ? lastTextureUseSerial(*textureSlot) : 0;
+  const auto waitStart = std::chrono::steady_clock::now();
   const bool frameFinished = frameSerial <= completedSerial() ||
                              waitForSerial(frameSerial, impl_->presentCompletionTimeoutSeconds);
+  if (!frameFinished && !isLost()) {
+    // A frame whose own work did not finish within the whole bound cannot be shown, and the
+    // queue holding it has stopped answering: declared here, the loss fails every later frame at
+    // once, and releases work another device's queue holds behind this device's.
+    markLostAfterWaitTimeout(DeviceLostWaitSite::Present,
+                             std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::steady_clock::now() - waitStart),
+                             "a frame's work did not complete within the present bound");
+  }
   // A lost root is checked after the wait, and whether or not there was one: a submission that
   // failed on the GPU declares the loss and then completes its serial, so a frame whose own work
   // failed reads as finished.

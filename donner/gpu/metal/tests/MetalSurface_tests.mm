@@ -455,6 +455,9 @@ TEST_F(MetalSurfaceTest, APresentThatSpendsItsBoundDeclaresTheRootLostOnce) {
       << "a present that spent its bound is a lost root the caller acts on, not a refusal";
   EXPECT_EQ(presented.result(), SurfaceStatus::DeviceLost);
   EXPECT_TRUE(device_->isLost()) << "the present spent its whole bound and declared nothing";
+  EXPECT_EQ(rootLoss->timedOutSite.load(), DeviceLostWaitSite::Present)
+      << "the loss is not attributed to the present that declared it";
+  EXPECT_GE(rootLoss->timedOutElapsedMs.load(), kShortPresentBound.count());
 
   const auto nextStart = std::chrono::steady_clock::now();
   const Result<SurfaceTexture> next = device_->acquireCurrentTexture(surface);
@@ -523,6 +526,7 @@ TEST_F(MetalSurfaceTest, AFrameHeldBehindAHungProducerIsReleasedByItsPresentsLos
   ASSERT_THAT(presented, HasResult());
   EXPECT_EQ(presented.result(), SurfaceStatus::DeviceLost);
   ASSERT_TRUE(rootLoss->lost.load()) << "the present that spent its bound declared nothing";
+  EXPECT_EQ(rootLoss->timedOutSite.load(), DeviceLostWaitSite::Present);
 
   const auto declared = std::chrono::steady_clock::now();
   const auto releaseDeadline = declared + std::chrono::seconds(2);
