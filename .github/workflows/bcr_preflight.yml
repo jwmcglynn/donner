@@ -5,18 +5,26 @@ on:
     branches: [main]
   pull_request:
     paths:
+      - .bazelignore
+      - .bazelrc
+      - .bazelversion
       - .bcr/**
       - .gitattributes
       - .github/workflows/bcr_preflight.yml
       - .github/workflows/publish_bcr.yml
       - .github/workflows/release.yml
+      - BUILD.bazel
       - MODULE.bazel
+      - MODULE.bazel.lock
       - build_defs/**
       - config/**
       - donner/**
       - examples/bazel_consumer/**
       - third_party/**
+      - tools/BUILD.bazel
       - tools/bcr_*.py
+      - "tools/ci/**"
+      - tools/release_cli*.py
       - tools/release_artifact_publisher*.py
   workflow_dispatch:
 
@@ -152,8 +160,115 @@ jobs:
             @donner//donner/base:base @donner//donner/css:css \
             @donner//donner/svg:svg @donner//donner/svg/renderer:renderer
 
+  cli-linux:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    env:
+      SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+      - name: Install CLI build dependencies
+        run: sudo apt-get install -y libncurses-dev
+      - name: Build and bind the Linux CLI to the preflight candidate
+        run: |
+          # The repository ignores MODULE.bazel.lock. Resolve once, then prove
+          # the build is complete under that generated, retained lockfile.
+          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg
+          bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg
+          python3 -B -m tools.release_cli package \
+            --platform linux-x86-64 --binary bazel-bin/donner/svg/tool/donner-svg \
+            --output "$RUNNER_TEMP/donner-cli-linux" --commit "$SOURCE_COMMIT" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: donner-svg-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-cli-linux/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+  cli-macos:
+    needs: prepare
+    runs-on: macos-26
+    env:
+      SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+      - name: Build and bind the macOS CLI to the preflight candidate
+        run: |
+          bazelisk build --lockfile_mode=update -c opt //tools/ci:release_svg
+          bazelisk build --lockfile_mode=error -c opt //tools/ci:release_svg
+          python3 -B -m tools.release_cli package \
+            --platform darwin-arm64 --binary bazel-bin/donner/svg/tool/donner-svg \
+            --output "$RUNNER_TEMP/donner-cli-macos" --commit "$SOURCE_COMMIT" \
+            --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: donner-svg-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-cli-macos/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+  attest-artifacts:
+    if: github.ref == 'refs/heads/main'
+    needs: [prepare, cli-linux, cli-macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+      attestations: write
+    env:
+      SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.prepare.outputs.source_artifact }}
+          path: ${{ runner.temp }}/donner-bcr/source
+      - uses: actions/download-artifact@v8
+        with:
+          name: donner-svg-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-bcr/cli-linux
+      - uses: actions/download-artifact@v8
+        with:
+          name: donner-svg-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-bcr/cli-macos
+      - name: Verify the exact preflight source and CLI bytes
+        run: |
+          python3 -B -m tools.bcr_source verify \
+            --artifacts "$RUNNER_TEMP/donner-bcr/source" --commit "$SOURCE_COMMIT"
+          python3 -B -m tools.release_cli verify \
+            --artifacts "$RUNNER_TEMP/donner-bcr/cli-linux" --platform linux-x86-64 \
+            --commit "$SOURCE_COMMIT" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+          python3 -B -m tools.release_cli verify \
+            --artifacts "$RUNNER_TEMP/donner-bcr/cli-macos" --platform darwin-arm64 \
+            --commit "$SOURCE_COMMIT" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+      - name: Attest the preflight build artifacts
+        uses: actions/attest-build-provenance@v3.2.0
+        with:
+          subject-path: |
+            ${{ runner.temp }}/donner-bcr/source/*.tar.gz
+            ${{ runner.temp }}/donner-bcr/cli-linux/donner-svg_linux_x86_64
+            ${{ runner.temp }}/donner-bcr/cli-linux/donner-svg_linux_x86_64.bazel.lock
+            ${{ runner.temp }}/donner-bcr/cli-macos/donner-svg_darwin_arm64
+            ${{ runner.temp }}/donner-bcr/cli-macos/donner-svg_darwin_arm64.bazel.lock
+
   qualify:
-    needs: [prepare, consumer]
+    needs: [prepare, consumer, cli-linux, cli-macos]
     runs-on: ubuntu-24.04
     env:
       SOURCE_COMMIT: ${{ needs.prepare.outputs.source_commit }}
@@ -165,6 +280,22 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.source_artifact }}
           path: ${{ runner.temp }}/donner-bcr/artifacts
+      - uses: actions/download-artifact@v8
+        with:
+          name: donner-svg-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-bcr/cli-linux
+      - uses: actions/download-artifact@v8
+        with:
+          name: donner-svg-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-bcr/cli-macos
+      - name: Verify both CLI artifacts from this preflight attempt
+        run: |
+          python3 -B -m tools.release_cli verify \
+            --artifacts "$RUNNER_TEMP/donner-bcr/cli-linux" --platform linux-x86-64 \
+            --commit "$SOURCE_COMMIT" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
+          python3 -B -m tools.release_cli verify \
+            --artifacts "$RUNNER_TEMP/donner-bcr/cli-macos" --platform darwin-arm64 \
+            --commit "$SOURCE_COMMIT" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT"
       - name: Bind the source archive to the completed test matrix
         run: |
           python3 -B -m tools.bcr_source qualify --artifacts "$RUNNER_TEMP/donner-bcr/artifacts" \

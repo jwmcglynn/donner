@@ -47,35 +47,42 @@ def check_source(commit: str, tag: str) -> str:
     return version
 
 
-def select_preflight(commit: str, tag: str) -> dict[str, object]:
+def candidate_ref(release_body: str) -> tuple[str, str]:
+    matches = re.findall(
+        r"(?m)^Release-Candidate-Preflight: ([1-9][0-9]*)/([1-9][0-9]*)$",
+        release_body,
+    )
+    if len(matches) != 1:
+        raise ValueError("release body must name exactly one preflight run and attempt")
+    return matches[0]
+
+
+def select_preflight(commit: str, tag: str, run_id: str, attempt: str) -> dict[str, object]:
     version = check_source(commit, tag)
-    query = urlencode({"head_sha": commit, "per_page": 100})
-    runs = gh_json("api", f"repos/{REPOSITORY}/actions/workflows/bcr_preflight.yml/runs?{query}")
-    eligible = [run for run in runs["workflow_runs"]
-                if run.get("event") in {"push", "workflow_dispatch"}]
-    if not eligible:
-        raise ValueError("run BCR Preflight for this exact commit before publishing")
-    selected = max(eligible, key=lambda run: run["id"])
-    run = gh_json("api", f"repos/{REPOSITORY}/actions/runs/{selected['id']}")
+    if not re.fullmatch(r"[1-9][0-9]*", run_id) or not re.fullmatch(r"[1-9][0-9]*", attempt):
+        raise ValueError("release candidate run and attempt must be numeric")
+    run = gh_json("api", f"repos/{REPOSITORY}/actions/runs/{run_id}/attempts/{attempt}")
     check_run(run, commit, PREFLIGHT_PATH, {"push", "workflow_dispatch"})
-    return {"run_id": str(run["id"]), "attempt": str(run["run_attempt"]), "version": version,
-            "artifact": f"donner-bcr-qualified-{run['run_attempt']}"}
-
-
-def binary_build_plan(commit: str, run_id: str) -> dict[str, str]:
-    if not re.fullmatch(r"[1-9][0-9]*", run_id):
-        raise ValueError("release workflow run ID must be numeric")
-    pages = gh_json("api", f"repos/{REPOSITORY}/actions/runs/{run_id}/artifacts",
+    if run.get("head_branch") != "main":
+        raise ValueError("release preflight must run on main")
+    if run.get("id") != int(run_id) or run["run_attempt"] != int(attempt):
+        raise ValueError("preflight run does not match the selected immutable attempt")
+    names = {
+        "artifact": f"donner-bcr-qualified-{run['run_attempt']}",
+        "linux_artifact": f"donner-svg-linux-x86-64-{commit}-{run['run_attempt']}",
+        "macos_artifact": f"donner-svg-darwin-arm64-{commit}-{run['run_attempt']}",
+    }
+    pages = gh_json("api", f"repos/{REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100",
                     "--paginate", "--slurp")
-    artifacts = [artifact for page in pages for artifact in page["artifacts"]]
-    result = {}
-    for platform, suffix in [("linux", "linux-x86-64"), ("macos", "darwin-arm64")]:
-        name = f"donner-svg-{suffix}-{commit}"
-        matching = [artifact for artifact in artifacts if artifact["name"] == name]
-        if len(matching) > 1 or any(artifact.get("expired") is not False for artifact in matching):
-            raise ValueError("retained binary artifact is ambiguous or expired; inspect recovery manually")
-        result[f"build_{platform}"] = "false" if matching else "true"
-    return result
+    artifacts = [artifact for page in pages for artifact in page.get("artifacts", [])]
+    for name in names.values():
+        matching = [item for item in artifacts if item.get("name") == name]
+        if (len(matching) != 1 or matching[0].get("expired") is not False
+                or not isinstance(matching[0].get("size_in_bytes"), int)
+                or matching[0]["size_in_bytes"] <= 0):
+            raise ValueError("preflight release artifact is missing, ambiguous, empty or expired")
+    return {"run_id": str(run["id"]), "attempt": str(run["run_attempt"]),
+            "version": version, **names}
 
 
 def check_release(release: dict, tag: str) -> None:
@@ -204,19 +211,15 @@ def main() -> None:
     select = commands.add_parser("select-preflight")
     select.add_argument("--commit", required=True)
     select.add_argument("--tag", required=True)
+    select.add_argument("--release-body-file", type=Path, required=True)
     select.add_argument("--github-output")
-    binaries = commands.add_parser("plan-binaries")
-    binaries.add_argument("--commit", required=True)
-    binaries.add_argument("--release-run-id", required=True)
-    binaries.add_argument("--github-output")
     plan = commands.add_parser("plan-submission")
     plan.add_argument("--release-run-id", required=True)
     plan.add_argument("--github-output")
     args = parser.parse_args()
     if args.command == "select-preflight":
-        result = select_preflight(args.commit, args.tag)
-    elif args.command == "plan-binaries":
-        result = binary_build_plan(args.commit, args.release_run_id)
+        run_id, attempt = candidate_ref(args.release_body_file.read_text(encoding="utf-8"))
+        result = select_preflight(args.commit, args.tag, run_id, attempt)
     else:
         result = plan_submission(args.release_run_id)
     bcr_source.outputs(result, args.github_output)

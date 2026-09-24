@@ -273,6 +273,18 @@ py_library(
     ],
 )
 
+py_library(
+    name = "release_cli",
+    srcs = ["release_cli.py"],
+)
+
+py_test(
+    name = "release_cli_tests",
+    size = "small",
+    srcs = ["release_cli_tests.py"],
+    deps = [":release_cli"],
+)
+
 py_test(
     name = "bcr_release_tests",
     size = "small",

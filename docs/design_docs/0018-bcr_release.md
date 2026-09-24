@@ -34,13 +34,13 @@ A maintainer approves and publishes a GitHub release. `Release` promotes its qua
 archive and CLI binaries; a separate `Publish to BCR` workflow then opens the registry pull request.
 A tag push or main-branch merge alone does not publish anything. Prereleases do not open BCR PRs.
 
-| Stage                    | Evidence                                                                                      | Credentials                     |
-| ------------------------ | --------------------------------------------------------------------------------------------- | ------------------------------- |
-| BCR Preflight            | Committed source archive, upstream admission report, Ubuntu/macOS × Bazel 7/8 consumer matrix | Read-only GitHub token          |
-| Release                  | Exact preflight run/attempt, source and binary manifests, uploaded asset digests              | Release assets and attestations |
-| Publish to BCR           | Successful Release event, released bytes, matching remote tag and source commit               | Dedicated BCR fork/PR token     |
-| BCR admission and builds | Upstream checks, maintainer review where required, platform matrix                            | BCR-owned infrastructure        |
-| Registry availability    | Merged entry visible at `https://registry.bazel.build/modules/donner`                         | BCR-owned infrastructure        |
+| Stage                    | Evidence                                                                                                                        | Credentials                                          |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| BCR Preflight            | Committed source archive, both lockfile-bound CLI binaries, upstream admission report, Ubuntu/macOS × Bazel 7/8 consumer matrix | Read-only build jobs; scoped OIDC/attestation signer |
+| Release                  | Exact preflight run/attempt, verified retained source and binary bytes, uploaded asset digests                                  | Release assets and attestations                      |
+| Publish to BCR           | Successful Release event, released bytes, matching remote tag and source commit                                                 | Dedicated BCR fork/PR token                          |
+| BCR admission and builds | Upstream checks, maintainer review where required, platform matrix                                                              | BCR-owned infrastructure                             |
+| Registry availability    | Merged entry visible at `https://registry.bazel.build/modules/donner`                                                           | BCR-owned infrastructure                             |
 
 ### Before approval
 
@@ -48,14 +48,17 @@ A tag push or main-branch merge alone does not publish anything. Prereleases do 
    ordinary CI qualification on the final source commit.
 2. Set the same version in `MODULE.bazel` and `examples/bazel_consumer/MODULE.bazel`. Review any
    compatibility-level change against all supported Bazel versions, including older resolvers.
-3. Require `BCR Preflight` on that exact commit. Main pushes run it automatically. If no run exists,
-   dispatch the read-only workflow at the intended ref; an empty source commit is unnecessary.
+3. Require `BCR Preflight` on that exact commit. Main pushes run it automatically. If no run exists
+   and main still points to the intended commit, dispatch the workflow on `main`; a branch or tag
+   dispatch cannot attest or supply release artifacts. An empty source commit is unnecessary.
 4. Inspect its admission report and all four consumer jobs. A generator or checkout-only build is
    not an admission test. Expected BCR maintainer review is reported separately from validation
    errors, and does not imply that upstream builds have run.
-5. Confirm `donner-bcr-qualified-<attempt>` is retained. Artifact retention is 90 days; run a fresh
-   preflight before approval if it expires. Release publication selects a successful push or manual
-   preflight for the exact source commit, never a PR run.
+5. Confirm `donner-bcr-qualified-<attempt>` and both `donner-svg-<platform>-<commit>-<attempt>`
+   artifacts, including each generated Bazel lockfile, are retained. Artifact retention is 90 days; run a fresh preflight before approval if
+   any expires. Use a successful push or manual preflight on main for the exact source commit,
+   never a PR or feature-branch run. Add `Release-Candidate-Preflight: <run-id>/<attempt>` as a line in the release body
+   before publication. The Release workflow accepts only that named run and attempt.
 
 ### Source archive and preflight
 
@@ -73,16 +76,24 @@ remain enabled. The report records the validator revision. Live asset availabili
 release publication. BCR may change its policy before submission, so preflight is not a promise of
 future admission.
 
-After the matrix succeeds, the qualification job records its run ID and attempt without changing the
-archive bytes. A failed matrix can resume using the retained producer artifact; qualification records
-the successful retry attempt. `//tools:bcr_source_tests` and `//tools:bcr_admission_tests` cover the
-archive/provenance rejection paths and the validator's download boundary.
+Preflight builds the Linux and macOS CLI binaries from the same committed checkout. The repository
+intentionally ignores `MODULE.bazel.lock`, so each platform resolves its lockfile once with
+`--lockfile_mode=update`, then repeats the build under `--lockfile_mode=error`. It retains each
+binary, generated lockfile, SHA-256, and provenance. A separate preflight job verifies and signs
+the source archive, both CLI binaries, and both generated lockfiles on main push or manual runs.
+Qualification waits for both CLI builds and the consumer matrix, re-verifies both CLI artifacts
+from its own attempt, and records that run ID and attempt without changing the archive bytes.
+After a failed preflight, rerun **all jobs** so source, binaries, matrix and qualification share
+one attempt; a failed-jobs-only rerun cannot qualify with older CLI artifacts. `//tools:bcr_source_tests`,
+`//tools:release_cli_tests`, and `//tools:bcr_admission_tests` cover archive, binary, and admission
+rejection paths.
 
 ### Publish and observe
 
 1. After release approval, create the intended immutable tag and publish the GitHub release.
-2. Watch `Release` resolve the qualified source and build the two CLI binaries. Its publisher verifies
-   manifests, attests the artifacts, and uploads the exact bytes. The source URL is:
+2. Watch `Release` resolve the named preflight attempt and download its source archive, both CLI
+   binaries, and their generated lockfiles. It verifies their retained bytes and preflight build attestations, then uploads those exact bytes
+   without compiling or repackaging. The source URL is:
    `https://github.com/jwmcglynn/donner/releases/download/vX.Y.Z/donner-X.Y.Z.tar.gz`.
 3. Require server-reported SHA-256 confirmation for every uploaded asset. An existing identical asset
    is accepted; a conflicting asset stops publication. `//tools:release_artifact_publisher_tests`
@@ -96,11 +107,12 @@ archive/provenance rejection paths and the validator's download boundary.
 
 ### Retry without replacing a release
 
-- For a transient failure, rerun failed Release jobs. Each platform job checks retained binary artifacts
-  in the same workflow run, including when only failed jobs are rerun. A platform builds only when its artifact is absent, so recovery also
-  works when preflight or one platform failed before producing an artifact. Existing platform
-  artifacts are reused and verified; expired or ambiguous artifacts require manual recovery. Do not
-  retag or rebuild a retained artifact.
+- For a failed preflight, rerun all jobs. A failed-jobs-only rerun is rejected by the qualification
+  job if successful CLI artifacts remain attached to an earlier attempt. For a transient Release
+  failure, rerun the failed Release job. It downloads and re-verifies the same
+  preflight attempt named in the release event; it never builds a replacement. Missing, expired, or
+  ambiguous artifacts stop publication. Requalify a new candidate before release approval; after
+  publication, do not silently substitute a later preflight attempt.
 - For a transient BCR publisher failure, rerun `Publish to BCR` or dispatch it with the successful
   Release workflow run ID. It validates that run through GitHub; dispatch does not create a release.
 - A matching existing fork branch and open/merged PR is a successful no-op. A conflicting branch,
