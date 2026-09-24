@@ -304,6 +304,36 @@ bool RetryBackendRequest(int attempt, const char* what) {
   return true;
 }
 
+/// Name of a wgpu-native backend type for the adapter selection log.
+/// @param backendType Backend reported by `wgpuAdapterGetInfo`.
+/// @return Display name, or "?" for a value this file does not recognize.
+std::string_view BackendTypeName(WGPUBackendType backendType) {
+  switch (backendType) {
+    case WGPUBackendType_Vulkan: return "Vulkan";
+    case WGPUBackendType_Metal: return "Metal";
+    case WGPUBackendType_D3D12: return "D3D12";
+    case WGPUBackendType_D3D11: return "D3D11";
+    case WGPUBackendType_OpenGL: return "OpenGL";
+    case WGPUBackendType_OpenGLES: return "OpenGLES";
+    case WGPUBackendType_WebGPU: return "WebGPU";
+    case WGPUBackendType_Null: return "Null";
+    default: return "?";
+  }
+}
+
+/// Name of a wgpu-native adapter type for the adapter selection log.
+/// @param adapterType Adapter class reported by `wgpuAdapterGetInfo`.
+/// @return Display name, or "?" for a value this file does not recognize.
+std::string_view AdapterTypeName(WGPUAdapterType adapterType) {
+  switch (adapterType) {
+    case WGPUAdapterType_DiscreteGPU: return "DiscreteGPU";
+    case WGPUAdapterType_IntegratedGPU: return "IntegratedGPU";
+    case WGPUAdapterType_CPU: return "CPU";
+    case WGPUAdapterType_Unknown: return "Unknown";
+    default: return "?";
+  }
+}
+
 /// Logs which adapter the selection landed on and reports whether it is a Vulkan backend.
 ///
 /// The log makes it obvious at a glance whether the process is on a discrete GPU, an integrated
@@ -320,35 +350,18 @@ bool DescribeSelectedAdapter(const wgpu::Adapter& adapter) {
   const auto text = [](const WGPUStringView& value) {
     return std::string_view{value.data ? value.data : "", value.data ? value.length : 0};
   };
-  const char* backend = "?";
-  switch (info.backendType) {
-    case WGPUBackendType_Vulkan: backend = "Vulkan"; break;
-    case WGPUBackendType_Metal: backend = "Metal"; break;
-    case WGPUBackendType_D3D12: backend = "D3D12"; break;
-    case WGPUBackendType_D3D11: backend = "D3D11"; break;
-    case WGPUBackendType_OpenGL: backend = "OpenGL"; break;
-    case WGPUBackendType_OpenGLES: backend = "OpenGLES"; break;
-    case WGPUBackendType_WebGPU: backend = "WebGPU"; break;
-    case WGPUBackendType_Null: backend = "Null"; break;
-    default: break;
-  }
-  const char* type = "?";
-  switch (info.adapterType) {
-    case WGPUAdapterType_DiscreteGPU: type = "DiscreteGPU"; break;
-    case WGPUAdapterType_IntegratedGPU: type = "IntegratedGPU"; break;
-    case WGPUAdapterType_CPU: type = "CPU"; break;
-    case WGPUAdapterType_Unknown: type = "Unknown"; break;
-    default: break;
-  }
+  const std::string_view backend = BackendTypeName(info.backendType);
+  const std::string_view type = AdapterTypeName(info.adapterType);
   const auto vendor = text(info.vendor);
   const auto device = text(info.device);
   const auto architecture = text(info.architecture);
   std::fprintf(stderr,
                "[Geode/wgpu-native] Adapter: %.*s %.*s (%.*s) "
-               "backend=%s type=%s vendorID=0x%04x deviceID=0x%04x\n",
+               "backend=%.*s type=%.*s vendorID=0x%04x deviceID=0x%04x\n",
                static_cast<int>(vendor.size()), vendor.data(), static_cast<int>(device.size()),
-               device.data(), static_cast<int>(architecture.size()), architecture.data(), backend,
-               type, info.vendorID, info.deviceID);
+               device.data(), static_cast<int>(architecture.size()), architecture.data(),
+               static_cast<int>(backend.size()), backend.data(), static_cast<int>(type.size()),
+               type.data(), info.vendorID, info.deviceID);
   const bool isVulkan = info.backendType == WGPUBackendType_Vulkan;
   wgpuAdapterInfoFreeMembers(info);
   return isVulkan;

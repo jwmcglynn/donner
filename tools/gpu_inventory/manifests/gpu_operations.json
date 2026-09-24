@@ -543,6 +543,7 @@
       "wgpuCTypes": [
         "WGPUAdapter",
         "WGPUAdapterInfo",
+        "WGPUAdapterType",
         "WGPUAdapterType_CPU",
         "WGPUAdapterType_DiscreteGPU",
         "WGPUAdapterType_IntegratedGPU",
