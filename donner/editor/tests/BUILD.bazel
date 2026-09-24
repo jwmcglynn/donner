@@ -40,6 +40,17 @@ donner_cc_library(
     hdrs = ["AsyncTestPolling.h"],
 )
 
+donner_cc_library(
+    name = "render_coordinator_test_access",
+    testonly = 1,
+    hdrs = ["RenderCoordinatorTestAccess.h"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:render_coordinator",
+        "//donner/editor:viewport_state",
+    ],
+)
+
 donner_cc_test(
     name = "viewport_geometry_tests",
     srcs = ["ViewportGeometry_tests.cc"],
@@ -147,6 +158,7 @@ donner_cc_test(
     shard_count = 4,
     deps = [
         ":bitmap_golden_compare",
+        ":render_coordinator_test_access",
         "//donner/editor:clipboard_interface",
         "//donner/editor:editor_shell",
         "//donner/editor:imgui_headers",
@@ -567,6 +579,7 @@ donner_perf_cc_test(
 _ASYNC_RENDERER_TEST_DEPS = [
     ":async_test_polling",
     ":bitmap_golden_compare",
+    ":render_coordinator_test_access",
     "//donner/base:base_test_utils",
     "//donner/editor:async_renderer",
     "//donner/editor:async_svg_document",
@@ -603,6 +616,7 @@ donner_cc_test(
     name = "render_coordinator_tests",
     srcs = ["RenderCoordinator_tests.cc"],
     deps = [
+        ":render_coordinator_test_access",
         "//donner/editor:async_renderer",
         "//donner/editor:composited_presentation",
         "//donner/editor:editor_app",

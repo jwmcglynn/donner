@@ -361,8 +361,16 @@ bool CaptureFullCanvasTextureSnapshot(
 }
 
 PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPreview,
+                                                        bool fullCanvasPresentationAllowed,
                                                         bool requiresTextureSnapshotPresentation,
                                                         bool captureCpuSnapshot) {
+  if (!hasCompositedPreview && !fullCanvasPresentationAllowed) {
+    // Nothing may be presented in place of the missing tiles, and the frame the renderer holds is
+    // either an earlier one (drag frames skip the main compose) or composed from those same
+    // missing tiles, so it is not a faithful capture either.
+    return PresentationSnapshotPlan{};
+  }
+
   if (requiresTextureSnapshotPresentation) {
     return PresentationSnapshotPlan{
         .captureCpuSnapshot = captureCpuSnapshot,
@@ -1681,6 +1689,9 @@ void AsyncRenderer::workerLoop() {
       const auto buildPreviewStart = std::chrono::steady_clock::now();
       const ScopedHeapDelta buildPreviewHeapDelta(MemoryStage::WorkerBuildPreview);
       compositedPreview = buildCompositedPreview();
+      if (withholdCompositorTilesForTesting_.load(std::memory_order_acquire)) {
+        compositedPreview.reset();
+      }
       workerTiming.buildPreviewMs = elapsedSince(buildPreviewStart);
     }
     // Selection chrome is no longer baked into the bitmap - main.cc
@@ -1690,13 +1701,13 @@ void AsyncRenderer::workerLoop() {
     (void)request.selection;
     svg::RendererBitmap bitmap;
     std::shared_ptr<const svg::RendererTextureSnapshot> fullCanvasTexture;
-    PresentationSnapshotPlan snapshotPlan;
-    // Worker-surface builds present GPU-native frames and ignore
-    // request.captureCpuSnapshot; browser diagnostics read pixels through the
-    // async smoke-readback path instead.
-    snapshotPlan = ChoosePresentationSnapshotPlan(
-        compositedPreview.has_value(), requestRenderer.requiresTextureSnapshotPresentation(),
-        request.captureCpuSnapshot);
+    // Only the explicit Off mode, overview infill, and the geometry-debug diagnostic use a flat
+    // payload. Normal On and FilterOnly presentation is the compositor's tile set or nothing.
+    const bool fullCanvasPresentationAllowed =
+        compositor_ == nullptr || request.overviewInfillOnly || geometryDebugOverlay;
+    const PresentationSnapshotPlan snapshotPlan = ChoosePresentationSnapshotPlan(
+        compositedPreview.has_value(), fullCanvasPresentationAllowed,
+        requestRenderer.requiresTextureSnapshotPresentation(), request.captureCpuSnapshot);
     {
       const auto finalSnapshotStart = std::chrono::steady_clock::now();
       const ScopedHeapDelta finalSnapshotHeapDelta(MemoryStage::WorkerFinalSnapshot);
@@ -1719,11 +1730,9 @@ void AsyncRenderer::workerLoop() {
     workerTiming.timedOutWaitSite = readbackStats.timedOutWaitSite;
     workerTiming.timedOutWaitMs = readbackStats.timedOutWaitMs;
     noteGpuWaitOutcome(readbackStats);
-    // Only the explicit Off mode, overview infill, and the geometry-debug diagnostic use a flat
-    // payload. Normal On and FilterOnly presentation must have produced compositor tiles above.
     if (!compositedPreview.has_value() && (!bitmap.empty() || fullCanvasTexture != nullptr)) {
       UTILS_RELEASE_ASSERT_MSG(
-          compositor_ == nullptr || request.overviewInfillOnly || geometryDebugOverlay,
+          fullCanvasPresentationAllowed,
           "A non-Off editor render produced no compositor tiles. Refusing monolithic full-canvas "
           "presentation.");
       const Entity previewEntity = compositor_ != nullptr ? compositorEntity_ : entt::null;
@@ -1741,11 +1750,10 @@ void AsyncRenderer::workerLoop() {
         compositedPreview->tiles.front().id = "geometry-debug-flat";
       }
     }
-    UTILS_RELEASE_ASSERT_MSG(
-        compositor_ == nullptr || request.overviewInfillOnly || geometryDebugOverlay ||
-            compositedPreview.has_value(),
-        "A non-Off editor render produced no compositor tiles. Refusing monolithic full-canvas "
-        "presentation.");
+    // A frame the renderer produced no pixels for (a failed readback, a lost device, refused
+    // allocations) has nothing to present. Hand it back as such: the UI keeps presenting its
+    // previous frame, and the overlays stay on that frame's transform.
+    workerTiming.nothingToPresent = !compositedPreview.has_value();
 
     // Attribute what this render iteration is holding, before the result leaves
     // the worker. The compositor caches are a level (they persist across
