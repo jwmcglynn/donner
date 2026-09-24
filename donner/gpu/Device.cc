@@ -1535,6 +1535,17 @@ std::optional<MapWaitOutcome> OutcomeForSlice(MapSliceState state) {
 
 }  // namespace
 
+Status Device::onSubmitAfterSources(uint64_t submissionSerial,
+                                    std::span<const SubmittedCommandBuffer> commandBuffers,
+                                    std::span<const SourceWait> waits) {
+  if (!waits.empty()) {
+    return Err(GpuErrorType::Unsupported,
+               "submit: this backend cannot make a submission wait on the device for another "
+               "device's work");
+  }
+  return onSubmit(submissionSerial, commandBuffers);
+}
+
 Status Device::onMapBufferAsync(uint32_t /*mappingSlotIndex*/, uint32_t /*bufferSlotIndex*/,
                                 MapMode /*mode*/, uint64_t /*offsetBytes*/,
                                 uint64_t /*byteCount*/) {
@@ -2204,7 +2215,8 @@ Result<uint64_t> Device::submit(std::span<CommandBuffer> commandBuffers) {
   if (Status mappings = checkSubmissionMappings(uses); mappings.hasError()) {
     return std::move(mappings).error();
   }
-  if (Status sources = checkSubmissionTextureSources(uses); sources.hasError()) {
+  std::vector<SourceWait> sourceWaits;
+  if (Status sources = checkSubmissionTextureSources(uses, sourceWaits); sources.hasError()) {
     return std::move(sources).error();
   }
 
@@ -2212,7 +2224,7 @@ Result<uint64_t> Device::submit(std::span<CommandBuffer> commandBuffers) {
   // burn a serial, or completion waiters would treat the failed work as finished. Resources are
   // marked in-use only for accepted submissions for the same reason.
   const uint64_t serial = lastSubmittedSerial_ + 1;
-  if (Status status = onSubmit(serial, submitted); status.hasError()) {
+  if (Status status = onSubmitAfterSources(serial, submitted, sourceWaits); status.hasError()) {
     return std::move(status).error();
   }
   lastSubmittedSerial_ = serial;
@@ -2604,7 +2616,7 @@ Result<std::shared_ptr<details::TextureShare>> Device::createTextureShare(
   BackendTextureExport backend = std::move(exported).result();
   const BackendDeviceIdentity identity = backendDeviceIdentity();
   if (!identity.isValid() || backend.backing == nullptr ||
-      (backend.ordering == SourceOrdering::WaitForSource && backend.completion == nullptr)) {
+      (backend.ordering != SourceOrdering::SharedQueue && backend.completion == nullptr)) {
     return Err(GpuErrorType::InvalidState,
                "exportTexture: the backend reported an incomplete export");
   }
@@ -2746,7 +2758,18 @@ std::optional<bool> Device::textureSourceState(const TextureRegistration& entry)
   if (completedSerial >= entry.orderAfterSerial) {
     return true;
   }
+  if (ordersOnDevice(share) && completion.committedSerial() >= entry.orderAfterSerial) {
+    return true;
+  }
   return std::nullopt;
+}
+
+bool Device::ordersOnDevice(const details::TextureShare& share) const {
+  // A device-side wait ends when the producer's backend signals it, which it also does for work
+  // that failed and for a loss of the producer's root. Only a consumer that shares that loss
+  // condition learns of either, so any other consumer waits for the outcome on the host.
+  return share.ordering() == SourceOrdering::WaitOnDevice &&
+         &share.producerLostState() == lostState_.get();
 }
 
 bool Device::waitForTextureSource(const Texture& registration, double timeoutSeconds) {
@@ -2779,7 +2802,45 @@ uint64_t Device::sharedTextureTailBytes() const {
   return sharedTextureTailBytes_->load(std::memory_order_relaxed);
 }
 
-Status Device::checkTextureSourceReady(const TextureRegistration& entry, uint32_t slotIndex) const {
+namespace {
+
+/// Records that a submission waits on the device for \p backing's producer work through
+/// \p serial, merging it into a wait the submission already carries for the same texture.
+/// @param waits Waits of the submission. @param backing Export the registration was made from.
+/// @param serial Producer serial the registration follows.
+void AddSourceWait(std::vector<SourceWait>& waits, const ExportedTextureBacking& backing,
+                   uint64_t serial) {
+  const auto sameBacking = [&backing](const SourceWait& wait) { return wait.backing == &backing; };
+  if (auto recorded = std::ranges::find_if(waits, sameBacking); recorded != waits.end()) {
+    recorded->serial = std::max(recorded->serial, serial);
+    return;
+  }
+  waits.push_back(SourceWait{&backing, serial});
+}
+
+/// Why a submission naming a registration whose producer work is unfinished is refused.
+/// @param share Share of the registered texture. @param slotIndex Slot of the registration.
+/// @param onDevice Whether the device orders work naming the registration.
+GpuError SourceNotReadyError(const details::TextureShare& share, uint32_t slotIndex,
+                             bool onDevice) {
+  if (onDevice) {
+    return Err(GpuErrorType::InvalidState,
+               std::format("submit: registered texture \"{}\" (slot {}) follows producer work "
+                           "its producer has not submitted yet; wait for it with "
+                           "waitForTextureSource before submitting work that reads it",
+                           share.descriptor().label.str(), slotIndex));
+  }
+  return Err(GpuErrorType::InvalidState,
+             std::format("submit: registered texture \"{}\" (slot {}) is still being "
+                         "written by its producer; wait for it with waitForTextureSource "
+                         "before submitting work that reads it",
+                         share.descriptor().label.str(), slotIndex));
+}
+
+}  // namespace
+
+Status Device::checkTextureSourceReady(const TextureRegistration& entry, uint32_t slotIndex,
+                                       std::vector<SourceWait>& waits) const {
   const details::TextureShare& share = *entry.lease->share();
   const SubmissionCompletion* completion = share.completion();
   // Completion first, for the reason given in textureSourceState.
@@ -2794,18 +2855,22 @@ Status Device::checkTextureSourceReady(const TextureRegistration& entry, uint32_
                            "that is lost or failed; its contents cannot be trusted",
                            share.descriptor().label.str(), slotIndex));
   }
-  if (share.ordering() == SourceOrdering::WaitForSource &&
-      completedSerial < entry.orderAfterSerial) {
-    return Err(GpuErrorType::InvalidState,
-               std::format("submit: registered texture \"{}\" (slot {}) is still being "
-                           "written by its producer; wait for it with waitForTextureSource "
-                           "before submitting work that reads it",
-                           share.descriptor().label.str(), slotIndex));
+  if (share.ordering() == SourceOrdering::SharedQueue ||
+      completedSerial >= entry.orderAfterSerial) {
+    return OkStatus();
   }
-  return OkStatus();
+  // Only work the producer has handed to its queue is waited for on the device. A device-side
+  // wait on work still being recorded could wait for a host thread that waits for this one.
+  const bool onDevice = ordersOnDevice(share);
+  if (onDevice && completion->committedSerial() >= entry.orderAfterSerial) {
+    AddSourceWait(waits, share.backing(), entry.orderAfterSerial);
+    return OkStatus();
+  }
+  return SourceNotReadyError(share, slotIndex, onDevice);
 }
 
-Status Device::checkSubmissionTextureSources(std::span<const SubmissionUse> uses) const {
+Status Device::checkSubmissionTextureSources(std::span<const SubmissionUse> uses,
+                                             std::vector<SourceWait>& waits) const {
   for (const SubmissionUse& use : uses) {
     if (use.kind != ResourceKind::Texture) {
       continue;
@@ -2814,7 +2879,7 @@ Status Device::checkSubmissionTextureSources(std::span<const SubmissionUse> uses
     if (entry == nullptr) {
       continue;
     }
-    if (Status ready = checkTextureSourceReady(*entry, use.slotIndex); ready.hasError()) {
+    if (Status ready = checkTextureSourceReady(*entry, use.slotIndex, waits); ready.hasError()) {
       return ready;
     }
   }

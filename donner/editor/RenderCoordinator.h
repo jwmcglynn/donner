@@ -7,6 +7,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"
@@ -46,6 +47,75 @@ struct DocumentPixelCaptureIdentity {
 struct DocumentPixelCapture {
   DocumentPixelCaptureIdentity identity;
   svg::RendererBitmap bitmap;
+};
+
+/// What a posted render request asked the worker for, as far as deciding whether a later request
+/// would repeat it.
+struct RenderAttemptIdentity {
+  std::uint64_t documentGeneration = 0;  //!< Document the request rendered.
+  std::uint64_t version = 0;             //!< Document frame version the request rendered.
+  EditorRasterViewport rasterViewport;   //!< Raster the request rendered into.
+  bool overviewInfillOnly = false;       //!< True for an overview infill request.
+  Entity selectedEntity = entt::null;    //!< Selected entity the request kept promoted.
+  std::optional<RenderRequest::DragPreview> dragPreview;  //!< Drag state the request carried.
+  /// Presentation refreshes requested before the request was posted. A renderer-setting change
+  /// (composited mode, geometry debug, the eyedropper) changes only this.
+  std::uint64_t presentationEpoch = 0;
+};
+
+/**
+ * Paces re-posting a render request whose worker result had nothing to present.
+ *
+ * Such a result (no compositor tile: a failed readback, a lost device, refused surfaces) marks
+ * nothing rendered, and every idle frame asks for a render, so without pacing the identical
+ * request would be posted again on every frame. The failed request may be posted again after each
+ * delay in \ref kRetryDelays; once the last retry fails too, an identical request is held until
+ * something about it changes. A different request is never held.
+ */
+class NothingToPresentRetry {
+public:
+  using Clock = std::chrono::steady_clock;
+
+  /// Delay before each successive retry of the same failed request.
+  static constexpr std::array<std::chrono::milliseconds, 3> kRetryDelays = {
+      std::chrono::milliseconds(100), std::chrono::milliseconds(500),
+      std::chrono::milliseconds(2000)};
+
+  /**
+   * Record that the result of \p attempt had nothing to present.
+   *
+   * @param attempt The request that produced the result.
+   * @param now Current time.
+   * @return True when this failure used up the last retry.
+   */
+  bool noteFailure(const RenderAttemptIdentity& attempt, Clock::time_point now);
+
+  /**
+   * Whether \p attempt may be posted at \p now.
+   *
+   * @param attempt The request about to be posted.
+   * @param now Current time.
+   */
+  [[nodiscard]] bool mayPost(const RenderAttemptIdentity& attempt, Clock::time_point now) const;
+
+  /// True while a retry of the failed request is still scheduled.
+  [[nodiscard]] bool retryScheduled() const;
+
+  /**
+   * Seconds until the scheduled retry is due, or nullopt when none is scheduled or it is already
+   * due: the wake for it has fired, and the next frame that asks for a render posts it.
+   *
+   * @param now Current time.
+   */
+  [[nodiscard]] std::optional<float> secondsUntilRetry(Clock::time_point now) const;
+
+  /// Forget the failed request, once a result presents or the document is replaced.
+  void reset();
+
+private:
+  std::optional<RenderAttemptIdentity> failedAttempt_;
+  std::size_t failures_ = 0;
+  Clock::time_point retryAt_{};
 };
 
 /**
@@ -202,8 +272,12 @@ public:
   [[nodiscard]] std::uint64_t overviewInfillRenderTotal() const {
     return overviewInfillRenderTotal_;
   }
-  /// Request one worker render even when document and viewport epochs are already current.
-  void requestPresentationRefresh() { pendingPresentationRefresh_ = true; }
+  /// Request one worker render even when document and viewport epochs are already current. The
+  /// request is a new one even if an identical earlier request is being held back.
+  void requestPresentationRefresh() {
+    pendingPresentationRefresh_ = true;
+    ++presentationEpoch_;
+  }
   /// Arm or disarm the worker-owned document pixel capture.
   void setDocumentPixelCaptureEnabled(bool enabled);
   /// Whether an editor session currently retains or requests document pixels.
@@ -215,6 +289,8 @@ public:
   [[nodiscard]] bool documentPixelCaptureUnavailable() const { return captureUnavailable_; }
   /// Wake deadline for an armed picker waiting on a delayed semantic canvas-size commit.
   [[nodiscard]] std::optional<float> nextPixelCaptureCanvasCommitWakeSeconds() const;
+  /// Wake deadline for the paced re-render of a request whose result had nothing to present.
+  [[nodiscard]] std::optional<float> nextNothingToPresentRetryWakeSeconds() const;
   /// Whether a renderer-presentation setting still needs a worker frame.
   [[nodiscard]] bool presentationRefreshPending() const { return pendingPresentationRefresh_; }
   /// Clear the per-frame cost accumulator before a new UI frame starts.
@@ -378,6 +454,12 @@ public:
   [[nodiscard]] std::uint64_t overlayVersionGateSuppressionTotalForDiagnostics() const {
     return overlayVersionGateSuppressionTotal_;
   }
+  /// Cumulative count of worker results that had nothing to present. Diagnostics only: a count
+  /// that keeps rising under a frozen canvas names a renderer that produces nothing, not a stalled
+  /// worker.
+  [[nodiscard]] std::uint64_t nothingToPresentResultTotalForDiagnostics() const {
+    return nothingToPresentResultTotal_;
+  }
   /// Selected entity eligible for composited presentation for replay diagnostics.
   [[nodiscard]] Entity selectedCompositedEntityForDiagnostics(EditorApp& app) const;
 
@@ -386,6 +468,8 @@ private:
   friend struct RenderCoordinatorTestAccess;
   void noteMissingPixelCaptureResult(const std::optional<RenderResult>& result);
   void rejectPixelCaptureResult(const std::optional<RenderResult>& result);
+  void noteResultWithNothingToPresent(const std::optional<RenderResult>& result);
+  [[nodiscard]] std::chrono::steady_clock::time_point nothingToPresentRetryNow() const;
   void acceptPixelCaptureResult(RenderResult& result, const EditorApp& app,
                                 const ViewportState& viewport);
   [[nodiscard]] bool preparePixelCaptureRequest(const EditorApp& app, const ViewportState& viewport,
@@ -523,6 +607,16 @@ private:
   bool pendingDocumentMutationOverviewRefresh_ = false;
   /// Renderer-only state changed and must be represented by the next accepted worker frame.
   bool pendingPresentationRefresh_ = false;
+  /// Count of presentation refreshes requested, carried by each posted request's identity.
+  std::uint64_t presentationEpoch_ = 0;
+  /// The last request posted to the worker. A result with nothing to present belongs to it.
+  std::optional<RenderAttemptIdentity> lastPostedAttempt_;
+  /// Paces re-posting a request whose result had nothing to present.
+  NothingToPresentRetry nothingToPresentRetry_;
+  /// Cumulative count of worker results that had nothing to present.
+  std::uint64_t nothingToPresentResultTotal_ = 0;
+  /// Test-only replacement for the steady clock that paces \ref nothingToPresentRetry_.
+  std::chrono::steady_clock::time_point (*nothingToPresentRetryClockForTesting_)() = nullptr;
   bool documentPixelCaptureEnabled_ = false;
   bool captureUnavailable_ = false;
   std::uint64_t documentPixelCaptureSessionId_ = 0;

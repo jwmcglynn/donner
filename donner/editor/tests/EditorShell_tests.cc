@@ -37,6 +37,7 @@
 #include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/editor/tests/RenderCoordinatorTestAccess.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_EDITOR_WGPU
@@ -44,6 +45,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/resources/FontManager.h"
 
 namespace donner::editor {
@@ -1171,6 +1173,8 @@ public:
     return shell.renderCoordinator_.overlayVersionGateSuppressionTotalForDiagnostics();
   }
 
+  static RenderCoordinator& Coordinator(EditorShell& shell) { return shell.renderCoordinator_; }
+
   static void HoldRenderResultsForPolls(EditorShell& shell, int polls) {
     shell.renderCoordinator_.asyncRenderer().setReplayResultHoldFramesForTesting(polls);
   }
@@ -2017,6 +2021,81 @@ TEST(EditorShellTest, UiRuntimeProducersUseFramebufferDevice) {
               testing::Eq(framebufferDeviceId));
 }
 #endif
+
+// A render that produces nothing to present is retried after each delay without any input: the
+// idle loop wakes for the retry, and that frame alone must post it.
+TEST(EditorShellTest, NothingToPresentRetriesPostFromIdleFrames) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+
+  // Idle frames only: no input, no document edit. The worker finishes each render before the next
+  // frame, which polls its result.
+  const auto runIdleFrames = [&](int frames) {
+    for (int frame = 0; frame < frames; ++frame) {
+      RunShellFrame(window, shell);
+      EXPECT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+          std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+    }
+    RunShellFrame(window, shell);
+    return coordinator.nothingToPresentResultTotalForDiagnostics();
+  };
+
+  const std::uint64_t settled = runIdleFrames(30);
+  ASSERT_GE(settled, 1u) << "the editor's first render must have produced nothing to present";
+  EXPECT_EQ(runIdleFrames(10), settled) << "no retry before its delay has passed";
+
+  std::uint64_t expected = settled;
+  for (const std::chrono::milliseconds delay : NothingToPresentRetry::kRetryDelays) {
+    RenderCoordinatorTestAccess::advanceFakeRetryClock(delay);
+    ++expected;
+    EXPECT_EQ(runIdleFrames(10), expected)
+        << "the retry due after " << delay.count() << " ms must post from an idle frame";
+  }
+  RenderCoordinatorTestAccess::advanceFakeRetryClock(std::chrono::minutes(1));
+  EXPECT_EQ(runIdleFrames(10), expected) << "after the last retry, idle frames post nothing";
+  EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt);
+}
+
+// A retry that falls due while the editor cannot ask for a render, here because the sample picker
+// covers the canvas, waits without keeping the idle loop awake, and posts once the picker closes.
+TEST(EditorShellTest, DueNothingToPresentRetryWaitsForTheSamplePickerWithoutWaking) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  RenderCoordinator& coordinator = EditorShellTestAccess::Coordinator(shell);
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  const auto runIdleFrames = [&](int frames) {
+    for (int frame = 0; frame < frames; ++frame) {
+      RunShellFrame(window, shell);
+      EXPECT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+          std::chrono::steady_clock::now() + std::chrono::seconds(10)));
+    }
+    RunShellFrame(window, shell);
+    return coordinator.nothingToPresentResultTotalForDiagnostics();
+  };
+  const std::uint64_t settled = runIdleFrames(30);
+  ASSERT_GE(settled, 1u);
+
+  EditorShellTestAccess::SetShowSamplePicker(shell, true);
+  RenderCoordinatorTestAccess::advanceFakeRetryClock(NothingToPresentRetry::kRetryDelays.front());
+  EXPECT_EQ(runIdleFrames(10), settled) << "the picker covers the canvas, so nothing renders";
+  EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt)
+      << "a due retry that cannot post must not keep the idle loop awake";
+
+  EditorShellTestAccess::SetShowSamplePicker(shell, false);
+  EXPECT_EQ(runIdleFrames(10), settled + 1) << "the due retry posts once the picker closes";
+}
 
 TEST(EditorShellTest, FullFrameSmokeCoversPanelSourceAndContextMenuStates) {
   gui::EditorWindow window = MakeHiddenWindow();

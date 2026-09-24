@@ -25,6 +25,7 @@
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
 

@@ -69,6 +69,16 @@ donner_cc_library(
 )
 
 donner_cc_test(
+    name = "replay_resource_budget_tests",
+    srcs = ["ReplayResourceBudget_tests.cc"],
+    deps = [
+        ":repro_file",
+        "//donner/editor:imgui_headers",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "repro_file_tests",
     srcs = ["ReproFile_tests.cc"],
     deps = [

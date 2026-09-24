@@ -104,16 +104,20 @@ public:
    * Construct a source store with initial source bytes.
    *
    * @param source Initial XML source text.
+   * @param maximumSourceSize Maximum source bytes retained after an edit.
+   * @param initialSourceVersion Version assigned to the initial source.
    */
-  explicit XMLSourceStore(std::string source, std::size_t maximumSourceSize = 16 * 1024 * 1024);
+  explicit XMLSourceStore(std::string source, std::size_t maximumSourceSize = 16 * 1024 * 1024,
+                          std::uint64_t initialSourceVersion = 0);
 
   /**
    * Construct a source store with explicit resource limits.
    *
    * @param source Initial XML source text.
    * @param limits Source, live-anchor, and per-edit anchor-work limits.
+   * @param initialSourceVersion Version assigned to the initial source.
    */
-  XMLSourceStore(std::string source, ResourceLimits limits);
+  XMLSourceStore(std::string source, ResourceLimits limits, std::uint64_t initialSourceVersion = 0);
 
   /// Return the current source bytes.
   [[nodiscard]] std::string_view source() const UTILS_LIFETIME_BOUND { return source_; }

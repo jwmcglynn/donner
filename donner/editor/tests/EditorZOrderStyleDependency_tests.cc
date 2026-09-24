@@ -16,6 +16,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor {

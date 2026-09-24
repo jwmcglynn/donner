@@ -15,13 +15,32 @@ FORK_SHA = "b" * 40
 
 def run_record(**overrides):
     value = {"id": 12, "head_sha": SHA, "path": release.PREFLIGHT_PATH,
-             "event": "push", "status": "completed", "conclusion": "success",
+             "event": "push", "head_branch": "main", "status": "completed", "conclusion": "success",
              "repository": {"full_name": release.REPOSITORY}, "run_attempt": 2}
     value.update(overrides)
     return value
 
 
+def retained_artifacts(**overrides):
+    names = [f"donner-bcr-qualified-2", f"donner-svg-linux-x86-64-{SHA}-2",
+             f"donner-svg-darwin-arm64-{SHA}-2"]
+    artifacts = [{"name": name, "expired": False, "size_in_bytes": 100} for name in names]
+    if overrides:
+        artifacts[1].update(overrides)
+    return {"artifacts": artifacts}
+
+
 class QualificationTest(unittest.TestCase):
+    def test_release_body_pins_one_preflight_attempt(self):
+        self.assertEqual(
+            release.candidate_ref("Release notes\n\nRelease-Candidate-Preflight: 12/2\n"),
+            ("12", "2"),
+        )
+        for body in ("Release notes", "Release-Candidate-Preflight: 0/2",
+                     "Release-Candidate-Preflight: 12/2\nRelease-Candidate-Preflight: 13/1"):
+            with self.subTest(body=body), self.assertRaisesRegex(ValueError, "exactly one"):
+                release.candidate_ref(body)
+
     def test_only_expected_successful_source_run_is_accepted(self):
         release.check_run(run_record(), SHA, release.PREFLIGHT_PATH, {"push"})
         for change in [{"head_sha": "c" * 40}, {"path": "other.yml"}, {"event": "pull_request"},
@@ -34,25 +53,51 @@ class QualificationTest(unittest.TestCase):
     @mock.patch.object(release, "check_source", return_value="1.0.0")
     def test_manual_preflight_is_accepted_without_an_empty_commit(self, check_source, gh):
         run = run_record(event="workflow_dispatch")
-        gh.side_effect = [{"workflow_runs": [run]}, run]
-        result = release.select_preflight(SHA, "v1.0.0")
+        gh.side_effect = [run, [retained_artifacts()]]
+        result = release.select_preflight(SHA, "v1.0.0", "12", "2")
         self.assertEqual(result, {"run_id": "12", "attempt": "2", "version": "1.0.0",
-                                  "artifact": "donner-bcr-qualified-2"})
+                                  "artifact": "donner-bcr-qualified-2",
+                                  "linux_artifact": f"donner-svg-linux-x86-64-{SHA}-2",
+                                  "macos_artifact": f"donner-svg-darwin-arm64-{SHA}-2"})
         check_source.assert_called_once_with(SHA, "v1.0.0")
 
     @mock.patch.object(release, "gh_json")
     @mock.patch.object(release, "check_source", return_value="1.0.0")
-    def test_latest_failed_preflight_does_not_fall_back_to_older_success(self, check_source, gh):
-        failed = run_record(id=13, conclusion="failure")
-        gh.side_effect = [{"workflow_runs": [run_record(), failed]}, failed]
-        with self.assertRaisesRegex(ValueError, "successful build"):
-            release.select_preflight(SHA, "v1.0.0")
+    def test_preflight_requires_all_retained_nonempty_artifacts(self, check_source, gh):
+        for listed in [retained_artifacts(expired=True),
+                       retained_artifacts(size_in_bytes=0),
+                       {"artifacts": retained_artifacts()["artifacts"][:2]},
+                       {"artifacts": retained_artifacts()["artifacts"] * 2}]:
+            with self.subTest(listed=listed):
+                gh.side_effect = [run_record(), [listed]]
+                with self.assertRaisesRegex(ValueError, "missing, ambiguous, empty or expired"):
+                    release.select_preflight(SHA, "v1.0.0", "12", "2")
 
-    @mock.patch.object(release, "gh_json", return_value={"workflow_runs": [run_record(event="pull_request")]})
+    @mock.patch.object(release, "gh_json")
+    @mock.patch.object(release, "check_source", return_value="1.0.0")
+    def test_artifact_lookup_reads_all_pages(self, check_source, gh):
+        gh.side_effect = [run_record(), [{"artifacts": []}, retained_artifacts()]]
+        self.assertEqual(release.select_preflight(SHA, "v1.0.0", "12", "2")["attempt"], "2")
+
+    @mock.patch.object(release, "gh_json")
+    @mock.patch.object(release, "check_source", return_value="1.0.0")
+    def test_failed_selected_preflight_does_not_fall_back(self, check_source, gh):
+        failed = run_record(id=13, conclusion="failure")
+        gh.return_value = failed
+        with self.assertRaisesRegex(ValueError, "successful build"):
+            release.select_preflight(SHA, "v1.0.0", "13", "2")
+
+    @mock.patch.object(release, "gh_json", return_value=run_record(event="pull_request"))
     @mock.patch.object(release, "check_source", return_value="1.0.0")
     def test_pr_artifacts_cannot_supply_a_release(self, check_source, gh):
-        with self.assertRaisesRegex(ValueError, "exact commit"):
-            release.select_preflight(SHA, "v1.0.0")
+        with self.assertRaisesRegex(ValueError, "successful build"):
+            release.select_preflight(SHA, "v1.0.0", "12", "2")
+
+    @mock.patch.object(release, "gh_json", return_value=run_record(head_branch="feature"))
+    @mock.patch.object(release, "check_source", return_value="1.0.0")
+    def test_manual_branch_attestation_cannot_supply_a_release(self, check_source, gh):
+        with self.assertRaisesRegex(ValueError, "on main"):
+            release.select_preflight(SHA, "v1.0.0", "12", "2")
 
     @mock.patch.object(release.release_artifact_publisher, "verify_remote_tag")
     @mock.patch.object(release.subprocess, "run")
@@ -72,25 +117,6 @@ class QualificationTest(unittest.TestCase):
                      {"tagName": "v2.0.0", "isDraft": False, "isPrerelease": False}]:
             with self.subTest(data=data), self.assertRaises(ValueError):
                 release.check_release(data, "v1.0.0")
-
-
-class BinaryRetryTest(unittest.TestCase):
-    @mock.patch.object(release, "gh_json")
-    def test_only_missing_platforms_build_on_retry(self, gh):
-        gh.return_value = [{"artifacts": []}]
-        self.assertEqual(release.binary_build_plan(SHA, "12"), {"build_linux": "true", "build_macos": "true"})
-        gh.return_value = [{"artifacts": [{"name": f"donner-svg-linux-x86-64-{SHA}", "expired": False}]}]
-        self.assertEqual(release.binary_build_plan(SHA, "12"), {"build_linux": "false", "build_macos": "true"})
-        gh.return_value.append({"artifacts": [{"name": f"donner-svg-darwin-arm64-{SHA}", "expired": False}]})
-        self.assertEqual(release.binary_build_plan(SHA, "12"), {"build_linux": "false", "build_macos": "false"})
-
-    @mock.patch.object(release, "gh_json")
-    def test_expired_and_ambiguous_artifacts_require_manual_recovery(self, gh):
-        artifact = {"name": f"donner-svg-linux-x86-64-{SHA}", "expired": False}
-        for artifacts in [[dict(artifact, expired=True)], [artifact, artifact]]:
-            gh.return_value = [{"artifacts": artifacts}]
-            with self.subTest(artifacts=artifacts), self.assertRaisesRegex(ValueError, "recovery manually"):
-                release.binary_build_plan(SHA, "12")
 
 
 class PublishedSourceTest(unittest.TestCase):

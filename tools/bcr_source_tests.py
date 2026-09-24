@@ -50,6 +50,14 @@ class ArchiveSafetyTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "excessive"):
                     source.archive_members(archive, "donner-1.0.0")
 
+    def test_requires_root_license_and_notice(self):
+        for present in ("LICENSE", "NOTICE"):
+            entries = [("donner-1.0.0/MODULE.bazel", tarfile.REGTYPE),
+                       (f"donner-1.0.0/{present}", tarfile.REGTYPE)]
+            with self.subTest(present=present), self.archive(entries) as archive:
+                with self.assertRaisesRegex(ValueError, "missing LICENSE or NOTICE"):
+                    source.archive_members(archive, "donner-1.0.0")
+
     def test_module_identity_and_version_are_literal_and_safe(self):
         self.assertEqual(source.module_values('module(name="donner", version="0.8.0-pre")')["version"],
                          "0.8.0-pre")
@@ -79,6 +87,8 @@ class SourceFixtureTest(unittest.TestCase):
         self.git("config", "user.name", "Test")
         self.git("config", "user.email", "test@example.invalid")
         self.write("MODULE.bazel", 'module(name="donner", version="1.0.0")\n')
+        self.write("LICENSE", "fixture license\n")
+        self.write("NOTICE", "fixture notice\n")
         self.write(".bcr/source.template.json", json.dumps({
             "url": "https://github.com/jwmcglynn/donner/releases/download/{TAG}/donner-{VERSION}.tar.gz",
             "strip_prefix": "donner-{VERSION}", "integrity": "",
@@ -86,7 +96,8 @@ class SourceFixtureTest(unittest.TestCase):
         self.write("examples/bazel_consumer/MODULE.bazel", 'bazel_dep(name="donner", version="1.0.0")\n')
         for name in ["BUILD.bazel", "main.cc", ".bazelrc"]:
             self.write(f"examples/bazel_consumer/{name}", "fixture\n")
-        self.git("add", "--", "MODULE.bazel", ".bcr/source.template.json", "examples")
+        self.git("add", "--", "MODULE.bazel", "LICENSE", "NOTICE",
+                 ".bcr/source.template.json", "examples")
         self.git("-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
         self.commit = self.git("rev-parse", "HEAD")
         self.artifacts = self.base / "artifacts"

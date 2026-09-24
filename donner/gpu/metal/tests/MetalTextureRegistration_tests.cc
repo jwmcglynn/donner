@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -28,9 +29,11 @@ namespace {
 
 using testing::Each;
 using testing::Eq;
+using testing::Ge;
 using testing::IsEmpty;
 using testing::IsFalse;
 using testing::IsTrue;
+using testing::Lt;
 
 /// One row of texels is exactly one copy row pitch, so a readback needs no repacking.
 constexpr Extent2d kExtent{kTexelRowPitchAlignment / 4, 4};
@@ -91,15 +94,15 @@ Result<uint64_t> SubmitCopy(Device& device, const Texture& texture, const Buffer
   return device.submit(Unwrap(encoder->finish()));
 }
 
-/// Copies \p texture back to the host on \p device and returns its texels, or nothing on failure.
-/// @param device Device \p texture belongs to. @param texture Texture to read.
-std::vector<uint8_t> ReadTexels(Device& device, const Texture& texture) {
-  const Buffer readback = Unwrap(device.createBuffer(
+/// A host-readable buffer a texture of \ref kExtent is copied into. @param device Owning device.
+Buffer MakeReadbackBuffer(Device& device) {
+  return Unwrap(device.createBuffer(
       BufferDescriptor{"readback", kReadbackBytes, BufferUsage::CopyDst | BufferUsage::MapRead}));
-  if (Result<uint64_t> submitted = SubmitCopy(device, texture, readback); submitted.hasError()) {
-    ADD_FAILURE() << "readback copy refused: " << submitted.error();
-    return {};
-  }
+}
+
+/// Maps \p readback, which a submitted copy fills, and returns its texels, or nothing on failure.
+/// @param device Device \p readback belongs to. @param readback Buffer to read.
+std::vector<uint8_t> MapTexels(Device& device, const Buffer& readback) {
   BufferMapping mapping = Unwrap(device.mapBufferAsync(readback, MapMode::Read, 0, kReadbackBytes));
   const MapWaitReport report = Unwrap(device.waitForMapping(mapping, MapWaitParams{0.01, 5.0}, {}));
   if (report.outcome != MapWaitOutcome::Ready) {
@@ -110,6 +113,17 @@ std::vector<uint8_t> ReadTexels(Device& device, const Texture& texture) {
   std::vector<uint8_t> texels(bytes.begin(), bytes.end());
   EXPECT_THAT(device.unmapBuffer(std::move(mapping)), IsOk());
   return texels;
+}
+
+/// Copies \p texture back to the host on \p device and returns its texels, or nothing on failure.
+/// @param device Device \p texture belongs to. @param texture Texture to read.
+std::vector<uint8_t> ReadTexels(Device& device, const Texture& texture) {
+  const Buffer readback = MakeReadbackBuffer(device);
+  if (Result<uint64_t> submitted = SubmitCopy(device, texture, readback); submitted.hasError()) {
+    ADD_FAILURE() << "readback copy refused: " << submitted.error();
+    return {};
+  }
+  return MapTexels(device, readback);
 }
 
 /// Splits tightly packed RGBA8 bytes into texels, for an all-texels matcher.
@@ -125,9 +139,13 @@ std::vector<std::array<uint8_t, 4>> Texels(std::span<const uint8_t> bytes) {
 class MetalTextureRegistrationTest : public testing::Test {
 protected:
   void SetUp() override {
-    producer_ = MetalDevice::Create();
+    // Like two contexts over one selected root, the devices share one loss condition, which is
+    // what lets the consumer's work be ordered after the producer's on the device.
+    producer_ = MetalDevice::Create(MetalDevice::MemoryModel::Detected, kMaxBufferByteSize,
+                                    std::chrono::seconds(5), rootLoss_);
     DONNER_REQUIRE_METAL_DEVICE(producer_, "Metal cross-device texture registration");
-    consumer_ = MetalDevice::Create();
+    consumer_ = MetalDevice::Create(MetalDevice::MemoryModel::Detected, kMaxBufferByteSize,
+                                    std::chrono::seconds(5), rootLoss_);
     ASSERT_THAT(consumer_, testing::NotNull());
   }
 
@@ -141,6 +159,7 @@ protected:
     }
   }
 
+  std::shared_ptr<DeviceLostState> rootLoss_ = std::make_shared<DeviceLostState>();
   std::unique_ptr<MetalDevice> producer_;
   std::unique_ptr<MetalDevice> consumer_;
 };
@@ -161,27 +180,31 @@ TEST_F(MetalTextureRegistrationTest, ASiblingDeviceReadsWhatTheProducerRendered)
 }
 
 /// Each device submits to its own command queue, and submission order on one queue says nothing
-/// about another. With the producer's queue held at a gate, the consumer is refused rather than
-/// allowed to read a texture the producer has not rendered yet; once the gate opens, the consumer
-/// reads the producer's pixels.
-TEST_F(MetalTextureRegistrationTest, ConsumerReadsAreOrderedAfterAGatedProducer) {
+/// about another. With the producer's queue held at a gate, the consumer's read of a texture the
+/// producer has not rendered yet is accepted without a host wait and held on the device instead:
+/// it does not complete while the gate is closed, nothing is declared lost, and once the gate
+/// opens the read completes with the producer's pixels.
+TEST_F(MetalTextureRegistrationTest, AConsumerReadWaitsOnTheDeviceForAGatedProducer) {
   const Texture target = MakeProducerTexture(*producer_);
   ASSERT_THAT(producer_->pauseSubmissionsForTest(), IsOk());
   ASSERT_THAT(SubmitGreenClear(*producer_, target), HasResult());
 
   const Texture registered =
       Unwrap(consumer_->registerTexture(Unwrap(producer_->exportTexture(target))));
-  EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.05), IsFalse());
+  EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.0), IsTrue())
+      << "the device orders the read, so the host has nothing to wait for";
+
+  const Buffer readback = MakeReadbackBuffer(*consumer_);
+  const Result<uint64_t> copied = SubmitCopy(*consumer_, registered, readback);
+  ASSERT_THAT(copied, HasResult()) << "the read was refused instead of ordered on the device";
+  EXPECT_THAT(consumer_->waitForSerial(copied.result(), 0.05), IsFalse())
+      << "the read ran before the producer's gated work";
   EXPECT_THAT(consumer_->isLost(), IsFalse());
   EXPECT_THAT(producer_->isLost(), IsFalse());
 
-  const Buffer readback = Unwrap(consumer_->createBuffer(
-      BufferDescriptor{"early", kReadbackBytes, BufferUsage::CopyDst | BufferUsage::MapRead}));
-  EXPECT_THAT(SubmitCopy(*consumer_, registered, readback), IsGpuError(GpuErrorType::InvalidState));
-
   producer_->resumeSubmissionsForTest();
-  ASSERT_THAT(consumer_->waitForTextureSource(registered, 5.0), IsTrue());
-  EXPECT_THAT(Texels(ReadTexels(*consumer_, registered)), Each(Eq(kGreen)));
+  ASSERT_THAT(consumer_->waitForSerial(copied.result(), 5.0), IsTrue());
+  EXPECT_THAT(Texels(MapTexels(*consumer_, readback)), Each(Eq(kGreen)));
 }
 
 /// The registration holds the texture, so it stays readable after the producer device and the
@@ -221,6 +244,37 @@ TEST_F(MetalTextureRegistrationTest, SeparateLossConditionsOverOneDeviceStillSha
   EXPECT_THAT(consumer_->isLost(), IsFalse());
 }
 
+/// Ordering on the device is only as sound as the loss condition behind it. The producer signals
+/// the event a consumer waits on for failed work too, and past every value when its own root is
+/// declared lost, so a consumer over another condition would never learn why its wait ended and
+/// would read whatever the failed work left behind as the producer's pixels. Its read of a gated
+/// producer is refused until the producer's work completes, and refused as untrusted once that
+/// work has failed.
+TEST_F(MetalTextureRegistrationTest, AReadOfAProducerOverAnotherLossConditionWaitsForItsOutcome) {
+  const std::unique_ptr<MetalDevice> producer =
+      MetalDevice::Create(MetalDevice::MemoryModel::Detected, kMaxBufferByteSize,
+                          std::chrono::seconds(5), std::make_shared<DeviceLostState>());
+  ASSERT_THAT(producer, testing::NotNull());
+  const Texture target = MakeProducerTexture(*producer);
+  ASSERT_THAT(producer->pauseSubmissionsForTest(), IsOk());
+  producer->failNextSubmissionForTest();
+  ASSERT_THAT(SubmitGreenClear(*producer, target), HasResult());
+  const Texture registered =
+      Unwrap(consumer_->registerTexture(Unwrap(producer->exportTexture(target))));
+
+  const Buffer readback = MakeReadbackBuffer(*consumer_);
+  EXPECT_THAT(SubmitCopy(*consumer_, registered, readback), IsGpuError(GpuErrorType::InvalidState))
+      << "the read was ordered on the device behind work whose failure it would never see";
+  EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.0), IsFalse());
+
+  producer->resumeSubmissionsForTest();
+  EXPECT_THAT(consumer_->waitForTextureSource(registered, 5.0), IsFalse())
+      << "the producer's work failed, so nothing may read what it left";
+  EXPECT_THAT(producer->isLost(), IsTrue());
+  EXPECT_THAT(SubmitCopy(*consumer_, registered, readback), IsGpuError(GpuErrorType::DeviceLost));
+  EXPECT_THAT(consumer_->isLost(), IsFalse());
+}
+
 /// A host write to a texture earlier work still uses is queued for the producer's next
 /// submission. Until a submission carries it, nothing orders it before a consumer, so the texture
 /// cannot be registered; afterwards the registration follows that submission and reads the write.
@@ -245,11 +299,59 @@ TEST_F(MetalTextureRegistrationTest, AQueuedWriteRefusesRegistrationUntilItIsSub
   ASSERT_THAT(producer_->submit(Unwrap(Unwrap(producer_->createCommandEncoder())->finish())),
               HasResult());
   const Texture registered = Unwrap(consumer_->registerTexture(exported));
-  EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.05), IsFalse());
+  const Buffer readback = MakeReadbackBuffer(*consumer_);
+  const uint64_t copied = Unwrap(SubmitCopy(*consumer_, registered, readback));
+  EXPECT_THAT(consumer_->waitForSerial(copied, 0.05), IsFalse())
+      << "the read ran before the gated submission that carried the write";
 
   producer_->resumeSubmissionsForTest();
-  ASSERT_THAT(consumer_->waitForTextureSource(registered, 5.0), IsTrue());
-  EXPECT_THAT(Texels(ReadTexels(*consumer_, registered)), Each(Eq(kBlue)));
+  ASSERT_THAT(consumer_->waitForSerial(copied, 5.0), IsTrue());
+  EXPECT_THAT(Texels(MapTexels(*consumer_, readback)), Each(Eq(kBlue)));
+}
+
+/// A consumer's work held on the device behind a producer's is released when the root the two
+/// share is declared lost: a producer that stops answering must not leave the consumer's queue
+/// stuck behind that wait, so the queue drains and publishes the read's completion. The
+/// consumer's bounded waits and its teardown end at once on the lost root.
+TEST_F(MetalTextureRegistrationTest, ADeclaredLossReleasesAConsumerWaitingOnTheDevice) {
+  const auto rootLost = std::make_shared<DeviceLostState>();
+  std::unique_ptr<MetalDevice> producer = MetalDevice::Create(
+      MetalDevice::MemoryModel::Detected, kMaxBufferByteSize, std::chrono::seconds(5), rootLost);
+  std::unique_ptr<MetalDevice> consumer = MetalDevice::Create(
+      MetalDevice::MemoryModel::Detected, kMaxBufferByteSize, std::chrono::seconds(5), rootLost);
+  ASSERT_THAT(producer, testing::NotNull());
+  ASSERT_THAT(consumer, testing::NotNull());
+  const Texture target = MakeProducerTexture(*producer);
+  ASSERT_THAT(producer->pauseSubmissionsForTest(), IsOk());
+  ASSERT_THAT(SubmitGreenClear(*producer, target), HasResult());
+  const Texture registered =
+      Unwrap(consumer->registerTexture(Unwrap(producer->exportTexture(target))));
+  const Buffer readback = MakeReadbackBuffer(*consumer);
+  const uint64_t copied = Unwrap(SubmitCopy(*consumer, registered, readback));
+  ASSERT_THAT(consumer->waitForSerial(copied, 0.05), IsFalse())
+      << "the read did not wait for the gated producer, so there is nothing to release";
+
+  ASSERT_THAT(DeclareDeviceLost(*rootLost), IsTrue());
+  // Whether the wait sees the released read complete or the loss first depends on scheduling, so
+  // only how long it takes is checked.
+  const auto waitStart = std::chrono::steady_clock::now();
+  static_cast<void>(consumer->waitForSerial(copied, 5.0));
+  EXPECT_THAT(std::chrono::steady_clock::now() - waitStart, Lt(std::chrono::seconds(1)))
+      << "a bounded wait on a lost root spent its budget";
+
+  const auto releaseDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (consumer->completedSerial() < copied &&
+         std::chrono::steady_clock::now() < releaseDeadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_THAT(consumer->completedSerial(), Ge(copied))
+      << "the consumer's read is still waiting on the device after the loss";
+
+  const auto teardownStart = std::chrono::steady_clock::now();
+  consumer.reset();
+  EXPECT_THAT(std::chrono::steady_clock::now() - teardownStart, Lt(std::chrono::seconds(1)))
+      << "the consumer's teardown waited on the lost root";
+  producer->resumeSubmissionsForTest();
 }
 
 }  // namespace

@@ -4,6 +4,7 @@
 #include <optional>
 #include <string_view>
 
+#include "donner/base/Length.h"
 #include "donner/base/OptionalRef.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/core/PreserveAspectRatio.h"

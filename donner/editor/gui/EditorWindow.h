@@ -762,6 +762,14 @@ public:
   /// False in OpenGL builds and before the WebGPU device came up.
   [[nodiscard]] bool usingOffscreenRenderTarget() const;
 
+  /// Whether \ref endFrameAndReadPixels returns this window's frames on a live device: readback
+  /// was asked for, through \ref EditorWindowOptions::enableFramebufferReadback or the browser's
+  /// readback diagnostic, and the frames this window draws into can be copied from. A surface
+  /// that reports its frames cannot be copied from still presents them, and the window drops the
+  /// readback rather than the surface, so its frames then read back empty. False before the
+  /// device came up.
+  [[nodiscard]] bool framebufferReadbackAvailable() const;
+
   /// Shared Geode device for direct append passes into the editor framebuffer.
   [[nodiscard]] std::shared_ptr<geode::GeodeDevice> geodeFramebufferDevice() const;
 

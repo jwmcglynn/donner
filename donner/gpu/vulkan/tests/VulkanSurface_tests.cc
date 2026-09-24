@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/DeviceLost.h"
 #include "donner/gpu/DeviceObserver.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
@@ -1311,6 +1312,24 @@ TEST(VulkanPresentationCreationTest, OwnerAcceptsDeviceLossFromEveryCompletionWa
   EXPECT_THAT(recorder.calls, Not(Contains("wait-idle")));
   EXPECT_THAT(std::span(recorder.calls).last(3),
               testing::ElementsAre("destroy-command-pool", "destroy-device", "destroy-instance"));
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, ADeviceLossFirstSeenAtTeardownReachesTheRoot) {
+  TeardownRecorder recorder;
+  recorder.fenceResults = {VK_ERROR_DEVICE_LOST};
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  const auto rootLoss = std::make_shared<DeviceLostState>();
+  auto device = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3, nullptr, nullptr, rootLoss);
+  device->attachWorkForTeardownTest(false, 11, 12);
+  device.reset();
+  EXPECT_THAT(recorder.calls, Contains("wait-fences"));
+  EXPECT_THAT(rootLoss->lost.load(), testing::IsTrue())
+      << "a loss the driver reports while teardown proves the device's work complete belongs to "
+         "every other device over the root";
+  EXPECT_THAT(rootLoss->timedOutSite.load(), testing::Eq(DeviceLostWaitSite::None))
+      << "the driver reported this loss; no wait gave up";
   gTeardownRecorder = nullptr;
 }
 

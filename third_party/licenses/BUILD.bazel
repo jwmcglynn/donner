@@ -229,6 +229,12 @@ donner_notice_file(
     variant = "Default (tiny-skia)",
 )
 
+filegroup(
+    name = "notice_default_txt",
+    srcs = [":notice_default"],
+    output_group = "notice",
+)
+
 donner_notice_file(
     name = "notice_text_full",
     licenses = TEXT_FULL_LICENSES,

@@ -105,6 +105,16 @@ py_test(
 )
 
 py_test(
+    name = "coverage_run_proof_tests",
+    size = "small",
+    srcs = [
+        "coverage_run_proof.py",
+        "coverage_run_proof_tests.py",
+        "lcov_metrics.py",
+    ],
+)
+
+py_test(
     name = "coverage_instrumentable_targets_tests",
     size = "small",
     srcs = [
@@ -182,8 +192,8 @@ py_test(
         "check_pr_body_tests.py",
     ],
     data = ["//:.github/workflows/main.yml"],
-    deps = ["@rules_python//python/runfiles"],
     imports = ["."],
+    deps = ["@rules_python//python/runfiles"],
 )
 
 py_test(
@@ -254,6 +264,32 @@ py_test(
     deps = [":bcr_source"],
 )
 
+py_test(
+    name = "default_notice_freshness_tests",
+    size = "small",
+    srcs = ["default_notice_freshness_tests.py"],
+    args = [
+        "$(location //:NOTICE)",
+        "$(location //third_party/licenses:notice_default_txt)",
+    ],
+    data = [
+        "//:NOTICE",
+        "//third_party/licenses:notice_default_txt",
+    ],
+)
+
+py_library(
+    name = "bcr_dependency_closure",
+    srcs = ["bcr_dependency_closure.py"],
+)
+
+py_test(
+    name = "bcr_dependency_closure_tests",
+    size = "small",
+    srcs = ["bcr_dependency_closure_tests.py"],
+    deps = [":bcr_dependency_closure"],
+)
+
 py_library(
     name = "bcr_release",
     srcs = ["bcr_release.py"],
@@ -263,11 +299,35 @@ py_library(
     ],
 )
 
+py_library(
+    name = "release_cli",
+    srcs = ["release_cli.py"],
+)
+
+py_test(
+    name = "release_cli_tests",
+    size = "small",
+    srcs = ["release_cli_tests.py"],
+    deps = [":release_cli"],
+)
+
 py_test(
     name = "bcr_release_tests",
     size = "small",
     srcs = ["bcr_release_tests.py"],
     deps = [":bcr_release"],
+)
+
+py_library(
+    name = "pages_artifact",
+    srcs = ["pages_artifact.py"],
+)
+
+py_test(
+    name = "pages_artifact_tests",
+    size = "small",
+    srcs = ["pages_artifact_tests.py"],
+    deps = [":pages_artifact"],
 )
 
 py_library(
@@ -298,7 +358,10 @@ py_test(
     name = "coverage_lane_routing_tests",
     size = "small",
     srcs = ["coverage_lane_routing_tests.py"],
-    data = ["//:.github/workflows/coverage.yml"],
+    data = [
+        "//:.github/workflows/coverage.yml",
+        "//:codecov.yml",
+    ],
     deps = ["@rules_python//python/runfiles"],
 )
 

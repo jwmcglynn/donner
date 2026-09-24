@@ -267,11 +267,13 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   // adapter, so the presented-pixel assertions can never pass. Restoring the
   // platform needs a GPU-backed runner or upstream swapchain support, not just
   // a constraint edit, so re-adding it here should fail this contract first.
-  assert.doesNotMatch(
-    buildFile,
-    /"@platforms\/\/os:linux"/,
-    "the headless browser test cannot run on Linux until WebGPU swapchain presentation exists there",
-  );
+  for (const lane of lanes) {
+    assert.doesNotMatch(
+      lane,
+      /"@platforms\/\/os:linux"/,
+      "presented-pixel browser tests cannot run on Linux until WebGPU swapchain presentation exists there",
+    );
+  }
 
   const chromiumConfig = readFileSync(path.join(testDirectory, "playwright.config.js"), "utf8");
   assert.match(

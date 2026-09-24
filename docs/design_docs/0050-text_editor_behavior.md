@@ -132,7 +132,7 @@ These form the foundation of any text editor and must work reliably.
   - [ ] Test: Deletion records undo entry.
 
 - [ ] **Tab & Indentation**
-  - [ ] Test: Tab key inserts \t or spaces (depends on insertSpaces_ setting).
+  - [ ] Test: Tab key inserts `\t` or spaces (depends on insertSpaces_ setting).
   - [ ] Test: Shift+Tab (Unindent) reduces indentation if selection or at line start.
   - [ ] Test: Multi-line tab: tab with multi-line selection indents all lines.
   - [ ] Test: Auto-indent on Enter preserves indentation of previous line (if smartIndent_).

@@ -181,10 +181,6 @@ class RunnerScenarioTest(unittest.TestCase):
         self.assertEqual(len(parsed.getElementsByTagName("testcase")), 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class RunnerComparatorAndCorpusRootTest(unittest.TestCase):
     """Covers the external-comparator delegation and corpus-root override."""
 
@@ -268,3 +264,7 @@ class RunnerComparatorAndCorpusRootTest(unittest.TestCase):
         )
         self.assertEqual({r["test"]: r["status"] for r in run.results}, {"donner-svg2/r": "pass"})
         self.assertTrue(run.ok)
+
+
+if __name__ == "__main__":
+    unittest.main()

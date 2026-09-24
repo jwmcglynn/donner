@@ -3329,8 +3329,27 @@ ApplySourceEditResult XMLDocument::setElementText(XMLNode element, std::string_v
 
 void XMLDocument::setSource(std::string source, std::size_t maximumSourceSize) {
   XMLDocumentContext& context = registry_->ctx().get<XMLDocumentContext>();
-  context.sourceStoreHolder->store =
-      std::make_shared<XMLSourceStore>(std::move(source), maximumSourceSize);
+  const XMLSourceStore* previousStore = context.sourceStoreHolder->store.get();
+  std::uint64_t nextVersion = 0;
+  if (previousStore != nullptr) {
+    UTILS_RELEASE_ASSERT_MSG(
+        previousStore->sourceVersion() != std::numeric_limits<std::uint64_t>::max(),
+        "XML source version exhausted");
+    nextVersion = previousStore->sourceVersion() + 1;
+  }
+  std::shared_ptr<XMLSourceStore> nextStore =
+      std::make_shared<XMLSourceStore>(std::move(source), maximumSourceSize, nextVersion);
+
+  // The existing tree has not been reparsed against these bytes. Drop source
+  // locations from attached and detached nodes while the old store still owns
+  // their anchors, so reused anchor ids cannot resolve into the new source.
+  for (Entity entity : registry_->view<donner::components::TreeComponent>()) {
+    if (std::optional<XMLNode> node = XMLNode::TryCast(EntityHandle(*registry_, entity))) {
+      node->clearSourceLocation();
+    }
+  }
+
+  context.sourceStoreHolder->store = std::move(nextStore);
   context.unreparsedSpans.clear();
   context.declaredDoctypeInternalSubset = false;
 }

@@ -14,8 +14,9 @@
 #include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/svg/ElementType.h"
 #include "donner/svg/SVGDocumentHandle.h"
-#include "donner/svg/properties/PropertyRegistry.h"
+#include "donner/svg/properties/PaintServer.h"
 
 namespace donner {
 
@@ -35,6 +36,9 @@ namespace donner::svg {
 
 // Forward declaration, #include "donner/svg/SVGDocument.h"
 class SVGDocument;
+
+// Forward declaration, #include "donner/svg/properties/PropertyRegistry.h"
+class PropertyRegistry;
 
 // Forward declaration, #include "donner/svg/DonnerController.h"
 class DonnerController;
@@ -689,6 +693,8 @@ public:
    * Get the computed CSS style of this element, after the CSS cascade has been applied. The
    * returned \ref donner::svg::PropertyRegistry contains resolved values for all CSS properties
    * (fill, stroke, font-size, etc.).
+   *
+   * @note Include `donner/svg/properties/PropertyRegistry.h` to inspect the returned properties.
    */
   const PropertyRegistry& getComputedStyle() const;
 
@@ -699,6 +705,8 @@ public:
    *
    * Unlike \ref getComputedStyle this never computes anything, making it suitable for diagnostics
    * that must observe style state without mutating it.
+   *
+   * @note Include `donner/svg/properties/PropertyRegistry.h` to inspect the returned properties.
    */
   const PropertyRegistry* specifiedStyle() const;
 
@@ -708,6 +716,8 @@ public:
    *
    * Unlike \ref getComputedStyle this never triggers style computation, making it suitable for
    * diagnostics that must observe whether - and with which values - the style cascade has run.
+   *
+   * @note Include `donner/svg/properties/PropertyRegistry.h` to inspect the returned properties.
    */
   const PropertyRegistry* computedStyleIfPresent() const;
 

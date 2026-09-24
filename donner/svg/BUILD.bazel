@@ -191,6 +191,8 @@ donner_cc_library(
         # getComputedTextLength/getSubStringLength, so this dep is not
         # conditional on text_enabled.
         "//donner/svg/text:text_engine",
+        ":element_type",
+        "//donner/svg/properties:property_parsing",
     ],
 )
 
@@ -221,6 +223,7 @@ donner_cc_library(
     deps = [
         ":svg_core",
         "//donner/svg/parser",
+        "//donner/svg/properties:property_parsing",
     ],
 )
 

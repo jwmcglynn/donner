@@ -771,6 +771,7 @@ TEST(TextEngineTest, CachedGeometryApisFilterToRequestedSubtree) {
   });
   cache.inkBounds = Box2d::FromXYWH(0.0, 0.0, 105.0, 5.0);
   cache.emBoxBounds = Box2d::FromXYWH(0.0, -10.0, 16.0, 20.0);
+  cache.objectBoundsByEntity.emplace(child, Box2d::FromXYWH(10.0, 0.0, 5.0, 5.0));
   registry.emplace<components::ComputedTextGeometryComponent>(root, std::move(cache));
 
   const EntityHandle rootHandle(registry, root);

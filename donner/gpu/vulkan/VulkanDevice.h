@@ -3,6 +3,7 @@
 /// \c donner::gpu::vulkan::VulkanDevice - the Vulkan backend for the Donner GPU runtime.
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -63,6 +64,11 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  * are freed. Vulkan requires this lost-device idle wait to return finitely, but the wait has no
  * caller-configured deadline. Later host accesses and submissions return the latched error.
  *
+ * A device takes part in the loss condition of the root it opens over (see \ref Create). A
+ * device-lost result from the driver declares that condition, as a backend-reported loss, before
+ * the error is latched; serial waits, texture uploads and mappings end as soon as any device over
+ * the root has declared it.
+ *
  * Which allocation a buffer is bound into is the allocator's decision, behind the seam in
  * VulkanBufferAllocator.h: one dedicated allocation per buffer today, with a suballocating
  * implementation replaceable there rather than at every call site, once measurement says the
@@ -114,17 +120,43 @@ public:
   /// refusal path runs on a device that has the feature. Only ever narrows the capability.
   void disableFullUint32IndexRangeForTest();
 
+  /// What the physical device \ref Create selects supports, which every device it opens shares.
+  struct SystemCapabilities {
+    /// Largest width or height of a 2D texture the physical device allocates, from its
+    /// `maxImageDimension2D` limit and capped at \ref kMaxTextureDimension, the largest extent the
+    /// runtime accepts.
+    uint32_t maxTextureDimension2D = 0;
+  };
+
+  /**
+   * Asks the physical device \ref Create selects what it supports, without creating a logical
+   * device on it: a transient instance is created, the same physical device is chosen, and its
+   * limits are read before the instance is destroyed.
+   *
+   * A backend root is selected before any device over it exists, and its limits have to be the
+   * device's own rather than a portable fallback.
+   *
+   * @return The capabilities, or empty when no Vulkan device is available or device creation is
+   *   closed after a failed shutdown.
+   */
+  static std::optional<SystemCapabilities> QuerySystemCapabilities();
+
   /**
    * Creates a headless device: a VkInstance without surface extensions (enabling
    * VK_LAYER_KHRONOS_validation only when the loader enumerates it), the first physical device
    * exposing a graphics queue family, and a single VkDevice + VkQueue. Returns nullptr if no
    * Vulkan 1.1 instance or graphics-capable physical device is available.
+   *
+   * @param lostState Loss condition of the backend root this device opens over, shared with every
+   *   other device over that root. A device given none keeps a private condition.
    */
-  static std::unique_ptr<VulkanDevice> Create();
+  static std::unique_ptr<VulkanDevice> Create(std::shared_ptr<DeviceLostState> lostState = nullptr);
 
   /// Creates a device with VK_KHR_timeline_semaphore enabled solely for test-owned host gates.
   /// Returns nullptr if the test extension/feature is unavailable; ordinary Create needs neither.
-  static std::unique_ptr<VulkanDevice> CreateWithTimelineSemaphoreForTest();
+  /// @param lostState Loss condition of the root the device opens over, as for \ref Create.
+  static std::unique_ptr<VulkanDevice> CreateWithTimelineSemaphoreForTest(
+      std::shared_ptr<DeviceLostState> lostState = nullptr);
 
   /**
    * Creates a device that can present: an instance with the surface extensions the loader offers
@@ -141,9 +173,11 @@ public:
    *   the returned instance. The span and each non-null, NUL-terminated name it contains are
    *   borrowed synchronously and must remain readable until this call returns. Creation fails
    *   when the count does not fit Vulkan's uint32_t field or the loader does not offer a name.
+   * @param lostState Loss condition of the root the device opens over, as for \ref Create.
    */
   static std::unique_ptr<VulkanDevice> CreateWithPresentationSupport(
-      std::span<const char* const> requiredInstanceExtensions = {});
+      std::span<const char* const> requiredInstanceExtensions = {},
+      std::shared_ptr<DeviceLostState> lostState = nullptr);
 
   /// Whether this device was created with presentation support. Test accessor, so a suite can
   /// say which device it is looking at rather than inferring it from a refusal.
@@ -211,6 +245,15 @@ public:
    */
   Result<TrackedTextureLayout> trackedTextureLayoutForTest(const Texture& texture) const;
 
+  /**
+   * Whether \p view has a native image view. Test accessor: a view of a texture that can be
+   * neither sampled, stored to nor rendered to has none, and nothing a slice reads back shows
+   * whether one was made. Fails closed on a handle that does not name a live view of this device.
+   *
+   * @param view View to query.
+   */
+  Result<bool> hasNativeViewForTest(const TextureView& view) const;
+
   /// One image barrier the backend recorded, reported as plain numbers so this header stays free
   /// of Vulkan types. Test accessor: which barriers are emitted is the whole contract of the
   /// resource-state model, and it is not observable in the pixels a slice reads back.
@@ -275,12 +318,11 @@ public:
   /// @param deviceHandle Fake device. @param commandPoolHandle Fake command pool.
   /// @param onAdmission Optional callback invoked while holding the creation gate.
   /// @param admissionContext Opaque argument for the admission callback.
-  static std::unique_ptr<VulkanDevice> CreateForTeardownTest(const VulkanApi* api,
-                                                             uint64_t instanceHandle,
-                                                             uint64_t deviceHandle,
-                                                             uint64_t commandPoolHandle,
-                                                             void (*onAdmission)(void*) = nullptr,
-                                                             void* admissionContext = nullptr);
+  /// @param lostState Loss condition of the root the device opens over, as for \ref Create.
+  static std::unique_ptr<VulkanDevice> CreateForTeardownTest(
+      const VulkanApi* api, uint64_t instanceHandle, uint64_t deviceHandle,
+      uint64_t commandPoolHandle, void (*onAdmission)(void*) = nullptr,
+      void* admissionContext = nullptr, std::shared_ptr<DeviceLostState> lostState = nullptr);
 
   /// Exercises native instance/device creation through a fake API and immediately destroys them.
   /// @param api Fake Vulkan callbacks. @param enablePresentation Whether to enable presentation.
@@ -321,6 +363,12 @@ public:
   /// Makes the next native submission fail before it reaches the queue, after encoding finishes.
   /// @param deviceLost Whether to inject terminal device loss instead of recoverable host OOM.
   void failNextSubmissionForTest(bool deviceLost = false);
+
+  /// Calls \p hook each time a step of a fence wait times out, in a serial wait or a texture
+  /// upload, before the wait checks the root's loss condition, so a test can declare a loss while
+  /// a wait is known to be blocked. Test accessor; an empty function removes the hook.
+  /// @param hook Called on the waiting thread.
+  void setFenceWaitStepHookForTest(std::function<void()> hook);
 
   /// Makes the next acquisition on the surface at \p surfaceSlotIndex report the swapchain as
   /// out of date, so its rebuild-and-retry path runs. Test seam; see the swapchain's own note for
@@ -420,9 +468,12 @@ private:
   /// the surface/swapchain extensions presentation needs.
   /// @param enableTimelineSemaphoreForTest Whether to request VK_KHR_timeline_semaphore.
   /// @param enablePresentation Whether to request the surface and swapchain extensions.
+  /// @param requiredInstanceExtensions Surface extensions the embedder needs on the instance.
+  /// @param lostState Loss condition of the root the device opens over; null for a private one.
   static std::unique_ptr<VulkanDevice> CreateImpl(
       bool enableTimelineSemaphoreForTest, bool enablePresentation,
-      std::span<const char* const> requiredInstanceExtensions = {});
+      std::span<const char* const> requiredInstanceExtensions,
+      std::shared_ptr<DeviceLostState> lostState);
 
   /// Constructs an empty device; \ref Create attaches the Vulkan instance/device.
   VulkanDevice();

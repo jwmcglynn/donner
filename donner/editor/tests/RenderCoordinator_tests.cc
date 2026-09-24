@@ -6,9 +6,12 @@
 #include <vector>
 
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/EditorCommand.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/tests/RenderCoordinatorTestAccess.h"
+#include "donner/svg/renderer/RendererInterface.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -29,40 +32,6 @@
 // (raw GL), which is unreachable from this contextless unit harness.
 
 namespace donner::editor {
-
-struct RenderCoordinatorTestAccess {
-  static void seedPreCommitPixelCapture(RenderCoordinator& coordinator, const EditorApp& app,
-                                        const ViewportState& viewport) {
-    coordinator.documentPixelCaptureEnabled_ = true;
-    coordinator.documentPixelCaptureSessionId_ = 1;
-    const DocumentPixelCaptureIdentity identity{
-        .sessionId = 1,
-        .documentGeneration = app.document().documentGeneration(),
-        .version = app.document().currentFrameVersion(),
-        .fontResourceRevision = app.document().fontResourceRevision(),
-        .canvasCommitGeneration = coordinator.documentCanvasCommitTotal_,
-        .rasterViewport = viewport.rasterViewport(),
-        .viewport = viewport,
-    };
-    coordinator.documentPixelCapture_ = DocumentPixelCapture{.identity = identity};
-    coordinator.requestedPixelCapture_ = identity;
-    coordinator.pendingCanvasSize_ = viewport.rasterViewport().semanticCanvasSizePx;
-    coordinator.pendingCanvasSizeSince_ = std::chrono::steady_clock::now();
-  }
-
-  static void makeCanvasCommitDue(RenderCoordinator& coordinator) {
-    coordinator.pendingCanvasSizeSince_ =
-        std::chrono::steady_clock::now() - std::chrono::milliseconds(200);
-  }
-
-  static std::optional<std::uint64_t> requestedCommitGeneration(
-      const RenderCoordinator& coordinator) {
-    if (!coordinator.requestedPixelCapture_.has_value()) {
-      return std::nullopt;
-    }
-    return coordinator.requestedPixelCapture_->canvasCommitGeneration;
-  }
-};
 
 namespace {
 
@@ -138,6 +107,71 @@ SelectTool::ActiveDragPreview DragPreview(Entity entity, std::uint64_t generatio
 // ---------------------------------------------------------------------------
 // Free-function presentation policies (pure, no editor state).
 // ---------------------------------------------------------------------------
+
+TEST(RenderCoordinatorPolicyTest, NothingToPresentRetryPacesTheFailedRequestThenHoldsIt) {
+  NothingToPresentRetry retry;
+  const RenderAttemptIdentity failing{.documentGeneration = 1, .version = 2};
+  RenderAttemptIdentity newVersion = failing;
+  newVersion.version = 3;
+  auto now = std::chrono::steady_clock::time_point{} + std::chrono::hours(1);
+  EXPECT_TRUE(retry.mayPost(failing, now));
+
+  for (const std::chrono::milliseconds delay : NothingToPresentRetry::kRetryDelays) {
+    SCOPED_TRACE(::testing::Message() << "retry delay " << delay.count() << " ms");
+    EXPECT_FALSE(retry.noteFailure(failing, now));
+    EXPECT_FALSE(retry.mayPost(failing, now + delay - std::chrono::milliseconds(1)));
+    EXPECT_TRUE(retry.mayPost(newVersion, now)) << "a different request is never held";
+    EXPECT_THAT(retry.secondsUntilRetry(now),
+                ::testing::Optional(
+                    ::testing::FloatNear(std::chrono::duration<float>(delay).count(), 1e-4f)));
+    now += delay;
+    EXPECT_TRUE(retry.mayPost(failing, now));
+    EXPECT_EQ(retry.secondsUntilRetry(now), std::nullopt)
+        << "a due retry asks for no further wake; the next frame that renders posts it";
+  }
+
+  EXPECT_TRUE(retry.noteFailure(failing, now)) << "the failure after the last retry gives up";
+  EXPECT_FALSE(retry.retryScheduled());
+  EXPECT_EQ(retry.secondsUntilRetry(now), std::nullopt);
+  EXPECT_FALSE(retry.mayPost(failing, now + std::chrono::hours(1)))
+      << "an identical request waits until something about it changes";
+  EXPECT_TRUE(retry.mayPost(newVersion, now));
+  EXPECT_FALSE(retry.noteFailure(failing, now)) << "giving up is reported once";
+
+  retry.reset();
+  EXPECT_TRUE(retry.mayPost(failing, now));
+}
+
+TEST(RenderCoordinatorPolicyTest, NothingToPresentRetryTreatsAChangedRasterOrDragAsANewRequest) {
+  const auto now = std::chrono::steady_clock::time_point{} + std::chrono::hours(1);
+  RenderAttemptIdentity failing{.documentGeneration = 1, .version = 2};
+  failing.rasterViewport.outputSizePx = Vector2i(64, 64);
+  failing.dragPreview = RenderRequest::DragPreview{.translation = Vector2d(4.0, 0.0)};
+  NothingToPresentRetry retry;
+  ASSERT_FALSE(retry.noteFailure(failing, now));
+  ASSERT_FALSE(retry.mayPost(failing, now));
+
+  RenderAttemptIdentity zoomed = failing;
+  zoomed.rasterViewport.outputSizePx = Vector2i(128, 128);
+  EXPECT_TRUE(retry.mayPost(zoomed, now));
+  RenderAttemptIdentity dragged = failing;
+  dragged.dragPreview->translation = Vector2d(6.0, 0.0);
+  EXPECT_TRUE(retry.mayPost(dragged, now));
+  RenderAttemptIdentity replaced = failing;
+  replaced.documentGeneration = 2;
+  EXPECT_TRUE(retry.mayPost(replaced, now));
+  RenderAttemptIdentity refreshed = failing;
+  refreshed.presentationEpoch = 1;
+  EXPECT_TRUE(retry.mayPost(refreshed, now)) << "a presentation refresh is a new request";
+  RenderAttemptIdentity recaptured = failing;
+  recaptured.dragPreview->forceLayerRasterization = true;
+  EXPECT_FALSE(retry.mayPost(recaptured, now))
+      << "the recapture flag is a scheduler hint, not a different request";
+
+  EXPECT_FALSE(retry.noteFailure(zoomed, now));
+  EXPECT_TRUE(retry.mayPost(failing, now)) << "a new failure replaces the held request";
+  EXPECT_FALSE(retry.mayPost(zoomed, now));
+}
 
 TEST(RenderCoordinatorPolicyTest, FullCanvasPreviewAlwaysPresentable) {
   RenderResult::CompositedPreview preview;
@@ -1015,6 +1049,181 @@ TEST(RenderCoordinatorTest, DelayedCanvasSizeCommitInvalidatesSameVersionPixelCa
   coordinator.asyncRenderer().cancelInFlight();
   ASSERT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
       std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+}
+
+// ---------------------------------------------------------------------------
+// A worker result that carries nothing to present.
+// ---------------------------------------------------------------------------
+
+/// Runs one editor frame's render handoff the way the shell does: consume the finished worker
+/// result, then ask for the next render at the end of the frame. Returns true when a request was
+/// posted. A result with nothing to present is rejected before any texture upload, so this runs
+/// without a GPU context as long as every result is withheld.
+bool RunRenderFrame(RenderCoordinator& coordinator, EditorApp& app, SelectTool& selectTool,
+                    const ViewportState& viewport, GlTextureCache& textures) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
+    coordinator.pollRenderResult(app, viewport, textures);
+    if (coordinator.asyncRenderer().isBusy()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+  EXPECT_FALSE(coordinator.asyncRenderer().isBusy()) << "the worker never finished its render";
+  return coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+}
+
+int CountPostedRenders(RenderCoordinator& coordinator, EditorApp& app, SelectTool& selectTool,
+                       const ViewportState& viewport, GlTextureCache& textures, int frames) {
+  int posted = 0;
+  for (int frame = 0; frame < frames; ++frame) {
+    if (RunRenderFrame(coordinator, app, selectTool, viewport, textures)) {
+      ++posted;
+    }
+  }
+  return posted;
+}
+
+// Every idle frame asks the coordinator for a render, and a result with nothing to present marks
+// neither its version nor its raster rendered. Without pacing, a failure that persists (a lost
+// device, surfaces the renderer keeps refusing) re-posts the identical failing request on every
+// frame, and every result wakes the next frame: the worker and the UI loop spin at full rate.
+TEST(RenderCoordinatorTest, RenderWithNothingToPresentIsNotRepostedEveryFrame) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+
+  const int posted = CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10);
+  EXPECT_THAT(posted, ::testing::AllOf(::testing::Ge(1), ::testing::Le(2)))
+      << "ten idle frames of a render that keeps producing nothing to present";
+  EXPECT_EQ(posted, 1) << "the first retry waits for its delay";
+  EXPECT_EQ(coordinator.displayedDocVersionForDiagnostics(), 0u)
+      << "a result with nothing to present must not become the displayed version";
+  EXPECT_THAT(coordinator.nextNothingToPresentRetryWakeSeconds(),
+              ::testing::Optional(::testing::FloatNear(0.1f, 1e-4f)))
+      << "the idle loop must wake for the retry without input";
+
+  for (const std::chrono::milliseconds delay : NothingToPresentRetry::kRetryDelays) {
+    RenderCoordinatorTestAccess::advanceFakeRetryClock(delay);
+    EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1)
+        << "one retry once " << delay.count() << " ms have passed";
+  }
+  RenderCoordinatorTestAccess::advanceFakeRetryClock(std::chrono::minutes(1));
+  EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 0)
+      << "after the last retry fails, the identical request waits until something changes";
+  EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt);
+  EXPECT_EQ(coordinator.nothingToPresentResultTotalForDiagnostics(),
+            NothingToPresentRetry::kRetryDelays.size() + 1);
+  EXPECT_EQ(coordinator.displayedDocVersionForDiagnostics(), 0u);
+}
+
+// A renderer setting changes what the worker draws without changing the document or the raster:
+// the composited mode, the geometry debug pass, arming the eyedropper. Each asks for a presentation
+// refresh, and the request made for it is not the request whose retries ran out.
+TEST(RenderCoordinatorTest, PresentationRefreshIsPostedAfterRetriesRunOut) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
+  for (const std::chrono::milliseconds delay : NothingToPresentRetry::kRetryDelays) {
+    RenderCoordinatorTestAccess::advanceFakeRetryClock(delay);
+    ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
+  }
+  ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 0)
+      << "the failed request is held once its retries run out";
+
+  coordinator.requestPresentationRefresh();
+  EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1)
+      << "a renderer-setting change must reach the worker even after the retries ran out";
+}
+
+// When a retry falls due, the idle loop has already woken for it, and the next frame that asks for
+// a render posts it. A frame that cannot ask for one, such as while the sample picker is open, must
+// not be told to wake again at once, or the idle loop spins until the user acts.
+TEST(RenderCoordinatorTest, DueRetryDoesNotKeepTheIdleLoopAwake) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
+  ASSERT_THAT(coordinator.nextNothingToPresentRetryWakeSeconds(),
+              ::testing::Optional(::testing::FloatNear(0.1f, 1e-4f)));
+
+  RenderCoordinatorTestAccess::advanceFakeRetryClock(NothingToPresentRetry::kRetryDelays.front());
+  coordinator.pollRenderResult(app, viewport, textures);
+  EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt)
+      << "a due retry must not ask the idle loop to wake again";
+  EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 1), 1)
+      << "the next frame that asks for a render posts the due retry";
+}
+
+// Pacing holds back only the request that failed. A new document version, or a replaced document,
+// is a different request and is posted at once.
+TEST(RenderCoordinatorTest, NothingToPresentRetryStartsOverForANewVersionOrDocument) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  ASSERT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
+
+  app.applyMutation(EditorCommand::SetAttributeCommand(QuerySelector(app, "#r1"), "fill", "green"));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1)
+      << "an edit makes a new request, which gets its own attempt";
+
+  ASSERT_TRUE(app.loadFromString(kHiddenRectSvg));
+  coordinator.resetForLoadedDocument(app.document().documentGeneration());
+  EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1)
+      << "a replaced document starts over";
+  EXPECT_EQ(coordinator.displayedDocVersionForDiagnostics(), 0u);
+}
+
+// The eyedropper keeps asking for a document pixel capture until one lands. A capture render that
+// comes back with nothing to present must not re-arm that request on every frame either.
+TEST(RenderCoordinatorTest, PixelCaptureWithNothingToPresentIsNotRepostedEveryFrame) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  coordinator.setDocumentPixelCaptureEnabled(true);
+
+  const int posted = CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10);
+  EXPECT_THAT(posted, ::testing::AllOf(::testing::Ge(1), ::testing::Le(2)))
+      << "ten idle frames of a capture render that keeps producing nothing to present";
+  EXPECT_EQ(coordinator.documentPixelCaptureFor(app, viewport), nullptr);
+  EXPECT_FALSE(coordinator.documentPixelCaptureUnavailable())
+      << "a retry is still scheduled, so the capture is not given up yet";
+
+  for (const std::chrono::milliseconds delay : NothingToPresentRetry::kRetryDelays) {
+    RenderCoordinatorTestAccess::advanceFakeRetryClock(delay);
+    EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 1);
+  }
+  EXPECT_TRUE(coordinator.documentPixelCaptureUnavailable())
+      << "after the last retry fails, the picker reports the capture unavailable";
+  RenderCoordinatorTestAccess::advanceFakeRetryClock(std::chrono::minutes(1));
+  EXPECT_EQ(CountPostedRenders(coordinator, app, selectTool, viewport, textures, 10), 0)
+      << "an unavailable capture is not requested again for the same document and viewport";
 }
 
 }  // namespace

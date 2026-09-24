@@ -1,6 +1,6 @@
 name: Release
 
-# Build and publish an immutable artifact set exactly once for each release.
+# Publish only immutable artifacts built and qualified before the release event.
 on:
   release:
     types: [published]
@@ -20,9 +20,12 @@ jobs:
       run_id: ${{ steps.source.outputs.run_id }}
       attempt: ${{ steps.source.outputs.attempt }}
       artifact: ${{ steps.source.outputs.artifact }}
+      linux_artifact: ${{ steps.source.outputs.linux_artifact }}
+      macos_artifact: ${{ steps.source.outputs.macos_artifact }}
     env:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_BODY: ${{ github.event.release.body }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -32,140 +35,14 @@ jobs:
       - name: Require preflight for the exact release source
         id: source
         run: |
+          printf '%s' "$RELEASE_BODY" > "$RUNNER_TEMP/donner-release-body.md"
           python3 -B -m tools.bcr_release select-preflight \
-            --commit "$GITHUB_SHA" --tag "$RELEASE_TAG" --github-output "$GITHUB_OUTPUT"
-
-  linux:
-    needs: resolve-source
-    runs-on: ubuntu-24.04
-    env:
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ github.event.release.tag_name }}
-
-      - name: Verify release source
-        run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")" = "$GITHUB_SHA"
-
-      - name: Resolve retained platform artifacts
-        id: binary
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 -B -m tools.bcr_release plan-binaries --commit "$GITHUB_SHA" \
-            --release-run-id "$GITHUB_RUN_ID" --github-output "$GITHUB_OUTPUT"
-
-      - name: Install Clang dependencies
-        if: steps.binary.outputs.build_linux == 'true'
-        run: |
-          sudo apt-get install -y libncurses-dev
-
-      - uses: bazel-contrib/setup-bazel@0.19.0
-        if: steps.binary.outputs.build_linux == 'true'
-        with:
-          bazelisk-cache: true
-
-      - name: Cache Bazel
-        if: steps.binary.outputs.build_linux == 'true'
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cache/bazel
-          key: ${{ runner.os }}-bazel-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel') }}
-          restore-keys: |
-            ${{ runner.os }}-bazel-
-
-      - name: Build Binaries
-        if: steps.binary.outputs.build_linux == 'true'
-        run: |
-          mkdir release
-          bazelisk build --lockfile_mode=off -c opt //tools/ci:release_svg
-          cp bazel-bin/donner/svg/tool/donner-svg release/donner-svg_linux_x86_64
-          (cd release && sha256sum donner-svg_linux_x86_64 > donner-svg_linux_x86_64.sha256)
-          {
-            echo "source_commit=${GITHUB_SHA}"
-            echo "release_tag=${RELEASE_TAG}"
-            sha256sum .bazelversion .bazelrc MODULE.bazel third_party/bazel/non_bcr_deps.bzl
-          } > release/donner-svg_linux_x86_64.provenance
-
-      - name: Upload immutable build artifact
-        if: steps.binary.outputs.build_linux == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: donner-svg-linux-x86-64-${{ github.sha }}
-          path: release/
-          if-no-files-found: error
-          retention-days: 90
-
-  macos:
-    needs: resolve-source
-    runs-on: macos-26
-    env:
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-          ref: ${{ github.event.release.tag_name }}
-
-      - name: Verify release source
-        run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")" = "$GITHUB_SHA"
-
-      - name: Resolve retained platform artifacts
-        id: binary
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 -B -m tools.bcr_release plan-binaries --commit "$GITHUB_SHA" \
-            --release-run-id "$GITHUB_RUN_ID" --github-output "$GITHUB_OUTPUT"
-
-      - uses: bazel-contrib/setup-bazel@0.19.0
-        if: steps.binary.outputs.build_macos == 'true'
-        with:
-          bazelisk-cache: true
-
-      - name: Cache Bazel
-        if: steps.binary.outputs.build_macos == 'true'
-        uses: actions/cache@v6
-        with:
-          path: |
-            /private/var/tmp/_bazel_runner/
-          key: ${{ runner.os }}-bazel-${{ hashFiles('.bazelversion', '.bazelrc', 'MODULE.bazel') }}
-          restore-keys: |
-            ${{ runner.os }}-bazel-
-
-      - name: Build Binaries
-        if: steps.binary.outputs.build_macos == 'true'
-        run: |
-          mkdir release
-          bazelisk build --lockfile_mode=off -c opt //tools/ci:release_svg
-          cp bazel-bin/donner/svg/tool/donner-svg release/donner-svg_darwin_arm64
-          (cd release && shasum -a 256 donner-svg_darwin_arm64 > donner-svg_darwin_arm64.sha256)
-          {
-            echo "source_commit=${GITHUB_SHA}"
-            echo "release_tag=${RELEASE_TAG}"
-            shasum -a 256 .bazelversion .bazelrc MODULE.bazel third_party/bazel/non_bcr_deps.bzl
-          } > release/donner-svg_darwin_arm64.provenance
-
-      - name: Upload immutable build artifact
-        if: steps.binary.outputs.build_macos == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: donner-svg-darwin-arm64-${{ github.sha }}
-          path: release/
-          if-no-files-found: error
-          retention-days: 90
+            --commit "$GITHUB_SHA" --tag "$RELEASE_TAG" \
+            --release-body-file "$RUNNER_TEMP/donner-release-body.md" \
+            --github-output "$GITHUB_OUTPUT"
 
   publish-release-artifacts:
-    needs: [resolve-source, linux, macos]
+    needs: resolve-source
     runs-on: ubuntu-24.04
     env:
       RELEASE_ID: ${{ github.event.release.id }}
@@ -175,8 +52,7 @@ jobs:
       SOURCE_ATTEMPT: ${{ needs.resolve-source.outputs.attempt }}
     permissions:
       contents: write
-      id-token: write
-      attestations: write
+      attestations: read
       actions: read
     steps:
       - name: Checkout verified release source
@@ -194,13 +70,17 @@ jobs:
       - name: Download Linux artifact
         uses: actions/download-artifact@v8
         with:
-          name: donner-svg-linux-x86-64-${{ github.sha }}
+          name: ${{ needs.resolve-source.outputs.linux_artifact }}
+          run-id: ${{ needs.resolve-source.outputs.run_id }}
+          github-token: ${{ github.token }}
           path: release/linux
 
       - name: Download macOS artifact
         uses: actions/download-artifact@v8
         with:
-          name: donner-svg-darwin-arm64-${{ github.sha }}
+          name: ${{ needs.resolve-source.outputs.macos_artifact }}
+          run-id: ${{ needs.resolve-source.outputs.run_id }}
+          github-token: ${{ github.token }}
           path: release/macos
 
       - name: Download qualified source archive
@@ -218,23 +98,37 @@ jobs:
 
       - name: Verify immutable artifacts
         run: |
-          (cd release/linux && sha256sum --check --strict donner-svg_linux_x86_64.sha256)
-          (cd release/macos && sha256sum --check --strict donner-svg_darwin_arm64.sha256)
-          {
-            echo "source_commit=${GITHUB_SHA}"
-            echo "release_tag=${RELEASE_TAG}"
-            sha256sum .bazelversion .bazelrc MODULE.bazel third_party/bazel/non_bcr_deps.bzl
-          } > expected.provenance
-          cmp --silent expected.provenance release/linux/donner-svg_linux_x86_64.provenance
-          cmp --silent expected.provenance release/macos/donner-svg_darwin_arm64.provenance
+          python3 -B -m tools.release_cli verify --artifacts release/linux \
+            --platform linux-x86-64 --commit "$GITHUB_SHA" \
+            --run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"
+          python3 -B -m tools.release_cli verify --artifacts release/macos \
+            --platform darwin-arm64 --commit "$GITHUB_SHA" \
+            --run-id "$SOURCE_RUN_ID" --attempt "$SOURCE_ATTEMPT"
 
-      - name: Attest release binaries
-        uses: actions/attest-build-provenance@v3.2.0
-        with:
-          subject-path: |
-            release/linux/donner-svg_linux_x86_64
-            release/macos/donner-svg_darwin_arm64
-            release/source/*.tar.gz
+      - name: Verify preflight build attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify release/linux/donner-svg_linux_x86_64 \
+            --repo jwmcglynn/donner \
+            --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
+            --source-digest "$GITHUB_SHA" > /dev/null
+          gh attestation verify release/linux/donner-svg_linux_x86_64.bazel.lock \
+            --repo jwmcglynn/donner \
+            --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
+            --source-digest "$GITHUB_SHA" > /dev/null
+          gh attestation verify release/macos/donner-svg_darwin_arm64 \
+            --repo jwmcglynn/donner \
+            --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
+            --source-digest "$GITHUB_SHA" > /dev/null
+          gh attestation verify release/macos/donner-svg_darwin_arm64.bazel.lock \
+            --repo jwmcglynn/donner \
+            --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
+            --source-digest "$GITHUB_SHA" > /dev/null
+          gh attestation verify release/source/*.tar.gz \
+            --repo jwmcglynn/donner \
+            --signer-workflow jwmcglynn/donner/.github/workflows/bcr_preflight.yml \
+            --source-digest "$GITHUB_SHA" > /dev/null
 
       - name: Upload verified release artifacts without replacement
         env:
@@ -244,7 +138,9 @@ jobs:
             release/linux/donner-svg_linux_x86_64 \
             release/linux/donner-svg_linux_x86_64.sha256 \
             release/linux/donner-svg_linux_x86_64.provenance \
+            release/linux/donner-svg_linux_x86_64.bazel.lock \
             release/macos/donner-svg_darwin_arm64 \
             release/macos/donner-svg_darwin_arm64.sha256 \
             release/macos/donner-svg_darwin_arm64.provenance \
+            release/macos/donner-svg_darwin_arm64.bazel.lock \
             release/source/*

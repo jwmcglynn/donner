@@ -1054,7 +1054,7 @@ EXCLUDE                = docs/reports \
 # from the input.
 # The default value is: NO.
 
-EXCLUDE_SYMLINKS       = NO
+EXCLUDE_SYMLINKS       = YES
 
 # If the value of the INPUT tag contains directories, you can use the
 # EXCLUDE_PATTERNS tag to specify one or more wildcard patterns to exclude
@@ -1069,6 +1069,7 @@ EXCLUDE_PATTERNS       = *.py \
                          */donner/base/*.mm \
                          */donner/benchmarks/*.cc \
                          */donner/benchmarks/*.cpp \
+                         */donner/benchmarks/*.h \
                          */donner/benchmarks/*.mm \
                          */donner/css/*.cc \
                          */donner/css/*.cpp \

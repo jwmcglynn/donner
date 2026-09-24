@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -37,6 +38,15 @@ TEST(XMLSourceStore, InsertBeforeSpanMovesResolvedOffsets) {
   EXPECT_EQ(store.source(), "<svg><g/><rect/></svg>");
   EXPECT_EQ(SpanText(store, *span), "<rect/>");
   EXPECT_EQ(MustResolve(store, *span), (ResolvedSourceSpan{9, 16}));
+}
+
+TEST(XMLSourceStore, VersionExhaustionRejectsAnEditWithoutChangingSource) {
+  constexpr std::uint64_t kLastVersion = std::numeric_limits<std::uint64_t>::max();
+  XMLSourceStore store("abc", 16, kLastVersion);
+
+  EXPECT_FALSE(store.replace(0, 1, "z").has_value());
+  EXPECT_EQ(store.source(), "abc");
+  EXPECT_EQ(store.sourceVersion(), kLastVersion);
 }
 
 TEST(XMLSourceStore, BoundaryInsertionHonorsAnchorBias) {

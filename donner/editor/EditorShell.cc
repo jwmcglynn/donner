@@ -87,6 +87,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/resources/FontManager.h"
 #include "embed_resources/FiraCodeFont.h"
 #include "embed_resources/RobotoFont.h"
@@ -1579,6 +1580,7 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
   }
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds());
+  includeWake(renderCoordinator_.nextNothingToPresentRetryWakeSeconds());
   includeWake(textEditor_.nextFlashWakeSeconds());
   includeWake(textEditor_.nextRopeAnimationWakeSeconds());
   const bool sourcePaneTargetVisible = !adaptiveUiLayout_.compactTouch() && sourcePaneVisible_;

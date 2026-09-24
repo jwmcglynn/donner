@@ -35,6 +35,9 @@ the version number.
 
 ## Pre-Release: Documentation
 
+- [ ] **Retain the docs candidate and rollback asset**. Follow the
+      [documentation promotion and rollback procedure](docs_artifact_promotion.md). Record the
+      reviewed docs artifact and a previous healthy marker-bearing artifact before publication.
 - [ ] **Audit doc comments**. Review public API Doxygen from a doc writer's perspective. Check that
       descriptions are clear, parameters are documented, and code examples work.
 - [ ] **Update examples and code snippets**. Ensure examples in docs and README cover all major
@@ -89,9 +92,12 @@ concern; the tag never moves retroactively.
 - [ ] **Release approved**. Obtain explicit maintainer approval for the intended release. A main
       merge, tag or green preflight is not release approval.
 - [ ] **BCR preflight qualified**. Root and consumer module versions match. The exact final commit
-      has a successful `BCR Preflight` run and its retained `donner-bcr-qualified-<attempt>` artifact.
-      Follow the [BCR runbook](../design_docs/0018-bcr_release.md); a read-only manual dispatch can
-      supply missing preflight evidence without changing the commit.
+      has a successful `BCR Preflight` run and its retained `donner-bcr-qualified-<attempt>` artifact
+      plus both CLI binary artifacts and generated lockfiles from the same run and attempt. Confirm
+      the preflight build attestations for the source archive, binaries, and lockfiles; rerun all
+      jobs after a failed preflight.
+      Follow the [BCR runbook](../design_docs/0018-bcr_release.md); a manual dispatch on `main`
+      can supply missing preflight evidence while it still points to the exact commit.
 
 - [ ] **Create release tag**. Run `git tag -a vX.Y.Z -m "Donner SVG vX.Y.Z"` on the build-report commit.
 - [ ] **Push tag**. Run `git push origin vX.Y.Z`.
@@ -102,8 +108,10 @@ concern; the tag never moves retroactively.
   Follow the pattern from previous releases:
   - Title: `Donner SVG vX.Y.Z`
   - Body: copy from the RELEASE_NOTES.md entry
+  - Add `Release-Candidate-Preflight: <run-id>/<attempt>` on its own line, using the reviewed
+    successful preflight attempt. The Release workflow rejects a missing or ambiguous marker.
   - Attach binary artifacts (e.g., `donner-svg_darwin_arm64`, `donner-svg_linux_x86_64`)
-    (built by the Release workflow when the GitHub release is published)
+    through the Release workflow, which verifies and uploads the retained preflight bytes.
 - [ ] **Verify release artifacts**. Check that the GitHub release page shows the correct tag,
       binaries and `donner-X.Y.Z.tar.gz` with its checksum/provenance are attached, uploaded digests
       match the qualified artifacts, and the release body renders correctly.

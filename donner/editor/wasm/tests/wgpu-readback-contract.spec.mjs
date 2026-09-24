@@ -201,6 +201,10 @@ test("worker stats carry the GPU wait outcome that ended the frame", () => {
   assert.match(publisher[0], /stats\['gpuWaitTimeoutSite'\] = UTF8ToString/);
   assert.match(publisher[0], /stats\['gpuWaitTimeoutMs'\]/);
   assert.match(publisher[0], /stats\['publishReason'\] = 'render-result'/);
+  // When the worker rendered nothing, the poll keeps presenting the previous frame; the page must
+  // still be able to tell that iteration from one that presented.
+  assert.match(publisher[0], /stats\['nothingToPresent'\] = heap\[b \+ 32\] > 0/);
+  assert.match(publisher[0], /stats\['nothingToPresentTotal'\] =/);
 
   // The site names are what a failing run prints, so they are part of the
   // contract rather than an implementation detail.

@@ -395,6 +395,13 @@ TEST(GeodeGpuRootSelection, ARequestNamesItsBackendInAnyLetterCase) {
     ASSERT_THAT(kind, gpu::HasResult());
     EXPECT_THAT(kind.result(), testing::Eq(GpuBackendKind::NativeMetal));
   }
+  for (const char* request : {"vulkan", "VULKAN", "Vulkan"}) {
+    SCOPED_TRACE(request);
+    const ScopedGpuBackendRequest scoped(request);
+    const gpu::Result<GpuBackendKind> kind = ProcessDefaultGpuBackendKind();
+    ASSERT_THAT(kind, gpu::HasResult());
+    EXPECT_THAT(kind.result(), testing::Eq(GpuBackendKind::NativeVulkan));
+  }
 }
 
 #if defined(__APPLE__)
@@ -407,6 +414,23 @@ TEST(GeodeGpuRootSelection, ARequestForMetalSelectsTheNativeBackendByDefault) {
   const std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
   ASSERT_THAT(root, testing::NotNull()) << "no Metal device is available on this host";
   EXPECT_THAT(root->capabilities().backend, testing::Eq(GpuBackendKind::NativeMetal));
+}
+#endif
+
+#if defined(__linux__)
+/// On Linux the variable selects the native Vulkan backend for every selection that names no
+/// backend, and the root says it is Vulkan, which the filter engine's pass serialization reads.
+TEST(GeodeGpuRootSelection, ARequestForVulkanSelectsTheNativeBackendByDefault) {
+  const ScopedGpuBackendRequest scoped("vulkan");
+  // Selection halts on a request it cannot parse, which would end this binary rather than fail
+  // this case, so the request is checked first.
+  ASSERT_THAT(ProcessDefaultGpuBackendKind(), gpu::HasResult());
+  GpuRootSelection selection;
+  selection.label = "RequestedNativeVulkanSelection";
+  const std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
+  ASSERT_THAT(root, testing::NotNull()) << "no Vulkan device is available on this host";
+  EXPECT_THAT(root->capabilities().backend, testing::Eq(GpuBackendKind::NativeVulkan));
+  EXPECT_TRUE(root->capabilities().isVulkan);
 }
 #endif
 
@@ -453,7 +477,8 @@ TEST(GeodeGpuRootSelectionDeathTest, AnUnrecognizedRequestHaltsRatherThanFalling
   GpuRootSelection selection;
   selection.label = "UnrecognizedRequest";
   EXPECT_DEATH((void)SelectGpuRoot(selection),
-               "DONNER_GPU_BACKEND=metl names no GPU backend; accepted values: wgpu, metal");
+               "DONNER_GPU_BACKEND=metl names no GPU backend; accepted values: wgpu, metal, "
+               "vulkan");
 }
 
 /// A request the host cannot serve halts for the same reason. A selection constrained to a wgpu
@@ -469,6 +494,20 @@ TEST(GeodeGpuRootSelectionDeathTest, ARequestTheHostCannotServeHaltsRatherThanRe
   };
   EXPECT_DEATH((void)SelectGpuRoot(selection),
                "DONNER_GPU_BACKEND=metal asked for the native Metal backend");
+}
+
+/// The same holds for a request for native Vulkan, on a platform that has that backend and on
+/// one that does not.
+TEST(GeodeGpuRootSelectionDeathTest, AVulkanRequestTheHostCannotServeHaltsRatherThanRefusing) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  const ScopedGpuBackendRequest scoped("vulkan");
+  GpuRootSelection selection;
+  selection.label = "UnservableVulkanRequest";
+  selection.compatibleSurface = [](const wgpu::Instance&) -> std::optional<wgpu::Surface> {
+    return wgpu::Surface{};
+  };
+  EXPECT_DEATH((void)SelectGpuRoot(selection),
+               "DONNER_GPU_BACKEND=vulkan asked for the native Vulkan backend");
 }
 
 /// Why every context in this suite selects the transitional adapter by name.

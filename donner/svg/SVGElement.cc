@@ -27,6 +27,7 @@
 #include "donner/svg/components/text/TextInvalidation.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::svg {
 

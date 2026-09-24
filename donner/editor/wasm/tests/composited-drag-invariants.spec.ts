@@ -17,7 +17,7 @@ import {
   type ViewportStats,
   visibleDocumentRegion,
 } from "./composited-probe";
-import { dragStream, pointerClick } from "./gesture-streams";
+import { dragStream, pointerClick, waitForAppliedPointer } from "./gesture-streams";
 
 /**
  * Composited-output invariants for SHAPE DRAG and CLICK-SELECT.
@@ -117,6 +117,54 @@ async function readSettledViewportStats(page: Page): Promise<ViewportStats> {
   return viewport;
 }
 
+/** Wait until the presentation worker is observably idle past its follow-up-render debounce. */
+async function waitForPresentationQuiescence(page: Page, message: string): Promise<void> {
+  let lastCompletedResults: number | undefined;
+  let stableSinceMs = Date.now();
+  let lastSnapshot: { completedResults?: unknown; workerBusy?: unknown } = {};
+  try {
+    await expect
+      .poll(
+        async () => {
+          const snapshot = await page.evaluate(() => ({
+            completedResults: (window as unknown as {
+              __donnerWorkerStats?: { completedResults?: unknown };
+            }).__donnerWorkerStats?.completedResults,
+            workerBusy: (window as unknown as {
+              __donnerInteractionStats?: { workerBusy?: unknown };
+            }).__donnerInteractionStats?.workerBusy,
+          }));
+          lastSnapshot = snapshot;
+          const now = Date.now();
+          const valid = typeof snapshot.completedResults === "number"
+            && Number.isFinite(snapshot.completedResults)
+            && typeof snapshot.workerBusy === "boolean";
+          if (!valid) {
+            lastCompletedResults = undefined;
+            stableSinceMs = now;
+            return false;
+          }
+          if (snapshot.workerBusy || snapshot.completedResults !== lastCompletedResults) {
+            lastCompletedResults = snapshot.completedResults;
+            stableSinceMs = now;
+            return false;
+          }
+          return now - stableSinceMs >= scaledMs(400);
+        },
+        {
+          message,
+          timeout: scaledMs(6_000),
+          intervals: [16, 25, 50, 100],
+        },
+      )
+      .toBe(true);
+  } catch (error) {
+    throw new Error(`${message}; last diagnostics=${JSON.stringify(lastSnapshot)}`, {
+      cause: error,
+    });
+  }
+}
+
 /**
  * Open the Donner Splash from the carousel and wait until it is really open.
  *
@@ -211,9 +259,10 @@ async function openDonnerSplash(page: Page): Promise<{ editorBounds: Rect; docum
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(0);
-  // The debounced canvas-size commit lands after the first frame; sampling
-  // before it settles measures the load, not the gesture.
-  await page.waitForTimeout(scaledMs(1_500));
+  await waitForPresentationQuiescence(
+    page,
+    "Donner Splash presentation must settle before the drag fixture is measured",
+  );
   const settled = await readSettledViewportStats(page);
   return {
     editorBounds,
@@ -342,9 +391,10 @@ async function openBasicShapes(page: Page): Promise<{
       ),
     { timeout: scaledMs(20_000), intervals: [16, 25, 50, 100] },
   ).toBe(true);
-  // The debounced canvas-size commit lands after the first worker result. Bind the measured blue
-  // bounds and trajectory ROI only after that geometry has settled.
-  await page.waitForTimeout(scaledMs(1_500));
+  await waitForPresentationQuiescence(
+    page,
+    "Basic Shapes presentation must settle before the drag fixture is measured",
+  );
   const settled = await readSettledViewportStats(page);
   const documentRect = {
     x: settled.documentX,
@@ -423,6 +473,113 @@ function assertProbeUsable(result: CompositedProbeResult, minimumSamples: number
 const kMinimumProbeSamples = process.env.CI ? 12 : 16;
 
 test.describe("composited drag invariants", () => {
+  test("a: browser drag distance follows the measured viewport zoom", async ({ browserName, page }) => {
+    test.skip(browserName !== "chromium", "This CSS-pixel measurement runs in the Chromium lane");
+    test.setTimeout(scaledMs(90_000));
+    const failures = await openEditor(page);
+    const { editorBounds, blueBounds } = await openBasicShapes(page);
+    const target = { x: editorBounds.x + kBlueRectOffset.x, y: editorBounds.y + kBlueRectOffset.y };
+    // The earlier manual shortfall was 50 -> about 43 document units. A
+    // controlled 1.15 zoom makes that ratio explicit in a browser gesture.
+    await page.evaluate(({ x, y }) => {
+      document.querySelector("canvas#canvas")?.dispatchEvent(
+        new WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          clientX: x,
+          clientY: y,
+          ctrlKey: true,
+          deltaMode: WheelEvent.DOM_DELTA_PIXEL,
+          deltaY: -100 * Math.log(1.15),
+        }),
+      );
+    }, target);
+    await expect.poll(async () => (await readViewportStats(page))?.zoom ?? 0).toBeGreaterThan(1.14);
+    const viewport = await readSettledViewportStats(page);
+    expect(viewport.zoom).toBeCloseTo(1.15, 2);
+    const documentRect = {
+      x: viewport.documentX,
+      y: viewport.documentY,
+      width: viewport.documentWidth,
+      height: viewport.documentHeight,
+    };
+    let initialBlue: ReturnType<typeof readEditorPixelBoundsFromPng> = null;
+    await expect.poll(async () => {
+      const shot = await page.screenshot({ clip: documentRect });
+      initialBlue = readEditorPixelBoundsFromPng(shot, "basic-blue", documentRect, {
+        minX: 0,
+        minY: 0,
+        maxX: documentRect.width,
+        maxY: documentRect.height,
+      });
+      return initialBlue === null ? 0 : initialBlue.maxX - initialBlue.minX;
+    }, { timeout: scaledMs(10_000) }).toBeGreaterThan(blueBounds.width * 1.1);
+    if (initialBlue === null) throw new Error("blue shape is missing after zoom");
+    const pointerMoves = await page.evaluate(() => {
+      const moves: Array<{ x: number; y: number }> = [];
+      document.querySelector<HTMLCanvasElement>("canvas#canvas")?.addEventListener(
+        "pointermove",
+        (event) => {
+          moves.push({ x: event.clientX, y: event.clientY });
+        },
+      );
+      (window as unknown as { __dragDistanceProbe?: typeof moves }).__dragDistanceProbe = moves;
+      return moves;
+    });
+    expect(pointerMoves).toEqual([]);
+
+    await pointerClick(page, target);
+    await expect.poll(() => selectedCount(page)).toBeGreaterThan(0);
+    await page.waitForTimeout(scaledMs(800));
+    await page.mouse.move(target.x, target.y);
+    await page.mouse.down();
+    await expect.poll(async () =>
+      page.evaluate(() =>
+        (window as unknown as { __donnerInteractionStats?: { dragging?: boolean } })
+          .__donnerInteractionStats?.dragging ?? false
+      )
+    ).toBe(true);
+    await page.mouse.move(target.x + 50, target.y + 30);
+    await waitForAppliedPointer(page, { x: target.x + 50, y: target.y + 30 }, {
+      timeoutMs: scaledMs(5_000),
+      message: "drag endpoint",
+    });
+    await expect.poll(async () =>
+      page.evaluate(() =>
+        (window as unknown as { __donnerInteractionStats?: { moved?: boolean } })
+          .__donnerInteractionStats?.moved ?? false
+      )
+    ).toBe(true);
+    await page.mouse.up();
+
+    let finalBlue: ReturnType<typeof readEditorPixelBoundsFromPng> = null;
+    await expect.poll(async () => {
+      const shot = await page.screenshot({ clip: documentRect });
+      finalBlue = readEditorPixelBoundsFromPng(shot, "basic-blue", documentRect, {
+        minX: 0,
+        minY: 0,
+        maxX: documentRect.width,
+        maxY: documentRect.height,
+      });
+      return finalBlue?.minX ?? -1;
+    }, { timeout: scaledMs(10_000) }).toBeGreaterThan(initialBlue.minX + 30);
+    const moves = await page.evaluate(() =>
+      (window as unknown as { __dragDistanceProbe?: Array<{ x: number; y: number }> })
+        .__dragDistanceProbe ?? []
+    );
+    console.log(
+      `drag-distance-evidence ${
+        JSON.stringify({ viewport, target, moves, initialBlue, finalBlue })
+      }`,
+    );
+    expect(moves.at(-1)).toEqual({ x: target.x + 50, y: target.y + 30 });
+    expect(finalBlue).not.toBeNull();
+    if (finalBlue === null) throw new Error("blue shape is missing after drag");
+    expect(Math.abs(finalBlue.minX - initialBlue.minX - 50)).toBeLessThan(3);
+    expect(Math.abs(finalBlue.minY - initialBlue.minY - 30)).toBeLessThan(3);
+    expect(failures.length).toBe(0);
+  });
+
   test("g: a shape drag never presents a position it already left", async ({ browserName, page }) => {
     // Keep the read-backs behind every candidate: this gesture drags the
     // rectangle past the artboard's top-left corner, where the editor pins the
