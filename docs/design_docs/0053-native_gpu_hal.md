@@ -91,15 +91,19 @@ The native backends replace the transitional adapter one platform at a time. The
 the production path on a platform until that platform's Geode, renderer and editor suites pass on
 the native backend, and a separate change then flips that platform's default. Until then:
 
-- `DONNER_GPU_BACKEND` (`wgpu` or `metal`) sets the backend for every selection that does not name
-  one, so a whole suite runs end to end on a backend that is not yet the default. A value that
-  names no backend, or a requested backend the host cannot provide, halts instead of falling
-  back, and a process that asks for a backend logs the one it selected, so a run shows which
-  backend executed.
+- `DONNER_GPU_BACKEND` (`wgpu`, `metal` or `vulkan`) sets the backend for every selection that
+  does not name one, so a whole suite runs end to end on a backend that is not yet the default. A
+  value that names no backend, or a requested backend the host cannot provide, halts instead of
+  falling back, and a process that asks for a backend logs the one it selected, so a run shows
+  which backend executed.
 - A native Metal root reports the device's own limits and drains its queue with a bounded wait for
   the last submitted serial, and a Metal device reports failed work as the loss of the root it
   shares. Contexts hold the runtime device and count what it accepts and releases through its
   observer; the adapter accessor resolves only on the adapter.
+- On Linux, a native Vulkan root reports its physical device's own limits without opening a device
+  for them, and every Vulkan device over it shares the root's loss condition. Vulkan does not
+  register textures across devices yet, so snapshot capture and cross-context snapshot drawing
+  still fail on it ([#1407](https://github.com/jwmcglynn/donner/issues/1407)).
 - The Geode, renderer and GPU-shader fixtures run on whichever backend the process selects. Cases
   whose subject is the adapter, or wgpu objects an embedder hands over, select the adapter by
   name, run under any override, and log why when the process default is another backend. The
