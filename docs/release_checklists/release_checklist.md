@@ -35,6 +35,9 @@ the version number.
 
 ## Pre-Release: Documentation
 
+- [ ] **Retain the docs candidate and rollback asset**. Follow the
+      [documentation promotion and rollback procedure](docs_artifact_promotion.md). Record the
+      reviewed docs artifact and a previous healthy marker-bearing artifact before publication.
 - [ ] **Audit doc comments**. Review public API Doxygen from a doc writer's perspective. Check that
       descriptions are clear, parameters are documented, and code examples work.
 - [ ] **Update examples and code snippets**. Ensure examples in docs and README cover all major
