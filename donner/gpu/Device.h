@@ -763,9 +763,11 @@ public:
    * VulkanDevice copy busy-buffer writes with four-byte-aligned offsets and sizes into a bounded
    * queue, flushed before the next ordinary submission, including an empty command stream.
    * Unaligned writes wait for that buffer's outstanding work and return
-   * GpuErrorType::InvalidState if the bounded wait times out. Queued writes can fail with
-   * GpuErrorType::LimitExceeded when their staging budget is exhausted. Callers must handle
-   * these errors without assuming a failed write changed the buffer.
+   * GpuErrorType::InvalidState if the bounded wait times out. On VulkanDevice, a wait that ends
+   * because another device over the same root declared it lost returns GpuErrorType::DeviceLost
+   * instead. Queued writes can fail with GpuErrorType::LimitExceeded when their staging budget
+   * is exhausted. Callers must handle these errors without assuming a failed write changed the
+   * buffer.
    *
    * @param buffer Destination buffer.
    * @param offsetBytes Destination byte offset.

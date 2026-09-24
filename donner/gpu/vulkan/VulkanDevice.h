@@ -66,8 +66,8 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  *
  * A device takes part in the loss condition of the root it opens over (see \ref Create). A
  * device-lost result from the driver declares that condition, as a backend-reported loss, before
- * the error is latched; serial waits and mappings end as soon as any device over the root has
- * declared it.
+ * the error is latched; serial waits, texture uploads and mappings end as soon as any device over
+ * the root has declared it.
  *
  * Which allocation a buffer is bound into is the allocator's decision, behind the seam in
  * VulkanBufferAllocator.h: one dedicated allocation per buffer today, with a suballocating
@@ -334,9 +334,9 @@ public:
   /// @param deviceLost Whether to inject terminal device loss instead of recoverable host OOM.
   void failNextSubmissionForTest(bool deviceLost = false);
 
-  /// Calls \p hook each time a step of a serial wait's fence wait times out, before the wait
-  /// checks the root's loss condition, so a test can declare a loss while a wait is known to be
-  /// blocked. Test accessor; an empty function removes the hook.
+  /// Calls \p hook each time a step of a fence wait times out, in a serial wait or a texture
+  /// upload, before the wait checks the root's loss condition, so a test can declare a loss while
+  /// a wait is known to be blocked. Test accessor; an empty function removes the hook.
   /// @param hook Called on the waiting thread.
   void setFenceWaitStepHookForTest(std::function<void()> hook);
 
