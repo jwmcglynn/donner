@@ -224,6 +224,15 @@ public:
    */
   Result<TrackedTextureLayout> trackedTextureLayoutForTest(const Texture& texture) const;
 
+  /**
+   * Whether \p view has a native image view. Test accessor: a view of a texture that can be
+   * neither sampled, stored to nor rendered to has none, and nothing a slice reads back shows
+   * whether one was made. Fails closed on a handle that does not name a live view of this device.
+   *
+   * @param view View to query.
+   */
+  Result<bool> hasNativeViewForTest(const TextureView& view) const;
+
   /// One image barrier the backend recorded, reported as plain numbers so this header stays free
   /// of Vulkan types. Test accessor: which barriers are emitted is the whole contract of the
   /// resource-state model, and it is not observable in the pixels a slice reads back.

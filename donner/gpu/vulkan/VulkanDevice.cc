@@ -2478,6 +2478,19 @@ Result<VulkanDevice::TrackedTextureLayout> VulkanDevice::trackedTextureLayoutFor
   }
 }
 
+Result<bool> VulkanDevice::hasNativeViewForTest(const TextureView& view) const {
+  if (Status status = validateTextureViewHandleForBackend(view); status.hasError()) {
+    return std::move(status).error();
+  }
+  const Impl::TextureViewRecord* record = FindRecord(impl_->textureViews, view.slotIndex());
+  if (record == nullptr) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    std::format("texture view handle (slot {}) does not name a live Vulkan view",
+                                view.slotIndex())};
+  }
+  return record->view != VK_NULL_HANDLE;
+}
+
 void VulkanDevice::setImageBarrierRecordingForTest(bool enabled) {
   if (enabled) {
     impl_->recordedBarriers.emplace();
@@ -2610,6 +2623,20 @@ Status VulkanDevice::onCreateTextureView(uint32_t slotIndex, uint32_t textureSlo
                     std::format("texture slot {} has no Vulkan image", textureSlotIndex)};
   }
 
+  // Vulkan accepts a view only of an image created with one of these usages
+  // (VUID-VkImageViewCreateInfo-image-04441). A view of any other texture keeps its slot with no
+  // native view, and binding it is refused before it gets here.
+  constexpr VkImageUsageFlags kViewableImageUsage =
+      VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
+      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+      VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+  if ((ToVkImageUsage(texture->usage) & kViewableImageUsage) == 0) {
+    SetSlot(impl_->textureViews, slotIndex,
+            std::optional<Impl::TextureViewRecord>(
+                Impl::TextureViewRecord{VK_NULL_HANDLE, textureSlotIndex}));
+    return OkStatus();
+  }
+
   VkImageViewCreateInfo viewInfo = {};
   viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
   viewInfo.image = texture->image;
@@ -2715,7 +2742,7 @@ Status VulkanDevice::Impl::bindDescriptorResource(const BindGroupEntry& entry, s
   } else if (const TextureViewBinding* viewBinding =
                  std::get_if<TextureViewBinding>(&entry.resource)) {
     const TextureViewRecord* view = FindRecord(textureViews, viewBinding->view.slotIndex());
-    if (view == nullptr) {
+    if (view == nullptr || view->view == VK_NULL_HANDLE) {
       return GpuError{GpuErrorType::InvalidState,
                       std::format("bind group binding {} does not resolve to a Vulkan "
                                   "image view",
@@ -3609,6 +3636,10 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
       return GpuError{
           GpuErrorType::InvalidState,
           std::format("render pass attachment {} does not resolve to a Vulkan image", i)};
+    }
+    if (view->view == VK_NULL_HANDLE) {
+      return GpuError{GpuErrorType::InvalidState,
+                      std::format("render pass attachment {} has no native image view", i)};
     }
 
     // Explicit transition to the attachment layout; the pass then begins and ends in
