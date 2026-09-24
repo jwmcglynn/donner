@@ -940,19 +940,19 @@ bool RuntimePresentationSurface::attachToWindow(const wgpu::Instance& instance,
 #endif
 }
 
+#ifndef __APPLE__
 wgpu::Surface RuntimePresentationSurface::adapterSelectionSurface() const {
-#ifdef __APPLE__
-  // A Metal layer presents from any Metal adapter the system reports, so adapter selection is
-  // left unconstrained - which it must be, since the layer is not a surface object to constrain
-  // it with.
-  return {};
-#else
   return platformSurface_;
-#endif
 }
+#endif
 
 bool RuntimePresentationSurface::chooseConfiguration(const wgpu::Adapter& adapter,
                                                      bool enableReadback) {
+#ifdef __APPLE__
+  // A Metal layer's format is not a question for an adapter, and a native device's selection
+  // produces none.
+  (void)adapter;
+#else
   if (!adapter) {
     // The format below is what the adapter reports its surface can present. Settling one without
     // asking would compile the renderer's pipelines for a format nothing checked, and the window
@@ -960,12 +960,13 @@ bool RuntimePresentationSurface::chooseConfiguration(const wgpu::Adapter& adapte
     std::fprintf(stderr, "EditorWindow: no adapter to ask what the window surface can present\n");
     return false;
   }
+#endif
   readback_ = enableReadback;
   // The renderer compiles its pipelines for this format before there is a device to ask the
   // runtime for surface capabilities, so it is settled here and checked against what the surface
   // reports as soon as there is one.
 #ifdef __APPLE__
-  // A Core Animation Metal layer presents BGRA8Unorm.
+  // A Core Animation Metal layer presents BGRA8Unorm whichever device draws into it.
   format_ = gpu::TextureFormat::BGRA8Unorm;
 #else
   wgpu::SurfaceCapabilities caps;
@@ -977,7 +978,7 @@ bool RuntimePresentationSurface::chooseConfiguration(const wgpu::Adapter& adapte
 }
 
 bool RuntimePresentationSurface::attachToDevice(geode::GeodeDevice& device) {
-  return attachToRuntime(device.adapterDevice(), native_, format_, readback_);
+  return attachToRuntime(device.runtimeDevice(), native_, format_, readback_);
 }
 
 bool RuntimePresentationSurface::attachToRuntime(gpu::Device& device,
@@ -1138,6 +1139,42 @@ std::unique_ptr<PresentationSurface> CreateEditorPresentationSurface() {
   return std::make_unique<RuntimePresentationSurface>();
 }
 
+/**
+ * Builds the surface \p window presents through, and readies \p selection for it.
+ *
+ * A Metal layer presents from any Metal device the system reports and belongs to no instance, so
+ * on Apple it is attached here and the selection is left unconstrained; the native backend refuses
+ * a selection constrained to a wgpu surface. Everywhere else the adapter has to be able to present
+ * to the window's surface object, which is made from the instance the selection creates, so the
+ * selection is handed a provider that makes it.
+ *
+ * @param window Window whose platform object frames are presented to.
+ * @param presentation Receives the surface; must outlive the selection.
+ * @param selection Selection about to be made.
+ * @param attachFailed Set when the window's platform object could not be obtained, here on Apple
+ *   and while the selection runs elsewhere; must outlive the selection.
+ */
+void PrepareSurfaceForSelection(GLFWwindow* window,
+                                std::unique_ptr<PresentationSurface>& presentation,
+                                geode::GpuRootSelection& selection, bool& attachFailed) {
+#ifdef __APPLE__
+  (void)selection;
+  presentation = CreateEditorPresentationSurface();
+  attachFailed = !presentation->attachToWindow(wgpu::Instance(), window);
+#else
+  selection.compatibleSurface =
+      [window, &presentation,
+       &attachFailed](const wgpu::Instance& instance) -> std::optional<wgpu::Surface> {
+    presentation = CreateEditorPresentationSurface();
+    if (!presentation->attachToWindow(instance, window)) {
+      attachFailed = true;
+      return std::nullopt;
+    }
+    return presentation->adapterSelectionSurface();
+  };
+#endif
+}
+
 /// Follows the window with a new configuration and acquires again, which is the operation a
 /// resize already performs, so a configuration that has drifted out of date costs a
 /// reconfiguration rather than a dropped frame.
@@ -1279,7 +1316,7 @@ private:
 /// @param registry Registry the renderer resolves draw commands against.
 /// @param surfaceFormat Surface format the pipelines must target.
 /// @param fonts Font atlas uploaded and registered as the UI's font texture.
-std::unique_ptr<ImGuiRuntimeRenderer> CreateUiRenderer(geode::GeodeWgpuAdapterDevice& device,
+std::unique_ptr<ImGuiRuntimeRenderer> CreateUiRenderer(gpu::Device& device,
                                                        UiTextureRegistry& registry,
                                                        gpu::TextureFormat surfaceFormat,
                                                        ImFontAtlas& fonts) {
@@ -1383,7 +1420,8 @@ struct EditorWindow::WgpuState {
   // and texture below is destroyed before the shared physical roots.
   std::shared_ptr<geode::GeodePhysicalDeviceOwner> physicalDevice;
   /// The backend objects the contexts below render through, reached through the selected runtime
-  /// device rather than held separately, so there is one owner of them.
+  /// device rather than held separately, so there is one owner of them. Recorded once the first
+  /// context retains the root, so it never names one nothing holds.
   const geode::GeodeGpuRoot* root = nullptr;
   gpu::TextureFormat surfaceFormat = gpu::TextureFormat::BGRA8Unorm;
   gpu::TextureUsage surfaceUsage = gpu::TextureUsage::RenderAttachment;
@@ -1414,11 +1452,12 @@ struct EditorWindow::WgpuState {
   /// for the same thing the first one did.
   bool surfaceReadbackEnabled = false;
 
-  /// A constructor that gave up before the device was selected leaves the root null with the rest
-  /// of the state in place.
+  /// A constructor that gave up before the framebuffer context existed leaves it null with the
+  /// rest of the state in place. Asked of the context rather than of the root's wgpu objects,
+  /// which a native backend's root does not hold.
   /// @return Whether this state names a device and something to draw into.
   bool canPresentFrames() const {
-    return root != nullptr && root->device() &&
+    return framebufferGeodeDevice != nullptr &&
            (presentation != nullptr || offscreenTexture.isValid());
   }
 };
@@ -1583,38 +1622,22 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   // where it previously fell back and ran.
   selection.usePlatformDefaultBackend = false;
   if (!useOffscreenWgpuTarget) {
-    // The window surface has to exist before an adapter is chosen, because the adapter has to be
-    // able to present to it. The selection hands over the instance for exactly that.
-    selection.compatibleSurface =
-        [this,
-         &surfaceAttachFailed](const wgpu::Instance& instance) -> std::optional<wgpu::Surface> {
-      wgpuState_->presentation = internal::CreateEditorPresentationSurface();
-      if (!wgpuState_->presentation->attachToWindow(instance, window_)) {
-        surfaceAttachFailed = true;
-        return std::nullopt;
-      }
-      // Null here is a surface that constrains nothing, not a failure.
-      return wgpuState_->presentation->adapterSelectionSurface();
-    };
+    internal::PrepareSurfaceForSelection(window_, wgpuState_->presentation, selection,
+                                         surfaceAttachFailed);
   }
 
-  std::shared_ptr<geode::GeodeGpuRoot> root = geode::SelectGpuRoot(selection);
+  std::shared_ptr<geode::GeodeGpuRoot> root =
+      surfaceAttachFailed ? nullptr : geode::SelectGpuRoot(selection);
   if (root == nullptr) {
-    std::fprintf(stderr, surfaceAttachFailed ? "EditorWindow: failed to create WebGPU surface\n"
-                                             : "EditorWindow: no usable WebGPU device available\n");
+    std::fprintf(stderr, surfaceAttachFailed
+                             ? "EditorWindow: failed to create the window's presentation surface\n"
+                             : "EditorWindow: no usable WebGPU device available\n");
     wgpuState_->presentation.reset();
     glfwDestroyWindow(window_);
     window_ = nullptr;
     TerminateGlfw();
     return;
   }
-  // Presentation, surface readback and UI texture registration still reach the transitional
-  // adapter's wgpu objects directly. Halting names the gap; a window that failed to open instead
-  // reads to its tests as a host without a GPU, and they skip.
-  UTILS_RELEASE_ASSERT_MSG(
-      root->capabilities().backend == geode::GpuBackendKind::TransitionalWgpu,
-      "EditorWindow presents only through the transitional adapter, and the process selected a "
-      "native GPU backend");
 
   bool enableSurfaceReadback = options_.enableFramebufferReadback;
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
@@ -1649,7 +1672,6 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   surfaceWidth = std::max(1, surfaceWidth);
   surfaceHeight = std::max(1, surfaceHeight);
 
-  wgpuState_->root = root.get();
   wgpuState_->geodeDevice =
       geode::GeodeDevice::CreateOverSelectedRoot(std::move(root), wgpuState_->surfaceFormat);
   if (wgpuState_->geodeDevice == nullptr) {
@@ -1663,6 +1685,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   // Retained separately so it outlives both contexts below: it is declared before them, so the
   // selected device and its backend objects are released only after the last context is gone.
   wgpuState_->physicalDevice = wgpuState_->geodeDevice->physicalDeviceOwner();
+  wgpuState_->root = &wgpuState_->physicalDevice->root();
 #ifdef __EMSCRIPTEN__
   static_assert(internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/true));
   // The Wasm render worker owns a separate device, leaving both users of this
@@ -1821,8 +1844,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     std::fprintf(stderr, "EditorWindow: ImGui_ImplGlfw_InitForOther failed\n");
     return;
   }
-  geode::GeodeWgpuAdapterDevice& runtimeDevice =
-      wgpuState_->framebufferGeodeDevice->adapterDevice();
+  gpu::Device& runtimeDevice = wgpuState_->framebufferGeodeDevice->runtimeDevice();
   wgpuState_->uiTextureRegistry = std::make_unique<UiTextureRegistry>(runtimeDevice);
   wgpuState_->uiRenderer = CreateUiRenderer(runtimeDevice, *wgpuState_->uiTextureRegistry,
                                             wgpuState_->surfaceFormat, *io.Fonts);

@@ -713,7 +713,9 @@ public:
   void refuseConfiguration() { configureSucceeds_ = false; }
 
   bool attachToWindow(const wgpu::Instance&, GLFWwindow*) override { return true; }
+#ifndef __APPLE__
   wgpu::Surface adapterSelectionSurface() const override { return {}; }
+#endif
   bool chooseConfiguration(const wgpu::Adapter&, bool) override { return true; }
   bool attachToDevice(geode::GeodeDevice&) override { return true; }
 
@@ -1197,14 +1199,27 @@ TEST_F(RuntimePresentationSurfaceTest, PresentingWithNoFrameHeldDoesNothing) {
   EXPECT_EQ(device_.abandonCalls, 0);
 }
 
-/// The window settles the format its renderer compiles pipelines for by asking the selected
-/// adapter what the surface can present. With no adapter there is nothing to ask, so answering
-/// anyway settles a format nothing checked: the browser arm of selection reached this with a null
-/// adapter and the window went on to configure the swapchain from the reply.
+#ifdef __APPLE__
+/// A Metal layer presents BGRA8Unorm whichever device draws into it, so the window settles the
+/// format its renderer compiles pipelines for without an adapter to ask. A native device's
+/// selection produces none, and the format is still checked against what the surface reports once
+/// the device exists.
+TEST_F(RuntimePresentationSurfaceTest, AMetalLayerSettlesItsFormatWithoutAnAdapter) {
+  EXPECT_THAT(surface_.chooseConfiguration(wgpu::Adapter(), /*enableReadback=*/false),
+              testing::IsTrue())
+      << "a Metal layer's format is not a question for an adapter";
+  EXPECT_THAT(surface_.format(), testing::Eq(gpu::TextureFormat::BGRA8Unorm));
+}
+#else
+/// Everywhere but Apple the window settles the format its renderer compiles pipelines for by
+/// asking the selected adapter what the surface can present. With no adapter there is nothing to
+/// ask, so answering anyway settles a format nothing checked: the browser arm of selection reached
+/// this with a null adapter and the window went on to configure the swapchain from the reply.
 TEST_F(RuntimePresentationSurfaceTest, ChoosingAConfigurationWithoutAnAdapterIsRefused) {
   EXPECT_FALSE(surface_.chooseConfiguration(wgpu::Adapter(), /*enableReadback=*/false))
       << "a selection that produced no adapter has not produced a surface configuration either";
 }
+#endif
 
 TEST_F(RuntimePresentationSurfaceTest, ASurfaceThatCannotPresentTheCompiledFormatIsRefused) {
   device_.formats = {gpu::TextureFormat::RGBA8Unorm};
@@ -1492,6 +1507,50 @@ TEST(EditorWindowTest, NumericDragFieldsSupportSimpleClickToEdit) {
   EXPECT_TRUE(ImGui::GetIO().ConfigDragClickToInputText);
 }
 
+/// Opens a window presenting to its surface (false) or rendering offscreen (true).
+class EditorWindowBackendTest : public testing::TestWithParam<bool> {};
+
+/// The window renders through whichever backend the process selects, on the arm that presents
+/// to a window surface and the arm that renders offscreen alike, and its surface, UI renderer and
+/// UI texture registry come up on that backend's device.
+TEST_P(EditorWindowBackendTest, OpensOnTheBackendTheProcessSelected) {
+  const gpu::Result<geode::GpuBackendKind> selected = geode::ProcessDefaultGpuBackendKind();
+  ASSERT_THAT(selected, gpu::HasResult());
+  SCOPED_TRACE(testing::Message() << "selected backend: " << selected.result());
+
+  EditorWindow window(EditorWindowOptions{
+      .title = "Selected Backend Window Test",
+      .initialWidth = 64,
+      .initialHeight = 48,
+      .visible = false,
+      .forceOffscreenRenderTarget = GetParam(),
+  });
+  ASSERT_THAT(window.valid(), testing::IsTrue())
+      << "the window did not open on the backend the process selected";
+  ASSERT_THAT(window.geodeFramebufferDevice(), testing::NotNull());
+#ifdef __APPLE__
+  // A hidden Cocoa window still presents to its Metal layer; only a forced target is offscreen.
+  EXPECT_THAT(window.usingOffscreenRenderTarget(), testing::Eq(GetParam()));
+#else
+  // A host without a display renders every window offscreen, so only the forced arm is known.
+  if (GetParam()) {
+    EXPECT_THAT(window.usingOffscreenRenderTarget(), testing::IsTrue());
+  }
+#endif
+  EXPECT_THAT(window.geodeFramebufferDevice()->physicalDeviceOwner()->root().capabilities().backend,
+              testing::Eq(selected.result()));
+  ASSERT_THAT(CurrentImGuiRuntimeRenderer(), testing::NotNull());
+  EXPECT_THAT(CurrentImGuiRuntimeRenderer()->device().deviceId(),
+              testing::Eq(window.geodeFramebufferDevice()->runtimeDevice().deviceId()))
+      << "the UI is drawn on a device other than the window's framebuffer device";
+}
+
+INSTANTIATE_TEST_SUITE_P(Targets, EditorWindowBackendTest, testing::Bool(),
+                         [](const testing::TestParamInfo<bool>& info) {
+                           return info.param ? std::string("Offscreen")
+                                             : std::string("WindowSurface");
+                         });
+
 TEST(EditorWindowTest, WgpuFramebufferGeodeDeviceSharingMatchesThreadingModel) {
   EXPECT_TRUE(internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/true));
   EXPECT_FALSE(internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/false));
@@ -1519,11 +1578,20 @@ TEST(EditorWindowTest, WgpuFramebufferGeodeDeviceSharingMatchesThreadingModel) {
   EXPECT_EQ(window.geodeFramebufferDevice()->physicalDeviceOwner(),
             window.geodeDevice()->physicalDeviceOwner());
   EXPECT_NE(window.geodeFramebufferDevice()->deviceId(), window.geodeDevice()->deviceId());
-  EXPECT_EQ(
-      static_cast<WGPUDevice>(window.geodeFramebufferDevice()->adapterDevice().root().device()),
-      static_cast<WGPUDevice>(window.geodeDevice()->adapterDevice().root().device()));
-  EXPECT_EQ(static_cast<WGPUQueue>(window.geodeFramebufferDevice()->adapterDevice().root().queue()),
-            static_cast<WGPUQueue>(window.geodeDevice()->adapterDevice().root().queue()));
+
+  // Both wrappers drive one backend device. A texture of one registers on the other only then:
+  // the transitional adapter also requires the two to submit to one queue, and Metal requires the
+  // texture's device to be the consumer's own.
+  gpu::Device& producer = window.geodeDevice()->runtimeDevice();
+  gpu::Device& consumer = window.geodeFramebufferDevice()->runtimeDevice();
+  gpu::Result<gpu::Texture> texture = producer.createTexture(gpu::TextureDescriptor{
+      "SharedBackendDeviceProbe", gpu::Extent2d{4, 4}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  ASSERT_THAT(texture, gpu::HasResult());
+  gpu::Result<gpu::TextureExport> exported = producer.exportTexture(texture.result());
+  ASSERT_THAT(exported, gpu::HasResult());
+  EXPECT_THAT(consumer.registerTexture(exported.result()), gpu::HasResult())
+      << "the UI framebuffer wrapper does not drive the backend device the renderer does";
 #endif
 }
 
@@ -1546,15 +1614,11 @@ TEST(EditorWindowTest, WgpuPhysicalDeviceOutlivesWindowWhenContextIsRetained) {
   }
 
   ASSERT_FALSE(physicalOwner.expired());
-  ASSERT_TRUE(static_cast<bool>(retainedContext->adapterDevice().root().device()));
-  wgpu::BufferDescriptor descriptor = {};
-  descriptor.label = geode::wgpuLabel("RetainedContextBuffer");
-  descriptor.size = 16;
-  descriptor.usage = wgpu::BufferUsage::CopyDst;
   {
-    geode::ScopedWgpuHandle<wgpu::Buffer> buffer(
-        retainedContext->adapterDevice().root().device().createBuffer(descriptor));
-    EXPECT_TRUE(static_cast<bool>(buffer));
+    gpu::Result<gpu::Buffer> buffer = retainedContext->runtimeDevice().createBuffer(
+        gpu::BufferDescriptor{"RetainedContextBuffer", 16, gpu::BufferUsage::CopyDst});
+    EXPECT_THAT(buffer, gpu::HasResult())
+        << "the retained context's backend device went away with the window";
   }
 
   retainedContext.reset();

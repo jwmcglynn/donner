@@ -165,9 +165,10 @@ struct GpuRootSelection {
   ///
   /// `std::nullopt` aborts the selection: the caller could not build what it meant to present to,
   /// and handing back a device that cannot present to it would fail later and further from the
-  /// cause. A null surface inside the optional is a caller that presents through a platform object
-  /// no surface can constrain - a Metal layer presents from any Metal adapter the system reports -
-  /// so selection is left unconstrained.
+  /// cause. A null surface inside the optional leaves selection unconstrained. The native backend
+  /// presents to no wgpu surface and refuses any selection carrying a provider; a caller whose
+  /// platform object constrains no selection, such as a Metal layer, prepares it before selecting
+  /// and sets none.
   std::function<std::optional<wgpu::Surface>(const wgpu::Instance&)> compatibleSurface;
 
   /// Backend to select, or empty for the process default (see \ref ProcessDefaultGpuBackendKind).
