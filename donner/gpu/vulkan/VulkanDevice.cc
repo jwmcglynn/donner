@@ -2853,8 +2853,8 @@ Result<BackendTextureExport> VulkanDevice::onExportTexture(uint32_t slotIndex) {
                     "exportTexture: the Vulkan slot does not own a live image"};
   }
   if (record->allocation == nullptr) {
-    // A swapchain retains its acquired images and may recycle one at presentation. E6's owned
-    // image path cannot promise that a sibling alias outlives the frame.
+    // A swapchain owns its acquired images and may recycle one at presentation. This runtime
+    // cannot retain a borrowed frame image for a sibling alias beyond that handoff.
     return GpuError{GpuErrorType::Unsupported,
                     "exportTexture: a Vulkan surface frame cannot be registered"};
   }
