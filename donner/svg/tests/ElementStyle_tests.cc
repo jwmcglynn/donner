@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::Optional;

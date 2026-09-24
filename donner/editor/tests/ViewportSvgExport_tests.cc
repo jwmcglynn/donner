@@ -23,6 +23,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor {
