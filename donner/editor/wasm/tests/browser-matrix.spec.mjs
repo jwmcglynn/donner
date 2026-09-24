@@ -244,6 +244,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       "chromium_remote_smoke_browser_backend",
       "firefox_composited_invariants_test",
       "font_reference_probe",
+      "standalone_geode_browser_renderer_test",
     ],
     "every playwright_test lane must be named and checked; update this contract when one is added",
   );
@@ -257,6 +258,23 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   for (const lane of lanes) {
     const laneName = /name = "([^"]+)"/.exec(lane)?.[1];
     const browserBackendLane = /browser_backend/.test(laneName);
+    if (laneName === "standalone_geode_browser_renderer_test") {
+      assert.ok(
+        lane.includes("\"//donner/svg/renderer/wasm:_geode_browser_test_package_for_playwright\""),
+        "standalone renderer must serve its browser-selected Geode package",
+      );
+      assert.ok(
+        lane.includes("\"//donner/editor/tests:standalone_geode_browser_png_compare\""),
+        "standalone renderer pixels must use the shared pixelmatch helper",
+      );
+      assert.ok(
+        lane.includes(
+          "\"//donner/editor/tests:testdata/browser/standalone_geode_browser_renderer.png\"",
+        ),
+        "standalone renderer must carry its committed golden",
+      );
+      continue;
+    }
     assert.equal(
       lane.includes(`"${browserBackendPackage}"`),
       browserBackendLane,

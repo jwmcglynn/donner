@@ -122,7 +122,8 @@
 
     status.textContent = 'Loading WASM module (with ASYNCIFY)...';
 
-    // 2. Load the Emscripten ES6 module, injecting the pre-provisioned device.
+    // 2. Load the Emscripten ES6 module. The adapter variant reuses the
+    // pre-provisioned device; the selected browser runtime obtains its own.
     try {
       const { default: createModule } = await import('./donner_wasm_geode_bin.js');
       Module = await createModule({
@@ -137,9 +138,8 @@
 
     // 3. Wrap exported C functions.
     //
-    // `donner_geode_init` and `donner_geode_render_svg` internally call
-    // wgpu::createInstance() / requestAdapter() / requestDevice() / poll -
-    // all of which suspend the WASM call stack via ASYNCIFY so the JS
+    // `donner_geode_init` and `donner_geode_render_svg` can request a GPU
+    // device and wait for readback, suspending the WASM call stack via ASYNCIFY so the JS
     // microtask queue can drive the browser's WebGPU Promise resolution.
     // From JS, the exported functions must be wrapped with `async: true`
     // so the returned value is a Promise we can `await`. Without this,
