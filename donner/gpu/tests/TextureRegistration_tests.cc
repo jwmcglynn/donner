@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <optional>
 #include <span>
@@ -24,8 +25,10 @@
 #include "donner/gpu/tests/RecordingDeviceObserver.h"
 #include "donner/gpu/tests/SharingTestDevice.h"
 
+using testing::ElementsAre;
 using testing::Eq;
 using testing::HasSubstr;
+using testing::IsEmpty;
 using testing::IsFalse;
 using testing::IsTrue;
 using testing::Lt;
@@ -441,6 +444,132 @@ TEST_F(TextureRegistrationTest, ASharedQueueRegistrationNeedsNoWait) {
 
   EXPECT_THAT(consumer.waitForTextureSource(registered, 0.0), IsTrue());
   EXPECT_THAT(SubmitSharedTextureRead(consumer, registered), HasResult());
+}
+
+/// Records and submits one command buffer that reads each of \p textures, in order.
+/// @param device Device the textures belong to. @param textures Textures to read.
+Result<uint64_t> SubmitReads(Device& device, std::initializer_list<const Texture*> textures) {
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device.createCommandEncoder());
+  std::vector<Buffer> buffers;
+  for (const Texture* texture : textures) {
+    buffers.push_back(GetResultOrFail(
+        device.createBuffer(BufferDescriptor{"readback", 256u * kSharedTextureExtent.height,
+                                             BufferUsage::CopyDst | BufferUsage::MapRead})));
+    if (Status copied = encoder->copyTextureToBuffer(
+            TexelCopyTextureInfo{*texture}, buffers.back(),
+            TexelCopyBufferLayout{0, 256, kSharedTextureExtent.height}, kSharedTextureExtent);
+        copied.hasError()) {
+      return std::move(copied).error();
+    }
+  }
+  return device.submit(GetResultOrFail(encoder->finish()));
+}
+
+/// Matches a device-side wait for \p serial on some export's backing.
+MATCHER_P(WaitsFor, serial,
+          "waits on the device for producer serial " + testing::PrintToString(serial)) {
+  *result_listener << "waits for serial " << arg.serial
+                   << (arg.backing == nullptr ? " on no backing" : "");
+  return arg.backing != nullptr && arg.serial == serial;
+}
+
+/// Two devices over one native device whose backend orders consumers on the device: work naming a
+/// registration is accepted while the producer's work still runs, and the consumer's backend is
+/// told which producer work its submission waits for. The host never waits.
+class DeviceOrderedRegistrationTest : public testing::Test {
+protected:
+  FakeNativeDevice native_;
+  SharingDevice producer_{native_, SharingOptions{.ordering = SourceOrdering::WaitOnDevice}};
+  SharingDevice consumer_{native_, SharingOptions{.ordering = SourceOrdering::WaitOnDevice}};
+};
+
+TEST_F(DeviceOrderedRegistrationTest, WorkIsAcceptedAtOnceAndWaitsOnTheDeviceForTheProducer) {
+  const Texture owned = MakeSharedTexture(producer_);
+  producer_.holdCompletion();
+  const uint64_t producerSerial = GetResultOrFail(SubmitSharedTextureRead(producer_, owned));
+  const Texture registered =
+      GetResultOrFail(consumer_.registerTexture(GetResultOrFail(producer_.exportTexture(owned))));
+
+  EXPECT_THAT(consumer_.waitForTextureSource(registered, 0.0), IsTrue())
+      << "the device orders the work, so the host has nothing to wait for";
+  ASSERT_THAT(SubmitSharedTextureRead(consumer_, registered), HasResult());
+  EXPECT_THAT(consumer_.lastSourceWaits(), ElementsAre(WaitsFor(producerSerial)));
+  EXPECT_THAT(consumer_.isLost(), IsFalse());
+  EXPECT_THAT(producer_.isLost(), IsFalse());
+
+  producer_.releaseCompletion();
+  ASSERT_THAT(SubmitSharedTextureRead(consumer_, registered), HasResult());
+  EXPECT_THAT(consumer_.lastSourceWaits(), IsEmpty())
+      << "producer work that has completed needs no wait";
+}
+
+TEST_F(DeviceOrderedRegistrationTest, ASubmissionWaitsOnceForATextureAtItsLatestSerial) {
+  const Texture owned = MakeSharedTexture(producer_);
+  const TextureExport exported = GetResultOrFail(producer_.exportTexture(owned));
+  producer_.holdCompletion();
+  ASSERT_THAT(SubmitSharedTextureRead(producer_, owned), HasResult());
+  const Texture early = GetResultOrFail(consumer_.registerTexture(exported));
+  const uint64_t latest = GetResultOrFail(SubmitSharedTextureRead(producer_, owned));
+  const Texture late = GetResultOrFail(consumer_.registerTexture(exported));
+
+  ASSERT_THAT(SubmitReads(consumer_, {&early, &late, &early}), HasResult());
+
+  EXPECT_THAT(consumer_.lastSourceWaits(), ElementsAre(WaitsFor(latest)))
+      << "one texture is waited for once, at the latest producer work any of its registrations "
+         "follows";
+}
+
+TEST_F(DeviceOrderedRegistrationTest, ProducerWorkNotYetHandedToItsQueueIsRefusedNotWaitedOn) {
+  const Texture owned = MakeSharedTexture(producer_);
+  producer_.deferCommit();
+  const uint64_t producerSerial = GetResultOrFail(SubmitSharedTextureRead(producer_, owned));
+  const Texture registered =
+      GetResultOrFail(consumer_.registerTexture(GetResultOrFail(producer_.exportTexture(owned))));
+
+  EXPECT_THAT(SubmitSharedTextureRead(consumer_, registered),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("not submitted")))
+      << "a device-side wait on work its producer has not handed over could wait for a host "
+         "thread that is waiting for this one";
+  EXPECT_THAT(consumer_.waitForTextureSource(registered, 0.0), IsFalse());
+
+  producer_.commitDeferred();
+  EXPECT_THAT(consumer_.waitForTextureSource(registered, 0.0), IsTrue());
+  ASSERT_THAT(SubmitSharedTextureRead(consumer_, registered), HasResult());
+  EXPECT_THAT(consumer_.lastSourceWaits(), ElementsAre(WaitsFor(producerSerial)));
+}
+
+TEST_F(DeviceOrderedRegistrationTest, ProducerWorkThatWasOnlyRecordedIsNotWaitedFor) {
+  const Texture owned = MakeSharedTexture(producer_);
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(producer_.createCommandEncoder());
+  const Buffer target = GetResultOrFail(
+      producer_.createBuffer(BufferDescriptor{"recorded", 256u * kSharedTextureExtent.height,
+                                              BufferUsage::CopyDst | BufferUsage::MapRead}));
+  ASSERT_THAT(encoder->copyTextureToBuffer(
+                  TexelCopyTextureInfo{owned}, target,
+                  TexelCopyBufferLayout{0, 256, kSharedTextureExtent.height}, kSharedTextureExtent),
+              IsOk());
+  const CommandBuffer recorded = GetResultOrFail(encoder->finish());
+  const Texture registered =
+      GetResultOrFail(consumer_.registerTexture(GetResultOrFail(producer_.exportTexture(owned))));
+
+  ASSERT_THAT(SubmitSharedTextureRead(consumer_, registered), HasResult());
+  EXPECT_THAT(consumer_.lastSourceWaits(), IsEmpty())
+      << "work the producer only recorded follows the registration, so nothing waits for it";
+  EXPECT_THAT(recorded.isValid(), IsTrue());
+}
+
+TEST_F(DeviceOrderedRegistrationTest, LossAndProducerFailureAreStillRefused) {
+  const Texture owned = MakeSharedTexture(producer_);
+  producer_.holdCompletion();
+  ASSERT_THAT(SubmitSharedTextureRead(producer_, owned), HasResult());
+  const Texture registered =
+      GetResultOrFail(consumer_.registerTexture(GetResultOrFail(producer_.exportTexture(owned))));
+
+  producer_.failExecution();
+  EXPECT_THAT(consumer_.waitForTextureSource(registered, 0.0), IsFalse());
+  EXPECT_THAT(SubmitSharedTextureRead(consumer_, registered), IsGpuError(GpuErrorType::DeviceLost))
+      << "a producer whose work failed has nothing a consumer can trust";
+  EXPECT_THAT(producer_.isLost(), IsTrue());
 }
 
 /// Loss ends the wait at once rather than spending its budget, and ends submissions naming the

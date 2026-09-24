@@ -214,10 +214,20 @@ struct ParkedCompletion {
 
 /// State shared with Metal command-buffer completion handlers, which run on a Metal-internal
 /// thread. Held by shared_ptr so a handler that outlives the device touches valid memory.
-struct CompletionState {
+struct CompletionState final : DeviceLossRelease {
   /// Highest serial through which every submission's completion has been published. Advanced
   /// only in serial order, under \ref watermarkMutex.
   std::atomic<uint64_t> completedSerial{0};
+  /// Highest serial whose command buffers have been committed to the queue.
+  std::atomic<uint64_t> committedSerial{0};
+  /// Signalled with the completed serial as it advances, so another device's queue can wait on
+  /// the GPU for this device's work: a consumer's command buffer waits for the serial it reads
+  /// after. Signalled from the completion path rather than encoded on the GPU, so work that failed
+  /// still releases whatever waits for it.
+  id<MTLSharedEvent> completionEvent = nil;
+  /// Value \ref completionEvent was last signalled with; guarded by \ref watermarkMutex, which
+  /// is what keeps the event's value from ever going down.
+  uint64_t signaledSerial = 0;
   std::atomic<uint64_t> inFlightStagingBytes{0};  //!< Accepted uploads awaiting completion.
   std::atomic<uint64_t> inFlightPayloadBytes{0};  //!< Logical bytes charged to the upload budget.
   std::atomic<bool> hadError{false};  //!< True once any command buffer reported an error.
@@ -234,6 +244,24 @@ struct CompletionState {
   std::mutex watermarkMutex;
   /// Serials published while an earlier serial's completion was still outstanding.
   std::set<uint64_t> finishedAhead;
+
+  /// Signals \ref completionEvent with \p serial if that raises it. Requires \ref watermarkMutex.
+  /// @param serial Value to signal.
+  void signalCompletionLocked(uint64_t serial) {
+    if (completionEvent != nil && serial > signaledSerial) {
+      signaledSerial = serial;
+      completionEvent.signaledValue = serial;
+    }
+  }
+
+  /// A declared loss releases every command buffer of another device waiting on this device's
+  /// work: this device's queue may never complete it, and the waiter's teardown and bounded waits
+  /// would otherwise sit behind that wait. No value a waiter can ask for is above the one
+  /// signalled, so no later completion lowers it.
+  void releaseOnLoss() override {
+    std::lock_guard<std::mutex> lock(watermarkMutex);
+    signalCompletionLocked(std::numeric_limits<uint64_t>::max());
+  }
 };
 
 /// What one submission's command buffers reported, gathered until the last of them finishes.
@@ -329,6 +357,7 @@ void PublishCompletion(CompletionState& state, uint64_t serial, NSError* executi
         state.finishedAhead.erase(state.finishedAhead.begin());
       }
       state.completedSerial.store(completed, std::memory_order_release);
+      state.signalCompletionLocked(completed);
     }
   }
 
@@ -389,13 +418,18 @@ constexpr char kMetalTextureShareFamily = 'M';
 /// registration names it; ARC releases it on whichever thread drops the last reference.
 class MetalExportedTexture final : public ExportedTextureBacking {
 public:
-  explicit MetalExportedTexture(id<MTLTexture> texture) : texture_(texture) {}
+  /// @param texture The exported texture. @param producer Completion of the device exporting it.
+  MetalExportedTexture(id<MTLTexture> texture, std::shared_ptr<CompletionState> producer)
+      : texture_(texture), producer_(std::move(producer)) {}
 
   /// The exported texture.
   id<MTLTexture> texture() const { return texture_; }
+  /// Completion of the device that exported the texture, whose event a consumer waits on.
+  const std::shared_ptr<CompletionState>& producer() const { return producer_; }
 
 private:
   id<MTLTexture> texture_;
+  std::shared_ptr<CompletionState> producer_;
 };
 
 /// A device's completion as consumers on other threads read it: the counter the command-buffer
@@ -407,6 +441,9 @@ public:
 
   uint64_t completedSerial() const override {
     return state_->completedSerial.load(std::memory_order_acquire);
+  }
+  uint64_t committedSerial() const override {
+    return state_->committedSerial.load(std::memory_order_acquire);
   }
   bool failed() const override { return state_->hadError.load(std::memory_order_acquire); }
 
@@ -464,6 +501,15 @@ struct MetalDevice::Impl {
 
   std::shared_ptr<CompletionState> completionState =
       std::make_shared<CompletionState>();  //!< Shared with completion handlers.
+
+  /// One producer's work the submission being encoded waits for on the GPU.
+  struct PendingSourceWait {
+    std::shared_ptr<CompletionState> producer;  //!< Producer whose event is waited on.
+    uint64_t serial = 0;                        //!< Value the event has to reach.
+  };
+  /// Waits the submission being encoded places at the start of its first command buffer, one per
+  /// producer with the latest serial it needs. Set and cleared around one \ref onSubmit.
+  std::vector<PendingSourceWait> pendingSourceWaits;
   /// \ref completionState as exports of this device's textures report it; created on the first
   /// export.
   std::shared_ptr<const SubmissionCompletion> exportCompletion;
@@ -855,7 +901,12 @@ std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel,
   if (!lostState) {
     lostState = std::make_shared<DeviceLostState>();
   }
+  result->impl_->completionState->completionEvent = [device newSharedEvent];
+  if (result->impl_->completionState->completionEvent == nil) {
+    return nullptr;
+  }
   result->impl_->completionState->rootLoss = lostState;
+  lostState->addLossRelease(result->impl_->completionState);
   result->adoptLostState(std::move(lostState));
   return result;
 }
@@ -1091,10 +1142,11 @@ Result<BackendTextureExport> MetalDevice::onExportTexture(uint32_t slotIndex) {
     impl_->exportCompletion = std::make_shared<MetalSubmissionCompletion>(impl_->completionState);
   }
   BackendTextureExport exported;
-  exported.backing = std::make_shared<const MetalExportedTexture>(texture);
+  exported.backing = std::make_shared<const MetalExportedTexture>(texture, impl_->completionState);
   // Each runtime device submits to its own command queue, and nothing orders one queue's work
-  // after another's, so a consumer waits for this device's work to complete.
-  exported.ordering = SourceOrdering::WaitForSource;
+  // after another's, so a consumer's command buffer waits on the GPU for this device's
+  // completion event to reach the serial it reads after.
+  exported.ordering = SourceOrdering::WaitOnDevice;
   exported.completion = impl_->exportCompletion;
   // An upload carried by a submission that never named the texture is recorded only here.
   exported.contentSerial = GetSlot(impl_->textureUploadSerials, slotIndex);
@@ -2233,6 +2285,12 @@ Status MetalDevice::Impl::beginSubmission(EncodingState& state, bool encodeQueue
   if (submissionGate != nil) {
     [state.commandBuffer encodeWaitForEvent:submissionGate value:1];
   }
+  // The submission's first buffer carries the waits; the rest run after it on this queue.
+  if (encodeQueuedWrites) {
+    for (const PendingSourceWait& wait : pendingSourceWaits) {
+      [state.commandBuffer encodeWaitForEvent:wait.producer->completionEvent value:wait.serial];
+    }
+  }
 
   return encodeQueuedWrites ? encodePendingWrites(state) : OkStatus();
 }
@@ -2322,9 +2380,32 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial,
   for (Impl::EncodingState& state : states) {
     [state.commandBuffer commit];
   }
+  impl_->completionState->committedSerial.store(submissionSerial, std::memory_order_release);
   impl_->didSubmitWrites(submissionSerial);
 
   return OkStatus();
+}
+
+Status MetalDevice::onSubmitAfterSources(uint64_t submissionSerial,
+                                         std::span<const SubmittedCommandBuffer> commandBuffers,
+                                         std::span<const SourceWait> waits) {
+  impl_->pendingSourceWaits.clear();
+  for (const SourceWait& wait : waits) {
+    const std::shared_ptr<CompletionState>& producer =
+        static_cast<const MetalExportedTexture&>(*wait.backing).producer();
+    const auto sameProducer = [&producer](const Impl::PendingSourceWait& pending) {
+      return pending.producer == producer;
+    };
+    if (auto pending = std::ranges::find_if(impl_->pendingSourceWaits, sameProducer);
+        pending != impl_->pendingSourceWaits.end()) {
+      pending->serial = std::max(pending->serial, wait.serial);
+    } else {
+      impl_->pendingSourceWaits.push_back(Impl::PendingSourceWait{producer, wait.serial});
+    }
+  }
+  Status status = onSubmit(submissionSerial, commandBuffers);
+  impl_->pendingSourceWaits.clear();
+  return status;
 }
 
 void MetalDevice::Impl::releaseFrameTextureSlot(uint32_t slotIndex, id<MTLTexture> frameTexture) {

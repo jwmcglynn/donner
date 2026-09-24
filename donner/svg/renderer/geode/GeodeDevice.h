@@ -150,13 +150,14 @@ struct SnapshotReadbackResources {
 };
 
 /**
- * Registers a texture another context exported as a texture of \p consumer, and waits until the
- * producer's work on it has completed, so what \p consumer records against it next may be
- * submitted.
+ * Registers a texture another context exported as a texture of \p consumer, and waits until what
+ * \p consumer records against it next may be submitted.
  *
- * For a context that draws the registration in a frame rather than capturing it: on a backend
- * whose contexts share one queue it returns at once, and otherwise it blocks this thread for the
- * producer's frame.
+ * For a context that draws the registration in a frame rather than capturing it. It returns at
+ * once on a backend whose contexts share one queue, and on one that orders the consumer's work
+ * after the producer's on the device (Metal), where it waits only for the producer to have
+ * handed that work to its queue, which it has by the time it exports. On any other backend it
+ * blocks this thread for the producer's frame.
  *
  * Loss policy. The runtime's source wait declares nothing when its budget runs out; this helper
  * is the consumer's own bounded wait and applies the policy of every other bounded wait over a

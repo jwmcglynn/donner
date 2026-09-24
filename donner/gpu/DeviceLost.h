@@ -9,13 +9,17 @@
 /// any one runtime device, because several runtime devices routinely drive one root and a root
 /// that stopped answering has stopped answering all of them.
 ///
-/// This header is deliberately free of the runtime's descriptors and handles (atomics, chrono and
-/// an ostream declaration only) so a wait loop can publish a loss without pulling the device in.
+/// This header is deliberately free of the runtime's descriptors and handles (atomics, chrono,
+/// the standard containers and an ostream declaration only) so a wait loop can publish a loss
+/// without pulling the device in.
 
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <iosfwd>
+#include <memory>
+#include <mutex>
+#include <vector>
 
 namespace donner::gpu {
 
@@ -39,6 +43,20 @@ enum class DeviceLostWaitSite : std::uint8_t {
 
 /// Ostream output operator, e.g. `QueueIdle`. @param os Output stream. @param site Value to output.
 std::ostream& operator<<(std::ostream& os, DeviceLostWaitSite site);
+
+/**
+ * Work a declared loss has to release: something blocked on the device behind a wait that only
+ * progress on the lost root would ever satisfy. Left blocked, it would hold every later wait on
+ * that device, the device's own teardown included, until the wait's bound ran out.
+ */
+class DeviceLossRelease {
+public:
+  virtual ~DeviceLossRelease();
+
+  /// Releases what is blocked. Called at most once per registration, on the thread that declared
+  /// the loss, after the condition is set.
+  virtual void releaseOnLoss() = 0;
+};
 
 /**
  * Sticky device-loss condition of one backend root.
@@ -69,13 +87,33 @@ struct DeviceLostState {
   /// `timedOutSite`, which publishes it, so a reader that sees a site also sees that site's
   /// elapsed time. Zero while `timedOutSite` is `None`.
   std::atomic<int> timedOutElapsedMs{0};
+
+  /**
+   * Registers \p release to run when this condition is declared, or runs it at once when it
+   * already has been. Held weakly, so a release whose owner is gone is skipped rather than kept
+   * alive; registering one that is already held does nothing. Callable from any thread.
+   *
+   * @param release What the declaration must release.
+   */
+  void addLossRelease(std::weak_ptr<DeviceLossRelease> release);
+
+private:
+  friend bool DeclareDeviceLost(DeviceLostState& state);
+
+  /// Runs every registered release once. Called by the declaration that set \ref lost.
+  void runLossReleases();
+
+  std::mutex releaseMutex_;  //!< Guards \ref releases_ and \ref releasesRun_.
+  std::vector<std::weak_ptr<DeviceLossRelease>> releases_;  //!< Releases still to run.
+  bool releasesRun_ = false;  //!< Whether the declaration has run the releases.
 };
 
 /**
  * Declare @p state lost with no wait to attribute it to.
  *
  * For losses the backend reports: there is no deadline behind them, so `timedOutSite` stays
- * `None` and says exactly that.
+ * `None` and says exactly that. The call that declares the loss runs every release registered
+ * with \ref DeviceLostState::addLossRelease before it returns.
  *
  * @param state Shared device-lost record.
  * @return True when this call performed the false-to-true transition, so a caller can log the

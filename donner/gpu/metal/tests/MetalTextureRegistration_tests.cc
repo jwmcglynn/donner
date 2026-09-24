@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -28,9 +29,11 @@ namespace {
 
 using testing::Each;
 using testing::Eq;
+using testing::Ge;
 using testing::IsEmpty;
 using testing::IsFalse;
 using testing::IsTrue;
+using testing::Lt;
 
 /// One row of texels is exactly one copy row pitch, so a readback needs no repacking.
 constexpr Extent2d kExtent{kTexelRowPitchAlignment / 4, 4};
@@ -260,11 +263,52 @@ TEST_F(MetalTextureRegistrationTest, AQueuedWriteRefusesRegistrationUntilItIsSub
   ASSERT_THAT(producer_->submit(Unwrap(Unwrap(producer_->createCommandEncoder())->finish())),
               HasResult());
   const Texture registered = Unwrap(consumer_->registerTexture(exported));
-  EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.05), IsFalse());
+  const Buffer readback = MakeReadbackBuffer(*consumer_);
+  const uint64_t copied = Unwrap(SubmitCopy(*consumer_, registered, readback));
+  EXPECT_THAT(consumer_->waitForSerial(copied, 0.05), IsFalse())
+      << "the read ran before the gated submission that carried the write";
 
   producer_->resumeSubmissionsForTest();
-  ASSERT_THAT(consumer_->waitForTextureSource(registered, 5.0), IsTrue());
-  EXPECT_THAT(Texels(ReadTexels(*consumer_, registered)), Each(Eq(kBlue)));
+  ASSERT_THAT(consumer_->waitForSerial(copied, 5.0), IsTrue());
+  EXPECT_THAT(Texels(MapTexels(*consumer_, readback)), Each(Eq(kBlue)));
+}
+
+/// A consumer's work held on the device behind a producer's is released when the root the two
+/// share is declared lost. A producer that stops answering must not leave the consumer's queue,
+/// and with it the consumer's own bounded waits and teardown, stuck behind that wait.
+TEST_F(MetalTextureRegistrationTest, ADeclaredLossReleasesAConsumerWaitingOnTheDevice) {
+  const auto rootLost = std::make_shared<DeviceLostState>();
+  std::unique_ptr<MetalDevice> producer = MetalDevice::Create(
+      MetalDevice::MemoryModel::Detected, kMaxBufferByteSize, std::chrono::seconds(5), rootLost);
+  std::unique_ptr<MetalDevice> consumer = MetalDevice::Create(
+      MetalDevice::MemoryModel::Detected, kMaxBufferByteSize, std::chrono::seconds(5), rootLost);
+  ASSERT_THAT(producer, testing::NotNull());
+  ASSERT_THAT(consumer, testing::NotNull());
+  const Texture target = MakeProducerTexture(*producer);
+  ASSERT_THAT(producer->pauseSubmissionsForTest(), IsOk());
+  ASSERT_THAT(SubmitGreenClear(*producer, target), HasResult());
+  const Texture registered =
+      Unwrap(consumer->registerTexture(Unwrap(producer->exportTexture(target))));
+  const Buffer readback = MakeReadbackBuffer(*consumer);
+  const uint64_t copied = Unwrap(SubmitCopy(*consumer, registered, readback));
+  ASSERT_THAT(consumer->waitForSerial(copied, 0.05), IsFalse())
+      << "the read did not wait for the gated producer, so there is nothing to release";
+
+  ASSERT_THAT(DeclareDeviceLost(*rootLost), IsTrue());
+  const auto declared = std::chrono::steady_clock::now();
+  EXPECT_THAT(consumer->waitForSerial(copied, 5.0), IsFalse())
+      << "a bounded wait on a lost root ends at once";
+  const auto releaseDeadline = declared + std::chrono::seconds(2);
+  while (consumer->completedSerial() < copied &&
+         std::chrono::steady_clock::now() < releaseDeadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_THAT(consumer->completedSerial(), Ge(copied))
+      << "the consumer's read is still waiting on the device after the loss";
+  consumer.reset();
+  EXPECT_THAT(std::chrono::steady_clock::now() - declared, Lt(std::chrono::seconds(2)))
+      << "the consumer's teardown waited behind the released read";
+  producer->resumeSubmissionsForTest();
 }
 
 }  // namespace

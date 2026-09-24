@@ -324,6 +324,11 @@ protected:
                         const Origin2d& destinationOrigin) override;
   Status onSubmit(uint64_t submissionSerial,
                   std::span<const SubmittedCommandBuffer> commandBuffers) override;
+  /// Places a GPU wait on each producer's completion event at the start of the submission's
+  /// first command buffer, one per producer at the latest serial it needs, then submits.
+  Status onSubmitAfterSources(uint64_t submissionSerial,
+                              std::span<const SubmittedCommandBuffer> commandBuffers,
+                              std::span<const SourceWait> waits) override;
   Status onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor& descriptor) override;
   Result<SurfaceCapabilities> onSurfaceCapabilities(uint32_t slotIndex) const override;
   Status onConfigureSurface(uint32_t slotIndex, const SurfaceConfiguration& configuration) override;

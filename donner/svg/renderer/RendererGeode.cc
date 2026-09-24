@@ -8194,9 +8194,9 @@ RendererBitmap RendererGeodeTextureSnapshot::readTextureCpu(
 bool RendererGeodeTextureSnapshot::waitForCaptureSource(geode::GeodeDevice& context,
                                                         const gpu::Texture& source,
                                                         ReadbackControl& control) {
-  // On a backend whose contexts submit to separate queues, nothing recorded here may reach the
-  // queue before the producer's work on the texture has completed. Sliced so the capture's own
-  // cancellation and deadline still apply.
+  // On a backend whose contexts submit to separate queues and do not order each other's work on
+  // the device, nothing recorded here may reach the queue before the producer's work on the
+  // texture has completed. Sliced so the capture's own cancellation and deadline still apply.
   while (!context.runtimeDevice().waitForTextureSource(source, kReadbackWaitSliceSeconds)) {
     if (context.isDeviceLost()) {
       control.status = ReadbackMapStatus::DeviceLost;

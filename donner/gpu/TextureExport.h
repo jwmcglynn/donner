@@ -76,6 +76,10 @@ enum class SourceOrdering : uint8_t {
   /// registration may reach the queue only once the producer work it is ordered after has
   /// completed.
   WaitForSource,
+  /// Producer and consumer submit to different native queues, and the consumer's backend makes a
+  /// submission that names the registration wait on the device for the producer work it is
+  /// ordered after. The submission is accepted at once, and nothing waits on the host.
+  WaitOnDevice,
 };
 
 /**
@@ -94,6 +98,12 @@ public:
   /// Highest producer submission serial known to have completed. Callable from any thread.
   [[nodiscard]] virtual uint64_t completedSerial() const = 0;
 
+  /// Highest producer submission serial whose work the producer's backend has handed to its
+  /// native queue, completed or not. A consumer ordered on the device waits only for work that
+  /// far along: a device-side wait on work the producer has not handed over could wait for a
+  /// host thread that is itself waiting for the consumer. Callable from any thread.
+  [[nodiscard]] virtual uint64_t committedSerial() const = 0;
+
   /// Whether the producer's backend has reported a terminal execution failure, after which no
   /// serial it reports as complete can be trusted. Callable from any thread.
   [[nodiscard]] virtual bool failed() const = 0;
@@ -105,7 +115,7 @@ struct BackendTextureExport {
   std::shared_ptr<const ExportedTextureBacking> backing;
   /// How registrations of this texture are ordered after the producer's work.
   SourceOrdering ordering = SourceOrdering::WaitForSource;
-  /// The producer's completion. Required for \ref SourceOrdering::WaitForSource.
+  /// The producer's completion. Required unless \ref ordering is \ref SourceOrdering::SharedQueue.
   std::shared_ptr<const SubmissionCompletion> completion;
   /// Producer serial whose completion makes the texture's current contents final, counting work
   /// the backend performed outside the runtime's own record of submissions (queued uploads).
@@ -113,6 +123,16 @@ struct BackendTextureExport {
   /// Whether a write to the texture is queued for the producer's next submission and has not been
   /// carried by one yet.
   bool writePending = false;
+};
+
+/// Producer work one consumer submission is ordered after on the device, for a registration whose
+/// ordering is \ref SourceOrdering::WaitOnDevice and whose producer work has not completed yet.
+struct SourceWait {
+  /// The producer's export of the registered texture. The consumer's backend is the producer's
+  /// too, and finds there what to wait on. Never null.
+  const ExportedTextureBacking* backing = nullptr;
+  /// Producer submission serial whose completion the consumer's work waits for.
+  uint64_t serial = 0;
 };
 
 namespace details {
