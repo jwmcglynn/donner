@@ -117,6 +117,54 @@ async function readSettledViewportStats(page: Page): Promise<ViewportStats> {
   return viewport;
 }
 
+/** Wait until the presentation worker is observably idle past its follow-up-render debounce. */
+async function waitForPresentationQuiescence(page: Page, message: string): Promise<void> {
+  let lastCompletedResults: number | undefined;
+  let stableSinceMs = Date.now();
+  let lastSnapshot: { completedResults?: unknown; workerBusy?: unknown } = {};
+  try {
+    await expect
+      .poll(
+        async () => {
+          const snapshot = await page.evaluate(() => ({
+            completedResults: (window as unknown as {
+              __donnerWorkerStats?: { completedResults?: unknown };
+            }).__donnerWorkerStats?.completedResults,
+            workerBusy: (window as unknown as {
+              __donnerInteractionStats?: { workerBusy?: unknown };
+            }).__donnerInteractionStats?.workerBusy,
+          }));
+          lastSnapshot = snapshot;
+          const now = Date.now();
+          const valid = typeof snapshot.completedResults === "number"
+            && Number.isFinite(snapshot.completedResults)
+            && typeof snapshot.workerBusy === "boolean";
+          if (!valid) {
+            lastCompletedResults = undefined;
+            stableSinceMs = now;
+            return false;
+          }
+          if (snapshot.workerBusy || snapshot.completedResults !== lastCompletedResults) {
+            lastCompletedResults = snapshot.completedResults;
+            stableSinceMs = now;
+            return false;
+          }
+          return now - stableSinceMs >= scaledMs(400);
+        },
+        {
+          message,
+          timeout: scaledMs(6_000),
+          intervals: [16, 25, 50, 100],
+        },
+      )
+      .toBe(true);
+  } catch (error) {
+    throw new Error(`${message}; last diagnostics=${JSON.stringify(lastSnapshot)}`, {
+      cause: error,
+    });
+  }
+}
+
 /**
  * Open the Donner Splash from the carousel and wait until it is really open.
  *
@@ -211,9 +259,10 @@ async function openDonnerSplash(page: Page): Promise<{ editorBounds: Rect; docum
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(0);
-  // The debounced canvas-size commit lands after the first frame; sampling
-  // before it settles measures the load, not the gesture.
-  await page.waitForTimeout(scaledMs(1_500));
+  await waitForPresentationQuiescence(
+    page,
+    "Donner Splash presentation must settle before the drag fixture is measured",
+  );
   const settled = await readSettledViewportStats(page);
   return {
     editorBounds,
@@ -342,9 +391,10 @@ async function openBasicShapes(page: Page): Promise<{
       ),
     { timeout: scaledMs(20_000), intervals: [16, 25, 50, 100] },
   ).toBe(true);
-  // The debounced canvas-size commit lands after the first worker result. Bind the measured blue
-  // bounds and trajectory ROI only after that geometry has settled.
-  await page.waitForTimeout(scaledMs(1_500));
+  await waitForPresentationQuiescence(
+    page,
+    "Basic Shapes presentation must settle before the drag fixture is measured",
+  );
   const settled = await readSettledViewportStats(page);
   const documentRect = {
     x: settled.documentX,
