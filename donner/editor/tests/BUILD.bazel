@@ -1,3 +1,4 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("//build_defs:package.bzl", "donner_package")
 load(
     "//build_defs:rules.bzl",
@@ -20,6 +21,11 @@ exports_files(
         "BitmapToBitmapCompare.cc",
     ],
     visibility = ["//visibility:public"],
+)
+
+exports_files(
+    ["testdata/browser/standalone_geode_browser_renderer.png"],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
 
 donner_cc_library(
@@ -48,6 +54,21 @@ donner_cc_library(
         "//donner/svg/renderer/tests:renderer_image_test_utils",
         "@com_google_gtest//:gtest",
         "@pixelmatch-cpp17",
+    ],
+)
+
+# Invoked by the browser Playwright lane after it captures the standalone Geode canvas.
+# Reuses the one pixelmatch golden helper and its inspectable actual/expected/diff artifacts.
+cc_binary(
+    name = "standalone_geode_browser_png_compare",
+    testonly = True,
+    srcs = ["StandaloneGeodeBrowserPngCompare.cc"],
+    tags = ["manual"],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/svg/renderer/tests:renderer_image_test_utils",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 
