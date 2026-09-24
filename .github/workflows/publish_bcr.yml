@@ -134,7 +134,6 @@ jobs:
     needs: [validate, generate-entry]
     if: needs.validate.outputs.prepare == 'true'
     runs-on: ubuntu-24.04
-    environment: bcr-fork-preparation
     steps:
       - name: Checkout trusted publication checks
         uses: actions/checkout@v7
@@ -184,6 +183,47 @@ jobs:
             --registry registry --source this --version "$VERSION" \
             --approved-sha256 "$APPROVED_SOURCE_SHA256" \
             --proposed-commit "$PREPARED_COMMIT"
+
+  publish-fork:
+    needs: [validate, generate-entry, prepare-fork]
+    if: needs.validate.outputs.prepare == 'true'
+    runs-on: ubuntu-24.04
+    environment: bcr-fork-preparation
+    steps:
+      - name: Download and reverify the entry without a fork token
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          PREPARED_BASE: ${{ needs.generate-entry.outputs.base }}
+          PREPARED_COMMIT: ${{ needs.generate-entry.outputs.commit }}
+          PREPARED_TREE: ${{ needs.generate-entry.outputs.tree }}
+          BUNDLE_SHA256: ${{ needs.generate-entry.outputs.bundle_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir prepared
+          gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" \
+            -n "bcr-entry-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" -D prepared
+          test "$(find prepared -type f | wc -l)" -eq 1
+          printf '%s  %s\n' "$BUNDLE_SHA256" prepared/bcr-entry.bundle | sha256sum -c -
+          PUSH_DIR="$RUNNER_TEMP/bcr-push"
+          mkdir "$PUSH_DIR"
+          /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+            /usr/bin/git init -q --template=/dev/null "$PUSH_DIR"
+          /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+            /usr/bin/git -C "$PUSH_DIR" fetch --no-tags \
+              https://github.com/bazelbuild/bazel-central-registry.git "$PREPARED_BASE"
+          /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+            /usr/bin/git -C "$PUSH_DIR" bundle verify "$GITHUB_WORKSPACE/prepared/bcr-entry.bundle"
+          /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+            /usr/bin/git -C "$PUSH_DIR" fetch --no-tags \
+              "$GITHUB_WORKSPACE/prepared/bcr-entry.bundle" "refs/heads/donner-${TAG}"
+          test "$(git -C "$PUSH_DIR" rev-parse FETCH_HEAD)" = "$PREPARED_COMMIT"
+          test "$(git -C "$PUSH_DIR" rev-parse 'FETCH_HEAD^')" = "$PREPARED_BASE"
+          test "$(git -C "$PUSH_DIR" rev-parse 'FETCH_HEAD^{tree}')" = "$PREPARED_TREE"
       - name: Create the fork branch only if absent
         env:
           TAG: ${{ needs.validate.outputs.tag }}
@@ -196,19 +236,23 @@ jobs:
             echo 'The protected fork token is missing.' >&2
             exit 1
           fi
-          PUSH_DIR=$(/usr/bin/mktemp -d "$RUNNER_TEMP/bcr-push.XXXXXX")
-          /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+          PUSH_DIR="$RUNNER_TEMP/bcr-push"
+          test "$(git -C "$PUSH_DIR" rev-parse FETCH_HEAD)" = "$PREPARED_COMMIT"
+          FORK_URL="https://x-access-token:${PUBLISH_TOKEN}@github.com/jwmcglynn/bazel-central-registry.git"
+          if /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
             GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
-            /usr/bin/git init -q --template=/dev/null "$PUSH_DIR"
-          /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
-            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
-            /usr/bin/git -C "$PUSH_DIR" fetch --no-tags "$GITHUB_WORKSPACE/registry" \
-              "$PREPARED_COMMIT"
+            /usr/bin/git ls-remote --exit-code "$FORK_URL" "refs/heads/donner-${TAG}" \
+            >/dev/null; then
+            echo 'The fork branch already exists; inspect it before retrying.' >&2
+            exit 1
+          else
+            test "$?" -eq 2
+          fi
           /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
             GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
             /usr/bin/git -C "$PUSH_DIR" -c core.hooksPath=/dev/null push \
               --force-with-lease="refs/heads/donner-${TAG}:" \
-              "https://x-access-token:${PUBLISH_TOKEN}@github.com/jwmcglynn/bazel-central-registry.git" \
+              "$FORK_URL" \
               "FETCH_HEAD:refs/heads/donner-${TAG}"
           echo "Prepared fork branch: jwmcglynn/bazel-central-registry:donner-${TAG}" >> "$GITHUB_STEP_SUMMARY"
           echo 'Review the exact fork diff, then seek separate approval for an upstream PR.' >> "$GITHUB_STEP_SUMMARY"

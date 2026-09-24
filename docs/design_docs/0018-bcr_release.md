@@ -105,10 +105,11 @@ rejection paths.
    archive SHA-256. This authorizes fork preparation only, not an upstream PR.
 5. Manually dispatch `Prepare BCR submission` on `main` with those three values. It rechecks the
    Release event, tag/source identity, published source bytes and preflight attempt before using
-   the fork-scoped token. A tokenless job runs the pinned entry generator, verifies the staged
-   source integrity, module files and metadata, and retains a bounded Git bundle. A separate
-   protected job verifies the bundle digest, base, commit tree and entry bytes before receiving
-   the fork token. A Git push with an empty-expected ref lease creates the branch only while absent;
+   the fork-scoped token. Tokenless jobs run the release-tagged entry generator, verify the staged
+   source integrity, module files and metadata, and retain and check a bounded Git bundle. The
+   protected push job runs no external actions; it downloads that artifact with the runner's
+   GitHub CLI and rechecks the digest, base, commit and tree before its final token-bearing step.
+   A Git push with an empty-expected ref lease creates the branch only while absent;
    it cannot replace or advance an existing branch. The job prints a compare URL,
    proposed title and body; it never files upstream.
    `//tools:bcr_release_tests` covers these gates and submission recovery;

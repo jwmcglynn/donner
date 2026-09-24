@@ -117,8 +117,9 @@ concern; the tag never moves retroactively.
       match the qualified artifacts, and the release body renders correctly.
 - [ ] **BCR submission checked**. For a stable release, manually dispatch `Prepare BCR submission`
       with the reviewed Release run, source commit and archive SHA-256 to prepare the owned fork
-      branch after the protected token environment is verified. Confirm the prepared entry's
-      source digest and the create-only branch lease: an existing branch must be inspected,
+      branch after the protected token environment is verified. Confirm the tokenless entry check
+      and the action-free protected push job both verify the bundle digest and commit. Check the
+      source digest and create-only branch lease: an existing branch must be inspected,
       never advanced or replaced. A fork no-force-push ruleset adds defense in depth.
       Inspect its exact diff and proposed title/body; obtain separate explicit approval
       before anyone opens the normal upstream PR. Track admission, maintainer review, builds and

@@ -154,13 +154,14 @@ gh run view <run-id> --repo jwmcglynn/donner --log-failed
 `BCR Preflight` qualifies the source archive and CLI binaries for an exact main commit. The
 Release workflow publishes those retained bytes. A separate, manually dispatched
 `.github/workflows/publish_bcr.yml` checks the successful Release run, approved full source
-commit and archive SHA-256. A tokenless job runs the pinned entry generator against `.bcr/`
-templates and retains a verified Git bundle. A separate protected job checks that bundle, the
-approved source integrity, module files and metadata before a create-only fork push. The
-empty-expected ref lease rejects any existing branch. The protected
-`bcr-fork-preparation` environment supplies a fork-only contents-write `PUBLISH_TOKEN` to that
-push step. The workflow prints a compare link and suggested title/body. Opening an upstream PR
-requires a separate approval of the exact destination and content.
+commit and archive SHA-256. Tokenless jobs run the release-tagged entry generator against `.bcr/`
+templates, verify approved source integrity, module files and metadata, and retain and recheck a
+Git bundle. The protected push job uses no external actions: it downloads the same artifact with
+the runner's GitHub CLI and verifies its digest, base, commit and tree before the final push step.
+Only that step receives the fork-only contents-write `PUBLISH_TOKEN` from the
+`bcr-fork-preparation` environment. The empty-expected ref lease rejects any existing branch.
+The workflow prints a compare link and suggested title/body. Opening an upstream PR requires a
+separate approval of the exact destination and content.
 
 ### What BCR consumers get
 
