@@ -2025,6 +2025,11 @@ bool EditorWindow::usingOffscreenRenderTarget() const {
          wgpuState_->offscreenTexture.isValid();
 }
 
+bool EditorWindow::framebufferReadbackAvailable() const {
+  return wgpuState_ != nullptr && wgpuState_->canPresentFrames() &&
+         SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage);
+}
+
 std::shared_ptr<geode::GeodeDevice> EditorWindow::geodeFramebufferDevice() const {
   return wgpuState_ != nullptr ? wgpuState_->framebufferGeodeDevice : nullptr;
 }

@@ -13,8 +13,10 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <optional>
+#include <ostream>
 #include <span>
 #include <sstream>
 #include <string>
@@ -1292,6 +1294,23 @@ TEST_F(RuntimePresentationSurfaceTest, ReadbackIsDroppedWhenFramesCannotBeCopied
   EXPECT_THAT(device_.lastConfiguration.usage, testing::Eq(gpu::TextureUsage::RenderAttachment));
 }
 
+TEST_F(RuntimePresentationSurfaceTest, AFrameThatCannotBeCopiedFromIsStillPresented) {
+  device_.usages = gpu::TextureUsage::RenderAttachment;
+  ASSERT_TRUE(surface_.attachToRuntime(device_, NativeHandle(), gpu::TextureFormat::BGRA8Unorm,
+                                       /*enableReadback=*/true));
+  ASSERT_TRUE(surface_.configure(640, 480));
+
+  internal::AcquiredFrame frame = surface_.acquire();
+  ASSERT_THAT(frame.status, testing::Eq(gpu::SurfaceStatus::Success));
+  ASSERT_THAT(frame.texture.isValid(), testing::IsTrue())
+      << "a surface whose frames cannot be copied from still hands them out to draw into";
+  surface_.present();
+
+  EXPECT_THAT(device_.presentCalls, testing::Eq(1))
+      << "the frame was not shown because it could not be read back";
+  EXPECT_THAT(device_.abandonCalls, testing::Eq(0));
+}
+
 TEST_F(RuntimePresentationSurfaceTest, ReadbackIsConfiguredWhenFramesCanBeCopiedFrom) {
   ASSERT_TRUE(surface_.attachToRuntime(device_, NativeHandle(), gpu::TextureFormat::BGRA8Unorm,
                                        /*enableReadback=*/true));
@@ -1556,10 +1575,30 @@ INSTANTIATE_TEST_SUITE_P(Targets, EditorWindowBackendTest, testing::Bool(),
                                              : std::string("WindowSurface");
                          });
 
-/// A real window, presenting to its surface (false) or rendering offscreen (true), taken through
-/// what happens to a window during its life: being resized, and losing its device. Only Apple
-/// always has a surface to present to; a host without a display renders both arms offscreen.
-class EditorWindowLifecycleTest : public testing::TestWithParam<bool> {
+/// Which of a window's configurations a lifecycle case runs on.
+struct LifecycleConfiguration {
+  /// Whether the window renders into its own offscreen target rather than presenting to a
+  /// surface.
+  bool offscreen = false;
+  /// Whether the frames the window draws into can be copied from, so reading one back returns
+  /// it. A surface that reports its frames cannot be copied from gives a window with readback
+  /// asked for the same frames as a window that never asked, which is how a case reaches it on
+  /// any host.
+  bool framesCopyable = true;
+};
+
+/// Prints \p configuration by the name its cases carry. @param configuration Value to print.
+/// @param os Stream to print to.
+void PrintTo(const LifecycleConfiguration& configuration, std::ostream* os) {
+  *os << (configuration.offscreen ? "Offscreen" : "WindowSurface")
+      << (configuration.framesCopyable ? "" : "WithoutCopyableFrames");
+}
+
+/// A real window, presenting to its surface or rendering offscreen, with frames it can or cannot
+/// copy back, taken through what happens to a window during its life: being resized, and losing
+/// its device. Only Apple always has a surface to present to; a host without a display renders
+/// both arms offscreen.
+class EditorWindowLifecycleTest : public testing::TestWithParam<LifecycleConfiguration> {
 protected:
   /// A hidden window on the parameter's arm that reads its frames back and clears to opaque blue.
   /// Its width leaves the readback's rows unaligned to the copy row pitch at 1x and at 2x, so
@@ -1570,10 +1609,78 @@ protected:
         .initialWidth = 100,
         .initialHeight = 48,
         .visible = false,
-        .forceOffscreenRenderTarget = GetParam(),
+        .forceOffscreenRenderTarget = GetParam().offscreen,
         .clearColor = {0.0f, 0.0f, 1.0f, 1.0f},
-        .enableFramebufferReadback = true,
+        .enableFramebufferReadback = GetParam().framesCopyable,
     };
+  }
+
+  /**
+   * Whether \p window's frames read back, which is what decides whether a case checks their
+   * texels. A window whose frames were configured without copy usage reports so; a window that
+   * asked for readback may still not get it, where its surface reports frames that cannot be
+   * copied from, and a case there checks everything but the texels.
+   *
+   * @param window Window under test.
+   */
+  bool framesReadBack(const EditorWindow& window) const {
+    const bool available = window.framebufferReadbackAvailable();
+    if (!GetParam().framesCopyable) {
+      EXPECT_THAT(available, testing::IsFalse())
+          << "a window whose frames cannot be copied from reports that they read back";
+      return available;
+    }
+    // A window's own offscreen target always carries copy usage when readback is asked for, and
+    // so does a Metal layer's frame; only another platform's surface can refuse it.
+    bool guaranteed = window.usingOffscreenRenderTarget();
+#ifdef __APPLE__
+    guaranteed = true;
+#endif
+    if (guaranteed) {
+      EXPECT_THAT(available, testing::IsTrue())
+          << "a window whose frames can be copied from reports that they do not read back";
+    } else if (!available) {
+      std::cout << "[  NOTE    ] frames are not read back on this host: its presentation surface "
+                   "reports that they cannot be copied from"
+                << std::endl;
+    }
+    return available;
+  }
+
+  /// The extents one drawn frame carried: what the frame loop reported to the callback, and the
+  /// texture the frame was actually drawn into.
+  struct DrawnFrame {
+    Vector2i reported;  //!< Extent the frame loop reported.
+    Vector2i target;    //!< Extent of the frame's target texture on the framebuffer device.
+
+    /// Equality operator. @param other Frame to compare against.
+    bool operator==(const DrawnFrame& other) const = default;
+
+    /// Ostream output operator. @param os Output stream. @param frame Frame to output.
+    friend std::ostream& operator<<(std::ostream& os, const DrawnFrame& frame) {
+      return os << "{reported=" << frame.reported << ", target=" << frame.target << "}";
+    }
+  };
+
+  /// A frame drawn at \p extent, as reported and as allocated. @param extent Framebuffer extent.
+  static DrawnFrame DrawnAt(Vector2i extent) { return DrawnFrame{extent, extent}; }
+
+  /// Records each frame the window draws, through a callback the window hands every frame's target
+  /// before its UI: the extent it reported and the extent of the texture it drew into, which a
+  /// target that was never reallocated or reconfigured would not share.
+  /// @param window Window to watch. @param frames Receives them.
+  static void recordDrawnFrames(EditorWindow& window, std::vector<DrawnFrame>* frames) {
+    gpu::Device& device = window.geodeFramebufferDevice()->runtimeDevice();
+    window.setWgpuUnderlayRenderCallback([frames,
+                                          &device](const EditorWindowWgpuRenderTarget& target) {
+      const gpu::Result<gpu::TextureDescriptor> described =
+          device.textureDescriptor(target.texture);
+      const Vector2i targetExtent = described.hasResult()
+                                        ? Vector2i(static_cast<int>(described.result().size.width),
+                                                   static_cast<int>(described.result().size.height))
+                                        : Vector2i::Zero();
+      frames->push_back(DrawnFrame{target.framebufferSizePx, targetExtent});
+    });
   }
 
   /// Checks \p window is on the arm the parameter asked for, where that is known: a hidden Cocoa
@@ -1581,10 +1688,10 @@ protected:
   /// @param window Window under test.
   void expectOnTheRequestedArm(const EditorWindow& window) const {
 #ifdef __APPLE__
-    ASSERT_THAT(window.usingOffscreenRenderTarget(), testing::Eq(GetParam()))
+    ASSERT_THAT(window.usingOffscreenRenderTarget(), testing::Eq(GetParam().offscreen))
         << "the window is not on the arm this case is about";
 #else
-    if (GetParam()) {
+    if (GetParam().offscreen) {
       ASSERT_THAT(window.usingOffscreenRenderTarget(), testing::IsTrue());
     }
 #endif
@@ -1592,26 +1699,41 @@ protected:
 };
 
 /// A resized window follows its new framebuffer extent on the next frame: a presented window
-/// reconfigures its surface, an offscreen one reallocates its target, and the frame is drawn and
-/// read back at the new extent, including the texels the old extent did not cover.
-TEST_P(EditorWindowLifecycleTest, AResizedWindowDrawsAndReadsBackAtItsNewExtent) {
+/// reconfigures its surface, an offscreen one reallocates its target, and the frame is drawn at
+/// the new extent. Where its frames read back, the frame reads back at that extent, including the
+/// texels the old extent did not cover.
+TEST_P(EditorWindowLifecycleTest, AResizedWindowDrawsAtItsNewExtent) {
   EditorWindow window(options());
   ASSERT_THAT(window.valid(), testing::IsTrue());
   ASSERT_NO_FATAL_FAILURE(expectOnTheRequestedArm(window));
+  const bool readsBack = framesReadBack(window);
+  std::vector<DrawnFrame> drawnFrames;
+  recordDrawnFrames(window, &drawnFrames);
 
+  const Vector2i initial = window.framebufferSize();
   window.beginFrame();
   const svg::RendererBitmap before = window.endFrameAndReadPixels();
-  ASSERT_THAT(before.empty(), testing::IsFalse());
-  ASSERT_THAT(before.dimensions, testing::Eq(window.framebufferSize()));
+  ASSERT_THAT(drawnFrames, testing::ElementsAre(DrawnAt(initial)))
+      << "the first frame was not drawn at the window's extent";
+  if (readsBack) {
+    ASSERT_THAT(before.empty(), testing::IsFalse());
+    ASSERT_THAT(before.dimensions, testing::Eq(initial));
+  }
 
   glfwSetWindowSize(window.rawHandle(), 150, 72);
   window.pollEvents();
   const Vector2i resized = window.framebufferSize();
-  ASSERT_THAT(resized, testing::Ne(before.dimensions)) << "the window was not resized";
+  ASSERT_THAT(resized, testing::Ne(initial)) << "the window was not resized";
 
   window.beginFrame();
   const svg::RendererBitmap after = window.endFrameAndReadPixels();
-  ASSERT_THAT(after.empty(), testing::IsFalse()) << "the resized window drew no frame";
+  EXPECT_THAT(drawnFrames, testing::ElementsAre(DrawnAt(initial), DrawnAt(resized)))
+      << "the resized window's frame was not drawn into a target of its new extent";
+  if (!readsBack) {
+    EXPECT_THAT(after.empty(), testing::IsTrue()) << "a frame that cannot be copied was read";
+    return;
+  }
+  ASSERT_THAT(after.empty(), testing::IsFalse()) << "the resized window's frame read back empty";
   EXPECT_THAT(after.dimensions, testing::Eq(resized));
   EXPECT_THAT(after.rowBytes, testing::Eq(static_cast<std::size_t>(resized.x) * 4u));
   EXPECT_THAT(PixelAt(after, resized.x - 1, resized.y - 1),
@@ -1629,10 +1751,17 @@ TEST_P(EditorWindowLifecycleTest, FramesAfterADeclaredLossReadBackNothingWithinT
   EditorWindow window(options());
   ASSERT_THAT(window.valid(), testing::IsTrue());
   ASSERT_NO_FATAL_FAILURE(expectOnTheRequestedArm(window));
+  const bool readsBack = framesReadBack(window);
+  std::vector<DrawnFrame> drawnFrames;
+  recordDrawnFrames(window, &drawnFrames);
 
   window.beginFrame();
-  ASSERT_THAT(window.endFrameAndReadPixels().empty(), testing::IsFalse())
-      << "the frame before the loss is drawn";
+  const svg::RendererBitmap beforeLoss = window.endFrameAndReadPixels();
+  ASSERT_THAT(drawnFrames, testing::ElementsAre(DrawnAt(window.framebufferSize())))
+      << "the frame before the loss was not drawn";
+  if (readsBack) {
+    ASSERT_THAT(beforeLoss.empty(), testing::IsFalse()) << "the frame before the loss read nothing";
+  }
 
   window.geodeFramebufferDevice()->markDeviceLost("declared lost by the window lifecycle test");
   EXPECT_THAT(window.geodeFramebufferDevice()->runtimeDevice().isLost(), testing::IsTrue())
@@ -1651,11 +1780,15 @@ TEST_P(EditorWindowLifecycleTest, FramesAfterADeclaredLossReadBackNothingWithinT
   }
 }
 
-INSTANTIATE_TEST_SUITE_P(Targets, EditorWindowLifecycleTest, testing::Bool(),
-                         [](const testing::TestParamInfo<bool>& info) {
-                           return info.param ? std::string("Offscreen")
-                                             : std::string("WindowSurface");
-                         });
+INSTANTIATE_TEST_SUITE_P(
+    Targets, EditorWindowLifecycleTest,
+    testing::Values(LifecycleConfiguration{.offscreen = false, .framesCopyable = true},
+                    LifecycleConfiguration{.offscreen = true, .framesCopyable = true},
+                    LifecycleConfiguration{.offscreen = false, .framesCopyable = false},
+                    LifecycleConfiguration{.offscreen = true, .framesCopyable = false}),
+    [](const testing::TestParamInfo<LifecycleConfiguration>& info) {
+      return testing::PrintToString(info.param);
+    });
 
 TEST(EditorWindowTest, WgpuFramebufferGeodeDeviceSharingMatchesThreadingModel) {
   EXPECT_TRUE(internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/true));
