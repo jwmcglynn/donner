@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resolve verified CI artifacts and guard automatic BCR submission."""
+"""Resolve verified CI artifacts and guard manual BCR fork preparation."""
 
 from __future__ import annotations
 
@@ -128,16 +128,23 @@ def verify_submission_metadata(head: str, commit: str, version: str) -> None:
     metadata = json.loads(fork_contents("modules/donner/metadata.json", head))
     template = json.loads(subprocess.check_output(
         ["git", "show", f"{commit}:.bcr/metadata.template.json"]))
+    check_metadata(metadata, template, version)
+
+
+def check_metadata(metadata: dict, template: dict, version: str) -> tuple[list[str], dict]:
+    metadata = metadata.copy()
+    template = template.copy()
     versions = metadata.pop("versions", None)
     yanked = metadata.pop("yanked_versions", None)
     template.pop("versions", None)
     expected_yanked = template.pop("yanked_versions", {})
     if metadata != template:
-        raise ValueError("existing registry metadata has different project or maintainer fields")
+        raise ValueError("registry metadata has different project or maintainer fields")
     if (not isinstance(versions, list) or not all(isinstance(item, str) for item in versions)
             or len(set(versions)) != len(versions) or versions.count(version) != 1):
-        raise ValueError("existing registry metadata has a missing or invalid version list")
+        raise ValueError("registry metadata has a missing or invalid version list")
     verify_yanked_metadata(yanked, expected_yanked, version)
+    return versions, yanked
 
 
 def verify_yanked_metadata(yanked, expected_yanked: dict, version: str) -> None:
@@ -183,26 +190,91 @@ def existing_submission(tag: str, commit: str, receipt: dict) -> str | None:
     return matching[0]["html_url"]
 
 
-def plan_submission(release_run_id: str) -> dict[str, object]:
+def verify_metadata_history(registry: Path, metadata_file: Path, versions: list[str],
+                            yanked: dict, template: dict, version: str) -> None:
+    old_metadata = subprocess.check_output(
+        ["git", "-C", str(registry), "ls-tree", "--name-only", "HEAD", "--",
+         metadata_file.as_posix()])
+    if old_metadata:
+        previous = json.loads(subprocess.check_output(
+            ["git", "-C", str(registry), "show", f"HEAD:{metadata_file.as_posix()}"]))
+        if versions != [*previous["versions"], version] or yanked != previous["yanked_versions"]:
+            raise ValueError("generated registry metadata changes existing versions or yanks")
+    elif versions != [version] or yanked != template.get("yanked_versions", {}):
+        raise ValueError("generated registry metadata has unexpected initial history")
+
+
+def verify_generated_entry(registry: Path, source: Path, version: str, sha256: str,
+                           proposed_commit: str | None = None) -> None:
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise ValueError("generated entry needs an approved stable version and archive SHA-256")
+    if proposed_commit is not None and not bcr_source.COMMIT.fullmatch(proposed_commit):
+        raise ValueError("generated entry needs a full proposed commit SHA")
+    root = Path("modules/donner")
+    entry = root / version
+    metadata_file = root / "metadata.json"
+    required = {entry / "MODULE.bazel", entry / "presubmit.yml", entry / "source.json",
+                metadata_file}
+    diff_args = (["HEAD", proposed_commit] if proposed_commit else ["--cached"])
+    changed_bytes = subprocess.check_output(
+        ["git", "-C", str(registry), "diff", "--name-only", "-z", *diff_args])
+    changed = {Path(name.decode()) for name in changed_bytes.split(b"\0") if name}
+    if changed != required:
+        raise ValueError("generated registry entry has missing or unexpected staged files")
+    def proposed_bytes(path: Path) -> bytes:
+        label = path.as_posix()
+        mode_command = (["ls-tree", proposed_commit, "--", label] if proposed_commit else
+                        ["ls-files", "--stage", "--", label])
+        mode = subprocess.check_output(["git", "-C", str(registry), *mode_command], text=True)
+        if not mode.startswith("100644 ") or not mode.endswith(f"\t{label}\n"):
+            raise ValueError("generated registry entry contains a missing or linked file")
+        ref = proposed_commit if proposed_commit else ""
+        return subprocess.check_output(["git", "-C", str(registry), "show", f"{ref}:{label}"])
+
+    for path in required:
+        proposed_bytes(path)
+    expected_source = {
+        "integrity": "sha256-" + base64.b64encode(bytes.fromhex(sha256)).decode(),
+        "strip_prefix": f"donner-{version}",
+        "url": bcr_source.source_url(version),
+    }
+    if json.loads(proposed_bytes(entry / "source.json")) != expected_source:
+        raise ValueError("generated registry entry does not match the approved source archive")
+    for generated, original in (("MODULE.bazel", "MODULE.bazel"),
+                                ("presubmit.yml", ".bcr/presubmit.yml")):
+        if proposed_bytes(entry / generated) != (source / original).read_bytes():
+            raise ValueError("generated registry entry differs from the approved module files")
+    metadata = json.loads(proposed_bytes(metadata_file))
+    template = json.loads((source / ".bcr/metadata.template.json").read_text(encoding="utf-8"))
+    versions, yanked = check_metadata(metadata, template, version)
+    verify_metadata_history(registry, metadata_file, versions, yanked, template, version)
+
+
+def plan_submission(release_run_id: str, approved_commit: str,
+                    approved_sha256: str) -> dict[str, object]:
     if not re.fullmatch(r"[1-9][0-9]*", release_run_id):
         raise ValueError("release workflow run ID must be numeric")
+    if not bcr_source.COMMIT.fullmatch(approved_commit) or not re.fullmatch(r"[0-9a-f]{64}", approved_sha256):
+        raise ValueError("BCR submission needs an approved source commit and archive SHA-256")
     run = gh_json("api", f"repos/{REPOSITORY}/actions/runs/{release_run_id}")
     commit = run.get("head_sha", "")
     check_run(run, commit, RELEASE_PATH, {"release"})
-    if not bcr_source.COMMIT.fullmatch(commit):
-        raise ValueError("invalid release source commit")
+    if commit != approved_commit:
+        raise ValueError("Release source commit differs from the approved BCR submission")
     version = bcr_source.module_values(bcr_source.git("show", f"{commit}:MODULE.bazel"))["version"]
     tag = f"v{version}"
     release = gh_json("release", "view", tag, "--repo", REPOSITORY,
                       "--json", "tagName,isDraft,isPrerelease,assets")
     check_release(release, tag)
     if release.get("isPrerelease") or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
-        return {"publish": "false", "reason": "BCR submission is limited to stable releases"}
+        return {"prepare": "false", "reason": "BCR submission is limited to stable releases"}
     check_source(commit, tag)
     receipt = verify_published_source(commit, tag, release)
+    if receipt.get("sha256") != approved_sha256:
+        raise ValueError("published source digest differs from the approved BCR submission")
     existing = existing_submission(tag, commit, receipt)
-    return {"publish": "false" if existing else "true", "tag": tag,
-            "existing_pr": existing, "source_commit": commit}
+    return {"prepare": "false" if existing else "true", "tag": tag,
+            "version": version, "existing_pr": existing, "source_commit": commit}
 
 
 def main() -> None:
@@ -215,13 +287,25 @@ def main() -> None:
     select.add_argument("--github-output")
     plan = commands.add_parser("plan-submission")
     plan.add_argument("--release-run-id", required=True)
+    plan.add_argument("--approved-commit", required=True)
+    plan.add_argument("--approved-sha256", required=True)
     plan.add_argument("--github-output")
+    generated = commands.add_parser("verify-generated")
+    generated.add_argument("--registry", type=Path, required=True)
+    generated.add_argument("--source", type=Path, required=True)
+    generated.add_argument("--version", required=True)
+    generated.add_argument("--approved-sha256", required=True)
+    generated.add_argument("--proposed-commit")
     args = parser.parse_args()
     if args.command == "select-preflight":
         run_id, attempt = candidate_ref(args.release_body_file.read_text(encoding="utf-8"))
         result = select_preflight(args.commit, args.tag, run_id, attempt)
+    elif args.command == "plan-submission":
+        result = plan_submission(args.release_run_id, args.approved_commit, args.approved_sha256)
     else:
-        result = plan_submission(args.release_run_id)
+        verify_generated_entry(args.registry, args.source, args.version, args.approved_sha256,
+                               args.proposed_commit)
+        return
     bcr_source.outputs(result, args.github_output)
 
 

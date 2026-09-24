@@ -1,13 +1,18 @@
-name: Publish to BCR
+name: Prepare BCR submission
 
 on:
-  workflow_run:
-    workflows: [Release]
-    types: [completed]
   workflow_dispatch:
     inputs:
       release_run_id:
-        description: Successful Release workflow run to resume
+        description: Successful Release workflow run approved for BCR submission
+        required: true
+        type: string
+      approved_source_commit:
+        description: Reviewed full release source commit SHA
+        required: true
+        type: string
+      approved_source_sha256:
+        description: Reviewed release source archive SHA-256
         required: true
         type: string
 
@@ -23,43 +28,234 @@ jobs:
   validate:
     if: >-
       github.repository == 'jwmcglynn/donner' &&
-      (github.event_name == 'workflow_dispatch' ||
-       (github.event.workflow_run.event == 'release' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.head_repository.full_name == github.repository))
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     outputs:
-      publish: ${{ steps.plan.outputs.publish }}
+      prepare: ${{ steps.plan.outputs.prepare }}
       tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      source_commit: ${{ steps.plan.outputs.source_commit }}
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_RUN_ID: ${{ github.event.workflow_run.id || inputs.release_run_id }}
+      RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+      APPROVED_SOURCE_COMMIT: ${{ inputs.approved_source_commit }}
+      APPROVED_SOURCE_SHA256: ${{ inputs.approved_source_sha256 }}
     steps:
       - name: Checkout trusted publisher
         uses: actions/checkout@v7
         with:
-          ref: main
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Verify the release and plan its registry submission
         id: plan
         run: |
           python3 -B -m tools.bcr_release plan-submission \
-            --release-run-id "$RELEASE_RUN_ID" --github-output "$GITHUB_OUTPUT"
+            --release-run-id "$RELEASE_RUN_ID" \
+            --approved-commit "$APPROVED_SOURCE_COMMIT" \
+            --approved-sha256 "$APPROVED_SOURCE_SHA256" \
+            --github-output "$GITHUB_OUTPUT"
 
-  publish:
+  generate-entry:
     needs: validate
-    if: needs.validate.outputs.publish == 'true'
-    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.5.0
-    with:
-      tag_name: ${{ needs.validate.outputs.tag }}
-      registry_fork: jwmcglynn/bazel-central-registry
-      module_roots: .
-      attest: false
-      download_default_release_artifacts: false
-      open_pull_request: true
-      draft: false
-      author_name: Jeff McGlynn
-      author_email: jeff@mcglynn.dev
-    secrets:
-      publish_token: ${{ secrets.BCR_PUBLISH_TOKEN }}
+    if: needs.validate.outputs.prepare == 'true'
+    runs-on: ubuntu-24.04
+    outputs:
+      base: ${{ steps.commit.outputs.base }}
+      commit: ${{ steps.commit.outputs.commit }}
+      tree: ${{ steps.commit.outputs.tree }}
+      bundle_sha256: ${{ steps.commit.outputs.bundle_sha256 }}
+    steps:
+      - name: Checkout trusted publication checks
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: false
+      - name: Checkout approved module source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.source_commit }}
+          path: this
+          persist-credentials: false
+      - name: Checkout BCR for the proposed entry
+        uses: actions/checkout@v7
+        with:
+          repository: bazelbuild/bazel-central-registry
+          ref: main
+          path: registry
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Generate the registry entry
+        uses: bazel-contrib/publish-to-bcr@v1.5.0
+        with:
+          tag: ${{ needs.validate.outputs.tag }}
+          module-version: ${{ needs.validate.outputs.version }}
+          module-roots: .
+          local-registry: registry
+          templates-dir: this/.bcr
+      - name: Verify and bundle the proposed entry without a fork token
+        id: commit
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          APPROVED_SOURCE_SHA256: ${{ inputs.approved_source_sha256 }}
+        run: |
+          set -euo pipefail
+          git -C registry add -- modules/donner
+          PYTHONPATH=trusted python3 -B -m tools.bcr_release verify-generated \
+            --registry registry --source this --version "$VERSION" \
+            --approved-sha256 "$APPROVED_SOURCE_SHA256"
+          TREE=$(git -C registry write-tree)
+          BASE=$(git -C registry rev-parse HEAD)
+          git -C registry checkout -b "donner-${TAG}"
+          git -C registry -c core.hooksPath=/dev/null -c commit.gpgsign=false \
+            -c user.name='Donner release' \
+            -c user.email='donner-release@users.noreply.github.com' \
+            commit -m "Publish donner@${VERSION}"
+          COMMIT=$(git -C registry rev-parse HEAD)
+          test "$(git -C registry rev-parse 'HEAD^{tree}')" = "$TREE"
+          git -C registry bundle create "$GITHUB_WORKSPACE/bcr-entry.bundle" \
+            "refs/heads/donner-${TAG}" "^$BASE"
+          git -C registry bundle verify "$GITHUB_WORKSPACE/bcr-entry.bundle"
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          echo "tree=$TREE" >> "$GITHUB_OUTPUT"
+          echo "bundle_sha256=$(sha256sum bcr-entry.bundle | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Retain the exact proposed entry
+        uses: actions/upload-artifact@v7
+        with:
+          name: bcr-entry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: bcr-entry.bundle
+          if-no-files-found: error
+          retention-days: 90
+
+  prepare-fork:
+    needs: [validate, generate-entry]
+    if: needs.validate.outputs.prepare == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout trusted publication checks
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: trusted
+          persist-credentials: false
+      - name: Checkout approved module source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.validate.outputs.source_commit }}
+          path: this
+          persist-credentials: false
+      - name: Checkout the exact BCR base
+        uses: actions/checkout@v7
+        with:
+          repository: bazelbuild/bazel-central-registry
+          ref: ${{ needs.generate-entry.outputs.base }}
+          path: registry
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download the proposed entry
+        uses: actions/download-artifact@v8
+        with:
+          name: bcr-entry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: prepared
+      - name: Verify the exact proposed commit without a fork token
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          APPROVED_SOURCE_SHA256: ${{ inputs.approved_source_sha256 }}
+          PREPARED_BASE: ${{ needs.generate-entry.outputs.base }}
+          PREPARED_COMMIT: ${{ needs.generate-entry.outputs.commit }}
+          PREPARED_TREE: ${{ needs.generate-entry.outputs.tree }}
+          BUNDLE_SHA256: ${{ needs.generate-entry.outputs.bundle_sha256 }}
+        run: |
+          set -euo pipefail
+          printf '%s  %s\n' "$BUNDLE_SHA256" prepared/bcr-entry.bundle | sha256sum -c -
+          test "$(git -C registry rev-parse HEAD)" = "$PREPARED_BASE"
+          git -C registry bundle verify "$GITHUB_WORKSPACE/prepared/bcr-entry.bundle"
+          git -C registry fetch --no-tags "$GITHUB_WORKSPACE/prepared/bcr-entry.bundle" \
+            "refs/heads/donner-${TAG}"
+          test "$(git -C registry rev-parse FETCH_HEAD)" = "$PREPARED_COMMIT"
+          test "$(git -C registry rev-parse 'FETCH_HEAD^')" = "$PREPARED_BASE"
+          test "$(git -C registry rev-parse 'FETCH_HEAD^{tree}')" = "$PREPARED_TREE"
+          PYTHONPATH=trusted python3 -B -m tools.bcr_release verify-generated \
+            --registry registry --source this --version "$VERSION" \
+            --approved-sha256 "$APPROVED_SOURCE_SHA256" \
+            --proposed-commit "$PREPARED_COMMIT"
+
+  publish-fork:
+    needs: [validate, generate-entry, prepare-fork]
+    if: needs.validate.outputs.prepare == 'true'
+    runs-on: ubuntu-24.04
+    environment: bcr-fork-preparation
+    steps:
+      - name: Download and reverify the entry without a fork token
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          PREPARED_BASE: ${{ needs.generate-entry.outputs.base }}
+          PREPARED_COMMIT: ${{ needs.generate-entry.outputs.commit }}
+          PREPARED_TREE: ${{ needs.generate-entry.outputs.tree }}
+          BUNDLE_SHA256: ${{ needs.generate-entry.outputs.bundle_sha256 }}
+        run: |
+          set -euo pipefail
+          mkdir prepared
+          gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" \
+            -n "bcr-entry-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" -D prepared
+          test "$(find prepared -type f | wc -l)" -eq 1
+          printf '%s  %s\n' "$BUNDLE_SHA256" prepared/bcr-entry.bundle | sha256sum -c -
+          PUSH_DIR="$RUNNER_TEMP/bcr-push"
+          mkdir "$PUSH_DIR"
+          /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+            /usr/bin/git init -q --template=/dev/null "$PUSH_DIR"
+          /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+            /usr/bin/git -C "$PUSH_DIR" fetch --no-tags \
+              https://github.com/bazelbuild/bazel-central-registry.git "$PREPARED_BASE"
+          /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+            /usr/bin/git -C "$PUSH_DIR" bundle verify "$GITHUB_WORKSPACE/prepared/bcr-entry.bundle"
+          /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+            /usr/bin/git -C "$PUSH_DIR" fetch --no-tags \
+              "$GITHUB_WORKSPACE/prepared/bcr-entry.bundle" "refs/heads/donner-${TAG}"
+          test "$(git -C "$PUSH_DIR" rev-parse FETCH_HEAD)" = "$PREPARED_COMMIT"
+          test "$(git -C "$PUSH_DIR" rev-parse 'FETCH_HEAD^')" = "$PREPARED_BASE"
+          test "$(git -C "$PUSH_DIR" rev-parse 'FETCH_HEAD^{tree}')" = "$PREPARED_TREE"
+      - name: Create the fork branch only if absent
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          PREPARED_COMMIT: ${{ needs.generate-entry.outputs.commit }}
+          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$PUBLISH_TOKEN" ]; then
+            echo 'The protected fork token is missing.' >&2
+            exit 1
+          fi
+          PUSH_DIR="$RUNNER_TEMP/bcr-push"
+          test "$(git -C "$PUSH_DIR" rev-parse FETCH_HEAD)" = "$PREPARED_COMMIT"
+          FORK_URL="https://x-access-token:${PUBLISH_TOKEN}@github.com/jwmcglynn/bazel-central-registry.git"
+          if /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+            /usr/bin/git ls-remote --exit-code "$FORK_URL" "refs/heads/donner-${TAG}" \
+            >/dev/null; then
+            echo 'The fork branch already exists; inspect it before retrying.' >&2
+            exit 1
+          else
+            test "$?" -eq 2
+          fi
+          /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" \
+            GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+            /usr/bin/git -C "$PUSH_DIR" -c core.hooksPath=/dev/null push \
+              --force-with-lease="refs/heads/donner-${TAG}:" \
+              "$FORK_URL" \
+              "FETCH_HEAD:refs/heads/donner-${TAG}"
+          echo "Prepared fork branch: jwmcglynn/bazel-central-registry:donner-${TAG}" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Review the exact fork diff, then seek separate approval for an upstream PR.' >> "$GITHUB_STEP_SUMMARY"
+          echo "Compare: https://github.com/bazelbuild/bazel-central-registry/compare/main...jwmcglynn:bazel-central-registry:donner-${TAG}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Suggested title: Publish donner@${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Suggested body: Release: https://github.com/jwmcglynn/donner/releases/tag/${TAG}" >> "$GITHUB_STEP_SUMMARY"

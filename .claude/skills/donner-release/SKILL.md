@@ -5,22 +5,22 @@ description: >-
   dedicated build-report commit that gets tagged, GitHub Release + binary verification, Bazel
   Central Registry (BCR) publishing pre-flight, and dependency-update handling. Use when preparing
   or cutting a release, editing RELEASE_NOTES.md, running tools/generate_build_report.py,
-  publishing to BCR (.bcr/, release.yml publish-to-bcr job), or handling Renovate/dependency PRs.
+  preparing BCR publication (.bcr/, bcr_preflight.yml, publish_bcr.yml), or handling Renovate/dependency PRs.
 ---
 
 # Donner Release Engineering
 
 Canonical docs — read these before improvising; this skill is the map, they are the territory:
 
-| Doc                                     | What it holds                                                                                               |
-| --------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `docs/release_checklist.md`             | The release checklist template. Work it top to bottom.                                                      |
-| `docs/design_docs/0018-bcr_release.md`  | BCR publishing runbook + common-failures table.                                                             |
-| `docs/design_docs/0011-v0_5_release.md` | v0.5 milestone plan; §"v0.5 Retrospective" lists release-process bugs carried forward.                      |
-| `docs/design_docs/0028-v1_0_release.md` | v1.0 plan; Phase 1 tracks the BCR publish root-cause.                                                       |
-| `docs/updating_dependencies.md`         | LLVM toolchain update flow (partially stale — see §Dependency updates).                                     |
-| `docs/ProjectRoadmap.md`                | Roadmap source of truth; update post-release.                                                               |
-| `docs/release_checklists/`              | Per-release manual checklists (currently `v0_8_showcase_checklist.md`, the showcase-asset authoring steps). |
+| Doc                                            | What it holds                                                                                               |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `docs/release_checklists/release_checklist.md` | The release checklist template. Work it top to bottom.                                                      |
+| `docs/design_docs/0018-bcr_release.md`         | BCR publishing runbook + common-failures table.                                                             |
+| `docs/design_docs/0011-v0_5_release.md`        | v0.5 milestone plan; §"v0.5 Retrospective" lists release-process bugs carried forward.                      |
+| `docs/design_docs/0028-v1_0_release.md`        | v1.0 plan; Phase 1 tracks the BCR publish root-cause.                                                       |
+| `docs/updating_dependencies.md`                | LLVM toolchain update flow (partially stale — see §Dependency updates).                                     |
+| `docs/ProjectRoadmap.md`                       | Roadmap source of truth; update post-release.                                                               |
+| `docs/release_checklists/`                     | Per-release manual checklists (currently `v0_8_showcase_checklist.md`, the showcase-asset authoring steps). |
 
 0011 and 0028 are milestone plans; for execution only the cited sections matter (0011 §"v0.5
 Retrospective" and §"Phase 2: Fuzzer Run", 0028 Phase 1) — skip the phase-by-phase implementation
@@ -35,11 +35,12 @@ logs.
 3. Write the `RELEASE_NOTES.md` entry for the new version.
 4. Bump `module(name = "donner", version = ...)` in `MODULE.bazel` to the release version (drop
    the `-pre` suffix). Required for **every** release, not just BCR publishes — a tag whose
-   MODULE.bazel still says `-pre` is a defect. `docs/release_checklist.md` has no version-bump
+   MODULE.bazel still says `-pre` is a defect. `docs/release_checklists/release_checklist.md` has no version-bump
    item (the step only appears as BCR pre-flight gate #1 in 0018); do it anyway.
 5. **Last of all**: the dedicated build-report commit. It is the commit that gets tagged.
-6. Tag, push tag, create the GitHub Release, verify binaries.
-7. (If BCR publish is in scope) run the BCR pre-flight first — see §BCR publishing.
+6. Qualify the exact main commit with BCR Preflight, then tag, push the tag, create the GitHub
+   Release and verify that its artifacts match the qualified bytes.
+7. (If BCR publish is in scope) obtain separate approval and prepare the fork — see §BCR publishing.
 8. Post-release: update `docs/ProjectRoadmap.md` (mark milestone shipped), announce.
 
 Any code fix discovered after the tag is a point-release concern. The tag never moves
@@ -47,7 +48,7 @@ retroactively — moving it breaks the GitHub source-tarball integrity hash that
 
 ## Pre-release quality gates
 
-From `docs/release_checklist.md` (each gate exists because a past release shipped without it):
+From `docs/release_checklists/release_checklist.md` (each gate exists because a past release shipped without it):
 
 - **Warning-clean build**: `bazel build //donner/...` with zero warnings. Warnings do NOT fail
   the build (no `-Werror` in `.bazelrc`) and Bazel does not re-emit warnings for cached actions,
@@ -126,48 +127,41 @@ gh release create vX.Y.Z --title "Donner SVG vX.Y.Z" --notes-file release_body.m
 ```
 
 - `release_body.md` is a scratch file: the new `RELEASE_NOTES.md` section body **without** the
-  `## vX.Y.Z` heading (the `--title` flag supplies the title). It is not gitignored — write it
-  under `/tmp` (or the scratchpad) or delete it before the next commit.
-- Publishing the release triggers `.github/workflows/release.yml`, which builds
-  `bazelisk build -c opt //donner/svg/tool:donner-svg` on Linux and macOS and attaches
-  `donner-svg_linux_x86_64` and `donner-svg_darwin_arm64` to the release.
+  `## vX.Y.Z` heading (the `--title` flag supplies the title), plus exactly one
+  `Release-Candidate-Preflight: <run-id>/<attempt>` line for the reviewed successful attempt.
+  The Release workflow rejects a missing or ambiguous marker. Write the scratch file under
+  `/tmp` (or the scratchpad) or delete it before the next commit.
+- Publishing the release triggers `.github/workflows/release.yml`, which downloads the selected
+  BCR Preflight attempt and attaches its already qualified source archive and Linux/macOS CLI
+  binaries. The Release workflow verifies the retained bytes and does not rebuild them.
 - Verify on the release page: correct tag, both binaries attached, body renders correctly.
 - Existing tags (query, don't assume): `git tag -l 'v*'`.
 
 ## BCR publishing (Bazel Central Registry)
 
-`docs/design_docs/0018-bcr_release.md` is the runbook — do not freelance. Current status per that
-doc: **no successful BCR publish has ever landed**; the first attempt (v0.5.0 tag, 2026-04-16)
-failed. **Mandatory before any retry**: pull up the previous attempt's BCR pull request
-(`bazelbuild/bazel-central-registry`, `modules/donner/<prev>/`) and its `publish-to-bcr` workflow
-run, identify exactly why it failed, and confirm the fix is in the tree. Never re-run the publish
-blind — a blind retry burns another release tag on the same failure. Copy-pasteable queries:
+`docs/design_docs/0018-bcr_release.md` is the runbook. Before preparing a registry entry,
+inspect existing Donner entries and PRs, the approved Release run, and the exact preflight
+attempt. Do not create another release tag to retry a registry-only error. Useful queries:
 
 ```sh
 gh pr list --repo bazelbuild/bazel-central-registry --search "donner in:title" --state all
-gh run list --repo jwmcglynn/donner --workflow=release.yml  # publish-to-bcr is a release.yml job
+gh run list --repo jwmcglynn/donner --workflow=publish_bcr.yml
 gh run view <run-id> --repo jwmcglynn/donner --log-failed
 ```
 
-Leading structural suspect (check this first): `release.yml`'s `linux`/`macos` jobs upload
-binaries straight to the GitHub Release via `svenstaro/upload-release-action` and never publish
-GitHub Actions _workflow artifacts_, while the pinned `publish-to-bcr` reusable workflow's
-artifact-download step expects workflow artifacts (`release_files` / attestations) from the
-calling run. Verify against the `publish.yaml` source at the exact pinned tag before fixing —
-either produce the expected artifacts in the binary jobs or configure the reusable workflow's
-inputs accordingly.
-
 ### How the pipeline works
 
-GitHub Release published → `release.yml` job `publish-to-bcr` (runs only on
-`release`/`published`, after the binary jobs) → calls the reusable workflow
-`bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml` pinned at an **exact tag**
-(currently `@v1.4.1` — check `release.yml`; Publish-to-BCR publishes no floating major tags, so
-`@v1` would never resolve). It reads the `.bcr/` templates (`config.yml`,
-`metadata.template.json`, `source.template.json`, `presubmit.yml`), substitutes `{VERSION}`, and
-opens a PR on `bazelbuild/bazel-central-registry` from the `jwmcglynn/bazel-central-registry`
-fork. The `BCR_PUBLISH_TOKEN` secret must be a **Classic** personal access token with
-`repo` + `workflow` scopes — fine-grained PATs cannot open PRs against public repos.
+`BCR Preflight` qualifies the source archive and CLI binaries for an exact main commit. The
+Release workflow publishes those retained bytes. A separate, manually dispatched
+`.github/workflows/publish_bcr.yml` checks the successful Release run, approved full source
+commit and archive SHA-256. Tokenless jobs run the release-tagged entry generator against `.bcr/`
+templates, verify approved source integrity, module files and metadata, and retain and recheck a
+Git bundle. The protected push job uses no external actions: it downloads the same artifact with
+the runner's GitHub CLI and verifies its digest, base, commit and tree before the final push step.
+Only that step receives the fork-only contents-write `PUBLISH_TOKEN` from the
+`bcr-fork-preparation` environment. The empty-expected ref lease rejects any existing branch.
+The workflow prints a compare link and suggested title/body. Opening an upstream PR requires a
+separate approval of the exact destination and content.
 
 ### What BCR consumers get
 
@@ -202,9 +196,8 @@ as a `bazel_dep`. Any target reaching one of those hidden repos must be gated wi
 5. **Tarball layout**: `.bcr/source.template.json` `strip_prefix` is `donner-{VERSION}` (GitHub
    archive convention: repo name + version).
 
-Failure signature → fix table: 0018 §"Common failures & fixes" (integrity hash mismatch = tag
-moved or tarball regenerated; publish-to-bcr skipped = missing/expired `BCR_PUBLISH_TOKEN`;
-"fork not found" = fork missing).
+Failure signature → fix table: 0018 §"Common failures & fixes". A missing protected fork token
+stops preparation; an existing branch causes the create-only push to fail for manual inspection.
 
 ## Dependency updates (Renovate + toolchains)
 
@@ -227,16 +220,13 @@ block already sketched in `MODULE.bazel`, with the checkout as a sibling directo
 
 ## Volatile facts — query, never trust memory
 
-| Fact                        | Query                                                    |
-| --------------------------- | -------------------------------------------------------- |
-| Current module version      | `grep -n '^module(' MODULE.bazel`                        |
-| Existing release tags       | `git tag -l 'v*'`                                        |
-| Publish-to-BCR workflow pin | `grep -n 'publish-to-bcr' .github/workflows/release.yml` |
-| Unreleased notes section    | `grep -n 'unreleased' RELEASE_NOTES.md`                  |
-| BCR presubmit allowlist     | `grep -A40 'build_targets' .bcr/presubmit.yml`           |
-
-Note that 0018's prose references an older workflow pin than `release.yml` actually uses — the
-workflow file wins; the doc lags.
+| Fact                     | Query                                                                       |
+| ------------------------ | --------------------------------------------------------------------------- |
+| Current module version   | `grep -n '^module(' MODULE.bazel`                                           |
+| Existing release tags    | `git tag -l 'v*'`                                                           |
+| BCR generator pin        | `grep -n 'bazel-contrib/publish-to-bcr@' .github/workflows/publish_bcr.yml` |
+| Unreleased notes section | `grep -n 'unreleased' RELEASE_NOTES.md`                                     |
+| BCR presubmit allowlist  | `grep -A40 'build_targets' .bcr/presubmit.yml`                              |
 
 ## Related skills
 

@@ -143,11 +143,10 @@ If/when the load bug is fixed, two more prerequisites for a from-scratch consume
 - Modern bzlmod has no native `cc_binary`: the consumer needs
   `bazel_dep(name = "rules_cc", ...)` + `load("@rules_cc//cc:cc_binary.bzl", "cc_binary")`.
 
-BCR publishing is wired via `.bcr/` + the `publish-to-bcr` job in
-`.github/workflows/release.yml` (see **donner-release**) but is not live yet — no version of
-donner is on the registry, so `git_override` (or `local_path_override`) is mandatory; a bare
-version-pinned `bazel_dep` will not resolve. The module version is in `MODULE.bazel`
-(`0.8.0-pre` line).
+BCR entry preparation uses `.bcr/` and the manual `.github/workflows/publish_bcr.yml` after a
+qualified GitHub Release (see **donner-release**). Check the registry for an available Donner
+version before using a version-pinned `bazel_dep`; otherwise use `git_override` or
+`local_path_override`. The module version is in `MODULE.bazel`.
 
 Consumers tune features with the module extension (`config/extensions.bzl`):
 
