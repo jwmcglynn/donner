@@ -2241,7 +2241,8 @@ VulkanDevice::VulkanDevice() : impl_(std::make_unique<Impl>()) {
 
 std::unique_ptr<VulkanDevice> VulkanDevice::CreateForTeardownTest(
     const VulkanApi* api, uint64_t instanceHandle, uint64_t deviceHandle,
-    uint64_t commandPoolHandle, void (*onAdmission)(void*), void* admissionContext) {
+    uint64_t commandPoolHandle, void (*onAdmission)(void*), void* admissionContext,
+    std::shared_ptr<DeviceLostState> lostState) {
   Impl::AdmissionGate& gate = Impl::admissionGate();
   const std::lock_guard admission(gate.mutex);
   if (gate.closed) {
@@ -2251,6 +2252,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateForTeardownTest(
     onAdmission(admissionContext);
   }
   std::unique_ptr<VulkanDevice> result(new VulkanDevice());
+  if (lostState) {
+    result->impl_->rootLoss = lostState;
+    result->adoptLostState(std::move(lostState));
+  }
   result->impl_->testApi = *api;
   result->impl_->api = &*result->impl_->testApi;
   static_assert(sizeof(result->impl_->instance) == sizeof(instanceHandle));

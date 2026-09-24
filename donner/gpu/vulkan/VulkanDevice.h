@@ -288,12 +288,11 @@ public:
   /// @param deviceHandle Fake device. @param commandPoolHandle Fake command pool.
   /// @param onAdmission Optional callback invoked while holding the creation gate.
   /// @param admissionContext Opaque argument for the admission callback.
-  static std::unique_ptr<VulkanDevice> CreateForTeardownTest(const VulkanApi* api,
-                                                             uint64_t instanceHandle,
-                                                             uint64_t deviceHandle,
-                                                             uint64_t commandPoolHandle,
-                                                             void (*onAdmission)(void*) = nullptr,
-                                                             void* admissionContext = nullptr);
+  /// @param lostState Loss condition of the root the device opens over, as for \ref Create.
+  static std::unique_ptr<VulkanDevice> CreateForTeardownTest(
+      const VulkanApi* api, uint64_t instanceHandle, uint64_t deviceHandle,
+      uint64_t commandPoolHandle, void (*onAdmission)(void*) = nullptr,
+      void* admissionContext = nullptr, std::shared_ptr<DeviceLostState> lostState = nullptr);
 
   /// Exercises native instance/device creation through a fake API and immediately destroys them.
   /// @param api Fake Vulkan callbacks. @param enablePresentation Whether to enable presentation.

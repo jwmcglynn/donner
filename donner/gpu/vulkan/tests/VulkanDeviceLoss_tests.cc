@@ -29,6 +29,7 @@ using gpu::tests::kMappingSceneByteSize;
 using gpu::tests::MappingScene;
 using gpu::tests::SceneWaitParams;
 using testing::Eq;
+using testing::HasSubstr;
 using testing::IsEmpty;
 using testing::IsFalse;
 using testing::IsTrue;
@@ -187,6 +188,45 @@ TEST_F(VulkanDeviceLossTest, ADriverReportedLossRefusesReadsThroughAReadyMapping
       << "a read after the driver reported the device lost is refused as a device loss, as "
          "mappedBytes documents, not as a generic invalid state";
   EXPECT_THAT(device_->unmapBuffer(std::move(mapping)), IsOk());
+}
+
+TEST_F(VulkanDeviceLossTest, ABusyBufferReadOverALostRootReportsTheLoss) {
+  const std::unique_ptr<VulkanDevice> gated = openGatedDeviceOverTheRoot();
+  if (!gated) {
+    GTEST_SKIP() << kNoQueueGate;
+  }
+
+  // The scene is built before the gate closes: writeTexture submits and waits on its own fence,
+  // which a gated queue would never let complete.
+  MappingScene scene;
+  ASSERT_NO_FATAL_FAILURE(gpu::tests::BuildMappingScene(*gated, scene));
+  ASSERT_THAT(gated->waitForSerial(scene.serial, 30.0), IsTrue()) << gated->lastErrorForTest();
+
+  tests::NativeQueueGate gate(gated->nativeContextForTest());
+  ASSERT_NO_FATAL_FAILURE(gate.start());
+
+  // A copy the gate holds open keeps the buffer busy, so reading it back has to wait for that copy.
+  const Buffer busy = gpu::tests::MakeReadbackBuffer(*gated);
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(gated->createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToBuffer(
+                  TexelCopyTextureInfo{scene.texture}, busy,
+                  TexelCopyBufferLayout{0, gpu::tests::kMappingSceneBytesPerRow,
+                                        gpu::tests::kMappingSceneExtent},
+                  Extent2d{gpu::tests::kMappingSceneExtent, gpu::tests::kMappingSceneExtent}),
+              IsOk());
+  (void)GetResultOrFail(gated->submit(GetResultOrFail(encoder->finish())));
+  ASSERT_THAT(gated->lastErrorForTest(), IsEmpty());
+
+  device_->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
+                                    "a sibling's queue drain gave up");
+
+  EXPECT_THAT(gated->readBackBuffer(busy),
+              IsGpuErrorWithMessage(GpuErrorType::DeviceLost, HasSubstr("lost")))
+      << "a read that cannot wait for its buffer's work because the root is lost must report the "
+         "loss, not a timeout";
+
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  EXPECT_THAT(gated->lastErrorForTest(), IsEmpty());
 }
 
 TEST_F(VulkanDeviceLossTest, AWaitEndsAtOnceWhenASiblingHasDeclaredTheRootLost) {
