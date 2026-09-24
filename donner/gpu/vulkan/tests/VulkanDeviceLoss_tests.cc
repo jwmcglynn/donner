@@ -272,6 +272,45 @@ TEST_F(VulkanDeviceLossTest, AnUploadHeldOnTheQueueEndsWhenASiblingDeclaresTheRo
       << "the sibling's declaration must be the only thing that went wrong on this device";
 }
 
+TEST_F(VulkanDeviceLossTest, UploadsOverARootAlreadyDeclaredLostAreRefusedBeforeTheyStage) {
+  const std::unique_ptr<VulkanDevice> gated = openGatedDeviceOverTheRoot();
+  if (!gated) {
+    GTEST_SKIP() << kNoQueueGate;
+  }
+  const Extent2d extent{gpu::tests::kMappingSceneExtent, gpu::tests::kMappingSceneExtent};
+  const Texture texture = GetResultOrFail(gated->createTexture(TextureDescriptor{
+      "lostRootUpload", extent, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
+
+  // The gate stands in for a hung root: an upload that reached its queue would never signal.
+  tests::NativeQueueGate gate(gated->nativeContextForTest());
+  ASSERT_NO_FATAL_FAILURE(gate.start());
+  ASSERT_THAT(gated->lastErrorForTest(), IsEmpty());
+  device_->markLostAfterWaitTimeout(DeviceLostWaitSite::QueueIdle, std::chrono::milliseconds{5},
+                                    "a sibling's queue drain gave up");
+
+  int steps = 0;
+  gated->setFenceWaitStepHookForTest([&] { ++steps; });
+  // A caller that uploads every frame keeps calling after the loss.
+  constexpr int kUploads = 8;
+  for (int upload = 0; upload < kUploads; ++upload) {
+    SCOPED_TRACE(testing::Message() << "upload " << upload);
+    EXPECT_THAT(gated->writeTexture(texture, gpu::tests::MappingSceneUpload(),
+                                    TexelCopyBufferLayout{0, gpu::tests::kMappingSceneBytesPerRow,
+                                                          gpu::tests::kMappingSceneExtent},
+                                    extent),
+                IsGpuErrorWithMessage(GpuErrorType::DeviceLost, HasSubstr("lost")));
+  }
+  gated->setFenceWaitStepHookForTest({});
+  EXPECT_THAT(gated->pendingTextureUploadCountForTest(), Eq(0u))
+      << "an upload refused on a lost root must not leave objects waiting on a fence that will "
+         "never signal";
+  EXPECT_THAT(steps, Eq(0)) << "an upload on a lost root must not wait at all";
+
+  ASSERT_EQ(gate.release(), VK_SUCCESS);
+  EXPECT_THAT(gated->lastErrorForTest(), IsEmpty())
+      << "the sibling's declaration must be the only thing that went wrong on this device";
+}
+
 TEST_F(VulkanDeviceLossTest, AWaitEndsAtOnceWhenASiblingHasDeclaredTheRootLost) {
   const std::unique_ptr<VulkanDevice> gated = openGatedDeviceOverTheRoot();
   if (!gated) {
