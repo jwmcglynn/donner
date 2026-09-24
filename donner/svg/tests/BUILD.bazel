@@ -56,6 +56,7 @@ donner_cc_test(
         "SVGDefsElement_tests.cc",
         "SVGDescElement_tests.cc",
         "SVGDocument_tests.cc",
+        "SVGElementHeader_tests.cc",
         "SVGElementPublicApi_tests.cc",
         "SVGElement_tests.cc",
         "SVGEllipseElement_tests.cc",
