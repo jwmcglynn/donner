@@ -331,6 +331,23 @@ py_test(
 )
 
 py_library(
+    name = "release_candidate",
+    srcs = ["release_candidate.py"],
+    deps = [
+        ":bcr_source",
+        ":pages_artifact",
+        ":release_cli",
+    ],
+)
+
+py_test(
+    name = "release_candidate_tests",
+    size = "small",
+    srcs = ["release_candidate_tests.py"],
+    deps = [":release_candidate"],
+)
+
+py_library(
     name = "bcr_admission",
     srcs = ["bcr_admission.py"],
     deps = [":bcr_source"],
