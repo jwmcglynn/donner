@@ -2643,11 +2643,11 @@ Result<TextureExport> Device::exportTexture(const Texture& texture) {
   if (share == nullptr) {
     Result<std::shared_ptr<details::TextureShare>> created =
         createTextureShare(texture.slotIndex(), descriptor);
-    if (Status frame = checkSurfaceFrameExport(texture, descriptor, created); frame.hasError()) {
-      return std::move(frame).error();
-    }
     if (created.hasError()) {
       return std::move(created).error();
+    }
+    if (Status frame = checkSurfaceFrameExport(texture, descriptor, created); frame.hasError()) {
+      return std::move(frame).error();
     }
     share = std::move(created).result();
   }
