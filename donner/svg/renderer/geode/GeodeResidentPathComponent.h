@@ -933,7 +933,8 @@ struct GeodeResidentSlot {
   GeodeResidentSlot(const GeodeResidentSlot&) = delete;
   GeodeResidentSlot& operator=(const GeodeResidentSlot&) = delete;
   /// Transfer slab handles, cached bindings, and CPU reservations.
-  GeodeResidentSlot(GeodeResidentSlot&&) noexcept = default;
+  /// @param other Slot whose resource ownership is transferred.
+  GeodeResidentSlot(GeodeResidentSlot&& other) noexcept = default;
   /// Release current geometry residence and mirrors, then take ownership of another slot.
   /// @param other Slot whose resources are moved into this one.
   /// @return This slot after the transfer.
@@ -1156,7 +1157,8 @@ struct GeodeResidentGradientSlot {
   GeodeResidentGradientSlot(const GeodeResidentGradientSlot&) = delete;
   GeodeResidentGradientSlot& operator=(const GeodeResidentGradientSlot&) = delete;
   /// Transfer slab handles, cached bindings, and CPU reservations.
-  GeodeResidentGradientSlot(GeodeResidentGradientSlot&&) noexcept = default;
+  /// @param other Gradient slot whose resource ownership is transferred.
+  GeodeResidentGradientSlot(GeodeResidentGradientSlot&& other) noexcept = default;
   /// Release the current slot and take ownership of another gradient slot's resources.
   /// @param other Slot whose resources are moved into this one.
   /// @return This gradient slot after the transfer.

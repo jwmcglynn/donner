@@ -26,12 +26,13 @@ namespace donner::svg::components {
  */
 class SubDocumentCache {
 public:
-  /// Admission limits for externally referenced SVG sub-documents.
+  /// Sub-document admission limits; entity and parsed-payload ceilings also include the root.
   struct Limits {
     size_t maximumDocuments = 64;                 ///< Distinct cached documents.
     size_t maximumParseAttempts = 128;            ///< Parse attempts, including failures.
-    size_t maximumAggregateEntities = 32 * 1024;  ///< Entities across cached documents.
-    size_t maximumAggregatePayloadBytes = 64 * 1024 * 1024;  ///< Retained parsed-payload bytes.
+    size_t maximumAggregateEntities = 32 * 1024;  ///< Root plus cached sub-document entities.
+    size_t maximumAggregatePayloadBytes =
+        64 * 1024 * 1024;  ///< Root plus cached parsed-payload bytes.
   };
 
   /// Observed cache size, parse work, and admission failures.

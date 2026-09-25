@@ -42,8 +42,8 @@ public:
   struct FetchSecurityStats {
     size_t attempts = 0;     ///< Fetch attempts charged against the document limit.
     size_t cacheHits = 0;    ///< Requests answered by cached positive or failed outcomes.
-    size_t cachedBytes = 0;  ///< Bytes retained in cached responses.
-    bool rejected = false;   ///< Whether external-resource policy or a limit rejected a request.
+    size_t cachedBytes = 0;  ///< Cumulative response bytes admitted to the cache.
+    bool rejected = false;   ///< Whether URL validation or a fetch budget rejected a request.
   };
   /// Constructor.
   explicit ResourceManagerContext(
