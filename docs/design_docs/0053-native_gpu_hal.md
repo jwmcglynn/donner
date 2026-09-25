@@ -545,9 +545,9 @@ performance and final integrated gates remain open.
       selects, on the presented and the offscreen arm on Apple (a host without a display renders
       both offscreen); a lost surface and a minimized window are
       driven through a scripted surface only, because no real window on the hosts these suites run
-      on produces either. The window still reaches the backend's wgpu objects for the platform
-      surface object off Apple and for the browser's diagnostic readback; on Apple it opens and
-      draws on the selected native device.
+      on produces either. The transitional desktop surface still uses wgpu handles for adapter
+      selection. Browser diagnostic readback uses deferred copy/map through `gpu::Device`; native
+      Metal and Vulkan windows draw through the selected runtime device.
 - [ ] Present the Linux editor through a native Vulkan window under
       [#1409](https://github.com/jwmcglynn/donner/issues/1409). The implementation is complete
       locally; hosted CI, combined-tree acceptance, and merge remain. A `GLFW_NO_API` window
