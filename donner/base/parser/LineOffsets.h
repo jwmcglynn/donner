@@ -17,12 +17,14 @@ namespace donner::parser {
  */
 class LineOffsets {
 public:
+  /// Default cap on newline offsets retained for diagnostics.
   static constexpr size_t kMaximumStoredLineOffsets = 64 * 1024;
 
   /**
    * Construct a LineOffsets object for the given input string.
    *
    * @param input Input string.
+   * @param maximumStoredOffsets Maximum newline offsets to retain.
    */
   explicit LineOffsets(std::string_view input,
                        size_t maximumStoredOffsets = kMaximumStoredLineOffsets) {
@@ -52,8 +54,11 @@ public:
 
   LineOffsets(const LineOffsets&) = delete;
   LineOffsets& operator=(const LineOffsets&) = delete;
+  /// Transfer retained line offsets and truncation state.
   LineOffsets(LineOffsets&&) noexcept = default;
-  LineOffsets& operator=(LineOffsets&&) noexcept = default;
+  /// Replace this object's offsets and truncation state with another's.
+  /// @param other Line-offset index to move into this object.
+  LineOffsets& operator=(LineOffsets&& other) noexcept = default;
 
   /**
    * Return the offsets of the start of each line.

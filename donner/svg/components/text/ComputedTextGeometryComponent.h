@@ -24,7 +24,7 @@ struct ComputedTextGeometryComponent {
   /// Faces used to compute these runs, including pending fallback resolutions. A second root
   /// keeps its own dependency even when the manager reused an existing face lookup.
   std::vector<FontFaceDependency> fontDependencies;
-  uint64_t fontResourceRevision = 0;
+  uint64_t fontResourceRevision = 0;  ///< Font resolution revision used for this geometry.
   /**
    * Outline geometry for a single rendered glyph.
    */
@@ -53,8 +53,8 @@ struct ComputedTextGeometryComponent {
   std::vector<TextRun> runs;                  ///< Cached layout runs for renderer reuse.
   Box2d inkBounds;                            ///< Union of glyph ink bounds.
   Box2d emBoxBounds;                          ///< Union of em-box bounds used for text bbox.
-  /// Glyph-cell bounds for each text content entity's complete subtree. Built once per text root.
   std::unordered_map<entt::entity, Box2d> objectBoundsByEntity;
+  ///< Glyph-cell bounds by text content entity subtree, built once per text root.
 };
 
 }  // namespace donner::svg::components

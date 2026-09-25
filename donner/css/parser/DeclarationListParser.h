@@ -25,16 +25,18 @@ public:
   /// Maximum component values parsed across one declaration list.
   static constexpr std::size_t kMaximumComponentValues = 64 * 1024;
 
+  /// Parsing work observed before a declaration list finishes or reaches a limit.
   struct SecurityStats {
-    std::size_t declarations = 0;
-    std::size_t componentValues = 0;
-    bool rejected = false;
+    std::size_t declarations = 0;     ///< Result entries emitted, including invalid placeholders.
+    std::size_t componentValues = 0;  ///< Component-value budget/accounting count.
+    bool rejected = false;            ///< Whether a parsing limit rejected input.
   };
 
   /**
    * Parse a HTML/SVG style attribute, corresponding to a CSS <declaration-list>.
    *
    * @param str Input string.
+   * @param securityStats Optional destination for bounded parsing counters.
    * @return Parsed declaration list.
    */
   static std::vector<DeclarationOrAtRule> Parse(std::string_view str,
@@ -45,6 +47,7 @@ public:
    * the list of declarations, skipping any at-rules when parsing.
    *
    * @param str Input string.
+   * @param securityStats Optional destination for bounded parsing counters.
    * @return Parsed declaration list.
    */
   static std::vector<Declaration> ParseOnlyDeclarations(std::string_view str,
@@ -55,6 +58,7 @@ public:
    * <declaration-list>.
    *
    * @param components List of component values.
+   * @param securityStats Optional destination for bounded parsing counters.
    * @return Parsed declaration list.
    */
   static std::vector<Declaration> ParseRuleDeclarations(std::span<ComponentValue> components,

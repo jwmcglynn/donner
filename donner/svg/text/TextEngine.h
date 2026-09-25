@@ -57,6 +57,7 @@ public:
   /// Adopt pending face resolutions under serialized document access and invalidate only the
   /// text roots whose cached runs used a changed face. Call before the renderer's dirty snapshot.
   std::vector<Entity> refreshFontResources();
+  /// Whether changed or pending font resources require another text preparation pass.
   bool needsFontResourceRefresh() const;
 
   /// Lay out all spans, returning positioned glyph runs.

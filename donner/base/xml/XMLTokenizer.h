@@ -32,6 +32,8 @@ namespace detail {
 /// `goto_into_protected_scope` issue with `goto` + lambdas in the same scope).
 class XMLTokenizerImpl {
 public:
+  /// Create a tokenizer over caller-owned XML source bytes.
+  /// @param source Source text that must outlive this tokenizer.
   explicit XMLTokenizerImpl(std::string_view source) : source_(source), size_(source.size()) {}
 
   /// Run the tokenizer, calling `emitFn(XMLToken)` for each token.

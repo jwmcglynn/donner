@@ -14,6 +14,8 @@ public:
   static constexpr std::size_t kMaximumSteps = 4 * 1024 * 1024;
 
   SelectorTraversalBudget() = default;
+  /// Create an aggregate selector traversal budget with a caller-selected visit ceiling.
+  /// @param maximumSteps Maximum element visits to admit.
   explicit SelectorTraversalBudget(std::size_t maximumSteps) : maximumSteps_(maximumSteps) {}
 
   /// Consume one element visit, returning false once the limit is reached.
@@ -26,10 +28,14 @@ public:
     return true;
   }
 
+  /// Element visits charged to this budget.
   [[nodiscard]] std::size_t steps() const { return steps_; }
+  /// Whether a traversal exceeded the visit ceiling.
   [[nodiscard]] bool rejected() const { return rejected_; }
+  /// Configured maximum element visits.
   [[nodiscard]] std::size_t maximumSteps() const { return maximumSteps_; }
 
+  /// Clear accumulated visits and rejection state while preserving the ceiling.
   void reset() {
     steps_ = 0;
     rejected_ = false;

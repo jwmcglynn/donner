@@ -23,10 +23,11 @@ namespace donner::fonts {
  */
 class WoffParser {
 public:
+  /// Resource ceilings for one WOFF parse and sfnt reconstruction.
   struct Options {
-    size_t maximumInputSize = 16 * 1024 * 1024;
-    size_t maximumTableSize = 30 * 1024 * 1024;
-    size_t maximumSfntSize = 64 * 1024 * 1024;
+    size_t maximumInputSize = 16 * 1024 * 1024;  ///< Encoded WOFF input bytes.
+    size_t maximumTableSize = 30 * 1024 * 1024;  ///< Reconstructed bytes in one table.
+    size_t maximumSfntSize = 64 * 1024 * 1024;   ///< Aggregate reconstructed sfnt bytes.
   };
 
   /**

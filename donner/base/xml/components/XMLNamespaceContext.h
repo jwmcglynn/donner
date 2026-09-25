@@ -46,6 +46,7 @@ public:
    * ```
    *
    * @param registry Underlying registry for the document.
+   * @param maximumCachedScopeBindings Maximum prefix bindings retained across cached scopes.
    */
   explicit XMLNamespaceContext(Registry& registry,
                                std::size_t maximumCachedScopeBindings = kMaximumCachedScopeBindings)

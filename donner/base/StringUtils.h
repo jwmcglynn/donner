@@ -44,6 +44,8 @@ enum class StringComparison : uint8_t {
  * `std::char_traits`.
  */
 struct CaseInsensitiveCharTraits : public std::char_traits<char> {
+  /// Convert an unsigned-byte character to its lowercase comparison value.
+  /// @param ch Character to lowercase using the current C locale.
   static int lower(char ch) { return std::tolower(static_cast<unsigned char>(ch)); }
 
   /**

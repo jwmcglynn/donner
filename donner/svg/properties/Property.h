@@ -8,6 +8,10 @@
 
 namespace donner::svg {
 
+/// Write an optional property's value, or `none` when no value is present.
+/// @tparam T Value type supported by the output stream.
+/// @param os Destination output stream.
+/// @param value Optional value to print.
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::optional<T>& value) {
   if (value.has_value()) {

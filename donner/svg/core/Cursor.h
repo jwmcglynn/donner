@@ -16,14 +16,16 @@ struct CursorImage {
   RcString url;                     ///< URL as authored inside `url()`.
   std::optional<Vector2d> hotspot;  ///< Optional hotspot in image coordinates.
 
+  /// Compare authored URL and hotspot values.
   bool operator==(const CursorImage&) const = default;
 };
 
 /// Cascaded CSS cursor value with authored URL candidates and a required keyword fallback.
 struct Cursor {
-  std::vector<CursorImage> images;
-  CursorType fallback = CursorType::Auto;
+  std::vector<CursorImage> images;         ///< Authored URL candidates in priority order.
+  CursorType fallback = CursorType::Auto;  ///< Required keyword when images cannot be used.
 
+  /// Compare URL candidates and keyword fallback.
   bool operator==(const Cursor&) const = default;
 };
 
