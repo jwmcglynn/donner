@@ -263,6 +263,126 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 job = self._job_body(job_name)
                 self.assertEqual(1, job.count("--test_tag_filters=-manual,-perf"))
 
+    def test_linux_wgpu_resvg_reference_is_selected_only_for_relevant_prs(self):
+        """The manual 16-shard comparison is explicit and never joins macOS/default suites."""
+        determine = self._job_body("determine-targets")
+        self.assertIn("wgpu_reference: ${{ steps.select_wgpu_resvg.outputs.run }}", determine)
+        start = determine.index("          # The manual reference is removed")
+        end = determine.index('          manual_affected="', start)
+        impacted_script = "#!/usr/bin/env bash\nset -euo pipefail\n"
+        impacted_script += textwrap.dedent(determine[start:end])
+        self.assertIn("labels(dep, tests(//tools/ci:linux_wgpu_resvg_reference))", impacted_script)
+        suite = self.ci_target_definitions.split('name = "linux_wgpu_resvg_reference"', 1)[1]
+        suite = suite.split("\n)", 1)[0]
+        labels = re.findall(r'"(//[^\"]+)"', suite)
+        self.assertEqual(
+            labels, ["//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"]
+        )
+        reference = labels[0]
+        with tempfile.TemporaryDirectory() as directory:
+            fake_bazelisk = Path(directory) / "bazelisk"
+            fake_bazelisk.write_text(
+                "#!/bin/sh\nprintf '%s\\n' '" + reference + "' '" + reference + "_impl'\n"
+            )
+            fake_bazelisk.chmod(0o755)
+            for index, (affected, selected) in enumerate((
+                (reference, True),
+                (reference + "_impl", True),
+                (reference + "_extra", False),
+                ("//donner/svg/renderer/tests:unrelated_manual_test", False),
+                ("//donner/base:base_tests", False),
+            )):
+                with self.subTest(affected=affected):
+                    output = Path(directory) / ("outputs-%d" % index)
+                    result = self._run_script(
+                        impacted_script, [],
+                        env={**os.environ, "affected": affected,
+                             "head_dir": directory, "GITHUB_OUTPUT": str(output),
+                             "PATH": directory + os.pathsep + os.environ.get("PATH", os.defpath)},
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual(
+                        "wgpu_reference_affected=true\n" if selected else "",
+                        output.read_text() if output.exists() else "",
+                    )
+            fake_bazelisk.write_text("#!/bin/sh\nexit 0\n")
+            empty = self._run_script(
+                impacted_script, [],
+                env={**os.environ, "affected": reference, "head_dir": directory,
+                     "GITHUB_OUTPUT": str(Path(directory) / "empty-outputs"),
+                     "PATH": directory + os.pathsep + os.environ.get("PATH", os.defpath)},
+            )
+            self.assertEqual(1, empty.returncode)
+            self.assertIn("Linux WebGPU resvg suite has no test target", empty.stdout)
+
+        selector = self._step_body(determine, "Select Linux WebGPU resvg reference")
+        self.assertIn("if: github.event_name == 'pull_request'", selector)
+        path_start = determine.index("          # Direct renderer/GPU/image inputs")
+        path_end = determine.index("          should_fallback=false", path_start)
+        path_script = "#!/usr/bin/env bash\nset -euo pipefail\n"
+        path_script += textwrap.dedent(determine[path_start:path_end])
+        for path, expected in (
+            ("donner/svg/renderer/RendererGeode.cc", "true"),
+            ("donner/gpu/browser/BrowserDevice.cc", "true"),
+            ("donner/gpu/shader/WgslEmitter.cc", "true"),
+            ("donner/svg/resources/ImageLoader.cc", "true"),
+            ("third_party/resvg-test-suite/tests/icon.svg", "true"),
+            ("MODULE.bazel", "true"),
+            (".github/workflows/main.yml", "true"),
+            (".github/workflows/lint.yml", "false"),
+            ("donner/base/Utils.h", "false"),
+        ):
+            with self.subTest(path=path), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "outputs"
+                result = self._run_script(
+                    path_script, [],
+                    env={**os.environ, "changed_files": path, "GITHUB_OUTPUT": str(output)},
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual("wgpu_reference_changed=%s\n" % expected, output.read_text())
+
+        script = textwrap.dedent(selector.split("        run: |\n", 1)[1])
+        for impacted, changed, unknown, full_test, expected in (
+            ("true", "false", "", "false", "true"),
+            ("", "true", "", "false", "true"),
+            ("", "false", "true", "false", "true"),
+            ("", "false", "", "true", "true"),
+            ("", "false", "", "false", "false"),
+        ):
+            with self.subTest(impacted=impacted, changed=changed,
+                              unknown=unknown, full_test=full_test), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "outputs"
+                configured = script.replace(
+                    "${{ steps.determine.outputs.wgpu_reference_affected }}", impacted
+                ).replace(
+                    "${{ steps.determine.outputs.wgpu_reference_changed }}", changed
+                ).replace(
+                    "${{ steps.determine.outputs.wgpu_reference_unknown }}", unknown
+                ).replace(
+                    "${{ steps.determine.outputs.full_test }}", full_test
+                )
+                result = self._run_script(
+                    "#!/usr/bin/env bash\n" + configured, [],
+                    env={**os.environ, "GITHUB_OUTPUT": str(output)},
+                )
+                self.assertEqual(0, result.returncode, result.stderr)
+                self.assertEqual("run=%s\n" % expected, output.read_text())
+
+        target = "//tools/ci:linux_wgpu_resvg_reference"
+        for job_name in ("linux", "linux-self-hosted"):
+            with self.subTest(job=job_name):
+                job = self._job_body(job_name)
+                step = self._step_body(job, "Test Linux WebGPU resvg reference")
+                self.assertIn(
+                    "!cancelled() && needs.determine-targets.outputs.wgpu_reference == 'true'",
+                    step,
+                )
+                self.assertIn("--test_tag_filters=", step)
+                self.assertIn(target, step)
+                self.assertIn("steps.wgpu_resvg_reference.outcome == 'failure'", job)
+        for job_name in ("macos", "macos-self-hosted"):
+            self.assertNotIn("Test Linux WebGPU resvg reference", self._job_body(job_name))
+
     def _coverage_jobs(self):
         """Every (name, body) pair for a top-level key in coverage.yml."""
         parts = re.split(
