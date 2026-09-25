@@ -8,6 +8,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -920,6 +921,54 @@ std::unique_ptr<GeodeDevice> CreateNativeVulkanContext() {
     return nullptr;
   }
   return GeodeDevice::CreateOverSelectedRoot(std::move(root), gpu::TextureFormat::RGBA8Unorm);
+}
+
+TEST(GeodeNativeVulkanRoot, HeadlessSelectionDoesNotExposePresentationInstance) {
+  std::unique_ptr<GeodeDevice> context = CreateNativeVulkanContext();
+  ASSERT_THAT(context, NotNull()) << kNoVulkanDevice;
+  auto& device = static_cast<gpu::vulkan::VulkanDevice&>(context->runtimeDevice());
+  EXPECT_FALSE(device.supportsPresentation());
+  EXPECT_THAT(device.nativeInstance(), IsNull());
+}
+
+TEST(GeodeNativeVulkanRoot, PresentationSelectionSharesInstanceAcrossRuntimeDevices) {
+  GpuRootSelection selection;
+  selection.label = "GeodeNativeVulkanPresentationTest";
+  selection.backend = GpuBackendKind::NativeVulkan;
+  selection.requireVulkanPresentation = true;
+  std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
+  if (root == nullptr) {
+    const char* required = std::getenv("DONNER_REQUIRE_VULKAN");
+    if (required != nullptr && std::string_view(required) == "1") {
+      ASSERT_THAT(CreateNativeVulkanContext(), NotNull()) << kNoVulkanDevice;
+    }
+    GTEST_SKIP() << "This Vulkan loader or driver lacks the surface and swapchain extensions "
+                    "needed for a presentation-capable shared root";
+  }
+  void* instance = root->vulkanRoot()->nativeInstance();
+  ASSERT_THAT(instance, NotNull());
+
+  GeodeRuntimeDevice first = CreateGpuDeviceOver(root);
+  GeodeRuntimeDevice second = CreateGpuDeviceOver(root);
+  ASSERT_THAT(first.device, NotNull());
+  ASSERT_THAT(second.device, NotNull());
+  auto& firstNative = static_cast<gpu::vulkan::VulkanDevice&>(*first.device);
+  auto& secondNative = static_cast<gpu::vulkan::VulkanDevice&>(*second.device);
+  EXPECT_TRUE(firstNative.supportsPresentation());
+  EXPECT_TRUE(secondNative.supportsPresentation());
+  EXPECT_THAT(firstNative.nativeInstance(), Eq(instance));
+  EXPECT_THAT(secondNative.nativeInstance(), Eq(instance));
+  EXPECT_THAT(firstNative.nativeContextForTest().queue,
+              Eq(secondNative.nativeContextForTest().queue));
+}
+
+TEST(GeodeNativeVulkanRoot, PresentationSelectionRejectsMissingRequiredExtension) {
+  const std::array<const char*, 1> required{"VK_EXT_donner_missing"};
+  GpuRootSelection selection;
+  selection.backend = GpuBackendKind::NativeVulkan;
+  selection.requireVulkanPresentation = true;
+  selection.requiredVulkanInstanceExtensions = required;
+  EXPECT_THAT(SelectGpuRoot(selection), IsNull());
 }
 
 /// Runtime devices over one selected Vulkan root share its native device and queue, while each

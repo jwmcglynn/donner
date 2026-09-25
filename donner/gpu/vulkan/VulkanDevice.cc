@@ -1027,6 +1027,10 @@ uint32_t VulkanSharedRoot::maxTextureDimension2D() const {
   return impl_->maxTextureDimension2D;
 }
 
+void* VulkanSharedRoot::nativeInstance() const {
+  return impl_->presentationEnabled ? impl_->instance : nullptr;
+}
+
 bool VulkanSharedRoot::executionLockedForTest() const {
   if (impl_->executionMutex.try_lock()) {
     impl_->executionMutex.unlock();
@@ -2354,6 +2358,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateWithPresentationSupport(
 std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateSharedRoot(
     std::shared_ptr<DeviceLostState> lostState) {
   return CreateRootImpl(false, false, {}, std::move(lostState));
+}
+
+std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateSharedRootWithPresentationSupport(
+    std::span<const char* const> requiredInstanceExtensions,
+    std::shared_ptr<DeviceLostState> lostState) {
+  return CreateRootImpl(false, true, requiredInstanceExtensions, std::move(lostState));
 }
 
 std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateSharedRootWithTimelineSemaphoreForTest(

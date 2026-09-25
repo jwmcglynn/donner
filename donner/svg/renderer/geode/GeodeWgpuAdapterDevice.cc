@@ -652,8 +652,15 @@ std::shared_ptr<GeodeGpuRoot> SelectNativeVulkanRoot(
                  "native backend.\n");
     return nullptr;
   }
+  if (!options.requireVulkanPresentation && !options.requiredVulkanInstanceExtensions.empty()) {
+    std::fprintf(stderr, "[Geode/vulkan] Surface extensions need a presentation root.\n");
+    return nullptr;
+  }
   std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeRoot =
-      gpu::vulkan::VulkanDevice::CreateSharedRoot(lostState);
+      options.requireVulkanPresentation
+          ? gpu::vulkan::VulkanDevice::CreateSharedRootWithPresentationSupport(
+                options.requiredVulkanInstanceExtensions, lostState)
+          : gpu::vulkan::VulkanDevice::CreateSharedRoot(lostState);
   if (nativeRoot == nullptr) {
     std::fprintf(stderr, "[Geode/vulkan] No Vulkan device available.\n");
     return nullptr;
@@ -867,20 +874,28 @@ namespace {
 gpu::Result<ResolvedBackend> ResolveBackend(const GpuRootSelection& options,
                                             std::string_view request,
                                             std::optional<GpuBackendKind> buildDefault) {
+  ResolvedBackend resolved;
   if (options.backend.has_value()) {
-    return ResolvedBackend{*options.backend, BackendRequestSource::Caller};
-  }
-  if (!request.empty()) {
+    resolved = ResolvedBackend{*options.backend, BackendRequestSource::Caller};
+  } else if (!request.empty()) {
     gpu::Result<GpuBackendKind> requested = ParseBackendRequest(request);
     if (requested.hasError()) {
       return std::move(requested).error();
     }
-    return ResolvedBackend{requested.result(), BackendRequestSource::Environment};
+    resolved = ResolvedBackend{requested.result(), BackendRequestSource::Environment};
+  } else if (buildDefault.has_value() && !options.compatibleSurface) {
+    resolved = ResolvedBackend{*buildDefault, BackendRequestSource::BuildSetting};
   }
-  if (buildDefault.has_value() && !options.compatibleSurface) {
-    return ResolvedBackend{*buildDefault, BackendRequestSource::BuildSetting};
+  if (options.requireVulkanPresentation && resolved.kind != GpuBackendKind::NativeVulkan) {
+    return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor,
+                         std::format("Vulkan presentation requested, but the {} backend resolved",
+                                     GpuBackendKindName(resolved.kind))};
   }
-  return ResolvedBackend{GpuBackendKind::TransitionalWgpu, BackendRequestSource::Default};
+  if (!options.requireVulkanPresentation && !options.requiredVulkanInstanceExtensions.empty()) {
+    return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor,
+                         "Vulkan instance extensions require presentation"};
+  }
+  return resolved;
 }
 
 }  // namespace
