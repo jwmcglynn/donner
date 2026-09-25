@@ -53,13 +53,12 @@ namespace donner::editor::gui {
 
 namespace internal {
 
-/// The Wasm render worker owns a separate WebGPU device, so the UI's primary
-/// and direct-framebuffer renderers remain single-threaded and may share one
-/// GeodeDevice wrapper. Desktop's AsyncRenderer shares the primary wrapper
-/// across threads; its UI-only framebuffer renderers need a separate wrapper
-/// to isolate mutable counters and deferred-destroy queues.
-[[nodiscard]] constexpr bool ShouldShareWgpuFramebufferGeodeDevice(bool emscriptenBuild) noexcept {
-  return emscriptenBuild;
+/// The transitional Wasm UI can share its wrapper because the render worker owns a separate
+/// device. The browser runtime gives the canvas its own logical UI context. Desktop's
+/// AsyncRenderer shares the primary wrapper across threads, so its UI context is separate too.
+[[nodiscard]] constexpr bool ShouldShareWgpuFramebufferGeodeDevice(
+    bool emscriptenBuild, bool browserRuntimeSelected) noexcept {
+  return emscriptenBuild && !browserRuntimeSelected;
 }
 
 /// Opaque fallback clear color for the browser UI surface, matching the page
@@ -268,17 +267,21 @@ public:
  * Presents through the GPU runtime's surface hooks, which is how every platform the editor runs
  * on presents.
  *
- * What differs between platforms is only the platform object frames go to. A Core Animation
- * Metal layer is named directly and the runtime builds the surface on it, on whichever backend
- * the process selected. Everywhere else the window library the editor already links makes the
- * surface object, because adapter selection has to be constrained to it before there is a device
- * to build anything with; the runtime is then pointed at that object and builds its swapchain on
- * it without taking it over.
+ * What differs between platforms is the platform object frames go to. A Core Animation Metal
+ * layer is named directly. The selected browser backend names the transferred canvas by selector
+ * after root selection. The transitional adapter elsewhere uses a window-library surface to
+ * constrain adapter selection before a device exists; the runtime then builds its swapchain on
+ * that borrowed object.
  */
 class RuntimePresentationSurface final : public PresentationSurface {
 public:
   /// Constructs a surface that is not attached to anything yet.
   RuntimePresentationSurface() = default;
+
+  /// Names the editor's transferred browser canvas without creating a WebGPU-C++ surface.
+  /// @param format Preferred canvas format chosen before Geode pipelines are compiled.
+  /// @param enableReadback Whether diagnostic pixel reads may use the acquired frame.
+  RuntimePresentationSurface(gpu::TextureFormat format, bool enableReadback);
 
   /// Hands back any frame still outstanding and gives up the surface.
   ~RuntimePresentationSurface() override;

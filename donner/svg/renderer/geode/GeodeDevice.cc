@@ -634,6 +634,21 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateOverSelectedRoot(std::shared_ptr
   return result;
 }
 
+std::unique_ptr<GeodeDevice> GeodeDevice::CreateOverPhysicalDeviceOwner(
+    std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice, gpu::TextureFormat textureFormat) {
+  if (physicalDevice == nullptr ||
+      physicalDevice->lostState()->lost.load(std::memory_order_acquire)) {
+    return nullptr;
+  }
+  std::unique_ptr<GeodeDevice> result = CreateLogicalContext(std::move(physicalDevice));
+  if (result == nullptr) {
+    return nullptr;
+  }
+  result->textureFormat_ = textureFormat;
+  result->initSharedPipelines();
+  return result;
+}
+
 GeodePipeline& GeodeDevice::pipeline() const {
   return *impl_->pipeline;
 }
@@ -796,13 +811,8 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
       std::fprintf(stderr, "[Geode] CreateFromExternal: physical device is already lost\n");
       return nullptr;
     }
-    std::unique_ptr<GeodeDevice> result = CreateLogicalContext(config.physicalDevice);
-    if (result == nullptr) {
-      return nullptr;
-    }
-    result->textureFormat_ = GpuTextureFormatFromWgpu(config.textureFormat);
-    result->initSharedPipelines();
-    return result;
+    return CreateOverPhysicalDeviceOwner(config.physicalDevice,
+                                         GpuTextureFormatFromWgpu(config.textureFormat));
   }
 
   std::shared_ptr<GeodeGpuRoot> root =

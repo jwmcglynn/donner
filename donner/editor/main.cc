@@ -302,15 +302,16 @@ void RunWasmEditorFrame(void* userdata) {
       ConsumeBrowserEditorFrameRequest() || state->window->hasQueuedInputEvents();
   const bool timerDue = state->nextIdleWakeAtMs.has_value() && nowMs >= *state->nextIdleWakeAtMs;
   if (!editorRequested && !browserRequested && !timerDue) {
-    // The GPU device lives on this thread, so its callbacks (the raster
-    // thread's snapshot map completions above all) are only delivered when
-    // this thread polls it. An idle editor would otherwise strand a raster
-    // thread mid-readback until the next rendered frame: measured as a
-    // 1.9 second first-sample present, the idle-timer period, with the
-    // raster thread burning 265 poll round trips. A non-blocking poll on
-    // every skipped tick is nanoseconds when nothing is pending.
+    // The transitional device needs a non-blocking driver poll for callbacks while idle. The
+    // browser runtime's JavaScript callbacks settle on the event loop; its runtime poll retires
+    // completed resources without asking a nonexistent adapter to poll.
     if (const std::shared_ptr<donner::geode::GeodeDevice> device = state->window->geodeDevice()) {
-      device->adapterDevice().pollSuspending(false);
+      if (device->physicalDeviceOwner()->root().capabilities().backend ==
+          donner::geode::GpuBackendKind::TransitionalWgpu) {
+        device->adapterDevice().pollSuspending(false);
+      } else {
+        device->runtimeDevice().poll();
+      }
     }
     return;
   }

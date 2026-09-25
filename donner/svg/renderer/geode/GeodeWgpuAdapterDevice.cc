@@ -559,8 +559,8 @@ gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> OpenBrowserDevice(
 
 /// Selects the browser backend: the root holds one runtime device over this worker's browser GPU
 /// device, which keeps that device open for as long as any runtime device over the root, so each
-/// of them joins it instead of asking the browser for another. Offered only for headless work,
-/// and refused elsewhere rather than falling back to the transitional adapter.
+/// of them joins it instead of asking the browser for another. A selected browser editor also
+/// reaches it without a WebGPU surface provider, then names its canvas through the runtime.
 ///
 /// @param options Caller-supplied inputs. A selection constrained to a wgpu surface is refused
 ///   before its surface provider runs: the browser backend presents to no wgpu surface.
