@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -225,6 +226,17 @@ class CoverageRunProofTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("filtered LCOV could not be read", diagnostic)
         self.assertNotIn(str(self.root), diagnostic)
+
+    def test_cli_hides_unexpected_parser_error_detail(self):
+        with patch.object(
+            proof,
+            "collect_lcov_metrics",
+            side_effect=ValueError("unexpected parser detail /private/runner-host/secret-path"),
+        ):
+            status, diagnostic = self.run_cli()
+        self.assertEqual(status, 1)
+        self.assertIn("coverage data is malformed", diagnostic)
+        self.assertNotIn("/private/runner-host/secret-path", diagnostic)
 
 
 if __name__ == "__main__":
