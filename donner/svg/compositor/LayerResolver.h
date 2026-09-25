@@ -15,9 +15,9 @@ namespace donner::svg::compositor {
  * is from a disabled source ends up at layer 0 (root).
  */
 struct ResolveOptions {
-  bool enableInteractionHints = true;
-  bool enableAnimationHints = true;
-  bool enableComplexityBucketHints = true;
+  bool enableInteractionHints = true;       ///< Include interaction-driven hint weights.
+  bool enableAnimationHints = true;         ///< Include animation-driven hint weights.
+  bool enableComplexityBucketHints = true;  ///< Include geometry-complexity hint weights.
   // Mandatory and Explicit are always honored - they represent SVG semantics
   // and the explicit escape-hatch API, not optional optimizations.
 };

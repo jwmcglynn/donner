@@ -48,7 +48,12 @@ public:
   // Non-copyable, movable.
   DragSession(const DragSession&) = delete;
   DragSession& operator=(const DragSession&) = delete;
+  /// Transfer ownership of an active drag promotion.
+  /// @param other Session whose promotion is transferred.
   DragSession(DragSession&& other) noexcept;
+  /// End this session's promotion and take ownership of another's.
+  /// @param other Session whose promotion is transferred.
+  /// @return This session after the transfer.
   DragSession& operator=(DragSession&& other) noexcept;
 
   /// Returns the target entity being dragged.

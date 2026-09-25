@@ -106,13 +106,18 @@ struct ComplexityBucketerStats {
  */
 class ComplexityBucketer {
 public:
+  /// Create a bucketer with the supplied complexity thresholds.
+  /// @param config Thresholds and limits used when choosing bucket roots.
   explicit ComplexityBucketer(ComplexityBucketerConfig config = {}) : config_(config) {}
 
   ~ComplexityBucketer() = default;
   ComplexityBucketer(const ComplexityBucketer&) = delete;
   ComplexityBucketer& operator=(const ComplexityBucketer&) = delete;
+  /// Transfer held bucket hints and their cleanup ownership.
   ComplexityBucketer(ComplexityBucketer&&) noexcept = default;
-  ComplexityBucketer& operator=(ComplexityBucketer&&) noexcept = default;
+  /// Replace this bucketer's held hints and state with another's.
+  /// @param other Bucketer whose hint ownership is transferred.
+  ComplexityBucketer& operator=(ComplexityBucketer&& other) noexcept = default;
 
   /**
    * Recompute the bucket partition for the current document state. Intended to
@@ -154,8 +159,10 @@ public:
     reconcile(newRegistry);
   }
 
+  /// Statistics from the most recent bucket reconciliation.
   [[nodiscard]] const ComplexityBucketerStats& stats() const { return stats_; }
 
+  /// Thresholds used for bucket selection.
   [[nodiscard]] const ComplexityBucketerConfig& config() const { return config_; }
 
 private:

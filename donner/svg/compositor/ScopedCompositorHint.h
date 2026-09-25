@@ -55,7 +55,12 @@ public:
   ScopedCompositorHint(const ScopedCompositorHint&) = delete;
   ScopedCompositorHint& operator=(const ScopedCompositorHint&) = delete;
 
+  /// Transfer ownership of an active hint without removing it from the registry.
+  /// @param other Hint owner whose entry is transferred.
   ScopedCompositorHint(ScopedCompositorHint&& other) noexcept;
+  /// Remove the current hint and take ownership of another active hint.
+  /// @param other Hint owner whose entry is transferred.
+  /// @return This hint owner after the transfer.
   ScopedCompositorHint& operator=(ScopedCompositorHint&& other) noexcept;
 
   /// Factory: publish a `Mandatory` hint at the infinite-weight sentinel (`0xFFFF`).

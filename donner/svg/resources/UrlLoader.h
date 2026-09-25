@@ -69,6 +69,8 @@ public:
    * Create a new URL loader that uses the given resource loader to fetch external resources.
    *
    * @param resourceLoader Resource loader to use for fetching external resources.
+   * @param maximumResourceSize Maximum bytes accepted from one loaded resource.
+   * @param remainingResourceBytes Optional shared byte budget, decremented on load.
    */
   explicit UrlLoader(ResourceLoaderInterface& resourceLoader,
                      size_t maximumResourceSize = kDefaultMaximumResourceSize,

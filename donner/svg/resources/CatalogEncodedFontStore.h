@@ -39,7 +39,9 @@ std::span<const CatalogFontAsset> CatalogFontAssets();
  */
 class CatalogEncodedFontStore {
 public:
+  /// Per-asset cap for encoded buffer capacity and declared decoded bytes.
   static constexpr size_t kMaximumAssetBytes = 2 * 1024 * 1024;
+  /// Maximum encoded-buffer capacity bytes retained by the store at once.
   static constexpr size_t kMaximumRetainedBytes = 4 * 1024 * 1024;
 
   CatalogEncodedFontStore();
@@ -47,6 +49,8 @@ public:
   CatalogEncodedFontStore(const CatalogEncodedFontStore&) = delete;
   CatalogEncodedFontStore& operator=(const CatalogEncodedFontStore&) = delete;
 
+  /// Return the current consumer-visible state for a compiled catalog asset.
+  /// @param contentId Compiled SHA-256 identity of the encoded font.
   FontFaceAvailability availability(std::string_view contentId) const;
 
   /// Queue only a coordinator-approved demand. Enumeration and provider loads do not call this.
@@ -73,13 +77,20 @@ public:
 
   /// An immutable lease preserves bytes during a provider copy. Eviction refuses leased buffers.
   std::shared_ptr<const std::vector<uint8_t>> encodedBytes(std::string_view contentId) const;
+  /// Evict unleased encoded bytes for a catalog asset.
+  /// @param contentId Compiled SHA-256 identity of the encoded font.
+  /// @return Whether the asset's stored bytes were evicted.
   bool evict(std::string_view contentId);
+  /// Encoded-buffer capacity bytes currently retained by this store.
   size_t retainedBytes() const;
 
   /// One admitted catalog copy/decode at a time. Release is an independent wake source, including
   /// when a pending preview document has already died and only its coordinator task remains.
   FontFaceAdmission tryAcquireDecode(std::string_view contentId) const;
+  /// Revision incremented when a consumer may need to retry pending font work.
   uint64_t wakeRevision() const;
+  /// Install a callback that schedules a retry after an admitted state change.
+  /// @param callback Lifetime-safe callback, or empty to clear it.
   void setWakeCallback(std::function<void()> callback);
 
 private:

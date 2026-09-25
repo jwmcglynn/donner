@@ -15,27 +15,31 @@ namespace donner::svg {
 
 /// Fully resolved gradient payload that can cross non-SVG package boundaries.
 struct ResolvedGradientData {
-  enum class Kind : uint8_t { kLinear = 0, kRadial = 1 };
+  /// Geometry represented by this gradient payload.
+  enum class Kind : uint8_t {
+    kLinear = 0,  ///< Gradient between two endpoints.
+    kRadial = 1,  ///< Gradient between focal and outer circles.
+  };
 
-  Kind kind = Kind::kLinear;
+  Kind kind = Kind::kLinear;  ///< Geometry selected for this payload.
 
-  GradientUnits units = GradientUnits::Default;
-  GradientSpreadMethod spreadMethod = GradientSpreadMethod::Default;
-  std::vector<GradientStop> stops;
+  GradientUnits units = GradientUnits::Default;  ///< Coordinate system for geometry lengths.
+  GradientSpreadMethod spreadMethod = GradientSpreadMethod::Default;  ///< Out-of-range behavior.
+  std::vector<GradientStop> stops;  ///< Ordered color stops of the resolved gradient.
 
-  Lengthd x1;
-  Lengthd y1;
-  Lengthd x2;
-  Lengthd y2;
+  Lengthd x1;  ///< Linear gradient start X coordinate.
+  Lengthd y1;  ///< Linear gradient start Y coordinate.
+  Lengthd x2;  ///< Linear gradient end X coordinate.
+  Lengthd y2;  ///< Linear gradient end Y coordinate.
 
-  Lengthd cx;
-  Lengthd cy;
-  Lengthd r;
-  std::optional<Lengthd> fx;
-  std::optional<Lengthd> fy;
-  Lengthd fr;
+  Lengthd cx;                 ///< Radial gradient outer-circle center X coordinate.
+  Lengthd cy;                 ///< Radial gradient outer-circle center Y coordinate.
+  Lengthd r;                  ///< Radial gradient outer-circle radius.
+  std::optional<Lengthd> fx;  ///< Optional focal-circle center X coordinate.
+  std::optional<Lengthd> fy;  ///< Optional focal-circle center Y coordinate.
+  Lengthd fr;                 ///< Focal-circle radius.
 
-  std::optional<css::Color> fallback;
+  std::optional<css::Color> fallback;  ///< Fallback paint color, if specified.
 };
 
 /**

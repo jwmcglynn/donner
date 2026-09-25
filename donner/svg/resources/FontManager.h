@@ -130,6 +130,9 @@ public:
   /// The output survives this manager and can be attached to a stable preview/document task.
   class DependencyCapture {
   public:
+    /// Route face dependencies consulted in this scope to caller-owned output.
+    /// @param manager Manager whose nested capture target is temporarily replaced.
+    /// @param output Caller-owned dependency destination that outlives this scope.
     DependencyCapture(FontManager& manager, std::vector<FontFaceDependency>& output);
     ~DependencyCapture();
     DependencyCapture(const DependencyCapture&) = delete;
@@ -140,6 +143,8 @@ public:
     std::vector<FontFaceDependency>* previous_;
   };
 
+  /// Begin a scoped capture of font faces consulted during layout preparation.
+  /// @param output Caller-owned dependency destination.
   DependencyCapture captureDependencies(std::vector<FontFaceDependency>& output) {
     return DependencyCapture(*this, output);
   }
@@ -153,9 +158,13 @@ public:
   /// Retry pending faces from the normal serialized text/frame preparation path. Returns true
   /// when a successful resolution changed fontResourceRevision(), even if asset identity did not.
   bool refreshPendingFonts();
+  /// Whether provider state changes need another normal preparation pass.
   bool needsResourceRefresh() const;
+  /// Whether current face dependencies still have unresolved states.
   bool hasUnresolvedDependencies() const;
+  /// Revision advanced when a resolved font change invalidates prepared text geometry.
   uint64_t fontResourceRevision() const { return fontResourceRevision_; }
+  /// Whether bounded dependency collection exceeded its resource limit.
   bool fontDependenciesOverflowed() const { return fontDependenciesOverflowed_; }
 
   /**
