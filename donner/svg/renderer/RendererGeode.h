@@ -13,7 +13,9 @@
 #include <memory>
 #include <optional>
 #include <vector>
+#ifndef __EMSCRIPTEN__
 #include <webgpu/webgpu.hpp>
+#endif
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
@@ -71,7 +73,14 @@ public:
    */
   static RendererGeodeTextureSnapshot AdoptRuntimeTexture(
       std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
+      gpu::TextureFormat format, AlphaType alphaType);
+
+#ifndef __EMSCRIPTEN__
+  /// Compatibility entry point for native hosts still holding a WebGPU texture format.
+  static RendererGeodeTextureSnapshot AdoptRuntimeTexture(
+      std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
       wgpu::TextureFormat format, AlphaType alphaType);
+#endif
 
   ~RendererGeodeTextureSnapshot() override;
 

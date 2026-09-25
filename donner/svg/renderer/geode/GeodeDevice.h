@@ -71,6 +71,9 @@ public:
   /// The backend root every runtime device over this owner drives.
   const GeodeGpuRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
 
+  /// Whether this owner has a backend device that requires queue-idle handling.
+  [[nodiscard]] bool hasBackendDevice() const;
+
   /// Sticky loss condition shared by every context and runtime device over this root. Retained
   /// because a backend device-lost callback can outlive everything that registered it.
   const std::shared_ptr<GeodeDeviceLostState>& lostState() const UTILS_LIFETIME_BOUND;

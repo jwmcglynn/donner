@@ -42,6 +42,10 @@ std::shared_ptr<GeodePhysicalDeviceOwner> GeodePhysicalDeviceOwner::Create(
 
 GeodePhysicalDeviceOwner::~GeodePhysicalDeviceOwner() = default;
 
+bool GeodePhysicalDeviceOwner::hasBackendDevice() const {
+  return root_->hasBackendDevice();
+}
+
 const std::shared_ptr<GeodeDeviceLostState>& GeodePhysicalDeviceOwner::lostState() const {
   return root_->lostState();
 }
