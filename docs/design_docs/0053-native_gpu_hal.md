@@ -698,14 +698,13 @@ later default flip without changing Metal or browser surface ownership.
       for the runtime devices over it and reports that device's texture limit; each runtime device
       waits for the browser with a bounded settle and fails with a named reason, and a loss the
       browser reports is declared into the loss condition the root's devices share. The headless
-      context pool never hands a thread-bound device to another thread. Both the retained opt-in
-      package and the production editor package select Browser; both Chromium boot lanes pin
-      the raster worker's selected backend.
+      context pool never hands a thread-bound device to another thread. The production editor
+      package selects Browser; its Chromium boot lane pins the raster worker's selected backend.
 - [x] Run the standalone Geode renderer WebAssembly module on the selected browser runtime.
       `//donner/editor/wasm/tests:standalone_geode_browser_renderer_test` serves its package in
       Chromium, confirms the browser backend was selected, and checks SVG document colors in the
       canvas. The default Geode renderer module remains a separate transitional consumer.
-- [x] Run the opt-in browser editor's UI canvas through the selected runtime. Name the transferred
+- [x] Run the browser editor's UI canvas through the selected runtime. Name the transferred
       `#canvas` with `CanvasSelector` after selecting the root, settle its preferred format before
       compiling Geode pipelines, and create a second logical UI context over that physical owner.
       Copy/map explicit diagnostic pixels and poll idle completions through `gpu::Device`, with

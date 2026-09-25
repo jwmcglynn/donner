@@ -268,19 +268,6 @@ editor_wasm_geode_transitioned_target(
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
 
-# Retained opt-in package and browser tests. Both this and the production editor package select
-# Browser while the separate lanes remain under review.
-editor_wasm_geode_transitioned_target(
-    name = "_wasm_web_package_browser_backend_for_serve",
-    browser_backend = True,
-    dep = ":wasm_web_package",
-    tags = [
-        "manual",
-        "wasm",
-    ],
-    visibility = ["//donner/editor/wasm/tests:__pkg__"],
-)
-
 configured_dependency_audit_test(
     name = "wasm_dependency_audit_test",
     size = "small",
@@ -318,18 +305,6 @@ configured_dependency_audit_test(
     ],
     tags = ["manual"],
     target = ":wasm_web_package",
-)
-
-# The package that selects the browser backend for headless work links the backend and its bridge.
-configured_dependency_audit_test(
-    name = "wasm_browser_backend_dependency_audit_test",
-    size = "small",
-    required = [
-        "//donner/editor/wasm:_editor_wasm_binary",
-        "//donner/gpu/browser:browser_device",
-        "//donner/gpu/browser:emscripten_browser_bridge",
-    ],
-    target = ":_wasm_web_package_browser_backend_for_serve",
 )
 
 genquery(
