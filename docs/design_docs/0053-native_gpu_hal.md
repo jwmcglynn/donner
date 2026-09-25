@@ -1,9 +1,10 @@
 # Design: Donner Native GPU Runtime and Rust-Independent Build
 
 **Status:** Implementing. Metal renderer/editor parity and Vulkan Geode/renderer parity are
-qualified. The served and shipped editor and standalone Geode Wasm packages use the browser runtime without
-linking the C WebGPU wrapper. Linux editor presentation, native platform defaults, physical-browser
-qualification, and native production dependency closure remain.
+qualified. The served and shipped editor and standalone Geode Wasm packages use the browser runtime
+without linking the C WebGPU wrapper. Unconstrained macOS Geode/editor roots default to native Metal.
+Linux editor presentation, the Linux native default, physical-browser qualification, and native
+production dependency closure remain.
 Cross-device registration works on Metal, the browser, the transitional adapter and Vulkan-owned
 images; Vulkan acquired frames refuse export. The end state retains one Linux test-only wgpu-native resvg
 comparison backend.\
@@ -42,12 +43,13 @@ commands, texture uploads, checkerboard targets, UI textures and compositor diag
 validated runtime handles. Production shader constructors select WGSL, MSL or SPIR-V projections
 from the same reflected program interfaces.
 
-Metal renderer and editor parity and Vulkan renderer parity are qualified. The served and shipped
-editor and default standalone Geode WebAssembly packages select the browser runtime. Their configured
-dependency closures and link actions exclude the C WebGPU wrapper. Linux editor presentation,
-native defaults, physical-browser qualification and removal of Rust-built GPU archives remain.
-The implementation checklist identifies those open boundaries; git history carries the delivery
-chronology.
+Metal renderer and editor parity and Vulkan renderer parity are qualified. macOS Geode and editor
+roots default to native Metal while explicit WebGPU requests remain available. The served and
+shipped editor and default standalone Geode WebAssembly packages select the browser runtime; their
+configured dependency closures and link actions exclude the C WebGPU wrapper. Linux editor
+presentation, its native default, physical-browser qualification, and removal of Rust-built GPU
+archives remain. The implementation checklist identifies those open boundaries; git history carries
+the delivery chronology.
 
 ### Native parity
 
@@ -146,7 +148,7 @@ lifetime, synchronization, memory-residency, security or privacy requirements.
 ## Next Steps
 
 1. Complete Linux Vulkan editor presentation and surface recovery. Metal renderer/editor and
-   Vulkan Geode/renderer parity have passed; platform defaults still need separate cutovers.
+   Vulkan Geode/renderer parity have passed; the Linux native default remains a separate cutover.
 2. Move counters and the remaining shared renderer services behind backend-neutral ownership
    without merging logical tables, serials, caches, or retirement.
 3. Remove remaining transitional snapshot/readback registrations and raw presentation-target
@@ -717,9 +719,10 @@ later default flip without changing Metal or browser surface ownership.
       suite with a Geode variant passes on native Metal under Metal API and shader validation,
       with the same case counts as the transitional adapter
       ([#1404](https://github.com/jwmcglynn/donner/issues/1404)).
-- [ ] Flip each platform's default to its native backend in a separate change after that
-      platform's suites, including the editor's, pass on it: Metal, then Vulkan, then the
-      browser.
+- [ ] Flip each platform's default after its renderer and editor suites pass. macOS now selects
+      native Metal for unconstrained Geode/editor roots; an explicit WebGPU request still selects
+      the transitional adapter. The browser editor already selects Browser. Linux Vulkan editor
+      presentation and its native default remain.
 - [x] The Linux-only `resvg_test_suite_wgpu_reference_linux` target selects the test-only
       wgpu-native backend by name and fails closed if another backend is selected. It runs the
       same GeodeGolden case IDs and reviewed per-scene golden/pixelmatch rules as native Vulkan on
