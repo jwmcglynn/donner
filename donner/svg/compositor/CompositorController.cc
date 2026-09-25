@@ -374,12 +374,19 @@ CompositorController::validateFullInteractionBounds(Registry& registry, Entity e
 std::optional<CompositorController::PromoteRefusalReason>
 CompositorController::interactionRefusalForViewport(Registry& registry, Entity entity,
                                                     const RenderViewport& viewport,
-                                                    const Transform2d& surfaceFromCanvas) {
+                                                    const Transform2d& surfaceFromCanvas,
+                                                    bool* filterCrossesCanvas) {
+  if (filterCrossesCanvas != nullptr) {
+    *filterCrossesCanvas = false;
+  }
   const auto [firstEntity, lastEntity] = computeEntityRange(registry, entity);
   const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
       renderer(), registry, firstEntity, lastEntity, viewport, surfaceFromCanvas,
       /*retainFullInteractionBounds=*/true);
   if (FilterOutputCrossesCanvas(registry, entity, geometry, viewport)) {
+    if (filterCrossesCanvas != nullptr) {
+      *filterCrossesCanvas = true;
+    }
     return PromoteRefusalReason::None;
   }
   if (InteractionRasterFitsBudget(geometry)) {
@@ -387,6 +394,41 @@ CompositorController::interactionRefusalForViewport(Registry& registry, Entity e
   }
   return geometry.interactionBoundsUnavailable ? PromoteRefusalReason::None
                                                : PromoteRefusalReason::MemoryLimit;
+}
+
+bool CompositorController::canKeepAffineFilterDragPreview(
+    Entity entity, bool filterCrossesCanvas, const RenderViewport& viewport,
+    const Transform2d& surfaceFromCanvas) const {
+  if (!filterCrossesCanvas) {
+    return false;
+  }
+  const auto hint = activeHints_.find(entity);
+  const CompositorLayer* layer = findLayer(entity);
+  const Vector2i canvasSize = BitmapDimensionsForViewport(viewport);
+  return hint != activeHints_.end() &&
+         hint->second.interactionKind() == InteractionHint::ActiveDrag && layer != nullptr &&
+         !layer->isDirty() && layer->hasRenderablePayload() &&
+         !layer->canvasFromBitmap().isTranslation() && layer->payloadRaster().has_value() &&
+         layer->payloadRaster()->canvasSize == canvasSize &&
+         SameTransformNear(layer->payloadRaster()->surfaceFromCanvas, surfaceFromCanvas);
+}
+
+std::optional<CompositorController::PromoteRefusalReason>
+CompositorController::interactionRefusalForFrame(Registry& registry, Entity entity,
+                                                 const RenderViewport& viewport,
+                                                 const Transform2d& surfaceFromCanvas,
+                                                 bool allowAffineDragPreview) {
+  if (!registry.valid(entity)) {
+    return PromoteRefusalReason::InvalidEntity;
+  }
+  bool filterCrossesCanvas = false;
+  const auto reason = interactionRefusalForViewport(registry, entity, viewport, surfaceFromCanvas,
+                                                    &filterCrossesCanvas);
+  if (allowAffineDragPreview &&
+      canKeepAffineFilterDragPreview(entity, filterCrossesCanvas, viewport, surfaceFromCanvas)) {
+    return std::nullopt;
+  }
+  return reason;
 }
 
 bool CompositorController::hasDirtyFilteredInteraction(
@@ -406,16 +448,15 @@ bool CompositorController::hasDirtyFilteredInteraction(
 void CompositorController::dropOversizedInteractionHintsForViewport(
     Registry& registry, const RenderViewport& viewport, const Transform2d& surfaceFromCanvas,
     bool firstViewport, bool surfaceChanged, bool viewportSizeChanged,
-    const std::vector<Entity>& transformDirtyEntities) {
+    const std::vector<Entity>& transformDirtyEntities, bool allowAffineDragPreview) {
   if (!firstViewport && !surfaceChanged && !viewportSizeChanged &&
       !hasDirtyFilteredInteraction(registry, transformDirtyEntities)) {
     return;
   }
   std::vector<std::pair<Entity, PromoteRefusalReason>> refused;
   for (const auto& [entity, hint] : activeHints_) {
-    const auto reason = registry.valid(entity) ? interactionRefusalForViewport(
-                                                     registry, entity, viewport, surfaceFromCanvas)
-                                               : std::optional{PromoteRefusalReason::InvalidEntity};
+    const auto reason = interactionRefusalForFrame(registry, entity, viewport, surfaceFromCanvas,
+                                                   allowAffineDragPreview);
     if (reason.has_value()) {
       refused.emplace_back(entity, *reason);
     }
@@ -1252,6 +1293,13 @@ bool CompositorController::remapAfterStructuralReplace(
                                                      };
   const Transform2d surfaceFromCanvas =
       hasLastSurfaceFromCanvas_ ? lastSurfaceFromCanvas_ : Transform2d();
+  // A held affine preview may safely transform its complete cached filter image across the
+  // artboard. Source writeback ends that preview: restore owning tiles before the settled
+  // raster so the root clip is evaluated against the new SVG transform.
+  dropOversizedInteractionHintsForViewport(registry, viewport, surfaceFromCanvas,
+                                           /*firstViewport=*/true, /*surfaceChanged=*/false,
+                                           /*viewportSizeChanged=*/false, {},
+                                           /*allowAffineDragPreview=*/false);
   for (auto& layer : layers_) {
     if (layer.isDirty() || !layer.hasRenderablePayload()) {
       continue;

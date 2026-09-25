@@ -6368,6 +6368,23 @@ TEST(RenderCoordinatorTest, UnsupportedTextSelectionDoesNotRepeatIdlePrewarm) {
         << idleFrame;
     EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
   }
+
+  ASSERT_TRUE(app.setStylePropertyOnSelection("fill", "#00ff00"));
+  ASSERT_TRUE(app.flushFrame());
+  coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
+  ASSERT_EQ(coordinator.pendingSelectedLayerRasterizationEntityForDiagnostics(),
+            text->unsafeEntityHandle().entity());
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+  const auto styleDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  ASSERT_TRUE(PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                        [&] { return !coordinator.asyncRenderer().isBusy(); }, styleDeadline));
+  EXPECT_TRUE(coordinator.pendingSelectedLayerRasterizationEntityForDiagnostics() == entt::null)
+      << "A forced owning-tile style refresh must clear the selected rasterization obligation";
+  for (int idleFrame = 0; idleFrame < 4; ++idleFrame) {
+    EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+        << "Text style refresh must not restart the selected prewarm on idle frame " << idleFrame;
+    EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
+  }
 }
 
 TEST(RenderCoordinatorTest, ViewportBoundedResultWithoutOverviewIsDiscarded) {

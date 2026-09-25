@@ -384,6 +384,31 @@ TEST(RenderCoordinatorPolicyTest, PendingSelectedLayerClearRequiresEntityPreview
       forcedPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
 }
 
+TEST(RenderCoordinatorPolicyTest, ForcedOwningTilesClearPendingSelectedRasterization) {
+  const Entity selectedEntity = static_cast<Entity>(7);
+  RenderRequest::DragPreview forcedPreview;
+  forcedPreview.entity = selectedEntity;
+  forcedPreview.interactionKind = svg::compositor::InteractionHint::Selection;
+  forcedPreview.forceLayerRasterization = true;
+
+  RenderResult::CompositedPreview owningPreview;
+  owningPreview.tiles.emplace_back();
+  owningPreview.tiles.front().id = "owning-span";
+  owningPreview.entity = entt::null;
+  owningPreview.representedDragPreview = forcedPreview;
+  EXPECT_TRUE(CompositedPreviewClearsPendingSelectedLayerRasterization(
+      owningPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8))
+      << "A complete forced owning-tile frame refreshes unpromotable selected text/style";
+
+  owningPreview.representedDragPreview->forceLayerRasterization = false;
+  EXPECT_FALSE(CompositedPreviewClearsPendingSelectedLayerRasterization(
+      owningPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
+  owningPreview.representedDragPreview->forceLayerRasterization = true;
+  owningPreview.tiles.clear();
+  EXPECT_FALSE(CompositedPreviewClearsPendingSelectedLayerRasterization(
+      owningPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
+}
+
 TEST(RenderCoordinatorPolicyTest, RepresentedDragPreviewFollowsActiveTargetWhenPresentable) {
   const SelectTool::ActiveDragPreview active =
       DragPreview(static_cast<Entity>(42), 7, Vector2d(5.0, 2.0));

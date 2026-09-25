@@ -194,6 +194,12 @@ private:
     const std::optional<RenderRequest::DragPreview>& representedDragPreview, Entity pendingEntity,
     std::uint64_t resultVersion, std::uint64_t pendingVersion);
 
+/// A complete forced render clears stale selected pixels whether they landed in a movable layer
+/// or in the selection's owning compositor tiles.
+[[nodiscard]] bool CompositedPreviewClearsPendingSelectedLayerRasterization(
+    const RenderResult::CompositedPreview& preview, Entity pendingEntity,
+    std::uint64_t resultVersion, std::uint64_t pendingVersion);
+
 /**
  * Return the drag transform that overlay chrome should represent in the current presentation frame.
  *

@@ -671,7 +671,10 @@ bool ShouldClearPendingSelectedLayerRasterization(
 bool CompositedPreviewClearsPendingSelectedLayerRasterization(
     const RenderResult::CompositedPreview& preview, Entity pendingEntity,
     std::uint64_t resultVersion, std::uint64_t pendingVersion) {
-  return preview.entity == pendingEntity &&
+  // A selected text/marker/filter child may be unpromotable, yet its complete owning tiles still
+  // contain the forced style refresh. Requiring a dedicated selected tile here leaves the pending
+  // obligation set forever and posts the identical render on every idle frame.
+  return preview.valid() &&
          ShouldClearPendingSelectedLayerRasterization(preview.representedDragPreview, pendingEntity,
                                                       resultVersion, pendingVersion);
 }
@@ -1608,12 +1611,14 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const bool hasIndependentSelectedPrewarmRenderReason = HasIndependentSelectedPrewarmRenderReason(
       dragPreview.has_value(), currentVersion != displayedDocVersion_,
       forceSelectedLayerRasterization, forcePresentationRefresh);
+  const bool selectionOnlyPrewarmAllowed = shouldRequestSelectionOnlyPrewarm(
+      app.document().documentGeneration(), prewarmEntity, currentVersion, rasterViewport);
   const EditorRasterViewport selectedPrewarmRaster = viewport.selectedPrewarmRasterViewport();
   const bool useSelectedPrewarmRasterViewport =
       !documentPixelCaptureEnabled_ && !useVisibleSelectedRaster &&
       ShouldUseSelectedPrewarmRasterViewport(
           prewarmEntity, requestOverviewInfill, rasterViewport.viewportBounded,
-          kSelectionOnlyPrewarmMayTriggerRender, hasIndependentSelectedPrewarmRenderReason,
+          selectionOnlyPrewarmAllowed, hasIndependentSelectedPrewarmRenderReason,
           HasCompleteVisibleCachedCoverage(textures, viewport, rasterViewport),
           rasterViewport.outputSizePx, selectedPrewarmRaster.outputSizePx);
   const EditorRasterViewport requestRasterViewport =
@@ -1670,8 +1675,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
               kDragTranslationRecaptureScreenPx /
               std::max(std::abs(viewport.pixelsPerDocUnit()), 1e-9),
           .requiresRenderedActiveDragPresentation = renderDragFallback,
-          .selectionOnlyPrewarmMayTriggerRender = shouldRequestSelectionOnlyPrewarm(
-              app.document().documentGeneration(), prewarmEntity, currentVersion, rasterViewport),
+          .selectionOnlyPrewarmMayTriggerRender = selectionOnlyPrewarmAllowed,
       });
   if (!schedule.shouldRequestRender()) {
     return false;

@@ -1277,14 +1277,21 @@ private:
   std::optional<PromoteResult> validateFullInteractionBounds(Registry& registry, Entity entity);
   std::optional<PromoteRefusalReason> interactionRefusalForViewport(
       Registry& registry, Entity entity, const RenderViewport& viewport,
-      const Transform2d& surfaceFromCanvas);
+      const Transform2d& surfaceFromCanvas, bool* filterCrossesCanvas = nullptr);
+  bool canKeepAffineFilterDragPreview(Entity entity, bool filterCrossesCanvas,
+                                      const RenderViewport& viewport,
+                                      const Transform2d& surfaceFromCanvas) const;
+  std::optional<PromoteRefusalReason> interactionRefusalForFrame(
+      Registry& registry, Entity entity, const RenderViewport& viewport,
+      const Transform2d& surfaceFromCanvas, bool allowAffineDragPreview);
   bool hasDirtyFilteredInteraction(Registry& registry,
                                    const std::vector<Entity>& transformDirtyEntities) const;
   void dropOversizedInteractionHintsForViewport(Registry& registry, const RenderViewport& viewport,
                                                 const Transform2d& surfaceFromCanvas,
                                                 bool firstViewport, bool surfaceChanged,
                                                 bool viewportSizeChanged,
-                                                const std::vector<Entity>& transformDirtyEntities);
+                                                const std::vector<Entity>& transformDirtyEntities,
+                                                bool allowAffineDragPreview = true);
   bool assignInteractionLayer(Registry& registry, Entity entity, InteractionHint interactionKind,
                               bool needsExclusiveLayer, bool suspendBucketAncestors);
   bool remapAncillaryInteractionEntities(const std::unordered_map<Entity, Entity>& remap);
