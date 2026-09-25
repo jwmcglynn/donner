@@ -66,15 +66,16 @@ namespace donner::geode {
  * superseded entries age out through the residency budget.
  */
 struct GlyphGeometryKey {
-  uint64_t fontId = 0;
-  uint32_t glyphIndex = 0;
-  float outlineScale = 0.0f;
-  float stretchScaleX = 1.0f;
-  float stretchScaleY = 1.0f;
-  double rotateDegrees = 0.0;
-  /// Device-derived cubic approximation tolerance for the cached outline encode.
-  double fillTolerance = 0.1;
+  uint64_t fontId = 0;         ///< Versioned font handle identity.
+  uint32_t glyphIndex = 0;     ///< Glyph index within the selected font.
+  float outlineScale = 0.0f;   ///< Scale applied while extracting the outline.
+  float stretchScaleX = 1.0f;  ///< Horizontal stretch applied to the outline.
+  float stretchScaleY = 1.0f;  ///< Vertical stretch applied to the outline.
+  double rotateDegrees = 0.0;  ///< Rotation applied to the outline, in degrees.
+  double fillTolerance = 0.1;  ///< Device-derived cubic approximation tolerance.
 
+  /// Compare every key field by raw bits, including signed zero and NaN payloads.
+  /// @param other Geometry key to compare.
   bool operator==(const GlyphGeometryKey& other) const {
     return fontId == other.fontId && glyphIndex == other.glyphIndex &&
            bits(outlineScale) == bits(other.outlineScale) &&
@@ -104,6 +105,8 @@ struct GlyphGeometryKey {
 /// the low-entropy fields (small glyph indices, a handful of scales) still
 /// spread across buckets.
 struct GlyphGeometryKeyHash {
+  /// Hash every bitwise field of a glyph geometry key.
+  /// @param key Key to hash.
   size_t operator()(const GlyphGeometryKey& key) const {
     uint64_t h = key.fontId;
     h = mix(h ^ key.glyphIndex);
@@ -446,8 +449,11 @@ struct GeodeTextInstanceRecordComponent {
     GeodeRecordSlab::Slot slot;
     std::vector<uint8_t> lastRecord;
   };
+  /// Stable owner for a separately allocated occurrence record.
   using OccurrenceOwner = std::unique_ptr<Occurrence>;
+  /// Estimated retained bytes in one occurrence and its instance record.
   static constexpr uint64_t kOccurrencePayloadBytes = sizeof(Occurrence) + sizeof(InstanceRecord);
+  /// Per-occurrence charge including the owner's vector entry.
   static constexpr uint64_t kProjectedBytesPerOccurrence =
       sizeof(OccurrenceOwner) + kOccurrencePayloadBytes;
 
@@ -464,9 +470,9 @@ struct GeodeTextInstanceRecordComponent {
   /// this as "older than every open frame", which is what an untouched
   /// component is.
   uint64_t lastFrame = 0;
-  std::shared_ptr<GeodeDocumentGeometryBudget> cpuBudget;
-  GeodeGeometryCacheReservation cpuReservation;
-  uint64_t cpuRetainedBytes = 0;
+  std::shared_ptr<GeodeDocumentGeometryBudget> cpuBudget;  ///< Document budget for CPU records.
+  GeodeGeometryCacheReservation cpuReservation;            ///< Owned CPU-byte reservation.
+  uint64_t cpuRetainedBytes = 0;                           ///< Charged owner and record bytes.
 
   GeodeTextInstanceRecordComponent() = default;
   ~GeodeTextInstanceRecordComponent() { freeRecordSlots(); }
@@ -474,6 +480,8 @@ struct GeodeTextInstanceRecordComponent {
   GeodeTextInstanceRecordComponent(const GeodeTextInstanceRecordComponent&) = delete;
   GeodeTextInstanceRecordComponent& operator=(const GeodeTextInstanceRecordComponent&) = delete;
 
+  /// Transfer occurrence slots and CPU reservations without freeing live slab records.
+  /// @param other Component whose records are moved into this object.
   GeodeTextInstanceRecordComponent(GeodeTextInstanceRecordComponent&& other) noexcept
       : occurrences(std::move(other.occurrences)),
         recordSlab(std::move(other.recordSlab)),
@@ -489,6 +497,9 @@ struct GeodeTextInstanceRecordComponent {
     other.occurrenceReservationPending = false;
   }
 
+  /// Release current slots and take ownership of another component's records.
+  /// @param other Component whose records are moved into this object.
+  /// @return This component after the transfer.
   GeodeTextInstanceRecordComponent& operator=(GeodeTextInstanceRecordComponent&& other) noexcept {
     if (this != &other) {
       // Release ours first, then take the source's slots and clear the
@@ -513,6 +524,9 @@ struct GeodeTextInstanceRecordComponent {
     return *this;
   }
 
+  /// Reserve CPU bytes and vector capacity before appending one occurrence.
+  /// @param budget Document budget that will own the new reservation.
+  /// @return False if capacity growth or byte admission fails.
   bool reserveOccurrence(std::shared_ptr<GeodeDocumentGeometryBudget> budget) {
     if (occurrenceReservationPending || !budget || (cpuBudget && cpuBudget.get() != budget.get()) ||
         occurrences.size() == std::numeric_limits<size_t>::max()) {
@@ -571,6 +585,9 @@ struct GeodeTextInstanceRecordComponent {
     return true;
   }
 
+  /// Append a slab slot after reserveOccurrence has admitted its CPU payload.
+  /// @param slot GPU record slab slot assigned to the new occurrence.
+  /// @return False if the pending reservation cannot be completed.
   bool appendReservedOccurrence(const GeodeRecordSlab::Slot& slot) {
     if (!occurrenceReservationPending) {
       return false;
@@ -604,6 +621,7 @@ struct GeodeTextInstanceRecordComponent {
     return true;
   }
 
+  /// Restore the CPU reservation after an occurrence append fails.
   void rollbackOccurrence() {
     if (!cpuBudget) {
       occurrenceReservationPending = false;
@@ -616,6 +634,7 @@ struct GeodeTextInstanceRecordComponent {
     occurrenceReservationPending = false;
   }
 
+  /// CPU bytes currently charged for this component, exposed to tests.
   uint64_t cpuRetainedBytesForTesting() const { return cpuRetainedBytes; }
 
   /// Return every slot to the slab (deferred to the next frame's merge, like

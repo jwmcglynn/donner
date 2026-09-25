@@ -133,8 +133,10 @@ public:
   GeodeRecordSlab(const GeodeRecordSlab&) = delete;
   GeodeRecordSlab& operator=(const GeodeRecordSlab&) = delete;
 
+  /// Device on which this record slab's buffers were created.
   uint64_t owningDeviceId() const { return owningDeviceId_; }
 
+  /// Document budget charged for resident records, if one was supplied.
   const std::shared_ptr<GeodeDocumentGeometryBudget>& documentBudget() const { return budget_; }
 
   /// Merge the previous frame's freed slots into the reusable free list.
@@ -236,6 +238,9 @@ public:
     uint64_t bufferId = 0;
   };
 
+  /// Include fixed uniform metadata when estimating a slab's retained bytes.
+  /// @param uniformBytes Bytes of uniform buffer payload.
+  /// @return Aggregate charge, or no value if addition overflows.
   static std::optional<uint64_t> batchUniformRetainedBytes(uint64_t uniformBytes) {
     constexpr uint64_t kMetadataBytes = kMaxBatchUniforms * sizeof(BatchUniform);
     if (uniformBytes > std::numeric_limits<uint64_t>::max() - kMetadataBytes) {
@@ -336,7 +341,7 @@ public:
   }
 
   /// The chunk buffer carrying \p bufferId, or a null handle when this slab does not own it.
-  /// Uploads need the owning handle; \ref Slot and \ref Allocation only carry an identity view.
+  /// Uploads need the owning handle; `Slot` and `Allocation` only carry an identity view.
   /// @param bufferId Stable buffer id stamped on the slot or allocation.
   const gpu::Buffer& bufferForId(uint64_t bufferId) const {
     static const gpu::Buffer kNone;
@@ -365,9 +370,11 @@ public:
     return total;
   }
 
+  /// Capacity bytes held by batch-uniform metadata, exposed to tests.
   uint64_t batchUniformMetadataBytesForTesting() const {
     return batchUniforms_.capacity() * sizeof(BatchUniform);
   }
+  /// Capacity bytes held by CPU uniform payloads, exposed to tests.
   uint64_t batchUniformPayloadBytesForTesting() const { return cpuPayloadBytes_; }
 
 private:
@@ -469,7 +476,7 @@ class GeodeDevice;
 class GeodeResidentSlab {
 public:
   /// The chunk buffer carrying \p bufferId, or a null handle when this slab does not own it.
-  /// Uploads need the owning handle; \ref Slot and \ref Allocation only carry an identity view.
+  /// Uploads need the owning handle; `Slot` and `Allocation` only carry an identity view.
   /// @param bufferId Stable buffer id stamped on the slot or allocation.
   const gpu::Buffer& bufferForId(uint64_t bufferId) const {
     static const gpu::Buffer kNone;
@@ -505,6 +512,7 @@ public:
 
   /// Create an empty slab bound to `deviceId` (usually the current
   /// renderer's device). Chunks are allocated lazily on first use.
+  /// @param deviceId Device on which this slab's buffers will be created.
   /// @param owner Retirement of the context that owns the device; must be live. See
   ///   \ref GeodeRecordSlab::GeodeRecordSlab.
   /// @param budget Document budget its bytes are charged to, if any.
@@ -534,6 +542,7 @@ public:
   /// Device this slab's chunks were created on.
   uint64_t owningDeviceId() const { return owningDeviceId_; }
 
+  /// Document budget charged for resident geometry, if one was supplied.
   const std::shared_ptr<GeodeDocumentGeometryBudget>& documentBudget() const { return budget_; }
 
   /// Merge the previous frame's freed ranges into the reusable free list.
@@ -776,6 +785,7 @@ struct GeodeResidentSlot {
   std::shared_ptr<GeodeResidentSlab> slab;
   /// Whole-slot allocation inside the slab, returned via `free` on reset.
   uint64_t allocationOffset = 0;
+  /// Number of bytes occupied by this slot's allocation.
   uint64_t allocationSize = 0;
 
   /// Cached fill bind group. All twelve bindings reference stable
@@ -811,7 +821,7 @@ struct GeodeResidentSlot {
   /// Always reserved, so a fill that changes from solid to gradient paint
   /// rewrites this region rather than re-laying-out the slot; a solid fill
   /// leaves it zero-filled and its record never reads it.
-  Region paint;
+  Region paint;    ///< Gradient paint block within the resident buffer.
   Region uniform;  ///< Batch-level uniform block (binding 0, 256-aligned).
 
   /// Document-scoped record slab slot for this entity's instance record
@@ -862,6 +872,7 @@ struct GeodeResidentSlot {
   /// re-uploaded. Component removal is the primary invalidation; this is
   /// belt-and-suspenders for the in-place stroke-slot rebuild path.
   const void* encodedKey = nullptr;
+  /// Size-based fingerprint of the last uploaded encoded path.
   uint64_t encodedFingerprint = 0;
 
   /// Bytes last written to the instance-record region. A draw whose
@@ -879,25 +890,34 @@ struct GeodeResidentSlot {
   /// record at flush time, after the caller's resolved gradient is gone, and
   /// must reproduce byte-identical bytes.
   uint32_t paintMode = 0;
-  uint32_t gradientSpread = 0;
-  uint32_t gradientStopCount = 0;
+  uint32_t gradientSpread = 0;     ///< Last published gradient spread mode.
+  uint32_t gradientStopCount = 0;  ///< Last published gradient stop count.
 
   /// Bytes last written to the uniform region. A draw whose recomputed
   /// uniform matches this skips the `writeBuffer` entirely (steady-state
   /// static frame => zero buffer writes); a camera/color change rewrites
   /// only this 448-byte region and keeps the cached bind group.
   std::vector<uint8_t> lastUniform;
-  GeodeGeometryCacheReservation cpuMirrorReservation;
-  uint64_t cpuUniformBytes = 0;
-  uint64_t cpuRecordBytes = 0;
-  uint64_t cpuPaintBytes = 0;
+  GeodeGeometryCacheReservation cpuMirrorReservation;  ///< Charged CPU mirror storage.
+  uint64_t cpuUniformBytes = 0;  ///< Capacity bytes reserved for the cached uniform.
+  uint64_t cpuRecordBytes = 0;   ///< Capacity bytes reserved for the cached record.
+  uint64_t cpuPaintBytes = 0;    ///< Capacity bytes reserved for cached paint data.
 
+  /// Replace the cached uniform's CPU-byte reservation.
+  /// @param bytes New uniform mirror capacity in bytes.
+  /// @return False if the document budget refuses the replacement charge.
   bool reserveUniformMirror(uint64_t bytes) {
     return reserveCpuMirrors(bytes, cpuRecordBytes, cpuPaintBytes);
   }
+  /// Replace the cached record's CPU-byte reservation.
+  /// @param bytes New record mirror capacity in bytes.
+  /// @return False if the document budget refuses the replacement charge.
   bool reserveRecordMirror(uint64_t bytes) {
     return reserveCpuMirrors(cpuUniformBytes, bytes, cpuPaintBytes);
   }
+  /// Replace the cached paint's CPU-byte reservation.
+  /// @param bytes New paint mirror capacity in bytes.
+  /// @return False if the document budget refuses the replacement charge.
   bool reservePaintMirror(uint64_t bytes) {
     return reserveCpuMirrors(cpuUniformBytes, cpuRecordBytes, bytes);
   }
@@ -912,7 +932,11 @@ struct GeodeResidentSlot {
 
   GeodeResidentSlot(const GeodeResidentSlot&) = delete;
   GeodeResidentSlot& operator=(const GeodeResidentSlot&) = delete;
+  /// Transfer slab handles, cached bindings, and CPU reservations.
   GeodeResidentSlot(GeodeResidentSlot&&) noexcept = default;
+  /// Release current geometry residence and mirrors, then take ownership of another slot.
+  /// @param other Slot whose resources are moved into this one.
+  /// @return This slot after the transfer.
   GeodeResidentSlot& operator=(GeodeResidentSlot&& other) noexcept {
     if (this != &other) {
       reset();
@@ -1039,7 +1063,7 @@ private:
 };
 
 /// GPU-resident geometry for one gradient-painted fill. Mirrors
-/// \ref GeodeResidentSlot: a combined-usage
+/// \ref GeodeResidentSlot. A combined-usage
 /// buffer holds the same eight analytic dual-ray SSBO regions, but the
 /// uniform region holds the 704-byte gradient uniform block (stops inline,
 /// `donner/gpu/shader/programs/SlugGradientSource.h`) and the cached bind group uses the
@@ -1065,6 +1089,7 @@ struct GeodeResidentGradientSlot {
   std::shared_ptr<GeodeResidentSlab> slab;
   /// Whole-slot allocation inside the slab, returned via `free` on reset.
   uint64_t allocationOffset = 0;
+  /// Number of bytes occupied by this gradient slot's allocation.
   uint64_t allocationSize = 0;
 
   /// Cached 11-binding gradient bind group. All bindings reference stable
@@ -1104,13 +1129,17 @@ struct GeodeResidentGradientSlot {
 
   /// Identity guard: address + cheap fingerprint of the uploaded encode.
   const void* encodedKey = nullptr;
+  /// Size-based fingerprint of the last uploaded encoded gradient path.
   uint64_t encodedFingerprint = 0;
 
   /// Bytes last written to the uniform region; unchanged draws skip the write.
   std::vector<uint8_t> lastUniform;
-  GeodeGeometryCacheReservation cpuMirrorReservation;
-  uint64_t cpuUniformBytes = 0;
+  GeodeGeometryCacheReservation cpuMirrorReservation;  ///< Charged CPU uniform mirror storage.
+  uint64_t cpuUniformBytes = 0;  ///< Capacity bytes reserved for the cached uniform.
 
+  /// Replace the cached gradient uniform's CPU-byte reservation.
+  /// @param bytes New uniform mirror capacity in bytes.
+  /// @return False if the document budget refuses the replacement charge.
   bool reserveUniformMirror(uint64_t bytes) {
     const std::shared_ptr<GeodeDocumentGeometryBudget> budget =
         slab ? slab->documentBudget() : nullptr;
@@ -1126,7 +1155,11 @@ struct GeodeResidentGradientSlot {
 
   GeodeResidentGradientSlot(const GeodeResidentGradientSlot&) = delete;
   GeodeResidentGradientSlot& operator=(const GeodeResidentGradientSlot&) = delete;
+  /// Transfer slab handles, cached bindings, and CPU reservations.
   GeodeResidentGradientSlot(GeodeResidentGradientSlot&&) noexcept = default;
+  /// Release the current slot and take ownership of another gradient slot's resources.
+  /// @param other Slot whose resources are moved into this one.
+  /// @return This gradient slot after the transfer.
   GeodeResidentGradientSlot& operator=(GeodeResidentGradientSlot&& other) noexcept {
     if (this != &other) {
       reset();
@@ -1200,14 +1233,10 @@ struct GeodeResidentGradientSlot {
 /// at the solid-fill draw sites; removed by the same entt listener that
 /// clears `GeodePathCacheComponent` when geometry changes.
 struct GeodeResidentPathSlots {
-  GeodeResidentSlot fillSlot;
-  GeodeResidentSlot strokeSlot;
-  /// Gradient-painted fill residence.
-  GeodeResidentGradientSlot gradientFillSlot;
-  /// Gradient-painted stroke residence. Holds the
-  /// cached stroke-outline encode plus the resolved gradient uniform, so
-  /// an unchanged gradient-stroked outline re-uploads zero geometry.
-  GeodeResidentGradientSlot gradientStrokeSlot;
+  GeodeResidentSlot fillSlot;                    ///< Solid fill's resident geometry and record.
+  GeodeResidentSlot strokeSlot;                  ///< Solid stroke's resident geometry and record.
+  GeodeResidentGradientSlot gradientFillSlot;    ///< Gradient-painted fill residence.
+  GeodeResidentGradientSlot gradientStrokeSlot;  ///< Cached gradient-stroked outline and paint.
 };
 
 /// One entity's GPU residence, one set of slots per device that draws it: a second device
