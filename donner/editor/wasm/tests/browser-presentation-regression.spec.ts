@@ -2252,7 +2252,7 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
   }).toBe(expectedFill);
 
   const beforeTextUndo = await page.evaluate(() =>
-    window.__donnerWorkerStats?.undoEntryCount ?? -1
+    window.__donnerEyedropperTestState?.undoEntryCount ?? -1
   );
   const textTool = { x: eyedropperTool.x - 36, y: eyedropperTool.y };
   await page.mouse.move(textTool.x, textTool.y);
@@ -2295,12 +2295,27 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     textToolActive: true,
   }));
   await page.keyboard.type("SVG");
+  await expect.poll(() =>
+    page.evaluate(() => ({
+      selectedText: window.__donnerEyedropperTestState?.selectedText,
+      selectedStyle: window.__donnerEyedropperTestState?.selectedStyle,
+      workerBusy: window.__donnerInteractionStats?.workerBusy,
+      workerSourceVersion: window.__donnerWorkerStats?.sourceVersion,
+    })), {
+    message: "typed SVG text must reach the selected DOM with its active sampled Fill",
+    timeout: scaledMs(5_000),
+  }).toEqual(expect.objectContaining({
+    selectedText: "SVG",
+    selectedStyle: expect.stringContaining(expectedFill),
+  }));
   const beforeEscapeFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
   await page.keyboard.down("Escape");
   await expectBrowserKeyFrame(page, beforeEscapeFrame, "Escape must wake a browser editor frame");
   await expect.poll(() =>
     page.evaluate(() => ({
-      undoEntries: window.__donnerWorkerStats?.undoEntryCount ?? -1,
+      undoEntries: window.__donnerEyedropperTestState?.undoEntryCount ?? -1,
+      workerUndoEntries: window.__donnerWorkerStats?.undoEntryCount ?? -1,
+      workerBusy: window.__donnerInteractionStats?.workerBusy,
       shortcutProbe: window.__donnerEyedropperShortcutProbe ?? null,
     })), {
     message: "Escape must commit the newly created SVG text as one document edit",
