@@ -137,7 +137,8 @@ public:
         tinyCases += name.ends_with("_TinyGolden") ? 1u : 0u;
       }
     }
-    constexpr size_t kReviewedGeodeGoldenCases = 1636;
+    // Registered cases include disabled cases; a corpus change needs explicit review.
+    constexpr size_t kReviewedGeodeGoldenCases = 1679;
     if (geodeCases != kReviewedGeodeGoldenCases || tinyCases != geodeCases) {
       FAIL() << "resvg wgpu reference case census changed: GeodeGolden=" << geodeCases
              << ", TinyGolden=" << tinyCases << ", reviewed=" << kReviewedGeodeGoldenCases;
