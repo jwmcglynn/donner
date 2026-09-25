@@ -1537,13 +1537,28 @@ HitTestConfig configFromPointerEvents(PointerEvents pe) {
   UTILS_UNREACHABLE();
 }
 
-bool IsInsideDefs(const Registry& registry, Entity entity) {
+bool IsDormantDefinitionUse(Registry& registry, Entity entity,
+                            const ShadowTreeComponent& shadowTree) {
+  const auto* hostType = registry.try_get<ElementTypeComponent>(entity);
+  if (hostType == nullptr || hostType->type() != ElementType::Use) {
+    return false;
+  }
+  const std::optional<RcString> href = shadowTree.mainHref();
+  if (!href || Reference(*href).isExternal() || !shadowTree.mainTargetEntity(registry)) {
+    return false;
+  }
   for (Entity ancestor = registry.get<donner::components::TreeComponent>(entity).parent();
        ancestor != entt::null;
        ancestor = registry.get<donner::components::TreeComponent>(ancestor).parent()) {
-    if (const auto* type = registry.try_get<ElementTypeComponent>(ancestor);
-        type != nullptr && type->type() == ElementType::Defs) {
+    const auto* type = registry.try_get<ElementTypeComponent>(ancestor);
+    if (type == nullptr) {
+      return false;
+    }
+    if (type->type() == ElementType::Defs) {
       return true;
+    }
+    if (type->type() != ElementType::G) {
+      return false;
     }
   }
   return false;
@@ -1551,11 +1566,11 @@ bool IsInsideDefs(const Registry& registry, Entity entity) {
 
 void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
   for (auto view = registry.view<ShadowTreeComponent>(); auto entity : view) {
-    // A referencing host expands nested uses from their light tree when it is presented.
-    if (IsInsideDefs(registry, entity)) {
+    auto [shadowTreeComponent] = view.get(entity);
+    // A referencing host expands these local uses from their light tree when it is presented.
+    if (IsDormantDefinitionUse(registry, entity, shadowTreeComponent)) {
       continue;
     }
-    auto [shadowTreeComponent] = view.get(entity);
     if (auto targetEntity = shadowTreeComponent.mainTargetEntity(registry)) {
       auto& shadow = registry.get_or_emplace<ComputedShadowTreeComponent>(entity);
       createShadowTreeSystem().populateInstance(

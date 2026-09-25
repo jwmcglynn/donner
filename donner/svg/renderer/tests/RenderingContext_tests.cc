@@ -127,7 +127,8 @@ TEST_F(RenderingContextTest, DefsUseBranchesExpandOnlyWhenReferencedByPresentedC
       <defs>
         <rect id="shape" width="10" height="10" fill="red"/>
         <use id="linked" href="#shape"/>
-        <use id="unused" href="#shape"/>
+        <use id="directUnused" href="#shape"/>
+        <g><use id="wrappedUnused" href="#shape"/></g>
       </defs>
       <use href="#linked"/>
     </svg>
