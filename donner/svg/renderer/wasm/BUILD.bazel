@@ -197,6 +197,22 @@ configured_dependency_audit_test(
     target = ":donner_wasm_geode",
 )
 
+# F6 product boundary for the standalone module, separate from its Browser-selection audit.
+configured_dependency_audit_test(
+    name = "geode_browser_no_c_webgpu_audit_test",
+    size = "small",
+    forbidden_packages = [
+        "//third_party/emdawnwebgpu",
+        "//third_party/webgpu-cpp",
+    ],
+    required = [
+        "//donner/gpu/browser:browser_device",
+        "//donner/gpu/browser:emscripten_browser_bridge",
+    ],
+    tags = ["manual"],
+    target = ":donner_wasm_geode",
+)
+
 # Convenience filegroup for the Geode test page and its assets.
 filegroup(
     name = "test_page_geode",

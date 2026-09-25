@@ -307,6 +307,23 @@ configured_dependency_audit_test(
     target = ":wasm_web_package",
 )
 
+# F6 product boundary: Browser-selected editor bytes cannot depend on the transitional C API or
+# its WebGPU-C++ wrapper. Keep this test manual until the remaining shared libraries are split.
+configured_dependency_audit_test(
+    name = "wasm_browser_no_c_webgpu_audit_test",
+    size = "small",
+    forbidden_packages = [
+        "//third_party/emdawnwebgpu",
+        "//third_party/webgpu-cpp",
+    ],
+    required = [
+        "//donner/gpu/browser:browser_device",
+        "//donner/gpu/browser:emscripten_browser_bridge",
+    ],
+    tags = ["manual"],
+    target = ":wasm_web_package",
+)
+
 genquery(
     name = "_wasm_package_size_test_definition",
     testonly = True,
