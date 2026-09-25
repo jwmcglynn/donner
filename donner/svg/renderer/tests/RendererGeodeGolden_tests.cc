@@ -407,16 +407,21 @@ TEST_F(RendererGeodeGoldenTests, ImageDataUrlPixelated) {
 /// and premultiplied-source-over blend path.
 TEST_F(RendererGeodeGoldenTests, ImageDataUrlOpacity) {
 #if defined(__linux__)
-  // Lavapipe and Metal differ by 1-2 channel values in the half-alpha composite. Both match the
-  // equivalent group-opacity render on their own backend, so pin each output at strict identity.
+  // Intel Arc's bilinear image output differs from the lavapipe golden by at most one 8-bit value
+  // per channel. Same-device image and group opacity still have a separate strict identity test.
   constexpr const char* kGolden =
       "donner/svg/renderer/testdata/golden/geode/image_data_url_opacity_linux.png";
+  ImageComparisonParams params = ImageComparisonParams::WithThreshold(
+      0.005f, 0,
+      "Linux bilinear image output differs by at most one 8-bit value per channel across drivers");
+  params.includeAntiAliasingDifferences();
 #else
   constexpr const char* kGolden =
       "donner/svg/renderer/testdata/golden/geode/image_data_url_opacity.png";
+  ImageComparisonParams params = strictGeodeParams();
 #endif
   compareWithGeodeGolden("donner/svg/renderer/testdata/image_data_url_opacity.svg", kGolden,
-                         strictGeodeParams());
+                         params);
 }
 
 // ----------------------------------------------------------------------------
