@@ -1,8 +1,9 @@
 # Design: Donner Native GPU Runtime and Rust-Independent Build
 
 **Status:** Implementing. Metal renderer/editor parity and Vulkan Geode/renderer parity are
-qualified. The browser backend is selected for the opt-in editor canvas and, in the F5 candidate,
-the served and shipped editor packages; native platform defaults and production dependency closure remain.
+qualified. The served and shipped editor Wasm packages select the browser runtime for their canvas
+and raster work. Linux editor presentation, remaining wrapper consumers, native platform defaults,
+and production dependency closure remain.
 Cross-device registration works on Metal, the browser, the transitional adapter and Vulkan-owned
 images; Vulkan acquired frames refuse export. The end state retains one Linux test-only wgpu-native resvg
 comparison backend.\
@@ -72,8 +73,8 @@ continue in dependency order.
 | 3a    | Native Metal parity - **complete**                                                             | Geode, renderer and editor suites pass with `DONNER_GPU_BACKEND=metal` under Metal API and shader validation.                                                          |
 | 4     | Snapshot, target, and readback identity                                                        | Remove transitional registrations and raw target binding; use validated runtime or acquired-surface textures through readback and presentation.                        |
 | 5     | `EditorWindow` surface integration                                                             | Connect platform windows to acquired runtime textures and cover resize, minimized, outdated/lost, timeout, device-loss, and invalidation behavior.                     |
-| 6     | Browser production bridge cutover                                                              | Select the merged browser backend in the WebAssembly editor path and remove the C WebGPU wrapper only after its final consumer moves.                                  |
-| 7     | Per-platform default flips                                                                     | Flip each platform's default to its native backend in a separate change, only after that platform's suites pass on it; Vulkan and the browser follow Metal.            |
+| 6     | Browser production bridge cutover                                                              | The WebAssembly editor selects the browser backend; remove the C WebGPU wrapper after its final consumer moves.                                                        |
+| 7     | Per-platform default flips                                                                     | Metal is qualified and the browser editor selects Browser; Linux Vulkan editor remains.                                                                                |
 | 8     | Dependency removal and final audits                                                            | Remove production adapter and Rust-built GPU deps; retain a Linux test reference; close dependency, pixel, memory, performance and artifact audits.                    |
 
 The merged units through compositor-debug upload are complete, as are shared physical-root
@@ -132,14 +133,14 @@ and `editor_shell_tests`, under Metal API and shader validation. So do the rende
 with a Geode variant, among them the regression, public API, golden, text path and resvg suites:
 the same cases pass and skip, with the same logged reasons, as on the transitional adapter, and
 each image comparison differs from its reference by the same pixel count on both. Native Vulkan
-passes the Geode and renderer parity suites on lavapipe and a discrete GPU. The F4 opt-in browser
-editor presents through the runtime, and F5 selects it in the served and shipped editor candidates;
-hosted and physical-browser qualification still gate those PRs. A native wgpu reference is not
-browser-backend evidence.
+passes the Geode and renderer parity suites on lavapipe and a discrete GPU. The browser editor
+presents through the runtime when Browser is selected, and the served and shipped editor packages
+select it. Hosted and physical-browser qualification remain required. A native wgpu reference is
+not browser-backend evidence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
 paths now use their reviewed runtime resource boundaries. Linux editor presentation and remaining
-module/adapter consumers still need their production cutovers; the F4 browser editor canvas and
+module/adapter consumers still need their production cutovers; the browser editor canvas and
 diagnostic readback already use the selected runtime.
 
 Strict Wasm-size qualification is deferred until production Rust removal. The remaining browser
@@ -186,8 +187,8 @@ lifetime, synchronization, memory-residency, security or privacy requirements.
 2. Move counters and the remaining shared renderer services behind backend-neutral ownership
    without merging logical tables, serials, caches, or retirement.
 3. Remove remaining transitional snapshot/readback registrations and raw presentation-target
-   binding, then select native Vulkan for the Linux production editor. The F5 browser editor
-   selection is implemented in this candidate and awaits hosted/physical-browser qualification.
+   binding, then select native Vulkan for the Linux production editor. The browser editor uses
+   the selected runtime; hosted and physical-browser qualification remain.
 4. Remove the transitional WebGPU implementation and Rust-built GPU dependencies from
    production; isolate the Linux resvg comparison backend, replace non-resvg WGSL validation,
    then run final pixel, memory, performance, artifact-size and dependency-closure acceptance.
@@ -676,8 +677,8 @@ later default flip without changing Metal or browser surface ownership.
       loop, so an explicit present is refused and a frame ends by abandoning its acquired texture.
       The backend and its bridge contract carry no Emscripten dependency, so `browser_tests` covers
       identifier reuse, ownership, request outcomes, mapping, device loss and command-stream
-      mirroring on every host. [PR #1266](https://github.com/jwmcglynn/donner/pull/1266) is merged;
-      the F4/F5 editor candidates now select it for their canvas and shipped package.
+      mirroring on every host. The served and shipped editor packages select this backend for their
+      canvas and raster work.
 - [x] Run several runtime devices over one browser GPU device in a worker, and register a texture
       of one on another. Snapshot capture opens exactly such a second runtime device on the
       producer's thread for every tile the raster worker reads back. Each device keeps its own
@@ -698,7 +699,7 @@ later default flip without changing Metal or browser surface ownership.
       waits for the browser with a bounded settle and fails with a named reason, and a loss the
       browser reports is declared into the loss condition the root's devices share. The headless
       context pool never hands a thread-bound device to another thread. Both the retained opt-in
-      package and the F5 production editor package select Browser; both Chromium boot lanes pin
+      package and the production editor package select Browser; both Chromium boot lanes pin
       the raster worker's selected backend.
 - [x] Run the standalone Geode renderer WebAssembly module on the selected browser runtime.
       `//donner/editor/wasm/tests:standalone_geode_browser_renderer_test` serves its package in
@@ -708,14 +709,12 @@ later default flip without changing Metal or browser surface ownership.
       `#canvas` with `CanvasSelector` after selecting the root, settle its preferred format before
       compiling Geode pipelines, and create a second logical UI context over that physical owner.
       Copy/map explicit diagnostic pixels and poll idle completions through `gpu::Device`, with
-      bounded retries and no frame held during a diagnostic mapping wait. Qualify the selected
-      Chromium editor's boot, pixels, presentation, catalog diagnostics, and default-package
-      regressions before the default flip. Implemented in [PR #1539](https://github.com/jwmcglynn/donner/pull/1539);
-      local full Mac default and Geode suites pass, with hosted qualification and merge pending.
-- [x] Select the browser runtime for the served and shipped editor package. The F5 candidate
-      explicitly selects Browser in the editor transition and `--config=editor-wasm`; configured
-      audits check both roots. Production Chromium boot, pixels, presentation and catalog lanes
-      pass locally; hosted qualification and merge remain.
+      bounded retries and no frame held during a diagnostic mapping wait. The selected Chromium
+      editor's boot, pixels, presentation and catalog diagnostics pass; hosted and physical-browser
+      qualification remain acceptance gates.
+- [x] Select the browser runtime for the served and shipped editor package. The editor transition
+      and `--config=editor-wasm` select Browser; configured audits check both roots. Production
+      Chromium boot, pixels, presentation and catalog lanes pass.
 - [ ] Remove the C WebGPU wrapper from the WebAssembly production path. The default Geode renderer
       WebAssembly module remains a second consumer of the wrapper and moves separately. The
       compiled WGSL projections remain trusted build input.
@@ -963,8 +962,8 @@ and physical-hardware observations are evidence with their stated limits, not un
 ## Testing and Validation
 
 Extend existing targets where they own the changed behavior. The native mapping, Metal/Vulkan surface and
-browser backend targets own their merged hooks. Linux production window integration, the F5 browser
-editor's hosted/physical-browser gates, and wrapper removal remain active. The GPU operation and
+browser backend targets own their merged hooks. Linux production window integration, browser
+hosted/physical-browser gates, and wrapper removal remain active. The GPU operation and
 shader manifests must use the
 complete repository input set, with
 `//tools/gpu_inventory:manifest_freshness_tests` as the freshness gate.
@@ -978,7 +977,7 @@ complete repository input set, with
 | Snapshot/target lifetime, alpha, cropping, refusal             | `//donner/svg/renderer/tests:renderer_geode_tests`; replace adapter-only coverage with native runtime execution as each caller migrates.                                                                                                                                                                                                                                                                       |
 | Filter resource ordering, scratch and working sets             | `//donner/svg/renderer/geode:geode_filter_engine_tests`, `//donner/svg/renderer/tests:renderer_geode_tests`, and native filter execution suites.                                                                                                                                                                                                                                                               |
 | Upload reuse, UI texture lifetime and thumbnails               | `//donner/editor/tests:gl_texture_cache_tests`, `//donner/editor/tests:layer_thumbnail_golden_tests`; extend them for runtime-backed resources.                                                                                                                                                                                                                                                                |
-| Mapping, loss, cancellation and native surfaces                | Shared `gpu_tests`, native mapping suites and owning Metal/Vulkan surface tests; actual editor surface execution remains required. `//donner/gpu/browser:browser_tests` owns the browser backend's identifier, ownership, mapping and device-loss behavior; browser execution of that backend joins the browser lanes with the production cutover.                                                             |
+| Mapping, loss, cancellation and native surfaces                | Shared `gpu_tests`, native mapping suites and owning Metal/Vulkan surface tests; Linux editor surface execution remains required. `//donner/gpu/browser:browser_tests` owns identifier, ownership, mapping and loss behavior; selected browser editor lanes exercise the runtime, with hosted and physical-browser gates remaining.                                                                            |
 | Editor ordering and presentation                               | The explicit Geode editor lane below, plus the browser rendering/interaction lanes for the selected bridge.                                                                                                                                                                                                                                                                                                    |
 | Structural counters, memory, timing and size                   | `//donner/gpu/baseline:baseline_counters_tests`, `//donner/svg/renderer/geode:geode_perf_tests`, and the paired measurements required by the cutover gates.                                                                                                                                                                                                                                                    |
 | Dependency closure                                             | `//tools/gpu_inventory:check_no_rust_dependencies_tests`, the blocking lexical verifier, planned required `CI / no-rust-configured-closure` job over configured product roots, generated CMake validation, and source-archive/artifact evidence.                                                                                                                                                               |
