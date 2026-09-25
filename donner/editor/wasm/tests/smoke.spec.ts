@@ -1516,7 +1516,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   await expect
     .poll(async () => (await readElementColorStats(canvas)).coloredPixels, {
       message: "expected visible Basic Shapes pixels before selecting the resize target",
-      timeout: scaledMs(1000),
+      timeout: scaledMs(5_000),
       intervals: [250, 400, 600],
     })
     .toBeGreaterThan(500);

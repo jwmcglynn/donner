@@ -2307,7 +2307,16 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     timeout: scaledMs(5_000),
   }).toEqual(expect.objectContaining({ undoEntries: beforeTextUndo + 1 }));
   await page.keyboard.up("Escape");
-  await expect.poll(() => page.evaluate(() => window.__donnerEyedropperTestState), {
+  await expect.poll(() =>
+    page.evaluate(() => ({
+      ...window.__donnerEyedropperTestState,
+      workerBusy: window.__donnerInteractionStats?.workerBusy,
+      completedResults: window.__donnerWorkerStats?.completedResults,
+      acceptedForPresentation: window.__donnerWorkerStats?.acceptedForPresentation,
+      workerSourceVersion: window.__donnerWorkerStats?.sourceVersion,
+      workerUndoEntryCount: window.__donnerWorkerStats?.undoEntryCount,
+      textEditing: window.__donnerEyedropperShortcutProbe?.current?.textEditing,
+    })), {
     message: "new text must inherit the eyedropper Fill through the DOM/source path",
     timeout: scaledMs(5_000),
   }).toEqual(expect.objectContaining({
