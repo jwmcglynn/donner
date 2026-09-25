@@ -389,8 +389,8 @@ jobs:
             exit 0
           fi
 
-          # Direct renderer/shader/image inputs still select the oracle when an infra change
-          # makes bazel-diff fall back before it can report affected targets.
+          # Direct renderer/shader/image inputs and this lane's workflow still select the oracle
+          # when an infra change makes bazel-diff fall back before it can report affected targets.
           wgpu_reference_changed=false
           while IFS= read -r path; do
             case "$path" in
@@ -402,7 +402,7 @@ jobs:
                 wgpu_reference_changed=true
                 break
                 ;;
-              third_party/bazel/non_bcr_deps.bzl|third_party/BUILD.wgpu_native*|MODULE.bazel|MODULE.bazel.lock|.bazelrc|build_defs/*)
+              third_party/bazel/non_bcr_deps.bzl|third_party/BUILD.wgpu_native*|MODULE.bazel|MODULE.bazel.lock|.bazelrc|build_defs/*|.github/workflows/main.yml)
                 wgpu_reference_changed=true
                 break
                 ;;

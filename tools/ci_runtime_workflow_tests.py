@@ -302,6 +302,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             ("donner/svg/resources/ImageLoader.cc", "true"),
             ("third_party/resvg-test-suite/tests/icon.svg", "true"),
             ("MODULE.bazel", "true"),
+            (".github/workflows/main.yml", "true"),
             (".github/workflows/lint.yml", "false"),
             ("donner/base/Utils.h", "false"),
         ):
