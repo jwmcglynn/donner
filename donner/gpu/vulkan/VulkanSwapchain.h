@@ -270,6 +270,10 @@ private:
   /// @param ownsSurface Whether destroying this also destroys \p surface.
   VulkanSwapchain(const VulkanSurfaceContext& context, VkSurfaceKHR surface, bool ownsSurface);
 
+  /// Publishes a driver-reported loss on the shared root after the caller records any native
+  /// ownership it must retain. @param result Native result. @param reason Diagnostic if lost.
+  void declareDeviceLoss(VkResult result, const char* reason) const;
+
   /// One submission this swapchain made on the caller's behalf, awaiting its fence.
   struct PendingSubmission {
     VkFence fence = VK_NULL_HANDLE;                  //!< Fence signalled when it completes.
