@@ -47,11 +47,21 @@ using GLFWscrollfun = void (*)(GLFWwindow*, double, double);
 
 namespace donner::geode {
 class GeodeDevice;
-}
+class GeodeGpuRoot;
+}  // namespace donner::geode
 
 namespace donner::editor::gui {
 
 namespace internal {
+
+#if defined(__linux__)
+/// Acquires one process-wide GLFW claim for a test-owned companion window.
+bool AcquireGlfwRuntimeForTesting();
+/// Releases a test-owned GLFW claim after its companion window is destroyed.
+void ReleaseGlfwRuntimeForTesting();
+/// Number of actual glfwTerminate calls made by the editor's runtime manager.
+uint64_t GlfwTerminationCountForTesting();
+#endif
 
 /// The transitional Wasm UI can share its wrapper because the render worker owns a separate
 /// device. The browser runtime gives the canvas its own logical UI context. Desktop's
@@ -268,10 +278,9 @@ public:
  * on presents.
  *
  * What differs between platforms is the platform object frames go to. A Core Animation Metal
- * layer is named directly. The selected browser backend names the transferred canvas by selector
- * after root selection. The transitional adapter elsewhere uses a window-library surface to
- * constrain adapter selection before a device exists; the runtime then builds its swapchain on
- * that borrowed object.
+ * layer is named directly. Native Vulkan borrows the GLFW surface selected before the logical
+ * device exists. The browser backend names the transferred canvas by selector. The transitional
+ * adapter uses a window-library WebGPU surface to constrain adapter selection.
  */
 class RuntimePresentationSurface final : public PresentationSurface {
 public:
@@ -282,6 +291,15 @@ public:
   /// @param format Preferred canvas format chosen before Geode pipelines are compiled.
   /// @param enableReadback Whether diagnostic pixel reads may use the acquired frame.
   RuntimePresentationSurface(gpu::TextureFormat format, bool enableReadback);
+
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+  /// Names a GLFW-created VkSurfaceKHR without taking platform ownership from the window.
+  /// @param surfaceHandle Native surface bits scoped to the selected Vulkan instance.
+  /// @param format Format selected from that physical device's surface capabilities.
+  /// @param enableReadback Whether diagnostic readback may use the frame.
+  void attachNativeVulkanSurface(uint64_t surfaceHandle, gpu::TextureFormat format,
+                                 bool enableReadback);
+#endif
 
   /// Hands back any frame still outstanding and gives up the surface.
   ~RuntimePresentationSurface() override;
@@ -797,6 +815,16 @@ public:
 private:
   struct WgpuState;
 
+  /// Releases the native window and its process-wide GLFW claim after GPU surface retirement.
+  void closeWindow();
+
+#ifdef DONNER_EDITOR_WGPU
+  /// Selects this window's runtime root and settles its presentation format before pipelines.
+  /// @param offscreen Whether this window draws into its own texture.
+  /// @param enableReadback Whether copied frame pixels are requested.
+  std::shared_ptr<geode::GeodeGpuRoot> selectGpuRootForWindow(bool offscreen, bool enableReadback);
+#endif
+
   void beginFrameImpl(const EditorWindowInputOverride* inputOverride);
   void endFrameImpl(svg::RendererBitmap* readback);
 
@@ -887,6 +915,7 @@ private:
 
   EditorWindowOptions options_;
   GLFWwindow* window_ = nullptr;
+  bool glfwClaimed_ = false;
   std::unique_ptr<WgpuState> wgpuState_;
 #ifdef DONNER_EDITOR_WGPU
   WgpuUnderlayRenderCallback wgpuUnderlayRenderCallback_;

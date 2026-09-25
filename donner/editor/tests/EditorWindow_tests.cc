@@ -53,6 +53,9 @@
 #include "donner/gpu/Device.h"
 #include "donner/gpu/Handles.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#if defined(__linux__)
+#include "donner/gpu/vulkan/VulkanDevice.h"
+#endif
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -1556,6 +1559,84 @@ TEST(EditorWindowTest, OffscreenWindowDoesNotPinLaterWindowToNullPlatform) {
       << "An offscreen window must not leave the next window on GLFW's null platform";
   EXPECT_THAT(glfwGetPlatform(), testing::Ne(GLFW_PLATFORM_NULL));
 }
+
+TEST(EditorWindowTest, NativeVulkanWindowsRetainGlfwUntilTheLastWindowCloses) {
+  if (std::getenv("DISPLAY") == nullptr && std::getenv("WAYLAND_DISPLAY") == nullptr) {
+    GTEST_SKIP() << "A display is required for native Vulkan window presentation";
+  }
+  const gpu::Result<geode::GpuBackendKind> selected = geode::ProcessDefaultGpuBackendKind();
+  ASSERT_THAT(selected, gpu::HasResult());
+  if (selected.result() != geode::GpuBackendKind::NativeVulkan) {
+    GTEST_SKIP() << "This run did not select native Vulkan";
+  }
+  const uint64_t terminations = internal::GlfwTerminationCountForTesting();
+  glfwInitHint(GLFW_PLATFORM, GLFW_ANY_PLATFORM);
+  ASSERT_TRUE(internal::AcquireGlfwRuntimeForTesting());
+  glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+  GLFWwindow* survivor = glfwCreateWindow(64, 48, "Companion GLFW Window", nullptr, nullptr);
+  if (survivor == nullptr) {
+    internal::ReleaseGlfwRuntimeForTesting();
+    FAIL() << "the companion GLFW window could not open";
+  }
+  {
+    EditorWindow editor(EditorWindowOptions{.title = "Vulkan Editor Window",
+                                            .initialWidth = 64,
+                                            .initialHeight = 48,
+                                            .visible = false});
+    EXPECT_TRUE(editor.valid());
+    if (editor.valid()) {
+      editor.beginFrame();
+      editor.endFrame();
+    }
+  }
+  EXPECT_EQ(internal::GlfwTerminationCountForTesting(), terminations);
+  int width = 0;
+  int height = 0;
+  glfwGetWindowSize(survivor, &width, &height);
+  EXPECT_GT(width, 0);
+  EXPECT_GT(height, 0);
+  glfwDestroyWindow(survivor);
+  internal::ReleaseGlfwRuntimeForTesting();
+  EXPECT_EQ(internal::GlfwTerminationCountForTesting(), terminations + 1);
+  internal::ReleaseGlfwRuntimeForTesting();
+  EXPECT_EQ(internal::GlfwTerminationCountForTesting(), terminations + 1);
+}
+
+TEST(EditorWindowTest, UnprovenNativeRetirementQuarantinesTheWindowAndGlfwClaim) {
+  if (std::getenv("DISPLAY") == nullptr && std::getenv("WAYLAND_DISPLAY") == nullptr) {
+    GTEST_SKIP() << "A display is required for native Vulkan window presentation";
+  }
+  const gpu::Result<geode::GpuBackendKind> selected = geode::ProcessDefaultGpuBackendKind();
+  ASSERT_THAT(selected, gpu::HasResult());
+  if (selected.result() != geode::GpuBackendKind::NativeVulkan) {
+    GTEST_SKIP() << "This run did not select native Vulkan";
+  }
+  ASSERT_EXIT(([&] {
+                auto window = std::make_unique<EditorWindow>(EditorWindowOptions{
+                    .title = "Retained Vulkan Window",
+                    .initialWidth = 64,
+                    .initialHeight = 48,
+                    .visible = false,
+                });
+                ASSERT_TRUE(window->valid());
+                auto& native = static_cast<gpu::vulkan::VulkanDevice&>(
+                    window->geodeFramebufferDevice()->runtimeDevice());
+                native.forceSurfaceRetirementUnprovenForTest();
+                window.reset();
+                EXPECT_NE(glfwGetPlatform(), GLFW_PLATFORM_NULL);
+                EditorWindow incompatible(EditorWindowOptions{
+                    .title = "Null Platform After Quarantine",
+                    .initialWidth = 32,
+                    .initialHeight = 32,
+                    .visible = false,
+                    .offscreen = true,
+                });
+                EXPECT_FALSE(incompatible.valid());
+                std::exit(testing::Test::HasFailure() ? 1 : 0);
+              }()),
+              testing::ExitedWithCode(0), "");
+}
 #endif
 
 TEST(EditorWindowTest, NumericDragFieldsSupportSimpleClickToEdit) {
@@ -1608,6 +1689,23 @@ TEST_P(EditorWindowBackendTest, OpensOnTheBackendTheProcessSelected) {
   EXPECT_THAT(CurrentImGuiRuntimeRenderer()->device().deviceId(),
               testing::Eq(window.geodeFramebufferDevice()->runtimeDevice().deviceId()))
       << "the UI is drawn on a device other than the window's framebuffer device";
+#if defined(__linux__)
+  if (!GetParam() &&
+      (std::getenv("DISPLAY") != nullptr || std::getenv("WAYLAND_DISPLAY") != nullptr) &&
+      selected.result() == geode::GpuBackendKind::NativeVulkan) {
+    auto& native =
+        static_cast<gpu::vulkan::VulkanDevice&>(window.geodeFramebufferDevice()->runtimeDevice());
+    EXPECT_TRUE(native.supportsPresentation());
+    EXPECT_NE(native.nativeInstance(), nullptr);
+    EXPECT_FALSE(window.usingOffscreenRenderTarget());
+    window.beginFrame();
+    window.endFrame();
+    glfwSetWindowSize(window.rawHandle(), 80, 64);
+    window.pollEvents();
+    window.beginFrame();
+    window.endFrame();
+  }
+#endif
 }
 
 INSTANTIATE_TEST_SUITE_P(Targets, EditorWindowBackendTest, testing::Bool(),

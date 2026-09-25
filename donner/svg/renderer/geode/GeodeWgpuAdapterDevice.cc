@@ -665,12 +665,7 @@ std::shared_ptr<GeodeGpuRoot> SelectNativeVulkanRoot(
     std::fprintf(stderr, "[Geode/vulkan] No Vulkan device available.\n");
     return nullptr;
   }
-  GeodeGpuRootCapabilities capabilities;
-  capabilities.backend = GpuBackendKind::NativeVulkan;
-  capabilities.maxTextureDimension2D = nativeRoot->maxTextureDimension2D();
-  capabilities.isVulkan = true;
-  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState),
-                                        nullptr, std::move(nativeRoot));
+  return AdoptNativeVulkanRoot(std::move(nativeRoot), std::move(lostState));
 #else
   (void)options;
   (void)lostState;
@@ -1095,6 +1090,26 @@ std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots& handles,
   borrowed.deviceLostCallbackToken = nullptr;
   const GeodeGpuRootCapabilities capabilities = QueryRootCapabilities(handles);
   return std::make_shared<GeodeGpuRoot>(std::move(borrowed), capabilities, std::move(lostState));
+}
+
+std::shared_ptr<GeodeGpuRoot> AdoptNativeVulkanRoot(
+    std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeRoot,
+    std::shared_ptr<gpu::DeviceLostState> lostState) {
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+  if (nativeRoot == nullptr || lostState == nullptr || nativeRoot->lostState() != lostState) {
+    return nullptr;
+  }
+  GeodeGpuRootCapabilities capabilities;
+  capabilities.backend = GpuBackendKind::NativeVulkan;
+  capabilities.maxTextureDimension2D = nativeRoot->maxTextureDimension2D();
+  capabilities.isVulkan = true;
+  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState),
+                                        nullptr, std::move(nativeRoot));
+#else
+  (void)nativeRoot;
+  (void)lostState;
+  return nullptr;
+#endif
 }
 
 GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {

@@ -23,6 +23,7 @@
 namespace donner::gpu::vulkan {
 
 class VulkanSwapchainTestAccess;
+class VulkanSurfaceRetirement;
 
 /// Preallocated owner/child teardown state shared by every surface of one device.
 ///
@@ -136,6 +137,15 @@ public:
   /// consume an outstanding acquisition semaphore, but it does not destroy or reset native
   /// objects. The owner can therefore prepare every sibling before destroying any of them.
   Status prepareForDestruction();
+
+  /// Binds the exact external-surface retirement record after backend acceptance.
+  /// @param retirement One-shot record owned by the shared root and embedder.
+  void setRetirementSignal(std::shared_ptr<VulkanSurfaceRetirement> retirement) {
+    retirement_ = std::move(retirement);
+  }
+
+  /// Marks platform prerequisites permanently retained after destruction proof fails.
+  void markRetirementUnproven();
 
   /// Retains \p next behind this surface while failed teardown quarantines a whole owner.
   void retainBefore(std::unique_ptr<VulkanSwapchain> next) { retainedNext_ = std::move(next); }
@@ -369,7 +379,8 @@ private:
   /// See \ref setQueueSubmissionCallback.
   std::function<void()> queueSubmissionCallback_;
 
-  VulkanSurfaceContext context_;           //!< Borrowed device objects.
+  VulkanSurfaceContext context_;  //!< Borrowed device objects.
+  std::shared_ptr<VulkanSurfaceRetirement> retirement_;
   VkSurfaceKHR surface_ = VK_NULL_HANDLE;  //!< The surface presented to.
   /// Whether \ref surface_ is this object's to destroy. False for a surface the embedder created
   /// and still owns, which its windowing library generally destroys with the window.

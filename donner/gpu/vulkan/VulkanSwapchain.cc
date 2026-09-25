@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "donner/gpu/CheckedArithmetic.h"
+#include "donner/gpu/vulkan/VulkanDevice.h"
 
 namespace donner::gpu::vulkan {
 
@@ -456,6 +457,7 @@ void VulkanSwapchain::declareDeviceLoss(VkResult result, const char* reason) con
 
 VulkanSwapchain::~VulkanSwapchain() {
   if (!preparedForDestruction_ && prepareForDestruction().hasError()) {
+    markRetirementUnproven();
     // The shared token is preallocated by the owner. Poison it before this object's members are
     // released, and leave its live lease outstanding: the owner then retains the VkDevice,
     // command pool, instance, and loader that every leaked native handle still requires. Detach
@@ -474,8 +476,17 @@ VulkanSwapchain::~VulkanSwapchain() {
     context_.api->vkDestroySurfaceKHR(context_.instance, surface_, nullptr);
   }
   surface_ = VK_NULL_HANDLE;
+  if (retirement_) {
+    retirement_->retire();
+  }
   if (context_.lifetime) {
     context_.lifetime->liveChildren.fetch_sub(1, std::memory_order_acq_rel);
+  }
+}
+
+void VulkanSwapchain::markRetirementUnproven() {
+  if (retirement_) {
+    retirement_->markUnproven();
   }
 }
 

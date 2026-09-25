@@ -108,6 +108,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "donner/editor/wasm/wasm_package_size_test_arguments.txt"
         )
         cls.ci_target_definitions = _repository_text("tools/ci/BUILD.bazel")
+        cls.editor_tests_build = _repository_text("donner/editor/tests/BUILD.bazel")
+        cls.xvfb_runner = _repository_text(
+            "donner/editor/tests/RunEditorWindowVulkanSurfaceTests.sh"
+        )
+        cls.ci_bazel_test = _repository_text("tools/ci_bazel_test.sh")
 
     def _job_body(self, job):
         marker = "\n  %s:\n" % job
@@ -160,6 +165,69 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 timeout=timeout,
                 cwd=cwd,
             )
+
+    def test_native_window_gate_runs_on_hosted_linux_when_remote_routing_is_selected(self):
+        hosted = self._job_body("linux")
+        local = self._job_body("linux-local-xvfb")
+        remote = self._job_body("linux-self-hosted")
+        self.assertIn("use_self_hosted_linux != 'true'", hosted.split("steps:", 1)[0])
+        self.assertIn("use_self_hosted_linux == 'true'", local.split("steps:", 1)[0])
+        self.assertIn("xvfb xauth", hosted)
+        self.assertIn("xvfb xauth", local)
+        self.assertIn("-local-gpu-isolated", remote)
+        target = self.editor_tests_build.split(
+            'name = "editor_window_vulkan_surface_tests",', 1
+        )[1].split("\n)\n", 1)[0]
+        for tag in ("exclusive-if-local", "local-gpu-isolated", "requires_xvfb"):
+            self.assertIn('"%s"' % tag, target)
+        self.assertIn('data = [":editor_window_tests_geode"]', target)
+        self.assertIn("export DONNER_GPU_BACKEND=vulkan", self.xvfb_runner)
+        self.assertIn("xvfb-run -a", self.xvfb_runner)
+
+        step = self._step_body(local, "Test local Xvfb targets")
+        self.assertIn("tools/ci_bazel_test.sh bazelisk test", step)
+        self.assertIn("--test_tag_filters=requires_xvfb", step)
+        self.assertIn("--strategy=TestRunner=local", step)
+        script_template = textwrap.dedent(step.split("run: |\n", 1)[1])
+        native_target = "//donner/editor/tests:editor_window_vulkan_surface_tests"
+        for fallback, affected, expected_target, no_tests in (
+            ("false", native_target, native_target, False),
+            ("false", "//donner/base:base_tests", "//donner/base:base_tests", True),
+            ("true", "", "//...", False),
+        ):
+            with self.subTest(fallback=fallback, affected=affected):
+                script = script_template.replace(
+                    "${{ needs.determine-targets.outputs.fallback }}", fallback
+                ).replace(
+                    "${{ needs.determine-targets.outputs.affected }}", affected
+                )
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    (root / "tools").mkdir()
+                    wrapper = root / "tools/ci_bazel_test.sh"
+                    wrapper.write_text(self.ci_bazel_test)
+                    wrapper.chmod(0o755)
+                    fake_bazel = root / "bazelisk"
+                    fake_bazel.write_text(
+                        '#!/bin/bash\nprintf "%s\\n" "$*" > "$BAZEL_ARGS"\n'
+                        'case " $* " in\n'
+                        '  *" //... "*|*" //donner/editor/tests:editor_window_vulkan_surface_tests "*) exit 0 ;;\n'
+                        '  *) exit 4 ;;\n'
+                        'esac\n'
+                    )
+                    fake_bazel.chmod(0o755)
+                    args_file = root / "args.txt"
+                    env = {**os.environ, "BAZEL_ARGS": str(args_file),
+                           "PATH": str(root) + os.pathsep + os.environ.get("PATH", "")}
+                    result = subprocess.run(
+                        ["/bin/bash", "-c", script], cwd=root, env=env,
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                    args = args_file.read_text()
+                    self.assertIn("--test_tag_filters=requires_xvfb", args)
+                    self.assertIn(expected_target, args)
+                    self.assertEqual(no_tests, "No test targets" in result.stdout)
 
     def test_shell_fixture_uses_the_test_interpreter(self):
         with tempfile.TemporaryDirectory() as directory:

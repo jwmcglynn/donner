@@ -15,6 +15,14 @@ load("//donner/editor:editor_product_dependency_tests.bzl", "editor_product_depe
 
 exports_files(
     [
+        "BUILD.bazel",
+        "RunEditorWindowVulkanSurfaceTests.sh",
+    ],
+    visibility = ["//tools:__pkg__"],
+)
+
+exports_files(
+    [
         "BitmapCompareCommon.cc",
         "BitmapCompareCommon.h",
         "BitmapGoldenCompare.h",
@@ -312,6 +320,7 @@ donner_cc_test(
             "//donner/editor/gui:ui_texture_registry",
             "//donner/gpu",
             "//donner/gpu:gpu_test_utils",
+            "//donner/gpu/vulkan:vulkan_device",
             "//donner/svg/parser",
             "//donner/svg/renderer",
             "//donner/svg/renderer:renderer_geode",
@@ -323,6 +332,21 @@ donner_cc_test(
         ],
         "//conditions:default": [],
     }),
+)
+
+# The test starts an X server and presents through that host's lavapipe ICD. Serialize it with
+# other local GPU tests so the display and driver remain on one execution host.
+sh_test(
+    name = "editor_window_vulkan_surface_tests",
+    srcs = ["RunEditorWindowVulkanSurfaceTests.sh"],
+    args = ["$(location :editor_window_tests_geode)"],
+    data = [":editor_window_tests_geode"],
+    tags = [
+        "exclusive-if-local",
+        "local-gpu-isolated",
+        "requires_xvfb",
+    ],
+    target_compatible_with = ["@platforms//os:linux"],
 )
 
 # The surface-less arm of the editor's WebGPU frame path. Split out of

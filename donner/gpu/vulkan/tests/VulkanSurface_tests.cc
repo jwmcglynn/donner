@@ -202,6 +202,16 @@ struct CreationRecorder {
   std::vector<VkStructureType> queriedFeatureTypes;
   std::vector<VkStructureType> enabledFeatureTypes;
   std::vector<std::string_view> cleanup;
+  std::vector<std::vector<VkFlags>> queueFlags = {{VK_QUEUE_GRAPHICS_BIT}};
+  std::vector<std::vector<VkBool32>> presentSupport = {{VK_TRUE}};
+  std::vector<std::vector<VkResult>> supportResults;
+  std::vector<std::vector<VkSurfaceFormatKHR>> surfaceFormatsByPhysical;
+  std::vector<std::vector<const char*>> deviceOffersByPhysical;
+  std::vector<VkBool32> robustAccessByPhysical;
+  std::vector<VkBool32> maintenanceByPhysical;
+  VkPhysicalDevice selectedPhysicalDevice = VK_NULL_HANDLE;
+  uint32_t selectedQueueFamily = UINT32_MAX;
+  std::vector<std::string_view> selectionCalls;
 };
 CreationRecorder* gCreationRecorder = nullptr;
 
@@ -234,10 +244,15 @@ VKAPI_ATTR VkResult VKAPI_CALL CaptureInstanceExtensions(const char*, uint32_t* 
   return CopyExtensionOffers(gCreationRecorder->instanceOffers, count, properties);
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL CaptureDeviceExtensions(VkPhysicalDevice, const char*,
+VKAPI_ATTR VkResult VKAPI_CALL CaptureDeviceExtensions(VkPhysicalDevice physicalDevice, const char*,
                                                        uint32_t* count,
                                                        VkExtensionProperties* properties) {
-  return CopyExtensionOffers(gCreationRecorder->deviceOffers, count, properties);
+  const size_t physicalIndex = reinterpret_cast<uintptr_t>(physicalDevice) - 81;
+  const std::vector<const char*>& offers =
+      gCreationRecorder->deviceOffersByPhysical.empty()
+          ? gCreationRecorder->deviceOffers
+          : gCreationRecorder->deviceOffersByPhysical.at(physicalIndex);
+  return CopyExtensionOffers(offers, count, properties);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL CaptureCreateInstance(const VkInstanceCreateInfo* info,
@@ -253,9 +268,11 @@ VKAPI_ATTR VkResult VKAPI_CALL CaptureCreateInstance(const VkInstanceCreateInfo*
 
 VKAPI_ATTR VkResult VKAPI_CALL CapturePhysicalDevices(VkInstance, uint32_t* count,
                                                       VkPhysicalDevice* devices) {
-  *count = 1;
+  *count = static_cast<uint32_t>(gCreationRecorder->queueFlags.size());
   if (devices) {
-    devices[0] = FakeHandle<VkPhysicalDevice>(81);
+    for (uint32_t index = 0; index < *count; ++index) {
+      devices[index] = FakeHandle<VkPhysicalDevice>(81 + index);
+    }
   }
   return VK_SUCCESS;
 }
@@ -265,31 +282,90 @@ VKAPI_ATTR void VKAPI_CALL CapturePhysicalProperties(VkPhysicalDevice,
   properties->apiVersion = VK_API_VERSION_1_1;
 }
 
-VKAPI_ATTR void VKAPI_CALL CaptureQueueFamilies(VkPhysicalDevice, uint32_t* count,
+VKAPI_ATTR void VKAPI_CALL CaptureQueueFamilies(VkPhysicalDevice physicalDevice, uint32_t* count,
                                                 VkQueueFamilyProperties* properties) {
-  *count = 1;
+  const size_t physicalIndex = reinterpret_cast<uintptr_t>(physicalDevice) - 81;
+  const std::vector<VkFlags>& flags = gCreationRecorder->queueFlags.at(physicalIndex);
+  *count = static_cast<uint32_t>(flags.size());
   if (properties) {
-    properties[0].queueFlags = VK_QUEUE_GRAPHICS_BIT;
-  }
-}
-
-VKAPI_ATTR void VKAPI_CALL CaptureFeatures(VkPhysicalDevice, VkPhysicalDeviceFeatures* features) {
-  features->robustBufferAccess = VK_TRUE;
-}
-
-VKAPI_ATTR void VKAPI_CALL CaptureFeatures2(VkPhysicalDevice, VkPhysicalDeviceFeatures2* features) {
-  for (auto* item = static_cast<VkBaseOutStructure*>(features->pNext); item; item = item->pNext) {
-    gCreationRecorder->queriedFeatureTypes.push_back(item->sType);
-    if (item->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT) {
-      reinterpret_cast<VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT*>(item)
-          ->swapchainMaintenance1 = gCreationRecorder->maintenanceSupported ? VK_TRUE : VK_FALSE;
+    for (uint32_t index = 0; index < *count; ++index) {
+      properties[index].queueFlags = flags[index];
     }
   }
 }
 
-VKAPI_ATTR VkResult VKAPI_CALL CaptureCreateDevice(VkPhysicalDevice, const VkDeviceCreateInfo* info,
+VKAPI_ATTR VkResult VKAPI_CALL CaptureSurfaceSupport(VkPhysicalDevice physicalDevice,
+                                                     uint32_t queueFamily, VkSurfaceKHR surface,
+                                                     VkBool32* supported) {
+  gCreationRecorder->selectionCalls.push_back("surface-support");
+  if (surface != FakeHandle<VkSurfaceKHR>(83)) {
+    return VK_ERROR_SURFACE_LOST_KHR;
+  }
+  const size_t physicalIndex = reinterpret_cast<uintptr_t>(physicalDevice) - 81;
+  if (!gCreationRecorder->supportResults.empty()) {
+    const VkResult result = gCreationRecorder->supportResults.at(physicalIndex).at(queueFamily);
+    if (result != VK_SUCCESS) {
+      return result;
+    }
+  }
+  *supported = gCreationRecorder->presentSupport.at(physicalIndex).at(queueFamily);
+  return VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL CaptureSurfaceFormats(VkPhysicalDevice physicalDevice,
+                                                     VkSurfaceKHR surface, uint32_t* count,
+                                                     VkSurfaceFormatKHR* formats) {
+  if (surface != FakeHandle<VkSurfaceKHR>(83)) {
+    return VK_ERROR_SURFACE_LOST_KHR;
+  }
+  const size_t physicalIndex = reinterpret_cast<uintptr_t>(physicalDevice) - 81;
+  const std::vector<VkSurfaceFormatKHR> defaults = {
+      {VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}};
+  const std::vector<VkSurfaceFormatKHR>& available =
+      gCreationRecorder->surfaceFormatsByPhysical.empty()
+          ? defaults
+          : gCreationRecorder->surfaceFormatsByPhysical.at(physicalIndex);
+  if (formats == nullptr) {
+    gCreationRecorder->selectionCalls.push_back("surface-formats");
+    *count = static_cast<uint32_t>(available.size());
+    return VK_SUCCESS;
+  }
+  const size_t copied = std::min<size_t>(*count, available.size());
+  std::copy_n(available.begin(), copied, formats);
+  *count = static_cast<uint32_t>(copied);
+  return copied == available.size() ? VK_SUCCESS : VK_INCOMPLETE;
+}
+
+VKAPI_ATTR void VKAPI_CALL CaptureFeatures(VkPhysicalDevice physicalDevice,
+                                           VkPhysicalDeviceFeatures* features) {
+  const size_t physicalIndex = reinterpret_cast<uintptr_t>(physicalDevice) - 81;
+  features->robustBufferAccess = gCreationRecorder->robustAccessByPhysical.empty()
+                                     ? VK_TRUE
+                                     : gCreationRecorder->robustAccessByPhysical.at(physicalIndex);
+}
+
+VKAPI_ATTR void VKAPI_CALL CaptureFeatures2(VkPhysicalDevice physicalDevice,
+                                            VkPhysicalDeviceFeatures2* features) {
+  const size_t physicalIndex = reinterpret_cast<uintptr_t>(physicalDevice) - 81;
+  for (auto* item = static_cast<VkBaseOutStructure*>(features->pNext); item; item = item->pNext) {
+    gCreationRecorder->queriedFeatureTypes.push_back(item->sType);
+    if (item->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT) {
+      reinterpret_cast<VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT*>(item)
+          ->swapchainMaintenance1 =
+          gCreationRecorder->maintenanceByPhysical.empty()
+              ? (gCreationRecorder->maintenanceSupported ? VK_TRUE : VK_FALSE)
+              : gCreationRecorder->maintenanceByPhysical.at(physicalIndex);
+    }
+  }
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL CaptureCreateDevice(VkPhysicalDevice physicalDevice,
+                                                   const VkDeviceCreateInfo* info,
                                                    const VkAllocationCallbacks*, VkDevice* device) {
   gCreationRecorder->deviceCreated = true;
+  gCreationRecorder->selectionCalls.push_back("create-device");
+  gCreationRecorder->selectedPhysicalDevice = physicalDevice;
+  gCreationRecorder->selectedQueueFamily = info->pQueueCreateInfos[0].queueFamilyIndex;
   for (uint32_t index = 0; index < info->enabledExtensionCount; ++index) {
     gCreationRecorder->enabledDeviceExtensions.emplace_back(info->ppEnabledExtensionNames[index]);
   }
@@ -324,6 +400,8 @@ VulkanApi MakeCreationApi() {
   api.vkEnumeratePhysicalDevices = CapturePhysicalDevices;
   api.vkGetPhysicalDeviceProperties = CapturePhysicalProperties;
   api.vkGetPhysicalDeviceQueueFamilyProperties = CaptureQueueFamilies;
+  api.vkGetPhysicalDeviceSurfaceSupportKHR = CaptureSurfaceSupport;
+  api.vkGetPhysicalDeviceSurfaceFormatsKHR = CaptureSurfaceFormats;
   api.vkGetPhysicalDeviceFeatures = CaptureFeatures;
   api.vkGetPhysicalDeviceFeatures2 = CaptureFeatures2;
   api.vkCreateDevice = CaptureCreateDevice;
@@ -371,6 +449,24 @@ void RecordAdmission(void* context) {
 
 class VulkanSwapchainTestAccess {
 public:
+  static std::shared_ptr<VulkanSurfaceRetirement> MakeRetirementSignal() {
+    return std::shared_ptr<VulkanSurfaceRetirement>(new VulkanSurfaceRetirement());
+  }
+
+  static bool AcceptRetirementSignal(const std::shared_ptr<VulkanSurfaceRetirement>& signal) {
+    return signal->accept();
+  }
+
+  static bool ClaimPlatformRelease(const std::shared_ptr<VulkanSurfaceRetirement>& signal) {
+    return signal->claimPlatformRelease();
+  }
+
+  static void AttachExternalRetirement(VulkanSwapchain& surface,
+                                       std::shared_ptr<VulkanSurfaceRetirement> signal) {
+    surface.ownsSurface_ = false;
+    surface.setRetirementSignal(std::move(signal));
+  }
+
   static VulkanApi MakeApi() {
     VulkanApi api;
     api.vkDeviceWaitIdle = RecordDeviceWaitIdle;
@@ -538,7 +634,8 @@ constexpr std::array<double, 4> kRedClear = {1.0, 0.0, 0.0, 1.0};
 class VulkanSurfaceTest : public testing::Test {
 protected:
   void SetUp() override {
-    device_ = VulkanDevice::CreateWithPresentationSupport();
+    root_ = VulkanDevice::CreateSharedRootWithPresentationSupport({});
+    device_ = VulkanDevice::CreateOverSharedRoot(root_);
     if (!device_) {
       // A conforming Vulkan 1.1 driver need not offer headless surfaces, so a runner that runs
       // every other Vulkan target may legitimately not present. Distinguish the two: no baseline
@@ -645,6 +742,7 @@ protected:
     return {pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3]};
   }
 
+  std::shared_ptr<VulkanSharedRoot> root_;
   std::unique_ptr<VulkanDevice> device_;
 };
 
@@ -686,6 +784,167 @@ TEST(VulkanPresentationCreationTest, ForwardsARequiredPlatformCompanionExtension
                                    testing::StrEq(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME),
                                    testing::StrEq(VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME),
                                    testing::StrEq(kXcbSurfaceExtension)));
+}
+
+TEST(VulkanPresentationCreationTest, SelectsLaterGraphicsQueueThatPresentsToActualSurface) {
+  CreationRecorder recorder = MaintenanceOffers(true);
+  recorder.queueFlags = {{VK_QUEUE_GRAPHICS_BIT, VK_QUEUE_GRAPHICS_BIT}};
+  recorder.presentSupport = {{VK_FALSE, VK_TRUE}};
+  gCreationRecorder = &recorder;
+
+  EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true, {}, 83),
+              testing::IsTrue());
+  EXPECT_THAT(recorder.selectedQueueFamily, 1u);
+  EXPECT_THAT(recorder.selectionCalls, testing::ElementsAre("surface-support", "surface-support",
+                                                            "surface-formats", "create-device"));
+  EXPECT_THAT(recorder.cleanup, testing::ElementsAre("device", "instance"));
+  gCreationRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, SelectsLaterPhysicalDeviceThatPresentsToActualSurface) {
+  CreationRecorder recorder = MaintenanceOffers(true);
+  recorder.queueFlags = {{VK_QUEUE_GRAPHICS_BIT}, {VK_QUEUE_GRAPHICS_BIT}};
+  recorder.presentSupport = {{VK_FALSE}, {VK_TRUE}};
+  gCreationRecorder = &recorder;
+
+  EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true, {}, 83),
+              testing::IsTrue());
+  EXPECT_THAT(recorder.selectedPhysicalDevice, FakeHandle<VkPhysicalDevice>(82));
+  EXPECT_THAT(recorder.selectedQueueFamily, 0u);
+  EXPECT_THAT(recorder.selectionCalls, testing::ElementsAre("surface-support", "surface-support",
+                                                            "surface-formats", "create-device"));
+  gCreationRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, RefusesWhenNoGraphicsQueuePresentsBeforeCreatingDevice) {
+  CreationRecorder recorder = MaintenanceOffers(true);
+  recorder.queueFlags = {{VK_QUEUE_GRAPHICS_BIT, VK_QUEUE_GRAPHICS_BIT}, {VK_QUEUE_GRAPHICS_BIT}};
+  recorder.presentSupport = {{VK_FALSE, VK_FALSE}, {VK_FALSE}};
+  gCreationRecorder = &recorder;
+
+  EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true, {}, 83),
+              testing::IsFalse());
+  EXPECT_THAT(recorder.deviceCreated, testing::IsFalse());
+  EXPECT_THAT(recorder.selectionCalls,
+              testing::ElementsAre("surface-support", "surface-support", "surface-support"));
+  EXPECT_THAT(recorder.cleanup, testing::ElementsAre("instance"));
+  gCreationRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, SkipsSurfaceCapableDevicesMissingRequiredRuntimeFeatures) {
+  CreationRecorder recorder = MaintenanceOffers(true);
+  recorder.queueFlags = {{VK_QUEUE_GRAPHICS_BIT},
+                         {VK_QUEUE_GRAPHICS_BIT},
+                         {VK_QUEUE_GRAPHICS_BIT},
+                         {VK_QUEUE_GRAPHICS_BIT}};
+  recorder.presentSupport = {{VK_TRUE}, {VK_TRUE}, {VK_TRUE}, {VK_TRUE}};
+  recorder.deviceOffersByPhysical = {{VK_KHR_SWAPCHAIN_EXTENSION_NAME},
+                                     recorder.deviceOffers,
+                                     recorder.deviceOffers,
+                                     recorder.deviceOffers};
+  recorder.robustAccessByPhysical = {VK_TRUE, VK_FALSE, VK_TRUE, VK_TRUE};
+  recorder.maintenanceByPhysical = {VK_TRUE, VK_TRUE, VK_FALSE, VK_TRUE};
+  gCreationRecorder = &recorder;
+
+  EXPECT_THAT(VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true, {}, 83),
+              testing::IsTrue());
+  EXPECT_THAT(recorder.selectedPhysicalDevice, FakeHandle<VkPhysicalDevice>(84));
+  EXPECT_THAT(recorder.selectionCalls,
+              testing::ElementsAre("surface-support", "surface-formats", "create-device"));
+  gCreationRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, SkipsFirstPresentingDeviceWithUnsupportedSurfaceFormat) {
+  CreationRecorder recorder = MaintenanceOffers(true);
+  recorder.queueFlags = {{VK_QUEUE_GRAPHICS_BIT}, {VK_QUEUE_GRAPHICS_BIT}};
+  recorder.presentSupport = {{VK_TRUE}, {VK_TRUE}};
+  recorder.surfaceFormatsByPhysical = {
+      {{VK_FORMAT_R8G8B8A8_SRGB, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}},
+      {{VK_FORMAT_B8G8R8A8_UNORM, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR}}};
+  gCreationRecorder = &recorder;
+
+  EXPECT_TRUE(
+      VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true, {}, 83));
+  EXPECT_THAT(recorder.selectedPhysicalDevice, FakeHandle<VkPhysicalDevice>(82));
+  EXPECT_THAT(recorder.selectionCalls,
+              testing::ElementsAre("surface-support", "surface-formats", "surface-support",
+                                   "surface-formats", "create-device"));
+  gCreationRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, ContinuesAfterOneCandidateSurfaceSupportQueryFails) {
+  CreationRecorder recorder = MaintenanceOffers(true);
+  recorder.queueFlags = {{VK_QUEUE_GRAPHICS_BIT}, {VK_QUEUE_GRAPHICS_BIT}};
+  recorder.presentSupport = {{VK_TRUE}, {VK_TRUE}};
+  recorder.supportResults = {{VK_ERROR_INITIALIZATION_FAILED}, {VK_SUCCESS}};
+  gCreationRecorder = &recorder;
+
+  EXPECT_TRUE(
+      VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true, {}, 83));
+  EXPECT_THAT(recorder.selectedPhysicalDevice, FakeHandle<VkPhysicalDevice>(82));
+  EXPECT_THAT(recorder.selectionCalls, testing::ElementsAre("surface-support", "surface-support",
+                                                            "surface-formats", "create-device"));
+  gCreationRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, StopsAfterTheExternalSurfaceIsLost) {
+  CreationRecorder recorder = MaintenanceOffers(true);
+  recorder.queueFlags = {{VK_QUEUE_GRAPHICS_BIT}, {VK_QUEUE_GRAPHICS_BIT}};
+  recorder.presentSupport = {{VK_TRUE}, {VK_TRUE}};
+  recorder.supportResults = {{VK_ERROR_SURFACE_LOST_KHR}, {VK_SUCCESS}};
+  gCreationRecorder = &recorder;
+
+  EXPECT_FALSE(
+      VulkanDevice::CreateNativeObjectsForPresentationTest(MakeCreationApi(), true, {}, 83));
+  EXPECT_FALSE(recorder.deviceCreated);
+  EXPECT_THAT(recorder.selectionCalls, testing::ElementsAre("surface-support"));
+  gCreationRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, ExternalRetirementPublishesOnlyAfterSwapchainDestruction) {
+  TeardownRecorder recorder;
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto signal = VulkanSwapchainTestAccess::MakeRetirementSignal();
+  EXPECT_THAT(signal->state(), testing::Eq(VulkanSurfaceRetirementState::Unattached));
+  ASSERT_TRUE(VulkanSwapchainTestAccess::AcceptRetirementSignal(signal));
+  auto surface = VulkanSwapchainTestAccess::MakeSurface(&api);
+  VulkanSwapchainTestAccess::AttachExternalRetirement(*surface, signal);
+  surface.reset();
+  EXPECT_THAT(signal->state(), testing::Eq(VulkanSurfaceRetirementState::Retired));
+  EXPECT_THAT(recorder.calls, testing::Contains("destroy-swapchain"));
+  EXPECT_THAT(recorder.calls, testing::Not(testing::Contains("destroy-surface")));
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, FailedProofKeepsExternalRetirementTerminallyUnproven) {
+  TeardownRecorder recorder;
+  recorder.fenceResults = {VK_TIMEOUT};
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  auto signal = VulkanSwapchainTestAccess::MakeRetirementSignal();
+  ASSERT_TRUE(VulkanSwapchainTestAccess::AcceptRetirementSignal(signal));
+  auto surface = VulkanSwapchainTestAccess::MakeSurface(&api);
+  VulkanSwapchainTestAccess::AttachExternalRetirement(*surface, signal);
+  surface.reset();
+  EXPECT_THAT(signal->state(), testing::Eq(VulkanSurfaceRetirementState::Unproven));
+  EXPECT_FALSE(VulkanSwapchainTestAccess::AcceptRetirementSignal(signal));
+  EXPECT_THAT(recorder.calls, testing::Not(testing::Contains("destroy-swapchain")));
+  EXPECT_THAT(recorder.calls, testing::Not(testing::Contains("destroy-surface")));
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, PlatformReleaseAndBackendAcceptanceAreMutuallyExclusive) {
+  auto released = VulkanSwapchainTestAccess::MakeRetirementSignal();
+  EXPECT_TRUE(VulkanSwapchainTestAccess::ClaimPlatformRelease(released));
+  EXPECT_FALSE(VulkanSwapchainTestAccess::ClaimPlatformRelease(released));
+  EXPECT_FALSE(VulkanSwapchainTestAccess::AcceptRetirementSignal(released));
+  EXPECT_THAT(released->state(), testing::Eq(VulkanSurfaceRetirementState::Released));
+
+  auto accepted = VulkanSwapchainTestAccess::MakeRetirementSignal();
+  EXPECT_TRUE(VulkanSwapchainTestAccess::AcceptRetirementSignal(accepted));
+  EXPECT_FALSE(VulkanSwapchainTestAccess::ClaimPlatformRelease(accepted));
+  EXPECT_THAT(accepted->state(), testing::Eq(VulkanSurfaceRetirementState::Live));
 }
 
 class MaintenanceDependencyTest : public testing::TestWithParam<bool> {};
@@ -1510,6 +1769,9 @@ TEST_F(VulkanSurfaceTest, PresentsThroughASurfaceTheEmbedderCreatedAndStillOwns)
 
   uint64_t handle = 0;
   std::memcpy(&handle, &embedderSurface, sizeof(embedderSurface));
+  std::shared_ptr<VulkanSurfaceRetirement> retirement = root_->registerExternalSurface(handle);
+  ASSERT_THAT(retirement, testing::NotNull());
+  EXPECT_THAT(root_->registerExternalSurface(handle), testing::IsNull());
 
   {
     SurfaceDescriptor descriptor;
@@ -1531,18 +1793,102 @@ TEST_F(VulkanSurfaceTest, PresentsThroughASurfaceTheEmbedderCreatedAndStillOwns)
     ASSERT_THAT(device_->destroySurface(std::move(surface)), IsOk());
   }
 
-  // Still the embedder's to destroy, and still valid: a second runtime surface over the same
-  // handle would be impossible if the first had destroyed it.
+  // The native surface remains valid after the runtime releases its swapchain, but this root
+  // refuses a second runtime owner of the same registration.
+  EXPECT_THAT(retirement->state(), testing::Eq(VulkanSurfaceRetirementState::Retired));
+  EXPECT_THAT(root_->preferredExternalSurfaceFormat(handle), testing::Optional(testing::_));
   SurfaceDescriptor again;
   again.native.kind = NativeSurfaceKind::EmbedderSurface;
   again.native.window = handle;
-  Surface reused = unwrap(device_->createSurface(again), "createSurface");
-  EXPECT_THAT(device_->configureSurface(reused, configuration(reused)), IsOk())
-      << "The runtime destroyed a surface it does not own";
-  EXPECT_THAT(device_->destroySurface(std::move(reused)), IsOk());
+  EXPECT_THAT(device_->createSurface(again),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("already accepted")));
 
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
-  native.api->vkDestroySurfaceKHR(instance, embedderSurface, nullptr);
+  EXPECT_TRUE(root_->destroyExternalSurface(handle, retirement));
+  EXPECT_FALSE(root_->destroyExternalSurface(handle, retirement));
+  EXPECT_THAT(retirement->state(), testing::Eq(VulkanSurfaceRetirementState::Released));
+}
+
+TEST_F(VulkanSurfaceTest, SharedRootRefusesAnUnregisteredExternalSurfaceBeforeQueryingIt) {
+  const VulkanDevice::NativeContextForTest native = device_->nativeContextForTest();
+  ASSERT_NE(native.api->vkCreateHeadlessSurfaceEXT, nullptr);
+  VkHeadlessSurfaceCreateInfoEXT info = {};
+  info.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+  VkSurfaceKHR surface = VK_NULL_HANDLE;
+  ASSERT_EQ(native.api->vkCreateHeadlessSurfaceEXT(static_cast<VkInstance>(native.instance), &info,
+                                                   nullptr, &surface),
+            VK_SUCCESS);
+  uint64_t handle = 0;
+  std::memcpy(&handle, &surface, sizeof(surface));
+  SurfaceDescriptor descriptor;
+  descriptor.native.kind = NativeSurfaceKind::EmbedderSurface;
+  descriptor.native.window = handle;
+
+  Result<Surface> created = device_->createSurface(descriptor);
+  EXPECT_THAT(created,
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("not registered")));
+  if (created.hasResult()) {
+    EXPECT_THAT(device_->destroySurface(std::move(created).result()), IsOk());
+  }
+  native.api->vkDestroySurfaceKHR(static_cast<VkInstance>(native.instance), surface, nullptr);
+}
+
+TEST_F(VulkanSurfaceTest, ConcurrentCloseCannotReleaseASurfaceDuringItsFirstBackendQuery) {
+  const VulkanDevice::NativeContextForTest native = device_->nativeContextForTest();
+  ASSERT_NE(native.api->vkCreateHeadlessSurfaceEXT, nullptr);
+  VkHeadlessSurfaceCreateInfoEXT info = {};
+  info.sType = VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT;
+  VkSurfaceKHR surface = VK_NULL_HANDLE;
+  ASSERT_EQ(native.api->vkCreateHeadlessSurfaceEXT(static_cast<VkInstance>(native.instance), &info,
+                                                   nullptr, &surface),
+            VK_SUCCESS);
+  uint64_t handle = 0;
+  std::memcpy(&handle, &surface, sizeof(surface));
+  std::shared_ptr<VulkanSurfaceRetirement> retirement = root_->registerExternalSurface(handle);
+  ASSERT_THAT(retirement, testing::NotNull());
+
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool beforeQuery = false;
+  bool resume = false;
+  bool createCompleted = false;
+  std::thread creator([&] {
+    std::unique_ptr<VulkanDevice> sibling = VulkanDevice::CreateOverSharedRoot(root_);
+    if (sibling == nullptr) {
+      return;
+    }
+    sibling->setBeforeExternalSurfaceQueryHookForTest([&] {
+      std::unique_lock lock(mutex);
+      beforeQuery = true;
+      changed.notify_all();
+      changed.wait(lock, [&] { return resume; });
+    });
+    SurfaceDescriptor descriptor;
+    descriptor.native.kind = NativeSurfaceKind::EmbedderSurface;
+    descriptor.native.window = handle;
+    Result<Surface> created = sibling->createSurface(descriptor);
+    if (created.hasResult()) {
+      (void)sibling->destroySurface(std::move(created).result());
+    }
+    createCompleted = true;
+  });
+  {
+    std::unique_lock lock(mutex);
+    EXPECT_TRUE(changed.wait_for(lock, std::chrono::seconds(2), [&] { return beforeQuery; }));
+  }
+  if (beforeQuery) {
+    EXPECT_THAT(retirement->state(), testing::Eq(VulkanSurfaceRetirementState::Live));
+    EXPECT_FALSE(root_->destroyExternalSurface(handle, retirement));
+  }
+  {
+    const std::lock_guard lock(mutex);
+    resume = true;
+  }
+  changed.notify_all();
+  creator.join();
+  EXPECT_TRUE(createCompleted);
+  EXPECT_THAT(retirement->state(), testing::Eq(VulkanSurfaceRetirementState::Retired));
+  EXPECT_TRUE(root_->destroyExternalSurface(handle, retirement));
 }
 
 TEST_F(VulkanSurfaceTest, ReportsWhatTheSurfaceCanPresent) {
