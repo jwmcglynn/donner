@@ -582,6 +582,83 @@ performance and final integrated gates remain open.
       on produces either. The window still reaches the backend's wgpu objects for the platform
       surface object off Apple and for the browser's diagnostic readback; on Apple it opens and
       draws on the selected native device.
+- [ ] Present the Linux editor through a native Vulkan window under
+      [#1409](https://github.com/jwmcglynn/donner/issues/1409). Surface-result root-loss
+      propagation ([PR #1532](https://github.com/jwmcglynn/donner/pull/1532)) and an opt-in
+      presentation-capable shared root ([PR #1533](https://github.com/jwmcglynn/donner/pull/1533))
+      are open foundations, not evidence that the editor presents yet. With GLFW initialized and
+      a `GLFW_NO_API` window alive, copy `glfwGetRequiredInstanceExtensions` names into the root
+      selection before creating its Vulkan instance. Require native Vulkan and an instance-only
+      presentation probe, without committing to a physical device, queue family or logical device.
+      Create the `VkSurfaceKHR` with `glfwCreateWindowSurface` against that exact instance, then
+      enumerate physical devices and graphics queue families using
+      `vkGetPhysicalDeviceSurfaceSupportKHR` for this surface. Select a candidate that can present
+      and satisfies the swapchain extension and required runtime features before creating its
+      logical device and completing the shared root. The opt-in #1533 root is a foundation; its
+      first-graphics-queue selection needs this surface-aware, two-stage extension for editor
+      windows. Do not reject a usable later queue or physical device because the first choice
+      cannot present. If no candidate exists before root completion, destroy `VkSurfaceKHR` before
+      the provisional instance, then the GLFW window and its runtime claim on the main thread;
+      no logical device exists on this path. Before `GeodeDevice::CreateOverSelectedRoot` compiles
+      its pipelines, query the selected device's actual surface formats and choose a supported
+      runtime texture format.
+      Fail if no compatible candidate or format exists; do not call the existing pre-Geode
+      `chooseConfiguration(wgpu::Adapter&)` for a native root. Build the first Geode context for
+      that format, then add a backend-neutral factory for a second logical Geode context over its
+      `GeodePhysicalDeviceOwner` and the same format. The current framebuffer
+      `CreateFromExternal(GeodeEmbedConfig)` path requires WebGPU handles and cannot serve native
+      Vulkan. At runtime surface attachment, query capabilities again and require the configured
+      format to match the already compiled pipelines; settle usage, extent and alpha mode there.
+      A rejected capability, changed format or failed creation must refuse the native window path
+      rather than silently select another backend. Resize/minimize and outdated/lost results
+      rebuild or stop the surface through the runtime's existing frame contract; a replacement
+      format change requires rebuilding both Geode contexts and their pipelines before any frame.
+
+#### Linux Vulkan external-surface retirement gate
+
+The editor owns the GLFW window and its `VkSurfaceKHR`; Vulkan owns the swapchain it builds over
+that surface. `Device::destroySurface()` consuming a runtime handle is **not** proof that the
+native swapchain was destroyed: an uncertain queue or failed completion proof can move it to
+Vulkan's retained-surface list. Add a one-shot retirement disposition tied to the exact external
+surface and owning shared root. It starts unattached, becomes live only on explicit backend
+acceptance before any call that can create a swapchain or retain the surface. An error after
+acceptance still requires a retirement disposition. It becomes retired only after all swapchain
+objects and their pending submissions are destroyed. On an unproved native teardown it becomes
+unproven, a terminal state for the editor's platform capsule. A later Vulkan-side proof may
+release backend objects but cannot authorize asynchronous destruction of the quarantined GLFW
+resources; the capsule stays until process exit. The backend publishes successful retirement
+with release ordering after native destruction; the editor observes it with acquire ordering
+before releasing platform prerequisites. Reject duplicate surface/signal ownership and reuse,
+and define failed creation before backend acceptance separately so a never-attached surface can
+be released without waiting for a swapchain that was never made.
+
+On proven retirement, the editor stops frame work, returns any acquired frame, destroys the
+runtime surface, verifies the native retirement disposition, then destroys `VkSurfaceKHR`, the
+GLFW window, the process-wide GLFW runtime claim, and finally the selected root/instance. GLFW
+window operations and destruction stay on the window's main thread. A bounded failure to prove
+retirement retains a typed lease of the surface, window, root and GLFW claim for process lifetime;
+no later window may call `glfwTerminate` while that lease exists, and a later incompatible
+`GLFW_PLATFORM_NULL` initialization is refused. This path reports the failed close without
+destroying native prerequisites or aborting the process. The order follows the
+[Vulkan WSI surface lifetime](https://docs.vulkan.org/spec/latest/chapters/VK_KHR_surface/wsi.html)
+and [GLFW Vulkan window contracts](https://www.glfw.org/docs/latest/group__vulkan.html).
+
+Extend `//donner/gpu/vulkan/tests:vulkan_surface_tests` with deterministic native-retirement
+proof, failed proof, acceptance-boundary and duplicate-ownership cases. Include a selection case
+whose first graphics queue cannot present to the actual surface but a later queue or physical
+device can, plus refusal when none can with pre-root cleanup order; no logical device is created
+before the surface query. Extend `//donner/editor/tests:editor_window_tests_geode` with explicit
+and destructor release order,
+multiwindow GLFW shutdown, retained-window quarantine, concurrent retirement observation, and
+pre-Geode format selection matching the runtime surface format at attach and rebuild. Extend
+`//donner/svg/renderer/geode:geode_device_tests` to require the UI framebuffer's second logical
+context to share the native Vulkan physical root and loss state without WebGPU embed handles.
+Add a Linux `//donner/editor/tests:editor_window_vulkan_surface_tests` CI target for real
+Xvfb/lavapipe present, resize/recreate and zero-extent window behavior, with deterministic
+lost/timeout result injection at the surface boundary; qualify the same path on Intel Arc with
+Khronos synchronization validation and no VUID or synchronization hazard. The Linux default
+stays on the current path until these gates pass; the opt-in root permits qualification and a
+later default flip without changing Metal or browser surface ownership.
 
 ### Browser bridge
 
@@ -861,7 +938,9 @@ feature, separate fences for presentation and runtime submissions, and completio
 whole owner graph before any teardown releases shared prerequisites. If a proof fails, the runtime
 retains that complete graph and refuses future Vulkan device creation until restart. This contract
 is implemented in merged PR #1272 and qualified by the native Vulkan surface tests; it does
-not use a process-abort path.
+not use a process-abort path. Linux editor integration must also retain its external
+`VkSurfaceKHR`, GLFW window, shared root and GLFW runtime claim until the native swapchain's
+retirement is proved; releasing the runtime handle alone does not provide that proof.
 
 The required owning tests and missing enforcement surfaces are listed below. Optional diagnostics
 and physical-hardware observations are evidence with their stated limits, not universal guarantees.
