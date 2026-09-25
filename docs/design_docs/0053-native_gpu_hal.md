@@ -1,15 +1,11 @@
 # Design: Donner Native GPU Runtime and Rust-Independent Build
 
-**Status:** Implementing. The shader compiler, native drawing and mapping, Metal and Vulkan
-surfaces, browser backend, runtime UI renderer, native shader linkage, filter command recording,
-checkerboard targeting, texture-cache uploads, compositor-debug uploads and Metal shared-root
-ownership are merged and qualified. Root selection now takes a backend kind and can serve the
-native Metal backend on request; the transitional adapter stays the production path on every
-platform until that platform's suites pass natively (see [Native parity](#native-parity)).
-Cross-device texture registration works on Metal, the browser backend, the transitional adapter
-and Vulkan-owned images. Vulkan acquired swapchain frames still refuse export. Native backend
-conformance, presentation cutover, the per-platform default flips, and dependency removal remain
-open.\
+**Status:** Implementing. Metal renderer/editor parity and Vulkan Geode/renderer parity are
+qualified. The browser backend is selected for headless work and the standalone Geode module;
+production editor surfaces, platform defaults, and production dependency closure remain.
+Cross-device registration works on Metal, the browser, the transitional adapter and Vulkan-owned
+images; Vulkan acquired frames refuse export. The end state retains one Linux test-only wgpu-native resvg
+comparison backend.\
 **Created:** 2026-07-05\
 **Updated:** 2026-09-24\
 **Author:** Claude Fable 5.1\
@@ -20,7 +16,9 @@ open.\
 Donner's GPU runtime is the interface between Geode/editor rendering and Metal, Vulkan, or browser
 WebGPU. The remaining work is to make production callers use that interface end to end, supply the
 missing draw, mapping, upload, and presentation operations, and remove the transitional WebGPU
-implementation from the dependency closure.
+implementation from production dependency closures.
+A pinned Linux test-only wgpu-native backend remains as a black-box resvg pixel comparison oracle;
+it does not validate Donner's browser bridge.
 
 `donner::gpu` provides the foundation for resource validation, command recording, submission,
 backend execution, and compile-time shader artifacts: every production shader is authored as WGSL
@@ -71,20 +69,20 @@ continue in dependency order.
 | 1     | Existing UI, shader linkage, filter, checkerboard, upload, and compositor units - **complete** | PRs #1267, #1279, #1284, #1298, #1299, #1300, and #1302 are merged and qualified. Preserve their batching, identity, lifetime, and retirement contracts.               |
 | 2     | Shared physical-device ownership - **complete**                                                | #1303 is merged. Preserve distinct logical state, borrowed external ownership, and one browser device per worker.                                                      |
 | 3     | Selected runtime-device ownership - **in progress**                                            | #1356, #1366 and #1371 are merged: contexts hold the device selected by kind, which counts its own work. Move the remaining services behind backend-neutral ownership. |
-| 3a    | Native Metal parity                                                                            | Metal conformance and editor presentation, until the Geode, renderer and editor suites pass with `DONNER_GPU_BACKEND=metal`.                                           |
+| 3a    | Native Metal parity - **complete**                                                             | Geode, renderer and editor suites pass with `DONNER_GPU_BACKEND=metal` under Metal API and shader validation.                                                          |
 | 4     | Snapshot, target, and readback identity                                                        | Remove transitional registrations and raw target binding; use validated runtime or acquired-surface textures through readback and presentation.                        |
 | 5     | `EditorWindow` surface integration                                                             | Connect platform windows to acquired runtime textures and cover resize, minimized, outdated/lost, timeout, device-loss, and invalidation behavior.                     |
 | 6     | Browser production bridge cutover                                                              | Select the merged browser backend in the WebAssembly editor path and remove the C WebGPU wrapper only after its final consumer moves.                                  |
 | 7     | Per-platform default flips                                                                     | Flip each platform's default to its native backend in a separate change, only after that platform's suites pass on it; Vulkan and the browser follow Metal.            |
-| 8     | Dependency removal and final audits                                                            | Remove transitional adapter and Rust-built native GPU dependencies, then close source, dependency, memory, performance, artifact, and integrated qualification audits. |
+| 8     | Dependency removal and final audits                                                            | Remove production adapter and Rust-built GPU deps; retain a Linux test reference; close dependency, pixel, memory, performance and artifact audits.                    |
 
 The merged units through compositor-debug upload are complete, as are shared physical-root
 ownership ([#1303](https://github.com/jwmcglynn/donner/pull/1303)), a selected device that owns
 the backend it was selected from ([#1356](https://github.com/jwmcglynn/donner/pull/1356)),
 selection by backend kind ([#1366](https://github.com/jwmcglynn/donner/pull/1366)), and counters
 that follow the same rules on every backend ([#1371](https://github.com/jwmcglynn/donner/pull/1371)).
-Native parity, snapshot/readback, backend-neutral services, presentation, browser selection, and
-dependency removal remain active in dependency order.
+Linux editor presentation, snapshot/readback, backend-neutral services, browser selection,
+platform default flips and dependency removal remain active in dependency order.
 
 ### Native parity
 
@@ -133,8 +131,9 @@ the Geode editor integration targets listed under [Testing and Validation](#test
 and `editor_shell_tests`, under Metal API and shader validation. So do the renderer's other suites
 with a Geode variant, among them the regression, public API, golden, text path and resvg suites:
 the same cases pass and skip, with the same logged reasons, as on the transitional adapter, and
-each image comparison differs from its reference by the same pixel count on both. Vulkan and the
-browser follow the same sequence.
+each image comparison differs from its reference by the same pixel count on both. Native Vulkan
+passes the Geode and renderer parity suites on lavapipe and a discrete GPU. Browser presentation
+remains a separate production cutover; a native wgpu reference is not browser-backend evidence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
 paths now use their reviewed runtime resource boundaries. Cross-context readback and presentation
@@ -157,11 +156,17 @@ lifetime, synchronization, memory-residency, security or privacy requirements.
 - Preserve pixels, frame ordering, alpha interpretation, bounded resource use, and editor behavior.
 - Remove transitional adapters, raw WebGPU API dependencies, and Rust-built native GPU libraries
   from production source, builds, and shipped artifacts.
+- Retain only a pinned Linux test-only wgpu-native reference for resvg GeodeGolden pixelmatch
+  comparisons; use the same case IDs and reviewed golden/pixelmatch parameters as native Vulkan
+  and Metal, allowing only documented per-driver numeric overrides. Do not add a macOS wgpu lane
+  or repeat the TinyGolden half.
 - Complete the remaining GPU audit acceptance on the exact integrated implementation.
 
 ## Non-Goals
 
 - Implementing the WebGPU standard, its C ABI, or arbitrary runtime WGSL parsing.
+- Treating native wgpu-native comparison results as proof that Donner's browser `navigator.gpu`
+  bridge or complete production editor presentation works.
 - Supporting user-supplied shaders or a public command-stream deserializer.
 - Replacing SVG traversal, Slug coverage, or the compositor with a second rendering engine.
 - Adding Windows or a native iOS host to this cutover; physical browser iOS qualification remains
@@ -172,14 +177,15 @@ lifetime, synchronization, memory-residency, security or privacy requirements.
 
 ## Next Steps
 
-1. Reach native Metal parity: backend conformance for what Geode records and editor presentation,
-   measured by running the suites with `DONNER_GPU_BACKEND=metal`.
+1. Complete Linux Vulkan editor presentation and surface recovery. Metal renderer/editor and
+   Vulkan Geode/renderer parity have passed; platform defaults still need separate cutovers.
 2. Move counters and the remaining shared renderer services behind backend-neutral ownership
    without merging logical tables, serials, caches, or retirement.
 3. Remove transitional snapshot/readback registrations and raw presentation-target binding, then
    select the native and browser backends through the production editor paths.
-4. Remove the transitional WebGPU implementation and Rust-built GPU dependencies, then run final
-   integrated pixel, memory, performance, artifact-size, and dependency-closure acceptance.
+4. Remove the transitional WebGPU implementation and Rust-built GPU dependencies from
+   production; isolate the Linux resvg comparison backend, replace non-resvg WGSL validation,
+   then run final pixel, memory, performance, artifact-size and dependency-closure acceptance.
 
 ## Implementation Plan
 
@@ -466,8 +472,9 @@ reads. `//donner/gpu/vulkan/tests:vulkan_surface_tests` checks the acquired-fram
 `//donner/svg/renderer/geode:geode_snapshot_readback_vulkan_tests` forces native Vulkan on Linux
 and checks exact capture pixels without a manual backend override. The native suite passes with
 Khronos synchronization validation on lavapipe; focused registration and snapshot cases pass on
-Intel Vulkan. The concurrent case also passes under ThreadSanitizer. Wider native Geode parity,
-performance and the publication gates remain open.
+Intel Vulkan. The concurrent case also passes under ThreadSanitizer. The Geode/renderer variants and Geode
+package pass on lavapipe and Intel Arc under validation. Linux editor presentation, root-lock
+performance and final integrated gates remain open.
 
 ### Resource plumbing and uploads
 
@@ -618,10 +625,11 @@ performance and the publication gates remain open.
       canvas. The default module keeps the transitional adapter until the editor cutover.
 - [ ] Replace the C WebGPU wrapper with that bridge in the WebAssembly production path: the
       editor window's browser surface, format, clear and readback through the runtime, then the
-      default flip. The Geode renderer WebAssembly module is a second consumer of the wrapper and
-      moves with the editor. The compiled WGSL projections remain trusted build input.
-- [ ] Run the complete browser editor path and remove emdawnwebgpu, `webgpu-cpp`, and remaining
-      generated C-ABI glue when no consumer needs them.
+      default flip. The default Geode renderer WebAssembly module remains a second consumer of the
+      wrapper and moves with the editor. The compiled WGSL projections remain trusted build input.
+- [ ] Run the complete browser editor path and remove emdawnwebgpu, `webgpu-cpp`, and generated
+      C-ABI glue from production when no production consumer needs them. The Linux resvg test
+      reference retains only its separately isolated, test-only WebGPU-C++ API wrapper.
 
 ### Device ownership and dependency closure
 
@@ -629,11 +637,10 @@ performance and the publication gates remain open.
       preserving their independent handle tables, serials, caches, counters, and retirement.
       Headless creation uses the same owner; borrowed embedders retain host ownership; under
       WebAssembly each worker's contexts share the browser device that worker obtained.
-- [ ] Finish Vulkan owned-image registration across runtime devices over one selected root.
-      Implementation is in PR #1515. Direct registration, native snapshot, in-flight lifetime,
-      acquired-frame refusal, synchronization validation, focused TSan, scoped full suite and
-      editor integration pass on the implementation code. Hosted PR gates, wider selected-backend
-      Geode parity and integrated root-lock performance acceptance remain before this closes.
+- [x] Register owned Vulkan images across runtime devices over one selected root. Registration,
+      snapshot pixels, in-flight lifetime, acquired-frame refusal, synchronization validation and
+      Geode renderer parity pass on lavapipe and a discrete GPU. Acquired swapchain frames remain
+      unexportable; Linux editor presentation is separate work.
 - [ ] Make the selected `gpu::Device` the backend owner. Turn `GeodeDevice` into backend-neutral
       renderer services for counters, caches, dummy resources, and deferred retirement; update
       headless and embedded construction. The selected device owns its backend root
@@ -659,10 +666,29 @@ performance and the publication gates remain open.
 - [ ] Flip each platform's default to its native backend in a separate change after that
       platform's suites, including the editor's, pass on it: Metal, then Vulkan, then the
       browser.
-- [ ] Remove the transitional adapter, native `wgpu-native` archives/overlays, unused headers,
-      obsolete build rules, and orphaned code with their final callers.
-- [ ] Make every no-Rust-dependency verifier category blocking and verify clean Bazel/CMake source
-      archive builds without a Rust toolchain. Inspect link/dependency and packaged-artifact evidence.
+- [ ] Add a Linux-only `resvg_test_suite_wgpu_reference_linux` target that selects the test-only
+      wgpu-native backend by name and fails closed if another backend is selected. Run the same
+      GeodeGolden case IDs and reviewed per-scene golden/pixelmatch rules as native Vulkan on
+      Linux and native Metal on macOS, with the existing TinyGolden duplicate filtered out. Retain
+      no macOS wgpu reference lane after the platform cutovers. The current named-variant macro
+      changes build settings, arguments and shard counts, not the runtime backend; use a dedicated
+      Linux test-only wrapper or transition with a backend-selection assertion. Tag and route this
+      reference explicitly for renderer/shader/image PRs and cutover, rather than adding its 16
+      shards to every unrelated PR's default suite.
+- [ ] Replace `wgsl_emitter_geode_validation_tests` outside the resvg oracle with non-Rust
+      validation of every shipped WGSL projection. Keep real-browser shader/pixel execution as
+      a separate gate for Donner's browser backend.
+- [ ] Remove the transitional adapter, `wgpu-native` archives/overlays, WebGPU-C++ headers,
+      obsolete rules and orphaned code from every production and non-test closure. Preserve only
+      pinned Linux archive(s) and the API wrapper needed by the resvg comparison target. Their
+      exported cc targets/aliases are `testonly`, Linux-compatible and visible only to the test
+      package; after replacing the native wgpu WGSL validator, remove macOS archive aliases and
+      prohibit any editor, Wasm or shipped-artifact edge. Pin the actual fetch rule and generated
+      lock to reviewed bytes with nonempty matching SHA-256 checksums.
+- [ ] Make unexpected Rust-built archives and any production reach into the Linux test oracle
+      blocking in `check_no_rust_dependencies.py`. Verify configured dependency/link closures,
+      CMake install targets and packaged artifacts, plus clean production source-archive builds
+      without `rustc`, `cargo` or a Rust-built GPU library.
 
 ### Remaining GPU audit acceptance
 
@@ -768,24 +794,34 @@ the public [WebGPU](https://gpuweb.github.io/gpuweb/), [WGSL](https://www.w3.org
 [Vulkan](https://registry.khronos.org/vulkan/), and [SPIR-V](https://registry.khronos.org/SPIR-V/)
 specifications; and official Metal documentation/SDK interfaces.
 
-Do not copy, translate, vendor, link, or retain implementation code or internal tests from `wgpu`,
-`wgpu-native`, Naga, Dawn, or Tint in the completed runtime, shader tooling, tests, or CI. Record the
-requirement/specification, algorithm choices, verification targets, and SDK/tool inputs for each
-implementation change. Keep transition reference pixels/counters as test data; remove the legacy
-implementation when it no longer has a migration caller.
+Do not copy, translate or vendor implementation code or internal tests from `wgpu`,
+`wgpu-native`, Naga, Dawn or Tint. The final dependency exception permits checksum-pinned Linux
+`wgpu-native` release archives and their WebGPU-C++ API wrapper, linked only by a Linux-only
+`testonly` resvg GeodeGolden comparison backend as a black box. The final configured graph must
+have no edge from the runtime, shader tooling outside that test, macOS, Wasm, editor, other CI
+targets or shipped artifacts to that reference. A planned
+`//tools/gpu_inventory:check_no_rust_dependencies_tests` extension must check the static
+visibility and compatibility boundary; configured dependency queries must check product closure.
+The exception does not permit copying the implementation or its internal tests. Record requirements, specifications, algorithm choices, verification targets and SDK/tool
+inputs for each implementation change. Keep transition reference pixels/counters as test data;
+remove legacy production callers as they migrate.
 
-The no-Rust requirement applies to build and artifact closure. No shipped artifact or non-test
-closure may fetch/invoke Rust tooling or depend on a Rust-built GPU library. Inert reference material
-is confined to the reviewed resvg/tiny-skia prefixes. The tiny-skia Rust cross-validation fixture is
-confined to the vendored workspace's own tests, without consumers or re-exports outside that test workspace. No Donner target, including tests,
-may reach the fixture or its Rust-built objects.
+The no-Rust requirement applies to production build and artifact closure. No shipped artifact
+or non-test closure may fetch/invoke Rust tooling or depend on a Rust-built GPU library. The explicit
+Linux resvg test may link the pinned Rust-built archive without making it a production dependency.
+Inert reference material is confined to the reviewed resvg/tiny-skia prefixes. The tiny-skia Rust
+cross-validation fixture stays in the vendored workspace's own tests, with no consumers or
+re-exports outside it. No Donner target, including tests, may reach that fixture or its objects.
 A transitive module declaration alone is not evidence that a Rust toolchain executes.
 
 `tools/gpu_inventory/check_no_rust_dependencies.py` and its tests enforce the tracked-tree rules;
 `tools/cmake/gen_cmakelists.py --check` also validates generated CMake output. Final closure acceptance
-additionally requires all verifier categories blocking, analyzed dependency/link evidence, and
-source-archive builds without `rustc` or `cargo`. Do not treat a lexical scan as complete proof of
-transitive build or artifact contents.
+requires every unexpected Rust-built archive to block, with only the exact Linux archive exported
+through a `testonly` target allowlisted and inventoried. The planned verifier tests must check Linux compatibility, narrow visibility and the fetch rule's
+matching SHA-256. Configured dependency/link queries must prove no product, editor, Wasm or CMake
+install target reaches the archive or wrapper. Artifact scans must find no Rust-built GPU library in
+shipped bytes. Production source archives must build without `rustc` or `cargo`. A lexical scan alone is not proof of transitive
+closure or artifact contents.
 
 ## Security and Reliability
 
@@ -823,6 +859,7 @@ complete repository input set, with
 | Indexed draws, resource identity, command/lifetime validation  | `//donner/gpu:gpu_tests`; extend native Metal/Vulkan execution tests and browser contract tests for indexed draws.                                                                                                                                                                                                                                                                                             |
 | Compiled shader artifacts, reflection and projection isolation | `//donner/gpu/shader/wgsl:wgsl_tests` and `wgsl_diagnostics_tests`, `//donner/gpu/shader:shader_tests`, `generated_program_descriptor_tests`, `msl_xcrun_validation_tests`, `spirv_val_validation_tests`, `wgsl_emitter_geode_validation_tests` (each shipped WGSL projection through the Geode WebGPU device), the linked isolation probes under `//donner/gpu/shader/artifact_tests`, and the parser fuzzer. |
 | Native vertex layouts and pixels                               | `//donner/gpu/metal/tests:metal_solid_fill_tests`, `//donner/gpu/vulkan/tests:vulkan_solid_fill_tests`; add the matching browser execution cases.                                                                                                                                                                                                                                                              |
+| Resvg renderer pixel parity                                    | `//donner/svg/renderer/tests:resvg_test_suite_geode` on Linux native Vulkan and macOS native Metal; planned Linux-only `//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux` uses the same GeodeGolden cases and reviewed golden/pixelmatch rules. The default-text CPU variant already covers TinyGolden. Browser rendering remains separately qualified in browser lanes.                      |
 | Snapshot/target lifetime, alpha, cropping, refusal             | `//donner/svg/renderer/tests:renderer_geode_tests`; replace adapter-only coverage with native runtime execution as each caller migrates.                                                                                                                                                                                                                                                                       |
 | Filter resource ordering, scratch and working sets             | `//donner/svg/renderer/geode:geode_filter_engine_tests`, `//donner/svg/renderer/tests:renderer_geode_tests`, and native filter execution suites.                                                                                                                                                                                                                                                               |
 | Upload reuse, UI texture lifetime and thumbnails               | `//donner/editor/tests:gl_texture_cache_tests`, `//donner/editor/tests:layer_thumbnail_golden_tests`; extend them for runtime-backed resources.                                                                                                                                                                                                                                                                |
@@ -830,6 +867,17 @@ complete repository input set, with
 | Editor ordering and presentation                               | The explicit Geode editor lane below, plus the browser rendering/interaction lanes for the selected bridge.                                                                                                                                                                                                                                                                                                    |
 | Structural counters, memory, timing and size                   | `//donner/gpu/baseline:baseline_counters_tests`, `//donner/svg/renderer/geode:geode_perf_tests`, and the paired measurements required by the cutover gates.                                                                                                                                                                                                                                                    |
 | Dependency closure                                             | `//tools/gpu_inventory:check_no_rust_dependencies_tests`, the blocking verifier invocation, generated CMake validation, and analyzed/source-archive/artifact evidence.                                                                                                                                                                                                                                         |
+
+The Linux native Vulkan resvg gate selects `DONNER_GPU_BACKEND=vulkan` with
+`DONNER_REQUIRE_VULKAN=1`; the macOS native Metal gate selects `DONNER_GPU_BACKEND=metal` with
+`DONNER_REQUIRE_METAL=1`. The Linux-only wgpu-native reference runs the same GeodeGolden case IDs
+against the reviewed per-scene goldens and pixelmatch rules, filtering `*_TinyGolden` as the
+existing Geode variant does; the CPU `default_text` target already runs those cases. Parity means
+each backend satisfies the same per-scene expected-pixel contract without an extra pairwise
+rendering pass. The reference runs for Linux renderer/shader/image PRs
+and final cutover, not on macOS or for unrelated PRs; it cannot substitute for actual Chromium,
+WebKit and physical iOS browser execution. Its backend selector and case census must fail closed
+in the named test target.
 
 Run the full `bazel test //...` gate and, separately, these targets with `--config=geode`:
 
@@ -863,8 +911,14 @@ The exact integrated candidate must satisfy all applicable platform gates:
   comparable clean/incremental build and startup measurements accompany the cutover.
 - Browser presentation qualifies on Chromium, WebKit, and the agreed physical iOS matrix. Device or
   browser-profile simulation alone does not establish physical-device coverage.
-- Production consumers and dependency/artifact evidence satisfy the runtime and no-Rust boundaries;
-  the concrete adapter and obsolete WebGPU/Rust implementation paths have no remaining consumers.
+- Production consumers, configured dependency/link queries and artifact scans satisfy the
+  runtime and no-Rust boundaries. The concrete adapter and Rust-built GPU libraries have no
+  production consumers; only the pinned Linux `testonly` resvg reference may reach wgpu-native.
+  `//tools/gpu_inventory:check_no_rust_dependencies_tests` and the final blocking verifier enforce
+  that exception while rejecting any other archive or production edge.
+- The Linux wgpu-native resvg reference, Linux native Vulkan and macOS native Metal run the same
+  GeodeGolden case set and reviewed pixelmatch contract without repeating TinyGolden or retaining
+  a macOS wgpu reference lane after cutover. Browser bridge pixels and presentation qualify separately in real browser lanes.
 - Independent security and implementation-provenance review of the RHI has no unresolved critical
   or high findings.
 - Required tests and checks execute successfully on the candidate, and actionable RHI/GPU review
