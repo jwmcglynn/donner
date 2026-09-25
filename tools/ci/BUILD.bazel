@@ -7,6 +7,12 @@ exports_files([
 
 # Manual suites select existing tests without adding new wildcard configurations.
 test_suite(
+    name = "linux_wgpu_resvg_reference",
+    tags = ["manual"],
+    tests = ["//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"],
+)
+
+test_suite(
     name = "image_loader_production_soak",
     tags = ["manual"],
     tests = ["//donner/svg/resources:image_loader_production_fuzzer_soak"],

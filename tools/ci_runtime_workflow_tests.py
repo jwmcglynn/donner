@@ -271,24 +271,49 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         end = determine.index('          manual_affected="', start)
         impacted_script = "#!/usr/bin/env bash\nset -euo pipefail\n"
         impacted_script += textwrap.dedent(determine[start:end])
-        for affected, selected in (
-            ("//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux", True),
-            ("//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux_impl", True),
-            ("//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux_extra", False),
-            ("//donner/svg/renderer/tests:unrelated_manual_test", False),
-            ("//donner/base:base_tests", False),
-        ):
-            with self.subTest(affected=affected), tempfile.TemporaryDirectory() as directory:
-                output = Path(directory) / "outputs"
-                result = self._run_script(
-                    impacted_script, [],
-                    env={**os.environ, "affected": affected, "GITHUB_OUTPUT": str(output)},
-                )
-                self.assertEqual(0, result.returncode, result.stderr)
-                self.assertEqual(
-                    "wgpu_reference_affected=true\n" if selected else "",
-                    output.read_text() if output.exists() else "",
-                )
+        self.assertIn("labels(dep, tests(//tools/ci:linux_wgpu_resvg_reference))", impacted_script)
+        suite = self.ci_target_definitions.split('name = "linux_wgpu_resvg_reference"', 1)[1]
+        suite = suite.split("\n)", 1)[0]
+        labels = re.findall(r'"(//[^\"]+)"', suite)
+        self.assertEqual(
+            labels, ["//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"]
+        )
+        reference = labels[0]
+        with tempfile.TemporaryDirectory() as directory:
+            fake_bazelisk = Path(directory) / "bazelisk"
+            fake_bazelisk.write_text(
+                "#!/bin/sh\nprintf '%s\\n' '" + reference + "' '" + reference + "_impl'\n"
+            )
+            fake_bazelisk.chmod(0o755)
+            for index, (affected, selected) in enumerate((
+                (reference, True),
+                (reference + "_impl", True),
+                (reference + "_extra", False),
+                ("//donner/svg/renderer/tests:unrelated_manual_test", False),
+                ("//donner/base:base_tests", False),
+            )):
+                with self.subTest(affected=affected):
+                    output = Path(directory) / ("outputs-%d" % index)
+                    result = self._run_script(
+                        impacted_script, [],
+                        env={**os.environ, "affected": affected,
+                             "head_dir": directory, "GITHUB_OUTPUT": str(output),
+                             "PATH": directory + os.pathsep + os.environ.get("PATH", os.defpath)},
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual(
+                        "wgpu_reference_affected=true\n" if selected else "",
+                        output.read_text() if output.exists() else "",
+                    )
+            fake_bazelisk.write_text("#!/bin/sh\nexit 0\n")
+            empty = self._run_script(
+                impacted_script, [],
+                env={**os.environ, "affected": reference, "head_dir": directory,
+                     "GITHUB_OUTPUT": str(Path(directory) / "empty-outputs"),
+                     "PATH": directory + os.pathsep + os.environ.get("PATH", os.defpath)},
+            )
+            self.assertEqual(1, empty.returncode)
+            self.assertIn("Linux WebGPU resvg suite has no test target", empty.stdout)
 
         selector = self._step_body(determine, "Select Linux WebGPU resvg reference")
         self.assertIn("if: github.event_name == 'pull_request'", selector)
@@ -342,7 +367,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual("run=%s\n" % expected, output.read_text())
 
-        target = "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"
+        target = "//tools/ci:linux_wgpu_resvg_reference"
         for job_name in ("linux", "linux-self-hosted"):
             with self.subTest(job=job_name):
                 job = self._job_body(job_name)

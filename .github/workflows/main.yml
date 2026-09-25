@@ -498,10 +498,21 @@ jobs:
 
           # The manual reference is removed from normal affected targets below. Capture its
           # pre-filter impact so only PRs that reach the pixel corpus run its 16 Linux shards.
-          if [[ " $affected " == *" //donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux "* ||
-                " $affected " == *" //donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux_impl "* ]]; then
-            echo "wgpu_reference_affected=true" >> "$GITHUB_OUTPUT"
+          reference_targets="$(
+            cd "$head_dir"
+            bazelisk query --keep_going \
+              'tests(//tools/ci:linux_wgpu_resvg_reference) union labels(dep, tests(//tools/ci:linux_wgpu_resvg_reference))'
+          )"
+          if [[ -z "$reference_targets" ]]; then
+            echo "::error::Linux WebGPU resvg suite has no test target."
+            exit 1
           fi
+          for reference_target in $reference_targets; do
+            if [[ " $affected " == *" $reference_target "* ]]; then
+              echo "wgpu_reference_affected=true" >> "$GITHUB_OUTPUT"
+              break
+            fi
+          done
 
           manual_affected="$(
             cd "$head_dir"
@@ -617,7 +628,7 @@ jobs:
           set -euo pipefail
           bazelisk test --config=ci --test_output=errors \
             --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp \
-            //donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux
+            //tools/ci:linux_wgpu_resvg_reference
 
       - name: Upload Bazel test failure artifacts
         if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure')
@@ -1050,7 +1061,7 @@ jobs:
             --build_event_json_file="$DIAG_DIR/test-wgpu/bep.json" \
             --nobuild_event_json_file_path_conversion \
             --execution_log_compact_file="$DIAG_DIR/test-wgpu/exec.log.zst" \
-            //donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux
+            //tools/ci:linux_wgpu_resvg_reference
 
       - name: Summarize diagnostics
         if: always()
