@@ -1582,6 +1582,7 @@ TEST_F(XMLDocumentTests, ApplySourceEditAtOpeningTagStartUsesElementSubtreeScope
 
 TEST_F(XMLDocumentTests, ApplySourceEditTextNodeScopeUpdatesValue) {
   XMLDocument doc = ParseDocument(R"(<svg><text>hello</text></svg>)");
+  XMLNode data = doc.root().firstChild()->firstChild()->firstChild().value();
   const std::size_t textOffset = doc.source().find("hello");
   ASSERT_NE(textOffset, std::string_view::npos);
 
@@ -1595,6 +1596,14 @@ TEST_F(XMLDocumentTests, ApplySourceEditTextNodeScopeUpdatesValue) {
   EXPECT_EQ(result.scope, ReparseScope::TextNode);
   EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
   EXPECT_EQ(doc.source(), R"(<svg><text>world</text></svg>)");
+  const std::optional<SourceRange> nodeLocation = data.getNodeLocation();
+  ASSERT_TRUE(nodeLocation.has_value());
+  EXPECT_EQ(nodeLocation->start.offset, std::optional(textOffset));
+  EXPECT_EQ(nodeLocation->end.offset, std::optional(textOffset + 5));
+  const std::optional<SourceRange> valueLocation = data.getValueLocation();
+  ASSERT_TRUE(valueLocation.has_value());
+  EXPECT_EQ(valueLocation->start.offset, std::optional(textOffset));
+  EXPECT_EQ(valueLocation->end.offset, std::optional(textOffset + 5));
 }
 
 TEST_F(XMLDocumentTests, ApplySourceEditDataNodeWithoutValueLocationUsesNodeRange) {

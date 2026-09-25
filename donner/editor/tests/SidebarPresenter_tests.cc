@@ -1312,6 +1312,26 @@ TEST_F(SidebarPresenterImGuiTest, InspectorRendersEditableTransformFields) {
   EXPECT_FALSE(app.canUndo()) << "rendering alone must not record undo entries";
 }
 
+TEST_F(SidebarPresenterImGuiTest, TransformAppearsBeforeStroke) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, "##sidebar_section_order_test"));
+
+  const auto transform =
+      presenter.transformFieldRectForTesting(SidebarPresenter::TransformField::PositionX);
+  const auto stroke = presenter.strokeIncrementRectForTesting();
+  ASSERT_TRUE(transform.has_value());
+  ASSERT_TRUE(stroke.has_value());
+  EXPECT_LT(transform->bottomRight.y, stroke->topLeft.y);
+}
+
 TEST_F(SidebarPresenterImGuiTest, TransformFieldsUseAlignedValueColumns) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kInspectorSvg));
