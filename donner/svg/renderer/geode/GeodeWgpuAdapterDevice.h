@@ -305,8 +305,9 @@ GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
 gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind();
 
 /**
- * The backend this build selects for headless work: the browser backend in a WebAssembly build
- * with the `//donner/svg/renderer/geode:browser_backend` build setting, and none otherwise.
+ * The backend this build selects when a caller has no WebGPU surface provider: the browser
+ * backend in a WebAssembly build with the `//donner/svg/renderer/geode:browser_backend` build
+ * setting, and none otherwise. The selected browser editor names its canvas after root selection.
  *
  * It applies only where nothing else decides, see \ref ResolveGpuBackendKind.
  *
@@ -319,10 +320,10 @@ std::optional<GpuBackendKind> BuildDefaultGpuBackendKind();
  * decides: the backend the caller names, the one \p request names, \p buildDefault for a
  * selection with no surface provider, and the transitional adapter.
  *
- * A selection with a surface provider presents to a window, and a build default moves none of
- * them: it exists to move headless work to a backend whose presentation is not ready, while the
- * window stays on the transitional adapter. A process request and a caller's choice both outrank
- * it, so a run that asked for a backend still gets that one.
+ * A selection with a WebGPU surface provider stays on the transitional adapter when only the
+ * build default names a backend. The selected browser editor has no such provider: it names its
+ * canvas by selector after root selection, so the browser build default applies there too. A
+ * process request and a caller's choice both outrank the build default.
  *
  * Exposed so the order can be checked in a build that selects no backend by default.
  *

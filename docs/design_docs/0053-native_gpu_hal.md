@@ -7,7 +7,7 @@ Cross-device registration works on Metal, the browser, the transitional adapter 
 images; Vulkan acquired frames refuse export. The end state retains one Linux test-only wgpu-native resvg
 comparison backend.\
 **Created:** 2026-07-05\
-**Updated:** 2026-09-24\
+**Updated:** 2026-09-25\
 **Author:** Claude Fable 5.1\
 **Drafted by:** GPT-5.6 Sol
 
@@ -688,8 +688,8 @@ later default flip without changing Metal or browser surface ownership.
 - [x] Select the browser backend for headless work in a WebAssembly build with the
       `//donner/svg/renderer/geode:browser_backend` build setting, since a page cannot set
       `DONNER_GPU_BACKEND`. A selection that names no backend, runs with no process request and
-      has no surface provider takes it; the editor window's selection carries a surface provider
-      and stays on the transitional adapter. A browser root keeps its worker's browser device open
+      has no surface provider takes it; the default editor window still carries a WebGPU surface
+      provider and stays on the transitional adapter. A browser root keeps its worker's device open
       for the runtime devices over it and reports that device's texture limit; each runtime device
       waits for the browser with a bounded settle and fails with a named reason, and a loss the
       browser reports is declared into the loss condition the root's devices share. The headless
@@ -700,10 +700,17 @@ later default flip without changing Metal or browser surface ownership.
       `//donner/editor/wasm/tests:standalone_geode_browser_renderer_test` serves its package in
       Chromium, confirms the browser backend was selected, and checks SVG document colors in the
       canvas. The default module keeps the transitional adapter until the editor cutover.
+- [ ] Run the opt-in browser editor's UI canvas through the selected runtime. Name the transferred
+      `#canvas` with `CanvasSelector` after selecting the root, settle its preferred format before
+      compiling Geode pipelines, and create a second logical UI context over that physical owner.
+      Copy/map explicit diagnostic pixels and poll idle completions through `gpu::Device`, with
+      bounded retries and no frame held during a diagnostic mapping wait. Qualify the selected
+      Chromium editor's boot, pixels, presentation, catalog diagnostics, and default-package
+      regressions before the default flip.
 - [ ] Replace the C WebGPU wrapper with that bridge in the WebAssembly production path: the
-      editor window's browser surface, format, clear and readback through the runtime, then the
-      default flip. The default Geode renderer WebAssembly module remains a second consumer of the
-      wrapper and moves with the editor. The compiled WGSL projections remain trusted build input.
+      default flip follows the opt-in editor qualification above. The default Geode renderer
+      WebAssembly module remains a second consumer of the wrapper and moves with the editor. The
+      compiled WGSL projections remain trusted build input.
 - [ ] Run the complete browser editor path and remove emdawnwebgpu, `webgpu-cpp`, and generated
       C-ABI glue from production when no production consumer needs them. The Linux resvg test
       reference retains only its separately isolated, test-only WebGPU-C++ API wrapper.

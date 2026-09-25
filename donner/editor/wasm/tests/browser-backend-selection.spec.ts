@@ -4,6 +4,7 @@ import { expect, test } from "@playwright/test";
 // backend because the build asked for it. The raster worker selects when the editor draws its
 // first document, during startup, and its stderr reaches the page console.
 const kSelectedByBuildSetting = "[Geode] GPU backend: browser, selected by the build setting";
+const kBrowserCanvasRuntimeSurface = "[EditorWindow] browser canvas runtime surface attached";
 
 // Every line the browser backend prints when it cannot serve a selection or a device.
 const kBrowserBackendFailure = "[Geode/browser]";
@@ -60,11 +61,18 @@ test("the raster worker selects the backend its package was built for", async ({
         timeout: 15000,
       })
       .toBe(true);
+    await expect
+      .poll(() => lines.some((line) => line.includes(kBrowserCanvasRuntimeSurface)), {
+        message: "the editor did not attach its canvas through the browser runtime",
+        timeout: 15000,
+      })
+      .toBe(true);
   } else {
     expect(
       lines.filter((line) => line.includes(kSelectedByBuildSetting)),
       "a package built without the browser backend selected it",
     ).toEqual([]);
+    expect(lines.filter((line) => line.includes(kBrowserCanvasRuntimeSurface))).toEqual([]);
   }
 
   // The line names the backend some selection in the page took, which could be any headless

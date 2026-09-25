@@ -268,17 +268,21 @@ public:
  * Presents through the GPU runtime's surface hooks, which is how every platform the editor runs
  * on presents.
  *
- * What differs between platforms is only the platform object frames go to. A Core Animation
- * Metal layer is named directly and the runtime builds the surface on it, on whichever backend
- * the process selected. Everywhere else the window library the editor already links makes the
- * surface object, because adapter selection has to be constrained to it before there is a device
- * to build anything with; the runtime is then pointed at that object and builds its swapchain on
- * it without taking it over.
+ * What differs between platforms is the platform object frames go to. A Core Animation Metal
+ * layer is named directly. The selected browser backend names the transferred canvas by selector
+ * after root selection. The transitional adapter elsewhere uses a window-library surface to
+ * constrain adapter selection before a device exists; the runtime then builds its swapchain on
+ * that borrowed object.
  */
 class RuntimePresentationSurface final : public PresentationSurface {
 public:
   /// Constructs a surface that is not attached to anything yet.
   RuntimePresentationSurface() = default;
+
+  /// Names the editor's transferred browser canvas without creating a WebGPU-C++ surface.
+  /// @param format Preferred canvas format chosen before Geode pipelines are compiled.
+  /// @param enableReadback Whether diagnostic pixel reads may use the acquired frame.
+  RuntimePresentationSurface(gpu::TextureFormat format, bool enableReadback);
 
   /// Hands back any frame still outstanding and gives up the surface.
   ~RuntimePresentationSurface() override;
