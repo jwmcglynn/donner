@@ -21,12 +21,13 @@ namespace donner::fonts {
  */
 class Woff2Parser {
 public:
+  /// Resource ceilings and pinned-font constraints for one WOFF2 decode.
   struct Options {
-    size_t maximumInputSize = 16 * 1024 * 1024;
-    size_t maximumOutputSize = 64 * 1024 * 1024;
-    size_t maximumIntermediateSize = 16 * 1024 * 1024;
-    size_t maximumTransformedGlyfSize = 4 * 1024 * 1024;
-    size_t maximumTableCount = 4096;
+    size_t maximumInputSize = 16 * 1024 * 1024;           ///< Encoded WOFF2 input bytes.
+    size_t maximumOutputSize = 64 * 1024 * 1024;          ///< Reconstructed sfnt output bytes.
+    size_t maximumIntermediateSize = 16 * 1024 * 1024;    ///< Intermediate decode storage bytes.
+    size_t maximumTransformedGlyfSize = 4 * 1024 * 1024;  ///< Transformed glyf table bytes.
+    size_t maximumTableCount = 4096;                      ///< Accepted sfnt table records.
     /// Nonzero for a build-pinned font whose exact reconstructed length is known. Uses one fixed
     /// output vector instead of a growing string followed by a copy; header and result must match.
     size_t expectedOutputSize = 0;

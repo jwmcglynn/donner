@@ -55,7 +55,9 @@ private:
 public:
   /// Bounded incremental-edit defaults, kept in sync with XMLParser::Options.
   static constexpr std::uint64_t kDefaultMaximumSourceEditTreeNodes = 8'192;
+  /// Default maximum attached element depth after an incremental source edit.
   static constexpr int kDefaultMaximumSourceEditTreeDepth = 256;
+  /// Default maximum live attributes after an incremental source edit.
   static constexpr std::uint64_t kDefaultMaximumSourceEditTotalAttributes = 100'000;
 
   /**

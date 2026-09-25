@@ -44,6 +44,7 @@ public:
   /// Default maximum external URL length retained by the parser.
   static constexpr size_t kDefaultMaximumExternalUrlSize = 4096;
 
+  /// Encoded input and external URL length limits for one parse.
   struct Options {
     /// Maximum number of encoded URI bytes accepted before decoding.
     size_t maximumInputSize = kDefaultMaximumInputSize;

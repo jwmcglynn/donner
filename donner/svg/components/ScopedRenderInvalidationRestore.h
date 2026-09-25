@@ -14,6 +14,8 @@ namespace donner::svg::components {
 /// obligations. Hold under the document write guard; restore only identities still alive.
 class ScopedRenderInvalidationRestore {
 public:
+  /// Save dirty flags and render-tree state for auxiliary geometry preparation.
+  /// @param registry Document registry whose invalidation state will be restored.
   explicit ScopedRenderInvalidationRestore(Registry& registry) : registry_(registry) {
     if (const auto* state = registry_.ctx().find<RenderTreeState>()) {
       state_ = *state;

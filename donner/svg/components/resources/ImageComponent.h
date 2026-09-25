@@ -26,6 +26,8 @@ struct ImageComponent {
  */
 struct LoadedImageComponent {
   LoadedImageComponent() : revision_(NextRevision()) {}
+  /// Store a decoded image with a fresh revision for cache invalidation.
+  /// @param loadedImage Decoded image payload to own.
   explicit LoadedImageComponent(ImageResource loadedImage)
       : image(std::move(loadedImage)), revision_(NextRevision()) {}
 

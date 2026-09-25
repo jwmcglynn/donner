@@ -37,8 +37,11 @@ public:
   /// Latch rejection when preflight itself crosses a hard limit.
   void reject() { rejected_ = true; }
 
+  /// Shadow branches admitted in the current render-tree rebuild.
   [[nodiscard]] std::size_t instances() const { return instances_; }
+  /// Generated shadow entities admitted in the current rebuild.
   [[nodiscard]] std::size_t generatedEntities() const { return generatedEntities_; }
+  /// Whether branch preflight exceeded a resource limit.
   [[nodiscard]] bool rejected() const { return rejected_; }
 
 private:
