@@ -264,6 +264,14 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
         "standalone renderer must serve its browser-selected Geode package",
       );
       assert.ok(
+        lane.includes("--config=$(rootpath :playwright.standalone-geode.bazel.config.js)"),
+        "standalone renderer must use its own Playwright config",
+      );
+      assert.ok(
+        lane.includes("\"playwright.standalone-geode.bazel.config.js\""),
+        "standalone renderer config must be in the Bazel runfiles",
+      );
+      assert.ok(
         lane.includes("\"//donner/editor/tests:standalone_geode_browser_png_compare\""),
         "standalone renderer pixels must use the shared pixelmatch helper",
       );
@@ -349,6 +357,10 @@ test("default browser discovery excludes the manual font reference probe", () =>
     "default discovery must not load a manual probe that requires explicit font inputs",
   );
   assert.match(referenceConfig, /testMatch: "font-reference\.spec\.ts"/);
+  assert.ok(
+    defaultConfig.testIgnore.includes("standalone-geode-browser-renderer.spec.ts"),
+    "the editor package must not discover the standalone renderer's different test page",
+  );
 });
 
 test("default browser discovery excludes the Node selector aggregator", () => {
