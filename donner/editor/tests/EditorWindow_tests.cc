@@ -1515,6 +1515,48 @@ TEST(EditorWindowTest, WgpuOffscreenTargetSupportsHeadlessReadback) {
               Rgba(testing::Le(3), testing::Le(3), Near(255, 3), testing::Eq(255)));
   EXPECT_TRUE(window.usingOffscreenRenderTarget());
 }
+
+TEST(EditorWindowTest, OffscreenWindowDoesNotPinLaterWindowToNullPlatform) {
+  if (std::getenv("DISPLAY") == nullptr && std::getenv("WAYLAND_DISPLAY") == nullptr) {
+    GTEST_SKIP() << "A display is needed to distinguish a window surface from the null platform";
+  }
+
+  glfwInitHint(GLFW_PLATFORM, GLFW_ANY_PLATFORM);
+  {
+    EditorWindow before(EditorWindowOptions{
+        .title = "Display Window Before Offscreen",
+        .initialWidth = 64,
+        .initialHeight = 48,
+        .visible = false,
+    });
+    if (!before.valid()) {
+      GTEST_SKIP() << "The host cannot open a display-backed editor window";
+    }
+    EXPECT_THAT(glfwGetPlatform(), testing::Ne(GLFW_PLATFORM_NULL));
+  }
+
+  {
+    EditorWindow offscreen(EditorWindowOptions{
+        .title = "Offscreen Window Between Display Windows",
+        .initialWidth = 64,
+        .initialHeight = 48,
+        .visible = false,
+        .offscreen = true,
+    });
+    ASSERT_THAT(offscreen.valid(), testing::IsTrue());
+    EXPECT_THAT(glfwGetPlatform(), testing::Eq(GLFW_PLATFORM_NULL));
+  }
+
+  EditorWindow after(EditorWindowOptions{
+      .title = "Display Window After Offscreen",
+      .initialWidth = 64,
+      .initialHeight = 48,
+      .visible = false,
+  });
+  ASSERT_THAT(after.valid(), testing::IsTrue())
+      << "An offscreen window must not leave the next window on GLFW's null platform";
+  EXPECT_THAT(glfwGetPlatform(), testing::Ne(GLFW_PLATFORM_NULL));
+}
 #endif
 
 TEST(EditorWindowTest, NumericDragFieldsSupportSimpleClickToEdit) {
