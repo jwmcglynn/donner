@@ -197,6 +197,13 @@ const kRightPaneWidth = 420;
 const kWelcomeContentMaxWidth = 920;
 
 const kBackend = "geode";
+const kExpectedHeadlessBackend = process.env.DONNER_WASM_EXPECTED_HEADLESS_BACKEND ?? "browser";
+if (kExpectedHeadlessBackend !== "browser" && kExpectedHeadlessBackend !== "transitional") {
+  throw new Error(`unsupported expected headless backend: ${kExpectedHeadlessBackend}`);
+}
+const kExpectedRasterWaitStrategy = kExpectedHeadlessBackend === "transitional"
+  ? "timed-wait-any"
+  : "device-poll";
 
 // Shared CI runners execute this suite 2-4x slower than local development
 // hardware. Scale wall-clock budgets and tight acceptance polls so the timing
@@ -1151,7 +1158,7 @@ for (
       `completed worker pixels did not reach the canvas promptly: ${JSON.stringify(phaseTimings)}`,
     ).toBeLessThan(presentationHandoffDeadlineMs);
     if (kBackend === "geode" && (completedWorkerStats?.readbackCount || 0) > 0) {
-      expect(completedWorkerStats?.readbackWaitStrategy).toBe("timed-wait-any");
+      expect(completedWorkerStats?.readbackWaitStrategy).toBe(kExpectedRasterWaitStrategy);
     }
     if (kBackend === "geode") {
       expect(await page.evaluate(() => window.__donnerHeadlessDeviceCreations)).toBe(

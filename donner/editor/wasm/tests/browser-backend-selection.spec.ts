@@ -9,9 +9,13 @@ const kBrowserCanvasRuntimeSurface = "[EditorWindow] browser canvas runtime surf
 // Every line the browser backend prints when it cannot serve a selection or a device.
 const kBrowserBackendFailure = "[Geode/browser]";
 
-// The backend the served package was built to select for headless work. A lane serving the
-// package that selects the browser backend says so; every other package must not select it.
-const kExpectsBrowserBackend = process.env.DONNER_WASM_EXPECTED_HEADLESS_BACKEND === "browser";
+// The editor's default package selects Browser. An explicit transitional fixture can still name
+// its older backend, but an omitted expectation must exercise the production default.
+const kExpectedHeadlessBackend = process.env.DONNER_WASM_EXPECTED_HEADLESS_BACKEND ?? "browser";
+if (kExpectedHeadlessBackend !== "browser" && kExpectedHeadlessBackend !== "transitional") {
+  throw new Error(`unsupported expected headless backend: ${kExpectedHeadlessBackend}`);
+}
+const kExpectsBrowserBackend = kExpectedHeadlessBackend === "browser";
 
 // How the raster worker waited for its readbacks, which only its own results publish. The browser
 // backend reports a mapping ready only when it looks again after handing the thread over, which

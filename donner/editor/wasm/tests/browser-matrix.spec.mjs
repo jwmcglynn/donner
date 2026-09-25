@@ -520,6 +520,7 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   // The suites scale their timing bounds by kCiTimeScale when CI is set, so a
   // local run measures CI's thresholds only if the script exports it.
   assert.match(normalizedBrowserCi, /export CI="\$\{CI:-true\}"/);
+  assert.match(normalizedBrowserCi, /export DONNER_WASM_EXPECTED_HEADLESS_BACKEND=browser/);
   // Lanes share one Playwright output directory and Playwright empties it on
   // start, so the job can only keep a failing lane's evidence if the script
   // archives each lane's results per lane and the workflow uploads THAT.
