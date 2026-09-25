@@ -1603,7 +1603,7 @@ TEST(EditorWindowTest, NativeVulkanWindowsRetainGlfwUntilTheLastWindowCloses) {
   EXPECT_EQ(internal::GlfwTerminationCountForTesting(), terminations + 1);
 }
 
-TEST(EditorWindowTest, UnprovenNativeRetirementQuarantinesTheWindowAndGlfwClaim) {
+TEST(EditorWindowDeathTest, UnprovenNativeRetirementQuarantinesTheWindowAndGlfwClaim) {
   if (std::getenv("DISPLAY") == nullptr && std::getenv("WAYLAND_DISPLAY") == nullptr) {
     GTEST_SKIP() << "A display is required for native Vulkan window presentation";
   }
