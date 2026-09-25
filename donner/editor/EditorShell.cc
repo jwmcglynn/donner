@@ -100,6 +100,28 @@ namespace {
 
 thread_local std::string gIsolatedReplayClipboard;
 
+bool CanAttemptSelectedRedrag(bool selectToolActive, bool cacheMatchesSelection,
+                              const MouseModifiers& modifiers,
+                              SelectionTransformHandleIntent handleIntent) {
+  return selectToolActive && cacheMatchesSelection && !modifiers.shift && !modifiers.doubleClick &&
+         handleIntent.kind == SelectionTransformHandleKind::None;
+}
+
+bool IsOccludedSelectedBoundsPress(const Vector2d& documentPoint,
+                                   std::span<const Box2d> selectionBoundsDoc,
+                                   std::span<const Box2d> occludingBoundsDoc,
+                                   double pixelsPerDocUnit, bool redragEligible) {
+  if (!redragEligible || selectionBoundsDoc.size() != 1u) {
+    return false;
+  }
+  const double hitSlopDoc = pixelsPerDocUnit > 0.0 ? 2.0 / pixelsPerDocUnit : 0.0;
+  if (!selectionBoundsDoc.front().inflatedBy(hitSlopDoc).contains(documentPoint)) {
+    return false;
+  }
+  return std::ranges::any_of(occludingBoundsDoc,
+                             [&](const Box2d& bounds) { return bounds.contains(documentPoint); });
+}
+
 const char* GetIsolatedReplayClipboard(ImGuiContext*) {
   return gIsolatedReplayClipboard.c_str();
 }
@@ -4525,18 +4547,26 @@ void EditorShell::dispatchBufferedRenderPaneClick(bool selectToolActive, bool pe
                                             /*includeRotate=*/!pendingClick.modifiers.shift,
                                             pointerHitTestPixelsPerDocUnit)
             : SelectionTransformHandleIntent{};
-    bool tookFastRedrag =
-        documentWriteAvailable && selectToolActive && !pendingClick.modifiers.doubleClick &&
-        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-        selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
-                                             pendingClick.modifiers, redragBoundsDoc,
-                                             redragOccludingBoundsDoc);
-    if (!tookFastRedrag && !pendingClick.modifiers.doubleClick && documentWriteAvailable &&
-        renderCoordinator_.asyncRenderer().isBusy() && selectToolActive && cacheMatchesSelection &&
-        pendingHandleIntent.kind == SelectionTransformHandleKind::None) {
-      // The occlusion cache uses broad AABBs for later-painted elements. When the worker is busy,
-      // prefer an optimistic re-drag of the current selection over freezing behind a conservative
-      // false-positive overlap; the idle path above still uses full hit-testing for retargets.
+    const bool redragEligible = CanAttemptSelectedRedrag(
+        selectToolActive, cacheMatchesSelection, pendingClick.modifiers, pendingHandleIntent);
+    const bool leftMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool selectDragIntent = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
+    const bool occludedSelectedPress = IsOccludedSelectedBoundsPress(
+        pendingClick.documentPoint, redragBoundsDoc, redragOccludingBoundsDoc,
+        pointerHitTestPixelsPerDocUnit, redragEligible);
+    if (occludedSelectedPress && leftMouseDown && !selectDragIntent) {
+      // Keep the click buffered until intent is known. A plain click should select the topmost
+      // covering path, while moving past the drag threshold should grab the already-selected
+      // object under its bounds. Both paths use only the cached bounds while the worker is busy.
+      return;
+    }
+    bool tookFastRedrag = documentWriteAvailable && redragEligible &&
+                          selectTool_.tryStartRedragOnSelected(
+                              app_, pendingClick.documentPoint, pendingClick.modifiers,
+                              redragBoundsDoc, redragOccludingBoundsDoc);
+    if (!tookFastRedrag && selectDragIntent && documentWriteAvailable && redragEligible) {
+      // Once the held pointer actually moves, give the current selection priority over broad
+      // later-painted AABBs. A click without movement reaches idle hit-testing below instead.
       tookFastRedrag = selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
                                                             pendingClick.modifiers, redragBoundsDoc,
                                                             std::span<const Box2d>());
@@ -4549,11 +4579,9 @@ void EditorShell::dispatchBufferedRenderPaneClick(bool selectToolActive, bool pe
         break;
 
       case PendingClickBusyAction::RunIdleClickPath: {
-        const bool leftMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
         const bool selectHoldElapsed =
             pendingSelectClickStartSeconds_.has_value() &&
             ImGui::GetTime() - *pendingSelectClickStartSeconds_ >= kSelectMarqueeHoldDelaySeconds;
-        const bool selectDragIntent = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
         const bool pendingClickHitsSelection =
             selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
             selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);

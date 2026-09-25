@@ -1587,6 +1587,10 @@ public:
     return shell.renderCoordinator_.asyncRenderer().isBusy();
   }
 
+  static int RenderRequestsPosted(const EditorShell& shell) {
+    return shell.renderCoordinator_.lastFrameCostBreakdown().renderRequestsPosted;
+  }
+
   static void SetPendingSelectClickStartSeconds(EditorShell& shell, double seconds) {
     shell.pendingSelectClickStartSeconds_ = seconds;
   }
@@ -4024,6 +4028,210 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
     (void)captureContent();
     awaitPresentation();
   }
+}
+
+void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
+                                  bool waitForSelectedPrewarm = false) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Geode direct Retina pointer drag",
+      .initialWidth = 1600,
+      .initialHeight = 900,
+      .visible = false,
+      .offscreen = true,
+      .forceOffscreenRenderTarget = true,
+      .offscreenContentScale = 2.0,
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Retina framebuffer readback is unavailable on this host";
+  }
+  const EditorSample* splash = FindEditorSample("geode-splash");
+  ASSERT_NE(splash, nullptr);
+  EditorShell shell(window, OptionsWithSource(splash->source, "geode_splash.svg"));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_NEAR(window.displayScale(), 2.0, 1e-6);
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto frame = [&](const Vector2d& documentPoint, bool mouseDown, bool capture) {
+    const Vector2d screen = shell.viewportForReadback().documentToScreen(documentPoint);
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(static_cast<float>(screen.x), static_cast<float>(screen.y));
+    io.AddMouseButtonEvent(0, mouseDown);
+    if (capture) {
+      shell.setContentOnlyCaptureForNextFrameForReplay(true);
+    }
+    window.beginFrame();
+    shell.runFrame();
+    if (capture) {
+      return window.endFrameAndReadPixels();
+    }
+    window.endFrame();
+    return svg::RendererBitmap{};
+  };
+  const auto coldDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  for (int tick = 0; tick < 30 && std::chrono::steady_clock::now() < coldDeadline; ++tick) {
+    (void)frame(Vector2d(-100.0, -100.0), false, false);
+    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(coldDeadline)) {
+      break;
+    }
+    if (EditorShellTestAccess::DisplayedDocVersion(shell) == app.document().currentFrameVersion()) {
+      break;
+    }
+  }
+  ASSERT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell),
+            app.document().currentFrameVersion());
+  (void)frame(Vector2d(-100.0, -100.0), false, false);
+  (void)frame(Vector2d(-100.0, -100.0), false, false);
+
+  const auto target = app.document().document().querySelector("#" + std::string(id));
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+  const auto bounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+  ASSERT_TRUE(bounds.has_value());
+  std::optional<Vector2d> hitPoint;
+  const Vector2d center = (bounds->topLeft + bounds->bottomRight) / 2.0;
+  if (selectFromLayers) {
+    // This silhouette is covered by later-painted crystal faces, so canvas hit-testing cannot
+    // select it. Select it from Layers, then immediately drag its bounds through real mouse input
+    // while its speculative prewarm is still in flight.
+    hitPoint = center;
+  } else {
+    double bestDistance = std::numeric_limits<double>::infinity();
+    for (int y = 1; y < 17; ++y) {
+      for (int x = 1; x < 17; ++x) {
+        const Vector2d point =
+            bounds->topLeft + Vector2d(bounds->width() * x / 17.0, bounds->height() * y / 17.0);
+        const auto hit = app.hitTest(point);
+        const double distance = (point - center).lengthSquared();
+        if (hit.has_value() && hit->id() == id && distance < bestDistance) {
+          hitPoint = point;
+          bestDistance = distance;
+        }
+      }
+    }
+  }
+  ASSERT_TRUE(hitPoint.has_value()) << id << " has no canvas hit point";
+  const ViewportState viewport = shell.viewportForReadback();
+  const Box2d crop = Box2d::FromXYWH(bounds->topLeft.x - 8.0, bounds->topLeft.y - 8.0,
+                                     bounds->width() + 90.0, bounds->height() + 16.0);
+  const svg::RendererBitmap before = frame(*hitPoint, false, true);
+  ASSERT_GE(before.dimensions.x, 3000);
+  ASSERT_GE(before.dimensions.y, 1600);
+  const svg::RendererBitmap beforeCrop =
+      CropDocumentRect(before, viewport, window.windowSize(), crop);
+  ASSERT_FALSE(beforeCrop.empty());
+  if (selectFromLayers) {
+    shell.asyncRendererForReplay().setReplayRenderDelayForTesting(std::chrono::milliseconds(45));
+    app.setSelection(*target);
+    EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+    (void)frame(*hitPoint, false, false);
+    if (waitForSelectedPrewarm) {
+      const auto awaitSelectedPrewarm = [&] {
+        const auto settledDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        for (int tick = 0; tick < 30 && std::chrono::steady_clock::now() < settledDeadline;
+             ++tick) {
+          (void)frame(*hitPoint, false, false);
+          if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+                  settledDeadline)) {
+            break;
+          }
+          if (!EditorShellTestAccess::RendererBusy(shell) &&
+              EditorShellTestAccess::DisplayedDocVersion(shell) ==
+                  app.document().currentFrameVersion()) {
+            return true;
+          }
+        }
+        return false;
+      };
+      ASSERT_TRUE(awaitSelectedPrewarm())
+          << "The selected silhouette prewarm did not settle before mouse-down";
+      ASSERT_FALSE(EditorShellTestAccess::RendererBusy(shell))
+          << "The selected silhouette prewarm did not settle before mouse-down";
+      ASSERT_GT(EditorShellTestAccess::DisplayedSelectionBoundsCount(shell), 0u);
+      const auto coveringHit = app.hitTest(*hitPoint);
+      ASSERT_TRUE(coveringHit.has_value());
+      ASSERT_NE(coveringHit->id(), id);
+      (void)frame(*hitPoint, true, false);
+      (void)frame(*hitPoint, false, false);
+      ASSERT_TRUE(app.selectedElement().has_value());
+      EXPECT_EQ(app.selectedElement()->id(), coveringHit->id())
+          << "A click without dragging must select the topmost covering facet";
+
+      // Restore the silhouette through Layers and verify that a real held drag, unlike the
+      // click above, keeps that selection even under the same overlapping facet.
+      app.setSelection(*target);
+      EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+      (void)frame(*hitPoint, false, false);
+      ASSERT_TRUE(awaitSelectedPrewarm());
+    }
+  }
+  const std::uint64_t displayedBefore = EditorShellTestAccess::DisplayedDocVersion(shell);
+  (void)frame(*hitPoint, true, false);
+
+  tests::BitmapGoldenCompareParams signalParams = tests::PixelmatchIdentityParams();
+  signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+  std::optional<svg::RendererBitmap> previousHeld;
+  int heldTransitions = 0;
+  bool activeDrag = false;
+  bool wrongActiveDragEntity = false;
+  bool versionAdvanced = false;
+  int requestsPosted = 0;
+  for (int move = 1; move <= 24; ++move) {
+    const bool capture = move % 8 == 0;
+    const svg::RendererBitmap held = frame(*hitPoint + Vector2d(move * 2.0, 0.0), true, capture);
+    const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+    if (status.activeDragPreview.has_value()) {
+      activeDrag = true;
+      wrongActiveDragEntity |= status.activeDragPreview->entity != targetEntity;
+    }
+    versionAdvanced |= status.displayedDocVersion > displayedBefore;
+    requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
+    if (capture) {
+      const svg::RendererBitmap heldCrop =
+          CropDocumentRect(held, viewport, window.windowSize(), crop);
+      ASSERT_FALSE(heldCrop.empty());
+      int changed = 0;
+      tests::CompareBitmapToBitmap(heldCrop, beforeCrop,
+                                   std::string(id) + "_retina_held_" + std::to_string(move),
+                                   signalParams, &changed);
+      if (previousHeld.has_value()) {
+        int between = 0;
+        tests::CompareBitmapToBitmap(heldCrop, *previousHeld,
+                                     std::string(id) + "_retina_successive_" + std::to_string(move),
+                                     signalParams, &between);
+        heldTransitions += between > 0 ? 1 : 0;
+      }
+      previousHeld = heldCrop;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
+  }
+  ASSERT_TRUE(app.selectedElement().has_value());
+  EXPECT_EQ(app.selectedElement()->id(), id)
+      << "chosen hitPoint=" << *hitPoint << " center=" << center << " viewportAfter="
+      << shell.viewportForReadback().screenToDocument(viewport.documentToScreen(*hitPoint));
+  EXPECT_TRUE(activeDrag) << "A direct canvas press did not begin the selected shape drag";
+  EXPECT_FALSE(wrongActiveDragEntity) << "The held native gesture dragged another Geode element";
+  EXPECT_GT(requestsPosted, 0) << "No raster request was posted during the held gesture";
+  EXPECT_TRUE(versionAdvanced) << "No worker frame was presented during the held drag; posted="
+                               << requestsPosted
+                               << " busy=" << EditorShellTestAccess::RendererBusy(shell);
+  EXPECT_GT(heldTransitions, 0)
+      << "Retina canvas pixels did not follow continued movement before release; posted="
+      << requestsPosted << " current=" << app.document().currentFrameVersion()
+      << " displayed=" << EditorShellTestAccess::DisplayedDocVersion(shell);
+  (void)frame(*hitPoint + Vector2d(48.0, 0.0), false, false);
+}
+
+TEST(EditorShellTest, GeodeCrownColdDirectRetinaDragPresentsBeforeMouseUp) {
+  RunGeodeColdDirectRetinaDrag("central-crown-face-2", /*selectFromLayers=*/false);
+}
+
+TEST(EditorShellTest, GeodeSilhouetteColdDirectRetinaDragPresentsBeforeMouseUp) {
+  RunGeodeColdDirectRetinaDrag("central-silhouette", /*selectFromLayers=*/true);
+}
+
+TEST(EditorShellTest, GeodeSilhouetteSettledLayersSelectionStillDragsSelectedShape) {
+  RunGeodeColdDirectRetinaDrag("central-silhouette", /*selectFromLayers=*/true,
+                               /*waitForSelectedPrewarm=*/true);
 }
 
 TEST(EditorShellTest, SelectDragKeepsFullPathChrome) {
