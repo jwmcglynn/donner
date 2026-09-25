@@ -28,8 +28,9 @@ coverage:
 
 comment:
   # PR uploads are selected subsets. Show their explicit flag without a
-  # project-coverage header derived from that subset.
+  # project-coverage header or summary derived from that subset.
   layout: "diff, flags, files, footer"
+  hide_project_coverage: true
 
 flags:
   unittests:
