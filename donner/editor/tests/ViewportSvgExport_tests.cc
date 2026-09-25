@@ -864,7 +864,7 @@ TEST(ViewportSvgExportTest, SelfClosingRootExportsEmptyContentGroup) {
   EXPECT_THAT(result.value, HasSubstr("<g clip-path=\"url(#donner-viewport-clip)\"></g>"));
 }
 
-TEST(ViewportSvgExportTest, NonFiniteViewportValuesFormatAsZero) {
+TEST(ViewportSvgExportTest, NonFiniteViewportValuesAreRejected) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   ViewportState viewport = IdentityViewport();
   const double infinity = std::numeric_limits<double>::infinity();
@@ -874,11 +874,11 @@ TEST(ViewportSvgExportTest, NonFiniteViewportValuesFormatAsZero) {
   const Result<std::string, std::string> result =
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("viewBox=\"0 0 0 0\""));
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error, "The viewport export dimensions are not finite and positive.");
 }
 
-TEST(ViewportSvgExportTest, NegativeZeroViewportValuesFormatAsZero) {
+TEST(ViewportSvgExportTest, ZeroSizedViewportWithNegativeZeroPanIsRejected) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   ViewportState viewport = IdentityViewport();
   viewport.panDocPoint = Vector2d(-0.0, -0.0);
@@ -887,12 +887,11 @@ TEST(ViewportSvgExportTest, NegativeZeroViewportValuesFormatAsZero) {
   const Result<std::string, std::string> result =
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("viewBox=\"0 0 0 0\""));
-  EXPECT_THAT(result.value, Not(HasSubstr("-0")));
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error, "The viewport export dimensions are not finite and positive.");
 }
 
-TEST(ViewportSvgExportTest, RoundedNegativeZeroViewportValuesFormatAsZero) {
+TEST(ViewportSvgExportTest, ZeroSizedViewportWithRoundedNegativeZeroPanIsRejected) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   ViewportState viewport = IdentityViewport();
   viewport.panDocPoint = Vector2d(-0.0000001, -0.0000001);
@@ -901,9 +900,8 @@ TEST(ViewportSvgExportTest, RoundedNegativeZeroViewportValuesFormatAsZero) {
   const Result<std::string, std::string> result =
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("viewBox=\"0 0 0 0\""));
-  EXPECT_THAT(result.value, Not(HasSubstr("-0")));
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error, "The viewport export dimensions are not finite and positive.");
 }
 
 TEST(ViewportSvgExportTest, FractionalViewportValuesTrimTrailingZeros) {
