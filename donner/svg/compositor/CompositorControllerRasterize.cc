@@ -1009,6 +1009,28 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
   return tiles;
 }
 
+bool CompositorController::hasCompletePaintOrderTilePayloads() const {
+  for (const CompositorLayer& layer : layers_) {
+    if (!layer.hasRenderablePayload()) {
+      return false;
+    }
+  }
+  for (size_t index = 0; index < staticSpanPlans_.size(); ++index) {
+    if (staticSpanPlans_[index].firstEntity == entt::null ||
+        staticSpanPlans_[index].lastEntity == entt::null) {
+      continue;
+    }
+    const bool hasBitmap =
+        index < staticSegments_.size() && HasPublicTileBitmap(staticSegments_[index]);
+    const bool hasTexture =
+        index < staticSegmentTextures_.size() && staticSegmentTextures_[index] != nullptr;
+    if (!hasBitmap && !hasTexture) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void CompositorController::recordComposePayloadRefusal() {
   ++lastRenderFrameStats_.composePayloadRefusalCount;
   ++lastRenderFrameStats_.composePayloadRefusalTotal;

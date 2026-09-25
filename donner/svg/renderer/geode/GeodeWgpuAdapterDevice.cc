@@ -761,6 +761,15 @@ std::string_view ProcessBackendRequest() {
   return value != nullptr ? std::string_view(value) : std::string_view();
 }
 
+/// The native backend qualified for this host's unconstrained Geode roots.
+GpuBackendKind PlatformDefaultGpuBackendKind() {
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+  return GpuBackendKind::NativeMetal;
+#else
+  return GpuBackendKind::TransitionalWgpu;
+#endif
+}
+
 /// What asked for the backend a selection produced.
 enum class BackendRequestSource : uint8_t {
   Caller,        //!< The caller named it.
@@ -779,11 +788,11 @@ struct ResolvedBackend {
 };
 
 /// The backend \p request names, as `DONNER_GPU_BACKEND` spells it.
-/// @param request Value of the variable; empty selects the transitional adapter.
+/// @param request Value of the variable; empty selects the platform default.
 /// @return The kind, or an error naming the value and the accepted values.
 gpu::Result<GpuBackendKind> ParseBackendRequest(std::string_view request) {
   if (request.empty()) {
-    return GpuBackendKind::TransitionalWgpu;
+    return PlatformDefaultGpuBackendKind();
   }
   using namespace std::string_view_literals;
   if (StringUtils::EqualsLowercase(request, "wgpu"sv)) {
@@ -869,7 +878,12 @@ namespace {
 gpu::Result<ResolvedBackend> ResolveBackend(const GpuRootSelection& options,
                                             std::string_view request,
                                             std::optional<GpuBackendKind> buildDefault) {
-  ResolvedBackend resolved;
+  // A WebGPU surface provider can only be served by the transitional adapter. Apple's editor
+  // attaches its Metal layer without one, so its window and offscreen roots take the native
+  // default.
+  ResolvedBackend resolved{options.compatibleSurface ? GpuBackendKind::TransitionalWgpu
+                                                     : PlatformDefaultGpuBackendKind(),
+                           BackendRequestSource::Default};
   if (options.backend.has_value()) {
     resolved = ResolvedBackend{*options.backend, BackendRequestSource::Caller};
   } else if (!request.empty()) {

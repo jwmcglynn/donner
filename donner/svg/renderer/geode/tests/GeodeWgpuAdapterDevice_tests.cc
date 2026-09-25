@@ -336,7 +336,7 @@ private:
 
 /// A case that selects the transitional adapter by name while the process default is another
 /// backend says so, naming itself and its reason, so a run on that backend shows which cases did
-/// not run on it and why. Under the adapter default the selection changes nothing and says nothing.
+/// not run on it and why.
 TEST(GeodeTestContextsTest, AnAdapterSelectionUnderAnotherDefaultLogsTheCaseAndItsReason) {
   {
     const ScopedGpuBackendRequest metal("metal");
@@ -358,26 +358,37 @@ TEST(GeodeTestContextsTest, AnAdapterSelectionUnderAnotherDefaultLogsTheCaseAndI
         CreateTransitionalAdapterContext("the reason under test");
     const std::string log = testing::internal::GetCapturedStderr();
     ASSERT_THAT(context, testing::NotNull()) << "no wgpu adapter is available on this host";
+#if defined(__APPLE__)
+    EXPECT_THAT(log, HasSubstr("not the process default native Metal: the reason under test"));
+#else
     EXPECT_THAT(log, Not(HasSubstr("the reason under test")));
+#endif
   }
 }
 
-/// A process that asks for no backend, or asks with an empty value, renders through the
-/// transitional adapter: it is the production path until a platform's suites pass natively.
-TEST(GeodeGpuRootSelection, AnUnsetOrEmptyRequestSelectsTheTransitionalAdapter) {
+/// An unset or empty request selects the qualified native backend on Apple and retains the
+/// transitional adapter elsewhere until that platform's editor presentation passes natively.
+TEST(GeodeGpuRootSelection, AnUnsetOrEmptyRequestSelectsThePlatformDefault) {
   for (const char* request : {static_cast<const char*>(nullptr), ""}) {
     SCOPED_TRACE(request == nullptr ? "DONNER_GPU_BACKEND unset" : "DONNER_GPU_BACKEND empty");
     const ScopedGpuBackendRequest scoped(request);
+    const gpu::Result<GpuBackendKind> selected = ProcessDefaultGpuBackendKind();
+    ASSERT_THAT(selected, gpu::HasResult());
+#if defined(__APPLE__)
+    EXPECT_THAT(selected.result(), testing::Eq(GpuBackendKind::NativeMetal));
+#else
+    EXPECT_THAT(selected.result(), testing::Eq(GpuBackendKind::TransitionalWgpu));
+#endif
     GpuRootSelection selection;
     selection.label = "ProcessDefaultSelection";
     const std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
-    ASSERT_THAT(root, testing::NotNull()) << "no wgpu adapter is available on this host";
-    EXPECT_THAT(root->capabilities().backend, testing::Eq(GpuBackendKind::TransitionalWgpu));
+    ASSERT_THAT(root, testing::NotNull()) << "no platform-default GPU is available on this host";
+    EXPECT_THAT(root->capabilities().backend, testing::Eq(selected.result()));
   }
 }
 
-/// The variable names a backend in any letter case, and naming the transitional adapter
-/// explicitly selects it just as leaving the variable unset does.
+/// The variable names a backend in any letter case; naming the transitional adapter explicitly
+/// continues to select it after a platform's native default flips.
 TEST(GeodeGpuRootSelection, ARequestNamesItsBackendInAnyLetterCase) {
   for (const char* request : {"wgpu", "WGPU", "Wgpu"}) {
     SCOPED_TRACE(request);
@@ -551,6 +562,13 @@ TEST(GeodeGpuBackendResolution, AWindowStaysOnTheTransitionalAdapterUnderABuildD
               testing::Eq(GpuBackendKind::TransitionalWgpu));
 }
 
+/// A caller supplying a WebGPU surface still gets the backend that can serve that surface even
+/// after an unconstrained root's platform default moves to native Metal.
+TEST(GeodeGpuBackendResolution, AWebGpuSurfaceProviderKeepsTheTransitionalAdapter) {
+  EXPECT_THAT(ResolvedKind(WindowSelection(), "", std::nullopt),
+              testing::Eq(GpuBackendKind::TransitionalWgpu));
+}
+
 /// A run that asks for a backend gets it, whatever the build would have chosen, and a caller that
 /// names one gets that whatever the run asked for.
 TEST(GeodeGpuBackendResolution, ARequestAndACallerBothOutrankTheBuildDefault) {
@@ -584,10 +602,15 @@ TEST(GeodeGpuBackendResolution, VulkanPresentationRefusesAnUnrelatedBackend) {
                                          HasSubstr("Vulkan instance extensions")));
 }
 
-/// Without a build default, a selection that asks for nothing stays on the transitional adapter.
-TEST(GeodeGpuBackendResolution, WithoutABuildDefaultHeadlessWorkStaysOnTheTransitionalAdapter) {
+/// Without a build default, headless work takes the platform's qualified default.
+TEST(GeodeGpuBackendResolution, WithoutABuildDefaultHeadlessWorkUsesThePlatformDefault) {
+#if defined(__APPLE__)
+  EXPECT_THAT(ResolvedKind(HeadlessSelection(), "", std::nullopt),
+              testing::Eq(GpuBackendKind::NativeMetal));
+#else
   EXPECT_THAT(ResolvedKind(HeadlessSelection(), "", std::nullopt),
               testing::Eq(GpuBackendKind::TransitionalWgpu));
+#endif
 }
 
 /// A request that names no backend is still an error with a build default, rather than being

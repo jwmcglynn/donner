@@ -1048,6 +1048,10 @@ public:
   [[nodiscard]] std::vector<CompositorTile> snapshotTilesForUpload(
       CompositorTileBitmapPayload payload = CompositorTileBitmapPayload::All) const;
 
+  /// True when every nonempty layer and static span has a current tile payload.
+  /// Direct composition alone does not make the editor's split-tile preview complete.
+  [[nodiscard]] bool hasCompletePaintOrderTilePayloads() const;
+
   /// Read-only accessor for the layer bound to @p entity. Test-only -
   /// lets regression tests inspect `canvasFromBitmap` /
   /// `bitmapEntityFromWorldTransform` after a drag frame to verify the
