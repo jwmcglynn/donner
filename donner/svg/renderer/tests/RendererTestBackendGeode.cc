@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <cstdlib>
 #include <memory>
 #include <string_view>
@@ -123,6 +124,23 @@ public:
     if (kind != geode::GpuBackendKind::TransitionalWgpu) {
       FAIL() << "the resvg wgpu reference selected " << geode::GpuBackendKindName(kind)
              << " instead of the transitional wgpu backend";
+    }
+
+    size_t geodeCases = 0;
+    size_t tinyCases = 0;
+    const testing::UnitTest* tests = testing::UnitTest::GetInstance();
+    for (int suiteIndex = 0; suiteIndex < tests->total_test_suite_count(); ++suiteIndex) {
+      const testing::TestSuite* suite = tests->GetTestSuite(suiteIndex);
+      for (int caseIndex = 0; caseIndex < suite->total_test_count(); ++caseIndex) {
+        const std::string_view name = suite->GetTestInfo(caseIndex)->name();
+        geodeCases += name.ends_with("_GeodeGolden") ? 1u : 0u;
+        tinyCases += name.ends_with("_TinyGolden") ? 1u : 0u;
+      }
+    }
+    constexpr size_t kReviewedGeodeGoldenCases = 1636;
+    if (geodeCases != kReviewedGeodeGoldenCases || tinyCases != geodeCases) {
+      FAIL() << "resvg wgpu reference case census changed: GeodeGolden=" << geodeCases
+             << ", TinyGolden=" << tinyCases << ", reviewed=" << kReviewedGeodeGoldenCases;
     }
   }
 
