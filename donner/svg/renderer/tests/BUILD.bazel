@@ -964,8 +964,8 @@ donner_variant_cc_test(
         # reference) and a GeodeGolden param, interleaved. The TinyGolden
         # half is an exact duplicate of the default_text variant's param
         # set (verified by enumerating both binaries: the geode variant's
-        # 1636 *_TinyGolden params strip-suffix-equal the default_text
-        # variant's 1636 params, zero missing / zero extra), so the geode
+        # 1679 *_TinyGolden params strip-suffix-equal the default_text
+        # variant's 1679 params, zero missing / zero extra), so the geode
         # lane filters them out and runs only the GeodeGolden half. The CPU
         # comparisons still run on every `bazel test //...` via
         # resvg_test_suite_default_text.
@@ -995,6 +995,55 @@ donner_variant_cc_test(
     # (CI baseline, 2026-07-01) and sat on the test-step critical path. 8 shards
     # per variant turn that into parallel ~35 s RE actions.
     shard_count = 8,
+)
+
+# An explicit Linux-only comparison lane for the transitional wgpu-native implementation.
+# It compiles the same resvg registrations and image-comparison fixture as the native Geode
+# lane, then runs only GeodeGolden params. Keeping the wrapper manual avoids adding another
+# 16 GPU shards to unrelated PRs; renderer/shader/image qualification selects it explicitly.
+donner_cc_test(
+    name = "resvg_test_suite_wgpu_reference_linux_impl",
+    size = "large",
+    srcs = ["resvg_test_suite.cc"],
+    data = [
+        "//donner/svg/renderer/testdata",
+        "//third_party/resvg-test-suite:fonts",
+        "//third_party/resvg-test-suite:resources",
+        "//third_party/resvg-test-suite:tests",
+    ],
+    env = {
+        "DONNER_GPU_BACKEND": "wgpu",
+        "DONNER_REQUIRE_WGPU_REFERENCE": "1",
+        "DONNER_TEST_TIMEOUT_SECONDS": "300",
+        "WGPU_BACKEND": "vulkan",
+    },
+    shard_count = 16,
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"] + select({
+        "//donner/svg/renderer:resvg_test_suite_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":image_comparison_test_fixture",
+        "//donner/base:base_test_utils",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "resvg_test_suite_wgpu_reference_linux",
+    size = "enormous",
+    timeout = "long",
+    testonly = 1,
+    args = ["--gtest_filter=-*_TinyGolden"],
+    dep = ":resvg_test_suite_wgpu_reference_linux_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+    shard_count = 16,
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    text = "true",
+    text_full = "false",
 )
 
 donner_cc_fuzzer(

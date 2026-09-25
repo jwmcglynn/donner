@@ -1,9 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <cstddef>
+#include <cstdlib>
 #include <memory>
+#include <string_view>
 
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 
 namespace donner::svg {
@@ -107,6 +111,40 @@ void ResetSharedTestBackendState() {
 
 class GeodeBackendEnvironment : public ::testing::Environment {
 public:
+  void SetUp() override {
+    const char* required = std::getenv("DONNER_REQUIRE_WGPU_REFERENCE");
+    if (required == nullptr || std::string_view(required) != "1") {
+      return;
+    }
+    std::shared_ptr<geode::GeodeDevice> device = SharedTestDevice();
+    if (device == nullptr) {
+      FAIL() << "the resvg wgpu reference could not create its GPU device";
+    }
+    const geode::GpuBackendKind kind = device->physicalDeviceOwner()->root().capabilities().backend;
+    if (kind != geode::GpuBackendKind::TransitionalWgpu) {
+      FAIL() << "the resvg wgpu reference selected " << geode::GpuBackendKindName(kind)
+             << " instead of the transitional wgpu backend";
+    }
+
+    size_t geodeCases = 0;
+    size_t tinyCases = 0;
+    const testing::UnitTest* tests = testing::UnitTest::GetInstance();
+    for (int suiteIndex = 0; suiteIndex < tests->total_test_suite_count(); ++suiteIndex) {
+      const testing::TestSuite* suite = tests->GetTestSuite(suiteIndex);
+      for (int caseIndex = 0; caseIndex < suite->total_test_count(); ++caseIndex) {
+        const std::string_view name = suite->GetTestInfo(caseIndex)->name();
+        geodeCases += name.ends_with("_GeodeGolden") ? 1u : 0u;
+        tinyCases += name.ends_with("_TinyGolden") ? 1u : 0u;
+      }
+    }
+    // Registered cases include disabled cases; a corpus change needs explicit review.
+    constexpr size_t kReviewedGeodeGoldenCases = 1679;
+    if (geodeCases != kReviewedGeodeGoldenCases || tinyCases != geodeCases) {
+      FAIL() << "resvg wgpu reference case census changed: GeodeGolden=" << geodeCases
+             << ", TinyGolden=" << tinyCases << ", reviewed=" << kReviewedGeodeGoldenCases;
+    }
+  }
+
   void TearDown() override { ResetSharedTestBackendState(); }
 };
 

@@ -670,9 +670,12 @@ performance and final integrated gates remain open.
       wgpu-native backend by name and fails closed if another backend is selected. Run the same
       GeodeGolden case IDs and reviewed per-scene golden/pixelmatch rules as native Vulkan on
       Linux and native Metal on macOS, with the existing TinyGolden duplicate filtered out. Retain
-      no macOS wgpu reference lane after the platform cutovers. The current named-variant macro
-      changes build settings, arguments and shard counts, not the runtime backend; use a dedicated
-      Linux test-only wrapper or transition with a backend-selection assertion. Tag and route this
+      no macOS wgpu reference lane after the platform cutovers. The current corpus registers
+      1,679 cases per comparison mode, including disabled registrations; compare filtered
+      GeodeGolden IDs to the native Vulkan variant at the same tree and fail on missing or extra
+      cases. The current named-variant macro changes build settings, arguments and shard counts,
+      not the runtime backend. Use a dedicated Linux test-only wrapper or transition with a
+      backend-selection assertion. Tag and route this
       reference explicitly for renderer/shader/image PRs and cutover, rather than adding its 16
       shards to every unrelated PR's default suite.
 - [ ] Replace `wgsl_emitter_geode_validation_tests` outside the resvg oracle with non-Rust
