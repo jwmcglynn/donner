@@ -1929,9 +1929,9 @@ struct VulkanDevice::Impl {
 
   /// Borrowed objects a swapchain works through.
   VulkanSurfaceContext surfaceContext() const {
-    return VulkanSurfaceContext{api,         instance,        physicalDevice,
-                                device,      queue,           queueFamilyIndex,
-                                commandPool, surfaceLifetime, queueMutex};
+    return VulkanSurfaceContext{api,        instance,         physicalDevice, device,
+                                queue,      queueFamilyIndex, commandPool,    surfaceLifetime,
+                                queueMutex, rootLoss};
   }
 
   /// Waits taken from surfaces for one submission, and the surfaces they came from.

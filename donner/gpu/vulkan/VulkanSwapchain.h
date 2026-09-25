@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "donner/gpu/Descriptors.h"
+#include "donner/gpu/DeviceLost.h"
 #include "donner/gpu/GpuResult.h"
 #include "donner/gpu/vulkan/VulkanLoader.h"
 #include "donner/gpu/vulkan/VulkanResourceState.h"
@@ -51,6 +52,7 @@ struct VulkanSurfaceContext {
   VkCommandPool commandPool = VK_NULL_HANDLE;        //!< Pool the present barrier is recorded in.
   std::shared_ptr<VulkanSurfaceLifetime> lifetime;   //!< Shared owner-retention state.
   std::mutex* queueMutex = nullptr;  //!< Shared VkQueue call lock; null for fake test contexts.
+  std::shared_ptr<DeviceLostState> rootLoss;  //!< Shared loss condition of the owning root.
 };
 
 /// The stage an acquisition wait applies to, and therefore the earliest stage at which a frame

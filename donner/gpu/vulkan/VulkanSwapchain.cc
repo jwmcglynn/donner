@@ -400,6 +400,10 @@ Result<std::unique_ptr<VulkanSwapchain>> VulkanSwapchain::Create(
     return GpuError{GpuErrorType::InvalidState,
                     "createSurface: device surface lifetime state is unavailable"};
   }
+  if (!context.rootLoss) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "createSurface: device root loss state is unavailable"};
+  }
   const VulkanApi& api = *context.api;
   if (api.vkCreateSwapchainKHR == nullptr) {
     return GpuError{GpuErrorType::Unsupported,
@@ -857,6 +861,9 @@ Result<SurfaceStatus> VulkanSwapchain::acquire() {
     frameRingSlot_ = attempt.ringSlot;
     pendingAcquireWait_ = acquireSemaphores_[attempt.ringSlot];
     ++acquireCount_;
+    if (context_.rootLoss && DeclareDeviceLost(*context_.rootLoss)) {
+      LogDeclaredDeviceLoss("vkAcquireNextImageKHR reported device loss");
+    }
   }
 
   const std::optional<SurfaceStatus> status = RuntimeStatus(attempt.result);
@@ -1098,6 +1105,10 @@ Result<SurfaceStatus> VulkanSwapchain::present(const TextureSyncState& state) {
   }
   hasFrame_ = false;
   frameTextureSlot_.reset();
+  if (result == VK_ERROR_DEVICE_LOST && context_.rootLoss &&
+      DeclareDeviceLost(*context_.rootLoss)) {
+    LogDeclaredDeviceLoss("vkQueuePresentKHR reported device loss");
+  }
 
   if (IsDefinitePreEnqueueFailure(result)) {
     // The handover submission still owns the frame and its binary semaphore. Recreate only after
