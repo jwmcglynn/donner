@@ -4201,8 +4201,9 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
       const bool rendererBusy = EditorShellTestAccess::RendererBusy(shell);
       if (currentVersion <= minimumVersion || status.displayedDocVersion < currentVersion ||
           pendingTransform) {
-        heldDiagnostics << "\n  phase=" << phase << " wait=" << tick << " current="
-                        << currentVersion << " displayed=" << status.displayedDocVersion
+        heldDiagnostics << "\n  phase=" << phase << " wait=" << tick
+                        << " current=" << currentVersion
+                        << " displayed=" << status.displayedDocVersion
                         << " pendingTransform=" << pendingTransform
                         << " rendererBusy=" << rendererBusy;
         (void)shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline);
