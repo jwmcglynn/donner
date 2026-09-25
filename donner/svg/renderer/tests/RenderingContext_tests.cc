@@ -22,6 +22,7 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/resources/FontManager.h"
@@ -116,6 +117,32 @@ TEST_F(RenderingContextTest, InstantiateRenderTreeMultipleShapes) {
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, warningSink_);
+}
+
+TEST_F(RenderingContextTest, DefsUseBranchesExpandOnlyWhenReferencedByPresentedContent) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <rect id="shape" width="10" height="10" fill="red"/>
+        <use id="linked" href="#shape"/>
+        <use id="unused" href="#shape"/>
+      </defs>
+      <use href="#linked"/>
+    </svg>
+  )svg");
+
+  RenderingContext context(document.registry());
+  context.instantiateRenderTree(false, warningSink_);
+
+  const auto* budget = document.registry().ctx().find<ShadowTreeResourceBudget>();
+  ASSERT_THAT(budget, NotNull());
+  EXPECT_THAT(budget->instances(), Eq(1u))
+      << "Definition-only uses must not consume the presentation shadow budget";
+  EXPECT_THAT(budget->generatedEntities(), Eq(2u));
+  EXPECT_THAT(
+      findShadowInstance(document.registry(), document.querySelector("#shape")->entityHandle()),
+      NotNull())
+      << "The visible use must still instantiate the nested definition";
 }
 
 // --- Hit testing ---
