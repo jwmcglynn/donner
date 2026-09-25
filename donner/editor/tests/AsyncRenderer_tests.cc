@@ -6187,11 +6187,15 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
       << "Once the viewport has settled, the coordinator should request one crisp selected "
          "prewarm.";
   EXPECT_TRUE(waitForCoordinator());
+  const Vector2i visibleCanvas = viewport.rasterViewport().outputSizePx;
   const Vector2i paddedCanvas = viewport.selectedPrewarmRasterViewport().outputSizePx;
+  ASSERT_NE(visibleCanvas, paddedCanvas)
+      << "The test must exercise a selected prewarm larger than the visible raster";
   ASSERT_FALSE(textures.tiles().empty());
   for (const GlTextureCache::TileView& tile : textures.tiles()) {
-    EXPECT_EQ(tile.rasterCanvasSize, paddedCanvas)
-        << "Settled selected prewarm should use the overdraw-padded raster viewport.";
+    EXPECT_EQ(tile.rasterCanvasSize, visibleCanvas)
+        << "A selected zoom must keep the complete visible raster instead of rebuilding the "
+           "scene for a much larger padded prewarm.";
   }
 }
 
@@ -6301,9 +6305,69 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
   ASSERT_TRUE(waitForCoordinator());
-  EXPECT_FALSE(textures.tiles().empty());
+  const auto posted = RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
+  ASSERT_TRUE(posted.has_value());
+  const auto cached = coordinator.compositedPresentation().diagnostics();
+  const auto frameStats = coordinator.asyncRenderer().compositorRenderFrameStats();
+  EXPECT_EQ(frameStats.textureAllocationFailureCount, 0)
+      << "Oversized selected geometry should fall back before attempting a rejected tile";
+  EXPECT_FALSE(textures.tiles().empty())
+      << "selected bounded render must publish active tiles: metadata misses="
+      << textures.metadataOnlyMissCount() << " overview tiles=" << textures.overviewTiles().size()
+      << " active raster=" << viewport.rasterViewport().outputSizePx
+      << " selected prewarm=" << viewport.selectedPrewarmRasterViewport().outputSizePx
+      << " posted overview=" << posted->overviewInfillOnly
+      << " posted raster=" << posted->rasterViewport.outputSizePx
+      << " posted selected=" << static_cast<unsigned>(posted->selectedEntity)
+      << " cached entity=" << static_cast<unsigned>(cached.cachedEntity)
+      << " cached version=" << cached.cachedVersion
+      << " alloc failures=" << frameStats.textureAllocationFailureCount;
   EXPECT_FALSE(textures.overviewTiles().empty())
       << "Publishing the crisp bounded selected prewarm must preserve the overview fallback.";
+  for (int idleFrame = 0; idleFrame < 4; ++idleFrame) {
+    EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+        << "An unavailable selected tile must not launch the same prewarm on every idle frame "
+        << idleFrame;
+    EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
+  }
+}
+
+TEST(RenderCoordinatorTest, UnsupportedTextSelectionDoesNotRepeatIdlePrewarm) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+      <text id="label" x="10" y="40">SVG</text>
+    </svg>
+  )svg"));
+  const auto text = app.document().document().querySelector("#label");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.devicePixelRatio = 1.0;
+  viewport.resetTo100Percent();
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode-only owning-tile presentation regression";
+  }
+
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  ASSERT_TRUE(PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                        [&] { return !coordinator.asyncRenderer().isBusy(); }, deadline));
+  ASSERT_FALSE(textures.tiles().empty()) << "The selected text must remain visible in owning tiles";
+  EXPECT_TRUE(coordinator.compositedPresentation().diagnostics().cachedEntity == entt::null)
+      << "Text has no complete independently movable tile";
+  for (int idleFrame = 0; idleFrame < 4; ++idleFrame) {
+    EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+        << "An unsupported selected text tile must not keep the worker busy on idle frame "
+        << idleFrame;
+    EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
+  }
 }
 
 TEST(RenderCoordinatorTest, ViewportBoundedResultWithoutOverviewIsDiscarded) {

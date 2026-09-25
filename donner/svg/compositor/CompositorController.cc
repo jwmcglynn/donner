@@ -58,6 +58,28 @@ private:
   RendererInterface& renderer_;
 };
 
+bool InteractionRasterFitsBudget(const LayerRasterGeometry& geometry) {
+  const double pixelWidth = geometry.viewport.size.x * geometry.viewport.devicePixelRatio;
+  const double pixelHeight = geometry.viewport.size.y * geometry.viewport.devicePixelRatio;
+  return !geometry.interactionBoundsRejected && std::isfinite(pixelWidth) &&
+         std::isfinite(pixelHeight) && pixelWidth > 0.0 && pixelHeight > 0.0 &&
+         pixelWidth <= kMaximumInteractionTileSidePx &&
+         pixelHeight <= kMaximumInteractionTileSidePx &&
+         pixelWidth * pixelHeight <= static_cast<double>(kMaximumInteractionTilePixels);
+}
+
+bool FilterOutputCrossesCanvas(Registry& registry, Entity entity,
+                               const LayerRasterGeometry& geometry,
+                               const RenderViewport& viewport) {
+  const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+  if (instance == nullptr || !instance->resolvedFilter || !geometry.boundsCanvas.has_value()) {
+    return false;
+  }
+  const Box2d& bounds = *geometry.boundsCanvas;
+  return bounds.topLeft.x < 0.0 || bounds.topLeft.y < 0.0 ||
+         bounds.bottomRight.x > viewport.size.x || bounds.bottomRight.y > viewport.size.y;
+}
+
 bool HasAssignedDescendant(Registry& registry, Entity entity) {
   using TreeComponent = donner::components::TreeComponent;
   std::vector<Entity> stack;
@@ -342,16 +364,85 @@ CompositorController::validateFullInteractionBounds(Registry& registry, Entity e
   if (!hasLastViewport_ || !hasLastSurfaceFromCanvas_) {
     return std::nullopt;
   }
+  if (const auto reason =
+          interactionRefusalForViewport(registry, entity, lastViewport_, lastSurfaceFromCanvas_)) {
+    return refusePromotion(entity, *reason);
+  }
+  return std::nullopt;
+}
+
+std::optional<CompositorController::PromoteRefusalReason>
+CompositorController::interactionRefusalForViewport(Registry& registry, Entity entity,
+                                                    const RenderViewport& viewport,
+                                                    const Transform2d& surfaceFromCanvas) {
   const auto [firstEntity, lastEntity] = computeEntityRange(registry, entity);
   const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
-      renderer(), registry, firstEntity, lastEntity, lastViewport_, lastSurfaceFromCanvas_,
+      renderer(), registry, firstEntity, lastEntity, viewport, surfaceFromCanvas,
       /*retainFullInteractionBounds=*/true);
-  if (!geometry.interactionBoundsRejected) {
+  if (FilterOutputCrossesCanvas(registry, entity, geometry, viewport)) {
+    return PromoteRefusalReason::None;
+  }
+  if (InteractionRasterFitsBudget(geometry)) {
     return std::nullopt;
   }
-  return refusePromotion(entity, geometry.interactionBoundsUnavailable
-                                     ? PromoteRefusalReason::None
-                                     : PromoteRefusalReason::MemoryLimit);
+  return geometry.interactionBoundsUnavailable ? PromoteRefusalReason::None
+                                               : PromoteRefusalReason::MemoryLimit;
+}
+
+bool CompositorController::hasDirtyFilteredInteraction(
+    Registry& registry, const std::vector<Entity>& transformDirtyEntities) const {
+  for (const auto& [entity, hint] : activeHints_) {
+    if (std::ranges::find(transformDirtyEntities, entity) == transformDirtyEntities.end()) {
+      continue;
+    }
+    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+    if (instance != nullptr && instance->resolvedFilter.has_value()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void CompositorController::dropOversizedInteractionHintsForViewport(
+    Registry& registry, const RenderViewport& viewport, const Transform2d& surfaceFromCanvas,
+    bool firstViewport, bool surfaceChanged, bool viewportSizeChanged,
+    const std::vector<Entity>& transformDirtyEntities) {
+  if (!firstViewport && !surfaceChanged && !viewportSizeChanged &&
+      !hasDirtyFilteredInteraction(registry, transformDirtyEntities)) {
+    return;
+  }
+  std::vector<std::pair<Entity, PromoteRefusalReason>> refused;
+  for (const auto& [entity, hint] : activeHints_) {
+    const auto reason = registry.valid(entity) ? interactionRefusalForViewport(
+                                                     registry, entity, viewport, surfaceFromCanvas)
+                                               : std::optional{PromoteRefusalReason::InvalidEntity};
+    if (reason.has_value()) {
+      refused.emplace_back(entity, *reason);
+    }
+  }
+  if (refused.empty()) {
+    return;
+  }
+  for (const auto& [entity, reason] : refused) {
+    // The same entity may retain a mandatory filter/clip layer after its interaction hint is
+    // removed. Its selected full-object payload has a different raster clip than the owning
+    // layer, so repaint it in this frame before publishing the restored topology.
+    if (CompositorLayer* layer = findLayer(entity)) {
+      layer->markDirty();
+    }
+    activeHints_.erase(entity);
+    pendingDemotions_.erase(entity);
+    clearTransientInteractionOwner(entity);
+    failedExclusiveInteractionRoot_ = entity;
+    failedExclusiveCanvasSize_ = BitmapDimensionsForViewport(viewport);
+    failedExclusiveSurfaceFromCanvas_ = surfaceFromCanvas;
+    failedInteractionRefusalReason_ = reason;
+  }
+  resolveLayerAssignments(registry);
+  reconcileLayers(registry);
+  markAllSegmentsDirty();
+  splitStaticLayersEntity_ = entt::null;
+  splitStaticLayersViewport_ = Vector2i::Zero();
 }
 
 bool CompositorController::assignInteractionLayer(Registry& registry, Entity entity,
@@ -393,8 +484,10 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
   if (failedExclusiveInteractionRoot_ != entt::null) {
     const Vector2i currentCanvas =
         hasLastViewport_ ? BitmapDimensionsForViewport(lastViewport_) : Vector2i::Zero();
-    if (failedExclusiveInteractionRoot_ == entity && failedExclusiveCanvasSize_ == currentCanvas) {
-      return refusePromotion(entity, PromoteRefusalReason::MemoryLimit);
+    if (failedExclusiveInteractionRoot_ == entity && failedExclusiveCanvasSize_ == currentCanvas &&
+        hasLastSurfaceFromCanvas_ &&
+        SameTransformNear(failedExclusiveSurfaceFromCanvas_, lastSurfaceFromCanvas_)) {
+      return refusePromotion(entity, failedInteractionRefusalReason_);
     }
     failedExclusiveInteractionRoot_ = entt::null;
     failedExclusiveCanvasSize_ = Vector2i::Zero();
@@ -1024,6 +1117,18 @@ bool CompositorController::remapAncillaryInteractionEntities(
   return true;
 }
 
+void CompositorController::invalidateMovedMandatoryLayersAfterRemap() {
+  for (auto& layer : layers_) {
+    if (!activeHints_.contains(layer.entity()) && layer.hasRenderablePayload() &&
+        !layer.canvasFromBitmap().isIdentity()) {
+      // This layer was carried by a live gesture, even though its interaction hint may have
+      // been refused and its mandatory hint remains. Source writeback is the crisp-settle
+      // boundary: rerasterize just that moved owner under the new document and root clip.
+      layer.markDirty();
+    }
+  }
+}
+
 bool CompositorController::remapAfterStructuralReplace(
     const std::unordered_map<Entity, Entity>& remap) {
   Registry& registry = document().registry();
@@ -1125,6 +1230,8 @@ bool CompositorController::remapAfterStructuralReplace(
     reconcileLayers(registry);
     markAllSegmentsDirty();
   }
+
+  invalidateMovedMandatoryLayersAfterRemap();
 
   // The remap proves the tree shape survived, not that cached layer pixels
   // are still a pixel-exact final render. Drag writeback commonly changes
@@ -1466,6 +1573,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       hasLastSurfaceFromCanvas_ && !SameTransformNear(lastSurfaceFromCanvas_, surfaceFromCanvas);
   const bool viewportSizeChanged = hasLastViewport_ && BitmapDimensionsForViewport(lastViewport_) !=
                                                            BitmapDimensionsForViewport(viewport);
+  const bool firstViewport = !hasLastViewport_;
   if (surfaceChanged || viewportSizeChanged) {
     for (auto& layer : layers_) {
       layer.markDirty();
@@ -1948,6 +2056,13 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       markAllSegmentsDirty();
     }
   }
+
+  // Promotion used the preceding overview raster. Recheck complete selected-object geometry
+  // against this frame's zoom before allocating any tiles, and restore owning tiles now if it
+  // no longer fits. The old complete frame remains presentable until this frame is ready.
+  dropOversizedInteractionHintsForViewport(registry, viewport, surfaceFromCanvas, firstViewport,
+                                           surfaceChanged, viewportSizeChanged,
+                                           transformDirtyEntities);
 
   if (layers_.empty()) {
     ZoneScopedN("Compositor::emptyLayerSetAfterPrepare");
@@ -2637,6 +2752,8 @@ void CompositorController::recoverFailedExclusivePromotion() {
   failedExclusiveInteractionRoot_ = exclusiveInteractionRoot_;
   failedExclusiveCanvasSize_ =
       hasLastViewport_ ? BitmapDimensionsForViewport(lastViewport_) : Vector2i::Zero();
+  failedExclusiveSurfaceFromCanvas_ = lastSurfaceFromCanvas_;
+  failedInteractionRefusalReason_ = PromoteRefusalReason::MemoryLimit;
   activeHints_.erase(exclusiveInteractionRoot_);
   pendingDemotions_.erase(exclusiveInteractionRoot_);
   if (selectedBucketDescendant_ == exclusiveInteractionRoot_) {

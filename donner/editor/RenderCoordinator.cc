@@ -834,6 +834,7 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   lastPostedAttempt_.reset();
   selectedPrewarmFallback_.reset();
   selectedPrewarmRecoveryPending_ = false;
+  unavailableSelectedPromotion_.reset();
   nothingToPresentRetry_.reset();
   setDocumentPixelCaptureEnabled(false);
   lastFrameCostBreakdown_ = FrameCostBreakdown{};
@@ -932,6 +933,36 @@ void RenderCoordinator::noteSelectedPrewarmResultPresented(const RenderResult& r
       SameRasterViewport(result.rasterViewport, selectedPrewarmFallback_->visibleRaster)) {
     selectedPrewarmRecoveryPending_ = false;
   }
+}
+
+bool RenderCoordinator::shouldRequestSelectionOnlyPrewarm(
+    std::uint64_t documentGeneration, Entity selectedEntity, std::uint64_t version,
+    const EditorRasterViewport& visibleRaster) const {
+  return kSelectionOnlyPrewarmMayTriggerRender &&
+         (!unavailableSelectedPromotion_.has_value() ||
+          unavailableSelectedPromotion_->documentGeneration != documentGeneration ||
+          unavailableSelectedPromotion_->version != version ||
+          unavailableSelectedPromotion_->selectedEntity != selectedEntity ||
+          !SameRasterViewport(unavailableSelectedPromotion_->visibleRaster, visibleRaster));
+}
+
+void RenderCoordinator::noteSelectedPromotionAvailability(const RenderResult& result) {
+  const RenderResult::CompositedPreview& preview = *result.compositedPreview;
+  if (preview.entity != entt::null) {
+    unavailableSelectedPromotion_.reset();
+    return;
+  }
+  if (preview.interactionKind != svg::compositor::InteractionHint::Selection ||
+      !preview.representedDragPreview.has_value() ||
+      preview.representedDragPreview->entity == entt::null) {
+    return;
+  }
+  unavailableSelectedPromotion_ = UnavailableSelectedPromotion{
+      .documentGeneration = result.documentGeneration,
+      .version = result.version,
+      .selectedEntity = preview.representedDragPreview->entity,
+      .visibleRaster = result.viewport.rasterViewport(),
+  };
 }
 
 std::optional<float> RenderCoordinator::nextPixelCaptureCanvasCommitWakeSeconds() const {
@@ -1472,6 +1503,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   compositedPresentation_.noteCachedTextures(
       result.compositedPreview->entity, result.version, resultCanvasSize,
       DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview));
+  noteSelectedPromotionAvailability(result);
   if (CompositedPreviewClearsPendingSelectedLayerRasterization(
           *result.compositedPreview, pendingSelectedLayerRasterizationEntity_, result.version,
           pendingSelectedLayerRasterizationVersion_)) {
@@ -1638,7 +1670,8 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
               kDragTranslationRecaptureScreenPx /
               std::max(std::abs(viewport.pixelsPerDocUnit()), 1e-9),
           .requiresRenderedActiveDragPresentation = renderDragFallback,
-          .selectionOnlyPrewarmMayTriggerRender = kSelectionOnlyPrewarmMayTriggerRender,
+          .selectionOnlyPrewarmMayTriggerRender = shouldRequestSelectionOnlyPrewarm(
+              app.document().documentGeneration(), prewarmEntity, currentVersion, rasterViewport),
       });
   if (!schedule.shouldRequestRender()) {
     return false;

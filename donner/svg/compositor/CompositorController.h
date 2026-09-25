@@ -1275,9 +1275,20 @@ private:
   std::optional<PromoteResult> validateExclusiveParent(Registry& registry, Entity entity,
                                                        bool* needsExclusiveLayer);
   std::optional<PromoteResult> validateFullInteractionBounds(Registry& registry, Entity entity);
+  std::optional<PromoteRefusalReason> interactionRefusalForViewport(
+      Registry& registry, Entity entity, const RenderViewport& viewport,
+      const Transform2d& surfaceFromCanvas);
+  bool hasDirtyFilteredInteraction(Registry& registry,
+                                   const std::vector<Entity>& transformDirtyEntities) const;
+  void dropOversizedInteractionHintsForViewport(Registry& registry, const RenderViewport& viewport,
+                                                const Transform2d& surfaceFromCanvas,
+                                                bool firstViewport, bool surfaceChanged,
+                                                bool viewportSizeChanged,
+                                                const std::vector<Entity>& transformDirtyEntities);
   bool assignInteractionLayer(Registry& registry, Entity entity, InteractionHint interactionKind,
                               bool needsExclusiveLayer, bool suspendBucketAncestors);
   bool remapAncillaryInteractionEntities(const std::unordered_map<Entity, Entity>& remap);
+  void invalidateMovedMandatoryLayersAfterRemap();
   /// Roll back a failed exclusive promotion before a partial tile set can be published.
   void recoverFailedExclusivePromotion();
 
@@ -1351,6 +1362,8 @@ private:
   Entity selectedBucketDescendant_ = entt::null;
   Entity failedExclusiveInteractionRoot_ = entt::null;
   Vector2i failedExclusiveCanvasSize_ = Vector2i::Zero();
+  Transform2d failedExclusiveSurfaceFromCanvas_;
+  PromoteRefusalReason failedInteractionRefusalReason_ = PromoteRefusalReason::MemoryLimit;
   std::vector<CompositorLayer> layers_;
 
   /// Layer-set hysteresis. Entity → frames

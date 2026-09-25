@@ -15,6 +15,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"
+#include "donner/svg/compositor/CompositorControllerInternal.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -814,6 +815,138 @@ TEST(CompositorGeodeSplashTest, SelectionBudgetRefusalDoesNotMakePartialTilesPre
   EXPECT_FALSE(compositor.hasCompleteTileSetForPresentation());
   EXPECT_FALSE(previouslyPresentedTiles.empty())
       << "the last complete frame must remain available while selected tiles cannot be allocated";
+}
+
+TEST(CompositorGeodeSplashTest, ZoomedSelectionFallsBackToCompleteOwningTiles) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source.contents, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(1536, 1024);
+  RendererGeode renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  RenderViewport viewport;
+  viewport.size = Vector2d(1536, 1024);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+  ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation());
+
+  const auto letter = document.querySelector("#letter-G");
+  ASSERT_TRUE(letter.has_value());
+  const Entity entity = letter->unsafeEntityHandle().entity();
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::Selection));
+
+  // Promotion used the overview geometry. The same raster dimensions at a new zoom can make the
+  // full-object tile too large even though all owning/static tiles remain viewport bounded.
+  const Transform2d zoom = Transform2d::Scale(40.0);
+  const CompositorLayer* selectedLayer = compositor.findLayerForTest(entity);
+  ASSERT_NE(selectedLayer, nullptr);
+  const LayerRasterGeometry selectedAtZoom = ComputeLayerRasterGeometry(
+      renderer, document.registry(), selectedLayer->firstEntity(), selectedLayer->lastEntity(),
+      viewport, zoom, /*retainFullInteractionBounds=*/true);
+  ASSERT_TRUE(selectedAtZoom.interactionBoundsRejected);
+  compositor.renderFrame(viewport, zoom);
+  EXPECT_FALSE(compositor.isPromoted(entity));
+  EXPECT_TRUE(compositor.hasCompleteTileSetForPresentation());
+  EXPECT_EQ(compositor.lastRenderFrameStats().textureAllocationFailureCount, 0);
+  EXPECT_EQ(compositor.promoteEntity(entity, InteractionHint::Selection),
+            CompositorController::PromoteResult::MemoryLimit);
+
+  // A return to the overview can promote again, even though the raster dimensions are unchanged.
+  compositor.renderFrame(viewport);
+  EXPECT_TRUE(compositor.hasCompleteTileSetForPresentation());
+  EXPECT_TRUE(compositor.promoteEntity(entity, InteractionHint::Selection));
+}
+
+TEST(CompositorGeodeSplashTest, FilteredDragCrossingArtboardReturnsToOwningTile) {
+  constexpr std::string_view source = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="264" height="100">
+  <defs><filter id="blur"><feGaussianBlur stdDeviation="4"/></filter></defs>
+  <g id="glow" filter="url(#blur)">
+    <circle cx="150" cy="50" r="20" fill="yellow"/>
+  </g>
+</svg>)svg";
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(264, 100);
+  RendererGeode renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  RenderViewport viewport;
+  viewport.size = Vector2d(264, 100);
+  compositor.renderFrame(viewport);
+
+  const auto glow = document.querySelector("#glow");
+  ASSERT_TRUE(glow.has_value());
+  const Entity entity = glow->unsafeEntityHandle().entity();
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::Selection));
+  compositor.renderFrame(viewport);
+  ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation());
+  const RendererBitmap beforeDrag = renderer.takeSnapshot();
+  ASSERT_FALSE(beforeDrag.empty());
+
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+  glow->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(100.0, 0.0));
+  compositor.renderFrame(viewport);
+  EXPECT_FALSE(compositor.isPromoted(entity));
+  EXPECT_NE(compositor.findLayerForTest(entity), nullptr)
+      << "the mandatory filtered owner must replace the full-object interaction tile";
+  EXPECT_TRUE(compositor.hasCompleteTileSetForPresentation());
+  EXPECT_EQ(compositor.lastRenderFrameStats().textureAllocationFailureCount, 0);
+
+  // Compare the held frame against a fresh compositor in the same Geode mode. A nonempty but
+  // stale mandatory owner would satisfy the topology checks above while showing old pixels.
+  auto referenceParsed = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_FALSE(referenceParsed.hasError());
+  SVGDocument referenceDocument = std::move(referenceParsed.result());
+  referenceDocument.setCanvasSize(264, 100);
+  const auto referenceGlow = referenceDocument.querySelector("#glow");
+  ASSERT_TRUE(referenceGlow.has_value());
+  referenceGlow->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(100.0, 0.0));
+  RendererGeode referenceRenderer;
+  CompositorController referenceCompositor(referenceDocument, referenceRenderer, config);
+  referenceCompositor.renderFrame(viewport);
+  // The first frame is a flat cold draw; advance to the cached-tile composition mode used by
+  // the held compositor frame before comparing their final pixels.
+  referenceCompositor.renderFrame(viewport);
+  ASSERT_TRUE(referenceCompositor.hasCompleteTileSetForPresentation());
+  const RendererBitmap heldFrame = renderer.takeSnapshot();
+  const RendererBitmap freshFrame = referenceRenderer.takeSnapshot();
+  ASSERT_FALSE(heldFrame.empty());
+  ASSERT_FALSE(freshFrame.empty());
+  int movedPixels = 0;
+  editor::tests::CompareBitmapToBitmap(heldFrame, beforeDrag, "filtered_glow_held_move_signal",
+                                       editor::tests::BitmapGoldenCompareParams{
+                                           .threshold = 0.0f,
+                                           .maxMismatchedPixels = std::numeric_limits<int>::max(),
+                                           .includeAntiAliasing = true,
+                                       },
+                                       &movedPixels);
+  EXPECT_GT(movedPixels, 100);
+  editor::tests::CompareBitmapToBitmap(heldFrame, freshFrame, "filtered_glow_held_vs_fresh",
+                                       editor::tests::PixelmatchIdentityParams());
+
+  const CompositorLayer* heldOwner = compositor.findLayerForTest(entity);
+  const CompositorLayer* freshOwner =
+      referenceCompositor.findLayerForTest(referenceGlow->unsafeEntityHandle().entity());
+  ASSERT_NE(heldOwner, nullptr);
+  ASSERT_NE(freshOwner, nullptr);
+  ASSERT_NE(heldOwner->textureSnapshot(), nullptr);
+  ASSERT_NE(freshOwner->textureSnapshot(), nullptr);
+  EXPECT_EQ(heldOwner->canvasOffset(), freshOwner->canvasOffset());
+  editor::tests::CompareBitmapToBitmap(
+      heldOwner->textureSnapshot()->takeSnapshot(), freshOwner->textureSnapshot()->takeSnapshot(),
+      "filtered_glow_held_owner_vs_fresh", editor::tests::PixelmatchIdentityParams());
+  EXPECT_EQ(compositor.promoteEntity(entity, InteractionHint::ActiveDrag),
+            CompositorController::PromoteResult::OwningTilesRequired);
 }
 
 }  // namespace

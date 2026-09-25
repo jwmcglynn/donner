@@ -495,6 +495,10 @@ private:
   void noteSelectedPrewarmResultPresented(const RenderResult& result);
   bool selectedPrewarmFallbackApplies(std::uint64_t documentGeneration, Entity selectedEntity,
                                       const EditorRasterViewport& visibleRaster);
+  [[nodiscard]] bool shouldRequestSelectionOnlyPrewarm(
+      std::uint64_t documentGeneration, Entity selectedEntity, std::uint64_t version,
+      const EditorRasterViewport& visibleRaster) const;
+  void noteSelectedPromotionAvailability(const RenderResult& result);
   [[nodiscard]] std::chrono::steady_clock::time_point nothingToPresentRetryNow() const;
   void acceptPixelCaptureResult(RenderResult& result, const EditorApp& app,
                                 const ViewportState& viewport);
@@ -649,6 +653,15 @@ private:
   /// this selection until its document or viewport identity changes.
   std::optional<SelectedPrewarmFallback> selectedPrewarmFallback_;
   bool selectedPrewarmRecoveryPending_ = false;
+  struct UnavailableSelectedPromotion {
+    std::uint64_t documentGeneration = 0;
+    std::uint64_t version = 0;
+    Entity selectedEntity = entt::null;
+    EditorRasterViewport visibleRaster;
+  };
+  /// A complete owning-tile result for a selection whose interaction tile was refused. Avoid
+  /// posting the identical selection-only prewarm every idle frame; retry on any identity change.
+  std::optional<UnavailableSelectedPromotion> unavailableSelectedPromotion_;
   /// Paces re-posting a request whose result had nothing to present.
   NothingToPresentRetry nothingToPresentRetry_;
   /// Cumulative count of worker results that had nothing to present.

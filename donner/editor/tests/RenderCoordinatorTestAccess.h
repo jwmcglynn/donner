@@ -82,6 +82,11 @@ struct RenderCoordinatorTestAccess {
                : std::nullopt;
   }
 
+  static std::optional<RenderAttemptIdentity> lastPostedAttempt(
+      const RenderCoordinator& coordinator) {
+    return coordinator.lastPostedAttempt_;
+  }
+
   static void noteRenderCompleted(RenderCoordinator& coordinator, std::uint64_t version,
                                   const EditorRasterViewport& rasterViewport) {
     coordinator.renderScheduler_.noteRenderCompleted(version, rasterViewport.outputSizePx,
