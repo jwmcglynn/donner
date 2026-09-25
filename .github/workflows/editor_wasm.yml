@@ -78,6 +78,8 @@ jobs:
         run: |
           bazelisk test --test_output=errors \
             //tools/ci:editor_wasm_audits
+          bazelisk test --config=editor-wasm --test_output=errors \
+            //tools/ci:editor_wasm_shipped_browser_audit
           bazelisk test --config=wasm-size --test_output=errors \
             //tools/ci:wasm_size_tests
           # Temporary payload measurement while the package still links the transitional

@@ -209,6 +209,7 @@ playwright_bin.playwright_test(
     env = {
         "CI": "1",
         "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
+        "DONNER_WASM_EXPECTED_HEADLESS_BACKEND": "browser",
         "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
         "NODE_OPTIONS": "",
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
@@ -219,11 +220,9 @@ playwright_bin.playwright_test(
     ],
 )
 
-# The same Chromium gates against the package that selects the browser backend for headless work,
-# so the raster worker, its offscreen targets and the snapshot capture contexts beside it render
-# through the Donner GPU runtime's browser backend while the window stays on the transitional
-# adapter. The boot lane also runs the check that the worker selected that backend, so a package
-# that quietly stayed on the adapter cannot pass these as if it had not.
+# Retained opt-in Chromium gates against the separately transitioned package. Both package routes
+# now select Browser for the editor canvas and raster worker. The boot lanes check selection, so
+# neither package can silently fall back to the transitional adapter.
 playwright_bin.playwright_test(
     name = "chromium_remote_smoke_browser_backend",
     size = "large",

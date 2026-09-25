@@ -54,8 +54,15 @@ test_suite(
     tags = ["manual"],
     tests = [
         "//donner/editor/wasm:editor_wasm_transition_tests",
+        "//donner/editor/wasm:wasm_dependency_audit_test",
         "//donner/svg/renderer:geode_excludes_tiny_skia_audit",
     ],
+)
+
+test_suite(
+    name = "editor_wasm_shipped_browser_audit",
+    tags = ["manual"],
+    tests = ["//donner/editor/wasm:wasm_shipped_browser_dependency_audit_test"],
 )
 
 test_suite(

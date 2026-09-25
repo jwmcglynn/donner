@@ -14,6 +14,7 @@ cxxopt_constexpr=True
 disable_perf_opt_transition=True
 editor_wasm_enabled=True
 geode_enabled=True
+browser_backend=True
 linkopt_pthread=True
 linkopt_oz=True
 renderer_backend=geode

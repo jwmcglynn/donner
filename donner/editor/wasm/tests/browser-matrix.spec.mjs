@@ -251,13 +251,12 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   for (const lane of lanes) {
     assertBrowserLane(lane);
   }
-  // A browser-backend lane serves only the package that selects that backend, and the production
-  // package serves every other lane, so neither can stand in for the other. One of them also runs
-  // the check that the worker selected the browser backend at all.
+  // Keep the old opt-in lanes separate while the production package flips to the browser backend.
+  // Both package routes now have to prove the selected backend in their boot lanes.
   const browserBackendPackage = "//donner/editor/wasm:_wasm_web_package_browser_backend_for_serve";
   for (const lane of lanes) {
     const laneName = /name = "([^"]+)"/.exec(lane)?.[1];
-    const browserBackendLane = /browser_backend/.test(laneName);
+    const optInLane = /browser_backend/.test(laneName);
     if (laneName === "standalone_geode_browser_renderer_test") {
       assert.ok(
         lane.includes("\"//donner/svg/renderer/wasm:_geode_browser_test_package_for_playwright\""),
@@ -285,21 +284,20 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     }
     assert.equal(
       lane.includes(`"${browserBackendPackage}"`),
-      browserBackendLane,
-      `${laneName} must serve the browser-backend package exactly when it is a browser-backend lane`,
+      optInLane,
+      `${laneName} must serve the opt-in package exactly when it is an opt-in lane`,
     );
-    if (browserBackendLane) {
+    if (optInLane) {
       assert.ok(
         !lane.includes(`"//donner/editor/wasm:_wasm_web_package_for_serve"`),
         `${laneName} must not serve the production package`,
       );
     }
-    // The selection check reads which backend to expect from its lane, so only a lane serving the
-    // browser-backend package may expect that one, and every other lane checks it was not chosen.
+    // Both boot lanes now select the browser backend; the other specs do not read this variable.
     assert.equal(
       lane.includes(`"DONNER_WASM_EXPECTED_HEADLESS_BACKEND": "browser"`),
-      browserBackendLane && lane.includes("$(rootpath :browser-backend-selection.spec.ts)"),
-      `${laneName} must expect the browser backend exactly when it checks the browser-backend package`,
+      lane.includes("$(rootpath :browser-backend-selection.spec.ts)"),
+      `${laneName} must expect the browser backend exactly when it checks package selection`,
     );
   }
   for (const laneName of ["boot_presentation_test", "boot_presentation_browser_backend_test"]) {
@@ -318,8 +316,8 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   const editorBuildFile = readFileSync(path.join(testDirectory, "..", "BUILD.bazel"), "utf8");
   assert.match(
     editorBuildFile,
-    /editor_wasm_geode_transitioned_target\([\s\S]*?name = "_wasm_web_package_for_serve"[\s\S]*?visibility = \["\/\/donner\/editor\/wasm\/tests:__pkg__"\]/,
-    "only the browser-test package should be able to consume the transitioned web package",
+    /editor_wasm_geode_transitioned_target\([\s\S]*?name = "_wasm_web_package_for_serve"[\s\S]*?browser_backend = True[\s\S]*?visibility = \["\/\/donner\/editor\/wasm\/tests:__pkg__"\]/,
+    "the served production package must select the browser backend",
   );
   assert.match(
     buildFile,

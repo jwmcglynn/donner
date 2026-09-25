@@ -193,6 +193,7 @@ build:wasm-size --linkopt=-sFILESYSTEM=0
 # presentation and performance work target Geode. Usage:
 #   bazel build --config=editor-wasm //donner/editor/wasm:wasm
 common:editor-wasm --config=wasm-geode
+common:editor-wasm --//donner/svg/renderer/geode:browser_backend=true
 common:editor-wasm --//donner/editor/wasm:enable_wasm=true
 common:editor-wasm --//donner/svg/renderer:text=true
 common:editor-wasm --//donner/svg/renderer:text_full=true
