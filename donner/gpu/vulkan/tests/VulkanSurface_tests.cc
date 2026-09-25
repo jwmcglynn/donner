@@ -1351,6 +1351,50 @@ TEST(VulkanPresentationCreationTest, PresentDeviceLossDeclaresSharedRootBeforeSt
   gTeardownRecorder = nullptr;
 }
 
+TEST(VulkanPresentationCreationTest, HandoverSubmitLossDeclaresSharedRootBeforePresentReturns) {
+  TeardownRecorder recorder;
+  recorder.submissionResult = VK_ERROR_DEVICE_LOST;
+  recorder.fenceResults = {VK_ERROR_DEVICE_LOST};
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  const auto rootLoss = std::make_shared<DeviceLostState>();
+  auto owner = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3, nullptr, nullptr, rootLoss);
+  auto sibling = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3, nullptr, nullptr, rootLoss);
+  auto surface = VulkanSwapchainTestAccess::MakePresentableSurface(&api, owner.get());
+
+  EXPECT_THAT(VulkanSwapchainTestAccess::Present(*surface), IsGpuError(GpuErrorType::InvalidState));
+  EXPECT_EQ(VulkanSwapchainTestAccess::PendingCount(*surface), 1u);
+  EXPECT_TRUE(owner->isLost());
+  EXPECT_TRUE(sibling->isLost());
+  EXPECT_EQ(rootLoss->timedOutSite.load(), DeviceLostWaitSite::None);
+
+  surface.reset();
+  owner.reset();
+  sibling.reset();
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, PresentFenceLossDeclaresSharedRootBeforeProofReturns) {
+  TeardownRecorder recorder;
+  recorder.fenceResults = {VK_ERROR_DEVICE_LOST, VK_SUCCESS};
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  const auto rootLoss = std::make_shared<DeviceLostState>();
+  auto owner = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3, nullptr, nullptr, rootLoss);
+  auto sibling = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3, nullptr, nullptr, rootLoss);
+  auto surface = VulkanSwapchainTestAccess::MakeSurface(&api, owner.get());
+
+  EXPECT_THAT(surface->prepareForDestruction(), IsOk());
+  EXPECT_TRUE(owner->isLost());
+  EXPECT_TRUE(sibling->isLost());
+  EXPECT_EQ(rootLoss->timedOutSite.load(), DeviceLostWaitSite::None);
+
+  surface.reset();
+  owner.reset();
+  sibling.reset();
+  gTeardownRecorder = nullptr;
+}
+
 TEST(VulkanPresentationCreationTest, OwnerAcceptsDeviceLossFromEveryCompletionWait) {
   TeardownRecorder recorder;
   recorder.fenceResults = {VK_ERROR_DEVICE_LOST, VK_ERROR_DEVICE_LOST, VK_ERROR_DEVICE_LOST,
