@@ -1920,10 +1920,8 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 
   geode::GpuRootSelection selection;
   selection.label = "DonnerEditorWGPUDevice";
-  // The editor is served by whatever backend the system can drive, which is the choice it has
-  // always left to the driver on both its window and offscreen paths. Narrowing it to a platform
-  // preference would leave a host whose preferred backend is unusable with no adapter at all,
-  // where it previously fell back and ran.
+  // A transitional WebGPU root lets the driver choose a usable API for its window or offscreen
+  // target. Native roots use their platform selection independently of this adapter preference.
   selection.usePlatformDefaultBackend = false;
   const bool browserRuntimeSelected = BrowserRuntimeSelectedForEditor(selection);
   if (NeedsWgpuSelectionSurface(useOffscreenWgpuTarget, browserRuntimeSelected)) {
@@ -1936,7 +1934,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   if (root == nullptr) {
     std::fprintf(stderr, surfaceAttachFailed
                              ? "EditorWindow: failed to create the window's presentation surface\n"
-                             : "EditorWindow: no usable WebGPU device available\n");
+                             : "EditorWindow: no usable GPU device available\n");
     wgpuState_->presentation.reset();
     glfwDestroyWindow(window_);
     window_ = nullptr;
