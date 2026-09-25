@@ -1572,6 +1572,19 @@ TEST_F(VulkanSurfaceTest, PresentsAFrameNothingDrewInto) {
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
+TEST_F(VulkanSurfaceTest, RefusesToExportAnAcquiredFrameTheSwapchainMayRecycle) {
+  const Surface surface = configuredSurface();
+  SurfaceTexture frame = unwrap(device_->acquireCurrentTexture(surface), "acquireCurrentTexture");
+  ASSERT_THAT(frame.texture.isValid(), testing::IsTrue());
+
+  EXPECT_THAT(device_->exportTexture(frame.texture),
+              IsGpuErrorWithMessage(GpuErrorType::Unsupported, HasSubstr("surface frame")))
+      << "a sibling cannot retain the swapchain's borrowed image after presentation";
+
+  EXPECT_THAT(device_->abandonCurrentTexture(surface), IsOk());
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+}
+
 TEST_F(VulkanSurfaceTest, KeepsItsAcquisitionRingStraightAcrossAnOutOfDateRebuild) {
   const Surface surface = configuredSurface();
 

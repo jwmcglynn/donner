@@ -32,6 +32,9 @@ public:
   /// Largest 2D texture dimension reported by this root's physical device.
   uint32_t maxTextureDimension2D() const;
 
+  /// True while another thread holds the root's encode-through-submit lock. Test accessor.
+  [[nodiscard]] bool executionLockedForTest() const;
+
 private:
   friend class VulkanDevice;
   struct Impl;
@@ -167,6 +170,11 @@ public:
   /// @param lostState Shared loss condition, or null for a private new condition.
   /// @return Root with one instance, logical device and queue, or null on selection failure.
   static std::shared_ptr<VulkanSharedRoot> CreateSharedRoot(
+      std::shared_ptr<DeviceLostState> lostState = nullptr);
+
+  /// Opens a shared root with timeline-semaphore support solely for native queue-gate tests.
+  /// Returns null when the test extension or physical-device feature is unavailable.
+  static std::shared_ptr<VulkanSharedRoot> CreateSharedRootWithTimelineSemaphoreForTest(
       std::shared_ptr<DeviceLostState> lostState = nullptr);
 
   /// Opens a runtime device with independent resources and serials over \p root.
@@ -398,6 +406,10 @@ public:
   /// @param deviceLost Whether to inject terminal device loss instead of recoverable host OOM.
   void failNextSubmissionForTest(bool deviceLost = false);
 
+  /// Calls p hook after encoding and before queue submission while the root execution lock is
+  /// held. Test-only, one-shot; a hook must not submit another device's work synchronously.
+  void setBeforeQueueSubmitHookForTest(std::function<void()> hook);
+
   /// Calls \p hook each time a step of a fence wait times out, in a serial wait or a texture
   /// upload, before the wait checks the root's loss condition, so a test can declare a loss while
   /// a wait is known to be blocked. Test accessor; an empty function removes the hook.
@@ -438,6 +450,10 @@ public:
 protected:
   Status onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) override;
   Status onCreateTexture(uint32_t slotIndex, const TextureDescriptor& descriptor) override;
+  [[nodiscard]] bool onOwnsTextureBacking(uint32_t slotIndex) const override;
+  [[nodiscard]] BackendDeviceIdentity backendDeviceIdentity() const override;
+  Result<BackendTextureExport> onExportTexture(uint32_t slotIndex) override;
+  Status onRegisterTexture(uint32_t slotIndex, const ExportedTextureBacking& backing) override;
   Status onCreateTextureView(uint32_t slotIndex, uint32_t textureSlotIndex,
                              const TextureViewDescriptor& descriptor) override;
   Status onCreateSampler(uint32_t slotIndex, const SamplerDescriptor& descriptor) override;

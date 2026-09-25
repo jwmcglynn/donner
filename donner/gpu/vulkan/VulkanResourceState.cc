@@ -3,6 +3,10 @@
 
 #include "donner/gpu/vulkan/VulkanResourceState.h"
 
+#include <memory>
+#include <mutex>
+#include <utility>
+
 namespace donner::gpu::vulkan {
 
 namespace {
@@ -144,23 +148,56 @@ ImageBarrierParams TransitionFor(const TextureSyncState& current, TextureUsageKi
   return params;
 }
 
+struct TextureSyncStateTable::SharedState {
+  explicit SharedState(const TextureSyncState& initial) : committed(initial) {}
+
+  std::mutex mutex;
+  TextureSyncState committed;
+};
+
 TextureSyncState TextureSyncStateTable::stateOf(uint32_t textureSlot) const {
-  if (const auto staged = staged_.find(textureSlot); staged != staged_.end()) {
+  const auto slot = committed_.find(textureSlot);
+  if (slot == committed_.end()) {
+    return TextureSyncState{};
+  }
+  if (const auto staged = staged_.find(slot->second); staged != staged_.end()) {
     return staged->second;
   }
-  if (const auto committed = committed_.find(textureSlot); committed != committed_.end()) {
-    return committed->second;
+  return committedStateOf(textureSlot);
+}
+
+TextureSyncStateTable::SharedStateHandle TextureSyncStateTable::share(uint32_t textureSlot) {
+  if (const auto found = committed_.find(textureSlot); found != committed_.end()) {
+    return found->second;
   }
-  return TextureSyncState{};
+  const SharedStateHandle state = std::make_shared<SharedState>(TextureSyncState{});
+  committed_.emplace(textureSlot, state);
+  aliasCounts_.emplace(state, 1);
+  return state;
+}
+
+bool TextureSyncStateTable::alias(uint32_t textureSlot, SharedStateHandle state) {
+  if (state == nullptr) {
+    return false;
+  }
+  if (const auto slot = committed_.find(textureSlot);
+      slot != committed_.end() && slot->second == state) {
+    return true;
+  }
+  forget(textureSlot);
+  ++aliasCounts_[state];
+  committed_[textureSlot] = std::move(state);
+  return true;
 }
 
 void TextureSyncStateTable::stage(uint32_t textureSlot, const TextureSyncState& state) {
-  staged_[textureSlot] = state;
+  staged_[share(textureSlot)] = state;
 }
 
 void TextureSyncStateTable::commitStaged() {
-  for (const auto& [textureSlot, state] : staged_) {
-    committed_[textureSlot] = state;
+  for (const auto& [shared, state] : staged_) {
+    const std::lock_guard lock(shared->mutex);
+    shared->committed = state;
   }
   staged_.clear();
 }
@@ -170,18 +207,33 @@ void TextureSyncStateTable::discardStaged() {
 }
 
 void TextureSyncStateTable::forget(uint32_t textureSlot) {
-  committed_.erase(textureSlot);
-  staged_.erase(textureSlot);
+  const auto slot = committed_.find(textureSlot);
+  if (slot == committed_.end()) {
+    return;
+  }
+  const SharedStateHandle old = slot->second;
+  committed_.erase(slot);
+  const auto count = aliasCounts_.find(old);
+  if (--count->second == 0) {
+    aliasCounts_.erase(count);
+    staged_.erase(old);
+  }
 }
 
 TextureSyncState TextureSyncStateTable::committedStateOf(uint32_t textureSlot) const {
   const auto it = committed_.find(textureSlot);
-  return it == committed_.end() ? TextureSyncState{} : it->second;
+  if (it == committed_.end()) {
+    return TextureSyncState{};
+  }
+  const std::lock_guard lock(it->second->mutex);
+  return it->second->committed;
 }
 
 void TextureSyncStateTable::reset(uint32_t textureSlot, const TextureSyncState& state) {
-  staged_.erase(textureSlot);
-  committed_[textureSlot] = state;
+  forget(textureSlot);
+  const SharedStateHandle fresh = std::make_shared<SharedState>(state);
+  committed_[textureSlot] = fresh;
+  aliasCounts_.emplace(fresh, 1);
 }
 
 bool TextureSyncStateTable::hasStagedChanges() const {

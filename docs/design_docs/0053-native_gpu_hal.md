@@ -2,13 +2,14 @@
 
 **Status:** Implementing. The shader compiler, native drawing and mapping, Metal and Vulkan
 surfaces, browser backend, runtime UI renderer, native shader linkage, filter command recording,
-checkerboard targeting, texture-cache uploads, compositor-debug uploads and shared physical-root
+checkerboard targeting, texture-cache uploads, compositor-debug uploads and Metal shared-root
 ownership are merged and qualified. Root selection now takes a backend kind and can serve the
 native Metal backend on request; the transitional adapter stays the production path on every
 platform until that platform's suites pass natively (see [Native parity](#native-parity)).
-Cross-device texture registration is implemented on Metal, the browser backend and the
-transitional adapter. Native backend conformance, presentation cutover, the per-platform default
-flips, and dependency removal remain open.\
+Cross-device texture registration works on Metal, the browser backend, the transitional adapter
+and Vulkan-owned images. Vulkan acquired swapchain frames still refuse export. Native backend
+conformance, presentation cutover, the per-platform default flips, and dependency removal remain
+open.\
 **Created:** 2026-07-05\
 **Updated:** 2026-09-24\
 **Author:** Claude Fable 5.1\
@@ -102,9 +103,12 @@ the native backend, and a separate change then flips that platform's default. Un
   observer; the adapter accessor resolves only on the adapter.
 - On Linux, a native Vulkan root reports its physical device's own limits without opening a
   second device for the query. Runtime devices over one selected root share its instance, logical
-  device, graphics queue and loss condition, while each keeps its own handles and serials.
-  Vulkan does not register textures across runtime devices yet, so snapshot capture and
-  cross-context snapshot drawing still fail on it
+  device, graphics queue and loss condition, while each keeps its own handles and serials. Owned
+  images can be registered on a sibling device, and capture-context snapshot readback returns
+  their pixels, as checked by `//donner/gpu/vulkan/tests:vulkan_texture_registration_tests` and
+  `//donner/svg/renderer/geode:geode_snapshot_readback_vulkan_tests`. An acquired swapchain frame still
+  refuses export because the swapchain can recycle its borrowed image at presentation, as checked
+  by `//donner/gpu/vulkan/tests:vulkan_surface_tests`
   ([#1407](https://github.com/jwmcglynn/donner/issues/1407)).
 - The Geode, renderer and GPU-shader fixtures run on whichever backend the process selects. Cases
   whose subject is the adapter, or wgpu objects an embedder hands over, select the adapter by
@@ -403,12 +407,27 @@ Loss:
 
 Backends:
 
-| Backend              | Registration                               | Reason                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| -------------------- | ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Transitional adapter | Implemented; one shared queue orders it    | Re-expresses the adapter's existing sibling registration; stale and foreign refusals keep their error types.                                                                                                                                                                                                                                                                                                            |
-| Metal                | Implemented; device-side shared-event wait | Separate command queues per runtime device over one `MTLDevice`.                                                                                                                                                                                                                                                                                                                                                        |
-| Vulkan               | Refused with `Unsupported`                 | Runtime devices over one selected root share a `VkDevice` and serialized queue; registration still needs a shared image-layout record and read-only aliases of the producer image.                                                                                                                                                                                                                       |
-| Browser              | Implemented; one shared queue orders it    | Snapshot capture opens a second runtime device over the same browser device on the producer's thread. Every runtime device in a worker runs over that worker's one `GPUDevice` and its queue, so a registration is a read-only alias of the same `GPUTexture`, ordered by submission order. WebGPU cannot share a texture across `GPUDevice`s, so textures never cross workers; worker-to-UI handoff stays CPU bitmaps. |
+| Backend              | Registration                                      | Reason                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------- | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transitional adapter | Implemented; one shared queue orders it           | Re-expresses the adapter's existing sibling registration; stale and foreign refusals keep their error types.                                                                                                                                                                                                                                                                                                            |
+| Metal                | Implemented; device-side shared-event wait        | Separate command queues per runtime device over one `MTLDevice`.                                                                                                                                                                                                                                                                                                                                                        |
+| Vulkan               | Owned images implemented; acquired frames refused | A shared `VkDevice` and queue, reference-counted native image and shared committed layout state support sibling aliases; `//donner/gpu/vulkan/tests:vulkan_texture_registration_tests` enforces owned-image registration. The swapchain can recycle an acquired frame at present, so export returns `Unsupported`; `//donner/gpu/vulkan/tests:vulkan_surface_tests` enforces that refusal.                              |
+| Browser              | Implemented; one shared queue orders it           | Snapshot capture opens a second runtime device over the same browser device on the producer's thread. Every runtime device in a worker runs over that worker's one `GPUDevice` and its queue, so a registration is a read-only alias of the same `GPUTexture`, ordered by submission order. WebGPU cannot share a texture across `GPUDevice`s, so textures never cross workers; worker-to-UI handoff stays CPU bitmaps. |
+
+On Vulkan, producer, export and consumer records retain one reference-counted native image
+allocation until the last in-flight use retires; that owner also retains the shared root.
+`//donner/gpu/vulkan/tests:vulkan_texture_registration_tests` enforces this with
+`ASubmittedReadRetainsTheImageAfterBothHandlesAreReleased`. Each runtime table stages its own
+image transitions, but aliases share one committed layout record.
+A root mutex spans barrier recording through queue submission and commit or rollback, so a sibling
+cannot encode a barrier from a stale layout while another device is about to submit. The native
+queue mutex remains nested inside it for Vulkan host synchronization. The
+[Vulkan synchronization rules](https://docs.vulkan.org/spec/latest/chapters/synchronization.html)
+require explicit memory dependencies in addition to single-queue submission order.
+`//donner/gpu/vulkan/tests:vulkan_texture_registration_tests` enforces the root ordering rule:
+`HoldsRootOrderFromBarrierEncodingThroughSubmission` fails if the mutex is absent even without a
+validation layer, and `ConcurrentUploadAndRegisteredReadStayWhole` then exercises the shared
+image under synchronization validation. Removing the lock makes that run report an invalid layout.
 
 Accounting: exporting, registering and waiting perform no allocation, bind group or submission on
 either device, so a native snapshot readback does exactly the work the adapter does, on the same
@@ -439,6 +458,16 @@ rendered pixels. With the fixtures on the selected backend, every Geode target, 
 registration refuses on the selected backend: a second headless device on the transitional
 adapter, and an adapter context on Metal, where a second headless device shares the consumer's
 `MTLDevice` and registers.
+
+On Vulkan, `//donner/gpu/vulkan/tests:vulkan_texture_registration_tests` checks same-root
+registration, foreign-root refusal, exact readback after producer destruction, retention while a
+consumer fence is held behind a timeline gate, and concurrent producer uploads with sibling
+reads. `//donner/gpu/vulkan/tests:vulkan_surface_tests` checks the acquired-frame export refusal.
+`//donner/svg/renderer/geode:geode_snapshot_readback_vulkan_tests` forces native Vulkan on Linux
+and checks exact capture pixels without a manual backend override. The native suite passes with
+Khronos synchronization validation on lavapipe; focused registration and snapshot cases pass on
+Intel Vulkan. The concurrent case also passes under ThreadSanitizer. Wider native Geode parity,
+performance and the publication gates remain open.
 
 ### Resource plumbing and uploads
 
@@ -596,6 +625,11 @@ adapter, and an adapter context on Metal, where a second headless device shares 
       preserving their independent handle tables, serials, caches, counters, and retirement.
       Headless creation uses the same owner; borrowed embedders retain host ownership; under
       WebAssembly each worker's contexts share the browser device that worker obtained.
+- [ ] Finish Vulkan owned-image registration across runtime devices over one selected root.
+      Implementation is in PR #1515. Direct registration, native snapshot, in-flight lifetime,
+      acquired-frame refusal, synchronization validation, focused TSan, scoped full suite and
+      editor integration pass on the implementation code. Hosted PR gates, wider selected-backend
+      Geode parity and integrated root-lock performance acceptance remain before this closes.
 - [ ] Make the selected `gpu::Device` the backend owner. Turn `GeodeDevice` into backend-neutral
       renderer services for counters, caches, dummy resources, and deferred retirement; update
       headless and embedded construction. The selected device owns its backend root

@@ -17,8 +17,10 @@
 
 #include <vulkan/vulkan.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <ostream>
 
 namespace donner::gpu::vulkan {
@@ -119,6 +121,17 @@ std::ostream& operator<<(std::ostream& os, const ImageBarrierParams& value);
  */
 class TextureSyncStateTable {
 public:
+  /// Slot tables stay independent; sharing an image requires an explicit alias.
+  TextureSyncStateTable() = default;
+  TextureSyncStateTable(const TextureSyncStateTable&) = delete;
+  TextureSyncStateTable& operator=(const TextureSyncStateTable&) = delete;
+  TextureSyncStateTable(TextureSyncStateTable&&) = default;
+  TextureSyncStateTable& operator=(TextureSyncStateTable&&) = default;
+
+  /// One image's committed state, shared across runtime devices that register it.
+  struct SharedState;
+  using SharedStateHandle = std::shared_ptr<SharedState>;
+
   /// The state \p textureSlot will be in at this point of an encode: the staged state when one
   /// was recorded, otherwise the committed one. A slot never seen reads as untouched.
   /// @param textureSlot Texture slot to query.
@@ -131,6 +144,16 @@ public:
   ///
   /// @param textureSlot Texture slot to query.
   [[nodiscard]] TextureSyncState committedStateOf(uint32_t textureSlot) const;
+
+  /// Returns the committed state owner for an image, creating an untouched entry if needed.
+  /// @param textureSlot Slot of the image being exported.
+  [[nodiscard]] SharedStateHandle share(uint32_t textureSlot);
+
+  /// Makes this slot name an image another runtime device already tracks.
+  /// Its staged state stays private to this table until an accepted submission commits it.
+  /// @param textureSlot New registration slot. @param state Shared committed state owner.
+  /// @return False for a null owner, leaving the slot unchanged.
+  [[nodiscard]] bool alias(uint32_t textureSlot, SharedStateHandle state);
 
   /// Records that a transition to \p state was encoded, pending submission.
   /// @param textureSlot Texture slot the transition applies to. @param state Resulting state.
@@ -159,8 +182,11 @@ public:
   [[nodiscard]] bool hasStagedChanges() const;
 
 private:
-  std::map<uint32_t, TextureSyncState> committed_;  //!< State the GPU has actually reached.
-  std::map<uint32_t, TextureSyncState> staged_;     //!< Transitions encoded but not submitted.
+  std::map<uint32_t, SharedStateHandle> committed_;  //!< Per-slot reference to native image state.
+  // Counts slots in this table so retiring one alias does not discard another's staged state.
+  std::map<SharedStateHandle, size_t, std::owner_less<SharedStateHandle>> aliasCounts_;
+  // Alias slots in one table must see the same in-encode state in command order.
+  std::map<SharedStateHandle, TextureSyncState, std::owner_less<SharedStateHandle>> staged_;
 };
 
 }  // namespace donner::gpu::vulkan
