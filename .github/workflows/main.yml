@@ -238,6 +238,7 @@ jobs:
       fallback: ${{ steps.determine.outputs.fallback }}
       affected: ${{ steps.determine.outputs.affected }}
       full_test: ${{ steps.determine.outputs.full_test }}
+      wgpu_reference: ${{ steps.select_wgpu_resvg.outputs.run }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -350,6 +351,7 @@ jobs:
             echo "fallback=true" >> "$GITHUB_OUTPUT"
             echo "affected=" >> "$GITHUB_OUTPUT"
             echo "full_test=false" >> "$GITHUB_OUTPUT"
+            echo "wgpu_reference_unknown=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -383,8 +385,30 @@ jobs:
             echo "No changed files detected; falling back to //...."
             echo "fallback=true" >> "$GITHUB_OUTPUT"
             echo "affected=" >> "$GITHUB_OUTPUT"
+            echo "wgpu_reference_unknown=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
+          # Direct renderer/shader/image inputs still select the oracle when an infra change
+          # makes bazel-diff fall back before it can report affected targets.
+          wgpu_reference_changed=false
+          while IFS= read -r path; do
+            case "$path" in
+              donner/svg/renderer/*|donner/gpu/shader/*|donner/svg/resources/*|donner/svg/components/resources/*)
+                wgpu_reference_changed=true
+                break
+                ;;
+              donner/svg/SVGImageElement.*|donner/svg/SVGFEImageElement.*|third_party/resvg-test-suite/*)
+                wgpu_reference_changed=true
+                break
+                ;;
+              third_party/bazel/non_bcr_deps.bzl|third_party/BUILD.wgpu_native*|MODULE.bazel|MODULE.bazel.lock|.bazelrc|build_defs/*)
+                wgpu_reference_changed=true
+                break
+                ;;
+            esac
+          done <<< "$changed_files"
+          echo "wgpu_reference_changed=$wgpu_reference_changed" >> "$GITHUB_OUTPUT"
 
           should_fallback=false
           while IFS= read -r path; do
@@ -472,6 +496,13 @@ jobs:
             exit 0
           fi
 
+          # The manual reference is removed from normal affected targets below. Capture its
+          # pre-filter impact so only PRs that reach the pixel corpus run its 16 Linux shards.
+          if [[ " $affected " == *" //donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux "* ||
+                " $affected " == *" //donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux_impl "* ]]; then
+            echo "wgpu_reference_affected=true" >> "$GITHUB_OUTPUT"
+          fi
+
           manual_affected="$(
             cd "$head_dir"
             bazelisk query --keep_going "attr(\"tags\", \"manual\", set($affected))"
@@ -493,6 +524,21 @@ jobs:
 
           echo "fallback=false" >> "$GITHUB_OUTPUT"
           echo "affected=$affected" >> "$GITHUB_OUTPUT"
+
+      - name: Select Linux WebGPU resvg reference
+        id: select_wgpu_resvg
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_reference=false
+          if [[ "${{ steps.determine.outputs.wgpu_reference_affected }}" == "true" ||
+                "${{ steps.determine.outputs.wgpu_reference_changed }}" == "true" ||
+                "${{ steps.determine.outputs.wgpu_reference_unknown }}" == "true" ||
+                "${{ steps.determine.outputs.full_test }}" == "true" ]]; then
+            run_reference=true
+          fi
+          echo "run=$run_reference" >> "$GITHUB_OUTPUT"
 
   linux:
     # GitHub-hosted x86_64 baseline. Suppressed when the trusted self-hosted
@@ -563,8 +609,18 @@ jobs:
             --test_tag_filters=-manual,-perf,-ci-remote-gpu \
             $TARGETS
 
+      - name: Test Linux WebGPU resvg reference
+        id: wgpu_resvg_reference
+        if: ${{ !cancelled() && needs.determine-targets.outputs.wgpu_reference == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk test --config=ci --test_output=errors \
+            --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp \
+            //donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux
+
       - name: Upload Bazel test failure artifacts
-        if: failure() && steps.test.outcome == 'failure'
+        if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -724,7 +780,7 @@ jobs:
           set -euo pipefail
           DIAG_DIR="$RUNNER_TEMP/donner-ci-diagnostics"
           echo "DIAG_DIR=$DIAG_DIR" >> "$GITHUB_ENV"
-          mkdir -p "$DIAG_DIR"/{fetch,build,test}
+          mkdir -p "$DIAG_DIR"/{fetch,build,test,test-wgpu}
           {
             echo "run_id=${{ github.run_id }} attempt=${{ github.run_attempt }} sha=${{ github.sha }}"
             echo "fallback=${{ needs.determine-targets.outputs.fallback }}"
@@ -979,6 +1035,23 @@ jobs:
             --execution_log_compact_file="$DIAG_DIR/test/exec.log.zst" \
             $TARGETS
 
+      - name: Test Linux WebGPU resvg reference
+        id: wgpu_resvg_reference
+        if: ${{ !cancelled() && needs.determine-targets.outputs.wgpu_reference == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$DIAG_DIR/run_bazel_with_heartbeat.sh" "$DIAG_DIR/test-wgpu/console.log" \
+            bazelisk test --config=ci --config=latest_llvm --test_output=errors \
+            $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
+            $DIAG_TEST_FLAGS \
+            --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp \
+            --profile="$DIAG_DIR/test-wgpu/profile.gz" \
+            --build_event_json_file="$DIAG_DIR/test-wgpu/bep.json" \
+            --nobuild_event_json_file_path_conversion \
+            --execution_log_compact_file="$DIAG_DIR/test-wgpu/exec.log.zst" \
+            //donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux
+
       - name: Summarize diagnostics
         if: always()
         shell: bash
@@ -1002,7 +1075,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && steps.test.outcome == 'failure'
+        if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
