@@ -3,6 +3,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/RunfileGate.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -11,6 +12,52 @@
 
 namespace donner::svg::compositor {
 namespace {
+
+TEST(CompositorGeodeSplashTest, RetinaSelectionKeepsCompleteVisibleTilesForFirstDrag) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source.contents, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(3072, 2048);
+
+  Renderer renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  compositor.setSkipMainComposeDuringSplit(true);
+  RenderViewport visibleViewport;
+  visibleViewport.size = Vector2d(2056, 1456);
+  visibleViewport.devicePixelRatio = 1.0;
+  const Transform2d visibleSurface = Transform2d::Translate(Vector2d(-508, -296));
+  compositor.renderFrame(visibleViewport, visibleSurface);
+  ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation());
+
+  auto letter = document.querySelector("#letter-G");
+  ASSERT_TRUE(letter.has_value());
+  const Entity letterEntity = letter->unsafeEntityHandle().entity();
+  ASSERT_TRUE(compositor.promoteEntity(letterEntity, InteractionHint::Selection));
+  compositor.renderFrame(visibleViewport, visibleSurface);
+  EXPECT_TRUE(compositor.hasCompleteTileSetForPresentation());
+  EXPECT_EQ(compositor.lastRenderFrameStats().textureAllocationFailureCount, 0);
+
+  ASSERT_TRUE(compositor.promoteEntity(letterEntity, InteractionHint::ActiveDrag));
+  letter->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8, 0)));
+  compositor.renderFrame(visibleViewport, visibleSurface);
+  EXPECT_TRUE(compositor.hasCompleteTileSetForPresentation());
+  EXPECT_EQ(compositor.lastRenderFrameStats().textureAllocationFailureCount, 0);
+  EXPECT_EQ(compositor.lastRenderFrameStats().cachedTileCount, 0)
+      << "The first pointer move should translate the retained G tile without rebuilding static "
+         "segments";
+  const auto tiles = compositor.snapshotTilesForUpload();
+  EXPECT_THAT(tiles, ::testing::Contains(::testing::Truly([](const CompositorTile& tile) {
+                return tile.isDragTarget && tile.textureSnapshot != nullptr &&
+                       tile.canvasFromBitmap.isTranslation() &&
+                       tile.canvasFromBitmap.translation().x > 0.0;
+              })));
+}
 
 TEST(CompositorGeodeSplashTest, PublishesTilesForFullArtworkOnColdFrame) {
   const donner::tests::RequiredRunfile source =

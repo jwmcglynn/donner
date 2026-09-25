@@ -170,12 +170,13 @@ private:
  * @param selectionOnlyPrewarmMayTriggerRender Backend policy for idle selection cache misses.
  * @param hasIndependentRenderReason True when drag, document invalidation, forced rasterization, or
  *   retry already requires a worker request.
+ * @param visibleOutputSizePx Size of the already-presented visible raster.
+ * @param prewarmOutputSizePx Size of the proposed enlarged selection raster.
  */
-[[nodiscard]] bool ShouldUseSelectedPrewarmRasterViewport(Entity selectedEntity,
-                                                          bool requestOverviewInfill,
-                                                          bool rasterViewportBounded,
-                                                          bool selectionOnlyPrewarmMayTriggerRender,
-                                                          bool hasIndependentRenderReason);
+[[nodiscard]] bool ShouldUseSelectedPrewarmRasterViewport(
+    Entity selectedEntity, bool requestOverviewInfill, bool rasterViewportBounded,
+    bool selectionOnlyPrewarmMayTriggerRender, bool hasIndependentRenderReason,
+    Vector2i visibleOutputSizePx, Vector2i prewarmOutputSizePx);
 
 /**
  * Return true when a render result satisfies a pending selected-layer rasterization.

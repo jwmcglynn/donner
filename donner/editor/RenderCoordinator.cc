@@ -5,6 +5,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <span>
 #include <utility>
@@ -583,9 +584,26 @@ bool ShouldDeferSelectedViewportRefresh(Entity selectedEntity, bool hasActiveDra
 bool ShouldUseSelectedPrewarmRasterViewport(Entity selectedEntity, bool requestOverviewInfill,
                                             bool rasterViewportBounded,
                                             bool selectionOnlyPrewarmMayTriggerRender,
-                                            bool hasIndependentRenderReason) {
-  return selectedEntity != entt::null && !requestOverviewInfill && rasterViewportBounded &&
-         (selectionOnlyPrewarmMayTriggerRender || hasIndependentRenderReason);
+                                            bool hasIndependentRenderReason,
+                                            Vector2i visibleOutputSizePx,
+                                            Vector2i prewarmOutputSizePx) {
+  if (selectedEntity == entt::null || requestOverviewInfill || !rasterViewportBounded ||
+      (!selectionOnlyPrewarmMayTriggerRender && !hasIndependentRenderReason)) {
+    return false;
+  }
+
+  // Changing the raster dimensions invalidates every cached segment. On large Retina canvases,
+  // even a modest enlargement can rebuild the entire scene and exhaust the texture-surface budget
+  // before the first pointer move. The visible raster already has a 128-screen-pixel margin, and
+  // active drags recapture after that displacement. Keep that raster when the proposed prewarm
+  // exceeds a conservative per-surface size instead of putting a full-scene rerender on the
+  // selection/drag path.
+  constexpr std::int64_t kMaximumSelectedPrewarmPixels = 4 * 1024 * 1024;
+  const std::int64_t visiblePixels = static_cast<std::int64_t>(visibleOutputSizePx.x) *
+                                     static_cast<std::int64_t>(visibleOutputSizePx.y);
+  const std::int64_t prewarmPixels = static_cast<std::int64_t>(prewarmOutputSizePx.x) *
+                                     static_cast<std::int64_t>(prewarmOutputSizePx.y);
+  return prewarmPixels <= visiblePixels || prewarmPixels <= kMaximumSelectedPrewarmPixels;
 }
 
 bool HasIndependentSelectedPrewarmRenderReason(bool hasActiveDrag, bool versionChanged,
@@ -1511,16 +1529,17 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const bool hasIndependentSelectedPrewarmRenderReason = HasIndependentSelectedPrewarmRenderReason(
       dragPreview.has_value(), currentVersion != displayedDocVersion_,
       forceSelectedLayerRasterization, forcePresentationRefresh);
+  const EditorRasterViewport selectedPrewarmRaster = viewport.selectedPrewarmRasterViewport();
   const bool useSelectedPrewarmRasterViewport =
       !documentPixelCaptureEnabled_ && !useVisibleSelectedRaster &&
       ShouldUseSelectedPrewarmRasterViewport(
           prewarmEntity, requestOverviewInfill, rasterViewport.viewportBounded,
-          kSelectionOnlyPrewarmMayTriggerRender, hasIndependentSelectedPrewarmRenderReason);
+          kSelectionOnlyPrewarmMayTriggerRender, hasIndependentSelectedPrewarmRenderReason,
+          rasterViewport.outputSizePx, selectedPrewarmRaster.outputSizePx);
   const EditorRasterViewport requestRasterViewport =
       requestOverviewInfill
           ? viewport.overviewInfillRasterViewport()
-          : (useSelectedPrewarmRasterViewport ? viewport.selectedPrewarmRasterViewport()
-                                              : rasterViewport);
+          : (useSelectedPrewarmRasterViewport ? selectedPrewarmRaster : rasterViewport);
   const Vector2i currentCanvasSize = requestRasterViewport.outputSizePx;
 
   if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && !deferCanvasCommitForActiveDrag &&

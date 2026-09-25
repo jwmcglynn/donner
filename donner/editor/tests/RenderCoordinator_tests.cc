@@ -282,19 +282,36 @@ TEST(RenderCoordinatorPolicyTest, SelectionOnlyPrewarmDoesNotOverdrawTheViewport
   EXPECT_TRUE(ShouldUseSelectedPrewarmRasterViewport(
       selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
       /*selectionOnlyPrewarmMayTriggerRender=*/true,
-      /*hasIndependentRenderReason=*/false))
+      /*hasIndependentRenderReason=*/false, Vector2i(800, 600), Vector2i(1200, 900)))
       << "Cached-texture presenters retain the desktop/TinySkia selection prewarm.";
   EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
       selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
       /*selectionOnlyPrewarmMayTriggerRender=*/false,
-      /*hasIndependentRenderReason=*/false))
+      /*hasIndependentRenderReason=*/false, Vector2i(800, 600), Vector2i(1200, 900)))
       << "Selecting on a direct surface must not manufacture a raster-viewport change that posts "
          "an otherwise-identical worker frame.";
   EXPECT_TRUE(ShouldUseSelectedPrewarmRasterViewport(
       selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
       /*selectionOnlyPrewarmMayTriggerRender=*/false,
-      /*hasIndependentRenderReason=*/true))
+      /*hasIndependentRenderReason=*/true, Vector2i(800, 600), Vector2i(1200, 900)))
       << "Real invalidation and moved-drag renders still get conservative overdraw.";
+
+  EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
+      selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
+      /*selectionOnlyPrewarmMayTriggerRender=*/true,
+      /*hasIndependentRenderReason=*/false, Vector2i(2774, 2048), Vector2i(3072, 2048)))
+      << "Retina selection must retain the already-complete visible tile set instead of "
+         "rebuilding full-scene tiles beyond the surface budget";
+  EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
+      selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
+      /*selectionOnlyPrewarmMayTriggerRender=*/true,
+      /*hasIndependentRenderReason=*/true, Vector2i(2774, 2048), Vector2i(3072, 2048)))
+      << "Active drag must not switch back to the oversized raster and invalidate its tiles";
+  EXPECT_TRUE(ShouldUseSelectedPrewarmRasterViewport(
+      selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
+      /*selectionOnlyPrewarmMayTriggerRender=*/true,
+      /*hasIndependentRenderReason=*/true, Vector2i(2048, 1536), Vector2i(2048, 1536)))
+      << "A full-document raster with unchanged dimensions has no extra tile cost";
 }
 
 TEST(RenderCoordinatorPolicyTest, OnlyForcedSelectedResultClearsPendingLayerRasterization) {
