@@ -2834,6 +2834,17 @@ TEST(AsyncRendererTest, PartialBudgetZoomKeepsPreviousCompletePresentation) {
         << "the software renderer must recover with a complete background and layer";
     EXPECT_TRUE(complete->workerTiming.nothingToPresent) << DescribePresentation(*complete);
   }
+
+  for (std::uint64_t version = 4; version <= 7; ++version) {
+    const std::optional<RenderResult> unallocatable =
+        renderSelected(version, UnallocatableRasterViewport());
+    ASSERT_TRUE(unallocatable.has_value());
+    EXPECT_FALSE(unallocatable->compositedPreview.has_value())
+        << "a budget-immediate fallback must not publish only its surviving layer: "
+        << DescribePresentation(*unallocatable);
+    EXPECT_TRUE(unallocatable->workerTiming.nothingToPresent)
+        << DescribePresentation(*unallocatable);
+  }
 }
 
 // A drag frame whose tiles all fail leaves nothing to present. The renderer's main target still
