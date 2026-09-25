@@ -612,6 +612,10 @@ performance and the publication gates remain open.
       context pool never hands a thread-bound device to another thread. Chromium lanes serve a
       package built with the setting beside the production one, and a check in both boot lanes
       pins which backend the raster worker selected.
+- [x] Run the standalone Geode renderer WebAssembly module on the selected browser runtime.
+      `//donner/editor/wasm/tests:standalone_geode_browser_renderer_test` serves its package in
+      Chromium, confirms the browser backend was selected, and checks SVG document colors in the
+      canvas. The default module keeps the transitional adapter until the editor cutover.
 - [ ] Replace the C WebGPU wrapper with that bridge in the WebAssembly production path: the
       editor window's browser surface, format, clear and readback through the runtime, then the
       default flip. The Geode renderer WebAssembly module is a second consumer of the wrapper and

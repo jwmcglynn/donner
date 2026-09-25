@@ -27,6 +27,8 @@ module.exports = defineConfig({
     "composited-invariants.spec.ts",
     "composited-drag-invariants.spec.ts",
     "font-reference.spec.ts",
+    // This spec serves the standalone renderer package, not the production editor package.
+    "standalone-geode-browser-renderer.spec.ts",
   ],
   timeout: 30000,
   use: {

@@ -705,3 +705,42 @@ playwright_bin.playwright_test(
         "@platforms//os:macos",
     ],
 )
+
+# The standalone Geode renderer module is selected onto the browser backend through a
+# package transition. The page must select that backend and paint SVG colors, not only boot.
+playwright_bin.playwright_test(
+    name = "standalone_geode_browser_renderer_test",
+    size = "large",
+    args = [
+        "test",
+        "$(rootpath :standalone-geode-browser-renderer.spec.ts)",
+        "--config=$(rootpath :playwright.standalone-geode.bazel.config.js)",
+    ],
+    copy_data_to_bin = False,
+    data = [
+        "package.json",
+        "playwright.bazel.config.js",
+        "playwright.config.js",
+        "playwright.standalone-geode.bazel.config.js",
+        "remote-webserver.mjs",
+        "standalone-geode-browser-renderer.spec.ts",
+        ":node_modules/@playwright/test",
+        "//donner/editor/tests:standalone_geode_browser_png_compare",
+        "//donner/editor/tests:testdata/browser/standalone_geode_browser_renderer.png",
+        "//donner/svg/renderer/wasm:_geode_browser_test_package_for_playwright",
+        "@playwright//:chromium",
+    ],
+    env = {
+        "CI": "1",
+        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/svg/renderer/wasm:_geode_browser_test_package_for_playwright)",
+        "DONNER_BROWSER_GOLDEN_COMPARE": "$(rootpath //donner/editor/tests:standalone_geode_browser_png_compare)",
+        "DONNER_BROWSER_GOLDEN_PNG": "$(rootpath //donner/editor/tests:testdata/browser/standalone_geode_browser_renderer.png)",
+        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)
