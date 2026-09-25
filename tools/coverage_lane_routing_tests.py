@@ -105,6 +105,10 @@ class CoverageLaneRoutingTest(unittest.TestCase):
         comment_layout = re.search(r'^  layout: "([^"]+)"', self.codecov, re.MULTILINE)
         self.assertIsNotNone(comment_layout)
         self.assertNotIn("header", comment_layout.group(1).split(", "))
+        # Omitting the header alone still leaves Codecov's project-percentage summary in PR
+        # comments. A focused upload must show patch coverage without implying a full baseline.
+        comment = self.codecov.split("\ncomment:\n", 1)[1].split("\nflags:\n", 1)[0]
+        self.assertRegex(comment, r"(?m)^  hide_project_coverage: true$")
 
     def test_each_coverage_runner_retains_sanitized_proof(self):
         self.assertEqual(self.text.count("python3 tools/coverage_run_proof.py"), 2)
