@@ -39,17 +39,20 @@ const geodeDeviceSource = await readFile(
   new URL("../../../svg/renderer/geode/GeodeDevice.cc", import.meta.url),
   "utf8",
 );
-// Backend-root selection, including the browser device import, lives with the wgpu adapter.
-const geodeSelectionSource = await readFile(
-  new URL("../../../svg/renderer/geode/GeodeWgpuAdapterDevice.cc", import.meta.url),
+const browserRootSource = await readFile(
+  new URL("../../../svg/renderer/geode/GeodeBrowserRoot.cc", import.meta.url),
   "utf8",
 );
-const geodeDeviceHeader = await readFile(
-  new URL("../../../svg/renderer/geode/GeodeDevice.h", import.meta.url),
+const browserDeviceSource = await readFile(
+  new URL("../../../gpu/browser/BrowserDevice.cc", import.meta.url),
   "utf8",
 );
-const emdawnWebgpuSource = await readFile(
-  new URL("../../../../third_party/emdawnwebgpu/webgpu/src/library_webgpu.js", import.meta.url),
+const browserBridgeSource = await readFile(
+  new URL("../../../gpu/browser/EmscriptenBrowserBridge.cc", import.meta.url),
+  "utf8",
+);
+const browserLibrarySource = await readFile(
+  new URL("../../../gpu/browser/library_donner_gpu.js", import.meta.url),
   "utf8",
 );
 
@@ -66,45 +69,102 @@ function extractAsyncFunction(sourceText, functionName) {
   return sourceText.slice(start, end);
 }
 
-test("late map rejection cannot clear a reused buffer handle's cleanup state", () => {
-  const mapAsyncStart = emdawnWebgpuSource.search(/\bemwgpuBufferMapAsync\s*:/);
-  assert.ok(mapAsyncStart >= 0, "expected the asynchronous buffer-map bridge");
-  const mapAsyncEndOffset = emdawnWebgpuSource.slice(mapAsyncStart).search(
-    /\bemwgpuBufferUnmap\s*:/,
-  );
-  assert.ok(mapAsyncEndOffset > 0, "expected the buffer-unmap bridge after mapAsync");
-  const mapAsyncEnd = mapAsyncStart + mapAsyncEndOffset;
-  const mapAsync = emdawnWebgpuSource.slice(mapAsyncStart, mapAsyncEnd);
-  const cleanupListDeclaration = mapAsync.match(
-    /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*\[\]/,
-  );
+function extractBrowserLibraryFunction(name, nextName, bridge) {
+  const start = browserLibrarySource.indexOf(`${name}: function(`);
+  const end = browserLibrarySource.indexOf("\n  },", start);
+  const next = browserLibrarySource.indexOf(`\n  ${nextName}__deps:`, end);
   assert.ok(
-    cleanupListDeclaration,
-    "each map generation must own a distinct cleanup list",
+    start >= 0 && end > start && next > end,
+    `expected the live ${name} browser bridge before ${nextName}`,
   );
-  const cleanupList = cleanupListDeclaration[1];
-  assert.match(
-    mapAsync,
-    new RegExp(`bufferOnUnmaps\\[bufferPtr\\]\\s*=\\s*${cleanupList}\\b`),
-    "the current buffer handle must publish that generation's cleanup list",
+  const expression = browserLibrarySource.slice(start, end + 4)
+    .replace(`${name}: `, "")
+    .trim();
+  return new Function("DonnerGpu", "GPUMapMode", `return (${expression});`)(
+    bridge,
+    { READ: 1 },
   );
-  const cleanupDeletes = [
-    ...mapAsync.matchAll(/delete\s+WebGPU\.Internals\.bufferOnUnmaps\[bufferPtr\]/g),
-  ];
-  assert.equal(cleanupDeletes.length, 1, "the rejection path must have one cleanup deletion");
-  const guardedCleanup = mapAsync.match(
-    new RegExp(
-      `if\\s*\\(WebGPU\\.Internals\\.bufferOnUnmaps\\[bufferPtr\\]\\s*===\\s*${cleanupList}\\)\\s*\\{([\\s\\S]*?)\\}`,
-    ),
+}
+
+test("late browser map rejection cannot change a reused mapping ID", () => {
+  const pending = [];
+  const buffer = {
+    mapAsync() {
+      const callback = {};
+      pending.push(callback);
+      return {
+        then(resolve) {
+          callback.resolve = resolve;
+          return {
+            catch(reject) {
+              callback.reject = reject;
+            },
+          };
+        },
+      };
+    },
+    getMappedRange() {
+      return new Uint8Array([1, 2, 3, 4]).buffer;
+    },
+    unmap() {},
+  };
+  const record = { objects: new Map(), mappings: new Map() };
+  const bridge = {
+    kSuccess: 0,
+    kFailed: 1,
+    kBuffer: 2,
+    kBufferMapping: 3,
+    kMapPending: 4,
+    kMapReady: 5,
+    kMapFailed: 6,
+    kMapDeviceLost: 7,
+    lost: false,
+    logicalFor: () => record,
+    lookup: () => buffer,
+    guard: () => 0,
+    guardRelease: () => 0,
+    refusalFor: (_, __, id) => record.objects.has(id) ? 0 : 1,
+    register: (_, __, id, mapping) => {
+      if (record.objects.has(id)) return 1;
+      record.objects.set(id, mapping);
+      return 0;
+    },
+  };
+  const mapAsync = extractBrowserLibraryFunction(
+    "donner_gpu_map_buffer_async",
+    "donner_gpu_mapping_state",
+    bridge,
   );
-  assert.ok(
-    guardedCleanup,
-    "a late rejection must not delete cleanup state installed by a reused handle",
+  const unmap = extractBrowserLibraryFunction(
+    "donner_gpu_unmap_buffer",
+    "donner_gpu_create_surface",
+    bridge,
   );
-  assert.match(
-    guardedCleanup[1],
-    /delete\s+WebGPU\.Internals\.bufferOnUnmaps\[bufferPtr\]/,
-    "only the current map generation may delete its cleanup state",
+
+  assert.equal(mapAsync(1, 7, 5, 0, 4), 0, "first map must start");
+  const oldMapping = record.mappings.get(7);
+  assert.ok(oldMapping, "first map must register its own state");
+  assert.equal(unmap(1, 7), 0, "first map must release its ID");
+  assert.equal(mapAsync(1, 7, 5, 0, 4), 0, "reused ID must start a new map");
+  const currentMapping = record.mappings.get(7);
+  assert.notEqual(currentMapping, oldMapping, "reused ID must own a new mapping record");
+
+  pending[0].reject(new Error("old map rejected late"));
+  assert.equal(
+    record.mappings.get(7),
+    currentMapping,
+    "old rejection must not remove the new mapping",
+  );
+  assert.equal(
+    currentMapping.state,
+    bridge.kMapPending,
+    "old rejection must not settle the new mapping",
+  );
+  pending[1].resolve();
+  assert.equal(
+    currentMapping.state,
+    bridge.kMapReady,
+    "new map must still complete after the old rejection",
   );
 });
 
@@ -147,14 +207,34 @@ test("diagnostic readback requests wake the event-driven main loop", () => {
     /struct AsyncSmokeReadbackSetupAttempt[\s\S]*WakeWasmEditorForPendingWgpuReadback\(\)/,
   );
 
-  const asyncReadback = source.match(
-    /void BeginAsyncSmokeReadback\([\s\S]*?\n}\n#endif/,
+  const runtimeReadback = source.match(
+    /void CompleteAsyncRuntimeSmokeReadback\(void\* userdata\) \{([\s\S]*?)\n}\n\nbool StartAsyncRuntimeSmokeReadback/,
   );
-  assert.ok(asyncReadback, "expected the asynchronous diagnostic readback callback");
+  assert.ok(runtimeReadback, "expected the browser-runtime diagnostic completion task");
   assert.match(
-    asyncReadback[0],
-    /inFlight->store\(false,[^;]*\);\s*if \([^)]*ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion[\s\S]*?WakeWasmEditorForPendingWgpuReadback\(\)/,
-    "every live map completion must clear the in-flight gate before rechecking pending requests",
+    runtimeReadback[1],
+    /device\.waitForMapping\(/,
+    "the deferred task must await its own runtime mapping",
+  );
+  assert.match(
+    runtimeReadback[1],
+    /device\.mappedBytes\(/,
+    "a ready mapping must publish the captured bytes",
+  );
+  assert.match(
+    runtimeReadback[1],
+    /device\.unmapBuffer\(/,
+    "the completion task must release the mapping on every outcome",
+  );
+  const releaseInFlight = runtimeReadback[1].indexOf("state->inFlight->store(false");
+  const recheckPending = runtimeReadback[1].indexOf(
+    "ShouldRecheckPendingWgpuReadbackRequestsAfterCompletion",
+  );
+  const wakePending = runtimeReadback[1].indexOf("WakeWasmEditorForPendingWgpuReadback()");
+  assert.ok(
+    releaseInFlight >= 0 && releaseInFlight < recheckPending
+      && recheckPending < wakePending,
+    "every runtime-map completion must release the in-flight gate before waking pending requests",
   );
 });
 
@@ -445,77 +525,112 @@ test("shared Basic Shapes visual gates settle first-use thumbnails before replac
   assert.match(helper.slice(0, sampleClick), /timeout:\s*scaledMs\(20_000\)/);
 });
 
-test("worker WebGPU startup keeps its browser Promise bridge private and single-purpose", () => {
-  assert.doesNotMatch(geodeDeviceHeader, /CreateHeadlessAsync/);
-  assert.doesNotMatch(geodeDeviceHeader, /donnerGeodeCompleteHeadlessImport/);
-  assert.doesNotMatch(geodeSelectionSource, /donnerGeodeCompleteHeadlessImport/);
-  const browserBridge = geodeSelectionSource.match(/EM_JS\(void, G,([\s\S]*?)\n}\);/);
-  assert.ok(browserBridge, "expected the browser Promise bridge");
-  assert.equal(
-    [...browserBridge[1].matchAll(/navigator\.gpu\.requestAdapter\(\)/g)].length,
-    1,
-    "browser adapter acquisition must happen exactly once",
+test("browser GPU startup owns one bounded request and shared logical roots", () => {
+  const beginStart = browserLibrarySource.indexOf(
+    "donner_gpu_begin_device_request: function(handle) {",
   );
-  assert.equal(
-    [...browserBridge[1].matchAll(/adapter\.requestDevice\(/g)].length,
-    1,
-    "browser device acquisition must continue from that adapter exactly once",
+  const beginEnd = browserLibrarySource.indexOf("donner_gpu_release_device__deps:", beginStart);
+  assert.ok(
+    beginStart >= 0 && beginEnd > beginStart,
+    "expected the live logical-device request hook",
   );
+  const begin = browserLibrarySource.slice(beginStart, beginEnd);
   assert.match(
-    browserBridge[1],
-    /WebGPU\.importJsAdapter\(adapter, instance\)/,
-    "the adapter the browser chose has to come back too: a caller asking what its surface can "
-      + "present needs an adapter to ask",
+    begin,
+    /if \(DonnerGpu\.requestStarted\) \{[\s\S]*?return DonnerGpu\.kSuccess;/,
+    "later logical devices must join the worker's existing browser device request",
   );
-  assert.match(geodeSelectionSource, /WebGPU\.importJsDevice\(device, instance\)/);
-  assert.match(
-    browserBridge[1],
-    /device\.onuncapturederror\s*=/,
-    "an imported device carries no C-level uncaptured-error callback, so the bridge installs one",
+  const requestStart = browserLibrarySource.indexOf("requestBrowserDevice: function() {");
+  const installStart = browserLibrarySource.indexOf("installDevice: function(device) {");
+  const releaseStart = browserLibrarySource.indexOf("releaseSharedDevice: function() {");
+  assert.ok(
+    requestStart >= 0 && installStart > requestStart && releaseStart > installStart,
+    "expected the live browser request, installation, and release hooks",
   );
-  assert.match(geodeSelectionSource, /\.catch\(\(\) => 1\)/);
-  assert.doesNotMatch(geodeSelectionSource, /Module\["_.*Geode.*"\]/);
-  assert.match(
-    geodeSelectionSource,
-    /Atomics\.store\(HEAP32, handlesOut >> 2, devicePtr\)/,
-  );
-  assert.match(
-    geodeSelectionSource,
-    /setTimeout\(\(\) => Atomics\.store\(HEAP32, handlesOut >> 2, devicePtr\)\)/,
-    "the result store must cross a browser task before releasing the waiting pthread",
+  const request = browserLibrarySource.slice(requestStart, installStart);
+  const install = browserLibrarySource.slice(installStart, releaseStart);
+  const release = browserLibrarySource.slice(
+    releaseStart,
+    browserLibrarySource.indexOf("releaseProducerHold: function", releaseStart),
   );
 
-  const browserImport = geodeSelectionSource.match(
-    /bool ImportBrowserRoot\(GeodeWgpuRoots& handles,[\s\S]*?\)\s*{([\s\S]*?)\n}/,
+  assert.equal(
+    [...request.matchAll(/navigator\.gpu\.requestAdapter\(\)/g)].length,
+    1,
+    "one browser adapter request must serve each device request",
   );
-  assert.ok(browserImport, "expected the browser device import the selection uses");
-  assert.match(browserImport[1], /G\(&state\.device, handles\.instance\)/);
-  assert.match(browserImport[1], /emscripten_sleep\(1\)/);
-  assert.doesNotMatch(browserImport[1], /RequestAdapterCallbackInfo/);
-  assert.doesNotMatch(browserImport[1], /RequestDeviceCallbackInfo/);
+  assert.equal(
+    [...request.matchAll(/adapter\.requestDevice\(\)/g)].length,
+    1,
+    "the browser device must come from the selected adapter exactly once",
+  );
+  assert.equal(
+    [...request.matchAll(/generation === DonnerGpu\.requestGeneration/g)].length,
+    2,
+    "both late success and late failure must ignore a released request generation",
+  );
+  assert.match(
+    install,
+    /device\.onuncapturederror\s*=/,
+    "an uncaptured browser validation error needs a diagnostic handler",
+  );
+  assert.match(
+    install,
+    /if \(DonnerGpu\.device === device\)/,
+    "a late device-loss callback must not mark its replacement lost",
+  );
+  assert.match(
+    release,
+    /DonnerGpu\.requestGeneration \+= 1/,
+    "releasing the last logical device must invalidate its outstanding request",
+  );
+
+  assert.match(
+    browserRootSource,
+    /BrowserDeviceRequest::Begin\(\s*std::make_unique<gpu::browser::EmscriptenBrowserBridge>\(\)\)/,
+    "browser root selection must use the owned runtime bridge",
+  );
+  assert.match(
+    browserRootSource,
+    /request\.settle\(kBrowserDeviceSettleSeconds\)/,
+    "device acquisition must stop after its bounded wait",
+  );
+  assert.match(
+    browserRootSource,
+    /std::move\(request\)\.take\(std::move\(lostState\)\)/,
+    "the selected device must retain the root's loss condition",
+  );
+  assert.match(
+    browserRootSource,
+    /OpenBrowserDevice\(root->lostState\(\)\)/,
+    "each logical context must reopen over the same loss condition",
+  );
+  assert.doesNotMatch(
+    browserRootSource,
+    /GeodeWgpuAdapterDevice|webgpu\/webgpu/,
+    "the configured browser root must not import the transitional C wrapper",
+  );
 
   const deviceDestructor = geodeDeviceSource.match(
     /GeodeDevice::~GeodeDevice\(\)([\s\S]*?)\n}/,
   );
-  assert.ok(deviceDestructor, "expected thread-affined WebGPU teardown");
-  const emscriptenBranch = deviceDestructor[1].match(
-    /#ifndef __EMSCRIPTEN__([\s\S]*?)#endif/,
-  );
-  assert.ok(emscriptenBranch, "expected native-only submitted-work wait");
+  assert.ok(deviceDestructor, "expected thread-affined GPU teardown");
+  const nativeDrain = deviceDestructor[1].match(/#ifndef __EMSCRIPTEN__([\s\S]*?)#endif/);
+  assert.ok(nativeDrain, "expected native-only submitted-work drain");
   assert.match(
-    emscriptenBranch[1],
+    nativeDrain[1],
     /waitForQueueIdle/,
-    "native teardown must drain through the bounded queue-idle wait",
+    "native teardown must use the bounded queue-idle wait",
   );
   assert.doesNotMatch(
     geodeDeviceSource,
     /WaitForSubmittedWork/,
-    "the unbounded submitted-work wait stays deleted; teardown drains are bounded",
+    "teardown must not use an unbounded submitted-work wait",
   );
   assert.doesNotMatch(
-    geodeSelectionSource,
+    browserRootSource,
     /WaitForSubmittedWork/,
-    "the unbounded submitted-work wait stays deleted; teardown drains are bounded",
+    "the browser root must not block teardown on submitted work",
   );
   assert.doesNotMatch(
     deviceDestructor[1],
@@ -524,19 +639,48 @@ test("worker WebGPU startup keeps its browser Promise bridge private and single-
   );
 });
 
-test("worker WebGPU startup enables event-driven timed readback waits", () => {
-  const browserStartup = geodeSelectionSource.match(
-    /bool ImportBrowserRoot\(GeodeWgpuRoots& handles,[\s\S]*?\)\s*{([\s\S]*?)\n}/,
+test("browser readback yields bounded event-loop slices for mapping completion", () => {
+  const wait = browserDeviceSource.match(
+    /MapSliceReport BrowserDevice::onWaitMappingSlice\([\s\S]*?\n}\n\nResult<std::span<const uint8_t>> BrowserDevice::onMappedBytes/,
   );
-  assert.ok(browserStartup, "expected a browser-specific root selection path");
+  assert.ok(wait, "expected the browser runtime's mapping wait");
+  assert.match(wait[0], /MapWaitKind::Polled/, "browser mappings settle through promise polling");
   assert.match(
-    browserStartup[1],
-    /WGPUInstanceFeatureName_TimedWaitAny/,
-    "the raster worker instance must support the timed wait used by snapshot readback",
+    wait[0],
+    /if \(yielding_\)/,
+    "nested waits must be refused during an existing stack unwind",
   );
-  assert.match(browserStartup[1], /requiredFeatureCount\s*=\s*1/);
-  assert.match(browserStartup[1], /requiredFeatures\s*=\s*&timedWaitFeature/);
-  assert.match(browserStartup[1], /G\(&state\.device/);
+  assert.match(
+    wait[0],
+    /bridge_->yieldToBrowser\(ClampYieldSeconds\(sliceSeconds, kMaxYieldSeconds\)\)/,
+    "each event-loop yield must be bounded by the slice limit",
+  );
+  const yieldCall = wait[0].indexOf("bridge_->yieldToBrowser(");
+  assert.ok(yieldCall >= 0, "expected a bounded browser yield before mapping revalidation");
+  assert.match(
+    wait[0].slice(yieldCall),
+    /objects_\.find\(BrowserObjectKind::BufferMapping, mappingSlotIndex\)/,
+    "the mapping ID must be checked again after yielding",
+  );
+  const yieldHook = browserBridgeSource.match(
+    /void EmscriptenBrowserBridge::yieldToBrowser\(double seconds\) \{([\s\S]*?)\n}/,
+  );
+  assert.ok(yieldHook, "expected the Emscripten event-loop yield hook");
+  assert.match(
+    yieldHook[1],
+    /emscripten_sleep\(static_cast<unsigned int>\(milliseconds\)\)/,
+    "the mapping promise needs an event-loop turn to settle",
+  );
+  assert.match(
+    yieldHook[1],
+    /kMaxSleepMilliseconds/,
+    "the bridge must bound the duration it passes to Emscripten",
+  );
+  assert.match(
+    browserDeviceSource,
+    /BrowserDeviceRequest::settle\(double timeoutSeconds\)[\s\S]*?deadline[\s\S]*?ClampYieldSeconds/,
+    "startup must also yield under a deadline",
+  );
 });
 
 test("renderer thread startup waits for cursor setup and wake wiring", () => {

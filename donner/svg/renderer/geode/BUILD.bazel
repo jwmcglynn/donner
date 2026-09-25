@@ -34,6 +34,7 @@ exports_files(
     [
         "GeodeDevice.cc",
         "GeodeDevice.h",
+        "GeodeBrowserRoot.cc",
         "GeodeWgpuAdapterDevice.cc",
     ],
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
