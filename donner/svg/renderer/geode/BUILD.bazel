@@ -52,9 +52,8 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
-# Build setting that selects the Donner GPU runtime's browser backend for headless work: selections
-# with no surface to present to, such as the editor's raster worker and the snapshot capture
-# contexts beside it. The window stays on the transitional adapter. WebAssembly only; it links the
+# Build setting that selects the Donner GPU runtime's browser backend for WebAssembly work,
+# including the editor canvas, its raster worker and the standalone Geode module. It links the
 # browser bridge into geode_device, and a binary that sets it links the bridge's JavaScript library
 # (see //donner/gpu/browser:emscripten_browser_bridge).
 bool_flag(

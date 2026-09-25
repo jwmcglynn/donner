@@ -663,7 +663,8 @@ later default flip without changing Metal or browser surface ownership.
 - [x] Run the standalone Geode renderer WebAssembly module on the selected browser runtime.
       `//donner/editor/wasm/tests:standalone_geode_browser_renderer_test` serves its package in
       Chromium, confirms the browser backend was selected, and checks SVG document colors in the
-      canvas. The default Geode renderer module remains a separate transitional consumer.
+      canvas. The normal `--config=wasm-geode` module also selects Browser; a configured audit
+      fails if the browser device and bridge disappear from that package.
 - [x] Run the browser editor's UI canvas through the selected runtime. Name the transferred
       `#canvas` with `CanvasSelector` after selecting the root, settle its preferred format before
       compiling Geode pipelines, and create a second logical UI context over that physical owner.
@@ -674,9 +675,9 @@ later default flip without changing Metal or browser surface ownership.
 - [x] Select the browser runtime for the served and shipped editor package. The editor transition
       and `--config=editor-wasm` select Browser; configured audits check both roots. Production
       Chromium boot, pixels, presentation and catalog lanes pass.
-- [ ] Remove the C WebGPU wrapper from the WebAssembly production path. The default Geode renderer
-      WebAssembly module remains a second consumer of the wrapper and moves separately. The
-      compiled WGSL projections remain trusted build input.
+- [ ] Remove the C WebGPU wrapper from the WebAssembly production path. The editor and default
+      Geode renderer module select Browser but still link adapter and C-wrapper code from shared
+      Geode libraries. The compiled WGSL projections remain trusted build input.
 - [ ] Run the complete browser editor path and remove emdawnwebgpu, `webgpu-cpp`, and generated
       C-ABI glue from production when no production consumer needs them. The Linux resvg test
       reference retains only its separately isolated, test-only WebGPU-C++ API wrapper.

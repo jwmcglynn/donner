@@ -603,13 +603,15 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("//tools/ci:editor_wasm_size_tests", build)
 
     def test_editor_wasm_pull_requests_link_the_browser_gpu_bridge(self):
-        """Both bridge link probes build on every pull request, in the job that fetched them."""
+        """Both bridge probes and the standalone default audit run on every PR."""
         workflow = self.editor_wasm
         build_job = workflow.split("\n  build:\n", 1)[1].split("\n  test:\n", 1)[0]
         self.assertIn("- name: Link the browser GPU bridge", build_job)
         link = build_job.split("- name: Link the browser GPU bridge", 1)[1]
         self.assertIn("bazelisk build --config=wasm-geode", link)
         self.assertIn("//tools/ci:browser_bridge_link_probes", link)
+        self.assertIn("bazelisk test --config=wasm-geode", link)
+        self.assertIn("//tools/ci:geode_wasm_browser_default_audit", link)
         self.assertNotIn("continue-on-error", link)
 
     def _size_check_step(self, workflow):

@@ -115,14 +115,14 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      # The browser GPU bridge's link probes resolve every entry point the bridge declares against
-      # its JavaScript library, once without threads and once with them, as the editor's module is
-      # built. The editor does not link the bridge yet, so nothing else on a pull request catches an
-      # entry point one half no longer declares, or a threaded path that no longer builds.
+      # Both bridge link probes resolve every JavaScript entry point, with and without threads.
+      # The configured audit also pins Browser selection in the standalone Geode module.
       - name: Link the browser GPU bridge
         run: |
           bazelisk build --config=wasm-geode \
             //tools/ci:browser_bridge_link_probes
+          bazelisk test --config=wasm-geode --test_output=errors \
+            //tools/ci:geode_wasm_browser_default_audit
 
   test:
     runs-on: macos-26

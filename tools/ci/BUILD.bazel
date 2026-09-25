@@ -72,6 +72,12 @@ test_suite(
 )
 
 test_suite(
+    name = "geode_wasm_browser_default_audit",
+    tags = ["manual"],
+    tests = ["//donner/svg/renderer/wasm:geode_browser_default_audit_test"],
+)
+
+test_suite(
     name = "wasm_size_tests",
     tags = ["manual"],
     tests = ["//donner/svg/renderer/wasm:render_test"],
