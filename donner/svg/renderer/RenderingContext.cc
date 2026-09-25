@@ -1537,6 +1537,62 @@ HitTestConfig configFromPointerEvents(PointerEvents pe) {
   UTILS_UNREACHABLE();
 }
 
+bool IsInsideDefs(const Registry& registry, Entity entity) {
+  for (Entity ancestor = registry.get<donner::components::TreeComponent>(entity).parent();
+       ancestor != entt::null;
+       ancestor = registry.get<donner::components::TreeComponent>(ancestor).parent()) {
+    if (const auto* type = registry.try_get<ElementTypeComponent>(ancestor);
+        type != nullptr && type->type() == ElementType::Defs) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void InstantiateMainShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
+  for (auto view = registry.view<ShadowTreeComponent>(); auto entity : view) {
+    // A referencing host expands nested uses from their light tree when it is presented.
+    if (IsInsideDefs(registry, entity)) {
+      continue;
+    }
+    auto [shadowTreeComponent] = view.get(entity);
+    if (auto targetEntity = shadowTreeComponent.mainTargetEntity(registry)) {
+      auto& shadow = registry.get_or_emplace<ComputedShadowTreeComponent>(entity);
+      createShadowTreeSystem().populateInstance(
+          EntityHandle(registry, entity), shadow, ShadowBranchType::Main, targetEntity.value(),
+          shadowTreeComponent.mainHref().value(), warningSink);
+
+      // populateInstance() just created these entities, each carrying an empty computed-style
+      // placeholder that the passes below dereference unconditionally. No mutation hook can have
+      // flagged them, so flag them here: the style pass is allowed to visit only dirty entities.
+      if (shadow.mainBranch) {
+        for (const Entity shadowEntity : shadow.mainBranch->shadowEntities) {
+          registry.get_or_emplace<DirtyFlagsComponent>(shadowEntity)
+              .mark(DirtyFlagsComponent::Style);
+        }
+      }
+    } else if (shadowTreeComponent.mainHref()) {
+      // Same-document resolution failed. Check if this is an external reference.
+      const Reference ref(shadowTreeComponent.mainHref().value());
+      if (ref.isExternal()) {
+        // Load the external SVG document via ResourceManagerContext.
+        auto& resourceManager = registry.ctx().get<ResourceManagerContext>();
+        const RcString docUrl(ref.documentUrl());
+        auto subDoc = resourceManager.loadExternalSVG(docUrl, warningSink);
+        if (subDoc) {
+          registry.emplace_or_replace<ExternalUseComponent>(entity, std::move(*subDoc),
+                                                            RcString(ref.fragment()));
+        }
+      } else {
+        ParseDiagnostic err;
+        err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +
+                     shadowTreeComponent.mainHref().value_or("") + "'";
+        warningSink.add(std::move(err));
+      }
+    }
+  }
+}
+
 }  // namespace
 
 RenderingContext::RenderingContext(Registry& registry) : registry_(registry) {}
@@ -1784,44 +1840,7 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
   // Evaluate conditional components which may create shadow trees.
   PaintSystem().createShadowTrees(registry_, warningSink);
 
-  // Instantiate shadow trees.
-  for (auto view = registry_.view<ShadowTreeComponent>(); auto entity : view) {
-    auto [shadowTreeComponent] = view.get(entity);
-    if (auto targetEntity = shadowTreeComponent.mainTargetEntity(registry_)) {
-      auto& shadow = registry_.get_or_emplace<ComputedShadowTreeComponent>(entity);
-      createShadowTreeSystem().populateInstance(
-          EntityHandle(registry_, entity), shadow, ShadowBranchType::Main, targetEntity.value(),
-          shadowTreeComponent.mainHref().value(), warningSink);
-
-      // populateInstance() just created these entities, each carrying an empty computed-style
-      // placeholder that the passes below dereference unconditionally. No mutation hook can have
-      // flagged them, so flag them here: the style pass is allowed to visit only dirty entities.
-      if (shadow.mainBranch) {
-        for (const Entity shadowEntity : shadow.mainBranch->shadowEntities) {
-          registry_.get_or_emplace<DirtyFlagsComponent>(shadowEntity)
-              .mark(DirtyFlagsComponent::Style);
-        }
-      }
-    } else if (shadowTreeComponent.mainHref()) {
-      // Same-document resolution failed. Check if this is an external reference.
-      const Reference ref(shadowTreeComponent.mainHref().value());
-      if (ref.isExternal()) {
-        // Load the external SVG document via ResourceManagerContext.
-        auto& resourceManager = registry_.ctx().get<ResourceManagerContext>();
-        const RcString docUrl(ref.documentUrl());
-        auto subDoc = resourceManager.loadExternalSVG(docUrl, warningSink);
-        if (subDoc) {
-          registry_.emplace_or_replace<ExternalUseComponent>(entity, std::move(*subDoc),
-                                                             RcString(ref.fragment()));
-        }
-      } else {
-        ParseDiagnostic err;
-        err.reason = std::string("Warning: Failed to resolve shadow tree target with href '") +
-                     shadowTreeComponent.mainHref().value_or("") + "'";
-        warningSink.add(std::move(err));
-      }
-    }
-  }
+  InstantiateMainShadowTrees(registry_, warningSink);
 
   StyleSystem().computeAllStyles(registry_, warningSink);
 
