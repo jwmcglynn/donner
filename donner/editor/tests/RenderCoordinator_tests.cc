@@ -276,41 +276,61 @@ TEST(RenderCoordinatorPolicyTest, SelectedViewportRefreshDeferRequiresEveryPredi
       /*needsOverviewInfill=*/true, /*pendingSelectedLayerRasterization=*/false));
 }
 
-TEST(RenderCoordinatorPolicyTest, SelectionOnlyPrewarmDoesNotOverdrawTheViewport) {
+TEST(RenderCoordinatorPolicyTest, SelectionPrewarmPreservesCompleteVisibleCoverageAtAnyPaneSize) {
   const Entity selectedEntity = static_cast<Entity>(7);
 
-  EXPECT_TRUE(ShouldUseSelectedPrewarmRasterViewport(
+  EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
       selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
       /*selectionOnlyPrewarmMayTriggerRender=*/true,
-      /*hasIndependentRenderReason=*/false, Vector2i(800, 600), Vector2i(1200, 900)))
-      << "Cached-texture presenters retain the desktop/TinySkia selection prewarm.";
+      /*hasIndependentRenderReason=*/false, /*hasCompleteVisibleCachedCoverage=*/true,
+      Vector2i(800, 600), Vector2i(1200, 900)))
+      << "Even a small pane rebuilds every cached static segment when selected prewarm changes "
+         "the output dimensions.";
   EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
       selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
       /*selectionOnlyPrewarmMayTriggerRender=*/false,
-      /*hasIndependentRenderReason=*/false, Vector2i(800, 600), Vector2i(1200, 900)))
+      /*hasIndependentRenderReason=*/false, /*hasCompleteVisibleCachedCoverage=*/false,
+      Vector2i(800, 600), Vector2i(900, 650)))
       << "Selecting on a direct surface must not manufacture a raster-viewport change that posts "
          "an otherwise-identical worker frame.";
   EXPECT_TRUE(ShouldUseSelectedPrewarmRasterViewport(
       selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
       /*selectionOnlyPrewarmMayTriggerRender=*/false,
-      /*hasIndependentRenderReason=*/true, Vector2i(800, 600), Vector2i(1200, 900)))
-      << "Real invalidation and moved-drag renders still get conservative overdraw.";
+      /*hasIndependentRenderReason=*/true, /*hasCompleteVisibleCachedCoverage=*/false,
+      Vector2i(800, 600), Vector2i(900, 650)))
+      << "Without complete coverage, a modest incremental overdraw can accompany a real render.";
 
   EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
       selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
       /*selectionOnlyPrewarmMayTriggerRender=*/true,
-      /*hasIndependentRenderReason=*/false, Vector2i(2774, 2048), Vector2i(3072, 2048)))
+      /*hasIndependentRenderReason=*/true, /*hasCompleteVisibleCachedCoverage=*/true,
+      Vector2i(800, 600), Vector2i(900, 650)))
+      << "An active drag must retain complete visible background tiles on small panes too.";
+  EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
+      selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
+      /*selectionOnlyPrewarmMayTriggerRender=*/true,
+      /*hasIndependentRenderReason=*/true, /*hasCompleteVisibleCachedCoverage=*/false,
+      Vector2i(800, 600), Vector2i(1200, 900)))
+      << "A cold pane should not multiply the first render area just to prewarm selection.";
+
+  EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
+      selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
+      /*selectionOnlyPrewarmMayTriggerRender=*/true,
+      /*hasIndependentRenderReason=*/false, /*hasCompleteVisibleCachedCoverage=*/true,
+      Vector2i(2774, 2048), Vector2i(3072, 2048)))
       << "Retina selection must retain the already-complete visible tile set instead of "
          "rebuilding full-scene tiles beyond the surface budget";
   EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
       selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
       /*selectionOnlyPrewarmMayTriggerRender=*/true,
-      /*hasIndependentRenderReason=*/true, Vector2i(2774, 2048), Vector2i(3072, 2048)))
+      /*hasIndependentRenderReason=*/true, /*hasCompleteVisibleCachedCoverage=*/true,
+      Vector2i(2774, 2048), Vector2i(3072, 2048)))
       << "Active drag must not switch back to the oversized raster and invalidate its tiles";
   EXPECT_TRUE(ShouldUseSelectedPrewarmRasterViewport(
       selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
       /*selectionOnlyPrewarmMayTriggerRender=*/true,
-      /*hasIndependentRenderReason=*/true, Vector2i(2048, 1536), Vector2i(2048, 1536)))
+      /*hasIndependentRenderReason=*/true, /*hasCompleteVisibleCachedCoverage=*/true,
+      Vector2i(2048, 1536), Vector2i(2048, 1536)))
       << "A full-document raster with unchanged dimensions has no extra tile cost";
 }
 
@@ -968,6 +988,40 @@ TEST(RenderCoordinatorTest, MaybeRequestRenderDispatchesWithoutTextureCache) {
   }
   EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
   EXPECT_EQ(app.document().document().canvasSize(), viewport.desiredCanvasSize());
+}
+
+TEST(RenderCoordinatorTest, HeldDragWithoutPromotedTileRendersChangedDocumentVersion) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  app.document().document().setCanvasSize(100, 100);
+  const svg::SVGElement target = QuerySelector(app, "#r1");
+  app.setSelection(target);
+  const Entity selectedEntity = target.unsafeEntityHandle().entity();
+  const std::uint64_t representedVersion = app.document().currentFrameVersion();
+  const EditorRasterViewport rasterViewport = viewport.rasterViewport();
+  RenderCoordinatorTestAccess::noteRenderCompleted(coordinator, representedVersion, rasterViewport);
+
+  selectTool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  selectTool.onMouseMove(app, Vector2d(35.0, 15.0), /*buttonHeld=*/true);
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_GT(app.document().currentFrameVersion(), representedVersion);
+  // The worker described the selection, but a masked/owning layer did not yield a tile that
+  // could be translated on the UI thread. Model that exact metadata/pixel mismatch here.
+  coordinator.compositedPresentation().noteCachedTextures(selectedEntity, representedVersion,
+                                                          rasterViewport.outputSizePx,
+                                                          selectTool.activeDragPreview());
+  ASSERT_TRUE(textures.tiles().empty());
+
+  EXPECT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+      << "A live drag with no presentable target tile must render while the pointer is held";
+  coordinator.asyncRenderer().cancelInFlight();
+  EXPECT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
 }
 
 TEST(RenderCoordinatorTest, CancelledPixelCaptureRepostsWithoutDocumentOrViewportChange) {

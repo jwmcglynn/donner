@@ -170,13 +170,17 @@ private:
  * @param selectionOnlyPrewarmMayTriggerRender Backend policy for idle selection cache misses.
  * @param hasIndependentRenderReason True when drag, document invalidation, forced rasterization, or
  *   retry already requires a worker request.
- * @param visibleOutputSizePx Size of the already-presented visible raster.
+ * @param hasCompleteVisibleCachedCoverage True when the currently presented tiles already cover
+ *   the visible raster at its requested pixel scale. Enlarging the raster in this state would
+ *   invalidate every cached static segment before the first pointer move.
+ * @param visibleOutputSizePx Size of the visible raster.
  * @param prewarmOutputSizePx Size of the proposed enlarged selection raster.
  */
 [[nodiscard]] bool ShouldUseSelectedPrewarmRasterViewport(
     Entity selectedEntity, bool requestOverviewInfill, bool rasterViewportBounded,
     bool selectionOnlyPrewarmMayTriggerRender, bool hasIndependentRenderReason,
-    Vector2i visibleOutputSizePx, Vector2i prewarmOutputSizePx);
+    bool hasCompleteVisibleCachedCoverage, Vector2i visibleOutputSizePx,
+    Vector2i prewarmOutputSizePx);
 
 /**
  * Return true when a render result satisfies a pending selected-layer rasterization.
@@ -513,6 +517,9 @@ private:
   void updatePixelCaptureCanvasCommitWake(bool wouldChange, bool firstCommit,
                                           bool deferForActiveDrag);
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
+  [[nodiscard]] bool activeDragNeedsRenderedPresentation(
+      EditorApp& app, const std::optional<SelectTool::ActiveDragPreview>& dragPreview,
+      const GlTextureCache* textures, Entity suppressedLayerEntity) const;
   [[nodiscard]] std::vector<Entity> selectedCompositedExtraEntities(EditorApp& app,
                                                                     Entity primaryEntity) const;
   /**

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <memory>
 #include <ostream>
+#include <string>
 #include <string_view>
 #include <thread>
 
@@ -1043,7 +1044,7 @@ TEST_F(CompositorControllerTest, PromoteDescendantUnderPreparedIsolatedAncestorU
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
-TEST_F(CompositorControllerTest, PromoteParentWithAlreadyPromotedDescendantFails) {
+TEST_F(CompositorControllerTest, PromoteParentTemporarilyOwnsAlreadyPromotedDescendant) {
   SVGDocument document = makeDocument(R"svg(
     <g id="parent">
       <rect id="child" width="10" height="10" fill="red" opacity="0.5" />
@@ -1065,13 +1066,38 @@ TEST_F(CompositorControllerTest, PromoteParentWithAlreadyPromotedDescendantFails
 
   const auto result = compositor.promoteEntity(parentEntity);
 
-  EXPECT_EQ(result, CompositorController::PromoteResult::DescendantPromoted);
+  EXPECT_EQ(result, CompositorController::PromoteResult::PromotedLayer);
+  EXPECT_TRUE(compositor.isPromoted(parentEntity));
+  EXPECT_EQ(compositor.findLayerForTest(childEntity), nullptr)
+      << "The child still renders inside the parent's bitmap, so its separate layer must pause";
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  compositor.demoteEntity(parentEntity);
   EXPECT_FALSE(compositor.isPromoted(parentEntity));
+  EXPECT_NE(compositor.findLayerForTest(childEntity), nullptr)
+      << "Mandatory child layers resume immediately when the selected parent is released";
+}
+
+TEST_F(CompositorControllerTest, BackdropBlendInsideParentKeepsOwningTiles) {
+  SVGDocument document = makeDocument(R"svg(
+    <g id="parent">
+      <rect id="child" width="10" height="10" fill="red" opacity="0.5" />
+      <rect x="4" width="10" height="10" fill="blue" style="mix-blend-mode:multiply" />
+    </g>
+  )svg");
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto parent = document.querySelector("#parent");
+  const auto child = document.querySelector("#child");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+  const Entity childEntity = child->unsafeEntityHandle().entity();
+  ASSERT_NE(compositor.findLayerForTest(childEntity), nullptr);
+
+  EXPECT_EQ(compositor.promoteEntity(parent->unsafeEntityHandle().entity()),
+            CompositorController::PromoteResult::DescendantPromoted);
   EXPECT_NE(compositor.findLayerForTest(childEntity), nullptr);
-  const auto state = compositor.snapshotState();
-  EXPECT_EQ(state.lastPromoteRefusalReason,
-            CompositorController::PromoteRefusalReason::DescendantPromoted);
-  EXPECT_EQ(state.lastPromoteRefusalEntity, parentEntity);
+  EXPECT_TRUE(compositor.hasCompleteTileSetForPresentation());
 }
 
 TEST_F(CompositorControllerTest, ResetAllLayersClearsPromotedEntities) {
@@ -1757,10 +1783,16 @@ TEST_F(CompositorControllerTest, PaintResourceStaticSpanPlanChoosesCachedTile) {
                  ::testing::Field("estimatedDrawOps", &StaticSpanPlan::estimatedDrawOps,
                                   ::testing::Ge(1)))));
 
-  const auto immediateTiles =
-      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::ImmediateOnly);
-  EXPECT_TRUE(std::none_of(immediateTiles.begin(), immediateTiles.end(),
-                           [](const CompositorTile& tile) { return tile.immediate; }));
+  const auto inspectorTiles = compositor.snapshotCompositeTiles();
+  const auto patternedTile =
+      std::find_if(inspectorTiles.begin(), inspectorTiles.end(), [](const auto& tile) {
+        return tile.kind == CompositorController::CompositeTileSnapshot::Kind::Segment &&
+               tile.spanRangeLabel.find("#patterned") != std::string::npos;
+      });
+  ASSERT_NE(patternedTile, inspectorTiles.end());
+  EXPECT_FALSE(patternedTile->immediate)
+      << "Pattern paint must retain the expensive static segment even when the selected target "
+         "itself qualifies for immediate presentation";
 }
 
 TEST_F(CompositorControllerTest, SnapshotTilesForUploadAppliesPayloadPolicies) {

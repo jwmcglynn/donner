@@ -338,13 +338,19 @@ bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
     return false;
   }
 
+  // A mask/clipPath or <use> root contributes through its shadow children, not a direct path on
+  // the root instance. Walking those children gives a conservative bound (including extra mask
+  // geometry is safe because a mask can only remove source coverage).
   switch (type->type()) {
     case ElementType::A:
+    case ElementType::ClipPath:
     case ElementType::Defs:
     case ElementType::G:
+    case ElementType::Mask:
     case ElementType::SVG:
     case ElementType::Switch:
-    case ElementType::Symbol: return true;
+    case ElementType::Symbol:
+    case ElementType::Use: return true;
     default: return false;
   }
 }
@@ -1567,6 +1573,20 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
   return params;
 }
 
+bool IsPlainVisibleLeaf(const components::RenderingInstanceComponent& instance) {
+  return instance.visible && !instance.subtreeInfo.has_value() &&
+         !instance.resolvedFilter.has_value() && !instance.mask.has_value() &&
+         !instance.clipPath.has_value() && !instance.clipRect.has_value() &&
+         !instance.markerStart.has_value() && !instance.markerMid.has_value() &&
+         !instance.markerEnd.has_value();
+}
+
+bool HasNeutralLeafCompositing(const components::ComputedStyleComponent& style) {
+  return style.properties->opacity.get().value() == 1.0 &&
+         style.properties->mixBlendMode.get().value() == MixBlendMode::Normal &&
+         style.properties->isolation.get().value() != Isolation::Isolate;
+}
+
 }  // namespace
 
 void RendererDriver::syncFilterPreparationStats() {
@@ -1927,6 +1947,44 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
   preparedFilterRegions_.clear();
 }
 
+void RendererDriver::popEndedSubtrees(std::vector<DeferredPop>& markers, Entity entity) {
+  while (!markers.empty() && markers.back().lastEntity == entity) {
+    const DeferredPop& deferred = markers.back();
+    if (deferred.hasFilterLayer) {
+      renderer_.popFilterLayer();
+    }
+    if (deferred.hasEntityClip) {
+      renderer_.popClip();
+    }
+    for (int mi = 0; mi < deferred.maskDepth; ++mi) {
+      renderer_.popMask();
+    }
+    if (deferred.hasIsolatedLayer) {
+      renderer_.popIsolatedLayer();
+    }
+    if (deferred.hasViewportClip) {
+      renderer_.popClip();
+    }
+    markers.pop_back();
+  }
+}
+
+bool RendererDriver::shouldCullEarlyLeaf(Registry& registry,
+                                         const components::RenderingInstanceComponent& instance,
+                                         const components::ComputedStyleComponent& style,
+                                         const std::vector<DeferredPop>& markers) const {
+  if (!earlyLeafViewportCulling_ || !IsPlainVisibleLeaf(instance) ||
+      !HasNeutralLeafCompositing(style) ||
+      std::any_of(markers.begin(), markers.end(),
+                  [](const DeferredPop& marker) { return marker.hasFilterLayer; })) {
+    return false;
+  }
+  const auto bounds = DeviceDrawableBoundsWithStroke(
+      instance.dataHandle(registry), style, ShapeNonScalingStrokeMode(instance, style),
+      instance.worldFromEntityTransform, surfaceFromCanvasTransform_);
+  return bounds.has_value() && ShouldCullDeviceBox(*bounds, renderingSize_);
+}
+
 bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEntity,
                                              Entity lastEntity,
                                              const std::function<bool()>& shouldCancel) {
@@ -1988,6 +2046,13 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
 
     const auto& style = instance.styleHandle(registry).get<components::ComputedStyleComponent>();
     if (!style.properties.has_value()) {
+      popEndedSubtrees(subtreeMarkers_, entity);
+      continue;
+    }
+
+    if (shouldCullEarlyLeaf(registry, instance, style, subtreeMarkers_)) {
+      components::ScopedFontResourceRender::recordDraw(registry, entity, /*culled=*/true);
+      popEndedSubtrees(subtreeMarkers_, entity);
       continue;
     }
 
@@ -2108,25 +2173,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       }
     }
 
-    while (!subtreeMarkers_.empty() && subtreeMarkers_.back().lastEntity == entity) {
-      const DeferredPop& deferred = subtreeMarkers_.back();
-      if (deferred.hasFilterLayer) {
-        renderer_.popFilterLayer();
-      }
-      if (deferred.hasEntityClip) {
-        renderer_.popClip();
-      }
-      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
-        renderer_.popMask();
-      }
-      if (deferred.hasIsolatedLayer) {
-        renderer_.popIsolatedLayer();
-      }
-      if (deferred.hasViewportClip) {
-        renderer_.popClip();
-      }
-      subtreeMarkers_.pop_back();
-    }
+    popEndedSubtrees(subtreeMarkers_, entity);
   }
 
   // Pop any remaining deferred layers (handles the case where lastEntity is
@@ -2153,204 +2200,250 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
   return completed;
 }
 
+namespace {
+
+struct RangeBoundContribution {
+  bool unknown = false;
+  std::optional<Box2d> bounds;
+  std::optional<Entity> consumedSubtreeEnd;
+};
+
+bool TraceRangeBounds() {
+  static const bool enabled = std::getenv("DONNER_TRACE_BOUNDS") != nullptr;
+  return enabled;
+}
+
+void TraceBoundReason(Entity entity, const char* reason) {
+  if (TraceRangeBounds()) {
+    std::fprintf(stderr, "[bounds] entity=%u %s → BAIL\n", static_cast<unsigned>(entity), reason);
+  }
+}
+
+void TraceBoundBox(Entity entity, const char* kind, const Box2d& box) {
+  if (TraceRangeBounds()) {
+    std::fprintf(stderr, "[bounds] entity=%u %s box=(%.1f,%.1f → %.1f,%.1f)\n",
+                 static_cast<unsigned>(entity), kind, box.topLeft.x, box.topLeft.y,
+                 box.bottomRight.x, box.bottomRight.y);
+  }
+}
+
+std::vector<Entity> CollectMainPaintRange(Registry& registry, Entity firstEntity,
+                                          Entity lastEntity) {
+  // feImage shadow instances are offscreen-only even when interleaved in this storage.
+  const std::unordered_set<Entity> shadows = collectOffscreenFeImageShadowEntities(registry);
+  std::vector<Entity> entities;
+  RenderingInstanceView view(registry);
+  while (!view.done() && view.currentEntity() != firstEntity) {
+    view.advance();
+  }
+  bool reachedLast = false;
+  while (!view.done() && !reachedLast) {
+    reachedLast = view.currentEntity() == lastEntity;
+    if (!shadows.contains(view.currentEntity())) {
+      entities.push_back(view.currentEntity());
+    }
+    view.advance();
+  }
+  return entities;
+}
+
+bool SkipBoundedSubtree(RenderingInstanceView& view, Entity subtreeEnd, Entity rangeEnd) {
+  bool skippedRangeEnd = false;
+  while (!view.done() && view.currentEntity() != subtreeEnd) {
+    skippedRangeEnd = skippedRangeEnd || view.currentEntity() == rangeEnd;
+    view.advance();
+  }
+  if (!view.done()) {
+    skippedRangeEnd = skippedRangeEnd || view.currentEntity() == rangeEnd;
+    view.advance();
+  }
+  return skippedRangeEnd;
+}
+
+RangeBoundContribution BoundFilteredEntity(Registry& registry, Entity entity,
+                                           const components::RenderingInstanceComponent& instance,
+                                           const Transform2d& finalTransform) {
+  const std::optional<Box2d> local =
+      computeFilterRegion(registry, *instance.resolvedFilter, instance);
+  if (!local) {
+    TraceBoundReason(entity, "filter (no region)");
+    return {.unknown = true};
+  }
+  const Box2d canvas = finalTransform.transformBox(*local);
+  TraceBoundBox(entity, "filter", canvas);
+  RangeBoundContribution result{.bounds = canvas};
+  if (instance.subtreeInfo && entity != instance.subtreeInfo->lastRenderedEntity) {
+    result.consumedSubtreeEnd = instance.subtreeInfo->lastRenderedEntity;
+  }
+  return result;
+}
+
+RangeBoundContribution BoundPathEntity(Registry& registry, Entity entity,
+                                       const components::RenderingInstanceComponent& instance,
+                                       const components::ComputedStyleComponent& style,
+                                       const Transform2d& finalTransform,
+                                       const components::ComputedPathComponent& path) {
+  // Marker geometry can extend beyond the path and is not bounded here.
+  if (instance.markerStart || instance.markerMid || instance.markerEnd) {
+    TraceBoundReason(entity, "marker");
+    return {.unknown = true};
+  }
+  Box2d local = path.spline.bounds();
+  const PaintParams paint = toPaintParams(registry, instance, style);
+  if (!std::holds_alternative<PaintServer::None>(paint.stroke) &&
+      paint.strokeParams.strokeWidth > 0.0) {
+    double padding = paint.strokeParams.strokeWidth / 2.0;
+    if (paint.strokeParams.lineJoin == StrokeLinejoin::Miter) {
+      padding *= paint.strokeParams.miterLimit;
+    }
+    local = Box2d(local.topLeft - Vector2d(padding, padding),
+                  local.bottomRight + Vector2d(padding, padding));
+  }
+  const Box2d canvas = finalTransform.transformBox(local);
+  TraceBoundBox(entity, "path/shape", canvas);
+  return {.bounds = canvas};
+}
+
+void TraceUnknownDrawable(Registry& registry, Entity entity,
+                          const components::RenderingInstanceComponent& instance) {
+  if (TraceRangeBounds()) {
+    const EntityHandle data = instance.dataHandle(registry);
+    const auto* type = data.try_get<components::ElementTypeComponent>();
+    std::fprintf(stderr, "[bounds] entity=%u data=%u type=%d unknown drawable → BAIL\n",
+                 static_cast<unsigned>(entity), static_cast<unsigned>(data.entity()),
+                 type != nullptr ? static_cast<int>(type->type()) : -1);
+  }
+}
+
+RangeBoundContribution BoundVisibleEntity(Registry& registry, Entity entity,
+                                          const components::RenderingInstanceComponent& instance,
+                                          const components::ComputedStyleComponent& style,
+                                          const Transform2d& surfaceFromCanvas,
+                                          bool allowMaskSuperset) {
+  // Transform2d composes left-first: entity-local → canvas → render surface.
+  const Transform2d finalTransform = instance.worldFromEntityTransform * surfaceFromCanvas;
+  if (instance.resolvedFilter) {
+    return BoundFilteredEntity(registry, entity, instance, finalTransform);
+  }
+  if (instance.mask && instance.mask->valid() && !allowMaskSuperset) {
+    TraceBoundReason(entity, "mask");
+    return {.unknown = true};
+  }
+  const EntityHandle data = instance.dataHandle(registry);
+  if (const auto* path = data.try_get<components::ComputedPathComponent>()) {
+    return BoundPathEntity(registry, entity, instance, style, finalTransform, *path);
+  }
+  if (data.try_get<components::ComputedTextComponent>()) {
+    TraceBoundReason(entity, "text");
+    return {.unknown = true};
+  }
+  if (data.try_get<components::LoadedImageComponent>()) {
+    TraceBoundReason(entity, "image");
+    return {.unknown = true};
+  }
+  if (IsNonDrawingContainer(data) || instance.subtreeInfo) {
+    return {};
+  }
+  TraceUnknownDrawable(registry, entity, instance);
+  return {.unknown = true};
+}
+
+bool IsPaintedBoundsCandidate(const components::RenderingInstanceComponent& instance,
+                              const components::ComputedStyleComponent& style) {
+  return style.properties.has_value() && instance.visible &&
+         style.properties->display.get().value() != Display::None;
+}
+
+void AddRangeBound(std::optional<Box2d>& accumulated, const Box2d& box) {
+  if (accumulated) {
+    accumulated->addBox(box);
+  } else {
+    accumulated = box;
+  }
+}
+
+std::optional<Box2d> ScanRangeBounds(Registry& registry, RenderingInstanceView& view,
+                                     Entity lastEntity, const Transform2d& surfaceFromCanvas,
+                                     bool allowMaskSuperset) {
+  std::optional<Box2d> accumulated;
+  bool reachedLast = false;
+  while (!view.done() && !reachedLast) {
+    const Entity entity = view.currentEntity();
+    reachedLast = entity == lastEntity;
+    const components::RenderingInstanceComponent& instance = view.get();
+    view.advance();
+    const auto& style = instance.styleHandle(registry).get<components::ComputedStyleComponent>();
+    if (!IsPaintedBoundsCandidate(instance, style)) {
+      continue;
+    }
+    const RangeBoundContribution bound =
+        BoundVisibleEntity(registry, entity, instance, style, surfaceFromCanvas, allowMaskSuperset);
+    if (bound.unknown) {
+      return std::nullopt;
+    }
+    if (bound.bounds) {
+      AddRangeBound(accumulated, *bound.bounds);
+    }
+    if (bound.consumedSubtreeEnd) {
+      reachedLast = reachedLast || SkipBoundedSubtree(view, *bound.consumedSubtreeEnd, lastEntity);
+    }
+  }
+  return accumulated;
+}
+
+std::optional<Box2d> FinalizeRangeBounds(std::optional<Box2d> accumulated,
+                                         const Vector2d& canvasSize, bool clipToCanvas) {
+  if (!accumulated || !clipToCanvas) {
+    return accumulated;
+  }
+  const Box2d canvasRect(Vector2d::Zero(), canvasSize);
+  const Vector2d topLeft(std::max(accumulated->topLeft.x, canvasRect.topLeft.x),
+                         std::max(accumulated->topLeft.y, canvasRect.topLeft.y));
+  const Vector2d bottomRight(std::min(accumulated->bottomRight.x, canvasRect.bottomRight.x),
+                             std::min(accumulated->bottomRight.y, canvasRect.bottomRight.y));
+  if (topLeft.x >= bottomRight.x || topLeft.y >= bottomRight.y) {
+    return std::nullopt;
+  }
+  if (TraceRangeBounds()) {
+    std::fprintf(stderr, "[bounds] ---> final: (%.1f,%.1f → %.1f,%.1f)\n", topLeft.x, topLeft.y,
+                 bottomRight.x, bottomRight.y);
+  }
+  return Box2d(topLeft, bottomRight);
+}
+
+}  // namespace
+
 std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
     Registry& registry, Entity firstEntity, Entity lastEntity, const RenderViewport& viewport,
     const Transform2d& surfaceFromCanvas) {
+  return computeEntityRangeBounds(registry, firstEntity, lastEntity, viewport, surfaceFromCanvas,
+                                  EntityRangeBoundsOptions{});
+}
+
+std::optional<Box2d> RendererDriver::computeEntityRangeBounds(Registry& registry,
+                                                              Entity firstEntity, Entity lastEntity,
+                                                              const RenderViewport& viewport,
+                                                              const Transform2d& surfaceFromCanvas,
+                                                              EntityRangeBoundsOptions options) {
   const Vector2d canvasSize = viewport.size;
   if (canvasSize.x <= 0.0 || canvasSize.y <= 0.0) {
     return std::nullopt;
   }
 
-  RenderingInstanceView view(registry);
-  while (!view.done() && view.currentEntity() != firstEntity) {
-    view.advance();
-  }
-  if (view.done()) {
+  // Keep the main-paint slice identical to drawPreparedEntityRange; shadow feImage
+  // instances are rendered offscreen and must not expand an owner's bounds.
+  std::vector<Entity> entities = CollectMainPaintRange(registry, firstEntity, lastEntity);
+  RenderingInstanceView view(registry, entities);
+  if (view.done() || view.currentEntity() != firstEntity) {
     return std::nullopt;
   }
-
-  std::optional<Box2d> accumulated;
-  static const bool kTrace = std::getenv("DONNER_TRACE_BOUNDS") != nullptr;
-  if (kTrace) {
+  if (TraceRangeBounds()) {
     std::fprintf(stderr, "[bounds] --- computeEntityRangeBounds(first=%u, last=%u) ---\n",
                  static_cast<unsigned>(firstEntity), static_cast<unsigned>(lastEntity));
   }
-  const auto unionBox = [&](const Box2d& box) {
-    if (!accumulated) {
-      accumulated = box;
-    } else {
-      accumulated->addBox(box);
-    }
-  };
-  const auto traceEntity = [&](Entity e, const char* kind, const Box2d& box) {
-    if (kTrace) {
-      std::fprintf(stderr, "[bounds] entity=%u %s box=(%.1f,%.1f → %.1f,%.1f)\n",
-                   static_cast<unsigned>(e), kind, box.topLeft.x, box.topLeft.y, box.bottomRight.x,
-                   box.bottomRight.y);
-    }
-  };
-
-  // Advance the view past an entity's subtree (used when a filter
-  // consumes its children - their individual bounds are absorbed into
-  // the filter region).
-  const auto skipSubtree = [&view](Entity lastRenderedEntity, Entity rangeLastEntity) {
-    bool skippedRangeLast = false;
-    while (!view.done() && view.currentEntity() != lastRenderedEntity) {
-      skippedRangeLast = skippedRangeLast || view.currentEntity() == rangeLastEntity;
-      view.advance();
-    }
-    if (!view.done()) {
-      skippedRangeLast = skippedRangeLast || view.currentEntity() == rangeLastEntity;
-      view.advance();  // skip past lastRenderedEntity itself
-    }
-    return skippedRangeLast;
-  };
-
-  bool reachedLast = false;
-  while (!view.done() && !reachedLast) {
-    const Entity currentEntity = view.currentEntity();
-    reachedLast = (currentEntity == lastEntity);
-
-    const components::RenderingInstanceComponent& instance = view.get();
-    view.advance();
-
-    const auto& style = instance.styleHandle(registry).get<components::ComputedStyleComponent>();
-    if (!style.properties.has_value()) {
-      continue;
-    }
-    if (!instance.visible) {
-      continue;
-    }
-    if (style.properties->display.get().value() == Display::None) {
-      continue;
-    }
-
-    // `Transform2d::operator*` is left-first: `A * B` means "apply A, then B".
-    // Match `drawEntityRange`'s composition order so bounds are computed in
-    // the same device-space the subsequent rasterize would produce. Today
-    // every caller passes `surfaceFromCanvas = Identity`, but mis-ordering
-    // the two here was a latent twin of the `drawEntityRange` setTransform
-    // bug that cost a day of bisection.
-    const Transform2d finalTransform = instance.worldFromEntityTransform * surfaceFromCanvas;
-
-    // Filter-region path: the filter's output rectangle IS the subtree's
-    // contribution to the canvas. The individual descendant entities'
-    // bounds are rolled up inside the filter layer; only the filter's
-    // post-processing extent matters for our outer bounds.
-    //
-    // If a filter is set but we can't compute a region for it (missing
-    // filter reference, non-`url()` CSS filter with no obvious extent),
-    // bail: the safe answer is "we don't know, fall back to full
-    // canvas". The compositor caller treats `nullopt` that way.
-    if (instance.resolvedFilter.has_value()) {
-      const std::optional<Box2d> filterRegionLocal =
-          computeFilterRegion(registry, *instance.resolvedFilter, instance);
-      if (!filterRegionLocal.has_value()) {
-        if (kTrace) {
-          std::fprintf(stderr, "[bounds] entity=%u filter → BAIL (no region)\n",
-                       static_cast<unsigned>(currentEntity));
-        }
-        return std::nullopt;
-      }
-      const Box2d filterCanvas = finalTransform.transformBox(*filterRegionLocal);
-      traceEntity(currentEntity, "filter", filterCanvas);
-      unionBox(filterCanvas);
-      if (instance.subtreeInfo.has_value()) {
-        // The filter consumed its subtree; skip the descendant entities.
-        if (currentEntity != instance.subtreeInfo->lastRenderedEntity) {
-          reachedLast =
-              reachedLast || skipSubtree(instance.subtreeInfo->lastRenderedEntity, lastEntity);
-        }
-      }
-      continue;
-    }
-
-    // Non-geometry bound-expanders we don't yet model: mask, marker-
-    // shape extents, pattern tiles with subtrees. Bail here so the
-    // compositor falls back to full-canvas rather than risking a
-    // visibly wrong crop.
-    if (instance.mask.has_value() && instance.mask->valid()) {
-      return std::nullopt;
-    }
-
-    // Geometry entities: path, rect, ellipse, line, polyline, polygon.
-    if (const auto* path =
-            instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-      Box2d localBounds = path->spline.bounds();
-
-      // Markers (arrowheads, etc.) extend draws past the path bounds.
-      // Their precise extent requires walking the marker shape; bail
-      // rather than crop them off.
-      if (instance.markerStart.has_value() || instance.markerMid.has_value() ||
-          instance.markerEnd.has_value()) {
-        return std::nullopt;
-      }
-
-      // Stroke padding. `strokeWidth / 2` is the geometric stroke
-      // extent from the path; miter joins on sharp corners can spike
-      // further - use `miterLimit * strokeWidth / 2` as the worst-case
-      // bound per spec.
-      const PaintParams paint = toPaintParams(registry, instance, style);
-      const bool hasStroke = !std::holds_alternative<PaintServer::None>(paint.stroke);
-      if (hasStroke && paint.strokeParams.strokeWidth > 0.0) {
-        double padding = paint.strokeParams.strokeWidth / 2.0;
-        if (paint.strokeParams.lineJoin == StrokeLinejoin::Miter) {
-          padding *= paint.strokeParams.miterLimit;
-        }
-        localBounds = Box2d(localBounds.topLeft - Vector2d(padding, padding),
-                            localBounds.bottomRight + Vector2d(padding, padding));
-      }
-
-      const Box2d canvasBounds = finalTransform.transformBox(localBounds);
-      traceEntity(currentEntity, "path/shape", canvasBounds);
-      unionBox(canvasBounds);
-      continue;
-    }
-
-    // Text and image - not yet modeled. Bail.
-    if (instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
-      return std::nullopt;
-    }
-    if (instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
-      return std::nullopt;
-    }
-
-    // An entity with none of the above data components is either a
-    // container group (no direct draw - its children contribute
-    // bounds as they're iterated) or a sub-document boundary (not
-    // modeled yet; bail).
-    if (IsNonDrawingContainer(instance.dataHandle(registry))) {
-      continue;
-    }
-
-    if (instance.subtreeInfo.has_value()) {
-      // Plain container - children will be iterated next. Continue.
-      continue;
-    }
-
-    // Unknown entity type. Safe fallback: bail.
-    return std::nullopt;
-  }
-
-  if (!accumulated) {
-    return std::nullopt;
-  }
-
-  // Clamp to canvas - content partially off-canvas shouldn't
-  // over-allocate the offscreen.
-  const Box2d canvasRect(Vector2d::Zero(), canvasSize);
-  const Vector2d clampedTL(std::max(accumulated->topLeft.x, canvasRect.topLeft.x),
-                           std::max(accumulated->topLeft.y, canvasRect.topLeft.y));
-  const Vector2d clampedBR(std::min(accumulated->bottomRight.x, canvasRect.bottomRight.x),
-                           std::min(accumulated->bottomRight.y, canvasRect.bottomRight.y));
-  if (clampedTL.x >= clampedBR.x || clampedTL.y >= clampedBR.y) {
-    return std::nullopt;  // Fully off-canvas.
-  }
-  if (kTrace) {
-    std::fprintf(stderr, "[bounds] ---> final: (%.1f,%.1f → %.1f,%.1f)\n", clampedTL.x, clampedTL.y,
-                 clampedBR.x, clampedBR.y);
-  }
-  return Box2d(clampedTL, clampedBR);
+  return FinalizeRangeBounds(
+      ScanRangeBounds(registry, view, lastEntity, surfaceFromCanvas, options.allowMaskSuperset),
+      canvasSize, options.clipToCanvas);
 }
 
 RendererBitmap RendererDriver::takeSnapshot() const {
@@ -2809,6 +2902,13 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
     const auto& style = instance.styleHandle(registry).get<components::ComputedStyleComponent>();
     if (!style.properties.has_value()) {
+      popEndedSubtrees(localDeferred, entity);
+      continue;
+    }
+
+    if (shouldCullEarlyLeaf(registry, instance, style, localDeferred)) {
+      components::ScopedFontResourceRender::recordDraw(registry, entity, /*culled=*/true);
+      popEndedSubtrees(localDeferred, entity);
       continue;
     }
 
@@ -2985,22 +3085,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       }
     }
 
-    while (!localDeferred.empty() && localDeferred.back().lastEntity == entity) {
-      const DeferredPop& deferred = localDeferred.back();
-      if (deferred.hasFilterLayer) {
-        renderer_.popFilterLayer();
-      }
-      if (deferred.hasEntityClip) {
-        renderer_.popClip();
-      }
-      for (int mi = 0; mi < deferred.maskDepth; ++mi) {
-        renderer_.popMask();
-      }
-      if (deferred.hasIsolatedLayer) {
-        renderer_.popIsolatedLayer();
-      }
-      localDeferred.pop_back();
-    }
+    popEndedSubtrees(localDeferred, entity);
   }
 }
 

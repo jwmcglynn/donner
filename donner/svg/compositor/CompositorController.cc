@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <string>
@@ -27,11 +28,13 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
+#include "donner/svg/components/paint/MaskComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/compositor/CompositorControllerInternal.h"
+#include "donner/svg/compositor/CompositorHintComponent.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -81,6 +84,36 @@ bool HasAssignedDescendant(Registry& registry, Entity entity) {
   return false;
 }
 
+// A parent can temporarily own its promoted descendants' pixels only when rasterizing the whole
+// subtree against transparency has the same result as the regular paint-order walk. Masks, clips,
+// gradients and opacity are evaluated by drawEntityRange inside the parent tile. A non-normal
+// blend reads the external backdrop, while a filter may read BackgroundImage, so keep those on
+// their existing owning tiles until they can be proven safe individually.
+bool CanFlattenInteractionSubtree(Registry& registry, Entity root) {
+  using TreeComponent = donner::components::TreeComponent;
+  std::vector<Entity> stack{root};
+  while (!stack.empty()) {
+    const Entity entity = stack.back();
+    stack.pop_back();
+    if (const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity)) {
+      const auto* style =
+          instance->styleHandle(registry).try_get<components::ComputedStyleComponent>();
+      if (style == nullptr || !style->properties.has_value() ||
+          style->properties->mixBlendMode.get().value() != MixBlendMode::Normal ||
+          instance->resolvedFilter.has_value()) {
+        return false;
+      }
+    }
+    if (const auto* tree = registry.try_get<TreeComponent>(entity)) {
+      for (Entity child = tree->firstChild(); child != entt::null;
+           child = registry.get<TreeComponent>(child).nextSibling()) {
+        stack.push_back(child);
+      }
+    }
+  }
+  return true;
+}
+
 bool HasAssignedAncestor(Registry& registry, Entity entity) {
   const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
   Entity cursor = tree != nullptr ? tree->parent() : entt::null;
@@ -91,6 +124,84 @@ bool HasAssignedAncestor(Registry& registry, Entity entity) {
     }
     const auto* ancestorTree = registry.try_get<donner::components::TreeComponent>(cursor);
     cursor = ancestorTree != nullptr ? ancestorTree->parent() : entt::null;
+  }
+  return false;
+}
+
+bool HasOnlyBucketAssignedAncestors(Registry& registry, Entity entity) {
+  const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+  Entity cursor = tree != nullptr ? tree->parent() : entt::null;
+  bool found = false;
+  while (cursor != entt::null && registry.valid(cursor)) {
+    const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(cursor);
+    if (assignment != nullptr && assignment->layerId != 0) {
+      const auto* hints = registry.try_get<CompositorHintComponent>(cursor);
+      if (hints == nullptr || hints->entries.empty() ||
+          !std::all_of(hints->entries.begin(), hints->entries.end(), [](const HintEntry& entry) {
+            return entry.source == HintSource::ComplexityBucket;
+          })) {
+        return false;
+      }
+      found = true;
+    }
+    const auto* ancestorTree = registry.try_get<donner::components::TreeComponent>(cursor);
+    cursor = ancestorTree != nullptr ? ancestorTree->parent() : entt::null;
+  }
+  return found;
+}
+
+bool HasStableDamageContext(Registry& registry, Entity child, Entity owner) {
+  const auto* tree = registry.try_get<donner::components::TreeComponent>(child);
+  Entity cursor = child;
+  while (cursor != entt::null && registry.valid(cursor)) {
+    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(cursor);
+    if (instance == nullptr || instance->resolvedFilter.has_value() ||
+        instance->markerStart.has_value() || instance->markerMid.has_value() ||
+        instance->markerEnd.has_value()) {
+      return false;
+    }
+    if (instance->mask.has_value() && instance->mask->valid()) {
+      const auto* mask = instance->mask->reference.handle.try_get<components::MaskComponent>();
+      if (mask == nullptr || mask->maskUnits != MaskUnits::UserSpaceOnUse ||
+          mask->maskContentUnits != MaskContentUnits::UserSpaceOnUse) {
+        return false;
+      }
+    }
+    if (instance->clipPath.has_value() && instance->clipPath->valid() &&
+        instance->clipPath->units != ClipPathUnits::UserSpaceOnUse) {
+      return false;
+    }
+    if (cursor == owner) {
+      return true;
+    }
+    tree = registry.try_get<donner::components::TreeComponent>(cursor);
+    cursor = tree != nullptr ? tree->parent() : entt::null;
+  }
+  return false;
+}
+
+bool OwnerSupportsDamagePatching(Registry& registry, const CompositorLayer& owner) {
+  RenderingInstanceView view(registry);
+  while (!view.done() && view.currentEntity() != owner.firstEntity()) {
+    view.advance();
+  }
+  while (!view.done()) {
+    const Entity entity = view.currentEntity();
+    const auto& instance = view.get();
+    if (instance.resolvedFilter.has_value() || instance.markerStart.has_value() ||
+        instance.markerMid.has_value() || instance.markerEnd.has_value()) {
+      return false;
+    }
+    const auto* style =
+        instance.styleHandle(registry).try_get<components::ComputedStyleComponent>();
+    if (style == nullptr || !style->properties.has_value() ||
+        style->properties->mixBlendMode.get().value() != MixBlendMode::Normal) {
+      return false;
+    }
+    if (entity == owner.lastEntity()) {
+      return true;
+    }
+    view.advance();
   }
   return false;
 }
@@ -123,126 +234,136 @@ CompositorController::~CompositorController() = default;
 CompositorController::CompositorController(CompositorController&&) noexcept = default;
 CompositorController& CompositorController::operator=(CompositorController&&) noexcept = default;
 
-CompositorController::PromoteResult CompositorController::promoteEntity(
-    Entity entity, InteractionHint interactionKind) {
-  Registry& registry = document().registry();
+CompositorController::PromoteResult CompositorController::refusePromotion(
+    Entity entity, PromoteRefusalReason reason) {
+  lastPromoteRefusalReason_ = reason;
+  lastPromoteRefusalEntity_ = entity;
+  switch (reason) {
+    case PromoteRefusalReason::InvalidEntity: return PromoteResult{PromoteResult::InvalidEntity};
+    case PromoteRefusalReason::LayerLimit: return PromoteResult{PromoteResult::LayerLimit};
+    case PromoteRefusalReason::MemoryLimit: return PromoteResult{PromoteResult::MemoryLimit};
+    case PromoteRefusalReason::DescendantPromoted:
+      return PromoteResult{PromoteResult::DescendantPromoted};
+    case PromoteRefusalReason::None: return PromoteResult{PromoteResult::OwningTilesRequired};
+  }
+  return PromoteResult{PromoteResult::OwningTilesRequired};
+}
 
-  const auto refuse = [&](PromoteRefusalReason reason) {
-    lastPromoteRefusalReason_ = reason;
-    lastPromoteRefusalEntity_ = entity;
-    switch (reason) {
-      case PromoteRefusalReason::InvalidEntity: return PromoteResult{PromoteResult::InvalidEntity};
-      case PromoteRefusalReason::LayerLimit: return PromoteResult{PromoteResult::LayerLimit};
-      case PromoteRefusalReason::MemoryLimit: return PromoteResult{PromoteResult::MemoryLimit};
-      case PromoteRefusalReason::DescendantPromoted:
-        return PromoteResult{PromoteResult::DescendantPromoted};
-      case PromoteRefusalReason::None: return PromoteResult{PromoteResult::OwningTilesRequired};
-    }
-    return PromoteResult{PromoteResult::OwningTilesRequired};
+void CompositorController::clearTransientInteractionOwner(Entity entity) {
+  if (exclusiveInteractionRoot_ == entity) {
+    exclusiveInteractionRoot_ = entt::null;
+  }
+  if (selectedBucketDescendant_ == entity) {
+    selectedBucketDescendant_ = entt::null;
+  }
+}
+
+void CompositorController::prepareColdFilterOnlyPromotion(Registry& registry) {
+  if (documentPrepared_ || config_.mandatoryHintScope != MandatoryHintScope::FilterOnly) {
+    return;
+  }
+  ParseWarningSink warningSink;
+  RendererUtils::prepareDocumentForRendering(document(), /*verbose=*/false, warningSink);
+  documentPrepared_ = true;
+  if (registry.ctx().contains<components::RenderTreeState>()) {
+    registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
+  }
+  mandatoryDetector_.reconcile(registry);
+  if (config_.complexityBucketing) {
+    complexityBucketer_.reconcile(registry);
+  }
+  hintsScanned_ = true;
+  const ResolveOptions resolveOptions{
+      .enableInteractionHints = config_.autoPromoteInteractions,
+      .enableAnimationHints = config_.autoPromoteAnimations,
+      .enableComplexityBucketHints = config_.complexityBucketing,
   };
+  resolveLayerAssignments(registry, resolveOptions);
+  reconcileLayers(registry);
+  refreshLayerMetadata();
+}
 
-  if (!registry.valid(entity)) {
-    return refuse(PromoteRefusalReason::InvalidEntity);
+std::optional<CompositorController::PromoteResult> CompositorController::classifyPromotionContext(
+    Registry& registry, Entity entity, bool* suspendBucketAncestors) {
+  const bool hasAssignedAncestor = HasAssignedAncestor(registry, entity);
+  *suspendBucketAncestors = hasAssignedAncestor && HasOnlyBucketAssignedAncestors(registry, entity);
+  const bool otherLiveInteraction =
+      std::any_of(activeHints_.begin(), activeHints_.end(), [&](const auto& entry) {
+        return entry.first != entity && !pendingDemotions_.contains(entry.first);
+      });
+  if (HasCompositingBreakingAncestor(registry, entity) ||
+      (hasAssignedAncestor && !*suspendBucketAncestors) ||
+      (*suspendBucketAncestors &&
+       (otherLiveInteraction ||
+        (selectedBucketDescendant_ != entt::null && selectedBucketDescendant_ != entity)))) {
+    return refusePromotion(entity, PromoteRefusalReason::None);
   }
+  return std::nullopt;
+}
 
-  // FilterOnly leaves opacity, blend-mode, and isolation ancestors inline. Promotion safety in
-  // that scope therefore depends on their resolved isolation state, including CSS-authored
-  // values. A cold editor request can promote a selection before the first renderFrame call; raw
-  // XML attributes are not enough to classify those cases. Prepare and reconcile first so the
-  // narrowed scope never extracts a selection from an inline compositing context. Full scope
-  // defers the equivalent validation to render preparation so its cold path stays unchanged.
-  if (!documentPrepared_ && config_.mandatoryHintScope == MandatoryHintScope::FilterOnly) {
-    ParseWarningSink warningSink;
-    RendererUtils::prepareDocumentForRendering(document(), /*verbose=*/false, warningSink);
-    documentPrepared_ = true;
-    if (registry.ctx().contains<components::RenderTreeState>()) {
-      registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
-    }
-    mandatoryDetector_.reconcile(registry);
-    if (config_.complexityBucketing) {
-      complexityBucketer_.reconcile(registry);
-    }
-    hintsScanned_ = true;
-    const ResolveOptions resolveOptions{
-        .enableInteractionHints = config_.autoPromoteInteractions,
-        .enableAnimationHints = config_.autoPromoteAnimations,
-        .enableComplexityBucketHints = config_.complexityBucketing,
-    };
-    resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
-    reconcileLayers(registry);
-    refreshLayerMetadata();
-  }
-
-  // Descendants under an ancestor filter / mask / clip-path or an already assigned layer cannot be
-  // extracted into their own layer without losing or duplicating the owning context. The editor
-  // still presents the compositor's remaining paint-order tiles; only the requested interaction
-  // split is refused.
-  if (HasCompositingBreakingAncestor(registry, entity) || HasAssignedAncestor(registry, entity)) {
-    lastPromoteRefusalReason_ = PromoteRefusalReason::None;
-    lastPromoteRefusalEntity_ = entt::null;
-    return PromoteResult{PromoteResult::OwningTilesRequired};
-  }
-
-  // Layer-set hysteresis. If `entity` is in the
-  // pending-demotion queue, lift the demotion. The layer + hint
-  // survived the `demoteEntity` call, so we can fall through to the
-  // kind-refresh path below and reuse the cached bitmap / segment
-  // split without any `resyncSegmentsToLayerSet` work. This is the
-  // "click-deselect-click" / "drag-release-redrag-same-element" fast
-  // path this optimizes.
-  pendingDemotions_.erase(entity);
-
-  // Already promoted via the controller's `promoteEntity` path. Refresh the
-  // Interaction kind in place so a Selection prewarm can become an ActiveDrag
-  // without demoting the layer or dropping its cached bg/promoted/fg bitmaps.
-  // Critical for drag-after-zoom: without this, the kind upgrade returned
-  // early here, the compositor kept treating the entity as a Selection hint,
-  // and the descendant-segment cascade marked unrelated segments dirty every
-  // drag frame - turning a moderately-zoomed drag into 3-second slow frames.
+bool CompositorController::refreshExistingInteraction(Entity entity,
+                                                      InteractionHint interactionKind) {
   auto activeHintIt = activeHints_.find(entity);
-  if (activeHintIt != activeHints_.end()) {
-    if (config_.autoPromoteInteractions) {
-      const std::optional<InteractionHint> activeKind = activeHintIt->second.interactionKind();
-      if (!activeKind.has_value() || *activeKind != interactionKind) {
-        activeHintIt->second.setInteractionKind(interactionKind);
-      }
+  if (activeHintIt == activeHints_.end()) {
+    return false;
+  }
+  if (config_.autoPromoteInteractions) {
+    const std::optional<InteractionHint> activeKind = activeHintIt->second.interactionKind();
+    if (!activeKind.has_value() || *activeKind != interactionKind) {
+      activeHintIt->second.setInteractionKind(interactionKind);
     }
-    lastPromoteRefusalReason_ = PromoteRefusalReason::None;
-    lastPromoteRefusalEntity_ = entt::null;
-    return PromoteResult{PromoteResult::PromotedLayer};
   }
+  lastPromoteRefusalReason_ = PromoteRefusalReason::None;
+  lastPromoteRefusalEntity_ = entt::null;
+  return true;
+}
 
-  if (activeHints_.size() >= static_cast<size_t>(kMaxCompositorLayers)) {
-    return refuse(PromoteRefusalReason::LayerLimit);
+std::optional<CompositorController::PromoteResult> CompositorController::validateExclusiveParent(
+    Registry& registry, Entity entity, bool* needsExclusiveLayer) {
+  *needsExclusiveLayer = HasAssignedDescendant(registry, entity);
+  if (!*needsExclusiveLayer) {
+    return std::nullopt;
   }
-
-  if (totalBitmapMemory() >= EffectiveCompositorMemoryBudget()) {
-    return refuse(PromoteRefusalReason::MemoryLimit);
+  const bool anotherExclusiveLayer =
+      exclusiveInteractionRoot_ != entt::null && exclusiveInteractionRoot_ != entity;
+  const bool anotherLiveInteraction =
+      std::any_of(activeHints_.begin(), activeHints_.end(), [&](const auto& entry) {
+        return entry.first != entity && !pendingDemotions_.contains(entry.first);
+      });
+  if (!documentPrepared_ || anotherExclusiveLayer || anotherLiveInteraction ||
+      !CanFlattenInteractionSubtree(registry, entity)) {
+    return refusePromotion(entity, PromoteRefusalReason::DescendantPromoted);
   }
+  return std::nullopt;
+}
 
-  // Refuse promotion when any descendant already has its own promoted
-  // layer (non-zero `ComputedLayerAssignmentComponent::layerId`). A
-  // user-promoted layer's range would span those descendants, causing
-  // `drawEntityRange` to render them into this layer's bitmap AND into
-  // the sub-layer's bitmap - double-exposed pixels on compose. This
-  // manifested as crescent-shaped color drift at radial-gradient orb
-  // edges when dragging `#Clouds_with_gradients` on the splash, which
-  // contains cls-90 / cls-93 clip-path sublayers.
-  //
-  // Leaving this specific drag target inside its owning compositor tiles costs the interaction
-  // fast path but preserves correctness.
-  // Typical interactive targets (single shapes, text letters, filter
-  // groups themselves) are unaffected.
-  if (HasAssignedDescendant(registry, entity)) {
-    return refuse(PromoteRefusalReason::DescendantPromoted);
+std::optional<CompositorController::PromoteResult>
+CompositorController::validateFullInteractionBounds(Registry& registry, Entity entity) {
+  if (!hasLastViewport_ || !hasLastSurfaceFromCanvas_) {
+    return std::nullopt;
   }
+  const auto [firstEntity, lastEntity] = computeEntityRange(registry, entity);
+  const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
+      renderer(), registry, firstEntity, lastEntity, lastViewport_, lastSurfaceFromCanvas_,
+      /*retainFullInteractionBounds=*/true);
+  if (!geometry.interactionBoundsRejected) {
+    return std::nullopt;
+  }
+  return refusePromotion(entity, geometry.interactionBoundsUnavailable
+                                     ? PromoteRefusalReason::None
+                                     : PromoteRefusalReason::MemoryLimit);
+}
 
-  // Under `autoPromoteInteractions`, the editor-driven
-  // `promoteEntity` call publishes an `Interaction` hint tagged with the
-  // caller-supplied kind (`Selection` for pre-warm on selection,
-  // `ActiveDrag` for an in-flight drag). When the gate is off, we fall back
-  // to the `Explicit` escape hatch. Either way the hint is tracked in
-  // `activeHints_` and `isPromoted` returns true.
+bool CompositorController::assignInteractionLayer(Registry& registry, Entity entity,
+                                                  InteractionHint interactionKind,
+                                                  bool needsExclusiveLayer,
+                                                  bool suspendBucketAncestors) {
+  if (needsExclusiveLayer) {
+    exclusiveInteractionRoot_ = entity;
+  }
+  if (suspendBucketAncestors) {
+    selectedBucketDescendant_ = entity;
+  }
   ScopedCompositorHint hint =
       config_.autoPromoteInteractions
           ? ScopedCompositorHint::Interaction(registry, entity, interactionKind)
@@ -250,27 +371,67 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
   const auto [it, inserted] = activeHints_.try_emplace(entity, std::move(hint));
   UTILS_RELEASE_ASSERT(inserted);
   static_cast<void>(it);
-
-  resolver_.resolve(registry, kMaxCompositorLayers);
+  resolveLayerAssignments(registry);
   reconcileLayers(registry);
-
   const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(entity);
-  if (assignment == nullptr || assignment->layerId == 0) {
-    activeHints_.erase(entity);
-    resolver_.resolve(registry, kMaxCompositorLayers);
-    reconcileLayers(registry);
-    // The resolver refused the assignment - treat as "descendant
-    // promoted" since that's the only realistic cause of post-
-    // emplace resolver rejection (the explicit hint exists, but the
-    // resolver picked a different overlapping promote that owns the
-    // layer slot).
-    return refuse(PromoteRefusalReason::DescendantPromoted);
+  if (assignment != nullptr && assignment->layerId != 0) {
+    return true;
+  }
+  activeHints_.erase(entity);
+  clearTransientInteractionOwner(entity);
+  resolveLayerAssignments(registry);
+  reconcileLayers(registry);
+  return false;
+}
+
+CompositorController::PromoteResult CompositorController::promoteEntity(
+    Entity entity, InteractionHint interactionKind) {
+  Registry& registry = document().registry();
+  if (!registry.valid(entity)) {
+    return refusePromotion(entity, PromoteRefusalReason::InvalidEntity);
+  }
+  if (failedExclusiveInteractionRoot_ != entt::null) {
+    const Vector2i currentCanvas =
+        hasLastViewport_ ? BitmapDimensionsForViewport(lastViewport_) : Vector2i::Zero();
+    if (failedExclusiveInteractionRoot_ == entity && failedExclusiveCanvasSize_ == currentCanvas) {
+      return refusePromotion(entity, PromoteRefusalReason::MemoryLimit);
+    }
+    failedExclusiveInteractionRoot_ = entt::null;
+    failedExclusiveCanvasSize_ = Vector2i::Zero();
   }
 
-  // Don't force a full cache invalidation - `resyncSegmentsToLayerSet`
-  // preserves segments whose boundary identity survives the new layer
-  // insertion, which is what keeps click-to-first-pixel fast on the
-  // splash's first drag-target promote.
+  // Filter-only mode needs resolved ancestor styles even on a cold editor selection.
+  prepareColdFilterOnlyPromotion(registry);
+  bool suspendBucketAncestors = false;
+  if (const auto refusal = classifyPromotionContext(registry, entity, &suspendBucketAncestors)) {
+    return *refusal;
+  }
+
+  // A selection hint can upgrade to ActiveDrag without dropping its retained tile.
+  pendingDemotions_.erase(entity);
+  if (refreshExistingInteraction(entity, interactionKind)) {
+    return PromoteResult{PromoteResult::PromotedLayer};
+  }
+  if (activeHints_.size() >= static_cast<size_t>(kMaxCompositorLayers)) {
+    return refusePromotion(entity, PromoteRefusalReason::LayerLimit);
+  }
+  if (totalBitmapMemory() >= EffectiveCompositorMemoryBudget()) {
+    return refusePromotion(entity, PromoteRefusalReason::MemoryLimit);
+  }
+
+  bool needsExclusiveLayer = false;
+  if (const auto refusal = validateExclusiveParent(registry, entity, &needsExclusiveLayer)) {
+    return *refusal;
+  }
+  if (const auto refusal = validateFullInteractionBounds(registry, entity)) {
+    return *refusal;
+  }
+  if (!assignInteractionLayer(registry, entity, interactionKind, needsExclusiveLayer,
+                              suspendBucketAncestors)) {
+    return refusePromotion(entity, PromoteRefusalReason::DescendantPromoted);
+  }
+
+  // The preserving segment resync on the next frame retains every unaffected paint-order tile.
   lastPromoteRefusalReason_ = PromoteRefusalReason::None;
   lastPromoteRefusalEntity_ = entt::null;
   return PromoteResult{PromoteResult::PromotedLayer};
@@ -292,6 +453,22 @@ void CompositorController::demoteEntity(Entity entity) {
   // pre-hysteresis behaviour, where the `activeHints_.find` miss was also
   // a no-op).
   if (!activeHints_.contains(entity)) {
+    return;
+  }
+
+  if (exclusiveInteractionRoot_ == entity || selectedBucketDescendant_ == entity) {
+    // Keeping the parent through the normal 30-frame hysteresis would overlap a newly selected
+    // child with its exclusive bitmap. Restore the descendants' mandatory assignments on the
+    // target switch instead of keeping two views of the same pixels alive.
+    exclusiveInteractionRoot_ = entt::null;
+    selectedBucketDescendant_ = entt::null;
+    activeHints_.erase(entity);
+    pendingDemotions_.erase(entity);
+    Registry& registry = document().registry();
+    resolveLayerAssignments(registry);
+    reconcileLayers(registry);
+    splitStaticLayersEntity_ = entt::null;
+    splitStaticLayersViewport_ = Vector2i::Zero();
     return;
   }
 
@@ -363,6 +540,12 @@ void CompositorController::processPendingDemotions(Registry& registry) {
 
   for (Entity entity : expired) {
     activeHints_.erase(entity);
+    if (exclusiveInteractionRoot_ == entity) {
+      exclusiveInteractionRoot_ = entt::null;
+    }
+    if (selectedBucketDescendant_ == entity) {
+      selectedBucketDescendant_ = entt::null;
+    }
   }
   // Batch a single resolver + reconcile pass for all expirations
   // - the loop above might have removed several hints at once, and
@@ -370,7 +553,7 @@ void CompositorController::processPendingDemotions(Registry& registry) {
   // rebuild. `resyncSegmentsToLayerSet` (called from
   // `renderFrame`'s normal flow later this tick) preserves every
   // segment whose boundary pair survived the layer removals.
-  resolver_.resolve(registry, kMaxCompositorLayers);
+  resolveLayerAssignments(registry);
   reconcileLayers(registry);
 }
 
@@ -399,6 +582,7 @@ bool CompositorController::dropUnsafeInteractionHints(Registry& registry) {
   for (const Entity entity : droppedEntities) {
     activeHints_.erase(entity);
     pendingDemotions_.erase(entity);
+    clearTransientInteractionOwner(entity);
     if (splitStaticLayersEntity_ == entity) {
       splitStaticLayersEntity_ = entt::null;
       splitStaticLayersViewport_ = Vector2i::Zero();
@@ -815,6 +999,31 @@ std::unordered_map<Entity, Entity> BuildStructuralEntityRemap(const SVGDocument&
   return remap;
 }
 
+bool CompositorController::remapAncillaryInteractionEntities(
+    const std::unordered_map<Entity, Entity>& remap) {
+  failedExclusiveInteractionRoot_ = entt::null;
+  failedExclusiveCanvasSize_ = Vector2i::Zero();
+  const auto remapRequired = [&](Entity* entity) {
+    if (*entity == entt::null) {
+      return true;
+    }
+    const auto it = remap.find(*entity);
+    if (it == remap.end()) {
+      return false;
+    }
+    *entity = it->second;
+    return true;
+  };
+  if (!remapRequired(&exclusiveInteractionRoot_) || !remapRequired(&selectedBucketDescendant_)) {
+    return false;
+  }
+  if (splitStaticLayersEntity_ != entt::null) {
+    const auto it = remap.find(splitStaticLayersEntity_);
+    splitStaticLayersEntity_ = it != remap.end() ? it->second : entt::null;
+  }
+  return true;
+}
+
 bool CompositorController::remapAfterStructuralReplace(
     const std::unordered_map<Entity, Entity>& remap) {
   Registry& registry = document().registry();
@@ -892,17 +1101,9 @@ bool CompositorController::remapAfterStructuralReplace(
     layer.remapEntities(eIt->second, firstIt->second, lastIt->second);
   }
 
-  // Step 4: flush ancillary entity references. `splitStaticLayersEntity_`
-  // keys the bg/fg cache; remap it or clear if unmappable.
-  if (splitStaticLayersEntity_ != entt::null) {
-    const auto it = remap.find(splitStaticLayersEntity_);
-    if (it != remap.end()) {
-      splitStaticLayersEntity_ = it->second;
-    } else {
-      // Cache identity lost - drop the split-target id so the next
-      // `snapshotTilesForUpload` re-derives it from `activeHints_`.
-      splitStaticLayersEntity_ = entt::null;
-    }
+  // Step 4: remap transient selection and split-cache references.
+  if (!remapAncillaryInteractionEntities(remap)) {
+    return false;
   }
 
   // Re-resolve and reconcile so `ComputedLayerAssignmentComponent`s
@@ -916,11 +1117,11 @@ bool CompositorController::remapAfterStructuralReplace(
       .enableAnimationHints = config_.autoPromoteAnimations,
       .enableComplexityBucketHints = config_.complexityBucketing,
   };
-  resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
+  resolveLayerAssignments(registry, resolveOptions);
   reconcileLayers(registry);
   const bool droppedUnsafeHints = dropUnsafeInteractionHints(registry);
   if (droppedUnsafeHints) {
-    resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
+    resolveLayerAssignments(registry, resolveOptions);
     reconcileLayers(registry);
     markAllSegmentsDirty();
   }
@@ -963,7 +1164,8 @@ bool CompositorController::remapAfterStructuralReplace(
       if (IsIntegerTranslation(canvasFromBitmap, &roundedTranslation)) {
         const LayerRasterGeometry geometry =
             ComputeLayerRasterGeometry(renderer(), registry, layer.firstEntity(),
-                                       layer.lastEntity(), viewport, surfaceFromCanvas);
+                                       layer.lastEntity(), viewport, surfaceFromCanvas,
+                                       /*retainFullInteractionBounds=*/true);
         const Vector2i expectedBitmapDims = BitmapDimensionsForViewport(geometry.viewport);
         const Vector2d composedCanvasOffset = layer.canvasOffset() + roundedTranslation;
         cacheStillValid = LayerPayloadDimensions(layer) == expectedBitmapDims &&
@@ -1007,10 +1209,14 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
     complexityBucketer_.clear();
   }
   activeHints_.clear();
+  exclusiveInteractionRoot_ = entt::null;
+  selectedBucketDescendant_ = entt::null;
+  failedExclusiveInteractionRoot_ = entt::null;
+  failedExclusiveCanvasSize_ = Vector2i::Zero();
   // The hysteresis queue is tied to the old entity space; both
   // document-replaced and live-registry resets must drop it.
   pendingDemotions_.clear();
-  resolver_.resolve(registry, kMaxCompositorLayers);
+  resolveLayerAssignments(registry);
   reconcileLayers(registry);
 
   staticSegments_.clear();
@@ -1170,17 +1376,37 @@ bool CompositorController::renderFrame(const RenderViewport& viewport, Cancellat
   cancelToken_.emplace(token);
   renderFrameImpl(viewport, surfaceFromCanvas);
   const bool cancelled = token.isCancelled();
+  if (!cancelled) {
+    recoverFailedExclusivePromotion();
+  }
   cancelToken_.reset();
   return !cancelled;
 }
 
 void CompositorController::renderFrame(const RenderViewport& viewport) {
   renderFrameImpl(viewport, Transform2d());
+  recoverFailedExclusivePromotion();
 }
 
 void CompositorController::renderFrame(const RenderViewport& viewport,
                                        const Transform2d& surfaceFromCanvas) {
   renderFrameImpl(viewport, surfaceFromCanvas);
+  recoverFailedExclusivePromotion();
+}
+
+bool CompositorController::tryPatchDirtyLayer(
+    CompositorLayer& layer, const RenderViewport& viewport, const Transform2d& surfaceFromCanvas,
+    const std::vector<DirtyEntityInvalidation>& dirtyInvalidations) {
+  if (dirtyInvalidations.size() != 1u) {
+    return false;
+  }
+  const DirtyEntityInvalidation& invalidation = dirtyInvalidations.front();
+  if (!invalidation.damageBoundsCanvas.has_value() ||
+      std::ranges::find(invalidation.containingLayerEntitiesBeforePrepare, layer.entity()) ==
+          invalidation.containingLayerEntitiesBeforePrepare.end()) {
+    return false;
+  }
+  return rasterizeLayerDamage(layer, viewport, surfaceFromCanvas, *invalidation.damageBoundsCanvas);
 }
 
 void CompositorController::renderFrameImpl(const RenderViewport& viewport,
@@ -1438,17 +1664,20 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         }
       }
       if (matchedLayer == nullptr) {
-        // Transform writebacks dirty descendants of the promoted root. A
-        // contained descendant does not disqualify the fast path because the
-        // root's resolution carries the translation for the whole subtree.
-        bool containedInPromotedLayer = false;
+        // A descendant dirtied *by its selected promoted root* is carried by that root's
+        // bitmap transform. A child edited independently inside a mandatory mask/filter layer
+        // is different: moving the whole owner bitmap would move its siblings, so the owner
+        // must be re-rasterized. Clearing that child's dirty flag here used to freeze masked
+        // crystal faces throughout a held drag until a later full render on mouse-up.
+        bool carriedByDirtyPromotedRoot = false;
         for (auto& layer : layers_) {
-          if (layerContainsEntity(layer, e)) {
-            containedInPromotedLayer = true;
+          if (layerContainsEntity(layer, e) &&
+              std::ranges::find(dirtyEntitySnapshot, layer.entity()) != dirtyEntitySnapshot.end()) {
+            carriedByDirtyPromotedRoot = true;
             break;
           }
         }
-        if (containedInPromotedLayer) {
+        if (carriedByDirtyPromotedRoot) {
           continue;
         }
         eligible = false;
@@ -1571,7 +1800,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   };
   {
     ZoneScopedN("Compositor::resolver.resolve");
-    resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
+    resolveLayerAssignments(registry, resolveOptions);
   }
   {
     ZoneScopedN("Compositor::reconcileLayers");
@@ -1648,7 +1877,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       hintsScanned_ = true;
       {
         ZoneScopedN("Compositor::resolver.resolve (first)");
-        resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
+        resolveLayerAssignments(registry, resolveOptions);
       }
       {
         ZoneScopedN("Compositor::reconcileLayers (first)");
@@ -1710,11 +1939,11 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         complexityBucketer_.reconcile(registry);
       }
       hintsScanned_ = true;
-      resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
+      resolveLayerAssignments(registry, resolveOptions);
       reconcileLayers(registry);
     }
     if (dropUnsafeInteractionHints(registry)) {
-      resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
+      resolveLayerAssignments(registry, resolveOptions);
       reconcileLayers(registry);
       markAllSegmentsDirty();
     }
@@ -1892,7 +2121,14 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         if (isCancelled()) {
           return;
         }
-        rasterizeLayer(layer, viewport, surfaceFromCanvas);
+        const bool patched =
+            tryPatchDirtyLayer(layer, viewport, surfaceFromCanvas, dirtyInvalidationSnapshot);
+        if (!patched) {
+          if (lastRenderFrameStats_.textureAllocationFailureCount != 0) {
+            return;
+          }
+          rasterizeLayer(layer, viewport, surfaceFromCanvas);
+        }
         if (layer.isImmediate()) {
           lastRenderFrameStats_.immediateRasterizeMs += layer.lastRasterizeMs();
           ++lastRenderFrameStats_.immediateTileCount;
@@ -2203,6 +2439,70 @@ void CompositorController::cascadeTransformDirtyToDescendantSegments(
   }
 }
 
+std::optional<Box2d> CompositorController::damageBoundsForDirtyEntity(
+    Registry& registry, Entity entity, std::span<const Entity> containingLayers,
+    std::size_t dirtyEntityCount) const {
+  if (dirtyEntityCount != 1u || !hasLastViewport_ || !hasLastSurfaceFromCanvas_ ||
+      containingLayers.size() != 1u || containingLayers.front() == entity) {
+    return std::nullopt;
+  }
+  if (!canPatchDirtyEntity(registry, entity, containingLayers.front())) {
+    return std::nullopt;
+  }
+  return translatedDamageBounds(registry, entity);
+}
+
+bool CompositorController::canPatchDirtyEntity(Registry& registry, Entity entity,
+                                               Entity owner) const {
+  constexpr uint16_t kPureTransformFlags = components::DirtyFlagsComponent::Layout |
+                                           components::DirtyFlagsComponent::Transform |
+                                           components::DirtyFlagsComponent::WorldTransform |
+                                           components::DirtyFlagsComponent::RenderInstance;
+  const auto* flags = registry.try_get<components::DirtyFlagsComponent>(entity);
+  const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+  const CompositorLayer* ownerLayer = findLayer(owner);
+  return flags != nullptr && instance != nullptr && ownerLayer != nullptr &&
+         (flags->flags & ~kPureTransformFlags) == 0 &&
+         instance->dataHandle(registry).all_of<components::ComputedPathComponent>() &&
+         HasStableDamageContext(registry, entity, owner) &&
+         OwnerSupportsDamagePatching(registry, *ownerLayer);
+}
+
+std::optional<Box2d> CompositorController::translatedDamageBounds(Registry& registry,
+                                                                  Entity entity) const {
+  const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
+  RendererDriver boundsDriver(renderer());
+  const std::optional<Box2d> oldBounds = boundsDriver.computeEntityRangeBounds(
+      registry, entity, entity, lastViewport_, lastSurfaceFromCanvas_,
+      RendererDriver::EntityRangeBoundsOptions{
+          .clipToCanvas = false,
+          .allowMaskSuperset = true,
+      });
+  if (!oldBounds.has_value()) {
+    return std::nullopt;
+  }
+  const auto& absolute =
+      components::LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry, entity));
+  const Transform2d canvasFromDocument =
+      components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+  const Transform2d newWorldFromEntity =
+      absolute.worldFromEntity * (absolute.worldIsCanvas ? canvasFromDocument : Transform2d());
+  const Transform2d oldOutput = instance.worldFromEntityTransform * lastSurfaceFromCanvas_;
+  const Transform2d newOutput = newWorldFromEntity * lastSurfaceFromCanvas_;
+  for (std::size_t i = 0; i < 4; ++i) {
+    if (!NearEquals(oldOutput.data[i], newOutput.data[i])) {
+      return std::nullopt;
+    }
+  }
+  const Vector2d delta = newOutput.translation() - oldOutput.translation();
+  if (!std::isfinite(delta.x) || !std::isfinite(delta.y) || delta.lengthSquared() == 0.0) {
+    return std::nullopt;
+  }
+  Box2d damage = *oldBounds;
+  damage.addBox(Box2d(oldBounds->topLeft + delta, oldBounds->bottomRight + delta));
+  return damage;
+}
+
 std::vector<CompositorController::DirtyEntityInvalidation>
 CompositorController::captureDirtyEntityInvalidations(
     const std::vector<Entity>& dirtyEntities) const {
@@ -2223,6 +2523,10 @@ CompositorController::captureDirtyEntityInvalidations(
         invalidation.containingLayerEntitiesBeforePrepare.push_back(layer.entity());
       }
     }
+    // Only a single, independently moved path inside one already-retained owner can use an
+    // incremental patch. A moving owner root itself uses the existing affine bitmap fast path.
+    invalidation.damageBoundsCanvas = damageBoundsForDirtyEntity(
+        registry, entity, invalidation.containingLayerEntitiesBeforePrepare, dirtyEntities.size());
 
     result.push_back(std::move(invalidation));
   }
@@ -2313,6 +2617,38 @@ void CompositorController::refreshLayerMetadata() {
       layer.setFallbackReasons(FallbackReason::None);
     }
   }
+}
+
+void CompositorController::resolveLayerAssignments(Registry& registry, ResolveOptions options) {
+  options.exclusiveInteractionRoot = exclusiveInteractionRoot_;
+  options.selectedInteractionDescendant = selectedBucketDescendant_;
+  resolver_.resolve(registry, kMaxCompositorLayers, options);
+}
+
+void CompositorController::recoverFailedExclusivePromotion() {
+  if (exclusiveInteractionRoot_ == entt::null ||
+      lastRenderFrameStats_.textureAllocationFailureCount == 0) {
+    return;
+  }
+  // The editor keeps its last complete published tiles when this render cannot be presented.
+  // Restore the previous mandatory-layer topology now, so the next worker turn can rebuild a
+  // complete owning-tile frame. Remember this refusal at the same raster size: AsyncRenderer may
+  // retry promotion after its first render, which would otherwise repeat the failed allocation.
+  failedExclusiveInteractionRoot_ = exclusiveInteractionRoot_;
+  failedExclusiveCanvasSize_ =
+      hasLastViewport_ ? BitmapDimensionsForViewport(lastViewport_) : Vector2i::Zero();
+  activeHints_.erase(exclusiveInteractionRoot_);
+  pendingDemotions_.erase(exclusiveInteractionRoot_);
+  if (selectedBucketDescendant_ == exclusiveInteractionRoot_) {
+    selectedBucketDescendant_ = entt::null;
+  }
+  exclusiveInteractionRoot_ = entt::null;
+  Registry& registry = document().registry();
+  resolveLayerAssignments(registry);
+  reconcileLayers(registry);
+  markAllSegmentsDirty();
+  splitStaticLayersEntity_ = entt::null;
+  splitStaticLayersViewport_ = Vector2i::Zero();
 }
 
 void CompositorController::reconcileLayers(Registry& registry) {

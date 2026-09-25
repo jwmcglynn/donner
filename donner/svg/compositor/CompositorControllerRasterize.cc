@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -114,6 +115,108 @@ Vector2i ComposePayloadDimensions(const RendererBitmap* bitmap,
     return bitmap->dimensions;
   }
   return texture != nullptr ? texture->dimensions() : Vector2i::Zero();
+}
+
+struct DamagePatchRect {
+  int left;
+  int top;
+  int right;
+  int bottom;
+};
+
+std::optional<DamagePatchRect> ComputeDamagePatchRect(const Box2d& damageBoundsCanvas,
+                                                      const Vector2d& ownerOffset,
+                                                      const Vector2i& ownerSize) {
+  constexpr double kDamageHaloPx = 3.0;
+  const Vector2d localMin = damageBoundsCanvas.topLeft - ownerOffset;
+  const Vector2d localMax = damageBoundsCanvas.bottomRight - ownerOffset;
+  if (!std::isfinite(localMin.x) || !std::isfinite(localMin.y) || !std::isfinite(localMax.x) ||
+      !std::isfinite(localMax.y)) {
+    return std::nullopt;
+  }
+  const auto edge = [](double value, int maximum) {
+    return static_cast<int>(std::clamp(value, 0.0, static_cast<double>(maximum)));
+  };
+  const DamagePatchRect rect{edge(std::floor(localMin.x - kDamageHaloPx), ownerSize.x),
+                             edge(std::floor(localMin.y - kDamageHaloPx), ownerSize.y),
+                             edge(std::ceil(localMax.x + kDamageHaloPx), ownerSize.x),
+                             edge(std::ceil(localMax.y + kDamageHaloPx), ownerSize.y)};
+  if (rect.left >= rect.right || rect.top >= rect.bottom ||
+      static_cast<std::int64_t>(rect.right - rect.left) * (rect.bottom - rect.top) * 3 >=
+          static_cast<std::int64_t>(ownerSize.x) * ownerSize.y) {
+    return std::nullopt;
+  }
+  return rect;
+}
+
+bool ComposeDamagePatch(RendererInterface& offscreen, const RendererTextureSnapshot& previous,
+                        const RendererTextureSnapshot& patch, const RenderViewport& viewport,
+                        const Vector2i& ownerSize, const DamagePatchRect& rect) {
+  offscreen.beginFrame(viewport);
+  offscreen.setPaint(PaintParams{});
+  offscreen.setTransform(Transform2d());
+  const Box2d fullRect(Vector2d::Zero(), Vector2d(ownerSize.x, ownerSize.y));
+  const auto copyOldOutside = [&](const Box2d& clipRect) {
+    if (clipRect.width() <= 0.0 || clipRect.height() <= 0.0) {
+      return true;
+    }
+    ResolvedClip clip;
+    clip.clipRect = clipRect;
+    offscreen.pushClip(clip);
+    const bool drawn = offscreen.drawTextureSnapshot(previous, fullRect, 1.0, true);
+    offscreen.popClip();
+    return drawn;
+  };
+  bool composed = true;
+  composed &= copyOldOutside(Box2d(Vector2d::Zero(), Vector2d(ownerSize.x, rect.top)));
+  composed &= copyOldOutside(Box2d(Vector2d(0, rect.bottom), Vector2d(ownerSize.x, ownerSize.y)));
+  composed &= copyOldOutside(Box2d(Vector2d(0, rect.top), Vector2d(rect.left, rect.bottom)));
+  composed &=
+      copyOldOutside(Box2d(Vector2d(rect.right, rect.top), Vector2d(ownerSize.x, rect.bottom)));
+  const Box2d patchRect(Vector2d(rect.left, rect.top), Vector2d(rect.right, rect.bottom));
+  ResolvedClip clip;
+  clip.clipRect = patchRect;
+  offscreen.pushClip(clip);
+  composed &= offscreen.drawTextureSnapshot(patch, patchRect, 1.0, true);
+  offscreen.popClip();
+  offscreen.endFrame();
+  return composed;
+}
+
+void ConfigureImmediatePresentation(ImmediateLayerPlan& plan, bool wasDynamicImmediate,
+                                    bool directInteractionLayer) {
+  const double estimatedRasterizeMs = EstimateStaticSpanRasterizeMs(
+      plan.estimatedDrawOps, plan.estimatedPathVerbs, plan.estimatedUsesAreaCostlyPaint,
+      static_cast<double>(plan.estimatedRetainedBytes) / 4.0);
+  plan.estimatedRasterizeMs = estimatedRasterizeMs;
+  plan.immediateBudgetMs = ImmediateStaticSpanBudgetMs();
+  if ((directInteractionLayer || plan.staticHeuristicImmediate) &&
+      IsImmediateSafe(plan.visible, plan.hasExpensiveEffect, plan.estimatedDrawOps)) {
+    const double chargeMs = ImmediateStaticSpanBudgetChargeMs(estimatedRasterizeMs);
+    plan.immediateBudgetChargeMs = chargeMs;
+    if (plan.staticHeuristicImmediate) {
+      plan.immediate = true;
+    } else if (directInteractionLayer && estimatedRasterizeMs <= plan.immediateBudgetMs &&
+               chargeMs <= plan.immediateBudgetMs) {
+      plan.immediate = true;
+      plan.dynamicHeuristicImmediate = true;
+    }
+  }
+  if (wasDynamicImmediate && !plan.immediate && estimatedRasterizeMs > plan.immediateBudgetMs) {
+    plan.demotedDynamicImmediate = true;
+  }
+}
+
+bool CanPatchLayerPayload(const RendererInterface& renderer, const CompositorLayer& layer) {
+  return renderer.requiresTextureSnapshotPresentation() && !layer.isImmediate() &&
+         layer.textureSnapshot() != nullptr && layer.canvasFromBitmap().isIdentity();
+}
+
+bool CanPatchLayerGeometry(const CompositorLayer& layer, const LayerRasterGeometry& geometry,
+                           const Vector2i& ownerSize) {
+  return !geometry.interactionBoundsRejected && geometry.tight &&
+         ownerSize == layer.textureSnapshot()->dimensions() &&
+         geometry.canvasOffset == layer.canvasOffset() && ownerSize.x > 0 && ownerSize.y > 0;
 }
 
 }  // namespace
@@ -293,8 +396,19 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   }
 
   Registry& registry = document().registry();
-  const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
-      renderer(), registry, layer.firstEntity(), layer.lastEntity(), viewport, surfaceFromCanvas);
+  const bool interactionLayer = activeHints_.contains(layer.entity());
+  const LayerRasterGeometry geometry =
+      ComputeLayerRasterGeometry(renderer(), registry, layer.firstEntity(), layer.lastEntity(),
+                                 viewport, surfaceFromCanvas, interactionLayer);
+  if (geometry.interactionBoundsRejected) {
+    // An oversized full-object tile must never be silently replaced with a viewport-clipped one:
+    // the old complete presentation remains available while the interaction uses owning tiles.
+    ++lastRenderFrameStats_.textureAllocationFailureCount;
+    ++lastRenderFrameStats_.textureAllocationFailureTotal;
+    surfaceBudgetExhaustedThisFrame_ = true;
+    layer.markDirty();
+    return;
+  }
   ImmediateLayerPlan immediatePlan;
   immediatePlan.visible = geometry.boundsCanvas.has_value();
   if (geometry.boundsCanvas.has_value()) {
@@ -380,34 +494,9 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   const double elapsedMs = static_cast<double>(elapsedUs) / 1000.0;
   layer.setLastRasterizeMs(elapsedMs);
   immediatePlan.measuredRasterizeMs = elapsedMs;
-  // Deterministic geometry estimate drives the decision; measured time above is
-  // telemetry only. See `EstimateStaticSpanRasterizeMs`.
-  const double estimatedRasterizeMs = EstimateStaticSpanRasterizeMs(
-      immediatePlan.estimatedDrawOps, immediatePlan.estimatedPathVerbs,
-      immediatePlan.estimatedUsesAreaCostlyPaint,
-      static_cast<double>(immediatePlan.estimatedRetainedBytes) / 4.0);
-  immediatePlan.estimatedRasterizeMs = estimatedRasterizeMs;
-  immediatePlan.immediateBudgetMs = ImmediateStaticSpanBudgetMs();
-  const bool interactionLayer =
-      activeHints_.contains(layer.entity()) || layer.entity() == splitStaticLayersEntity_;
-  const bool directLayerCandidate = interactionLayer || immediatePlan.staticHeuristicImmediate;
-  if (directLayerCandidate &&
-      IsImmediateSafe(immediatePlan.visible, immediatePlan.hasExpensiveEffect,
-                      immediatePlan.estimatedDrawOps)) {
-    const double budgetChargeMs = ImmediateStaticSpanBudgetChargeMs(estimatedRasterizeMs);
-    immediatePlan.immediateBudgetChargeMs = budgetChargeMs;
-    if (immediatePlan.staticHeuristicImmediate) {
-      immediatePlan.immediate = true;
-    } else if (interactionLayer && estimatedRasterizeMs <= immediatePlan.immediateBudgetMs &&
-               budgetChargeMs <= immediatePlan.immediateBudgetMs) {
-      immediatePlan.immediate = true;
-      immediatePlan.dynamicHeuristicImmediate = true;
-    }
-  }
-  if (wasDynamicImmediate && !immediatePlan.immediate &&
-      estimatedRasterizeMs > immediatePlan.immediateBudgetMs) {
-    immediatePlan.demotedDynamicImmediate = true;
-  }
+  // Deterministic geometry estimate drives the decision; measured time is telemetry only.
+  ConfigureImmediatePresentation(immediatePlan, wasDynamicImmediate,
+                                 interactionLayer || layer.entity() == splitStaticLayersEntity_);
   layer.setImmediatePlan(immediatePlan);
   // Don't reset `canvasFromBitmap_` here - a caller may have set it
   // explicitly (tests, editor drag hand-off paths) and expect that
@@ -416,6 +505,86 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   // for DOM-driven deltas; rasterization itself just refreshes the
   // bitmap's content and the stamped `bitmapEntityFromWorldTransform`.
   yieldBetweenTiles();
+}
+
+bool CompositorController::rasterizeLayerDamage(CompositorLayer& layer,
+                                                const RenderViewport& viewport,
+                                                const Transform2d& surfaceFromCanvas,
+                                                const Box2d& damageBoundsCanvas) {
+  if (!CanPatchLayerPayload(renderer(), layer)) {
+    return false;
+  }
+  Registry& registry = document().registry();
+  const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
+      renderer(), registry, layer.firstEntity(), layer.lastEntity(), viewport, surfaceFromCanvas);
+  const Vector2i ownerSize = BitmapDimensionsForViewport(geometry.viewport);
+  if (!CanPatchLayerGeometry(layer, geometry, ownerSize)) {
+    return false;
+  }
+
+  // Crop to the union of the moved child's old and new geometry, with an AA/stroke halo. The
+  // region is in the owner's bitmap pixel space; the artboard/static tiles never grow for it.
+  const std::optional<DamagePatchRect> rect =
+      ComputeDamagePatchRect(damageBoundsCanvas, layer.canvasOffset(), ownerSize);
+  if (!rect.has_value()) {
+    return false;
+  }
+
+  const auto started = std::chrono::steady_clock::now();
+  const std::shared_ptr<const RendererTextureSnapshot> previous = layer.textureSnapshot();
+  std::unique_ptr<RendererInterface> offscreen = acquireOffscreen();
+  UTILS_RELEASE_ASSERT(offscreen != nullptr);
+  const RendererResourceStats beforePatchStats = offscreen->resourceStats();
+  RenderViewport patchViewport = geometry.viewport;
+  patchViewport.size = Vector2d(rect->right - rect->left, rect->bottom - rect->top);
+  const Transform2d patchSurface =
+      geometry.surfaceFromCanvas * Transform2d::Translate(Vector2d(-rect->left, -rect->top));
+  RendererDriver patchDriver(*offscreen);
+  patchDriver.setConservativeEarlyLeafCulling(true);
+  if (!patchDriver.drawEntityRangeInterruptibly(registry, layer.firstEntity(), layer.lastEntity(),
+                                                patchViewport, patchSurface,
+                                                [this]() { return isCancelled(); })) {
+    return false;
+  }
+  const RendererResourceStats patchStats = offscreen->resourceStats();
+  std::shared_ptr<const RendererTextureSnapshot> patch = offscreen->takeTextureSnapshot();
+  if (patch == nullptr) {
+    discardFailedOffscreen(std::move(offscreen));
+    return false;
+  }
+
+  if (!ComposeDamagePatch(*offscreen, *previous, *patch, geometry.viewport, ownerSize, *rect)) {
+    discardFailedOffscreen(std::move(offscreen));
+    return false;
+  }
+
+  Transform2d surfaceFromEntity;
+  if (registry.all_of<components::RenderingInstanceComponent>(layer.entity())) {
+    surfaceFromEntity = registry.get<components::RenderingInstanceComponent>(layer.entity())
+                            .worldFromEntityTransform *
+                        surfaceFromCanvas;
+  }
+  const CompositorLayer::PayloadRaster raster{
+      .canvasSize = BitmapDimensionsForViewport(viewport),
+      .surfaceFromCanvas = surfaceFromCanvas,
+  };
+  if (!SetLayerPayloadFromOffscreen(layer, *offscreen, surfaceFromEntity, raster)) {
+    discardFailedOffscreen(std::move(offscreen));
+    return false;
+  }
+  layer.setGeneration(nextTileGeneration_++);
+  layer.setCanvasOffset(geometry.canvasOffset);
+  layer.setLastRasterizeMs(
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
+          .count());
+  ++lastRenderFrameStats_.damagePatchTileCount;
+  lastRenderFrameStats_.damagePatchGeometryDraws +=
+      patchStats.geometryDraws >= beforePatchStats.geometryDraws
+          ? patchStats.geometryDraws - beforePatchStats.geometryDraws
+          : patchStats.geometryDraws;
+  recycleOffscreen(std::move(offscreen));
+  yieldBetweenTiles();
+  return true;
 }
 
 void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& viewport,

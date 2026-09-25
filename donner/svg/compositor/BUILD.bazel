@@ -229,7 +229,10 @@ donner_cc_test(
 donner_cc_test(
     name = "compositor_geode_splash_tests",
     srcs = ["CompositorGeodeSplash_tests.cc"],
-    data = ["//:geode_splash.svg"],
+    data = [
+        "//:donner_splash.svg",
+        "//:geode_splash.svg",
+    ],
     target_compatible_with = select({
         "//donner/svg/renderer:renderer_backend_geode": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -237,6 +240,7 @@ donner_cc_test(
     deps = [
         ":compositor",
         "//donner/base:base_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_geode",

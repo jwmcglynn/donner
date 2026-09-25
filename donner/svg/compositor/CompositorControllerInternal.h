@@ -30,7 +30,15 @@ struct LayerRasterGeometry {
   Vector2d canvasOffset = Vector2d::Zero();
   std::optional<Box2d> boundsCanvas;
   bool tight = false;
+  /// The full selected object exceeds the bounded drag-tile allocation; never publish a clipped
+  /// substitute as a complete interaction frame.
+  bool interactionBoundsRejected = false;
+  /// No conservative full-object bound is available for the selected content.
+  bool interactionBoundsUnavailable = false;
 };
+
+inline constexpr std::uint64_t kMaximumInteractionTilePixels = 4ULL * 1024 * 1024;
+inline constexpr int kMaximumInteractionTileSidePx = 4096;
 
 /// Deterministic cost estimate for a static paint-order span.
 struct StaticSpanCostEstimate {
@@ -58,7 +66,8 @@ Vector2i BitmapDimensionsForViewport(const RenderViewport& viewport);
 LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Registry& registry,
                                                Entity firstEntity, Entity lastEntity,
                                                const RenderViewport& viewport,
-                                               const Transform2d& surfaceFromCanvas);
+                                               const Transform2d& surfaceFromCanvas,
+                                               bool retainFullInteractionBounds = false);
 bool SameTransformNear(const Transform2d& lhs, const Transform2d& rhs);
 bool IsIntegerTranslation(const Transform2d& transform, Vector2d* roundedTranslation);
 

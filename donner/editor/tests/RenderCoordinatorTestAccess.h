@@ -82,6 +82,12 @@ struct RenderCoordinatorTestAccess {
                : std::nullopt;
   }
 
+  static void noteRenderCompleted(RenderCoordinator& coordinator, std::uint64_t version,
+                                  const EditorRasterViewport& rasterViewport) {
+    coordinator.renderScheduler_.noteRenderCompleted(version, rasterViewport.outputSizePx,
+                                                     rasterViewport);
+  }
+
   static bool selectedPrewarmFallbackApplies(RenderCoordinator& coordinator,
                                              std::uint64_t documentGeneration,
                                              Entity selectedEntity,

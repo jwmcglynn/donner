@@ -18,6 +18,7 @@
 #endif
 
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/RenderPanePresenter.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
@@ -437,6 +438,43 @@ bool DocumentRectContains(const Box2d& outer, const Box2d& inner) {
          outer.bottomRight.y + kTolerance >= inner.bottomRight.y;
 }
 
+bool HasCompleteVisibleCachedCoverage(const GlTextureCache* textures, const ViewportState& viewport,
+                                      const EditorRasterViewport& visibleRaster) {
+  if (textures == nullptr || textures->tiles().empty() || textures->metadataOnlyMissCount() != 0) {
+    return false;
+  }
+  const PresentationCoverageDiagnostics coverage = textures->coverageDiagnostics();
+  // The base raster carries a 128-screen-pixel margin. During a small pan the requested raster
+  // rectangle shifts, but the previously cached rectangle still covers every visible artboard
+  // pixel. Test pane coverage rather than insisting on a second 128-pixel margin at the new pan.
+  const Box2d paneDocumentRect = viewport.screenToDocument(
+      Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize));
+  const Box2d visibleArtboardRect(
+      Vector2d(std::max(paneDocumentRect.topLeft.x, viewport.documentViewBox.topLeft.x),
+               std::max(paneDocumentRect.topLeft.y, viewport.documentViewBox.topLeft.y)),
+      Vector2d(std::min(paneDocumentRect.bottomRight.x, viewport.documentViewBox.bottomRight.x),
+               std::min(paneDocumentRect.bottomRight.y, viewport.documentViewBox.bottomRight.y)));
+  if (visibleArtboardRect.size().x <= 0.0 || visibleArtboardRect.size().y <= 0.0 ||
+      !DocumentRectContains(coverage.activeRasterDocumentRect, visibleArtboardRect)) {
+    return false;
+  }
+  const Vector2d cachedDocumentSize = coverage.activeRasterDocumentRect.size();
+  const Vector2d visibleDocumentSize = visibleRaster.documentRect.size();
+  if (cachedDocumentSize.x <= 0.0 || cachedDocumentSize.y <= 0.0 || visibleDocumentSize.x <= 0.0 ||
+      visibleDocumentSize.y <= 0.0) {
+    return false;
+  }
+  // A lower-resolution overview may cover the same document rect without having enough source
+  // pixels for a crisp interaction. Compare pixel density on both axes before retaining it.
+  constexpr double kScaleTolerance = 1e-3;
+  const Vector2d cachedScale(coverage.activeOutputSizePx.x / cachedDocumentSize.x,
+                             coverage.activeOutputSizePx.y / cachedDocumentSize.y);
+  const Vector2d visibleScale(visibleRaster.outputSizePx.x / visibleDocumentSize.x,
+                              visibleRaster.outputSizePx.y / visibleDocumentSize.y);
+  return std::abs(cachedScale.x - visibleScale.x) <= kScaleTolerance &&
+         std::abs(cachedScale.y - visibleScale.y) <= kScaleTolerance;
+}
+
 bool RasterViewportCanPresentCurrentViewport(const EditorRasterViewport& rendered,
                                              const EditorRasterViewport& current) {
   return SameRasterViewport(rendered, current) ||
@@ -585,6 +623,7 @@ bool ShouldUseSelectedPrewarmRasterViewport(Entity selectedEntity, bool requestO
                                             bool rasterViewportBounded,
                                             bool selectionOnlyPrewarmMayTriggerRender,
                                             bool hasIndependentRenderReason,
+                                            bool hasCompleteVisibleCachedCoverage,
                                             Vector2i visibleOutputSizePx,
                                             Vector2i prewarmOutputSizePx) {
   if (selectedEntity == entt::null || requestOverviewInfill || !rasterViewportBounded ||
@@ -592,18 +631,26 @@ bool ShouldUseSelectedPrewarmRasterViewport(Entity selectedEntity, bool requestO
     return false;
   }
 
-  // Changing the raster dimensions invalidates every cached segment. On large Retina canvases,
-  // even a modest enlargement can rebuild the entire scene and exhaust the texture-surface budget
-  // before the first pointer move. The visible raster already has a 128-screen-pixel margin, and
-  // active drags recapture after that displacement. Keep that raster when the proposed prewarm
-  // exceeds a conservative per-surface size instead of putting a full-scene rerender on the
-  // selection/drag path.
-  constexpr std::int64_t kMaximumSelectedPrewarmPixels = 4 * 1024 * 1024;
+  // A different output size invalidates every cached static segment, regardless of whether the
+  // canvas is large enough to cross an absolute pixel threshold. Preserve complete visible cache
+  // coverage for the first pointer frame. The promoted target is rasterized independently from
+  // its own full object bounds, so the visible background raster need not expand with it.
+  if (prewarmOutputSizePx == visibleOutputSizePx) {
+    return true;
+  }
+  if (hasCompleteVisibleCachedCoverage) {
+    return false;
+  }
+
+  // Without a complete visible cache there is no static tile set to protect. Use a modest
+  // incremental area limit so a cold selection still gains overdraw without multiplying the
+  // initial scene render cost on a small pane.
   const std::int64_t visiblePixels = static_cast<std::int64_t>(visibleOutputSizePx.x) *
                                      static_cast<std::int64_t>(visibleOutputSizePx.y);
   const std::int64_t prewarmPixels = static_cast<std::int64_t>(prewarmOutputSizePx.x) *
                                      static_cast<std::int64_t>(prewarmOutputSizePx.y);
-  return prewarmPixels <= visiblePixels || prewarmPixels <= kMaximumSelectedPrewarmPixels;
+  return visiblePixels > 0 && prewarmPixels > 0 &&
+         prewarmPixels - visiblePixels <= visiblePixels / 4;
 }
 
 bool HasIndependentSelectedPrewarmRenderReason(bool hasActiveDrag, bool versionChanged,
@@ -1535,6 +1582,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       ShouldUseSelectedPrewarmRasterViewport(
           prewarmEntity, requestOverviewInfill, rasterViewport.viewportBounded,
           kSelectionOnlyPrewarmMayTriggerRender, hasIndependentSelectedPrewarmRenderReason,
+          HasCompleteVisibleCachedCoverage(textures, viewport, rasterViewport),
           rasterViewport.outputSizePx, selectedPrewarmRaster.outputSizePx);
   const EditorRasterViewport requestRasterViewport =
       requestOverviewInfill
@@ -1557,6 +1605,13 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   if (suppressedLayerEntity != entt::null) {
     compositedPresentation_.discardCachedTexturesForEntity(suppressedLayerEntity);
   }
+
+  // A composited result can carry the selected entity without a promoted drag-target tile (for
+  // example, when a mask forces its child into an owning layer). In that case the presenter has
+  // no bitmap to move on the UI thread. Render the changing document during the held drag rather
+  // than treating the selection's cached metadata as proof that its pixels can move locally.
+  const bool renderDragFallback =
+      activeDragNeedsRenderedPresentation(app, dragPreview, textures, suppressedLayerEntity);
 
   const bool selectionBoundsChanged = app.selectedElements() != selectionBoundsCache_.lastSelection;
   if (!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value()) {
@@ -1582,6 +1637,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
           .dragTranslationRecaptureDistanceDoc =
               kDragTranslationRecaptureScreenPx /
               std::max(std::abs(viewport.pixelsPerDocUnit()), 1e-9),
+          .requiresRenderedActiveDragPresentation = renderDragFallback,
           .selectionOnlyPrewarmMayTriggerRender = kSelectionOnlyPrewarmMayTriggerRender,
       });
   if (!schedule.shouldRequestRender()) {
@@ -1667,6 +1723,19 @@ Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
   }
 
   return selected->unsafeEntityHandle().entity();
+}
+
+bool RenderCoordinator::activeDragNeedsRenderedPresentation(
+    EditorApp& app, const std::optional<SelectTool::ActiveDragPreview>& dragPreview,
+    const GlTextureCache* textures, Entity suppressedLayerEntity) const {
+  if (!dragPreview.has_value()) {
+    return false;
+  }
+  if (textures == nullptr) {
+    return true;
+  }
+  return !HasPresentableDragTargetTile(*textures, dragPreview, suppressedLayerEntity,
+                                       selectedElementIsDisplayNone(app));
 }
 
 Entity RenderCoordinator::selectedCompositedEntityForDiagnostics(EditorApp& app) const {

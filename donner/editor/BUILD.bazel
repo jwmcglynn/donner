@@ -1091,6 +1091,7 @@ donner_cc_library(
         ":gl_texture_cache",
         ":overlay_renderer",
         ":presentation_render_scheduler",
+        ":render_pane_presenter",
         ":select_tool",
         ":selection_aabb",
         ":tracy_wrapper",

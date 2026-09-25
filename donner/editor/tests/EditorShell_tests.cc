@@ -13,17 +13,21 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "donner/css/Color.h"
@@ -38,6 +42,7 @@
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/editor/tests/RenderCoordinatorTestAccess.h"
+#include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_EDITOR_WGPU
@@ -58,6 +63,38 @@ constexpr std::string_view kInitialSvg = R"svg(
   <text id="label" x="12" y="60">Donner</text>
 </svg>
 )svg";
+
+svg::RendererBitmap CropDocumentRect(const svg::RendererBitmap& bitmap,
+                                     const ViewportState& viewport, const Vector2i& logicalSize,
+                                     const Box2d& documentRect) {
+  svg::RendererBitmap crop;
+  if (bitmap.empty() || logicalSize.x <= 0 || logicalSize.y <= 0) {
+    return crop;
+  }
+  const Vector2d screenMin = viewport.documentToScreen(documentRect.topLeft);
+  const Vector2d screenMax = viewport.documentToScreen(documentRect.bottomRight);
+  const int x = static_cast<int>(std::lround(screenMin.x * bitmap.dimensions.x / logicalSize.x));
+  const int y = static_cast<int>(std::lround(screenMin.y * bitmap.dimensions.y / logicalSize.y));
+  const int right =
+      static_cast<int>(std::lround(screenMax.x * bitmap.dimensions.x / logicalSize.x));
+  const int bottom =
+      static_cast<int>(std::lround(screenMax.y * bitmap.dimensions.y / logicalSize.y));
+  if (x < 0 || y < 0 || right > bitmap.dimensions.x || bottom > bitmap.dimensions.y || right <= x ||
+      bottom <= y) {
+    return crop;
+  }
+  crop.dimensions = Vector2i(right - x, bottom - y);
+  crop.rowBytes = static_cast<std::size_t>(right - x) * 4u;
+  crop.alphaType = bitmap.alphaType;
+  crop.pixels.resize(crop.rowBytes * static_cast<std::size_t>(bottom - y));
+  for (int row = 0; row < bottom - y; ++row) {
+    std::memcpy(crop.pixels.data() + static_cast<std::size_t>(row) * crop.rowBytes,
+                bitmap.pixels.data() + static_cast<std::size_t>(y + row) * bitmap.rowBytes +
+                    static_cast<std::size_t>(x) * 4u,
+                crop.rowBytes);
+  }
+  return crop;
+}
 
 constexpr std::string_view kStyledSvg = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
@@ -1186,6 +1223,14 @@ public:
     return snapshot.has_value() ? snapshot->paths.size() : 0u;
   }
 
+  static std::optional<Box2d> SelectionChromeFirstBoundsDoc(const EditorShell& shell) {
+    const std::optional<SelectionChromeSnapshot>& snapshot =
+        shell.renderCoordinator_.immediateOverlaySnapshot();
+    return snapshot.has_value() && !snapshot->aabbsDoc.empty()
+               ? std::optional<Box2d>(snapshot->aabbsDoc.front())
+               : std::nullopt;
+  }
+
   static std::uint64_t DisplayedDocVersion(const EditorShell& shell) {
     return shell.renderCoordinator_.displayedDocVersion();
   }
@@ -1518,6 +1563,15 @@ public:
     const std::array<Box2d, 1> bounds = {selectionBounds};
     return shell.selectTool_.tryStartRedragOnSelected(shell.app_, documentPoint, MouseModifiers{},
                                                       bounds);
+  }
+
+  static bool MoveSelectedShapeDrag(EditorShell& shell, const Vector2d& documentPoint) {
+    shell.selectTool_.onMouseMove(shell.app_, documentPoint, /*buttonHeld=*/true);
+    return shell.flushInteractiveDragMutationAndRequestRender();
+  }
+
+  static void EndSelectedShapeDrag(EditorShell& shell, const Vector2d& documentPoint) {
+    shell.selectTool_.onMouseUp(shell.app_, documentPoint);
   }
 
   static void BufferPendingClick(EditorShell& shell, const Vector2d& documentPoint,
@@ -3555,6 +3609,421 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
       << tileDiagnostics.str();
 
   runFrameWithMouse(screenPoint(Vector2d(35.0, 28.0)), /*mouseDown=*/false);
+}
+
+TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettledPixels) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Partly offscreen splash drag pixels",
+      .initialWidth = 960,
+      .initialHeight = 720,
+      .visible = false,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Framebuffer readback is unavailable on this host";
+  }
+  const EditorSample* splash = FindEditorSample("donner-splash");
+  ASSERT_NE(splash, nullptr);
+  EditorShell shell(window, OptionsWithSource(splash->source, "donner_splash.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  // A canvas click hits the child ellipse. Explicit group promotion from the Layers panel is
+  // covered separately by the compositor test for #Background_shine.
+  const auto shine = app.document().document().querySelector("#Background_shine ellipse");
+  ASSERT_THAT(shine, testing::Optional(testing::_));
+  const Entity shineEntity = shine->unsafeEntityHandle().entity();
+  const std::optional<Box2d> originalWorldBounds =
+      shine->cast<svg::SVGGeometryElement>().worldBounds();
+  ASSERT_TRUE(originalWorldBounds.has_value());
+
+  const auto captureFrame = [&](bool contentOnly = false) {
+    if (contentOnly) {
+      shell.setContentOnlyCaptureForNextFrameForReplay(true);
+    }
+    window.beginFrame();
+    shell.runFrame();
+    return window.endFrameAndReadPixels();
+  };
+  const auto settleFrame = [&](std::string_view stage, std::uint64_t minimumVersion) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    for (int frame = 0; frame < 20 && std::chrono::steady_clock::now() < deadline; ++frame) {
+      (void)captureFrame();
+      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+        break;
+      }
+      const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+      if (app.document().currentFrameVersion() >= minimumVersion &&
+          EditorShellTestAccess::DisplayedDocVersion(shell) ==
+              app.document().currentFrameVersion() &&
+          !status.tiles.empty()) {
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+    FAIL() << "The splash did not produce a stable cached frame at " << stage
+           << ": minimumVersion=" << minimumVersion
+           << " current=" << app.document().currentFrameVersion()
+           << " displayed=" << EditorShellTestAccess::DisplayedDocVersion(shell)
+           << " tiles=" << status.tiles.size()
+           << " rendererBusy=" << EditorShellTestAccess::RendererBusy(shell)
+           << " pendingMutations=" << app.document().hasPendingMutations();
+  };
+  settleFrame("initial", app.document().currentFrameVersion());
+  app.setSelection(*shine);
+  // The selection-only cache request is committed after a brief viewport-settle delay. Let it
+  // become eligible before starting the held-pointer frame.
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  settleFrame("selected", app.document().currentFrameVersion());
+
+  const ViewportState viewport = shell.viewportForReadback();
+  const EditorRasterViewport visibleRaster = viewport.rasterViewport();
+  ASSERT_TRUE(visibleRaster.viewportBounded);
+  ASSERT_NE(visibleRaster.outputSizePx, viewport.selectedPrewarmRasterViewport().outputSizePx)
+      << "The regression needs a small pane whose selected prewarm would change tile dimensions";
+  EXPECT_EQ(shell.layerInspectorStatusForReadback().presentationCoverage.activeOutputSizePx,
+            visibleRaster.outputSizePx)
+      << "Selecting the ellipse must preserve the complete visible static tile cache";
+  const std::optional<Box2d> originalChromeBounds =
+      EditorShellTestAccess::SelectionChromeFirstBoundsDoc(shell);
+  ASSERT_TRUE(originalChromeBounds.has_value());
+  const svg::RendererBitmap beforeMove = captureFrame(/*contentOnly=*/true);
+  ASSERT_FALSE(beforeMove.empty());
+
+  // Background_shine is an ellipse centered at y=10 with radius 262: its source pixels above
+  // y=0 are initially off-artboard. Moving it down by 300 brings those pixels into the artboard.
+  // Hold the worker result so this screenshot is precisely the first pointer presentation of
+  // previously cached target pixels, with no newly rasterized frame to hide a clipped tile.
+  EditorShellTestAccess::HoldRenderResultsForPolls(shell, 12);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(300.0, 80.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  (void)captureFrame();
+  ASSERT_THAT(app.selectedElement(), testing::Optional(testing::_));
+  ASSERT_EQ(app.selectedElement()->unsafeEntityHandle().entity(), shineEntity);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(300.0, 380.0),
+      .leftMouseDown = true,
+  });
+  (void)captureFrame();
+  ASSERT_THAT(app.selectedElement(), testing::Optional(testing::_));
+  ASSERT_EQ(app.selectedElement()->unsafeEntityHandle().entity(), shineEntity);
+  const LayerInspectorStatusReadback firstStatus = shell.layerInspectorStatusForReadback();
+  ASSERT_THAT(firstStatus.activeDragPreview, testing::Optional(testing::_));
+  EXPECT_NEAR(firstStatus.activeDragPreview->translation.y, 300.0, 1e-6);
+  EXPECT_GT(EditorShellTestAccess::SelectionChromePathCount(shell), 0u)
+      << "The first moved pixels must keep the selection outline aligned with the live shape";
+  const std::optional<Box2d> firstChromeBounds =
+      EditorShellTestAccess::SelectionChromeFirstBoundsDoc(shell);
+  ASSERT_TRUE(firstChromeBounds.has_value());
+  EXPECT_NEAR(firstChromeBounds->topLeft.x, originalChromeBounds->topLeft.x, 1e-6);
+  EXPECT_NEAR(firstChromeBounds->bottomRight.x, originalChromeBounds->bottomRight.x, 1e-6);
+  EXPECT_NEAR(firstChromeBounds->topLeft.y - originalChromeBounds->topLeft.y, 300.0, 1e-6);
+  EXPECT_NEAR(firstChromeBounds->bottomRight.y - originalChromeBounds->bottomRight.y, 300.0, 1e-6);
+  const svg::RendererBitmap firstMove = captureFrame(/*contentOnly=*/true);
+
+  EditorShellTestAccess::HoldRenderResultsForPolls(shell, 0);
+  const std::uint64_t heldDragVersion = app.document().currentFrameVersion();
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(300.0, 380.0),
+      .leftMouseReleased = true,
+  });
+  (void)captureFrame();
+  settleFrame("released", heldDragVersion);
+  const std::optional<svg::SVGElement> movedShine =
+      app.document().document().querySelector("#Background_shine ellipse");
+  ASSERT_TRUE(movedShine.has_value());
+  const std::optional<Box2d> movedWorldBounds =
+      movedShine->cast<svg::SVGGeometryElement>().worldBounds();
+  ASSERT_TRUE(movedWorldBounds.has_value());
+  EXPECT_NEAR(movedWorldBounds->topLeft.x, originalWorldBounds->topLeft.x, 1e-6);
+  EXPECT_NEAR(movedWorldBounds->bottomRight.x, originalWorldBounds->bottomRight.x, 1e-6);
+  EXPECT_NEAR(movedWorldBounds->topLeft.y - originalWorldBounds->topLeft.y, 300.0, 1e-6);
+  EXPECT_NEAR(movedWorldBounds->bottomRight.y - originalWorldBounds->bottomRight.y, 300.0, 1e-6);
+  const svg::RendererBitmap settled = captureFrame(/*contentOnly=*/true);
+  ASSERT_EQ(beforeMove.dimensions, firstMove.dimensions);
+  ASSERT_EQ(firstMove.dimensions, settled.dimensions);
+
+  const auto cropDocumentRect = [&](const svg::RendererBitmap& bitmap, const Box2d& documentRect) {
+    return CropDocumentRect(bitmap, viewport, window.windowSize(), documentRect);
+  };
+  // The unobscured upper sky contains visible source pixels removed by this move. Pixelmatch
+  // establishes both that the crop changed and that the first held frame already matches the
+  // settled composition; the compositor test checks the newly exposed off-artboard source rows.
+  const Box2d upperSky = Box2d::FromXYWH(270.0, 40.0, 70.0, 50.0);
+  const svg::RendererBitmap beforeSky = cropDocumentRect(beforeMove, upperSky);
+  const svg::RendererBitmap firstSky = cropDocumentRect(firstMove, upperSky);
+  const svg::RendererBitmap settledSky = cropDocumentRect(settled, upperSky);
+  ASSERT_FALSE(beforeSky.empty());
+  ASSERT_FALSE(firstSky.empty());
+  ASSERT_FALSE(settledSky.empty());
+  tests::BitmapGoldenCompareParams signalParams = tests::PixelmatchIdentityParams();
+  signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+  int movedSkyPixels = -1;
+  tests::CompareBitmapToBitmap(beforeSky, settledSky, "shine_upper_sky_changed", signalParams,
+                               &movedSkyPixels);
+  EXPECT_GT(movedSkyPixels, 25) << "The moved shine must visibly change the upper-sky crop";
+  // The cached drag tile and a fresh post-release raster can differ along antialiased edges;
+  // apply the renderer suite's standard pixelmatch threshold while keeping the mismatch budget
+  // far below the changed-sky signal.
+  tests::CompareBitmapToBitmap(firstSky, settledSky, "shine_first_held_frame_matches_settled",
+                               tests::ApprovedPixelToleranceParams(0.02f, 100));
+  if (const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::array<std::pair<const char*, const svg::RendererBitmap*>, 3> screenshots = {
+        std::pair{"before.png", &beforeMove}, std::pair{"first.png", &firstMove},
+        std::pair{"settled.png", &settled}};
+    for (const auto& [name, bitmap] : screenshots) {
+      const std::filesystem::path path = std::filesystem::path(outputDir) / name;
+      (void)svg::RendererImageIO::writeRgbaPixelsToPngFile(
+          path.string().c_str(), bitmap->pixels, bitmap->dimensions.x, bitmap->dimensions.y,
+          bitmap->rowBytes / 4u);
+    }
+  }
+  // Full-object target tiles may extend outside the artboard; the editor must still clip the
+  // composed document at the SVG root. A crop below the artboard stays on the checkerboard.
+  const Box2d belowArtboard = Box2d::FromXYWH(460.0, 535.0, 10.0, 10.0);
+  const svg::RendererBitmap beforeOutside = cropDocumentRect(beforeMove, belowArtboard);
+  const svg::RendererBitmap firstOutside = cropDocumentRect(firstMove, belowArtboard);
+  ASSERT_FALSE(beforeOutside.empty()) << "The viewport must expose a point below the SVG root";
+  ASSERT_FALSE(firstOutside.empty());
+  tests::CompareBitmapToBitmap(firstOutside, beforeOutside, "shine_artboard_clip",
+                               tests::PixelmatchIdentityParams());
+}
+
+TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Cold splash shine drag pixels",
+      .initialWidth = 960,
+      .initialHeight = 720,
+      .visible = false,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Framebuffer readback is unavailable on this host";
+  }
+  const EditorSample* splash = FindEditorSample("donner-splash");
+  ASSERT_NE(splash, nullptr);
+  EditorShell shell(window, OptionsWithSource(splash->source, "donner_splash.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto shine = app.document().document().querySelector("#Background_shine ellipse");
+  ASSERT_TRUE(shine.has_value());
+  const Entity shineEntity = shine->unsafeEntityHandle().entity();
+  const auto captureContent = [&] {
+    shell.setContentOnlyCaptureForNextFrameForReplay(true);
+    window.beginFrame();
+    shell.runFrame();
+    return window.endFrameAndReadPixels();
+  };
+  const auto waitForCurrentFrame = [&] {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (int frame = 0; frame < 24 && std::chrono::steady_clock::now() < deadline; ++frame) {
+      (void)captureContent();
+      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+        return false;
+      }
+      const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+      const bool dragTileReady =
+          !status.activeDragPreview.has_value() ||
+          std::ranges::any_of(status.tiles, [](const LayerInspectorStatusReadback::Tile& tile) {
+            return tile.isDragTarget;
+          });
+      if (!app.document().hasPendingMutations() &&
+          EditorShellTestAccess::DisplayedDocVersion(shell) ==
+              app.document().currentFrameVersion() &&
+          !status.tiles.empty() && dragTileReady) {
+        return true;
+      }
+    }
+    return false;
+  };
+  ASSERT_TRUE(waitForCurrentFrame());
+  const ViewportState viewport = shell.viewportForReadback();
+  const svg::RendererBitmap before = captureContent();
+
+  // Start from an unselected, already-presented document. Mouse-down and the next move happen
+  // back-to-back, without a selection-only prewarm or a mouse-up to settle the renderer.
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(300.0, 80.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  (void)captureContent();
+  ASSERT_TRUE(app.selectedElement().has_value());
+  ASSERT_EQ(app.selectedElement()->unsafeEntityHandle().entity(), shineEntity);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(300.0, 380.0),
+      .leftMouseDown = true,
+  });
+  (void)captureContent();
+  ASSERT_TRUE(waitForCurrentFrame()) << "The selected tile must arrive while the pointer is held";
+  const svg::RendererBitmap held = captureContent();
+  const LayerInspectorStatusReadback heldStatus = shell.layerInspectorStatusForReadback();
+  ASSERT_TRUE(heldStatus.activeDragPreview.has_value());
+  EXPECT_NEAR(heldStatus.activeDragPreview->translation.y, 300.0, 1e-6);
+  const bool hasFullShineTile =
+      std::ranges::any_of(heldStatus.tiles, [](const LayerInspectorStatusReadback::Tile& tile) {
+        // A cold capture may rasterize after the +300 transform, so its origin can already be
+        // inside the artboard. The complete ellipse spans about 455 by 524 document units.
+        return tile.isDragTarget && tile.bitmapDimsDoc.x > 400.0 && tile.bitmapDimsDoc.y > 500.0;
+      });
+  EXPECT_TRUE(hasFullShineTile)
+      << "The first cold drag capture must retain source pixels above the artboard";
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(300.0, 380.0),
+      .leftMouseReleased = true,
+  });
+  (void)captureContent();
+  ASSERT_TRUE(waitForCurrentFrame());
+  const svg::RendererBitmap settled = captureContent();
+  const Box2d sky = Box2d::FromXYWH(270.0, 40.0, 70.0, 50.0);
+  const svg::RendererBitmap beforeSky =
+      CropDocumentRect(before, viewport, window.windowSize(), sky);
+  const svg::RendererBitmap heldSky = CropDocumentRect(held, viewport, window.windowSize(), sky);
+  const svg::RendererBitmap settledSky =
+      CropDocumentRect(settled, viewport, window.windowSize(), sky);
+  ASSERT_FALSE(beforeSky.empty());
+  ASSERT_FALSE(heldSky.empty());
+  ASSERT_FALSE(settledSky.empty());
+  tests::BitmapGoldenCompareParams signalParams = tests::PixelmatchIdentityParams();
+  signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+  int changedPixels = -1;
+  tests::CompareBitmapToBitmap(heldSky, beforeSky, "cold_shine_held_pixel_change", signalParams,
+                               &changedPixels);
+  EXPECT_GT(changedPixels, 0);
+  tests::CompareBitmapToBitmap(heldSky, settledSky, "cold_shine_held_matches_settled",
+                               tests::ApprovedPixelToleranceParams(0.02f, 100));
+}
+
+TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Geode masked child held drag pixels",
+      .initialWidth = 1024,
+      .initialHeight = 768,
+      .visible = false,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Framebuffer readback is unavailable on this host";
+  }
+  const EditorSample* splash = FindEditorSample("geode-splash");
+  ASSERT_NE(splash, nullptr);
+  EditorShell shell(window, OptionsWithSource(splash->source, "geode_splash.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto captureContent = [&] {
+    shell.setContentOnlyCaptureForNextFrameForReplay(true);
+    window.beginFrame();
+    shell.runFrame();
+    return window.endFrameAndReadPixels();
+  };
+  const auto awaitPresentation = [&] {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (int frame = 0; frame < 30 && std::chrono::steady_clock::now() < deadline; ++frame) {
+      (void)captureContent();
+      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+        break;
+      }
+      if (EditorShellTestAccess::DisplayedDocVersion(shell) ==
+          app.document().currentFrameVersion()) {
+        return;
+      }
+    }
+    FAIL() << "Geode drag frame did not reach the presenter while the pointer was held: current="
+           << app.document().currentFrameVersion()
+           << " displayed=" << EditorShellTestAccess::DisplayedDocVersion(shell)
+           << " rendererBusy=" << EditorShellTestAccess::RendererBusy(shell);
+  };
+  awaitPresentation();
+
+  for (const char* id : {"central-crown-face-2", "central-silhouette"}) {
+    SCOPED_TRACE(id);
+    const std::optional<svg::SVGElement> target =
+        app.document().document().querySelector(std::string("#") + id);
+    ASSERT_TRUE(target.has_value());
+    const std::optional<Box2d> bounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+    ASSERT_TRUE(bounds.has_value());
+    app.setSelection(*target);
+    EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+    (void)captureContent();
+    awaitPresentation();
+
+    const ViewportState viewport = shell.viewportForReadback();
+    const Vector2d start = (bounds->topLeft + bounds->bottomRight) / 2.0;
+    const Box2d contentCrop = Box2d::FromXYWH(bounds->topLeft.x - 8.0, bounds->topLeft.y - 8.0,
+                                              bounds->width() + 116.0, bounds->height() + 16.0);
+    const svg::RendererBitmap before = captureContent();
+    ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(shell, start, *bounds));
+    ASSERT_TRUE(EditorShellTestAccess::MoveSelectedShapeDrag(shell, start + Vector2d(10.0, 0.0)));
+    awaitPresentation();
+    const svg::RendererBitmap firstHeld = captureContent();
+    const LayerInspectorStatusReadback firstStatus = shell.layerInspectorStatusForReadback();
+    ASSERT_TRUE(firstStatus.activeDragPreview.has_value());
+    EXPECT_NEAR(firstStatus.activeDragPreview->translation.x, 10.0, 1e-6);
+    const std::optional<Box2d> firstBounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+    ASSERT_TRUE(firstBounds.has_value());
+    EXPECT_NEAR(firstBounds->topLeft.x - bounds->topLeft.x, 10.0, 1e-6);
+    ASSERT_TRUE(EditorShellTestAccess::MoveSelectedShapeDrag(shell, start + Vector2d(20.0, 0.0)));
+    awaitPresentation();
+    const svg::RendererBitmap secondHeld = captureContent();
+    const LayerInspectorStatusReadback secondStatus = shell.layerInspectorStatusForReadback();
+    ASSERT_TRUE(secondStatus.activeDragPreview.has_value());
+    EXPECT_NEAR(secondStatus.activeDragPreview->translation.x, 20.0, 1e-6);
+    const std::optional<Box2d> secondBounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+    ASSERT_TRUE(secondBounds.has_value());
+    EXPECT_NEAR(secondBounds->topLeft.x - bounds->topLeft.x, 20.0, 1e-6);
+
+    const svg::RendererBitmap beforeCrop =
+        CropDocumentRect(before, viewport, window.windowSize(), contentCrop);
+    const svg::RendererBitmap firstCrop =
+        CropDocumentRect(firstHeld, viewport, window.windowSize(), contentCrop);
+    const svg::RendererBitmap secondCrop =
+        CropDocumentRect(secondHeld, viewport, window.windowSize(), contentCrop);
+    ASSERT_FALSE(beforeCrop.empty());
+    ASSERT_FALSE(firstCrop.empty());
+    ASSERT_FALSE(secondCrop.empty());
+    tests::BitmapGoldenCompareParams signalParams = tests::PixelmatchIdentityParams();
+    signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+    int firstMovePixels = -1;
+    int secondMovePixels = -1;
+    tests::CompareBitmapToBitmap(firstCrop, beforeCrop, std::string(id) + "_first_held_move",
+                                 signalParams, &firstMovePixels);
+    tests::CompareBitmapToBitmap(secondCrop, firstCrop, std::string(id) + "_second_held_move",
+                                 signalParams, &secondMovePixels);
+    if (firstMovePixels == 0 || secondMovePixels == 0) {
+      if (const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+        const std::array<std::pair<const char*, const svg::RendererBitmap*>, 3> frames = {
+            std::pair{"before", &beforeCrop}, std::pair{"first", &firstCrop},
+            std::pair{"second", &secondCrop}};
+        for (const auto& [stage, bitmap] : frames) {
+          const std::filesystem::path path =
+              std::filesystem::path(outputDir) / (std::string(id) + "_" + stage + ".png");
+          (void)svg::RendererImageIO::writeRgbaPixelsToPngFile(
+              path.string().c_str(), bitmap->pixels, bitmap->dimensions.x, bitmap->dimensions.y,
+              bitmap->rowBytes / 4u);
+        }
+      }
+    }
+    EXPECT_GT(firstMovePixels, 0)
+        << "The canvas stayed frozen through the first held move: current="
+        << firstStatus.documentFrameVersion << " displayed=" << firstStatus.displayedDocVersion
+        << " tiles=" << firstStatus.tiles.size();
+    EXPECT_GT(secondMovePixels, 0)
+        << "The canvas stayed frozen through the next held move: current="
+        << secondStatus.documentFrameVersion << " displayed=" << secondStatus.displayedDocVersion
+        << " tiles=" << secondStatus.tiles.size();
+
+    EditorShellTestAccess::EndSelectedShapeDrag(shell, start + Vector2d(20.0, 0.0));
+    EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+    (void)captureContent();
+    awaitPresentation();
+  }
 }
 
 TEST(EditorShellTest, SelectDragKeepsFullPathChrome) {
