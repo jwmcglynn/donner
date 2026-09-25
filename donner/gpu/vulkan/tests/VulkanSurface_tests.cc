@@ -427,14 +427,19 @@ public:
     gTeardownRecorder = nullptr;
   }
 
-  static std::unique_ptr<VulkanSwapchain> MakeAcquireOnlySurface(const VulkanApi* api) {
+  static std::unique_ptr<VulkanSwapchain> MakeAcquireOnlySurface(const VulkanApi* api,
+                                                                 VulkanDevice* owner = nullptr) {
     VulkanSurfaceContext context{};
-    context.api = api;
-    context.instance = FakeHandle<VkInstance>(1);
-    context.device = FakeHandle<VkDevice>(2);
-    context.queue = FakeHandle<VkQueue>(3);
-    context.commandPool = FakeHandle<VkCommandPool>(4);
-    context.lifetime = std::make_shared<VulkanSurfaceLifetime>();
+    if (owner) {
+      context = owner->surfaceContextForTeardownTest();
+    } else {
+      context.api = api;
+      context.instance = FakeHandle<VkInstance>(1);
+      context.device = FakeHandle<VkDevice>(2);
+      context.queue = FakeHandle<VkQueue>(3);
+      context.commandPool = FakeHandle<VkCommandPool>(4);
+      context.lifetime = std::make_shared<VulkanSurfaceLifetime>();
+    }
     auto surface = std::unique_ptr<VulkanSwapchain>(
         new VulkanSwapchain(context, FakeHandle<VkSurfaceKHR>(5), true));
     surface->swapchain_ = FakeHandle<VkSwapchainKHR>(6);
@@ -445,8 +450,9 @@ public:
     return surface;
   }
 
-  static std::unique_ptr<VulkanSwapchain> MakePresentableSurface(const VulkanApi* api) {
-    auto surface = MakeAcquireOnlySurface(api);
+  static std::unique_ptr<VulkanSwapchain> MakePresentableSurface(const VulkanApi* api,
+                                                                 VulkanDevice* owner = nullptr) {
+    auto surface = MakeAcquireOnlySurface(api, owner);
     surface->images_ = {FakeHandle<VkImage>(8)};
     surface->handoverSemaphores_ = {FakeHandle<VkSemaphore>(9)};
     surface->presentFences_ = {FakeHandle<VkFence>(10)};
@@ -456,8 +462,9 @@ public:
     return surface;
   }
 
-  static std::unique_ptr<VulkanSwapchain> MakeAcquirableSurface(const VulkanApi* api) {
-    auto surface = MakePresentableSurface(api);
+  static std::unique_ptr<VulkanSwapchain> MakeAcquirableSurface(const VulkanApi* api,
+                                                                VulkanDevice* owner = nullptr) {
+    auto surface = MakePresentableSurface(api, owner);
     surface->configuration_ = SurfaceConfiguration{};
     surface->pendingAcquireWait_ = VK_NULL_HANDLE;
     surface->hasFrame_ = false;
@@ -1293,6 +1300,54 @@ TEST(VulkanPresentationCreationTest, AcquisitionLossRetainsWaitUntilLaterComplet
                                                    "create-fence", "queue-submit", "wait-fences"));
   surface.reset();
   EXPECT_THAT(recorder.calls, Contains("destroy-surface"));
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, AcquireDeviceLossDeclaresSharedRootBeforeStatusReturns) {
+  TeardownRecorder recorder;
+  recorder.acquireResult = VK_ERROR_DEVICE_LOST;
+  recorder.submissionResult = VK_ERROR_DEVICE_LOST;
+  recorder.fenceResults = {VK_ERROR_DEVICE_LOST};
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  const auto rootLoss = std::make_shared<DeviceLostState>();
+  auto owner = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3, nullptr, nullptr, rootLoss);
+  auto sibling = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3, nullptr, nullptr, rootLoss);
+  auto surface = VulkanSwapchainTestAccess::MakeAcquirableSurface(&api, owner.get());
+
+  const Result<SurfaceStatus> acquired = surface->acquire();
+  ASSERT_THAT(acquired, IsOk());
+  EXPECT_EQ(acquired.result(), SurfaceStatus::DeviceLost);
+  EXPECT_TRUE(owner->isLost());
+  EXPECT_TRUE(sibling->isLost());
+  EXPECT_EQ(rootLoss->timedOutSite.load(), DeviceLostWaitSite::None);
+
+  surface.reset();
+  owner.reset();
+  sibling.reset();
+  gTeardownRecorder = nullptr;
+}
+
+TEST(VulkanPresentationCreationTest, PresentDeviceLossDeclaresSharedRootBeforeStatusReturns) {
+  TeardownRecorder recorder;
+  recorder.presentResult = VK_ERROR_DEVICE_LOST;
+  VulkanApi api = VulkanSwapchainTestAccess::MakeApi();
+  gTeardownRecorder = &recorder;
+  const auto rootLoss = std::make_shared<DeviceLostState>();
+  auto owner = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3, nullptr, nullptr, rootLoss);
+  auto sibling = VulkanDevice::CreateForTeardownTest(&api, 1, 2, 3, nullptr, nullptr, rootLoss);
+  auto surface = VulkanSwapchainTestAccess::MakePresentableSurface(&api, owner.get());
+
+  const Result<SurfaceStatus> presented = VulkanSwapchainTestAccess::Present(*surface);
+  ASSERT_THAT(presented, IsOk());
+  EXPECT_EQ(presented.result(), SurfaceStatus::DeviceLost);
+  EXPECT_TRUE(owner->isLost());
+  EXPECT_TRUE(sibling->isLost());
+  EXPECT_EQ(rootLoss->timedOutSite.load(), DeviceLostWaitSite::None);
+
+  surface.reset();
+  owner.reset();
+  sibling.reset();
   gTeardownRecorder = nullptr;
 }
 
