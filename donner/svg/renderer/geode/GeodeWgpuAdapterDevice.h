@@ -307,8 +307,8 @@ GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
 
 /**
  * The backend a selection that names none builds from: the kind `DONNER_GPU_BACKEND` names
- * (`wgpu`, `metal` or `vulkan`, in any letter case), or native Metal on Apple when the variable is
- * unset or empty. Other native platforms retain the transitional adapter until their cutover.
+ * (`wgpu`, `metal` or `vulkan`, in any letter case), or native Metal on Apple and native Vulkan on
+ * Linux when the variable is unset or empty. Other platforms retain the transitional adapter.
  *
  * One process-wide request so a suite can be run end to end against a backend that is not yet the
  * default, without a second copy of every target.
@@ -333,8 +333,9 @@ std::optional<GpuBackendKind> BuildDefaultGpuBackendKind();
  * The backend \ref SelectGpuRoot builds from for \p options. The first of these that applies
  * decides: the backend the caller names, the one \p request names, \p buildDefault for a
  * selection with no surface provider, and the platform default. A selection constrained by a
- * WebGPU surface provider retains the transitional adapter by default because native Metal cannot
- * serve that surface. Apple's editor attaches its Metal layer without such a provider.
+ * WebGPU surface provider retains the transitional adapter by default because native backends
+ * cannot serve that surface. Native editor windows attach their platform surfaces without such a
+ * provider.
  *
  * A selection with a WebGPU surface provider stays on the transitional adapter when only the
  * build default names a backend. The selected browser editor has no such provider: it names its
