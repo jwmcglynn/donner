@@ -317,12 +317,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
         selector = self._step_body(determine, "Select Linux WebGPU resvg reference")
         self.assertIn("if: github.event_name == 'pull_request'", selector)
-        path_start = determine.index("          # Direct renderer/shader/image inputs")
+        path_start = determine.index("          # Direct renderer/GPU/image inputs")
         path_end = determine.index("          should_fallback=false", path_start)
         path_script = "#!/usr/bin/env bash\nset -euo pipefail\n"
         path_script += textwrap.dedent(determine[path_start:path_end])
         for path, expected in (
             ("donner/svg/renderer/RendererGeode.cc", "true"),
+            ("donner/gpu/browser/BrowserDevice.cc", "true"),
             ("donner/gpu/shader/WgslEmitter.cc", "true"),
             ("donner/svg/resources/ImageLoader.cc", "true"),
             ("third_party/resvg-test-suite/tests/icon.svg", "true"),

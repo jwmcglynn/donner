@@ -389,12 +389,12 @@ jobs:
             exit 0
           fi
 
-          # Direct renderer/shader/image inputs and this lane's workflow still select the oracle
+          # Direct renderer/GPU/image inputs and this lane's workflow still select the oracle
           # when an infra change makes bazel-diff fall back before it can report affected targets.
           wgpu_reference_changed=false
           while IFS= read -r path; do
             case "$path" in
-              donner/svg/renderer/*|donner/gpu/shader/*|donner/svg/resources/*|donner/svg/components/resources/*)
+              donner/svg/renderer/*|donner/gpu/*|donner/svg/resources/*|donner/svg/components/resources/*)
                 wgpu_reference_changed=true
                 break
                 ;;
