@@ -19,7 +19,9 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#ifndef __EMSCRIPTEN__
 #include <webgpu/webgpu.hpp>
+#endif
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
@@ -44,7 +46,6 @@
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
-#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeFillTolerance.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"

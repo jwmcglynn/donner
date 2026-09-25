@@ -85,7 +85,6 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/resources/FontManager.h"

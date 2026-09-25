@@ -16,10 +16,9 @@ import unittest
 from python.runfiles import runfiles
 
 
-# Every payload ceiling measurement mode turns into a print-only report, at the
-# value it must hold once measurement mode ends. The three byte budgets the
-# transitional WebGPU implementation widened return to their production goals;
-# the two JavaScript budgets were never widened and hold where they are.
+# Measurement mode reports payload sizes while the production Rust-built GPU
+# dependency is still being removed. These are the ceilings to restore when
+# that cutover is complete and the package is remeasured.
 STRICT_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 50200,
     "--max-js-raw-bytes": 177800,
@@ -27,40 +26,15 @@ STRICT_PAYLOAD_CEILINGS = {
     "--max-wasm-gzip-bytes": 3060000,
     "--max-wasm-raw-bytes": 9200000,
 }
-TRANSITIONAL_WEBGPU_PACKAGES = ("//third_party/emdawnwebgpu", "//third_party/webgpu-cpp")
 MEASURE_MODE_ARG = "--test_arg=--payload-budget-mode=measure"
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
 STEP_AFTER_SIZE_CHECK = "- name: Stage package for handoff"
-# A configured dependency listing for the editor Wasm package after the
-# transitional WebGPU implementation is gone, used to exercise the expiry.
-_MIGRATED_DEPENDENCY_LABELS = (
-    "@@//donner/editor/wasm:wasm\n"
-    "@@//donner/editor/gui:editor_window\n"
-    "@@//donner/svg/renderer:renderer_geode\n"
-)
-
-
 def _repository_text(path):
     resolver = runfiles.Create()
     resolved = resolver.Rlocation("donner/%s" % path)
     with open(resolved, encoding="utf-8") as handle:
         return handle.read()
-
-
-def _transitional_webgpu_dependencies(dependency_labels):
-    """Labels of the transitional WebGPU packages in a configured dependency listing.
-
-    The listing comes from the build graph after `select()` resolution, so a
-    dependency that survives only in an unused configuration does not count.
-    """
-    prefixes = tuple(
-        package + separator
-        for package in TRANSITIONAL_WEBGPU_PACKAGES
-        for separator in (":", "/")
-    )
-    labels = [label.removeprefix("@@") for label in dependency_labels.split()]
-    return sorted(label for label in labels if label.startswith(prefixes))
 
 
 def _declared_payload_ceilings(size_test_arguments):
@@ -83,10 +57,10 @@ def _payload_budget_expiry_message():
         "%s %d" % (flag, limit) for flag, limit in sorted(STRICT_PAYLOAD_CEILINGS.items())
     )
     return (
-        "The editor Wasm package no longer depends on %s, so the measurement-only payload "
-        "budgets have expired: drop %s from the Editor WASM workflow's size-check step and "
-        "restore the strict ceilings on %s (%s)."
-        % (" or ".join(TRANSITIONAL_WEBGPU_PACKAGES), MEASURE_MODE_ARG, PAYLOAD_SIZE_TEST, restore)
+        "After production Rust-built GPU dependencies are removed and the Wasm package is "
+        "remeasured, drop %s from the Editor WASM size-check step and restore the strict "
+        "ceilings on %s (%s)."
+        % (MEASURE_MODE_ARG, PAYLOAD_SIZE_TEST, restore)
     )
 
 
@@ -101,9 +75,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         cls.lint = _repository_text(".github/workflows/lint.yml")
         cls.coverage_script = _repository_text("tools/coverage.sh")
         cls.apt_install = _repository_text(".github/actions/apt-install/action.yml")
-        cls.wasm_dependency_labels = _repository_text(
-            "donner/editor/wasm/wasm_package_dependency_labels.txt"
-        )
         cls.wasm_size_test_arguments = _repository_text(
             "donner/editor/wasm/wasm_package_size_test_arguments.txt"
         )
@@ -625,13 +596,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn(STEP_AFTER_SIZE_CHECK, workflow)
         return workflow.split(SIZE_CHECK_STEP, 1)[1].split(STEP_AFTER_SIZE_CHECK, 1)[0]
 
-    def _assert_payload_budget_gate(self, dependency_labels, size_test_arguments, workflow):
-        """Measurement-only payload budgets live exactly as long as their justification.
+    def _assert_payload_budget_gate(self, size_test_arguments, workflow, post_rust_removal):
+        """Measurement remains active until the production Rust cutover is complete.
 
-        The justification is a configured dependency on the transitional WebGPU
-        implementation. While that dependency exists the workflow may run the size
-        test in measurement mode; once it is gone the workflow must run the size
-        test strictly and the ceilings must be back at their production values.
+        After that cutover, the package must be remeasured and its strict ceilings
+        restored. The synthetic post-removal cases keep that future gate testable.
         """
         ceilings = _declared_payload_ceilings(size_test_arguments)
         self.assertEqual(
@@ -645,18 +614,17 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             size_check_step.count(MEASURE_MODE_ARG),
             "measurement mode belongs to the size-check step and nowhere else",
         )
-        if _transitional_webgpu_dependencies(dependency_labels):
-            self.assertLessEqual(
+        if not post_rust_removal:
+            self.assertEqual(
                 size_check_step.count(MEASURE_MODE_ARG),
                 1,
-                "measurement mode belongs to exactly one size-check invocation",
+                "measurement mode remains required until production Rust removal",
             )
-            if MEASURE_MODE_ARG in size_check_step:
-                self.assertIn(
-                    "Remove only this test_arg",
-                    size_check_step,
-                    "measurement mode must carry its removal instructions",
-                )
+            self.assertIn(
+                "Remove only this test_arg after production Rust-built GPU dependencies",
+                size_check_step,
+                "measurement mode must carry its post-Rust removal instructions",
+            )
             return
 
         message = _payload_budget_expiry_message()
@@ -665,18 +633,18 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertEqual(0, workflow.count(MEASURE_MODE_ARG), message)
         self.assertEqual(ceilings, STRICT_PAYLOAD_CEILINGS, message)
 
-    def test_editor_wasm_measurement_budgets_expire_with_the_transitional_dependency(self):
-        """The live build graph decides whether measurement mode is still licensed."""
+    def test_editor_wasm_measurement_budgets_remain_until_production_rust_removal(self):
+        """The live workflow retains measurement pending the separate Rust cutover."""
         self._assert_payload_budget_gate(
-            self.wasm_dependency_labels,
             self.wasm_size_test_arguments,
             self.editor_wasm,
+            post_rust_removal=False,
         )
 
     def test_editor_wasm_payload_gate_names_the_ceilings_and_flag_to_restore(self):
         with self.assertRaises(AssertionError) as raised:
             self._assert_payload_budget_gate(
-                _MIGRATED_DEPENDENCY_LABELS, self.wasm_size_test_arguments, self.editor_wasm
+                self.wasm_size_test_arguments, self.editor_wasm, post_rust_removal=True
             )
         message = str(raised.exception)
         self.assertIn(MEASURE_MODE_ARG, message)
@@ -687,7 +655,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         strict_workflow = self.editor_wasm.replace(MEASURE_MODE_ARG, "")
         with self.assertRaises(AssertionError) as raised:
             self._assert_payload_budget_gate(
-                _MIGRATED_DEPENDENCY_LABELS, self.wasm_size_test_arguments, strict_workflow
+                self.wasm_size_test_arguments, strict_workflow, post_rust_removal=True
             )
         self.assertIn("restore the strict ceilings", str(raised.exception))
 
@@ -698,10 +666,18 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 r'("%s", )"\d+"' % re.escape(flag), r'\g<1>"%d"' % limit, strict_arguments
             )
         self._assert_payload_budget_gate(
-            _MIGRATED_DEPENDENCY_LABELS,
             strict_arguments,
             self.editor_wasm.replace(MEASURE_MODE_ARG, ""),
+            post_rust_removal=True,
         )
+
+    def test_editor_wasm_payload_gate_rejects_strict_mode_before_rust_removal(self):
+        strict_workflow = self.editor_wasm.replace(MEASURE_MODE_ARG, "")
+        with self.assertRaises(AssertionError) as raised:
+            self._assert_payload_budget_gate(
+                self.wasm_size_test_arguments, strict_workflow, post_rust_removal=False
+            )
+        self.assertIn("measurement mode remains required", str(raised.exception))
 
     def test_editor_wasm_size_check_step_runs_the_gated_size_test(self):
         """The gate reads the ceilings of the target the workflow actually runs."""
@@ -711,18 +687,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn(suite_name, self.ci_target_definitions)
         suite = self.ci_target_definitions.split(suite_name, 1)[1].split("\n)", 1)[0]
         self.assertIn(PAYLOAD_SIZE_TEST, suite)
-
-    def test_editor_wasm_payload_gate_reads_the_dependency_from_resolved_labels(self):
-        """A label from an unrelated package never licenses measurement mode."""
-        self.assertEqual(
-            _transitional_webgpu_dependencies(
-                "@@//third_party/emdawnwebgpu:webgpu_impl\n"
-                "@@//third_party/webgpu-cpp:wgpu_emscripten\n"
-                "@@//donner/editor/wasm:wasm\n"
-                "@@//third_party/webgpu-cpp-notes:readme\n"
-            ),
-            ["//third_party/emdawnwebgpu:webgpu_impl", "//third_party/webgpu-cpp:wgpu_emscripten"],
-        )
 
     def test_editor_wasm_handoff_resolves_artifact_and_provenance_from_metadata(self):
         stage = self.editor_wasm.split("- name: Stage package for handoff", 1)[1].split(

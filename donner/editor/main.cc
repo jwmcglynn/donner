@@ -16,7 +16,6 @@
 #include "donner/base/AsyncifySuspendProbe.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 #ifdef DONNER_EDITOR_WHOLE_APP_WORKER
 // The app pthread's JS context has no `window`, so the frame-scheduling flag,
@@ -302,16 +301,8 @@ void RunWasmEditorFrame(void* userdata) {
       ConsumeBrowserEditorFrameRequest() || state->window->hasQueuedInputEvents();
   const bool timerDue = state->nextIdleWakeAtMs.has_value() && nowMs >= *state->nextIdleWakeAtMs;
   if (!editorRequested && !browserRequested && !timerDue) {
-    // The transitional device needs a non-blocking driver poll for callbacks while idle. The
-    // browser runtime's JavaScript callbacks settle on the event loop; its runtime poll retires
-    // completed resources without asking a nonexistent adapter to poll.
     if (const std::shared_ptr<donner::geode::GeodeDevice> device = state->window->geodeDevice()) {
-      if (device->physicalDeviceOwner()->root().capabilities().backend ==
-          donner::geode::GpuBackendKind::TransitionalWgpu) {
-        device->adapterDevice().pollSuspending(false);
-      } else {
-        device->runtimeDevice().poll();
-      }
+      device->runtimeDevice().poll();
     }
     return;
   }

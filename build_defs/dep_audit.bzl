@@ -1,7 +1,7 @@
 """Dependency audits for unconfigured backend and configured product graphs.
 
-`configured_dependency_audit_test` follows selected binary/library dependencies
-through build transitions, so it also audits product dispatchers and Wasm packages.
+`configured_dependency_audit_test` follows selected binary/library dependencies and
+linker inputs through build transitions, so it also audits product dispatchers and Wasm packages.
 
 `configured_dependency_labels` exposes the same configured closure as a text
 file, for tests that need to ask a question the forbidden/required lists cannot
@@ -95,21 +95,32 @@ def forbidden_transitive_dep_test(name, target, forbidden, **kwargs):
         **kwargs
     )
 
-_ConfiguredDepsInfo = provider(fields = ["labels"])
+_ConfiguredDepsInfo = provider(fields = ["labels", "linkopts"])
 
 # Follow binary/library dependencies and the wrappers used to package Wasm.
-_CONFIGURED_DEP_ATTRS = ["deps", "implementation_deps", "dep", "cc_target", "wasm_deps", "dir"]
+_CONFIGURED_DEP_ATTRS = ["deps", "implementation_deps", "dep", "cc_target", "wasm_deps", "dir", "additional_linker_inputs"]
 
 def _configured_deps_impl(target, ctx):
-    transitive = []
+    if ctx.rule == None:
+        return [_ConfiguredDepsInfo(labels = depset([target.label]), linkopts = depset())]
+
+    direct_labels = [target.label]
+    transitive_labels = []
+    transitive_linkopts = []
     for name in _CONFIGURED_DEP_ATTRS:
         deps = getattr(ctx.rule.attr, name, [])
         if type(deps) != "list":
             deps = [deps] if deps != None else []
         for dep in deps:
+            direct_labels.append(dep.label)
             if _ConfiguredDepsInfo in dep:
-                transitive.append(dep[_ConfiguredDepsInfo].labels)
-    return [_ConfiguredDepsInfo(labels = depset([target.label], transitive = transitive))]
+                transitive_labels.append(dep[_ConfiguredDepsInfo].labels)
+                transitive_linkopts.append(dep[_ConfiguredDepsInfo].linkopts)
+    own_linkopts = [str(target.label) + " " + option for option in getattr(ctx.rule.attr, "linkopts", [])]
+    return [_ConfiguredDepsInfo(
+        labels = depset(direct_labels, transitive = transitive_labels),
+        linkopts = depset(own_linkopts, transitive = transitive_linkopts),
+    )]
 
 _configured_deps = aspect(
     implementation = _configured_deps_impl,
@@ -172,17 +183,29 @@ def _configured_dependency_audit_impl(ctx):
                 label.package.startswith(package_label.package + "/"))
         ])
 
+    forbidden_linkopts = []
+    for option in target[_ConfiguredDepsInfo].linkopts.to_list():
+        display_option = option.replace("\\", "\\\\").replace("\r", "\\r").replace("\n", "\\n")
+        for label in ctx.attr.forbidden:
+            if label in option:
+                forbidden_linkopts.append(display_option)
+        for package in ctx.attr.forbidden_packages:
+            if package + ":" in option or package + "/" in option:
+                forbidden_linkopts.append(display_option)
+    forbidden_linkopts = sorted(depset(forbidden_linkopts).to_list())
+
     messages = ["Configured dependency audit: " + str(target.label)]
     messages += ["Forbidden dependency: " + label for label in found]
+    messages += ["Forbidden linker option: " + option for option in forbidden_linkopts]
     messages += ["Missing required dependency: " + label for label in missing]
-    if not found and not missing:
-        messages.append("PASS: required dependencies present; forbidden dependencies absent")
+    if not found and not missing and not forbidden_linkopts:
+        messages.append("PASS: required dependencies present; forbidden dependencies and linker options absent")
 
     output = ctx.actions.declare_file(ctx.label.name + ".sh")
     ctx.actions.write(
         output,
         "#!/bin/sh\ncat <<'AUDIT'\n" + "\n".join(messages) +
-        "\nAUDIT\nexit {}\n".format(1 if found or missing else 0),
+        "\nAUDIT\nexit {}\n".format(1 if found or missing or forbidden_linkopts else 0),
         is_executable = True,
     )
     return [DefaultInfo(executable = output)]
@@ -199,7 +222,7 @@ _configured_dependency_audit = rule(
         "forbidden_packages": attr.string_list(),
         "required": attr.string_list(),
     },
-    doc = "Audits selected dependency edges after select() and platform transitions, without compiling.",
+    doc = "Audits selected dependency and link-input edges after transitions, without compiling.",
 )
 
 def configured_dependency_audit_test(name, target, forbidden = [], forbidden_packages = [], required = [], text_configuration = "inherit", disable_backend_transitions = False, **kwargs):
@@ -209,7 +232,8 @@ def configured_dependency_audit_test(name, target, forbidden = [], forbidden_pac
       name: Test name.
       target: Product root, including any platform-transition wrappers.
       forbidden: Labels that must not be reachable through binary dependencies.
-      forbidden_packages: Packages (and subpackages) that must not be reachable.
+      forbidden_packages: Packages (and subpackages) that must not be reachable through dependencies,
+                          linker inputs, or linker options.
       required: Labels that must be visited, guarding traversal through wrappers.
       text_configuration: Ambient core text tier applied before product transitions.
       disable_backend_transitions: Exercise the backend-transition bypass flag.
