@@ -111,6 +111,8 @@ void GlfwErrorCallback(int error, const char* description) {
 unsigned gGlfwClaims = 0;
 #ifndef __APPLE__
 bool gGlfwQuarantined = false;
+#endif
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
 uint64_t gGlfwTerminationCount = 0;
 #endif
 
@@ -142,7 +144,9 @@ void TerminateGlfw() {
 #ifndef __APPLE__
   if (gGlfwClaims == 0 && !gGlfwQuarantined) {
     glfwTerminate();
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
     ++gGlfwTerminationCount;
+#endif
   }
 #endif
 }
@@ -1069,7 +1073,7 @@ UiScaleConfig ComputeUiScaleConfig(int logicalWindowWidth, int framebufferWidth,
 #ifdef DONNER_EDITOR_WGPU
 namespace internal {
 
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
 bool AcquireGlfwRuntimeForTesting() {
   return InitializeGlfw();
 }

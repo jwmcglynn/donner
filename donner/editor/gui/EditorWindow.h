@@ -54,7 +54,7 @@ namespace donner::editor::gui {
 
 namespace internal {
 
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
 /// Acquires one process-wide GLFW claim for a test-owned companion window.
 bool AcquireGlfwRuntimeForTesting();
 /// Releases a test-owned GLFW claim after its companion window is destroyed.

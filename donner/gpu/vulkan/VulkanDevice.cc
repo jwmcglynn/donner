@@ -469,6 +469,10 @@ const char* SelectMaintenanceExtension(const VulkanApi& api,
 
 enum class CandidateFormatSupport { Usable, Unusable, TerminalFailure };
 
+bool SurfaceQueryFailureIsTerminal(VkResult result) {
+  return result == VK_ERROR_SURFACE_LOST_KHR || result == VK_ERROR_OUT_OF_HOST_MEMORY;
+}
+
 CandidateFormatSupport QueryCandidateSurfaceFormat(const VulkanApi& api,
                                                    VkPhysicalDevice physicalDevice,
                                                    VkSurfaceKHR surface) {
@@ -478,7 +482,7 @@ CandidateFormatSupport QueryCandidateSurfaceFormat(const VulkanApi& api,
   uint32_t count = 0;
   VkResult result =
       api.vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &count, nullptr);
-  if (result == VK_ERROR_SURFACE_LOST_KHR || result == VK_ERROR_OUT_OF_HOST_MEMORY) {
+  if (SurfaceQueryFailureIsTerminal(result)) {
     return CandidateFormatSupport::TerminalFailure;
   }
   if (result != VK_SUCCESS || count == 0) {
@@ -487,7 +491,7 @@ CandidateFormatSupport QueryCandidateSurfaceFormat(const VulkanApi& api,
   std::vector<VkSurfaceFormatKHR> nativeFormats(count);
   result = api.vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &count,
                                                     nativeFormats.data());
-  if (result == VK_ERROR_SURFACE_LOST_KHR || result == VK_ERROR_OUT_OF_HOST_MEMORY) {
+  if (SurfaceQueryFailureIsTerminal(result)) {
     return CandidateFormatSupport::TerminalFailure;
   }
   if (result != VK_SUCCESS) {
@@ -503,6 +507,82 @@ CandidateFormatSupport QueryCandidateSurfaceFormat(const VulkanApi& api,
              : CandidateFormatSupport::Unusable;
 }
 
+/// Rejects a candidate before logical-device creation if any mandatory feature is absent.
+bool CandidateHasPresentationFeatures(const VulkanApi& api,
+                                      std::span<const char* const> instanceExtensions,
+                                      VkPhysicalDevice candidate) {
+  VkPhysicalDeviceProperties properties = {};
+  api.vkGetPhysicalDeviceProperties(candidate, &properties);
+  if (properties.apiVersion < kTargetApiVersion ||
+      SelectMaintenanceExtension(api, instanceExtensions, candidate) == nullptr) {
+    return false;
+  }
+  VkPhysicalDeviceFeatures features = {};
+  api.vkGetPhysicalDeviceFeatures(candidate, &features);
+  if (features.robustBufferAccess != VK_TRUE) {
+    return false;
+  }
+  VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT maintenance = {};
+  maintenance.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
+  VkPhysicalDeviceFeatures2 features2 = {};
+  features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+  features2.pNext = &maintenance;
+  api.vkGetPhysicalDeviceFeatures2(candidate, &features2);
+  return maintenance.swapchainMaintenance1 == VK_TRUE;
+}
+
+enum class CandidateQueueSupport { Unusable, Selected, TerminalFailure };
+
+/// Returns one graphics queue that presents a runtime-supported format, or why this candidate
+/// cannot serve the surface. @param selectedQueueFamily Set only on Selected.
+CandidateQueueSupport ProbeCandidatePresentingQueue(const VulkanApi& api,
+                                                    VkPhysicalDevice candidate,
+                                                    VkSurfaceKHR surface,
+                                                    uint32_t& selectedQueueFamily) {
+  uint32_t familyCount = 0;
+  api.vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, nullptr);
+  std::vector<VkQueueFamilyProperties> families(familyCount);
+  api.vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, families.data());
+  for (uint32_t familyIndex = 0; familyIndex < familyCount; ++familyIndex) {
+    if ((families[familyIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) {
+      continue;
+    }
+    VkBool32 supported = VK_FALSE;
+    const VkResult result =
+        api.vkGetPhysicalDeviceSurfaceSupportKHR(candidate, familyIndex, surface, &supported);
+    if (SurfaceQueryFailureIsTerminal(result)) {
+      return CandidateQueueSupport::TerminalFailure;
+    }
+    if (result != VK_SUCCESS || supported != VK_TRUE) {
+      continue;
+    }
+    const CandidateFormatSupport format = QueryCandidateSurfaceFormat(api, candidate, surface);
+    if (format == CandidateFormatSupport::TerminalFailure) {
+      return CandidateQueueSupport::TerminalFailure;
+    }
+    if (format != CandidateFormatSupport::Usable) {
+      return CandidateQueueSupport::Unusable;
+    }
+    selectedQueueFamily = familyIndex;
+    return CandidateQueueSupport::Selected;
+  }
+  return CandidateQueueSupport::Unusable;
+}
+
+std::vector<VkPhysicalDevice> EnumeratePhysicalDevicesForSurface(const VulkanApi& api,
+                                                                 VkInstance instance) {
+  uint32_t deviceCount = 0;
+  if (api.vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr) != VK_SUCCESS ||
+      deviceCount == 0) {
+    return {};
+  }
+  std::vector<VkPhysicalDevice> devices(deviceCount);
+  if (api.vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data()) != VK_SUCCESS) {
+    return {};
+  }
+  return devices;
+}
+
 /// Selects a graphics queue that can present to the embedder's actual surface. A candidate also
 /// needs every extension and feature the logical device will request.
 bool SelectPresentablePhysicalDevice(const VulkanApi& api, VkInstance instance,
@@ -513,66 +593,20 @@ bool SelectPresentablePhysicalDevice(const VulkanApi& api, VkInstance instance,
   if (surface == VK_NULL_HANDLE || api.vkGetPhysicalDeviceSurfaceSupportKHR == nullptr) {
     return false;
   }
-  uint32_t deviceCount = 0;
-  if (api.vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr) != VK_SUCCESS ||
-      deviceCount == 0) {
-    return false;
-  }
-  std::vector<VkPhysicalDevice> devices(deviceCount);
-  if (api.vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data()) != VK_SUCCESS) {
-    return false;
-  }
-  for (VkPhysicalDevice candidate : devices) {
-    VkPhysicalDeviceProperties properties = {};
-    api.vkGetPhysicalDeviceProperties(candidate, &properties);
-    if (properties.apiVersion < kTargetApiVersion ||
-        SelectMaintenanceExtension(api, instanceExtensions, candidate) == nullptr) {
+  for (VkPhysicalDevice candidate : EnumeratePhysicalDevicesForSurface(api, instance)) {
+    if (!CandidateHasPresentationFeatures(api, instanceExtensions, candidate)) {
       continue;
     }
-    VkPhysicalDeviceFeatures features = {};
-    api.vkGetPhysicalDeviceFeatures(candidate, &features);
-    if (features.robustBufferAccess != VK_TRUE) {
-      continue;
+    uint32_t queueFamily = 0;
+    const CandidateQueueSupport result =
+        ProbeCandidatePresentingQueue(api, candidate, surface, queueFamily);
+    if (result == CandidateQueueSupport::TerminalFailure) {
+      return false;
     }
-    VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT maintenance = {};
-    maintenance.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
-    VkPhysicalDeviceFeatures2 features2 = {};
-    features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
-    features2.pNext = &maintenance;
-    api.vkGetPhysicalDeviceFeatures2(candidate, &features2);
-    if (maintenance.swapchainMaintenance1 != VK_TRUE) {
-      continue;
-    }
-    uint32_t familyCount = 0;
-    api.vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, nullptr);
-    std::vector<VkQueueFamilyProperties> families(familyCount);
-    api.vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, families.data());
-    for (uint32_t familyIndex = 0; familyIndex < familyCount; ++familyIndex) {
-      if ((families[familyIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) {
-        continue;
-      }
-      VkBool32 supported = VK_FALSE;
-      const VkResult supportResult =
-          api.vkGetPhysicalDeviceSurfaceSupportKHR(candidate, familyIndex, surface, &supported);
-      if (supportResult == VK_ERROR_SURFACE_LOST_KHR ||
-          supportResult == VK_ERROR_OUT_OF_HOST_MEMORY) {
-        return false;
-      }
-      if (supportResult != VK_SUCCESS) {
-        continue;
-      }
-      if (supported == VK_TRUE) {
-        const CandidateFormatSupport format = QueryCandidateSurfaceFormat(api, candidate, surface);
-        if (format == CandidateFormatSupport::TerminalFailure) {
-          return false;
-        }
-        if (format != CandidateFormatSupport::Usable) {
-          break;
-        }
-        selectedDevice = candidate;
-        selectedQueueFamily = familyIndex;
-        return true;
-      }
+    if (result == CandidateQueueSupport::Selected) {
+      selectedDevice = candidate;
+      selectedQueueFamily = queueFamily;
+      return true;
     }
   }
   return false;
