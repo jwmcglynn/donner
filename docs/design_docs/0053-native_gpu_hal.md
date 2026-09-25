@@ -588,11 +588,21 @@ performance and final integrated gates remain open.
       presentation-capable shared root ([PR #1533](https://github.com/jwmcglynn/donner/pull/1533))
       are open foundations, not evidence that the editor presents yet. With GLFW initialized and
       a `GLFW_NO_API` window alive, copy `glfwGetRequiredInstanceExtensions` names into the root
-      selection before creating its Vulkan instance. Require native Vulkan, create the
-      `VkSurfaceKHR` with `glfwCreateWindowSurface` against that exact instance. Before
-      `GeodeDevice::CreateOverSelectedRoot` compiles its pipelines, query that surface through the
-      selected Vulkan physical root for present-queue support and a supported runtime texture
-      format. Fail if either is unavailable; do not call the existing pre-Geode
+      selection before creating its Vulkan instance. Require native Vulkan and an instance-only
+      presentation probe, without committing to a physical device, queue family or logical device.
+      Create the `VkSurfaceKHR` with `glfwCreateWindowSurface` against that exact instance, then
+      enumerate physical devices and graphics queue families using
+      `vkGetPhysicalDeviceSurfaceSupportKHR` for this surface. Select a candidate that can present
+      and satisfies the swapchain extension and required runtime features before creating its
+      logical device and completing the shared root. The opt-in #1533 root is a foundation; its
+      first-graphics-queue selection needs this surface-aware, two-stage extension for editor
+      windows. Do not reject a usable later queue or physical device because the first choice
+      cannot present. If no candidate exists before root completion, destroy `VkSurfaceKHR` before
+      the provisional instance, then the GLFW window and its runtime claim on the main thread;
+      no logical device exists on this path. Before `GeodeDevice::CreateOverSelectedRoot` compiles
+      its pipelines, query the selected device's actual surface formats and choose a supported
+      runtime texture format.
+      Fail if no compatible candidate or format exists; do not call the existing pre-Geode
       `chooseConfiguration(wgpu::Adapter&)` for a native root. Build the first Geode context for
       that format, then add a backend-neutral factory for a second logical Geode context over its
       `GeodePhysicalDeviceOwner` and the same format. The current framebuffer
@@ -634,8 +644,11 @@ destroying native prerequisites or aborting the process. The order follows the
 and [GLFW Vulkan window contracts](https://www.glfw.org/docs/latest/group__vulkan.html).
 
 Extend `//donner/gpu/vulkan/tests:vulkan_surface_tests` with deterministic native-retirement
-proof, failed proof, acceptance-boundary and duplicate-ownership cases. Extend
-`//donner/editor/tests:editor_window_tests_geode` with explicit and destructor release order,
+proof, failed proof, acceptance-boundary and duplicate-ownership cases. Include a selection case
+whose first graphics queue cannot present to the actual surface but a later queue or physical
+device can, plus refusal when none can with pre-root cleanup order; no logical device is created
+before the surface query. Extend `//donner/editor/tests:editor_window_tests_geode` with explicit
+and destructor release order,
 multiwindow GLFW shutdown, retained-window quarantine, concurrent retirement observation, and
 pre-Geode format selection matching the runtime surface format at attach and rebuild. Extend
 `//donner/svg/renderer/geode:geode_device_tests` to require the UI framebuffer's second logical
