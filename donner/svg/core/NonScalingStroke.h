@@ -45,8 +45,8 @@ bool IsSimilarityTransform(const Transform2d& transform);
 /**
  * Resolves how an element's stroke is realized.
  *
- * A CTM with a non-finite component never resolves to \ref NonScalingStrokeMode::HostSpace:
- * mapping the centerline through it would produce non-finite geometry, and the caches keyed on
+ * A CTM with a non-finite component never resolves to \ref NonScalingStrokeMode::HostSpace.
+ * Mapping the centerline through it would produce non-finite geometry, and the caches keyed on
  * that transform could never hit again, because a NaN component compares unequal to itself.
  *
  * @param vectorEffect The element's computed `vector-effect`.

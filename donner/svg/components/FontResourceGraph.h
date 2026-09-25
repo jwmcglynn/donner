@@ -57,7 +57,7 @@ public:
   /// Snapshot a prepared tree under the document access guard. Does not load any font.
   explicit FontResourceGraph(const Registry& registry);
 
-  /// Collect main-tree instances beneath target, including <use> shadow children, and follow
+  /// Collect main-tree instances beneath target, including `<use>` shadow children, and follow
   /// only their resolved paint/mask/marker ranges. A text span includes its containing text root.
   Collection collect(const Registry& registry, Entity target,
                      Purpose purpose = Purpose::CompleteTarget) const;

@@ -22,7 +22,7 @@ namespace donner::svg::text_engine_detail {
 /// keyword, in pixels. The offset is added to the baseline Y position, so positive values
 /// move glyphs down (+Y in SVG coordinates); e.g. `hanging` returns +0.8 * ascent.
 /// @param baseline Effective baseline keyword for the span.
-/// @param vm Font vertical metrics in design units (\ref FontVMetrics::xHeight may be 0).
+/// @param vm Font vertical metrics in design units (`FontVMetrics::xHeight` may be 0).
 /// @param scale Design units → pixels scale (em scale, fontSize / unitsPerEm).
 double computeBaselineShift(DominantBaseline baseline, const FontVMetrics& vm, float scale);
 

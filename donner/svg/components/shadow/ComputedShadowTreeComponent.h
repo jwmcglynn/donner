@@ -91,8 +91,8 @@ struct ComputedShadowTreeComponent {
   /// branch instantiated.
   std::optional<BranchStorage> mainBranch;
 
-  /// Storage for additional shadow trees, such as \ref ShadowBranchType::OffscreenFill or \ref
-  /// OffscreenStroke.
+  /// Storage for additional shadow trees, such as \ref ShadowBranchType::OffscreenFill or
+  /// \ref ShadowBranchType::OffscreenStroke.
   std::vector<BranchStorage> branches;
 };
 

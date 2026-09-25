@@ -53,7 +53,7 @@ struct ComputedPathComponent {
   /**
    * The transform that produced \ref cachedHostSpline, or `std::nullopt` when nothing is cached.
    *
-   * Public and mutable for the same reason as \ref cachedLocalBounds: the component has to stay
+   * Public and mutable for the same reason as `cachedLocalBounds`: the component has to stay
    * an aggregate.
    */
   mutable std::optional<Transform2d> cachedHostFromLocal;

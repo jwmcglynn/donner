@@ -13,7 +13,7 @@
 /// `Asyncify` object is a closure-renamed module-scope binding, so the probe
 /// instead brackets the call sites that can suspend. Bracketing is exact for
 /// wall time because Asyncify preserves the shadow stack across an unwind:
-/// entering a \ref ScopedSuspendPoint runs its constructor once before the
+/// entering a \ref donner::ScopedSuspendPoint runs its constructor once before the
 /// call, the unwind returns out of the enclosing function without running
 /// destructors, the rewind restores the stack pointer and locals, and the
 /// destructor finally runs once on the normal path out. The measured interval

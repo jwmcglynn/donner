@@ -146,7 +146,7 @@ bool ValidateSfnt(std::span<const uint8_t> data);
  * Return a bounded sfnt table by its four-byte tag.
  *
  * This compatibility helper performs a fresh, explicitly bounded validation. Repeated callers
- * should retain an @ref SfntFont and call @ref SfntFont::findTable instead.
+ * should retain a \ref donner::fonts::SfntFont and call its `findTable` method instead.
  */
 std::optional<std::span<const uint8_t>> FindSfntTable(std::span<const uint8_t> data,
                                                       std::string_view tag);

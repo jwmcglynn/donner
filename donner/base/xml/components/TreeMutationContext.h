@@ -11,11 +11,12 @@ namespace donner::components {
 /**
  * Document-local hooks for tree mutations.
  *
- * Always installed in `Registry::ctx()` by the owning document model: \ref XMLDocument installs
- * the `Default*` callbacks below (which operate on \ref TreeComponent directly), and higher-level
- * models such as SVGDocument overwrite the individual callbacks after construction to layer
- * invalidation and lifetime tracking on top. \ref XMLNode mutation methods always go through the
- * context, so the lookup never needs to fall back to a direct \ref TreeComponent path -
+ * Always installed in `Registry::ctx()` by the owning document model:
+ * \ref donner::xml::XMLDocument installs the `Default*` callbacks below (which operate on
+ * \ref TreeComponent directly), and higher-level models such as SVGDocument overwrite the
+ * individual callbacks after construction to layer invalidation and lifetime tracking on top.
+ * \ref donner::xml::XMLNode mutation methods always go through the context, so the lookup never
+ * needs to fall back to a direct \ref TreeComponent path -
  * `Registry::ctx().contains<TreeMutationContext>()` is an invariant of any registry exposed
  * through one of the document facades.
  */

@@ -15,7 +15,7 @@ namespace donner::svg::components {
  *
  * @param registry Document registry.
  * @param id ID to resolve.
- * @return The attached entity with \p id, or \ref entt::null when none exists.
+ * @return The attached entity with \p id, or `entt::null` when none exists.
  */
 Entity FindAttachedEntityById(Registry& registry, const RcString& id);
 
