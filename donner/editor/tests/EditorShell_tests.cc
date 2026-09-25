@@ -898,6 +898,8 @@ TEST(EditorShellInternalTest, PaintReferenceStateIncludesSameDocumentSourceRange
 
 class EditorShellTestAccess {
 public:
+  using NativeSaveOutcome = EditorShell::NativeSaveOutcome;
+
   static EditorApp& App(EditorShell& shell) { return shell.app_; }
   static const EditorApp& App(const EditorShell& shell) { return shell.app_; }
   static std::size_t PendingHistoryActionCount(const EditorShell& shell) {
@@ -1049,6 +1051,22 @@ public:
 
   static void RequestSaveAs(EditorShell& shell, std::string error = std::string()) {
     shell.requestSaveAs(std::move(error));
+  }
+
+  static void QueueNativeSaveSelection(EditorShell& shell, std::string path) {
+    shell.queueNativeSaveSelection(std::move(path));
+  }
+
+  static NativeSaveOutcome TryPendingNativeSave(EditorShell& shell, std::string* error) {
+    return shell.tryPendingNativeSave(error);
+  }
+
+  static std::optional<std::string> PendingNativeSavePath(const EditorShell& shell) {
+    return shell.pendingNativeSavePath_;
+  }
+
+  static void ExpirePendingNativeSave(EditorShell& shell) {
+    shell.pendingNativeSaveDeadline_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
   }
 
   static void RequestExportViewportSvg(EditorShell& shell, bool includeOverlay,
@@ -2803,6 +2821,96 @@ TEST(EditorShellTest, SaveRequestsUseCurrentPathAndFallbackToSaveAs) {
   EXPECT_TRUE(untitledShell.valid());
 }
 
+TEST(EditorShellTest, NativeViewportExportRetainsChosenPathUntilRendererIsReady) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "source.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  const std::filesystem::path exportPath = TempPathForTest("native_deferred_viewport.svg");
+  std::filesystem::remove(exportPath);
+
+  EditorShellTestAccess::RequestExportViewportSvg(shell, /*includeOverlay=*/false);
+  ASSERT_TRUE(EditorShellTestAccess::SaveFileModalRequested(shell));
+  EditorShellTestAccess::QueueNativeSaveSelection(shell, exportPath.string());
+  ASSERT_FALSE(EditorShellTestAccess::SaveFileModalRequested(shell));
+  AsyncRenderer& renderer =
+      EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(500));
+  ASSERT_TRUE(renderer.isBusy());
+
+  std::string error;
+  EXPECT_EQ(EditorShellTestAccess::TryPendingNativeSave(shell, &error),
+            EditorShellTestAccess::NativeSaveOutcome::Deferred);
+  EXPECT_THAT(EditorShellTestAccess::PendingNativeSavePath(shell),
+              testing::Optional(exportPath.string()));
+  EXPECT_TRUE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_FALSE(EditorShellTestAccess::SaveFileModalRequested(shell));
+  EXPECT_FALSE(std::filesystem::exists(exportPath));
+
+  renderer.cancelInFlight();
+  ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                           std::chrono::seconds(2)));
+  std::ignore = renderer.pollResult();
+  renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
+
+  error.clear();
+  EXPECT_EQ(EditorShellTestAccess::TryPendingNativeSave(shell, &error),
+            EditorShellTestAccess::NativeSaveOutcome::Saved)
+      << error;
+  EXPECT_FALSE(EditorShellTestAccess::PendingNativeSavePath(shell).has_value());
+  EXPECT_FALSE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_FALSE(EditorShellTestAccess::SaveFileModalRequested(shell));
+  ASSERT_TRUE(std::filesystem::exists(exportPath));
+  EXPECT_NE(ReadTextFile(exportPath).find("target"), std::string::npos);
+}
+
+TEST(EditorShellTest, NativeViewportExportReportsPermanentErrorWithoutImGuiSaveDialog) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "source.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  EditorShellTestAccess::RequestExportViewportSvg(shell, /*includeOverlay=*/false);
+  const std::filesystem::path invalidPath =
+      TempPathForTest("native_save_missing_directory/viewport.svg");
+  EditorShellTestAccess::QueueNativeSaveSelection(shell, invalidPath.string());
+
+  std::string error;
+  EXPECT_EQ(EditorShellTestAccess::TryPendingNativeSave(shell, &error),
+            EditorShellTestAccess::NativeSaveOutcome::Failed);
+  EXPECT_FALSE(error.empty());
+  EXPECT_FALSE(EditorShellTestAccess::PendingNativeSavePath(shell).has_value());
+  EXPECT_FALSE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_FALSE(EditorShellTestAccess::SaveFileModalRequested(shell));
+}
+
+TEST(EditorShellTest, NativeViewportExportTimesOutWithoutReopeningImGuiSaveDialog) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "source.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::RequestExportViewportSvg(shell, /*includeOverlay=*/false);
+  EditorShellTestAccess::QueueNativeSaveSelection(shell, TempPathForTest("timed_out.svg").string());
+  EditorShellTestAccess::ExpirePendingNativeSave(shell);
+
+  std::string error;
+  EXPECT_EQ(EditorShellTestAccess::TryPendingNativeSave(shell, &error),
+            EditorShellTestAccess::NativeSaveOutcome::Failed);
+  EXPECT_THAT(error, testing::HasSubstr("timed out"));
+  EXPECT_FALSE(EditorShellTestAccess::PendingNativeSavePath(shell).has_value());
+  EXPECT_FALSE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_FALSE(EditorShellTestAccess::SaveFileModalRequested(shell));
+}
+
 TEST(EditorShellTest, ViewportSvgExportRequestsAndWritesCroppedSvg) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -3043,6 +3151,141 @@ TEST(EditorShellTest, ValidStyleSourceEditRequestsCanvasRenderWithoutCanvasClick
   RunShellFrame(window, shell);
   EXPECT_THAT(EditorShellTestAccess::DisplayedDocVersion(shell),
               testing::Eq(EditorShellTestAccess::App(shell).document().currentFrameVersion()));
+}
+
+TEST(EditorShellTest, TypingStylesheetColorKeepsSourceFocusAndReferenceRopes) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kStyledSvg, "styled.svg"));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  source.resetTextChanged();
+  const std::size_t declarationOffset = source.getText().find("fill: red");
+  ASSERT_THAT(declarationOffset, testing::Ne(std::string::npos));
+  const std::size_t colorOffset = declarationOffset + 6u;
+  source.setCursorPosition(source.getCoordinatesAtByteOffset(colorOffset));
+  std::optional<StyleFocus> styleFocus =
+      EditorShellTestAccess::StyleFocusAtSourceOffset(shell, colorOffset);
+  ASSERT_THAT(styleFocus, testing::Optional(testing::_));
+  ASSERT_THAT(styleFocus->partition.referenceLinks.empty(), testing::Eq(false));
+  EditorShellTestAccess::ApplyStyleFocus(shell, std::move(*styleFocus));
+  EditorShellTestAccess::SetSourceFocusMode(shell, true);
+  ASSERT_THAT(source.hasFocusPartition(), testing::Eq(true));
+
+  source.setSelection(source.getCoordinatesAtByteOffset(colorOffset),
+                      source.getCoordinatesAtByteOffset(colorOffset + 3u));
+  for (const char ch : std::string_view("blue")) {
+    source.insertText(std::string(1, ch));
+    window.beginFrame();
+    ImGuiIO& io = ImGui::GetIO();
+    if (!io.Fonts->IsBuilt()) {
+      io.Fonts->Build();
+    }
+    EditorShellTestAccess::RenderSourcePane(shell, /*paneOriginY=*/0.0f,
+                                            /*paneHeight=*/180.0f, /*paneWidth=*/260.0f,
+                                            io.Fonts->Fonts[0]);
+    window.endFrame();
+    RunShellFrame(window, shell);
+  }
+
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  RunShellFrame(window, shell);
+  EXPECT_THAT(EditorShellTestAccess::DisplayedDocVersion(shell),
+              testing::Eq(EditorShellTestAccess::App(shell).document().currentFrameVersion()));
+  EXPECT_THAT(source.getText(), testing::HasSubstr("fill: blue"));
+  EXPECT_THAT(std::string(EditorShellTestAccess::App(shell).document().document().source()),
+              testing::HasSubstr("fill: blue"));
+  const std::optional<svg::SVGElement> targetAfter =
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_THAT(targetAfter, testing::Optional(testing::_));
+  EXPECT_THAT(targetAfter->getComputedStyle().fill.get(),
+              testing::Optional(svg::PaintServer(
+                  svg::PaintServer::Solid(css::Color(css::RGBA(0, 0, 255, 255))))));
+  EXPECT_THAT(source.hasFocusPartition(), testing::Eq(true));
+  EXPECT_THAT(EditorShellTestAccess::SourceFocusOriginatedInStyle(shell), testing::Eq(true));
+  EXPECT_THAT(source.isTextChanged(), testing::Eq(false));
+  EXPECT_THAT(EditorShellTestAccess::App(shell).document().hasPendingMutations(),
+              testing::Eq(false));
+  const std::size_t cursorOffset = source.getByteOffsetAtCoordinates(source.getCursorPosition());
+  EXPECT_THAT(cursorOffset,
+              testing::AllOf(testing::Ge(colorOffset), testing::Le(colorOffset + 4u)));
+  EXPECT_THAT(EditorShellTestAccess::StyleFocusAtSourceOffset(shell, cursorOffset),
+              testing::Optional(testing::_));
+  const std::optional<StyleFocus> focusAfter =
+      EditorShellTestAccess::StyleFocusAtSourceCursor(shell);
+  ASSERT_THAT(focusAfter, testing::Optional(testing::_));
+  EXPECT_THAT(focusAfter->partition.referenceLinks.empty(), testing::Eq(false));
+}
+
+TEST(EditorShellTest, SelectedSplashStylesheetEditPresentsWithoutCanvasClick) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  const EditorSample* splash = FindEditorSample("donner-splash");
+  ASSERT_NE(splash, nullptr);
+  std::string sourceText(splash->source);
+  const std::size_t ruleOffset = sourceText.find(".cls-5 {");
+  ASSERT_NE(ruleOffset, std::string::npos);
+  const std::size_t originalColorOffset = sourceText.find("url(#linear-gradient)", ruleOffset);
+  ASSERT_NE(originalColorOffset, std::string::npos);
+  sourceText.replace(originalColorOffset, std::string_view("url(#linear-gradient)").size(), "red");
+
+  EditorShell shell(window, OptionsWithSource(sourceText, "donner_splash.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const std::optional<svg::SVGElement> letter =
+      app.document().document().querySelector("#Donner_D");
+  ASSERT_THAT(letter, testing::Optional(testing::_));
+  app.setSelection(*letter);
+
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  source.resetTextChanged();
+  const std::size_t declarationOffset = source.getText().find("fill: red", ruleOffset);
+  ASSERT_NE(declarationOffset, std::string::npos);
+  const std::size_t colorOffset = declarationOffset + 6u;
+  source.setCursorPosition(source.getCoordinatesAtByteOffset(colorOffset));
+  std::optional<StyleFocus> styleFocus =
+      EditorShellTestAccess::StyleFocusAtSourceOffset(shell, colorOffset);
+  ASSERT_THAT(styleFocus, testing::Optional(testing::_));
+  EditorShellTestAccess::ApplyStyleFocus(shell, std::move(*styleFocus));
+  EditorShellTestAccess::SetSourceFocusMode(shell, true);
+  source.setSelection(source.getCoordinatesAtByteOffset(colorOffset),
+                      source.getCoordinatesAtByteOffset(colorOffset + 3u));
+  source.insertText("green");
+  const std::uint64_t before = app.document().currentFrameVersion();
+
+  window.beginFrame();
+  ImGuiIO& io = ImGui::GetIO();
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+  EditorShellTestAccess::RenderSourcePane(shell, /*paneOriginY=*/0.0f, /*paneHeight=*/180.0f,
+                                          /*paneWidth=*/260.0f, io.Fonts->Fonts[0]);
+  window.endFrame();
+  EXPECT_GT(app.document().currentFrameVersion(), before);
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    RunShellFrame(window, shell);
+    if (EditorShellTestAccess::DisplayedDocVersion(shell) == app.document().currentFrameVersion()) {
+      break;
+    }
+    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+        std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+  }
+  EXPECT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell),
+            app.document().currentFrameVersion());
+  const std::optional<svg::SVGElement> updatedLetter =
+      app.document().document().querySelector("#Donner_D");
+  ASSERT_THAT(updatedLetter, testing::Optional(testing::_));
+  EXPECT_THAT(updatedLetter->getComputedStyle().fill.get(),
+              testing::Optional(svg::PaintServer(
+                  svg::PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 255))))));
 }
 
 TEST(EditorShellTest, StyleFocusCursorAndPartitionGuards) {
@@ -6383,7 +6626,11 @@ TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
   ASSERT_THAT(pixel, testing::Optional(testing::_));
   const std::optional<css::RGBA> color = ReadDocumentPixel(capture->bitmap, *pixel);
   ASSERT_THAT(color, testing::Optional(testing::_));
-  EXPECT_THAT(color->toHexString(), testing::Eq("#53c4f1"));
+  EXPECT_EQ(color->r, 0x53);
+  EXPECT_EQ(color->g, 0xc4);
+  EXPECT_EQ(color->b, 0xf1);
+  EXPECT_GE(color->a, 240)
+      << "The sampled glyph point should remain nearly opaque across GPU antialiasing variants";
 
   const Vector2d edgeScreen = viewport.documentToScreen(Vector2d(2.0, 2.0));
   const std::optional<Vector2i> edgePixel =

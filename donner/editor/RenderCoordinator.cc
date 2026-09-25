@@ -329,6 +329,16 @@ bool SameRasterViewport(const EditorRasterViewport& lhs, const EditorRasterViewp
          SameTransform(lhs.outputFromDocument, rhs.outputFromDocument);
 }
 
+bool ShouldRetainSelectedPrewarmFallback(const RenderAttemptIdentity& attempt,
+                                         const RenderResult& result,
+                                         const EditorRasterViewport& visibleRaster) {
+  return SameRasterViewport(attempt.rasterViewport, result.rasterViewport) &&
+         attempt.selectedEntity != entt::null && !result.overviewInfillOnly &&
+         result.rasterViewport.viewportBounded && visibleRaster.viewportBounded &&
+         (result.rasterViewport.outputSizePx.x > visibleRaster.outputSizePx.x ||
+          result.rasterViewport.outputSizePx.y > visibleRaster.outputSizePx.y);
+}
+
 bool SameRequestedDragPreview(const std::optional<RenderRequest::DragPreview>& lhs,
                               const std::optional<RenderRequest::DragPreview>& rhs) {
   if (!lhs.has_value() || !rhs.has_value()) {
@@ -578,6 +588,13 @@ bool ShouldUseSelectedPrewarmRasterViewport(Entity selectedEntity, bool requestO
          (selectionOnlyPrewarmMayTriggerRender || hasIndependentRenderReason);
 }
 
+bool HasIndependentSelectedPrewarmRenderReason(bool hasActiveDrag, bool versionChanged,
+                                               bool forceSelectedLayerRasterization,
+                                               bool forcePresentationRefresh) {
+  return hasActiveDrag || versionChanged || forceSelectedLayerRasterization ||
+         forcePresentationRefresh;
+}
+
 bool ShouldClearPendingSelectedLayerRasterization(
     const std::optional<RenderRequest::DragPreview>& representedDragPreview, Entity pendingEntity,
     std::uint64_t resultVersion, std::uint64_t pendingVersion) {
@@ -750,6 +767,8 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   pendingDocumentMutationOverviewRefresh_ = false;
   pendingPresentationRefresh_ = false;
   lastPostedAttempt_.reset();
+  selectedPrewarmFallback_.reset();
+  selectedPrewarmRecoveryPending_ = false;
   nothingToPresentRetry_.reset();
   setDocumentPixelCaptureEnabled(false);
   lastFrameCostBreakdown_ = FrameCostBreakdown{};
@@ -802,6 +821,16 @@ void RenderCoordinator::noteResultWithNothingToPresent(const std::optional<Rende
   const bool fromLastPost = lastPostedAttempt_.has_value() &&
                             lastPostedAttempt_->documentGeneration == result->documentGeneration &&
                             lastPostedAttempt_->version == result->version;
+  const EditorRasterViewport visibleRaster = result->viewport.rasterViewport();
+  if (fromLastPost &&
+      ShouldRetainSelectedPrewarmFallback(*lastPostedAttempt_, *result, visibleRaster)) {
+    selectedPrewarmFallback_ = SelectedPrewarmFallback{
+        .documentGeneration = result->documentGeneration,
+        .selectedEntity = lastPostedAttempt_->selectedEntity,
+        .visibleRaster = visibleRaster,
+    };
+    selectedPrewarmRecoveryPending_ = true;
+  }
   if (!fromLastPost ||
       !nothingToPresentRetry_.noteFailure(*lastPostedAttempt_, nothingToPresentRetryNow())) {
     rejectPixelCaptureResult(result);
@@ -816,6 +845,27 @@ void RenderCoordinator::noteResultWithNothingToPresent(const std::optional<Rende
     // Hold the capture request for this identity as unavailable, as for an oversized capture, so
     // the picker stops asking for it until the document or viewport changes.
     captureUnavailable_ = true;
+  }
+}
+
+bool RenderCoordinator::selectedPrewarmFallbackApplies(std::uint64_t documentGeneration,
+                                                       Entity selectedEntity,
+                                                       const EditorRasterViewport& visibleRaster) {
+  if (selectedPrewarmFallback_.has_value() &&
+      (selectedPrewarmFallback_->documentGeneration != documentGeneration ||
+       selectedPrewarmFallback_->selectedEntity != selectedEntity ||
+       !SameRasterViewport(selectedPrewarmFallback_->visibleRaster, visibleRaster))) {
+    selectedPrewarmFallback_.reset();
+    selectedPrewarmRecoveryPending_ = false;
+  }
+  return selectedPrewarmFallback_.has_value();
+}
+
+void RenderCoordinator::noteSelectedPrewarmResultPresented(const RenderResult& result) {
+  if (selectedPrewarmFallback_.has_value() &&
+      result.documentGeneration == selectedPrewarmFallback_->documentGeneration &&
+      SameRasterViewport(result.rasterViewport, selectedPrewarmFallback_->visibleRaster)) {
+    selectedPrewarmRecoveryPending_ = false;
   }
 }
 
@@ -1339,6 +1389,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
 
   textures.uploadComposited(*result.compositedPreview, result.rasterViewport);
   lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
+  noteSelectedPrewarmResultPresented(result);
   if (!result.rasterViewport.viewportBounded) {
     pendingDocumentMutationOverviewRefresh_ = false;
   }
@@ -1427,6 +1478,8 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   DocumentPixelCaptureIdentity desiredCapture;
   bool captureNeeded = preparePixelCaptureRequest(app, viewport, &desiredCapture);
   const Entity prewarmEntity = selectedCompositedEntity(app);
+  const bool useVisibleSelectedRaster = selectedPrewarmFallbackApplies(
+      app.document().documentGeneration(), prewarmEntity, rasterViewport);
   const PresentationCoverageDiagnostics coverageDiagnostics =
       textures != nullptr ? textures->coverageDiagnostics() : PresentationCoverageDiagnostics{};
   const bool needsOverviewInfill =
@@ -1437,7 +1490,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const bool deferSelectedViewportRefresh = ShouldDeferSelectedViewportRefresh(
       prewarmEntity, dragPreview.has_value(), currentVersion, displayedDocVersion_,
       compositedPresentation_.hasCachedTextures(), rasterViewportSettled, needsOverviewInfill,
-      pendingSelectedLayerRasterization);
+      pendingSelectedLayerRasterization || selectedPrewarmRecoveryPending_);
   if (shouldDeferViewportRender(deferSelectedViewportRefresh, needsOverviewInfill, captureNeeded)) {
     if (renderWorker_.asyncRenderer.isBusy()) {
       renderWorker_.asyncRenderer.cancelInFlight();
@@ -1453,12 +1506,13 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       requestOverviewInfill ? std::vector<Entity>{}
                             : selectedCompositedExtraEntities(app, prewarmEntity);
   const bool forceSelectedLayerRasterization = pendingSelectedLayerRasterization;
-  bool forcePresentationRefresh = pendingPresentationRefresh_ || captureNeeded;
-  const bool hasIndependentSelectedPrewarmRenderReason =
-      dragPreview.has_value() || currentVersion != displayedDocVersion_ ||
-      forceSelectedLayerRasterization || forcePresentationRefresh;
+  bool forcePresentationRefresh =
+      pendingPresentationRefresh_ || captureNeeded || selectedPrewarmRecoveryPending_;
+  const bool hasIndependentSelectedPrewarmRenderReason = HasIndependentSelectedPrewarmRenderReason(
+      dragPreview.has_value(), currentVersion != displayedDocVersion_,
+      forceSelectedLayerRasterization, forcePresentationRefresh);
   const bool useSelectedPrewarmRasterViewport =
-      !documentPixelCaptureEnabled_ &&
+      !documentPixelCaptureEnabled_ && !useVisibleSelectedRaster &&
       ShouldUseSelectedPrewarmRasterViewport(
           prewarmEntity, requestOverviewInfill, rasterViewport.viewportBounded,
           kSelectionOnlyPrewarmMayTriggerRender, hasIndependentSelectedPrewarmRenderReason);

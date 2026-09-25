@@ -72,6 +72,9 @@ private:
 
   bool textChangePending_ = false;
   bool textDispatchThrottled_ = false;
+  /// Continue dispatching each keystroke through a stylesheet edit burst, even if an
+  /// intermediate CSS value is incomplete and cannot currently resolve to a style rule.
+  bool stylesheetEditBurst_ = false;
   float textChangeIdleTimer_ = 0.0f;
 };
 

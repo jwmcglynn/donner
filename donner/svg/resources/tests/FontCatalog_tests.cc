@@ -265,6 +265,20 @@ TEST(FontCatalogTest, GenericSansSerifBoldAndItalicProduceDistinctOutlines) {
   EXPECT_THAT(boldItalicOutline.points(), Not(::testing::ElementsAreArray(italicOutline.points())));
 }
 
+TEST(FontCatalogTest, GenericSansResolvesMetadataWithoutAppearingInPicker) {
+  FontCatalog catalog;
+  EXPECT_TRUE(catalog.hasFamily("sans-serif"));
+  EXPECT_THAT(catalog.find("SANS-SERIF"),
+              ::testing::Optional(
+                  FontFamilyInfo{"sans-serif", FontSource::Bundled, FontCategory::SansSerif}));
+  const auto appearsInPicker = [](const std::vector<FontFamilyInfo>& families) {
+    return std::any_of(families.begin(), families.end(),
+                       [](const FontFamilyInfo& info) { return info.family == "sans-serif"; });
+  };
+  EXPECT_FALSE(appearsInPicker(catalog.families()));
+  EXPECT_FALSE(appearsInPicker(catalog.familiesBySource(FontSource::Bundled)));
+}
+
 TEST(FontCatalogTest, IntrinsicGenericItalicIsNotSlantedTwiceInSimpleBackend) {
   FontCatalog catalog;
   Registry registry;

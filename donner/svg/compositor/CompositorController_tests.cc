@@ -2469,6 +2469,7 @@ TEST_F(CompositorControllerTest, NullTextureSnapshotLeavesLayerDirtyForRetry) {
   EXPECT_FALSE(rowsAfterFailure.front().hasValidBitmap)
       << "failed allocation must leave the layer without a payload";
   EXPECT_TRUE(rowsAfterFailure.front().dirty) << "failed allocation must leave the layer dirty";
+  EXPECT_FALSE(compositor.hasCompleteTileSetForPresentation());
 
   // Retry succeeds once allocation works again.
   *failTexture = false;
@@ -2477,6 +2478,7 @@ TEST_F(CompositorControllerTest, NullTextureSnapshotLeavesLayerDirtyForRetry) {
   ASSERT_EQ(rowsAfterRetry.size(), 1u);
   EXPECT_TRUE(rowsAfterRetry.front().hasValidBitmap);
   EXPECT_FALSE(rowsAfterRetry.front().dirty);
+  EXPECT_TRUE(compositor.hasCompleteTileSetForPresentation());
 }
 
 // Segment allocation failures follow the same contract: the slot stays dirty
@@ -2522,6 +2524,7 @@ TEST_F(CompositorControllerTest, NullTextureSnapshotLeavesSegmentsDirtyForRetry)
                   [](const auto& row) { return row.dirty; });
   EXPECT_TRUE(anyDirtyAfterFailure)
       << "failed allocation must leave at least one segment dirty for retry";
+  EXPECT_FALSE(compositor.hasCompleteTileSetForPresentation());
 
   *failTexture = false;
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
@@ -2529,6 +2532,7 @@ TEST_F(CompositorControllerTest, NullTextureSnapshotLeavesSegmentsDirtyForRetry)
   const bool anyDirtyAfterRetry = std::any_of(segmentsAfterRetry.begin(), segmentsAfterRetry.end(),
                                               [](const auto& row) { return row.dirty; });
   EXPECT_FALSE(anyDirtyAfterRetry) << "retry must complete all dirty segments";
+  EXPECT_TRUE(compositor.hasCompleteTileSetForPresentation());
 }
 
 // A null device (offscreen creation always fails) latches offscreen support

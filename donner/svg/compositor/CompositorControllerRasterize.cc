@@ -5,6 +5,7 @@
 /// editor for GPU upload.
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <memory>
@@ -1025,6 +1026,30 @@ bool CompositorController::hasCompletePaintOrderTilePayloads() const {
     const bool hasTexture =
         index < staticSegmentTextures_.size() && staticSegmentTextures_[index] != nullptr;
     if (!hasBitmap && !hasTexture) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool CompositorController::hasCompleteTileSetForPresentation() const {
+  const size_t segmentCount = layers_.size() + 1u;
+  const std::array<size_t, 4> segmentStorageSizes = {
+      staticSegments_.size(), staticSegmentTextures_.size(), staticSegmentDirty_.size(),
+      staticSpanPlans_.size()};
+  if (!std::ranges::all_of(segmentStorageSizes,
+                           [segmentCount](size_t size) { return size == segmentCount; })) {
+    return false;
+  }
+  if (lastRenderFrameStats_.textureAllocationFailureCount != 0 ||
+      !hasCompletePaintOrderTilePayloads()) {
+    return false;
+  }
+  for (size_t index = 0; index < segmentCount; ++index) {
+    const bool hasPayload =
+        HasPublicTileBitmap(staticSegments_[index]) || staticSegmentTextures_[index] != nullptr;
+    if (!hasPayload &&
+        (staticSegmentDirty_[index] || staticSpanPlans_[index].firstEntity != entt::null)) {
       return false;
     }
   }

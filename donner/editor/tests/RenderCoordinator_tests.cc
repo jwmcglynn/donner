@@ -1121,6 +1121,68 @@ TEST(RenderCoordinatorTest, RenderWithNothingToPresentIsNotRepostedEveryFrame) {
   EXPECT_EQ(coordinator.displayedDocVersionForDiagnostics(), 0u);
 }
 
+TEST(RenderCoordinatorTest, FailedSelectedOverdrawRetriesVisibleRasterAfterRetryBudgetExhausts) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000"
+         viewBox="0 0 1000 1000">
+      <rect id="target" x="100" y="100" width="100" height="100" fill="red"/>
+      <rect id="peer" x="300" y="100" width="100" height="100" fill="blue"/>
+    </svg>
+  )svg"));
+  const auto target = app.document().document().querySelector("#target");
+  const auto peer = app.document().document().querySelector("#peer");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(peer.has_value());
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 1000.0, 1000.0);
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.devicePixelRatio = 1.0;
+  viewport.resetTo100Percent();
+  const EditorRasterViewport visibleRaster = viewport.rasterViewport();
+  ASSERT_TRUE(visibleRaster.viewportBounded);
+  ASSERT_GT(viewport.selectedPrewarmRasterViewport().outputSizePx.x, visibleRaster.outputSizePx.x);
+
+  RenderCoordinator coordinator;
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  const std::uint64_t generation = app.document().documentGeneration();
+  const std::uint64_t version = app.document().currentFrameVersion();
+  const Entity selectedEntity = target->unsafeEntityHandle().entity();
+  for (std::size_t attempt = 0; attempt <= NothingToPresentRetry::kRetryDelays.size(); ++attempt) {
+    RenderCoordinatorTestAccess::noteSelectedPrewarmFailure(coordinator, generation, version,
+                                                            selectedEntity, viewport);
+  }
+  ASSERT_TRUE(RenderCoordinatorTestAccess::selectedPrewarmRecoveryPending(coordinator));
+
+  SelectTool selectTool;
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr));
+  const auto postedRaster = RenderCoordinatorTestAccess::lastPostedRasterViewport(coordinator);
+  ASSERT_TRUE(postedRaster.has_value());
+  EXPECT_EQ(postedRaster->outputSizePx, visibleRaster.outputSizePx)
+      << "the bounded recovery must post even when generic retries for enlarged prewarm ended";
+  EXPECT_EQ(postedRaster->documentRect, visibleRaster.documentRect);
+  EXPECT_TRUE(RenderCoordinatorTestAccess::selectedPrewarmFallbackApplies(
+      coordinator, generation, selectedEntity, visibleRaster));
+
+  EXPECT_FALSE(RenderCoordinatorTestAccess::selectedPrewarmFallbackApplies(
+      coordinator, generation, peer->unsafeEntityHandle().entity(), visibleRaster));
+  EXPECT_FALSE(RenderCoordinatorTestAccess::selectedPrewarmRecoveryPending(coordinator));
+
+  RenderCoordinatorTestAccess::noteSelectedPrewarmFailure(coordinator, generation, version,
+                                                          selectedEntity, viewport);
+  ViewportState pannedViewport = viewport;
+  pannedViewport.panDocPoint.x += 10.0;
+  EXPECT_FALSE(RenderCoordinatorTestAccess::selectedPrewarmFallbackApplies(
+      coordinator, generation, selectedEntity, pannedViewport.rasterViewport()));
+
+  RenderCoordinatorTestAccess::noteSelectedPrewarmFailure(coordinator, generation, version,
+                                                          selectedEntity, viewport);
+  EXPECT_FALSE(RenderCoordinatorTestAccess::selectedPrewarmFallbackApplies(
+      coordinator, generation + 1u, selectedEntity, visibleRaster));
+}
+
 // A renderer setting changes what the worker draws without changing the document or the raster:
 // the composited mode, the geometry debug pass, arming the eyedropper. Each asks for a presentation
 // refresh, and the request made for it is not the request whose retries ran out.

@@ -3755,6 +3755,105 @@ TEST(AsyncRendererTest, SelectedPathStyleChangePublishesFreshPromotedLayerPixels
       << testing::PrintToString(*afterInterior);
 }
 
+TEST(AsyncRendererTest, SelectedSplashStylesheetSourceEditMatchesFreshCompositorPixels) {
+  const donner::tests::RequiredRunfile splash =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splash);
+  std::string source = splash.contents;
+  const std::size_t ruleOffset = source.find(".cls-5 {");
+  ASSERT_NE(ruleOffset, std::string::npos);
+  const std::string originalFill = "fill: url(#linear-gradient);";
+  const std::size_t initialFillOffset = source.find(originalFill, ruleOffset);
+  ASSERT_NE(initialFillOffset, std::string::npos);
+  source.replace(initialFillOffset, originalFill.size(), "fill: red;");
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  app.document().document().setCanvasSize(892, 512);
+  const auto selected = app.document().document().querySelector("#Donner_D");
+  ASSERT_TRUE(selected.has_value());
+  app.setSelection(*selected);
+  const Entity entity = selected->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  const auto renderSelected = [&](std::uint64_t version) {
+    RenderRequest request(renderer, app.document().document());
+    request.version = version;
+    request.documentGeneration = app.document().documentGeneration();
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = svg::compositor::InteractionHint::Selection,
+    };
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+  const auto findSelectedLayer = [entity](const auto& tiles) {
+    return std::find_if(tiles.begin(), tiles.end(),
+                        [entity](const auto& tile) { return tile.layerEntity == entity; });
+  };
+
+  const std::optional<RenderResult> red = renderSelected(1);
+  ASSERT_TRUE(red.has_value());
+  ASSERT_TRUE(red->compositedPreview.has_value());
+  const auto redLayer = findSelectedLayer(red->compositedPreview->tiles);
+  ASSERT_NE(redLayer, red->compositedPreview->tiles.end());
+  const auto countersBefore = asyncRenderer.compositorFastPathCountersForTesting();
+
+  const std::size_t greenEditOffset =
+      app.document().document().source().find("fill: red;", ruleOffset);
+  ASSERT_NE(greenEditOffset, std::string_view::npos);
+  const xml::ApplySourceEditResult edit =
+      app.document().document().applySourceEdit(xml::XMLEditIntent{
+          .range = SourceRange{FileOffset::Offset(greenEditOffset + 6),
+                               FileOffset::Offset(greenEditOffset + 9)},
+          .replacement = "green",
+          .sourceVersion = app.document().document().sourceVersion(),
+      });
+  ASSERT_TRUE(edit.applied);
+  ASSERT_FALSE(edit.diagnostic.has_value());
+  EXPECT_TRUE(app.document().document().hasPendingRenderInvalidation());
+  EXPECT_THAT(std::string(app.document().document().source()),
+              ::testing::HasSubstr(".cls-5 {\n      fill: green;"));
+
+  const std::optional<RenderResult> green = renderSelected(2);
+  ASSERT_TRUE(green.has_value());
+  ASSERT_TRUE(green->compositedPreview.has_value());
+  EXPECT_GT(asyncRenderer.compositorRenderFrameStats().cachedTileCount, 0)
+      << "stylesheet edits must re-rasterize cached compositor layers";
+  const auto greenLayer = findSelectedLayer(green->compositedPreview->tiles);
+  ASSERT_NE(greenLayer, green->compositedPreview->tiles.end());
+  const auto countersAfter = asyncRenderer.compositorFastPathCountersForTesting();
+  ASSERT_GT(greenLayer->generation, redLayer->generation)
+      << "noDirtyFrames " << countersBefore.noDirtyFrames << " -> " << countersAfter.noDirtyFrames
+      << ", slowPathFramesWithDirty " << countersBefore.slowPathFramesWithDirty << " -> "
+      << countersAfter.slowPathFramesWithDirty << ", pending render invalidation "
+      << app.document().document().hasPendingRenderInvalidation();
+
+  svg::Renderer freshRenderer;
+  svg::SVGDocument referenceDocument = svg::instantiateSubtree(app.document().document().source());
+  referenceDocument.setCanvasSize(892, 512);
+  const auto referenceSelected = referenceDocument.querySelector("#Donner_D");
+  ASSERT_TRUE(referenceSelected.has_value());
+  const Entity referenceEntity = referenceSelected->unsafeEntityHandle().entity();
+  svg::compositor::CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  svg::compositor::CompositorController fresh(referenceDocument, freshRenderer, config);
+  ASSERT_TRUE(fresh.promoteEntity(referenceEntity, svg::compositor::InteractionHint::Selection));
+  fresh.renderFrame(svg::RenderViewport{Vector2d(892, 512)});
+  const auto expectedTiles = fresh.snapshotTilesForUpload();
+  const auto expectedLayer = std::find_if(
+      expectedTiles.begin(), expectedTiles.end(),
+      [referenceEntity](const auto& tile) { return tile.layerEntity == referenceEntity; });
+  ASSERT_NE(expectedLayer, expectedTiles.end());
+  tests::CompareBitmapToBitmap(
+      MaterializeTileBitmap(*greenLayer),
+      !expectedLayer->bitmap.empty() ? expectedLayer->bitmap
+                                     : expectedLayer->textureSnapshot->takeSnapshot(),
+      "selected_splash_stylesheet_source_edit", tests::PixelmatchIdentityParams());
+}
+
 TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGenerations) {
   const donner::tests::RequiredRunfile splashFile =
       donner::tests::ReadRequiredRunfile("donner_splash.svg");

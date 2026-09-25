@@ -380,6 +380,11 @@ void CaptureFullCanvasTextureForResult(svg::RendererInterface& renderer,
   }
 }
 
+bool CanUseFullCanvasPresentation(bool hasCompositor, bool overviewInfillOnly,
+                                  bool geometryDebugOverlay) {
+  return !hasCompositor || overviewInfillOnly || geometryDebugOverlay;
+}
+
 }  // namespace
 
 bool CaptureFullCanvasTextureSnapshot(
@@ -1431,6 +1436,9 @@ void AsyncRenderer::workerLoop() {
       if (!CanPublishCompositorTiles(compositor_.get())) {
         return std::nullopt;
       }
+      if (!compositor_->hasCompleteTileSetForPresentation()) {
+        return std::nullopt;
+      }
       const std::vector<Entity> dragPreviewEntities =
           request.dragPreview.has_value() ? DragPreviewEntities(*request.dragPreview)
                                           : std::vector<Entity>();
@@ -1742,8 +1750,8 @@ void AsyncRenderer::workerLoop() {
     std::shared_ptr<const svg::RendererTextureSnapshot> fullCanvasTexture;
     // Only the explicit Off mode, overview infill, and the geometry-debug diagnostic use a flat
     // payload. Normal On and FilterOnly presentation is the compositor's tile set or nothing.
-    const bool fullCanvasPresentationAllowed =
-        compositor_ == nullptr || request.overviewInfillOnly || geometryDebugOverlay;
+    const bool fullCanvasPresentationAllowed = CanUseFullCanvasPresentation(
+        compositor_ != nullptr, request.overviewInfillOnly, geometryDebugOverlay);
     const PresentationSnapshotPlan snapshotPlan = ChoosePresentationSnapshotPlan(
         compositedPreview.has_value(), fullCanvasPresentationAllowed,
         requestRenderer.requiresTextureSnapshotPresentation(), request.captureCpuSnapshot);

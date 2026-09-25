@@ -379,7 +379,7 @@ async function openBasicShapes(page: Page): Promise<{
     (window as unknown as { __donnerWorkerStats?: { completedResults?: number } })
       .__donnerWorkerStats?.completedResults ?? 0
   );
-  await page.mouse.click(editorBounds.x + editorBounds.width * 0.5, editorBounds.y + 282);
+  await page.mouse.click(editorBounds.x + editorBounds.width * 0.76, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expect.poll(
     () =>
@@ -481,6 +481,9 @@ test.describe("composited drag invariants", () => {
     const target = { x: editorBounds.x + kBlueRectOffset.x, y: editorBounds.y + kBlueRectOffset.y };
     // The earlier manual shortfall was 50 -> about 43 document units. A
     // controlled 1.15 zoom makes that ratio explicit in a browser gesture.
+    // The editor's GLFW scroll callback uses the current pointer position. Move it from the
+    // carousel card into the render pane before dispatching the synthetic ctrl-wheel event.
+    await page.mouse.move(target.x, target.y);
     await page.evaluate(({ x, y }) => {
       document.querySelector("canvas#canvas")?.dispatchEvent(
         new WheelEvent("wheel", {
@@ -551,6 +554,11 @@ test.describe("composited drag invariants", () => {
       )
     ).toBe(true);
     await page.mouse.up();
+    const moves = await page.evaluate(() =>
+      (window as unknown as { __dragDistanceProbe?: Array<{ x: number; y: number }> })
+        .__dragDistanceProbe ?? []
+    );
+    expect(moves.at(-1)).toEqual({ x: target.x + 50, y: target.y + 30 });
 
     let finalBlue: ReturnType<typeof readEditorPixelBoundsFromPng> = null;
     await expect.poll(async () => {
@@ -563,16 +571,11 @@ test.describe("composited drag invariants", () => {
       });
       return finalBlue?.minX ?? -1;
     }, { timeout: scaledMs(10_000) }).toBeGreaterThan(initialBlue.minX + 30);
-    const moves = await page.evaluate(() =>
-      (window as unknown as { __dragDistanceProbe?: Array<{ x: number; y: number }> })
-        .__dragDistanceProbe ?? []
-    );
     console.log(
       `drag-distance-evidence ${
         JSON.stringify({ viewport, target, moves, initialBlue, finalBlue })
       }`,
     );
-    expect(moves.at(-1)).toEqual({ x: target.x + 50, y: target.y + 30 });
     expect(finalBlue).not.toBeNull();
     if (finalBlue === null) throw new Error("blue shape is missing after drag");
     expect(Math.abs(finalBlue.minX - initialBlue.minX - 50)).toBeLessThan(3);

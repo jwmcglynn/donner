@@ -997,8 +997,8 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
                          "Bounds  %.1f x %.1f at %.1f, %.1f", b.width(), b.height(), b.topLeft.x,
                          b.topLeft.y);
     }
-    queuedMutation = renderStrokeControlsPanel(liveApp);
-    queuedMutation = renderTransformPanel(liveApp) || queuedMutation;
+    queuedMutation = renderTransformPanel(liveApp);
+    queuedMutation = renderStrokeControlsPanel(liveApp) || queuedMutation;
     RenderInspectorSection("XML attributes", "##inspector_xml_attributes",
                            inspectorSnapshot_.xmlAttributes, InspectorSectionKind::XmlAttributes);
     RenderInspectorSection("Computed CSS", "##inspector_computed_style",

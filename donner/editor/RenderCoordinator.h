@@ -487,6 +487,9 @@ private:
   void noteMissingPixelCaptureResult(const std::optional<RenderResult>& result);
   void rejectPixelCaptureResult(const std::optional<RenderResult>& result);
   void noteResultWithNothingToPresent(const std::optional<RenderResult>& result);
+  void noteSelectedPrewarmResultPresented(const RenderResult& result);
+  bool selectedPrewarmFallbackApplies(std::uint64_t documentGeneration, Entity selectedEntity,
+                                      const EditorRasterViewport& visibleRaster);
   [[nodiscard]] std::chrono::steady_clock::time_point nothingToPresentRetryNow() const;
   void acceptPixelCaptureResult(RenderResult& result, const EditorApp& app,
                                 const ViewportState& viewport);
@@ -629,6 +632,15 @@ private:
   std::uint64_t presentationEpoch_ = 0;
   /// The last request posted to the worker. A result with nothing to present belongs to it.
   std::optional<RenderAttemptIdentity> lastPostedAttempt_;
+  struct SelectedPrewarmFallback {
+    std::uint64_t documentGeneration = 0;
+    Entity selectedEntity = entt::null;
+    EditorRasterViewport visibleRaster;
+  };
+  /// An expanded selected prewarm that exhausted the tile budget; use the visible raster for
+  /// this selection until its document or viewport identity changes.
+  std::optional<SelectedPrewarmFallback> selectedPrewarmFallback_;
+  bool selectedPrewarmRecoveryPending_ = false;
   /// Paces re-posting a request whose result had nothing to present.
   NothingToPresentRetry nothingToPresentRetry_;
   /// Cumulative count of worker results that had nothing to present.

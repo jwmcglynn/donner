@@ -95,6 +95,11 @@ bool HasAssignedAncestor(Registry& registry, Entity entity) {
   return false;
 }
 
+bool CanReuseImmediateDragLayer(const CompositorLayer& layer, bool rootDirty) {
+  return !rootDirty && layer.isImmediate() && !layer.isDirty() && layer.hasRenderablePayload() &&
+         layer.bitmapEntityFromWorldTransform().has_value();
+}
+
 }  // namespace
 
 CompositorController::CompositorController(SVGDocument& document, RendererInterface& renderer,
@@ -1871,9 +1876,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       // `LayerComposeOffsetTracksDomTranslationDelta`,
       // `RotationDragCarriesAffineInCanvasFromBitmapForLockstep`, and
       // `M9RepromoteSameEntityCancelsPendingDemote`.
-      const bool immediateDragReuse = layer.isImmediate() && !layer.isDirty() &&
-                                      layer.hasRenderablePayload() &&
-                                      layer.bitmapEntityFromWorldTransform().has_value();
+      const bool immediateDragReuse = CanReuseImmediateDragLayer(layer, rootDirty_);
       const bool needsRaster =
           (layer.isDirty() || layer.isImmediate() || !layer.hasRenderablePayload() || rootDirty_) &&
           !immediateDragReuse;

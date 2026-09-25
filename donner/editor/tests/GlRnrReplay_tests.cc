@@ -3593,13 +3593,19 @@ TEST(GlRnrReplayTest, GeodeSplashPickerClickPublishesBackgroundAndWordmark) {
     return std::array<std::uint8_t, 4>{capture->pixels[offset], capture->pixels[offset + 1],
                                        capture->pixels[offset + 2], capture->pixels[offset + 3]};
   };
-  ASSERT_EQ(capture->dimensions, Vector2i(3200, 1800));
-  EXPECT_THAT(pixelAt(500, 320),
+  // The replay's logical window is 1600x900. Headless hosts may expose either 1x or 2x backing
+  // pixels, so probe the same document locations at the capture's actual scale.
+  ASSERT_EQ(capture->dimensions.x % 1600, 0);
+  const int captureScale = capture->dimensions.x / 1600;
+  ASSERT_TRUE(captureScale == 1 || captureScale == 2);
+  ASSERT_EQ(capture->dimensions.y, 900 * captureScale);
+  EXPECT_THAT(pixelAt(250 * captureScale, 160 * captureScale),
               ::testing::ElementsAre(::testing::AllOf(::testing::Ge(35), ::testing::Le(100)),
                                      ::testing::Lt(40), ::testing::Ge(90), 255))
       << "violet background must survive the first tiled sample render";
-  EXPECT_THAT(pixelAt(1800, 1000), ::testing::ElementsAre(::testing::Ge(170), ::testing::Ge(120),
-                                                          ::testing::Ge(200), 255))
+  EXPECT_THAT(
+      pixelAt(900 * captureScale, 500 * captureScale),
+      ::testing::ElementsAre(::testing::Ge(170), ::testing::Ge(120), ::testing::Ge(200), 255))
       << "Geode wordmark must survive the first tiled sample render";
   RemoveDiagnosticOutputOnSuccess(outputDir);
 }

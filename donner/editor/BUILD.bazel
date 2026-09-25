@@ -747,6 +747,7 @@ donner_cc_library(
         ":text_patch",
         ":transform_syntax_preserving",
         "//donner/base",
+        "//donner/base/xml",
     ],
 )
 

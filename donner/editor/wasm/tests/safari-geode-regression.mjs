@@ -662,7 +662,7 @@ async function runRegression(driver, editorUrl, result) {
   const beforeSampleResults = Number(result.thumbnailDiagnostic.worker?.completedResults || 0);
   const sample = kMemoryOnly
     ? { id: "donner-splash", label: "Donner Splash", xFraction: 0.24 }
-    : { id: "basic-shapes", label: "Basic Shapes", xFraction: 0.5 };
+    : { id: "basic-shapes", label: "Basic Shapes", xFraction: 0.76 };
   const sampleClickPoint = {
     x: canvas.x + canvas.width * sample.xFraction,
     y: canvas.y + 282,

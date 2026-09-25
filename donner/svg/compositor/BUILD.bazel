@@ -239,6 +239,7 @@ donner_cc_test(
         "//donner/base:base_test_utils",
         "//donner/svg/parser",
         "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_geode",
         "@com_google_gtest//:gtest_main",
     ],
 )

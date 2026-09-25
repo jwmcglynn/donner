@@ -7,6 +7,7 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
+#include "donner/svg/renderer/RendererGeode.h"
 
 namespace donner::svg::compositor {
 namespace {
@@ -160,6 +161,45 @@ TEST(CompositorGeodeSplashTest, RetinaViewportCropPublishesTiles) {
   const auto tiles = compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::All);
   EXPECT_THAT(tiles, ::testing::Not(::testing::IsEmpty()))
       << "allocation failures=" << compositor.lastRenderFrameStats().textureAllocationFailureCount;
+}
+
+TEST(CompositorGeodeSplashTest, SelectionBudgetRefusalDoesNotMakePartialTilesPresentable) {
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(source.contents, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(1536, 1024);
+
+  RendererGeode renderer;
+  CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  CompositorController compositor(document, renderer, config);
+  RenderViewport visibleViewport;
+  visibleViewport.size = Vector2d(1536, 1024);
+  visibleViewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(visibleViewport);
+  const auto previouslyPresentedTiles = compositor.snapshotTilesForUpload();
+  ASSERT_GT(previouslyPresentedTiles.size(), 4u);
+  ASSERT_TRUE(compositor.hasCompleteTileSetForPresentation());
+
+  const auto letter = document.querySelector("#letter-G");
+  ASSERT_TRUE(letter.has_value());
+  ASSERT_TRUE(
+      compositor.promoteEntity(letter->unsafeEntityHandle().entity(), InteractionHint::Selection));
+  renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/256,
+                                      /*maximumBytes=*/24u * 1024u * 1024u);
+  RenderViewport prewarmViewport;
+  prewarmViewport.size = Vector2d(1536, 1024);
+  prewarmViewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(prewarmViewport);
+
+  EXPECT_GT(compositor.lastRenderFrameStats().textureAllocationFailureCount, 0);
+  EXPECT_FALSE(compositor.hasCompleteTileSetForPresentation());
+  EXPECT_FALSE(previouslyPresentedTiles.empty())
+      << "the last complete frame must remain available while selected tiles cannot be allocated";
 }
 
 }  // namespace

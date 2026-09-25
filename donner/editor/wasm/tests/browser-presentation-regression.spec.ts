@@ -852,7 +852,7 @@ async function openBasicShapes(page: Page): Promise<{
   const beforeSampleResults = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  await page.mouse.click(canvasBounds.x + canvasBounds.width * 0.5, canvasBounds.y + 282);
+  await page.mouse.click(canvasBounds.x + canvasBounds.width * 0.76, canvasBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expectWorkerResultsToReach(
     page,
@@ -1310,7 +1310,7 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   }
 
   const beforeSample = await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0);
-  await page.mouse.click(editorBounds.x + editorBounds.width * 0.5, editorBounds.y + 282);
+  await page.mouse.click(editorBounds.x + editorBounds.width * 0.76, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expectWorkerResultsToReach(
     page,
@@ -1881,7 +1881,7 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
   }
 
   const beforeSample = await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0);
-  await page.mouse.click(editorBounds.x + editorBounds.width * 0.5, editorBounds.y + 282);
+  await page.mouse.click(editorBounds.x + editorBounds.width * 0.76, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expectWorkerResultsToReach(
     page,

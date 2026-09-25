@@ -11,20 +11,20 @@ namespace {
 
 // Widget sub-layout constants, relative to the widget's top-left. Fill stays
 // upper-left and Stroke lower-right; draw order alone changes the foreground.
-// The right column holds the angled swap arrow above one active-role None
-// button, then optional custom-paint label chips.
-constexpr float kSwatchSize = 28.0f;
+// The swap arrow sits between the upper-right corners of the two swatches;
+// None is farther right so the arrow does not appear to point toward it.
+constexpr float kSwatchSize = 26.0f;
 constexpr float kFillLeft = 3.0f;
 constexpr float kFillTop = 2.0f;
-constexpr float kStrokeLeft = 14.0f;
-constexpr float kStrokeTop = 13.0f;
+constexpr float kStrokeLeft = 17.0f;
+constexpr float kStrokeTop = 17.0f;
 
-constexpr float kSwapLeft = 44.0f;
-constexpr float kSwapTop = 2.0f;
-constexpr float kSwapWidth = 19.0f;
-constexpr float kSwapHeight = 18.0f;
+constexpr float kSwapLeft = 30.0f;
+constexpr float kSwapTop = 0.0f;
+constexpr float kSwapWidth = 17.0f;
+constexpr float kSwapHeight = 16.0f;
 
-constexpr float kNoneLeft = 46.0f;
+constexpr float kNoneLeft = 52.0f;
 constexpr float kNoneTop = 24.0f;
 constexpr float kNoneSize = 19.0f;
 
@@ -210,16 +210,15 @@ void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2&
 
 void DrawSwapAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, bool enabled) {
   const ImU32 tint = enabled ? IM_COL32(215, 222, 232, 255) : IM_COL32(120, 126, 134, 255);
-  const ImVec2 upperLeft(min.x + 2.0f, min.y + 5.0f);
-  const ImVec2 upperRight(max.x - 2.0f, upperLeft.y);
-  const ImVec2 lowerLeft(min.x + 2.0f, max.y - 5.0f);
-  const ImVec2 lowerRight(max.x - 2.0f, lowerLeft.y);
-  drawList->AddLine(upperLeft, upperRight, tint, 1.6f);
-  drawList->AddLine(lowerLeft, lowerRight, tint, 1.6f);
-  drawList->AddLine(upperLeft, ImVec2(upperLeft.x + 3.0f, upperLeft.y - 3.0f), tint, 1.6f);
-  drawList->AddLine(upperLeft, ImVec2(upperLeft.x + 3.0f, upperLeft.y + 3.0f), tint, 1.6f);
-  drawList->AddLine(lowerRight, ImVec2(lowerRight.x - 3.0f, lowerRight.y - 3.0f), tint, 1.6f);
-  drawList->AddLine(lowerRight, ImVec2(lowerRight.x - 3.0f, lowerRight.y + 3.0f), tint, 1.6f);
+  const ImVec2 fillTip(min.x + 2.0f, min.y + 5.0f);
+  const ImVec2 corner(max.x - 3.0f, fillTip.y);
+  const ImVec2 strokeTip(corner.x, max.y - 2.0f);
+  drawList->AddLine(fillTip, corner, tint, 1.6f);
+  drawList->AddLine(corner, strokeTip, tint, 1.6f);
+  drawList->AddLine(fillTip, ImVec2(fillTip.x + 3.0f, fillTip.y - 3.0f), tint, 1.6f);
+  drawList->AddLine(fillTip, ImVec2(fillTip.x + 3.0f, fillTip.y + 3.0f), tint, 1.6f);
+  drawList->AddLine(strokeTip, ImVec2(strokeTip.x - 3.0f, strokeTip.y - 3.0f), tint, 1.6f);
+  drawList->AddLine(strokeTip, ImVec2(strokeTip.x + 3.0f, strokeTip.y - 3.0f), tint, 1.6f);
 }
 
 void DrawNoneAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,

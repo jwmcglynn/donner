@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -372,7 +373,7 @@ private:
   void processPendingSampleLoad();
   /// Apply Group or Ungroup only while the render worker releases DOM ownership.
   bool tryApplyGroupOperation(bool ungroup);
-  bool trySavePath(std::string_view path, std::string* error);
+  bool trySavePath(std::string_view path, std::string* error, bool* retryWhenReady = nullptr);
 #ifndef __EMSCRIPTEN__
   void applyPendingDocumentSpaceReplayInputForTesting();
 #endif
@@ -403,6 +404,14 @@ private:
   /// just before the ImGui dialog render pass, so headless callers that only
   /// drive the request/try-path methods never present native UI.
   void serviceNativeDialogs();
+  /// Result of writing a path chosen in a native save panel.
+  enum class NativeSaveOutcome { Saved, Deferred, Failed };
+  /// Retain the chosen path while rendering or fonts settle after the OS panel closes.
+  void queueNativeSaveSelection(std::string path);
+  /// Attempt the retained save without presenting a dialog; deferred attempts keep the path.
+  NativeSaveOutcome tryPendingNativeSave(std::string* error);
+  /// Retry a deferred native save and show permanent failures through AppKit.
+  void servicePendingNativeSave();
   void requestSave();
   void requestSaveAs(std::string error = std::string());
   /// Open the save dialog to export the current viewport as a cropped SVG.
@@ -411,8 +420,9 @@ private:
   void requestExportViewportSvg(bool includeOverlay = false, std::string error = std::string());
   /// Generate the viewport SVG content and write it to \p path. Returns false
   /// and sets \p error on failure (mirrors \ref trySavePath's contract).
-  bool tryExportViewportSvgToPath(std::string_view path, std::string* error);
-  bool synchronizeSourceBeforeSave(std::string* error);
+  bool tryExportViewportSvgToPath(std::string_view path, std::string* error,
+                                  bool* retryWhenReady = nullptr);
+  bool synchronizeSourceBeforeSave(std::string* error, bool* retryWhenReady = nullptr);
   void updateWindowTitle();
   void requestHistoryAction(HistoryAction action);
   void applyPendingHistoryActions();
@@ -567,7 +577,8 @@ private:
   void requestCatalogFonts(std::span<const svg::FontFaceDependency> dependencies, int priority,
                            bool explicitRetry = false);
   bool requireCatalogFontsForSelection();
-  bool requireCatalogFontsForElement(const svg::SVGElement& element, std::string* error);
+  bool requireCatalogFontsForElement(const svg::SVGElement& element, std::string* error,
+                                     bool* retryWhenReady = nullptr);
   void retryCatalogFont(std::string_view family);
   void rememberOutputFontDemand(std::span<const svg::FontFaceDependency> dependencies);
   void drainOutputFontDemand();
@@ -786,6 +797,12 @@ private:
   /// \ref ViewportExportOptions::includeSelectionOverlay and the
   /// capture-at-export-time overlay snapshot in \ref tryExportViewportSvgToPath.
   bool pendingViewportExportOverlay_ = false;
+  /// Chosen native save path awaiting a render/font readiness retry.
+  std::optional<std::string> pendingNativeSavePath_;
+  /// The document selected in the native panel; a later document must not inherit its path.
+  std::uint64_t pendingNativeSaveDocumentGeneration_ = 0;
+  /// A stalled renderer or font load must eventually end the native save with an actionable error.
+  std::chrono::steady_clock::time_point pendingNativeSaveDeadline_;
 #ifdef __EMSCRIPTEN__
   static constexpr bool contentOnlyCaptureThisFrame_ = false;
 #else

@@ -119,7 +119,7 @@ TEST(EditorControlSessionTest, InspectorTextInputReplay) {
     frame.mouseY = 240;
     if (index >= 21) {
       frame.mouseX = 868;
-      frame.mouseY = 375;
+      frame.mouseY = 361;
     }
     if (index == 10 || index == 21 || index == 23) {
       frame.mouseButtonMask = 1;

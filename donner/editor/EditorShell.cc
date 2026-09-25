@@ -1622,6 +1622,11 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
     constexpr float kSampleThumbnailRetryWakeSeconds = 0.05f;
     includeWake(kSampleThumbnailRetryWakeSeconds);
   }
+  if (pendingNativeSavePath_.has_value()) {
+    // Worker/font completion posts its own wake; this bounded poll catches a missed wake
+    // without running the entire editor frame ten times a second while a save is waiting.
+    includeWake(0.25f);
+  }
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds());
   includeWake(renderCoordinator_.nextNothingToPresentRetryWakeSeconds());
@@ -2390,10 +2395,13 @@ void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalS
   dialogPresenter_.clearSaveFileError();
 }
 
-bool EditorShell::synchronizeSourceBeforeSave(std::string* error) {
+bool EditorShell::synchronizeSourceBeforeSave(std::string* error, bool* retryWhenReady) {
   documentSyncController_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/1.0f);
 
   if (renderCoordinator_.asyncRenderer().isBusy()) {
+    if (retryWhenReady != nullptr) {
+      *retryWhenReady = true;
+    }
     *error = "Cannot save while the renderer is applying pending edits.";
     return false;
   }
@@ -2408,6 +2416,9 @@ bool EditorShell::synchronizeSourceBeforeSave(std::string* error) {
   }
 
   if (!app_.document().queue().empty()) {
+    if (retryWhenReady != nullptr) {
+      *retryWhenReady = true;
+    }
     *error = "Cannot save while document edits are still pending.";
     return false;
   }
@@ -2415,7 +2426,10 @@ bool EditorShell::synchronizeSourceBeforeSave(std::string* error) {
   return true;
 }
 
-bool EditorShell::trySavePath(std::string_view path, std::string* error) {
+bool EditorShell::trySavePath(std::string_view path, std::string* error, bool* retryWhenReady) {
+  if (retryWhenReady != nullptr) {
+    *retryWhenReady = false;
+  }
   if (!options_.allowFileSystemActions) {
     *error = "File operations are disabled for this session.";
     return false;
@@ -2428,7 +2442,7 @@ bool EditorShell::trySavePath(std::string_view path, std::string* error) {
     *error = "No SVG document is loaded.";
     return false;
   }
-  if (!synchronizeSourceBeforeSave(error)) {
+  if (!synchronizeSourceBeforeSave(error, retryWhenReady)) {
     return false;
   }
   if (!app_.document().document().hasSourceStore()) {
@@ -2458,7 +2472,9 @@ void EditorShell::requestSaveAs(std::string error) {
   if (!options_.allowFileSystemActions) {
     return;
   }
+  pendingNativeSavePath_.reset();
   pendingViewportExport_ = false;
+  pendingViewportExportOverlay_ = false;
   dialogPresenter_.requestSaveFile(app_.currentFilePath(), std::move(error));
 }
 
@@ -2466,6 +2482,7 @@ void EditorShell::requestExportViewportSvg(bool includeOverlay, std::string erro
   if (!options_.allowFileSystemActions) {
     return;
   }
+  pendingNativeSavePath_.reset();
   pendingViewportExport_ = true;
   pendingViewportExportOverlay_ = includeOverlay;
   // Default export filename: "<stem>_viewport.svg" beside the source document,
@@ -2482,7 +2499,11 @@ void EditorShell::requestExportViewportSvg(bool includeOverlay, std::string erro
   dialogPresenter_.requestSaveFile(std::make_optional(defaultPath), std::move(error));
 }
 
-bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string* error) {
+bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string* error,
+                                             bool* retryWhenReady) {
+  if (retryWhenReady != nullptr) {
+    *retryWhenReady = false;
+  }
   if (!options_.allowFileSystemActions) {
     *error = "File operations are disabled for this session.";
     return false;
@@ -2491,12 +2512,13 @@ bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string*
     *error = "No document is open to export.";
     return false;
   }
-  if (!synchronizeSourceBeforeSave(error)) {
+  if (!synchronizeSourceBeforeSave(error, retryWhenReady)) {
     return false;
   }
 
   if (pendingViewportExportOverlay_ &&
-      !requireCatalogFontsForElement(app_.document().document().svgElement(), error)) {
+      !requireCatalogFontsForElement(app_.document().document().svgElement(), error,
+                                     retryWhenReady)) {
     return false;
   }
 
@@ -2547,10 +2569,74 @@ bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string*
   return true;
 }
 
+void EditorShell::queueNativeSaveSelection(std::string path) {
+  dialogPresenter_.consumeSaveFileModalRequest();
+  pendingNativeSavePath_ = std::move(path);
+  pendingNativeSaveDocumentGeneration_ =
+      app_.hasDocument() ? app_.document().documentGeneration() : 0;
+  pendingNativeSaveDeadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  window_.wakeEventLoop();
+}
+
+EditorShell::NativeSaveOutcome EditorShell::tryPendingNativeSave(std::string* error) {
+  error->clear();
+  if (!pendingNativeSavePath_.has_value()) {
+    *error = "No native save path was selected.";
+    return NativeSaveOutcome::Failed;
+  }
+  if (std::chrono::steady_clock::now() >= pendingNativeSaveDeadline_) {
+    pendingNativeSavePath_.reset();
+    pendingViewportExport_ = false;
+    pendingViewportExportOverlay_ = false;
+    *error = "Saving timed out while rendering or fonts were being prepared. Try again.";
+    return NativeSaveOutcome::Failed;
+  }
+  if (!app_.hasDocument() ||
+      app_.document().documentGeneration() != pendingNativeSaveDocumentGeneration_) {
+    pendingNativeSavePath_.reset();
+    pendingViewportExport_ = false;
+    pendingViewportExportOverlay_ = false;
+    *error = "The document changed after choosing a save location. Choose a location again.";
+    return NativeSaveOutcome::Failed;
+  }
+
+  bool retryWhenReady = false;
+  const bool saved =
+      pendingViewportExport_
+          ? tryExportViewportSvgToPath(*pendingNativeSavePath_, error, &retryWhenReady)
+          : trySavePath(*pendingNativeSavePath_, error, &retryWhenReady);
+  if (saved) {
+    pendingNativeSavePath_.reset();
+    return NativeSaveOutcome::Saved;
+  }
+  if (retryWhenReady) {
+    pendingNativeSaveDocumentGeneration_ = app_.document().documentGeneration();
+    return NativeSaveOutcome::Deferred;
+  }
+
+  pendingNativeSavePath_.reset();
+  pendingViewportExport_ = false;
+  pendingViewportExportOverlay_ = false;
+  return NativeSaveOutcome::Failed;
+}
+
+void EditorShell::servicePendingNativeSave() {
+  if (!pendingNativeSavePath_.has_value()) {
+    return;
+  }
+  std::string error;
+  if (tryPendingNativeSave(&error) == NativeSaveOutcome::Failed) {
+    nativeDialogs_.showSaveError(window_.rawHandle(), error);
+  }
+}
+
 void EditorShell::requestSave() {
   if (!options_.allowFileSystemActions) {
     return;
   }
+  pendingNativeSavePath_.reset();
+  pendingViewportExport_ = false;
+  pendingViewportExportOverlay_ = false;
   if (!app_.currentFilePath().has_value()) {
     requestSaveAs();
     return;
@@ -2590,6 +2676,14 @@ void EditorShell::serviceNativeDialogs() {
   }
 
   if (dialogPresenter_.openFileModalRequested()) {
+    pendingNativeSavePath_.reset();
+    pendingViewportExport_ = false;
+    pendingViewportExportOverlay_ = false;
+  } else {
+    servicePendingNativeSave();
+  }
+
+  if (dialogPresenter_.openFileModalRequested()) {
     dialogPresenter_.consumeOpenFileModalRequest();
     if (const std::optional<std::string> chosen =
             nativeDialogs_.openFile(window_.rawHandle(), app_.currentFilePath())) {
@@ -2611,14 +2705,11 @@ void EditorShell::serviceNativeDialogs() {
         suggested.empty() ? std::nullopt : std::make_optional(suggested);
     if (const std::optional<std::string> chosen =
             nativeDialogs_.saveFile(window_.rawHandle(), suggestedOpt)) {
-      std::string error;
-      // Mirror the render() callback's routing: an in-flight viewport export
-      // writes cropped SVG, otherwise this is a normal document save.
-      const bool ok = pendingViewportExport_ ? tryExportViewportSvgToPath(*chosen, &error)
-                                             : trySavePath(*chosen, &error);
-      if (!ok) {
-        dialogPresenter_.requestSaveFile(std::make_optional(*chosen), std::move(error));
-      }
+      queueNativeSaveSelection(*chosen);
+      servicePendingNativeSave();
+    } else {
+      pendingViewportExport_ = false;
+      pendingViewportExportOverlay_ = false;
     }
     window_.wakeEventLoop();
   }
@@ -5310,28 +5401,55 @@ void EditorShell::requestCatalogFonts(std::span<const svg::FontFaceDependency> d
 #endif
 }
 
-bool EditorShell::requireCatalogFontsForElement(const svg::SVGElement& element,
-                                                std::string* error) {
+namespace {
+
+struct FontOutputPreflightFailure {
+  const char* message;
+  bool retryWhenReady;
+  bool requestRender;
+};
+
+std::optional<FontOutputPreflightFailure> ClassifyFontOutputPreflight(
+    svg::FontResourcePreflight::Status status) {
+  using Status = svg::FontResourcePreflight::Status;
+  switch (status) {
+    case Status::InvalidTarget:
+      return FontOutputPreflightFailure{"The output target is no longer in this document.", false,
+                                        false};
+    case Status::ResourceLimit:
+      return FontOutputPreflightFailure{"The document exceeds its font resource limit.", false,
+                                        false};
+    case Status::NeedsRender:
+      return FontOutputPreflightFailure{
+          "Rendering is still being prepared. Try again when it finishes.", true, true};
+    default: return std::nullopt;
+  }
+}
+
+void MarkFontOutputRetry(bool* retryWhenReady, bool shouldRetry) {
+  if (retryWhenReady != nullptr && shouldRetry) {
+    *retryWhenReady = true;
+  }
+}
+
+}  // namespace
+
+bool EditorShell::requireCatalogFontsForElement(const svg::SVGElement& element, std::string* error,
+                                                bool* retryWhenReady) {
   if (!renderCoordinator_.asyncRenderer().isFontResourceAdoptionSafe()) {
+    MarkFontOutputRetry(retryWhenReady, true);
     *error = "Rendering is still being prepared. Try again when it finishes.";
     return false;
   }
   const auto preflight = app_.document().document().preflightFontResourcesForElement(element);
-  using Status = svg::FontResourcePreflight::Status;
   const auto& dependencies = preflight.dependencies;
   rememberOutputFontDemand(dependencies);
   requestCatalogFonts(dependencies, 0);
-  if (preflight.status == Status::InvalidTarget || preflight.status == Status::ResourceLimit ||
-      preflight.status == Status::NeedsRender) {
-    switch (preflight.status) {
-      case Status::InvalidTarget:
-        *error = "The output target is no longer in this document.";
-        break;
-      case Status::ResourceLimit: *error = "The document exceeds its font resource limit."; break;
-      default:
-        *error = "Rendering is still being prepared. Try again when it finishes.";
-        requestRenderAtEndOfFrame_ = true;
-        break;
+  if (const auto failure = ClassifyFontOutputPreflight(preflight.status)) {
+    *error = failure->message;
+    MarkFontOutputRetry(retryWhenReady, failure->retryWhenReady);
+    if (failure->requestRender) {
+      requestRenderAtEndOfFrame_ = true;
     }
     window_.wakeEventLoop();
     return false;
@@ -5344,10 +5462,11 @@ bool EditorShell::requireCatalogFontsForElement(const svg::SVGElement& element,
     *error = dependency.state == svg::FontFaceLoadState::Failed
                  ? "Font unavailable: " + dependency.family + ". Retry the font, then try again."
                  : "Loading font: " + dependency.family + ". Try again when it finishes.";
+    MarkFontOutputRetry(retryWhenReady, dependency.state != svg::FontFaceLoadState::Failed);
     window_.wakeEventLoop();
     return false;
   }
-  return preflight.status == Status::Ready;
+  return preflight.status == svg::FontResourcePreflight::Status::Ready;
 }
 
 void EditorShell::retryCatalogFont(std::string_view family) {

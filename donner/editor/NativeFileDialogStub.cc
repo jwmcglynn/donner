@@ -23,6 +23,13 @@ std::optional<std::string> ShowNativeSaveFileDialog(GLFWwindow* parent,
   return std::nullopt;
 }
 
+void ShowNativeFileDialogError(GLFWwindow* parent, const std::string& title,
+                               const std::string& message) {
+  (void)parent;
+  (void)title;
+  (void)message;
+}
+
 void NoteNativeRecentDocument(const std::string& path) {
   (void)path;
 }

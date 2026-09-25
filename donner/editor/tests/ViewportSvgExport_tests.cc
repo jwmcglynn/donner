@@ -193,6 +193,17 @@ TEST(ViewportSvgExportTest, TinyPositiveCropRetainsNonzeroDimensions) {
   EXPECT_TRUE(ReparsesCleanly(result.value));
 }
 
+TEST(ViewportSvgExportTest, RejectsFiniteSourceDimensionsWhoseExportScaleOverflows) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1e200\" height=\"1\" "
+      "viewBox=\"0 0 1e-200 1\" preserveAspectRatio=\"none\"/>");
+  const ViewportState viewport = IdentityViewport();
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, viewport, Recti(Vector2i(0, 0), Vector2i(1, 1)), ViewportExportOptions{});
+  ASSERT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("dimensions cannot be represented"));
+}
+
 TEST(ViewportSvgExportTest, ViewportOutsideDocumentHasNoExportableRegion) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   const ViewportState viewport =

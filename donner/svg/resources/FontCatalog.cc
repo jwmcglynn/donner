@@ -27,7 +27,9 @@ std::string toLower(std::string_view value) {
 /// Editor-only generic family with consistent upright, bold, and italic metrics.
 class GenericSansProvider final : public FontFamilyProvider {
 public:
-  std::vector<FontFamilyInfo> families() const override { return {}; }
+  std::vector<FontFamilyInfo> families() const override {
+    return {{"sans-serif", FontSource::Bundled, FontCategory::SansSerif}};
+  }
 
   bool hasFamily(std::string_view family) const override {
     return StringUtils::Equals<StringComparison::IgnoreCase>(family,
@@ -84,6 +86,11 @@ std::vector<FontFamilyInfo> FontCatalog::families() const {
     std::sort(group.begin(), group.end(),
               [](const FontFamilyInfo& a, const FontFamilyInfo& b) { return a.family < b.family; });
     for (FontFamilyInfo& info : group) {
+      // CSS generic families resolve through find(), but are not named faces in the picker.
+      if (StringUtils::Equals<StringComparison::IgnoreCase>(info.family,
+                                                            std::string_view("sans-serif"))) {
+        continue;
+      }
       if (seen.insert(toLower(info.family)).second) {
         result.push_back(std::move(info));
       }
@@ -163,6 +170,10 @@ std::vector<FontFamilyInfo> FontCatalog::familiesBySource(FontSource source) con
   std::vector<FontFamilyInfo> result;
   for (const auto& provider : providers_) {
     for (FontFamilyInfo& info : provider->families()) {
+      if (StringUtils::Equals<StringComparison::IgnoreCase>(info.family,
+                                                            std::string_view("sans-serif"))) {
+        continue;
+      }
       if (info.source == source) {
         result.push_back(std::move(info));
       }
