@@ -240,6 +240,20 @@ public:
   static std::unique_ptr<GeodeDevice> CreateOverSelectedRoot(std::shared_ptr<GeodeGpuRoot> root,
                                                              gpu::TextureFormat textureFormat);
 
+  /**
+   * Creates another logical context over the selected physical owner.
+   *
+   * It shares the backend root and loss condition with the first context while retaining its own
+   * runtime device, handle table, submission serials, counters, and pipelines. No WebGPU embed
+   * handles are needed, so native and browser roots use the same path.
+   *
+   * @param physicalDevice Owner retained by the first context; null or lost owners are refused.
+   * @param textureFormat Format this context's render targets and pipelines are built for.
+   * @return A distinct logical context, or null when a usable device cannot be created.
+   */
+  static std::unique_ptr<GeodeDevice> CreateOverPhysicalDeviceOwner(
+      std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice, gpu::TextureFormat textureFormat);
+
   /// Number of \ref CreateHeadless calls made so far in this process. Each
   /// headless creation stands up a full WebGPU instance/adapter/device, so
   /// hot paths must share one device instead of re-creating; tests pin that

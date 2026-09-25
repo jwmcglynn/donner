@@ -249,6 +249,31 @@ TEST(GeodeDevice, SharedPhysicalOwnerRejectsAlreadyLostDevice) {
   borrowedContext.reset();
 }
 
+TEST(GeodeDevice, SecondLogicalContextUsesSelectedPhysicalOwnerWithoutEmbedHandles) {
+  auto first = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
+  ASSERT_THAT(first, NotNull());
+  const std::shared_ptr<GeodePhysicalDeviceOwner> owner = first->physicalDeviceOwner();
+  ASSERT_THAT(owner, NotNull());
+
+  auto second = GeodeDevice::CreateOverPhysicalDeviceOwner(owner, gpu::TextureFormat::RGBA8Unorm);
+  ASSERT_THAT(second, NotNull());
+  EXPECT_THAT(second->physicalDeviceOwner(), Eq(owner));
+  EXPECT_THAT(second->textureFormat(), Eq(gpu::TextureFormat::RGBA8Unorm));
+  EXPECT_NE(second->runtimeDevice().deviceId(), first->runtimeDevice().deviceId());
+}
+
+TEST(GeodeDevice, SecondLogicalContextRejectsNullOrLostPhysicalOwner) {
+  EXPECT_THAT(GeodeDevice::CreateOverPhysicalDeviceOwner(nullptr, gpu::TextureFormat::BGRA8Unorm),
+              IsNull());
+  auto first = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
+  ASSERT_THAT(first, NotNull());
+  const std::shared_ptr<GeodePhysicalDeviceOwner> owner = first->physicalDeviceOwner();
+  ASSERT_THAT(owner, NotNull());
+  owner->lostState()->lost.store(true, std::memory_order_release);
+  EXPECT_THAT(GeodeDevice::CreateOverPhysicalDeviceOwner(owner, gpu::TextureFormat::BGRA8Unorm),
+              IsNull());
+}
+
 /// An offscreen render target holds exactly the texels written to it. Every texel of a 64x64
 /// pattern comes back through a mapped readback buffer, so the allocation has the extent and format
 /// it was described with, and the readback buffer a snapshot readback allocates can be created and
@@ -781,6 +806,21 @@ std::unique_ptr<GeodeDevice> CreateNativeMetalContext() {
     return nullptr;
   }
   return GeodeDevice::CreateOverSelectedRoot(std::move(root), gpu::TextureFormat::RGBA8Unorm);
+}
+
+TEST(GeodeNativeMetalRoot, SecondLogicalContextSharesPhysicalOwnerWithoutWebGpuEmbedConfig) {
+  std::unique_ptr<GeodeDevice> first = CreateNativeMetalContext();
+  ASSERT_THAT(first, NotNull()) << kNoMetalDevice;
+  const std::shared_ptr<GeodePhysicalDeviceOwner> owner = first->physicalDeviceOwner();
+  ASSERT_THAT(owner, NotNull());
+  ASSERT_THAT(owner->root().capabilities().backend, Eq(GpuBackendKind::NativeMetal));
+
+  std::unique_ptr<GeodeDevice> second =
+      GeodeDevice::CreateOverPhysicalDeviceOwner(owner, gpu::TextureFormat::RGBA8Unorm);
+  ASSERT_THAT(second, NotNull());
+  EXPECT_THAT(second->physicalDeviceOwner(), Eq(owner));
+  EXPECT_NE(second->runtimeDevice().deviceId(), first->runtimeDevice().deviceId());
+  EXPECT_THAT(second->textureFormat(), Eq(gpu::TextureFormat::RGBA8Unorm));
 }
 
 /// A native root reports the texture limit its device reports, not the 8,192-texel fallback a
