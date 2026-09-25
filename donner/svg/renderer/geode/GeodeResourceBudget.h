@@ -16,17 +16,21 @@ namespace donner::geode {
 /** Aggregate encoded-geometry work retained by one renderer frame. */
 class GeodeFrameGeometryBudget {
 public:
+  /// Maximum encoded geometry draw calls admitted in one frame.
   static constexpr std::size_t kMaximumDraws = 64u * 1024u;
   /// Sized with the text budget for about ten dense pages of instanced glyphs per frame.
   static constexpr std::size_t kMaximumItems = 4u << 20;
+  /// Maximum encoded geometry bytes retained for one frame.
   static constexpr std::uint64_t kMaximumRetainedBytes = 256u << 20;
 
+  /// Caller-selected frame limits for draws, items, and retained bytes.
   struct Limits {
-    std::size_t draws = kMaximumDraws;
-    std::size_t items = kMaximumItems;
-    std::uint64_t retainedBytes = kMaximumRetainedBytes;
+    std::size_t draws = kMaximumDraws;                    ///< Maximum draw calls.
+    std::size_t items = kMaximumItems;                    ///< Maximum encoded items.
+    std::uint64_t retainedBytes = kMaximumRetainedBytes;  ///< Maximum retained bytes.
   };
 
+  /// Begin a new frame with zero charges and no latched rejection.
   void reset() {
     draws_ = 0;
     items_ = 0;
@@ -34,6 +38,11 @@ public:
     rejected_ = false;
   }
 
+  /// Charge draw, item, and retained-byte work to the current frame.
+  /// @param draws Additional draw calls.
+  /// @param items Additional encoded geometry items.
+  /// @param retainedBytes Additional retained geometry bytes.
+  /// @return False if any limit is exceeded or the frame was already rejected.
   [[nodiscard]] bool reserve(std::size_t draws, std::size_t items, std::uint64_t retainedBytes) {
     if (rejected_ || draws_ > limits_.draws || draws > limits_.draws - draws_ ||
         items_ > limits_.items || items > limits_.items - items_ ||
@@ -48,23 +57,34 @@ public:
     return true;
   }
 
+  /// Subtract charges when frame geometry is discarded, saturating each counter at zero.
+  /// @param draws Draw calls to release.
+  /// @param items Encoded items to release.
+  /// @param retainedBytes Geometry bytes to release.
   void release(std::size_t draws, std::size_t items, std::uint64_t retainedBytes) {
     draws_ = draws > draws_ ? 0 : draws_ - draws;
     items_ = items > items_ ? 0 : items_ - items;
     retainedBytes_ = retainedBytes > retainedBytes_ ? 0 : retainedBytes_ - retainedBytes;
   }
 
+  /// Latch the current frame as rejected after an external geometry failure.
   void reject() { rejected_ = true; }
 
+  /// Tighten frame limits for a test; this never raises a production limit.
+  /// @param limits Requested upper bounds for each frame charge.
   void setLimitsForTesting(Limits limits) {
     limits_.draws = std::min(limits_.draws, limits.draws);
     limits_.items = std::min(limits_.items, limits.items);
     limits_.retainedBytes = std::min(limits_.retainedBytes, limits.retainedBytes);
   }
 
+  /// Draw calls charged to the current frame.
   [[nodiscard]] std::size_t draws() const { return draws_; }
+  /// Encoded geometry items charged to the current frame.
   [[nodiscard]] std::size_t items() const { return items_; }
+  /// Geometry bytes charged to the current frame.
   [[nodiscard]] std::uint64_t retainedBytes() const { return retainedBytes_; }
+  /// Whether frame geometry admission has been rejected.
   [[nodiscard]] bool rejected() const { return rejected_; }
 
 private:
@@ -78,14 +98,19 @@ private:
 /** Live document geometry retained outside the frame-local arena. */
 class GeodeDocumentGeometryBudget {
 public:
+  /// Maximum geometry cache bytes retained by one document.
   static constexpr std::uint64_t kMaximumCacheBytes = 64u << 20;
+  /// Maximum GPU resident geometry, record, and uniform buffer bytes retained by one document.
   static constexpr std::uint64_t kMaximumResidentBytes = 64u << 20;
 
+  /// Caller-selected cache and GPU residency ceilings.
   struct Limits {
-    std::uint64_t cacheBytes = kMaximumCacheBytes;
-    std::uint64_t residentBytes = kMaximumResidentBytes;
+    std::uint64_t cacheBytes = kMaximumCacheBytes;        ///< Maximum cached geometry bytes.
+    std::uint64_t residentBytes = kMaximumResidentBytes;  ///< Maximum GPU resident bytes.
   };
 
+  /// Create a document geometry budget with an optional shared resource-family budget.
+  /// @param family Shared document budget, or null for local accounting only.
   explicit GeodeDocumentGeometryBudget(
       std::shared_ptr<svg::components::DocumentResourceFamilyBudget> family = nullptr)
       : family_(std::move(family)) {}
@@ -100,6 +125,10 @@ public:
   GeodeDocumentGeometryBudget(const GeodeDocumentGeometryBudget&) = delete;
   GeodeDocumentGeometryBudget& operator=(const GeodeDocumentGeometryBudget&) = delete;
 
+  /// Replace a caller's charged cache bytes, releasing or reserving the difference.
+  /// @param previous Bytes the caller previously charged, clamped to the aggregate charge.
+  /// @param replacement Bytes the caller wants charged now.
+  /// @return False when growth is requested after a latched rejection or exceeds a resource limit.
   [[nodiscard]] bool replaceCacheBytes(std::uint64_t previous, std::uint64_t replacement) {
     previous = std::min(previous, cacheBytes_);
     if (replacement <= previous) {
@@ -119,6 +148,8 @@ public:
     return true;
   }
 
+  /// Release up to the specified cache bytes from this document's aggregate charge.
+  /// @param bytes Cache bytes to release.
   void releaseCacheBytes(std::uint64_t bytes) {
     const std::uint64_t released = std::min(bytes, cacheBytes_);
     cacheBytes_ -= released;
@@ -147,18 +178,24 @@ public:
     return true;
   }
 
+  /// Release up to the specified GPU resident bytes from the aggregate charge.
+  /// @param bytes Resident bytes to release.
   void releaseResidentBytes(std::uint64_t bytes) {
     const std::uint64_t released = std::min(bytes, residentBytes_);
     residentBytes_ -= released;
     releaseFamily(released);
   }
 
+  /// Tighten cache and resident limits for a test; production limits cannot be raised.
+  /// @param limits Requested upper bounds for both document charges.
   void setLimitsForTesting(Limits limits) {
     limits_.cacheBytes = std::min(limits_.cacheBytes, limits.cacheBytes);
     limits_.residentBytes = std::min(limits_.residentBytes, limits.residentBytes);
   }
 
+  /// Cache geometry bytes currently charged to this document.
   [[nodiscard]] std::uint64_t cacheBytes() const { return cacheBytes_; }
+  /// GPU resident geometry, record, and uniform buffer bytes currently charged to this document.
   [[nodiscard]] std::uint64_t residentBytes() const { return residentBytes_; }
   /// Whether a cache or resident request has ever been refused.
   [[nodiscard]] bool rejected() const { return cacheRejected_ || residentRejected_; }
@@ -197,11 +234,16 @@ public:
   GeodeGeometryCacheReservation(const GeodeGeometryCacheReservation&) = delete;
   GeodeGeometryCacheReservation& operator=(const GeodeGeometryCacheReservation&) = delete;
 
+  /// Transfer ownership of a cache reservation without changing its charge.
+  /// @param other Reservation to move into this object.
   GeodeGeometryCacheReservation(GeodeGeometryCacheReservation&& other) noexcept
       : budget_(std::move(other.budget_)), bytes_(other.bytes_) {
     other.bytes_ = 0;
   }
 
+  /// Release the current reservation and take ownership of another.
+  /// @param other Reservation to move into this object.
+  /// @return This reservation after the transfer.
   GeodeGeometryCacheReservation& operator=(GeodeGeometryCacheReservation&& other) noexcept {
     if (this != &other) {
       reset();
@@ -212,6 +254,10 @@ public:
     return *this;
   }
 
+  /// Atomically replace the owned cache reservation with a new budget and byte count.
+  /// @param budget Document budget that will own the replacement charge.
+  /// @param bytes Cache bytes requested from that budget.
+  /// @return False if the replacement cannot be reserved; the old charge remains owned.
   [[nodiscard]] bool replace(std::shared_ptr<GeodeDocumentGeometryBudget> budget,
                              std::uint64_t bytes) {
     if (budget_.get() == budget.get()) {
@@ -230,6 +276,7 @@ public:
     return true;
   }
 
+  /// Release the owned cache charge and forget its budget.
   void reset() {
     if (budget_ && bytes_ != 0) {
       budget_->releaseCacheBytes(bytes_);
@@ -238,6 +285,7 @@ public:
     bytes_ = 0;
   }
 
+  /// Cache bytes charged by this reservation.
   [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
 
 private:
