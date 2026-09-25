@@ -1,9 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <cstdlib>
 #include <memory>
+#include <string_view>
 
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 
 namespace donner::svg {
@@ -107,6 +110,22 @@ void ResetSharedTestBackendState() {
 
 class GeodeBackendEnvironment : public ::testing::Environment {
 public:
+  void SetUp() override {
+    const char* required = std::getenv("DONNER_REQUIRE_WGPU_REFERENCE");
+    if (required == nullptr || std::string_view(required) != "1") {
+      return;
+    }
+    std::shared_ptr<geode::GeodeDevice> device = SharedTestDevice();
+    if (device == nullptr) {
+      FAIL() << "the resvg wgpu reference could not create its GPU device";
+    }
+    const geode::GpuBackendKind kind = device->physicalDeviceOwner()->root().capabilities().backend;
+    if (kind != geode::GpuBackendKind::TransitionalWgpu) {
+      FAIL() << "the resvg wgpu reference selected " << geode::GpuBackendKindName(kind)
+             << " instead of the transitional wgpu backend";
+    }
+  }
+
   void TearDown() override { ResetSharedTestBackendState(); }
 };
 
