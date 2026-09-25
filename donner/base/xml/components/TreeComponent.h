@@ -126,7 +126,8 @@ private:
  * traversal order.
  *
  * Returning \c false from \p func prunes: neither that entity's children nor any deeper descendant
- * is visited. Returning early from a `ForAllChildrenRecursive` callback instead skips only the
+ * is visited. Returning early from a \ref donner::components::ForAllChildrenRecursive callback
+ * instead skips only the
  * current entity, so a caller whose condition covers a whole subtree (for example `display: none`,
  * which removes the subtree from the rendering tree) has to use this form.
  *
@@ -165,7 +166,8 @@ void ForAllChildrenRecursivePruned(EntityHandle handle, const Func& func) {
  *
  * \p handle itself is visited first, which is why a caller that wants the descendants alone
  * compares against it. Whatever \p func returns is discarded, so returning early from it skips the
- * current entity only; use `ForAllChildrenRecursivePruned` to skip a whole subtree.
+ * current entity only; use \ref donner::components::ForAllChildrenRecursivePruned to skip a whole
+ * subtree.
  *
  * @param handle Entity handle to iterate over, which is visited first.
  * @param func Functor to call for each entity.
