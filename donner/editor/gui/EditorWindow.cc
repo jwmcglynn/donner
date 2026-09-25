@@ -1522,6 +1522,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     // GPU; set it explicitly so every host matches. overwrite=0 honors an
     // operator who deliberately pre-set it.
     setenv("LIBGL_ALWAYS_SOFTWARE", "1", /*overwrite=*/0);
+  } else {
+    // GLFW keeps init hints across termination; restore display detection after a null window.
+    glfwInitHint(GLFW_PLATFORM, GLFW_ANY_PLATFORM);
   }
 #endif
 #endif
