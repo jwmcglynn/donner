@@ -17,10 +17,12 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -451,6 +453,49 @@ TEST_F(RenderingContextTest, GradientAndClipPath) {
 
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, warningSink_);
+}
+
+TEST_F(RenderingContextTest, UseInsideDefinitionClipPathStillClipsPresentedShape) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <rect id="clipShape" width="25" height="25"/>
+        <clipPath id="clip"><use href="#clipShape"/></clipPath>
+      </defs>
+      <rect id="target" width="100" height="100" clip-path="url(#clip)"/>
+    </svg>
+  )svg");
+
+  RenderingContext context(document.registry());
+  context.instantiateRenderTree(false, warningSink_);
+
+  const auto* clipPaths =
+      document.querySelector("#target")->entityHandle().try_get<ComputedClipPathsComponent>();
+  ASSERT_THAT(clipPaths, NotNull());
+  EXPECT_THAT(clipPaths->clipPaths, testing::SizeIs(1));
+}
+
+TEST_F(RenderingContextTest, TemplateGradientInsideDefsRetainsInheritedStops) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <linearGradient id="base">
+          <stop offset="0" stop-color="red"/>
+          <stop offset="1" stop-color="blue"/>
+        </linearGradient>
+        <linearGradient id="child" href="#base"/>
+      </defs>
+      <rect width="100" height="100" fill="url(#child)"/>
+    </svg>
+  )svg");
+
+  RenderingContext context(document.registry());
+  context.instantiateRenderTree(false, warningSink_);
+
+  const auto* gradient =
+      document.querySelector("#child")->entityHandle().try_get<ComputedGradientComponent>();
+  ASSERT_THAT(gradient, NotNull());
+  EXPECT_THAT(gradient->stops, testing::SizeIs(2));
 }
 
 TEST_F(RenderingContextTest, UseElement) {
