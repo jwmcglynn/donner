@@ -65,10 +65,10 @@ inline std::ostream& operator<<(std::ostream& os, FontResourcePreflight::Status 
  * `firstChild()`, `appendChild()`, `querySelector()`). Elements are lightweight value types that
  * can be copied and passed on the stack.
  *
- * SVGDocument defaults to `ThreadingMode::SingleThreaded`. To access the DOM from multiple
- * threads, opt into `ThreadingMode::ConcurrentDom` and use the DOM facade APIs or scoped access
- * helpers. Direct ECS access through `registry()` and `entityHandle()` is only conditionally safe
- * while the caller holds an explicit document access guard.
+ * SVGDocument defaults to \ref donner::svg::ThreadingMode::SingleThreaded. To access the DOM from
+ * multiple threads, opt into \ref donner::svg::ThreadingMode::ConcurrentDom and use the DOM facade
+ * APIs or scoped access helpers. Direct ECS access through `registry()` and `entityHandle()` is
+ * only conditionally safe while the caller holds an explicit document access guard.
  *
  * @note Internally, data is stored using an Entity Component System (ECS) for cache-friendly
  * access during rendering. The `registry()` and `entityHandle()` accessors expose this for
@@ -119,16 +119,17 @@ public:
   /**
    * Get the underlying ECS Registry, which holds all data for the document.
    *
-   * This is an unsafe advanced escape hatch. In `ThreadingMode::ConcurrentDom`, callers must
-   * hold an explicit document access guard while reading or mutating the returned registry.
+   * This is an unsafe advanced escape hatch. In \ref donner::svg::ThreadingMode::ConcurrentDom,
+   * callers must hold an explicit document access guard while reading or mutating the returned
+   * registry.
    */
   Registry& unsafeRegistry() { return documentState_->registry(); }
 
   /**
    * Get the underlying ECS Registry, which holds all data for the document.
    *
-   * This is an unsafe advanced escape hatch. In `ThreadingMode::ConcurrentDom`, callers must
-   * hold an explicit document access guard while reading the returned registry.
+   * This is an unsafe advanced escape hatch. In \ref donner::svg::ThreadingMode::ConcurrentDom,
+   * callers must hold an explicit document access guard while reading the returned registry.
    */
   const Registry& unsafeRegistry() const { return documentState_->registry(); }
 
@@ -176,8 +177,8 @@ public:
   /**
    * Run a callback with scoped read access to this document.
    *
-   * In `ThreadingMode::ConcurrentDom`, use this to batch repeated reads such as traversal or
-   * selector scans under one document read lock.
+   * In \ref donner::svg::ThreadingMode::ConcurrentDom, use this to batch repeated reads such as
+   * traversal or selector scans under one document read lock.
    *
    * @param callback Callable invoked as `callback(DocumentReadAccess&)`.
    */
@@ -197,7 +198,8 @@ public:
    *
    * Nested DOM setters called by the callback reuse this write access and coalesce their mutation
    * revision bumps into one revision increment for the whole callback. Callbacks can accept either
-   * `DocumentWriteAccess` for raw ECS work or `SVGDocumentMutation` for typed DOM mutation
+   * \ref donner::svg::DocumentWriteAccess for raw ECS work or
+   * \ref donner::svg::SVGDocumentMutation for typed DOM mutation
    * helpers.
    *
    * @param callback Callable invoked as `callback(DocumentWriteAccess&)` or
@@ -270,11 +272,11 @@ public:
    * empty view.
    *
    * This, \ref sourceVersion and \ref hasSourceStore report the document's current source store,
-   * including one that `xml::XMLDocument::setSource` installed through \ref xmlDocument after
-   * the document was built. They do not touch the registry, so the thread that edits the source
-   * may call them without document access while another thread holds write access; any other
+   * including one that \ref donner::xml::XMLDocument::setSource installed through \ref xmlDocument
+   * after the document was built. They do not touch the registry, so the thread that edits the
+   * source may call them without document access while another thread holds write access; any other
    * thread needs read access. The view is valid until the source next changes, through a source
-   * edit or `xml::XMLDocument::setSource`; copy it to keep it longer.
+   * edit or \ref donner::xml::XMLDocument::setSource; copy it to keep it longer.
    */
   std::string_view source() const;
 
@@ -285,7 +287,7 @@ public:
    * Rehydrate the underlying XML document facade over this SVG document's shared registry.
    *
    * The returned facade exposes the parsed XML tree, including source locations for
-   * source-backed documents. When `xml::XMLDocument::sourceDiagnostic` reports a pending
+   * source-backed documents. When \ref donner::xml::XMLDocument::sourceDiagnostic reports a pending
    * diagnostic, the tree reflects the last valid parse and is stale relative to \ref source;
    * consumers that slice current source bytes must refuse rather than use stale ranges.
    */
@@ -346,9 +348,9 @@ public:
    *
    * This is the DOM-side structured editing entry point for text-content writes: it removes the
    * element's existing text-like XML child nodes and (for non-empty @p text) inserts a single data
-   * node holding @p text, applying every change through `xml::XMLSourceStore` so source deltas
-   * are emitted. Element children (e.g. `<tspan>`) are preserved. Callers remain responsible for
-   * updating any component-level text mirror (e.g. `SVGTextContentElement::setTextContent`).
+   * node holding @p text, applying every change through \ref donner::xml::XMLSourceStore so source
+   * deltas are emitted. Element children (e.g. `<tspan>`) are preserved. Callers remain responsible
+   * for updating any component-level text mirror (e.g. `SVGTextContentElement::setTextContent`).
    *
    * @param element Element whose text content to replace.
    * @param text New text content (raw, unescaped).
@@ -460,8 +462,8 @@ public:
    * Find the first element in the tree that matches the given CSS selector.
    *
    * This method performs its own scoped read. For repeated DOM reads in
-   * `ThreadingMode::ConcurrentDom`, wrap the whole scan in \ref withReadAccess so nested reads
-   * reuse the same document access.
+   * \ref donner::svg::ThreadingMode::ConcurrentDom, wrap the whole scan in \ref withReadAccess so
+   * nested reads reuse the same document access.
    *
    * ```
    * auto element = document.querySelector("#elementId");

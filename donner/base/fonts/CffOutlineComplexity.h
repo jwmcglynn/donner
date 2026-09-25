@@ -38,9 +38,10 @@ struct CffOutlineValidationResult {
 /**
  * Validate CFF1 or non-variable CFF2 charstrings without materializing outlines.
  *
- * Variable CFF2 operators return `CffOutlineValidationStatus::UnsupportedVariation` so callers
- * can retain directory validation while failing closed before an untrusted outline decoder.
- * Legacy CFF1 endchar composites include their resolved component costs in the returned bound.
+ * Variable CFF2 operators return \ref
+ * donner::fonts::CffOutlineValidationStatus::UnsupportedVariation so callers can retain directory
+ * validation while failing closed before an untrusted outline decoder. Legacy CFF1 endchar
+ * composites include their resolved component costs in the returned bound.
  *
  * @param table Exact CFF or CFF2 table bytes.
  * @param cff2 Whether @p table uses CFF2 structures and CharStrings.

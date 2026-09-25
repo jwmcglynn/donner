@@ -57,8 +57,8 @@ std::optional<RcString> EscapeAttributeValue(std::string_view value, char quoteC
  * UTF-8 passes through unchanged.
  *
  * Returns `std::nullopt` for input that cannot be represented in well-formed XML
- * character data (same reject list as `EscapeAttributeValue`: NUL, C0 controls other
- * than tab/LF/CR, lone surrogates, U+FFFE/U+FFFF, malformed UTF-8).
+ * character data. Like \ref donner::xml::EscapeAttributeValue, it rejects NUL, C0 controls other
+ * than tab/LF/CR, lone surrogates, U+FFFE/U+FFFF, and malformed UTF-8.
  *
  * @param value Raw unescaped text content.
  */
