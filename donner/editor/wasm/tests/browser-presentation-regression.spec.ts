@@ -1321,14 +1321,23 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     },
   );
 
+  const probeRegion = {
+    x: editorBounds.x + 280,
+    y: editorBounds.y + 260,
+    width: 460,
+    height: 280,
+  };
+  let baselineBluePixels = 0;
   await expect
-    .poll(() => readElementColorStats(editorCanvas).then((stats) => stats.coloredPixels), {
+    .poll(async () => {
+      baselineBluePixels = (await readEditorResizePixelBounds(page, probeRegion)).blue?.pixels ?? 0;
+      return baselineBluePixels;
+    }, {
       message: "expected the initial Basic Shapes render before starting the drag",
       timeout: scaledMs(2_000),
       intervals: [16, 25, 50, 100],
     })
     .toBeGreaterThan(500);
-  const baseline = await readElementColorStats(editorCanvas);
 
   const dragStart = {
     x: editorBounds.x + kBlueRectOffset.x,
@@ -1357,12 +1366,6 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     blue: PixelBounds;
     teal: PixelBounds;
   }> = [];
-  const probeRegion = {
-    x: editorBounds.x + 280,
-    y: editorBounds.y + 260,
-    width: 460,
-    height: 280,
-  };
   // An active drag presents by transforming the prewarmed selected-layer texture
   // inside UI frames; the worker does not re-rasterize the document until the
   // pointer releases. So the per-step signal that "the drag produced a frame" is
@@ -1493,7 +1496,7 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   expect(blueCenters.at(-1) || 0).toBeGreaterThan(blueCenters[0] || 0);
   expect(
     samples.map((sample) => sample.coloredPixels),
-    `baseline=${baseline.coloredPixels}; frames=${JSON.stringify(samples)}`,
+    `baseline=${baselineBluePixels}; frames=${JSON.stringify(samples)}`,
   ).not.toContain(0);
   expect(failures).toEqual([]);
 });

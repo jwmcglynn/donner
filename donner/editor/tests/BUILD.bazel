@@ -52,6 +52,7 @@ donner_cc_library(
     # blessed pixelmatch comparator for their frozen-baseline comparisons.
     visibility = [
         "//donner/gpu:__subpackages__",
+        "//donner/svg/compositor:__pkg__",
         "//donner/svg/renderer/geode:__pkg__",
         "//donner/svg/renderer/tests:__pkg__",
         "//tools/mcp-servers/editor-control:__pkg__",
@@ -1190,6 +1191,7 @@ donner_cc_test(
         "geode_splash_click.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         "//:donner_splash.svg",
+        "//:geode_splash.svg",
     ],
     defines = select({
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_GL_RNR_GEODE_BACKEND"],
