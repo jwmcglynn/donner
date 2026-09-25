@@ -1,10 +1,13 @@
 """Tests for the path-safe per-target proof retained with coverage reports."""
 
+from contextlib import redirect_stderr
+from io import StringIO
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -73,6 +76,22 @@ class CoverageRunProofTest(unittest.TestCase):
         }
         arguments.update(changes)
         return proof.make_proof(**arguments)
+
+    def run_cli(self):
+        diagnostic = StringIO()
+        with redirect_stderr(diagnostic):
+            status = proof.main([
+                "--bep", str(self.bep),
+                "--report", str(self.report),
+                "--reason", "non_pr",
+                "--patterns", "//donner/...",
+                "--expected-pattern-count", "1",
+                "--event", "push",
+                "--ref", "refs/heads/main",
+                "--revision", _REVISION,
+                "--output", str(self.root / "coverage-proof.json"),
+            ])
+        return status, diagnostic.getvalue()
 
     def test_complete_main_proof_retains_status_and_line_universe_without_uris(self):
         result = self.make_proof()
@@ -174,6 +193,50 @@ class CoverageRunProofTest(unittest.TestCase):
         self.assertEqual(json.loads(artifact.read_text())["test_counts"], {"PASSED": 1})
         self.assertNotIn(_SECRET_URI, artifact.read_text())
         self.assertIn("Processed LCOV universe: 1 source files", summary.read_text())
+
+    def test_cli_reports_distinct_sanitized_validation_and_io_failures(self):
+        self.write_bep(status="FAILED")
+        status, diagnostic = self.run_cli()
+        self.assertEqual(status, 1)
+        self.assertIn("build-event stream contains a failed or incomplete test", diagnostic)
+        self.assertNotIn(_SECRET_URI, diagnostic)
+
+        self.write_bep(status="UNKNOWN")
+        status, diagnostic = self.run_cli()
+        self.assertEqual(status, 1)
+        self.assertIn("build-event stream has an unknown test status", diagnostic)
+
+        self.write_bep()
+        self.report.write_text(self.report.read_text() * 2, encoding="utf-8")
+        status, diagnostic = self.run_cli()
+        self.assertEqual(status, 1)
+        self.assertIn("filtered LCOV repeats a source file record", diagnostic)
+
+        self.report.write_text(
+            "SF:/private/runner-host/secret-path/source.cc\nDA:1,1\nend_of_record\n",
+            encoding="utf-8",
+        )
+        status, diagnostic = self.run_cli()
+        self.assertEqual(status, 1)
+        self.assertIn("filtered LCOV contains a non-public source path", diagnostic)
+        self.assertNotIn("/private/runner-host/secret-path", diagnostic)
+
+        self.report.unlink()
+        status, diagnostic = self.run_cli()
+        self.assertEqual(status, 1)
+        self.assertIn("filtered LCOV could not be read", diagnostic)
+        self.assertNotIn(str(self.root), diagnostic)
+
+    def test_cli_hides_unexpected_parser_error_detail(self):
+        with patch.object(
+            proof,
+            "collect_lcov_metrics",
+            side_effect=ValueError("unexpected parser detail /private/runner-host/secret-path"),
+        ):
+            status, diagnostic = self.run_cli()
+        self.assertEqual(status, 1)
+        self.assertIn("coverage data is malformed", diagnostic)
+        self.assertNotIn("/private/runner-host/secret-path", diagnostic)
 
 
 if __name__ == "__main__":

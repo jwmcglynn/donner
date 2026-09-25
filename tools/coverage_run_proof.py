@@ -17,6 +17,10 @@ _REVISION = re.compile(r"[0-9a-f]{40}\Z")
 _CONFIGURATION = re.compile(r"[A-Za-z0-9_-]{0,64}\Z")
 
 
+class CoverageProofError(ValueError):
+    """A validation failure with a fixed, path-free message safe for CI logs."""
+
+
 def _digest(path: Path) -> str:
     checksum = sha256()
     with path.open("rb") as stream:
@@ -55,9 +59,9 @@ def _bep_events(bep_path: Path):
             try:
                 event = json.loads(line)
             except ValueError as exc:
-                raise ValueError("build-event stream contains invalid JSON") from exc
+                raise CoverageProofError("build-event stream contains invalid JSON") from exc
             if not isinstance(event, dict):
-                raise ValueError("build-event stream contains a non-object event")
+                raise CoverageProofError("build-event stream contains a non-object event")
             yield event
 
 def _summary_entry(event: dict) -> tuple[tuple[str, str], str] | None:
@@ -72,9 +76,9 @@ def _summary_entry(event: dict) -> tuple[tuple[str, str], str] | None:
         or not _CONFIGURATION.fullmatch(identity[1])
         or not isinstance(status, str)
     ):
-        raise ValueError("build-event stream has an invalid test summary")
+        raise CoverageProofError("build-event stream has an invalid test summary")
     if status not in {"PASSED", "FLAKY", "FAILED", "TIMEOUT", "INCOMPLETE"}:
-        raise ValueError("build-event stream has an unknown test status")
+        raise CoverageProofError("build-event stream has an unknown test status")
     return identity, status
 
 
@@ -108,7 +112,7 @@ class _BepStatusCollector:
         if summary is not None:
             identity, status = summary
             if identity in self.summaries and self.summaries[identity] != status:
-                raise ValueError("build-event stream has conflicting test summaries")
+                raise CoverageProofError("build-event stream has conflicting test summaries")
             self.summaries[identity] = status
         skipped = _skipped_entry(event)
         if skipped is not None:
@@ -116,9 +120,9 @@ class _BepStatusCollector:
 
     def result(self) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
         if not self.finished_successfully or not self.saw_last_message or not self.summaries:
-            raise ValueError("build-event stream does not prove a complete successful test run")
+            raise CoverageProofError("build-event stream does not prove a complete successful test run")
         if any(status not in {"PASSED", "FLAKY"} for status in self.summaries.values()):
-            raise ValueError("build-event stream contains a failed or incomplete test")
+            raise CoverageProofError("build-event stream contains a failed or incomplete test")
         tests = [
             {"label": label, "configuration": config, "status": status}
             for (label, config), status in sorted(self.summaries.items())
@@ -141,7 +145,7 @@ def test_statuses(bep_path: Path) -> tuple[list[dict[str, str]], list[dict[str, 
 def _record_source(record: list[str]) -> str:
     sources = [line[3:].strip() for line in record if line.startswith("SF:")]
     if len(sources) != 1:
-        raise ValueError("filtered LCOV record must name one source file")
+        raise CoverageProofError("filtered LCOV record must name one source file")
     source = sources[0]
     path = Path(source)
     if (
@@ -149,7 +153,7 @@ def _record_source(record: list[str]) -> str:
         or ".." in path.parts
         or not re.fullmatch(r"donner/[A-Za-z0-9_./+\-]+", source)
     ):
-        raise ValueError("filtered LCOV contains a non-public source path")
+        raise CoverageProofError("filtered LCOV contains a non-public source path")
     return source
 
 
@@ -161,9 +165,9 @@ def _record_lines(record: list[str]) -> list[int]:
         try:
             line_number = int(line[3:].split(",", 1)[0])
         except ValueError as exc:
-            raise ValueError("filtered LCOV has an invalid line number") from exc
+            raise CoverageProofError("filtered LCOV has an invalid line number") from exc
         if line_number <= 0:
-            raise ValueError("filtered LCOV has an invalid line number")
+            raise CoverageProofError("filtered LCOV has an invalid line number")
         numbers.add(line_number)
     return sorted(numbers)
 
@@ -179,18 +183,18 @@ def _line_universe(report: Path) -> list[dict[str, object]]:
                 files.append({"source_file": _record_source(record), "lines": _record_lines(record)})
                 record = []
     if record:
-        raise ValueError("filtered LCOV ends with an incomplete record")
+        raise CoverageProofError("filtered LCOV ends with an incomplete record")
     if not files:
-        raise ValueError("filtered LCOV contains no source files")
+        raise CoverageProofError("filtered LCOV contains no source files")
     if len({entry["source_file"] for entry in files}) != len(files):
-        raise ValueError("filtered LCOV repeats a source file record")
+        raise CoverageProofError("filtered LCOV repeats a source file record")
     return sorted(files, key=lambda entry: entry["source_file"])
 
 
 def _file_coverage(metrics: LcovMetrics, universe: list[dict[str, object]]) -> list[dict[str, object]]:
     files = sorted(metrics.files, key=lambda file: file.source_file)
     if [file.source_file for file in files] != [entry["source_file"] for entry in universe]:
-        raise ValueError("filtered LCOV file counters do not match the public file universe")
+        raise CoverageProofError("filtered LCOV file counters do not match the public file universe")
     return [
         {
             "source_file": file.source_file,
@@ -216,17 +220,17 @@ def _selection_scope(
 ) -> tuple[list[str], str]:
     selected = patterns.split()
     if not selected or any(not _PATTERN.fullmatch(pattern) for pattern in selected):
-        raise ValueError("coverage target selection contains an invalid pattern")
+        raise CoverageProofError("coverage target selection contains an invalid pattern")
     if len(selected) != expected_pattern_count:
-        raise ValueError("coverage target selection count does not match its pattern list")
+        raise CoverageProofError("coverage target selection count does not match its pattern list")
     if not re.fullmatch(r"[a-z_]+", reason):
-        raise ValueError("coverage target selection has an invalid reason")
+        raise CoverageProofError("coverage target selection has an invalid reason")
     if not re.fullmatch(r"[A-Za-z0-9_./-]+", ref) or not _REVISION.fullmatch(revision):
-        raise ValueError("coverage run has an invalid source identity")
+        raise CoverageProofError("coverage run has an invalid source identity")
 
     on_main = ref == "refs/heads/main" and event in {"push", "workflow_dispatch"}
     if on_main and (reason != "non_pr" or selected != ["//donner/..."]):
-        raise ValueError("main coverage selected less than the complete product target tree")
+        raise CoverageProofError("main coverage selected less than the complete product target tree")
     return selected, "complete-main" if on_main else "partial-pr"
 
 
@@ -254,12 +258,12 @@ def make_proof(
     tests, skipped = test_statuses(bep)
     metrics = collect_lcov_metrics(report)
     if not metrics.files or not metrics.codecov_lines.total:
-        raise ValueError("filtered LCOV has no executable line universe")
+        raise CoverageProofError("filtered LCOV has no executable line universe")
     if (
         len(universe) != len(metrics.files)
         or sum(len(item["lines"]) for item in universe) != metrics.codecov_lines.total
     ):
-        raise ValueError("filtered LCOV universe does not match its coverage counters")
+        raise CoverageProofError("filtered LCOV universe does not match its coverage counters")
 
     return {
         "schema": 1,
@@ -325,6 +329,19 @@ def summary_markdown(proof: dict[str, object]) -> str:
     )
 
 
+def _io_failure_reason(error: OSError, args: argparse.Namespace) -> str:
+    filename = error.filename
+    if filename == str(args.bep):
+        return "build-event stream could not be read"
+    if filename == str(args.report):
+        return "filtered LCOV could not be read"
+    if filename in {str(args.output), str(args.output.parent)}:
+        return "proof output could not be written"
+    if args.step_summary is not None and filename == str(args.step_summary):
+        return "step summary could not be written"
+    return "coverage proof file I/O failed"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bep", type=Path, required=True)
@@ -354,8 +371,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.step_summary is not None:
             with args.step_summary.open("a", encoding="utf-8") as stream:
                 stream.write(summary_markdown(proof))
-    except (OSError, ValueError):
-        print("ERROR: coverage proof could not verify the run inputs", file=sys.stderr)
+    except (OSError, ValueError) as error:
+        if isinstance(error, CoverageProofError):
+            reason = str(error)
+        elif isinstance(error, OSError):
+            reason = _io_failure_reason(error, args)
+        else:
+            reason = "coverage data is malformed"
+        print(f"ERROR: coverage proof could not verify the run inputs: {reason}", file=sys.stderr)
         return 1
     return 0
 
