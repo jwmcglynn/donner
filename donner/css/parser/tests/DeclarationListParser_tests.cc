@@ -186,7 +186,8 @@ TEST(DeclarationListParser, BoundsAggregateInlineComponentValuesAndAtRules) {
     atRules += ";";
   }
   DeclarationListParser::SecurityStats atRuleStats;
-  (void)DeclarationListParser::Parse(atRules, &atRuleStats);
+  const auto parsedAtRules = DeclarationListParser::Parse(atRules, &atRuleStats);
+  EXPECT_THAT(parsedAtRules, testing::Not(testing::IsEmpty()));
   EXPECT_TRUE(atRuleStats.rejected);
   EXPECT_EQ(atRuleStats.componentValues, DeclarationListParser::kMaximumComponentValues);
 }
