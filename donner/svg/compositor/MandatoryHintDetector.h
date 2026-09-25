@@ -93,8 +93,11 @@ public:
   MandatoryHintDetector(const MandatoryHintDetector&) = delete;
   MandatoryHintDetector& operator=(const MandatoryHintDetector&) = delete;
 
+  /// Transfer held mandatory hints and their cleanup ownership.
   MandatoryHintDetector(MandatoryHintDetector&&) noexcept = default;
-  MandatoryHintDetector& operator=(MandatoryHintDetector&&) noexcept = default;
+  /// Replace this detector's hint ownership with another's.
+  /// @param other Detector whose hints are transferred.
+  MandatoryHintDetector& operator=(MandatoryHintDetector&& other) noexcept = default;
 
   /**
    * Walk all entities with `RenderingInstanceComponent`; publish a `Mandatory`

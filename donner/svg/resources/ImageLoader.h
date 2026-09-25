@@ -31,6 +31,7 @@ public:
    * document budget remain additional caps. This bounds synchronous work from tiny inputs.
    */
   static constexpr size_t kMaximumDecodedBytesPerInputByte = 4096;
+  /// Minimum decoded-byte allowance for small encoded image inputs.
   static constexpr size_t kMinimumDecodedImageAllowance = 1 * 1024 * 1024;
 
   /// Result type returned by \ref fromUri. Contains either decoded raster pixels, raw SVG content,
@@ -41,6 +42,10 @@ public:
    * Create a new image loader that uses the given resource loader to fetch external resources.
    *
    * @param resourceLoader Resource loader to use for fetching external resources.
+   * @param maximumResourceSize Maximum encoded bytes accepted from one resource.
+   * @param remainingResourceBytes Optional shared byte budget charged for encoded input and
+   * decoded raster output.
+   * @param maximumDecodedImageSize Maximum decoded RGBA bytes accepted for one image.
    */
   explicit ImageLoader(ResourceLoaderInterface& resourceLoader,
                        size_t maximumResourceSize = UrlLoader::kDefaultMaximumResourceSize,
