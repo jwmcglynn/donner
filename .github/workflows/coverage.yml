@@ -685,21 +685,34 @@ jobs:
           # then silently drops it from the build so the run produces an empty
           # report. So the cquery runs on the whole final list, always, and its
           # answer is handed to the same classifier call that judges kinds.
-          # Diagnostics: affected-label-kind.txt plus final-targets.txt name
+          # Diagnostics: final-label-kind.txt plus final-targets.txt name
           # exactly what was classified.
           # BEGIN coverage final-list decision (extracted by tools/coverage_selection_decision_tests.py)
           coverage_final_decision() {
             local final_file="$1"
-            local kinds_file="$2"
-            local scratch_dir="$3"
-            local diag_dir="$4"
-            local repo_dir="$5"
+            local scratch_dir="$2"
+            local diag_dir="$3"
+            local repo_dir="$4"
 
             local compat_file="$scratch_dir/host-compat.txt"
             local incompatible_file="$scratch_dir/host-incompatible.txt"
+            local final_kinds_file="$scratch_dir/final-label-kind.txt"
             : > "$incompatible_file"
             local labels
             labels="$(tr '\n' ' ' < "$final_file")"
+            # tests() can expand a test_suite into members absent from the earlier affected-set
+            # kind query. Classify the final runnable list itself, or missing kinds force an
+            # empty C++ coverage run for host-compatible analysis and scripting tests.
+            if ( cd "$repo_dir" && bazelisk query "set($labels)" \
+                --output=label_kind --keep_going \
+                ) > "$final_kinds_file" 2> "$diag_dir/final-kind-query.log"; then
+              cp "$final_kinds_file" "$diag_dir/final-label-kind.txt" || true
+            else
+              echo "Final rule-kind query failed; running coverage (guard intact)." >&2
+              cat "$diag_dir/final-kind-query.log" >&2 || true
+              echo run
+              return
+            fi
             if ( cd "$repo_dir" && bazelisk cquery "set($labels)" \
                 --output=starlark \
                 --starlark:expr='"{} {}".format(target.label, "HOST_INCOMPATIBLE" if "IncompatiblePlatformProvider" in providers(target) else "HOST_COMPATIBLE")' \
@@ -717,7 +730,7 @@ jobs:
 
             local decision
             if ! decision="$(python3 tools/coverage_instrumentable_targets.py \
-                --label-kind-file "$kinds_file" \
+                --label-kind-file "$final_kinds_file" \
                 --restrict-to-file "$final_file" \
                 --host-incompatible-file "$incompatible_file" \
                 2>> "$diag_dir/instrumentability.log")"; then
@@ -741,7 +754,7 @@ jobs:
           cp "$final_file" "$diagnostics_dir/final-targets.txt"
           if [[ "$kind_query_ok" == "true" ]]; then
             final_decision="$(coverage_final_decision \
-              "$final_file" "$label_kind_file" "$work_dir" "$diagnostics_dir" "$head_dir")"
+              "$final_file" "$work_dir" "$diagnostics_dir" "$head_dir")"
             cat "$diagnostics_dir/instrumentability.log" 2> /dev/null || true
             if [[ "$final_decision" == "skip" ]]; then
               echo "Final coverage target list has nothing host-instrumentable to measure; skipping PR coverage."

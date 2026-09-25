@@ -30,10 +30,9 @@ about the wrong set.
 
 These tests exercise the CONSOLIDATED decision as it exists in coverage.yml --
 the shell function is extracted from the workflow and run against the real
-classifier, with `bazelisk cquery` stubbed to return each incident's recorded
-compatibility answer. They also pin the shape that makes a fourth WRONG-SET
-sibling impossible: exactly one classifier call, exactly one cquery, both after
-every narrowing step.
+classifier, with `bazelisk query` and `cquery` stubbed to return each incident's
+final rule kinds and host compatibility. They pin one classifier call and one
+query of each kind, all after every narrowing step.
 """
 
 import os
@@ -53,7 +52,15 @@ _BEGIN = "# BEGIN coverage final-list decision"
 _END = "# END coverage final-list decision"
 
 _STUB_BAZELISK = """#!/bin/bash
-# Minimal `bazelisk` stand-in: the decision block only ever runs one cquery.
+# Minimal `bazelisk` stand-in: the decision block runs one query and one cquery.
+if [[ "${1:-}" == "query" ]]; then
+  if [[ "${STUB_QUERY_FAIL:-}" == "1" ]]; then
+    echo "stub: query failed" >&2
+    exit 1
+  fi
+  cat "$STUB_QUERY_OUTPUT"
+  exit 0
+fi
 if [[ "${1:-}" == "cquery" ]]; then
   if [[ "${STUB_CQUERY_FAIL:-}" == "1" ]]; then
     echo "stub: cquery failed" >&2
@@ -107,15 +114,21 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
         assert match is not None, "decision block markers not found in coverage.yml"
         return textwrap.dedent(match.group("body"))
 
-    def _decide(self, label_kinds, final_targets, host_compat, cquery_fails=False):
+    def _decide(
+        self, label_kinds, final_targets, host_compat, cquery_fails=False,
+        final_label_kinds=None, query_fails=False,
+    ):
         """Run the extracted decision block and return its verdict.
 
         Args:
-            label_kinds: `bazel query --output label_kind` lines for the
-                alias-resolved affected set.
+            label_kinds: `bazel query --output label_kind` fixture lines, used
+                as the final query answer unless final_label_kinds is given.
             final_targets: The final coverage target list, one label per entry.
             host_compat: Lines the host-compatibility cquery reports.
             cquery_fails: Make the stubbed cquery exit nonzero instead.
+            final_label_kinds: Override the final-list query answer to model
+                test-suite expansion beyond the earlier affected set.
+            query_fails: Make the final rule-kind query fail.
 
         Returns:
             The verdict word ("skip" or "run").
@@ -130,9 +143,11 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             diagnostics = root / "diagnostics"
             diagnostics.mkdir()
 
-            kinds_file = scratch / "affected-label-kind.txt"
+            kinds_file = root / "query-output.txt"
             kinds_file.write_text(
-                "".join(f"{line}\n" for line in label_kinds), encoding="utf-8"
+                "".join(f"{line}\n" for line in (
+                    label_kinds if final_label_kinds is None else final_label_kinds
+                )), encoding="utf-8"
             )
             final_file = scratch / "final-targets.txt"
             final_file.write_text(
@@ -147,7 +162,7 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             fixture.write_text(
                 "#!/bin/bash\nset -euo pipefail\n"
                 + self.decision
-                + '\ncoverage_final_decision "$1" "$2" "$3" "$4" "$5"\n',
+                + '\ncoverage_final_decision "$1" "$2" "$3" "$4"\n',
                 encoding="utf-8",
             )
             fixture.chmod(0o755)
@@ -155,16 +170,18 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             env = os.environ.copy()
             env["PATH"] = "%s:%s" % (self.bin_dir, env["PATH"])
             env["STUB_CQUERY_OUTPUT"] = str(compat_file)
+            env["STUB_QUERY_OUTPUT"] = str(kinds_file)
             env["FIXTURE_PYTHON"] = sys.executable
             if cquery_fails:
                 env["STUB_CQUERY_FAIL"] = "1"
+            if query_fails:
+                env["STUB_QUERY_FAIL"] = "1"
 
             result = subprocess.run(
                 [
                     "/bin/bash",
                     str(fixture),
                     str(final_file),
-                    str(kinds_file),
                     str(scratch),
                     str(diagnostics),
                     str(root),
@@ -423,7 +440,7 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
         self.assertEqual("run", verdict)
 
     def test_final_label_without_a_kind_line_keeps_the_coverage_run(self):
-        """`tests()` can name a test_suite member the kind query never saw."""
+        """A partial final kind query must keep the coverage run."""
         verdict = self._decide(
             label_kinds=["py_test rule //tools:filter_coverage_tests"],
             final_targets=[
@@ -436,6 +453,44 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             ],
         )
         self.assertEqual("run", verdict)
+
+    def test_suite_expansion_requeries_kinds_for_the_final_test_list(self):
+        """Expanded analysis guards were absent from the earlier kind query.
+
+        The PR #1540 coverage run selected host-compatible Python/shell tests
+        plus guards from `tests(editor_product_dependency_tests)`. The earlier
+        affected-set kind query had no lines for 39 of those expanded tests, so
+        the classifier ran coverage, which had zero C++ executable lines.
+        """
+        suite = "//donner/editor/tests:editor_product_dependency_tests"
+        guard = "//donner/editor/tests:editor_guard_accepts_full_text_test"
+        audit = "//donner/editor/wasm:wasm_dependency_audit_test"
+        self.assertEqual(
+            "skip",
+            self._decide(
+                label_kinds=[f"test_suite rule {suite}", f"sh_test rule {audit}"],
+                final_targets=[guard, audit],
+                final_label_kinds=[
+                    f"_guard_accepts_full_text_test rule {guard}",
+                    f"sh_test rule {audit}",
+                ],
+                host_compat=[
+                    f"@@{guard} HOST_COMPATIBLE",
+                    f"@@{audit} HOST_COMPATIBLE",
+                ],
+            ),
+        )
+
+    def test_final_kind_query_failure_keeps_the_coverage_run(self):
+        self.assertEqual(
+            "run",
+            self._decide(
+                label_kinds=["py_test rule //tools:filter_coverage_tests"],
+                final_targets=["//tools:filter_coverage_tests"],
+                host_compat=["@@//tools:filter_coverage_tests HOST_COMPATIBLE"],
+                query_fails=True,
+            ),
+        )
 
     # ---- workflow shape: one decision, after every narrowing step -------
 
@@ -452,6 +507,7 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             self.workflow.count("bazelisk cquery"),
             "coverage.yml runs more than one host-compatibility cquery",
         )
+        self.assertEqual(1, self.decision.count("bazelisk query"))
 
     def test_the_decision_names_the_final_list_and_the_cquery_answer(self):
         """Both criteria, one call, on the narrowed list."""
