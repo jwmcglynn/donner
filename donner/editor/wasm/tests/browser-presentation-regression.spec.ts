@@ -821,6 +821,8 @@ async function diagnosePresentedCanvas(
 async function openBasicShapes(page: Page): Promise<{
   canvasBounds: { x: number; y: number; width: number; height: number };
   documentClip: { x: number; y: number; width: number; height: number };
+  baselinePng: Buffer;
+  blueRect: PixelBounds;
 }> {
   const editorCanvas = page.locator("canvas#canvas");
   const canvasBounds = await editorCanvas.boundingBox();
@@ -877,6 +879,8 @@ async function openBasicShapes(page: Page): Promise<{
   // Shapes blue rounded rectangle inside the render pane.
   // Last pixel count the probe measured, reported below on both paths.
   let lastBluePixels = -1;
+  let baselinePng: Buffer | null = null;
+  let blueRect: PixelBounds | null = null;
   try {
     await expect
       .poll(
@@ -888,6 +892,10 @@ async function openBasicShapes(page: Page): Promise<{
             maxX: documentClip.width,
             maxY: documentClip.height,
           });
+          if (bounds !== null) {
+            baselinePng = shot;
+            blueRect = bounds;
+          }
           lastBluePixels = bounds === null ? 0 : bounds.pixels;
           return lastBluePixels;
         },
@@ -927,7 +935,10 @@ async function openBasicShapes(page: Page): Promise<{
     );
   }
 
-  return { canvasBounds, documentClip };
+  if (baselinePng === null || blueRect === null) {
+    throw new Error("Basic Shapes never produced a verified blue artboard capture");
+  }
+  return { canvasBounds, documentClip, baselinePng, blueRect };
 }
 
 // Drive the same overlay state transition as the View menu without making the
@@ -1044,7 +1055,9 @@ test("browser overlay control stays disabled after a normal editor frame", async
 
 test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ page }) => {
   const failures = await openEditor(page, "overlay");
-  const { canvasBounds, documentClip } = await openBasicShapes(page);
+  const { canvasBounds, documentClip, baselinePng: baseline, blueRect } = await openBasicShapes(
+    page,
+  );
   const rejectedControlInputs = await page.evaluate(() => {
     const control = window.Module?._donner_set_overlay_state;
     return [
@@ -1053,24 +1066,12 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     ];
   });
   expect(rejectedControlInputs).toEqual([0, 0]);
-  const baseline = await page.screenshot({ clip: documentClip });
   await attachEvidenceFile("overlay-baseline", baseline, "image/png");
   // Since the single-canvas architecture the document has no element of its own to measure, so the
   // document-space mapping is recovered from the document's own pixels: the
   // Basic Shapes blue rounded rectangle spans (32,32)-(212,152) in document
   // units. Both the probe points below and the "restored baseline" comparison
   // window are derived from it, so neither can drift onto render-pane chrome.
-  const blueRect = readEditorPixelBoundsFromPng(baseline, "basic-blue", documentClip, {
-    minX: 0,
-    minY: 0,
-    maxX: documentClip.width,
-    maxY: documentClip.height,
-  });
-  expect(blueRect, "the Basic Shapes blue rectangle was not visible in the render pane").not
-    .toBeNull();
-  if (blueRect === null) {
-    throw new Error("the Basic Shapes blue rectangle was not visible in the render pane");
-  }
   const documentScale =
     ((blueRect.maxX - blueRect.minX) / 180 + (blueRect.maxY - blueRect.minY) / 120) * 0.5;
   expect(documentScale, "the recovered document scale is degenerate").toBeGreaterThan(0.05);
@@ -1303,29 +1304,10 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   // forward.
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const failures = await openEditor(page);
-  const { documentClip: probeRegion } = await openBasicShapes(page);
-  let baselineBluePixels = 0;
-  await expect
-    .poll(async () => {
-      baselineBluePixels = (await readEditorResizePixelBounds(page, probeRegion)).blue?.pixels ?? 0;
-      return baselineBluePixels;
-    }, {
-      message: "expected the initial Basic Shapes render before starting the drag",
-      timeout: scaledMs(2_000),
-      intervals: [250, 400, 600],
-    })
+  const { documentClip: probeRegion, blueRect: blueCss } = await openBasicShapes(page);
+  const baselineBluePixels = blueCss.pixels;
+  expect(baselineBluePixels, "expected the initial Basic Shapes render before starting the drag")
     .toBeGreaterThan(500);
-
-  const blueCss = readEditorPixelBoundsFromPng(
-    await page.screenshot({ clip: probeRegion }),
-    "basic-blue",
-    probeRegion,
-    { minX: 0, minY: 0, maxX: probeRegion.width, maxY: probeRegion.height },
-  );
-  expect(blueCss, "the drag press needs a visible blue rectangle").not.toBeNull();
-  if (blueCss === null) {
-    return;
-  }
   const dragStart = {
     x: probeRegion.x + (blueCss.minX + blueCss.maxX) / 2,
     y: probeRegion.y + (blueCss.minY + blueCss.maxY) / 2,

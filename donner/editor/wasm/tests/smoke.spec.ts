@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import {
   type CanvasColorStats,
   findElementColoredPixel,
+  type PixelBounds,
   readCanvasColorStats,
   readEditorPixelBounds,
   readEditorPixelBoundsFromPng,
@@ -1542,15 +1543,22 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
       Math.min(viewport.documentY + viewport.documentHeight, viewport.paneY + viewport.paneHeight)
       - Math.max(viewport.documentY, viewport.paneY),
   };
-  const blueCss = readEditorPixelBoundsFromPng(
-    await page.screenshot({ clip: probeRegion }),
-    "basic-blue",
-    probeRegion,
-    { minX: 0, minY: 0, maxX: probeRegion.width, maxY: probeRegion.height },
-  );
-  expect(blueCss, "the resize target must be visibly blue").not.toBeNull();
+  let blueCss: PixelBounds | null = null;
+  await expect.poll(async () => {
+    blueCss = readEditorPixelBoundsFromPng(
+      await page.screenshot({ clip: probeRegion }),
+      "basic-blue",
+      probeRegion,
+      { minX: 0, minY: 0, maxX: probeRegion.width, maxY: probeRegion.height },
+    );
+    return blueCss?.pixels ?? 0;
+  }, {
+    message: "the resize target must be visibly blue in the artboard capture",
+    timeout: scaledMs(5_000),
+    intervals: [250, 400, 600],
+  }).toBeGreaterThan(500);
   if (blueCss === null) {
-    return;
+    throw new Error("resize target disappeared after a verified blue artboard capture");
   }
   const blueRectCenter = {
     x: probeRegion.x + (blueCss.minX + blueCss.maxX) / 2,
