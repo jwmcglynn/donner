@@ -259,18 +259,6 @@ web_package(
 
 editor_wasm_geode_transitioned_target(
     name = "_wasm_web_package_for_serve",
-    dep = ":wasm_web_package",
-    tags = [
-        "manual",
-        "wasm",
-    ],
-    visibility = ["//donner/editor/wasm/tests:__pkg__"],
-)
-
-# The same package with the browser backend selected for headless work, which the browser tests
-# serve beside the production one until the browser backend is the default.
-editor_wasm_geode_transitioned_target(
-    name = "_wasm_web_package_browser_backend_for_serve",
     browser_backend = True,
     dep = ":wasm_web_package",
     tags = [
@@ -284,9 +272,6 @@ configured_dependency_audit_test(
     name = "wasm_dependency_audit_test",
     size = "small",
     forbidden = [
-        # The browser backend links only into the package built with it selected, below.
-        "//donner/gpu/browser:browser_device",
-        "//donner/gpu/browser:emscripten_browser_bridge",
         "//donner/svg/renderer:renderer_tiny_skia",
         "//third_party/google_fonts:google_fonts_data",
         "@tracy//:tracy_client",
@@ -297,6 +282,8 @@ configured_dependency_audit_test(
     ],
     required = [
         "//donner/editor/wasm:_editor_wasm_binary",
+        "//donner/gpu/browser:browser_device",
+        "//donner/gpu/browser:emscripten_browser_bridge",
         "//donner/svg/renderer:renderer_geode",
         "//third_party/google_fonts:google_fonts_catalog_inc",
         "//third_party/public-sans:public-sans",
@@ -306,16 +293,18 @@ configured_dependency_audit_test(
     target = ":_wasm_web_package_for_serve",
 )
 
-# The package that selects the browser backend for headless work links the backend and its bridge.
+# The shipped package uses the editor-wasm config rather than the serve target's transition.
+# Run this manual audit with --config=editor-wasm so that CI checks that independent root too.
 configured_dependency_audit_test(
-    name = "wasm_browser_backend_dependency_audit_test",
+    name = "wasm_shipped_browser_dependency_audit_test",
     size = "small",
     required = [
         "//donner/editor/wasm:_editor_wasm_binary",
         "//donner/gpu/browser:browser_device",
         "//donner/gpu/browser:emscripten_browser_bridge",
     ],
-    target = ":_wasm_web_package_browser_backend_for_serve",
+    tags = ["manual"],
+    target = ":wasm_web_package",
 )
 
 genquery(
@@ -384,6 +373,7 @@ editor_wasm_config_probe(
 editor_wasm_geode_transitioned_target(
     name = "_editor_wasm_geode_transition_test_data",
     testonly = True,
+    browser_backend = True,
     dep = ":_editor_wasm_geode_transition_probe",
     visibility = ["//visibility:private"],
 )

@@ -597,8 +597,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             1,
             prefetch.count("if: steps.editor-wasm-prefetch.outcome == 'failure'"),
         )
-        self.assertEqual(3, build.count("bazelisk test"))
+        self.assertEqual(4, build.count("bazelisk test"))
         self.assertNotIn("continue-on-error", build)
+        self.assertIn("//tools/ci:editor_wasm_shipped_browser_audit", build)
         self.assertIn("//tools/ci:editor_wasm_size_tests", build)
 
     def test_editor_wasm_pull_requests_link_the_browser_gpu_bridge(self):

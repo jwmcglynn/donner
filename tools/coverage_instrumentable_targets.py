@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Decide whether an affected-target set contains instrumentable C/C++ code.
 
-Reads the output of `bazel query --output label_kind` for the affected-target
-set (as produced by the coverage lane's bazel-diff step, with aliases already
-resolved to their `actual` targets) and reports whether any affected target is
-an instrumentable C/C++ compilation unit.
+Reads `bazel query --output label_kind` for the final runnable affected-target
+list, after test-suite expansion, tag filtering and variant trimming. Reports
+whether any target is an instrumentable C/C++ compilation unit.
 
 The coverage lane uses this to skip PR coverage when a change's affected targets
 are all non-instrumentable (docs, shell/Python/JavaScript tooling, filegroups, build
@@ -215,16 +214,14 @@ def restrict_lines(
     """Select the label_kind lines for exactly `labels`, in `labels` order.
 
     Args:
-        lines: Raw lines from `bazel query --output label_kind` for a set that
-            is a superset of `labels` (the coverage lane's alias-resolved
-            affected set).
+        lines: Raw lines from `bazel query --output label_kind` for the final
+            runnable list. A partial answer is handled below.
         labels: The final coverage target list, one label per entry.
 
     Returns:
         (selected lines, labels that had no kind line). A non-empty second
-        element means the caller cannot decide on this set: `tests()` expansion
-        can name a test_suite member that was never in the queried set, and an
-        unclassified target must keep the coverage run rather than skip it.
+        element means the caller cannot decide on this set: a partial kind
+        query must keep the coverage run rather than skip it.
     """
     by_label: dict[str, str] = {}
     for raw_line in lines:

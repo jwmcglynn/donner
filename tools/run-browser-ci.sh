@@ -154,6 +154,7 @@ fi
 expected_wasm_sha256="$(sha256_of "${pkg_dir}/editor.wasm")"
 log "Serving copy at ${pkg_dir}"
 echo "editor.wasm sha256: ${expected_wasm_sha256}"
+export DONNER_WASM_EXPECTED_HEADLESS_BACKEND=browser
 
 # ---------------------------------------------------------------------------
 # 3. Serve the copy

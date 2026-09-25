@@ -121,6 +121,7 @@ def _editor_wasm_config_probe_impl(ctx):
         ),
         "editor_wasm_enabled={}".format(ctx.attr._editor_wasm_enabled[BuildSettingInfo].value),
         "geode_enabled={}".format(ctx.attr._geode_enabled[BuildSettingInfo].value),
+        "browser_backend={}".format(ctx.attr._browser_backend[BuildSettingInfo].value),
         "linkopt_pthread={}".format("-pthread" in ctx.fragments.cpp.linkopts),
         "linkopt_oz={}".format("-Oz" in ctx.fragments.cpp.linkopts),
         "renderer_backend={}".format(ctx.attr._renderer_backend[BuildSettingInfo].value),
@@ -141,6 +142,7 @@ editor_wasm_config_probe = rule(
         ),
         "_editor_wasm_enabled": attr.label(default = "//donner/editor/wasm:enable_wasm"),
         "_geode_enabled": attr.label(default = "//donner/svg/renderer/geode:enable_geode"),
+        "_browser_backend": attr.label(default = "//donner/svg/renderer/geode:browser_backend"),
         "_renderer_backend": attr.label(default = "//donner/svg/renderer:renderer_backend"),
         "_renderer_wasm_enabled": attr.label(
             default = "//donner/svg/renderer/wasm:enable_wasm",

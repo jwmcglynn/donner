@@ -232,16 +232,12 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   assert.deepEqual(
     lanes.map((lane) => /name = "([^"]+)"/.exec(lane)?.[1]).sort(),
     [
-      "boot_presentation_browser_backend_test",
       "boot_presentation_test",
-      "browser_presentation_regression_browser_backend_test",
       "browser_presentation_regression_test",
       "browser_responsiveness_perf_test",
-      "catalog_font_loading_browser_backend_test",
       "catalog_font_loading_test",
       "chromium_composited_invariants_test",
       "chromium_remote_smoke",
-      "chromium_remote_smoke_browser_backend",
       "firefox_composited_invariants_test",
       "font_reference_probe",
       "standalone_geode_browser_renderer_test",
@@ -251,13 +247,11 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   for (const lane of lanes) {
     assertBrowserLane(lane);
   }
-  // A browser-backend lane serves only the package that selects that backend, and the production
-  // package serves every other lane, so neither can stand in for the other. One of them also runs
-  // the check that the worker selected the browser backend at all.
-  const browserBackendPackage = "//donner/editor/wasm:_wasm_web_package_browser_backend_for_serve";
+  // Every editor lane serves the one production browser-selected package. The standalone
+  // renderer has its own page and package, verified separately below.
+  const editorPackage = "//donner/editor/wasm:_wasm_web_package_for_serve";
   for (const lane of lanes) {
     const laneName = /name = "([^"]+)"/.exec(lane)?.[1];
-    const browserBackendLane = /browser_backend/.test(laneName);
     if (laneName === "standalone_geode_browser_renderer_test") {
       assert.ok(
         lane.includes("\"//donner/svg/renderer/wasm:_geode_browser_test_package_for_playwright\""),
@@ -283,26 +277,18 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
       );
       continue;
     }
-    assert.equal(
-      lane.includes(`"${browserBackendPackage}"`),
-      browserBackendLane,
-      `${laneName} must serve the browser-backend package exactly when it is a browser-backend lane`,
-    );
-    if (browserBackendLane) {
-      assert.ok(
-        !lane.includes(`"//donner/editor/wasm:_wasm_web_package_for_serve"`),
-        `${laneName} must not serve the production package`,
-      );
+    if (laneName === "font_reference_probe") {
+      continue;
     }
-    // The selection check reads which backend to expect from its lane, so only a lane serving the
-    // browser-backend package may expect that one, and every other lane checks it was not chosen.
+    assert.ok(lane.includes(`"${editorPackage}"`), `${laneName} must serve the editor package`);
+    // The boot lane checks both UI canvas and raster worker selection.
     assert.equal(
       lane.includes(`"DONNER_WASM_EXPECTED_HEADLESS_BACKEND": "browser"`),
-      browserBackendLane && lane.includes("$(rootpath :browser-backend-selection.spec.ts)"),
-      `${laneName} must expect the browser backend exactly when it checks the browser-backend package`,
+      lane.includes("$(rootpath :browser-backend-selection.spec.ts)"),
+      `${laneName} must expect the browser backend exactly when it checks package selection`,
     );
   }
-  for (const laneName of ["boot_presentation_test", "boot_presentation_browser_backend_test"]) {
+  for (const laneName of ["boot_presentation_test"]) {
     const lane = lanes.find((body) => body.includes(`name = "${laneName}"`));
     assert.ok(
       lane?.includes("$(rootpath :browser-backend-selection.spec.ts)"),
@@ -318,9 +304,10 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   const editorBuildFile = readFileSync(path.join(testDirectory, "..", "BUILD.bazel"), "utf8");
   assert.match(
     editorBuildFile,
-    /editor_wasm_geode_transitioned_target\([\s\S]*?name = "_wasm_web_package_for_serve"[\s\S]*?visibility = \["\/\/donner\/editor\/wasm\/tests:__pkg__"\]/,
-    "only the browser-test package should be able to consume the transitioned web package",
+    /editor_wasm_geode_transitioned_target\([\s\S]*?name = "_wasm_web_package_for_serve"[\s\S]*?browser_backend = True[\s\S]*?visibility = \["\/\/donner\/editor\/wasm\/tests:__pkg__"\]/,
+    "the served production package must select the browser backend",
   );
+  assert.doesNotMatch(editorBuildFile, /_wasm_web_package_browser_backend_for_serve/);
   assert.match(
     buildFile,
     /"PLAYWRIGHT_BROWSERS_PATH": "\$\(rootpath @playwright\/\/:chromium\)\/\.\.\/"/,
@@ -522,6 +509,7 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   // The suites scale their timing bounds by kCiTimeScale when CI is set, so a
   // local run measures CI's thresholds only if the script exports it.
   assert.match(normalizedBrowserCi, /export CI="\$\{CI:-true\}"/);
+  assert.match(normalizedBrowserCi, /export DONNER_WASM_EXPECTED_HEADLESS_BACKEND=browser/);
   // Lanes share one Playwright output directory and Playwright empties it on
   // start, so the job can only keep a failing lane's evidence if the script
   // archives each lane's results per lane and the workflow uploads THAT.
