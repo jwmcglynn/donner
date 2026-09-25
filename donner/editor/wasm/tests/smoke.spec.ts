@@ -5,9 +5,7 @@ import {
   findElementColoredPixel,
   type PixelBounds,
   readCanvasColorStats,
-  readEditorPixelBounds,
   readEditorPixelBoundsFromPng,
-  readEditorResizePixelBounds,
   readElementColorStats,
   readTextStyleGlyphStats,
 } from "./canvas-color-stats";
@@ -1543,14 +1541,49 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
       Math.min(viewport.documentY + viewport.documentHeight, viewport.paneY + viewport.paneHeight)
       - Math.max(viewport.documentY, viewport.paneY),
   };
+  // Gecko can return a blank clipped screenshot of the transferred canvas after an otherwise
+  // valid presentation. Read the full canvas, then inspect only the published artboard. Keep
+  // coordinates relative to probeRegion so the pointer and resize comparisons below stay exact.
+  const artboardInCapture = {
+    minX: probeRegion.x - editorBounds.x,
+    minY: probeRegion.y - editorBounds.y,
+    maxX: probeRegion.x + probeRegion.width - editorBounds.x,
+    maxY: probeRegion.y + probeRegion.height - editorBounds.y,
+  };
+  const toArtboard = (pixels: PixelBounds | null): PixelBounds | null =>
+    pixels === null ? null : {
+      minX: pixels.minX - artboardInCapture.minX,
+      minY: pixels.minY - artboardInCapture.minY,
+      maxX: pixels.maxX - artboardInCapture.minX,
+      maxY: pixels.maxY - artboardInCapture.minY,
+      pixels: pixels.pixels,
+    };
+  const readResizePixels = async () => {
+    const shot = await page.screenshot({ clip: editorBounds });
+    const blue = readEditorPixelBoundsFromPng(
+      shot,
+      "basic-blue",
+      editorBounds,
+      artboardInCapture,
+    );
+    const margin = 32;
+    const tealSearch = blue === null ? artboardInCapture : {
+      minX: Math.max(artboardInCapture.minX, blue.minX - margin),
+      minY: Math.max(artboardInCapture.minY, blue.minY - margin),
+      maxX: Math.min(artboardInCapture.maxX, blue.maxX + margin),
+      maxY: Math.min(artboardInCapture.maxY, blue.maxY + margin),
+    };
+    const teal = readEditorPixelBoundsFromPng(
+      shot,
+      "selection-teal",
+      editorBounds,
+      tealSearch,
+    );
+    return { blue: toArtboard(blue), teal: toArtboard(teal) };
+  };
   let blueCss: PixelBounds | null = null;
   await expect.poll(async () => {
-    blueCss = readEditorPixelBoundsFromPng(
-      await page.screenshot({ clip: probeRegion }),
-      "basic-blue",
-      probeRegion,
-      { minX: 0, minY: 0, maxX: probeRegion.width, maxY: probeRegion.height },
-    );
+    blueCss = (await readResizePixels()).blue;
     return blueCss?.pixels ?? 0;
   }, {
     message: "the resize target must be visibly blue in the artboard capture",
@@ -1569,17 +1602,17 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     y: probeRegion.y + blueCss.maxY + 1,
   };
   await page.mouse.click(blueRectCenter.x, blueRectCenter.y);
-  await expect
-    .poll(
-      async () => (await readEditorPixelBounds(page, probeRegion, "selection-teal"))?.pixels || 0,
-      {
-        timeout: scaledMs(5_000),
-        intervals: [250, 400, 600],
-      },
-    )
-    .toBeGreaterThan(50);
-
-  const initialPixels = await readEditorResizePixelBounds(page, probeRegion);
+  // Gecko can also hand back one empty capture after selection. Require blue and teal from the
+  // same verified image before using its bounds as the resize baseline.
+  let initialPixels = await readResizePixels();
+  await expect.poll(async () => {
+    initialPixels = await readResizePixels();
+    return (initialPixels.blue?.pixels ?? 0) > 500 && (initialPixels.teal?.pixels ?? 0) > 50;
+  }, {
+    message: "the selected resize target and outline must share a visible artboard capture",
+    timeout: scaledMs(5_000),
+    intervals: [250, 400, 600],
+  }).toBe(true);
   expect(initialPixels.blue).not.toBeNull();
   if (initialPixels.blue === null) {
     return;
@@ -1619,7 +1652,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
 
   await expect
     .poll(async () => {
-      const { blue, teal } = await readEditorResizePixelBounds(page, probeRegion);
+      const { blue, teal } = await readResizePixels();
       if (blue === null || teal === null) {
         return false;
       }

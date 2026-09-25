@@ -4169,41 +4169,86 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
 
   tests::BitmapGoldenCompareParams signalParams = tests::PixelmatchIdentityParams();
   signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
-  std::optional<svg::RendererBitmap> previousHeld;
-  int heldTransitions = 0;
   bool activeDrag = false;
   bool wrongActiveDragEntity = false;
-  bool versionAdvanced = false;
   int requestsPosted = 0;
   for (int move = 1; move <= 24; ++move) {
-    const bool capture = move % 8 == 0;
-    const svg::RendererBitmap held = frame(*hitPoint + Vector2d(move * 2.0, 0.0), true, capture);
+    (void)frame(*hitPoint + Vector2d(move * 0.5, 0.0), true, false);
     const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
     if (status.activeDragPreview.has_value()) {
       activeDrag = true;
       wrongActiveDragEntity |= status.activeDragPreview->entity != targetEntity;
     }
-    versionAdvanced |= status.displayedDocVersion > displayedBefore;
     requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
-    if (capture) {
-      const svg::RendererBitmap heldCrop =
-          CropDocumentRect(held, viewport, window.windowSize(), crop);
-      ASSERT_FALSE(heldCrop.empty());
-      int changed = 0;
-      tests::CompareBitmapToBitmap(heldCrop, beforeCrop,
-                                   std::string(id) + "_retina_held_" + std::to_string(move),
-                                   signalParams, &changed);
-      if (previousHeld.has_value()) {
-        int between = 0;
-        tests::CompareBitmapToBitmap(heldCrop, *previousHeld,
-                                     std::string(id) + "_retina_successive_" + std::to_string(move),
-                                     signalParams, &between);
-        heldTransitions += between > 0 ? 1 : 0;
-      }
-      previousHeld = heldCrop;
-    }
     std::this_thread::sleep_for(std::chrono::milliseconds(3));
   }
+  std::ostringstream heldDiagnostics;
+  const auto awaitHeldPixels = [&](double dx, std::uint64_t minimumVersion,
+                                   const svg::RendererBitmap& prior,
+                                   std::string_view phase) -> std::optional<svg::RendererBitmap> {
+    const Vector2d pointer = *hitPoint + Vector2d(dx, 0.0);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    for (int tick = 0; tick < 40 && std::chrono::steady_clock::now() < deadline; ++tick) {
+      (void)frame(pointer, true, false);
+      requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
+      const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+      if (status.activeDragPreview.has_value()) {
+        activeDrag = true;
+        wrongActiveDragEntity |= status.activeDragPreview->entity != targetEntity;
+      }
+      const std::uint64_t currentVersion = app.document().currentFrameVersion();
+      if (currentVersion <= minimumVersion || status.displayedDocVersion < currentVersion) {
+        (void)shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline);
+        continue;
+      }
+      const svg::RendererBitmap held = frame(pointer, true, true);
+      requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
+      const LayerInspectorStatusReadback capturedStatus = shell.layerInspectorStatusForReadback();
+      const svg::RendererBitmap heldCrop =
+          CropDocumentRect(held, viewport, window.windowSize(), crop);
+      int baselinePixels = -1;
+      int successivePixels = -1;
+      if (!heldCrop.empty()) {
+        const std::string label =
+            std::string(id) + "_" + std::string(phase) + "_" + std::to_string(tick);
+        tests::CompareBitmapToBitmap(heldCrop, beforeCrop, label + "_baseline", signalParams,
+                                     &baselinePixels);
+        tests::CompareBitmapToBitmap(heldCrop, prior, label + "_successive", signalParams,
+                                     &successivePixels);
+      }
+      heldDiagnostics << "\n  phase=" << phase << " capture=" << tick
+                      << " current=" << app.document().currentFrameVersion()
+                      << " displayed=" << capturedStatus.displayedDocVersion << " translationX="
+                      << (capturedStatus.activeDragPreview.has_value()
+                              ? capturedStatus.activeDragPreview->translation.x
+                              : std::numeric_limits<double>::quiet_NaN())
+                      << " baselinePixels=" << baselinePixels
+                      << " successivePixels=" << successivePixels;
+      if (successivePixels > 0 && capturedStatus.activeDragPreview.has_value() &&
+          capturedStatus.activeDragPreview->entity == targetEntity &&
+          std::abs(capturedStatus.activeDragPreview->translation.x - dx) < 0.5) {
+        return heldCrop;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return std::nullopt;
+  };
+  // The crown is clipped to the unmoved crystal silhouette. Large translations move it entirely
+  // outside that clip, making two correctly rendered held frames identical; keep both probes
+  // within the visible clip so pixel movement is a meaningful presentation oracle.
+  const auto firstHeld = awaitHeldPixels(12.0, displayedBefore, beforeCrop, "first_held");
+  ASSERT_TRUE(firstHeld.has_value())
+      << "The first held position never reached the canvas before mouse-up; posted="
+      << requestsPosted << " busy=" << EditorShellTestAccess::RendererBusy(shell)
+      << heldDiagnostics.str();
+  const std::uint64_t firstVersion = app.document().currentFrameVersion();
+  (void)frame(*hitPoint + Vector2d(20.0, 0.0), true, false);
+  requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
+  const auto secondHeld = awaitHeldPixels(20.0, firstVersion, *firstHeld, "second_held");
+  ASSERT_TRUE(secondHeld.has_value())
+      << "The second held position never produced distinct canvas pixels before mouse-up; "
+      << "posted=" << requestsPosted << " busy=" << EditorShellTestAccess::RendererBusy(shell)
+      << heldDiagnostics.str();
   ASSERT_TRUE(app.selectedElement().has_value());
   EXPECT_EQ(app.selectedElement()->id(), id)
       << "chosen hitPoint=" << *hitPoint << " center=" << center << " viewportAfter="
@@ -4211,14 +4256,7 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
   EXPECT_TRUE(activeDrag) << "A direct canvas press did not begin the selected shape drag";
   EXPECT_FALSE(wrongActiveDragEntity) << "The held native gesture dragged another Geode element";
   EXPECT_GT(requestsPosted, 0) << "No raster request was posted during the held gesture";
-  EXPECT_TRUE(versionAdvanced) << "No worker frame was presented during the held drag; posted="
-                               << requestsPosted
-                               << " busy=" << EditorShellTestAccess::RendererBusy(shell);
-  EXPECT_GT(heldTransitions, 0)
-      << "Retina canvas pixels did not follow continued movement before release; posted="
-      << requestsPosted << " current=" << app.document().currentFrameVersion()
-      << " displayed=" << EditorShellTestAccess::DisplayedDocVersion(shell);
-  (void)frame(*hitPoint + Vector2d(48.0, 0.0), false, false);
+  (void)frame(*hitPoint + Vector2d(20.0, 0.0), false, false);
 }
 
 TEST(EditorShellTest, GeodeCrownColdDirectRetinaDragPresentsBeforeMouseUp) {
