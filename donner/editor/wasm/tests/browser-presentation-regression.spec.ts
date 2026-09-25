@@ -824,6 +824,7 @@ async function diagnosePresentedCanvas(
 async function openBasicShapes(page: Page): Promise<{
   canvasBounds: { x: number; y: number; width: number; height: number };
   documentClip: { x: number; y: number; width: number; height: number };
+  captureClip: { x: number; y: number; width: number; height: number };
   baselinePng: Buffer;
   blueRect: PixelBounds;
 }> {
@@ -872,6 +873,18 @@ async function openBasicShapes(page: Page): Promise<{
   // The source pane can collapse at the Firefox compatibility viewport, moving the document
   // hundreds of CSS pixels left. Probe the actual published artboard instead of a 1600px layout.
   const documentClip = presentedDocumentRegion(await readViewportStats(page));
+  // Gecko intermittently returns an empty image for a clipped screenshot of the transferred
+  // WebGPU canvas even after an accepted presentation. Capture the whole canvas there, then
+  // search only the published document rectangle; other UI pixels cannot satisfy the blue probe.
+  const captureClip = page.context().browser()?.browserType().name() === "firefox"
+    ? canvasBounds
+    : documentClip;
+  const documentSearchBounds = {
+    minX: documentClip.x - captureClip.x,
+    minY: documentClip.y - captureClip.y,
+    maxX: documentClip.x + documentClip.width - captureClip.x,
+    maxY: documentClip.y + documentClip.height - captureClip.y,
+  };
   // A completed worker result is not yet a presented document. The counter
   // above advances when the app thread polls the raster off the worker, at
   // least one UI frame before that frame reaches the browser composite - and
@@ -888,13 +901,13 @@ async function openBasicShapes(page: Page): Promise<{
     await expect
       .poll(
         async () => {
-          const shot = await page.screenshot({ clip: documentClip });
-          const bounds = readEditorPixelBoundsFromPng(shot, "basic-blue", documentClip, {
-            minX: 0,
-            minY: 0,
-            maxX: documentClip.width,
-            maxY: documentClip.height,
-          });
+          const shot = await page.screenshot({ clip: captureClip });
+          const bounds = readEditorPixelBoundsFromPng(
+            shot,
+            "basic-blue",
+            captureClip,
+            documentSearchBounds,
+          );
           if (bounds !== null) {
             baselinePng = shot;
             blueRect = bounds;
@@ -941,7 +954,7 @@ async function openBasicShapes(page: Page): Promise<{
   if (baselinePng === null || blueRect === null) {
     throw new Error("Basic Shapes never produced a verified blue artboard capture");
   }
-  return { canvasBounds, documentClip, baselinePng, blueRect };
+  return { canvasBounds, documentClip, captureClip, baselinePng, blueRect };
 }
 
 // Drive the same overlay state transition as the View menu without making the
@@ -1058,9 +1071,10 @@ test("browser overlay control stays disabled after a normal editor frame", async
 
 test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ page }) => {
   const failures = await openEditor(page, "overlay");
-  const { canvasBounds, documentClip, baselinePng: baseline, blueRect } = await openBasicShapes(
-    page,
-  );
+  const { canvasBounds, captureClip: documentClip, baselinePng: baseline, blueRect } =
+    await openBasicShapes(
+      page,
+    );
   const rejectedControlInputs = await page.evaluate(() => {
     const control = window.Module?._donner_set_overlay_state;
     return [
@@ -1318,13 +1332,13 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   // forward.
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const failures = await openEditor(page);
-  const { documentClip: probeRegion, blueRect: blueCss } = await openBasicShapes(page);
+  const { documentClip: probeRegion, captureClip, blueRect: blueCss } = await openBasicShapes(page);
   const baselineBluePixels = blueCss.pixels;
   expect(baselineBluePixels, "expected the initial Basic Shapes render before starting the drag")
     .toBeGreaterThan(500);
   const dragStart = {
-    x: probeRegion.x + (blueCss.minX + blueCss.maxX) / 2,
-    y: probeRegion.y + (blueCss.minY + blueCss.maxY) / 2,
+    x: captureClip.x + (blueCss.minX + blueCss.maxX) / 2,
+    y: captureClip.y + (blueCss.minY + blueCss.maxY) / 2,
   };
   // The press must land on a settled editor: a mouse-down while the sample's
   // first render is still in flight is dropped by the busy worker (the same
