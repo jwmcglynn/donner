@@ -210,15 +210,12 @@ struct GpuRootSelection {
   /// that looks like a rendering bug.
   std::optional<GpuBackendKind> backend;
 
-  /// Whether an absent `WGPU_BACKEND` override falls back to the platform's preferred backend
-  /// rather than leaving the choice to the driver.
-  ///
-  /// The headless entry point does: a run whose expectations were recorded against one backend
-  /// and which silently lands on another is a failure that looks like a rendering bug. The editor
-  /// does not. Its window is served by whatever backend the system can drive its surface with,
-  /// and narrowing that leaves a host whose preferred backend is unusable with no adapter at all;
-  /// its offscreen target takes the same answer so that one editor does not select two different
-  /// ways depending on where its frames go.
+  /// For the transitional WebGPU adapter only, choose the host's preferred WGPU backend when
+  /// `WGPU_BACKEND` is unset instead of leaving adapter choice to the driver. This setting does
+  /// not select the Geode runtime backend (native Metal, native Vulkan, or browser WebGPU).
+  /// Headless adapter runs pin their backend for reproducible expectations. An editor window
+  /// using the adapter lets the driver choose an API that can serve its surface; its offscreen
+  /// adapter target follows the same choice.
   bool usePlatformDefaultBackend = true;
 };
 
