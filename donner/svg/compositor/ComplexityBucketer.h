@@ -12,13 +12,12 @@ namespace donner::svg::compositor {
 /**
  * Runtime configuration for `ComplexityBucketer`.
  *
- * Defaults are hand-tuned illustrative constants; deliberately no ML or
- * user-history heuristics. Adjust values based on benchmark results as the
- * system matures.
+ * Defaults are fixed, hand-tuned constants. Bucket choices depend on configured thresholds and
+ * render-tree complexity, without per-user history.
  */
 struct ComplexityBucketerConfig {
-  /// Total number of layer slots the bucketer is allowed to produce, including
-  /// reserved slots. Design-doc target is K=4 across all backends for v1.
+  /// Total layer slots available to the bucketer, including reserved slots. The default four with
+  /// one reserved slot permits at most three geometry buckets.
   uint32_t targetBucketCount = 4;
 
   /// Slots reserved for non-bucket hint sources (interactive layer, animation,
@@ -89,15 +88,15 @@ struct ComplexityBucketerStats {
  * / clip / filter / mask ancestor (other than the root itself), so bucketing
  * them cannot split a group that must stay atomic.
  *
- * **v1 simplifications (tracked as followups):**
+ * **Candidate and work limits:**
  *
  * - Cost walk does NOT perform bbox overlap rejection. Two candidates with
  *   visually overlapping subtrees may both be bucketed. Correctness is
  *   preserved (the resolver composes layers in order); optimality may suffer
  *   for pathological documents.
- * - Candidates are limited to top-level root children. Deeper cost peaks
- *   (e.g., a deeply-nested `<g>` with many filter children) are not promoted
- *   in v1 - they'd require a deferred-pop walk we're deferring.
+ * - Candidates are limited to top-level root children. A deeper cost peak
+ *   (e.g., a nested `<g>` with many filtered children) contributes to its
+ *   top-level ancestor's cost instead of becoming an independent layer.
  * - Each reconcile recomputes from scratch. No incremental update on partial
  *   mutations.
  *

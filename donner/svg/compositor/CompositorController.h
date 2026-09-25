@@ -761,14 +761,9 @@ public:
     staticSpanRasterizeElapsedMsForTesting_ = elapsedMs;
   }
 
-  /// One row of the unified "everything composited together" view that
-  /// the layer-inspector panel renders in paint order. Mirrors what
-  /// `composeLayers` actually draws so the operator
-  /// sees the same sequence of blits the renderer performs.
-  ///
-  /// Carries either a downsampled CPU thumbnail or a backend texture snapshot for every tile
-  /// (background, foreground, segment, layer) so the panel can render previews inline instead of
-  /// just dimensions.
+  /// One row of the layer inspector's paint-order tile structure. Promoted layers remain visible
+  /// in this view even when they have no bitmap or texture payload. When pixels are available,
+  /// a CPU thumbnail or backend texture snapshot lets the panel show a preview inline.
   struct CompositeTileSnapshot {
     /// Paint-order role of the captured compositor tile.
     enum class Kind : uint8_t {
@@ -780,25 +775,18 @@ public:
 
     Kind kind = Kind::Layer;  ///< Role of this tile in the composite sequence.
 
-    /// Stable identifier for the editor's GL texture cache:
-    /// `"bg"`, `"fg"`, `"seg:{index}"`, `"layer:{entity}"`. Lets the
-    /// panel re-use uploaded textures across frames for unchanged
-    /// tiles.
+    /// Stable identifier for the editor's texture cache: `"seg:{index}"` or
+    /// `"layer:{entity}"`. Lets the panel reuse unchanged tile textures.
     std::string id;  ///< Stable tile identifier for editor texture reuse.
 
-    /// Human-readable label rendered in the panel: `"background"`,
-    /// `"foreground"`, `"segment 0"`, `"layer #12"`.
+    /// Human-readable panel label, such as `"segment 0"` or `"layer #12"`.
     std::string label;
     /// Source bitmap dimensions in canvas pixels. `Vector2i::Zero()`
     /// when the source bitmap is empty.
     Vector2i bitmapDims = Vector2i::Zero();
-    /// Monotonic version counter for change detection. Layers / segments
-    /// expose real generations; bg/fg use a derived generation that
-    /// bumps when the split-bitmap cache is rebuilt.
+    /// Monotonic segment or layer generation for change detection.
     uint64_t generation = 0;
-    /// Wall-clock duration of the most recent rasterize. Always 0 for
-    /// `Background` / `Foreground` (those are *composed*, not
-    /// rasterized, by `recomposeSplitBitmaps`).
+    /// Wall-clock duration of this segment or layer's most recent rasterization.
     double lastRasterizeMs = 0.0;
     /// True when this segment or promoted layer is presented as a transient immediate tile instead
     /// of a retained bitmap/texture cache entry.
@@ -846,15 +834,10 @@ public:
     std::vector<uint8_t> thumbnailPixels;  ///< CPU RGBA thumbnail pixels when available.
   };
 
-  /// Build the unified composite-tile snapshot in paint order. The
-  /// sequence mirrors `composeLayers`:
-  ///   - When the split-bitmap cache is active (single editor-promoted
-  ///     entity): `Background`, `Layer` (drag target), `Foreground`.
-  ///     The bg/fg already subsume the static segments and non-drag
-  ///     layers below / above the drag entity.
-  ///   - Otherwise: `Segment 0`, `Layer 0`, `Segment 1`, `Layer 1`,
-  ///     ..., `Segment N`. (Editor-facing bg/fg are inactive in this
-  ///     mode.)
+  /// Build the available segment and layer tiles in paint order, whether or not a split-path drag
+  /// is active. The sequence interleaves `Segment 0`, `Layer 0`, `Segment 1`, and so on; segments
+  /// without a bitmap or texture are omitted. The drag-target layer is marked inline.
+  /// `Background` and `Foreground` enum values remain for source compatibility but are not emitted.
   [[nodiscard]] std::vector<CompositeTileSnapshot> snapshotCompositeTiles(
       SnapshotThumbnails thumbnails = SnapshotThumbnails::Include) const;
 
@@ -1037,9 +1020,8 @@ public:
   /// affect only segments that happened to get re-rasterized for other
   /// reasons).
   ///
-  /// Intended as a bisection knob for the editor: if a visual
-  /// regression seems to originate in 0027-tight_bounded_segments, flip
-  /// the toggle and watch whether it disappears. Not a hot path -
+  /// Intended as a bisection knob for the editor: toggle tight-bounded rasterization to isolate a
+  /// visual regression in segment bounds. Not a hot path -
   /// re-rasterizing every segment on the next frame costs one full
   /// render's worth of work.
   void setTightBoundedSegmentsEnabled(bool enabled);

@@ -10,9 +10,8 @@
 namespace donner::svg::compositor {
 
 /**
- * Kind of interaction the editor is signalling to the compositor. See design
- * doc § Interaction hints. `Hover` is intentionally omitted in v1 - whether v2
- * adds it at all is deferred (Non-Goal 8).
+ * Kind of interaction the editor signals to the compositor. Selection and active drag can hold
+ * hints across frames; hover does not create a compositor hint.
  */
 enum class InteractionHint : uint8_t {
   /// The entity is selected (has selection chrome). Held across frames until
@@ -66,21 +65,18 @@ public:
   /// Factory: publish a `Mandatory` hint at the infinite-weight sentinel (`0xFFFF`).
   static ScopedCompositorHint Mandatory(Registry& registry, Entity entity);
 
-  /// Factory: publish an `Explicit` hint with caller-chosen weight (defaults to the
-  /// mid-range weight `0x4000`, matching the design-doc default).
+  /// Factory: publish an `Explicit` hint with caller-chosen weight (default `0x4000`, below
+  /// the default interaction and animation weights).
   static ScopedCompositorHint Explicit(Registry& registry, Entity entity, uint16_t weight = 0x4000);
 
-  /// Factory: publish an `Interaction` hint. `kind` records the interaction
-  /// semantics for future introspection; the resolver only reads the weight.
-  /// Default weight `0x8000` matches the Medium slot in the design-doc weight
-  /// hierarchy.
+  /// Factory: publish an `Interaction` hint. `kind` records the interaction semantics; the
+  /// resolver only reads the weight.
+  /// Default weight `0x8000` outranks explicit hints but remains below animation hints.
   static ScopedCompositorHint Interaction(Registry& registry, Entity entity, InteractionHint kind,
                                           uint16_t weight = 0x8000);
 
-  /// Factory: publish an `Animation` hint. Default weight `0xC000` matches the
-  /// High slot in the design-doc weight hierarchy - higher than Interaction so
-  /// an actively-animating entity wins over a merely-selected one under budget
-  /// pressure.
+  /// Factory: publish an `Animation` hint. Default weight `0xC000` outranks interaction hints,
+  /// so an actively animating entity wins over a merely selected one under budget pressure.
   static ScopedCompositorHint Animation(Registry& registry, Entity entity,
                                         uint16_t weight = 0xC000);
 
