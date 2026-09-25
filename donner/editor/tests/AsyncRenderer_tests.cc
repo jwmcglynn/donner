@@ -2633,6 +2633,15 @@ constexpr std::string_view kFullCanvasTargetSvg = R"svg(
   </svg>
 )svg";
 
+constexpr std::string_view kSmallFilteredTargetSvg = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+    <defs><filter id="blur"><feGaussianBlur stdDeviation="0.2"/></filter></defs>
+    <rect width="64" height="64" fill="white"/>
+    <rect id="target" x="8" y="8" width="2" height="2" fill="blue"
+          filter="url(#blur)"/>
+  </svg>
+)svg";
+
 /// Output raster that maps the 64x64 fixture onto a canvas no surface can be allocated for.
 EditorRasterViewport UnallocatableRasterViewport() {
   EditorRasterViewport raster;
@@ -2764,14 +2773,7 @@ TEST(AsyncRendererTest, ZoomWhoseTilesCannotReRasterizeNeverPublishesTheOldScale
 }
 
 TEST(AsyncRendererTest, PartialBudgetZoomKeepsPreviousCompletePresentation) {
-  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-      <defs><filter id="blur"><feGaussianBlur stdDeviation="0.2"/></filter></defs>
-      <rect width="64" height="64" fill="white"/>
-      <rect id="target" x="8" y="8" width="2" height="2" fill="blue"
-            filter="url(#blur)"/>
-    </svg>
-  )svg");
+  svg::SVGDocument document = svg::instantiateSubtree(kSmallFilteredTargetSvg);
   document.setCanvasSize(64, 64);
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
@@ -2844,6 +2846,48 @@ TEST(AsyncRendererTest, PartialBudgetZoomKeepsPreviousCompletePresentation) {
         << DescribePresentation(*unallocatable);
     EXPECT_TRUE(unallocatable->workerTiming.nothingToPresent)
         << DescribePresentation(*unallocatable);
+  }
+}
+
+TEST(AsyncRendererTest, UnboundedStaticBudgetFallbackNeverPublishesLayerAlone) {
+  svg::SVGDocument document = svg::instantiateSubtree(kSmallFilteredTargetSvg);
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setTightBoundedSegmentsEnabled(false);
+  const auto renderSelected = [&](std::uint64_t version,
+                                  std::optional<EditorRasterViewport> rasterViewport) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    if (rasterViewport.has_value()) {
+      request.rasterViewport = *rasterViewport;
+    }
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> before = renderSelected(1, std::nullopt);
+  ASSERT_TRUE(before.has_value());
+  ASSERT_TRUE(before->compositedPreview.has_value()) << DescribePresentation(*before);
+
+  for (std::uint64_t version = 2; version <= 5; ++version) {
+    const std::optional<RenderResult> zoomed =
+        renderSelected(version, UnallocatableRasterViewport());
+    ASSERT_TRUE(zoomed.has_value());
+    const auto tiles = asyncRenderer.compositorCompositeTiles();
+    using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
+    const bool layerHasPayload = std::ranges::any_of(tiles, [](const auto& tile) {
+      return tile.kind == Kind::Layer && tile.bitmapDims.x > 0 && tile.bitmapDims.y > 0;
+    });
+    ASSERT_TRUE(layerHasPayload) << DescribeCompositeSegments(tiles);
+    EXPECT_FALSE(zoomed->compositedPreview.has_value()) << DescribePresentation(*zoomed);
+    EXPECT_TRUE(zoomed->workerTiming.nothingToPresent) << DescribePresentation(*zoomed);
   }
 }
 

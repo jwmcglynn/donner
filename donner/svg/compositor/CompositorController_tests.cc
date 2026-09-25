@@ -2573,6 +2573,7 @@ struct TextureFailureState {
   bool failTexture = true;
   bool budgetRejected = false;
   int snapshotAttempts = 0;
+  int failOnSnapshotAttempt = 0;
   /// Whether tiles are CPU bitmaps, which report a failed snapshot as an empty bitmap.
   bool cpuTiles = false;
 };
@@ -2588,7 +2589,7 @@ public:
         .WillByDefault(::testing::Return(!state_->cpuTiles));
     ON_CALL(*this, takeTextureSnapshot()).WillByDefault([this]() {
       ++state_->snapshotAttempts;
-      if (state_->failTexture) {
+      if (state_->failTexture || state_->snapshotAttempts == state_->failOnSnapshotAttempt) {
         return std::shared_ptr<const RendererTextureSnapshot>{nullptr};
       }
       return std::shared_ptr<const RendererTextureSnapshot>(
@@ -2596,7 +2597,7 @@ public:
     });
     ON_CALL(*this, takeSnapshot()).WillByDefault([this]() {
       ++state_->snapshotAttempts;
-      if (state_->failTexture) {
+      if (state_->failTexture || state_->snapshotAttempts == state_->failOnSnapshotAttempt) {
         return RendererBitmap{};
       }
       return MockRendererInterface::makeDummyBitmap();
@@ -2978,6 +2979,47 @@ TEST_F(CompositorControllerTest, SurfaceBudgetRejectionStopsFurtherTileAttemptsI
       compositor.snapshotSegmentInspectorRows(),
       ::testing::AllOf(SizeIs(Ge(1u)),
                        Each(Field(&CompositorController::SegmentInspectorRow::dirty, false))));
+}
+
+TEST_F(CompositorControllerTest, PaintOrderCompletenessRequiresBothLayerAndSegmentPayloads) {
+  for (const int failingAttempt : {1, 2}) {
+    SCOPED_TRACE(failingAttempt);
+    SVGDocument document = makeDocument(R"svg(
+      <defs><filter id="blur"><feGaussianBlur stdDeviation="0.2"/></filter></defs>
+      <rect width="64" height="64" fill="white"/>
+      <rect id="target" x="8" y="8" width="8" height="8" fill="red"
+            filter="url(#blur)"/>
+    )svg");
+    auto target = document.querySelector("#target");
+    ASSERT_TRUE(target.has_value());
+    const Entity entity = target->unsafeEntityHandle().entity();
+    auto state = std::make_shared<TextureFailureState>();
+    state->failTexture = false;
+    state->budgetRejected = failingAttempt == 2;
+    state->failOnSnapshotAttempt = failingAttempt;
+    NiceMock<MockRendererInterface> renderer;
+    ConfigureBudgetAwareOffscreens(renderer, state);
+
+    CompositorController compositor(document, renderer, CachedLayersOnlyConfig());
+    ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+    compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+    EXPECT_THAT(state->snapshotAttempts, Ge(2));
+    const std::vector<CompositorTile> tiles = compositor.snapshotTilesForUpload();
+    const auto layer = std::ranges::find(tiles, entity, &CompositorTile::layerEntity);
+    ASSERT_NE(layer, tiles.end());
+    const bool layerHasPayload = layer->bitmapDims.x > 0 && layer->bitmapDims.y > 0;
+    const bool segmentHasPayload = std::ranges::any_of(tiles, [](const CompositorTile& tile) {
+      return tile.layerEntity == entt::null && tile.bitmapDims.x > 0 && tile.bitmapDims.y > 0;
+    });
+    EXPECT_EQ(layerHasPayload, failingAttempt != 1);
+    EXPECT_EQ(segmentHasPayload, failingAttempt != 2);
+    EXPECT_FALSE(compositor.hasCompletePaintOrderTilePayloads());
+
+    state->failOnSnapshotAttempt = 0;
+    compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+    EXPECT_TRUE(compositor.hasCompletePaintOrderTilePayloads());
+  }
 }
 
 // A tile rejected by two consecutive frames' fresh budgets at the same canvas

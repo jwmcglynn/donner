@@ -319,9 +319,10 @@ bool CanSkipPreviewMainCompose(bool hasPreview, bool promotionComplete, bool has
 
 bool CanPublishCompositorTiles(const svg::compositor::CompositorController* compositor) {
   // An earlier tile can succeed before a later allocation fails. Keep the prior presentation
-  // until a retry or direct-compose fallback produces a complete paint-order tile set.
+  // until every nonempty paint-order slot has a tile payload from the current raster.
   return compositor != nullptr &&
-         compositor->lastRenderFrameStats().textureAllocationFailureCount == 0;
+         compositor->lastRenderFrameStats().textureAllocationFailureCount == 0 &&
+         compositor->hasCompletePaintOrderTilePayloads();
 }
 
 class ScopedFrameResourceScope {
