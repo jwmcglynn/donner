@@ -299,7 +299,6 @@ donner_cc_library(
         ":geode_path_encoder",
         ":geode_resident_path_component",
         "//donner/base",
-        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -663,7 +662,6 @@ donner_cc_library(
     deps = [
         ":geode_device",
         "//donner/base",
-        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -692,7 +690,6 @@ donner_cc_library(
                "//donner/svg/core",
                "//donner/svg/renderer:pixel_format_utils",
                "//donner/svg/resources:image_resource",
-               "//third_party/webgpu-cpp:webgpu_cpp",
            ] + shader_apis(GEODE_ENCODER_SHADER_FAMILIES) +
            shader_artifacts(GEODE_ENCODER_SHADER_FAMILIES) +
            native_shader_artifacts(GEODE_ENCODER_SHADER_FAMILIES),
