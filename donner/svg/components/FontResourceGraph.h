@@ -18,17 +18,30 @@ namespace donner::svg::components {
 
 struct FontPaintDependenciesComponent;
 
+/// Advance the document's font-preparation epoch so cached dependency evidence is rebuilt.
+/// @param registry Document registry whose preparation state changed.
 void InvalidateFontResourcePreparation(Registry& registry);
 
 /// A render scope accepts exclusions only after its caller completes the corresponding traversal.
 class ScopedFontResourceRender {
 public:
+  /// Start a render scope and optionally identify the root covered by its traversal.
+  /// @param registry Document registry containing the render scope state.
+  /// @param coverageRoot Root of the covered tree, or null until set later.
   explicit ScopedFontResourceRender(Registry& registry, Entity coverageRoot = entt::null);
   ~ScopedFontResourceRender();
   ScopedFontResourceRender(const ScopedFontResourceRender&) = delete;
   ScopedFontResourceRender& operator=(const ScopedFontResourceRender&) = delete;
+  /// Publish render coverage; an incomplete scope is not usable as font evidence.
+  /// @param completed Whether the corresponding traversal reached completion.
   void finish(bool completed = true);
+  /// Set the covered root of an active outermost render scope.
+  /// @param root Root whose rendered descendants were traversed.
   void setCoverageRoot(Entity root);
+  /// Record whether an entity was painted or excluded during an active render scope.
+  /// @param registry Document registry containing the render scope state.
+  /// @param entity Rendered or excluded entity.
+  /// @param excluded True when the entity was excluded rather than painted.
   static void recordDraw(Registry& registry, Entity entity, bool excluded);
 
 private:
@@ -44,7 +57,11 @@ private:
  */
 class FontResourceGraph {
 public:
-  enum class Purpose { CompleteTarget, RenderedFrame };
+  /// Choose between full prepared dependencies and completed rendered-frame evidence.
+  enum class Purpose {
+    CompleteTarget,  ///< Follow the complete prepared target subtree.
+    RenderedFrame,   ///< Use only evidence from a completed render scope.
+  };
 
   /// Owned result of following the prepared references reachable from a target.
   struct Collection {
@@ -65,6 +82,8 @@ public:
   /// Mark consumers of changed geometry through the references captured before refresh.
   /// Ordinary ancestor-layer propagation remains the renderer's existing dirty-entity path.
   void invalidateDependents(Registry& registry, std::span<const Entity> changedOwners) const;
+  /// Refresh per-instance font evidence after resources change without rebuilding graph edges.
+  /// @param registry Document registry with current font and instance metadata.
   void refreshMetadata(const Registry& registry);
 
 private:
@@ -121,16 +140,29 @@ class FontResourceGraphCache {
 public:
   /// New compute ceiling: 1024 passes over the existing 32 Ki parsed-child entity envelope.
   static constexpr std::size_t kMaximumWork = 32 * 1024 * 1024;
+  /// Work and reuse counters for one cache lifetime.
   struct Stats {
-    std::size_t graphBuilds = 0;
-    std::size_t targetCollections = 0;
-    std::size_t cacheHits = 0;
-    std::size_t work = 0;
-    bool resourceLimit = false;
+    std::size_t graphBuilds = 0;        ///< Dependency graphs constructed.
+    std::size_t targetCollections = 0;  ///< Target traversals computed.
+    std::size_t cacheHits = 0;          ///< Target collections reused.
+    std::size_t work = 0;               ///< Charged units against the cache work ceiling.
+    bool resourceLimit = false;         ///< True after the work ceiling is exhausted.
   };
+  /// Create a cache using caller-owned counters or internal counters.
+  /// @param stats Optional counters that must outlive the cache.
   explicit FontResourceGraphCache(Stats* stats = nullptr) : stats_(stats ? stats : &ownedStats_) {}
+  /// Snapshot dependency evidence before a font-resource refresh changes geometry.
+  /// @param document Document whose prepared graph should be retained for invalidation.
   void preserveBeforeRefresh(const SVGDocumentHandle& document);
+  /// Invalidate consumers of changed geometry and refresh retained font metadata.
+  /// @param document Document whose font resources were refreshed.
+  /// @param changedOwners Geometry owners whose dependents may need repainting.
   void finishRefresh(const SVGDocumentHandle& document, std::span<const Entity> changedOwners);
+  /// Collect a target's font dependencies, reusing valid evidence within this cache lifetime.
+  /// @param document Document containing the target.
+  /// @param target Entity whose dependency closure is requested.
+  /// @param purpose Whether to use full prepared or completed rendered-frame evidence.
+  /// @return Dependencies and render/limit state for the target.
   FontResourceGraph::Collection collect(
       const SVGDocumentHandle& document, Entity target,
       FontResourceGraph::Purpose purpose = FontResourceGraph::Purpose::CompleteTarget);
@@ -143,9 +175,10 @@ private:
     bool completedScope = false;
     std::vector<FontFaceDependency> faces;
     std::unique_ptr<FontResourceGraph> graph;
+    /// Cached target result bound to the render scope that last reused it.
     struct TargetCollection {
-      FontResourceGraph::Collection value;
-      uint64_t renderScopeToken = 0;
+      FontResourceGraph::Collection value;  ///< Owned dependency result.
+      uint64_t renderScopeToken = 0;  ///< Render-scope token last associated with this result.
     };
     std::array<std::unordered_map<Entity, TargetCollection>, 2> targets;
     std::size_t collectionWork = 0;

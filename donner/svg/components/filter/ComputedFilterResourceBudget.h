@@ -15,20 +15,32 @@ namespace donner::svg::components {
 /** Owns computed-filter structural reservations and shared raster payload admission. */
 class ComputedFilterResourceBudget {
 public:
+  /// Default ceiling for retained computed-filter structures and shared image pixels.
   static constexpr std::size_t kMaximumBytes = 16 * 1024 * 1024;
+
+  /// Per-document computed-filter memory ceiling.
   struct Limits {
+    /// Maximum retained bytes across structural reservations and live shared images.
     std::size_t maximumBytes = kMaximumBytes;
   };
 
+  /// Create a budget with the default local limit and optional shared family budget.
+  /// @param family Shared document resource budget, or null for local accounting only.
   explicit ComputedFilterResourceBudget(
       std::shared_ptr<DocumentResourceFamilyBudget> family = nullptr)
       : family_(std::move(family)) {}
+
+  /// Create a budget with a caller-selected local limit and optional shared family budget.
+  /// @param family Shared document resource budget, or null for local accounting only.
+  /// @param limits Local retained-byte limit.
   ComputedFilterResourceBudget(std::shared_ptr<DocumentResourceFamilyBudget> family, Limits limits)
       : family_(std::move(family)), limits_(limits) {}
   ~ComputedFilterResourceBudget() { releaseFamilyBytes(structuralBytes_); }
 
   ComputedFilterResourceBudget(const ComputedFilterResourceBudget&) = delete;
   ComputedFilterResourceBudget& operator=(const ComputedFilterResourceBudget&) = delete;
+  /// Transfer reservations and accounting without releasing the family's retained bytes.
+  /// @param other Budget whose reservations are moved into this object.
   ComputedFilterResourceBudget(ComputedFilterResourceBudget&& other) noexcept
       : family_(std::move(other.family_)),
         structuralBytes_(other.structuralBytes_),
@@ -44,6 +56,10 @@ public:
   }
   ComputedFilterResourceBudget& operator=(ComputedFilterResourceBudget&&) = delete;
 
+  /// Set the structural reservation for one entity; a smaller value releases the difference.
+  /// @param entity Owner of the computed filter structure.
+  /// @param bytes New retained structural-byte reservation for this entity.
+  /// @return False if an increase exceeds either the local or shared family limit.
   bool reserve(Entity entity, std::size_t bytes) {
     pruneExpiredSharedImages();
     const auto existing = reservations_.find(entity);
@@ -75,6 +91,8 @@ public:
     return true;
   }
 
+  /// Release an entity's structural reservation and prune expired shared image entries.
+  /// @param entity Owner whose structural reservation is removed.
   void release(Entity entity) {
     const auto existing = reservations_.find(entity);
     if (existing != reservations_.end()) {
@@ -152,13 +170,18 @@ public:
     return pixels;
   }
 
+  /// Current structural bytes plus live shared image bytes retained by this budget.
   std::size_t retainedBytes() const {
     pruneExpiredSharedImages();
     return structuralBytes_ + sharedImageBytes_;
   }
+  /// Number of shared image payloads materialized through this budget.
   std::size_t sharedImageMaterializations() const { return sharedImageMaterializations_; }
+  /// Reserved diagnostic counter for shared-image byte comparisons; currently remains zero.
   std::size_t sharedImageComparedBytes() const { return sharedImageComparedBytes_; }
+  /// Whether an admission exceeded a local or shared resource limit.
   bool rejected() const { return rejected_; }
+  /// Configured local retained-byte limit.
   const Limits& limits() const { return limits_; }
 
 private:

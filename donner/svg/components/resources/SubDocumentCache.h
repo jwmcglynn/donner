@@ -26,20 +26,22 @@ namespace donner::svg::components {
  */
 class SubDocumentCache {
 public:
+  /// Admission limits for externally referenced SVG sub-documents.
   struct Limits {
-    size_t maximumDocuments = 64;
-    size_t maximumParseAttempts = 128;
-    size_t maximumAggregateEntities = 32 * 1024;
-    size_t maximumAggregatePayloadBytes = 64 * 1024 * 1024;
+    size_t maximumDocuments = 64;                 ///< Distinct cached documents.
+    size_t maximumParseAttempts = 128;            ///< Parse attempts, including failures.
+    size_t maximumAggregateEntities = 32 * 1024;  ///< Entities across cached documents.
+    size_t maximumAggregatePayloadBytes = 64 * 1024 * 1024;  ///< Retained parsed-payload bytes.
   };
 
+  /// Observed cache size, parse work, and admission failures.
   struct SecurityStats {
-    size_t parseAttempts = 0;
-    size_t documents = 0;
-    size_t entities = 0;
-    size_t payloadBytes = 0;
-    size_t negativeCacheHits = 0;
-    bool rejected = false;
+    size_t parseAttempts = 0;      ///< Parse attempts charged to this cache.
+    size_t documents = 0;          ///< Successfully cached sub-documents.
+    size_t entities = 0;           ///< Aggregate entities in cached sub-documents.
+    size_t payloadBytes = 0;       ///< Aggregate retained parsed-payload bytes.
+    size_t negativeCacheHits = 0;  ///< Negative-cache or reject-all short-circuits.
+    bool rejected = false;         ///< Whether an admission limit rejected a request.
   };
 
   /**
@@ -52,6 +54,8 @@ public:
 
   /// Constructor.
   SubDocumentCache() = default;
+  /// Create a cache with caller-selected document and parse limits.
+  /// @param limits Admission limits for referenced sub-documents.
   explicit SubDocumentCache(Limits limits) : limits_(limits) {}
 
   /// Destructor.
@@ -110,6 +114,7 @@ public:
   /// Include root-document parsed payload in the aggregate retained-payload envelope.
   void setRootPayloadBytes(size_t count) { rootPayloadBytes_ = count; }
 
+  /// Current parse, cache, and rejection counters.
   const SecurityStats& securityStats() const { return securityStats_; }
 
 private:

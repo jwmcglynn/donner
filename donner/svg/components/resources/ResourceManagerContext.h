@@ -38,11 +38,12 @@ public:
   /// Maximum stylesheet-provided font faces retained by one untrusted document.
   static constexpr size_t kMaximumStylesheetFontFaces = 1024;
 
+  /// External resource fetch attempts, cache use, and limit state.
   struct FetchSecurityStats {
-    size_t attempts = 0;
-    size_t cacheHits = 0;
-    size_t cachedBytes = 0;
-    bool rejected = false;
+    size_t attempts = 0;     ///< Fetch attempts charged against the document limit.
+    size_t cacheHits = 0;    ///< Requests answered by cached positive or failed outcomes.
+    size_t cachedBytes = 0;  ///< Bytes retained in cached responses.
+    bool rejected = false;   ///< Whether external-resource policy or a limit rejected a request.
   };
   /// Constructor.
   explicit ResourceManagerContext(
@@ -129,9 +130,13 @@ public:
    * Get all registered `@font-face` declarations.
    */
   const std::vector<css::FontFace>& fontFaces() const { return fontFaces_; }
+  /// Font faces still awaiting loading or registration.
   size_t pendingFontFaceCount() const { return fontFaceIndexesToLoad_.size(); }
+  /// Whether stylesheet font-face registration exceeded its document limit.
   bool stylesheetFontFaceLimitRejected() const { return stylesheetFontFaceLimitRejected_; }
+  /// Current stylesheet font-face count exposed to tests.
   size_t stylesheetFontFaceCountForTesting() const { return stylesheetFontFaceCount_; }
+  /// Number of stylesheet registration records exposed to tests.
   size_t stylesheetFontFaceRegistrationCountForTesting() const {
     return stylesheetFontFaceRegistrations_.size();
   }
