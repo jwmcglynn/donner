@@ -2622,11 +2622,23 @@ namespace {
 constexpr int kUnallocatableCanvasPx = 9000;
 static_assert(static_cast<std::uint64_t>(kUnallocatableCanvasPx) * kUnallocatableCanvasPx * 4u >
               svg::RendererSurfaceBudget::kMaximumBytes);
+constexpr int kPartialBudgetCanvasPx = 8192;
+static_assert(static_cast<std::uint64_t>(kPartialBudgetCanvasPx) * kPartialBudgetCanvasPx * 4u ==
+              svg::RendererSurfaceBudget::kMaximumBytes);
 
 constexpr std::string_view kFullCanvasTargetSvg = R"svg(
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
     <rect width="64" height="64" fill="white"/>
     <rect id="target" width="64" height="64" fill="blue"/>
+  </svg>
+)svg";
+
+constexpr std::string_view kSmallFilteredTargetSvg = R"svg(
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+    <defs><filter id="blur"><feGaussianBlur stdDeviation="0.2"/></filter></defs>
+    <rect width="64" height="64" fill="white"/>
+    <rect id="target" x="8" y="8" width="2" height="2" fill="blue"
+          filter="url(#blur)"/>
   </svg>
 )svg";
 
@@ -2637,6 +2649,15 @@ EditorRasterViewport UnallocatableRasterViewport() {
   raster.outputSizePx = Vector2i(kUnallocatableCanvasPx, kUnallocatableCanvasPx);
   raster.semanticCanvasSizePx = Vector2i(64, 64);
   raster.outputFromDocument = Transform2d::Scale(kUnallocatableCanvasPx / 64.0);
+  return raster;
+}
+
+EditorRasterViewport PartialBudgetRasterViewport() {
+  EditorRasterViewport raster;
+  raster.documentRect = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  raster.outputSizePx = Vector2i(kPartialBudgetCanvasPx, kPartialBudgetCanvasPx);
+  raster.semanticCanvasSizePx = Vector2i(64, 64);
+  raster.outputFromDocument = Transform2d::Scale(kPartialBudgetCanvasPx / 64.0);
   return raster;
 }
 
@@ -2749,6 +2770,125 @@ TEST(AsyncRendererTest, ZoomWhoseTilesCannotReRasterizeNeverPublishesTheOldScale
   const RenderResult::CompositedTile* layer = FindLayerTile(*restored, entity);
   ASSERT_NE(layer, nullptr) << DescribePresentation(*restored);
   EXPECT_TRUE(HasPresentationPayload(*layer)) << DescribePresentation(*restored);
+}
+
+TEST(AsyncRendererTest, PartialBudgetZoomKeepsPreviousCompletePresentation) {
+  svg::SVGDocument document = svg::instantiateSubtree(kSmallFilteredTargetSvg);
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  const auto renderSelected = [&](std::uint64_t version,
+                                  std::optional<EditorRasterViewport> rasterViewport) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    if (rasterViewport.has_value()) {
+      request.rasterViewport = *rasterViewport;
+    }
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> before = renderSelected(1, std::nullopt);
+  ASSERT_TRUE(before.has_value());
+  ASSERT_TRUE(before->compositedPreview.has_value()) << DescribePresentation(*before);
+  const bool beforeHasBackgroundTile = std::ranges::any_of(
+      before->compositedPreview->tiles, [](const RenderResult::CompositedTile& tile) {
+        return tile.kind != RenderResult::CompositedTile::Kind::Layer;
+      });
+  ASSERT_TRUE(beforeHasBackgroundTile) << DescribePresentation(*before);
+
+  const std::optional<RenderResult> zoomed = renderSelected(2, PartialBudgetRasterViewport());
+  ASSERT_TRUE(zoomed.has_value());
+  const auto tiles = asyncRenderer.compositorCompositeTiles();
+  using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
+  const bool layerHasPayload = std::ranges::any_of(tiles, [](const auto& tile) {
+    return tile.kind == Kind::Layer && tile.bitmapDims.x > 0 && tile.bitmapDims.y > 0;
+  });
+  const bool segmentMissing =
+      std::ranges::none_of(tiles, [](const auto& tile) { return tile.kind == Kind::Segment; });
+  ASSERT_TRUE(layerHasPayload && segmentMissing)
+      << "the zoom must reproduce a partial new raster: " << DescribeCompositeSegments(tiles)
+      << " result=" << DescribePresentation(*zoomed);
+  ASSERT_GT(asyncRenderer.compositorRenderFrameStats().textureAllocationFailureCount, 0);
+  EXPECT_FALSE(zoomed->compositedPreview.has_value()) << DescribePresentation(*zoomed);
+  EXPECT_TRUE(zoomed->workerTiming.nothingToPresent) << DescribePresentation(*zoomed);
+
+  const std::optional<RenderResult> complete = renderSelected(3, PartialBudgetRasterViewport());
+  ASSERT_TRUE(complete.has_value());
+  if (complete->compositedPreview.has_value()) {
+    const auto& completeTiles = complete->compositedPreview->tiles;
+    const bool hasBackground = std::ranges::any_of(completeTiles, [](const auto& tile) {
+      return tile.kind != RenderResult::CompositedTile::Kind::Layer && HasPresentationPayload(tile);
+    });
+    const bool hasLayer = std::ranges::any_of(completeTiles, [](const auto& tile) {
+      return tile.kind == RenderResult::CompositedTile::Kind::Layer && HasPresentationPayload(tile);
+    });
+    EXPECT_TRUE(hasBackground && hasLayer) << DescribePresentation(*complete);
+    EXPECT_FALSE(complete->workerTiming.nothingToPresent) << DescribePresentation(*complete);
+  } else {
+    EXPECT_TRUE(renderer.requiresTextureSnapshotPresentation())
+        << "the software renderer must recover with a complete background and layer";
+    EXPECT_TRUE(complete->workerTiming.nothingToPresent) << DescribePresentation(*complete);
+  }
+
+  for (std::uint64_t version = 4; version <= 7; ++version) {
+    const std::optional<RenderResult> unallocatable =
+        renderSelected(version, UnallocatableRasterViewport());
+    ASSERT_TRUE(unallocatable.has_value());
+    EXPECT_FALSE(unallocatable->compositedPreview.has_value())
+        << "a budget-immediate fallback must not publish only its surviving layer: "
+        << DescribePresentation(*unallocatable);
+    EXPECT_TRUE(unallocatable->workerTiming.nothingToPresent)
+        << DescribePresentation(*unallocatable);
+  }
+}
+
+TEST(AsyncRendererTest, UnboundedStaticBudgetFallbackNeverPublishesLayerAlone) {
+  svg::SVGDocument document = svg::instantiateSubtree(kSmallFilteredTargetSvg);
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setTightBoundedSegmentsEnabled(false);
+  const auto renderSelected = [&](std::uint64_t version,
+                                  std::optional<EditorRasterViewport> rasterViewport) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    if (rasterViewport.has_value()) {
+      request.rasterViewport = *rasterViewport;
+    }
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> before = renderSelected(1, std::nullopt);
+  ASSERT_TRUE(before.has_value());
+  ASSERT_TRUE(before->compositedPreview.has_value()) << DescribePresentation(*before);
+
+  for (std::uint64_t version = 2; version <= 5; ++version) {
+    const std::optional<RenderResult> zoomed =
+        renderSelected(version, UnallocatableRasterViewport());
+    ASSERT_TRUE(zoomed.has_value());
+    const auto tiles = asyncRenderer.compositorCompositeTiles();
+    using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
+    const bool layerHasPayload = std::ranges::any_of(tiles, [](const auto& tile) {
+      return tile.kind == Kind::Layer && tile.bitmapDims.x > 0 && tile.bitmapDims.y > 0;
+    });
+    ASSERT_TRUE(layerHasPayload) << DescribeCompositeSegments(tiles);
+    EXPECT_FALSE(zoomed->compositedPreview.has_value()) << DescribePresentation(*zoomed);
+    EXPECT_TRUE(zoomed->workerTiming.nothingToPresent) << DescribePresentation(*zoomed);
+  }
 }
 
 // A drag frame whose tiles all fail leaves nothing to present. The renderer's main target still
