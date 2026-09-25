@@ -16,22 +16,33 @@ namespace donner::svg::components {
 /** Bounds dynamic payload retained while parsing one untrusted SVG document. */
 class ParsedPayloadResourceBudget {
 public:
-  enum class Category { Attribute, Stylesheet, ProjectedText };
+  /// Independently attributed parsed payload categories.
+  enum class Category {
+    Attribute,      ///< Parsed XML attribute representations.
+    Stylesheet,     ///< Parsed stylesheet representations.
+    ProjectedText,  ///< SVG text projected from the XML tree.
+  };
 
+  /// Local ceiling for all retained parsed payloads.
   struct Limits {
+    /// Maximum aggregate bytes retained across payload categories.
     std::size_t maximumRetainedBytes = 64 * 1024 * 1024;
   };
 
+  /// Current category bytes and cumulative admission failures.
   struct SecurityStats {
-    std::size_t retainedBytes = 0;
-    std::size_t attributeBytes = 0;
-    std::size_t stylesheetBytes = 0;
-    std::size_t projectedTextBytes = 0;
-    std::size_t rejectedReservations = 0;
-    bool rejected = false;
+    std::size_t retainedBytes = 0;         ///< Aggregate payload bytes currently reserved.
+    std::size_t attributeBytes = 0;        ///< Bytes attributed to XML attributes.
+    std::size_t stylesheetBytes = 0;       ///< Bytes attributed to stylesheets.
+    std::size_t projectedTextBytes = 0;    ///< Bytes attributed to projected SVG text.
+    std::size_t rejectedReservations = 0;  ///< Number of failed or unrepresentable requests.
+    bool rejected = false;                 ///< Whether any request was rejected.
   };
 
   ParsedPayloadResourceBudget() = default;
+  /// Create a payload budget with a local ceiling and optional shared family budget.
+  /// @param limits Local retained-byte limit.
+  /// @param family Shared document resource budget, or null for local accounting only.
   explicit ParsedPayloadResourceBudget(
       Limits limits, std::shared_ptr<DocumentResourceFamilyBudget> family = nullptr)
       : limits_(limits), family_(std::move(family)) {}
@@ -43,6 +54,8 @@ public:
 
   ParsedPayloadResourceBudget(const ParsedPayloadResourceBudget&) = delete;
   ParsedPayloadResourceBudget& operator=(const ParsedPayloadResourceBudget&) = delete;
+  /// Transfer reservations without releasing the shared family's retained bytes.
+  /// @param other Budget whose reservations are moved into this object.
   ParsedPayloadResourceBudget(ParsedPayloadResourceBudget&& other) noexcept
       : limits_(other.limits_),
         stats_(other.stats_),
@@ -159,6 +172,7 @@ public:
     stats_.rejected = true;
   }
 
+  /// Current category accounting and cumulative rejection state.
   const SecurityStats& securityStats() const { return stats_; }
 
   /// Estimate dynamic representation bytes retained by parsed SVG attributes.

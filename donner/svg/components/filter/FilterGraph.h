@@ -41,8 +41,10 @@ inline constexpr int kMaximumFilterPixelRadius = 256;
 
 /// Geode decomposes morphology into shader passes whose per-axis radius is at most 31.
 inline constexpr std::uint64_t kMaximumFilterMorphologyPassesPerAxis = 9;
+/// Bound for aggregate morphology work after splitting a large radius into shader passes.
 inline constexpr std::uint64_t kMaximumFilterMorphologyWorkMultiplier =
     2 * (2 * kMaximumFilterPixelRadius + kMaximumFilterMorphologyPassesPerAxis) + 5;
+/// Bound for temporary buffers retained by a multi-pass morphology execution.
 inline constexpr std::uint64_t kMaximumFilterMorphologyRetainedBuffers =
     2 * kMaximumFilterMorphologyPassesPerAxis + 3;
 
@@ -69,6 +71,7 @@ inline constexpr std::size_t kMaximumFilterColorMatrixValues = 20;
 
 /// Maximum convolve order on either axis and aggregate kernel payload.
 inline constexpr int kMaximumFilterConvolveOrder = 64;
+/// Maximum number of coefficients accepted by an `feConvolveMatrix` kernel.
 inline constexpr std::size_t kMaximumFilterKernelValues =
     static_cast<std::size_t>(kMaximumFilterConvolveOrder) * kMaximumFilterConvolveOrder;
 
@@ -340,7 +343,8 @@ struct Turbulence {
 /// Parameters for \c feImage.
 struct Image {
   RcString href;  ///< Image URL or fragment reference.
-  PreserveAspectRatio preserveAspectRatio = PreserveAspectRatio::Default();
+  PreserveAspectRatio preserveAspectRatio =
+      PreserveAspectRatio::Default();  ///< Image aspect ratio.
 
   /// Shared loaded image data (RGBA, straight alpha). Null if loading failed or href is a fragment.
   ///
@@ -350,7 +354,9 @@ struct Image {
   int imageWidth = 0;   ///< Width of loaded image in pixels.
   int imageHeight = 0;  ///< Height of loaded image in pixels.
 
+  /// Whether a nonempty decoded raster payload is available.
   [[nodiscard]] bool hasImageData() const { return imageData && !imageData->empty(); }
+  /// Size of the decoded raster payload, or zero when no payload is loaded.
   [[nodiscard]] std::size_t imageDataSize() const { return imageData ? imageData->size() : 0; }
 
   /// Shared handle to an external SVG sub-document. The renderer pre-renders this to pixel data
@@ -857,13 +863,14 @@ inline bool FilterGraphFitsExecutionBudget(const FilterGraph& graph, std::uint64
  */
 class FilterExecutionBudget {
 public:
+  /// Reason the frame stopped admitting filter work.
   enum class RejectionReason : std::uint8_t {
-    None,
-    InvalidGraph,
-    ExecutionLimit,
-    WorkLimit,
-    MemoryLimit,
-    External,
+    None,            ///< No rejection has occurred.
+    InvalidGraph,    ///< A graph failed validation or cost estimation.
+    ExecutionLimit,  ///< The frame exceeded its graph execution count.
+    WorkLimit,       ///< The frame exceeded its estimated pixel-work limit.
+    MemoryLimit,     ///< Intermediate or capture memory exceeded its limit.
+    External,        ///< A renderer-owned allocation or preflight failed.
   };
 
   /// Maximum number of graph executions, including zero-area and otherwise inexpensive graphs.
@@ -1015,19 +1022,27 @@ public:
     rejected_ = true;
   }
 
+  /// Filter graph executions admitted during the current frame.
   [[nodiscard]] std::uint64_t executions() const { return executions_; }
+  /// Estimated pixel-work units admitted during the current frame.
   [[nodiscard]] std::uint64_t workUnits() const { return workUnits_; }
+  /// Total intermediate, persistent GPU, and live CPU capture bytes accounted for this frame.
   [[nodiscard]] std::uint64_t retainedBytes() const {
     return intermediateBytes_ + persistentGpuBytes_ + liveCpuCaptureBytes_;
   }
+  /// Bytes reserved for capture surfaces before allocation.
   [[nodiscard]] std::uint64_t captureBytesReserved() const { return captureBytesReserved_; }
+  /// GPU capture reservations still active in the current frame.
   [[nodiscard]] std::uint64_t activeGpuReservations() const { return activeGpuReservations_; }
+  /// Intermediate and persistent GPU bytes retained for filter execution.
   [[nodiscard]] std::uint64_t retainedGpuBytes() const {
     return intermediateBytes_ + persistentGpuBytes_;
   }
   /// Ordered GPU chunks submitted since this budget was constructed.
   [[nodiscard]] std::uint64_t chunks() const { return chunks_; }
+  /// Whether the frame has stopped admitting filter work.
   [[nodiscard]] bool rejected() const { return rejected_; }
+  /// Current recorded reason for rejecting filter work in this frame.
   [[nodiscard]] RejectionReason rejectionReason() const { return rejectionReason_; }
 
 private:
