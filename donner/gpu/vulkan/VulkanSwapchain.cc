@@ -400,6 +400,10 @@ Result<std::unique_ptr<VulkanSwapchain>> VulkanSwapchain::Create(
     return GpuError{GpuErrorType::InvalidState,
                     "createSurface: device surface lifetime state is unavailable"};
   }
+  if (!context.rootLoss) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "createSurface: device root loss state is unavailable"};
+  }
   const VulkanApi& api = *context.api;
   if (api.vkCreateSwapchainKHR == nullptr) {
     return GpuError{GpuErrorType::Unsupported,
@@ -440,6 +444,13 @@ VulkanSwapchain::VulkanSwapchain(const VulkanSurfaceContext& context, VkSurfaceK
     : context_(context), surface_(surface), ownsSurface_(ownsSurface) {
   if (context_.lifetime) {
     context_.lifetime->liveChildren.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
+void VulkanSwapchain::declareDeviceLoss(VkResult result, const char* reason) const {
+  if (result == VK_ERROR_DEVICE_LOST && context_.rootLoss &&
+      DeclareDeviceLost(*context_.rootLoss)) {
+    LogDeclaredDeviceLoss(reason);
   }
 }
 
@@ -498,6 +509,7 @@ Status VulkanSwapchain::prepareForDestruction() {
     const VkFence fence = presentFences_[image];
     const VkResult waited = context_.api->vkWaitForFences(context_.device, 1, &fence, VK_TRUE,
                                                           kDrainTimeoutNanoseconds);
+    declareDeviceLoss(waited, "vkWaitForFences (present destruction proof) reported device loss");
     if (!CompletionProvesIdle(waited)) {
       return VkError("vkWaitForFences (present destruction proof)", waited);
     }
@@ -735,12 +747,14 @@ Status VulkanSwapchain::waitForPresentFence(uint32_t imageIndex) {
   VkFence fence = presentFences_[imageIndex];
   const VkResult waited =
       context_.api->vkWaitForFences(context_.device, 1, &fence, VK_TRUE, kDrainTimeoutNanoseconds);
+  declareDeviceLoss(waited, "vkWaitForFences (present completion) reported device loss");
   if (!CompletionProvesIdle(waited)) {
     return VkError("vkWaitForFences (present completion)", waited);
   }
   if (waited == VK_SUCCESS) {
     if (const VkResult reset = context_.api->vkResetFences(context_.device, 1, &fence);
         reset != VK_SUCCESS) {
+      declareDeviceLoss(reset, "vkResetFences (present completion) reported device loss");
       return VkError("vkResetFences (present completion)", reset);
     }
   }
@@ -791,9 +805,10 @@ Status VulkanSwapchain::waitForAcquireRingSlot(size_t ringSlot) {
   if (acquireRingFences_[ringSlot] == VK_NULL_HANDLE) {
     return OkStatus();
   }
-  if (const VkResult result = context_.api->vkWaitForFences(
-          context_.device, 1, &acquireRingFences_[ringSlot], VK_TRUE, kDrainTimeoutNanoseconds);
-      !CompletionProvesIdle(result)) {
+  const VkResult result = context_.api->vkWaitForFences(
+      context_.device, 1, &acquireRingFences_[ringSlot], VK_TRUE, kDrainTimeoutNanoseconds);
+  declareDeviceLoss(result, "vkWaitForFences (acquire ring) reported device loss");
+  if (!CompletionProvesIdle(result)) {
     return VkError("vkWaitForFences (acquire ring)", result);
   }
   acquireRingFences_[ringSlot] = VK_NULL_HANDLE;
@@ -857,6 +872,7 @@ Result<SurfaceStatus> VulkanSwapchain::acquire() {
     frameRingSlot_ = attempt.ringSlot;
     pendingAcquireWait_ = acquireSemaphores_[attempt.ringSlot];
     ++acquireCount_;
+    declareDeviceLoss(attempt.result, "vkAcquireNextImageKHR reported device loss");
   }
 
   const std::optional<SurfaceStatus> status = RuntimeStatus(attempt.result);
@@ -1009,6 +1025,7 @@ Status VulkanSwapchain::finishHandoverSubmission(VkResult result, const SurfaceW
     preparationBlocked_ = true;
   }
   pending_.push_back(submission);
+  declareDeviceLoss(result, "vkQueueSubmit (present) reported device loss");
   return VkError("vkQueueSubmit (present)", result);
 }
 
@@ -1098,6 +1115,7 @@ Result<SurfaceStatus> VulkanSwapchain::present(const TextureSyncState& state) {
   }
   hasFrame_ = false;
   frameTextureSlot_.reset();
+  declareDeviceLoss(result, "vkQueuePresentKHR reported device loss");
 
   if (IsDefinitePreEnqueueFailure(result)) {
     // The handover submission still owns the frame and its binary semaphore. Recreate only after
@@ -1138,7 +1156,9 @@ void VulkanSwapchain::pollPendingSubmissions() {
   const VulkanApi& api = *context_.api;
   auto it = pending_.begin();
   while (it != pending_.end()) {
-    if (!CompletionProvesIdle(api.vkGetFenceStatus(context_.device, it->fence))) {
+    const VkResult result = api.vkGetFenceStatus(context_.device, it->fence);
+    declareDeviceLoss(result, "vkGetFenceStatus (surface submission) reported device loss");
+    if (!CompletionProvesIdle(result)) {
       ++it;
       continue;
     }
@@ -1186,6 +1206,7 @@ Status VulkanSwapchain::provePendingSubmissionsComplete() {
   const VkResult result =
       context_.api->vkWaitForFences(context_.device, static_cast<uint32_t>(fences.size()),
                                     fences.data(), VK_TRUE, kDrainTimeoutNanoseconds);
+  declareDeviceLoss(result, "vkWaitForFences (surface destruction proof) reported device loss");
   if (!CompletionProvesIdle(result)) {
     return VkError("vkWaitForFences (surface destruction proof)", result);
   }

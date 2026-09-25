@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "donner/gpu/Descriptors.h"
+#include "donner/gpu/DeviceLost.h"
 #include "donner/gpu/GpuResult.h"
 #include "donner/gpu/vulkan/VulkanLoader.h"
 #include "donner/gpu/vulkan/VulkanResourceState.h"
@@ -51,6 +52,7 @@ struct VulkanSurfaceContext {
   VkCommandPool commandPool = VK_NULL_HANDLE;        //!< Pool the present barrier is recorded in.
   std::shared_ptr<VulkanSurfaceLifetime> lifetime;   //!< Shared owner-retention state.
   std::mutex* queueMutex = nullptr;  //!< Shared VkQueue call lock; null for fake test contexts.
+  std::shared_ptr<DeviceLostState> rootLoss;  //!< Shared loss condition of the owning root.
 };
 
 /// The stage an acquisition wait applies to, and therefore the earliest stage at which a frame
@@ -267,6 +269,10 @@ private:
   /// @param context Borrowed objects. @param surface Created surface.
   /// @param ownsSurface Whether destroying this also destroys \p surface.
   VulkanSwapchain(const VulkanSurfaceContext& context, VkSurfaceKHR surface, bool ownsSurface);
+
+  /// Publishes a driver-reported loss on the shared root after the caller records any native
+  /// ownership it must retain. @param result Native result. @param reason Diagnostic if lost.
+  void declareDeviceLoss(VkResult result, const char* reason) const;
 
   /// One submission this swapchain made on the caller's behalf, awaiting its fence.
   struct PendingSubmission {
