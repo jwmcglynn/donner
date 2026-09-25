@@ -8,6 +8,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -936,7 +937,14 @@ TEST(GeodeNativeVulkanRoot, PresentationSelectionSharesInstanceAcrossRuntimeDevi
   selection.backend = GpuBackendKind::NativeVulkan;
   selection.requireVulkanPresentation = true;
   std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
-  ASSERT_THAT(root, NotNull()) << kNoVulkanDevice;
+  if (root == nullptr) {
+    const char* required = std::getenv("DONNER_REQUIRE_VULKAN");
+    if (required != nullptr && std::string_view(required) == "1") {
+      ASSERT_THAT(CreateNativeVulkanContext(), NotNull()) << kNoVulkanDevice;
+    }
+    GTEST_SKIP() << "This Vulkan loader or driver lacks the surface and swapchain extensions "
+                    "needed for a presentation-capable shared root";
+  }
   void* instance = root->vulkanRoot()->nativeInstance();
   ASSERT_THAT(instance, NotNull());
 

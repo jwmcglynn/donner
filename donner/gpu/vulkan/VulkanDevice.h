@@ -32,6 +32,10 @@ public:
   /// Largest 2D texture dimension reported by this root's physical device.
   uint32_t maxTextureDimension2D() const;
 
+  /// Borrowed instance for an embedder to create its own window-system surface, or null when
+  /// this root was created for headless work. The root must outlive the embedder surface.
+  [[nodiscard]] void* nativeInstance() const;
+
   /// True while another thread holds the root's encode-through-submit lock. Test accessor.
   [[nodiscard]] bool executionLockedForTest() const;
 
@@ -170,6 +174,15 @@ public:
   /// @param lostState Shared loss condition, or null for a private new condition.
   /// @return Root with one instance, logical device and queue, or null on selection failure.
   static std::shared_ptr<VulkanSharedRoot> CreateSharedRoot(
+      std::shared_ptr<DeviceLostState> lostState = nullptr);
+
+  /// Opens one shared root with VK_KHR_swapchain and the instance extensions the embedder needs
+  /// to make a window-system surface. The extension names are borrowed until this call returns;
+  /// unsupported names fail selection instead of falling back to a headless root.
+  /// @param requiredInstanceExtensions NUL-terminated extension names the embedder requires.
+  /// @param lostState Shared loss condition, or null for a private new condition.
+  static std::shared_ptr<VulkanSharedRoot> CreateSharedRootWithPresentationSupport(
+      std::span<const char* const> requiredInstanceExtensions,
       std::shared_ptr<DeviceLostState> lostState = nullptr);
 
   /// Opens a shared root with timeline-semaphore support solely for native queue-gate tests.

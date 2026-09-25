@@ -194,6 +194,13 @@ struct GpuRootSelection {
   /// and sets none.
   std::function<std::optional<wgpu::Surface>(const wgpu::Instance&)> compatibleSurface;
 
+  /// Request a presentation-capable native Vulkan root. Headless selections leave this false;
+  /// a caller sets it before opening an instance-scoped window surface.
+  bool requireVulkanPresentation = false;
+  /// Platform surface extensions required on that Vulkan instance. The names and span are
+  /// borrowed until SelectGpuRoot returns. Nonempty without a presentation request is refused.
+  std::span<const char* const> requiredVulkanInstanceExtensions;
+
   /// Backend to select, or empty for the process default (see \ref ResolveGpuBackendKind).
   /// A caller that names a backend gets that one whatever the process default is, because a case
   /// about one backend must not run on another when a whole run changes its default.

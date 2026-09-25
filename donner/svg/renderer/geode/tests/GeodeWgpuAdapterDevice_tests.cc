@@ -564,6 +564,26 @@ TEST(GeodeGpuBackendResolution, ARequestAndACallerBothOutrankTheBuildDefault) {
               testing::Eq(GpuBackendKind::NativeMetal));
 }
 
+TEST(GeodeGpuBackendResolution, VulkanPresentationRefusesAnUnrelatedBackend) {
+  GpuRootSelection selection = HeadlessSelection();
+  selection.requireVulkanPresentation = true;
+  EXPECT_THAT(ResolveGpuBackendKind(selection, "", std::nullopt),
+              gpu::IsGpuErrorWithMessage(gpu::GpuErrorType::InvalidDescriptor,
+                                         HasSubstr("Vulkan presentation")));
+  selection.backend = GpuBackendKind::NativeMetal;
+  EXPECT_THAT(ResolveGpuBackendKind(selection, "", std::nullopt),
+              gpu::IsGpuErrorWithMessage(gpu::GpuErrorType::InvalidDescriptor,
+                                         HasSubstr("Vulkan presentation")));
+  selection.backend = GpuBackendKind::NativeVulkan;
+  EXPECT_THAT(ResolveGpuBackendKind(selection, "", std::nullopt), gpu::HasResult());
+  selection.requireVulkanPresentation = false;
+  const std::array<const char*, 1> required{"VK_KHR_surface"};
+  selection.requiredVulkanInstanceExtensions = required;
+  EXPECT_THAT(ResolveGpuBackendKind(selection, "", std::nullopt),
+              gpu::IsGpuErrorWithMessage(gpu::GpuErrorType::InvalidDescriptor,
+                                         HasSubstr("Vulkan instance extensions")));
+}
+
 /// Without a build default, a selection that asks for nothing stays on the transitional adapter.
 TEST(GeodeGpuBackendResolution, WithoutABuildDefaultHeadlessWorkStaysOnTheTransitionalAdapter) {
   EXPECT_THAT(ResolvedKind(HeadlessSelection(), "", std::nullopt),
