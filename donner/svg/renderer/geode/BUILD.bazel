@@ -1043,9 +1043,11 @@ donner_multi_transitioned_test(
 )
 
 # One document drawn by renderers on two devices, including from two threads, the way a render
-# worker and a UI-thread thumbnail pass share an editor document.
+# worker and a UI-thread thumbnail pass share an editor document. Its 22 short cases together
+# exceed the small target's 60-second limit under Vulkan synchronization validation.
 donner_cc_test(
     name = "geode_document_residency_tests_impl",
+    size = "medium",
     srcs = ["tests/GeodeDocumentResidency_tests.cc"],
     data = ["//third_party/resvg-test-suite:fonts"],
     target_compatible_with = _GEODE_ONLY,
@@ -1072,7 +1074,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_document_residency_tests",
-    size = "small",
+    size = "medium",
     testonly = 1,
     dep = ":geode_document_residency_tests_impl",
     opens_gpu_device = True,
