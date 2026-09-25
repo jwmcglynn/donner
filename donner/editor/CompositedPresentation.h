@@ -359,6 +359,16 @@ public:
       const std::optional<SelectTool::ActiveDragPreview>& activePreview) const {
     const std::optional<CachedTextures> cache = currentCache();
 
+    // An unpromotable selected child is painted into its owning tiles. The accepted result has
+    // no independent drag-target entity, but it still records the gesture transform those pixels
+    // represent. Keep chrome aligned with that accepted frame while this exact gesture is active.
+    if (activePreview.has_value() && cache.has_value() && cache->entity == entt::null &&
+        cache->representedPreview.has_value() &&
+        cache->representedPreview->entity == activePreview->entity &&
+        cache->representedPreview->dragGeneration == activePreview->dragGeneration) {
+      return cache->representedPreview;
+    }
+
     // Prefer an active preview whose entity matches our cached textures. If
     // the active drag has moved to a different entity while a new render is
     // in flight, keep displaying the last cached document image without

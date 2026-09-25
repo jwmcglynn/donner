@@ -40,6 +40,8 @@ declare global {
     __donnerWorkerStats?: {
       cachedTileCount?: number;
       completedResults: number;
+      frameVersion?: number;
+      acceptedForPresentation?: boolean;
       sourceVersion?: number;
       undoEntryCount?: number;
       offscreenCreateCount?: number;
@@ -63,6 +65,7 @@ declare global {
       pendingClick: boolean;
       selectedCount: number;
       workerBusy: boolean;
+      moved: boolean;
       pointerX: number;
       pointerY: number;
       eyedropperArmed: boolean;
@@ -1135,6 +1138,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   // around the document. Compare only the document's own extent; Firefox may
   // change those unrelated chrome pixels while menus close.
   let lastRestoreDifference = "";
+  let restoredPng: Buffer | null = null;
   await expect
     .poll(
       async () => {
@@ -1146,17 +1150,27 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
           documentPixelsInClip,
         );
         lastRestoreDifference = JSON.stringify(difference);
+        if (difference.changedPixels === 0) {
+          restoredPng = shot;
+        }
         return difference.changedPixels;
       },
       {
         message: "Disabling Compositor Tile Overlay must restore document pixels",
         timeout: scaledMs(5_000),
-        intervals: [50, 100, 250],
+        // Gecko can return a blank transferred-canvas capture immediately after the texture
+        // drop. Leave a frame window between readbacks while retaining exact pixel identity.
+        intervals: page.context().browser()?.browserType().name() === "firefox"
+          ? [250, 400, 600]
+          : [50, 100, 250],
       },
     )
     .toBe(0);
   await attachEvidenceFile("overlay-restore-difference", lastRestoreDifference, "application/json");
-  const geometryBaseline = await page.screenshot({ clip: documentClip });
+  if (restoredPng === null) {
+    throw new Error("overlay restore passed without a verified document capture");
+  }
+  const geometryBaseline = restoredPng;
   await attachEvidenceFile("overlay-disabled-baseline", geometryBaseline, "image/png");
 
   // The blue rounded rectangle spans (32,32)-(212,152). Its emitted
@@ -1467,6 +1481,151 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     samples.map((sample) => sample.coloredPixels),
     `baseline=${baselineBluePixels}; frames=${JSON.stringify(samples)}`,
   ).not.toContain(0);
+  expect(failures).toEqual([]);
+});
+
+test("Geode crown face paints at each held pointer position before release", async ({ page }) => {
+  test.slow();
+  const failures = await openEditor(page);
+  const canvas = page.locator("canvas#canvas");
+  const canvasBounds = await canvas.boundingBox();
+  expect(canvasBounds).not.toBeNull();
+  if (canvasBounds === null) {
+    return;
+  }
+  const resultsBeforeSample = await page.evaluate(() =>
+    window.__donnerWorkerStats?.completedResults ?? 0
+  );
+  await page.mouse.click(canvasBounds.x + canvasBounds.width * 0.5, canvasBounds.y + 282);
+  await expect(canvas).toHaveAttribute("data-active-sample-id", "geode-splash");
+  await expectWorkerResultsToReach(page, (results) => results > resultsBeforeSample, {
+    message: "Geode Splash must render before the crown drag",
+    timeout: scaledMs(5_000),
+  });
+  await waitForBrowserComposite(page);
+
+  const viewport = await readViewportStats(page);
+  const screenFromDocument = (x: number, y: number) => ({
+    x: viewport.documentX + x * viewport.documentWidth / 1536,
+    y: viewport.documentY + y * viewport.documentHeight / 1024,
+  });
+  // Native hit-testing identifies this interior point as #central-crown-face-2.
+  const press = screenFromDocument(537, 498);
+  const crop = { x: press.x - 50, y: press.y - 45, width: 145, height: 105 };
+  await page.mouse.move(press.x, press.y);
+  await waitForAppliedPointer(page, press, {
+    message: "Geode crown selection press",
+    timeoutMs: scaledMs(4_000),
+  });
+  await waitForPressReadiness(page, "Geode crown selection press");
+  await page.mouse.click(press.x, press.y);
+  await expect.poll(
+    () => page.evaluate(() => window.__donnerInteractionStats?.selectedCount ?? 0),
+    {
+      message: "the crown face must be selected before dragging",
+      timeout: scaledMs(4_000),
+    },
+  ).toBe(1);
+  await waitForPressReadiness(page, "Geode crown drag press");
+
+  const baseline = await page.screenshot({ clip: crop });
+  await attachEvidenceFile("geode-crown-selected-baseline", baseline, "image/png");
+  const selectedBounds = readEditorPixelBoundsFromPng(
+    baseline,
+    "selection-teal",
+    crop,
+    { minX: 10, minY: 5, maxX: 110, maxY: 95 },
+  );
+  expect(selectedBounds, "the selected crown face must have visible bounds").not.toBeNull();
+  if (selectedBounds === null) {
+    return;
+  }
+  const expectedTopLeft = screenFromDocument(518, 481);
+  const expectedBottomRight = screenFromDocument(556, 515);
+  for (
+    const [actual, expected] of [
+      [selectedBounds.minX, expectedTopLeft.x - crop.x],
+      [selectedBounds.minY, expectedTopLeft.y - crop.y],
+      [selectedBounds.maxX, expectedBottomRight.x - crop.x],
+      [selectedBounds.maxY, expectedBottomRight.y - crop.y],
+    ]
+  ) {
+    expect(Math.abs(actual - expected), "selection bounds must identify crown face 2")
+      .toBeLessThanOrEqual(8);
+  }
+
+  await page.mouse.move(press.x, press.y);
+  await waitForAppliedPointer(page, press, {
+    message: "Geode crown drag start",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.down();
+  try {
+    for (const delta of [24, 36]) {
+      const previousResults = await page.evaluate(() =>
+        window.__donnerWorkerStats?.completedResults ?? 0
+      );
+      const target = { x: press.x + delta, y: press.y };
+      await page.mouse.move(target.x, target.y);
+      await waitForAppliedPointer(page, target, {
+        message: `Geode crown held move ${delta}`,
+        timeoutMs: scaledMs(4_000),
+      });
+      await expect.poll(() =>
+        page.evaluate((before) => {
+          const worker = window.__donnerWorkerStats;
+          const interaction = window.__donnerInteractionStats;
+          const overlay = window.__donnerOverlayStats;
+          return !!interaction?.dragging && !!interaction.moved
+            && (worker?.completedResults ?? 0) > before && worker?.acceptedForPresentation === true
+            && (worker?.frameVersion ?? -1)
+              >= (overlay?.currentDocVersion ?? Number.POSITIVE_INFINITY)
+            && (overlay?.displayedDocVersion ?? -1)
+              >= (overlay?.currentDocVersion ?? Number.POSITIVE_INFINITY);
+        }, previousResults), {
+        message: `Geode crown move ${delta} must present a current document frame while held`,
+        timeout: scaledMs(5_000),
+        intervals: [16, 25, 50, 100],
+      }).toBe(true);
+      await waitForBrowserComposite(page);
+      const held = await page.screenshot({ clip: crop });
+      await attachEvidenceFile(`geode-crown-held-${delta}`, held, "image/png");
+      const heldChrome = readEditorPixelBoundsFromPng(
+        held,
+        "selection-teal",
+        crop,
+        { minX: 10, minY: 5, maxX: 130, maxY: 95 },
+      );
+      expect.soft(heldChrome, `held crown move ${delta} lost its selection chrome`).not.toBeNull();
+      if (heldChrome !== null) {
+        expect.soft(
+          heldChrome.minX,
+          `Geode crown selection chrome stayed at its old X during held move ${delta}`,
+        ).toBeGreaterThan(selectedBounds.minX + delta - 8);
+      }
+      // The pale face must vacate its old interior while the mouse is held. This crop is inside
+      // the face and away from its teal bounds and the pointer tooltip; the settled frame shows
+      // the same dark underlying facet here.
+      const oldFaceInterior = { x: 40, y: 40, width: 15, height: 12 };
+      const signal = readPngPixelDifferenceStats(baseline, held, oldFaceInterior);
+      expect.soft(
+        signal.changedPixelsAbove8,
+        `Geode crown content did not leave its old interior during held move ${delta}`,
+      )
+        .toBeGreaterThan(100);
+      const staticControl = readPngPixelDifferenceStats(
+        baseline,
+        held,
+        { x: 115, y: 70, width: 15, height: 15 },
+      );
+      expect(
+        staticControl.changedPixelsAbove8,
+        "a blank or stale screenshot cannot count as a moved crown face",
+      ).toBeLessThanOrEqual(5);
+    }
+  } finally {
+    await page.mouse.up();
+  }
   expect(failures).toEqual([]);
 });
 
