@@ -628,26 +628,31 @@ TEST(GlTextureCacheTest, RegisteredBackingSurvivesUntilItsExactRetirementIsRelea
   std::unique_ptr<ImGuiRuntimeRenderer> renderer = std::move(created).result();
   renderer->install();
 
-  GlTextureCache cache(device);
   int firstDestructionCount = 0;
   int secondDestructionCount = 0;
-  cache.uploadComposited(SingleSnapshotTilePreview(
-      "layer:retirement", 1, CreateCountingGeodeTextureSnapshot(device, &firstDestructionCount)));
-  cache.uploadComposited(SingleSnapshotTilePreview(
-      "layer:retirement", 2, CreateCountingGeodeTextureSnapshot(device, &secondDestructionCount)));
+  {
+    GlTextureCache cache(device);
+    cache.uploadComposited(SingleSnapshotTilePreview(
+        "layer:retirement", 1, CreateCountingGeodeTextureSnapshot(device, &firstDestructionCount)));
+    cache.uploadComposited(SingleSnapshotTilePreview(
+        "layer:retirement", 2,
+        CreateCountingGeodeTextureSnapshot(device, &secondDestructionCount)));
 
-  for (uint32_t frame = 0; frame <= UiTextureRegistry::kDefaultRetirementFrames; ++frame) {
-    renderer->advanceFrame();
-    cache.advancePresentationFrame();
+    for (uint32_t frame = 0; frame <= UiTextureRegistry::kDefaultRetirementFrames; ++frame) {
+      renderer->advanceFrame();
+      cache.advancePresentationFrame();
+    }
+    EXPECT_EQ(renderer->retainedTextureBackingCountForTest(), 1u)
+        << "cache retirement must transfer the backing into the renderer";
+    for (uint32_t frame = 1; frame < registry.retirementFrames(); ++frame) {
+      renderer->advanceFrame();
+      EXPECT_EQ(renderer->retainedTextureBackingCountForTest(), 1u);
+    }
+    EXPECT_FALSE(renderer->advanceFrame().empty());
+    EXPECT_EQ(renderer->retainedTextureBackingCountForTest(), 0u);
   }
-  EXPECT_EQ(renderer->retainedTextureBackingCountForTest(), 1u)
-      << "cache retirement must transfer the backing into the renderer";
-  for (uint32_t frame = 1; frame < registry.retirementFrames(); ++frame) {
-    renderer->advanceFrame();
-    EXPECT_EQ(renderer->retainedTextureBackingCountForTest(), 1u);
-  }
-  EXPECT_FALSE(renderer->advanceFrame().empty());
-  EXPECT_EQ(renderer->retainedTextureBackingCountForTest(), 0u);
+  EXPECT_EQ(firstDestructionCount, 1);
+  EXPECT_EQ(secondDestructionCount, 1);
 
   renderer->uninstall();
   ImGui::DestroyContext(context);
@@ -684,6 +689,7 @@ TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures)
   ASSERT_NE(renderer, nullptr);
 
   int firstDestructionCount = 0;
+  int secondDestructionCount = 0;
   std::shared_ptr<const svg::RendererTextureSnapshot> firstSnapshot =
       CreateCountingGeodeTextureSnapshot(device, &firstDestructionCount, Vector2i(3, 5));
   ASSERT_NE(firstSnapshot, nullptr);
@@ -699,7 +705,6 @@ TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures)
   EXPECT_EQ(stats.peakTrackedBytes, stats.totalTrackedBytes);
   EXPECT_EQ(stats.largestAllocationPx, Vector2i(3, 5));
 
-  int secondDestructionCount = 0;
   std::shared_ptr<const svg::RendererTextureSnapshot> secondSnapshot =
       CreateCountingGeodeTextureSnapshot(device, &secondDestructionCount, Vector2i(2, 2));
   ASSERT_NE(secondSnapshot, nullptr);
@@ -741,6 +746,7 @@ TEST(GlTextureCacheTest, UnboundedUploadRetainsSeparateOverviewAcrossBoundedUplo
   ASSERT_NE(device, nullptr);
 
   int overviewDestructionCount = 0;
+  int boundedDestructionCount = 0;
   RenderResult::CompositedPreview overviewPreview;
   RenderResult::CompositedTile overviewTile = MetadataTile(
       RenderResult::CompositedTile::Kind::Segment, 1, Vector2i(1, 1), Vector2i(100, 100));
@@ -758,7 +764,6 @@ TEST(GlTextureCacheTest, UnboundedUploadRetainsSeparateOverviewAcrossBoundedUplo
   EXPECT_FALSE(cache.activeTilesViewportBounded());
   EXPECT_EQ(cache.overviewTiles().front().rasterCanvasSize, Vector2i(100, 100));
 
-  int boundedDestructionCount = 0;
   RenderResult::CompositedPreview boundedPreview;
   RenderResult::CompositedTile boundedTile = MetadataTile(
       RenderResult::CompositedTile::Kind::Segment, 2, Vector2i(1, 1), Vector2i(20, 20));
@@ -794,6 +799,7 @@ TEST(GlTextureCacheTest, OverviewUploadDoesNotReplaceActiveBoundedTiles) {
   ASSERT_NE(device, nullptr);
 
   int boundedDestructionCount = 0;
+  int overviewDestructionCount = 0;
   RenderResult::CompositedPreview boundedPreview;
   RenderResult::CompositedTile boundedTile = MetadataTile(
       RenderResult::CompositedTile::Kind::Segment, 2, Vector2i(1, 1), Vector2i(20, 20));
@@ -810,7 +816,6 @@ TEST(GlTextureCacheTest, OverviewUploadDoesNotReplaceActiveBoundedTiles) {
   ASSERT_EQ(cache.tiles().size(), 1u);
   EXPECT_TRUE(cache.overviewTiles().empty());
 
-  int overviewDestructionCount = 0;
   RenderResult::CompositedPreview overviewPreview;
   RenderResult::CompositedTile overviewTile = MetadataTile(
       RenderResult::CompositedTile::Kind::Segment, 1, Vector2i(1, 1), Vector2i(100, 100));
