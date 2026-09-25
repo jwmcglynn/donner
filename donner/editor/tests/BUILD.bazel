@@ -349,6 +349,24 @@ sh_test(
     target_compatible_with = ["@platforms//os:linux"],
 )
 
+# The platform-default flip must also open a real displayed Vulkan window without an override.
+# The runner checks both an absent and an empty request, and refuses skipped gtest cases.
+sh_test(
+    name = "editor_window_vulkan_default_tests",
+    srcs = ["RunEditorWindowVulkanSurfaceTests.sh"],
+    args = [
+        "$(location :editor_window_tests_geode)",
+        "default",
+    ],
+    data = [":editor_window_tests_geode"],
+    tags = [
+        "exclusive-if-local",
+        "local-gpu-isolated",
+        "requires_xvfb",
+    ],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
 # The surface-less arm of the editor's WebGPU frame path. Split out of
 # `editor_window_tests` so it can carry a `geode` variant: that is what makes
 # `bazel test //...` run it on both the macOS and Linux lanes, which is the only
