@@ -2813,8 +2813,27 @@ TEST(AsyncRendererTest, PartialBudgetZoomKeepsPreviousCompletePresentation) {
   ASSERT_TRUE(layerHasPayload && segmentMissing)
       << "the zoom must reproduce a partial new raster: " << DescribeCompositeSegments(tiles)
       << " result=" << DescribePresentation(*zoomed);
+  ASSERT_GT(asyncRenderer.compositorRenderFrameStats().textureAllocationFailureCount, 0);
   EXPECT_FALSE(zoomed->compositedPreview.has_value()) << DescribePresentation(*zoomed);
   EXPECT_TRUE(zoomed->workerTiming.nothingToPresent) << DescribePresentation(*zoomed);
+
+  const std::optional<RenderResult> complete = renderSelected(3, PartialBudgetRasterViewport());
+  ASSERT_TRUE(complete.has_value());
+  if (complete->compositedPreview.has_value()) {
+    const auto& completeTiles = complete->compositedPreview->tiles;
+    const bool hasBackground = std::ranges::any_of(completeTiles, [](const auto& tile) {
+      return tile.kind != RenderResult::CompositedTile::Kind::Layer && HasPresentationPayload(tile);
+    });
+    const bool hasLayer = std::ranges::any_of(completeTiles, [](const auto& tile) {
+      return tile.kind == RenderResult::CompositedTile::Kind::Layer && HasPresentationPayload(tile);
+    });
+    EXPECT_TRUE(hasBackground && hasLayer) << DescribePresentation(*complete);
+    EXPECT_FALSE(complete->workerTiming.nothingToPresent) << DescribePresentation(*complete);
+  } else {
+    EXPECT_TRUE(renderer.requiresTextureSnapshotPresentation())
+        << "the software renderer must recover with a complete background and layer";
+    EXPECT_TRUE(complete->workerTiming.nothingToPresent) << DescribePresentation(*complete);
+  }
 }
 
 // A drag frame whose tiles all fail leaves nothing to present. The renderer's main target still

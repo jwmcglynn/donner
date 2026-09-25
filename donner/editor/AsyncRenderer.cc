@@ -317,6 +317,13 @@ bool CanSkipPreviewMainCompose(bool hasPreview, bool promotionComplete, bool has
          !overviewInfillOnly;
 }
 
+bool CanPublishCompositorTiles(const svg::compositor::CompositorController* compositor) {
+  // An earlier tile can succeed before a later allocation fails. Keep the prior presentation
+  // until a retry or direct-compose fallback produces a complete paint-order tile set.
+  return compositor != nullptr &&
+         compositor->lastRenderFrameStats().textureAllocationFailureCount == 0;
+}
+
 class ScopedFrameResourceScope {
 public:
   explicit ScopedFrameResourceScope(svg::RendererInterface& renderer) : renderer_(renderer) {
@@ -1391,7 +1398,7 @@ void AsyncRenderer::workerLoop() {
       if (request.overviewInfillOnly) {
         return std::nullopt;
       }
-      if (compositor_ == nullptr) {
+      if (!CanPublishCompositorTiles(compositor_.get())) {
         return std::nullopt;
       }
       const std::vector<Entity> dragPreviewEntities =
