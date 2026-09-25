@@ -887,7 +887,17 @@ TEST(EditorControlSessionTest, ScreenSpaceReplayConvertsDragDistanceByViewportZo
           session.handleToolCall("replay_rnr", json{{"rnr_path", path.string()},
                                                     {"render_each_frame", false},
                                                     {"include_frame_results", false}});
-      ASSERT_FALSE(result.isError) << "drag replay failed";
+      std::string replayError;
+      if (result.isError) {
+        replayError = result.body.value("error", std::string("missing replay error detail"));
+        const std::string replayPath = path.string();
+        const std::string redactedPath = "<test .rnr path>";
+        for (std::size_t offset = replayError.find(replayPath); offset != std::string::npos;
+             offset = replayError.find(replayPath, offset + redactedPath.size())) {
+          replayError.replace(offset, replayPath.size(), redactedPath);
+        }
+      }
+      ASSERT_FALSE(result.isError) << "drag replay failed: " << replayError;
       const ToolCallResult selection = session.handleToolCall(
           "select_by_selector", json{{"selector", "#target"}, {"render", false}});
       ASSERT_FALSE(selection.isError) << selection.body.dump(2);

@@ -577,7 +577,7 @@ test.describe("composited drag invariants", () => {
     if (finalBlue === null) throw new Error("blue shape is missing after drag");
     expect(Math.abs(finalBlue.minX - initialBlue.minX - 50)).toBeLessThan(3);
     expect(Math.abs(finalBlue.minY - initialBlue.minY - 30)).toBeLessThan(3);
-    expect(failures.length).toBe(0);
+    expect(failures).toEqual([]);
   });
 
   test("g: a shape drag never presents a position it already left", async ({ browserName, page }) => {
