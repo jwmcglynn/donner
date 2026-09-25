@@ -53,13 +53,12 @@ namespace donner::editor::gui {
 
 namespace internal {
 
-/// The Wasm render worker owns a separate WebGPU device, so the UI's primary
-/// and direct-framebuffer renderers remain single-threaded and may share one
-/// GeodeDevice wrapper. Desktop's AsyncRenderer shares the primary wrapper
-/// across threads; its UI-only framebuffer renderers need a separate wrapper
-/// to isolate mutable counters and deferred-destroy queues.
-[[nodiscard]] constexpr bool ShouldShareWgpuFramebufferGeodeDevice(bool emscriptenBuild) noexcept {
-  return emscriptenBuild;
+/// The transitional Wasm UI can share its wrapper because the render worker owns a separate
+/// device. The browser runtime gives the canvas its own logical UI context. Desktop's
+/// AsyncRenderer shares the primary wrapper across threads, so its UI context is separate too.
+[[nodiscard]] constexpr bool ShouldShareWgpuFramebufferGeodeDevice(
+    bool emscriptenBuild, bool browserRuntimeSelected) noexcept {
+  return emscriptenBuild && !browserRuntimeSelected;
 }
 
 /// Opaque fallback clear color for the browser UI surface, matching the page

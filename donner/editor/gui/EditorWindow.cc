@@ -973,6 +973,26 @@ bool StartAsyncSmokeReadback(const geode::GeodeGpuRoot& root, const wgpu::Textur
                           requestId, inFlight, alive, consecutiveFailures);
   return true;
 }
+
+bool StartRequestedSmokeReadback(bool requested, bool canReadBack, const geode::GeodeGpuRoot& root,
+                                 const std::shared_ptr<geode::GeodeDevice>& context,
+                                 const gpu::Texture& target, uint32_t width, uint32_t height,
+                                 gpu::TextureFormat format, std::chrono::milliseconds budget,
+                                 int requestId, const std::shared_ptr<std::atomic_bool>& inFlight,
+                                 const std::shared_ptr<std::atomic_bool>& alive,
+                                 const std::shared_ptr<std::atomic_uint>& consecutiveFailures,
+                                 EditorWindowFrameTiming& timing) {
+  if (!requested || !canReadBack) {
+    return false;
+  }
+  if (root.capabilities().backend == geode::GpuBackendKind::Browser) {
+    return StartAsyncRuntimeSmokeReadback(context, target, width, height, format, budget, requestId,
+                                          inFlight, alive, consecutiveFailures, timing);
+  }
+  return StartAsyncSmokeReadback(root, context->adapterDevice().wgpuTextureOf(target), width,
+                                 height, format, requestId, inFlight, alive, consecutiveFailures,
+                                 timing);
+}
 #endif
 #endif
 
@@ -1658,6 +1678,96 @@ struct EditorWindow::WgpuState {
 struct EditorWindow::WgpuState {};
 #endif
 
+#ifdef DONNER_EDITOR_WGPU
+bool BrowserRuntimeSelectedForEditor(const geode::GpuRootSelection& selection) {
+#ifdef __EMSCRIPTEN__
+  const char* backendRequest = std::getenv("DONNER_GPU_BACKEND");
+  const gpu::Result<geode::GpuBackendKind> requestedBackend = geode::ResolveGpuBackendKind(
+      selection, backendRequest == nullptr ? std::string_view{} : std::string_view(backendRequest),
+      geode::BuildDefaultGpuBackendKind());
+  return requestedBackend.hasResult() &&
+         requestedBackend.result() == geode::GpuBackendKind::Browser;
+#else
+  (void)selection;
+  return false;
+#endif
+}
+
+bool NeedsWgpuSelectionSurface(bool offscreen, bool browserRuntimeSelected) {
+  return !offscreen && !browserRuntimeSelected;
+}
+
+bool PrepareEditorSurfaceFormat(std::unique_ptr<internal::PresentationSurface>& presentation,
+                                const geode::GeodeGpuRoot& root, bool browserRuntimeSelected,
+                                bool offscreen, bool enableReadback, gpu::TextureFormat& format,
+                                gpu::TextureUsage& usage) {
+#ifdef __EMSCRIPTEN__
+  if (browserRuntimeSelected && !offscreen) {
+    const std::optional<gpu::TextureFormat> preferred = BrowserPreferredCanvasFormat();
+    if (!preferred.has_value()) {
+      std::fprintf(stderr, "EditorWindow: the browser reported no supported canvas format\n");
+      return false;
+    }
+    format = *preferred;
+    presentation = internal::CreateEditorBrowserCanvasSurface(*preferred, enableReadback);
+    return true;
+  }
+#else
+  (void)browserRuntimeSelected;
+  (void)offscreen;
+#endif
+  if (presentation != nullptr) {
+    if (!presentation->chooseConfiguration(root.adapter(), enableReadback)) {
+      return false;
+    }
+    format = presentation->format();
+    return true;
+  }
+  format = gpu::TextureFormat::BGRA8Unorm;
+  usage = RenderTargetUsage(enableReadback);
+  return true;
+}
+
+#ifdef __EMSCRIPTEN__
+std::shared_ptr<geode::GeodeDevice> CreateBrowserOrTransitionalUiContext(
+    bool browserRuntimeSelected, const std::shared_ptr<geode::GeodeDevice>& first,
+    const std::shared_ptr<geode::GeodePhysicalDeviceOwner>& owner, gpu::TextureFormat format) {
+  if (browserRuntimeSelected) {
+    return std::shared_ptr<geode::GeodeDevice>(
+        geode::GeodeDevice::CreateOverPhysicalDeviceOwner(owner, format));
+  }
+  return first;
+}
+
+void ReportBrowserCanvasAttachment(bool browserRuntimeSelected) {
+  if (browserRuntimeSelected) {
+    std::fprintf(stderr, "[EditorWindow] browser canvas runtime surface attached\n");
+  }
+}
+
+bool IsBrowserRoot(const geode::GeodeGpuRoot* root) {
+  return root != nullptr && root->capabilities().backend == geode::GpuBackendKind::Browser;
+}
+
+std::unique_ptr<internal::PresentationSurface> RebuildBrowserCanvasSurface(
+    const std::shared_ptr<geode::GeodeDevice>& context, gpu::TextureFormat format,
+    bool enableReadback, gpu::TextureUsage& usage, int width, int height) {
+  const std::optional<gpu::TextureFormat> preferred = BrowserPreferredCanvasFormat();
+  if (!preferred.has_value() || *preferred != format) {
+    std::fprintf(stderr, "EditorWindow: the rebuilt browser canvas changed format\n");
+    return nullptr;
+  }
+  std::unique_ptr<internal::PresentationSurface> replacement =
+      internal::CreateEditorBrowserCanvasSurface(*preferred, enableReadback);
+  if (!replacement->attachToDevice(*context) || !replacement->configure(width, height)) {
+    return nullptr;
+  }
+  usage = replacement->usage();
+  return replacement;
+}
+#endif
+#endif
+
 EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(options)) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   // The worker-owned document canvas sits behind this ImGui surface. Keep
@@ -1815,16 +1925,8 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   // preference would leave a host whose preferred backend is unusable with no adapter at all,
   // where it previously fell back and ran.
   selection.usePlatformDefaultBackend = false;
-  bool browserRuntimeSelected = false;
-#ifdef __EMSCRIPTEN__
-  const char* backendRequest = std::getenv("DONNER_GPU_BACKEND");
-  const gpu::Result<geode::GpuBackendKind> requestedBackend = geode::ResolveGpuBackendKind(
-      selection, backendRequest == nullptr ? std::string_view{} : std::string_view(backendRequest),
-      geode::BuildDefaultGpuBackendKind());
-  browserRuntimeSelected =
-      requestedBackend.hasResult() && requestedBackend.result() == geode::GpuBackendKind::Browser;
-#endif
-  if (!useOffscreenWgpuTarget && !browserRuntimeSelected) {
+  const bool browserRuntimeSelected = BrowserRuntimeSelectedForEditor(selection);
+  if (NeedsWgpuSelectionSurface(useOffscreenWgpuTarget, browserRuntimeSelected)) {
     internal::PrepareSurfaceForSelection(window_, wgpuState_->presentation, selection,
                                          surfaceAttachFailed);
   }
@@ -1847,35 +1949,17 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   enableSurfaceReadback = enableSurfaceReadback || WgpuReadbackStatsEnabled();
 #endif
   wgpuState_->surfaceReadbackEnabled = enableSurfaceReadback;
-  if (browserRuntimeSelected && !useOffscreenWgpuTarget) {
-#ifdef __EMSCRIPTEN__
-    const std::optional<gpu::TextureFormat> preferred = BrowserPreferredCanvasFormat();
-    if (!preferred.has_value()) {
-      std::fprintf(stderr, "EditorWindow: the browser reported no supported canvas format\n");
-      glfwDestroyWindow(window_);
-      window_ = nullptr;
-      TerminateGlfw();
-      return;
-    }
-    wgpuState_->surfaceFormat = *preferred;
-    wgpuState_->presentation =
-        internal::CreateEditorBrowserCanvasSurface(*preferred, enableSurfaceReadback);
-#endif
-  } else if (wgpuState_->presentation != nullptr) {
-    if (!wgpuState_->presentation->chooseConfiguration(root->adapter(), enableSurfaceReadback)) {
-      std::fprintf(stderr, "EditorWindow: the window surface cannot present editor frames\n");
-      glfwDestroyWindow(window_);
-      window_ = nullptr;
-      TerminateGlfw();
-      return;
-    }
-    // Only the format is settled this early, because the renderer's pipelines are compiled for it
-    // before there is a device. The usage and alpha compositing a surface ends up with depend on
-    // what it reports once it exists, so they are read after it is built below.
-    wgpuState_->surfaceFormat = wgpuState_->presentation->format();
-  } else {
-    wgpuState_->surfaceFormat = gpu::TextureFormat::BGRA8Unorm;
-    wgpuState_->surfaceUsage = RenderTargetUsage(enableSurfaceReadback);
+  // Settle the format before Geode compiles its pipelines. A surface's final usage is read
+  // after configuration below, when the platform can narrow the requested capabilities.
+  if (!PrepareEditorSurfaceFormat(wgpuState_->presentation, *root, browserRuntimeSelected,
+                                  useOffscreenWgpuTarget, enableSurfaceReadback,
+                                  wgpuState_->surfaceFormat, wgpuState_->surfaceUsage)) {
+    std::fprintf(stderr, "EditorWindow: the window surface cannot present editor frames\n");
+    wgpuState_->presentation.reset();
+    glfwDestroyWindow(window_);
+    window_ = nullptr;
+    TerminateGlfw();
+    return;
   }
 
   int surfaceWidth = 0;
@@ -1904,27 +1988,18 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   wgpuState_->physicalDevice = wgpuState_->geodeDevice->physicalDeviceOwner();
   wgpuState_->root = &wgpuState_->physicalDevice->root();
 #ifdef __EMSCRIPTEN__
-  static_assert(internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/true));
-  if (browserRuntimeSelected) {
-    // The browser's runtime owns the canvas and needs a separate logical UI context over the
-    // selected physical device. The transitional wrapper keeps its established shared context.
-    wgpuState_->framebufferGeodeDevice = geode::GeodeDevice::CreateOverPhysicalDeviceOwner(
-        wgpuState_->physicalDevice, wgpuState_->surfaceFormat);
-    if (wgpuState_->framebufferGeodeDevice == nullptr) {
-      std::fprintf(stderr, "EditorWindow: could not create the browser UI context\n");
-      wgpuState_->presentation.reset();
-      glfwDestroyWindow(window_);
-      window_ = nullptr;
-      TerminateGlfw();
-      return;
-    }
-  } else {
-    // The Wasm render worker owns a separate device, leaving both users of the transitional
-    // wrapper on the UI thread. Reuse it to avoid compiling identical Geode pipelines twice.
-    wgpuState_->framebufferGeodeDevice = wgpuState_->geodeDevice;
-  }
+  static_assert(internal::ShouldShareWgpuFramebufferGeodeDevice(
+      /*emscriptenBuild=*/true, /*browserRuntimeSelected=*/false));
+  static_assert(!internal::ShouldShareWgpuFramebufferGeodeDevice(
+      /*emscriptenBuild=*/true, /*browserRuntimeSelected=*/true));
+  // The browser owns the canvas and uses a separate logical UI context over the selected
+  // physical device. The transitional wrapper keeps its established shared UI context.
+  wgpuState_->framebufferGeodeDevice =
+      CreateBrowserOrTransitionalUiContext(browserRuntimeSelected, wgpuState_->geodeDevice,
+                                           wgpuState_->physicalDevice, wgpuState_->surfaceFormat);
 #else
-  static_assert(!internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/false));
+  static_assert(!internal::ShouldShareWgpuFramebufferGeodeDevice(
+      /*emscriptenBuild=*/false, /*browserRuntimeSelected=*/false));
   // Native AsyncRenderer shares the primary wrapper with its background
   // thread. Keep the UI framebuffer's mutable counters and deferred-destroy
   // queues isolated in a second wrapper even though both wrap the same raw
@@ -1934,14 +2009,15 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   framebufferEmbedConfig.textureFormat = geode::WgpuTextureFormatFrom(wgpuState_->surfaceFormat);
   wgpuState_->framebufferGeodeDevice =
       geode::GeodeDevice::CreateFromExternal(framebufferEmbedConfig);
+#endif
   if (wgpuState_->framebufferGeodeDevice == nullptr) {
-    std::fprintf(stderr, "EditorWindow: framebuffer GeodeDevice::CreateFromExternal failed\n");
+    std::fprintf(stderr, "EditorWindow: could not create the framebuffer Geode context\n");
+    wgpuState_->presentation.reset();
     glfwDestroyWindow(window_);
     window_ = nullptr;
     TerminateGlfw();
     return;
   }
-#endif
 
   if (wgpuState_->presentation != nullptr) {
     if (!wgpuState_->presentation->attachToDevice(*wgpuState_->framebufferGeodeDevice) ||
@@ -1960,9 +2036,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     // let the frame loop copy out of frames that were never configured to be copied from.
     wgpuState_->surfaceUsage = wgpuState_->presentation->usage();
 #ifdef __EMSCRIPTEN__
-    if (browserRuntimeSelected) {
-      std::fprintf(stderr, "[EditorWindow] browser canvas runtime surface attached\n");
-    }
+    ReportBrowserCanvasAttachment(browserRuntimeSelected);
 #endif
 #ifdef __EMSCRIPTEN__
     // The constructor optimistically set an alpha-0 clear so the worker's document canvas can
@@ -2394,21 +2468,11 @@ gpu::Texture EditorWindow::acquirePresentationFrame(int framebufferWidth, int fr
 std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentationSurface(
     int framebufferWidth, int framebufferHeight) {
 #ifdef __EMSCRIPTEN__
-  if (wgpuState_->root != nullptr &&
-      wgpuState_->root->capabilities().backend == geode::GpuBackendKind::Browser) {
-    const std::optional<gpu::TextureFormat> preferred = BrowserPreferredCanvasFormat();
-    if (!preferred.has_value() || *preferred != wgpuState_->surfaceFormat) {
-      std::fprintf(stderr, "EditorWindow: the rebuilt browser canvas changed format\n");
-      return nullptr;
-    }
-    std::unique_ptr<internal::PresentationSurface> replacement =
-        internal::CreateEditorBrowserCanvasSurface(*preferred, wgpuState_->surfaceReadbackEnabled);
-    if (!replacement->attachToDevice(*wgpuState_->framebufferGeodeDevice) ||
-        !replacement->configure(framebufferWidth, framebufferHeight)) {
-      return nullptr;
-    }
-    wgpuState_->surfaceUsage = replacement->usage();
-    return replacement;
+  if (IsBrowserRoot(wgpuState_->root)) {
+    return RebuildBrowserCanvasSurface(wgpuState_->framebufferGeodeDevice,
+                                       wgpuState_->surfaceFormat,
+                                       wgpuState_->surfaceReadbackEnabled, wgpuState_->surfaceUsage,
+                                       framebufferWidth, framebufferHeight);
   }
 #endif
   // The same staged bringup the constructor runs, against the window that is still here: a
@@ -2743,9 +2807,6 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       .alive = wgpuState_->smokeReadbackAlive,
       .consecutiveFailures = wgpuState_->smokeReadbackConsecutiveFailures,
   };
-  const bool readbackViaBrowserRuntime =
-      requestAsyncSmokeReadback && wgpuState_->root != nullptr &&
-      wgpuState_->root->capabilities().backend == geode::GpuBackendKind::Browser;
 #endif
   if (!configureFrameTarget(displayW, displayH)) {
     return;
@@ -2800,20 +2861,12 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     }
   }
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-  if (readbackViaBrowserRuntime && canReadBack &&
-      StartAsyncRuntimeSmokeReadback(
-          wgpuState_->framebufferGeodeDevice, frameTarget, readbackWidth, readbackHeight,
-          wgpuState_->surfaceFormat, wgpuState_->readbackBudget, smokeReadbackRequestId,
-          wgpuState_->smokeReadbackInFlight, wgpuState_->smokeReadbackAlive,
-          wgpuState_->smokeReadbackConsecutiveFailures, timing)) {
-    smokeReadbackHandedOffToMapCallback = true;
-  } else if (!readbackViaBrowserRuntime && requestAsyncSmokeReadback && canReadBack &&
-             StartAsyncSmokeReadback(
-                 *wgpuState_->root,
-                 wgpuState_->framebufferGeodeDevice->adapterDevice().wgpuTextureOf(frameTarget),
-                 readbackWidth, readbackHeight, wgpuState_->surfaceFormat, smokeReadbackRequestId,
-                 wgpuState_->smokeReadbackInFlight, wgpuState_->smokeReadbackAlive,
-                 wgpuState_->smokeReadbackConsecutiveFailures, timing)) {
+  if (StartRequestedSmokeReadback(requestAsyncSmokeReadback, canReadBack, *wgpuState_->root,
+                                  wgpuState_->framebufferGeodeDevice, frameTarget, readbackWidth,
+                                  readbackHeight, wgpuState_->surfaceFormat,
+                                  wgpuState_->readbackBudget, smokeReadbackRequestId,
+                                  wgpuState_->smokeReadbackInFlight, wgpuState_->smokeReadbackAlive,
+                                  wgpuState_->smokeReadbackConsecutiveFailures, timing)) {
     smokeReadbackHandedOffToMapCallback = true;
   }
   if (publishSmokeReadbackStats && targetReadback != nullptr && !targetReadback->empty()) {
