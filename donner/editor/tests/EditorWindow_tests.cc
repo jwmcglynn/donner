@@ -1529,9 +1529,8 @@ TEST(EditorWindowTest, OffscreenWindowDoesNotPinLaterWindowToNullPlatform) {
         .initialHeight = 48,
         .visible = false,
     });
-    if (!before.valid()) {
-      GTEST_SKIP() << "The host cannot open a display-backed editor window";
-    }
+    ASSERT_THAT(before.valid(), testing::IsTrue())
+        << "A declared display must open a window for this regression to be meaningful";
     EXPECT_THAT(glfwGetPlatform(), testing::Ne(GLFW_PLATFORM_NULL));
   }
 
