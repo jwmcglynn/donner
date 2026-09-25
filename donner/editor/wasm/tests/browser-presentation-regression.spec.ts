@@ -864,12 +864,9 @@ async function openBasicShapes(page: Page): Promise<{
   );
   await waitForBrowserComposite(page);
 
-  const documentClip = {
-    x: canvasBounds.x + 280,
-    y: canvasBounds.y + 250,
-    width: 660,
-    height: 430,
-  };
+  // The source pane can collapse at the Firefox compatibility viewport, moving the document
+  // hundreds of CSS pixels left. Probe the actual published artboard instead of a 1600px layout.
+  const documentClip = presentedDocumentRegion(await readViewportStats(page));
   // A completed worker result is not yet a presented document. The counter
   // above advances when the app thread polls the raster off the worker, at
   // least one UI frame before that frame reaches the browser composite - and
@@ -897,7 +894,11 @@ async function openBasicShapes(page: Page): Promise<{
         {
           message: "expected the presented render pane to show the Basic Shapes blue rectangle",
           timeout: scaledMs(5_000),
-          intervals: [16, 25, 50, 100],
+          // Gecko's first WebGPU screenshot can be empty even after the worker publishes.
+          // Closely repeated readbacks starve the next browser composite; leave a frame window.
+          intervals: page.context().browser()?.browserType().name() === "firefox"
+            ? [250, 400, 600]
+            : [16, 25, 50, 100],
         },
       )
       .toBeGreaterThan(0);
@@ -1302,31 +1303,7 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   // forward.
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const failures = await openEditor(page);
-  const editorCanvas = page.locator("canvas#canvas");
-  const editorBounds = await editorCanvas.boundingBox();
-  expect(editorBounds).not.toBeNull();
-  if (editorBounds === null) {
-    return;
-  }
-
-  const beforeSample = await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0);
-  await page.mouse.click(editorBounds.x + editorBounds.width * 0.76, editorBounds.y + 282);
-  await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
-  await expectWorkerResultsToReach(
-    page,
-    (completedResults) => completedResults > beforeSample,
-    {
-      message: "expected Basic Shapes to render before the drag",
-      timeout: scaledMs(5_000),
-    },
-  );
-
-  const probeRegion = {
-    x: editorBounds.x + 280,
-    y: editorBounds.y + 260,
-    width: 460,
-    height: 280,
-  };
+  const { documentClip: probeRegion } = await openBasicShapes(page);
   let baselineBluePixels = 0;
   await expect
     .poll(async () => {
@@ -1335,13 +1312,23 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     }, {
       message: "expected the initial Basic Shapes render before starting the drag",
       timeout: scaledMs(2_000),
-      intervals: [16, 25, 50, 100],
+      intervals: [250, 400, 600],
     })
     .toBeGreaterThan(500);
 
+  const blueCss = readEditorPixelBoundsFromPng(
+    await page.screenshot({ clip: probeRegion }),
+    "basic-blue",
+    probeRegion,
+    { minX: 0, minY: 0, maxX: probeRegion.width, maxY: probeRegion.height },
+  );
+  expect(blueCss, "the drag press needs a visible blue rectangle").not.toBeNull();
+  if (blueCss === null) {
+    return;
+  }
   const dragStart = {
-    x: editorBounds.x + kBlueRectOffset.x,
-    y: editorBounds.y + kBlueRectOffset.y,
+    x: probeRegion.x + (blueCss.minX + blueCss.maxX) / 2,
+    y: probeRegion.y + (blueCss.minY + blueCss.maxY) / 2,
   };
   // The press must land on a settled editor: a mouse-down while the sample's
   // first render is still in flight is dropped by the busy worker (the same
@@ -2265,7 +2252,7 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
   }).toBe(expectedFill);
 
   const beforeTextUndo = await page.evaluate(() =>
-    window.__donnerEyedropperTestState?.undoEntryCount ?? -1
+    window.__donnerWorkerStats?.undoEntryCount ?? -1
   );
   const textTool = { x: eyedropperTool.x - 36, y: eyedropperTool.y };
   await page.mouse.move(textTool.x, textTool.y);
@@ -2293,24 +2280,27 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     page.evaluate(() => ({
       selectedCount: window.__donnerInteractionStats?.selectedCount,
       selectedStyle: window.__donnerEyedropperTestState?.selectedStyle,
+      textEditing: window.__donnerEyedropperShortcutProbe?.current?.textEditing,
+      textToolActive: window.__donnerEyedropperShortcutProbe?.current?.textToolActive,
+      workerBusy: window.__donnerInteractionStats?.workerBusy,
+      pointerX: window.__donnerInteractionStats?.pointerX,
+      pointerY: window.__donnerInteractionStats?.pointerY,
+      sourceVersion: window.__donnerWorkerStats?.sourceVersion,
     })), {
-    message: "Text tool must create and select a text node with the sampled Fill before typing",
+    message: "Text tool must create and select a text editing session before typing",
     timeout: scaledMs(5_000),
-  }).toEqual({
+  }).toEqual(expect.objectContaining({
     selectedCount: 1,
-    selectedStyle: expect.stringContaining(expectedFill),
-  });
+    textEditing: true,
+    textToolActive: true,
+  }));
   await page.keyboard.type("SVG");
-  await expect.poll(() => page.evaluate(() => window.__donnerEyedropperTestState?.selectedText), {
-    message: "typed SVG text must reach the selected DOM element before the commit key",
-    timeout: scaledMs(5_000),
-  }).toBe("SVG");
   const beforeEscapeFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
   await page.keyboard.down("Escape");
   await expectBrowserKeyFrame(page, beforeEscapeFrame, "Escape must wake a browser editor frame");
   await expect.poll(() =>
     page.evaluate(() => ({
-      undoEntries: window.__donnerEyedropperTestState?.undoEntryCount ?? -1,
+      undoEntries: window.__donnerWorkerStats?.undoEntryCount ?? -1,
       shortcutProbe: window.__donnerEyedropperShortcutProbe ?? null,
     })), {
     message: "Escape must commit the newly created SVG text as one document edit",

@@ -5,6 +5,7 @@ import {
   findElementColoredPixel,
   readCanvasColorStats,
   readEditorPixelBounds,
+  readEditorPixelBoundsFromPng,
   readEditorResizePixelBounds,
   readElementColorStats,
   readTextStyleGlyphStats,
@@ -1516,7 +1517,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     .poll(async () => (await readElementColorStats(canvas)).coloredPixels, {
       message: "expected visible Basic Shapes pixels before selecting the resize target",
       timeout: scaledMs(1000),
-      intervals: [16, 25, 50, 100],
+      intervals: [250, 400, 600],
     })
     .toBeGreaterThan(500);
 
@@ -1526,21 +1527,47 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     return;
   }
 
-  const blueRectCenter = {
-    x: editorBounds.x + kBlueRectOffset.x,
-    y: editorBounds.y + kBlueRectOffset.y,
-  };
-  const resizeHandle = { x: editorBounds.x + 498, y: editorBounds.y + 413 };
+  const viewport = await page.evaluate(() => window.__donnerViewportStats);
+  expect(viewport, "Basic Shapes must publish its visible document bounds").toBeDefined();
+  if (!viewport) {
+    return;
+  }
   const probeRegion = {
-    x: editorBounds.x + 300,
-    y: editorBounds.y + 270,
-    width: 360,
-    height: 240,
+    x: Math.max(viewport.documentX, viewport.paneX),
+    y: Math.max(viewport.documentY, viewport.paneY),
+    width:
+      Math.min(viewport.documentX + viewport.documentWidth, viewport.paneX + viewport.paneWidth)
+      - Math.max(viewport.documentX, viewport.paneX),
+    height:
+      Math.min(viewport.documentY + viewport.documentHeight, viewport.paneY + viewport.paneHeight)
+      - Math.max(viewport.documentY, viewport.paneY),
+  };
+  const blueCss = readEditorPixelBoundsFromPng(
+    await page.screenshot({ clip: probeRegion }),
+    "basic-blue",
+    probeRegion,
+    { minX: 0, minY: 0, maxX: probeRegion.width, maxY: probeRegion.height },
+  );
+  expect(blueCss, "the resize target must be visibly blue").not.toBeNull();
+  if (blueCss === null) {
+    return;
+  }
+  const blueRectCenter = {
+    x: probeRegion.x + (blueCss.minX + blueCss.maxX) / 2,
+    y: probeRegion.y + (blueCss.minY + blueCss.maxY) / 2,
+  };
+  const resizeHandle = {
+    x: probeRegion.x + blueCss.maxX + 1,
+    y: probeRegion.y + blueCss.maxY + 1,
   };
   await page.mouse.click(blueRectCenter.x, blueRectCenter.y);
   await expect
-    .poll(async () =>
-      (await readEditorPixelBounds(page, probeRegion, "selection-teal"))?.pixels || 0
+    .poll(
+      async () => (await readEditorPixelBounds(page, probeRegion, "selection-teal"))?.pixels || 0,
+      {
+        timeout: scaledMs(5_000),
+        intervals: [250, 400, 600],
+      },
     )
     .toBeGreaterThan(50);
 
