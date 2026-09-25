@@ -20,5 +20,10 @@ export DONNER_GPU_BACKEND=vulkan
 export VK_ICD_FILENAMES="$icd"
 export XDG_RUNTIME_DIR="${TEST_TMPDIR:-/tmp}"
 
-exec xvfb-run -a -s '-screen 0 1280x720x24' "$1" \
-  --gtest_filter='*EditorWindowBackendTest.OpensOnTheBackendTheProcessSelected/WindowSurface:EditorWindowTest.NativeVulkanWindowsRetainGlfwUntilTheLastWindowCloses:EditorWindowTest.UnprovenNativeRetirementQuarantinesTheWindowAndGlfwClaim'
+filter='*EditorWindowBackendTest.OpensOnTheBackendTheProcessSelected/WindowSurface'
+filter+=':EditorWindowTest.NativeVulkanWindowsRetainGlfwUntilTheLastWindowCloses'
+filter+=':EditorWindowTest.UnprovenNativeRetirementQuarantinesTheWindowAndGlfwClaim'
+filter+=':*EditorWindowLifecycleTest.AResizedWindowDrawsAtItsNewExtent/WindowSurface'
+filter+=':EditorWindowTest.AMinimizedWindowSkipsTheFrameWithoutHoldingOneOpen'
+
+exec xvfb-run -a -s '-screen 0 1280x720x24' "$1" "--gtest_filter=$filter"
