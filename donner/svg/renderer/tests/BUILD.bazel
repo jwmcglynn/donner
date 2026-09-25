@@ -744,6 +744,10 @@ donner_multi_transitioned_test(
 
 donner_cc_test(
     name = "renderer_geode_tests_impl",
+    # The full suite exceeds the default 60-second small-test limit with Vulkan
+    # synchronization validation. Match the transitioned wrapper's bounded limit.
+    size = "large",
+    timeout = "long",
     srcs = ["RendererGeode_tests.cc"],
     # Geode pulls in Dawn; gate behind the same enable_geode flag the rest of
     # the geode/ targets use.
