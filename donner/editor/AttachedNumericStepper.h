@@ -9,6 +9,9 @@ namespace donner::editor {
 
 struct EditorTheme;
 
+/// Logical width of the stepper pair attached to a numeric input.
+inline constexpr float kAttachedNumericStepperWidth = 22.0f;
+
 /// One pair of compact step buttons joined to the right edge of a numeric field.
 struct AttachedNumericStepperResult {
   bool increment = false;  ///< Up button was activated in this frame.
@@ -36,17 +39,16 @@ struct AttachedNumericStepperResult {
 ///
 /// Call after rendering the input and its attached stepper. The caller must pair a true return
 /// with ImGui::EndPopup(). Single-click activation keeps the field editable while expanding the
-/// preset choices.
+/// preset choices. Its width matches the numeric field plus attached stepper.
 ///
 /// @param popupId Stable ImGui popup ID in the caller's current ID scope.
 /// @param fieldMin Minimum screen-space corner of the numeric input.
 /// @param fieldMax Maximum screen-space corner of the numeric input.
 /// @param fieldActivated True only on the input's focus-acquisition frame.
-/// @param width Popup width in logical pixels.
 /// @param maximumHeight Maximum popup height before its contents scroll.
 /// @return True when the popup is open and BeginPopup succeeded.
 [[nodiscard]] bool BeginHybridNumericPresetPopup(const char* popupId, const ImVec2& fieldMin,
                                                  const ImVec2& fieldMax, bool fieldActivated,
-                                                 float width, float maximumHeight);
+                                                 float maximumHeight);
 
 }  // namespace donner::editor

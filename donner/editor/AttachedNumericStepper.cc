@@ -10,7 +10,6 @@ namespace donner::editor {
 AttachedNumericStepperResult RenderAttachedNumericStepper(const char* id, const ImVec2& fieldMin,
                                                           const ImVec2& fieldMax,
                                                           const EditorTheme& theme) {
-  constexpr float kButtonWidth = 22.0f;
   const float upperHeight = std::floor((fieldMax.y - fieldMin.y) * 0.5f);
   const float lowerHeight = fieldMax.y - fieldMin.y - upperHeight;
   const bool fieldActive = ImGui::IsItemActive();
@@ -22,13 +21,15 @@ AttachedNumericStepperResult RenderAttachedNumericStepper(const char* id, const 
   ImGui::PushID(id);
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
   AttachedNumericStepperResult result;
-  result.increment = ImGui::InvisibleButton("##up", ImVec2(kButtonWidth, upperHeight));
+  result.increment =
+      ImGui::InvisibleButton("##up", ImVec2(kAttachedNumericStepperWidth, upperHeight));
   const ImVec2 upMin = ImGui::GetItemRectMin();
   const ImVec2 upMax = ImGui::GetItemRectMax();
   const bool upHovered = ImGui::IsItemHovered();
   result.incrementRect = Box2d(Vector2d(upMin.x, upMin.y), Vector2d(upMax.x, upMax.y));
 
-  result.decrement = ImGui::InvisibleButton("##down", ImVec2(kButtonWidth, lowerHeight));
+  result.decrement =
+      ImGui::InvisibleButton("##down", ImVec2(kAttachedNumericStepperWidth, lowerHeight));
   const ImVec2 downMin = ImGui::GetItemRectMin();
   const ImVec2 downMax = ImGui::GetItemRectMax();
   const bool downHovered = ImGui::IsItemHovered();
@@ -63,13 +64,15 @@ AttachedNumericStepperResult RenderAttachedNumericStepper(const char* id, const 
 }
 
 bool BeginHybridNumericPresetPopup(const char* popupId, const ImVec2& fieldMin,
-                                   const ImVec2& fieldMax, bool fieldActivated, float width,
+                                   const ImVec2& fieldMax, bool fieldActivated,
                                    float maximumHeight) {
   if (fieldActivated) {
     ImGui::OpenPopup(popupId);
   }
   ImGui::SetNextWindowPos(ImVec2(fieldMin.x, fieldMax.y + 3.0f), ImGuiCond_Appearing);
-  ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, maximumHeight));
+  const float controlWidth = fieldMax.x - fieldMin.x + kAttachedNumericStepperWidth;
+  ImGui::SetNextWindowSizeConstraints(ImVec2(controlWidth, 0.0f),
+                                      ImVec2(controlWidth, maximumHeight));
   return ImGui::BeginPopup(popupId,
                            ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNavFocus);
 }

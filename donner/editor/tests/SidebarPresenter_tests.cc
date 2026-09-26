@@ -26,6 +26,7 @@ namespace donner::editor {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::Not;
 using ::testing::Pair;
@@ -1148,6 +1149,57 @@ TEST(SidebarPresenterTest, MarkerIdsAreCachedAndRefreshAfterSourceMutation) {
   presenter.refreshSnapshot(app);
   EXPECT_THAT(presenter.markerIdsForTesting(), ElementsAre("new-arrow"));
   EXPECT_EQ(presenter.markerScanCountForTesting(), scans + 1u);
+}
+
+TEST(SidebarPresenterTest, ModifiedTaggedMarkerRemainsAvailableByDocumentId) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <defs><marker id="donner-marker-open-arrow" data-donner-prefab-marker="open-arrow">
+             <path d="M1 1 L7 4 L1 7" fill="red"/>
+           </marker></defs>
+           <path id="target" d="M10 40 L110 40" stroke="black"/>
+         </svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  EXPECT_THAT(presenter.markerIdsForTesting(), ElementsAre("donner-marker-open-arrow"));
+}
+
+TEST_F(SidebarPresenterImGuiTest, MarkerPresetPickerInsertsArrowIntoDocument) {
+  constexpr std::string_view kLineSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <path id="target" d="M10 40 L110 40" fill="none" stroke="black"/>
+         </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kLineSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##marker_prefab_picker_test";
+  constexpr float kWindowHeight = 900.0f;
+  RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), false, kWindowHeight);
+  const auto disclosure = presenter.markerDisclosureRectForTesting();
+  ASSERT_TRUE(disclosure.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*disclosure), true, kWindowHeight);
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*disclosure), false, kWindowHeight);
+  const auto endPicker = presenter.markerPickerRectForTesting(1);
+  ASSERT_TRUE(endPicker.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*endPicker), true, kWindowHeight);
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*endPicker), false, kWindowHeight);
+  RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), false, kWindowHeight);
+  const auto arrow = presenter.markerPrefabRectForTesting(0);
+  ASSERT_TRUE(arrow.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*arrow), true, kWindowHeight);
+  EXPECT_TRUE(
+      RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*arrow), false, kWindowHeight));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_TRUE(app.document().document().querySelector("#donner-marker-filled-arrow").has_value());
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.markerIdsForTesting(), IsEmpty());
+  EXPECT_THAT(std::string(app.document().document().source()),
+              HasSubstr("marker-end: url(#donner-marker-filled-arrow)"));
 }
 
 TEST_F(SidebarPresenterImGuiTest, BusyStrokeWidthStepDoesNotQueueMutation) {

@@ -883,6 +883,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "stroke_marker_prefabs",
+    srcs = ["StrokeMarkerPrefabs.cc"],
+    hdrs = ["StrokeMarkerPrefabs.h"],
+    deps = [
+        ":command_queue",
+        ":editor_app",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "sidebar_presenter",
     srcs = ["SidebarPresenter.cc"],
     hdrs = ["SidebarPresenter.h"],
@@ -897,6 +909,7 @@ donner_cc_library(
         ":embedded_svg_icon",
         ":imgui_headers",
         ":lock_state",
+        ":stroke_marker_prefabs",
         ":undo_timeline",
         ":viewport_state",
         "//donner/base",

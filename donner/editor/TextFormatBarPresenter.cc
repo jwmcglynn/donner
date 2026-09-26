@@ -381,7 +381,7 @@ void TextFormatBarPresenter::renderFontSizePresetPopup(const FormatBarState& sta
                                                        const ImVec2& fieldMax, bool fieldActivated,
                                                        FormatBarActions* actions) {
   if (!BeginHybridNumericPresetPopup("##format_bar_font_size_presets", fieldMin, fieldMax,
-                                     fieldActivated, fieldMax.x - fieldMin.x, 320.0f)) {
+                                     fieldActivated, 320.0f)) {
     return;
   }
   const EditorTheme& theme = EditorTheme::Active();

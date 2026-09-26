@@ -25,6 +25,7 @@
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LockState.h"
+#include "donner/editor/StrokeMarkerPrefabs.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -94,7 +95,7 @@ bool CollectMarkerIds(const svg::SVGElement& root, std::vector<std::string>& ids
     pending.pop_front();
     ++visited;
     const RcString tag = element.tagName().name;
-    if (std::string_view(tag) == "marker") {
+    if (std::string_view(tag) == "marker" && !StrokeMarkerPrefabForElement(element).has_value()) {
       const RcString id = element.id();
       const std::string_view name = id;
       if (!name.empty() && name.size() <= 100 && std::all_of(name.begin(), name.end(), [](char c) {
@@ -1153,8 +1154,7 @@ bool SidebarPresenter::renderStrokeWidthPresetPopup(const StrokeRenderContext& c
   const ImVec2 fieldMax(static_cast<float>(field.bottomRight.x),
                         static_cast<float>(field.bottomRight.y));
   if (!BeginHybridNumericPresetPopup("##stroke_width_presets", fieldMin, fieldMax,
-                                     fieldActivated && context.canMutate, fieldMax.x - fieldMin.x,
-                                     300.0f)) {
+                                     fieldActivated && context.canMutate, 300.0f)) {
     return false;
   }
 
@@ -1518,10 +1518,16 @@ bool SidebarPresenter::renderDashOffsetRow(const StrokeRenderContext& context) {
 
 bool SidebarPresenter::renderStrokeMarkers(const StrokeRenderContext& context) {
   bool queuedMutation = false;
+  markerPickerRects_.fill(std::nullopt);
+  markerPrefabRects_.fill(std::nullopt);
   const bool hasMarker =
       inspectorSnapshot_.markerStart != "none" || inspectorSnapshot_.markerEnd != "none";
   ImGui::SetNextItemOpen(hasMarker, ImGuiCond_Once);
   const bool markersOpen = ImGui::TreeNodeEx("Markers", ImGuiTreeNodeFlags_SpanAvailWidth);
+  const ImVec2 disclosureMin = ImGui::GetItemRectMin();
+  const ImVec2 disclosureMax = ImGui::GetItemRectMax();
+  markerDisclosureRect_ =
+      Box2d(Vector2d(disclosureMin.x, disclosureMin.y), Vector2d(disclosureMax.x, disclosureMax.y));
   if (markersOpen) {
     queuedMutation =
         renderStrokeMarkerPicker(context, "Start", "marker-start", inspectorSnapshot_.markerStart);
@@ -1541,24 +1547,68 @@ bool SidebarPresenter::renderStrokeMarkerPicker(const StrokeRenderContext& conte
                                                 const char* label, const char* property,
                                                 const std::string& current) {
   StrokeRowLabel(label, context.rowStartX, context.theme);
-  const std::string display = MarkerDisplayLabel(current);
+  const std::optional<StrokeMarkerPrefab> currentPrefab =
+      context.app != nullptr
+          ? StrokeMarkerPrefabForReference(context.app->document().document(), current)
+          : std::nullopt;
+  std::string display = MarkerDisplayLabel(current);
+  if (currentPrefab.has_value()) {
+    for (const StrokeMarkerPrefabOption& option : kStrokeMarkerPrefabOptions) {
+      if (option.prefab == *currentPrefab) {
+        display = option.label;
+      }
+    }
+  }
   ImGui::SetNextItemWidth(144.0f);
   ImGui::PushID(property);
   bool changed = false;
-  if (ImGui::BeginCombo("##marker", display.c_str())) {
+  const bool popupOpen = ImGui::BeginCombo("##marker", display.c_str());
+  const ImVec2 pickerMin = ImGui::GetItemRectMin();
+  const ImVec2 pickerMax = ImGui::GetItemRectMax();
+  markerPickerRects_[std::string_view(property) == "marker-start" ? 0u : 1u] =
+      Box2d(Vector2d(pickerMin.x, pickerMin.y), Vector2d(pickerMax.x, pickerMax.y));
+  if (popupOpen) {
     if (ImGui::Selectable("None", current == "none") && context.canMutate) {
       changed = applyStrokeStyle(*context.app, property, "none", "Change stroke marker");
     }
-    for (const std::string& id : inspectorSnapshot_.markerIds) {
-      const std::string reference = "url(#" + id + ")";
-      if (ImGui::Selectable(id.c_str(), current == reference) && context.canMutate) {
-        changed =
-            applyStrokeStyle(*context.app, property, reference, "Change stroke marker") || changed;
-      }
-    }
+    changed = renderMarkerPrefabChoices(context, property, currentPrefab) || changed;
+    changed = renderDocumentMarkerChoices(context, property, current) || changed;
     ImGui::EndCombo();
   }
   ImGui::PopID();
+  return changed;
+}
+
+bool SidebarPresenter::renderMarkerPrefabChoices(const StrokeRenderContext& context,
+                                                 const char* property,
+                                                 std::optional<StrokeMarkerPrefab> currentPrefab) {
+  ImGui::SeparatorText("Presets");
+  bool changed = false;
+  for (std::size_t index = 0; index < kStrokeMarkerPrefabOptions.size(); ++index) {
+    const StrokeMarkerPrefabOption& option = kStrokeMarkerPrefabOptions[index];
+    const bool chosen = ImGui::Selectable(option.label.data(), currentPrefab == option.prefab);
+    const ImVec2 rowMin = ImGui::GetItemRectMin();
+    const ImVec2 rowMax = ImGui::GetItemRectMax();
+    markerPrefabRects_[index] = Box2d(Vector2d(rowMin.x, rowMin.y), Vector2d(rowMax.x, rowMax.y));
+    if (chosen && context.canMutate) {
+      changed = ApplyStrokeMarkerPrefab(*context.app, property, option.prefab) || changed;
+    }
+  }
+  return changed;
+}
+
+bool SidebarPresenter::renderDocumentMarkerChoices(const StrokeRenderContext& context,
+                                                   const char* property,
+                                                   const std::string& current) {
+  ImGui::SeparatorText("Document markers");
+  bool changed = false;
+  for (const std::string& id : inspectorSnapshot_.markerIds) {
+    const std::string reference = "url(#" + id + ")";
+    if (ImGui::Selectable(id.c_str(), current == reference) && context.canMutate) {
+      changed =
+          applyStrokeStyle(*context.app, property, reference, "Change stroke marker") || changed;
+    }
+  }
   return changed;
 }
 

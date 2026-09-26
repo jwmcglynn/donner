@@ -21,6 +21,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/StrokeMarkerPrefabs.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
@@ -256,6 +257,16 @@ public:
   /// Cached IDs offered by the marker selectors.
   [[nodiscard]] std::span<const std::string> markerIdsForTesting() const { return markerCacheIds_; }
 
+  [[nodiscard]] std::optional<Box2d> markerDisclosureRectForTesting() const {
+    return markerDisclosureRect_;
+  }
+  [[nodiscard]] std::optional<Box2d> markerPickerRectForTesting(std::size_t index) const {
+    return index < markerPickerRects_.size() ? markerPickerRects_[index] : std::nullopt;
+  }
+  [[nodiscard]] std::optional<Box2d> markerPrefabRectForTesting(std::size_t index) const {
+    return index < markerPrefabRects_.size() ? markerPrefabRects_[index] : std::nullopt;
+  }
+
   /// Number of bounded marker scans performed by this presenter.
   [[nodiscard]] std::size_t markerScanCountForTesting() const { return markerScanCount_; }
 
@@ -427,6 +438,10 @@ private:
   bool renderStrokeMarkers(const StrokeRenderContext& context);
   bool renderStrokeMarkerPicker(const StrokeRenderContext& context, const char* label,
                                 const char* property, const std::string& current);
+  bool renderMarkerPrefabChoices(const StrokeRenderContext& context, const char* property,
+                                 std::optional<StrokeMarkerPrefab> currentPrefab);
+  bool renderDocumentMarkerChoices(const StrokeRenderContext& context, const char* property,
+                                   const std::string& current);
   /// Track activation and release of the just-rendered scalar widget.
   void trackStrokeScalarItem(const StrokeRenderContext& context, StrokeScalarField field);
 
@@ -501,6 +516,9 @@ private:
   std::uint64_t markerCacheSourceVersion_ = 0;
   std::string markerCacheSourceText_;
   std::vector<std::string> markerCacheIds_;
+  std::optional<Box2d> markerDisclosureRect_;
+  std::array<std::optional<Box2d>, 2> markerPickerRects_{};
+  std::array<std::optional<Box2d>, kStrokeMarkerPrefabOptions.size()> markerPrefabRects_{};
   bool markerCacheTruncated_ = false;
   std::size_t markerScanCount_ = 0;
 
