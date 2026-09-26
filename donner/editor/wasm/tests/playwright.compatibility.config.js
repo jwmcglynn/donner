@@ -8,8 +8,16 @@ module.exports = defineConfig({
   projects: [
     {
       name: "firefox-geode-resize",
-      repeatEach: 100,
-      grep: [/Firefox never exposes the checkerboard while dragging a Splash letter/],
+      grep: [
+        /Geode Wasm View overlays render tile metadata and sparse Slug triangle edges/,
+        /Firefox keeps Basic Shapes resize pixels and outline synchronized/,
+        /Firefox keeps the dragged shape and its selection outline in every drag frame/,
+        /Firefox never exposes the checkerboard while dragging a Splash letter/,
+        /the surface frame probe reports canvas work submitted after its task ended/,
+        /Firefox restores the Splash canvas after transient surface loss/,
+        /Firefox renders every visible Splash layer thumbnail/,
+        /Firefox hands a blocked thumbnail renderer to a foreground sample load/,
+      ],
       use: {
         ...devices["Desktop Firefox"],
         browserName: "firefox",

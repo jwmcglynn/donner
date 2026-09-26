@@ -907,6 +907,31 @@ TEST(EditorWindowTest, ALostSurfaceThatCannotBeRebuiltIsGivenUp) {
   EXPECT_EQ(calls.shutdowns, 1);
 }
 
+TEST(EditorWindowTest, ALostCanvasSurfaceCanRecoverOnTheNextFrame) {
+  SurfaceCalls lostCalls;
+  SurfaceCalls recoveredCalls;
+  std::unique_ptr<internal::PresentationSurface> surface =
+      ScriptedSurfaceReporting({gpu::SurfaceStatus::Lost}, &lostCalls);
+  Vector2i configuredPx = kFrameSizePx;
+
+  const internal::PresentationFrameOutcome first = internal::AcquirePresentationFrame(
+      surface, kFrameSizePx, configuredPx,
+      []() -> std::unique_ptr<internal::PresentationSurface> { return nullptr; });
+  ASSERT_TRUE(first.released);
+  ASSERT_EQ(surface, nullptr);
+
+  const internal::PresentationFrameOutcome next = internal::AcquirePresentationFrame(
+      surface, kFrameSizePx, configuredPx,
+      [&] { return ScriptedSurfaceReporting({gpu::SurfaceStatus::Success}, &recoveredCalls); });
+
+  EXPECT_TRUE(next.texture.isValid()) << "a transient rebuild failure must not strand the canvas";
+  EXPECT_EQ(next.status, gpu::SurfaceStatus::Success);
+  EXPECT_FALSE(next.released);
+  EXPECT_NE(surface, nullptr);
+  EXPECT_EQ(configuredPx, kFrameSizePx);
+  EXPECT_EQ(recoveredCalls.acquires, 1);
+}
+
 TEST(EditorWindowTest, ASecondLostAfterRebuildingGivesTheSurfaceUp) {
   SurfaceCalls lostCalls;
   SurfaceCalls rebuiltCalls;
