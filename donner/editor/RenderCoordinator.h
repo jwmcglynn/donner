@@ -633,6 +633,18 @@ private:
   std::vector<std::array<Vector2d, 4>> lastOverlayTextEditingSelectionQuadsDoc_;
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> lastOverlayTextBoxDragPreviewDoc_;
 
+  /// Hold a refreshed overview until detailed tiles can publish the same document version.
+  void acceptOverviewResult(RenderResult result, EditorApp& app, GlTextureCache& textures);
+  /// Whether the staged overview and detailed result describe the current document.
+  bool hasMatchingPendingOverview(const RenderResult& result, EditorApp& app) const;
+  /// Whether a detailed result has coherent full-document coverage behind it.
+  bool canPresentWithOverview(const RenderResult& result,
+                              const EditorRasterViewport& rasterViewport, EditorApp& app,
+                              const GlTextureCache& textures) const;
+  /// Consume stale staging and determine whether full-document coverage needs refreshing.
+  bool needsOverviewInfillForViewport(EditorApp& app, const EditorRasterViewport& rasterViewport,
+                                      bool activeDrag, const GlTextureCache* textures);
+
   PresentationRenderScheduler renderScheduler_;
   /// Live selected display:none entity whose stale promoted layer is currently hidden.
   Entity displayNoneSuppressedSelectionEntity_ = entt::null;
