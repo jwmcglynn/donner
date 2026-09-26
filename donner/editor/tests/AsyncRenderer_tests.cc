@@ -6332,6 +6332,69 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
   }
 }
 
+TEST(RenderCoordinatorTest, ZoomedPaintUsesCompletedOverviewWhenDetailedRenderFails) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="target" d="M 20 20 L 80 20 L 50 80 Z" fill="white" stroke="black" transform="translate(3 5) rotate(15 50 50)"/>
+    </svg>
+  )svg"));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.resetTo100Percent();
+  viewport.zoomAround(32.0, viewport.paneCenter());
+  ASSERT_TRUE(viewport.rasterViewport().viewportBounded);
+
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Requires native texture presentation";
+  }
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  const auto render = [&]() {
+    if (!coordinator.maybeRequestRender(app, selectTool, viewport, &textures)) {
+      return false;
+    }
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); },
+                     std::chrono::steady_clock::now() + std::chrono::seconds(5));
+  };
+  ASSERT_TRUE(render());
+  ASSERT_THAT(textures.overviewTiles(), testing::Not(testing::IsEmpty()));
+
+  RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+  ASSERT_TRUE(render());
+  ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
+  const auto oldVersion = coordinator.displayedDocVersion();
+  ASSERT_TRUE(app.setStylePropertyOnSelection("fill", "#36c317"));
+  ASSERT_TRUE(app.flushFrame());
+  coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
+  ASSERT_TRUE(render());
+  ASSERT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly);
+  EXPECT_EQ(coordinator.displayedDocVersion(), oldVersion);
+
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  ASSERT_TRUE(render());
+  EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion())
+      << "A completed overview must remain usable when detailed rendering produces no pixels";
+  EXPECT_FALSE(textures.activeTilesViewportBounded());
+  EXPECT_GT(coordinator.nothingToPresentResultTotalForDiagnostics(), 0u);
+
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(false);
+  RenderCoordinatorTestAccess::advanceFakeRetryClock(NothingToPresentRetry::kRetryDelays.front());
+  ASSERT_TRUE(render());
+  EXPECT_TRUE(textures.activeTilesViewportBounded())
+      << "Publishing the overview must still permit a detailed render when the worker recovers";
+  EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
+}
+
 TEST(RenderCoordinatorTest, ZoomedPaintChangesRefreshOverviewAndSettle) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
