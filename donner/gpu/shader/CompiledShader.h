@@ -15,8 +15,8 @@ namespace donner::gpu::shader {
 
 /// A small owning identifier in a frozen shader interface.
 struct ShaderName {
-  std::array<char, 64> bytes{};
-  uint8_t size = 0;
+  std::array<char, 64> bytes{};  //!< Owning storage for the identifier spelling.
+  uint8_t size = 0;              //!< Number of valid bytes in bytes.
 
   /// Borrows this identifier's bytes.
   constexpr std::string_view view() const UTILS_LIFETIME_BOUND { return {bytes.data(), size}; }
@@ -27,12 +27,13 @@ enum class ShaderScalarType : uint8_t { I32, U32, F32, None };
 
 /// A reflected buffer member, including the layout required by the shader.
 struct ShaderBufferMember {
-  ShaderName name;
-  ShaderScalarType scalarType = ShaderScalarType::F32;
-  uint8_t lanes = 1;
-  uint32_t offsetBytes = 0;
-  uint32_t sizeBytes = 0;
-  uint32_t alignmentBytes = 1;
+  ShaderName name;  //!< Reflected member name.
+  ShaderScalarType scalarType =
+      ShaderScalarType::F32;       //!< Numeric component kind, or None for a structure member.
+  uint8_t lanes = 1;               //!< Vector lanes or matrix rows; zero for structures.
+  uint32_t offsetBytes = 0;        //!< Byte offset within the enclosing buffer or structure.
+  uint32_t sizeBytes = 0;          //!< Occupied byte size.
+  uint32_t alignmentBytes = 1;     //!< Required byte alignment.
   uint32_t arrayCount = 0;         //!< Fixed array length, or zero for a scalar/vector member.
   uint32_t arrayStrideBytes = 0;   //!< Byte stride for a fixed array member.
   uint8_t matrixColumns = 0;       //!< Matrix columns; lanes gives rows. Zero for non-matrices.
@@ -43,18 +44,21 @@ struct ShaderBufferMember {
 
 /// One resource and the layout of its parameter block, when applicable.
 struct ShaderResource {
-  ShaderName name;
-  BindingType type = BindingType::UniformBuffer;
-  uint32_t group = 0;
-  uint32_t binding = 0;
-  uint32_t minSizeBytes = 0;
-  uint32_t alignmentBytes = 1;
+  ShaderName name;                                //!< Authored WGSL resource name.
+  BindingType type = BindingType::UniformBuffer;  //!< Resource binding category.
+  uint32_t group = 0;                             //!< WGSL group attribute index.
+  uint32_t binding = 0;                           //!< WGSL binding attribute index.
+  uint32_t minSizeBytes = 0;             //!< Minimum required buffer-binding size in bytes.
+  uint32_t alignmentBytes = 1;           //!< Reflected WGSL resource type alignment in bytes.
   uint32_t runtimeArrayStrideBytes = 0;  //!< Zero for fixed-size resources.
-  ShaderScalarType runtimeArrayScalarType = ShaderScalarType::F32;
+  ShaderScalarType runtimeArrayScalarType =
+      ShaderScalarType::F32;      //!< Numeric runtime-array component kind; ignored for structure
+                                  //!< elements.
   uint8_t runtimeArrayLanes = 0;  //!< Zero for non-arrays or structure elements.
-  uint32_t firstMember = 0;
-  uint32_t memberCount = 0;
-  TextureFormat storageFormat = TextureFormat::RGBA32Float;
+  uint32_t firstMember = 0;       //!< First reflected member in the artifact member array.
+  uint32_t memberCount = 0;       //!< Number of reflected members in that range.
+  TextureFormat storageFormat =
+      TextureFormat::RGBA32Float;  //!< Storage texture format, when this is a storage texture.
 };
 
 /// Builtin reflected by an entry-point interface.
@@ -68,17 +72,18 @@ enum class ShaderBuiltin : uint8_t {
 
 /// A flattened scalar/vector entry-point input or output.
 struct ShaderInterfaceVariable {
-  ShaderName name;
-  ShaderScalarType scalarType = ShaderScalarType::F32;
-  uint8_t lanes = 1;
-  ShaderBuiltin builtin = ShaderBuiltin::None;
-  uint32_t location = UINT32_MAX;
-  bool flat = false;  //!< Flat interstage interpolation.
+  ShaderName name;                                      //!< Flattened input or output name.
+  ShaderScalarType scalarType = ShaderScalarType::F32;  //!< Numeric component kind.
+  uint8_t lanes = 1;                                    //!< Vector lane count.
+  ShaderBuiltin builtin =
+      ShaderBuiltin::None;         //!< Builtin value, or None for a location-based variable.
+  uint32_t location = UINT32_MAX;  //!< User location, or UINT32_MAX when absent.
+  bool flat = false;               //!< Flat interstage interpolation.
 };
 
 /// One entry point and its source-derived interface ranges.
 struct ShaderEntryPoint {
-  ShaderName name;
+  ShaderName name;                                    //!< Authored entry-point name.
   ShaderStage stage = ShaderStage::None;              //!< Exactly one shader stage.
   std::array<uint32_t, 3> workgroupSize = {1, 1, 1};  //!< Compute workgroup dimensions only.
   uint32_t firstInput = 0;    //!< First input in the artifact interface-variable array.
@@ -90,13 +95,14 @@ struct ShaderEntryPoint {
 
 /// Borrowed views into a shader artifact with static storage in the owning program.
 struct CompiledShaderView {
-  std::string_view wgsl;
-  std::string_view msl;
-  std::span<const uint32_t> spirv;
-  std::span<const ShaderResource> resources;
-  std::span<const ShaderBufferMember> members;
-  std::span<const ShaderEntryPoint> entryPoints;
-  std::span<const ShaderInterfaceVariable> interfaceVariables;
+  std::string_view wgsl;                          //!< Borrowed WGSL source text.
+  std::string_view msl;                           //!< Borrowed Metal Shading Language source text.
+  std::span<const uint32_t> spirv;                //!< Borrowed SPIR-V words.
+  std::span<const ShaderResource> resources;      //!< Borrowed reflected resource bindings.
+  std::span<const ShaderBufferMember> members;    //!< Borrowed reflected buffer members.
+  std::span<const ShaderEntryPoint> entryPoints;  //!< Borrowed entry-point metadata.
+  std::span<const ShaderInterfaceVariable>
+      interfaceVariables;  //!< Borrowed flattened entry input and output metadata.
 
   /// Finds a resource by its authored WGSL name; the result borrows this view's artifact.
   /// @param name Authored resource name.
