@@ -88,6 +88,18 @@ line, style, and color; [#1177](https://github.com/jwmcglynn/donner/issues/1177)
 ([#1172](https://github.com/jwmcglynn/donner/issues/1172)). `<tref>` is intentionally unsupported
 because SVG 2 removed it.
 
+### Not yet supported
+
+- Donner does not fetch network image URLs. Embedded data URIs render; an embedding host can supply
+  a resource loader for file-backed images. See [#1183](https://github.com/jwmcglynn/donner/issues/1183).
+- Bidirectional text, `textLength` / `lengthAdjust`, and several SVG 2 `textPath` and vertical-text
+  options remain incomplete. The text feature list above links each tracked gap.
+- CSS `filter:` function lists, `enable-background` / `BackgroundImage`, and some `feImage`
+  subregion cases remain incomplete even though the `<filter>` primitive elements are supported.
+- `<foreignObject>`, `<script>`, SVG 1.1 fonts, and `<tref>` are not rendered as SVG elements.
+  The [SVG 1.x exclusions](docs/unsupported_svg1_features.md) distinguish retired features from
+  work still planned for SVG 2.
+
 ### Renderers
 
 Donner ships two backends behind one renderer interface. The tiny_skia CPU backend is the default.
@@ -122,82 +134,26 @@ How it works: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc-
 
 ## API Demo
 
-```cpp
-// This is the base SVG we are loading, a simple path containing a line
-const std::string_view svgContents(R"(
-  <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 10 10">
-    <path d="M 1 1 L 4 5" stroke="blue" />
-  </svg>
-)");
+The checked-in [SVG tree example](examples/svg_tree_interaction.cc) is a complete C++ program. It
+parses an SVG, queries a `<path>`, reads its computed geometry, and changes the document. Build and
+run the same source the API reference displays:
 
-// Call ParseSVG to load the SVG file
-donner::ParseWarningSink disabled = donner::ParseWarningSink::Disabled();
-donner::ParseResult<donner::svg::SVGDocument> maybeResult =
-    donner::svg::parser::SVGParser::ParseSVG(svgContents, disabled);
-
-if (maybeResult.hasError()) {
-  std::cerr << "Parse Error " << maybeResult.error() << "\n";  // Includes line:column and reason
-  std::abort();
-  // - or - handle the error per your project's conventions
-}
-
-donner::svg::SVGDocument document = std::move(maybeResult.result());
-
-// querySelector supports standard CSS selectors, anything that's valid when defining a CSS rule
-// works here too, for example querySelector("svg > path[fill='blue']") is also valid and will
-// match the same element.
-std::optional<donner::svg::SVGElement> maybePath = document.querySelector("path");
-UTILS_RELEASE_ASSERT_MSG(maybePath, "Failed to find path element");
-
-// The result of querySelector is a generic SVGElement, but we know it's a path, so we can cast
-// it. If the cast fails, an assertion will be triggered.
-donner::svg::SVGPathElement path = maybePath->cast<donner::svg::SVGPathElement>();
-
-if (std::optional<donner::Path> computedPath = path.computedPath()) {
-  std::cout << "Path: " << *computedPath << "\n";
-  std::cout << "Length: " << computedPath->pathLength() << " userspace units\n";
-} else {
-  std::cout << "Path is empty\n";
-}
+```sh
+bazel run //examples:svg_tree_interaction
 ```
 
-Detailed docs: [svg_tree_interaction.cc](https://jwmcglynn.github.io/donner/svg_tree_interaction_8cc-example.html)
+Detailed docs: [SVG tree interaction](https://jwmcglynn.github.io/donner/svg_tree_interaction_8cc-example.html).
 
 ## API Demo 2: Rendering an SVG to PNG
 
-```cpp
-using namespace donner;
-using namespace donner::svg;
-using namespace donner::svg::parser;
+The checked-in [PNG rendering example](examples/svg_to_png.cc) bounds file input, parses the SVG,
+draws through the selected renderer backend, and saves `output.png`. Build and run it with a file:
 
-std::ifstream file("test.svg");
-if (!file) {
-  std::cerr << "Could not open file\n";
-  std::abort();
-}
-
-std::string fileData;
-file.seekg(0, std::ios::end);
-const std::streamsize fileLength = file.tellg();
-file.seekg(0);
-
-fileData.resize(fileLength);  
-file.read(fileData.data(), fileLength);
-
-ParseWarningSink warnings;
-ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(fileData, warnings);
-if (maybeDocument.hasError()) {
-  std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
-  std::abort();
-}
-
-Renderer renderer;
-renderer.draw(maybeDocument.result());
-
-const bool success = renderer.save("output.png");
+```sh
+bazel run //examples:svg_to_png -- donner_splash.svg
 ```
 
-Detailed docs: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc-example.html)
+Detailed docs: [SVG to PNG](https://jwmcglynn.github.io/donner/svg_to_png_8cc-example.html).
 
 ## Documentation
 
