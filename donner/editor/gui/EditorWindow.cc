@@ -1234,65 +1234,71 @@ AcquiredFrame RebuildAndReacquire(
   return surface->acquire();
 }
 
-PresentationFrameOutcome AcquirePresentationFrame(
+/// Acquires a visible frame, making at most one attempt to replace a missing or lost surface.
+AcquiredFrame AcquireOrRecoverSurfaceFrame(
     std::unique_ptr<PresentationSurface>& surface, Vector2i sizePx, Vector2i& configuredPx,
     const std::function<std::unique_ptr<PresentationSurface>()>& rebuild) {
-  PresentationFrameOutcome outcome;
-
-  if (sizePx.x <= 0 || sizePx.y <= 0) {
-    // A minimized window has no framebuffer to present to, and a surface cannot be configured for
-    // an extent with no texels in it. Nothing is acquired, so the surface is left holding no
-    // frame and the next non-empty extent acquires normally.
-    return outcome;
-  }
-
-  const auto acquireStart = std::chrono::steady_clock::now();
   const bool rebuiltMissingSurface = surface == nullptr;
   AcquiredFrame frame = rebuiltMissingSurface
                             ? RebuildAndReacquire(surface, sizePx, configuredPx, rebuild)
                             : surface->acquire();
+  switch (SurfaceFrameActionFor(frame.status)) {
+    case SurfaceFrameAction::ReconfigureAndRetry:
+      return FollowWindowAndReacquire(*surface, sizePx, configuredPx);
+    case SurfaceFrameAction::Release:
+      // A lost device cannot be rebuilt here. A missing surface was already rebuilt once.
+      if (frame.status == gpu::SurfaceStatus::Lost && !rebuiltMissingSurface) {
+        return RebuildAndReacquire(surface, sizePx, configuredPx, rebuild);
+      }
+      break;
+    case SurfaceFrameAction::Draw:
+    case SurfaceFrameAction::Skip: break;
+  }
+  return frame;
+}
+
+/// Abandons a frame that cannot be drawn, releasing a terminal surface when necessary.
+void AbandonUnpresentableFrame(std::unique_ptr<PresentationSurface>& surface,
+                               Vector2i& configuredPx, PresentationFrameOutcome& outcome) {
+  if (surface == nullptr) {
+    // The rebuild already gave the surface up; there is nothing left to abandon or release.
+    outcome.released = true;
+    return;
+  }
+  surface->abandon();
+  if (SurfaceFrameActionFor(outcome.status) != SurfaceFrameAction::Release) {
+    return;
+  }
+  std::fprintf(stderr, "EditorWindow: the presentation surface can serve no further frames\n");
+  outcome.markDeviceLost = outcome.status == gpu::SurfaceStatus::DeviceLost;
+  surface->shutdown();
+  surface.reset();
+  configuredPx = Vector2i::Zero();
+  outcome.released = true;
+}
+
+PresentationFrameOutcome AcquirePresentationFrame(
+    std::unique_ptr<PresentationSurface>& surface, Vector2i sizePx, Vector2i& configuredPx,
+    const std::function<std::unique_ptr<PresentationSurface>()>& rebuild) {
+  PresentationFrameOutcome outcome;
+  if (sizePx.x <= 0 || sizePx.y <= 0) {
+    // A minimized window has no texels to present; the next non-empty extent acquires normally.
+    return outcome;
+  }
+
+  const auto acquireStart = std::chrono::steady_clock::now();
+  AcquiredFrame frame = AcquireOrRecoverSurfaceFrame(surface, sizePx, configuredPx, rebuild);
   outcome.acquireMs = ElapsedMs(acquireStart);
   if (outcome.acquireMs > 250.0) {
     std::fprintf(stderr, "[Editor/WGPU] surface acquire took %.1fms (status=%d, size=%dx%d)\n",
                  outcome.acquireMs, static_cast<int>(frame.status), sizePx.x, sizePx.y);
   }
 
-  switch (SurfaceFrameActionFor(frame.status)) {
-    case SurfaceFrameAction::ReconfigureAndRetry:
-      frame = FollowWindowAndReacquire(*surface, sizePx, configuredPx);
-      break;
-    case SurfaceFrameAction::Release:
-      // Only one of the two statuses that give a surface up can be recovered from here: a
-      // platform object that is gone is replaced by a fresh one built from the window, while
-      // nothing here brings a lost device back.
-      if (frame.status == gpu::SurfaceStatus::Lost && !rebuiltMissingSurface) {
-        frame = RebuildAndReacquire(surface, sizePx, configuredPx, rebuild);
-      }
-      break;
-    case SurfaceFrameAction::Draw:
-    case SurfaceFrameAction::Skip: break;
-  }
-
   outcome.status = frame.status;
-  const SurfaceFrameAction action = SurfaceFrameActionFor(outcome.status);
-  if (action == SurfaceFrameAction::Draw && frame.texture.isValid()) {
+  if (SurfaceFrameActionFor(frame.status) == SurfaceFrameAction::Draw && frame.texture.isValid()) {
     outcome.texture = std::move(frame.texture);
-    return outcome;
-  }
-
-  if (surface == nullptr) {
-    // The rebuild already gave the surface up; there is nothing left to abandon or release.
-    outcome.released = true;
-    return outcome;
-  }
-  surface->abandon();
-  if (action == SurfaceFrameAction::Release) {
-    std::fprintf(stderr, "EditorWindow: the presentation surface can serve no further frames\n");
-    outcome.markDeviceLost = outcome.status == gpu::SurfaceStatus::DeviceLost;
-    surface->shutdown();
-    surface.reset();
-    configuredPx = Vector2i::Zero();
-    outcome.released = true;
+  } else {
+    AbandonUnpresentableFrame(surface, configuredPx, outcome);
   }
   return outcome;
 }

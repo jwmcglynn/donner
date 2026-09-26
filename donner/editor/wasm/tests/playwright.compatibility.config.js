@@ -2,7 +2,11 @@ const { defineConfig, devices } = require("@playwright/test");
 
 module.exports = defineConfig({
   testDir: ".",
-  testMatch: ["smoke.spec.ts", "browser-presentation-regression.spec.ts"],
+  testMatch: [
+    "smoke.spec.ts",
+    "browser-presentation-regression.spec.ts",
+    "browser-surface-recovery.spec.ts",
+  ],
   timeout: 30000,
   workers: 1,
   projects: [
