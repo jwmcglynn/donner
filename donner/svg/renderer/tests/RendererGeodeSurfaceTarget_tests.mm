@@ -18,20 +18,17 @@
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::svg {
 namespace {
 
-using test::PixelAt;
-using test::RgbaEq;
 using testing::IsTrue;
 
 /// Frame size, in pixels.
 constexpr uint32_t kFrameSize = 64;
 
-/// A surface over a fresh Core Animation layer whose frames the renderer can draw into and copy
-/// from.
+/// A surface over a fresh Core Animation layer whose borrowed frames the renderer can draw into
+/// and present.
 class RendererGeodeSurfaceTargetTest : public testing::Test {
 protected:
   void SetUp() override {
@@ -81,25 +78,17 @@ protected:
   gpu::Surface surface_;
 };
 
-/// `setTargetTexture` promises that a target with `CopySrc` can be read back, and a surface frame
-/// is such a target. Where the capture context shares the renderer's queue, its readback is queued
-/// before the frame is presented, so the capture reads the frame the renderer drew. A native
-/// backend gives the capture context its own queue, whose read could land after the present, so
-/// there the capture is refused and comes back empty.
-TEST_F(RendererGeodeSurfaceTargetTest, ACaptureOfASurfaceFrameReadsItWhereTheQueueIsShared) {
+/// A surface frame is borrowed by the presentation queue. The native capture context has its own
+/// queue, so it refuses readback that could run after the surface recycles the frame.
+TEST_F(RendererGeodeSurfaceTargetTest, ACaptureOfANativeSurfaceFrameIsRefused) {
   // The renderer outlives the present, as a presenting host's does.
   RendererGeode renderer(device_);
   gpu::SurfaceTexture frame = gpu::GetResultOrFail(runtime().acquireCurrentTexture(surface_));
   ASSERT_THAT(frame.texture.isValid(), IsTrue());
 
   const RendererBitmap bitmap = drawRedAndCapture(renderer, frame.texture);
-  if (device_->hasTransitionalAdapter()) {
-    ASSERT_FALSE(bitmap.empty()) << "the capture refused the surface frame the renderer drew";
-    EXPECT_THAT(PixelAt(bitmap, kFrameSize / 2, kFrameSize / 2), RgbaEq(255, 0, 0, 255));
-  } else {
-    EXPECT_TRUE(bitmap.empty())
-        << "a capture on its own queue could read the frame after the surface takes it back";
-  }
+  EXPECT_TRUE(bitmap.empty())
+      << "a capture on its own queue could read the frame after the surface takes it back";
   EXPECT_THAT(runtime().presentSurface(surface_), gpu::HasResult());
   EXPECT_FALSE(device_->isDeviceLost());
 }

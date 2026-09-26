@@ -500,5 +500,19 @@ TEST(WgslEmitterTests, RejectsNonFiniteFloatLiterals) {
   EXPECT_THAT(EmitWgsl(module.result()), IsShaderError(HasSubstr("non-finite")));
 }
 
+TEST(WgslEmitterTests, MaximumFiniteF32UsesRepresentableWgslDecimal) {
+  ModuleBuilder builder;
+  constexpr float maximum = std::numeric_limits<float>::max();
+  EXPECT_THAT(builder.addConstant("kMaximum", LiteralF32(maximum)), IsShaderOk());
+  EXPECT_THAT(builder.addConstant("kNegativeMaximum", LiteralF32(-maximum)), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  const auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  EXPECT_THAT(wgsl.result(), HasSubstr("kMaximum: f32 = 3.402823466e38f"));
+  EXPECT_THAT(wgsl.result(), HasSubstr("kNegativeMaximum: f32 = -3.402823466e38f"));
+}
+
 }  // namespace
 }  // namespace donner::gpu::shader

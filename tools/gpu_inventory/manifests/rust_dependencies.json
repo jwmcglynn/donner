@@ -120,7 +120,22 @@
         "wgpu_native_"
       ]
     },
-    "third_party/BUILD.wgpu_native_platform": {
+    "donner/editor/gui/BUILD.bazel": {
+      "tokens": [
+        "wgpu_native_"
+      ]
+    },
+    "donner/svg/renderer/BUILD.bazel": {
+      "tokens": [
+        "wgpu_native_"
+      ]
+    },
+    "donner/svg/renderer/geode/BUILD.bazel": {
+      "tokens": [
+        "wgpu_native_"
+      ]
+    },
+    "donner/svg/renderer/tests/BUILD.bazel": {
       "tokens": [
         "wgpu_native_"
       ]

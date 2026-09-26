@@ -1,14 +1,35 @@
 """Shared GLFW + ImGui + OpenGL host for the advanced Donner editor."""
 
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+configured_dependency_audit_test(
+    name = "native_editor_no_wgpu_archive_audit_test",
+    forbidden = [
+        "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
+        "//donner/svg/renderer:renderer_geode_wgpu_reference_linux",
+        "//donner/svg/renderer/tests:image_comparison_test_fixture_wgpu_reference_linux",
+        "//donner/svg/renderer/tests:renderer_test_backend_wgpu_reference_linux",
+        "//third_party/webgpu-cpp:webgpu_cpp",
+        "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
+        "@wgpu_native_linux_aarch64//:wgpu_native",
+        "@wgpu_native_linux_x86_64//:wgpu_native",
+    ],
+    target = "//donner/editor",
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
 objc_library(
-    name = "editor_wgpu_surface_macos",
-    srcs = ["EditorWgpuSurface_macos.mm"],
-    hdrs = ["EditorWgpuSurface.h"],
+    name = "editor_metal_layer_macos",
+    srcs = ["EditorMetalLayer_macos.mm"],
+    hdrs = ["EditorMetalLayer.h"],
     sdk_frameworks = [
         "Cocoa",
         "QuartzCore",
@@ -16,50 +37,9 @@ objc_library(
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "//conditions:default": ["@platforms//:incompatible"],
-    }) + select({
-        "//donner/svg/renderer/geode:geode_enabled": [],
-        "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        "//third_party/webgpu-cpp:webgpu_cpp",
         "@glfw",
-    ],
-)
-
-donner_cc_library(
-    name = "editor_wgpu_surface_linux",
-    srcs = ["EditorWgpuSurface_linux.cc"],
-    hdrs = ["EditorWgpuSurface.h"],
-    target_compatible_with = select({
-        "@platforms//os:linux": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }) + select({
-        "//donner/svg/renderer/geode:geode_enabled": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    deps = [
-        "//third_party/webgpu-cpp:webgpu_cpp",
-        "@glfw",
-    ],
-)
-
-donner_cc_library(
-    name = "editor_wgpu_surface",
-    hdrs = ["EditorWgpuSurface.h"],
-    target_compatible_with = select({
-        "@platforms//os:macos": [],
-        "@platforms//os:linux": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }) + select({
-        "//donner/svg/renderer/geode:geode_enabled": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    deps = select({
-        "@platforms//os:macos": [":editor_wgpu_surface_macos"],
-        "@platforms//os:linux": [":editor_wgpu_surface_linux"],
-        "//conditions:default": [],
-    }) + [
-        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -93,6 +73,9 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_interface",
         "@imgui",
     ] + select({
+        "@platforms//os:macos": [":editor_metal_layer_macos"],
+        "//conditions:default": [],
+    }) + select({
         "//donner/editor:wasm_geode_enabled": [
             ":imgui_runtime_renderer",
             ":ui_texture_registration",
@@ -103,7 +86,6 @@ donner_cc_library(
             "//third_party/emscripten-glfw",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
-            ":editor_wgpu_surface",
             ":imgui_runtime_renderer",
             ":ui_texture_registration",
             ":ui_texture_registry",
@@ -111,8 +93,6 @@ donner_cc_library(
             "//donner/gpu/vulkan:vulkan_device",
             "//donner/svg/renderer/geode:geode_device",
             "//donner/svg/renderer/geode:geode_gpu_wait",
-            "//donner/svg/renderer/geode:geode_wgpu_util",
-            "//third_party/webgpu-cpp:webgpu_cpp",
             "@glfw",
             "@vulkan_headers",
         ],

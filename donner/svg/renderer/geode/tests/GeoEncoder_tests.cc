@@ -23,8 +23,6 @@
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -34,7 +32,7 @@ namespace donner::geode {
 namespace {
 
 constexpr uint32_t kSize = 64;
-constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
+constexpr gpu::TextureFormat kFormat = gpu::TextureFormat::RGBA8Unorm;
 constexpr gpu::Extent2d kTargetSize = {kSize, kSize};
 
 using svg::test::FormatRgba;
@@ -94,7 +92,7 @@ protected:
     // The device-owned shared pipelines target the device's format; the per-test render
     // targets are created with kFormat, so the two must agree. Pipeline construction lives on
     // GeodeDevice per the ownership rule.
-    ASSERT_EQ(device_->textureFormat(), GpuTextureFormatFromWgpu(kFormat));
+    ASSERT_EQ(device_->textureFormat(), kFormat);
     pipeline_ = &device_->pipeline();
     gradientPipeline_ = &device_->gradientPipeline();
     imagePipeline_ = &device_->imagePipeline();

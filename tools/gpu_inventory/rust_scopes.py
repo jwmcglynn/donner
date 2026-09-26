@@ -110,6 +110,8 @@ class RustScopes:
     inert_reference_prefixes: tuple[str, ...]
     test_only_rust_prefixes: tuple[str, ...]
     test_only_consumer_prefixes: tuple[str, ...]
+    # The sole Rust-built GPU oracle archives, pinned to reviewed release bytes.
+    test_only_gpu_oracle_archives: tuple[tuple[str, str, str], ...] = ()
 
     def is_inert(self, path: str) -> bool:
         return path.startswith(self.inert_reference_prefixes)
@@ -128,4 +130,8 @@ def load_rust_scopes(allowlist_path: Path) -> RustScopes:
         inert_reference_prefixes=tuple(data["inertReferencePrefixes"]),
         test_only_rust_prefixes=tuple(data["testOnlyRustPrefixes"]),
         test_only_consumer_prefixes=tuple(data["testOnlyConsumerPrefixes"]),
+        test_only_gpu_oracle_archives=tuple(
+            (item["name"], item["asset"], item["sha256"])
+            for item in data.get("testOnlyGpuOracleArchives", [])
+        ),
     )

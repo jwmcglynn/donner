@@ -41,10 +41,8 @@
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 
 namespace donner::svg {
@@ -215,10 +213,8 @@ RendererResourceStats DrawOneFrame(RendererGeode& renderer, SVGDocument& documen
 /// A second logical context over the physical root \p root holds, the way an editor's UI context
 /// shares the root its render worker draws through.
 std::shared_ptr<geode::GeodeDevice> LogicalContextOver(const geode::GeodeDevice& root) {
-  geode::GeodeEmbedConfig config;
-  config.physicalDevice = root.physicalDeviceOwner();
-  config.textureFormat = geode::WgpuTextureFormatFrom(root.textureFormat());
-  return geode::GeodeDevice::CreateFromExternal(config);
+  return geode::GeodeDevice::CreateOverPhysicalDeviceOwner(root.physicalDeviceOwner(),
+                                                           root.textureFormat());
 }
 
 /**

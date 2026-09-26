@@ -4,15 +4,14 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 # The Vulkan solid-fill vertical slice renders the shared baseline scene
 # through donner::gpu + the emitted SPIR-V and compares it against an
-# in-process render of the identical scene through the production wgpu path
+# independent in-process Geode render of the identical scene through native Vulkan
 # (the frozen-baseline pattern executed per-device, valid on software Vulkan
 # and physical GPUs alike). Opaque texels must match exactly; partially
 # covered ones may differ by one least-significant bit, which is the two
 # pipelines quantizing float results to 8-bit unorm independently.
 #
-# Linux-only: this is the one platform where both halves execute (the Vulkan
-# loader on the RHI side, wgpu-native's Vulkan backend on the production
-# side). The wgpu half needs the geode configuration, so the test is wrapped
+# Linux-only: this is the one platform where both halves execute through the
+# Vulkan loader. The Geode half needs the geode configuration, so the test is wrapped
 # in the same donner_multi_transitioned_test mechanism as the geode-lane
 # renderer suites - reachable from plain `bazel test //...` without
 # --config=geode. On macOS the impl target is incompatible and the wrapper is
@@ -43,6 +42,20 @@ donner_cc_test(
         "//donner/gpu",
         "//donner/gpu/vulkan:vulkan_device",
         "//donner/gpu/vulkan:vulkan_resource_state",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "vulkan_adapter_identity_tests",
+    srcs = ["VulkanAdapterIdentity_tests.cc"],
+    env = {
+        "DONNER_REQUIRE_VULKAN": "1",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//donner/gpu/vulkan:vulkan_device",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -90,8 +103,6 @@ donner_cc_test(
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_path_encoder",
         "//donner/svg/renderer/geode:geode_test_contexts",
-        "//donner/svg/renderer/geode:geode_wgpu_util",
-        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
