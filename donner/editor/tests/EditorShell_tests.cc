@@ -65,20 +65,23 @@ constexpr std::string_view kInitialSvg = R"svg(
 )svg";
 
 svg::RendererBitmap CropDocumentRect(const svg::RendererBitmap& bitmap,
-                                     const ViewportState& viewport, const Vector2i& logicalSize,
-                                     const Box2d& documentRect) {
+                                     const ViewportState& viewport, const Box2d& documentRect) {
   svg::RendererBitmap crop;
-  if (bitmap.empty() || logicalSize.x <= 0 || logicalSize.y <= 0) {
+  if (bitmap.empty() || !std::isfinite(viewport.devicePixelRatio) ||
+      viewport.devicePixelRatio <= 0.0) {
     return crop;
   }
   const Vector2d screenMin = viewport.documentToScreen(documentRect.topLeft);
   const Vector2d screenMax = viewport.documentToScreen(documentRect.bottomRight);
-  const int x = static_cast<int>(std::lround(screenMin.x * bitmap.dimensions.x / logicalSize.x));
-  const int y = static_cast<int>(std::lround(screenMin.y * bitmap.dimensions.y / logicalSize.y));
-  const int right =
-      static_cast<int>(std::lround(screenMax.x * bitmap.dimensions.x / logicalSize.x));
-  const int bottom =
-      static_cast<int>(std::lround(screenMax.y * bitmap.dimensions.y / logicalSize.y));
+  // documentToScreen() uses logical screen pixels. A GLFW offscreen window may report its
+  // physical framebuffer dimensions from windowSize() on a Retina host; scaling by that value
+  // silently crops at half the intended coordinates. The viewport's device ratio is the
+  // authoritative logical-to-framebuffer transform used for this document render.
+  const double framebufferScale = viewport.devicePixelRatio;
+  const int x = static_cast<int>(std::lround(screenMin.x * framebufferScale));
+  const int y = static_cast<int>(std::lround(screenMin.y * framebufferScale));
+  const int right = static_cast<int>(std::lround(screenMax.x * framebufferScale));
+  const int bottom = static_cast<int>(std::lround(screenMax.y * framebufferScale));
   if (x < 0 || y < 0 || right > bitmap.dimensions.x || bottom > bitmap.dimensions.y || right <= x ||
       bottom <= y) {
     return crop;
@@ -94,6 +97,36 @@ svg::RendererBitmap CropDocumentRect(const svg::RendererBitmap& bitmap,
                 crop.rowBytes);
   }
   return crop;
+}
+
+TEST(EditorShellTest, DocumentCropUsesViewportDeviceScaleAtOneAndTwoX) {
+  for (int scale : {1, 2}) {
+    svg::RendererBitmap framebuffer;
+    framebuffer.dimensions = Vector2i(100 * scale, 80 * scale);
+    framebuffer.rowBytes = static_cast<std::size_t>(framebuffer.dimensions.x) * 4u;
+    framebuffer.pixels.resize(framebuffer.rowBytes * framebuffer.dimensions.y);
+    for (int y = 0; y < framebuffer.dimensions.y; ++y) {
+      for (int x = 0; x < framebuffer.dimensions.x; ++x) {
+        const std::size_t offset = static_cast<std::size_t>(y) * framebuffer.rowBytes + x * 4u;
+        framebuffer.pixels[offset] = static_cast<std::uint8_t>(x);
+        framebuffer.pixels[offset + 1] = static_cast<std::uint8_t>(y);
+        framebuffer.pixels[offset + 3] = 255;
+      }
+    }
+    ViewportState viewport;
+    viewport.zoom = 1.0;
+    viewport.devicePixelRatio = static_cast<double>(scale);
+    viewport.panScreenPoint = Vector2d(10.0, 20.0);
+    const svg::RendererBitmap crop =
+        CropDocumentRect(framebuffer, viewport, Box2d::FromXYWH(4.0, 5.0, 3.0, 2.0));
+    ASSERT_EQ(crop.dimensions, Vector2i(3 * scale, 2 * scale));
+    ASSERT_FALSE(crop.empty());
+    EXPECT_EQ(crop.pixels[0], 14 * scale);
+    EXPECT_EQ(crop.pixels[1], 25 * scale);
+    const std::size_t last = crop.pixels.size() - 4u;
+    EXPECT_EQ(crop.pixels[last], 17 * scale - 1);
+    EXPECT_EQ(crop.pixels[last + 1], 27 * scale - 1);
+  }
 }
 
 constexpr std::string_view kStyledSvg = R"svg(
@@ -3752,7 +3785,7 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
   ASSERT_EQ(firstMove.dimensions, settled.dimensions);
 
   const auto cropDocumentRect = [&](const svg::RendererBitmap& bitmap, const Box2d& documentRect) {
-    return CropDocumentRect(bitmap, viewport, window.windowSize(), documentRect);
+    return CropDocumentRect(bitmap, viewport, documentRect);
   };
   // The unobscured upper sky contains visible source pixels removed by this move. Pixelmatch
   // establishes both that the crop changed and that the first held frame already matches the
@@ -3886,11 +3919,9 @@ TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
   ASSERT_TRUE(waitForCurrentFrame());
   const svg::RendererBitmap settled = captureContent();
   const Box2d sky = Box2d::FromXYWH(270.0, 40.0, 70.0, 50.0);
-  const svg::RendererBitmap beforeSky =
-      CropDocumentRect(before, viewport, window.windowSize(), sky);
-  const svg::RendererBitmap heldSky = CropDocumentRect(held, viewport, window.windowSize(), sky);
-  const svg::RendererBitmap settledSky =
-      CropDocumentRect(settled, viewport, window.windowSize(), sky);
+  const svg::RendererBitmap beforeSky = CropDocumentRect(before, viewport, sky);
+  const svg::RendererBitmap heldSky = CropDocumentRect(held, viewport, sky);
+  const svg::RendererBitmap settledSky = CropDocumentRect(settled, viewport, sky);
   ASSERT_FALSE(beforeSky.empty());
   ASSERT_FALSE(heldSky.empty());
   ASSERT_FALSE(settledSky.empty());
@@ -3983,12 +4014,9 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
     ASSERT_TRUE(secondBounds.has_value());
     EXPECT_NEAR(secondBounds->topLeft.x - bounds->topLeft.x, 20.0, 1e-6);
 
-    const svg::RendererBitmap beforeCrop =
-        CropDocumentRect(before, viewport, window.windowSize(), contentCrop);
-    const svg::RendererBitmap firstCrop =
-        CropDocumentRect(firstHeld, viewport, window.windowSize(), contentCrop);
-    const svg::RendererBitmap secondCrop =
-        CropDocumentRect(secondHeld, viewport, window.windowSize(), contentCrop);
+    const svg::RendererBitmap beforeCrop = CropDocumentRect(before, viewport, contentCrop);
+    const svg::RendererBitmap firstCrop = CropDocumentRect(firstHeld, viewport, contentCrop);
+    const svg::RendererBitmap secondCrop = CropDocumentRect(secondHeld, viewport, contentCrop);
     ASSERT_FALSE(beforeCrop.empty());
     ASSERT_FALSE(firstCrop.empty());
     ASSERT_FALSE(secondCrop.empty());
@@ -4116,8 +4144,7 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
   const svg::RendererBitmap before = frame(*hitPoint, false, true);
   ASSERT_GE(before.dimensions.x, 3000);
   ASSERT_GE(before.dimensions.y, 1600);
-  const svg::RendererBitmap beforeCrop =
-      CropDocumentRect(before, viewport, window.windowSize(), crop);
+  const svg::RendererBitmap beforeCrop = CropDocumentRect(before, viewport, crop);
   ASSERT_FALSE(beforeCrop.empty());
   if (selectFromLayers) {
     shell.asyncRendererForReplay().setReplayRenderDelayForTesting(std::chrono::milliseconds(45));
@@ -4214,8 +4241,7 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
       svg::RendererBitmap held = frame(pointer, true, true);
       requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
       const LayerInspectorStatusReadback capturedStatus = shell.layerInspectorStatusForReadback();
-      const svg::RendererBitmap heldCrop =
-          CropDocumentRect(held, viewport, window.windowSize(), crop);
+      const svg::RendererBitmap heldCrop = CropDocumentRect(held, viewport, crop);
       int baselinePixels = -1;
       int successivePixels = -1;
       if (!heldCrop.empty()) {
