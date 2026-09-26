@@ -191,6 +191,10 @@ for the external-consumer setup.
 | `--config=latest_llvm` | Use the latest LLVM toolchain (required for coverage)                                                                     |
 | `--config=lld`         | Force the `lld` linker; workaround for dev boxes whose default linker can't link the suite (see FAQ below)                |
 
+For a separate Bazel module, the root `@donner` dependency uses tiny-skia by default. See
+\ref GettingStarted for the checked-in consumer example, the source-checkout override, and
+published BCR versions.
+
 ## Continuous integration remote cache
 
 The GitHub-hosted CI lanes (the hosted Linux/macOS fallback builds, the
