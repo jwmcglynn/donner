@@ -709,8 +709,8 @@ donner_cc_test(
     data = ["//:geode_splash.svg"],
     deps = [
         ":bitmap_golden_compare",
-        "//donner/base:base_test_utils",
         ":render_coordinator_test_access",
+        "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:composited_presentation",
         "//donner/editor:editor_app",
@@ -951,6 +951,7 @@ donner_cc_test(
     deps = [
         "//donner/base",
         "//donner/editor:editor_app",
+        "//donner/editor:embedded_svg_icon",
         "//donner/editor:imgui_headers",
         "//donner/editor:sidebar_presenter",
         "//donner/svg",

@@ -482,6 +482,8 @@ git_override(
     patches = [
         "//third_party/patches:imgui_bazel_build_files.patch",
         "//third_party/patches:imgui-explicit-raw-memory.patch",
+        # Match DragScalar's resting label to its left-aligned temporary text editor.
+        "//third_party/patches:imgui-left-align-drag-values.patch",
     ],
     remote = "https://github.com/ocornut/imgui",
 )

@@ -196,6 +196,9 @@ public:
   [[nodiscard]] std::optional<Box2d> strokeIncrementRectForTesting() const {
     return strokeIncrementRect_;
   }
+  [[nodiscard]] std::optional<Box2d> strokeDecrementRectForTesting() const {
+    return strokeDecrementRect_;
+  }
   /// Last rendered width value field, for drag and unit-preservation checks.
   [[nodiscard]] std::optional<Box2d> strokeWidthRectForTesting() const { return strokeWidthRect_; }
 
@@ -229,6 +232,12 @@ public:
   /// Last rendered sharp-join limit field, absent for rounded/beveled joins.
   [[nodiscard]] std::optional<Box2d> strokeMiterLimitRectForTesting() const {
     return strokeMiterLimitRect_;
+  }
+  [[nodiscard]] std::optional<Box2d> strokeMiterIncrementRectForTesting() const {
+    return strokeMiterIncrementRect_;
+  }
+  [[nodiscard]] std::optional<Box2d> strokeMiterDecrementRectForTesting() const {
+    return strokeMiterDecrementRect_;
   }
   /// Last rendered dash-offset field when its advanced row is visible.
   [[nodiscard]] std::optional<Box2d> strokeDashOffsetRectForTesting() const {
@@ -377,7 +386,8 @@ private:
   bool renderTransformPanel(EditorApp* liveApp);
 
   /// Render SVG stroke controls from the captured selection, queuing style mutations when idle.
-  bool renderStrokeControlsPanel(EditorApp* liveApp);
+  bool renderStrokeControlsPanel(EditorApp* liveApp,
+                                 const IconTextureProvider& iconTextureProvider);
 
   enum class StrokeScalarField;
   struct StrokeRenderContext {
@@ -385,6 +395,7 @@ private:
     const EditorTheme& theme;
     float rowStartX;
     bool canMutate;
+    const IconTextureProvider& iconTextureProvider;
   };
   bool renderStrokeWidthRow(const StrokeRenderContext& context);
   bool renderStrokeWidthField(const StrokeRenderContext& context, const Lengthd& widthLength,
@@ -448,6 +459,7 @@ private:
   std::array<std::optional<Box2d>, 5> transformFieldRects_;
   std::array<std::optional<Box2d>, 6> matrixFieldRects_;
   std::optional<Box2d> strokeIncrementRect_;
+  std::optional<Box2d> strokeDecrementRect_;
   std::optional<Box2d> strokeWidthRect_;
   std::array<std::optional<Box2d>, 3> strokeCapRects_;
   std::array<std::optional<Box2d>, 5> strokeJoinRects_;
@@ -456,6 +468,8 @@ private:
   std::array<std::optional<Box2d>, 3> strokeDashPresetRects_;
   bool strokeCustomDashSelected_ = false;
   std::optional<Box2d> strokeMiterLimitRect_;
+  std::optional<Box2d> strokeMiterIncrementRect_;
+  std::optional<Box2d> strokeMiterDecrementRect_;
   std::optional<Box2d> strokeDashOffsetRect_;
   std::array<char, 128> strokeDasharrayBuffer_{};
   bool strokeDasharrayEditing_ = false;
@@ -489,6 +503,27 @@ private:
 /// available, so batching them with the boot icons keeps that first selection
 /// from stalling on a run of GPU readbacks.
 [[nodiscard]] std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests();
+
+/// Stroke-cap and stroke-join previews drawn by the SVG renderer, in button order.
+enum class StrokePreviewIcon : std::uint8_t {
+  ButtCap,
+  RoundCap,
+  SquareCap,
+  MiterJoin,
+  RoundJoin,
+  BevelJoin,
+};
+
+inline constexpr std::array<StrokePreviewIcon, 6> kStrokePreviewIcons = {
+    StrokePreviewIcon::ButtCap,   StrokePreviewIcon::RoundCap,  StrokePreviewIcon::SquareCap,
+    StrokePreviewIcon::MiterJoin, StrokePreviewIcon::RoundJoin, StrokePreviewIcon::BevelJoin,
+};
+
+/// Embedded SVG source whose actual stroke property produces this preview.
+[[nodiscard]] std::span<const unsigned char> StrokePreviewIconSvg(StrokePreviewIcon icon);
+
+/// Unique UI texture key for a rendered stroke preview.
+[[nodiscard]] std::uint64_t StrokePreviewIconTextureKey(StrokePreviewIcon icon);
 
 /// The path operations the inspector shows a button for, in button order.
 inline constexpr std::array<PathOperationKind, 4> kInspectorPathOperations = {

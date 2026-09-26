@@ -6,8 +6,8 @@
 /// context: when the canvas selection is a single `<text>` element or an
 /// in-canvas text editing session is active. It offers a searchable font-family
 /// picker (each known family previewed in its own face, with a free-text
-/// fallback for families the editor lacks), a font-size combo with drag and
-/// preset behavior, and Bold/Italic/Underline toggles.
+/// fallback for families the editor lacks), a font-size control with drag,
+/// attached steps, and presets, and Bold/Italic/Underline toggles.
 ///
 /// Following the `MenuBarPresenter` pattern, the presenter is a thin, testable
 /// surface: `render()` draws the imgui controls and returns edge-triggered

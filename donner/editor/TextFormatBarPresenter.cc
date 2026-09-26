@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <optional>
@@ -11,6 +12,7 @@
 #include "donner/base/FormatNumber.h"
 #include "donner/base/RcString.h"
 #include "donner/base/parser/NumberParser.h"
+#include "donner/editor/AttachedNumericStepper.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorTheme.h"
 #include "donner/editor/ImGuiIncludes.h"
@@ -299,7 +301,7 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
       ImGui::EndCombo();
     }
 
-    // --- Font size: drag box plus a preset dropdown. ---
+    // --- Font size: editable drag box, attached steps, and presets. ---
     ImGui::SameLine();
     if (!sizeControlActive_) {
       sizeEditValue_ = state.hasFontSize ? state.fontSize : 0.0f;
@@ -307,7 +309,19 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
     ImGui::SetNextItemWidth(64.0f);
     ImGui::DragFloat("##format_bar_font_size", &sizeEditValue_, 0.5f, 1.0f, 512.0f, "%.0f");
     sizeControlActive_ = ImGui::IsItemActive();
-    if (ImGui::IsItemDeactivatedAfterEdit()) {
+    const bool sizeEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
+    const ImVec2 sizeFieldMin = ImGui::GetItemRectMin();
+    const ImVec2 sizeFieldMax = ImGui::GetItemRectMax();
+    const AttachedNumericStepperResult sizeSteps = RenderAttachedNumericStepper(
+        "format_bar_font_size_steps", sizeFieldMin, sizeFieldMax, theme);
+    if (sizeEditCommitted) {
+      actions.setFontSize = true;
+      actions.fontSize = sizeEditValue_;
+    }
+    if (sizeSteps.increment || sizeSteps.decrement) {
+      const float currentSize =
+          std::isfinite(sizeEditValue_) && sizeEditValue_ >= 1.0f ? sizeEditValue_ : 16.0f;
+      sizeEditValue_ = std::clamp(currentSize + (sizeSteps.increment ? 1.0f : -1.0f), 1.0f, 512.0f);
       actions.setFontSize = true;
       actions.fontSize = sizeEditValue_;
     }

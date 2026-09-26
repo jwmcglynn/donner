@@ -3099,6 +3099,25 @@ void EditorShell::handleGlobalShortcuts() {
     }
   }
 
+  // A selected text object accepts the same B/I/U actions as the format bar.
+  // The active Text tool handles its own character-range shortcuts above; the
+  // source pane and focused ImGui inputs keep their keyboard ownership.
+  if (activeTool_ == ActiveTool::Select && !sourcePaneFocused && !anyPopupOpen && cmd && !shift) {
+    const std::vector<svg::SVGElement>& selection = app_.selectedElements();
+    if (selection.size() == 1u && selection.front().type() == svg::ElementType::Text) {
+      FormatBarActions actions;
+      actions.toggleBold = ImGui::IsKeyPressed(ImGuiKey_B, /*repeat=*/false);
+      actions.toggleItalic = ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false);
+      actions.toggleUnderline = ImGui::IsKeyPressed(ImGuiKey_U, /*repeat=*/false);
+      if (actions.toggleBold || actions.toggleItalic || actions.toggleUnderline) {
+        FormatBarState state;
+        ReadTextFormatState(selection.front(), &state);
+        applyFormatBarActions(state, actions);
+        return;
+      }
+    }
+  }
+
   if (!anyPopupOpen && cmd &&
       (ImGui::IsKeyPressed(ImGuiKey_Equal, /*repeat=*/false) ||
        ImGui::IsKeyPressed(ImGuiKey_KeypadAdd, /*repeat=*/false))) {

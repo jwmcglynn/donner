@@ -452,6 +452,7 @@ protected:
   static constexpr float kPadding = 8.0f;
   static constexpr float kFamilyInputWidth = 180.0f;
   static constexpr float kSizeDragWidth = 64.0f;
+  static constexpr float kSizeStepperWidth = 22.0f;
 
   void SetUp() override {
     IMGUI_CHECKVERSION();
@@ -545,14 +546,15 @@ protected:
     return merged;
   }
 
-  // Horizontal layout of the single control row (left to right): family input,
-  // family combo arrow, size drag, size combo arrow, B, I, U.
+  // Horizontal layout: family input, family menu, size drag and attached steps,
+  // size presets, B, I, U.
   float RowCenterY() const { return kBarY + kPadding + frameHeight_ * 0.5f; }
   float RowBottomY() const { return kBarY + kPadding + frameHeight_; }
   float FamilyInputLeft() const { return kBarX + kPadding; }
   float FamilyArrowLeft() const { return FamilyInputLeft() + kFamilyInputWidth; }
   float SizeDragLeft() const { return FamilyArrowLeft() + frameHeight_ + itemSpacingX_; }
-  float SizeArrowLeft() const { return SizeDragLeft() + kSizeDragWidth; }
+  float SizeStepperLeft() const { return SizeDragLeft() + kSizeDragWidth; }
+  float SizeArrowLeft() const { return SizeStepperLeft() + kSizeStepperWidth; }
   float BoldLeft() const { return SizeArrowLeft() + frameHeight_ + itemSpacingX_; }
   float ItalicLeft() const { return BoldLeft() + frameHeight_ + itemSpacingX_; }
   float UnderlineLeft() const { return ItalicLeft() + frameHeight_ + itemSpacingX_; }
@@ -658,6 +660,21 @@ TEST_F(TextFormatBarPresenterInputTest, DraggingSizeControlCommitsNewFontSize) {
   EXPECT_TRUE(merged.setFontSize);
   EXPECT_GT(merged.fontSize, 16.0f);
   EXPECT_FALSE(merged.setFontFamily);
+}
+
+TEST_F(TextFormatBarPresenterInputTest, AttachedFontSizeStepsCommitOnePointChanges) {
+  const FormatBarState state = MakeState();
+  Frame(state);
+  const float x = SizeStepperLeft() + kSizeStepperWidth * 0.5f;
+  const float top = kBarY + kPadding;
+
+  const FormatBarActions up = Click(state, ImVec2(x, top + frameHeight_ * 0.25f));
+  EXPECT_TRUE(up.setFontSize);
+  EXPECT_EQ(up.fontSize, 17.0f);
+
+  const FormatBarActions down = Click(state, ImVec2(x, top + frameHeight_ * 0.75f));
+  EXPECT_TRUE(down.setFontSize);
+  EXPECT_EQ(down.fontSize, 15.0f);
 }
 
 TEST_F(TextFormatBarPresenterInputTest, SizePresetMenuSelectsPreset) {

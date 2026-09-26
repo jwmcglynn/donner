@@ -4451,6 +4451,39 @@ TEST(EditorShellTest, SelectDoubleClickOnTextSwitchesToTextEditingAtClick) {
   EXPECT_TRUE(after.underline);
 }
 
+TEST(EditorShellTest, SelectToolShortcutsComposeTextBoldItalicAndUnderline) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "shortcut-text.svg"));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto label = app.document().document().querySelector("#label");
+  ASSERT_TRUE(label.has_value());
+  app.setSelection(*label);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_B}, /*ctrl=*/false, /*shift=*/false, /*super=*/true);
+  EXPECT_EQ(label->getAttribute("font-weight"), "bold");
+  DriveGlobalShortcut(shell, {ImGuiKey_I}, /*ctrl=*/false, /*shift=*/false, /*super=*/true);
+  EXPECT_EQ(label->getAttribute("font-weight"), "bold");
+  EXPECT_EQ(label->getAttribute("font-style"), "italic");
+  DriveGlobalShortcut(shell, {ImGuiKey_U}, /*ctrl=*/false, /*shift=*/false, /*super=*/true);
+  EXPECT_EQ(label->getAttribute("text-decoration"), "underline");
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_B}, /*ctrl=*/false, /*shift=*/false, /*super=*/true);
+  EXPECT_EQ(label->getAttribute("font-weight"), "normal");
+  EXPECT_EQ(label->getAttribute("font-style"), "italic");
+  EXPECT_EQ(label->getAttribute("text-decoration"), "underline");
+
+  DriveGlobalShortcut(shell, {ImGuiKey_I}, /*ctrl=*/false, /*shift=*/false, /*super=*/true,
+                      /*textInputActive=*/true);
+  EXPECT_EQ(label->getAttribute("font-style"), "italic");
+}
+
 TEST(EditorShellTest, DocumentSpaceReplayInputRoutesTextToolPlainClickCreatesNothing) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {

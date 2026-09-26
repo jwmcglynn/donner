@@ -14,9 +14,11 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/FormatNumber.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/css/CSS.h"
+#include "donner/editor/AttachedNumericStepper.h"
 #include "donner/editor/DisclosureChevron.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/EditorTheme.h"
@@ -28,6 +30,7 @@
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "embed_resources/BootstrapIcons.h"
+#include "embed_resources/EditorIcons.h"
 
 namespace donner::editor {
 
@@ -135,10 +138,25 @@ bool IsValidStrokeDasharray(std::string_view value) {
          });
 }
 
-enum class StrokeChoiceKind { Cap, Join };
+constexpr int kStrokePreviewRasterSizePx = 96;
 
-bool RenderStrokeChoice(const char* id, const char* tooltip, StrokeChoiceKind kind, int index,
-                        bool selected, const EditorTheme& theme, std::optional<Box2d>* rect) {
+const std::optional<svg::RendererBitmap>& CachedStrokePreviewBitmap(StrokePreviewIcon icon) {
+  static const std::array<std::optional<svg::RendererBitmap>, kStrokePreviewIcons.size()> bitmaps =
+      [] {
+        std::array<std::optional<svg::RendererBitmap>, kStrokePreviewIcons.size()> result;
+        for (std::size_t index = 0; index < kStrokePreviewIcons.size(); ++index) {
+          result[index] = RenderEmbeddedSvgIcon(StrokePreviewIconSvg(kStrokePreviewIcons[index]),
+                                                kStrokePreviewRasterSizePx);
+        }
+        return result;
+      }();
+  return bitmaps[static_cast<std::size_t>(icon)];
+}
+
+bool RenderStrokeChoice(const char* id, const char* tooltip, StrokePreviewIcon icon, bool selected,
+                        const EditorTheme& theme,
+                        const SidebarPresenter::IconTextureProvider& iconTextureProvider,
+                        std::optional<Box2d>* rect) {
   const ImVec2 size(32.0f, 28.0f);
   const bool pressed = ImGui::InvisibleButton(id, size);
   const ImVec2 min = ImGui::GetItemRectMin();
@@ -150,57 +168,24 @@ bool RenderStrokeChoice(const char* id, const char* tooltip, StrokeChoiceKind ki
                                                     : theme.surfaceRaised;
   draw->AddRectFilled(min, max, background, theme.radiusControl);
   draw->AddRect(min, max, selected ? theme.accentDefault : theme.borderSubtle, theme.radiusControl);
-  const ImU32 ink = selected ? theme.accentDefault : theme.textPrimary;
-  const float centerY = (min.y + max.y) * 0.5f;
-  if (kind == StrokeChoiceKind::Cap) {
-    const float endX = min.x + 22.0f;
-    draw->AddLine(ImVec2(min.x + 9.0f, centerY), ImVec2(endX, centerY), ink, 4.0f);
-    if (index == 0) {
-      draw->AddLine(ImVec2(endX, centerY - 5.0f), ImVec2(endX, centerY + 5.0f), ink, 1.0f);
-    } else if (index == 1) {
-      draw->AddCircleFilled(ImVec2(endX, centerY), 3.0f, ink);
-    } else {
-      draw->AddRectFilled(ImVec2(endX - 1.0f, centerY - 3.0f), ImVec2(endX + 4.0f, centerY + 3.0f),
-                          ink);
-    }
-  } else {
-    const ImVec2 apex(min.x + 16.0f, min.y + 6.0f);
-    if (index == 3) {
-      draw->AddLine(ImVec2(min.x + 9.0f, min.y + 21.0f), ImVec2(min.x + 13.0f, min.y + 12.0f), ink,
-                    3.0f);
-      draw->AddLine(ImVec2(min.x + 13.0f, min.y + 12.0f), ImVec2(min.x + 19.0f, min.y + 12.0f), ink,
-                    3.0f);
-      draw->AddLine(ImVec2(min.x + 19.0f, min.y + 12.0f), ImVec2(min.x + 23.0f, min.y + 21.0f), ink,
-                    3.0f);
-    } else {
-      draw->AddLine(ImVec2(min.x + 9.0f, min.y + 21.0f), apex, ink, 3.0f);
-      draw->AddLine(apex, ImVec2(min.x + 23.0f, min.y + 21.0f), ink, 3.0f);
-      if (index == 2) {
-        draw->AddCircleFilled(apex, 4.0f, ink);
+  if (iconTextureProvider) {
+    const std::optional<svg::RendererBitmap>& bitmap = CachedStrokePreviewBitmap(icon);
+    if (bitmap.has_value()) {
+      const SidebarPresenter::IconTexture texture =
+          iconTextureProvider(StrokePreviewIconTextureKey(icon), *bitmap);
+      if (texture.texture != 0) {
+        const ImVec2 iconMin(min.x + 4.0f, min.y + 2.0f);
+        const ImVec2 iconMax(iconMin.x + 24.0f, iconMin.y + 24.0f);
+        const ImVec2 uvMax(static_cast<float>(texture.uvBottomRight.x),
+                           static_cast<float>(texture.uvBottomRight.y));
+        draw->AddImage(texture.texture, iconMin, iconMax, ImVec2(0.0f, 0.0f), uvMax,
+                       selected ? theme.accentDefault : theme.textPrimary);
       }
     }
   }
   if (ImGui::IsItemHovered()) {
     ImGui::SetTooltip("%s", tooltip);
   }
-  return pressed;
-}
-
-bool RenderStrokeStep(const char* id, bool up, const EditorTheme& theme,
-                      std::optional<Box2d>* rect) {
-  const bool pressed = ImGui::InvisibleButton(id, ImVec2(26.0f, 19.0f));
-  const ImVec2 min = ImGui::GetItemRectMin();
-  const ImVec2 max = ImGui::GetItemRectMax();
-  *rect = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
-  ImDrawList* draw = ImGui::GetWindowDrawList();
-  draw->AddRectFilled(min, max, ImGui::IsItemHovered() ? theme.surfaceHover : theme.surfaceRaised,
-                      theme.radiusControl);
-  const float centerX = (min.x + max.x) * 0.5f;
-  const float centerY = (min.y + max.y) * 0.5f;
-  const float direction = up ? -1.0f : 1.0f;
-  draw->AddTriangleFilled(ImVec2(centerX, centerY + direction * 4.0f),
-                          ImVec2(centerX - 5.0f, centerY - direction * 2.0f),
-                          ImVec2(centerX + 5.0f, centerY - direction * 2.0f), theme.textPrimary);
   return pressed;
 }
 
@@ -616,6 +601,23 @@ constexpr double kMinimumSpanForScale = 1e-6;
 
 }  // namespace
 
+std::span<const unsigned char> StrokePreviewIconSvg(StrokePreviewIcon icon) {
+  switch (icon) {
+    case StrokePreviewIcon::ButtCap: return embedded::kStrokeCapButtSvg;
+    case StrokePreviewIcon::RoundCap: return embedded::kStrokeCapRoundSvg;
+    case StrokePreviewIcon::SquareCap: return embedded::kStrokeCapSquareSvg;
+    case StrokePreviewIcon::MiterJoin: return embedded::kStrokeJoinMiterSvg;
+    case StrokePreviewIcon::RoundJoin: return embedded::kStrokeJoinRoundSvg;
+    case StrokePreviewIcon::BevelJoin: return embedded::kStrokeJoinBevelSvg;
+  }
+  return embedded::kStrokeCapButtSvg;
+}
+
+std::uint64_t StrokePreviewIconTextureKey(StrokePreviewIcon icon) {
+  constexpr std::uint64_t kIconTextureKeyBase = 0xf800000000000000ull;
+  return kIconTextureKeyBase + static_cast<std::uint64_t>(icon) + 1u;
+}
+
 std::span<const unsigned char> PathOperationIconSvg(PathOperationKind operation) {
   switch (operation) {
     case PathOperationKind::Union: return embedded::kBootstrapUnionSvg;
@@ -642,7 +644,7 @@ std::uint64_t PathOperationIconTextureKey(PathOperationKind operation) {
 }
 
 std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests() {
-  static const std::array<EmbeddedSvgIconRequest, 5> kRequests = {{
+  static const std::array<EmbeddedSvgIconRequest, 11> kRequests = {{
       {PathOperationIconSvg(PathOperationKind::Union), kPathOperationIconRasterSizePx,
        /*tintableMask=*/true},
       {PathOperationIconSvg(PathOperationKind::Intersect), kPathOperationIconRasterSizePx,
@@ -652,6 +654,18 @@ std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests() {
       {PathOperationIconSvg(PathOperationKind::SubtractBack), kPathOperationIconRasterSizePx,
        /*tintableMask=*/true},
       {PathOperationIconSvg(PathOperationKind::Exclude), kPathOperationIconRasterSizePx,
+       /*tintableMask=*/true},
+      {StrokePreviewIconSvg(StrokePreviewIcon::ButtCap), kStrokePreviewRasterSizePx,
+       /*tintableMask=*/true},
+      {StrokePreviewIconSvg(StrokePreviewIcon::RoundCap), kStrokePreviewRasterSizePx,
+       /*tintableMask=*/true},
+      {StrokePreviewIconSvg(StrokePreviewIcon::SquareCap), kStrokePreviewRasterSizePx,
+       /*tintableMask=*/true},
+      {StrokePreviewIconSvg(StrokePreviewIcon::MiterJoin), kStrokePreviewRasterSizePx,
+       /*tintableMask=*/true},
+      {StrokePreviewIconSvg(StrokePreviewIcon::RoundJoin), kStrokePreviewRasterSizePx,
+       /*tintableMask=*/true},
+      {StrokePreviewIconSvg(StrokePreviewIcon::BevelJoin), kStrokePreviewRasterSizePx,
        /*tintableMask=*/true},
   }};
   return kRequests;
@@ -967,14 +981,14 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
   if (!inspectorSnapshot_.hasSelection) {
     if (liveApp != nullptr && liveApp->selectedElements().size() > 1u) {
       ImGui::Text("%zu elements selected", liveApp->selectedElements().size());
-      queuedMutation = renderStrokeControlsPanel(liveApp);
+      queuedMutation = renderStrokeControlsPanel(liveApp, iconTextureProvider);
       queuedMutation =
           RenderPathOperationsPanel(liveApp, inspectorSnapshot_.pathOperationAvailability,
                                     iconTextureProvider) ||
           queuedMutation;
     } else {
       ImGui::TextDisabled("Select a single element to inspect attributes.");
-      queuedMutation = renderStrokeControlsPanel(liveApp);
+      queuedMutation = renderStrokeControlsPanel(liveApp, iconTextureProvider);
       queuedMutation =
           RenderPathOperationsPanel(liveApp, inspectorSnapshot_.pathOperationAvailability,
                                     iconTextureProvider) ||
@@ -998,7 +1012,7 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
                          b.topLeft.y);
     }
     queuedMutation = renderTransformPanel(liveApp);
-    queuedMutation = renderStrokeControlsPanel(liveApp) || queuedMutation;
+    queuedMutation = renderStrokeControlsPanel(liveApp, iconTextureProvider) || queuedMutation;
     RenderInspectorSection("XML attributes", "##inspector_xml_attributes",
                            inspectorSnapshot_.xmlAttributes, InspectorSectionKind::XmlAttributes);
     RenderInspectorSection("Computed CSS", "##inspector_computed_style",
@@ -1012,7 +1026,8 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
   return queuedMutation;
 }
 
-bool SidebarPresenter::renderStrokeControlsPanel(EditorApp* liveApp) {
+bool SidebarPresenter::renderStrokeControlsPanel(EditorApp* liveApp,
+                                                 const IconTextureProvider& iconTextureProvider) {
   const EditorTheme& theme = EditorTheme::Active();
   ImGui::Separator();
   ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "STROKE");
@@ -1022,7 +1037,8 @@ bool SidebarPresenter::renderStrokeControlsPanel(EditorApp* liveApp) {
     finishStrokeScalarEdit(*liveApp, strokeScalarEdit_->field);
   }
   ImGui::BeginDisabled(!inspectorSnapshot_.strokeEditable);
-  const StrokeRenderContext context{liveApp, theme, ImGui::GetCursorPosX(), canMutate};
+  const StrokeRenderContext context{liveApp, theme, ImGui::GetCursorPosX(), canMutate,
+                                    iconTextureProvider};
   bool queuedMutation = renderStrokeWidthRow(context);
   queuedMutation = renderStrokeCapRow(context) || queuedMutation;
   queuedMutation = renderStrokeJoinRow(context) || queuedMutation;
@@ -1042,7 +1058,6 @@ bool SidebarPresenter::renderStrokeWidthRow(const StrokeRenderContext& context) 
       context.canMutate ? FirstSelectedStrokeWidth(*context.app) : inspectorSnapshot_.strokeWidth;
   float width = static_cast<float>(widthLength.value);
   bool queuedMutation = renderStrokeWidthField(context, widthLength, &width);
-  ImGui::SameLine(0.0f, theme.space1);
   queuedMutation = renderStrokeWidthStepper(context, widthLength, width) || queuedMutation;
   return queuedMutation;
 }
@@ -1083,34 +1098,27 @@ bool SidebarPresenter::renderStrokeWidthField(const StrokeRenderContext& context
 
 bool SidebarPresenter::renderStrokeWidthStepper(const StrokeRenderContext& context,
                                                 const Lengthd& widthLength, float width) {
-  EditorApp* liveApp = context.app;
-  const EditorTheme& theme = context.theme;
-  const bool canMutate = context.canMutate;
-  bool queuedMutation = false;
-  ImGui::BeginGroup();
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 1.0f));
-  if (RenderStrokeStep("##stroke_width_up", true, theme, &strokeIncrementRect_) && canMutate) {
-    width += 1.0f;
-    if (widthLength.unit == LengthUnit::None || widthLength.unit == LengthUnit::Px) {
-      liveApp->setActiveStrokeWidth(width);
-    }
-    const RcString cssWidth = Lengthd(width, widthLength.unit).toRcString();
-    queuedMutation = applyStrokeStyle(*liveApp, "stroke-width", cssWidth, "Change stroke width") ||
-                     queuedMutation;
+  if (!strokeWidthRect_.has_value()) {
+    return false;
   }
-  std::optional<Box2d> decrementRect;
-  if (RenderStrokeStep("##stroke_width_down", false, theme, &decrementRect) && canMutate) {
-    width = std::max(0.0f, width - 1.0f);
-    if (widthLength.unit == LengthUnit::None || widthLength.unit == LengthUnit::Px) {
-      liveApp->setActiveStrokeWidth(width);
-    }
-    const RcString cssWidth = Lengthd(width, widthLength.unit).toRcString();
-    queuedMutation = applyStrokeStyle(*liveApp, "stroke-width", cssWidth, "Change stroke width") ||
-                     queuedMutation;
+  const Box2d& field = *strokeWidthRect_;
+  const AttachedNumericStepperResult steps = RenderAttachedNumericStepper(
+      "stroke_width_steps",
+      ImVec2(static_cast<float>(field.topLeft.x), static_cast<float>(field.topLeft.y)),
+      ImVec2(static_cast<float>(field.bottomRight.x), static_cast<float>(field.bottomRight.y)),
+      context.theme);
+  strokeIncrementRect_ = steps.incrementRect;
+  strokeDecrementRect_ = steps.decrementRect;
+  if (!context.canMutate || (!steps.increment && !steps.decrement)) {
+    return false;
   }
-  ImGui::PopStyleVar();
-  ImGui::EndGroup();
-  return queuedMutation;
+
+  width = std::max(0.0f, width + (steps.increment ? 1.0f : -1.0f));
+  if (widthLength.unit == LengthUnit::None || widthLength.unit == LengthUnit::Px) {
+    context.app->setActiveStrokeWidth(width);
+  }
+  const RcString cssWidth = Lengthd(width, widthLength.unit).toRcString();
+  return applyStrokeStyle(*context.app, "stroke-width", cssWidth, "Change stroke width");
 }
 
 bool SidebarPresenter::renderStrokeCapRow(const StrokeRenderContext& context) {
@@ -1120,6 +1128,8 @@ bool SidebarPresenter::renderStrokeCapRow(const StrokeRenderContext& context) {
   const bool canMutate = context.canMutate;
   bool queuedMutation = false;
   constexpr std::array<const char*, 3> kCaps = {"butt", "round", "square"};
+  constexpr std::array<StrokePreviewIcon, 3> kCapIcons = {
+      StrokePreviewIcon::ButtCap, StrokePreviewIcon::RoundCap, StrokePreviewIcon::SquareCap};
   const int cap = std::clamp(inspectorSnapshot_.strokeLinecap, 0, 2);
   StrokeRowLabel("Cap", rowStartX, theme);
   ImGui::PushID("stroke_caps");
@@ -1128,8 +1138,8 @@ bool SidebarPresenter::renderStrokeCapRow(const StrokeRenderContext& context) {
       ImGui::SameLine(0.0f, 2.0f);
     }
     ImGui::PushID(index);
-    if (RenderStrokeChoice("##choice", kCaps[index], StrokeChoiceKind::Cap, index, cap == index,
-                           theme, &strokeCapRects_[index]) &&
+    if (RenderStrokeChoice("##choice", kCaps[index], kCapIcons[index], cap == index, theme,
+                           context.iconTextureProvider, &strokeCapRects_[index]) &&
         canMutate) {
       queuedMutation =
           applyStrokeStyle(*liveApp, "stroke-linecap", kCaps[index], "Change stroke cap") ||
@@ -1154,15 +1164,17 @@ bool SidebarPresenter::renderStrokeJoinRow(const StrokeRenderContext& context) {
   strokeJoinRects_.fill(std::nullopt);
   ImGui::PushID("stroke_joins");
   constexpr std::array<int, 3> kCommonJoins = {0, 2, 3};
+  constexpr std::array<StrokePreviewIcon, 3> kJoinIcons = {
+      StrokePreviewIcon::MiterJoin, StrokePreviewIcon::RoundJoin, StrokePreviewIcon::BevelJoin};
   for (std::size_t position = 0; position < kCommonJoins.size(); ++position) {
     const int index = kCommonJoins[position];
     if (position > 0u) {
       ImGui::SameLine(0.0f, 2.0f);
     }
     ImGui::PushID(index);
-    if (RenderStrokeChoice("##choice", kJoins[index], StrokeChoiceKind::Join, index,
+    if (RenderStrokeChoice("##choice", kJoins[index], kJoinIcons[position],
                            join == index || (index == 0 && (join == 1 || join == 4)), theme,
-                           &strokeJoinRects_[index]) &&
+                           context.iconTextureProvider, &strokeJoinRects_[index]) &&
         canMutate) {
       queuedMutation =
           applyStrokeStyle(*liveApp, "stroke-linejoin", kJoins[index], "Change stroke join") ||
@@ -1184,12 +1196,14 @@ bool SidebarPresenter::renderStrokeMiterRow(const StrokeRenderContext& context) 
   bool queuedMutation = false;
   const int join = std::clamp(inspectorSnapshot_.strokeLinejoin, 0, 4);
   strokeMiterLimitRect_.reset();
+  strokeMiterIncrementRect_.reset();
+  strokeMiterDecrementRect_.reset();
   if (join == 0 || join == 1 || join == 4) {
     StrokeRowLabel("Limit", rowStartX, theme);
     float miterlimit = inspectorSnapshot_.strokeMiterlimit;
     ImGui::SetNextItemWidth(90.0f);
     const bool limitChanged =
-        ImGui::InputFloat("##stroke_miter_limit", &miterlimit, 0.1f, 1.0f, "%.1f");
+        ImGui::InputFloat("##stroke_miter_limit", &miterlimit, 0.0f, 0.0f, "%.1f");
     if (limitChanged && canMutate) {
       if (std::isfinite(miterlimit) && miterlimit >= 1.0f) {
         beginStrokeScalarEdit(*liveApp, StrokeScalarField::MiterLimit);
@@ -1205,8 +1219,21 @@ bool SidebarPresenter::renderStrokeMiterRow(const StrokeRenderContext& context) 
     trackStrokeScalarItem(context, StrokeScalarField::MiterLimit);
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
+    const bool fieldHovered = ImGui::IsItemHovered();
     strokeMiterLimitRect_ = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
-    if (ImGui::IsItemHovered()) {
+    const AttachedNumericStepperResult steps =
+        RenderAttachedNumericStepper("stroke_miter_steps", min, max, theme);
+    strokeMiterIncrementRect_ = steps.incrementRect;
+    strokeMiterDecrementRect_ = steps.decrementRect;
+    if (context.canMutate && (steps.increment || steps.decrement)) {
+      miterlimit = std::max(1.0f, miterlimit + (steps.increment ? 1.0f : -1.0f));
+      queuedMutation = applyStrokeStyle(*liveApp, "stroke-miterlimit",
+                                        donner::detail::FormatNumberForSVG(miterlimit),
+                                        "Change stroke miter limit") ||
+                       queuedMutation;
+      strokeMiterError_.clear();
+    }
+    if (fieldHovered) {
       ImGui::SetTooltip("Maximum sharp-corner length relative to stroke width");
     }
     if (!strokeMiterError_.empty()) {
