@@ -729,7 +729,16 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
         }
 
     def test_exact_linux_oracle_is_allowed(self):
-        self.assertEqual(categories(verifier.check(self.allowed_files(), SCOPES)), [])
+        self.assertEqual(categories(verifier.check_tracked_tree(self.allowed_files(), SCOPES)), [])
+
+    def test_deleting_each_required_boundary_file_fails_the_tracked_tree(self):
+        for path in verifier.REQUIRED_ARCHIVE_SITES:
+            with self.subTest(path=path):
+                files = self.allowed_files()
+                del files[path]
+                findings = verifier.check_tracked_tree(files, SCOPES)
+                self.assertIn("rust-built-archive", categories(findings))
+                self.assertIn(path, [finding.path for finding in findings])
 
     def test_each_required_oracle_edge_fails_closed_when_removed(self):
         omissions = {

@@ -117,8 +117,9 @@ scopes and the verifier enforces the boundary of each:
   release assets and reviewed SHA-256 pins for the sole resvg comparison lane.
   The verifier checks the fetch rule, root module names, Linux-only overlay,
   test-only wrapper alias chain, and resvg test consumer as one narrow declared
-  boundary. The separate configured closure receipt proves the selected Linux
-  oracle actually reaches that archive.
+  boundary. The full tracked-tree scan also fails if any of these five files
+  disappears. The separate configured closure receipt proves the selected
+  Linux oracle actually reaches that archive.
 
 The visibility check reads the raw file and fails closed on anything it cannot
 parse as a literal list of quoted labels, a comment included: a comment

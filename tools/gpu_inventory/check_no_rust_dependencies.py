@@ -101,6 +101,10 @@ ARCHIVE_MODULE = "MODULE.bazel"
 ARCHIVE_OVERLAY = "third_party/BUILD.wgpu_native_platform"
 ARCHIVE_RUNTIME = "third_party/webgpu-cpp/BUILD.bazel"
 ARCHIVE_ORACLE_CONSUMER = "donner/svg/renderer/tests/BUILD.bazel"
+REQUIRED_ARCHIVE_SITES = tuple(sorted((
+    ARCHIVE_FETCH_RULE, ARCHIVE_MODULE, ARCHIVE_OVERLAY, ARCHIVE_RUNTIME,
+    ARCHIVE_ORACLE_CONSUMER,
+)))
 ARCHIVE_NAME_RE = re.compile(r"\bwgpu_native_[a-z0-9_]+\b")
 ARCHIVE_STRUCT_RE = re.compile(
     r"struct\(\s*name\s*=\s*\"(?P<name>[^\"]+)\"\s*,\s*"
@@ -706,6 +710,15 @@ def check(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
     return findings
 
 
+def check_tracked_tree(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
+    """Apply the per-file rules and require every test-oracle boundary file to exist."""
+    findings = check(files, scopes)
+    for path in REQUIRED_ARCHIVE_SITES:
+        if path not in files:
+            findings.extend(_archive_finding(path, "required Linux test-oracle boundary file is missing"))
+    return findings
+
+
 def git_tracked_files(repo_root: Path) -> list[str]:
     """Returns all git-tracked paths (repo-relative, sorted)."""
     output = subprocess.check_output(
@@ -784,7 +797,7 @@ def main() -> int:
 
     blocking = parse_blocking(args.blocking)
     scopes = load_rust_scopes(args.root / ALLOWLIST_RELPATH)
-    findings = check(collect_scannable_files(args.root), scopes)
+    findings = check_tracked_tree(collect_scannable_files(args.root), scopes)
     print(format_report(findings, blocking), end="")
 
     blocked = sorted({f.category for f in findings} & set(blocking))
