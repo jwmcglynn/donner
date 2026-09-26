@@ -884,7 +884,6 @@ objc_library(
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:stroke_params",
         "//donner/svg/renderer/geode:geode_device",
-        "//donner/svg/renderer/tests:rgba_test_matchers",
         "@com_google_gtest//:gtest",
     ],
     alwayslink = True,

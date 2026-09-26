@@ -306,11 +306,9 @@ public:
    *   `RGBA8Unorm`).
    * - Be at least as large as the viewport (in device pixels).
    *
-   * If the texture also has `CopySrc` usage, `takeSnapshot()` can read it back.
-   * If it lacks `CopySrc`, `takeSnapshot()` returns an empty bitmap. A frame a surface has out is
-   * read back where the device's contexts share one queue (the transitional adapter), before the
-   * frame is presented; a native backend gives the readback its own queue, whose read could land
-   * after the present, so there `takeSnapshot()` returns an empty bitmap for such a frame.
+   * A readable owned target can be captured through `CopySrc` or the supported sampled GPU path.
+   * A borrowed surface frame returns an empty bitmap: the native runtime refuses its export
+   * because the capture queue could read it after presentation recycles the frame.
    *
    * Only the identity is kept, so the caller retains ownership and the texture must remain live
    * from `beginFrame()` through `endFrame()`. A host that holds its target as a backend texture
