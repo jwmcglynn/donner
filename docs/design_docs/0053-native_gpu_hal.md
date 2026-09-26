@@ -732,10 +732,10 @@ separate hosted and integrated acceptance gate.
 - [ ] Remove the transitional adapter, `wgpu-native` archives/overlays, WebGPU-C++ headers,
       obsolete rules and orphaned code from every production and non-test closure. Preserve only
       pinned Linux archive(s) and the API wrapper needed by the resvg comparison target. Their
-      exported cc targets/aliases are `testonly`, Linux-compatible and visible only to the test
-      package; after replacing the native wgpu WGSL validator, remove macOS archive aliases and
-      prohibit any editor, Wasm or shipped-artifact edge. Pin the actual fetch rule and generated
-      lock to reviewed bytes with nonempty matching SHA-256 checksums.
+      exported cc targets/aliases must become `testonly`, Linux-compatible and visible only to the
+      test package. Remove macOS archive aliases and prohibit any editor, Wasm or shipped-artifact
+      edge. Pin the actual fetch rule and generated lock to reviewed bytes with nonempty matching
+      SHA-256 checksums.
 - [ ] Make unexpected Rust-built archives blocking in `check_no_rust_dependencies.py`. Add the
       `no-rust-configured-closure` aggregate job to `.github/workflows/main.yml` and make
       `CI / no-rust-configured-closure` a required branch-protection check ([#1530](https://github.com/jwmcglynn/donner/issues/1530)).
