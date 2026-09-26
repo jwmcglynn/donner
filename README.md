@@ -109,8 +109,8 @@ data URIs remain self-contained; secure processing modes also disable external l
 ### Renderers
 
 Donner ships two backends behind one renderer interface. The tiny_skia CPU backend is the default.
-The Geode GPU backend drives the editor canvas: native Metal on macOS, native Vulkan on Linux,
-and browser WebGPU through Donner's browser bridge. Both backends honor
+The Geode GPU backend drives the editor canvas with Vulkan, Metal, and WebGPU rendering across
+macOS, Linux, and Wasm. Both backends honor
 `paint-order` for shapes, markers, text, and tspans, and share the same DOM, layout, paint
 resolution, markers, and filter graph.
 
@@ -131,36 +131,59 @@ bazel run //donner/svg/tool:donner-svg -- donner_splash.svg --interactive
 
 Tool docs: [donner-svg CLI tool](https://jwmcglynn.github.io/donner/DonnerSvgTool.html)
 
-## Example: Saving an SVG to PNG
+## C++ API examples
 
-```sh
-bazel run //examples:svg_to_png -- donner_splash.svg
+These short excerpts show the core calls inside `main`. The linked examples include headers,
+diagnostics, and complete programs you can build and run.
+
+### Inspect and edit an SVG
+
+Parse a document, find a path, read its geometry, and change its style:
+
+```cpp
+const std::string_view source =
+    R"(<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1 L4 5"/></svg>)";
+donner::ParseWarningSink warnings;
+auto parsed = donner::svg::parser::SVGParser::ParseSVG(source, warnings);
+if (parsed.hasError()) return 1;
+
+auto document = std::move(parsed.result());
+auto element = document.querySelector("path");
+if (!element || !element->isa<donner::svg::SVGPathElement>()) return 1;
+auto path = element->cast<donner::svg::SVGPathElement>();
+if (auto spline = path.computedSpline()) {
+  std::cout << spline->pathLength() << '\n';
+}
+path.setStyle("stroke: red");
 ```
 
-How it works: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc-example.html)
+[Complete SVG tree example](examples/svg_tree_interaction.cc);
+[annotated example](https://jwmcglynn.github.io/donner/svg_tree_interaction_8cc-example.html).
+Run: `bazel run //examples:svg_tree_interaction`
 
-## API Demo
+### Render an SVG to PNG
 
-The checked-in [SVG tree example](examples/svg_tree_interaction.cc) is a complete C++ program. It
-parses an SVG, queries a `<path>`, reads its computed geometry, and changes the document. Build and
-run the same source the API reference displays:
+Read a bounded file, parse it, draw it, and save the rendered image:
 
-```sh
-bazel run //examples:svg_tree_interaction
+```cpp
+if (argc != 2) return 1;
+auto file = donner::ReadFileBounded(
+    argv[1], donner::svg::parser::SVGParser::kDefaultMaximumInputSize);
+const auto* source = std::get_if<std::string>(&file);
+if (!source) return 1;
+donner::ParseWarningSink warnings;
+auto parsed = donner::svg::parser::SVGParser::ParseSVG(*source, warnings);
+if (parsed.hasError()) return 1;
+
+auto document = std::move(parsed.result());
+donner::svg::Renderer renderer;
+renderer.draw(document);
+return renderer.save("output.png") ? 0 : 1;
 ```
 
-Detailed docs: [SVG tree interaction](https://jwmcglynn.github.io/donner/svg_tree_interaction_8cc-example.html).
-
-## API Demo 2: Rendering an SVG to PNG
-
-The checked-in [PNG rendering example](examples/svg_to_png.cc) bounds file input, parses the SVG,
-draws through the selected renderer backend, and saves `output.png`. Build and run it with a file:
-
-```sh
-bazel run //examples:svg_to_png -- donner_splash.svg
-```
-
-Detailed docs: [SVG to PNG](https://jwmcglynn.github.io/donner/svg_to_png_8cc-example.html).
+[Complete PNG example](examples/svg_to_png.cc);
+[annotated example](https://jwmcglynn.github.io/donner/svg_to_png_8cc-example.html).
+Run: `bazel run //examples:svg_to_png -- donner_splash.svg`
 
 ## Documentation
 
