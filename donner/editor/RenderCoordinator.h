@@ -495,6 +495,13 @@ public:
 private:
   friend class EditorShellTestAccess;
   friend struct RenderCoordinatorTestAccess;
+  [[nodiscard]] bool clipGuideCacheMatches(Entity selectedEntity, std::uint64_t documentGeneration,
+                                           std::uint64_t nonTransformRevision) const;
+  void updateClipGuidesForOverlay(
+      const EditorApp& app, std::span<const svg::SVGElement> selection,
+      const std::optional<SelectTool::ActiveDragPreview>& activePreview,
+      const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
+      const Transform2d& representedDocumentFromLiveDocument, SelectionChromeSnapshot* snapshot);
   void noteMissingPixelCaptureResult(const std::optional<RenderResult>& result);
   void rejectPixelCaptureResult(const std::optional<RenderResult>& result);
   void noteResultWithNothingToPresent(const std::optional<RenderResult>& result);
@@ -564,6 +571,14 @@ private:
   CompositedPresentation compositedPresentation_;
   SelectionBoundsCache selectionBoundsCache_;
   std::optional<SelectionChromeSnapshot> immediateOverlaySnapshot_;
+  struct ClipGuideCache {
+    SelectionChromeSnapshot baseline;
+    Entity selectedEntity = entt::null;
+    std::uint64_t documentGeneration = 0;
+    std::uint64_t nonTransformRevision = 0;
+    std::uint64_t dragGeneration = 0;
+  };
+  std::optional<ClipGuideCache> clipGuideCache_;
 
   std::uint64_t displayedDocVersion_ = 0;
   std::uint64_t overlayVersionGateSuppressionTotal_ = 0;

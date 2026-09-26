@@ -797,6 +797,7 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   lockedRejectionFlash_.reset();
   lastOverlaySourceHoverVec_.clear();
   immediateOverlaySnapshot_.reset();
+  clipGuideCache_.reset();
   lastOverlayRasterSize_ = Vector2i::Zero();
   lastOverlayScreenRect_.reset();
   lastOverlayCanvasFromDocument_.reset();
@@ -1150,6 +1151,63 @@ void RenderCoordinator::promoteSelectionBoundsIfReady() {
   PromoteSelectionBoundsIfReady(selectionBoundsCache_, displayedDocVersion_);
 }
 
+bool RenderCoordinator::clipGuideCacheMatches(Entity selectedEntity,
+                                              std::uint64_t documentGeneration,
+                                              std::uint64_t nonTransformRevision) const {
+  return clipGuideCache_.has_value() && clipGuideCache_->selectedEntity == selectedEntity &&
+         clipGuideCache_->documentGeneration == documentGeneration &&
+         clipGuideCache_->nonTransformRevision == nonTransformRevision;
+}
+
+void RenderCoordinator::updateClipGuidesForOverlay(
+    const EditorApp& app, std::span<const svg::SVGElement> selection,
+    const std::optional<SelectTool::ActiveDragPreview>& activePreview,
+    const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
+    const Transform2d& representedDocumentFromLiveDocument, SelectionChromeSnapshot* snapshot) {
+  if (selection.size() != 1u) {
+    clipGuideCache_.reset();
+    return;
+  }
+
+  const Entity selectedEntity = selection.front().unsafeEntityHandle().entity();
+  const auto& document = app.document();
+  if (clipGuideCache_.has_value() &&
+      !clipGuideCacheMatches(selectedEntity, document.documentGeneration(),
+                             document.nonTransformRevision())) {
+    clipGuideCache_.reset();
+  }
+
+  if (activeBoundsPreview.has_value()) {
+    if (!clipGuideCache_.has_value() || !activePreview.has_value() ||
+        activePreview->dragGeneration == 0) {
+      return;
+    }
+    const std::uint64_t dragGeneration = activePreview->dragGeneration;
+    if (clipGuideCache_->dragGeneration != 0 && dragGeneration != clipGuideCache_->dragGeneration) {
+      clipGuideCache_.reset();
+      return;
+    }
+    OverlayRenderer::projectCachedClipGuides(snapshot, clipGuideCache_->baseline,
+                                             activeBoundsPreview,
+                                             representedDocumentFromLiveDocument);
+    clipGuideCache_->dragGeneration = dragGeneration;
+    return;
+  }
+
+  if (snapshot->clipGuidesDoc.empty()) {
+    clipGuideCache_.reset();
+    return;
+  }
+  SelectionChromeSnapshot baseline;
+  baseline.clipGuidesDoc = snapshot->clipGuidesDoc;
+  clipGuideCache_ = ClipGuideCache{
+      .baseline = std::move(baseline),
+      .selectedEntity = selectedEntity,
+      .documentGeneration = document.documentGeneration(),
+      .nonTransformRevision = document.nonTransformRevision(),
+  };
+}
+
 bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
     EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
     std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
@@ -1277,6 +1335,9 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
       std::span<const svg::SVGElement>(sourceHoverElements_), currentOverlayCullRectDoc,
       resolvedSelectionDetail, representedDocumentFromLiveDocument, lockedFlashInput,
       viewport.devicePixelRatio, penLivePreviewElement_);
+  updateClipGuidesForOverlay(app, std::span<const svg::SVGElement>(overlaySelection),
+                             effectiveDocumentDragPreview, chromeBoundsPreview,
+                             representedDocumentFromLiveDocument, &chromeSnapshot);
   // Pen hover chrome is pushed state (no registry reads), stamped onto the
   // snapshot after capture.
   chromeSnapshot.penPreviewSegmentDoc = penHoverPreviewSegmentDoc_;

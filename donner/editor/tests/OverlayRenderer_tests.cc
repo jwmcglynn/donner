@@ -5,17 +5,24 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
+#include <filesystem>
+#include <limits>
 #include <ostream>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "donner/base/Transform.h"
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/DocumentState.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "gtest/gtest.h"
@@ -80,6 +87,31 @@ auto DrawSnapshot(const SelectionChromeSnapshot& snapshot) {
   svg::Renderer renderer;
   svg::RenderViewport viewport;
   viewport.size = Vector2d(120.0, 120.0);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  OverlayRenderer::drawChromeFromSnapshot(renderer, snapshot);
+  renderer.endFrame();
+  return renderer.takeSnapshot();
+}
+
+bool WriteClipGuideScreenshot(const svg::RendererBitmap& bitmap, std::string_view filename) {
+  const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  if (outputDir == nullptr || bitmap.empty()) {
+    return false;
+  }
+  const std::filesystem::path path = std::filesystem::path(outputDir) / filename;
+  return svg::RendererImageIO::writeRgbaPixelsToPngFile(path.string().c_str(), bitmap.pixels,
+                                                        bitmap.dimensions.x, bitmap.dimensions.y,
+                                                        bitmap.rowBytes / 4u);
+}
+
+svg::RendererBitmap RenderGeodeArtworkWithChrome(EditorApp& app,
+                                                 const SelectionChromeSnapshot& snapshot) {
+  svg::Renderer renderer;
+  renderer.draw(app.document().document());
+  renderer.setPreserveTargetOnBeginFrame(true);
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(1536.0, 1024.0);
   viewport.devicePixelRatio = 1.0;
   renderer.beginFrame(viewport);
   OverlayRenderer::drawChromeFromSnapshot(renderer, snapshot);
@@ -1908,6 +1940,128 @@ TEST(OverlayRendererTest, TextBoxDragPreviewDrawsFrameBaselineAndIbeamDistinctFr
   // point away from the baseline and I-beam.
   EXPECT_EQ(pixelAt(120, 110, 3), 0)
       << "drag preview interior must not carry the marquee's translucent fill";
+}
+
+TEST(OverlayRendererTest, GeodeClipGuidesProjectDirectAndInheritedSources) {
+  const auto source = ::donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  ASSERT_TRUE(source.ok()) << source.error;
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source.contents));
+  app.document().document().setCanvasSize(1536, 1024);
+  svg::Renderer renderer;
+  renderer.draw(app.document().document());
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+
+  for (const auto& [selector, followsSelection] :
+       {std::pair{"#central-crown-face-2", false}, std::pair{"#agate-light-2", true}}) {
+    const auto selected = app.document().document().querySelector(selector);
+    ASSERT_TRUE(selected.has_value()) << selector;
+    const std::array selection{*selected};
+    const SelectionChromeSnapshot baseline = OverlayRenderer::captureChromeSnapshot(
+        std::span<const svg::SVGElement>(selection), std::nullopt, canvasFromDoc);
+    ASSERT_EQ(baseline.clipGuidesDoc.size(), 1u) << selector;
+    EXPECT_EQ(baseline.clipGuidesDoc.front().followsSelection, followsSelection) << selector;
+
+    SelectionChromeSnapshot projected = baseline;
+    const SelectionChromeBoundsPreview preview{
+        .startBoundsDoc = Box2d(Vector2d(0.0, 0.0), Vector2d(10.0, 10.0)),
+        .documentFromStartDocument = Transform2d::Translate(12.0, 0.0),
+    };
+    OverlayRenderer::projectCachedClipGuides(&projected, baseline, preview, Transform2d());
+    ASSERT_EQ(projected.clipGuidesDoc.size(), 1u);
+    const double expectedShift = followsSelection ? 12.0 : 0.0;
+    EXPECT_NEAR(projected.clipGuidesDoc.front().pathDoc.bounds().topLeft.x,
+                baseline.clipGuidesDoc.front().pathDoc.bounds().topLeft.x + expectedShift, 1e-6)
+        << selector;
+    EXPECT_EQ(projected.clipGuidesDoc.front().basePathDoc,
+              baseline.clipGuidesDoc.front().basePathDoc)
+        << selector;
+  }
+}
+
+TEST(OverlayRendererTest, GeodeCrownClipGuideFullArtworkScreenshot) {
+  const auto source = ::donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  ASSERT_TRUE(source.ok()) << source.error;
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source.contents));
+  app.document().document().setCanvasSize(1536, 1024);
+  svg::Renderer prepared;
+  prepared.draw(app.document().document());
+  const auto crown = app.document().document().querySelector("#central-crown-face-2");
+  ASSERT_TRUE(crown.has_value());
+  const std::array selection{*crown};
+  const SelectionChromeSnapshot withGuide = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(selection), std::nullopt,
+      app.document().document().canvasFromDocumentTransform());
+  ASSERT_EQ(withGuide.clipGuidesDoc.size(), 1u);
+  SelectionChromeSnapshot withoutGuide = withGuide;
+  withoutGuide.clipGuidesDoc.clear();
+
+  const svg::RendererBitmap withBitmap = RenderGeodeArtworkWithChrome(app, withGuide);
+  const svg::RendererBitmap withoutBitmap = RenderGeodeArtworkWithChrome(app, withoutGuide);
+  ASSERT_FALSE(withBitmap.empty());
+  ASSERT_FALSE(withoutBitmap.empty());
+  int guidePixels = 0;
+  tests::CompareBitmapToBitmap(
+      withBitmap, withoutBitmap, "geode_crown_clip_guide_vs_control",
+      tests::ApprovedPixelToleranceParams(0.0f, std::numeric_limits<int>::max(), true),
+      &guidePixels);
+  EXPECT_GT(guidePixels, 20) << "Clip guidance must add visible pixels over the full artwork";
+  if (std::getenv("TEST_UNDECLARED_OUTPUTS_DIR") != nullptr) {
+    EXPECT_TRUE(WriteClipGuideScreenshot(withBitmap, "geode_crown_clip_guide.png"));
+    EXPECT_TRUE(WriteClipGuideScreenshot(withoutBitmap, "geode_crown_no_clip_guide.png"));
+  }
+}
+
+TEST(OverlayRendererTest, GeodeAgateDirectClipGuideMovesAndRendersThroughHeldDrag) {
+  const auto source = ::donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  ASSERT_TRUE(source.ok()) << source.error;
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source.contents));
+  app.document().document().setCanvasSize(1536, 1024);
+  svg::Renderer prepared;
+  prepared.draw(app.document().document());
+  const auto agate = app.document().document().querySelector("#agate-light-2");
+  ASSERT_TRUE(agate.has_value());
+  const std::array selection{*agate};
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  const SelectionChromeSnapshot baseline = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(selection), std::nullopt, canvasFromDoc);
+  ASSERT_EQ(baseline.clipGuidesDoc.size(), 1u);
+  ASSERT_TRUE(baseline.clipGuidesDoc.front().followsSelection);
+  const double baselineX = baseline.clipGuidesDoc.front().pathDoc.bounds().topLeft.x;
+
+  for (int x : {12, 20}) {
+    const Transform2d movement = Transform2d::Translate(static_cast<double>(x), 0.0);
+    agate->cast<svg::SVGGraphicsElement>().setTransform(movement);
+    prepared.draw(app.document().document());
+    const SelectionChromeBoundsPreview preview{
+        .startBoundsDoc = Box2d::FromXYWH(471.0, 343.0, 55.0, 92.0),
+        .documentFromStartDocument = movement,
+    };
+    SelectionChromeSnapshot active = OverlayRenderer::captureChromeSnapshot(
+        std::span<const svg::SVGElement>(selection), std::nullopt, canvasFromDoc, preview);
+    EXPECT_TRUE(active.clipGuidesDoc.empty())
+        << "Active Select capture must skip clip-source DOM traversal";
+    OverlayRenderer::projectCachedClipGuides(&active, baseline, preview, Transform2d());
+    ASSERT_EQ(active.clipGuidesDoc.size(), 1u);
+    EXPECT_NEAR(active.clipGuidesDoc.front().pathDoc.bounds().topLeft.x, baselineX + x, 1e-6);
+    SelectionChromeSnapshot control = active;
+    control.clipGuidesDoc.clear();
+    const svg::RendererBitmap withBitmap = RenderGeodeArtworkWithChrome(app, active);
+    const svg::RendererBitmap withoutBitmap = RenderGeodeArtworkWithChrome(app, control);
+    int guidePixels = 0;
+    tests::CompareBitmapToBitmap(
+        withBitmap, withoutBitmap, "geode_agate_held_clip_guide_vs_control",
+        tests::ApprovedPixelToleranceParams(0.0f, std::numeric_limits<int>::max(), true),
+        &guidePixels);
+    EXPECT_GT(guidePixels, 20) << "Effective direct clip must be visible at held x=" << x;
+    if (std::getenv("TEST_UNDECLARED_OUTPUTS_DIR") != nullptr) {
+      const std::string_view filename =
+          x == 12 ? "geode_agate_held_clip_guide_12.png" : "geode_agate_held_clip_guide_20.png";
+      EXPECT_TRUE(WriteClipGuideScreenshot(withBitmap, filename));
+    }
+  }
 }
 
 }  // namespace

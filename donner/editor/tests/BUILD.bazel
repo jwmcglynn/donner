@@ -706,7 +706,10 @@ donner_cc_test(
 donner_cc_test(
     name = "render_coordinator_tests",
     srcs = ["RenderCoordinator_tests.cc"],
+    data = ["//:geode_splash.svg"],
     deps = [
+        ":bitmap_golden_compare",
+        "//donner/base:base_test_utils",
         ":render_coordinator_test_access",
         "//donner/editor:async_renderer",
         "//donner/editor:composited_presentation",
@@ -717,6 +720,8 @@ donner_cc_test(
         "//donner/editor:selection_aabb",
         "//donner/editor:viewport_state",
         "//donner/svg",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_image_io",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -1017,11 +1022,15 @@ donner_cc_test(
 donner_cc_test(
     name = "overlay_renderer_tests",
     srcs = ["OverlayRenderer_tests.cc"],
+    data = ["//:geode_splash.svg"],
     deps = [
+        ":bitmap_golden_compare",
+        "//donner/base:base_test_utils",
         "//donner/editor:editor_app",
         "//donner/editor:overlay_renderer",
         "//donner/svg",
         "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "@com_google_gtest//:gtest_main",
     ],
