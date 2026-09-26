@@ -434,8 +434,10 @@ donner_cc_library(
         "//donner/svg/renderer/geode:geode_fill_tolerance",
         "//donner/svg/renderer/geode:geode_stroke_tolerance",
         "//donner/svg/resources:image_resource",
-        "//third_party/webgpu-cpp:webgpu_cpp",
     ] + select({
+        "@platforms//cpu:wasm32": [],
+        "//conditions:default": ["//third_party/webgpu-cpp:webgpu_cpp"],
+    }) + select({
         ":text_enabled": [
             ":placed_text_geometry",
             "//donner/svg/text:text_engine",

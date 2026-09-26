@@ -19,7 +19,9 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#ifndef __EMSCRIPTEN__
 #include <webgpu/webgpu.hpp>
+#endif
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
@@ -44,7 +46,6 @@
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
-#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeFillTolerance.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
@@ -57,7 +58,9 @@
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeStrokeTolerance.h"
+#ifndef __EMSCRIPTEN__
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#endif
 #include "donner/svg/resources/ImageResource.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/base/MathUtils.h"
@@ -70,6 +73,7 @@
 namespace donner::svg {
 
 namespace {
+#ifndef __EMSCRIPTEN__
 std::optional<gpu::TextureFormat> SnapshotRuntimeFormat(wgpu::TextureFormat format) {
   if (format == wgpu::TextureFormat::RGBA8Unorm) {
     return gpu::TextureFormat::RGBA8Unorm;
@@ -79,6 +83,7 @@ std::optional<gpu::TextureFormat> SnapshotRuntimeFormat(wgpu::TextureFormat form
   }
   return std::nullopt;
 }
+#endif
 
 bool SnapshotExtentFits(Vector2i content, Vector2i allocation) {
   return content.x > 0 && content.y > 0 && content.x <= allocation.x && content.y <= allocation.y;
@@ -131,16 +136,16 @@ struct RendererGeodeTextureSnapshot::Backing {
 
 RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
     std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
-    wgpu::TextureFormat format, AlphaType alphaType) {
+    gpu::TextureFormat format, AlphaType alphaType) {
   RendererGeodeTextureSnapshot result;
   if (!device || !device->runtimeDevice().ownsTextureBacking(texture)) {
     return result;
   }
   const gpu::Result<gpu::TextureDescriptor> descriptor =
       device->runtimeDevice().textureDescriptor(texture);
-  const auto runtimeFormat = SnapshotRuntimeFormat(format);
-  if (descriptor.hasError() || !runtimeFormat || descriptor.result().format != *runtimeFormat ||
-      descriptor.result().sampleCount != 1 ||
+  if (descriptor.hasError() ||
+      (format != gpu::TextureFormat::RGBA8Unorm && format != gpu::TextureFormat::BGRA8Unorm) ||
+      descriptor.result().format != format || descriptor.result().sampleCount != 1 ||
       (descriptor.result().usage & kSnapshotUsableCapabilities) == gpu::TextureUsage::None ||
       !SnapshotExtentFits(dimensions, SnapshotAllocationExtent(descriptor.result().size))) {
     return result;
@@ -156,11 +161,24 @@ RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
     result.backing_->exported = std::move(exported).result();
   }
   result.allocationDimensions_ = SnapshotAllocationExtent(descriptor.result().size);
-  result.runtimeFormat_ = runtimeFormat;
+  result.runtimeFormat_ = format;
   result.dimensions_ = dimensions;
   result.alphaType_ = alphaType;
   return result;
 }
+
+#ifndef __EMSCRIPTEN__
+RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+    std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
+    wgpu::TextureFormat format, AlphaType alphaType) {
+  const std::optional<gpu::TextureFormat> runtimeFormat = SnapshotRuntimeFormat(format);
+  if (!runtimeFormat) {
+    return {};
+  }
+  return AdoptRuntimeTexture(std::move(device), std::move(texture), dimensions, *runtimeFormat,
+                             alphaType);
+}
+#endif
 
 RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
     RendererGeodeTextureSnapshot&& other) noexcept {
@@ -4996,8 +5014,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // die with the `Registry` they live on, and calling `.disconnect<&fn>()` from
   // a renderer dtor would UB when the registry was destroyed first.
 
-  static void releaseTexture(wgpu::Texture& texture) { geode::ReleaseWgpuHandle(texture); }
-
   /// Drops a runtime texture handle without pooling it, for teardown paths where the pool and
   /// the surface budget are on their way out too.
   /// @param texture Handle to drop; left invalid.
@@ -5339,7 +5355,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// Bounded, and skipped once the device is lost, so renderer teardown never blocks on a hung
   /// driver.
   void waitForQueueIdleAtTeardown() {
-    if (device && device->physicalDeviceOwner()->root().hasBackendDevice()) {
+    if (device && device->physicalDeviceOwner()->hasBackendDevice()) {
       device->waitForQueueIdle();
     }
   }
@@ -7683,8 +7699,8 @@ std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapsho
 
   const Vector2i dimensions(impl_->pixelWidth, impl_->pixelHeight);
   auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-      impl_->device, std::move(impl_->ownedTarget), dimensions,
-      geode::WgpuTextureFormatFrom(impl_->textureFormat), AlphaType::Premultiplied);
+      impl_->device, std::move(impl_->ownedTarget), dimensions, impl_->textureFormat,
+      AlphaType::Premultiplied);
   if (!snapshot.isValid()) {
     return nullptr;
   }

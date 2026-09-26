@@ -7,7 +7,6 @@
 #include <memory>
 #include <span>
 #include <vector>
-#include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
 #include "donner/base/FillRule.h"

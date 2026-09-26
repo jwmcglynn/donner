@@ -1,10 +1,10 @@
 # Design: Donner Native GPU Runtime and Rust-Independent Build
 
 **Status:** Implementing. Metal renderer/editor parity and Vulkan Geode/renderer parity are
-qualified. The served and shipped editor Wasm packages select the browser runtime for their canvas
-and raster work. Unconstrained macOS Geode/editor roots default to native Metal. Linux editor
-presentation, remaining wrapper consumers, the Linux native default, and production dependency
-closure remain.
+qualified. The served and shipped editor and standalone Geode Wasm packages use the browser runtime
+without linking the C WebGPU wrapper. Unconstrained macOS Geode/editor roots default to native Metal.
+Linux editor presentation, the Linux native default, physical-browser qualification, and native
+production dependency closure remain.
 Cross-device registration works on Metal, the browser, the transitional adapter and Vulkan-owned
 images; Vulkan acquired frames refuse export. The end state retains one Linux test-only wgpu-native resvg
 comparison backend.\
@@ -26,9 +26,9 @@ it does not validate Donner's browser bridge.
 backend execution, and compile-time shader artifacts: every production shader is authored as WGSL
 and compiled during C++ constant evaluation into the WGSL, MSL, or SPIR-V projection its consumer
 links, with the host interface reflected from the same compile
-([WGSL shader compilation](../wgsl_compiler.md)). Production `GeodeDevice`, filter resource
-plumbing, texture caches, and editor presentation still depend on concrete WebGPU objects. Native shader
-execution tests therefore establish individual capabilities; they do not establish a complete
+([WGSL shader compilation](../wgsl_compiler.md)). Native transitional `GeodeDevice` and editor
+presentation paths still depend on concrete WebGPU objects. Native shader execution tests
+therefore establish individual capabilities; they do not establish a complete
 native editor or a Rust-independent build.
 
 The target is an original C++20 runtime serving Donner's own rendering requirements. It is not a
@@ -45,10 +45,11 @@ from the same reflected program interfaces.
 
 Metal renderer and editor parity and Vulkan renderer parity are qualified. macOS Geode and editor
 roots default to native Metal while explicit WebGPU requests remain available. The served and
-shipped editor WebAssembly packages select the browser runtime. Linux editor presentation, the default
-standalone WebAssembly module's backend cutover, and removal of the C WebGPU wrapper and Rust-built
-GPU archives remain. The implementation checklist identifies those open boundaries; git history
-carries the delivery chronology.
+shipped editor and default standalone Geode WebAssembly packages select the browser runtime; their
+configured dependency closures and link actions exclude the C WebGPU wrapper. Linux editor
+presentation, its native default, physical-browser qualification, and removal of Rust-built GPU
+archives remain. The implementation checklist identifies those open boundaries; git history carries
+the delivery chronology.
 
 ### Native parity
 
@@ -103,13 +104,13 @@ select it. Hosted and physical-browser qualification remain required. A native w
 not browser-backend evidence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
-paths now use their reviewed runtime resource boundaries. Linux editor presentation and remaining
-module/adapter consumers still need their production cutovers; the browser editor canvas and
+paths now use their reviewed runtime resource boundaries. Linux editor presentation and native
+adapter consumers still need their production cutovers; the browser editor canvas and
 diagnostic readback already use the selected runtime.
 
-Strict Wasm-size qualification is deferred until production Rust removal. The remaining browser
-cutover removes the transitional WebGPU path from the WebAssembly build: emdawnwebgpu's C++
-implementation of the WebGPU C API over the browser's JavaScript API, and the adapter over it.
+Strict Wasm-size qualification is deferred until production Rust removal. The browser-selected
+WebAssembly packages now exclude emdawnwebgpu's C++ WebGPU C API implementation, its JavaScript
+glue, and the transitional adapter from their configured dependencies and link actions.
 The Rust-built libraries are native-only, so removing them does not change the WebAssembly
 payload. The browser backend brings code and a
 JavaScript bridge of its own, so the cutover alone is not expected to return the package to its
@@ -456,8 +457,7 @@ performance and final integrated gates remain open.
       source-render/filter/composite order, positive-completion retirement, terminal loss behavior,
       and sibling unsubmitted host ranges. Abandoned frames allocate and record nothing; uncertain
       accepted backing remains retained, and a browser task yield is not completion proof. Wasm-size
-      qualification remains deferred until the browser cutover removes the transitional WebGPU path
-      from the WebAssembly build.
+      qualification remains deferred until production Rust removal.
 - [x] Shared fill, gradient, mask, image and snapshot pipeline resources and `GeoEncoder` use runtime
       handles and command recording.
 - [x] Move the checkerboard pass's raw target import to `EditorShellPresentation`; accept a
@@ -523,8 +523,8 @@ performance and final integrated gates remain open.
       deleted.
 - [ ] Migrate frame composition off the raw WebGPU frame encoder so the editor records its whole
       frame through the runtime. The clear, document underlay, chrome, UI and framebuffer readback
-      do on every tier; the browser's asynchronous diagnostic readback remains
-      ([#1410](https://github.com/jwmcglynn/donner/issues/1410)).
+      do on every tier; the browser's asynchronous diagnostic readback also uses the runtime.
+      Native transitional surface setup remains until its platform cutover.
 
 ### Native surfaces
 
@@ -665,7 +665,8 @@ later default flip without changing Metal or browser surface ownership.
 - [x] Run the standalone Geode renderer WebAssembly module on the selected browser runtime.
       `//donner/editor/wasm/tests:standalone_geode_browser_renderer_test` serves its package in
       Chromium, confirms the browser backend was selected, and checks SVG document colors in the
-      canvas. The default Geode renderer module remains a separate transitional consumer.
+      canvas. The normal `--config=wasm-geode` module also selects Browser; a configured audit
+      fails if the browser device and bridge disappear from that package.
 - [x] Run the browser editor's UI canvas through the selected runtime. Name the transferred
       `#canvas` with `CanvasSelector` after selecting the root, settle its preferred format before
       compiling Geode pipelines, and create a second logical UI context over that physical owner.
@@ -676,12 +677,15 @@ later default flip without changing Metal or browser surface ownership.
 - [x] Select the browser runtime for the served and shipped editor package. The editor transition
       and `--config=editor-wasm` select Browser; configured audits check both roots. Production
       Chromium boot, pixels, presentation and catalog lanes pass.
-- [ ] Remove the C WebGPU wrapper from the WebAssembly production path. The default Geode renderer
-      WebAssembly module remains a second consumer of the wrapper and moves separately. The
-      compiled WGSL projections remain trusted build input.
-- [ ] Run the complete browser editor path and remove emdawnwebgpu, `webgpu-cpp`, and generated
-      C-ABI glue from production when no production consumer needs them. The Linux resvg test
-      reference retains only its separately isolated, test-only WebGPU-C++ API wrapper.
+- [x] Remove the C WebGPU wrapper from the browser-selected WebAssembly production path. The editor
+      and default Geode renderer module select Browser; their configured dependency and linker-input
+      audits pass without `emdawnwebgpu` or `webgpu-cpp`. The actual Wasm link actions name only
+      `library_donner_gpu.js` among GPU JavaScript libraries. Negative fixtures in
+      `//build_defs:configured_link_input_audit_negative_tests` prove that a forbidden linker input
+      or option fails the audit. The compiled WGSL projections remain trusted build input.
+- [ ] Qualify the complete browser editor path on Chromium, WebKit and the agreed physical iOS
+      matrix. The Linux resvg test reference retains its separately isolated, test-only
+      WebGPU-C++ API wrapper; native production dependency removal remains a separate gate.
 
 ### Device ownership and dependency closure
 

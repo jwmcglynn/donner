@@ -1,7 +1,7 @@
 """Shared GLFW + ImGui + OpenGL host for the advanced Donner editor."""
 
-load("//build_defs:rules.bzl", "donner_cc_library")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -100,9 +100,7 @@ donner_cc_library(
             "//donner/gpu",
             "//donner/svg/renderer/geode:geode_device",
             "//donner/svg/renderer/geode:geode_gpu_wait",
-            "//donner/svg/renderer/geode:geode_wgpu_util",
             "//third_party/emscripten-glfw",
-            "//third_party/webgpu-cpp:webgpu_cpp",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
             ":editor_wgpu_surface",

@@ -2,6 +2,7 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_python//python:defs.bzl", "py_test")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//donner/editor/wasm:web_package.bzl", "web_package")
 load("//tools/http:serve_http.bzl", "serve_http")
@@ -130,16 +131,16 @@ cc_binary(
         "WasmBridgeUtils.h",
         "wasm_bridge_geode.cc",
     ],
-    additional_linker_inputs = [
-        "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_enum_tables.js",
-        "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_struct_info.js",
-        "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_sig_info.js",
-        "//third_party/emdawnwebgpu:webgpu/src/library_webgpu.js",
-    ] + select({
+    additional_linker_inputs = select({
         "//donner/svg/renderer/geode:browser_backend_enabled": [
             "//donner/gpu/browser:library_donner_gpu.js",
         ],
-        "//conditions:default": [],
+        "//conditions:default": [
+            "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_enum_tables.js",
+            "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_struct_info.js",
+            "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_sig_info.js",
+            "//third_party/emdawnwebgpu:webgpu/src/library_webgpu.js",
+        ],
     }),
     linkopts = [
         "-sMODULARIZE=1",
@@ -153,15 +154,16 @@ cc_binary(
         "-sUSE_PTHREADS=0",
         "-sSTACK_SIZE=1048576",
         "--no-entry",
-        "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_enum_tables.js)",
-        "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_struct_info.js)",
-        "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_sig_info.js)",
-        "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu.js)",
     ] + select({
         "//donner/svg/renderer/geode:browser_backend_enabled": [
             "--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)",
         ],
-        "//conditions:default": [],
+        "//conditions:default": [
+            "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_enum_tables.js)",
+            "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_struct_info.js)",
+            "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_sig_info.js)",
+            "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu.js)",
+        ],
     }),
     tags = ["manual"],
     target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
@@ -184,6 +186,34 @@ wasm_cc_binary(
     target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
 )
 
+# The standalone Geode module must select Donner's browser runtime in its normal Wasm config.
+configured_dependency_audit_test(
+    name = "geode_browser_default_audit_test",
+    size = "small",
+    required = [
+        "//donner/gpu/browser:browser_device",
+        "//donner/gpu/browser:emscripten_browser_bridge",
+    ],
+    tags = ["manual"],
+    target = ":donner_wasm_geode",
+)
+
+# The standalone Browser module must have no transitional C API or WebGPU-C++ wrapper edge.
+configured_dependency_audit_test(
+    name = "geode_browser_no_c_webgpu_audit_test",
+    size = "small",
+    forbidden_packages = [
+        "//third_party/emdawnwebgpu",
+        "//third_party/webgpu-cpp",
+    ],
+    required = [
+        "//donner/gpu/browser:browser_device",
+        "//donner/gpu/browser:emscripten_browser_bridge",
+    ],
+    target = ":donner_wasm_geode",
+    target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
+)
+
 # Convenience filegroup for the Geode test page and its assets.
 filegroup(
     name = "test_page_geode",
@@ -194,8 +224,8 @@ filegroup(
     target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
 )
 
-# A browser-selected copy of the standalone Geode page. Keep the default page on the
-# transitional adapter until the browser production cutover is complete.
+# The standalone browser test page applies its own transition so the host Playwright test can
+# build it under the same Browser setting as the normal --config=wasm-geode module.
 web_package(
     name = "geode_browser_test_package",
     srcs = ["test-geode.html"],

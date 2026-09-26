@@ -32,7 +32,9 @@
 #include <vector>
 
 #ifdef DONNER_EDITOR_WGPU
+#ifndef __EMSCRIPTEN__
 #include <webgpu/webgpu.hpp>
+#endif
 
 #include "donner/gpu/Descriptors.h"
 #include "donner/gpu/Handles.h"
@@ -52,14 +54,6 @@ class GeodeDevice;
 namespace donner::editor::gui {
 
 namespace internal {
-
-/// The transitional Wasm UI can share its wrapper because the render worker owns a separate
-/// device. The browser runtime gives the canvas its own logical UI context. Desktop's
-/// AsyncRenderer shares the primary wrapper across threads, so its UI context is separate too.
-[[nodiscard]] constexpr bool ShouldShareWgpuFramebufferGeodeDevice(
-    bool emscriptenBuild, bool browserRuntimeSelected) noexcept {
-  return emscriptenBuild && !browserRuntimeSelected;
-}
 
 /// Opaque fallback clear color for the browser UI surface, matching the page
 /// background painted behind the canvas (`donner/editor/wasm/editor.css`:
@@ -192,6 +186,7 @@ public:
    * @param window Window whose platform object frames are presented to.
    * @return False when the platform object could not be obtained.
    */
+#ifndef __EMSCRIPTEN__
   [[nodiscard]] virtual bool attachToWindow(const wgpu::Instance& instance, GLFWwindow* window) = 0;
 
 #ifndef __APPLE__
@@ -214,6 +209,7 @@ public:
    */
   [[nodiscard]] virtual bool chooseConfiguration(const wgpu::Adapter& adapter,
                                                  bool enableReadback) = 0;
+#endif
 
   /**
    * Finishes setup against the device whose queue draws the frames, narrowing what was asked for
@@ -286,11 +282,13 @@ public:
   /// Hands back any frame still outstanding and gives up the surface.
   ~RuntimePresentationSurface() override;
 
+#ifndef __EMSCRIPTEN__
   bool attachToWindow(const wgpu::Instance& instance, GLFWwindow* window) override;
 #ifndef __APPLE__
   wgpu::Surface adapterSelectionSurface() const override;
 #endif
   bool chooseConfiguration(const wgpu::Adapter& adapter, bool enableReadback) override;
+#endif
   bool attachToDevice(geode::GeodeDevice& device) override;
 
   /**
@@ -339,7 +337,7 @@ private:
   gpu::Surface surface_;
   /// Platform object frames are presented to, filled in while attaching to the window.
   gpu::NativeSurfaceHandle native_;
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
   /// The surface object this made from the window's platform handle. The runtime's swapchain is
   /// built on it, so it is let go of only after the runtime's surface is gone.
   wgpu::Surface platformSurface_;

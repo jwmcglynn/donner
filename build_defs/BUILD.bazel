@@ -1,8 +1,10 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "fuzzer_compatible_with")
 
@@ -54,6 +56,63 @@ py_test(
     size = "small",
     srcs = ["sanitizer_runtime_provenance_tests.py"],
     data = [":rules.bzl"],
+)
+
+cc_library(
+    name = "dep_audit_link_input_fixture",
+    testonly = True,
+    additional_linker_inputs = [
+        "//donner/gpu/browser:library_donner_gpu.js",
+    ],
+)
+
+cc_library(
+    name = "dep_audit_link_option_fixture",
+    testonly = True,
+    linkopts = ["--js-library=//donner/gpu/browser:library_donner_gpu.js"],
+)
+
+cc_library(
+    name = "dep_audit_link_option_heredoc_fixture",
+    testonly = True,
+    linkopts = ["--js-library=//donner/gpu/browser:library_donner_gpu.js\nAUDIT\nexit 0"],
+)
+
+configured_dependency_audit_test(
+    name = "dep_audit_link_input_expected_failure",
+    forbidden_packages = ["//donner/gpu/browser"],
+    tags = ["manual"],
+    target = ":dep_audit_link_input_fixture",
+)
+
+configured_dependency_audit_test(
+    name = "dep_audit_link_option_expected_failure",
+    forbidden_packages = ["//donner/gpu/browser"],
+    tags = ["manual"],
+    target = ":dep_audit_link_option_fixture",
+)
+
+configured_dependency_audit_test(
+    name = "dep_audit_link_option_heredoc_expected_failure",
+    forbidden_packages = ["//donner/gpu/browser"],
+    tags = ["manual"],
+    target = ":dep_audit_link_option_heredoc_fixture",
+)
+
+sh_test(
+    name = "configured_link_input_audit_negative_tests",
+    size = "small",
+    srcs = ["configured_link_input_audit_negative_tests.sh"],
+    args = [
+        "$(location :dep_audit_link_input_expected_failure)",
+        "$(location :dep_audit_link_option_expected_failure)",
+        "$(location :dep_audit_link_option_heredoc_expected_failure)",
+    ],
+    data = [
+        ":dep_audit_link_input_expected_failure",
+        ":dep_audit_link_option_expected_failure",
+        ":dep_audit_link_option_heredoc_expected_failure",
+    ],
 )
 
 string_flag(
