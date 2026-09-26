@@ -160,9 +160,8 @@ donner_cc_library(
     testonly = 1,
     # The shared dispatcher (RendererTestBackend.cc) plus the tiny-skia backend
     # TU are always linked; the geode build additionally links the geode
-    # backend TU so a single binary can dispatch to *both* renderers at runtime
-    # (geode-vs-tiny-skia parity — see docs/design_docs/0017 §Phase 4b). Each
-    # backend TU registers its ops into the dispatcher's table.
+    # backend TU so tests can select either renderer at runtime. Each backend
+    # TU registers its ops into the dispatcher's table.
     srcs = [
         "RendererTestBackend.cc",
         "RendererTestBackendTinySkia.cc",
@@ -442,10 +441,9 @@ donner_cc_test(
     data = [
         "//donner/svg/renderer/testdata",
     ],
-    # Geode runs through this suite too, using the shared (tiny-skia-authored)
-    # goldens with a widened default threshold. Per-test Geode overrides live
-    # in `geodeOverrides()` in `Renderer_tests.cc` — see the Phase 5b section
-    # of `docs/design_docs/0017-geode_renderer.md`.
+    # Geode runs through this suite using the shared goldens. The default
+    # threshold and per-test params live in `geodeOverrides()` in
+    # `Renderer_tests.cc`; the separate resvg override policy is in Design 0021.
     deps = [
         ":image_comparison_test_fixture",
         ":renderer_test_utils",
