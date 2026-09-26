@@ -4483,6 +4483,33 @@ TEST(EditorShellTest, SelectToolShortcutsComposeTextBoldItalicAndUnderline) {
   EXPECT_EQ(label->getAttribute("font-style"), "italic");
 }
 
+TEST(EditorShellTest, SelectToolFormattingShortcutRecordsUndo) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "shortcut-undo.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto label = app.document().document().querySelector("#label");
+  ASSERT_TRUE(label.has_value());
+  app.setSelection(*label);
+  const std::string before(app.document().document().source());
+
+  DriveGlobalShortcut(shell, {ImGuiKey_B}, /*ctrl=*/false, /*shift=*/false, /*super=*/true);
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  EXPECT_EQ(app.document().document().querySelector("#label")->getAttribute("font-weight"), "bold");
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), before);
+  EXPECT_TRUE(app.hasSelection());
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(app.document().document().querySelector("#label")->getAttribute("font-weight"), "bold");
+}
+
 TEST(EditorShellTest, DocumentSpaceReplayInputRoutesTextToolPlainClickCreatesNothing) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
