@@ -1848,9 +1848,11 @@ bool EditorApp::setStylePropertiesOnSelection(
 
   bool queuedMutation = false;
   for (const svg::SVGElement& element : selection_) {
-    const std::optional<RcString> styleAttribute = element.getAttribute("style");
-    std::optional<std::string> mergedStyle =
-        styleAttribute ? std::string(*styleAttribute) : std::string();
+    std::optional<std::string> mergedStyle = document_.queue().pendingStyleAttribute(element);
+    if (!mergedStyle.has_value()) {
+      const std::optional<RcString> styleAttribute = element.getAttribute("style");
+      mergedStyle = styleAttribute ? std::string(*styleAttribute) : std::string();
+    }
     for (const auto& [name, value] : properties) {
       mergedStyle = MergeStyleProperty(*mergedStyle, name, value);
       if (!mergedStyle) {
