@@ -640,9 +640,6 @@
       ],
       "wgpuCTypes": [
         "WGPUBuffer"
-      ],
-      "wgpuCppTokens": [
-        "TextureFormat"
       ]
     },
     "donner/svg/renderer/geode/tests/GeodeShaders_tests.cc": {
@@ -703,15 +700,6 @@
         "TextureDimension",
         "TextureFormat",
         "TextureUsage"
-      ]
-    },
-    "donner/svg/renderer/geode/tests/GeodeSnapshotReadback_tests.cc": {
-      "operations": [
-        "createTexture",
-        "writeTexture"
-      ],
-      "wgpuCppTokens": [
-        "TextureFormat"
       ]
     },
     "donner/svg/renderer/geode/tests/GeodeWgpuAdapterDevice_tests.cc": {
