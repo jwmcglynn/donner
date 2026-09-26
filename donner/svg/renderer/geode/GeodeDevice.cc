@@ -20,7 +20,6 @@
 #ifdef DONNER_GEODE_BROWSER_BACKEND
 #include "donner/svg/renderer/geode/GeodeBrowserRoot.h"
 #elif defined(DONNER_GEODE_WGPU_REFERENCE)
-#include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #else
 #include "donner/svg/renderer/geode/GeodeNativeRoot.h"
@@ -693,6 +692,7 @@ gpu::Device& GeodeDevice::runtimeDevice() const {
   return *runtimeDevice_;
 }
 
+#ifdef DONNER_GEODE_WGPU_REFERENCE
 bool GeodeDevice::hasTransitionalAdapter() const {
   return transitionalAdapter_ != nullptr;
 }
@@ -702,6 +702,8 @@ GeodeWgpuAdapterDevice& GeodeDevice::adapterDevice() const {
                            "GeodeDevice::adapterDevice: context renders through a native backend");
   return *transitionalAdapter_;
 }
+#endif
+
 GeodeFilterEngine& GeodeDevice::filterEngine() const {
   return *impl_->filterEngine;
 }
@@ -813,52 +815,6 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
         runtimeDevice(), textureFormat_, GeodeCheckerboardPipeline::BlendMode::DestinationOver);
   }
   return *impl_->checkerboardUnderlayPipeline;
-}
-
-std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedConfig& config) {
-#ifdef DONNER_GEODE_WGPU_REFERENCE
-#ifdef DONNER_GEODE_BROWSER_BACKEND
-  (void)config;
-  std::fprintf(stderr, "[Geode/browser] External WebGPU roots are not supported\n");
-  return nullptr;
-#else
-  if (config.physicalDevice != nullptr) {
-    // A config that names both a shared owner and explicit roots is stating they are the same
-    // objects; a mismatch means one of the two is wrong, and rendering through the wrong one is
-    // undiagnosable. `GeodeDevice_tests.SharedPhysicalOwnerRejectsConflictingRoots` has an arm per
-    // field compared here, so a new field needs one too or it is unenforced.
-    if ((config.lostState && config.lostState != config.physicalDevice->lostState()) ||
-        !config.physicalDevice->root().names(config.instance, config.adapter, config.device,
-                                             config.queue)) {
-      std::fprintf(stderr,
-                   "[Geode] CreateFromExternal: physical owner and explicit state disagree\n");
-      return nullptr;
-    }
-    if (config.physicalDevice->lostState()->lost.load(std::memory_order_acquire)) {
-      std::fprintf(stderr, "[Geode] CreateFromExternal: physical device is already lost\n");
-      return nullptr;
-    }
-    return CreateOverPhysicalDeviceOwner(config.physicalDevice,
-                                         GpuTextureFormatFromWgpu(config.textureFormat));
-  }
-
-  std::shared_ptr<GeodeGpuRoot> root =
-      AdoptGpuRoot(GeodeWgpuRoots{config.instance, config.adapter, config.device, config.queue},
-                   config.lostState);
-  if (root == nullptr) {
-    return nullptr;
-  }
-  if (root->lostState()->lost.load(std::memory_order_acquire)) {
-    std::fprintf(stderr, "[Geode] CreateFromExternal: physical device is already lost\n");
-    return nullptr;
-  }
-  return CreateOverSelectedRoot(std::move(root), GpuTextureFormatFromWgpu(config.textureFormat));
-#endif
-#else
-  (void)config;
-  std::fprintf(stderr, "[Geode] External WebGPU roots are unavailable in this native build.\n");
-  return nullptr;
-#endif
 }
 
 void GeodeDevice::initSharedBindSlotResources() {

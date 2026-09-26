@@ -369,24 +369,6 @@ donner_cc_library(
     }),
 )
 
-donner_cc_test(
-    name = "geode_wgpu_util_tests_impl",
-    srcs = ["tests/GeodeWgpuUtil_tests.cc"],
-    target_compatible_with = _GEODE_ONLY,
-    deps = [
-        ":geode_wgpu_util",
-        "//donner/base:gtest_timeout_main",
-    ],
-)
-
-donner_multi_transitioned_test(
-    name = "geode_wgpu_util_tests",
-    timeout = "short",
-    testonly = 1,
-    dep = ":geode_wgpu_util_tests_impl",
-    renderer_backend = "geode",
-)
-
 donner_cc_library(
     name = "checkerboard_pipeline",
     srcs = ["GeodeCheckerboardPipeline.cc"],
@@ -435,7 +417,6 @@ donner_cc_library(
         ":browser_backend_enabled": ["GeodeBrowserRoot.h"],
         ":wgpu_reference_backend_enabled": [
             "GeodeCallbackState.h",
-            "GeodeEmbed.h",
             "GeodeWgpuAdapterDevice.h",
         ],
         "//conditions:default": ["GeodeNativeRoot.h"],
@@ -523,6 +504,26 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+donner_cc_test(
+    name = "geode_native_root_tests_impl",
+    srcs = ["tests/GeodeNativeRoot_tests.cc"],
+    target_compatible_with = _GEODE_ONLY + select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":geode_device",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_native_root_tests",
+    dep = ":geode_native_root_tests_impl",
+    renderer_backend = "geode",
+)
+
 # Test support: a context over a backend a test names, and texture readback through the runtime.
 donner_cc_library(
     name = "geode_test_contexts",
@@ -538,35 +539,6 @@ donner_cc_library(
         ":geode_device",
         "//donner/gpu",
     ],
-)
-
-donner_cc_test(
-    name = "geode_wgpu_adapter_device_tests_impl",
-    srcs = ["tests/GeodeWgpuAdapterDevice_tests.cc"],
-    target_compatible_with = _GEODE_ONLY,
-    deps = [
-        ":geode_device",
-        ":geode_test_contexts",
-        "//donner/base:gtest_timeout_main",
-        "//donner/gpu",
-        "//donner/gpu:float_texture_slice",
-        "//donner/gpu:gpu_test_utils",
-        "//donner/gpu:sub_rectangle_copy_scene",
-        "//donner/gpu:sub_rectangle_upload_scene",
-        "//donner/gpu:vertex_input_slice",
-        "//donner/gpu/shader:float_storage_test_module",
-        "//donner/gpu/shader:module_interface",
-        "//donner/gpu/shader:wgsl_emitter",
-    ],
-)
-
-donner_multi_transitioned_test(
-    name = "geode_wgpu_adapter_device_tests",
-    # See geode_device_tests for the rationale on the short timeout.
-    timeout = "short",
-    testonly = 1,
-    dep = ":geode_wgpu_adapter_device_tests_impl",
-    renderer_backend = "geode",
 )
 
 donner_cc_test(

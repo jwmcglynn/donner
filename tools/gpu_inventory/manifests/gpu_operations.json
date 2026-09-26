@@ -347,29 +347,6 @@
         "Device"
       ]
     },
-    "donner/svg/renderer/geode/GeodeDevice.h": {
-      "operations": [
-        "poll"
-      ],
-      "wgpuCFunctions": [
-        "wgpuDevicePoll"
-      ],
-      "wgpuCTypes": [
-        "WGPUBuffer"
-      ],
-      "wgpuCppTokens": [
-        "Queue"
-      ]
-    },
-    "donner/svg/renderer/geode/GeodeEmbed.h": {
-      "wgpuCppTokens": [
-        "Adapter",
-        "Device",
-        "Instance",
-        "Queue",
-        "TextureFormat"
-      ]
-    },
     "donner/svg/renderer/geode/GeodeFilterEngine.h": {
       "wgpuCppTokens": [
         "Device"
@@ -700,61 +677,6 @@
         "TextureDimension",
         "TextureFormat",
         "TextureUsage"
-      ]
-    },
-    "donner/svg/renderer/geode/tests/GeodeWgpuAdapterDevice_tests.cc": {
-      "operations": [
-        "copyTextureToBuffer",
-        "copyTextureToTexture",
-        "createBindGroup",
-        "createBindGroupLayout",
-        "createBuffer",
-        "createCommandEncoder",
-        "createComputePipeline",
-        "createPipelineLayout",
-        "createShaderModule",
-        "createTexture",
-        "finish",
-        "getConstMappedRange",
-        "mapAsync",
-        "poll",
-        "release",
-        "submit",
-        "unmap",
-        "writeTexture"
-      ],
-      "wgpuCFunctions": [
-        "wgpuLabel",
-        "wgpuTextureOf",
-        "wgpuTextureViewOf"
-      ],
-      "wgpuCTypes": [
-        "WGPUMapAsyncStatus",
-        "WGPUMapAsyncStatus_Success",
-        "WGPUStringView",
-        "WGPUTexture"
-      ],
-      "wgpuCppTokens": [
-        "Buffer",
-        "BufferDescriptor",
-        "BufferMapCallbackInfo",
-        "BufferUsage",
-        "CallbackMode",
-        "CommandBuffer",
-        "CommandEncoder",
-        "Default",
-        "Extent3D",
-        "Instance",
-        "MapMode",
-        "Surface",
-        "TexelCopyBufferInfo",
-        "TexelCopyTextureInfo",
-        "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
-        "TextureFormat",
-        "TextureUsage",
-        "WaitStatus"
       ]
     },
     "donner/svg/renderer/tests/RendererGeodeGolden_tests.cc": {

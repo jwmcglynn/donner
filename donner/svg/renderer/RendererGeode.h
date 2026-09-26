@@ -1,11 +1,9 @@
 #pragma once
 /// @file
-/// Geode (WebGPU/Slug) implementation of \ref donner::svg::RendererInterface.
+/// Geode GPU implementation of \ref donner::svg::RendererInterface.
 ///
-/// Geode is a GPU-native SVG rendering backend using WebGPU and the Slug
-/// algorithm for resolution-independent vector rasterization. It can run
-/// **headless** (creating its own device) or **embedded** inside a host
-/// application that provides an existing WebGPU device and render target.
+/// Geode uses native Metal or Vulkan and the Slug algorithm for resolution-independent vector
+/// rasterization. It can create a headless device or render over a selected shared GPU root.
 
 #include <chrono>
 #include <cstddef>
@@ -31,7 +29,6 @@ namespace donner::geode {
 class GeodeDevice;
 class GeodePipeline;
 class GeoEncoder;
-struct GeodeEmbedConfig;
 }  // namespace donner::geode
 
 // Forward-declare std::shared_ptr specialization to avoid pulling <memory>
@@ -242,7 +239,7 @@ struct RendererGeodeTexturePoolStats {
 };
 
 /**
- * Geode rendering backend - GPU-native via WebGPU + the Slug algorithm.
+ * Geode rendering backend - GPU-native via the Slug algorithm.
  *
  * `RendererGeode` implements `RendererInterface` by translating draw calls
  * into the lower-level `donner::geode::GeoEncoder` API.
@@ -259,12 +256,11 @@ struct RendererGeodeTexturePoolStats {
  *
  * ## Embedded rendering
  *
- * Host applications that already own a WebGPU device can:
- * 1. Create a `GeodeDevice` from their existing device via
- *    `GeodeDevice::CreateFromExternal(GeodeEmbedConfig{...})`.
- * 2. Optionally call `setTargetTexture()` to render directly into a
- *    swap-chain texture or other host-owned surface.
- * 3. Call `draw()` or the `beginFrame()`/`endFrame()` lifecycle as usual.
+ * Host applications select a native Geode root for their platform surface, create a context with
+ * `GeodeDevice::CreateOverSelectedRoot()`, and may create sibling contexts with
+ * `CreateOverPhysicalDeviceOwner()`. `setTargetTexture()` renders into a runtime texture owned by
+ * that context, including an acquired native surface frame. Draw with `draw()` or the
+ * `beginFrame()`/`endFrame()` lifecycle as usual.
  *
  * If `GeodeDevice::CreateHeadless()` fails (no GPU available), all draw
  * operations become no-ops and `takeSnapshot()` returns an empty bitmap.
@@ -425,7 +421,7 @@ public:
 
   /**
    * True once the GPU device backing this renderer has been declared lost,
-   * either by a driver-reported WebGPU device-lost callback or by a bounded
+   * either by a driver-reported GPU device loss or by a bounded
    * GPU wait exceeding its deadline (for example a snapshot readback map that
    * never completed). The condition is sticky.
    *

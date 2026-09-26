@@ -19,7 +19,7 @@
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 
 namespace donner::geode {
 namespace {
@@ -37,8 +37,8 @@ TEST(GeodeNativeCountersTest, ANativeMetalContextCountsTheFrameItRenders) {
   std::shared_ptr<GeodeDevice> device =
       GeodeDevice::CreateOverSelectedRoot(std::move(root), gpu::TextureFormat::RGBA8Unorm);
   ASSERT_THAT(device, NotNull()) << "a context over a selected native root must build";
-  ASSERT_THAT(device->hasTransitionalAdapter(), IsFalse())
-      << "the selection must have produced the native backend, not the transitional adapter";
+  ASSERT_THAT(device->physicalDeviceOwner()->root().capabilities().backend,
+              testing::Eq(GpuBackendKind::NativeMetal));
 
   svg::RendererGeode renderer(device);
   svg::RenderViewport viewport;
