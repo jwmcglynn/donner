@@ -818,11 +818,11 @@ public:
   /// Set the overall editor UI scale.
   /// @param scale Scale applied to editor chrome.
   void setUIScale(float scale) { uiScale_ = scale; }
-  /// Set the editor UI font size.
-  /// @param size Requested UI font size.
+  /// Set the size reference for find/replace control geometry; this does not select a font.
+  /// @param size UI sizing reference.
   void setUIFontSize(float size) { uiFontSize_ = size; }
-  /// Set the source text font size.
-  /// @param size Requested editor font size.
+  /// Store a legacy editor-sizing reference; current rendering does not read it.
+  /// @param size Legacy sizing reference.
   void setEditorFontSize(float size) { editorFontSize_ = size; }
 
   /**
