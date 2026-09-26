@@ -1518,27 +1518,104 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     return;
   }
 
-  const viewport = await page.evaluate(() => window.__donnerViewportStats);
-  expect(viewport, "Basic Shapes must publish its visible document bounds").toBeDefined();
-  if (!viewport) {
-    return;
-  }
-  const probeRegion = {
-    x: Math.max(viewport.documentX, viewport.paneX),
-    y: Math.max(viewport.documentY, viewport.paneY),
-    width:
-      Math.min(viewport.documentX + viewport.documentWidth, viewport.paneX + viewport.paneWidth)
-      - Math.max(viewport.documentX, viewport.paneX),
-    height:
-      Math.min(viewport.documentY + viewport.documentHeight, viewport.paneY + viewport.paneHeight)
-      - Math.max(viewport.documentY, viewport.paneY),
-  };
   // Gecko can return an empty image for a clipped transferred-canvas screenshot,
   // even when that clip covers the whole canvas. Capture the page without a clip
   // and inspect only the published artboard.
   const captureViewport = page.viewportSize();
   if (captureViewport === null) {
     throw new Error("the Firefox viewport is unavailable for the resize pixel probe");
+  }
+  type ProbeRegion = { x: number; y: number; width: number; height: number };
+  let probeRegion: ProbeRegion | null = null;
+  let blueCss: PixelBounds | null = null;
+  let lastBlueProbe:
+    | { shot: Buffer; state: object; region: ProbeRegion | null; bluePixels: number }
+    | null = null;
+  try {
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => ({
+        sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
+        completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+        presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+        renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
+        viewport: window.__donnerViewportStats ?? null,
+      }));
+      const viewport = state.viewport;
+      const region = viewport === null ? null : {
+        x: Math.max(viewport.documentX, viewport.paneX),
+        y: Math.max(viewport.documentY, viewport.paneY),
+        width: Math.min(
+          viewport.documentX + viewport.documentWidth,
+          viewport.paneX + viewport.paneWidth,
+        ) - Math.max(viewport.documentX, viewport.paneX),
+        height: Math.min(
+          viewport.documentY + viewport.documentHeight,
+          viewport.paneY + viewport.paneHeight,
+        ) - Math.max(viewport.documentY, viewport.paneY),
+      };
+      const shot = await page.screenshot();
+      const blue = region !== null && region.width > 0 && region.height > 0
+        ? readEditorPixelBoundsFromPng(shot, "basic-blue", captureViewport, {
+          minX: region.x,
+          minY: region.y,
+          maxX: region.x + region.width,
+          maxY: region.y + region.height,
+        })
+        : null;
+      lastBlueProbe = { shot, state, region, bluePixels: blue?.pixels ?? 0 };
+      if (
+        region !== null && blue !== null && state.sampleId === "basic-shapes"
+        && state.completedResults > beforeSample && state.presentedAtMs !== null
+        && blue.pixels > 500
+      ) {
+        probeRegion = region;
+        blueCss = {
+          minX: blue.minX - region.x,
+          minY: blue.minY - region.y,
+          maxX: blue.maxX - region.x,
+          maxY: blue.maxY - region.y,
+          pixels: blue.pixels,
+        };
+        return blue.pixels;
+      }
+      return 0;
+    }, {
+      message: "the resize target must be visibly blue in the artboard capture",
+      timeout: scaledMs(5_000),
+      intervals: [250, 400, 600],
+    }).toBeGreaterThan(500);
+  } catch (error) {
+    if (lastBlueProbe !== null) {
+      const pngPath = test.info().outputPath("basic-shapes-blue-probe.png");
+      const statePath = test.info().outputPath("basic-shapes-blue-probe.json");
+      await writeFile(pngPath, lastBlueProbe.shot);
+      await writeFile(
+        statePath,
+        JSON.stringify(
+          {
+            state: lastBlueProbe.state,
+            beforeSample,
+            region: lastBlueProbe.region,
+            bluePixels: lastBlueProbe.bluePixels,
+            captureViewport,
+          },
+          null,
+          2,
+        ),
+      );
+      await test.info().attach("basic-shapes-blue-probe.png", {
+        path: pngPath,
+        contentType: "image/png",
+      });
+      await test.info().attach("basic-shapes-blue-probe.json", {
+        path: statePath,
+        contentType: "application/json",
+      });
+    }
+    throw error;
+  }
+  if (probeRegion === null || blueCss === null) {
+    throw new Error("resize target disappeared after a verified blue artboard capture");
   }
   const artboardInCapture = {
     minX: probeRegion.x,
@@ -1577,18 +1654,6 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     );
     return { blue: toArtboard(blue), teal: toArtboard(teal) };
   };
-  let blueCss: PixelBounds | null = null;
-  await expect.poll(async () => {
-    blueCss = (await readResizePixels()).blue;
-    return blueCss?.pixels ?? 0;
-  }, {
-    message: "the resize target must be visibly blue in the artboard capture",
-    timeout: scaledMs(5_000),
-    intervals: [250, 400, 600],
-  }).toBeGreaterThan(500);
-  if (blueCss === null) {
-    throw new Error("resize target disappeared after a verified blue artboard capture");
-  }
   const blueRectCenter = {
     x: probeRegion.x + (blueCss.minX + blueCss.maxX) / 2,
     y: probeRegion.y + (blueCss.minY + blueCss.maxY) / 2,
