@@ -8,8 +8,10 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include FT_FREETYPE_H
+#include FT_MULTIPLE_MASTERS_H
 #include FT_OUTLINE_H
 #include FT_TRUETYPE_TABLES_H
 #include <hb-ft.h>
@@ -198,7 +200,8 @@ struct TextBackendFull::HbFontEntry {
   HbFontEntry(const HbFontEntry&) = delete;
   HbFontEntry& operator=(const HbFontEntry&) = delete;
 
-  HbFontEntry(HbFontEntry&& other) noexcept : font(other.font), ftFace(other.ftFace) {
+  HbFontEntry(HbFontEntry&& other) noexcept
+      : font(other.font), ftFace(other.ftFace), syntheticBold(other.syntheticBold) {
     other.font = nullptr;
     other.ftFace = nullptr;
   }
@@ -217,6 +220,7 @@ struct TextBackendFull::HbFontEntry {
 
     font = other.font;
     ftFace = other.ftFace;
+    syntheticBold = other.syntheticBold;
     other.font = nullptr;
     other.ftFace = nullptr;
     return *this;
@@ -224,6 +228,7 @@ struct TextBackendFull::HbFontEntry {
 
   hb_font_t* font = nullptr;
   FT_Face ftFace = nullptr;
+  bool syntheticBold = false;
 
   ~HbFontEntry() {
     if (font) {
@@ -234,6 +239,23 @@ struct TextBackendFull::HbFontEntry {
     }
   }
 };
+
+namespace {
+
+bool CanCreateHbFont(const FontManager& fontManager, FontHandle handle) {
+  return handle && fontManager.isValidatedFont(handle) &&
+         (fontManager.isTrustedFont(handle) || HasCachedOutlineTables(fontManager, handle));
+}
+
+void SetInitialFaceSize(FT_Face face) {
+  if (face->num_fixed_sizes > 0 && !FT_IS_SCALABLE(face)) {
+    FT_Select_Size(face, 0);
+  } else {
+    FT_Set_Char_Size(face, 0, 16 * 64, 72, 72);
+  }
+}
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Construction / destruction
@@ -256,6 +278,72 @@ FT_Int32 FreeTypeLoadFlags(const FontManager& fontManager, FontHandle font) {
          (fontManager.isTrustedFont(font) ? FT_Int32{0} : FT_Int32{FT_LOAD_NO_BITMAP});
 }
 
+constexpr FT_ULong Tag(char a, char b, char c, char d) {
+  return (static_cast<FT_ULong>(a) << 24) | (static_cast<FT_ULong>(b) << 16) |
+         (static_cast<FT_ULong>(c) << 8) | static_cast<FT_ULong>(d);
+}
+
+struct AppliedVariationAxes {
+  bool weight = false;
+  bool style = false;
+};
+
+AppliedVariationAxes SetRequestedVariationAxes(FT_Library library, FT_Face face,
+                                               const FontFaceRequest& request) {
+  if (!FT_HAS_MULTIPLE_MASTERS(face)) {
+    return {};
+  }
+  FT_MM_Var* variation = nullptr;
+  if (FT_Get_MM_Var(face, &variation) != 0 || variation == nullptr) {
+    return {};
+  }
+  AppliedVariationAxes applied;
+  constexpr FT_UInt kMaximumAxes = 32;
+  if (variation->num_axis <= kMaximumAxes) {
+    std::vector<FT_Fixed> coordinates;
+    coordinates.reserve(variation->num_axis);
+    for (FT_UInt index = 0; index < variation->num_axis; ++index) {
+      const FT_Var_Axis& axis = variation->axis[index];
+      FT_Fixed value = axis.def;
+      if (axis.tag == Tag('w', 'g', 'h', 't')) {
+        value = static_cast<FT_Fixed>(std::clamp(request.weight, 1, 1000)) << 16;
+        applied.weight = true;
+      } else if (axis.tag == Tag('i', 't', 'a', 'l')) {
+        value = request.style == FontStyle::Normal ? 0 : (1 << 16);
+        applied.style = true;
+      } else if (axis.tag == Tag('s', 'l', 'n', 't') && request.style != FontStyle::Normal) {
+        value = -(10 << 16);
+        applied.style = true;
+      }
+      coordinates.push_back(std::clamp(value, axis.minimum, axis.maximum));
+    }
+    if (FT_Set_Var_Design_Coordinates(face, variation->num_axis, coordinates.data()) != 0) {
+      applied = {};
+    }
+  }
+  FT_Done_MM_Var(library, variation);
+  return applied;
+}
+
+void ConfigureProviderFace(const FontManager& fontManager, FontHandle handle, FT_Face face,
+                           bool* syntheticBold) {
+  const auto request = fontManager.providerFaceRequest(handle);
+  if (!request.has_value()) {
+    return;
+  }
+  const AppliedVariationAxes axes = SetRequestedVariationAxes(getFtLibrary(), face, *request);
+  const bool catalog = fontManager.isImmutableCatalogFont(handle);
+  const bool generic = fontManager.isGenericSansProviderFont(handle);
+  const bool intrinsicBold = (face->style_flags & FT_STYLE_FLAG_BOLD) != 0;
+  const bool intrinsicItalic = (face->style_flags & FT_STYLE_FLAG_ITALIC) != 0;
+  *syntheticBold = (catalog || generic) && request->weight >= 600 && !axes.weight && !intrinsicBold;
+  if (request->style != FontStyle::Normal && !axes.style && !intrinsicItalic &&
+      (catalog || generic)) {
+    FT_Matrix italicFromUpright{1 << 16, static_cast<FT_Fixed>(0.22 * (1 << 16)), 0, 1 << 16};
+    FT_Set_Transform(face, &italicFromUpright, nullptr);
+  }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -266,15 +354,10 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
   if (!handle) {
     return nullptr;
   }
-
   if (const auto* entry = registry_.try_get<HbFontEntry>(handle.entity())) {
     return entry->font;
   }
-
-  if (!fontManager_.isValidatedFont(handle)) {
-    return nullptr;
-  }
-  if (!fontManager_.isTrustedFont(handle) && !HasCachedOutlineTables(fontManager_, handle)) {
+  if (!CanCreateHbFont(fontManager_, handle)) {
     // Bitmap-only fonts can cause FreeType to decompress embedded PNG strikes from HarfBuzz
     // metric callbacks. Reject document-provided bitmap fonts before constructing an FT_Face.
     return nullptr;
@@ -297,15 +380,12 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
   if (err != 0) {
     return nullptr;
   }
+  ConfigureProviderFace(fontManager_, handle, entry.ftFace, &entry.syntheticBold);
 
   // Set a default size (will be overridden per shaping call).
   // For bitmap-only fonts (CBDT), use FT_Select_Size to pick the first strike;
   // FT_Set_Char_Size fails for non-scalable fonts.
-  if (entry.ftFace->num_fixed_sizes > 0 && !FT_IS_SCALABLE(entry.ftFace)) {
-    FT_Select_Size(entry.ftFace, 0);
-  } else {
-    FT_Set_Char_Size(entry.ftFace, 0, 16 * 64, 72, 72);
-  }
+  SetInitialFaceSize(entry.ftFace);
 
   // Create HarfBuzz font backed by FreeType for GSUB/GPOS shaping.
   entry.font = hb_ft_font_create_referenced(entry.ftFace);
@@ -497,6 +577,12 @@ Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale)
 
   if (ftFace->glyph->format != FT_GLYPH_FORMAT_OUTLINE) {
     return {};
+  }
+  if (const auto* entry = registry_.try_get<HbFontEntry>(font.entity());
+      entry && entry->syntheticBold) {
+    const FT_Pos strength =
+        static_cast<FT_Pos>(std::clamp(*fontSizePx * 0.03f * 64.0f, 0.0f, 4096.0f));
+    FT_Outline_Embolden(&ftFace->glyph->outline, strength);
   }
 
   // Decompose the outline into a Path via PathBuilder.

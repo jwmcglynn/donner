@@ -408,17 +408,22 @@ int main(int argc, char** argv) {
   }
 
   auto shell = std::make_unique<donner::editor::EditorShell>(
-      *window, donner::editor::EditorShellOptions{
-                   .svgPath = svgPath.value_or(""),
-                   .initialSource = initialSource,
-                   .initialPath = initialPath,
-                   .showWelcome = showWelcome,
-                   .editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
-                   .editorBuildInfo = EmbeddedBytesToString(donner::embedded::kEditorBuildInfo),
+      *window,
+      donner::editor::EditorShellOptions{
+          .svgPath = svgPath.value_or(""),
+          .initialSource = initialSource,
+          .initialPath = initialPath,
+          .showWelcome = showWelcome,
+          .editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
+          .editorBuildInfo = EmbeddedBytesToString(donner::embedded::kEditorBuildInfo),
+          .fontPreviewCachePath =
+              imguiIniPath.empty()
+                  ? std::string()
+                  : (std::filesystem::path(imguiIniPath).parent_path() / "font-previews").string(),
 #ifndef __EMSCRIPTEN__
-                   .reproOutputPath = reproOutputPath,
+          .reproOutputPath = reproOutputPath,
 #endif
-               });
+      });
   if (!shell->valid()) {
     if (svgPath.has_value()) {
       std::cerr << "Could not open file " << *svgPath << "\n";

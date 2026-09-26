@@ -68,7 +68,8 @@ void PrintUsage(std::string_view argv0) {
                "       [--hold-frames-behind <n>]\n"
                "       [--drive-document-input] [--source-pane-visible]\n"
                "       [--content-only-capture]\n"
-               "       [--visible] [--no-pace] [--print-diagnostics]\n"
+               "       [--visible] [--no-pace] [--show-welcome] [--composited-off]\n"
+               "       [--print-diagnostics]\n"
                "       [--diagnostics-frame <n>]...\n";
 }
 
@@ -187,6 +188,16 @@ void PrintUsage(std::string_view argv0) {
 
     if (arg == "--source-pane-visible") {
       options->sourcePaneVisible = true;
+      continue;
+    }
+
+    if (arg == "--show-welcome") {
+      options->showWelcome = true;
+      continue;
+    }
+
+    if (arg == "--composited-off") {
+      options->compositedOff = true;
       continue;
     }
 
@@ -489,6 +500,10 @@ void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics,
       PrintJsonString(frame.statusSuffix);
       std::cout << ",\"viewport_desired_canvas\":";
       PrintVector2i(frame.viewportDesiredCanvas);
+      std::cout << ",\"viewport_pane_size\":";
+      PrintVector2d(frame.viewportPaneSize);
+      std::cout << ",\"raster_output_size\":";
+      PrintVector2i(frame.rasterOutputSize);
       std::cout << ",\"document_canvas\":";
       PrintVector2i(frame.documentCanvas);
       std::cout << ",\"compositor_canvas\":";

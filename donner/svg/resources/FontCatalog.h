@@ -11,10 +11,12 @@ namespace donner::svg {
 
 /**
  * Aggregate font catalog: the single surface the editor's font picker and \ref FontManager
- * resolution consume.
+ * resolution consume. The default catalog also resolves the CSS generic `sans-serif` family
+ * through bundled regular, bold, and italic faces without listing it as a named picker family.
  *
- * A default-constructed catalog contains an embedded provider (curated Google Fonts) followed by a
- * system provider (CoreText on macOS; a no-op stub elsewhere). Providers are consulted in order, so
+ * A default-constructed catalog contains the generic sans-serif faces, an embedded provider
+ * (curated Google Fonts), then a system provider (CoreText on macOS; a no-op stub elsewhere).
+ * Providers are consulted in order, so
  * resolution and `loadFace()` prefer **Bundled** families over **System** families, and
  * `families()` lists the Bundled group before the System group.
  *

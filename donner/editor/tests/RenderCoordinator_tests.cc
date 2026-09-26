@@ -1,16 +1,22 @@
 #include "donner/editor/RenderCoordinator.h"
 
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
 #include <limits>
 #include <thread>
 #include <vector>
 
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/editor/tests/RenderCoordinatorTestAccess.h"
+#include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -72,6 +78,12 @@ constexpr std::string_view kDefsSvg =
          <defs id="d1"><rect id="r1" x="0" y="0" width="10" height="10"/></defs>
        </svg>)";
 
+constexpr std::string_view kInheritedClipSvg =
+    R"CLIP(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <defs><clipPath id="clip"><rect id="clip-shape" x="5" y="5" width="60" height="60"/></clipPath></defs>
+         <g clip-path="url(#clip)"><rect id="child" x="10" y="10" width="20" height="20"/></g>
+       </svg>)CLIP";
+
 ViewportState MakeViewport(EditorApp& app) {
   ViewportState viewport;
   auto viewBox = app.document().document().svgElement().viewBox();
@@ -91,6 +103,17 @@ svg::SVGElement QuerySelector(EditorApp& app, std::string_view selector) {
   auto element = app.document().document().querySelector(selector);
   EXPECT_TRUE(element.has_value()) << "querySelector(" << selector << ") returned nullopt";
   return *element;
+}
+
+bool WriteClipGuideHeldFrame(const svg::RendererBitmap& bitmap, std::string_view filename) {
+  const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  if (outputDir == nullptr || bitmap.empty()) {
+    return false;
+  }
+  const std::filesystem::path path = std::filesystem::path(outputDir) / filename;
+  return svg::RendererImageIO::writeRgbaPixelsToPngFile(path.string().c_str(), bitmap.pixels,
+                                                        bitmap.dimensions.x, bitmap.dimensions.y,
+                                                        bitmap.rowBytes / 4u);
 }
 
 SelectTool::ActiveDragPreview DragPreview(Entity entity, std::uint64_t generation,
@@ -276,25 +299,62 @@ TEST(RenderCoordinatorPolicyTest, SelectedViewportRefreshDeferRequiresEveryPredi
       /*needsOverviewInfill=*/true, /*pendingSelectedLayerRasterization=*/false));
 }
 
-TEST(RenderCoordinatorPolicyTest, SelectionOnlyPrewarmDoesNotOverdrawTheViewport) {
+TEST(RenderCoordinatorPolicyTest, SelectionPrewarmPreservesCompleteVisibleCoverageAtAnyPaneSize) {
   const Entity selectedEntity = static_cast<Entity>(7);
 
-  EXPECT_TRUE(ShouldUseSelectedPrewarmRasterViewport(
+  EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
       selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
       /*selectionOnlyPrewarmMayTriggerRender=*/true,
-      /*hasIndependentRenderReason=*/false))
-      << "Cached-texture presenters retain the desktop/TinySkia selection prewarm.";
+      /*hasIndependentRenderReason=*/false, /*hasCompleteVisibleCachedCoverage=*/true,
+      Vector2i(800, 600), Vector2i(1200, 900)))
+      << "Even a small pane rebuilds every cached static segment when selected prewarm changes "
+         "the output dimensions.";
   EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
       selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
       /*selectionOnlyPrewarmMayTriggerRender=*/false,
-      /*hasIndependentRenderReason=*/false))
+      /*hasIndependentRenderReason=*/false, /*hasCompleteVisibleCachedCoverage=*/false,
+      Vector2i(800, 600), Vector2i(900, 650)))
       << "Selecting on a direct surface must not manufacture a raster-viewport change that posts "
          "an otherwise-identical worker frame.";
   EXPECT_TRUE(ShouldUseSelectedPrewarmRasterViewport(
       selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
       /*selectionOnlyPrewarmMayTriggerRender=*/false,
-      /*hasIndependentRenderReason=*/true))
-      << "Real invalidation and moved-drag renders still get conservative overdraw.";
+      /*hasIndependentRenderReason=*/true, /*hasCompleteVisibleCachedCoverage=*/false,
+      Vector2i(800, 600), Vector2i(900, 650)))
+      << "Without complete coverage, a modest incremental overdraw can accompany a real render.";
+
+  EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
+      selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
+      /*selectionOnlyPrewarmMayTriggerRender=*/true,
+      /*hasIndependentRenderReason=*/true, /*hasCompleteVisibleCachedCoverage=*/true,
+      Vector2i(800, 600), Vector2i(900, 650)))
+      << "An active drag must retain complete visible background tiles on small panes too.";
+  EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
+      selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
+      /*selectionOnlyPrewarmMayTriggerRender=*/true,
+      /*hasIndependentRenderReason=*/true, /*hasCompleteVisibleCachedCoverage=*/false,
+      Vector2i(800, 600), Vector2i(1200, 900)))
+      << "A cold pane should not multiply the first render area just to prewarm selection.";
+
+  EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
+      selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
+      /*selectionOnlyPrewarmMayTriggerRender=*/true,
+      /*hasIndependentRenderReason=*/false, /*hasCompleteVisibleCachedCoverage=*/true,
+      Vector2i(2774, 2048), Vector2i(3072, 2048)))
+      << "Retina selection must retain the already-complete visible tile set instead of "
+         "rebuilding full-scene tiles beyond the surface budget";
+  EXPECT_FALSE(ShouldUseSelectedPrewarmRasterViewport(
+      selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
+      /*selectionOnlyPrewarmMayTriggerRender=*/true,
+      /*hasIndependentRenderReason=*/true, /*hasCompleteVisibleCachedCoverage=*/true,
+      Vector2i(2774, 2048), Vector2i(3072, 2048)))
+      << "Active drag must not switch back to the oversized raster and invalidate its tiles";
+  EXPECT_TRUE(ShouldUseSelectedPrewarmRasterViewport(
+      selectedEntity, /*requestOverviewInfill=*/false, /*rasterViewportBounded=*/true,
+      /*selectionOnlyPrewarmMayTriggerRender=*/true,
+      /*hasIndependentRenderReason=*/true, /*hasCompleteVisibleCachedCoverage=*/true,
+      Vector2i(2048, 1536), Vector2i(2048, 1536)))
+      << "A full-document raster with unchanged dimensions has no extra tile cost";
 }
 
 TEST(RenderCoordinatorPolicyTest, OnlyForcedSelectedResultClearsPendingLayerRasterization) {
@@ -345,6 +405,31 @@ TEST(RenderCoordinatorPolicyTest, PendingSelectedLayerClearRequiresEntityPreview
   forcedPreview.forceLayerRasterization = false;
   EXPECT_FALSE(ShouldClearPendingSelectedLayerRasterization(
       forcedPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
+}
+
+TEST(RenderCoordinatorPolicyTest, ForcedOwningTilesClearPendingSelectedRasterization) {
+  const Entity selectedEntity = static_cast<Entity>(7);
+  RenderRequest::DragPreview forcedPreview;
+  forcedPreview.entity = selectedEntity;
+  forcedPreview.interactionKind = svg::compositor::InteractionHint::Selection;
+  forcedPreview.forceLayerRasterization = true;
+
+  RenderResult::CompositedPreview owningPreview;
+  owningPreview.tiles.emplace_back();
+  owningPreview.tiles.front().id = "owning-span";
+  owningPreview.entity = entt::null;
+  owningPreview.representedDragPreview = forcedPreview;
+  EXPECT_TRUE(CompositedPreviewClearsPendingSelectedLayerRasterization(
+      owningPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8))
+      << "A complete forced owning-tile frame refreshes unpromotable selected text/style";
+
+  owningPreview.representedDragPreview->forceLayerRasterization = false;
+  EXPECT_FALSE(CompositedPreviewClearsPendingSelectedLayerRasterization(
+      owningPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
+  owningPreview.representedDragPreview->forceLayerRasterization = true;
+  owningPreview.tiles.clear();
+  EXPECT_FALSE(CompositedPreviewClearsPendingSelectedLayerRasterization(
+      owningPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
 }
 
 TEST(RenderCoordinatorPolicyTest, RepresentedDragPreviewFollowsActiveTargetWhenPresentable) {
@@ -790,6 +875,136 @@ TEST(RenderCoordinatorTest, RasterizeOverlayTracksActiveBoundsPreviewChanges) {
   EXPECT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
 }
 
+TEST(RenderCoordinatorTest, ClipGuideUsesIdleBaselineThroughTwoHeldMovesAndInvalidatesOnClipEdit) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInheritedClipSvg));
+  svg::Renderer renderer;
+  renderer.draw(app.document().document());
+  const svg::SVGElement child = QuerySelector(app, "#child");
+  app.setSelection(child);
+  RenderCoordinator coordinator;
+  ViewportState viewport = MakeViewport(app);
+
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  ASSERT_EQ(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.size(), 1u);
+  const Path basePath = coordinator.immediateOverlaySnapshot()->clipGuidesDoc.front().pathDoc;
+
+  SelectTool::ActiveTransformBoundsPreview boundsPreview;
+  boundsPreview.startBoundsDoc = Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0);
+  for (double x : {12.0, 20.0}) {
+    const Transform2d movement = Transform2d::Translate(x, 0.0);
+    boundsPreview.documentFromStartDocument = movement;
+    const auto preview =
+        DragPreview(child.unsafeEntityHandle().entity(), 7, Vector2d(x, 0.0), movement);
+    ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
+        app, viewport, std::nullopt, preview, boundsPreview, SelectionChromeDetail::Full, preview));
+    ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+    ASSERT_EQ(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.size(), 1u);
+    EXPECT_EQ(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.front().pathDoc, basePath)
+        << "Inherited clip must remain fixed through held move " << x;
+  }
+
+  app.applyMutation(
+      EditorCommand::SetAttributeCommand(QuerySelector(app, "#clip-shape"), "x", "8"));
+  ASSERT_TRUE(app.document().flushFrame());
+  const auto preview = DragPreview(child.unsafeEntityHandle().entity(), 7, Vector2d(20.0, 0.0),
+                                   Transform2d::Translate(20.0, 0.0));
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
+      app, viewport, std::nullopt, preview, boundsPreview, SelectionChromeDetail::Full, preview));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  EXPECT_TRUE(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.empty())
+      << "Clip edits invalidate the held immutable guide even if the selection is unchanged";
+  renderer.draw(app.document().document());
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  ASSERT_EQ(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.size(), 1u);
+  EXPECT_NE(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.front().pathDoc, basePath)
+      << "The edited clip guide must return on the next safe idle capture";
+}
+
+TEST(RenderCoordinatorTest, GeodeCrownClipGuideRendersOnFirstAndSecondHeldMove) {
+  const auto source = ::donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  ASSERT_TRUE(source.ok()) << source.error;
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source.contents));
+  app.document().document().setCanvasSize(1536, 1024);
+  svg::Renderer prepared;
+  prepared.draw(app.document().document());
+  const svg::SVGElement crown = QuerySelector(app, "#central-crown-face-2");
+  app.setSelection(crown);
+  RenderCoordinator coordinator;
+  ViewportState viewport = MakeViewport(app);
+  viewport.paneSize = Vector2d(1536.0, 1024.0);
+  viewport.resetTo100Percent();
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  ASSERT_EQ(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.size(), 1u);
+  const Path inheritedClip = coordinator.immediateOverlaySnapshot()->clipGuidesDoc.front().pathDoc;
+  const std::uint64_t clipRevision = app.document().nonTransformRevision();
+
+  SelectTool::ActiveTransformBoundsPreview boundsPreview;
+  boundsPreview.startBoundsDoc = Box2d::FromXYWH(518.0, 481.0, 38.0, 34.0);
+  std::optional<svg::RendererBitmap> firstHeld;
+  for (int x : {12, 20}) {
+    const Transform2d movement = Transform2d::Translate(static_cast<double>(x), 0.0);
+    app.applyMutation(EditorCommand::SetTransformCommand(crown, movement));
+    ASSERT_TRUE(app.document().flushFrame());
+    EXPECT_EQ(app.document().nonTransformRevision(), clipRevision);
+    prepared.draw(app.document().document());
+    boundsPreview.documentFromStartDocument = movement;
+    const auto preview =
+        DragPreview(crown.unsafeEntityHandle().entity(), 17, Vector2d(x, 0.0), movement);
+    ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
+        app, viewport, std::nullopt, preview, boundsPreview, SelectionChromeDetail::Full, preview));
+    ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+    const SelectionChromeSnapshot withGuide = *coordinator.immediateOverlaySnapshot();
+    ASSERT_EQ(withGuide.clipGuidesDoc.size(), 1u) << "held x=" << x;
+    EXPECT_EQ(withGuide.clipGuidesDoc.front().pathDoc, inheritedClip);
+    SelectionChromeSnapshot withoutGuide = withGuide;
+    withoutGuide.clipGuidesDoc.clear();
+
+    svg::Renderer withRenderer;
+    withRenderer.draw(app.document().document());
+    withRenderer.setPreserveTargetOnBeginFrame(true);
+    svg::RenderViewport rasterViewport;
+    rasterViewport.size = Vector2d(1536.0, 1024.0);
+    rasterViewport.devicePixelRatio = 1.0;
+    withRenderer.beginFrame(rasterViewport);
+    OverlayRenderer::drawChromeFromSnapshot(withRenderer, withGuide);
+    withRenderer.endFrame();
+    const svg::RendererBitmap withBitmap = withRenderer.takeSnapshot();
+    svg::Renderer withoutRenderer;
+    withoutRenderer.draw(app.document().document());
+    withoutRenderer.setPreserveTargetOnBeginFrame(true);
+    withoutRenderer.beginFrame(rasterViewport);
+    OverlayRenderer::drawChromeFromSnapshot(withoutRenderer, withoutGuide);
+    withoutRenderer.endFrame();
+    const svg::RendererBitmap withoutBitmap = withoutRenderer.takeSnapshot();
+    int guidePixels = 0;
+    tests::CompareBitmapToBitmap(
+        withBitmap, withoutBitmap, "geode_crown_held_clip_guide_vs_control",
+        tests::ApprovedPixelToleranceParams(0.0f, std::numeric_limits<int>::max(), true),
+        &guidePixels);
+    EXPECT_GT(guidePixels, 20) << "Guide must remain visible while mouse is held at x=" << x;
+    const std::string_view filename =
+        x == 12 ? "geode_crown_held_clip_guide_12.png" : "geode_crown_held_clip_guide_20.png";
+    if (std::getenv("TEST_UNDECLARED_OUTPUTS_DIR") != nullptr) {
+      EXPECT_TRUE(WriteClipGuideHeldFrame(withBitmap, filename));
+    }
+    if (firstHeld.has_value()) {
+      int movedPixels = 0;
+      tests::CompareBitmapToBitmap(
+          withBitmap, *firstHeld, "geode_crown_first_vs_second_held",
+          tests::ApprovedPixelToleranceParams(0.0f, std::numeric_limits<int>::max(), true),
+          &movedPixels);
+      EXPECT_GT(movedPixels, 20) << "Artwork and selection must advance between held positions";
+    } else {
+      firstHeld = withBitmap;
+    }
+  }
+}
+
 TEST(RenderCoordinatorTest, RasterizeOverlayWithEmptySelectionIsAccepted) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
@@ -951,6 +1166,40 @@ TEST(RenderCoordinatorTest, MaybeRequestRenderDispatchesWithoutTextureCache) {
   }
   EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
   EXPECT_EQ(app.document().document().canvasSize(), viewport.desiredCanvasSize());
+}
+
+TEST(RenderCoordinatorTest, HeldDragWithoutPromotedTileRendersChangedDocumentVersion) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  SelectTool selectTool;
+  const ViewportState viewport = MakeViewport(app);
+  app.document().document().setCanvasSize(100, 100);
+  const svg::SVGElement target = QuerySelector(app, "#r1");
+  app.setSelection(target);
+  const Entity selectedEntity = target.unsafeEntityHandle().entity();
+  const std::uint64_t representedVersion = app.document().currentFrameVersion();
+  const EditorRasterViewport rasterViewport = viewport.rasterViewport();
+  RenderCoordinatorTestAccess::noteRenderCompleted(coordinator, representedVersion, rasterViewport);
+
+  selectTool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  selectTool.onMouseMove(app, Vector2d(35.0, 15.0), /*buttonHeld=*/true);
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_GT(app.document().currentFrameVersion(), representedVersion);
+  // The worker described the selection, but a masked/owning layer did not yield a tile that
+  // could be translated on the UI thread. Model that exact metadata/pixel mismatch here.
+  coordinator.compositedPresentation().noteCachedTextures(selectedEntity, representedVersion,
+                                                          rasterViewport.outputSizePx,
+                                                          selectTool.activeDragPreview());
+  ASSERT_TRUE(textures.tiles().empty());
+
+  EXPECT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+      << "A live drag with no presentable target tile must render while the pointer is held";
+  coordinator.asyncRenderer().cancelInFlight();
+  EXPECT_TRUE(coordinator.asyncRenderer().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
 }
 
 TEST(RenderCoordinatorTest, CancelledPixelCaptureRepostsWithoutDocumentOrViewportChange) {
@@ -1119,6 +1368,68 @@ TEST(RenderCoordinatorTest, RenderWithNothingToPresentIsNotRepostedEveryFrame) {
   EXPECT_EQ(coordinator.nothingToPresentResultTotalForDiagnostics(),
             NothingToPresentRetry::kRetryDelays.size() + 1);
   EXPECT_EQ(coordinator.displayedDocVersionForDiagnostics(), 0u);
+}
+
+TEST(RenderCoordinatorTest, FailedSelectedOverdrawRetriesVisibleRasterAfterRetryBudgetExhausts) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000"
+         viewBox="0 0 1000 1000">
+      <rect id="target" x="100" y="100" width="100" height="100" fill="red"/>
+      <rect id="peer" x="300" y="100" width="100" height="100" fill="blue"/>
+    </svg>
+  )svg"));
+  const auto target = app.document().document().querySelector("#target");
+  const auto peer = app.document().document().querySelector("#peer");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(peer.has_value());
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 1000.0, 1000.0);
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.devicePixelRatio = 1.0;
+  viewport.resetTo100Percent();
+  const EditorRasterViewport visibleRaster = viewport.rasterViewport();
+  ASSERT_TRUE(visibleRaster.viewportBounded);
+  ASSERT_GT(viewport.selectedPrewarmRasterViewport().outputSizePx.x, visibleRaster.outputSizePx.x);
+
+  RenderCoordinator coordinator;
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  const std::uint64_t generation = app.document().documentGeneration();
+  const std::uint64_t version = app.document().currentFrameVersion();
+  const Entity selectedEntity = target->unsafeEntityHandle().entity();
+  for (std::size_t attempt = 0; attempt <= NothingToPresentRetry::kRetryDelays.size(); ++attempt) {
+    RenderCoordinatorTestAccess::noteSelectedPrewarmFailure(coordinator, generation, version,
+                                                            selectedEntity, viewport);
+  }
+  ASSERT_TRUE(RenderCoordinatorTestAccess::selectedPrewarmRecoveryPending(coordinator));
+
+  SelectTool selectTool;
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, nullptr));
+  const auto postedRaster = RenderCoordinatorTestAccess::lastPostedRasterViewport(coordinator);
+  ASSERT_TRUE(postedRaster.has_value());
+  EXPECT_EQ(postedRaster->outputSizePx, visibleRaster.outputSizePx)
+      << "the bounded recovery must post even when generic retries for enlarged prewarm ended";
+  EXPECT_EQ(postedRaster->documentRect, visibleRaster.documentRect);
+  EXPECT_TRUE(RenderCoordinatorTestAccess::selectedPrewarmFallbackApplies(
+      coordinator, generation, selectedEntity, visibleRaster));
+
+  EXPECT_FALSE(RenderCoordinatorTestAccess::selectedPrewarmFallbackApplies(
+      coordinator, generation, peer->unsafeEntityHandle().entity(), visibleRaster));
+  EXPECT_FALSE(RenderCoordinatorTestAccess::selectedPrewarmRecoveryPending(coordinator));
+
+  RenderCoordinatorTestAccess::noteSelectedPrewarmFailure(coordinator, generation, version,
+                                                          selectedEntity, viewport);
+  ViewportState pannedViewport = viewport;
+  pannedViewport.panDocPoint.x += 10.0;
+  EXPECT_FALSE(RenderCoordinatorTestAccess::selectedPrewarmFallbackApplies(
+      coordinator, generation, selectedEntity, pannedViewport.rasterViewport()));
+
+  RenderCoordinatorTestAccess::noteSelectedPrewarmFailure(coordinator, generation, version,
+                                                          selectedEntity, viewport);
+  EXPECT_FALSE(RenderCoordinatorTestAccess::selectedPrewarmFallbackApplies(
+      coordinator, generation + 1u, selectedEntity, visibleRaster));
 }
 
 // A renderer setting changes what the worker draws without changing the document or the raster:

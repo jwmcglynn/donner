@@ -114,6 +114,15 @@ struct SelectionChromeSnapshot {
     bool displayNone = false;
   };
   std::vector<PathItem> paths;
+  /// One supported effective clip boundary, kept separately from selection/export chrome.
+  /// `basePathDoc` is captured at the last safe idle state. A direct selected-owner clip follows
+  /// its gesture from that base; an inherited ancestor clip stays fixed while the child moves.
+  struct ClipGuide {
+    Path basePathDoc;
+    Path pathDoc;
+    bool followsSelection = false;
+  };
+  std::vector<ClipGuide> clipGuidesDoc;
   /// Transient source-hover path outlines. Drawn as soft hover chrome before selection chrome.
   std::vector<PathItem> hoverPaths;
 
@@ -383,6 +392,13 @@ public:
       const std::optional<LockedRejectionFlashInput>& lockedFlash = std::nullopt,
       double devicePixelRatio = 1.0,
       const std::optional<svg::SVGElement>& livePathPreviewElement = std::nullopt);
+
+  /// Reuse an idle-captured clip guide without touching the SVG registry during a drag. Direct
+  /// selected-owner clips follow the gesture; inherited clips keep their document placement.
+  static void projectCachedClipGuides(
+      SelectionChromeSnapshot* destination, const SelectionChromeSnapshot& prior,
+      const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
+      const Transform2d& representedDocumentFromLiveDocument);
 
   /// Chrome squares whose on-screen size is fixed, and therefore resolved
   /// against the transform the chrome is drawn with rather than stored.

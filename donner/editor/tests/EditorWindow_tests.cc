@@ -1829,6 +1829,37 @@ INSTANTIATE_TEST_SUITE_P(Targets, EditorWindowBackendTest, testing::Bool(),
                                              : std::string("WindowSurface");
                          });
 
+#ifdef __APPLE__
+TEST(EditorWindowTest, NativeMetalWindowSurfacePresentsUiAtRetinaScale) {
+  const gpu::Result<geode::GpuBackendKind> backend = geode::ProcessDefaultGpuBackendKind();
+  ASSERT_THAT(backend, gpu::HasResult());
+  if (backend.result() != geode::GpuBackendKind::NativeMetal) {
+    GTEST_SKIP() << "This test exercises the native Metal window surface";
+  }
+
+  EditorWindow window(EditorWindowOptions{
+      .title = "Native Metal Retina UI Test",
+      .initialWidth = 96,
+      .initialHeight = 96,
+      .visible = false,
+      .clearColor = {0.0f, 0.0f, 0.0f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  ASSERT_TRUE(window.valid());
+  ASSERT_FALSE(window.usingOffscreenRenderTarget());
+
+  window.beginFrame();
+  ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(24.0f, 24.0f), ImVec2(72.0f, 72.0f),
+                                                IM_COL32(255, 0, 0, 255));
+  const svg::RendererBitmap frame = window.endFrameAndReadPixels();
+  ASSERT_FALSE(frame.empty())
+      << "The Metal layer must acquire a frame at the GLFW framebuffer's backing scale";
+  const Vector2d readbackFromLogical = ReadbackScale(frame, 96, 96);
+  EXPECT_THAT(PixelAtLogical(frame, readbackFromLogical, 48, 48),
+              Rgba(Near(255, 3), testing::Le(3), testing::Le(3), testing::Eq(255)));
+}
+#endif
+
 /// Which of a window's configurations a lifecycle case runs on.
 struct LifecycleConfiguration {
   /// Whether the window renders into its own offscreen target rather than presenting to a

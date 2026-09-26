@@ -16,7 +16,11 @@
 namespace donner::editor::tests {
 
 void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::RendererBitmap& expected,
-                           std::string_view testLabel, const BitmapGoldenCompareParams& params) {
+                           std::string_view testLabel, const BitmapGoldenCompareParams& params,
+                           int* mismatchedPixels) {
+  if (mismatchedPixels != nullptr) {
+    *mismatchedPixels = -1;
+  }
   ASSERT_FALSE(actual.empty()) << "[" << testLabel << "] actual bitmap is empty";
   ASSERT_FALSE(expected.empty()) << "[" << testLabel << "] expected bitmap is empty";
   ASSERT_EQ(actual.rowBytes % 4u, 0u)
@@ -59,6 +63,9 @@ void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::Rendere
   options.includeAA = params.includeAntiAliasing;
   const int mismatched = pixelmatch::pixelmatch(expected.pixels, actual.pixels, diffImage, width,
                                                 height, strideInPixels, options);
+  if (mismatchedPixels != nullptr) {
+    *mismatchedPixels = mismatched;
+  }
 
   if (mismatched > params.maxMismatchedPixels) {
     const std::filesystem::path outDir = detail::DiffOutputDir();

@@ -380,6 +380,51 @@ TEST(ViewportStateTest, RasterViewportSeparatesSemanticCanvasFromHighZoomOutput)
   EXPECT_NEAR_VEC(outputBottomRight, Vector2d(2112.0, 1712.0), 1e-9);
 }
 
+TEST(ViewportStateTest, RasterViewportClampsOnlyTheFullyVisibleRetinaAxis) {
+  ViewportState viewport = MakeFreshState(Vector2d::Zero(), Vector2d(1131.0, 884.0),
+                                          Box2d::FromXYWH(0.0, 0.0, 1536.0, 1024.0), /*dpr=*/2.0);
+  const EditorRasterViewport raster = viewport.rasterViewport();
+
+  EXPECT_TRUE(raster.viewportBounded);
+  EXPECT_EQ(raster.semanticCanvasSizePx, Vector2i(3072, 2048));
+  EXPECT_EQ(raster.outputSizePx, Vector2i(2774, 2048));
+  EXPECT_EQ(raster.documentRect.topLeft.y, viewport.documentViewBox.topLeft.y);
+  EXPECT_EQ(raster.documentRect.bottomRight.y, viewport.documentViewBox.bottomRight.y);
+  EXPECT_GT(raster.documentRect.topLeft.x, viewport.documentViewBox.topLeft.x);
+  EXPECT_LT(raster.documentRect.bottomRight.x, viewport.documentViewBox.bottomRight.x);
+  EXPECT_NEAR_VEC(raster.outputFromDocument.transformPosition(raster.documentRect.topLeft),
+                  Vector2d::Zero(), 1e-9);
+}
+
+TEST(ViewportStateTest, RasterViewportClampsOnlyTheFullyVisibleHorizontalAxis) {
+  ViewportState viewport = MakeFreshState(Vector2d::Zero(), Vector2d(884.0, 1131.0),
+                                          Box2d::FromXYWH(0.0, 0.0, 1024.0, 1536.0), /*dpr=*/2.0);
+  const EditorRasterViewport raster = viewport.rasterViewport();
+
+  EXPECT_TRUE(raster.viewportBounded);
+  EXPECT_EQ(raster.semanticCanvasSizePx, Vector2i(2048, 3072));
+  EXPECT_EQ(raster.outputSizePx, Vector2i(2048, 2774));
+  EXPECT_EQ(raster.documentRect.topLeft.x, viewport.documentViewBox.topLeft.x);
+  EXPECT_EQ(raster.documentRect.bottomRight.x, viewport.documentViewBox.bottomRight.x);
+  EXPECT_GT(raster.documentRect.topLeft.y, viewport.documentViewBox.topLeft.y);
+  EXPECT_LT(raster.documentRect.bottomRight.y, viewport.documentViewBox.bottomRight.y);
+}
+
+TEST(ViewportStateTest, SelectedPrewarmDoesNotExpandFullyCoveredAxisBeyondDocument) {
+  ViewportState viewport = MakeFreshState(Vector2d::Zero(), Vector2d(1131.0, 884.0),
+                                          Box2d::FromXYWH(0.0, 0.0, 1536.0, 1024.0), /*dpr=*/2.0);
+  const EditorRasterViewport base = viewport.rasterViewport();
+  const EditorRasterViewport selected = viewport.selectedPrewarmRasterViewport();
+
+  ASSERT_TRUE(base.viewportBounded);
+  EXPECT_EQ(base.outputSizePx, Vector2i(2774, 2048));
+  EXPECT_EQ(selected.outputSizePx, Vector2i(3072, 2048));
+  EXPECT_EQ(selected.documentRect, viewport.documentViewBox);
+  EXPECT_TRUE(selected.viewportBounded)
+      << "Selected prewarm keeps the compositor tile request even when padding reaches the full "
+         "document.";
+}
+
 TEST(ViewportStateTest, SelectedPrewarmRasterViewportAddsBoundedOverdraw) {
   ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 600.0),
                                    Box2d::FromXYWH(100.0, 200.0, 1000.0, 1000.0),

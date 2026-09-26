@@ -2587,6 +2587,11 @@ std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentation
 
 #ifdef DONNER_EDITOR_WGPU
 bool EditorWindow::configureFrameTarget(int displayW, int displayH) {
+#ifdef __APPLE__
+  if (wgpuState_->presentation != nullptr) {
+    UpdateMetalLayerBackingScale(window_);
+  }
+#endif
   // The next acquire rebuilds a lost presentation surface. Never replace a visible canvas with
   // an offscreen target when its surface temporarily disappears.
   if (wgpuState_->presentationRequired && wgpuState_->presentation == nullptr) {

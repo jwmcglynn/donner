@@ -176,6 +176,14 @@ license(
     package_url = "https://fonts.google.com/",
 )
 
+license(
+    name = "generic_sans_faces",
+    package_name = "Noto Sans",
+    license_kinds = ["@rules_license//licenses/spdx:OFL-1.1"],
+    license_text = "//third_party/resvg-test-suite:fonts/Noto-LICENSE-OFL.txt",
+    package_url = "https://github.com/notofonts/latin-greek-cyrillic",
+)
+
 # Canonical per-variant license lists. These match the build-report
 # variants in `tools/generate_build_report.py` so a Python script can
 # correlate cquery results with the aggregated manifest.
@@ -213,6 +221,7 @@ ALL_KNOWN_LICENSES = [
     ":fira-code",
     ":bootstrap-icons",
     ":google_fonts",
+    ":generic_sans_faces",
     "@libpng//:license",
     "@zlib//:license",
 ]

@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -862,6 +863,10 @@ public:
     int immediateTileCount = 0;
     /// Count of segment/layer tiles charged to cached raster work.
     int cachedTileCount = 0;
+    /// Retained owner tiles refreshed by a bounded damage patch this frame.
+    int damagePatchTileCount = 0;
+    /// Geometry draws charged while rasterizing those damage rectangles.
+    std::size_t damagePatchGeometryDraws = 0;
     /// Offscreen renderer instances constructed this frame. With pooling,
     /// a steady-state frame reuses the pooled instance and reports 0 or 1
     /// here regardless of tile count; per-tile construction (the pre-pool
@@ -1048,6 +1053,11 @@ public:
   [[nodiscard]] std::vector<CompositorTile> snapshotTilesForUpload(
       CompositorTileBitmapPayload payload = CompositorTileBitmapPayload::All) const;
 
+  /// True when every non-empty paint-order slot has a current payload for direct tile
+  /// presentation. The editor must retain its previous complete frame when a surface allocation
+  /// failure leaves only part of a new layer/segment topology rasterized.
+  [[nodiscard]] bool hasCompleteTileSetForPresentation() const;
+
   /// True when every nonempty layer and static span has a current tile payload.
   /// Direct composition alone does not make the editor's split-tile preview complete.
   [[nodiscard]] bool hasCompletePaintOrderTilePayloads() const;
@@ -1073,6 +1083,10 @@ private:
   /// Rasterize a single promoted layer into its bitmap cache.
   void rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport,
                       const Transform2d& surfaceFromCanvas);
+  /// Replace only a child-transform damage rectangle in a retained masked owner, preserving the
+  /// previous complete texture until both the patch and composite succeed.
+  bool rasterizeLayerDamage(CompositorLayer& layer, const RenderViewport& viewport,
+                            const Transform2d& surfaceFromCanvas, const Box2d& damageBoundsCanvas);
 
   /// Take the pooled offscreen renderer, or construct a fresh one when the
   /// pool is empty. Tile rasterization used to construct and destroy one
@@ -1211,12 +1225,23 @@ private:
     std::optional<size_t> staticSegmentIndexBeforePrepare;
     /// Promoted layers containing @ref entity before render-tree preparation.
     std::vector<Entity> containingLayerEntitiesBeforePrepare;
+    /// Conservative old+new device-space coverage of a pure translated shape inside one retained
+    /// owner layer. Used only for a bounded damage patch; absent means full owner rasterization.
+    std::optional<Box2d> damageBoundsCanvas;
   };
+  bool tryPatchDirtyLayer(CompositorLayer& layer, const RenderViewport& viewport,
+                          const Transform2d& surfaceFromCanvas,
+                          const std::vector<DirtyEntityInvalidation>& dirtyInvalidations);
 
   /// Snapshot cache locations for dirty entities before preparation can remove
   /// `display:none` entities from the render instance view.
   std::vector<DirtyEntityInvalidation> captureDirtyEntityInvalidations(
       const std::vector<Entity>& dirtyEntities) const;
+  std::optional<Box2d> damageBoundsForDirtyEntity(Registry& registry, Entity entity,
+                                                  std::span<const Entity> containingLayers,
+                                                  std::size_t dirtyEntityCount) const;
+  bool canPatchDirtyEntity(Registry& registry, Entity entity, Entity owner) const;
+  std::optional<Box2d> translatedDamageBounds(Registry& registry, Entity entity) const;
 
   /// Check dirty flags on promoted entities and mark affected layers.
   /// Translate pre-captured dirty entity cache locations (snapshotted before
@@ -1237,6 +1262,42 @@ private:
   /// through; `promoteEntity` / `demoteEntity` / `renderFrame` / `resetAllLayers`
   /// all defer to it after running the resolver.
   void reconcileLayers(Registry& registry);
+
+  /// Apply the runtime hint gates and the transient exclusive-parent boundary to one resolver
+  /// pass. The latter withholds overlapping descendant assignments while their hints stay live.
+  void resolveLayerAssignments(Registry& registry, ResolveOptions options = {});
+  PromoteResult refusePromotion(Entity entity, PromoteRefusalReason reason);
+  void clearTransientInteractionOwner(Entity entity);
+  void prepareColdFilterOnlyPromotion(Registry& registry);
+  std::optional<PromoteResult> classifyPromotionContext(Registry& registry, Entity entity,
+                                                        bool* suspendBucketAncestors);
+  bool refreshExistingInteraction(Entity entity, InteractionHint interactionKind);
+  std::optional<PromoteResult> validateExclusiveParent(Registry& registry, Entity entity,
+                                                       bool* needsExclusiveLayer);
+  std::optional<PromoteResult> validateFullInteractionBounds(Registry& registry, Entity entity);
+  std::optional<PromoteRefusalReason> interactionRefusalForViewport(
+      Registry& registry, Entity entity, const RenderViewport& viewport,
+      const Transform2d& surfaceFromCanvas, bool* filterCrossesCanvas = nullptr);
+  bool canKeepAffineFilterDragPreview(Entity entity, bool filterCrossesCanvas,
+                                      const RenderViewport& viewport,
+                                      const Transform2d& surfaceFromCanvas) const;
+  std::optional<PromoteRefusalReason> interactionRefusalForFrame(
+      Registry& registry, Entity entity, const RenderViewport& viewport,
+      const Transform2d& surfaceFromCanvas, bool allowAffineDragPreview);
+  bool hasDirtyFilteredInteraction(Registry& registry,
+                                   const std::vector<Entity>& transformDirtyEntities) const;
+  void dropOversizedInteractionHintsForViewport(Registry& registry, const RenderViewport& viewport,
+                                                const Transform2d& surfaceFromCanvas,
+                                                bool firstViewport, bool surfaceChanged,
+                                                bool viewportSizeChanged,
+                                                const std::vector<Entity>& transformDirtyEntities,
+                                                bool allowAffineDragPreview = true);
+  bool assignInteractionLayer(Registry& registry, Entity entity, InteractionHint interactionKind,
+                              bool needsExclusiveLayer, bool suspendBucketAncestors);
+  bool remapAncillaryInteractionEntities(const std::unordered_map<Entity, Entity>& remap);
+  void invalidateMovedMandatoryLayersAfterRemap();
+  /// Roll back a failed exclusive promotion before a partial tile set can be published.
+  void recoverFailedExclusivePromotion();
 
   /// Age `pendingDemotions_` by one frame and
   /// flush any entries that hit zero. Called once per `renderFrame`
@@ -1301,6 +1362,15 @@ private:
   MandatoryHintDetector mandatoryDetector_;
   ComplexityBucketer complexityBucketer_;
   std::unordered_map<Entity, ScopedCompositorHint> activeHints_;
+  /// A selected parent rendered as one layer in place of its nested mandatory child layers.
+  /// The child hints are preserved and their assignments resume immediately on target switch.
+  Entity exclusiveInteractionRoot_ = entt::null;
+  /// Selected descendant whose optional complexity-bucket ancestors are temporarily dissolved.
+  Entity selectedBucketDescendant_ = entt::null;
+  Entity failedExclusiveInteractionRoot_ = entt::null;
+  Vector2i failedExclusiveCanvasSize_ = Vector2i::Zero();
+  Transform2d failedExclusiveSurfaceFromCanvas_;
+  PromoteRefusalReason failedInteractionRefusalReason_ = PromoteRefusalReason::MemoryLimit;
   std::vector<CompositorLayer> layers_;
 
   /// Layer-set hysteresis. Entity → frames

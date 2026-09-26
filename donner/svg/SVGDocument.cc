@@ -633,6 +633,16 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
 
   if (!foundTextChild) {
     combined = node.value().value_or(RcString(""));
+    // SVG style projection stores its text on the element after the original XML Data children
+    // have been consumed. A source edit therefore reparses the element value directly. Retain
+    // that value's source span so style focus and reference ropes can still find its rules.
+    if (const std::optional<SourceRange> valueLocation = node.getValueLocation();
+        valueLocation.has_value() && valueLocation->start.offset.has_value() &&
+        valueLocation->end.offset.has_value() &&
+        *valueLocation->end.offset >= *valueLocation->start.offset &&
+        *valueLocation->end.offset - *valueLocation->start.offset == combined.size()) {
+      sourceMap.addSegment(0, combined.size(), valueLocation->start);
+    }
   }
 
   components::StylesheetComponent projected;

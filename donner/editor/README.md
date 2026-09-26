@@ -52,6 +52,15 @@ bazel run //donner/editor -- donner_splash.svg
 
 The editor target applies a Geode transition internally, so no `--config=geode`
 flag is needed for the desktop editor.
+On macOS, the build also produces `bazel-bin/donner/editor/Donner.app`, and
+`bazel run //donner/editor` launches its embedded executable. The
+`//donner/editor:editor_binary` target retains the transitioned raw binary
+launcher for command-line use and tests. On Linux, `//donner/editor` remains
+that raw launcher.
+
+The app icon is `art/Donner.icns`, generated from the repository's
+`donner_icon.svg` with `//donner/svg/tool` at 1024 pixels, then resized into
+the standard macOS iconset sizes and packed with `iconutil`.
 
 ### Desktop - TinySkia backend
 

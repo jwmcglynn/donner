@@ -170,12 +170,17 @@ private:
  * @param selectionOnlyPrewarmMayTriggerRender Backend policy for idle selection cache misses.
  * @param hasIndependentRenderReason True when drag, document invalidation, forced rasterization, or
  *   retry already requires a worker request.
+ * @param hasCompleteVisibleCachedCoverage True when the currently presented tiles already cover
+ *   the visible raster at its requested pixel scale. Enlarging the raster in this state would
+ *   invalidate every cached static segment before the first pointer move.
+ * @param visibleOutputSizePx Size of the visible raster.
+ * @param prewarmOutputSizePx Size of the proposed enlarged selection raster.
  */
-[[nodiscard]] bool ShouldUseSelectedPrewarmRasterViewport(Entity selectedEntity,
-                                                          bool requestOverviewInfill,
-                                                          bool rasterViewportBounded,
-                                                          bool selectionOnlyPrewarmMayTriggerRender,
-                                                          bool hasIndependentRenderReason);
+[[nodiscard]] bool ShouldUseSelectedPrewarmRasterViewport(
+    Entity selectedEntity, bool requestOverviewInfill, bool rasterViewportBounded,
+    bool selectionOnlyPrewarmMayTriggerRender, bool hasIndependentRenderReason,
+    bool hasCompleteVisibleCachedCoverage, Vector2i visibleOutputSizePx,
+    Vector2i prewarmOutputSizePx);
 
 /**
  * Return true when a render result satisfies a pending selected-layer rasterization.
@@ -187,6 +192,12 @@ private:
  */
 [[nodiscard]] bool ShouldClearPendingSelectedLayerRasterization(
     const std::optional<RenderRequest::DragPreview>& representedDragPreview, Entity pendingEntity,
+    std::uint64_t resultVersion, std::uint64_t pendingVersion);
+
+/// A complete forced render clears stale selected pixels whether they landed in a movable layer
+/// or in the selection's owning compositor tiles.
+[[nodiscard]] bool CompositedPreviewClearsPendingSelectedLayerRasterization(
+    const RenderResult::CompositedPreview& preview, Entity pendingEntity,
     std::uint64_t resultVersion, std::uint64_t pendingVersion);
 
 /**
@@ -484,9 +495,23 @@ public:
 private:
   friend class EditorShellTestAccess;
   friend struct RenderCoordinatorTestAccess;
+  [[nodiscard]] bool clipGuideCacheMatches(Entity selectedEntity, std::uint64_t documentGeneration,
+                                           std::uint64_t nonTransformRevision) const;
+  void updateClipGuidesForOverlay(
+      const EditorApp& app, std::span<const svg::SVGElement> selection,
+      const std::optional<SelectTool::ActiveDragPreview>& activePreview,
+      const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
+      const Transform2d& representedDocumentFromLiveDocument, SelectionChromeSnapshot* snapshot);
   void noteMissingPixelCaptureResult(const std::optional<RenderResult>& result);
   void rejectPixelCaptureResult(const std::optional<RenderResult>& result);
   void noteResultWithNothingToPresent(const std::optional<RenderResult>& result);
+  void noteSelectedPrewarmResultPresented(const RenderResult& result);
+  bool selectedPrewarmFallbackApplies(std::uint64_t documentGeneration, Entity selectedEntity,
+                                      const EditorRasterViewport& visibleRaster);
+  [[nodiscard]] bool shouldRequestSelectionOnlyPrewarm(
+      std::uint64_t documentGeneration, Entity selectedEntity, std::uint64_t version,
+      const EditorRasterViewport& visibleRaster) const;
+  void noteSelectedPromotionAvailability(const RenderResult& result);
   [[nodiscard]] std::chrono::steady_clock::time_point nothingToPresentRetryNow() const;
   void acceptPixelCaptureResult(RenderResult& result, const EditorApp& app,
                                 const ViewportState& viewport);
@@ -509,6 +534,9 @@ private:
   void updatePixelCaptureCanvasCommitWake(bool wouldChange, bool firstCommit,
                                           bool deferForActiveDrag);
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
+  [[nodiscard]] bool activeDragNeedsRenderedPresentation(
+      EditorApp& app, const std::optional<SelectTool::ActiveDragPreview>& dragPreview,
+      const GlTextureCache* textures, Entity suppressedLayerEntity) const;
   [[nodiscard]] std::vector<Entity> selectedCompositedExtraEntities(EditorApp& app,
                                                                     Entity primaryEntity) const;
   /**
@@ -543,6 +571,14 @@ private:
   CompositedPresentation compositedPresentation_;
   SelectionBoundsCache selectionBoundsCache_;
   std::optional<SelectionChromeSnapshot> immediateOverlaySnapshot_;
+  struct ClipGuideCache {
+    SelectionChromeSnapshot baseline;
+    Entity selectedEntity = entt::null;
+    std::uint64_t documentGeneration = 0;
+    std::uint64_t nonTransformRevision = 0;
+    std::uint64_t dragGeneration = 0;
+  };
+  std::optional<ClipGuideCache> clipGuideCache_;
 
   std::uint64_t displayedDocVersion_ = 0;
   std::uint64_t overlayVersionGateSuppressionTotal_ = 0;
@@ -629,6 +665,24 @@ private:
   std::uint64_t presentationEpoch_ = 0;
   /// The last request posted to the worker. A result with nothing to present belongs to it.
   std::optional<RenderAttemptIdentity> lastPostedAttempt_;
+  struct SelectedPrewarmFallback {
+    std::uint64_t documentGeneration = 0;
+    Entity selectedEntity = entt::null;
+    EditorRasterViewport visibleRaster;
+  };
+  /// An expanded selected prewarm that exhausted the tile budget; use the visible raster for
+  /// this selection until its document or viewport identity changes.
+  std::optional<SelectedPrewarmFallback> selectedPrewarmFallback_;
+  bool selectedPrewarmRecoveryPending_ = false;
+  struct UnavailableSelectedPromotion {
+    std::uint64_t documentGeneration = 0;
+    std::uint64_t version = 0;
+    Entity selectedEntity = entt::null;
+    EditorRasterViewport visibleRaster;
+  };
+  /// A complete owning-tile result for a selection whose interaction tile was refused. Avoid
+  /// posting the identical selection-only prewarm every idle frame; retry on any identity change.
+  std::optional<UnavailableSelectedPromotion> unavailableSelectedPromotion_;
   /// Paces re-posting a request whose result had nothing to present.
   NothingToPresentRetry nothingToPresentRetry_;
   /// Cumulative count of worker results that had nothing to present.

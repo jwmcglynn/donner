@@ -456,6 +456,8 @@ struct SampleThumbnailRenderResult {
   SampleThumbnailRenderOutcome outcome =
       SampleThumbnailRenderOutcome::RenderError;  //!< Terminal outcome of this preview attempt.
   svg::RendererBitmap bitmap;  //!< Captured bitmap; it may be empty even when outcome is Rendered.
+  /// Self-contained SVG with font-preview text replaced by glyph paths.
+  std::string outlinedSvg;
 };
 
 /// Observable state and monotonic counters for the bounded sample-thumbnail lane.

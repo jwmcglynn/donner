@@ -11,20 +11,20 @@ namespace {
 
 // Widget sub-layout constants, relative to the widget's top-left. Fill stays
 // upper-left and Stroke lower-right; draw order alone changes the foreground.
-// The right column holds the angled swap arrow above one active-role None
-// button, then optional custom-paint label chips.
-constexpr float kSwatchSize = 28.0f;
+// The swap arrow sits between the upper-right corners of the two swatches;
+// None is farther right so the arrow does not appear to point toward it.
+constexpr float kSwatchSize = 26.0f;
 constexpr float kFillLeft = 3.0f;
 constexpr float kFillTop = 2.0f;
-constexpr float kStrokeLeft = 14.0f;
-constexpr float kStrokeTop = 13.0f;
+constexpr float kStrokeLeft = 17.0f;
+constexpr float kStrokeTop = 17.0f;
 
-constexpr float kSwapLeft = 44.0f;
-constexpr float kSwapTop = 2.0f;
-constexpr float kSwapWidth = 19.0f;
-constexpr float kSwapHeight = 18.0f;
+constexpr float kSwapLeft = 30.0f;
+constexpr float kSwapTop = 0.0f;
+constexpr float kSwapWidth = 17.0f;
+constexpr float kSwapHeight = 16.0f;
 
-constexpr float kNoneLeft = 46.0f;
+constexpr float kNoneLeft = 52.0f;
 constexpr float kNoneTop = 24.0f;
 constexpr float kNoneSize = 19.0f;
 
@@ -175,9 +175,11 @@ void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2&
     // when they carry the same color.
     constexpr float kRing = 4.0f;
     drawList->AddRectFilled(min, max, color, kRounding);
-    drawList->AddRectFilled(ImVec2(min.x + kRing, min.y + kRing),
-                            ImVec2(max.x - kRing, max.y - kRing), IM_COL32(32, 34, 38, 255),
-                            kRounding * 0.5f);
+    const ImVec2 holeMin(min.x + kRing, min.y + kRing);
+    const ImVec2 holeMax(max.x - kRing, max.y - kRing);
+    drawList->AddRectFilled(holeMin, holeMax, IM_COL32(32, 34, 38, 255), kRounding * 0.5f);
+    drawList->AddRect(holeMin, holeMax, EditorTheme::Active().textPrimary, kRounding * 0.5f, 0,
+                      1.0f);
   }
 
   if (state.isCustom) {
@@ -195,7 +197,9 @@ void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2&
   const EditorTheme& theme = EditorTheme::Active();
   drawList->AddRect(min, max, IM_COL32(255, 255, 255, 210), kRounding, 0, 1.0f);
   drawList->AddRect(min, max,
-                    active || state.isCustom ? theme.accentDefault : IM_COL32(0, 0, 0, 210),
+                    active || state.isCustom
+                        ? theme.accentDefault
+                        : (fillRole ? IM_COL32(0, 0, 0, 210) : theme.textPrimary),
                     kRounding, 0, 1.6f);
 
   if (state.isNone) {
@@ -206,15 +210,15 @@ void DrawFillStrokeSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2&
 
 void DrawSwapAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, bool enabled) {
   const ImU32 tint = enabled ? IM_COL32(215, 222, 232, 255) : IM_COL32(120, 126, 134, 255);
-  const ImVec2 leftTip(min.x + 2.0f, min.y + 5.0f);
-  const ImVec2 bend(max.x - 6.0f, leftTip.y);
-  const ImVec2 downTip(bend.x, max.y - 2.0f);
-  drawList->AddLine(leftTip, bend, tint, 1.6f);
-  drawList->AddLine(bend, downTip, tint, 1.6f);
-  drawList->AddLine(leftTip, ImVec2(leftTip.x + 3.0f, leftTip.y - 3.0f), tint, 1.6f);
-  drawList->AddLine(leftTip, ImVec2(leftTip.x + 3.0f, leftTip.y + 3.0f), tint, 1.6f);
-  drawList->AddLine(downTip, ImVec2(downTip.x - 3.0f, downTip.y - 3.0f), tint, 1.6f);
-  drawList->AddLine(downTip, ImVec2(downTip.x + 3.0f, downTip.y - 3.0f), tint, 1.6f);
+  const ImVec2 fillTip(min.x + 2.0f, min.y + 5.0f);
+  const ImVec2 corner(max.x - 3.0f, fillTip.y);
+  const ImVec2 strokeTip(corner.x, max.y - 2.0f);
+  drawList->AddLine(fillTip, corner, tint, 1.6f);
+  drawList->AddLine(corner, strokeTip, tint, 1.6f);
+  drawList->AddLine(fillTip, ImVec2(fillTip.x + 3.0f, fillTip.y - 3.0f), tint, 1.6f);
+  drawList->AddLine(fillTip, ImVec2(fillTip.x + 3.0f, fillTip.y + 3.0f), tint, 1.6f);
+  drawList->AddLine(strokeTip, ImVec2(strokeTip.x - 3.0f, strokeTip.y - 3.0f), tint, 1.6f);
+  drawList->AddLine(strokeTip, ImVec2(strokeTip.x + 3.0f, strokeTip.y - 3.0f), tint, 1.6f);
 }
 
 void DrawNoneAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,

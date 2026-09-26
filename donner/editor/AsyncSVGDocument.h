@@ -35,6 +35,10 @@ class AsyncSVGDocument {
 public:
   struct FlushResult {
     bool appliedCommands = false;
+    /// True only when every applied command changed an element transform. An overlay guide captured
+    /// before a drag may be safely projected through these version advances without rereading clip
+    /// resources; any other edit invalidates that immutable guide cache.
+    bool onlyTransformCommands = false;
     bool replacedDocument = false;
     bool preserveUndoOnReparse = false;
     /// True when at least one flushed command removed an element from the live document.
@@ -128,6 +132,10 @@ public:
   /// Metadata from the most recent `flushFrame()` call.
   [[nodiscard]] const FlushResult& lastFlushResult() const { return lastFlushResult_; }
 
+  /// Advances on every change that can alter a clip guide without changing the selected
+  /// element's transform. Unlike lastFlushResult(), survives no-op frame flushes.
+  [[nodiscard]] std::uint64_t nonTransformRevision() const { return nonTransformRevision_; }
+
   /// Generation counter bumped only when `setDocument` replaces the inner
   /// SVGDocument (e.g. `ReplaceDocumentCommand` on source-pane edits). The
   /// inner document's storage address is stable across a replacement (the
@@ -197,6 +205,7 @@ private:
   CommandQueue queue_;
   std::atomic<std::uint64_t> frameVersion_{0};
   std::atomic<std::uint64_t> documentGeneration_{0};
+  std::uint64_t nonTransformRevision_ = 0;
 
   /// Remap from the previous document's entity ids to the current
   /// document's entity ids, populated by `setDocumentMaybeStructural`

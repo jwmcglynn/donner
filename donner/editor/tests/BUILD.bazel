@@ -52,6 +52,7 @@ donner_cc_library(
     # blessed pixelmatch comparator for their frozen-baseline comparisons.
     visibility = [
         "//donner/gpu:__subpackages__",
+        "//donner/svg/compositor:__pkg__",
         "//donner/svg/renderer/geode:__pkg__",
         "//donner/svg/renderer/tests:__pkg__",
         "//tools/mcp-servers/editor-control:__pkg__",
@@ -214,6 +215,15 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/resources:font_catalog",
         "//donner/svg/resources:font_manager",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "font_preview_cache_tests",
+    srcs = ["FontPreviewCache_tests.cc"],
+    deps = [
+        "//donner/editor:font_preview_cache",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -683,6 +693,7 @@ donner_cc_test(
     srcs = ["AsyncRenderer_tests.cc"],
     data = [
         "//:donner_splash.svg",
+        "//:geode_splash.svg",
     ],
     opens_gpu_device = True,
     # 75 independent gtest cases (wall-clock-sensitive cases live in the
@@ -695,7 +706,10 @@ donner_cc_test(
 donner_cc_test(
     name = "render_coordinator_tests",
     srcs = ["RenderCoordinator_tests.cc"],
+    data = ["//:geode_splash.svg"],
     deps = [
+        ":bitmap_golden_compare",
+        "//donner/base:base_test_utils",
         ":render_coordinator_test_access",
         "//donner/editor:async_renderer",
         "//donner/editor:composited_presentation",
@@ -706,6 +720,8 @@ donner_cc_test(
         "//donner/editor:selection_aabb",
         "//donner/editor:viewport_state",
         "//donner/svg",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_image_io",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -1006,11 +1022,15 @@ donner_cc_test(
 donner_cc_test(
     name = "overlay_renderer_tests",
     srcs = ["OverlayRenderer_tests.cc"],
+    data = ["//:geode_splash.svg"],
     deps = [
+        ":bitmap_golden_compare",
+        "//donner/base:base_test_utils",
         "//donner/editor:editor_app",
         "//donner/editor:overlay_renderer",
         "//donner/svg",
         "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "@com_google_gtest//:gtest_main",
     ],
@@ -1136,6 +1156,7 @@ donner_cc_binary(
         "drag_start_hang_repro.rnr",
         "filter_post_drag_jump.rnr",
         "geode_drag_zoom_o_pop.rnr",
+        "geode_splash_click.rnr",
         "pen-fill.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         ":zoom_out_drag_jump_rnr",
@@ -1176,8 +1197,10 @@ donner_cc_test(
     data = [
         "filter_post_drag_jump.rnr",
         "geode_drag_zoom_o_pop.rnr",
+        "geode_splash_click.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         "//:donner_splash.svg",
+        "//:geode_splash.svg",
     ],
     defines = select({
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_GL_RNR_GEODE_BACKEND"],

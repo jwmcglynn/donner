@@ -464,7 +464,7 @@ TEST(ViewportStateTest, RasterViewportBoundsTallDocumentTargets) {
                                           120 + 2 * ViewportState::kHighZoomRasterMarginScreenPx));
 }
 
-TEST(ViewportStateTest, RasterViewportKeepsFullDocumentWhenBoundingWouldAllocateMorePixels) {
+TEST(ViewportStateTest, RasterViewportClampsCoveredAxisBeforeComparingArea) {
   ViewportState viewport;
   viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 892.0, 512.0);
   viewport.zoom = 1.0;
@@ -474,9 +474,18 @@ TEST(ViewportStateTest, RasterViewportKeepsFullDocumentWhenBoundingWouldAllocate
 
   const EditorRasterViewport raster = viewport.rasterViewport();
 
-  EXPECT_FALSE(raster.viewportBounded);
-  EXPECT_EQ(raster.outputSizePx, Vector2i(1784, 1024));
-  EXPECT_EQ(raster.documentRect, viewport.documentViewBox);
+  // The tall pane's proposed Y extent exceeds the document. Clamping Y to the full canvas
+  // makes the remaining X crop smaller than a full-document render.
+  EXPECT_TRUE(raster.viewportBounded);
+  EXPECT_EQ(raster.semanticCanvasSizePx, Vector2i(1784, 1024));
+  EXPECT_EQ(raster.outputSizePx, Vector2i(1718, 1024));
+  EXPECT_EQ(raster.documentRect.topLeft.y, viewport.documentViewBox.topLeft.y);
+  EXPECT_EQ(raster.documentRect.bottomRight.y, viewport.documentViewBox.bottomRight.y);
+  EXPECT_EQ(raster.documentRect.size().x, 859.0);
+  const Vector2d rasterOrigin =
+      raster.outputFromDocument.transformPosition(raster.documentRect.topLeft);
+  EXPECT_NEAR(rasterOrigin.x, 0.0, 1e-9);
+  EXPECT_NEAR(rasterOrigin.y, 0.0, 1e-9);
 }
 
 TEST(ViewportStateTest, SelectedPrewarmExpandsViewportBoundedRaster) {

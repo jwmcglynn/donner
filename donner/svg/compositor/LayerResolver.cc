@@ -6,6 +6,7 @@
 #include <limits>
 #include <vector>
 
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/compositor/CompositorHintComponent.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 
@@ -19,26 +20,45 @@ struct Candidate {
   bool mandatory;
 };
 
+bool IsProperDescendant(Registry& registry, Entity entity, Entity ancestor) {
+  if (entity == ancestor || ancestor == entt::null) {
+    return false;
+  }
+  const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+  while (tree != nullptr) {
+    const Entity parent = tree->parent();
+    if (parent == ancestor) {
+      return true;
+    }
+    if (parent == entt::null || !registry.valid(parent)) {
+      break;
+    }
+    tree = registry.try_get<donner::components::TreeComponent>(parent);
+  }
+  return false;
+}
+
+void RemoveAssignmentsWithoutHints(Registry& registry) {
+  // Collect before removing: changing the component storage invalidates an active view.
+  std::vector<Entity> stale;
+  auto assignmentView = registry.view<ComputedLayerAssignmentComponent>();
+  for (Entity entity : assignmentView) {
+    const auto* hints = registry.try_get<CompositorHintComponent>(entity);
+    if (hints == nullptr || hints->empty()) {
+      stale.push_back(entity);
+    }
+  }
+  for (Entity entity : stale) {
+    registry.remove<ComputedLayerAssignmentComponent>(entity);
+  }
+}
+
 }  // namespace
 
 void LayerResolver::resolve(Registry& registry, uint32_t maxLayers, const ResolveOptions& options) {
   stats_ = {};
 
-  // Clean up stale ComputedLayerAssignmentComponents on entities that no longer have any hints.
-  // Collect first (we can't modify storage while iterating a view), then remove.
-  {
-    std::vector<Entity> stale;
-    auto assignmentView = registry.view<ComputedLayerAssignmentComponent>();
-    for (auto entity : assignmentView) {
-      const auto* hints = registry.try_get<CompositorHintComponent>(entity);
-      if (hints == nullptr || hints->empty()) {
-        stale.push_back(entity);
-      }
-    }
-    for (Entity entity : stale) {
-      registry.remove<ComputedLayerAssignmentComponent>(entity);
-    }
-  }
+  RemoveAssignmentsWithoutHints(registry);
 
   // Collect candidates. An entity qualifies when it has at least one hint entry.
   std::vector<Candidate> mandatoryCandidates;
@@ -51,6 +71,24 @@ void LayerResolver::resolve(Registry& registry, uint32_t maxLayers, const Resolv
       continue;
     }
     ++stats_.candidatesEvaluated;
+
+    if (IsProperDescendant(registry, entity, options.exclusiveInteractionRoot)) {
+      // The exclusive parent's range draws this subtree with its original mask, clip and opacity
+      // context. A second layer assignment here would paint the descendant twice. Keep its hint
+      // untouched so ending the interaction restores mandatory/bucket promotion on the next pass.
+      registry.remove<ComputedLayerAssignmentComponent>(entity);
+      continue;
+    }
+    if (IsProperDescendant(registry, options.selectedInteractionDescendant, entity) &&
+        std::ranges::all_of(hint.entries, [](const HintEntry& entry) {
+          return entry.source == HintSource::ComplexityBucket;
+        })) {
+      // A complexity bucket is a performance hint, not an SVG compositing context. Temporarily
+      // dissolve it around a selected child so that child can own a complete interaction tile.
+      // Keep the hint itself so the bucket returns as soon as selection changes.
+      registry.remove<ComputedLayerAssignmentComponent>(entity);
+      continue;
+    }
 
     // Compute the effective total weight, honoring per-source gates. A hint
     // from a disabled source contributes 0; an entity whose only hints are

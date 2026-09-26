@@ -166,6 +166,11 @@ def _transitioned_fixed_args(ctx):
     result += [file.short_path for file in getattr(ctx.files, "file_args", [])]
     return " ".join([_shell_quote(arg) for arg in result])
 
+DonnerTransitionedBinaryInfo = provider(
+    doc = "The linked binary behind a product-configured executable wrapper.",
+    fields = {"binary": "The linked executable File, with the requested build transition."},
+)
+
 def _donner_transitioned_executable_impl(ctx):
     dep_target = ctx.attr.dep
     if type(dep_target) == "list":
@@ -267,6 +272,7 @@ exec "$impl" {fixed_args} "$@"
             files = depset([executable], transitive = [dep_default_info.files]),
             runfiles = forwarded_runfiles,
         ),
+        DonnerTransitionedBinaryInfo(binary = files_to_run.executable),
     ]
 
     # Forward InstrumentedFilesInfo so that `bazel coverage` collects coverage

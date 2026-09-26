@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <limits>
 #include <optional>
 #include <span>
@@ -11,9 +12,11 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/css/CSS.h"
 #include "donner/editor/DisclosureChevron.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/EditorTheme.h"
@@ -75,6 +78,210 @@ bool IsAncestorOrSelf(const donner::svg::SVGElement& ancestor,
 bool IsSelectedInTree(std::span<const donner::svg::SVGElement> selection,
                       const donner::svg::SVGElement& element) {
   return std::find(selection.begin(), selection.end(), element) != selection.end();
+}
+
+bool CollectMarkerIds(const svg::SVGElement& root, std::vector<std::string>& ids) {
+  constexpr std::size_t kMaximumVisitedNodes = 4096;
+  constexpr std::size_t kMaximumMarkerIds = 100;
+  std::deque<svg::SVGElement> pending{root};
+  std::size_t visited = 0;
+  bool truncated = false;
+  while (!pending.empty() && visited < kMaximumVisitedNodes && ids.size() < kMaximumMarkerIds) {
+    const svg::SVGElement element = pending.front();
+    pending.pop_front();
+    ++visited;
+    const RcString tag = element.tagName().name;
+    if (std::string_view(tag) == "marker") {
+      const RcString id = element.id();
+      const std::string_view name = id;
+      if (!name.empty() && name.size() <= 100 && std::all_of(name.begin(), name.end(), [](char c) {
+            return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                   c == '_' || c == '-' || c == '.' || c == ':';
+          })) {
+        ids.emplace_back(name);
+      }
+    }
+    for (auto child = element.firstChild(); child.has_value(); child = child->nextSibling()) {
+      if (pending.size() + visited >= kMaximumVisitedNodes) {
+        truncated = true;
+        break;
+      }
+      pending.push_back(*child);
+    }
+  }
+  return truncated || !pending.empty();
+}
+
+bool IsValidStrokeDasharray(std::string_view value) {
+  if (value == "none") {
+    return true;
+  }
+  const std::string declaration = "stroke-dasharray: " + std::string(value);
+  const std::vector<css::Declaration> parsed = css::CSS::ParseStyleAttribute(declaration);
+  if (parsed.size() != 1 || parsed.front().name != "stroke-dasharray") {
+    return false;
+  }
+  svg::PropertyRegistry properties;
+  if (properties.parseProperty(parsed.front(), css::Specificity::StyleAttribute()).has_value()) {
+    return false;
+  }
+  const auto pattern = properties.strokeDasharray.get();
+  if (!pattern.has_value()) {
+    return value == "none";
+  }
+  return !pattern->empty() &&
+         std::all_of(pattern->begin(), pattern->end(), [](const Lengthd& part) {
+           return std::isfinite(part.value) && part.value >= 0.0;
+         });
+}
+
+enum class StrokeChoiceKind { Cap, Join };
+
+bool RenderStrokeChoice(const char* id, const char* tooltip, StrokeChoiceKind kind, int index,
+                        bool selected, const EditorTheme& theme, std::optional<Box2d>* rect) {
+  const ImVec2 size(32.0f, 28.0f);
+  const bool pressed = ImGui::InvisibleButton(id, size);
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  *rect = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  const ImU32 background = selected                 ? theme.surfaceActive
+                           : ImGui::IsItemHovered() ? theme.surfaceHover
+                                                    : theme.surfaceRaised;
+  draw->AddRectFilled(min, max, background, theme.radiusControl);
+  draw->AddRect(min, max, selected ? theme.accentDefault : theme.borderSubtle, theme.radiusControl);
+  const ImU32 ink = selected ? theme.accentDefault : theme.textPrimary;
+  const float centerY = (min.y + max.y) * 0.5f;
+  if (kind == StrokeChoiceKind::Cap) {
+    const float endX = min.x + 22.0f;
+    draw->AddLine(ImVec2(min.x + 9.0f, centerY), ImVec2(endX, centerY), ink, 4.0f);
+    if (index == 0) {
+      draw->AddLine(ImVec2(endX, centerY - 5.0f), ImVec2(endX, centerY + 5.0f), ink, 1.0f);
+    } else if (index == 1) {
+      draw->AddCircleFilled(ImVec2(endX, centerY), 3.0f, ink);
+    } else {
+      draw->AddRectFilled(ImVec2(endX - 1.0f, centerY - 3.0f), ImVec2(endX + 4.0f, centerY + 3.0f),
+                          ink);
+    }
+  } else {
+    const ImVec2 apex(min.x + 16.0f, min.y + 6.0f);
+    if (index == 3) {
+      draw->AddLine(ImVec2(min.x + 9.0f, min.y + 21.0f), ImVec2(min.x + 13.0f, min.y + 12.0f), ink,
+                    3.0f);
+      draw->AddLine(ImVec2(min.x + 13.0f, min.y + 12.0f), ImVec2(min.x + 19.0f, min.y + 12.0f), ink,
+                    3.0f);
+      draw->AddLine(ImVec2(min.x + 19.0f, min.y + 12.0f), ImVec2(min.x + 23.0f, min.y + 21.0f), ink,
+                    3.0f);
+    } else {
+      draw->AddLine(ImVec2(min.x + 9.0f, min.y + 21.0f), apex, ink, 3.0f);
+      draw->AddLine(apex, ImVec2(min.x + 23.0f, min.y + 21.0f), ink, 3.0f);
+      if (index == 2) {
+        draw->AddCircleFilled(apex, 4.0f, ink);
+      }
+    }
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", tooltip);
+  }
+  return pressed;
+}
+
+bool RenderStrokeStep(const char* id, bool up, const EditorTheme& theme,
+                      std::optional<Box2d>* rect) {
+  const bool pressed = ImGui::InvisibleButton(id, ImVec2(26.0f, 19.0f));
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  *rect = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  draw->AddRectFilled(min, max, ImGui::IsItemHovered() ? theme.surfaceHover : theme.surfaceRaised,
+                      theme.radiusControl);
+  const float centerX = (min.x + max.x) * 0.5f;
+  const float centerY = (min.y + max.y) * 0.5f;
+  const float direction = up ? -1.0f : 1.0f;
+  draw->AddTriangleFilled(ImVec2(centerX, centerY + direction * 4.0f),
+                          ImVec2(centerX - 5.0f, centerY - direction * 2.0f),
+                          ImVec2(centerX + 5.0f, centerY - direction * 2.0f), theme.textPrimary);
+  return pressed;
+}
+
+std::vector<float> PreviewDashLengths(std::string_view pattern) {
+  std::string normalized(pattern);
+  std::replace(normalized.begin(), normalized.end(), ',', ' ');
+  std::istringstream input(normalized);
+  std::vector<float> values;
+  float value = 0.0f;
+  while (values.size() < 12u && input >> value) {
+    if (!std::isfinite(value) || value < 0.0f) {
+      return {};
+    }
+    values.push_back(value);
+  }
+  return input.eof() && !values.empty() ? values : std::vector<float>{};
+}
+
+void DrawDashPreview(ImDrawList* draw, const ImVec2& min, const ImVec2& max,
+                     std::span<const float> lengths, ImU32 ink) {
+  constexpr std::array<float, 2> kFallback = {6.0f, 4.0f};
+  if (lengths.empty()) {
+    lengths = kFallback;
+  }
+  float period = 0.0f;
+  for (float length : lengths) {
+    period += length;
+  }
+  const float scale = std::clamp(70.0f / std::max(period, 1.0f), 0.6f, 3.0f);
+  const float right = max.x - 7.0f;
+  const float centerY = (min.y + max.y) * 0.5f;
+  float x = min.x + 7.0f;
+  for (std::size_t index = 0; x < right && index < 100u; ++index) {
+    const float length = std::max(2.0f, lengths[index % lengths.size()] * scale);
+    if (index % 2u == 0u) {
+      draw->AddLine(ImVec2(x, centerY), ImVec2(std::min(x + length, right), centerY), ink, 3.0f);
+    }
+    x += length;
+  }
+}
+
+bool RenderDashPreset(const char* id, const char* tooltip, std::span<const float> lengths,
+                      bool selected, const EditorTheme& theme, std::optional<Box2d>* rect) {
+  const bool pressed = ImGui::InvisibleButton(id, ImVec2(46.0f, 28.0f));
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  *rect = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  draw->AddRectFilled(min, max, selected ? theme.surfaceActive : theme.surfaceRaised,
+                      theme.radiusControl);
+  draw->AddRect(min, max, selected ? theme.accentDefault : theme.borderSubtle, theme.radiusControl);
+  DrawDashPreview(draw, min, max, lengths, selected ? theme.accentDefault : theme.textPrimary);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("%s", tooltip);
+  }
+  return pressed;
+}
+
+std::string MarkerDisplayLabel(std::string_view reference) {
+  if (reference.starts_with("url(#") && reference.ends_with(')')) {
+    return std::string(reference.substr(5, reference.size() - 6));
+  }
+  return reference == "none" ? "None" : std::string(reference);
+}
+
+void StrokeRowLabel(const char* label, float rowStartX, const EditorTheme& theme) {
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "%s", label);
+  ImGui::SameLine();
+  ImGui::SetCursorPosX(rowStartX + 70.0f);
+}
+
+void RenderRareJoinNote(int join, const EditorTheme& theme) {
+  if (join != 1 && join != 4) {
+    return;
+  }
+  ImGui::SameLine(0.0f, theme.space1);
+  ImGui::TextDisabled("%s", join == 1 ? "Miter clip*" : "Arcs*");
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Authored join renders as miter; choose a visible style to change it");
+  }
 }
 
 std::string BuildTreeNodeLabel(const donner::svg::SVGElement& element) {
@@ -393,44 +600,13 @@ bool RenderPathOperationsPanel(EditorApp* liveApp,
   return queuedMutation;
 }
 
-/// Shared width for the inspector's editable numeric fields (stroke width,
-/// transform scalars, raw matrix cells) so every DragFloat lines up.
-constexpr float kInspectorFieldWidth = 96.0f;
-
-double FirstSelectedStrokeWidth(const EditorApp& app) {
+Lengthd FirstSelectedStrokeWidth(const EditorApp& app) {
   const std::vector<svg::SVGElement>& selection = app.selectedElements();
   if (selection.empty()) {
-    return 1.0;
+    return Lengthd(1.0);
   }
 
-  return selection.front().getComputedStyle().strokeWidth.get().value().value;
-}
-
-bool RenderStrokeControlsPanel(EditorApp* liveApp, bool snapshotEditable,
-                               float snapshotStrokeWidth) {
-  ImGui::Separator();
-  ImGui::TextUnformatted("Stroke");
-
-  const bool canMutate = liveApp != nullptr && liveApp->hasSelection();
-  const bool visuallyEditable = liveApp != nullptr ? canMutate : snapshotEditable;
-  float strokeWidth =
-      canMutate ? static_cast<float>(FirstSelectedStrokeWidth(*liveApp)) : snapshotStrokeWidth;
-
-  if (!visuallyEditable) {
-    ImGui::BeginDisabled();
-  }
-  ImGui::SetNextItemWidth(kInspectorFieldWidth);
-  const bool changed = ImGui::DragFloat("Width", &strokeWidth, 0.1f, 0.0f, 200.0f, "%.2f");
-  if (!visuallyEditable) {
-    ImGui::EndDisabled();
-  }
-
-  if (changed && liveApp != nullptr) {
-    liveApp->setActiveStrokeWidth(strokeWidth);
-    return liveApp->setStrokeWidthOnSelection(strokeWidth);
-  }
-
-  return false;
+  return selection.front().getComputedStyle().strokeWidth.get().value();
 }
 
 /// Below this document-space span (in user units), a bounds axis is treated
@@ -530,6 +706,56 @@ void SidebarPresenter::captureTreeNode(const donner::svg::SVGElement& element,
   }
 }
 
+void SidebarPresenter::refreshMarkerCache(const EditorApp& app) {
+  const svg::SVGElement rootElement = app.document().document().svgElement();
+  const std::uint64_t sourceVersion = app.document().document().sourceVersion();
+  const std::string_view sourceText = app.document().document().source();
+  const bool sourceChanged = sourceVersion == 0 ? markerCacheSourceText_ != sourceText
+                                                : markerCacheSourceVersion_ != sourceVersion;
+  if (!markerCacheRoot_.has_value() || *markerCacheRoot_ != rootElement || sourceChanged ||
+      sourceText.empty()) {
+    markerCacheIds_.clear();
+    markerCacheTruncated_ = CollectMarkerIds(rootElement, markerCacheIds_);
+    markerCacheRoot_ = rootElement;
+    markerCacheSourceVersion_ = sourceVersion;
+    markerCacheSourceText_ = sourceVersion == 0 ? std::string(sourceText) : std::string();
+    ++markerScanCount_;
+  }
+}
+
+void SidebarPresenter::captureStrokeSnapshot(const EditorApp& app,
+                                             std::span<const svg::SVGElement> selection,
+                                             InspectorSnapshot& inspector) {
+  const bool hasSelection = !selection.empty();
+  inspector.strokeEditable =
+      hasSelection && std::ranges::none_of(selection, [](const svg::SVGElement& element) {
+        return IsLocked(element);
+      });
+  if (!hasSelection) {
+    return;
+  }
+  const auto& stroke = selection.front().getComputedStyle();
+  inspector.strokeWidth = stroke.strokeWidth.get().value();
+  inspector.strokeLinecap = static_cast<int>(stroke.strokeLinecap.get().value());
+  inspector.strokeLinejoin = static_cast<int>(stroke.strokeLinejoin.get().value());
+  inspector.strokeMiterlimit = static_cast<float>(stroke.strokeMiterlimit.get().value());
+  if (const auto dasharray = stroke.strokeDasharray.get(); dasharray.has_value()) {
+    std::ostringstream stream;
+    stream << *dasharray;
+    inspector.strokeDasharray = stream.str();
+  }
+  inspector.strokeDashoffset = stroke.strokeDashoffset.get().value();
+  if (const auto marker = stroke.markerStart.get(); marker.has_value()) {
+    inspector.markerStart = "url(" + std::string(std::string_view(marker->href)) + ")";
+  }
+  if (const auto marker = stroke.markerEnd.get(); marker.has_value()) {
+    inspector.markerEnd = "url(" + std::string(std::string_view(marker->href)) + ")";
+  }
+  refreshMarkerCache(app);
+  inspector.markerIds = markerCacheIds_;
+  inspector.markerListTruncated = markerCacheTruncated_;
+}
+
 void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
   if (!app.hasDocument()) {
     treeSnapshot_.reset();
@@ -537,6 +763,11 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
     // The document is gone; the edit's element handle and baseline are
     // meaningless now, so drop the in-progress edit instead of committing.
     transformEdit_.reset();
+    markerCacheRoot_.reset();
+    markerCacheIds_.clear();
+    markerCacheSourceVersion_ = 0;
+    markerCacheSourceText_.clear();
+    markerCacheTruncated_ = false;
     return;
   }
 
@@ -549,10 +780,7 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
 
   // Inspector snapshot.
   InspectorSnapshot inspector;
-  inspector.strokeEditable = !selectionList.empty();
-  if (inspector.strokeEditable) {
-    inspector.strokeWidth = static_cast<float>(FirstSelectedStrokeWidth(app));
-  }
+  captureStrokeSnapshot(app, selectionList, inspector);
   inspector.pathOperationAvailability.reserve(kPathOperationButtons.size());
   for (const PathOperationButton& button : kPathOperationButtons) {
     inspector.pathOperationAvailability.push_back(app.pathOperationAvailability(button.operation));
@@ -739,16 +967,14 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
   if (!inspectorSnapshot_.hasSelection) {
     if (liveApp != nullptr && liveApp->selectedElements().size() > 1u) {
       ImGui::Text("%zu elements selected", liveApp->selectedElements().size());
-      queuedMutation = RenderStrokeControlsPanel(liveApp, inspectorSnapshot_.strokeEditable,
-                                                 inspectorSnapshot_.strokeWidth);
+      queuedMutation = renderStrokeControlsPanel(liveApp);
       queuedMutation =
           RenderPathOperationsPanel(liveApp, inspectorSnapshot_.pathOperationAvailability,
                                     iconTextureProvider) ||
           queuedMutation;
     } else {
       ImGui::TextDisabled("Select a single element to inspect attributes.");
-      queuedMutation = RenderStrokeControlsPanel(liveApp, inspectorSnapshot_.strokeEditable,
-                                                 inspectorSnapshot_.strokeWidth);
+      queuedMutation = renderStrokeControlsPanel(liveApp);
       queuedMutation =
           RenderPathOperationsPanel(liveApp, inspectorSnapshot_.pathOperationAvailability,
                                     iconTextureProvider) ||
@@ -772,9 +998,7 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
                          b.topLeft.y);
     }
     queuedMutation = renderTransformPanel(liveApp);
-    queuedMutation = RenderStrokeControlsPanel(liveApp, inspectorSnapshot_.strokeEditable,
-                                               inspectorSnapshot_.strokeWidth) ||
-                     queuedMutation;
+    queuedMutation = renderStrokeControlsPanel(liveApp) || queuedMutation;
     RenderInspectorSection("XML attributes", "##inspector_xml_attributes",
                            inspectorSnapshot_.xmlAttributes, InspectorSectionKind::XmlAttributes);
     RenderInspectorSection("Computed CSS", "##inspector_computed_style",
@@ -788,6 +1012,498 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState&,
   return queuedMutation;
 }
 
+bool SidebarPresenter::renderStrokeControlsPanel(EditorApp* liveApp) {
+  const EditorTheme& theme = EditorTheme::Active();
+  ImGui::Separator();
+  ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "STROKE");
+  const bool canMutate =
+      liveApp != nullptr && liveApp->hasSelection() && inspectorSnapshot_.strokeEditable;
+  if (liveApp != nullptr && strokeScalarEdit_.has_value() && strokeScalarEdit_->pendingCommit) {
+    finishStrokeScalarEdit(*liveApp, strokeScalarEdit_->field);
+  }
+  ImGui::BeginDisabled(!inspectorSnapshot_.strokeEditable);
+  const StrokeRenderContext context{liveApp, theme, ImGui::GetCursorPosX(), canMutate};
+  bool queuedMutation = renderStrokeWidthRow(context);
+  queuedMutation = renderStrokeCapRow(context) || queuedMutation;
+  queuedMutation = renderStrokeJoinRow(context) || queuedMutation;
+  queuedMutation = renderStrokeMiterRow(context) || queuedMutation;
+  ImGui::Separator();
+  queuedMutation = renderStrokeDashSection(context) || queuedMutation;
+  ImGui::Separator();
+  queuedMutation = renderStrokeMarkers(context) || queuedMutation;
+  ImGui::EndDisabled();
+  return queuedMutation;
+}
+
+bool SidebarPresenter::renderStrokeWidthRow(const StrokeRenderContext& context) {
+  const EditorTheme& theme = context.theme;
+  StrokeRowLabel("Width", context.rowStartX, theme);
+  const Lengthd widthLength =
+      context.canMutate ? FirstSelectedStrokeWidth(*context.app) : inspectorSnapshot_.strokeWidth;
+  float width = static_cast<float>(widthLength.value);
+  bool queuedMutation = renderStrokeWidthField(context, widthLength, &width);
+  ImGui::SameLine(0.0f, theme.space1);
+  queuedMutation = renderStrokeWidthStepper(context, widthLength, width) || queuedMutation;
+  return queuedMutation;
+}
+
+bool SidebarPresenter::renderStrokeWidthField(const StrokeRenderContext& context,
+                                              const Lengthd& widthLength, float* width) {
+  EditorApp* liveApp = context.app;
+  const bool canMutate = context.canMutate;
+  std::ostringstream widthUnit;
+  widthUnit << widthLength.unit;
+  const std::string widthFormat = "%.1f" + widthUnit.str();
+  ImGui::SetNextItemWidth(90.0f);
+  const bool widthChanged =
+      ImGui::DragFloat("##stroke_width", width, 0.1f, 0.0f, 200.0f, widthFormat.c_str());
+  {
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    strokeWidthRect_ = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
+  }
+  bool queuedMutation = false;
+  if (widthChanged && canMutate) {
+    beginStrokeScalarEdit(*liveApp, StrokeScalarField::Width);
+    if (widthLength.unit == LengthUnit::None || widthLength.unit == LengthUnit::Px) {
+      liveApp->setActiveStrokeWidth(*width);
+    }
+    const RcString cssWidth = Lengthd(*width, widthLength.unit).toRcString();
+    const bool changed = liveApp->setStylePropertyOnSelection("stroke-width", cssWidth);
+    strokeScalarEdit_->changed |= changed;
+    queuedMutation = changed;
+  }
+  trackStrokeScalarItem(context, StrokeScalarField::Width);
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip(widthLength.unit == LengthUnit::None ? "Stroke width in user units"
+                                                           : "Stroke width retains its SVG unit");
+  }
+  return queuedMutation;
+}
+
+bool SidebarPresenter::renderStrokeWidthStepper(const StrokeRenderContext& context,
+                                                const Lengthd& widthLength, float width) {
+  EditorApp* liveApp = context.app;
+  const EditorTheme& theme = context.theme;
+  const bool canMutate = context.canMutate;
+  bool queuedMutation = false;
+  ImGui::BeginGroup();
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 1.0f));
+  if (RenderStrokeStep("##stroke_width_up", true, theme, &strokeIncrementRect_) && canMutate) {
+    width += 1.0f;
+    if (widthLength.unit == LengthUnit::None || widthLength.unit == LengthUnit::Px) {
+      liveApp->setActiveStrokeWidth(width);
+    }
+    const RcString cssWidth = Lengthd(width, widthLength.unit).toRcString();
+    queuedMutation = applyStrokeStyle(*liveApp, "stroke-width", cssWidth, "Change stroke width") ||
+                     queuedMutation;
+  }
+  std::optional<Box2d> decrementRect;
+  if (RenderStrokeStep("##stroke_width_down", false, theme, &decrementRect) && canMutate) {
+    width = std::max(0.0f, width - 1.0f);
+    if (widthLength.unit == LengthUnit::None || widthLength.unit == LengthUnit::Px) {
+      liveApp->setActiveStrokeWidth(width);
+    }
+    const RcString cssWidth = Lengthd(width, widthLength.unit).toRcString();
+    queuedMutation = applyStrokeStyle(*liveApp, "stroke-width", cssWidth, "Change stroke width") ||
+                     queuedMutation;
+  }
+  ImGui::PopStyleVar();
+  ImGui::EndGroup();
+  return queuedMutation;
+}
+
+bool SidebarPresenter::renderStrokeCapRow(const StrokeRenderContext& context) {
+  EditorApp* liveApp = context.app;
+  const EditorTheme& theme = context.theme;
+  const float rowStartX = context.rowStartX;
+  const bool canMutate = context.canMutate;
+  bool queuedMutation = false;
+  constexpr std::array<const char*, 3> kCaps = {"butt", "round", "square"};
+  const int cap = std::clamp(inspectorSnapshot_.strokeLinecap, 0, 2);
+  StrokeRowLabel("Cap", rowStartX, theme);
+  ImGui::PushID("stroke_caps");
+  for (int index = 0; index < static_cast<int>(kCaps.size()); ++index) {
+    if (index > 0) {
+      ImGui::SameLine(0.0f, 2.0f);
+    }
+    ImGui::PushID(index);
+    if (RenderStrokeChoice("##choice", kCaps[index], StrokeChoiceKind::Cap, index, cap == index,
+                           theme, &strokeCapRects_[index]) &&
+        canMutate) {
+      queuedMutation =
+          applyStrokeStyle(*liveApp, "stroke-linecap", kCaps[index], "Change stroke cap") ||
+          queuedMutation;
+    }
+    ImGui::PopID();
+  }
+  ImGui::PopID();
+
+  return queuedMutation;
+}
+
+bool SidebarPresenter::renderStrokeJoinRow(const StrokeRenderContext& context) {
+  EditorApp* liveApp = context.app;
+  const EditorTheme& theme = context.theme;
+  const float rowStartX = context.rowStartX;
+  const bool canMutate = context.canMutate;
+  bool queuedMutation = false;
+  constexpr std::array<const char*, 5> kJoins = {"miter", "miter-clip", "round", "bevel", "arcs"};
+  const int join = std::clamp(inspectorSnapshot_.strokeLinejoin, 0, 4);
+  StrokeRowLabel("Join", rowStartX, theme);
+  strokeJoinRects_.fill(std::nullopt);
+  ImGui::PushID("stroke_joins");
+  constexpr std::array<int, 3> kCommonJoins = {0, 2, 3};
+  for (std::size_t position = 0; position < kCommonJoins.size(); ++position) {
+    const int index = kCommonJoins[position];
+    if (position > 0u) {
+      ImGui::SameLine(0.0f, 2.0f);
+    }
+    ImGui::PushID(index);
+    if (RenderStrokeChoice("##choice", kJoins[index], StrokeChoiceKind::Join, index,
+                           join == index || (index == 0 && (join == 1 || join == 4)), theme,
+                           &strokeJoinRects_[index]) &&
+        canMutate) {
+      queuedMutation =
+          applyStrokeStyle(*liveApp, "stroke-linejoin", kJoins[index], "Change stroke join") ||
+          queuedMutation;
+    }
+    ImGui::PopID();
+  }
+  RenderRareJoinNote(join, theme);
+  ImGui::PopID();
+
+  return queuedMutation;
+}
+
+bool SidebarPresenter::renderStrokeMiterRow(const StrokeRenderContext& context) {
+  EditorApp* liveApp = context.app;
+  const EditorTheme& theme = context.theme;
+  const float rowStartX = context.rowStartX;
+  const bool canMutate = context.canMutate;
+  bool queuedMutation = false;
+  const int join = std::clamp(inspectorSnapshot_.strokeLinejoin, 0, 4);
+  strokeMiterLimitRect_.reset();
+  if (join == 0 || join == 1 || join == 4) {
+    StrokeRowLabel("Limit", rowStartX, theme);
+    float miterlimit = inspectorSnapshot_.strokeMiterlimit;
+    ImGui::SetNextItemWidth(90.0f);
+    const bool limitChanged =
+        ImGui::InputFloat("##stroke_miter_limit", &miterlimit, 0.1f, 1.0f, "%.1f");
+    if (limitChanged && canMutate) {
+      if (std::isfinite(miterlimit) && miterlimit >= 1.0f) {
+        beginStrokeScalarEdit(*liveApp, StrokeScalarField::MiterLimit);
+        const bool changed =
+            liveApp->setStylePropertyOnSelection("stroke-miterlimit", std::to_string(miterlimit));
+        strokeScalarEdit_->changed |= changed;
+        queuedMutation = changed || queuedMutation;
+        strokeMiterError_.clear();
+      } else {
+        strokeMiterError_ = "Limit must be at least 1";
+      }
+    }
+    trackStrokeScalarItem(context, StrokeScalarField::MiterLimit);
+    const ImVec2 min = ImGui::GetItemRectMin();
+    const ImVec2 max = ImGui::GetItemRectMax();
+    strokeMiterLimitRect_ = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Maximum sharp-corner length relative to stroke width");
+    }
+    if (!strokeMiterError_.empty()) {
+      ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.destructive), "%s",
+                         strokeMiterError_.c_str());
+    }
+  }
+
+  return queuedMutation;
+}
+
+bool SidebarPresenter::renderStrokeDashSection(const StrokeRenderContext& context) {
+  const bool snapshotDashed =
+      inspectorSnapshot_.strokeDasharray != "none" && !inspectorSnapshot_.strokeDasharray.empty();
+  if (snapshotDashed) {
+    lastDashPattern_ = inspectorSnapshot_.strokeDasharray;
+  }
+  bool dashed = snapshotDashed;
+  bool queuedMutation = false;
+  if (ImGui::Checkbox("Dashed line", &dashed)) {
+    if (context.canMutate) {
+      queuedMutation = applyStrokeStyle(*context.app, "stroke-dasharray",
+                                        dashed ? lastDashPattern_ : "none", "Toggle dashed stroke");
+    } else {
+      dashed = snapshotDashed;
+    }
+  }
+  const ImVec2 toggleMin = ImGui::GetItemRectMin();
+  const ImVec2 toggleMax = ImGui::GetItemRectMax();
+  strokeDashToggleRect_ =
+      Box2d(Vector2d(toggleMin.x, toggleMin.y), Vector2d(toggleMax.x, toggleMax.y));
+  strokeDashPreviewRect_.reset();
+  strokeDashPresetRects_.fill(std::nullopt);
+  strokeDashOffsetRect_.reset();
+  strokeCustomDashSelected_ = false;
+  if (!dashed) {
+    strokeDasharrayEditing_ = false;
+    return queuedMutation;
+  }
+
+  const std::string_view pattern =
+      snapshotDashed ? inspectorSnapshot_.strokeDasharray : lastDashPattern_;
+  const std::vector<float> currentLengths = PreviewDashLengths(pattern);
+  renderDashPreviewRow(context, currentLengths, pattern);
+  queuedMutation = renderDashPresetRow(context, currentLengths) || queuedMutation;
+  queuedMutation = renderDashCustomEditor(context, pattern) || queuedMutation;
+  queuedMutation = renderDashOffsetRow(context) || queuedMutation;
+  return queuedMutation;
+}
+
+void SidebarPresenter::renderDashPreviewRow(const StrokeRenderContext& context,
+                                            std::span<const float> lengths,
+                                            std::string_view pattern) {
+  const EditorTheme& theme = context.theme;
+  StrokeRowLabel("Preview", context.rowStartX, theme);
+  ImGui::Dummy(ImVec2(174.0f, 24.0f));
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  strokeDashPreviewRect_ = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  draw->AddRectFilled(min, max, theme.surfaceSunken, theme.radiusControl);
+  draw->AddRect(min, max, theme.borderSubtle, theme.radiusControl);
+  DrawDashPreview(draw, min, max, lengths, theme.accentDefault);
+  if (ImGui::IsItemHovered()) {
+    const std::size_t previewLength = std::min(pattern.size(), std::size_t{80});
+    ImGui::SetTooltip("Dash pattern: %.*s", static_cast<int>(previewLength), pattern.data());
+  }
+}
+
+bool SidebarPresenter::renderDashPresetRow(const StrokeRenderContext& context,
+                                           std::span<const float> currentLengths) {
+  const EditorTheme& theme = context.theme;
+  StrokeRowLabel("Style", context.rowStartX, theme);
+  constexpr std::array<std::string_view, 3> kPresetValues = {"6 4", "1 4", "6 3 1 3"};
+  constexpr std::array<const char*, 3> kPresetNames = {"Dash", "Dot", "Dash-dot"};
+  ImGui::PushID("stroke_dash_presets");
+  bool matchedPreset = false;
+  bool queuedMutation = false;
+  for (std::size_t index = 0; index < kPresetValues.size(); ++index) {
+    if (index > 0) {
+      ImGui::SameLine(0.0f, 2.0f);
+    }
+    ImGui::PushID(static_cast<int>(index));
+    const std::vector<float> presetLengths = PreviewDashLengths(kPresetValues[index]);
+    const bool selected = std::equal(currentLengths.begin(), currentLengths.end(),
+                                     presetLengths.begin(), presetLengths.end());
+    matchedPreset |= selected;
+    if (RenderDashPreset("##choice", kPresetNames[index], presetLengths, selected, theme,
+                         &strokeDashPresetRects_[index]) &&
+        context.canMutate) {
+      queuedMutation = submitDashPattern(*context.app, kPresetValues[index]) || queuedMutation;
+    }
+    ImGui::PopID();
+  }
+  ImGui::PopID();
+  ImGui::SameLine(0.0f, theme.space1);
+  strokeCustomDashSelected_ = !matchedPreset;
+  if (strokeCustomDashSelected_) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::ColorConvertU32ToFloat4(theme.surfaceActive));
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(theme.accentDefault));
+    ImGui::PushStyleColor(ImGuiCol_Border, ImGui::ColorConvertU32ToFloat4(theme.accentDefault));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+  }
+  if (ImGui::SmallButton(strokeDashDetailsOpen_ ? "Done##stroke_dash" : "Custom##stroke_dash")) {
+    strokeDashDetailsOpen_ = !strokeDashDetailsOpen_;
+  }
+  if (strokeCustomDashSelected_) {
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
+  }
+  if (!strokeDashDetailsOpen_) {
+    strokeDasharrayEditing_ = false;
+  }
+  return queuedMutation;
+}
+
+bool SidebarPresenter::renderDashCustomEditor(const StrokeRenderContext& context,
+                                              std::string_view pattern) {
+  if (!strokeDashDetailsOpen_) {
+    return false;
+  }
+  const EditorTheme& theme = context.theme;
+  bool queuedMutation = false;
+  if (inspectorSnapshot_.strokeDasharray.size() >= strokeDasharrayBuffer_.size()) {
+    strokeDasharrayEditing_ = false;
+    ImGui::TextDisabled("Long pattern - edit in SVG source");
+  } else {
+    if (!strokeDasharrayEditing_) {
+      strokeDasharrayBuffer_.fill('\0');
+      std::copy(pattern.begin(), pattern.end(), strokeDasharrayBuffer_.begin());
+    }
+    StrokeRowLabel("Pattern", context.rowStartX, theme);
+    ImGui::SetNextItemWidth(174.0f);
+    const bool submitted =
+        ImGui::InputText("##stroke_dash_pattern", strokeDasharrayBuffer_.data(),
+                         strokeDasharrayBuffer_.size(), ImGuiInputTextFlags_EnterReturnsTrue);
+    strokeDasharrayEditing_ = ImGui::IsItemActive();
+    if (submitted && context.canMutate) {
+      queuedMutation = submitDashPattern(*context.app, strokeDasharrayBuffer_.data());
+      strokeDashError_ = queuedMutation ? "" : "Use nonnegative dash and gap lengths";
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Dash and gap lengths, e.g. 4 2 or 4 2 1 2; press Enter to apply");
+    }
+  }
+  if (!strokeDashError_.empty()) {
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.destructive), "%s",
+                       strokeDashError_.c_str());
+  }
+  return queuedMutation;
+}
+
+bool SidebarPresenter::renderDashOffsetRow(const StrokeRenderContext& context) {
+  if (!strokeDashDetailsOpen_ && inspectorSnapshot_.strokeDashoffset.value == 0.0) {
+    return false;
+  }
+  StrokeRowLabel("Offset", context.rowStartX, context.theme);
+  const Lengthd offsetLength = inspectorSnapshot_.strokeDashoffset;
+  float dashoffset = static_cast<float>(offsetLength.value);
+  std::ostringstream offsetUnit;
+  offsetUnit << offsetLength.unit;
+  const std::string offsetFormat = "%.1f" + offsetUnit.str();
+  ImGui::SetNextItemWidth(90.0f);
+  const bool offsetChanged =
+      ImGui::InputFloat("##stroke_dash_offset", &dashoffset, 0.1f, 1.0f, offsetFormat.c_str());
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  strokeDashOffsetRect_ = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
+  bool queuedMutation = false;
+  if (offsetChanged && context.canMutate && std::isfinite(dashoffset)) {
+    beginStrokeScalarEdit(*context.app, StrokeScalarField::DashOffset);
+    queuedMutation = setStrokeDashOffset(*context.app, dashoffset);
+    strokeScalarEdit_->changed |= queuedMutation;
+  }
+  trackStrokeScalarItem(context, StrokeScalarField::DashOffset);
+  return queuedMutation;
+}
+
+bool SidebarPresenter::renderStrokeMarkers(const StrokeRenderContext& context) {
+  bool queuedMutation = false;
+  const bool hasMarker =
+      inspectorSnapshot_.markerStart != "none" || inspectorSnapshot_.markerEnd != "none";
+  ImGui::SetNextItemOpen(hasMarker, ImGuiCond_Once);
+  const bool markersOpen = ImGui::TreeNodeEx("Markers", ImGuiTreeNodeFlags_SpanAvailWidth);
+  if (markersOpen) {
+    queuedMutation =
+        renderStrokeMarkerPicker(context, "Start", "marker-start", inspectorSnapshot_.markerStart);
+    queuedMutation =
+        renderStrokeMarkerPicker(context, "End", "marker-end", inspectorSnapshot_.markerEnd) ||
+        queuedMutation;
+    if (inspectorSnapshot_.markerListTruncated) {
+      ImGui::TextDisabled("Marker list limited to the first 100 IDs in 4096 SVG nodes.");
+    }
+    ImGui::TreePop();
+  }
+
+  return queuedMutation;
+}
+
+bool SidebarPresenter::renderStrokeMarkerPicker(const StrokeRenderContext& context,
+                                                const char* label, const char* property,
+                                                const std::string& current) {
+  StrokeRowLabel(label, context.rowStartX, context.theme);
+  const std::string display = MarkerDisplayLabel(current);
+  ImGui::SetNextItemWidth(144.0f);
+  ImGui::PushID(property);
+  bool changed = false;
+  if (ImGui::BeginCombo("##marker", display.c_str())) {
+    if (ImGui::Selectable("None", current == "none") && context.canMutate) {
+      changed = applyStrokeStyle(*context.app, property, "none", "Change stroke marker");
+    }
+    for (const std::string& id : inspectorSnapshot_.markerIds) {
+      const std::string reference = "url(#" + id + ")";
+      if (ImGui::Selectable(id.c_str(), current == reference) && context.canMutate) {
+        changed =
+            applyStrokeStyle(*context.app, property, reference, "Change stroke marker") || changed;
+      }
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::PopID();
+  return changed;
+}
+
+bool SidebarPresenter::submitDashPattern(EditorApp& liveApp, std::string_view pattern) {
+  return pattern.size() < strokeDasharrayBuffer_.size() && IsValidStrokeDasharray(pattern) &&
+         applyStrokeStyle(liveApp, "stroke-dasharray", pattern, "Change stroke dashes");
+}
+
+bool SidebarPresenter::setStrokeDashOffset(EditorApp& liveApp, double value) {
+  if (!std::isfinite(value)) {
+    return false;
+  }
+  const RcString cssOffset = Lengthd(value, inspectorSnapshot_.strokeDashoffset.unit).toRcString();
+  return liveApp.setStylePropertyOnSelection("stroke-dashoffset", cssOffset);
+}
+
+bool SidebarPresenter::applyStrokeStyle(EditorApp& liveApp, std::string_view property,
+                                        std::string_view value, std::string_view undoLabel) {
+  if (!liveApp.hasSelection() || !liveApp.document().hasDocument()) {
+    return false;
+  }
+  const std::string before(liveApp.document().document().source());
+  const bool queued = liveApp.setStylePropertyOnSelection(property, value);
+  if (queued) {
+    liveApp.recordDocumentSourceUndoOnNextFlush(std::string(undoLabel),
+                                                liveApp.document().document().svgElement(), before,
+                                                /*preserveSelection=*/true);
+  }
+  return queued;
+}
+
+void SidebarPresenter::beginStrokeScalarEdit(EditorApp& liveApp, StrokeScalarField field) {
+  if (strokeScalarEdit_.has_value() && strokeScalarEdit_->field == field) {
+    return;
+  }
+  if (strokeScalarEdit_.has_value()) {
+    finishStrokeScalarEdit(liveApp, strokeScalarEdit_->field);
+  }
+  strokeScalarEdit_ = StrokeScalarEdit{
+      .field = field,
+      .beforeSource = std::string(liveApp.document().document().source()),
+  };
+}
+
+void SidebarPresenter::trackStrokeScalarItem(const StrokeRenderContext& context,
+                                             StrokeScalarField field) {
+  if (context.canMutate && ImGui::IsItemActivated()) {
+    beginStrokeScalarEdit(*context.app, field);
+  }
+  if (ImGui::IsItemDeactivated() && strokeScalarEdit_.has_value() &&
+      strokeScalarEdit_->field == field) {
+    if (context.app != nullptr) {
+      finishStrokeScalarEdit(*context.app, field);
+    } else {
+      strokeScalarEdit_->pendingCommit = true;
+    }
+  }
+}
+
+void SidebarPresenter::finishStrokeScalarEdit(EditorApp& liveApp, StrokeScalarField field) {
+  if (!strokeScalarEdit_.has_value() || strokeScalarEdit_->field != field) {
+    return;
+  }
+  StrokeScalarEdit completed = std::move(*strokeScalarEdit_);
+  strokeScalarEdit_.reset();
+  if (!completed.changed) {
+    return;
+  }
+  const char* label = field == StrokeScalarField::Width        ? "Change stroke width"
+                      : field == StrokeScalarField::MiterLimit ? "Change miter limit"
+                                                               : "Change dash offset";
+  liveApp.recordDocumentSourceUndoOnNextFlush(label, liveApp.document().document().svgElement(),
+                                              std::move(completed.beforeSource),
+                                              /*preserveSelection=*/true);
+}
+
 bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
   if (!inspectorSnapshot_.transform.has_value()) {
     return false;
@@ -795,6 +1511,7 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
 
   bool queuedMutation = false;
   transformFieldRects_.fill(std::nullopt);
+  matrixFieldRects_.fill(std::nullopt);
 
   // The single selected element, when the app is live this frame. All edits
   // target this element; when `liveApp` is null (async renderer busy) the
@@ -951,6 +1668,10 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
         if (!visuallyEditable) {
           ImGui::EndDisabled();
         }
+        const ImVec2 cellMin = ImGui::GetItemRectMin();
+        const ImVec2 cellMax = ImGui::GetItemRectMax();
+        matrixFieldRects_[i] =
+            Box2d(Vector2d(cellMin.x, cellMin.y), Vector2d(cellMax.x, cellMax.y));
 
         if (liveApp == nullptr) {
           continue;

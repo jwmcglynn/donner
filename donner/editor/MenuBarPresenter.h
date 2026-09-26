@@ -22,6 +22,10 @@ enum class PerfOverlayMode : std::uint8_t {
 
 struct MenuBarState {
   bool sourcePaneFocused = false;
+  /// An in-canvas text session owns editing shortcuts.
+  bool textToolEditing = false;
+  /// A non-source ImGui text field owns editing shortcuts.
+  bool inspectorTextInputFocused = false;
   bool canSave = false;
   bool canRevert = false;
   bool canUndo = false;

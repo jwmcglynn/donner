@@ -358,15 +358,50 @@ public:
   [[nodiscard]] std::optional<SelectTool::ActiveDragPreview> presentationPreview(
       const std::optional<SelectTool::ActiveDragPreview>& activePreview) const {
     const std::optional<CachedTextures> cache = currentCache();
+    if (activePreview.has_value() && cache.has_value()) {
+      if (const auto represented = previewForActiveDrag(*cache, *activePreview);
+          represented.has_value()) {
+        return represented;
+      }
+    }
+    return previewWithoutActiveDrag(cache);
+  }
 
-    // Prefer an active preview whose entity matches our cached textures. If
-    // the active drag has moved to a different entity while a new render is
-    // in flight, keep displaying the last cached document image without
-    // applying the new entity's live drag offset to stale drag-target tiles.
-    if (activePreview.has_value() && cache.has_value() && activePreview->entity == cache->entity) {
-      return representedPreviewForActiveCache(*cache, *activePreview);
+  /// Preserve in-flight settling across temporary selection remaps.
+  ///
+  /// After ReplaceDocument, entity handles are invalidated and the selection is remapped to new
+  /// entities. Cached composited textures stay live as the visible document image until the next
+  /// render atomically replaces them via noteCachedTextures().
+  void clearSettlingIfSelectionChanged(Entity selectedEntity, bool dragActive) {
+    if (isWaitingForFullRender() || isWaitingForChromeRefresh()) {
+      return;
     }
 
+    (void)selectedEntity;
+    (void)dragActive;
+  }
+
+private:
+  [[nodiscard]] static std::optional<SelectTool::ActiveDragPreview> previewForActiveDrag(
+      const CachedTextures& cache, const SelectTool::ActiveDragPreview& activePreview) {
+    // An unpromotable selected child is painted into its owning tiles. The accepted result has
+    // no independent drag-target entity, but it still records the gesture transform those pixels
+    // represent. Keep chrome aligned with that accepted frame while this exact gesture is active.
+    if (cache.entity == entt::null && cache.representedPreview.has_value() &&
+        cache.representedPreview->entity == activePreview.entity &&
+        cache.representedPreview->dragGeneration == activePreview.dragGeneration) {
+      return cache.representedPreview;
+    }
+
+    // A different active entity cannot apply its live offset to stale cached drag-target tiles.
+    if (activePreview.entity == cache.entity) {
+      return representedPreviewForActiveCache(cache, activePreview);
+    }
+    return std::nullopt;
+  }
+
+  [[nodiscard]] std::optional<SelectTool::ActiveDragPreview> previewWithoutActiveDrag(
+      const std::optional<CachedTextures>& cache) const {
     if (const auto* settling = std::get_if<SettlingForRender>(&state_);
         settling != nullptr && cache.has_value() && settling->preview.entity == cache->entity) {
       return settling->preview;
@@ -385,21 +420,6 @@ public:
     return std::nullopt;
   }
 
-  /// Preserve in-flight settling across temporary selection remaps.
-  ///
-  /// After ReplaceDocument, entity handles are invalidated and the selection is remapped to new
-  /// entities. Cached composited textures stay live as the visible document image until the next
-  /// render atomically replaces them via noteCachedTextures().
-  void clearSettlingIfSelectionChanged(Entity selectedEntity, bool dragActive) {
-    if (isWaitingForFullRender() || isWaitingForChromeRefresh()) {
-      return;
-    }
-
-    (void)selectedEntity;
-    (void)dragActive;
-  }
-
-private:
   [[nodiscard]] std::optional<CachedTextures> currentCache() const {
     if (const auto* cached = std::get_if<Cached>(&state_)) {
       return cached->cache;

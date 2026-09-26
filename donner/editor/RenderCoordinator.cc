@@ -5,6 +5,7 @@
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <span>
 #include <utility>
@@ -17,6 +18,7 @@
 #endif
 
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/RenderPanePresenter.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
@@ -329,6 +331,16 @@ bool SameRasterViewport(const EditorRasterViewport& lhs, const EditorRasterViewp
          SameTransform(lhs.outputFromDocument, rhs.outputFromDocument);
 }
 
+bool ShouldRetainSelectedPrewarmFallback(const RenderAttemptIdentity& attempt,
+                                         const RenderResult& result,
+                                         const EditorRasterViewport& visibleRaster) {
+  return SameRasterViewport(attempt.rasterViewport, result.rasterViewport) &&
+         attempt.selectedEntity != entt::null && !result.overviewInfillOnly &&
+         result.rasterViewport.viewportBounded && visibleRaster.viewportBounded &&
+         (result.rasterViewport.outputSizePx.x > visibleRaster.outputSizePx.x ||
+          result.rasterViewport.outputSizePx.y > visibleRaster.outputSizePx.y);
+}
+
 bool SameRequestedDragPreview(const std::optional<RenderRequest::DragPreview>& lhs,
                               const std::optional<RenderRequest::DragPreview>& rhs) {
   if (!lhs.has_value() || !rhs.has_value()) {
@@ -424,6 +436,43 @@ bool DocumentRectContains(const Box2d& outer, const Box2d& inner) {
          outer.topLeft.y <= inner.topLeft.y + kTolerance &&
          outer.bottomRight.x + kTolerance >= inner.bottomRight.x &&
          outer.bottomRight.y + kTolerance >= inner.bottomRight.y;
+}
+
+bool HasCompleteVisibleCachedCoverage(const GlTextureCache* textures, const ViewportState& viewport,
+                                      const EditorRasterViewport& visibleRaster) {
+  if (textures == nullptr || textures->tiles().empty() || textures->metadataOnlyMissCount() != 0) {
+    return false;
+  }
+  const PresentationCoverageDiagnostics coverage = textures->coverageDiagnostics();
+  // The base raster carries a 128-screen-pixel margin. During a small pan the requested raster
+  // rectangle shifts, but the previously cached rectangle still covers every visible artboard
+  // pixel. Test pane coverage rather than insisting on a second 128-pixel margin at the new pan.
+  const Box2d paneDocumentRect = viewport.screenToDocument(
+      Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize));
+  const Box2d visibleArtboardRect(
+      Vector2d(std::max(paneDocumentRect.topLeft.x, viewport.documentViewBox.topLeft.x),
+               std::max(paneDocumentRect.topLeft.y, viewport.documentViewBox.topLeft.y)),
+      Vector2d(std::min(paneDocumentRect.bottomRight.x, viewport.documentViewBox.bottomRight.x),
+               std::min(paneDocumentRect.bottomRight.y, viewport.documentViewBox.bottomRight.y)));
+  if (visibleArtboardRect.size().x <= 0.0 || visibleArtboardRect.size().y <= 0.0 ||
+      !DocumentRectContains(coverage.activeRasterDocumentRect, visibleArtboardRect)) {
+    return false;
+  }
+  const Vector2d cachedDocumentSize = coverage.activeRasterDocumentRect.size();
+  const Vector2d visibleDocumentSize = visibleRaster.documentRect.size();
+  if (cachedDocumentSize.x <= 0.0 || cachedDocumentSize.y <= 0.0 || visibleDocumentSize.x <= 0.0 ||
+      visibleDocumentSize.y <= 0.0) {
+    return false;
+  }
+  // A lower-resolution overview may cover the same document rect without having enough source
+  // pixels for a crisp interaction. Compare pixel density on both axes before retaining it.
+  constexpr double kScaleTolerance = 1e-3;
+  const Vector2d cachedScale(coverage.activeOutputSizePx.x / cachedDocumentSize.x,
+                             coverage.activeOutputSizePx.y / cachedDocumentSize.y);
+  const Vector2d visibleScale(visibleRaster.outputSizePx.x / visibleDocumentSize.x,
+                              visibleRaster.outputSizePx.y / visibleDocumentSize.y);
+  return std::abs(cachedScale.x - visibleScale.x) <= kScaleTolerance &&
+         std::abs(cachedScale.y - visibleScale.y) <= kScaleTolerance;
 }
 
 bool RasterViewportCanPresentCurrentViewport(const EditorRasterViewport& rendered,
@@ -573,9 +622,42 @@ bool ShouldDeferSelectedViewportRefresh(Entity selectedEntity, bool hasActiveDra
 bool ShouldUseSelectedPrewarmRasterViewport(Entity selectedEntity, bool requestOverviewInfill,
                                             bool rasterViewportBounded,
                                             bool selectionOnlyPrewarmMayTriggerRender,
-                                            bool hasIndependentRenderReason) {
-  return selectedEntity != entt::null && !requestOverviewInfill && rasterViewportBounded &&
-         (selectionOnlyPrewarmMayTriggerRender || hasIndependentRenderReason);
+                                            bool hasIndependentRenderReason,
+                                            bool hasCompleteVisibleCachedCoverage,
+                                            Vector2i visibleOutputSizePx,
+                                            Vector2i prewarmOutputSizePx) {
+  if (selectedEntity == entt::null || requestOverviewInfill || !rasterViewportBounded ||
+      (!selectionOnlyPrewarmMayTriggerRender && !hasIndependentRenderReason)) {
+    return false;
+  }
+
+  // A different output size invalidates every cached static segment, regardless of whether the
+  // canvas is large enough to cross an absolute pixel threshold. Preserve complete visible cache
+  // coverage for the first pointer frame. The promoted target is rasterized independently from
+  // its own full object bounds, so the visible background raster need not expand with it.
+  if (prewarmOutputSizePx == visibleOutputSizePx) {
+    return true;
+  }
+  if (hasCompleteVisibleCachedCoverage) {
+    return false;
+  }
+
+  // Without a complete visible cache there is no static tile set to protect. Use a modest
+  // incremental area limit so a cold selection still gains overdraw without multiplying the
+  // initial scene render cost on a small pane.
+  const std::int64_t visiblePixels = static_cast<std::int64_t>(visibleOutputSizePx.x) *
+                                     static_cast<std::int64_t>(visibleOutputSizePx.y);
+  const std::int64_t prewarmPixels = static_cast<std::int64_t>(prewarmOutputSizePx.x) *
+                                     static_cast<std::int64_t>(prewarmOutputSizePx.y);
+  return visiblePixels > 0 && prewarmPixels > 0 &&
+         prewarmPixels - visiblePixels <= visiblePixels / 4;
+}
+
+bool HasIndependentSelectedPrewarmRenderReason(bool hasActiveDrag, bool versionChanged,
+                                               bool forceSelectedLayerRasterization,
+                                               bool forcePresentationRefresh) {
+  return hasActiveDrag || versionChanged || forceSelectedLayerRasterization ||
+         forcePresentationRefresh;
 }
 
 bool ShouldClearPendingSelectedLayerRasterization(
@@ -589,7 +671,10 @@ bool ShouldClearPendingSelectedLayerRasterization(
 bool CompositedPreviewClearsPendingSelectedLayerRasterization(
     const RenderResult::CompositedPreview& preview, Entity pendingEntity,
     std::uint64_t resultVersion, std::uint64_t pendingVersion) {
-  return preview.entity == pendingEntity &&
+  // A selected text/marker/filter child may be unpromotable, yet its complete owning tiles still
+  // contain the forced style refresh. Requiring a dedicated selected tile here leaves the pending
+  // obligation set forever and posts the identical render on every idle frame.
+  return preview.valid() &&
          ShouldClearPendingSelectedLayerRasterization(preview.representedDragPreview, pendingEntity,
                                                       resultVersion, pendingVersion);
 }
@@ -712,6 +797,7 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   lockedRejectionFlash_.reset();
   lastOverlaySourceHoverVec_.clear();
   immediateOverlaySnapshot_.reset();
+  clipGuideCache_.reset();
   lastOverlayRasterSize_ = Vector2i::Zero();
   lastOverlayScreenRect_.reset();
   lastOverlayCanvasFromDocument_.reset();
@@ -750,6 +836,9 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   pendingDocumentMutationOverviewRefresh_ = false;
   pendingPresentationRefresh_ = false;
   lastPostedAttempt_.reset();
+  selectedPrewarmFallback_.reset();
+  selectedPrewarmRecoveryPending_ = false;
+  unavailableSelectedPromotion_.reset();
   nothingToPresentRetry_.reset();
   setDocumentPixelCaptureEnabled(false);
   lastFrameCostBreakdown_ = FrameCostBreakdown{};
@@ -802,6 +891,16 @@ void RenderCoordinator::noteResultWithNothingToPresent(const std::optional<Rende
   const bool fromLastPost = lastPostedAttempt_.has_value() &&
                             lastPostedAttempt_->documentGeneration == result->documentGeneration &&
                             lastPostedAttempt_->version == result->version;
+  const EditorRasterViewport visibleRaster = result->viewport.rasterViewport();
+  if (fromLastPost &&
+      ShouldRetainSelectedPrewarmFallback(*lastPostedAttempt_, *result, visibleRaster)) {
+    selectedPrewarmFallback_ = SelectedPrewarmFallback{
+        .documentGeneration = result->documentGeneration,
+        .selectedEntity = lastPostedAttempt_->selectedEntity,
+        .visibleRaster = visibleRaster,
+    };
+    selectedPrewarmRecoveryPending_ = true;
+  }
   if (!fromLastPost ||
       !nothingToPresentRetry_.noteFailure(*lastPostedAttempt_, nothingToPresentRetryNow())) {
     rejectPixelCaptureResult(result);
@@ -817,6 +916,57 @@ void RenderCoordinator::noteResultWithNothingToPresent(const std::optional<Rende
     // the picker stops asking for it until the document or viewport changes.
     captureUnavailable_ = true;
   }
+}
+
+bool RenderCoordinator::selectedPrewarmFallbackApplies(std::uint64_t documentGeneration,
+                                                       Entity selectedEntity,
+                                                       const EditorRasterViewport& visibleRaster) {
+  if (selectedPrewarmFallback_.has_value() &&
+      (selectedPrewarmFallback_->documentGeneration != documentGeneration ||
+       selectedPrewarmFallback_->selectedEntity != selectedEntity ||
+       !SameRasterViewport(selectedPrewarmFallback_->visibleRaster, visibleRaster))) {
+    selectedPrewarmFallback_.reset();
+    selectedPrewarmRecoveryPending_ = false;
+  }
+  return selectedPrewarmFallback_.has_value();
+}
+
+void RenderCoordinator::noteSelectedPrewarmResultPresented(const RenderResult& result) {
+  if (selectedPrewarmFallback_.has_value() &&
+      result.documentGeneration == selectedPrewarmFallback_->documentGeneration &&
+      SameRasterViewport(result.rasterViewport, selectedPrewarmFallback_->visibleRaster)) {
+    selectedPrewarmRecoveryPending_ = false;
+  }
+}
+
+bool RenderCoordinator::shouldRequestSelectionOnlyPrewarm(
+    std::uint64_t documentGeneration, Entity selectedEntity, std::uint64_t version,
+    const EditorRasterViewport& visibleRaster) const {
+  return kSelectionOnlyPrewarmMayTriggerRender &&
+         (!unavailableSelectedPromotion_.has_value() ||
+          unavailableSelectedPromotion_->documentGeneration != documentGeneration ||
+          unavailableSelectedPromotion_->version != version ||
+          unavailableSelectedPromotion_->selectedEntity != selectedEntity ||
+          !SameRasterViewport(unavailableSelectedPromotion_->visibleRaster, visibleRaster));
+}
+
+void RenderCoordinator::noteSelectedPromotionAvailability(const RenderResult& result) {
+  const RenderResult::CompositedPreview& preview = *result.compositedPreview;
+  if (preview.entity != entt::null) {
+    unavailableSelectedPromotion_.reset();
+    return;
+  }
+  if (preview.interactionKind != svg::compositor::InteractionHint::Selection ||
+      !preview.representedDragPreview.has_value() ||
+      preview.representedDragPreview->entity == entt::null) {
+    return;
+  }
+  unavailableSelectedPromotion_ = UnavailableSelectedPromotion{
+      .documentGeneration = result.documentGeneration,
+      .version = result.version,
+      .selectedEntity = preview.representedDragPreview->entity,
+      .visibleRaster = result.viewport.rasterViewport(),
+  };
 }
 
 std::optional<float> RenderCoordinator::nextPixelCaptureCanvasCommitWakeSeconds() const {
@@ -1001,6 +1151,63 @@ void RenderCoordinator::promoteSelectionBoundsIfReady() {
   PromoteSelectionBoundsIfReady(selectionBoundsCache_, displayedDocVersion_);
 }
 
+bool RenderCoordinator::clipGuideCacheMatches(Entity selectedEntity,
+                                              std::uint64_t documentGeneration,
+                                              std::uint64_t nonTransformRevision) const {
+  return clipGuideCache_.has_value() && clipGuideCache_->selectedEntity == selectedEntity &&
+         clipGuideCache_->documentGeneration == documentGeneration &&
+         clipGuideCache_->nonTransformRevision == nonTransformRevision;
+}
+
+void RenderCoordinator::updateClipGuidesForOverlay(
+    const EditorApp& app, std::span<const svg::SVGElement> selection,
+    const std::optional<SelectTool::ActiveDragPreview>& activePreview,
+    const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
+    const Transform2d& representedDocumentFromLiveDocument, SelectionChromeSnapshot* snapshot) {
+  if (selection.size() != 1u) {
+    clipGuideCache_.reset();
+    return;
+  }
+
+  const Entity selectedEntity = selection.front().unsafeEntityHandle().entity();
+  const auto& document = app.document();
+  if (clipGuideCache_.has_value() &&
+      !clipGuideCacheMatches(selectedEntity, document.documentGeneration(),
+                             document.nonTransformRevision())) {
+    clipGuideCache_.reset();
+  }
+
+  if (activeBoundsPreview.has_value()) {
+    if (!clipGuideCache_.has_value() || !activePreview.has_value() ||
+        activePreview->dragGeneration == 0) {
+      return;
+    }
+    const std::uint64_t dragGeneration = activePreview->dragGeneration;
+    if (clipGuideCache_->dragGeneration != 0 && dragGeneration != clipGuideCache_->dragGeneration) {
+      clipGuideCache_.reset();
+      return;
+    }
+    OverlayRenderer::projectCachedClipGuides(snapshot, clipGuideCache_->baseline,
+                                             activeBoundsPreview,
+                                             representedDocumentFromLiveDocument);
+    clipGuideCache_->dragGeneration = dragGeneration;
+    return;
+  }
+
+  if (snapshot->clipGuidesDoc.empty()) {
+    clipGuideCache_.reset();
+    return;
+  }
+  SelectionChromeSnapshot baseline;
+  baseline.clipGuidesDoc = snapshot->clipGuidesDoc;
+  clipGuideCache_ = ClipGuideCache{
+      .baseline = std::move(baseline),
+      .selectedEntity = selectedEntity,
+      .documentGeneration = document.documentGeneration(),
+      .nonTransformRevision = document.nonTransformRevision(),
+  };
+}
+
 bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
     EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
     std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
@@ -1128,6 +1335,9 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
       std::span<const svg::SVGElement>(sourceHoverElements_), currentOverlayCullRectDoc,
       resolvedSelectionDetail, representedDocumentFromLiveDocument, lockedFlashInput,
       viewport.devicePixelRatio, penLivePreviewElement_);
+  updateClipGuidesForOverlay(app, std::span<const svg::SVGElement>(overlaySelection),
+                             effectiveDocumentDragPreview, chromeBoundsPreview,
+                             representedDocumentFromLiveDocument, &chromeSnapshot);
   // Pen hover chrome is pushed state (no registry reads), stamped onto the
   // snapshot after capture.
   chromeSnapshot.penPreviewSegmentDoc = penHoverPreviewSegmentDoc_;
@@ -1339,6 +1549,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
 
   textures.uploadComposited(*result.compositedPreview, result.rasterViewport);
   lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
+  noteSelectedPrewarmResultPresented(result);
   if (!result.rasterViewport.viewportBounded) {
     pendingDocumentMutationOverviewRefresh_ = false;
   }
@@ -1356,6 +1567,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   compositedPresentation_.noteCachedTextures(
       result.compositedPreview->entity, result.version, resultCanvasSize,
       DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview));
+  noteSelectedPromotionAvailability(result);
   if (CompositedPreviewClearsPendingSelectedLayerRasterization(
           *result.compositedPreview, pendingSelectedLayerRasterizationEntity_, result.version,
           pendingSelectedLayerRasterizationVersion_)) {
@@ -1427,6 +1639,8 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   DocumentPixelCaptureIdentity desiredCapture;
   bool captureNeeded = preparePixelCaptureRequest(app, viewport, &desiredCapture);
   const Entity prewarmEntity = selectedCompositedEntity(app);
+  const bool useVisibleSelectedRaster = selectedPrewarmFallbackApplies(
+      app.document().documentGeneration(), prewarmEntity, rasterViewport);
   const PresentationCoverageDiagnostics coverageDiagnostics =
       textures != nullptr ? textures->coverageDiagnostics() : PresentationCoverageDiagnostics{};
   const bool needsOverviewInfill =
@@ -1437,7 +1651,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const bool deferSelectedViewportRefresh = ShouldDeferSelectedViewportRefresh(
       prewarmEntity, dragPreview.has_value(), currentVersion, displayedDocVersion_,
       compositedPresentation_.hasCachedTextures(), rasterViewportSettled, needsOverviewInfill,
-      pendingSelectedLayerRasterization);
+      pendingSelectedLayerRasterization || selectedPrewarmRecoveryPending_);
   if (shouldDeferViewportRender(deferSelectedViewportRefresh, needsOverviewInfill, captureNeeded)) {
     if (renderWorker_.asyncRenderer.isBusy()) {
       renderWorker_.asyncRenderer.cancelInFlight();
@@ -1453,20 +1667,25 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       requestOverviewInfill ? std::vector<Entity>{}
                             : selectedCompositedExtraEntities(app, prewarmEntity);
   const bool forceSelectedLayerRasterization = pendingSelectedLayerRasterization;
-  bool forcePresentationRefresh = pendingPresentationRefresh_ || captureNeeded;
-  const bool hasIndependentSelectedPrewarmRenderReason =
-      dragPreview.has_value() || currentVersion != displayedDocVersion_ ||
-      forceSelectedLayerRasterization || forcePresentationRefresh;
+  bool forcePresentationRefresh =
+      pendingPresentationRefresh_ || captureNeeded || selectedPrewarmRecoveryPending_;
+  const bool hasIndependentSelectedPrewarmRenderReason = HasIndependentSelectedPrewarmRenderReason(
+      dragPreview.has_value(), currentVersion != displayedDocVersion_,
+      forceSelectedLayerRasterization, forcePresentationRefresh);
+  const bool selectionOnlyPrewarmAllowed = shouldRequestSelectionOnlyPrewarm(
+      app.document().documentGeneration(), prewarmEntity, currentVersion, rasterViewport);
+  const EditorRasterViewport selectedPrewarmRaster = viewport.selectedPrewarmRasterViewport();
   const bool useSelectedPrewarmRasterViewport =
-      !documentPixelCaptureEnabled_ &&
+      !documentPixelCaptureEnabled_ && !useVisibleSelectedRaster &&
       ShouldUseSelectedPrewarmRasterViewport(
           prewarmEntity, requestOverviewInfill, rasterViewport.viewportBounded,
-          kSelectionOnlyPrewarmMayTriggerRender, hasIndependentSelectedPrewarmRenderReason);
+          selectionOnlyPrewarmAllowed, hasIndependentSelectedPrewarmRenderReason,
+          HasCompleteVisibleCachedCoverage(textures, viewport, rasterViewport),
+          rasterViewport.outputSizePx, selectedPrewarmRaster.outputSizePx);
   const EditorRasterViewport requestRasterViewport =
       requestOverviewInfill
           ? viewport.overviewInfillRasterViewport()
-          : (useSelectedPrewarmRasterViewport ? viewport.selectedPrewarmRasterViewport()
-                                              : rasterViewport);
+          : (useSelectedPrewarmRasterViewport ? selectedPrewarmRaster : rasterViewport);
   const Vector2i currentCanvasSize = requestRasterViewport.outputSizePx;
 
   if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && !deferCanvasCommitForActiveDrag &&
@@ -1484,6 +1703,13 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   if (suppressedLayerEntity != entt::null) {
     compositedPresentation_.discardCachedTexturesForEntity(suppressedLayerEntity);
   }
+
+  // A composited result can carry the selected entity without a promoted drag-target tile (for
+  // example, when a mask forces its child into an owning layer). In that case the presenter has
+  // no bitmap to move on the UI thread. Render the changing document during the held drag rather
+  // than treating the selection's cached metadata as proof that its pixels can move locally.
+  const bool renderDragFallback =
+      activeDragNeedsRenderedPresentation(app, dragPreview, textures, suppressedLayerEntity);
 
   const bool selectionBoundsChanged = app.selectedElements() != selectionBoundsCache_.lastSelection;
   if (!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value()) {
@@ -1509,7 +1735,8 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
           .dragTranslationRecaptureDistanceDoc =
               kDragTranslationRecaptureScreenPx /
               std::max(std::abs(viewport.pixelsPerDocUnit()), 1e-9),
-          .selectionOnlyPrewarmMayTriggerRender = kSelectionOnlyPrewarmMayTriggerRender,
+          .requiresRenderedActiveDragPresentation = renderDragFallback,
+          .selectionOnlyPrewarmMayTriggerRender = selectionOnlyPrewarmAllowed,
       });
   if (!schedule.shouldRequestRender()) {
     return false;
@@ -1594,6 +1821,19 @@ Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
   }
 
   return selected->unsafeEntityHandle().entity();
+}
+
+bool RenderCoordinator::activeDragNeedsRenderedPresentation(
+    EditorApp& app, const std::optional<SelectTool::ActiveDragPreview>& dragPreview,
+    const GlTextureCache* textures, Entity suppressedLayerEntity) const {
+  if (!dragPreview.has_value()) {
+    return false;
+  }
+  if (textures == nullptr) {
+    return true;
+  }
+  return !HasPresentableDragTargetTile(*textures, dragPreview, suppressedLayerEntity,
+                                       selectedElementIsDisplayNone(app));
 }
 
 Entity RenderCoordinator::selectedCompositedEntityForDiagnostics(EditorApp& app) const {

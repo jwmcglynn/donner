@@ -483,7 +483,7 @@ test.describe("composited output invariants", () => {
     // tail's own defect class (a resize committed once input goes quiet) is
     // covered by (a) and (c), which do include it.
     // A slower fixed-distance gesture falls below the probe's per-frame spatial resolution.
-    const panDurationMs = scaledMs(700);
+    const panDurationMs = 700;
     const kPanDistanceCssPx = 294;
     const stream = await panStream(page, at, {
       dxPerSec: 0,

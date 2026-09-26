@@ -103,6 +103,19 @@ std::optional<std::string> ShowNativeSaveFileDialog(GLFWwindow* parent,
   }
 }
 
+void ShowNativeFileDialogError(GLFWwindow* parent, const std::string& title,
+                               const std::string& message) {
+  (void)parent;
+  @autoreleasepool {
+    NSAlert* alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleWarning;
+    alert.messageText = [NSString stringWithUTF8String:title.c_str()];
+    alert.informativeText = [NSString stringWithUTF8String:message.c_str()];
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+  }
+}
+
 void NoteNativeRecentDocument(const std::string& path) {
   if (path.empty()) {
     return;

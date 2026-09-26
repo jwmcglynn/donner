@@ -17,7 +17,10 @@ target here — they are standalone scripts run directly.
 
 package(default_visibility = ["//visibility:public"])
 
-exports_files(["LICENSE"])
+exports_files([
+    "LICENSE",
+    "fonts/Noto-LICENSE-OFL.txt",
+])
 
 filegroup(
     name = "tests",
@@ -31,8 +34,8 @@ filegroup(
     name = "resources",
     srcs = glob(
         ["resources/**"],
-        exclude = ["resources/README.md"],
         allow_empty = True,
+        exclude = ["resources/README.md"],
     ),
 )
 

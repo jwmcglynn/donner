@@ -10,20 +10,25 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "donner/css/Color.h"
@@ -38,6 +43,7 @@
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/editor/tests/RenderCoordinatorTestAccess.h"
+#include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_EDITOR_WGPU
@@ -58,6 +64,86 @@ constexpr std::string_view kInitialSvg = R"svg(
   <text id="label" x="12" y="60">Donner</text>
 </svg>
 )svg";
+
+svg::RendererBitmap CropDocumentRect(const svg::RendererBitmap& bitmap,
+                                     const ViewportState& viewport, double framebufferScale,
+                                     const Box2d& documentRect) {
+  svg::RendererBitmap crop;
+  if (bitmap.empty() || !std::isfinite(framebufferScale) || framebufferScale <= 0.0) {
+    return crop;
+  }
+  const Vector2d screenMin = viewport.documentToScreen(documentRect.topLeft);
+  const Vector2d screenMax = viewport.documentToScreen(documentRect.bottomRight);
+  // documentToScreen() uses logical UI pixels. The offscreen test's forced display scale can
+  // differ from both GLFW windowSize() and the viewport's OS-reported devicePixelRatio.
+  const Vector2d physicalMin = screenMin * framebufferScale;
+  const Vector2d physicalMax = screenMax * framebufferScale;
+  if (!std::isfinite(physicalMin.x) || !std::isfinite(physicalMin.y) ||
+      !std::isfinite(physicalMax.x) || !std::isfinite(physicalMax.y)) {
+    return crop;
+  }
+  const auto clippedPixel = [](double position, int limit) {
+    return static_cast<int>(std::lround(std::clamp(position, 0.0, static_cast<double>(limit))));
+  };
+  const int x = clippedPixel(physicalMin.x, bitmap.dimensions.x);
+  const int y = clippedPixel(physicalMin.y, bitmap.dimensions.y);
+  const int right = clippedPixel(physicalMax.x, bitmap.dimensions.x);
+  const int bottom = clippedPixel(physicalMax.y, bitmap.dimensions.y);
+  if (right <= x || bottom <= y) {
+    return crop;
+  }
+  crop.dimensions = Vector2i(right - x, bottom - y);
+  crop.rowBytes = static_cast<std::size_t>(right - x) * 4u;
+  crop.alphaType = bitmap.alphaType;
+  crop.pixels.resize(crop.rowBytes * static_cast<std::size_t>(bottom - y));
+  for (int row = 0; row < bottom - y; ++row) {
+    std::memcpy(crop.pixels.data() + static_cast<std::size_t>(row) * crop.rowBytes,
+                bitmap.pixels.data() + static_cast<std::size_t>(y + row) * bitmap.rowBytes +
+                    static_cast<std::size_t>(x) * 4u,
+                crop.rowBytes);
+  }
+  return crop;
+}
+
+TEST(EditorShellTest, DocumentCropUsesEffectiveFramebufferScaleAndClipsVisibleEdges) {
+  // The forced 2x offscreen scale may coexist with either a 1x or 2x OS-reported viewport ratio.
+  const std::array<std::pair<int, int>, 3> cases = {{{1, 1}, {2, 1}, {2, 2}}};
+  for (const auto& [scale, reportedDpr] : cases) {
+    svg::RendererBitmap framebuffer;
+    framebuffer.dimensions = Vector2i(100 * scale, 80 * scale);
+    framebuffer.rowBytes = static_cast<std::size_t>(framebuffer.dimensions.x) * 4u;
+    framebuffer.pixels.resize(framebuffer.rowBytes * framebuffer.dimensions.y);
+    for (int y = 0; y < framebuffer.dimensions.y; ++y) {
+      for (int x = 0; x < framebuffer.dimensions.x; ++x) {
+        const std::size_t offset = static_cast<std::size_t>(y) * framebuffer.rowBytes + x * 4u;
+        framebuffer.pixels[offset] = static_cast<std::uint8_t>(x);
+        framebuffer.pixels[offset + 1] = static_cast<std::uint8_t>(y);
+        framebuffer.pixels[offset + 3] = 255;
+      }
+    }
+    ViewportState viewport;
+    viewport.zoom = 1.0;
+    viewport.devicePixelRatio = static_cast<double>(reportedDpr);
+    viewport.panScreenPoint = Vector2d(10.0, 20.0);
+    const svg::RendererBitmap crop =
+        CropDocumentRect(framebuffer, viewport, scale, Box2d::FromXYWH(4.0, 5.0, 3.0, 2.0));
+    ASSERT_EQ(crop.dimensions, Vector2i(3 * scale, 2 * scale));
+    ASSERT_FALSE(crop.empty());
+    EXPECT_EQ(crop.pixels[0], 14 * scale);
+    EXPECT_EQ(crop.pixels[1], 25 * scale);
+    const std::size_t last = crop.pixels.size() - 4u;
+    EXPECT_EQ(crop.pixels[last], 17 * scale - 1);
+    EXPECT_EQ(crop.pixels[last + 1], 27 * scale - 1);
+
+    const svg::RendererBitmap visibleBottom =
+        CropDocumentRect(framebuffer, viewport, scale, Box2d::FromXYWH(4.0, 55.0, 3.0, 10.0));
+    ASSERT_EQ(visibleBottom.dimensions, Vector2i(3 * scale, 5 * scale));
+    EXPECT_EQ(visibleBottom.pixels[1], 75 * scale);
+    EXPECT_EQ(visibleBottom.pixels[visibleBottom.pixels.size() - 3u], 80 * scale - 1);
+    EXPECT_TRUE(CropDocumentRect(framebuffer, viewport, scale, Box2d::FromXYWH(4.0, 61.0, 3.0, 2.0))
+                    .empty());
+  }
+}
 
 constexpr std::string_view kStyledSvg = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
@@ -898,6 +984,8 @@ TEST(EditorShellInternalTest, PaintReferenceStateIncludesSameDocumentSourceRange
 
 class EditorShellTestAccess {
 public:
+  using NativeSaveOutcome = EditorShell::NativeSaveOutcome;
+
   static EditorApp& App(EditorShell& shell) { return shell.app_; }
   static const EditorApp& App(const EditorShell& shell) { return shell.app_; }
   static std::size_t PendingHistoryActionCount(const EditorShell& shell) {
@@ -933,6 +1021,13 @@ public:
 
   static std::size_t CachedFontPreviewCount(const EditorShell& shell) {
     return shell.fontPreviewBitmaps_.size();
+  }
+
+  static std::vector<svg::FontFaceDependency> FontPreviewDependencies(const EditorShell& shell,
+                                                                      std::string_view family) {
+    const auto it = shell.fontPreviewIdentities_.find(std::string(family));
+    return it == shell.fontPreviewIdentities_.end() ? std::vector<svg::FontFaceDependency>{}
+                                                    : it->second.dependencies;
   }
 
   static SampleThumbnailRenderResult PendingSampleFontResult(EditorShell& shell,
@@ -1042,6 +1137,22 @@ public:
 
   static void RequestSaveAs(EditorShell& shell, std::string error = std::string()) {
     shell.requestSaveAs(std::move(error));
+  }
+
+  static void QueueNativeSaveSelection(EditorShell& shell, std::string path) {
+    shell.queueNativeSaveSelection(std::move(path));
+  }
+
+  static NativeSaveOutcome TryPendingNativeSave(EditorShell& shell, std::string* error) {
+    return shell.tryPendingNativeSave(error);
+  }
+
+  static std::optional<std::string> PendingNativeSavePath(const EditorShell& shell) {
+    return shell.pendingNativeSavePath_;
+  }
+
+  static void ExpirePendingNativeSave(EditorShell& shell) {
+    shell.pendingNativeSaveDeadline_ = std::chrono::steady_clock::now() - std::chrono::seconds(1);
   }
 
   static void RequestExportViewportSvg(EditorShell& shell, bool includeOverlay,
@@ -1161,9 +1272,23 @@ public:
     return snapshot.has_value() ? snapshot->paths.size() : 0u;
   }
 
+  static std::optional<Box2d> SelectionChromeFirstBoundsDoc(const EditorShell& shell) {
+    const std::optional<SelectionChromeSnapshot>& snapshot =
+        shell.renderCoordinator_.immediateOverlaySnapshot();
+    return snapshot.has_value() && !snapshot->aabbsDoc.empty()
+               ? std::optional<Box2d>(snapshot->aabbsDoc.front())
+               : std::nullopt;
+  }
+
   static std::uint64_t DisplayedDocVersion(const EditorShell& shell) {
     return shell.renderCoordinator_.displayedDocVersion();
   }
+
+  static bool SamplePresentationPending(const EditorShell& shell) {
+    return shell.samplePresentationPending_;
+  }
+
+  static std::string_view ActiveSampleId(const EditorShell& shell) { return shell.activeSampleId_; }
 
   static std::optional<std::uint64_t> ImmediateOverlayDocumentVersion(const EditorShell& shell) {
     return shell.renderCoordinator_.immediateOverlayDocumentVersionForDiagnostics();
@@ -1333,6 +1458,11 @@ public:
     shell.applyMenuActions(actions);
   }
 
+  static void ApplyMenuHistoryActions(EditorShell& shell, const MenuBarActions& actions,
+                                      bool sourcePaneFocused) {
+    shell.applyMenuHistoryActions(actions, sourcePaneFocused);
+  }
+
   static void UseInMemoryShapeClipboard(EditorShell& shell) {
     shell.shapeClipboard_ = std::make_unique<InMemoryClipboard>();
   }
@@ -1441,6 +1571,16 @@ public:
 
   static bool TextToolIsEditing(const EditorShell& shell) { return shell.textTool_.isEditing(); }
 
+  static FormatBarState ComputeFormatBarState(EditorShell& shell) {
+    return shell.computeFormatBarState();
+  }
+
+  static void ToggleTextBold(EditorShell& shell) { shell.textTool_.toggleBold(shell.app_); }
+  static void ToggleTextItalic(EditorShell& shell) { shell.textTool_.toggleItalic(shell.app_); }
+  static void ToggleTextUnderline(EditorShell& shell) {
+    shell.textTool_.toggleUnderline(shell.app_);
+  }
+
   static std::size_t TextToolCaretIndex(const EditorShell& shell) {
     return shell.textTool_.caretIndex();
   }
@@ -1474,6 +1614,15 @@ public:
                                                       bounds);
   }
 
+  static bool MoveSelectedShapeDrag(EditorShell& shell, const Vector2d& documentPoint) {
+    shell.selectTool_.onMouseMove(shell.app_, documentPoint, /*buttonHeld=*/true);
+    return shell.flushInteractiveDragMutationAndRequestRender();
+  }
+
+  static void EndSelectedShapeDrag(EditorShell& shell, const Vector2d& documentPoint) {
+    shell.selectTool_.onMouseUp(shell.app_, documentPoint);
+  }
+
   static void BufferPendingClick(EditorShell& shell, const Vector2d& documentPoint,
                                  MouseModifiers modifiers = MouseModifiers{}) {
     shell.interactionController_.bufferPendingClick(documentPoint, modifiers);
@@ -1485,6 +1634,10 @@ public:
 
   static bool RendererBusy(const EditorShell& shell) {
     return shell.renderCoordinator_.asyncRenderer().isBusy();
+  }
+
+  static int RenderRequestsPosted(const EditorShell& shell) {
+    return shell.renderCoordinator_.lastFrameCostBreakdown().renderRequestsPosted;
   }
 
   static void SetPendingSelectClickStartSeconds(EditorShell& shell, double seconds) {
@@ -2775,6 +2928,96 @@ TEST(EditorShellTest, SaveRequestsUseCurrentPathAndFallbackToSaveAs) {
   EXPECT_TRUE(untitledShell.valid());
 }
 
+TEST(EditorShellTest, NativeViewportExportRetainsChosenPathUntilRendererIsReady) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "source.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  const std::filesystem::path exportPath = TempPathForTest("native_deferred_viewport.svg");
+  std::filesystem::remove(exportPath);
+
+  EditorShellTestAccess::RequestExportViewportSvg(shell, /*includeOverlay=*/false);
+  ASSERT_TRUE(EditorShellTestAccess::SaveFileModalRequested(shell));
+  EditorShellTestAccess::QueueNativeSaveSelection(shell, exportPath.string());
+  ASSERT_FALSE(EditorShellTestAccess::SaveFileModalRequested(shell));
+  AsyncRenderer& renderer =
+      EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(500));
+  ASSERT_TRUE(renderer.isBusy());
+
+  std::string error;
+  EXPECT_EQ(EditorShellTestAccess::TryPendingNativeSave(shell, &error),
+            EditorShellTestAccess::NativeSaveOutcome::Deferred);
+  EXPECT_THAT(EditorShellTestAccess::PendingNativeSavePath(shell),
+              testing::Optional(exportPath.string()));
+  EXPECT_TRUE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_FALSE(EditorShellTestAccess::SaveFileModalRequested(shell));
+  EXPECT_FALSE(std::filesystem::exists(exportPath));
+
+  renderer.cancelInFlight();
+  ASSERT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                           std::chrono::seconds(2)));
+  std::ignore = renderer.pollResult();
+  renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
+
+  error.clear();
+  EXPECT_EQ(EditorShellTestAccess::TryPendingNativeSave(shell, &error),
+            EditorShellTestAccess::NativeSaveOutcome::Saved)
+      << error;
+  EXPECT_FALSE(EditorShellTestAccess::PendingNativeSavePath(shell).has_value());
+  EXPECT_FALSE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_FALSE(EditorShellTestAccess::SaveFileModalRequested(shell));
+  ASSERT_TRUE(std::filesystem::exists(exportPath));
+  EXPECT_NE(ReadTextFile(exportPath).find("target"), std::string::npos);
+}
+
+TEST(EditorShellTest, NativeViewportExportReportsPermanentErrorWithoutImGuiSaveDialog) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "source.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  EditorShellTestAccess::RequestExportViewportSvg(shell, /*includeOverlay=*/false);
+  const std::filesystem::path invalidPath =
+      TempPathForTest("native_save_missing_directory/viewport.svg");
+  EditorShellTestAccess::QueueNativeSaveSelection(shell, invalidPath.string());
+
+  std::string error;
+  EXPECT_EQ(EditorShellTestAccess::TryPendingNativeSave(shell, &error),
+            EditorShellTestAccess::NativeSaveOutcome::Failed);
+  EXPECT_FALSE(error.empty());
+  EXPECT_FALSE(EditorShellTestAccess::PendingNativeSavePath(shell).has_value());
+  EXPECT_FALSE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_FALSE(EditorShellTestAccess::SaveFileModalRequested(shell));
+}
+
+TEST(EditorShellTest, NativeViewportExportTimesOutWithoutReopeningImGuiSaveDialog) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "source.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::RequestExportViewportSvg(shell, /*includeOverlay=*/false);
+  EditorShellTestAccess::QueueNativeSaveSelection(shell, TempPathForTest("timed_out.svg").string());
+  EditorShellTestAccess::ExpirePendingNativeSave(shell);
+
+  std::string error;
+  EXPECT_EQ(EditorShellTestAccess::TryPendingNativeSave(shell, &error),
+            EditorShellTestAccess::NativeSaveOutcome::Failed);
+  EXPECT_THAT(error, testing::HasSubstr("timed out"));
+  EXPECT_FALSE(EditorShellTestAccess::PendingNativeSavePath(shell).has_value());
+  EXPECT_FALSE(EditorShellTestAccess::PendingViewportExport(shell));
+  EXPECT_FALSE(EditorShellTestAccess::SaveFileModalRequested(shell));
+}
+
 TEST(EditorShellTest, ViewportSvgExportRequestsAndWritesCroppedSvg) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -2968,6 +3211,188 @@ TEST(EditorShellTest, SourceStyleDecorationsDiscardReplacedDocumentResult) {
             EditorShellTestAccess::App(shell).document().documentGeneration());
   EXPECT_EQ(EditorShellTestAccess::StyleSourceContributionCount(shell), 0u);
   EXPECT_TRUE(source.sourceStyleDecorations().empty());
+}
+
+TEST(EditorShellTest, ValidStyleSourceEditRequestsCanvasRenderWithoutCanvasClick) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kStyledSvg, "styled.svg"));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  source.resetTextChanged();
+  const std::size_t declarationOffset = source.getText().find("fill: red");
+  ASSERT_THAT(declarationOffset, testing::Ne(std::string::npos));
+  const std::size_t colorOffset = declarationOffset + 6u;
+  source.setSelection(source.getCoordinatesAtByteOffset(colorOffset),
+                      source.getCoordinatesAtByteOffset(colorOffset + 3u));
+  source.insertText("blue");
+  EditorShellTestAccess::ClearRequestRenderAtEndOfFrame(shell);
+  const std::uint64_t versionBefore =
+      EditorShellTestAccess::App(shell).document().currentFrameVersion();
+
+  window.beginFrame();
+  ImGuiIO& io = ImGui::GetIO();
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+  EditorShellTestAccess::RenderSourcePane(shell, /*paneOriginY=*/0.0f, /*paneHeight=*/180.0f,
+                                          /*paneWidth=*/260.0f, io.Fonts->Fonts[0]);
+  window.endFrame();
+
+  EXPECT_THAT(EditorShellTestAccess::App(shell).document().currentFrameVersion(),
+              testing::Gt(versionBefore));
+  const auto target =
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  EXPECT_THAT(target->getComputedStyle().fill.get(),
+              testing::Optional(svg::PaintServer(
+                  svg::PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF))))));
+  EXPECT_THAT(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell), testing::Eq(true));
+
+  RunShellFrame(window, shell);
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  RunShellFrame(window, shell);
+  EXPECT_THAT(EditorShellTestAccess::DisplayedDocVersion(shell),
+              testing::Eq(EditorShellTestAccess::App(shell).document().currentFrameVersion()));
+}
+
+TEST(EditorShellTest, TypingStylesheetColorKeepsSourceFocusAndReferenceRopes) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kStyledSvg, "styled.svg"));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  source.resetTextChanged();
+  const std::size_t declarationOffset = source.getText().find("fill: red");
+  ASSERT_THAT(declarationOffset, testing::Ne(std::string::npos));
+  const std::size_t colorOffset = declarationOffset + 6u;
+  source.setCursorPosition(source.getCoordinatesAtByteOffset(colorOffset));
+  std::optional<StyleFocus> styleFocus =
+      EditorShellTestAccess::StyleFocusAtSourceOffset(shell, colorOffset);
+  ASSERT_THAT(styleFocus, testing::Optional(testing::_));
+  ASSERT_THAT(styleFocus->partition.referenceLinks.empty(), testing::Eq(false));
+  EditorShellTestAccess::ApplyStyleFocus(shell, std::move(*styleFocus));
+  EditorShellTestAccess::SetSourceFocusMode(shell, true);
+  ASSERT_THAT(source.hasFocusPartition(), testing::Eq(true));
+
+  source.setSelection(source.getCoordinatesAtByteOffset(colorOffset),
+                      source.getCoordinatesAtByteOffset(colorOffset + 3u));
+  for (const char ch : std::string_view("blue")) {
+    source.insertText(std::string(1, ch));
+    window.beginFrame();
+    ImGuiIO& io = ImGui::GetIO();
+    if (!io.Fonts->IsBuilt()) {
+      io.Fonts->Build();
+    }
+    EditorShellTestAccess::RenderSourcePane(shell, /*paneOriginY=*/0.0f,
+                                            /*paneHeight=*/180.0f, /*paneWidth=*/260.0f,
+                                            io.Fonts->Fonts[0]);
+    window.endFrame();
+    RunShellFrame(window, shell);
+  }
+
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(3)));
+  RunShellFrame(window, shell);
+  EXPECT_THAT(EditorShellTestAccess::DisplayedDocVersion(shell),
+              testing::Eq(EditorShellTestAccess::App(shell).document().currentFrameVersion()));
+  EXPECT_THAT(source.getText(), testing::HasSubstr("fill: blue"));
+  EXPECT_THAT(std::string(EditorShellTestAccess::App(shell).document().document().source()),
+              testing::HasSubstr("fill: blue"));
+  const std::optional<svg::SVGElement> targetAfter =
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_THAT(targetAfter, testing::Optional(testing::_));
+  EXPECT_THAT(targetAfter->getComputedStyle().fill.get(),
+              testing::Optional(svg::PaintServer(
+                  svg::PaintServer::Solid(css::Color(css::RGBA(0, 0, 255, 255))))));
+  EXPECT_THAT(source.hasFocusPartition(), testing::Eq(true));
+  EXPECT_THAT(EditorShellTestAccess::SourceFocusOriginatedInStyle(shell), testing::Eq(true));
+  EXPECT_THAT(source.isTextChanged(), testing::Eq(false));
+  EXPECT_THAT(EditorShellTestAccess::App(shell).document().hasPendingMutations(),
+              testing::Eq(false));
+  const std::size_t cursorOffset = source.getByteOffsetAtCoordinates(source.getCursorPosition());
+  EXPECT_THAT(cursorOffset,
+              testing::AllOf(testing::Ge(colorOffset), testing::Le(colorOffset + 4u)));
+  EXPECT_THAT(EditorShellTestAccess::StyleFocusAtSourceOffset(shell, cursorOffset),
+              testing::Optional(testing::_));
+  const std::optional<StyleFocus> focusAfter =
+      EditorShellTestAccess::StyleFocusAtSourceCursor(shell);
+  ASSERT_THAT(focusAfter, testing::Optional(testing::_));
+  EXPECT_THAT(focusAfter->partition.referenceLinks.empty(), testing::Eq(false));
+}
+
+TEST(EditorShellTest, SelectedSplashStylesheetEditPresentsWithoutCanvasClick) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  const EditorSample* splash = FindEditorSample("donner-splash");
+  ASSERT_NE(splash, nullptr);
+  std::string sourceText(splash->source);
+  const std::size_t ruleOffset = sourceText.find(".cls-5 {");
+  ASSERT_NE(ruleOffset, std::string::npos);
+  const std::size_t originalColorOffset = sourceText.find("url(#linear-gradient)", ruleOffset);
+  ASSERT_NE(originalColorOffset, std::string::npos);
+  sourceText.replace(originalColorOffset, std::string_view("url(#linear-gradient)").size(), "red");
+
+  EditorShell shell(window, OptionsWithSource(sourceText, "donner_splash.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const std::optional<svg::SVGElement> letter =
+      app.document().document().querySelector("#Donner_D");
+  ASSERT_THAT(letter, testing::Optional(testing::_));
+  app.setSelection(*letter);
+
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  source.resetTextChanged();
+  const std::size_t declarationOffset = source.getText().find("fill: red", ruleOffset);
+  ASSERT_NE(declarationOffset, std::string::npos);
+  const std::size_t colorOffset = declarationOffset + 6u;
+  source.setCursorPosition(source.getCoordinatesAtByteOffset(colorOffset));
+  std::optional<StyleFocus> styleFocus =
+      EditorShellTestAccess::StyleFocusAtSourceOffset(shell, colorOffset);
+  ASSERT_THAT(styleFocus, testing::Optional(testing::_));
+  EditorShellTestAccess::ApplyStyleFocus(shell, std::move(*styleFocus));
+  EditorShellTestAccess::SetSourceFocusMode(shell, true);
+  source.setSelection(source.getCoordinatesAtByteOffset(colorOffset),
+                      source.getCoordinatesAtByteOffset(colorOffset + 3u));
+  source.insertText("green");
+  const std::uint64_t before = app.document().currentFrameVersion();
+
+  window.beginFrame();
+  ImGuiIO& io = ImGui::GetIO();
+  if (!io.Fonts->IsBuilt()) {
+    io.Fonts->Build();
+  }
+  EditorShellTestAccess::RenderSourcePane(shell, /*paneOriginY=*/0.0f, /*paneHeight=*/180.0f,
+                                          /*paneWidth=*/260.0f, io.Fonts->Fonts[0]);
+  window.endFrame();
+  EXPECT_GT(app.document().currentFrameVersion(), before);
+  EXPECT_TRUE(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell));
+
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    RunShellFrame(window, shell);
+    if (EditorShellTestAccess::DisplayedDocVersion(shell) == app.document().currentFrameVersion()) {
+      break;
+    }
+    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+        std::chrono::steady_clock::now() + std::chrono::seconds(1)));
+  }
+  EXPECT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell),
+            app.document().currentFrameVersion());
+  const std::optional<svg::SVGElement> updatedLetter =
+      app.document().document().querySelector("#Donner_D");
+  ASSERT_THAT(updatedLetter, testing::Optional(testing::_));
+  EXPECT_THAT(updatedLetter->getComputedStyle().fill.get(),
+              testing::Optional(svg::PaintServer(
+                  svg::PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 255))))));
 }
 
 TEST(EditorShellTest, StyleFocusCursorAndPartitionGuards) {
@@ -3239,6 +3664,720 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
   runFrameWithMouse(screenPoint(Vector2d(35.0, 28.0)), /*mouseDown=*/false);
 }
 
+TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettledPixels) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Partly offscreen splash drag pixels",
+      .initialWidth = 960,
+      .initialHeight = 720,
+      .visible = false,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Framebuffer readback is unavailable on this host";
+  }
+  const EditorSample* splash = FindEditorSample("donner-splash");
+  ASSERT_NE(splash, nullptr);
+  EditorShell shell(window, OptionsWithSource(splash->source, "donner_splash.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  // A canvas click hits the child ellipse. Explicit group promotion from the Layers panel is
+  // covered separately by the compositor test for #Background_shine.
+  const auto shine = app.document().document().querySelector("#Background_shine ellipse");
+  ASSERT_THAT(shine, testing::Optional(testing::_));
+  const Entity shineEntity = shine->unsafeEntityHandle().entity();
+  const std::optional<Box2d> originalWorldBounds =
+      shine->cast<svg::SVGGeometryElement>().worldBounds();
+  ASSERT_TRUE(originalWorldBounds.has_value());
+
+  const auto captureFrame = [&](bool contentOnly = false) {
+    if (contentOnly) {
+      shell.setContentOnlyCaptureForNextFrameForReplay(true);
+    }
+    window.beginFrame();
+    shell.runFrame();
+    return window.endFrameAndReadPixels();
+  };
+  const auto settleFrame = [&](std::string_view stage, std::uint64_t minimumVersion) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    for (int frame = 0; frame < 20 && std::chrono::steady_clock::now() < deadline; ++frame) {
+      (void)captureFrame();
+      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+        break;
+      }
+      const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+      if (app.document().currentFrameVersion() >= minimumVersion &&
+          EditorShellTestAccess::DisplayedDocVersion(shell) ==
+              app.document().currentFrameVersion() &&
+          !status.tiles.empty()) {
+        return;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+    FAIL() << "The splash did not produce a stable cached frame at " << stage
+           << ": minimumVersion=" << minimumVersion
+           << " current=" << app.document().currentFrameVersion()
+           << " displayed=" << EditorShellTestAccess::DisplayedDocVersion(shell)
+           << " tiles=" << status.tiles.size()
+           << " rendererBusy=" << EditorShellTestAccess::RendererBusy(shell)
+           << " pendingMutations=" << app.document().hasPendingMutations();
+  };
+  settleFrame("initial", app.document().currentFrameVersion());
+  app.setSelection(*shine);
+  // The selection-only cache request is committed after a brief viewport-settle delay. Let it
+  // become eligible before starting the held-pointer frame.
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  settleFrame("selected", app.document().currentFrameVersion());
+
+  const ViewportState viewport = shell.viewportForReadback();
+  const EditorRasterViewport visibleRaster = viewport.rasterViewport();
+  ASSERT_TRUE(visibleRaster.viewportBounded);
+  ASSERT_NE(visibleRaster.outputSizePx, viewport.selectedPrewarmRasterViewport().outputSizePx)
+      << "The regression needs a small pane whose selected prewarm would change tile dimensions";
+  EXPECT_EQ(shell.layerInspectorStatusForReadback().presentationCoverage.activeOutputSizePx,
+            visibleRaster.outputSizePx)
+      << "Selecting the ellipse must preserve the complete visible static tile cache";
+  const std::optional<Box2d> originalChromeBounds =
+      EditorShellTestAccess::SelectionChromeFirstBoundsDoc(shell);
+  ASSERT_TRUE(originalChromeBounds.has_value());
+  const svg::RendererBitmap beforeMove = captureFrame(/*contentOnly=*/true);
+  ASSERT_FALSE(beforeMove.empty());
+
+  // Background_shine is an ellipse centered at y=10 with radius 262: its source pixels above
+  // y=0 are initially off-artboard. Moving it down by 300 brings those pixels into the artboard.
+  // Hold the worker result so this screenshot is precisely the first pointer presentation of
+  // previously cached target pixels, with no newly rasterized frame to hide a clipped tile.
+  EditorShellTestAccess::HoldRenderResultsForPolls(shell, 12);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(300.0, 80.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  (void)captureFrame();
+  ASSERT_THAT(app.selectedElement(), testing::Optional(testing::_));
+  ASSERT_EQ(app.selectedElement()->unsafeEntityHandle().entity(), shineEntity);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(300.0, 380.0),
+      .leftMouseDown = true,
+  });
+  (void)captureFrame();
+  ASSERT_THAT(app.selectedElement(), testing::Optional(testing::_));
+  ASSERT_EQ(app.selectedElement()->unsafeEntityHandle().entity(), shineEntity);
+  const LayerInspectorStatusReadback firstStatus = shell.layerInspectorStatusForReadback();
+  ASSERT_THAT(firstStatus.activeDragPreview, testing::Optional(testing::_));
+  EXPECT_NEAR(firstStatus.activeDragPreview->translation.y, 300.0, 1e-6);
+  EXPECT_GT(EditorShellTestAccess::SelectionChromePathCount(shell), 0u)
+      << "The first moved pixels must keep the selection outline aligned with the live shape";
+  const std::optional<Box2d> firstChromeBounds =
+      EditorShellTestAccess::SelectionChromeFirstBoundsDoc(shell);
+  ASSERT_TRUE(firstChromeBounds.has_value());
+  EXPECT_NEAR(firstChromeBounds->topLeft.x, originalChromeBounds->topLeft.x, 1e-6);
+  EXPECT_NEAR(firstChromeBounds->bottomRight.x, originalChromeBounds->bottomRight.x, 1e-6);
+  EXPECT_NEAR(firstChromeBounds->topLeft.y - originalChromeBounds->topLeft.y, 300.0, 1e-6);
+  EXPECT_NEAR(firstChromeBounds->bottomRight.y - originalChromeBounds->bottomRight.y, 300.0, 1e-6);
+  const svg::RendererBitmap firstMove = captureFrame(/*contentOnly=*/true);
+
+  EditorShellTestAccess::HoldRenderResultsForPolls(shell, 0);
+  const std::uint64_t heldDragVersion = app.document().currentFrameVersion();
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(300.0, 380.0),
+      .leftMouseReleased = true,
+  });
+  (void)captureFrame();
+  settleFrame("released", heldDragVersion);
+  const std::optional<svg::SVGElement> movedShine =
+      app.document().document().querySelector("#Background_shine ellipse");
+  ASSERT_TRUE(movedShine.has_value());
+  const std::optional<Box2d> movedWorldBounds =
+      movedShine->cast<svg::SVGGeometryElement>().worldBounds();
+  ASSERT_TRUE(movedWorldBounds.has_value());
+  EXPECT_NEAR(movedWorldBounds->topLeft.x, originalWorldBounds->topLeft.x, 1e-6);
+  EXPECT_NEAR(movedWorldBounds->bottomRight.x, originalWorldBounds->bottomRight.x, 1e-6);
+  EXPECT_NEAR(movedWorldBounds->topLeft.y - originalWorldBounds->topLeft.y, 300.0, 1e-6);
+  EXPECT_NEAR(movedWorldBounds->bottomRight.y - originalWorldBounds->bottomRight.y, 300.0, 1e-6);
+  const svg::RendererBitmap settled = captureFrame(/*contentOnly=*/true);
+  ASSERT_EQ(beforeMove.dimensions, firstMove.dimensions);
+  ASSERT_EQ(firstMove.dimensions, settled.dimensions);
+
+  const auto cropDocumentRect = [&](const svg::RendererBitmap& bitmap, const Box2d& documentRect) {
+    return CropDocumentRect(bitmap, viewport, window.displayScale(), documentRect);
+  };
+  // The unobscured upper sky contains visible source pixels removed by this move. Pixelmatch
+  // establishes both that the crop changed and that the first held frame already matches the
+  // settled composition; the compositor test checks the newly exposed off-artboard source rows.
+  const Box2d upperSky = Box2d::FromXYWH(270.0, 40.0, 70.0, 50.0);
+  const svg::RendererBitmap beforeSky = cropDocumentRect(beforeMove, upperSky);
+  const svg::RendererBitmap firstSky = cropDocumentRect(firstMove, upperSky);
+  const svg::RendererBitmap settledSky = cropDocumentRect(settled, upperSky);
+  ASSERT_FALSE(beforeSky.empty());
+  ASSERT_FALSE(firstSky.empty());
+  ASSERT_FALSE(settledSky.empty());
+  tests::BitmapGoldenCompareParams signalParams = tests::PixelmatchIdentityParams();
+  signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+  int movedSkyPixels = -1;
+  tests::CompareBitmapToBitmap(beforeSky, settledSky, "shine_upper_sky_changed", signalParams,
+                               &movedSkyPixels);
+  EXPECT_GT(movedSkyPixels, 25) << "The moved shine must visibly change the upper-sky crop";
+  // The cached drag tile and a fresh post-release raster can differ along antialiased edges;
+  // apply the renderer suite's standard pixelmatch threshold while keeping the mismatch budget
+  // far below the changed-sky signal.
+  tests::CompareBitmapToBitmap(firstSky, settledSky, "shine_first_held_frame_matches_settled",
+                               tests::ApprovedPixelToleranceParams(0.02f, 100));
+  if (const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    const std::array<std::pair<const char*, const svg::RendererBitmap*>, 3> screenshots = {
+        std::pair{"before.png", &beforeMove}, std::pair{"first.png", &firstMove},
+        std::pair{"settled.png", &settled}};
+    for (const auto& [name, bitmap] : screenshots) {
+      const std::filesystem::path path = std::filesystem::path(outputDir) / name;
+      (void)svg::RendererImageIO::writeRgbaPixelsToPngFile(
+          path.string().c_str(), bitmap->pixels, bitmap->dimensions.x, bitmap->dimensions.y,
+          bitmap->rowBytes / 4u);
+    }
+  }
+  // Full-object target tiles may extend outside the artboard; the editor must still clip the
+  // composed document at the SVG root. A crop below the artboard stays on the checkerboard.
+  const Box2d belowArtboard = Box2d::FromXYWH(460.0, 535.0, 10.0, 10.0);
+  const svg::RendererBitmap beforeOutside = cropDocumentRect(beforeMove, belowArtboard);
+  const svg::RendererBitmap firstOutside = cropDocumentRect(firstMove, belowArtboard);
+  ASSERT_FALSE(beforeOutside.empty()) << "The viewport must expose a point below the SVG root";
+  ASSERT_FALSE(firstOutside.empty());
+  tests::CompareBitmapToBitmap(firstOutside, beforeOutside, "shine_artboard_clip",
+                               tests::PixelmatchIdentityParams());
+}
+
+TEST(EditorShellTest, ColdSplashShineDragGetsFullTileBeforeMouseUp) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Cold splash shine drag pixels",
+      .initialWidth = 960,
+      .initialHeight = 720,
+      .visible = false,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Framebuffer readback is unavailable on this host";
+  }
+  const EditorSample* splash = FindEditorSample("donner-splash");
+  ASSERT_NE(splash, nullptr);
+  EditorShell shell(window, OptionsWithSource(splash->source, "donner_splash.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto shine = app.document().document().querySelector("#Background_shine ellipse");
+  ASSERT_TRUE(shine.has_value());
+  const Entity shineEntity = shine->unsafeEntityHandle().entity();
+  const auto captureContent = [&] {
+    shell.setContentOnlyCaptureForNextFrameForReplay(true);
+    window.beginFrame();
+    shell.runFrame();
+    return window.endFrameAndReadPixels();
+  };
+  const auto waitForCurrentFrame = [&] {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (int frame = 0; frame < 24 && std::chrono::steady_clock::now() < deadline; ++frame) {
+      (void)captureContent();
+      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+        return false;
+      }
+      const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+      const bool dragTileReady =
+          !status.activeDragPreview.has_value() ||
+          std::ranges::any_of(status.tiles, [](const LayerInspectorStatusReadback::Tile& tile) {
+            return tile.isDragTarget;
+          });
+      if (!app.document().hasPendingMutations() &&
+          EditorShellTestAccess::DisplayedDocVersion(shell) ==
+              app.document().currentFrameVersion() &&
+          !status.tiles.empty() && dragTileReady) {
+        return true;
+      }
+    }
+    return false;
+  };
+  ASSERT_TRUE(waitForCurrentFrame());
+  const ViewportState viewport = shell.viewportForReadback();
+  const svg::RendererBitmap before = captureContent();
+
+  // Start from an unselected, already-presented document. Mouse-down and the next move happen
+  // back-to-back, without a selection-only prewarm or a mouse-up to settle the renderer.
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(300.0, 80.0),
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+  });
+  (void)captureContent();
+  ASSERT_TRUE(app.selectedElement().has_value());
+  ASSERT_EQ(app.selectedElement()->unsafeEntityHandle().entity(), shineEntity);
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(300.0, 380.0),
+      .leftMouseDown = true,
+  });
+  (void)captureContent();
+  ASSERT_TRUE(waitForCurrentFrame()) << "The selected tile must arrive while the pointer is held";
+  const svg::RendererBitmap held = captureContent();
+  const LayerInspectorStatusReadback heldStatus = shell.layerInspectorStatusForReadback();
+  ASSERT_TRUE(heldStatus.activeDragPreview.has_value());
+  EXPECT_NEAR(heldStatus.activeDragPreview->translation.y, 300.0, 1e-6);
+  const bool hasFullShineTile =
+      std::ranges::any_of(heldStatus.tiles, [](const LayerInspectorStatusReadback::Tile& tile) {
+        // A cold capture may rasterize after the +300 transform, so its origin can already be
+        // inside the artboard. The complete ellipse spans about 455 by 524 document units.
+        return tile.isDragTarget && tile.bitmapDimsDoc.x > 400.0 && tile.bitmapDimsDoc.y > 500.0;
+      });
+  EXPECT_TRUE(hasFullShineTile)
+      << "The first cold drag capture must retain source pixels above the artboard";
+
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(300.0, 380.0),
+      .leftMouseReleased = true,
+  });
+  (void)captureContent();
+  ASSERT_TRUE(waitForCurrentFrame());
+  const svg::RendererBitmap settled = captureContent();
+  const Box2d sky = Box2d::FromXYWH(270.0, 40.0, 70.0, 50.0);
+  const svg::RendererBitmap beforeSky =
+      CropDocumentRect(before, viewport, window.displayScale(), sky);
+  const svg::RendererBitmap heldSky = CropDocumentRect(held, viewport, window.displayScale(), sky);
+  const svg::RendererBitmap settledSky =
+      CropDocumentRect(settled, viewport, window.displayScale(), sky);
+  ASSERT_FALSE(beforeSky.empty());
+  ASSERT_FALSE(heldSky.empty());
+  ASSERT_FALSE(settledSky.empty());
+  tests::BitmapGoldenCompareParams signalParams = tests::PixelmatchIdentityParams();
+  signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+  int changedPixels = -1;
+  tests::CompareBitmapToBitmap(heldSky, beforeSky, "cold_shine_held_pixel_change", signalParams,
+                               &changedPixels);
+  EXPECT_GT(changedPixels, 0);
+  tests::CompareBitmapToBitmap(heldSky, settledSky, "cold_shine_held_matches_settled",
+                               tests::ApprovedPixelToleranceParams(0.02f, 100));
+}
+
+TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Geode masked child held drag pixels",
+      .initialWidth = 1024,
+      .initialHeight = 768,
+      .visible = false,
+      .forceOffscreenRenderTarget = true,
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Framebuffer readback is unavailable on this host";
+  }
+  const EditorSample* splash = FindEditorSample("geode-splash");
+  ASSERT_NE(splash, nullptr);
+  EditorShell shell(window, OptionsWithSource(splash->source, "geode_splash.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto captureContent = [&] {
+    shell.setContentOnlyCaptureForNextFrameForReplay(true);
+    window.beginFrame();
+    shell.runFrame();
+    return window.endFrameAndReadPixels();
+  };
+  const auto awaitPresentation = [&] {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (int frame = 0; frame < 30 && std::chrono::steady_clock::now() < deadline; ++frame) {
+      (void)captureContent();
+      if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+        break;
+      }
+      if (EditorShellTestAccess::DisplayedDocVersion(shell) ==
+          app.document().currentFrameVersion()) {
+        return;
+      }
+    }
+    FAIL() << "Geode drag frame did not reach the presenter while the pointer was held: current="
+           << app.document().currentFrameVersion()
+           << " displayed=" << EditorShellTestAccess::DisplayedDocVersion(shell)
+           << " rendererBusy=" << EditorShellTestAccess::RendererBusy(shell);
+  };
+  awaitPresentation();
+
+  for (const char* id : {"central-crown-face-2", "central-silhouette"}) {
+    SCOPED_TRACE(id);
+    const std::optional<svg::SVGElement> target =
+        app.document().document().querySelector(std::string("#") + id);
+    ASSERT_TRUE(target.has_value());
+    const std::optional<Box2d> bounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+    ASSERT_TRUE(bounds.has_value());
+    app.setSelection(*target);
+    EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+    (void)captureContent();
+    awaitPresentation();
+
+    const ViewportState viewport = shell.viewportForReadback();
+    const Vector2d start = (bounds->topLeft + bounds->bottomRight) / 2.0;
+    const Box2d contentCrop = Box2d::FromXYWH(bounds->topLeft.x - 8.0, bounds->topLeft.y - 8.0,
+                                              bounds->width() + 116.0, bounds->height() + 16.0);
+    const svg::RendererBitmap before = captureContent();
+    ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(shell, start, *bounds));
+    ASSERT_TRUE(EditorShellTestAccess::MoveSelectedShapeDrag(shell, start + Vector2d(10.0, 0.0)));
+    awaitPresentation();
+    const svg::RendererBitmap firstHeld = captureContent();
+    const LayerInspectorStatusReadback firstStatus = shell.layerInspectorStatusForReadback();
+    ASSERT_TRUE(firstStatus.activeDragPreview.has_value());
+    EXPECT_NEAR(firstStatus.activeDragPreview->translation.x, 10.0, 1e-6);
+    const std::optional<Box2d> firstBounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+    ASSERT_TRUE(firstBounds.has_value());
+    EXPECT_NEAR(firstBounds->topLeft.x - bounds->topLeft.x, 10.0, 1e-6);
+    ASSERT_TRUE(EditorShellTestAccess::MoveSelectedShapeDrag(shell, start + Vector2d(20.0, 0.0)));
+    awaitPresentation();
+    const svg::RendererBitmap secondHeld = captureContent();
+    const LayerInspectorStatusReadback secondStatus = shell.layerInspectorStatusForReadback();
+    ASSERT_TRUE(secondStatus.activeDragPreview.has_value());
+    EXPECT_NEAR(secondStatus.activeDragPreview->translation.x, 20.0, 1e-6);
+    const std::optional<Box2d> secondBounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+    ASSERT_TRUE(secondBounds.has_value());
+    EXPECT_NEAR(secondBounds->topLeft.x - bounds->topLeft.x, 20.0, 1e-6);
+
+    const svg::RendererBitmap beforeCrop =
+        CropDocumentRect(before, viewport, window.displayScale(), contentCrop);
+    const svg::RendererBitmap firstCrop =
+        CropDocumentRect(firstHeld, viewport, window.displayScale(), contentCrop);
+    const svg::RendererBitmap secondCrop =
+        CropDocumentRect(secondHeld, viewport, window.displayScale(), contentCrop);
+    ASSERT_FALSE(beforeCrop.empty());
+    ASSERT_FALSE(firstCrop.empty());
+    ASSERT_FALSE(secondCrop.empty());
+    tests::BitmapGoldenCompareParams signalParams = tests::PixelmatchIdentityParams();
+    signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+    int firstMovePixels = -1;
+    int secondMovePixels = -1;
+    tests::CompareBitmapToBitmap(firstCrop, beforeCrop, std::string(id) + "_first_held_move",
+                                 signalParams, &firstMovePixels);
+    tests::CompareBitmapToBitmap(secondCrop, firstCrop, std::string(id) + "_second_held_move",
+                                 signalParams, &secondMovePixels);
+    if (firstMovePixels == 0 || secondMovePixels == 0) {
+      if (const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+        const std::array<std::pair<const char*, const svg::RendererBitmap*>, 3> frames = {
+            std::pair{"before", &beforeCrop}, std::pair{"first", &firstCrop},
+            std::pair{"second", &secondCrop}};
+        for (const auto& [stage, bitmap] : frames) {
+          const std::filesystem::path path =
+              std::filesystem::path(outputDir) / (std::string(id) + "_" + stage + ".png");
+          (void)svg::RendererImageIO::writeRgbaPixelsToPngFile(
+              path.string().c_str(), bitmap->pixels, bitmap->dimensions.x, bitmap->dimensions.y,
+              bitmap->rowBytes / 4u);
+        }
+      }
+    }
+    EXPECT_GT(firstMovePixels, 0)
+        << "The canvas stayed frozen through the first held move: current="
+        << firstStatus.documentFrameVersion << " displayed=" << firstStatus.displayedDocVersion
+        << " tiles=" << firstStatus.tiles.size();
+    EXPECT_GT(secondMovePixels, 0)
+        << "The canvas stayed frozen through the next held move: current="
+        << secondStatus.documentFrameVersion << " displayed=" << secondStatus.displayedDocVersion
+        << " tiles=" << secondStatus.tiles.size();
+
+    EditorShellTestAccess::EndSelectedShapeDrag(shell, start + Vector2d(20.0, 0.0));
+    EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+    (void)captureContent();
+    awaitPresentation();
+  }
+}
+
+void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
+                                  bool waitForSelectedPrewarm = false) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Geode direct Retina pointer drag",
+      .initialWidth = 1600,
+      .initialHeight = 900,
+      .visible = false,
+      .offscreen = true,
+      .forceOffscreenRenderTarget = true,
+      .offscreenContentScale = 2.0,
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Retina framebuffer readback is unavailable on this host";
+  }
+  const EditorSample* splash = FindEditorSample("geode-splash");
+  ASSERT_NE(splash, nullptr);
+  EditorShell shell(window, OptionsWithSource(splash->source, "geode_splash.svg"));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_NEAR(window.displayScale(), 2.0, 1e-6);
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto frame = [&](const Vector2d& documentPoint, bool mouseDown, bool capture) {
+    const Vector2d screen = shell.viewportForReadback().documentToScreen(documentPoint);
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(static_cast<float>(screen.x), static_cast<float>(screen.y));
+    io.AddMouseButtonEvent(0, mouseDown);
+    if (capture) {
+      shell.setContentOnlyCaptureForNextFrameForReplay(true);
+    }
+    window.beginFrame();
+    shell.runFrame();
+    if (capture) {
+      return window.endFrameAndReadPixels();
+    }
+    window.endFrame();
+    return svg::RendererBitmap{};
+  };
+  const auto coldDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  for (int tick = 0; tick < 30 && std::chrono::steady_clock::now() < coldDeadline; ++tick) {
+    (void)frame(Vector2d(-100.0, -100.0), false, false);
+    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(coldDeadline)) {
+      break;
+    }
+    if (EditorShellTestAccess::DisplayedDocVersion(shell) == app.document().currentFrameVersion()) {
+      break;
+    }
+  }
+  ASSERT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell),
+            app.document().currentFrameVersion());
+  (void)frame(Vector2d(-100.0, -100.0), false, false);
+  (void)frame(Vector2d(-100.0, -100.0), false, false);
+
+  const auto target = app.document().document().querySelector("#" + std::string(id));
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+  const auto bounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+  ASSERT_TRUE(bounds.has_value());
+  std::optional<Vector2d> hitPoint;
+  const Vector2d center = (bounds->topLeft + bounds->bottomRight) / 2.0;
+  if (selectFromLayers) {
+    // This silhouette is covered by later-painted crystal faces, so canvas hit-testing cannot
+    // select it. Select it from Layers, then immediately drag its bounds through real mouse input
+    // while its speculative prewarm is still in flight.
+    hitPoint = center;
+  } else {
+    double bestDistance = std::numeric_limits<double>::infinity();
+    for (int y = 1; y < 17; ++y) {
+      for (int x = 1; x < 17; ++x) {
+        const Vector2d point =
+            bounds->topLeft + Vector2d(bounds->width() * x / 17.0, bounds->height() * y / 17.0);
+        const auto hit = app.hitTest(point);
+        const double distance = (point - center).lengthSquared();
+        if (hit.has_value() && hit->id() == id && distance < bestDistance) {
+          hitPoint = point;
+          bestDistance = distance;
+        }
+      }
+    }
+  }
+  ASSERT_TRUE(hitPoint.has_value()) << id << " has no canvas hit point";
+  const ViewportState viewport = shell.viewportForReadback();
+  const Box2d crop = Box2d::FromXYWH(bounds->topLeft.x - 8.0, bounds->topLeft.y - 8.0,
+                                     bounds->width() + 90.0, bounds->height() + 16.0);
+  const svg::RendererBitmap before = frame(*hitPoint, false, true);
+  ASSERT_GE(before.dimensions.x, 3000);
+  ASSERT_GE(before.dimensions.y, 1600);
+  const svg::RendererBitmap beforeCrop =
+      CropDocumentRect(before, viewport, window.displayScale(), crop);
+  ASSERT_FALSE(beforeCrop.empty());
+  if (selectFromLayers) {
+    shell.asyncRendererForReplay().setReplayRenderDelayForTesting(std::chrono::milliseconds(45));
+    app.setSelection(*target);
+    EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+    (void)frame(*hitPoint, false, false);
+    if (waitForSelectedPrewarm) {
+      const auto awaitSelectedPrewarm = [&] {
+        const auto settledDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        for (int tick = 0; tick < 30 && std::chrono::steady_clock::now() < settledDeadline;
+             ++tick) {
+          (void)frame(*hitPoint, false, false);
+          if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+                  settledDeadline)) {
+            break;
+          }
+          if (!EditorShellTestAccess::RendererBusy(shell) &&
+              EditorShellTestAccess::DisplayedDocVersion(shell) ==
+                  app.document().currentFrameVersion()) {
+            return true;
+          }
+        }
+        return false;
+      };
+      ASSERT_TRUE(awaitSelectedPrewarm())
+          << "The selected silhouette prewarm did not settle before mouse-down";
+      ASSERT_FALSE(EditorShellTestAccess::RendererBusy(shell))
+          << "The selected silhouette prewarm did not settle before mouse-down";
+      ASSERT_GT(EditorShellTestAccess::DisplayedSelectionBoundsCount(shell), 0u);
+      const auto coveringHit = app.hitTest(*hitPoint);
+      ASSERT_TRUE(coveringHit.has_value());
+      ASSERT_NE(coveringHit->id(), id);
+      (void)frame(*hitPoint, true, false);
+      (void)frame(*hitPoint, false, false);
+      ASSERT_TRUE(app.selectedElement().has_value());
+      EXPECT_EQ(app.selectedElement()->id(), coveringHit->id())
+          << "A click without dragging must select the topmost covering facet";
+
+      // Restore the silhouette through Layers and verify that a real held drag, unlike the
+      // click above, keeps that selection even under the same overlapping facet.
+      app.setSelection(*target);
+      EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
+      (void)frame(*hitPoint, false, false);
+      ASSERT_TRUE(awaitSelectedPrewarm());
+    }
+  }
+  const std::uint64_t displayedBefore = EditorShellTestAccess::DisplayedDocVersion(shell);
+  (void)frame(*hitPoint, true, false);
+
+  tests::BitmapGoldenCompareParams signalParams = tests::PixelmatchIdentityParams();
+  signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
+  bool activeDrag = false;
+  bool wrongActiveDragEntity = false;
+  int requestsPosted = 0;
+  for (int move = 1; move <= 24; ++move) {
+    (void)frame(*hitPoint + Vector2d(move * 0.5, 0.0), true, false);
+    const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+    if (status.activeDragPreview.has_value()) {
+      activeDrag = true;
+      wrongActiveDragEntity |= status.activeDragPreview->entity != targetEntity;
+    }
+    requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
+  }
+  std::ostringstream heldDiagnostics;
+  std::optional<svg::RendererBitmap> lastHeldFrame;
+  std::optional<svg::RendererBitmap> lastHeldCrop;
+  const auto awaitHeldPixels = [&](double dx, std::uint64_t minimumVersion,
+                                   const svg::RendererBitmap& prior,
+                                   std::string_view phase) -> std::optional<svg::RendererBitmap> {
+    const Vector2d pointer = *hitPoint + Vector2d(dx, 0.0);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    for (int tick = 0; tick < 40 && std::chrono::steady_clock::now() < deadline; ++tick) {
+      (void)frame(pointer, true, false);
+      requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
+      const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
+      if (status.activeDragPreview.has_value()) {
+        activeDrag = true;
+        wrongActiveDragEntity |= status.activeDragPreview->entity != targetEntity;
+      }
+      const std::uint64_t currentVersion = app.document().currentFrameVersion();
+      const bool pendingTransform = app.document().hasPendingMutations();
+      const bool rendererBusy = EditorShellTestAccess::RendererBusy(shell);
+      if (currentVersion <= minimumVersion || status.displayedDocVersion < currentVersion ||
+          pendingTransform) {
+        heldDiagnostics << "\n  phase=" << phase << " wait=" << tick
+                        << " current=" << currentVersion
+                        << " displayed=" << status.displayedDocVersion
+                        << " pendingTransform=" << pendingTransform
+                        << " rendererBusy=" << rendererBusy;
+        (void)shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline);
+        continue;
+      }
+      svg::RendererBitmap held = frame(pointer, true, true);
+      requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
+      const LayerInspectorStatusReadback capturedStatus = shell.layerInspectorStatusForReadback();
+      const svg::RendererBitmap heldCrop =
+          CropDocumentRect(held, viewport, window.displayScale(), crop);
+      EXPECT_EQ(heldCrop.dimensions, prior.dimensions)
+          << "The same fixed document crop changed size during a held drag";
+      int baselinePixels = -1;
+      int successivePixels = -1;
+      if (!heldCrop.empty()) {
+        const std::string label =
+            std::string(id) + "_" + std::string(phase) + "_" + std::to_string(tick);
+        tests::CompareBitmapToBitmap(heldCrop, beforeCrop, label + "_baseline", signalParams,
+                                     &baselinePixels);
+        tests::CompareBitmapToBitmap(heldCrop, prior, label + "_successive", signalParams,
+                                     &successivePixels);
+      }
+      heldDiagnostics << "\n  phase=" << phase << " capture=" << tick
+                      << " current=" << app.document().currentFrameVersion()
+                      << " displayed=" << capturedStatus.displayedDocVersion << " translationX="
+                      << (capturedStatus.activeDragPreview.has_value()
+                              ? capturedStatus.activeDragPreview->translation.x
+                              : std::numeric_limits<double>::quiet_NaN())
+                      << " baselinePixels=" << baselinePixels
+                      << " successivePixels=" << successivePixels << " displayedPreviewX="
+                      << (capturedStatus.displayedDragPreview.has_value()
+                              ? capturedStatus.displayedDragPreview->translation.x
+                              : std::numeric_limits<double>::quiet_NaN())
+                      << " activeTileDraws="
+                      << capturedStatus.frameCost.directPresentation.activeTileDrawCount
+                      << " tiles=" << capturedStatus.tiles.size() << " pendingSelectedRaster="
+                      << (capturedStatus.pendingSelectedLayerRasterizationEntity != entt::null)
+                      << " pendingSelectedVersion="
+                      << capturedStatus.pendingSelectedLayerRasterizationVersion;
+      for (const LayerInspectorStatusReadback::Tile& tile : capturedStatus.tiles) {
+        if (tile.isDragTarget) {
+          heldDiagnostics << " targetTile=" << tile.id << ":" << tile.generation
+                          << " presentedX=" << tile.presentedDragTranslationDoc.x
+                          << " payload=" << tile.bitmapDimsPx.x << "x" << tile.bitmapDimsPx.y
+                          << " metadataOnly=" << tile.metadataOnly;
+        }
+      }
+      int loggedOwnerTiles = 0;
+      for (const LayerInspectorStatusReadback::Tile& tile : capturedStatus.tiles) {
+        if (tile.kind == RenderResult::CompositedTile::Kind::Layer && loggedOwnerTiles < 12) {
+          heldDiagnostics << " ownerTile=" << tile.id << ":" << tile.generation
+                          << " presentedX=" << tile.presentedDragTranslationDoc.x
+                          << " payload=" << tile.bitmapDimsPx.x << "x" << tile.bitmapDimsPx.y;
+          ++loggedOwnerTiles;
+        }
+      }
+      lastHeldFrame = std::move(held);
+      lastHeldCrop = heldCrop;
+      if (successivePixels > 0 && capturedStatus.activeDragPreview.has_value() &&
+          capturedStatus.activeDragPreview->entity == targetEntity &&
+          std::abs(capturedStatus.activeDragPreview->translation.x - dx) < 0.5) {
+        return heldCrop;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return std::nullopt;
+  };
+  // The crown is clipped to the unmoved crystal silhouette. Large translations move it entirely
+  // outside that clip, making two correctly rendered held frames identical; keep both probes
+  // within the visible clip so pixel movement is a meaningful presentation oracle.
+  const auto firstHeld = awaitHeldPixels(12.0, displayedBefore, beforeCrop, "first_held");
+  if (!firstHeld.has_value() && lastHeldFrame.has_value() && lastHeldCrop.has_value()) {
+    if (const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+      const std::array<std::pair<const char*, const svg::RendererBitmap*>, 4> frames = {
+          std::pair{"before_full", &before}, std::pair{"last_held_full", &*lastHeldFrame},
+          std::pair{"before_crop", &beforeCrop}, std::pair{"last_held_crop", &*lastHeldCrop}};
+      for (const auto& [stage, bitmap] : frames) {
+        const std::filesystem::path path =
+            std::filesystem::path(outputDir) / (std::string(id) + "_" + stage + ".png");
+        (void)svg::RendererImageIO::writeRgbaPixelsToPngFile(
+            path.string().c_str(), bitmap->pixels, bitmap->dimensions.x, bitmap->dimensions.y,
+            bitmap->rowBytes / 4u);
+      }
+    }
+  }
+  ASSERT_TRUE(firstHeld.has_value())
+      << "The first held position never reached the canvas before mouse-up; posted="
+      << requestsPosted << " busy=" << EditorShellTestAccess::RendererBusy(shell)
+      << " cropFrameOrigin=" << viewport.documentToScreen(crop.topLeft) * window.displayScale()
+      << " cropDims=" << beforeCrop.dimensions.x << "x" << beforeCrop.dimensions.y
+      << " framebufferDims=" << before.dimensions.x << "x" << before.dimensions.y
+      << heldDiagnostics.str();
+  const std::uint64_t firstVersion = app.document().currentFrameVersion();
+  (void)frame(*hitPoint + Vector2d(20.0, 0.0), true, false);
+  requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
+  const auto secondHeld = awaitHeldPixels(20.0, firstVersion, *firstHeld, "second_held");
+  ASSERT_TRUE(secondHeld.has_value())
+      << "The second held position never produced distinct canvas pixels before mouse-up; "
+      << "posted=" << requestsPosted << " busy=" << EditorShellTestAccess::RendererBusy(shell)
+      << heldDiagnostics.str();
+  ASSERT_TRUE(app.selectedElement().has_value());
+  EXPECT_EQ(app.selectedElement()->id(), id)
+      << "chosen hitPoint=" << *hitPoint << " center=" << center << " viewportAfter="
+      << shell.viewportForReadback().screenToDocument(viewport.documentToScreen(*hitPoint));
+  EXPECT_TRUE(activeDrag) << "A direct canvas press did not begin the selected shape drag";
+  EXPECT_FALSE(wrongActiveDragEntity) << "The held native gesture dragged another Geode element";
+  EXPECT_GT(requestsPosted, 0) << "No raster request was posted during the held gesture";
+  (void)frame(*hitPoint + Vector2d(20.0, 0.0), false, false);
+}
+
+TEST(EditorShellTest, GeodeCrownColdDirectRetinaDragPresentsBeforeMouseUp) {
+  RunGeodeColdDirectRetinaDrag("central-crown-face-2", /*selectFromLayers=*/false);
+}
+
+TEST(EditorShellTest, GeodeSilhouetteColdDirectRetinaDragPresentsBeforeMouseUp) {
+  RunGeodeColdDirectRetinaDrag("central-silhouette", /*selectFromLayers=*/true);
+}
+
+TEST(EditorShellTest, GeodeSilhouetteSettledLayersSelectionStillDragsSelectedShape) {
+  RunGeodeColdDirectRetinaDrag("central-silhouette", /*selectFromLayers=*/true,
+                               /*waitForSelectedPrewarm=*/true);
+}
+
 TEST(EditorShellTest, SelectDragKeepsFullPathChrome) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -3301,6 +4440,15 @@ TEST(EditorShellTest, SelectDoubleClickOnTextSwitchesToTextEditingAtClick) {
   EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsText(shell));
   EXPECT_TRUE(EditorShellTestAccess::TextToolIsEditing(shell));
   EXPECT_EQ(EditorShellTestAccess::TextToolCaretIndex(shell), 2u);
+  const FormatBarState before = EditorShellTestAccess::ComputeFormatBarState(shell);
+  EXPECT_TRUE(before.visible);
+  EditorShellTestAccess::ToggleTextBold(shell);
+  EditorShellTestAccess::ToggleTextItalic(shell);
+  EditorShellTestAccess::ToggleTextUnderline(shell);
+  const FormatBarState after = EditorShellTestAccess::ComputeFormatBarState(shell);
+  EXPECT_TRUE(after.bold);
+  EXPECT_TRUE(after.italic);
+  EXPECT_TRUE(after.underline);
 }
 
 TEST(EditorShellTest, DocumentSpaceReplayInputRoutesTextToolPlainClickCreatesNothing) {
@@ -3690,7 +4838,7 @@ TEST(EditorShellTest, OutputFontDemandDeduplicatesAssetsAndCancelsAfterSourceMut
   EXPECT_EQ(std::string_view(*fill), "red");
 }
 
-TEST(EditorShellTest, TextFormatBarLazilyRendersCatalogFamilyInItsOwnFace) {
+TEST(EditorShellTest, TextFormatBarPrewarmsCatalogFamilyInItsOwnFace) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
@@ -3699,7 +4847,7 @@ TEST(EditorShellTest, TextFormatBarLazilyRendersCatalogFamilyInItsOwnFace) {
   EditorShell shell(window, OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg"/>)"));
   ASSERT_TRUE(shell.valid());
   EXPECT_EQ(EditorShellTestAccess::CachedFontPreviewCount(shell), 0u)
-      << "Constructing the editor must not eagerly materialize the desktop font catalog";
+      << "Background previews must leave construction responsive";
 
   EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
   FormatBarFontPreview preview;
@@ -3714,6 +4862,55 @@ TEST(EditorShellTest, TextFormatBarLazilyRendersCatalogFamilyInItsOwnFace) {
   EXPECT_EQ(EditorShellTestAccess::CachedFontPreviewCount(shell), 1u);
   EXPECT_EQ(preview.width, 196.0f);
   EXPECT_EQ(preview.height, 24.0f);
+}
+
+TEST(EditorShellTest, FontPreviewWarmsFromDiskBeforeWorkerRender) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  const auto cachePath =
+      std::filesystem::temp_directory_path() /
+      ("donner-preview-warm-" + std::to_string(reinterpret_cast<std::uintptr_t>(&window)));
+  std::filesystem::create_directories(cachePath);
+  auto options = OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg"/>)");
+  options.editorBuildInfo = "test-build\ntest-commit\n";
+  options.fontPreviewCachePath = cachePath.string();
+  {
+    EditorShell shell(window, options);
+    ASSERT_TRUE(shell.valid());
+    EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
+    FormatBarFontPreview preview;
+    for (int attempt = 0; attempt < 500 && !preview.available(); ++attempt) {
+      EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+      preview = EditorShellTestAccess::FontPreviewForFamily(shell, "Bebas Neue");
+      if (!preview.available()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+    }
+    ASSERT_TRUE(preview.available());
+    const auto dependencies = EditorShellTestAccess::FontPreviewDependencies(shell, "Bebas Neue");
+    ASSERT_EQ(dependencies.size(), 1u);
+    EXPECT_EQ(dependencies.front().family, "bebas neue");
+    EXPECT_FALSE(dependencies.front().availability.contentId.empty());
+  }
+  std::size_t svgCount = 0;
+  for (const auto& entry : std::filesystem::directory_iterator(cachePath)) {
+    if (entry.path().extension() == ".svg") {
+      ++svgCount;
+    }
+  }
+  EXPECT_EQ(svgCount, 1u);
+
+  {
+    EditorShell shell(window, options);
+    ASSERT_TRUE(shell.valid());
+    EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
+    EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+    EXPECT_EQ(EditorShellTestAccess::CachedFontPreviewCount(shell), 1u);
+    EXPECT_TRUE(EditorShellTestAccess::FontPreviewForFamily(shell, "Bebas Neue").available());
+  }
+  std::filesystem::remove_all(cachePath);
 }
 
 TEST(EditorShellTest, PrivateUiRenderHelpersCoverPaneToolbarAndPanelStates) {
@@ -5048,6 +6245,34 @@ TEST(EditorShellTest, MenuActionsRouteCanvasClipboardHistorySelectionAndViewStat
   EXPECT_EQ(EditorShellTestAccess::GetPerfOverlayMode(shell), PerfOverlayMode::FullGraph);
 }
 
+TEST(EditorShellTest, SourceFocusedMenuUndoAndRedoKeepDocumentHistoryUntouched) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  TextEditor& source = EditorShellTestAccess::Source(shell);
+  const std::string original = source.getText();
+  source.setSelection(Coordinates(0, 0), Coordinates(0, 0));
+  source.insertText(" ");
+  ASSERT_NE(source.getText(), original);
+  ASSERT_TRUE(source.canUndo());
+
+  MenuBarActions actions;
+  actions.undo = true;
+  EditorShellTestAccess::ApplyMenuHistoryActions(shell, actions, /*sourcePaneFocused=*/true);
+  EXPECT_EQ(source.getText(), original);
+  EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 0u);
+
+  actions = MenuBarActions{};
+  actions.redo = true;
+  EditorShellTestAccess::ApplyMenuHistoryActions(shell, actions, /*sourcePaneFocused=*/true);
+  EXPECT_NE(source.getText(), original);
+  EXPECT_EQ(EditorShellTestAccess::PendingHistoryActionCount(shell), 0u);
+}
+
 TEST(EditorShellTest, MenuActionsRouteDialogAndExportRequestsWithoutCurrentPath) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -5277,6 +6502,51 @@ TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames)
   EXPECT_EQ(EditorShellTestAccess::SampleThumbnailGeneratedCount(shell), sampleCount);
 }
 
+TEST(EditorShellTest, GeodeSplashSampleClickPublishesFirstDocumentFrame) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Geode Splash sample load regression",
+      .initialWidth = 960,
+      .initialHeight = 720,
+      .visible = false,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShellOptions options = OptionsWithSource(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"/>)");
+  options.showWelcome = true;
+  EditorShell shell(window, options);
+  ASSERT_TRUE(shell.valid());
+
+  shell.prepareFrame();
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+  EditorShellTestAccess::QueueSampleLoad(shell, "geode-splash");
+  EditorShellTestAccess::ProcessPendingSampleLoad(shell);
+  ASSERT_EQ(EditorShellTestAccess::ActiveSampleId(shell), "geode-splash");
+  ASSERT_TRUE(EditorShellTestAccess::SamplePresentationPending(shell));
+
+  bool displayed = false;
+  for (int attempt = 0; attempt < 300; ++attempt) {
+    shell.prepareFrame();
+    window.beginFrame();
+    shell.runFrame();
+    window.endFrame();
+    if (!EditorShellTestAccess::SamplePresentationPending(shell) &&
+        EditorShellTestAccess::DisplayedDocVersion(shell) ==
+            EditorShellTestAccess::App(shell).document().currentFrameVersion()) {
+      displayed = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  EXPECT_TRUE(displayed) << "sample frame did not present: rendererBusy="
+                         << EditorShellTestAccess::RendererBusy(shell)
+                         << ", version=" << EditorShellTestAccess::DisplayedDocVersion(shell)
+                         << ", pending=" << EditorShellTestAccess::SamplePresentationPending(shell);
+}
+
 TEST(EditorShellTest, MainDocumentRenderTakesPriorityOverNewCarouselThumbnailWork) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -5454,6 +6724,25 @@ void RunFrameWithMouse(gui::EditorWindow& window, EditorShell& shell, const ImVe
   window.beginFrame();
   shell.runFrame();
   window.endFrame();
+}
+
+const DocumentPixelCapture* WaitForDocumentPixelCapture(gui::EditorWindow& window,
+                                                        EditorShell& shell) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (std::chrono::steady_clock::now() < deadline) {
+    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+    if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+      return nullptr;
+    }
+    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
+    if (const DocumentPixelCapture* capture = EditorShellTestAccess::PixelCapture(shell)) {
+      return capture;
+    }
+    // The canvas-size commit debounce uses wall-clock time. Let its idle wake mature between
+    // frames instead of assuming four fast test frames are longer than that delay.
+    std::this_thread::sleep_for(std::chrono::milliseconds(15));
+  }
+  return nullptr;
 }
 
 svg::RendererBitmap CaptureFrameWithMouse(gui::EditorWindow& window, EditorShell& shell,
@@ -5814,14 +7103,7 @@ TEST(EditorShellTest, IdleEyedropperArmingAndCanvasCommitWakeDispatchRender) {
   ASSERT_THAT(EditorShellTestAccess::ArmEyedropper(shell, /*stroke=*/false), testing::Eq(true));
   EXPECT_THAT(EditorShellTestAccess::RequestRenderAtEndOfFrame(shell), testing::Eq(true))
       << "Arming on an idle canvas must submit the first capture without another input event.";
-  const DocumentPixelCapture* capture = nullptr;
-  for (int attempt = 0; attempt < 4 && capture == nullptr; ++attempt) {
-    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-        std::chrono::steady_clock::now() + std::chrono::seconds(3)));
-    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    capture = EditorShellTestAccess::PixelCapture(shell);
-  }
+  const DocumentPixelCapture* capture = WaitForDocumentPixelCapture(window, shell);
   ASSERT_NE(capture, nullptr) << "The idle arm did not produce a document pixel capture.";
 
   // Represent the next idle frame after the first capture request has cleared its one-shot flag.
@@ -5851,14 +7133,7 @@ TEST(EditorShellTest, CancelledIdleEyedropperCaptureRepostsThroughShellFrame) {
       std::chrono::steady_clock::now() + std::chrono::seconds(3)));
   RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
   ASSERT_THAT(EditorShellTestAccess::ArmEyedropper(shell, /*stroke=*/false), testing::Eq(true));
-  const DocumentPixelCapture* capture = nullptr;
-  for (int attempt = 0; attempt < 4 && capture == nullptr; ++attempt) {
-    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-        std::chrono::steady_clock::now() + std::chrono::seconds(3)));
-    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    capture = EditorShellTestAccess::PixelCapture(shell);
-  }
+  const DocumentPixelCapture* capture = WaitForDocumentPixelCapture(window, shell);
   ASSERT_NE(capture, nullptr);
 
   EditorShellTestAccess::RestartEyedropperCapture(shell);
@@ -5878,6 +7153,38 @@ TEST(EditorShellTest, CancelledIdleEyedropperCaptureRepostsThroughShellFrame) {
       std::chrono::steady_clock::now() + std::chrono::seconds(3)));
   RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
   EXPECT_NE(EditorShellTestAccess::PixelCapture(shell), nullptr);
+}
+
+TEST(EditorShellTest, ToolPaletteButtonsReachTheCenteredBottomEdge) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_THAT(shell.valid(), testing::Eq(true));
+
+  constexpr ImVec2 kPaneOrigin(0.0f, 0.0f);
+  constexpr ImVec2 kContentRegion(640.0f, 480.0f);
+  const Box2d palette =
+      EditorShellTestAccess::ToolPaletteScreenRect(shell, kPaneOrigin, kContentRegion);
+  const float buttonSize = EditorShellTestAccess::AdaptiveUiLayout(shell).toolButtonSize;
+  ASSERT_THAT(buttonSize, testing::Lt(44.0f));
+  const float paletteCenterY =
+      (static_cast<float>(palette.topLeft.y) + static_cast<float>(palette.bottomRight.y)) * 0.5f;
+  const float penButtonCenterX =
+      static_cast<float>(palette.topLeft.x) + 8.0f + buttonSize + 4.0f + buttonSize * 0.5f;
+  const ImVec2 abovePenButton(penButtonCenterX, paletteCenterY - buttonSize * 0.5f - 2.0f);
+  const ImVec2 penButtonNearBottom(penButtonCenterX, paletteCenterY + buttonSize * 0.5f - 2.0f);
+
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, abovePenButton, false);
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, abovePenButton, true);
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, abovePenButton, false);
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsSelect(shell), testing::Eq(true));
+
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, penButtonNearBottom, false);
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, penButtonNearBottom, true);
+  RenderToolPaletteFrame(window, shell, kPaneOrigin, kContentRegion, penButtonNearBottom, false);
+  EXPECT_THAT(EditorShellTestAccess::ActiveToolIsPen(shell), testing::Eq(true));
 }
 
 TEST(EditorShellTest, ToolbarEyedropperButtonArmsWithoutSamplingItsActivationClick) {
@@ -6130,14 +7437,7 @@ TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
   RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
   ASSERT_THAT(EditorShellTestAccess::ArmEyedropper(shell, /*stroke=*/false), testing::Eq(true));
 
-  const DocumentPixelCapture* capture = nullptr;
-  for (int attempt = 0; attempt < 4 && capture == nullptr; ++attempt) {
-    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
-        std::chrono::steady_clock::now() + std::chrono::seconds(3)));
-    RunFrameWithMouse(window, shell, ImVec2(-1.0f, -1.0f), false);
-    capture = EditorShellTestAccess::PixelCapture(shell);
-  }
+  const DocumentPixelCapture* capture = WaitForDocumentPixelCapture(window, shell);
   ASSERT_NE(capture, nullptr) << "The composed worker readback never reached the live canvas.";
 
   const ViewportState& viewport = shell.viewportForReadback();
@@ -6147,7 +7447,11 @@ TEST(EditorShellTest, EyedropperSamplesDonnerTextAndShowsEdgeLoupe) {
   ASSERT_THAT(pixel, testing::Optional(testing::_));
   const std::optional<css::RGBA> color = ReadDocumentPixel(capture->bitmap, *pixel);
   ASSERT_THAT(color, testing::Optional(testing::_));
-  EXPECT_THAT(color->toHexString(), testing::Eq("#53c4f1"));
+  EXPECT_EQ(color->r, 0x53);
+  EXPECT_EQ(color->g, 0xc4);
+  EXPECT_EQ(color->b, 0xf1);
+  EXPECT_GE(color->a, 240)
+      << "The sampled glyph point should remain nearly opaque across GPU antialiasing variants";
 
   const Vector2d edgeScreen = viewport.documentToScreen(Vector2d(2.0, 2.0));
   const std::optional<Vector2i> edgePixel =
