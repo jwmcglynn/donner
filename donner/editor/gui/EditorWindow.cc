@@ -16,6 +16,10 @@
 
 #include <webgpu/webgpu.hpp>
 
+#if defined(__linux__)
+#include <vulkan/vulkan.h>
+#endif
+
 extern "C" {
 #include "GLFW/glfw3.h"
 }
@@ -37,7 +41,9 @@ extern "C" {
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -58,6 +64,7 @@ extern "C" {
 #include "donner/editor/gui/UiTextureRegistration.h"
 #include "donner/editor/gui/UiTextureRegistry.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/DeviceLost.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #ifdef __EMSCRIPTEN__
@@ -66,6 +73,9 @@ extern "C" {
 #include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+#include "donner/gpu/vulkan/VulkanDevice.h"
+#endif
 #endif
 #endif
 
@@ -100,10 +110,19 @@ void GlfwErrorCallback(int error, const char* description) {
   std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
 }
 
+unsigned gGlfwClaims = 0;
+#ifndef __APPLE__
+bool gGlfwQuarantined = false;
+#endif
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+uint64_t gGlfwTerminationCount = 0;
+#endif
+
 bool InitializeGlfw() {
   if (glfwInit() == GLFW_FALSE) {
     return false;
   }
+  ++gGlfwClaims;
 #ifdef __APPLE__
   // Cocoa defers some NSWindow destruction onto AppKit queues. Repeated glfwTerminate/glfwInit
   // cycles can release those objects after the next window is already live, which races teardown
@@ -120,10 +139,47 @@ bool InitializeGlfw() {
 }
 
 void TerminateGlfw() {
+  if (gGlfwClaims == 0) {
+    return;
+  }
+  --gGlfwClaims;
 #ifndef __APPLE__
-  glfwTerminate();
+  if (gGlfwClaims == 0 && !gGlfwQuarantined) {
+    glfwTerminate();
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+    ++gGlfwTerminationCount;
+#endif
+  }
 #endif
 }
+
+#if defined(__linux__) && defined(DONNER_EDITOR_WGPU)
+struct RetainedVulkanWindow {
+  RetainedVulkanWindow* next = nullptr;
+  GLFWwindow* window = nullptr;
+  uint64_t surfaceHandle = 0;
+  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> root;
+  std::shared_ptr<gpu::vulkan::VulkanSurfaceRetirement> retirement;
+};
+
+RetainedVulkanWindow* gRetainedVulkanWindows = nullptr;
+
+void QuarantineVulkanWindow(
+    std::unique_ptr<RetainedVulkanWindow> capsule, GLFWwindow* window, uint64_t surfaceHandle,
+    std::shared_ptr<gpu::vulkan::VulkanSharedRoot> root,
+    std::shared_ptr<gpu::vulkan::VulkanSurfaceRetirement> retirement) noexcept {
+  static_assert(std::is_nothrow_move_assignable_v<decltype(root)>);
+  static_assert(std::is_nothrow_move_assignable_v<decltype(retirement)>);
+  RetainedVulkanWindow* retained = capsule.release();
+  retained->window = window;
+  retained->surfaceHandle = surfaceHandle;
+  retained->root = std::move(root);
+  retained->retirement = std::move(retirement);
+  retained->next = gRetainedVulkanWindows;
+  gRetainedVulkanWindows = retained;
+  gGlfwQuarantined = true;
+}
+#endif
 
 #ifdef DONNER_EDITOR_WGPU
 /// WebGPU requires texture-to-buffer rows to be 256-byte aligned.
@@ -868,6 +924,20 @@ UiScaleConfig ComputeUiScaleConfig(int logicalWindowWidth, int framebufferWidth,
 #ifdef DONNER_EDITOR_WGPU
 namespace internal {
 
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+bool AcquireGlfwRuntimeForTesting() {
+  return InitializeGlfw();
+}
+
+void ReleaseGlfwRuntimeForTesting() {
+  TerminateGlfw();
+}
+
+uint64_t GlfwTerminationCountForTesting() {
+  return gGlfwTerminationCount;
+}
+#endif
+
 #if !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
 /// Creates the surface object this platform's window library makes for \p window.
 ///
@@ -922,6 +992,17 @@ RuntimePresentationSurface::RuntimePresentationSurface(gpu::TextureFormat format
   native_.kind = gpu::NativeSurfaceKind::CanvasSelector;
   native_.selector = RcString("#canvas");
 }
+
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+void RuntimePresentationSurface::attachNativeVulkanSurface(uint64_t surfaceHandle,
+                                                           gpu::TextureFormat format,
+                                                           bool enableReadback) {
+  native_.kind = gpu::NativeSurfaceKind::EmbedderSurface;
+  native_.window = surfaceHandle;
+  format_ = format;
+  readback_ = enableReadback;
+}
+#endif
 
 #ifndef __EMSCRIPTEN__
 bool RuntimePresentationSurface::attachToWindow(const wgpu::Instance& instance,
@@ -1151,9 +1232,9 @@ std::unique_ptr<PresentationSurface> CreateEditorBrowserCanvasSurface(gpu::Textu
  *
  * A Metal layer presents from any Metal device the system reports and belongs to no instance, so
  * on Apple it is attached here and the selection is left unconstrained; the native backend refuses
- * a selection constrained to a wgpu surface. Everywhere else the adapter has to be able to present
- * to the window's surface object, which is made from the instance the selection creates, so the
- * selection is handed a provider that makes it.
+ * a selection constrained to a wgpu surface. The transitional WebGPU adapter must present to a
+ * surface made from its own instance, so selection receives a provider that makes it. Native
+ * Vulkan instead selects against the actual GLFW VkSurfaceKHR before opening a logical device.
  *
  * @param window Window whose platform object frames are presented to.
  * @param presentation Receives the surface; must outlive the selection.
@@ -1467,6 +1548,12 @@ bool RenderUiDrawData(gpu::Device& device, ImGuiRuntimeRenderer& renderer,
 }
 
 struct EditorWindow::WgpuState {
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+  std::unique_ptr<RetainedVulkanWindow> nativeQuarantineCapsule;
+  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeVulkanRoot;
+  std::shared_ptr<gpu::vulkan::VulkanSurfaceRetirement> nativeVulkanRetirement;
+  uint64_t nativeVulkanSurface = 0;
+#endif
   // Declared first so every context, renderer, registry, presentation object,
   // and texture below is destroyed before the shared physical roots.
   std::shared_ptr<geode::GeodePhysicalDeviceOwner> physicalDevice;
@@ -1476,6 +1563,7 @@ struct EditorWindow::WgpuState {
   const geode::GeodeGpuRoot* root = nullptr;
   gpu::TextureFormat surfaceFormat = gpu::TextureFormat::BGRA8Unorm;
   gpu::TextureUsage surfaceUsage = gpu::TextureUsage::RenderAttachment;
+  bool browserRuntimeSelected = false;
   std::shared_ptr<geode::GeodeDevice> geodeDevice;
   /// The browser canvas uses a distinct logical UI context over the shared physical owner.
   std::shared_ptr<geode::GeodeDevice> framebufferGeodeDevice;
@@ -1537,6 +1625,93 @@ bool BrowserRuntimeSelectedForEditor(const geode::GpuRootSelection& selection) {
   return false;
 #endif
 }
+
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+struct NativeVulkanSelection {
+  std::shared_ptr<geode::GeodeGpuRoot> geodeRoot;
+  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeRoot;
+  std::shared_ptr<gpu::vulkan::VulkanSurfaceRetirement> retirement;
+  uint64_t surfaceHandle = 0;
+  gpu::TextureFormat format = gpu::TextureFormat::BGRA8Unorm;
+};
+
+bool NativeVulkanWindowSelected(const geode::GpuRootSelection& selection, bool offscreen) {
+  if (offscreen) {
+    return false;
+  }
+  const char* backendRequest = std::getenv("DONNER_GPU_BACKEND");
+  const gpu::Result<geode::GpuBackendKind> kind = geode::ResolveGpuBackendKind(
+      selection, backendRequest == nullptr ? std::string_view{} : std::string_view(backendRequest),
+      geode::BuildDefaultGpuBackendKind());
+  return kind.hasResult() && kind.result() == geode::GpuBackendKind::NativeVulkan;
+}
+
+NativeVulkanSelection SelectNativeVulkanWindow(GLFWwindow* window) {
+  NativeVulkanSelection selected;
+  if (glfwVulkanSupported() != GLFW_TRUE) {
+    return selected;
+  }
+  uint32_t extensionCount = 0;
+  const char** required = glfwGetRequiredInstanceExtensions(&extensionCount);
+  if (required == nullptr || extensionCount == 0) {
+    return selected;
+  }
+  std::vector<std::string> extensionNames;
+  extensionNames.reserve(extensionCount);
+  for (uint32_t index = 0; index < extensionCount; ++index) {
+    if (required[index] == nullptr) {
+      return selected;
+    }
+    extensionNames.emplace_back(required[index]);
+  }
+  std::vector<const char*> extensions;
+  extensions.reserve(extensionNames.size());
+  for (const std::string& name : extensionNames) {
+    extensions.push_back(name.c_str());
+  }
+  auto loss = std::make_shared<gpu::DeviceLostState>();
+  std::unique_ptr<gpu::vulkan::VulkanPresentationProbe> probe =
+      gpu::vulkan::VulkanDevice::CreatePresentationProbe(extensions, loss);
+  if (probe == nullptr) {
+    return selected;
+  }
+  VkSurfaceKHR surface = VK_NULL_HANDLE;
+  const VkResult created = glfwCreateWindowSurface(static_cast<VkInstance>(probe->nativeInstance()),
+                                                   window, nullptr, &surface);
+  if (created != VK_SUCCESS || surface == VK_NULL_HANDLE) {
+    if (surface != VK_NULL_HANDLE) {
+      uint64_t failedSurface = 0;
+      static_assert(sizeof(surface) == sizeof(failedSurface));
+      std::memcpy(&failedSurface, &surface, sizeof(surface));
+      probe->destroyExternalSurface(failedSurface);
+    }
+    return selected;
+  }
+  static_assert(sizeof(surface) == sizeof(selected.surfaceHandle));
+  std::memcpy(&selected.surfaceHandle, &surface, sizeof(surface));
+  selected.nativeRoot =
+      gpu::vulkan::VulkanDevice::CompletePresentationRoot(*probe, selected.surfaceHandle);
+  if (selected.nativeRoot == nullptr) {
+    if (probe->nativeInstance() != nullptr) {
+      probe->destroyExternalSurface(selected.surfaceHandle);
+      selected.surfaceHandle = 0;
+    }
+    return selected;
+  }
+  selected.retirement = selected.nativeRoot->registerExternalSurface(selected.surfaceHandle);
+  if (selected.retirement == nullptr) {
+    return selected;
+  }
+  const std::optional<gpu::TextureFormat> format =
+      selected.nativeRoot->preferredExternalSurfaceFormat(selected.surfaceHandle);
+  if (!format.has_value()) {
+    return selected;
+  }
+  selected.format = *format;
+  selected.geodeRoot = geode::AdoptNativeVulkanRoot(selected.nativeRoot, loss);
+  return selected;
+}
+#endif
 
 #ifndef __EMSCRIPTEN__
 bool NeedsWgpuSelectionSurface(bool offscreen, bool browserRuntimeSelected) {
@@ -1608,6 +1783,54 @@ std::unique_ptr<internal::PresentationSurface> RebuildBrowserCanvasSurface(
 #endif
 #endif
 
+#ifdef DONNER_EDITOR_WGPU
+std::shared_ptr<geode::GeodeGpuRoot> EditorWindow::selectGpuRootForWindow(bool offscreen,
+                                                                          bool enableReadback) {
+  geode::GpuRootSelection selection;
+  selection.label = "DonnerEditorWGPUDevice";
+  selection.usePlatformDefaultBackend = false;
+  wgpuState_->browserRuntimeSelected = BrowserRuntimeSelectedForEditor(selection);
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+  if (NativeVulkanWindowSelected(selection, offscreen)) {
+    wgpuState_->nativeQuarantineCapsule = std::make_unique<RetainedVulkanWindow>();
+    NativeVulkanSelection native = SelectNativeVulkanWindow(window_);
+    wgpuState_->nativeVulkanRoot = std::move(native.nativeRoot);
+    wgpuState_->nativeVulkanRetirement = std::move(native.retirement);
+    wgpuState_->nativeVulkanSurface = native.surfaceHandle;
+    wgpuState_->surfaceFormat = native.format;
+    if (native.geodeRoot == nullptr) {
+      return nullptr;
+    }
+    auto presentation = std::make_unique<internal::RuntimePresentationSurface>();
+    presentation->attachNativeVulkanSurface(native.surfaceHandle, native.format, enableReadback);
+    wgpuState_->presentation = std::move(presentation);
+    wgpuState_->surfaceUsage = RenderTargetUsage(enableReadback);
+    return native.geodeRoot;
+  }
+#endif
+#ifndef __EMSCRIPTEN__
+  bool attachFailed = false;
+  if (NeedsWgpuSelectionSurface(offscreen, wgpuState_->browserRuntimeSelected)) {
+    internal::PrepareSurfaceForSelection(window_, wgpuState_->presentation, selection,
+                                         attachFailed);
+  }
+  if (attachFailed) {
+    return nullptr;
+  }
+#endif
+  std::shared_ptr<geode::GeodeGpuRoot> root = geode::SelectGpuRoot(selection);
+  if (root == nullptr) {
+    return nullptr;
+  }
+  if (!PrepareEditorSurfaceFormat(wgpuState_->presentation, *root,
+                                  wgpuState_->browserRuntimeSelected, offscreen, enableReadback,
+                                  wgpuState_->surfaceFormat, wgpuState_->surfaceUsage)) {
+    return nullptr;
+  }
+  return root;
+}
+#endif
+
 EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(options)) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   // The worker-owned document canvas sits behind this ImGui surface. Keep
@@ -1630,6 +1853,11 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
       std::getenv("DISPLAY") != nullptr || std::getenv("WAYLAND_DISPLAY") != nullptr;
   useNullPlatform = useNullPlatform || !hasDisplay;
   if (useNullPlatform) {
+    if (gGlfwQuarantined) {
+      std::fprintf(stderr,
+                   "EditorWindow: null GLFW platform refused while a native window is retained\n");
+      return;
+    }
     glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
     // Force Mesa's software renderer (llvmpipe) for offscreen/headless replay.
     // The null-platform path uses an EGL surfaceless context, which otherwise
@@ -1650,6 +1878,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     std::fprintf(stderr, "EditorWindow: glfwInit() failed\n");
     return;
   }
+  glfwClaimed_ = true;
 
 #ifdef __EMSCRIPTEN__
   // emscripten-glfw does not own the browser graphics API, so neither the
@@ -1744,7 +1973,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
         glfwErrorCode == GLFW_VERSION_UNAVAILABLE || glfwErrorCode == GLFW_PLATFORM_ERROR;
     std::fprintf(stderr, "EditorWindow: glfwCreateWindow() failed (GLFW error %d: %s)\n",
                  glfwErrorCode, glfwErrorDesc != nullptr ? glfwErrorDesc : "");
-    TerminateGlfw();
+    closeWindow();
     return;
   }
 
@@ -1756,49 +1985,16 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   wgpuState_ = std::make_unique<WgpuState>();
   // The browser readback-stats lane keeps the real canvas surface rather than an offscreen mirror.
   const bool useOffscreenWgpuTarget = useNullPlatform || options_.forceOffscreenRenderTarget;
-  bool surfaceAttachFailed = false;
-
-  geode::GpuRootSelection selection;
-  selection.label = "DonnerEditorWGPUDevice";
-  // A transitional WebGPU root lets the driver choose a usable API for its window or offscreen
-  // target. Native roots use their platform selection independently of this adapter preference.
-  selection.usePlatformDefaultBackend = false;
-  const bool browserRuntimeSelected = BrowserRuntimeSelectedForEditor(selection);
-#ifndef __EMSCRIPTEN__
-  if (NeedsWgpuSelectionSurface(useOffscreenWgpuTarget, browserRuntimeSelected)) {
-    internal::PrepareSurfaceForSelection(window_, wgpuState_->presentation, selection,
-                                         surfaceAttachFailed);
-  }
-#endif
-
-  std::shared_ptr<geode::GeodeGpuRoot> root =
-      surfaceAttachFailed ? nullptr : geode::SelectGpuRoot(selection);
-  if (root == nullptr) {
-    std::fprintf(stderr, surfaceAttachFailed
-                             ? "EditorWindow: failed to create the window's presentation surface\n"
-                             : "EditorWindow: no usable GPU device available\n");
-    wgpuState_->presentation.reset();
-    glfwDestroyWindow(window_);
-    window_ = nullptr;
-    TerminateGlfw();
-    return;
-  }
-
   bool enableSurfaceReadback = options_.enableFramebufferReadback;
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   enableSurfaceReadback = enableSurfaceReadback || WgpuReadbackStatsEnabled();
 #endif
   wgpuState_->surfaceReadbackEnabled = enableSurfaceReadback;
-  // Settle the format before Geode compiles its pipelines. A surface's final usage is read
-  // after configuration below, when the platform can narrow the requested capabilities.
-  if (!PrepareEditorSurfaceFormat(wgpuState_->presentation, *root, browserRuntimeSelected,
-                                  useOffscreenWgpuTarget, enableSurfaceReadback,
-                                  wgpuState_->surfaceFormat, wgpuState_->surfaceUsage)) {
-    std::fprintf(stderr, "EditorWindow: the window surface cannot present editor frames\n");
-    wgpuState_->presentation.reset();
-    glfwDestroyWindow(window_);
-    window_ = nullptr;
-    TerminateGlfw();
+  std::shared_ptr<geode::GeodeGpuRoot> root =
+      selectGpuRootForWindow(useOffscreenWgpuTarget, enableSurfaceReadback);
+  if (root == nullptr) {
+    std::fprintf(stderr, "EditorWindow: no usable presentation device or surface available\n");
+    closeWindow();
     return;
   }
 
@@ -1818,9 +2014,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   if (wgpuState_->geodeDevice == nullptr) {
     std::fprintf(stderr,
                  "EditorWindow: could not build a Geode context over the selected device\n");
-    glfwDestroyWindow(window_);
-    window_ = nullptr;
-    TerminateGlfw();
+    closeWindow();
     return;
   }
   // Retained separately so it outlives both contexts below: it is declared before them, so the
@@ -1836,18 +2030,13 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   // thread. Keep the UI framebuffer's mutable counters and deferred-destroy
   // queues isolated in a second wrapper even though both wrap the same raw
   // WebGPU device and queue.
-  geode::GeodeEmbedConfig framebufferEmbedConfig;
-  framebufferEmbedConfig.physicalDevice = wgpuState_->physicalDevice;
-  framebufferEmbedConfig.textureFormat = geode::WgpuTextureFormatFrom(wgpuState_->surfaceFormat);
-  wgpuState_->framebufferGeodeDevice =
-      geode::GeodeDevice::CreateFromExternal(framebufferEmbedConfig);
+  wgpuState_->framebufferGeodeDevice = geode::GeodeDevice::CreateOverPhysicalDeviceOwner(
+      wgpuState_->physicalDevice, wgpuState_->surfaceFormat);
 #endif
   if (wgpuState_->framebufferGeodeDevice == nullptr) {
     std::fprintf(stderr, "EditorWindow: could not create the framebuffer Geode context\n");
     wgpuState_->presentation.reset();
-    glfwDestroyWindow(window_);
-    window_ = nullptr;
-    TerminateGlfw();
+    closeWindow();
     return;
   }
 
@@ -1858,9 +2047,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
       // Let the surface go while the window it was built on is still there, rather than leaving
       // it to this window's teardown to release a platform object outliving its window.
       wgpuState_->presentation.reset();
-      glfwDestroyWindow(window_);
-      window_ = nullptr;
-      TerminateGlfw();
+      closeWindow();
       return;
     }
     // The surface narrowed what it was asked for to what it reported it can do, so this is the
@@ -1869,7 +2056,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     wgpuState_->surfaceUsage = wgpuState_->presentation->usage();
     wgpuState_->presentationRequired = true;
 #ifdef __EMSCRIPTEN__
-    ReportBrowserCanvasAttachment(browserRuntimeSelected);
+    ReportBrowserCanvasAttachment(wgpuState_->browserRuntimeSelected);
 #endif
 #ifdef __EMSCRIPTEN__
     // The constructor optimistically set an alpha-0 clear so the worker's document canvas can
@@ -1889,9 +2076,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
         wgpuState_->surfaceFormat, wgpuState_->surfaceUsage);
     if (!wgpuState_->offscreenTexture.isValid()) {
       std::fprintf(stderr, "EditorWindow: failed to create offscreen WebGPU target\n");
-      glfwDestroyWindow(window_);
-      window_ = nullptr;
-      TerminateGlfw();
+      closeWindow();
       return;
     }
   }
@@ -1904,9 +2089,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 
   if (gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress)) == 0) {
     std::fprintf(stderr, "EditorWindow: glad failed to load GL symbols\n");
-    glfwDestroyWindow(window_);
-    window_ = nullptr;
-    TerminateGlfw();
+    closeWindow();
     return;
   }
 
@@ -2052,11 +2235,44 @@ EditorWindow::~EditorWindow() {
     wgpuState_->geodeDevice.reset();
   }
 #endif
+  closeWindow();
+}
+
+void EditorWindow::closeWindow() {
+#ifdef DONNER_EDITOR_WGPU
+  if (wgpuState_ != nullptr && wgpuState_->presentation != nullptr) {
+    wgpuState_->presentation->shutdown();
+    wgpuState_->presentation.reset();
+  }
+#endif
+#if defined(__linux__) && defined(DONNER_EDITOR_WGPU)
+  if (wgpuState_ != nullptr && wgpuState_->nativeVulkanSurface != 0) {
+    const bool released = wgpuState_->nativeVulkanRoot != nullptr &&
+                          wgpuState_->nativeVulkanRoot->destroyExternalSurface(
+                              wgpuState_->nativeVulkanSurface, wgpuState_->nativeVulkanRetirement);
+    if (!released) {
+      QuarantineVulkanWindow(
+          std::move(wgpuState_->nativeQuarantineCapsule), window_, wgpuState_->nativeVulkanSurface,
+          std::move(wgpuState_->nativeVulkanRoot), std::move(wgpuState_->nativeVulkanRetirement));
+      std::fprintf(stderr,
+                   "EditorWindow: native surface retirement is unproven; retaining its window\n");
+      window_ = nullptr;
+      glfwClaimed_ = false;
+      wgpuState_->nativeVulkanSurface = 0;
+      return;
+    }
+    wgpuState_->nativeVulkanSurface = 0;
+    wgpuState_->nativeVulkanRetirement.reset();
+  }
+#endif
   if (window_ != nullptr) {
     glfwDestroyWindow(window_);
     window_ = nullptr;
   }
-  TerminateGlfw();
+  if (glfwClaimed_) {
+    TerminateGlfw();
+    glfwClaimed_ = false;
+  }
 }
 
 bool EditorWindow::shouldClose() const {
@@ -2301,6 +2517,13 @@ gpu::Texture EditorWindow::acquirePresentationFrame(int framebufferWidth, int fr
 
 std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentationSurface(
     int framebufferWidth, int framebufferHeight) {
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+  if (wgpuState_->nativeVulkanSurface != 0) {
+    // A lost VkSurfaceKHR cannot be replaced without selecting a new physical owner and
+    // rebuilding both contexts' pipelines against its format. Stop the window's presentation.
+    return nullptr;
+  }
+#endif
 #ifdef __EMSCRIPTEN__
   return RebuildBrowserCanvasSurface(wgpuState_->framebufferGeodeDevice, wgpuState_->surfaceFormat,
                                      wgpuState_->surfaceReadbackEnabled, wgpuState_->surfaceUsage,

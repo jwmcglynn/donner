@@ -267,6 +267,20 @@ std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options);
 std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots& handles,
                                            std::shared_ptr<gpu::DeviceLostState> lostState);
 
+/**
+ * Adopts a completed native Vulkan root selected for an embedder's actual surface.
+ *
+ * The root and Geode contexts share the exact sticky loss state established before instance
+ * creation. A mismatched or null owner is refused.
+ *
+ * @param nativeRoot Completed Vulkan instance, physical and logical device, and queue.
+ * @param lostState Loss condition used when opening p nativeRoot.
+ * @return Geode root over the native owner, or null for mismatched inputs.
+ */
+std::shared_ptr<GeodeGpuRoot> AdoptNativeVulkanRoot(
+    std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeRoot,
+    std::shared_ptr<gpu::DeviceLostState> lostState);
+
 /// A runtime device opened over a selected root.
 struct GeodeRuntimeDevice {
   /// The device, or null when none could be opened.

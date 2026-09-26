@@ -4,31 +4,52 @@
 
 ## Adding to Your Bazel Project
 
-Add the following to your `MODULE.bazel`. Donner is built and tested against the Bazel version
-pinned in its `.bazelversion` (currently 8.8.0).
+Donner's root `@donner` library uses the tiny-skia renderer by default. A separate Bazel module
+can use a version from the Bazel Central Registry once that version is published, or build
+against a checked-out source tree. The checked-in
+[consumer example](../examples/bazel_consumer/README.md) exercises the latter path and is also
+used by BCR preflight against the release candidate.
+
+For the current v0.8 prerelease source tree, put this in your `MODULE.bazel`:
 
 ```py
-bazel_dep(name = "donner", version = "0.0.0")
-git_override(
-    module_name = "donner",
-    remote = "https://github.com/jwmcglynn/donner",
-    commit = "<latest commit>",
+module(name = "my_svg_app")
+
+bazel_dep(name = "donner", version = "0.8.0-pre")
+# On macOS, register the Apple toolchain before rules_cc selects a host toolchain.
+bazel_dep(name = "apple_support", version = "2.8.2")
+bazel_dep(name = "rules_cc", version = "0.2.25")
+```
+
+Use standard `rules_cc` targets in `BUILD.bazel`:
+
+```py
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+cc_binary(
+    name = "my_app",
+    srcs = ["main.cc"],
+    deps = ["@donner"],
 )
 ```
 
-## Adding a Dependency
+Set C++20 in your `.bazelrc`, as the checked-in consumer does:
 
-Donner with the default renderer is available as the `@donner` dependency. Add it to your rule's `deps`:
-
-```py
-donner_cc_binary(
-    name = "my_library",
-    # ...
-    deps = [
-        "@donner",
-    ],
-)
+```text
+build --cxxopt=-std=c++20
+build --host_cxxopt=-std=c++20
 ```
+
+Build against an adjacent checkout with a module override (replace the path with your Donner
+checkout):
+
+```sh
+bazel build --override_module=donner=/path/to/donner //:my_app
+```
+
+For a published BCR version, replace `0.8.0-pre` with the version listed in the registry and
+run `bazel build //:my_app` without the override. Donner is built and tested against the Bazel
+version pinned in its `.bazelversion` (currently 8.8.0).
 
 ## Adding to Your CMake Project {#GettingStartedCMake}
 
@@ -188,9 +209,9 @@ cat bazel-bin/third_party/licenses/notice_default.txt
 
 Each variant produces two files next to each other:
 
-  - `notice_<variant>.txt`: the concatenated NOTICE to embed in your application.
-  - `notice_<variant>.json`: a machine-readable manifest (package name, version, SPDX
-    identifier, upstream URL, license text path) for producing your own formatting.
+- `notice_<variant>.txt`: the concatenated NOTICE to embed in your application.
+- `notice_<variant>.json`: a machine-readable manifest (package name, version, SPDX
+  identifier, upstream URL, license text path) for producing your own formatting.
 
 ### Embedding the NOTICE into your application
 
