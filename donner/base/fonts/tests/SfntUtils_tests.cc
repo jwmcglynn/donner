@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -176,40 +177,34 @@ std::vector<uint8_t> MakeCff1WithRealUnderlinePosition(std::vector<uint8_t> bcdB
   return MakeCff1WithSubrs({14}, {}, {}, std::move(prefix));
 }
 
-std::vector<uint8_t> MakeCff1WithCharset(std::vector<std::vector<uint8_t>> charStrings,
-                                         std::vector<uint16_t> charsetSids,
-                                         std::vector<std::vector<uint8_t>> localSubrs = {}) {
-  EXPECT_EQ(charStrings.size(), charsetSids.size());
+std::vector<uint8_t> MakeCff1WithCharsetData(
+    const std::vector<std::vector<uint8_t>>& charStrings, const std::vector<uint8_t>& charset,
+    const std::vector<std::vector<uint8_t>>& localSubrs = {},
+    std::optional<size_t> predefinedCharset = std::nullopt) {
   EXPECT_FALSE(charStrings.empty());
-  EXPECT_EQ(charsetSids.front(), 0u);
   const std::vector<uint8_t> nameIndex = MakeCffIndex({{'A'}}, false);
   const std::vector<uint8_t> stringIndex = MakeCffIndex({}, false);
   const std::vector<uint8_t> globalIndex = MakeCffIndex({}, false);
   const std::vector<uint8_t> localIndex = MakeCffIndex(localSubrs, false);
   const std::vector<uint8_t> encodedCharStrings = MakeCffIndex(charStrings, false);
-  std::vector<uint8_t> charset{0};
-  for (size_t glyph = 1; glyph < charsetSids.size(); ++glyph) {
-    charset.push_back(static_cast<uint8_t>(charsetSids[glyph] >> 8));
-    charset.push_back(static_cast<uint8_t>(charsetSids[glyph]));
-  }
 
   std::vector<uint8_t> topDict;
   std::vector<uint8_t> topIndex;
   std::vector<uint8_t> privateDict;
   for (int iteration = 0; iteration < 8; ++iteration) {
     topIndex = MakeCffIndex({topDict}, false);
-    const size_t charsetOffset =
+    const size_t privateOffset =
         4 + nameIndex.size() + topIndex.size() + stringIndex.size() + globalIndex.size();
     privateDict.clear();
     if (!localSubrs.empty()) {
       privateDict = EncodeDictInteger(2);
       privateDict.push_back(19);
     }
-    const size_t privateOffset = charsetOffset + charset.size();
     const size_t charStringsOffset =
         privateOffset + privateDict.size() + (localSubrs.empty() ? 0 : localIndex.size());
 
-    std::vector<uint8_t> nextTop = EncodeDictInteger(charsetOffset);
+    const size_t charsetOffset = charStringsOffset + encodedCharStrings.size();
+    std::vector<uint8_t> nextTop = EncodeDictInteger(predefinedCharset.value_or(charsetOffset));
     nextTop.push_back(15);
     const std::vector<uint8_t> encodedCharStringsOffset = EncodeDictInteger(charStringsOffset);
     nextTop.insert(nextTop.end(), encodedCharStringsOffset.begin(), encodedCharStringsOffset.end());
@@ -236,13 +231,31 @@ std::vector<uint8_t> MakeCff1WithCharset(std::vector<std::vector<uint8_t>> charS
   append(topIndex);
   append(stringIndex);
   append(globalIndex);
-  append(charset);
   append(privateDict);
   if (!localSubrs.empty()) {
     result.insert(result.end(), localIndex.begin(), localIndex.end());
   }
   result.insert(result.end(), encodedCharStrings.begin(), encodedCharStrings.end());
+  // Leave the charset last so truncated ranges cannot consume bytes from another structure.
+  append(charset);
   return result;
+}
+
+std::vector<uint8_t> MakeCff1WithCharset(std::vector<std::vector<uint8_t>> charStrings,
+                                         std::vector<uint16_t> charsetSids,
+                                         std::vector<std::vector<uint8_t>> localSubrs = {}) {
+  EXPECT_EQ(charStrings.size(), charsetSids.size());
+  if (charsetSids.empty()) {
+    ADD_FAILURE() << "The charset fixture needs its .notdef entry";
+    return {};
+  }
+  EXPECT_EQ(charsetSids.front(), 0u);
+  std::vector<uint8_t> charset{0};
+  for (size_t glyph = 1; glyph < charsetSids.size(); ++glyph) {
+    charset.push_back(static_cast<uint8_t>(charsetSids[glyph] >> 8));
+    charset.push_back(static_cast<uint8_t>(charsetSids[glyph]));
+  }
+  return MakeCff1WithCharsetData(charStrings, charset, localSubrs);
 }
 
 std::vector<uint8_t> MakeCff1SeacChain(size_t depth, std::vector<uint8_t> leaf,
@@ -776,6 +789,95 @@ TEST(SfntUtils, Cff1LegacyEndcharCompositeAggregatesRenderableComponents) {
   ASSERT_TRUE(font.has_value());
   EXPECT_EQ(font->numGlyphs(), 4u);
   EXPECT_TRUE(font->glyphOutlineComplexity(3).has_value());
+}
+
+TEST(SfntUtils, CffCharsetFormatsResolveTheNamedCompositeComponents) {
+  struct Case {
+    const char* name;
+    std::vector<uint8_t> charset;
+  };
+  const std::vector<Case> cases{
+      {"format 0", {0, 0, 34, 0, 35, 0, 150}},
+      {"format 1 contiguous", {1, 0, 34, 2}},
+      {"format 1 separate ranges", {1, 0, 34, 1, 0, 150, 0}},
+      {"format 2 contiguous", {2, 0, 34, 0, 2}},
+      {"format 2 separate ranges", {2, 0, 34, 0, 1, 0, 150, 0, 0}},
+  };
+  const std::vector<std::vector<uint8_t>> programs{
+      {14},
+      {139, 139, 21, 149, 139, 5, 14},
+      {139, 139, 21, 139, 149, 5, 14},
+      {139, 139, 204, 205, 14},  // Legacy composite of StandardEncoding A and B (SIDs 34 and 35).
+  };
+  for (const Case& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    const auto bytes = MakeCff1WithCharsetData(programs, testCase.charset);
+    const auto result = ValidateCffOutlineComplexities(bytes, false, programs.size());
+    ASSERT_THAT(result.status, testing::Eq(CffOutlineValidationStatus::Complete));
+    EXPECT_THAT(
+        result.glyphs,
+        testing::ElementsAre(testing::Field(&CffGlyphOutlineComplexity::maximumVertices, 0u),
+                             testing::Field(&CffGlyphOutlineComplexity::maximumVertices, 3u),
+                             testing::Field(&CffGlyphOutlineComplexity::maximumVertices, 3u),
+                             testing::Field(&CffGlyphOutlineComplexity::maximumVertices, 6u)));
+    const auto font = SfntFont::Validate(MakeCffSfnt("CFF ", bytes, 4));
+    ASSERT_THAT(font.has_value(), testing::IsTrue());
+    ASSERT_THAT(font->glyphOutlineComplexity(3).has_value(), testing::IsTrue());
+    EXPECT_THAT(font->glyphOutlineComplexity(3)->maximumVertices, testing::Eq(6u));
+  }
+}
+
+TEST(SfntUtils, CffCharsetRejectsTruncatedAndOverflowingRangesWithoutPartialGlyphs) {
+  struct Case {
+    const char* name;
+    std::vector<uint8_t> charset;
+  };
+  const std::vector<Case> cases{
+      {"missing format", {}},
+      {"unsupported format", {3}},
+      {"truncated format 0", {0, 0, 34, 0}},
+      {"truncated format 1", {1, 0}},
+      {"truncated format 2", {2, 0, 34, 0}},
+      {"format 1 exceeds glyph count", {1, 0, 34, 2}},
+      {"format 2 exceeds glyph count", {2, 0, 34, 0, 2}},
+      {"format 1 SID overflow", {1, 255, 255, 1}},
+      {"format 2 SID overflow", {2, 255, 255, 0, 1}},
+  };
+  for (const Case& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    const auto result = ValidateCffOutlineComplexities(
+        MakeCff1WithCharsetData({{14}, {14}, {14}}, testCase.charset), false, 3);
+    EXPECT_THAT(result.status, testing::Eq(CffOutlineValidationStatus::Invalid));
+    EXPECT_THAT(result.glyphs, testing::IsEmpty());
+  }
+}
+
+TEST(SfntUtils, CffPredefinedCharsetsAcceptTheirLastGlyphAndRejectTheNext) {
+  struct Case {
+    const char* name;
+    size_t selector;
+    size_t glyphCount;
+  };
+  const std::array cases{Case{"ISOAdobe", 0, 229}, Case{"Expert", 1, 166},
+                         Case{"ExpertSubset", 2, 87}};
+  for (const Case& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    const auto exact = ValidateCffOutlineComplexities(
+        MakeCff1WithCharsetData(std::vector<std::vector<uint8_t>>(testCase.glyphCount, {14}), {},
+                                {}, testCase.selector),
+        false, testCase.glyphCount);
+    ASSERT_THAT(exact.status, testing::Eq(CffOutlineValidationStatus::Complete));
+    EXPECT_THAT(exact.glyphs, testing::SizeIs(testCase.glyphCount));
+    EXPECT_THAT(exact.glyphs,
+                testing::Each(testing::Field(&CffGlyphOutlineComplexity::maximumVertices, 0u)));
+    const size_t extraGlyph = testCase.glyphCount + 1;
+    const auto excessive = ValidateCffOutlineComplexities(
+        MakeCff1WithCharsetData(std::vector<std::vector<uint8_t>>(extraGlyph, {14}), {}, {},
+                                testCase.selector),
+        false, extraGlyph);
+    EXPECT_THAT(excessive.status, testing::Eq(CffOutlineValidationStatus::Invalid));
+    EXPECT_THAT(excessive.glyphs, testing::IsEmpty());
+  }
 }
 
 TEST(SfntUtils, Cff1SeacRejectsMissingComponentsAndCycles) {
