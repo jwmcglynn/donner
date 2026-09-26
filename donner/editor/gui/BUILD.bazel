@@ -14,13 +14,9 @@ configured_dependency_audit_test(
         "//donner/svg/renderer/tests:image_comparison_test_fixture_wgpu_reference_linux",
         "//donner/svg/renderer/tests:renderer_test_backend_wgpu_reference_linux",
         "//third_party/webgpu-cpp:webgpu_cpp",
-        "//third_party/webgpu-cpp:webgpu_cpp_compat_headers",
-        "//third_party/webgpu-cpp:webgpu_cpp_headers",
         "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
         "@wgpu_native_linux_aarch64//:wgpu_native",
         "@wgpu_native_linux_x86_64//:wgpu_native",
-        "@wgpu_native_macos_aarch64//:wgpu_native",
-        "@wgpu_native_macos_x86_64//:wgpu_native",
     ],
     target = "//donner/editor",
     target_compatible_with = select({
