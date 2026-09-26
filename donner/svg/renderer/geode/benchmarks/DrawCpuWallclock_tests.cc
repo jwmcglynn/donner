@@ -12,10 +12,14 @@
 #include <optional>
 #include <vector>
 
-#include "donner/base/tests/ScopedEnvironmentVariable.h"
 #include "donner/gpu/RecordingDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/benchmarks/DrawCpuWorkload.h"
+
+#if defined(__APPLE__)
+#include "donner/gpu/metal/MetalDevice.h"
+#elif defined(__linux__)
+#include "donner/gpu/vulkan/VulkanDevice.h"
+#endif
 
 namespace donner::geode::benchmarks {
 namespace {
@@ -57,36 +61,17 @@ TEST(DrawCpuBenchmarkWallclock, RecordingBackend) {
 
 #if defined(__APPLE__)
 TEST(DrawCpuBenchmarkWallclock, NativeMetal) {
-  GpuRootSelection selection;
-  selection.backend = GpuBackendKind::NativeMetal;
-  const std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
-  ASSERT_NE(root, nullptr);
-  GeodeRuntimeDevice runtime = CreateGpuDeviceOver(root);
-  ASSERT_NE(runtime.device, nullptr);
-  ReportSamples("metal", *runtime.device);
+  std::unique_ptr<gpu::metal::MetalDevice> device = gpu::metal::MetalDevice::Create();
+  ASSERT_NE(device, nullptr);
+  ReportSamples("metal", *device);
 }
 #endif
 
 #if defined(__linux__)
 TEST(DrawCpuBenchmarkWallclock, NativeVulkan) {
-  GpuRootSelection selection;
-  selection.backend = GpuBackendKind::NativeVulkan;
-  const std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
-  ASSERT_NE(root, nullptr);
-  GeodeRuntimeDevice runtime = CreateGpuDeviceOver(root);
-  ASSERT_NE(runtime.device, nullptr);
-  ReportSamples("vulkan", *runtime.device);
-}
-
-TEST(DrawCpuBenchmarkWallclock, TransitionalWgpuReference) {
-  const ScopedEnvironmentVariable wgpuBackend("WGPU_BACKEND", "vulkan");
-  GpuRootSelection selection;
-  selection.backend = GpuBackendKind::TransitionalWgpu;
-  const std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
-  ASSERT_NE(root, nullptr);
-  GeodeRuntimeDevice runtime = CreateGpuDeviceOver(root);
-  ASSERT_NE(runtime.device, nullptr);
-  ReportSamples("wgpu_reference", *runtime.device);
+  std::unique_ptr<gpu::vulkan::VulkanDevice> device = gpu::vulkan::VulkanDevice::Create();
+  ASSERT_NE(device, nullptr);
+  ReportSamples("vulkan", *device);
 }
 #endif
 

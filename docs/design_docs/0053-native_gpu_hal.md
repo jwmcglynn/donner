@@ -928,7 +928,8 @@ in the normal Bazel test graph and the `perf`-tagged
 workflow. The wall-clock target records 1, 100 and 10,000 draws through the shipped SlugFill
 pipeline and all eleven reflected bind slots, reports command-recording and submission CPU
 nanoseconds per draw separately, and checks each submission's draw count through `DeviceObserver`.
-The Linux Perf lane runs native Vulkan and the Linux-only wgpu reference; macOS runs native Metal.
+The Linux Perf lane runs native Vulkan and macOS runs native Metal; the recording backend runs on
+both. Only the Linux resvg pixelmatch oracle retains wgpu-native for ongoing validation.
 
 First local `-c opt` results on an Apple M4 Pro (2026-09-25; median of three post-warmup samples,
 nanoseconds per draw) are:
@@ -958,6 +959,9 @@ adapter. The native Vulkan case executed separately on that runner:
 | wgpu reference |      1 |  5,180 | 31,048 |
 | wgpu reference |    100 |    303 |    400 |
 | wgpu reference | 10,000 |    233 |     84 |
+
+The wgpu rows are a one-time transitional comparison from that run. The ongoing per-draw Perf
+target runs only the recording and native backends; wgpu-native remains in the Linux resvg oracle.
 
 The recording backend's submission includes command serialization, while Metal's includes driver
 encoding and queue submission. These microbenchmarks do not yet justify changing the compositor's

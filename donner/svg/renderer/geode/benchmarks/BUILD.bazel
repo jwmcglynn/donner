@@ -9,7 +9,6 @@ _GEODE_ONLY = select({
 })
 
 _BENCH_DEPS = [
-    "//donner/base:base_test_utils",
     "//donner/gpu",
     "//donner/gpu:recording_device",
     "//donner/gpu/shader:slug_fill_api",
@@ -36,7 +35,11 @@ donner_cc_test(
     ],
     tags = ["manual"],
     target_compatible_with = _GEODE_ONLY,
-    deps = _BENCH_DEPS,
+    deps = _BENCH_DEPS + select({
+        "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
+        "@platforms//os:linux": ["//donner/gpu/vulkan:vulkan_device"],
+        "//conditions:default": [],
+    }),
 )
 
 donner_multi_transitioned_test(
