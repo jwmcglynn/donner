@@ -8,11 +8,10 @@
 /// then reports unreachable blocks against whichever test process happened to create a device,
 /// with stacks that mostly cannot be symbolized because the owning module is gone.
 ///
-/// Attribution evidence: running the affected tests with `LSAN_OPTIONS=print_suppressions=1` and
-/// this single `libwgpu_native.so` template accounts for every reported byte (for example
-/// `//donner/gpu/shader:wgsl_emitter_geode_validation_tests`: 1303 allocations / 562632 bytes,
-/// exactly the unsuppressed total). Every leaked chunk's allocation stack passes through the
-/// prebuilt library. Donner's own teardown is not the cause: `GeodeDevice::~GeodeDevice` waits for
+/// Attribution evidence: running the affected native GPU tests with
+/// `LSAN_OPTIONS=print_suppressions=1` showed that this `libwgpu_native.so` template accounts for
+/// their wgpu-native allocations. The allocation stacks pass through the prebuilt library.
+/// Donner's own teardown is not the cause: `GeodeDevice::~GeodeDevice` waits for
 /// submitted work and then releases queue, device, adapter, and instance.
 ///
 /// Matching by module name keeps leak detection fully enabled for Donner code. It is deliberately
