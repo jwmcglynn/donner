@@ -1117,6 +1117,12 @@ bool RuntimePresentationSurface::configure(int width, int height) {
 }
 
 AcquiredFrame RuntimePresentationSurface::acquire() {
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+  if (forceSurfaceLossOnNextAcquireForTesting_) {
+    forceSurfaceLossOnNextAcquireForTesting_ = false;
+    return AcquiredFrame{gpu::Texture(), gpu::SurfaceStatus::Lost};
+  }
+#endif
   gpu::Result<gpu::SurfaceTexture> acquired = device_->acquireCurrentTexture(surface_);
   if (acquired.hasError()) {
     // The runtime refused the acquire outright rather than reporting on the surface, so it is
@@ -1133,6 +1139,12 @@ AcquiredFrame RuntimePresentationSurface::acquire() {
   hasAcquiredFrame_ = frame.texture.isValid();
   return AcquiredFrame{std::move(frame.texture), frame.status};
 }
+
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+void RuntimePresentationSurface::forceSurfaceLossForTesting() {
+  forceSurfaceLossOnNextAcquireForTesting_ = true;
+}
+#endif
 
 void RuntimePresentationSurface::present() {
   if (!hasAcquiredFrame_) {
@@ -1577,6 +1589,9 @@ struct EditorWindow::WgpuState {
   /// A window created for a visible surface must retry attaching it after a transient loss;
   /// a null surface must never silently become a headless target.
   bool presentationRequired = false;
+  /// A native Vulkan surface cannot be rebuilt over the existing physical owner after it is lost.
+  /// Once that rebuild is refused, later frames must not try the same impossible operation.
+  bool presentationTerminal = false;
   /// Registrations of the textures UI draw data may sample, and the renderer that resolves them.
   /// Both are created once the device exists and torn down before it.
   std::unique_ptr<UiTextureRegistry> uiTextureRegistry;
@@ -1604,7 +1619,7 @@ struct EditorWindow::WgpuState {
   /// @return Whether this state can attempt a frame on its selected target.
   bool canPresentFrames() const {
     return framebufferGeodeDevice != nullptr && !framebufferGeodeDevice->isDeviceLost() &&
-           (presentationRequired || offscreenTexture.isValid());
+           !presentationTerminal && (presentationRequired || offscreenTexture.isValid());
   }
 };
 #else
@@ -2385,6 +2400,16 @@ void EditorWindow::setFramebufferReadbackBudgetForTesting(std::chrono::milliseco
                                    ? std::min(budget, geode::kDefaultGpuWaitTimeout)
                                    : geode::kDefaultGpuWaitTimeout;
 }
+
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+void EditorWindow::forcePresentationSurfaceLossForTesting() {
+  if (wgpuState_ != nullptr && wgpuState_->nativeVulkanSurface != 0 &&
+      wgpuState_->presentation != nullptr) {
+    static_cast<internal::RuntimePresentationSurface&>(*wgpuState_->presentation)
+        .forceSurfaceLossForTesting();
+  }
+}
+#endif
 #endif
 
 void EditorWindow::pollEvents() {
@@ -2520,7 +2545,9 @@ std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentation
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
   if (wgpuState_->nativeVulkanSurface != 0) {
     // A lost VkSurfaceKHR cannot be replaced without selecting a new physical owner and
-    // rebuilding both contexts' pipelines against its format. Stop the window's presentation.
+    // rebuilding both contexts' pipelines against its format. Stop this window's presentation
+    // rather than retrying an impossible rebuild on every later frame.
+    wgpuState_->presentationTerminal = true;
     return nullptr;
   }
 #endif

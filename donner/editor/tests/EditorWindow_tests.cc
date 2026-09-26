@@ -1628,6 +1628,48 @@ TEST(EditorWindowTest, NativeVulkanWindowsRetainGlfwUntilTheLastWindowCloses) {
   EXPECT_EQ(internal::GlfwTerminationCountForTesting(), terminations + 1);
 }
 
+TEST(EditorWindowTest, LostNativeVulkanSurfaceStopsLaterFrameRetries) {
+  if (std::getenv("DISPLAY") == nullptr && std::getenv("WAYLAND_DISPLAY") == nullptr) {
+    GTEST_SKIP() << "A display is required for native Vulkan window presentation";
+  }
+  const gpu::Result<geode::GpuBackendKind> selected = geode::ProcessDefaultGpuBackendKind();
+  ASSERT_THAT(selected, gpu::HasResult());
+  if (selected.result() != geode::GpuBackendKind::NativeVulkan) {
+    GTEST_SKIP() << "This run did not select native Vulkan";
+  }
+  EditorWindow window(EditorWindowOptions{
+      .title = "Lost Vulkan Editor Surface",
+      .initialWidth = 64,
+      .initialHeight = 48,
+      .visible = false,
+  });
+  ASSERT_TRUE(window.valid());
+  int drawnFrames = 0;
+  window.setWgpuUnderlayRenderCallback([&](const EditorWindowWgpuRenderTarget&) { ++drawnFrames; });
+  window.beginFrame();
+  window.endFrame();
+  ASSERT_EQ(drawnFrames, 1) << "the native surface must first draw a real frame";
+
+  testing::internal::CaptureStderr();
+  window.forcePresentationSurfaceLossForTesting();
+  for (int frame = 0; frame < 3; ++frame) {
+    window.beginFrame();
+    window.endFrame();
+  }
+  const std::string errors = testing::internal::GetCapturedStderr();
+  constexpr std::string_view kFailedRebuild = "could not be rebuilt from the window";
+  std::size_t rebuildReports = 0;
+  for (std::size_t pos = errors.find(kFailedRebuild); pos != std::string::npos;
+       pos = errors.find(kFailedRebuild, pos + kFailedRebuild.size())) {
+    ++rebuildReports;
+  }
+  EXPECT_EQ(rebuildReports, 1u) << errors;
+  EXPECT_EQ(drawnFrames, 1) << "the lost native surface cannot draw another frame";
+  EXPECT_FALSE(window.geodeFramebufferDevice()->isDeviceLost())
+      << "only the platform surface was lost; the shared device remains healthy";
+  EXPECT_FALSE(window.framebufferReadbackAvailable());
+}
+
 TEST(EditorWindowDeathTest, UnprovenNativeRetirementQuarantinesTheWindowAndGlfwClaim) {
   if (std::getenv("DISPLAY") == nullptr && std::getenv("WAYLAND_DISPLAY") == nullptr) {
     GTEST_SKIP() << "A display is required for native Vulkan window presentation";

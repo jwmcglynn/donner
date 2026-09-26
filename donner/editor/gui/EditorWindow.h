@@ -295,6 +295,9 @@ public:
   /// @param enableReadback Whether diagnostic readback may use the frame.
   void attachNativeVulkanSurface(uint64_t surfaceHandle, gpu::TextureFormat format,
                                  bool enableReadback);
+
+  /// Make the next acquire report a lost surface without touching the native Vulkan object.
+  void forceSurfaceLossForTesting();
 #endif
 
   /// Hands back any frame still outstanding and gives up the surface.
@@ -366,6 +369,9 @@ private:
   bool readback_ = false;
   /// Whether the platform is holding a frame this surface handed out.
   bool hasAcquiredFrame_ = false;
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+  bool forceSurfaceLossOnNextAcquireForTesting_ = false;
+#endif
 };
 
 /// What acquiring one frame produced, and what the window must do about it.
@@ -809,6 +815,10 @@ public:
    *   it.
    */
   void setFramebufferReadbackBudgetForTesting(std::chrono::milliseconds budget);
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+  /// Make the next native window-surface acquire report loss, for lifecycle regression tests.
+  void forcePresentationSurfaceLossForTesting();
+#endif
 #endif
 
 private:

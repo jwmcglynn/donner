@@ -22,6 +22,7 @@ export XDG_RUNTIME_DIR="${TEST_TMPDIR:-/tmp}"
 
 filter='*EditorWindowBackendTest.OpensOnTheBackendTheProcessSelected/WindowSurface'
 filter+=':EditorWindowTest.NativeVulkanWindowsRetainGlfwUntilTheLastWindowCloses'
+filter+=':EditorWindowTest.LostNativeVulkanSurfaceStopsLaterFrameRetries'
 filter+=':EditorWindowDeathTest.UnprovenNativeRetirementQuarantinesTheWindowAndGlfwClaim'
 filter+=':*EditorWindowLifecycleTest.AResizedWindowDrawsAtItsNewExtent/WindowSurface'
 filter+=':EditorWindowTest.AMinimizedWindowSkipsTheFrameWithoutHoldingOneOpen'
