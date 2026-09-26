@@ -1482,8 +1482,30 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
           frames: window.__donnerMainLoopRenderedFrames || 0,
           worker: window.__donnerWorkerStats,
           workerBusy: window.__donnerInteractionStats?.workerBusy,
+          interaction: window.__donnerInteractionStats,
+          viewport: window.__donnerViewportStats,
         }))
         .catch((error: unknown) => ({ unavailable: String(error) }));
+      try {
+        await attachEvidenceFile(`drag-teal-missing-step-${step}`, geometry.png, "image/png");
+        await attachEvidenceFile(
+          `drag-teal-missing-step-${step}-state`,
+          JSON.stringify(
+            {
+              step,
+              probeRegion,
+              blue: geometry.blue,
+              sampledState: state,
+              laterChromeState: chromeState,
+            },
+            null,
+            2,
+          ),
+          "application/json",
+        );
+      } catch (error) {
+        console.warn(`drag-teal-missing evidence unavailable: ${String(error)}`);
+      }
       console.log(
         `drag-teal-missing step=${step} frame=${state.renderedFrames} state=${
           JSON.stringify(chromeState)
