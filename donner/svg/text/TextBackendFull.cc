@@ -48,7 +48,7 @@ FT_Library getFtLibrary() {
 
 /// Returns true if the codepoint belongs to a cursive/joining script where letter-spacing
 /// should be suppressed (CSS Text §8.1: "cursive scripts ... must not use letter-spacing").
-/// This covers Arabic, Syriac, Thaana, N'Ko, Mandaic, and similar connecting scripts.
+/// This covers Arabic, Syriac, N'Ko, Mandaic, and similar connecting scripts.
 bool isCursiveScript(uint32_t cp) {
   // Arabic (0600-06FF), Arabic Supplement (0750-077F), Arabic Extended-A (08A0-08FF),
   // Arabic Presentation Forms-A (FB50-FDFF), Arabic Presentation Forms-B (FE70-FEFF).
@@ -59,10 +59,6 @@ bool isCursiveScript(uint32_t cp) {
   }
   // Syriac (0700-074F), Syriac Supplement (0860-086F).
   if ((cp >= 0x0700 && cp <= 0x074F) || (cp >= 0x0860 && cp <= 0x086F)) {
-    return true;
-  }
-  // Thaana (0780-07BF).
-  if (cp >= 0x0780 && cp <= 0x07BF) {
     return true;
   }
   // N'Ko (07C0-07FF).
