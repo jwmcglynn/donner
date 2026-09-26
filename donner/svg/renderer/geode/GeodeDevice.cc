@@ -365,6 +365,7 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
                                    "GPU queue did not go idle within the bounded wait deadline");
     return GpuWaitResult::TimedOut;
   }
+#if defined(DONNER_GEODE_WGPU_REFERENCE) || defined(__EMSCRIPTEN__)
 #if defined(__EMSCRIPTEN__) && !defined(DONNER_GEODE_BROWSER_BACKEND)
   // emdawnwebgpu's poll yields the Asyncify thread for one browser task and
   // its return value does not report queue-idle, so a drain loop keyed on it
@@ -389,6 +390,9 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
                                    "GPU queue did not go idle within the bounded wait deadline");
   }
   return result;
+#else
+  UTILS_UNREACHABLE();
+#endif
 #else
   UTILS_UNREACHABLE();
 #endif

@@ -1,11 +1,9 @@
 """Geode: GPU-native SVG rendering backend.
 
 This backend is gated behind a build flag so default builds do not pull in the
-WebGPU runtime at all (the GPU/Dawn dependencies are not in the default graph),
-not because of maturity — Geode is the editor's default renderer. WebGPU is provided
-on native by a prebuilt `wgpu-native` archive (see
-`third_party/bazel/non_bcr_deps.bzl`) and on WASM by emdawnwebgpu (browser
-WebGPU bindings).
+GPU runtime at all. Geode is the editor's default renderer. Native macOS and
+Linux use Donner's Metal and Vulkan devices. The explicit Linux resvg comparison
+configuration retains the pinned wgpu-native reference implementation.
 
 To enable:
 
@@ -61,6 +59,28 @@ config_setting(
 bool_flag(
     name = "browser_backend",
     build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+# Selected only by the Linux resvg reference test transition. Ordinary Geode builds use the
+# native root and never compile the transitional adapter or link its Rust-built runtime.
+bool_flag(
+    name = "wgpu_reference_backend",
+    build_setting_default = False,
+    visibility = ["//build_defs:__pkg__"],
+)
+
+config_setting(
+    name = "wgpu_reference_backend_requested",
+    flag_values = {":wgpu_reference_backend": "True"},
+)
+
+selects.config_setting_group(
+    name = "wgpu_reference_backend_enabled",
+    match_all = [
+        ":wgpu_reference_backend_requested",
+        "@platforms//os:linux",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -343,9 +363,10 @@ donner_cc_library(
         "//donner/svg/renderer:__subpackages__",
         "//examples:__pkg__",
     ],
-    deps = [
-        "//third_party/webgpu-cpp:webgpu_cpp",
-    ],
+    deps = select({
+        ":wgpu_reference_backend_enabled": ["//third_party/webgpu-cpp:webgpu_cpp"],
+        "//conditions:default": ["//third_party/webgpu-cpp:webgpu_cpp_headers"],
+    }),
 )
 
 donner_cc_test(
@@ -401,7 +422,8 @@ donner_cc_library(
         "GeodePipeline.cc",
     ] + select({
         ":browser_backend_enabled": ["GeodeBrowserRoot.cc"],
-        "//conditions:default": ["GeodeWgpuAdapterDevice.cc"],
+        ":wgpu_reference_backend_enabled": ["GeodeWgpuAdapterDevice.cc"],
+        "//conditions:default": ["GeodeNativeRoot.cc"],
     }),
     hdrs = [
         "GeodeDevice.h",
@@ -417,13 +439,8 @@ donner_cc_library(
             "GeodeWgpuAdapterDevice.h",
         ],
     }),
-    # wgpu-native's prebuilt libwgpu_native.dylib ships with its Metal
-    # backend already linked, so no per-target framework linkopts are
-    # needed on macOS — unlike the previous Dawn cmake() build which
-    # required the consumer to link Metal/Foundation/QuartzCore/IOKit/
-    # IOSurface/CoreGraphics manually. Linux still needs dl + pthread
-    # because wgpu-native's .so references them but doesn't runtime-
-    # load them itself.
+    # Linux's native Vulkan device needs dl and pthread; the Linux reference
+    # configuration also uses these when it links wgpu-native.
     linkopts = select({
         "@platforms//os:linux": [
             "-ldl",
@@ -433,6 +450,7 @@ donner_cc_library(
     }),
     local_defines = select({
         ":browser_backend_enabled": ["DONNER_GEODE_BROWSER_BACKEND=1"],
+        ":wgpu_reference_backend_enabled": ["DONNER_GEODE_WGPU_REFERENCE=1"],
         "//conditions:default": [],
     }),
     target_compatible_with = _GEODE_ONLY,
@@ -468,9 +486,13 @@ donner_cc_library(
                    "//donner/gpu/browser:browser_device",
                    "//donner/gpu/browser:emscripten_browser_bridge",
                ],
-               "//conditions:default": [
+               ":wgpu_reference_backend_enabled": [
                    ":geode_wgpu_util",
                    "//third_party/webgpu-cpp:webgpu_cpp",
+               ],
+               "//conditions:default": [
+                   ":geode_wgpu_util",
+                   "//third_party/webgpu-cpp:webgpu_cpp_headers",
                ],
            }) + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) +
            shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES) +

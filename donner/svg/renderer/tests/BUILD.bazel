@@ -1045,6 +1045,7 @@ donner_multi_transitioned_test(
     target_compatible_with = ["@platforms//os:linux"],
     text = "true",
     text_full = "false",
+    wgpu_reference_backend = True,
 )
 
 donner_cc_fuzzer(

@@ -431,6 +431,26 @@
         "Device"
       ]
     },
+    "donner/svg/renderer/geode/GeodeNativeRoot.cc": {
+      "wgpuCTypes": [
+        "WGPUAdapter",
+        "WGPUDevice",
+        "WGPUInstance",
+        "WGPUQueue",
+        "WGPUTextureFormat",
+        "WGPUTextureFormat_BGRA8Unorm",
+        "WGPUTextureFormat_R8Unorm",
+        "WGPUTextureFormat_RGBA32Float",
+        "WGPUTextureFormat_RGBA8Unorm"
+      ],
+      "wgpuCppTokens": [
+        "Adapter",
+        "Device",
+        "Instance",
+        "Queue",
+        "TextureFormat"
+      ]
+    },
     "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.cc": {
       "operations": [
         "beginComputePass",
