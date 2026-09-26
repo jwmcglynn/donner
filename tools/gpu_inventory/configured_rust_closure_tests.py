@@ -30,6 +30,25 @@ class ConfiguredRustClosureTests(unittest.TestCase):
         with self.assertRaisesRegex(gate.GateError, "Rust archive"):
             gate.check_closure(root, "native", labels, self.spec)
 
+    def test_product_to_each_test_reference_target_is_rejected_without_archive(self) -> None:
+        root = "//donner/editor:editor"
+        for reference in sorted(gate.TEST_ONLY_REFERENCE_LABELS):
+            with self.subTest(reference=reference):
+                with self.assertRaisesRegex(gate.GateError, "test oracle, WebGPU-C\\+\\+ wrapper"):
+                    gate.check_closure(root, "nativeGeode", {root, reference}, self.spec)
+
+    def test_test_reference_label_does_not_match_a_longer_target_name(self) -> None:
+        root = "//donner/editor:editor"
+        gate.check_closure(root, "nativeGeode",
+                           {root, "//donner/svg/renderer/geode:geode_wgpu_util_tests"}, self.spec)
+
+    def test_linux_oracle_may_reach_the_test_only_reference_chain(self) -> None:
+        root = self.spec["oracleLabel"]
+        labels = {root, *gate.TEST_ONLY_REFERENCE_LABELS,
+                  "//third_party/webgpu-cpp:webgpu_cpp",
+                  "@@+non_bcr_deps+wgpu_native_linux_x86_64//:wgpu_native"}
+        gate.check_closure(root, "oracle", labels, self.spec)
+
     def test_browser_product_to_emscripten_wrapper_is_rejected(self) -> None:
         root = "//donner/editor/wasm:wasm_web_package"
         with self.assertRaisesRegex(gate.GateError, "WebGPU-C\\+\\+ wrapper"):
@@ -61,6 +80,18 @@ class ConfiguredRustClosureTests(unittest.TestCase):
             path.write_text(json.dumps(modified))
             with patch.object(gate, "INVENTORY", path):
                 with self.assertRaisesRegex(gate.GateError, "required product"):
+                    gate.inventory()
+
+    def test_test_only_reference_denylist_cannot_be_dropped(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            modified = json.loads(json.dumps(self.spec))
+            modified["forbiddenLabelFragments"].remove(
+                "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux"
+            )
+            path = Path(temp) / "roots.json"
+            path.write_text(json.dumps(modified))
+            with patch.object(gate, "INVENTORY", path):
+                with self.assertRaisesRegex(gate.GateError, "omitted a forbidden"):
                     gate.inventory()
 
     def test_lock_checks_each_pin_in_its_own_repo_spec(self) -> None:

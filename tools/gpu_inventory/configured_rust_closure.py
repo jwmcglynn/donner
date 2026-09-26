@@ -45,6 +45,14 @@ REQUIRED_GEODE_ROOTS = {
     "//donner/editor:editor_impl", "//examples:geode_embed",
 }
 REQUIRED_LINUX_ARCHIVES = {"wgpu_native_linux_aarch64", "wgpu_native_linux_x86_64"}
+TEST_ONLY_REFERENCE_LABELS = {
+    "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
+    "//donner/svg/renderer:renderer_geode_wgpu_reference_linux",
+    "//donner/svg/renderer/tests:renderer_test_backend_wgpu_reference_linux",
+    "//donner/svg/renderer/tests:image_comparison_test_fixture_wgpu_reference_linux",
+    "//donner/svg/renderer/geode:geode_wgpu_util",
+    "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
+}
 
 
 class GateError(RuntimeError):
@@ -72,7 +80,9 @@ def _validate_inventory_header(data: dict[str, Any]) -> None:
         raise GateError("configured root inventory has an unknown schema or platform set")
     if set(data.get("allowedArchiveRepositories", [])) != REQUIRED_LINUX_ARCHIVES:
         raise GateError("archive allowlist must contain exactly the two Linux oracle variants")
-    required_fragments = {"//third_party/webgpu-cpp:", "//:wgpu_native", "//tests/rust_ffi:"}
+    required_fragments = TEST_ONLY_REFERENCE_LABELS | {
+        "//third_party/webgpu-cpp:", "//:wgpu_native", "//tests/rust_ffi:",
+    }
     if not required_fragments.issubset(data.get("forbiddenLabelFragments", [])):
         raise GateError("configured root inventory omitted a forbidden Rust-backed dependency")
 
@@ -170,7 +180,12 @@ def parse_cquery_labels(output: str, root: str) -> set[str]:
 
 
 def forbidden(labels: set[str], fragments: list[str]) -> list[str]:
-    return sorted(label for label in labels if any(fragment in label for fragment in fragments))
+    def matches(label: str, fragment: str) -> bool:
+        if fragment in TEST_ONLY_REFERENCE_LABELS:
+            return label.endswith(fragment)
+        return fragment in label
+
+    return sorted(label for label in labels if any(matches(label, fragment) for fragment in fragments))
 
 
 def check_closure(root: str, profile: str, labels: set[str], spec: dict[str, Any]) -> None:

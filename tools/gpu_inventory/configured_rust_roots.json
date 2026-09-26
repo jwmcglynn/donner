@@ -49,6 +49,12 @@
     }
   },
   "forbiddenLabelFragments": [
+    "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
+    "//donner/svg/renderer:renderer_geode_wgpu_reference_linux",
+    "//donner/svg/renderer/tests:renderer_test_backend_wgpu_reference_linux",
+    "//donner/svg/renderer/tests:image_comparison_test_fixture_wgpu_reference_linux",
+    "//donner/svg/renderer/geode:geode_wgpu_util",
+    "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
     "//third_party/webgpu-cpp:",
     "//third_party/webgpu-cpp:webgpu_cpp",
     "//third_party/webgpu-cpp:wgpu_native_platform",
