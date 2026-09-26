@@ -50,7 +50,7 @@ struct SourceStructuralMovePlan {
 
 /// Result of validating and building a structural move plan.
 struct SourceStructuralMoveEvaluation {
-  /// Whether the requested move is ready, deferred, or rejected.
+  /// Validation status: Ready, or a specific reason the move cannot be queued.
   SourceStructuralMoveStatus status = SourceStructuralMoveStatus::Rejected;
   /// Validated move plan when evaluation succeeds.
   std::optional<SourceStructuralMovePlan> plan;
