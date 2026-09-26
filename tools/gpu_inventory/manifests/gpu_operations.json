@@ -645,39 +645,6 @@
         "TextureFormat"
       ]
     },
-    "donner/svg/renderer/geode/tests/GeodeDevice_tests.cc": {
-      "operations": [
-        "createCommandEncoder",
-        "createTexture",
-        "release",
-        "submit",
-        "writeTexture"
-      ],
-      "wgpuCTypes": [
-        "WGPUAdapter"
-      ],
-      "wgpuCppTokens": [
-        "TextureFormat"
-      ]
-    },
-    "donner/svg/renderer/geode/tests/GeodeEmbed_tests.cc": {
-      "operations": [
-        "createTexture",
-        "release"
-      ],
-      "wgpuCFunctions": [
-        "wgpuLabel"
-      ],
-      "wgpuCppTokens": [
-        "Device",
-        "Queue",
-        "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
-        "TextureFormat",
-        "TextureUsage"
-      ]
-    },
     "donner/svg/renderer/geode/tests/GeodeShaders_tests.cc": {
       "operations": [
         "beginComputePass",
