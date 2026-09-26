@@ -791,7 +791,7 @@ export async function readEditorPixelBounds(
 export async function readEditorResizePixelBounds(
   page: Page,
   region: CssRegion,
-): Promise<{ blue: PixelBounds | null; teal: PixelBounds | null }> {
+): Promise<{ blue: PixelBounds | null; teal: PixelBounds | null; png: Buffer }> {
   const viewport = page.viewportSize();
   if (viewport === null) {
     throw new Error("the browser viewport is unavailable for the resize pixel probe");
@@ -823,7 +823,7 @@ export async function readEditorResizePixelBounds(
       maxY: bounds.maxY - region.y,
       pixels: bounds.pixels,
     };
-  return { blue: relativeToDocument(blue), teal: relativeToDocument(teal) };
+  return { blue: relativeToDocument(blue), teal: relativeToDocument(teal), png: shot };
 }
 
 export interface EditorBackgroundCoverageStats {
