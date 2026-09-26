@@ -91,15 +91,6 @@
         "wgpuLifetimeTextureCreates"
       ]
     },
-    "donner/editor/tests/GlTextureCache_tests.cc": {
-      "operations": [
-        "createTexture"
-      ],
-      "wgpuCppTokens": [
-        "Texture",
-        "TextureFormat"
-      ]
-    },
     "donner/editor/tests/ViewportInteractionController_tests.cc": {
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",

@@ -11,7 +11,6 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -505,7 +504,7 @@ std::shared_ptr<const svg::RendererTextureSnapshot> CreateCountingGeodeTextureSn
 
   svg::RendererGeodeTextureSnapshot snapshot =
       svg::RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-          device, std::move(created).result(), dimensions, wgpu::TextureFormat::RGBA8Unorm,
+          device, std::move(created).result(), dimensions, gpu::TextureFormat::RGBA8Unorm,
           svg::AlphaType::Premultiplied);
   if (!snapshot.isValid()) {
     return nullptr;
@@ -537,22 +536,16 @@ RenderResult::CompositedPreview SingleSnapshotTilePreview(
   return preview;
 }
 
-/// A retired snapshot's backing survives its safety window and is then destroyed explicitly, not
-/// left for the backend to collect. A released snapshot hands its backing to the owning context's
-/// retirement mailbox, which that context drains at every frame boundary, so the case drains it
-/// wherever a frame boundary would fall before it looks.
+/// A retired snapshot keeps its backing through the safety window, then the owning context gives
+/// up that allocation when its retirement mailbox is drained at a frame boundary.
 TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
-  if (!device->hasTransitionalAdapter()) {
-    GTEST_SKIP() << "reads the transitional adapter's wgpu backing-destroy counter";
-  }
   // Start from an empty mailbox, so backing released by earlier cases is not counted here.
   device->drainDeferredTextureBackings();
   int firstDestructionCount = 0;
   int secondDestructionCount = 0;
-  const std::uint64_t backingDestroysBefore =
-      geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting();
+  const std::uint64_t backingReleasesBefore = device->lifetimeTextureReleases();
 
   {
     ImGuiContext* context = ImGui::CreateContext();
@@ -579,8 +572,7 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
     EXPECT_EQ(firstDestructionCount, 0);
     EXPECT_EQ(secondDestructionCount, 0);
     device->drainDeferredTextureBackings();
-    EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
-              backingDestroysBefore)
+    EXPECT_EQ(device->lifetimeTextureReleases(), backingReleasesBefore)
         << "Retirement must keep the replaced texture backing alive through its safety window";
 
     cache.advancePresentationFrame();
@@ -589,8 +581,7 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
     EXPECT_EQ(firstDestructionCount, 0);
     EXPECT_EQ(secondDestructionCount, 0);
     device->drainDeferredTextureBackings();
-    EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
-              backingDestroysBefore);
+    EXPECT_EQ(device->lifetimeTextureReleases(), backingReleasesBefore);
 
     cache.advancePresentationFrame();
     EXPECT_EQ(firstDestructionCount, 1);
@@ -598,9 +589,8 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
     EXPECT_THAT(device->deferredTextureDestroyCountForTesting(), testing::Eq(1u))
         << "The aged-out snapshot must hand its backing to the owning context's retirement";
     device->drainDeferredTextureBackings();
-    EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
-              backingDestroysBefore + 1u)
-        << "The aged-out owned snapshot must explicitly destroy its GPU backing";
+    EXPECT_EQ(device->lifetimeTextureReleases(), backingReleasesBefore + 1u)
+        << "The aged-out owned snapshot must give up its GPU allocation";
     renderer->uninstall();
     ImGui::DestroyContext(context);
   }
@@ -611,9 +601,8 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
       << "Cache teardown must hand the remaining active snapshot's backing to the owning "
          "context's retirement";
   device->drainDeferredTextureBackings();
-  EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
-            backingDestroysBefore + 2u)
-      << "Cache teardown must explicitly destroy the remaining active snapshot backing";
+  EXPECT_EQ(device->lifetimeTextureReleases(), backingReleasesBefore + 2u)
+      << "Cache teardown must give up the remaining active snapshot allocation";
 }
 
 TEST(GlTextureCacheTest, RegisteredBackingSurvivesUntilItsExactRetirementIsReleased) {

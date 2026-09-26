@@ -128,14 +128,7 @@
       ]
     },
     "donner/editor/tests/GlTextureCache_tests.cc": {
-      "operations": [
-        "createTexture"
-      ],
-      "usesEditorWgpuDefine": true,
-      "wgpuCppTokens": [
-        "Texture",
-        "TextureFormat"
-      ]
+      "usesEditorWgpuDefine": true
     },
     "donner/editor/tests/LayersPanel_tests.cc": {
       "usesEditorWgpuDefine": true
