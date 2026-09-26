@@ -8,8 +8,8 @@ browser package, and the sole Linux resvg comparison roots. The named
 `configured_rust_closure.py`. Each receipt records Bazel's selected dependency
 closure for every declared root and binds it to the commit, Git tree, inventory,
 and platform. The Linux oracle receipt also binds the generated dependency lock.
-A production root that reaches the
-WebGPU-C++ wrapper, a wgpu-native archive, or the Rust FFI oracle fails. The
+A production root that reaches the WebGPU-C++ wrapper, a wgpu-native archive,
+or the Rust FFI oracle fails. The
 Linux resvg test root must reach its checksum-pinned wrapper and archive;
 macOS has no oracle exception. Missing or stale platform receipts fail the
 aggregate job.
@@ -113,6 +113,10 @@ scopes and the verifier enforces the boundary of each:
 - `testOnlyConsumerPrefixes` - the only build files that may name the oracle's
   targets. This is what keeps it out of every non-test closure, and it is
   checked alongside the oracle's own visibility.
+- `testOnlyGpuOracleArchives` - the exact Linux aarch64 and x86_64 wgpu-native
+  release assets and reviewed SHA-256 pins for the sole resvg comparison lane.
+  The verifier checks the fetch rule, root module names, Linux-only overlay,
+  test-only runtime, and resvg test consumer as one narrow boundary.
 
 The visibility check reads the raw file and fails closed on anything it cannot
 parse as a literal list of quoted labels, a comment included: a comment
@@ -122,9 +126,12 @@ only labels it accepts are `__pkg__` and `__subpackages__` targets under the
 vendored `//tests` tree, so a package_group label, whose membership is declared
 elsewhere, is a finding.
 
-The Lint workflow runs `--blocking default`, which is every category except
-`rust-built-archive`: the prebuilt `wgpu-native` tarballs are the Rust that
-actually ships today, and they leave with the Metal and Linux cutovers.
+The Lint workflow runs `--blocking default`, which includes
+`rust-built-archive`. The two pinned Linux test-oracle archives are its only
+exception; an extra archive, production reference, or missing test-only guard
+fails. On the pre-cutover four-archive tree this check intentionally reports
+four blocking archive findings until the macOS fetch, overlay, module, and
+runtime references are removed.
 
 Bazel files are scanned for Rust rule-set names and, outside comments, for bare
 `cargo`, `rustc`, and `rustup` commands, because a `genrule` command or a `.bzl`

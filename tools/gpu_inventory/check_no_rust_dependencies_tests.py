@@ -21,6 +21,12 @@ SCOPES = RustScopes(
         "third_party/tiny-skia-cpp/tests/rust_ffi/",
     ),
     test_only_consumer_prefixes=("third_party/tiny-skia-cpp/tests/",),
+    test_only_gpu_oracle_archives=(
+        ("wgpu_native_linux_aarch64", "wgpu-linux-aarch64-release.zip",
+         "97786f622d6d4f9aaa87c27d165de8db65daf1d391e0bcc32a2dd9bb45fcd299"),
+        ("wgpu_native_linux_x86_64", "wgpu-linux-x86_64-release.zip",
+         "86f3eb9f74d7f1ac82ee52d9b2ab15e366ef86a932759c750b7472652836ee59"),
+    ),
 )
 
 FIXTURE_BUILD = "third_party/tiny-skia-cpp/tests/rust_ffi/BUILD.bazel"
@@ -87,11 +93,16 @@ class CheckTest(unittest.TestCase):
     def test_overlay_build_file_is_scanned(self):
         files = {
             "third_party/BUILD.wgpu_native_platform": (
-                "# overlay for the wgpu_native_macos_aarch64 archive\n"
+                'cc_library(\n    name = "wgpu_native",\n'
+                '    testonly = True,\n    srcs = ["lib/libwgpu_native.dylib"],\n)\n'
             )
         }
         findings = verifier.check(files, SCOPES)
         self.assertEqual(categories(findings), ["rust-built-archive"])
+
+    def test_archive_name_in_comment_is_not_a_build_edge(self):
+        files = {"third_party/BUILD.wgpu_native_platform": "# old wgpu_native_macos archive\n"}
+        self.assertEqual(verifier.check(files, SCOPES), [])
 
     def test_non_build_files_are_not_scanned_for_edges(self):
         files = {"docs/history.md": "The old backend used rules_rust and wgpu_native_ archives."}
@@ -655,16 +666,120 @@ class BlockingSelectionTest(unittest.TestCase):
             verifier.parse_blocking("rust-build-edge,typo")
         self.assertIn("typo", str(raised.exception))
 
-    def test_default_blocking_covers_everything_but_the_archives(self):
-        """The archives are still in the tree; every other category is clean."""
-        self.assertEqual(
-            sorted(set(verifier.CATEGORIES) - set(verifier.DEFAULT_BLOCKING)),
-            ["rust-built-archive"],
-        )
+    def test_default_blocking_includes_unexpected_archives(self):
+        self.assertEqual(verifier.DEFAULT_BLOCKING, verifier.CATEGORIES)
 
     def test_the_default_keyword_selects_that_set(self):
         """The CI set lives in the tool, so the workflow spells one word."""
         self.assertEqual(verifier.parse_blocking("default"), verifier.DEFAULT_BLOCKING)
+
+
+class LinuxGpuOracleArchiveTest(unittest.TestCase):
+    """The sole Rust-built GPU archive crosses only a checksum-pinned test boundary."""
+
+    @staticmethod
+    def allowed_files():
+        return {
+            "third_party/bazel/non_bcr_deps.bzl": (
+                '_WGPU_NATIVE_PLATFORMS = [\n'
+                '    struct(\n        name = "wgpu_native_linux_aarch64",\n'
+                '        asset = "wgpu-linux-aarch64-release.zip",\n'
+                '        sha256 = "97786f622d6d4f9aaa87c27d165de8db65daf1d391e0bcc32a2dd9bb45fcd299",\n'
+                '    ),\n'
+                '    struct(\n        name = "wgpu_native_linux_x86_64",\n'
+                '        asset = "wgpu-linux-x86_64-release.zip",\n'
+                '        sha256 = "86f3eb9f74d7f1ac82ee52d9b2ab15e366ef86a932759c750b7472652836ee59",\n'
+                '    ),\n]\n'
+                'for p in _WGPU_NATIVE_PLATFORMS:\n'
+                '    http_archive(\n'
+                '        url = "https://github.com/gfx-rs/wgpu-native/releases/download/{}/{}",\n'
+                '        sha256 = p.sha256,\n'
+                '        build_file = "//third_party:BUILD.wgpu_native_platform",\n'
+                '    )\n'
+            ),
+            "MODULE.bazel": (
+                'use_repo(\n    non_bcr_deps,\n'
+                '    "wgpu_native_linux_aarch64",\n'
+                '    "wgpu_native_linux_x86_64",\n)\n'
+            ),
+            "third_party/BUILD.wgpu_native_platform": (
+                'cc_library(\n    name = "wgpu_native",\n    testonly = True,\n'
+                '    srcs = ["lib/libwgpu_native.so"],\n)\n'
+            ),
+            "third_party/webgpu-cpp/BUILD.bazel": (
+                'cc_library(\n    name = "webgpu_cpp",\n    testonly = True,\n)\n'
+                'cc_library(\n    name = "wgpu_native_reference_runtime",\n'
+                '    testonly = True,\n'
+                '    target_compatible_with = ["@platforms//os:linux"],\n'
+                '    visibility = ["//donner/svg/renderer/tests:__pkg__"],\n'
+                '    deps = [":webgpu_cpp"],\n)\n'
+                'alias(\n    name = "wgpu_native_platform",\n    testonly = True,\n'
+                '    actual = ":wgpu_native_linux",\n)\n'
+                'alias(\n    name = "wgpu_native_linux",\n    testonly = True,\n'
+                '    actual = select({\n'
+                '        "@platforms//cpu:aarch64": "@wgpu_native_linux_aarch64//:wgpu_native",\n'
+                '        "@platforms//cpu:x86_64": "@wgpu_native_linux_x86_64//:wgpu_native",\n'
+                '    }),\n)\n'
+            ),
+            "donner/svg/renderer/tests/BUILD.bazel": (
+                'donner_cc_test(\n    name = "resvg_test_suite_wgpu_reference_linux_impl",\n'
+                '    target_compatible_with = ["@platforms//os:linux"],\n'
+                '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
+            ),
+        }
+
+    def test_exact_linux_oracle_is_allowed(self):
+        self.assertEqual(categories(verifier.check(self.allowed_files(), SCOPES)), [])
+
+    def test_new_macos_archive_fails_default_blocking(self):
+        files = self.allowed_files()
+        files["third_party/bazel/non_bcr_deps.bzl"] = files["third_party/bazel/non_bcr_deps.bzl"].replace(
+            "]\nfor p in _WGPU_NATIVE_PLATFORMS:",
+            '    struct(\n        name = "wgpu_native_macos_aarch64",\n'
+            '        asset = "wgpu-macos-aarch64-release.zip",\n'
+            '        sha256 = "f140ff27234ebfa9fcca2b492d0cb499f2e197424b9edc45134bcbad0f8d3a78",\n'
+            '    ),\n]\nfor p in _WGPU_NATIVE_PLATFORMS:',
+        )
+        findings = verifier.check(files, SCOPES)
+        self.assertIn("rust-built-archive", categories(findings))
+        self.assertIn("rust-built-archive", verifier.parse_blocking("default"))
+
+    def test_changed_or_empty_sha_is_rejected(self):
+        for replacement in ("0" * 64, "", "f" * 64):
+            with self.subTest(sha256=replacement):
+                files = self.allowed_files()
+                files["third_party/bazel/non_bcr_deps.bzl"] = files["third_party/bazel/non_bcr_deps.bzl"].replace(
+                    "86f3eb9f74d7f1ac82ee52d9b2ab15e366ef86a932759c750b7472652836ee59",
+                    replacement,
+                )
+                self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
+
+    def test_production_reference_is_rejected(self):
+        files = self.allowed_files()
+        files["donner/editor/BUILD.bazel"] = (
+            'cc_library(\n    name = "editor",\n'
+            '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
+        )
+        self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
+        files["donner/editor/BUILD.bazel"] = (
+            'cc_library(\n    name = "editor",\n'
+            '    deps = ["@wgpu_native_freebsd_arm64//:wgpu_native"],\n)\n'
+        )
+        self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
+
+    def test_overlay_or_runtime_exposure_is_rejected(self):
+        files = self.allowed_files()
+        files["third_party/BUILD.wgpu_native_platform"] = files["third_party/BUILD.wgpu_native_platform"].replace(
+            'srcs = ["lib/libwgpu_native.so"]',
+            'srcs = ["lib/libwgpu_native.so", "lib/libwgpu_native.dylib"]',
+        )
+        self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
+        files = self.allowed_files()
+        files["third_party/webgpu-cpp/BUILD.bazel"] = files["third_party/webgpu-cpp/BUILD.bazel"].replace(
+            'name = "webgpu_cpp",\n    testonly = True,',
+            'name = "webgpu_cpp",',
+        )
+        self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
 
 
 class FormatReportTest(unittest.TestCase):

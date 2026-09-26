@@ -67,8 +67,7 @@ def run(*args: str, cwd: Path = ROOT) -> str:
     return proc.stdout
 
 
-def inventory() -> dict[str, Any]:
-    data = json.loads(INVENTORY.read_text())
+def _validate_inventory_header(data: dict[str, Any]) -> None:
     if data.get("schema") != SCHEMA or set(data.get("platforms", {})) != {"linux", "macos"}:
         raise GateError("configured root inventory has an unknown schema or platform set")
     if set(data.get("allowedArchiveRepositories", [])) != REQUIRED_LINUX_ARCHIVES:
@@ -76,23 +75,23 @@ def inventory() -> dict[str, Any]:
     required_fragments = {"//third_party/webgpu-cpp:", "//:wgpu_native", "//tests/rust_ffi:"}
     if not required_fragments.issubset(data.get("forbiddenLabelFragments", [])):
         raise GateError("configured root inventory omitted a forbidden Rust-backed dependency")
-    for os_name, profiles in data["platforms"].items():
-        if set(profiles) != {"native", "nativeGeode", "browser", "oracle"}:
-            raise GateError(f"{os_name}: incomplete closure profile inventory")
-        if not profiles["native"] or not profiles["browser"] or (os_name == "linux" and not profiles["oracle"]):
-            raise GateError(f"{os_name}: missing required product or oracle root")
-        if not REQUIRED_NATIVE_ROOTS.issubset(profiles["native"]) or \
-           not REQUIRED_GEODE_ROOTS.issubset(profiles["nativeGeode"]) or \
-           not REQUIRED_BROWSER_ROOTS.issubset(profiles["browser"]):
-            raise GateError(f"{os_name}: required product or shipped browser root missing")
-        for roots in profiles.values():
-            if len(roots) != len(set(roots)) or any(not root.startswith("//") for root in roots):
-                raise GateError(f"{os_name}: duplicate or invalid configured root")
-    if data["platforms"]["macos"]["oracle"]:
-        raise GateError("the wgpu-native oracle is Linux-only")
-    if data["platforms"]["linux"]["oracle"] != [data["oracleLabel"]]:
-        raise GateError("the sole Linux oracle root must match the allowlist")
-    artifact_roots = data.get("artifactRoots", {})
+
+
+def _validate_profile(os_name: str, profiles: dict[str, list[str]]) -> None:
+    if set(profiles) != {"native", "nativeGeode", "browser", "oracle"}:
+        raise GateError(f"{os_name}: incomplete closure profile inventory")
+    if not profiles["native"] or not profiles["browser"] or (os_name == "linux" and not profiles["oracle"]):
+        raise GateError(f"{os_name}: missing required product or oracle root")
+    if not REQUIRED_NATIVE_ROOTS.issubset(profiles["native"]) or \
+       not REQUIRED_GEODE_ROOTS.issubset(profiles["nativeGeode"]) or \
+       not REQUIRED_BROWSER_ROOTS.issubset(profiles["browser"]):
+        raise GateError(f"{os_name}: required product or shipped browser root missing")
+    for roots in profiles.values():
+        if len(roots) != len(set(roots)) or any(not root.startswith("//") for root in roots):
+            raise GateError(f"{os_name}: duplicate or invalid configured root")
+
+
+def _validate_artifact_roots(artifact_roots: dict[str, Any]) -> None:
     if set(artifact_roots) != {"linux", "macos"}:
         raise GateError("Linux and macOS shipped artifact roots must be declared")
     if set(artifact_roots["linux"].get("native", [])) != {"//donner/svg/tool:donner-svg"} or \
@@ -101,6 +100,18 @@ def inventory() -> dict[str, Any]:
            "//donner/svg/renderer/wasm:geode_browser_test_package",
        } or set(artifact_roots["macos"].get("native", [])) != {"//donner/svg/tool:donner-svg"}:
         raise GateError("required CLI or shipped browser artifact root missing")
+
+
+def inventory() -> dict[str, Any]:
+    data = json.loads(INVENTORY.read_text())
+    _validate_inventory_header(data)
+    for os_name, profiles in data["platforms"].items():
+        _validate_profile(os_name, profiles)
+    if data["platforms"]["macos"]["oracle"]:
+        raise GateError("the wgpu-native oracle is Linux-only")
+    if data["platforms"]["linux"]["oracle"] != [data["oracleLabel"]]:
+        raise GateError("the sole Linux oracle root must match the allowlist")
+    _validate_artifact_roots(data.get("artifactRoots", {}))
     return data
 
 
@@ -215,6 +226,16 @@ def check_cmake_consumer() -> dict[str, str | bool]:
     return {"installSurface": "absent", "consumerPassed": True, "generatedCmakeSha256": generated_sha}
 
 
+def _artifact_file_record(path: Path, item: Path, root: str) -> dict[str, Any]:
+    name = str(item.relative_to(path)) if path.is_dir() else item.name
+    if BAD_ARTIFACT_RE.search(name):
+        raise GateError(f"{root}: shipped artifact includes Rust-backed GPU path: {name}")
+    data = item.read_bytes()
+    if not data or b"libwgpu_native" in data or b"webgpu_cpp" in data:
+        raise GateError(f"{root}: empty or Rust-backed GPU artifact: {name}")
+    return {"path": name, "bytes": len(data), "sha256": digest(data)}
+
+
 def scan_artifact_output(path: Path, root: str) -> list[dict[str, Any]]:
     """Hash real Bazel outputs, including every member of a tree artifact."""
     if not path.exists():
@@ -227,42 +248,33 @@ def scan_artifact_output(path: Path, root: str) -> list[dict[str, Any]]:
     files = [item for item in entries if item.is_file()]
     if not files:
         raise GateError(f"{root}: empty or symlinked Bazel artifact")
-    records = []
-    for item in files:
-        name = str(item.relative_to(path)) if path.is_dir() else item.name
-        if BAD_ARTIFACT_RE.search(name):
-            raise GateError(f"{root}: shipped artifact includes Rust-backed GPU path: {name}")
-        data = item.read_bytes()
-        if not data or b"libwgpu_native" in data or b"webgpu_cpp" in data:
-            raise GateError(f"{root}: empty or Rust-backed GPU artifact: {name}")
-        records.append({"path": name, "bytes": len(data), "sha256": digest(data)})
-    return records
+    return [_artifact_file_record(path, item, root) for item in files]
+
+
+def _artifact_output_records(output: str, root: str) -> list[dict[str, Any]]:
+    rel = Path(output)
+    if rel.is_absolute() or ".." in rel.parts:
+        raise GateError(f"{root}: invalid Bazel output path: {output}")
+    return scan_artifact_output(ROOT / rel, root)
+
+
+def _build_one_artifact(profile: str, root: str, bazel: str) -> dict[str, Any]:
+    flags = ["--config=editor-wasm"] if profile == "browser" else []
+    run(bazel, "build", root, "--noshow_progress", *flags)
+    output = run(bazel, "cquery", root, "--output=files", "--noshow_progress", *flags)
+    paths = [line.strip() for line in output.splitlines() if line.strip()]
+    if not paths:
+        raise GateError(f"{root}: Bazel produced no shipped artifact")
+    files = [record for path in paths for record in _artifact_output_records(path, root)]
+    if profile == "browser" and (not any(row["path"].endswith(".wasm") for row in files) or
+                                 not any(row["path"].endswith(".js") for row in files)):
+        raise GateError(f"{root}: shipped browser package lacks Wasm or JS")
+    return {"profile": profile, "root": root, "files": files}
 
 
 def build_and_scan_artifacts(os_name: str, bazel: str, spec: dict[str, Any]) -> list[dict[str, Any]]:
-    receipts = []
-    for profile, roots in spec["artifactRoots"][os_name].items():
-        for root in roots:
-            args = [bazel, "build", root, "--noshow_progress"]
-            query = [bazel, "cquery", root, "--output=files", "--noshow_progress"]
-            if profile == "browser":
-                args.append("--config=editor-wasm")
-                query.append("--config=editor-wasm")
-            run(*args)
-            outputs = [line.strip() for line in run(*query).splitlines() if line.strip()]
-            if not outputs:
-                raise GateError(f"{root}: Bazel produced no shipped artifact")
-            files = []
-            for output in outputs:
-                rel = Path(output)
-                if rel.is_absolute() or ".." in rel.parts:
-                    raise GateError(f"{root}: invalid Bazel output path: {output}")
-                files += scan_artifact_output(ROOT / rel, root)
-            if profile == "browser" and (not any(row["path"].endswith(".wasm") for row in files) or
-                                         not any(row["path"].endswith(".js") for row in files)):
-                raise GateError(f"{root}: shipped browser package lacks Wasm or JS")
-            receipts.append({"profile": profile, "root": root, "files": files})
-    return receipts
+    return [_build_one_artifact(profile, root, bazel)
+            for profile, roots in spec["artifactRoots"][os_name].items() for root in roots]
 
 
 def platform_receipt(os_name: str, bazel: str) -> dict[str, Any]:
@@ -291,6 +303,85 @@ def platform_receipt(os_name: str, bazel: str) -> dict[str, Any]:
             "pins": pins, "closures": closures, "cmake": cmake, "artifacts": artifacts}
 
 
+def _verify_receipt_identity(receipt: dict[str, Any], os_name: str,
+                             expected: dict[str, str], pins: dict[str, str]) -> None:
+    if receipt.get("schema") != SCHEMA or any(receipt.get(key) != value for key, value in expected.items()):
+        raise GateError(f"{os_name}: stale or mismatched source/inventory receipt")
+    if receipt.get("pins") != pins:
+        raise GateError(f"{os_name}: stale or mismatched archive lock receipt")
+    lock_sha = receipt.get("lockSha256")
+    if os_name == "linux" and not isinstance(lock_sha, str):
+        raise GateError(f"{os_name}: stale or mismatched archive lock receipt")
+    if os_name == "linux" and not re.fullmatch(r"[0-9a-f]{64}", lock_sha):
+        raise GateError(f"{os_name}: stale or mismatched archive lock receipt")
+    if os_name == "macos" and lock_sha is not None:
+        raise GateError(f"{os_name}: stale or mismatched archive lock receipt")
+    if not receipt.get("architecture"):
+        raise GateError(f"{os_name}: missing host architecture")
+
+
+def _verify_closure_rows(receipt: dict[str, Any], os_name: str, spec: dict[str, Any]) -> None:
+    expected = {(profile, root) for profile, roots in spec["platforms"][os_name].items()
+                for root in roots}
+    rows = receipt.get("closures", [])
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise GateError(f"{os_name}: missing, duplicate, or unexpected configured root receipt")
+    actual = {(row.get("profile"), row.get("root")) for row in rows}
+    if len(rows) != len(expected) or actual != expected:
+        raise GateError(f"{os_name}: missing, duplicate, or unexpected configured root receipt")
+    if any(not isinstance(row.get("labelsSha256"), str) or
+           not re.fullmatch(r"[0-9a-f]{64}", row["labelsSha256"]) or
+           not isinstance(row.get("labelCount"), int) or row["labelCount"] < 2 for row in rows):
+        raise GateError(f"{os_name}: empty or malformed closure receipt")
+
+
+def _verify_cmake_receipt(receipt: dict[str, Any], os_name: str) -> None:
+    cmake = receipt.get("cmake")
+    if os_name == "macos":
+        if cmake is not None:
+            raise GateError("unexpected macOS CMake receipt")
+        return
+    if not isinstance(cmake, dict) or cmake.get("installSurface") != "absent" or \
+       cmake.get("consumerPassed") is not True or \
+       not isinstance(cmake.get("generatedCmakeSha256"), str) or \
+       not re.fullmatch(r"[0-9a-f]{64}", cmake["generatedCmakeSha256"]):
+        raise GateError("Linux generated CMake/no-install consumer receipt is missing or malformed")
+
+
+def _verify_artifact_file_item(item: dict[str, Any], os_name: str) -> None:
+    if not isinstance(item.get("path"), str) or \
+       not isinstance(item.get("bytes"), int) or item["bytes"] <= 0 or \
+       not isinstance(item.get("sha256"), str) or \
+       not re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) or \
+       BAD_ARTIFACT_RE.search(item["path"]):
+        raise GateError(f"{os_name}: malformed or contaminated shipped artifact receipt")
+
+
+def _verify_artifact_files(files: Any, os_name: str, profile: str) -> None:
+    if not isinstance(files, list) or not files or any(not isinstance(item, dict) for item in files):
+        raise GateError(f"{os_name}: malformed or contaminated shipped artifact receipt")
+    for item in files:
+        _verify_artifact_file_item(item, os_name)
+    if len({item["path"] for item in files}) != len(files):
+        raise GateError(f"{os_name}: duplicate shipped artifact path")
+    if profile == "browser" and (not any(item["path"].endswith(".wasm") for item in files) or
+                                 not any(item["path"].endswith(".js") for item in files)):
+        raise GateError(f"{os_name}: shipped browser receipt lacks Wasm or JS")
+
+
+def _verify_artifacts(receipt: dict[str, Any], os_name: str, spec: dict[str, Any]) -> None:
+    expected = {(profile, root) for profile, roots in spec["artifactRoots"][os_name].items()
+                for root in roots}
+    artifacts = receipt.get("artifacts", [])
+    if not isinstance(artifacts, list) or any(not isinstance(row, dict) for row in artifacts):
+        raise GateError(f"{os_name}: missing or unexpected shipped Bazel artifact receipt")
+    actual = {(row.get("profile"), row.get("root")) for row in artifacts}
+    if len(artifacts) != len(expected) or actual != expected:
+        raise GateError(f"{os_name}: missing or unexpected shipped Bazel artifact receipt")
+    for artifact in artifacts:
+        _verify_artifact_files(artifact.get("files"), os_name, artifact["profile"])
+
+
 def verify_receipts(receipts: list[dict[str, Any]]) -> None:
     spec = inventory()
     expected = source_identity()
@@ -299,50 +390,10 @@ def verify_receipts(receipts: list[dict[str, Any]]) -> None:
     pins = archive_pins()
     for receipt in receipts:
         os_name = receipt["platform"]
-        if receipt.get("schema") != SCHEMA or any(receipt.get(key) != value for key, value in expected.items()):
-            raise GateError(f"{os_name}: stale or mismatched source/inventory receipt")
-        if receipt.get("pins") != pins or (os_name == "linux" and not re.fullmatch(r"[0-9a-f]{64}", receipt.get("lockSha256", ""))) or (os_name == "macos" and receipt.get("lockSha256") is not None):
-            raise GateError(f"{os_name}: stale or mismatched archive lock receipt")
-        if not receipt.get("architecture"):
-            raise GateError(f"{os_name}: missing host architecture")
-        expected_pairs = {(profile, root) for profile, roots in spec["platforms"][os_name].items() for root in roots}
-        closures = receipt.get("closures", [])
-        actual_pairs = {(row.get("profile"), row.get("root")) for row in closures}
-        if len(closures) != len(expected_pairs) or actual_pairs != expected_pairs:
-            raise GateError(f"{os_name}: missing, duplicate, or unexpected configured root receipt")
-        if any(not re.fullmatch(r"[0-9a-f]{64}", row.get("labelsSha256", "")) or row.get("labelCount", 0) < 2 for row in closures):
-            raise GateError(f"{os_name}: empty or malformed closure receipt")
-        if os_name == "linux":
-            cmake = receipt.get("cmake")
-            if not isinstance(cmake, dict) or cmake.get("installSurface") != "absent" or \
-               cmake.get("consumerPassed") is not True or \
-               not re.fullmatch(r"[0-9a-f]{64}", cmake.get("generatedCmakeSha256", "")):
-                raise GateError("Linux generated CMake/no-install consumer receipt is missing or malformed")
-        elif receipt.get("cmake") is not None:
-            raise GateError("unexpected macOS CMake receipt")
-        artifact_roots = spec["artifactRoots"][os_name]
-        expected_artifacts = {(profile, root) for profile, roots in artifact_roots.items() for root in roots}
-        artifacts = receipt.get("artifacts", [])
-        if not isinstance(artifacts, list) or len(artifacts) != len(expected_artifacts) or \
-           {(row.get("profile"), row.get("root")) for row in artifacts} != expected_artifacts:
-            raise GateError(f"{os_name}: missing or unexpected shipped Bazel artifact receipt")
-        for artifact in artifacts:
-            files = artifact.get("files", [])
-            if not isinstance(files, list) or not files or any(
-                not isinstance(item, dict) or not isinstance(item.get("path"), str) or
-                not isinstance(item.get("bytes"), int) or item["bytes"] <= 0 or
-                not re.fullmatch(r"[0-9a-f]{64}", item.get("sha256", "")) or
-                BAD_ARTIFACT_RE.search(item["path"])
-                for item in files
-            ):
-                raise GateError(f"{os_name}: malformed or contaminated shipped artifact receipt")
-            if len({item["path"] for item in files}) != len(files):
-                raise GateError(f"{os_name}: duplicate shipped artifact path")
-            if artifact["profile"] == "browser" and (
-                not any(item["path"].endswith(".wasm") for item in files) or
-                not any(item["path"].endswith(".js") for item in files)
-            ):
-                raise GateError(f"{os_name}: shipped browser receipt lacks Wasm or JS")
+        _verify_receipt_identity(receipt, os_name, expected, pins)
+        _verify_closure_rows(receipt, os_name, spec)
+        _verify_cmake_receipt(receipt, os_name)
+        _verify_artifacts(receipt, os_name, spec)
 
 
 def main() -> int:

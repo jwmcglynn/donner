@@ -127,6 +127,14 @@ class ConfiguredRustClosureTests(unittest.TestCase):
             receipts[0]["artifacts"][0]["files"][0]["path"] = "libwgpu_native.so"
             with self.assertRaisesRegex(gate.GateError, "contaminated shipped artifact"):
                 gate.verify_receipts(receipts)
+            receipts[0]["artifacts"][0]["files"][0]["path"] = "donner-svg"
+            receipts[0]["artifacts"][0]["files"][0]["sha256"] = 7
+            with self.assertRaisesRegex(gate.GateError, "malformed or contaminated"):
+                gate.verify_receipts(receipts)
+            receipts[0]["artifacts"][0]["files"][0]["sha256"] = "0" * 64
+            receipts[0]["closures"].pop()
+            with self.assertRaisesRegex(gate.GateError, "missing, duplicate, or unexpected"):
+                gate.verify_receipts(receipts)
 
 
 if __name__ == "__main__":
