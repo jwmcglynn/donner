@@ -3,8 +3,10 @@
 **Status:** Implementing. Metal renderer/editor parity and Vulkan Geode/renderer parity are
 qualified. The served and shipped editor Wasm packages select the browser runtime for their canvas
 and raster work. Unconstrained macOS Geode/editor roots default to native Metal. Linux native editor
-presentation is implemented and locally qualified on lavapipe and Intel Arc; hosted/integrated
-gates and its default flip remain, along with wrapper consumers and production dependency closure.
+presentation and its native default are implemented in this candidate; the editor passed local
+lavapipe and Intel Arc gates, and the default passed both in a reviewed combined candidate.
+Hosted/integrated qualification and merge remain, along with wrapper consumers and production
+dependency closure.
 Cross-device registration works on Metal, the browser, the transitional adapter and Vulkan-owned
 images; Vulkan acquired frames refuse export. The end state retains one Linux test-only wgpu-native resvg
 comparison backend.\
@@ -46,10 +48,12 @@ from the same reflected program interfaces.
 Metal renderer and editor parity and Vulkan renderer parity are qualified. macOS Geode and editor
 roots default to native Metal while explicit WebGPU requests remain available. The served and
 shipped editor WebAssembly packages select the browser runtime. Linux native editor presentation
-passes local Xvfb execution on lavapipe and Intel Arc; hosted CI, integrated qualification, merge,
-and the Linux default flip remain. The default standalone WebAssembly backend cutover and removal
-of the C WebGPU wrapper and Rust-built GPU archives also remain. The implementation checklist
-identifies those open boundaries; git history carries the delivery chronology.
+passes local Xvfb execution on lavapipe and Intel Arc. This candidate selects native Vulkan by
+default for unconstrained Linux roots; the reviewed combined tree passed real unset and empty
+window frames on both drivers. Hosted CI, integrated qualification and merge remain. The default
+standalone WebAssembly backend cutover and removal of the C WebGPU wrapper and Rust-built GPU
+archives also remain. The implementation checklist identifies those open boundaries; git history
+carries the delivery chronology.
 
 ### Native parity
 
@@ -148,8 +152,8 @@ lifetime, synchronization, memory-residency, security or privacy requirements.
 
 ## Next Steps
 
-1. Complete hosted and integrated qualification of the locally passing Linux Vulkan editor
-   window, then select the native Linux platform default.
+1. Qualify and merge the locally passing Linux Vulkan editor window, then qualify this native
+   Linux default on the exact integrated tree and merge its dependent PR.
 2. Move counters and the remaining shared renderer services behind backend-neutral ownership
    without merging logical tables, serials, caches, or retirement.
 3. Remove remaining transitional WebGPU consumers and finish hosted and physical-browser
@@ -699,10 +703,13 @@ the integrated editor matrix, and merge still gate this item and the Linux defau
       suite with a Geode variant passes on native Metal under Metal API and shader validation,
       with the same case counts as the transitional adapter
       ([#1404](https://github.com/jwmcglynn/donner/issues/1404)).
-- [ ] Flip each platform's default after its renderer and editor suites pass. macOS now selects
-      native Metal for unconstrained Geode/editor roots; an explicit WebGPU request still selects
-      the transitional adapter. The browser editor already selects Browser. Linux Vulkan editor
-      presentation and its native default remain.
+- [ ] Flip each platform's default after its renderer and editor suites pass. macOS selects native
+      Metal for unconstrained Geode/editor roots; an explicit WebGPU request still selects the
+      transitional adapter. The browser editor selects Browser. The lower Linux editor PR supplies
+      native Vulkan presentation; this candidate selects Vulkan for unset and empty unconstrained
+      Linux roots. Its nonmanual Xvfb gate executed real frames and resize for both requests on
+      lavapipe and Intel Arc in a reviewed combined tree. Hosted and exact merged-tree qualification
+      and the dependent PR merge remain.
 - [x] The Linux-only `resvg_test_suite_wgpu_reference_linux` target selects the test-only
       wgpu-native backend by name and fails closed if another backend is selected. It runs the
       same GeodeGolden case IDs and reviewed per-scene golden/pixelmatch rules as native Vulkan on
