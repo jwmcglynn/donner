@@ -16,6 +16,7 @@ To enable:
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:defs.bzl", "py_test")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load(
@@ -474,6 +475,25 @@ donner_cc_library(
            }) + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) +
            shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES) +
            native_shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES),
+)
+
+# The ordinary native Geode root must not fetch or link the test-only wgpu-native archive.
+configured_dependency_audit_test(
+    name = "geode_native_no_wgpu_archive_audit_impl",
+    forbidden = [
+        "@wgpu_native_linux_aarch64//:wgpu_native",
+        "@wgpu_native_linux_x86_64//:wgpu_native",
+        "@wgpu_native_macos_aarch64//:wgpu_native",
+        "@wgpu_native_macos_x86_64//:wgpu_native",
+    ],
+    tags = ["manual"],
+    target = "//donner/svg/renderer/geode:geode_device",
+)
+
+donner_multi_transitioned_test(
+    name = "geode_native_no_wgpu_archive_audit_test",
+    dep = ":geode_native_no_wgpu_archive_audit_impl",
+    renderer_backend = "geode",
 )
 
 # Test support: a context over a backend a test names, and texture readback through the runtime.
