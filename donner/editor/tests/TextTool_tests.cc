@@ -13,6 +13,8 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/core/TextDecoration.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 

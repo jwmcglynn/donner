@@ -18,6 +18,7 @@
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/svg/DocumentState.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
 namespace {

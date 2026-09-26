@@ -2760,6 +2760,62 @@ test("WebGPU eyedropper Escape and an outside-document click cancel a ready capt
   expect(failures).toEqual([]);
 });
 
+async function readPastedSourceStats(page: Page) {
+  return page.evaluate(() => ({
+    viewport: window.__donnerViewportStats,
+    source: window.__donnerEyedropperTestState,
+    worker: window.__donnerWorkerStats,
+    interaction: window.__donnerInteractionStats,
+  }));
+}
+
+type PastedSourceStats = Awaited<ReturnType<typeof readPastedSourceStats>>;
+
+function pastedSourcePresentation(stats: PastedSourceStats) {
+  return {
+    documentGeneration: stats.source?.documentGeneration ?? -1,
+    workerGeneration: stats.worker?.documentGeneration ?? -1,
+    acceptedForPresentation: stats.worker?.acceptedForPresentation ?? false,
+    presentedAtMs: stats.worker?.presentedAtMs ?? -1,
+    hasPresentedAtMs: stats.worker?.presentedAtMs !== undefined,
+    sourceVersion: stats.worker?.sourceVersion ?? -1,
+    width: stats.viewport?.documentWidth ?? 0,
+    height: stats.viewport?.documentHeight ?? 0,
+    busy: stats.interaction?.workerBusy ?? true,
+  };
+}
+
+function pastedSourceDiagnostics(stats: PastedSourceStats) {
+  return {
+    sourcePaneFocused: stats.source?.sourcePaneFocused ?? false,
+    sourceSelectionActive: stats.source?.sourceSelectionActive ?? false,
+    sourceBytes: stats.source?.sourceBufferByteLength ?? -1,
+    selectionBytes: stats.source?.sourceSelectionByteLength ?? -1,
+    diagnostics: stats.source?.sourceDiagnosticCount ?? -1,
+    textSyncWakePending: stats.source?.textSyncWakePending ?? false,
+    completedResults: stats.worker?.completedResults ?? -1,
+  };
+}
+
+async function readPastedSourceSnapshot(page: Page) {
+  const stats = await readPastedSourceStats(page);
+  return {
+    ...pastedSourcePresentation(stats),
+    ...pastedSourceDiagnostics(stats),
+  };
+}
+
+function pastedSourceReady(
+  snapshot: Awaited<ReturnType<typeof readPastedSourceSnapshot>>,
+  beforeDocumentGeneration: number,
+): boolean {
+  return snapshot.documentGeneration > beforeDocumentGeneration
+    && snapshot.width > 0 && snapshot.height > 0
+    && Math.abs(snapshot.width - snapshot.height) < 1 && !snapshot.busy
+    && snapshot.workerGeneration === snapshot.documentGeneration
+    && snapshot.acceptedForPresentation && snapshot.hasPresentedAtMs;
+}
+
 test("WebGPU eyedropper copies translucent document alpha, not checkerboard alpha", async ({ page }) => {
   const failures = await openEditor(page, "eyedropper");
   await openDonnerSplash(page);
@@ -2896,36 +2952,13 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     message: "Ctrl+V must replace the selected intermediate source with the full SVG fixture",
     timeout: scaledMs(4_000),
   }).toEqual(expect.objectContaining({ sourceBytes: fixture.length, selectedBytes: 0 }));
-  await expect.poll(() =>
-    page.evaluate((before) => {
-      const width = window.__donnerViewportStats?.documentWidth ?? 0;
-      const height = window.__donnerViewportStats?.documentHeight ?? 0;
-      const sourceVersion = window.__donnerWorkerStats?.sourceVersion ?? -1;
-      const busy = window.__donnerInteractionStats?.workerBusy ?? true;
-      const sourceState = window.__donnerEyedropperTestState;
-      const worker = window.__donnerWorkerStats;
-      return {
-        ready: (sourceState?.documentGeneration ?? -1) > before && width > 0 && height > 0
-          && Math.abs(width - height) < 1 && !busy
-          && worker?.documentGeneration === sourceState?.documentGeneration
-          && worker?.acceptedForPresentation === true && worker?.presentedAtMs !== undefined,
-        documentGeneration: sourceState?.documentGeneration ?? -1,
-        workerGeneration: worker?.documentGeneration ?? -1,
-        acceptedForPresentation: worker?.acceptedForPresentation ?? false,
-        presentedAtMs: worker?.presentedAtMs ?? -1,
-        sourceVersion,
-        width,
-        height,
-        busy,
-        sourcePaneFocused: sourceState?.sourcePaneFocused ?? false,
-        sourceSelectionActive: sourceState?.sourceSelectionActive ?? false,
-        sourceBytes: sourceState?.sourceBufferByteLength ?? -1,
-        selectionBytes: sourceState?.sourceSelectionByteLength ?? -1,
-        diagnostics: sourceState?.sourceDiagnosticCount ?? -1,
-        textSyncWakePending: sourceState?.textSyncWakePending ?? false,
-        completedResults: window.__donnerWorkerStats?.completedResults ?? -1,
-      };
-    }, beforeDocumentGeneration), {
+  await expect.poll(async () => {
+    const snapshot = await readPastedSourceSnapshot(page);
+    return {
+      ...snapshot,
+      ready: pastedSourceReady(snapshot, beforeDocumentGeneration),
+    };
+  }, {
     message: "the pasted translucent SVG must become a settled square document",
     timeout: scaledMs(5_000),
     intervals: [16, 25, 50, 100],
