@@ -1603,6 +1603,52 @@ TEST(EditorWindowTest, NativeVulkanWindowsRetainGlfwUntilTheLastWindowCloses) {
   EXPECT_EQ(internal::GlfwTerminationCountForTesting(), terminations + 1);
 }
 
+TEST(EditorWindowTest, NativeVulkanDefaultWindowPresentsAndResizes) {
+  const char* requested = std::getenv("DONNER_GPU_BACKEND");
+  if (requested != nullptr && requested[0] != '\0') {
+    GTEST_SKIP() << "The platform-default gate runs without an explicit backend request";
+  }
+  if (std::getenv("DISPLAY") == nullptr && std::getenv("WAYLAND_DISPLAY") == nullptr) {
+    GTEST_SKIP() << "A display is required for native Vulkan window presentation";
+  }
+
+  const gpu::Result<geode::GpuBackendKind> selected = geode::ProcessDefaultGpuBackendKind();
+  ASSERT_THAT(selected, gpu::HasResult());
+  ASSERT_THAT(selected.result(), testing::Eq(geode::GpuBackendKind::NativeVulkan));
+
+  EditorWindow window(EditorWindowOptions{
+      .title = "Default Native Vulkan Window",
+      .initialWidth = 64,
+      .initialHeight = 48,
+      .visible = false,
+      .enableFramebufferReadback = true,
+  });
+  ASSERT_TRUE(window.valid());
+  ASSERT_NE(window.geodeFramebufferDevice(), nullptr);
+  ASSERT_FALSE(window.usingOffscreenRenderTarget());
+  EXPECT_THAT(window.geodeFramebufferDevice()->physicalDeviceOwner()->root().capabilities().backend,
+              testing::Eq(geode::GpuBackendKind::NativeVulkan));
+  auto& native =
+      static_cast<gpu::vulkan::VulkanDevice&>(window.geodeFramebufferDevice()->runtimeDevice());
+  EXPECT_TRUE(native.supportsPresentation());
+
+  const Vector2i before = window.framebufferSize();
+  ASSERT_GT(before.x, 0);
+  ASSERT_GT(before.y, 0);
+  window.beginFrame();
+  const svg::RendererBitmap first = window.endFrameAndReadPixels();
+  ASSERT_FALSE(first.empty()) << "the default Vulkan window did not draw a presentable frame";
+  EXPECT_EQ(first.dimensions, before);
+  glfwSetWindowSize(window.rawHandle(), 96, 80);
+  window.pollEvents();
+  const Vector2i after = window.framebufferSize();
+  ASSERT_NE(after, before) << "the displayed Vulkan window did not resize";
+  window.beginFrame();
+  const svg::RendererBitmap resized = window.endFrameAndReadPixels();
+  ASSERT_FALSE(resized.empty()) << "the resized default Vulkan surface did not draw a frame";
+  EXPECT_EQ(resized.dimensions, after);
+}
+
 TEST(EditorWindowDeathTest, UnprovenNativeRetirementQuarantinesTheWindowAndGlfwClaim) {
   if (std::getenv("DISPLAY") == nullptr && std::getenv("WAYLAND_DISPLAY") == nullptr) {
     GTEST_SKIP() << "A display is required for native Vulkan window presentation";

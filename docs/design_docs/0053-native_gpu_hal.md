@@ -1,9 +1,9 @@
 # Design: Donner Native GPU Runtime and Rust-Independent Build
 
-**Status:** Implementing. macOS Geode/editor roots default to native Metal; the editor and standalone
-Geode Wasm packages use the browser runtime without the C WebGPU wrapper. Linux native editor
-presentation is implemented and locally qualified on lavapipe and Intel Arc. Hosted/integrated and
-physical-browser qualification, the Linux native default, and native Rust dependency closure remain.\
+**Status:** Implementing. macOS Geode/editor roots select native Metal; unconstrained Linux roots
+select native Vulkan, and its editor presents through a surface-selected device. The editor and
+standalone Geode Wasm packages use the browser runtime without the C WebGPU wrapper.
+Hosted/integrated and physical-browser qualification and native Rust dependency closure remain.\
 **Created:** 2026-07-05\
 **Updated:** 2026-09-25\
 **Author:** Claude Fable 5.1\
@@ -39,13 +39,14 @@ commands, texture uploads, checkerboard targets, UI textures and compositor diag
 validated runtime handles. Production shader constructors select WGSL, MSL or SPIR-V projections
 from the same reflected program interfaces.
 
-Metal renderer and editor parity and Vulkan renderer parity are qualified. macOS Geode and editor
-roots default to native Metal while explicit WebGPU requests remain available. The served and
-shipped editor and standalone Geode WebAssembly packages select the browser runtime; their
-configured dependency closures and link actions exclude the C WebGPU wrapper. Linux native editor
-presentation passes local Xvfb execution on lavapipe and Intel Arc; hosted CI, integrated
-qualification, merge, the Linux default flip, physical-browser qualification, and removal of
-Rust-built GPU archives remain.
+Metal renderer and editor parity and Vulkan renderer parity are qualified. macOS Geode/editor roots
+select native Metal, while explicit WebGPU requests remain available. Linux unconstrained roots
+select native Vulkan, and displayed editor windows use its surface-selected presentation device.
+The served and shipped editor and standalone Geode WebAssembly packages select the browser runtime;
+their configured dependency closures and link actions exclude the C WebGPU wrapper. The Linux-only
+`//donner/editor/tests:editor_window_vulkan_default_tests` gate checks unset and empty backend
+requests with real displayed frames at initial and resized extents. Hosted and integrated acceptance
+remain, as does removal of Rust-built GPU archives.
 
 ### Native parity
 
@@ -100,9 +101,9 @@ select it. Hosted and physical-browser qualification remain required. A native w
 not browser-backend evidence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
-paths use their reviewed runtime resource boundaries. Linux editor presentation is locally
-qualified; hosted/integrated acceptance and its default flip remain, as do native adapter
-consumers. The browser editor canvas and diagnostic readback use the selected runtime.
+paths use their reviewed runtime resource boundaries. Linux editor presentation uses native Vulkan;
+the browser editor canvas and diagnostic readback use the selected runtime. Native adapter
+consumers remain.
 
 Strict Wasm-size qualification is deferred until production Rust removal. The browser-selected
 WebAssembly packages now exclude emdawnwebgpu's C++ WebGPU C API implementation, its JavaScript
@@ -143,8 +144,8 @@ lifetime, synchronization, memory-residency, security or privacy requirements.
 
 ## Next Steps
 
-1. Complete hosted and integrated qualification of the locally passing Linux Vulkan editor
-   window, then select the native Linux platform default.
+1. Qualify Linux Vulkan editor presentation and its native default through hosted and integrated
+   acceptance, then merge their dependent changes.
 2. Move counters and the remaining shared renderer services behind backend-neutral ownership
    without merging logical tables, serials, caches, or retirement.
 3. Remove remaining transitional WebGPU consumers and finish hosted and physical-browser
@@ -603,7 +604,8 @@ quarantine. Real lost and minimized GLFW transitions remain unexercised. It
 passes five cases on lavapipe and five on Intel Arc under Khronos synchronization validation,
 with no logged VUID or synchronization hazard. Hosted Linux installs Xvfb and xauth; a tagged
 hosted lane runs the target when the ordinary Linux job routes to remote execution. Hosted CI,
-the integrated editor matrix, and merge still gate this item and the Linux default flip.
+the integrated editor matrix, and merge still gate this item. The native Linux default has a
+separate hosted and integrated acceptance gate.
 
 ### Browser bridge
 
@@ -697,10 +699,13 @@ the integrated editor matrix, and merge still gate this item and the Linux defau
       suite with a Geode variant passes on native Metal under Metal API and shader validation,
       with the same case counts as the transitional adapter
       ([#1404](https://github.com/jwmcglynn/donner/issues/1404)).
-- [ ] Flip each platform's default after its renderer and editor suites pass. macOS now selects
-      native Metal for unconstrained Geode/editor roots; an explicit WebGPU request still selects
-      the transitional adapter. The browser editor already selects Browser. Linux Vulkan editor
-      presentation and its native default remain.
+- [ ] Flip each platform's default after its renderer and editor suites pass. macOS selects native
+      Metal for unconstrained Geode/editor roots; an explicit WebGPU request still selects the
+      transitional adapter. The browser editor selects Browser. On Linux, unconstrained roots
+      select native Vulkan and displayed editor windows use a surface-selected presentation root.
+      The nonmanual `//donner/editor/tests:editor_window_vulkan_default_tests` target runs fresh
+      processes with the backend unset and empty, asserting nonempty frames at initial and resized
+      extents. Hosted/integrated qualification and merge gate completion.
 - [x] The Linux-only `resvg_test_suite_wgpu_reference_linux` target selects the test-only
       wgpu-native backend by name and fails closed if another backend is selected. It runs the
       same GeodeGolden case IDs and reviewed per-scene golden/pixelmatch rules as native Vulkan on
