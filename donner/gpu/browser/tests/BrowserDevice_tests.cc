@@ -156,6 +156,14 @@ void ExpectBridgeCreateFailureAndRetry(BrowserFixture& fixture, std::string_view
                                     AllOf(HasSubstr(operation), HasSubstr("browser refused"))));
   EXPECT_THAT(*fixture.bridge->objects, testing::ContainerEq(existing));
   fixture.bridge->failOperation.clear();
+  const auto callsBeforeRefusal = *fixture.bridge->calls;
+  fixture.bridge->owned = false;
+  auto wrongWorker = create();
+  EXPECT_THAT(wrongWorker,
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("another worker")));
+  EXPECT_THAT(*fixture.bridge->calls, testing::ContainerEq(callsBeforeRefusal));
+  EXPECT_THAT(*fixture.bridge->objects, testing::ContainerEq(existing));
+  fixture.bridge->owned = true;
   {
     auto retried = create();
     ASSERT_THAT(retried, HasResult());
@@ -174,6 +182,27 @@ TEST(BrowserDeviceRequest, PendingRequestYieldsNoDevice) {
   EXPECT_THAT(request.state(), BrowserDeviceRequestState::Pending);
   EXPECT_THAT(std::move(request).take(),
               IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("has not settled")));
+}
+
+TEST(BrowserDeviceRequest, MovingARequestTransfersTheOnlyRightToTakeItsDevice) {
+  BrowserDeviceRequest original =
+      BrowserDeviceRequest::Begin(std::make_unique<FakeBrowserBridge>());
+  BrowserDeviceRequest moved(std::move(original));
+  EXPECT_THAT(original.state(), BrowserDeviceRequestState::Failed);
+  EXPECT_THAT(original.error().str(), testing::IsEmpty());
+  EXPECT_THAT(std::move(original).take(),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("consumed")));
+
+  BrowserDeviceRequest assigned = BrowserDeviceRequest::Begin(nullptr);
+  assigned = std::move(moved);
+  EXPECT_THAT(assigned.state(), BrowserDeviceRequestState::Ready);
+  EXPECT_THAT(std::move(moved).take(),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("consumed")));
+  auto device = std::move(assigned).take();
+  ASSERT_THAT(device, HasResult());
+  EXPECT_THAT(device.result()->createBuffer(SimpleBuffer(BufferUsage::Vertex)), HasResult());
+  EXPECT_THAT(std::move(assigned).take(),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("consumed")));
 }
 
 TEST(BrowserDeviceRequest, BrowserWithoutGpuServiceIsUnsupported) {
@@ -383,6 +412,86 @@ TEST(BrowserDevice, RefusesCreationFromAnotherThread) {
   EXPECT_THAT(fromOtherThread, IsGpuErrorWithMessage(GpuErrorType::InvalidState,
                                                      HasSubstr("cannot be used from another "
                                                                "thread")));
+}
+
+TEST(BrowserDevice, NonOwningContextCannotReadWriteSubmitOrAcquireExistingResources) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  auto buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+  auto texture = fixture.device->createTexture(
+      SimpleTexture(TextureUsage::CopyDst | TextureUsage::RenderAttachment));
+  ASSERT_THAT(texture, HasResult());
+  auto view = fixture.device->createTextureView(texture.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+  auto surface = fixture.device->createSurface(CanvasSurface());
+  ASSERT_THAT(surface, HasResult());
+  ASSERT_THAT(fixture.device->configureSurface(surface.result(), CanvasConfiguration({4, 4})),
+              IsOk());
+  auto mapping = fixture.device->mapBufferAsync(buffer.result(), MapMode::Read, 0, 4);
+  ASSERT_THAT(mapping, HasResult());
+  fixture.bridge->completeMapping(5, {1, 2, 3, 4});
+  auto ready = fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.05}, {});
+  ASSERT_THAT(ready, HasResult());
+  ASSERT_THAT(ready.result().outcome, MapWaitOutcome::Ready);
+  auto upload = fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst));
+  ASSERT_THAT(upload, HasResult());
+  CommandBuffer commands = RecordClearPass(*fixture.device, view.result());
+  const auto objectsBefore = *fixture.bridge->objects;
+  const auto callsBefore = *fixture.bridge->calls;
+  const auto refused =
+      IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("another worker"));
+  fixture.bridge->owned = false;
+
+  const std::array<uint8_t, 4> bufferBytes{4, 3, 2, 1};
+  const std::vector<uint8_t> textureBytes(1024);
+  EXPECT_THAT(fixture.device->writeBuffer(upload.result(), 0, bufferBytes), refused);
+  EXPECT_THAT(fixture.device->writeTexture(texture.result(), textureBytes,
+                                           TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
+              refused);
+  EXPECT_THAT(fixture.device->mappedBytes(mapping.result()), refused);
+  EXPECT_THAT(fixture.device->surfaceCapabilities(surface.result()), refused);
+  EXPECT_THAT(fixture.device->configureSurface(surface.result(), CanvasConfiguration({8, 8})),
+              refused);
+  EXPECT_THAT(fixture.device->acquireCurrentTexture(surface.result()), refused);
+  EXPECT_THAT(fixture.device->exportTexture(texture.result()), refused);
+  EXPECT_THAT(fixture.device->submit(std::move(commands)), refused);
+  EXPECT_THAT(*fixture.bridge->calls, testing::ContainerEq(callsBefore));
+  EXPECT_THAT(*fixture.bridge->objects, testing::ContainerEq(objectsBefore));
+
+  fixture.bridge->owned = true;
+  EXPECT_THAT(fixture.device->mappedBytes(mapping.result()), HasResult());
+  EXPECT_THAT(fixture.device->writeBuffer(upload.result(), 0, bufferBytes), IsOk());
+  EXPECT_THAT(fixture.device->acquireCurrentTexture(surface.result()), HasResult());
+}
+
+TEST(BrowserDevice, UnavailableSurfaceFrameReleasesItsIdentifierBeforeRetry) {
+  for (SurfaceStatus status : {SurfaceStatus::Lost, SurfaceStatus::Timeout}) {
+    SCOPED_TRACE(status);
+    BrowserFixture fixture = MakeDevice();
+    ASSERT_THAT(fixture.device, testing::NotNull());
+    auto surface = fixture.device->createSurface(CanvasSurface());
+    ASSERT_THAT(surface, HasResult());
+    ASSERT_THAT(fixture.device->configureSurface(surface.result(), CanvasConfiguration({4, 4})),
+                IsOk());
+    fixture.bridge->acquireStatus = status;
+    auto unavailable = fixture.device->acquireCurrentTexture(surface.result());
+    ASSERT_THAT(unavailable, HasResult());
+    EXPECT_THAT(unavailable.result().status, status);
+    EXPECT_THAT(unavailable.result().texture.isValid(), testing::IsFalse());
+    EXPECT_THAT(fixture.device->liveObjectCountForTest(), 1u);
+    EXPECT_THAT(fixture.bridge->objectCount(), 1u);
+
+    fixture.bridge->acquireStatus = SurfaceStatus::Success;
+    auto retried = fixture.device->acquireCurrentTexture(surface.result());
+    ASSERT_THAT(retried, HasResult());
+    EXPECT_THAT(retried.result().status, SurfaceStatus::Success);
+    EXPECT_THAT(retried.result().texture.isValid(), testing::IsTrue());
+    EXPECT_THAT(fixture.bridge->objectCount(), 2u);
+    EXPECT_THAT(fixture.device->abandonCurrentTexture(surface.result()), IsOk());
+    EXPECT_THAT(fixture.bridge->objectCount(), 1u);
+  }
 }
 
 TEST(BrowserDevice, RefusesCreationAfterTheDeviceIsLost) {
@@ -687,6 +796,28 @@ TEST(BrowserDevice, FailedBridgeCreatesPreserveLiveObjectsAndPermitRetry) {
   ExpectBridgeCreateFailureAndRetry(fixture, "createRenderPipeline", [&] {
     return fixture.device->createRenderPipeline(pipelineDescriptor);
   });
+
+  ShaderModuleDescriptor computeSource = SimpleShaderModule("compute");
+  computeSource.computeEntryPoints.push_back(
+      ComputeEntryPointInfo{RcString("main"), WorkgroupSize{1, 1, 1}});
+  auto computeModule = fixture.device->createShaderModule(computeSource);
+  ASSERT_THAT(computeModule, HasResult());
+  ComputePipelineDescriptor computeDescriptor;
+  computeDescriptor.layout = PipelineLayoutRef(pipelineLayout.result());
+  computeDescriptor.compute.module = ShaderModuleRef(computeModule.result());
+  computeDescriptor.compute.entryPoint = RcString("main");
+  computeDescriptor.workgroupSize = WorkgroupSize{1, 1, 1};
+  ExpectBridgeCreateFailureAndRetry(fixture, "createComputePipeline", [&] {
+    return fixture.device->createComputePipeline(computeDescriptor);
+  });
+  ExpectBridgeCreateFailureAndRetry(fixture, "createSurface",
+                                    [&] { return fixture.device->createSurface(CanvasSurface()); });
+  auto readback =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(readback, HasResult());
+  ExpectBridgeCreateFailureAndRetry(fixture, "mapBufferAsync", [&] {
+    return fixture.device->mapBufferAsync(readback.result(), MapMode::Read, 0, 4);
+  });
 }
 
 TEST(BrowserDevice, PreservesSamplerSettingsAndTextureBindingIdentities) {
@@ -791,6 +922,8 @@ TEST(BrowserDevice, PreservesVertexBlendAndIndexedDrawParameters) {
   ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
   ASSERT_THAT(pass.result()->setVertexBuffer(0, vertices.result(), 16), IsOk());
   ASSERT_THAT(pass.result()->setVertexBuffer(1, vertices.result(), 64), IsOk());
+  ASSERT_THAT(pass.result()->setScissorRect(1, 1, 2, 2), IsOk());
+  ASSERT_THAT(pass.result()->setViewport(0.5f, 1.0f, 3.0f, 2.0f, 0.25f, 0.75f), IsOk());
   ASSERT_THAT(pass.result()->setIndexBuffer(indices.result(), IndexFormat::Uint16, 4), IsOk());
   ASSERT_THAT(pass.result()->drawIndexed(6, 2), IsOk());
   ASSERT_THAT(pass.result()->end(), IsOk());
@@ -805,7 +938,9 @@ TEST(BrowserDevice, PreservesVertexBlendAndIndexedDrawParameters) {
           "beginRenderPass attachments=[(view=2 load=1 store=1 "
           "clear=[0.000,0.000,0.000,1.000])]",
           "setRenderPipeline pipeline=6", "setVertexBuffer slot=0 buffer=7 offset=16",
-          "setVertexBuffer slot=1 buffer=7 offset=64", "setIndexBuffer buffer=8 format=1 offset=4",
+          "setVertexBuffer slot=1 buffer=7 offset=64", "setScissorRect x=1 y=1 size=2x2",
+          "setViewport x=0.500 y=1.000 size=3.000x2.000 depth=0.250..0.750",
+          "setIndexBuffer buffer=8 format=1 offset=4",
           "drawIndexed indexCount=6 instanceCount=2 firstIndex=0 baseVertex=0 firstInstance=0",
           "endRenderPass", "endCommandBuffer serial=1", "submitCommandBuffers serial=1 count=1"));
 }
@@ -1873,6 +2008,40 @@ TEST(BrowserDeviceSharing, ExportsATextureForAnotherDeviceOverTheSameBrowserDevi
   EXPECT_THAT(exported.result().descriptor().size, kShareableExtent);
   EXPECT_THAT(producer.bridge->gpuDevice->isTextureLive(*producer.bridge->nativeTextureOf(1)),
               testing::IsTrue());
+}
+
+TEST(BrowserDeviceSharing, FailedExportAndRegistrationLeaveTheTextureAvailableForRetry) {
+  BrowserFixture producer = MakeDevice();
+  ASSERT_THAT(producer.device, testing::NotNull());
+  BrowserFixture consumer = MakeDevice(producer.bridge->gpuDevice);
+  ASSERT_THAT(consumer.device, testing::NotNull());
+  auto texture = producer.device->createTexture(ShareableTexture());
+  ASSERT_THAT(texture, HasResult());
+  const auto nativeTexture = producer.bridge->nativeTextureOf(1);
+  ASSERT_THAT(nativeTexture, testing::Ne(std::nullopt));
+
+  producer.bridge->failOperation = "shareTexture";
+  EXPECT_THAT(producer.device->exportTexture(texture.result()),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("exportTexture")));
+  EXPECT_THAT(producer.bridge->gpuDevice->liveShares(), 0u);
+  EXPECT_THAT(producer.bridge->gpuDevice->isTextureLive(*nativeTexture), testing::IsTrue());
+  producer.bridge->failOperation.clear();
+  auto exported = producer.device->exportTexture(texture.result());
+  ASSERT_THAT(exported, HasResult());
+
+  consumer.bridge->failOperation = "registerSharedTexture";
+  EXPECT_THAT(consumer.device->registerTexture(exported.result()),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("registerTexture")));
+  EXPECT_THAT(*consumer.bridge->objects, testing::IsEmpty());
+  EXPECT_THAT(producer.bridge->gpuDevice->liveShares(), 1u);
+  consumer.bridge->failOperation.clear();
+  {
+    auto registered = consumer.device->registerTexture(exported.result());
+    ASSERT_THAT(registered, HasResult());
+    EXPECT_THAT(consumer.bridge->nativeTextureOf(2), nativeTexture);
+  }
+  EXPECT_THAT(*consumer.bridge->objects, testing::IsEmpty());
+  EXPECT_THAT(producer.bridge->gpuDevice->isTextureLive(*nativeTexture), testing::IsTrue());
 }
 
 TEST(BrowserDeviceSharing, RegistersAnExportAsAReadOnlyAliasOfTheSameBrowserTexture) {
