@@ -105,7 +105,7 @@ jobs:
 
           if [[ -z "$targets" ]]; then
             if [[ "$TARGET_TAG" == "perf_linux" ]]; then
-              echo "No Linux GPU perf targets found; the nightly lane must measure Vulkan and the reference."
+              echo "No Linux GPU perf targets found; the nightly lane must measure recording and Vulkan."
               exit 1
             fi
             echo "No perf-tagged test targets found."
