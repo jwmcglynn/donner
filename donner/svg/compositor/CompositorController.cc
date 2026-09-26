@@ -172,31 +172,34 @@ bool HasOnlyBucketAssignedAncestors(Registry& registry, Entity entity) {
   return found;
 }
 
+bool HasStableDamageMask(const components::RenderingInstanceComponent& instance) {
+  if (!instance.mask.has_value() || !instance.mask->valid()) {
+    return true;
+  }
+  const auto* mask = instance.mask->reference.handle.try_get<components::MaskComponent>();
+  return mask != nullptr && mask->maskUnits == MaskUnits::UserSpaceOnUse &&
+         mask->maskContentUnits == MaskContentUnits::UserSpaceOnUse;
+}
+
+bool HasStableDamageNode(const components::RenderingInstanceComponent& instance) {
+  const bool unsupportedClip = instance.clipPath.has_value() && instance.clipPath->valid() &&
+                               instance.clipPath->units != ClipPathUnits::UserSpaceOnUse;
+  return !instance.resolvedFilter.has_value() && !instance.markerStart.has_value() &&
+         !instance.markerMid.has_value() && !instance.markerEnd.has_value() && !unsupportedClip &&
+         HasStableDamageMask(instance);
+}
+
 bool HasStableDamageContext(Registry& registry, Entity child, Entity owner) {
-  const auto* tree = registry.try_get<donner::components::TreeComponent>(child);
   Entity cursor = child;
   while (cursor != entt::null && registry.valid(cursor)) {
     const auto* instance = registry.try_get<components::RenderingInstanceComponent>(cursor);
-    if (instance == nullptr || instance->resolvedFilter.has_value() ||
-        instance->markerStart.has_value() || instance->markerMid.has_value() ||
-        instance->markerEnd.has_value()) {
-      return false;
-    }
-    if (instance->mask.has_value() && instance->mask->valid()) {
-      const auto* mask = instance->mask->reference.handle.try_get<components::MaskComponent>();
-      if (mask == nullptr || mask->maskUnits != MaskUnits::UserSpaceOnUse ||
-          mask->maskContentUnits != MaskContentUnits::UserSpaceOnUse) {
-        return false;
-      }
-    }
-    if (instance->clipPath.has_value() && instance->clipPath->valid() &&
-        instance->clipPath->units != ClipPathUnits::UserSpaceOnUse) {
+    if (instance == nullptr || !HasStableDamageNode(*instance)) {
       return false;
     }
     if (cursor == owner) {
       return true;
     }
-    tree = registry.try_get<donner::components::TreeComponent>(cursor);
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(cursor);
     cursor = tree != nullptr ? tree->parent() : entt::null;
   }
   return false;

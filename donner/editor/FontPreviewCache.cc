@@ -94,8 +94,7 @@ struct SidecarHeader {
   std::size_t pixelBytes = 0;
 };
 
-std::optional<SidecarHeader> ReadSidecarHeader(std::ifstream& file, std::string_view identity,
-                                               Vector2i dimensions, std::uint64_t svgHash) {
+std::optional<std::string> ReadHeaderLine(std::ifstream& file) {
   std::string magic(kMagic.size(), '\0');
   file.read(magic.data(), static_cast<std::streamsize>(magic.size()));
   std::string line;
@@ -107,27 +106,55 @@ std::optional<SidecarHeader> ReadSidecarHeader(std::ifstream& file, std::string_
   if (!file || magic != kMagic || next != '\n') {
     return std::nullopt;
   }
-  std::istringstream input(line);
+  return line;
+}
+
+struct SidecarFields {
   int width = 0;
   int height = 0;
   std::size_t rowBytes = 0;
   int alphaType = -1;
   std::size_t identitySize = 0;
-  std::uint64_t savedSvgHash = 0;
+  std::uint64_t svgHash = 0;
   std::uint64_t pixelHash = 0;
-  input >> width >> height >> rowBytes >> alphaType >> identitySize >> savedSvgHash >> pixelHash;
+};
+
+bool ValidSidecarDimensions(const SidecarFields& fields, Vector2i dimensions) {
+  return fields.width == dimensions.x && fields.height == dimensions.y && fields.width > 0 &&
+         fields.height > 0 && fields.width <= 4096 && fields.height <= 4096;
+}
+
+bool ValidSidecarPayload(const SidecarFields& fields) {
+  return fields.rowBytes <= kMaxBitmapBytes &&
+         fields.rowBytes >= static_cast<std::size_t>(fields.width) * 4 &&
+         static_cast<std::size_t>(fields.height) <= kMaxBitmapBytes / fields.rowBytes;
+}
+
+std::optional<SidecarHeader> ParseSidecarHeader(const std::string& line, std::string_view identity,
+                                                Vector2i dimensions, std::uint64_t svgHash) {
+  std::istringstream input(line);
+  SidecarFields fields;
+  input >> fields.width >> fields.height >> fields.rowBytes >> fields.alphaType >>
+      fields.identitySize >> fields.svgHash >> fields.pixelHash;
   std::string trailing;
-  if (!input || (input >> trailing) || width != dimensions.x || height != dimensions.y ||
-      width <= 0 || height <= 0 || width > 4096 || height > 4096 || rowBytes > kMaxBitmapBytes ||
-      rowBytes < static_cast<std::size_t>(width) * 4 || identitySize != identity.size() ||
-      savedSvgHash != svgHash ||
-      (alphaType != static_cast<int>(svg::AlphaType::Premultiplied) &&
-       alphaType != static_cast<int>(svg::AlphaType::Unpremultiplied)) ||
-      static_cast<std::size_t>(height) > kMaxBitmapBytes / rowBytes) {
+  if (!input || (input >> trailing) || !ValidSidecarDimensions(fields, dimensions) ||
+      !ValidSidecarPayload(fields) || fields.identitySize != identity.size() ||
+      fields.svgHash != svgHash ||
+      (fields.alphaType != static_cast<int>(svg::AlphaType::Premultiplied) &&
+       fields.alphaType != static_cast<int>(svg::AlphaType::Unpremultiplied))) {
     return std::nullopt;
   }
-  return SidecarHeader{rowBytes, static_cast<svg::AlphaType>(alphaType), pixelHash,
-                       rowBytes * static_cast<std::size_t>(height)};
+  return SidecarHeader{fields.rowBytes, static_cast<svg::AlphaType>(fields.alphaType),
+                       fields.pixelHash, fields.rowBytes * static_cast<std::size_t>(fields.height)};
+}
+
+std::optional<SidecarHeader> ReadSidecarHeader(std::ifstream& file, std::string_view identity,
+                                               Vector2i dimensions, std::uint64_t svgHash) {
+  const std::optional<std::string> line = ReadHeaderLine(file);
+  if (!line.has_value()) {
+    return std::nullopt;
+  }
+  return ParseSidecarHeader(*line, identity, dimensions, svgHash);
 }
 
 std::optional<svg::RendererBitmap> ReadBitmapSidecar(const std::filesystem::path& path,

@@ -150,52 +150,90 @@ std::optional<double> ParseNumericAttribute(const svg::SVGElement& element, std:
   return result.result().number;
 }
 
-bool HasSupportedTspanAttributes(const svg::SVGElement& span) {
-  for (const xml::XMLQualifiedNameRef& attribute : span.attributes()) {
-    if (!attribute.namespacePrefix.empty()) {
-      return false;
-    }
-    const std::string_view name = attribute.name;
-    if (name == "x" || name == "dy" || name == "data-donner-soft-wrap" ||
-        name == "data-donner-same-line") {
-      continue;
-    }
-    if (name == "style") {
-      const auto value = span.getAttribute("style");
-      if (!value.has_value()) {
-        return false;
-      }
-      const std::vector<css::Declaration> declarations =
-          css::CSS::ParseStyleAttribute(std::string_view(*value));
-      if (declarations.empty()) {
-        return false;
-      }
-      for (const css::Declaration& declaration : declarations) {
-        const std::string cssText = declaration.toCssText();
-        if (cssText != "font-weight: bold" && cssText != "font-weight: normal" &&
-            cssText != "font-style: italic" && cssText != "font-style: normal" &&
-            cssText != "text-decoration: underline" && cssText != "text-decoration: none") {
-          return false;
-        }
-      }
-      continue;
-    }
-    if (name == "font-weight" || name == "font-style" || name == "text-decoration") {
-      const auto value = span.getAttribute(name);
-      if (!value.has_value()) {
-        return false;
-      }
-      const std::string_view text = *value;
-      if ((name == "font-weight" && text != "bold" && text != "normal") ||
-          (name == "font-style" && text != "italic" && text != "normal") ||
-          (name == "text-decoration" && text != "underline" && text != "none")) {
-        return false;
-      }
-      continue;
-    }
+bool IsSupportedInlineStyleDeclaration(const css::Declaration& declaration) {
+  const std::string cssText = declaration.toCssText();
+  return cssText == "font-weight: bold" || cssText == "font-weight: normal" ||
+         cssText == "font-style: italic" || cssText == "font-style: normal" ||
+         cssText == "text-decoration: underline" || cssText == "text-decoration: none";
+}
+
+bool HasSupportedInlineStyle(const svg::SVGElement& span) {
+  const auto value = span.getAttribute("style");
+  if (!value.has_value()) {
     return false;
   }
+  const std::vector<css::Declaration> declarations =
+      css::CSS::ParseStyleAttribute(std::string_view(*value));
+  return !declarations.empty() &&
+         std::all_of(declarations.begin(), declarations.end(), IsSupportedInlineStyleDeclaration);
+}
+
+bool HasSupportedPresentationAttribute(const svg::SVGElement& span, std::string_view name) {
+  const auto value = span.getAttribute(name);
+  if (!value.has_value()) {
+    return false;
+  }
+  const std::string_view text = *value;
+  if (name == "font-weight") {
+    return text == "bold" || text == "normal";
+  }
+  if (name == "font-style") {
+    return text == "italic" || text == "normal";
+  }
+  return text == "underline" || text == "none";
+}
+
+bool IsSupportedTspanAttribute(const svg::SVGElement& span,
+                               const xml::XMLQualifiedNameRef& attribute) {
+  if (!attribute.namespacePrefix.empty()) {
+    return false;
+  }
+  const std::string_view name = attribute.name;
+  if (name == "x" || name == "dy" || name == "data-donner-soft-wrap" ||
+      name == "data-donner-same-line") {
+    return true;
+  }
+  if (name == "style") {
+    return HasSupportedInlineStyle(span);
+  }
+  if (name == "font-weight" || name == "font-style" || name == "text-decoration") {
+    return HasSupportedPresentationAttribute(span, name);
+  }
+  return false;
+}
+
+bool HasSupportedTspanAttributes(const svg::SVGElement& span) {
+  for (const xml::XMLQualifiedNameRef& attribute : span.attributes()) {
+    if (!IsSupportedTspanAttribute(span, attribute)) {
+      return false;
+    }
+  }
   return true;
+}
+
+bool HasMatchingOptionalTspanX(std::optional<double> spanX, std::optional<double> rootX) {
+  return !spanX.has_value() || (rootX.has_value() && !(std::abs(*spanX - *rootX) > 1e-6));
+}
+
+bool HasSupportedNewLineTspanPosition(std::optional<double> spanX, std::optional<double> spanDy,
+                                      std::optional<double> rootX, double lineHeight) {
+  return rootX.has_value() && spanX.has_value() && spanDy.has_value() &&
+         !(std::abs(*spanX - *rootX) > 1e-6) && !(std::abs(*spanDy - lineHeight) > 1e-6);
+}
+
+bool HasSupportedTspanPosition(const svg::SVGElement& span, bool sawTspan,
+                               std::optional<double> rootX, double lineHeight) {
+  const bool sameLine = span.getAttribute("data-donner-same-line").has_value();
+  const bool softWrap = span.getAttribute("data-donner-soft-wrap").has_value();
+  const std::optional<double> spanX = ParseNumericAttribute(span, "x");
+  const std::optional<double> spanDy = ParseNumericAttribute(span, "dy");
+  if (!sawTspan) {
+    return !sameLine && !softWrap && !spanDy.has_value() && HasMatchingOptionalTspanX(spanX, rootX);
+  }
+  if (sameLine) {
+    return !softWrap && !spanX.has_value() && !spanDy.has_value();
+  }
+  return HasSupportedNewLineTspanPosition(spanX, spanDy, rootX, lineHeight);
 }
 
 bool CanRebuildExistingText(const svg::SVGTextElement& text) {
@@ -210,16 +248,7 @@ bool CanRebuildExistingText(const svg::SVGTextElement& text) {
           !HasSupportedTspanAttributes(*child)) {
         return false;
       }
-      const bool sameLine = child->getAttribute("data-donner-same-line").has_value();
-      const bool softWrap = child->getAttribute("data-donner-soft-wrap").has_value();
-      const std::optional<double> spanX = ParseNumericAttribute(*child, "x");
-      const std::optional<double> spanDy = ParseNumericAttribute(*child, "dy");
-      if ((!sawTspan && (sameLine || softWrap || spanDy.has_value())) ||
-          (sawTspan && sameLine && (softWrap || spanX.has_value() || spanDy.has_value())) ||
-          (sawTspan && !sameLine &&
-           (!rootX.has_value() || !spanX.has_value() || !spanDy.has_value() ||
-            std::abs(*spanX - *rootX) > 1e-6 || std::abs(*spanDy - lineHeight) > 1e-6)) ||
-          (spanX.has_value() && (!rootX.has_value() || std::abs(*spanX - *rootX) > 1e-6))) {
+      if (!HasSupportedTspanPosition(*child, sawTspan, rootX, lineHeight)) {
         return false;
       }
       sawTspan = true;

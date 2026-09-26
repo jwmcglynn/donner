@@ -1,6 +1,7 @@
 #include "donner/editor/EditorMenuModel.h"
 
 #include <array>
+#include <optional>
 
 namespace donner::editor {
 namespace {
@@ -92,6 +93,118 @@ constexpr std::array kMenus = {
     EditorMenu{"View", kViewItems},
 };
 
+bool NativeTextCaptureDisables(MenuBarCommand command) {
+  switch (command) {
+    case MenuBarCommand::Undo:
+    case MenuBarCommand::Redo:
+    case MenuBarCommand::Cut:
+    case MenuBarCommand::Copy:
+    case MenuBarCommand::Paste:
+    case MenuBarCommand::PasteInFront:
+    case MenuBarCommand::ConvertTextToOutlines:
+    case MenuBarCommand::Group:
+    case MenuBarCommand::Ungroup:
+    case MenuBarCommand::SelectAll:
+    case MenuBarCommand::DeselectAll: return true;
+    default: return false;
+  }
+}
+
+bool SourceFocusDisables(MenuBarCommand command) {
+  switch (command) {
+    case MenuBarCommand::PasteInFront:
+    case MenuBarCommand::ConvertTextToOutlines:
+    case MenuBarCommand::Group:
+    case MenuBarCommand::Ungroup: return true;
+    default: return false;
+  }
+}
+
+std::optional<bool> FileAndHistoryEnabled(MenuBarCommand command, const MenuBarState& state) {
+  switch (command) {
+    case MenuBarCommand::SaveFile:
+    case MenuBarCommand::SaveFileAs:
+    case MenuBarCommand::ExportViewportSvg:
+    case MenuBarCommand::ExportViewportSvgWithOverlay: return state.canSave;
+    case MenuBarCommand::RevertFile: return state.canRevert;
+    case MenuBarCommand::Undo: return state.canUndo;
+    case MenuBarCommand::Redo: return state.canRedo;
+    default: return std::nullopt;
+  }
+}
+
+std::optional<bool> ClipboardEnabled(MenuBarCommand command, const MenuBarState& state) {
+  switch (command) {
+    case MenuBarCommand::Cut:
+    case MenuBarCommand::Copy: return state.sourcePaneFocused || state.hasShapeSelection;
+    case MenuBarCommand::Paste: return state.sourcePaneFocused || state.hasShapeClipboard;
+    case MenuBarCommand::PasteInFront: return state.hasShapeClipboard;
+    default: return std::nullopt;
+  }
+}
+
+std::optional<bool> SelectionEnabled(MenuBarCommand command, const MenuBarState& state) {
+  switch (command) {
+    case MenuBarCommand::ConvertTextToOutlines: return state.hasTextSelection;
+    case MenuBarCommand::Group: return state.canGroup;
+    case MenuBarCommand::Ungroup: return state.canUngroup;
+    case MenuBarCommand::SelectAll: return state.sourcePaneFocused || state.hasSelectableElements;
+    case MenuBarCommand::DeselectAll: return state.sourcePaneFocused || state.hasShapeSelection;
+    default: return std::nullopt;
+  }
+}
+
+bool CommandEnabled(MenuBarCommand command, const MenuBarState& state) {
+  if (const std::optional<bool> enabled = FileAndHistoryEnabled(command, state)) {
+    return *enabled;
+  }
+  if (const std::optional<bool> enabled = ClipboardEnabled(command, state)) {
+    return *enabled;
+  }
+  if (const std::optional<bool> enabled = SelectionEnabled(command, state)) {
+    return *enabled;
+  }
+  return true;
+}
+
+std::optional<bool> ViewCommandChecked(MenuBarCommand command, const MenuBarState& state) {
+  switch (command) {
+    case MenuBarCommand::ToggleSourceFocusMode: return state.sourceFocusMode;
+    case MenuBarCommand::ToggleCompositorDebugPanel: return state.showCompositorDebugPanel;
+    case MenuBarCommand::ToggleCompositorTileOverlay: return state.compositorTileOverlay;
+    case MenuBarCommand::ToggleGeometryDebugOverlay: return state.geometryDebugOverlay;
+    case MenuBarCommand::ToggleLayoutLock: return state.panelLayoutLocked;
+    default: return std::nullopt;
+  }
+}
+
+std::optional<bool> RenderCommandChecked(MenuBarCommand command, const MenuBarState& state) {
+  switch (command) {
+    case MenuBarCommand::SetPerfOverlayOff: return state.perfOverlayMode == PerfOverlayMode::Off;
+    case MenuBarCommand::SetPerfOverlayFpsPill:
+      return state.perfOverlayMode == PerfOverlayMode::FpsPill;
+    case MenuBarCommand::SetPerfOverlayFullGraph:
+      return state.perfOverlayMode == PerfOverlayMode::FullGraph;
+    case MenuBarCommand::SetCompositedRenderingOff:
+      return state.compositedRenderingMode == CompositedRenderingMode::Off;
+    case MenuBarCommand::SetCompositedRenderingFilterOnly:
+      return state.compositedRenderingMode == CompositedRenderingMode::FilterOnly;
+    case MenuBarCommand::SetCompositedRenderingOn:
+      return state.compositedRenderingMode == CompositedRenderingMode::On;
+    default: return std::nullopt;
+  }
+}
+
+bool CommandChecked(MenuBarCommand command, const MenuBarState& state) {
+  if (const std::optional<bool> checked = ViewCommandChecked(command, state)) {
+    return *checked;
+  }
+  if (const std::optional<bool> checked = RenderCommandChecked(command, state)) {
+    return *checked;
+  }
+  return false;
+}
+
 }  // namespace
 
 std::span<const EditorMenu> EditorMenuModel() {
@@ -109,89 +222,19 @@ EditorMenuItemPresentation PresentEditorMenuItem(const EditorMenuNode& item,
   if (item.kind != EditorMenuNode::Kind::Command) {
     return result;
   }
-  if (surface == EditorMenuSurface::Native && SuppressNativeMenuShortcuts(state)) {
-    switch (item.command) {
-      case MenuBarCommand::Undo:
-      case MenuBarCommand::Redo:
-      case MenuBarCommand::Cut:
-      case MenuBarCommand::Copy:
-      case MenuBarCommand::Paste:
-      case MenuBarCommand::PasteInFront:
-      case MenuBarCommand::ConvertTextToOutlines:
-      case MenuBarCommand::Group:
-      case MenuBarCommand::Ungroup:
-      case MenuBarCommand::SelectAll:
-      case MenuBarCommand::DeselectAll: result.enabled = false; return result;
-      default: break;
-    }
+  if (surface == EditorMenuSurface::Native && SuppressNativeMenuShortcuts(state) &&
+      NativeTextCaptureDisables(item.command)) {
+    result.enabled = false;
+    return result;
   }
   // Canvas-only actions should not mutate a shape behind the source editor.
   // Apply this to both menu surfaces so their enabled states stay in sync.
-  if (state.sourcePaneFocused) {
-    switch (item.command) {
-      case MenuBarCommand::PasteInFront:
-      case MenuBarCommand::ConvertTextToOutlines:
-      case MenuBarCommand::Group:
-      case MenuBarCommand::Ungroup: result.enabled = false; return result;
-      default: break;
-    }
+  if (state.sourcePaneFocused && SourceFocusDisables(item.command)) {
+    result.enabled = false;
+    return result;
   }
-  switch (item.command) {
-    case MenuBarCommand::SaveFile:
-    case MenuBarCommand::SaveFileAs:
-    case MenuBarCommand::ExportViewportSvg:
-    case MenuBarCommand::ExportViewportSvgWithOverlay: result.enabled = state.canSave; break;
-    case MenuBarCommand::RevertFile: result.enabled = state.canRevert; break;
-    case MenuBarCommand::Undo: result.enabled = state.canUndo; break;
-    case MenuBarCommand::Redo: result.enabled = state.canRedo; break;
-    case MenuBarCommand::Cut:
-    case MenuBarCommand::Copy:
-      result.enabled = state.sourcePaneFocused || state.hasShapeSelection;
-      break;
-    case MenuBarCommand::Paste:
-      result.enabled = state.sourcePaneFocused || state.hasShapeClipboard;
-      break;
-    case MenuBarCommand::PasteInFront: result.enabled = state.hasShapeClipboard; break;
-    case MenuBarCommand::ConvertTextToOutlines: result.enabled = state.hasTextSelection; break;
-    case MenuBarCommand::Group: result.enabled = state.canGroup; break;
-    case MenuBarCommand::Ungroup: result.enabled = state.canUngroup; break;
-    case MenuBarCommand::SelectAll:
-      result.enabled = state.sourcePaneFocused || state.hasSelectableElements;
-      break;
-    case MenuBarCommand::DeselectAll:
-      result.enabled = state.sourcePaneFocused || state.hasShapeSelection;
-      break;
-    case MenuBarCommand::ToggleSourceFocusMode: result.checked = state.sourceFocusMode; break;
-    case MenuBarCommand::ToggleCompositorDebugPanel:
-      result.checked = state.showCompositorDebugPanel;
-      break;
-    case MenuBarCommand::ToggleCompositorTileOverlay:
-      result.checked = state.compositorTileOverlay;
-      break;
-    case MenuBarCommand::ToggleGeometryDebugOverlay:
-      result.checked = state.geometryDebugOverlay;
-      break;
-    case MenuBarCommand::ToggleLayoutLock: result.checked = state.panelLayoutLocked; break;
-    case MenuBarCommand::SetPerfOverlayOff:
-      result.checked = state.perfOverlayMode == PerfOverlayMode::Off;
-      break;
-    case MenuBarCommand::SetPerfOverlayFpsPill:
-      result.checked = state.perfOverlayMode == PerfOverlayMode::FpsPill;
-      break;
-    case MenuBarCommand::SetPerfOverlayFullGraph:
-      result.checked = state.perfOverlayMode == PerfOverlayMode::FullGraph;
-      break;
-    case MenuBarCommand::SetCompositedRenderingOff:
-      result.checked = state.compositedRenderingMode == CompositedRenderingMode::Off;
-      break;
-    case MenuBarCommand::SetCompositedRenderingFilterOnly:
-      result.checked = state.compositedRenderingMode == CompositedRenderingMode::FilterOnly;
-      break;
-    case MenuBarCommand::SetCompositedRenderingOn:
-      result.checked = state.compositedRenderingMode == CompositedRenderingMode::On;
-      break;
-    default: break;
-  }
+  result.enabled = CommandEnabled(item.command, state);
+  result.checked = CommandChecked(item.command, state);
   return result;
 }
 
