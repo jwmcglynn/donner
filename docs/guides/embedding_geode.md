@@ -55,6 +55,14 @@ surface on that context's runtime device:
 ```cpp
 auto context = std::shared_ptr<donner::geode::GeodeDevice>(
     donner::geode::GeodeDevice::CreateOverSelectedRoot(native.root, native.format));
+if (context == nullptr) {
+  native.root.reset();
+  if (donner::example::RetireNativeEmbedSurface(native, window)) {
+    glfwDestroyWindow(window);
+    glfwTerminate();
+  }
+  return;
+}
 donner::gpu::Device& device = context->runtimeDevice();
 
 donner::gpu::SurfaceDescriptor descriptor;
