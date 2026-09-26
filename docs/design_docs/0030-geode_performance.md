@@ -459,14 +459,12 @@ algorithm.
 
 ### Current state
 
-Geode is Phase 3 + Phase 4 + Phase 3d landed; Phase 5 (ECS cache) and
-the "batch draw calls" bullet are open checklist items in
-`docs/design_docs/0017-geode_renderer.md:1439-1448`. The backend is
-feature-complete enough to be the default for GPU-capable consumers
-(0017 Phase 4 text + filter work is green).
+Geode is feature-complete enough to be the default for GPU-capable consumers.
+This design tracks its cache and batch-draw optimization work; the
+[original Geode rationale](0017-geode_renderer.md#original-rationale) remains in Git history.
 
-Design doc 0017 establishes the *goal* of ECS-resident GPU caches but
-leaves the mechanism TBD. 0025's "Perf-gate waivers (v1)" table
+The original Geode plan left ECS-resident GPU cache mechanics open; this
+design addresses them. 0025's "Perf-gate waivers (v1)" table
 documents the current composited-rendering cost gap and attributes it
 to three concrete causes (dirty-walk, split-bitmap reblit, style
 cascade); none of those three are Geode-internal, but the Geode
