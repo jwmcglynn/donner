@@ -20,15 +20,11 @@ permissions:
 # are retried to survive transient GitHub/registry outages. Build/test steps
 # are NOT retried -- a real test failure should surface immediately.
 
-# Self-hosted runner gates (repo Settings -> Variables). Setting
-# SELFHOSTED_LINUX_RUNNER / SELFHOSTED_MACOS_RUNNER to "true" routes trusted
-# operator PRs and main pushes onto the matching self-hosted ARM64 runner and
-# skips the matching GitHub-hosted lane. Renovate and non-operator diffs stay
-# GitHub-hosted. Gated on BOTH github.actor and github.triggering_actor ==
-# jwmcglynn so that no collaborator push -- and no rerun of the operator's run
-# by someone else -- can execute on the runner or poison the shared LAN Bazel
-# cache. Unset is a no-op: behavior is identical to the GitHub-hosted-only
-# workflow.
+# Self-hosted runner gates (repo Settings -> Variables). Enabled switches
+# route only same-repository operator PRs to the matching ARM64 runner; main
+# pushes and untrusted PRs use GitHub-hosted runners. Both the original actor
+# and rerun actor must be the operator. An explicit false switch keeps the
+# hosted lane available during a runner outage.
 
 jobs:
   gatekeeper:
@@ -144,10 +140,7 @@ jobs:
         env:
           ACTOR: ${{ github.actor }}
           EVENT_NAME: ${{ github.event_name }}
-          GH_TOKEN: ${{ github.token }}
-          REF: ${{ github.ref }}
           REPOSITORY: ${{ github.repository }}
-          SHA: ${{ github.sha }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
           SELFHOSTED_MACOS_RUNNER: ${{ vars.SELFHOSTED_MACOS_RUNNER }}
@@ -189,29 +182,30 @@ jobs:
           PY
           )"
 
-          pr_author="$(
+          pr_fields="$(
             python3 - <<'PY'
           import json
           import os
 
           event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-          print(event.get("pull_request", {}).get("user", {}).get("login", ""))
+          pr = event.get("pull_request") or {}
+          fields = (
+              (pr.get("user") or {}).get("login", ""),
+              ((pr.get("head") or {}).get("repo") or {}).get("full_name", ""),
+              ((pr.get("base") or {}).get("repo") or {}).get("full_name", ""),
+          )
+          print("\x1f".join(fields))
           PY
           )"
-
-          if [[ -z "$pr_author" && "$EVENT_NAME" == "push" && "$REF" == "refs/heads/main" ]]; then
-            if ! pr_author="$(gh api -H "Accept: application/vnd.github+json" \
-              "/repos/$REPOSITORY/commits/$SHA/pulls" \
-              --jq '.[0].user.login // ""')"; then
-              pr_author="unknown"
-            fi
-          fi
+          IFS=$'\x1f' read -r pr_author pr_head_repo pr_base_repo <<< "$pr_fields"
 
           trusted_operator=false
-          if [[ "$ACTOR" == "jwmcglynn" && "$TRIGGERING_ACTOR" == "jwmcglynn" && "$is_renovate" != "true" ]]; then
-            if [[ -z "$pr_author" || "$pr_author" == "jwmcglynn" ]]; then
-              trusted_operator=true
-            fi
+          if [[ "$EVENT_NAME" == "pull_request" && "$REPOSITORY" == "jwmcglynn/donner" &&
+                "$ACTOR" == "jwmcglynn" && "$TRIGGERING_ACTOR" == "jwmcglynn" &&
+                "$pr_author" == "jwmcglynn" && "$pr_head_repo" == "$REPOSITORY" &&
+                "$pr_base_repo" == "$REPOSITORY" &&
+                "$is_renovate" != "true" ]]; then
+            trusted_operator=true
           fi
 
           use_linux=false
@@ -225,7 +219,7 @@ jobs:
 
           echo "use_self_hosted_linux=$use_linux" >> "$GITHUB_OUTPUT"
           echo "use_self_hosted_macos=$use_macos" >> "$GITHUB_OUTPUT"
-          echo "trusted_operator=$trusted_operator renovate=$is_renovate pr_author=$pr_author linux=$use_linux macos=$use_macos"
+          echo "runner_route event=$EVENT_NAME trusted_operator=$trusted_operator renovate=$is_renovate pr_author=$pr_author head_repo=$pr_head_repo linux=$use_linux macos=$use_macos"
 
   determine-targets:
     runs-on: ubuntu-24.04
@@ -768,8 +762,8 @@ jobs:
           timeout-minutes: "150"
 
   # Operator's ARM64 Linux runs on the operator's self-hosted runner.
-  # Replaces `linux` for trusted operator PRs and main pushes (extra arch
-  # coverage + homelab cache). Renovate and non-operator runs stay hosted.
+  # Replaces `linux` for trusted operator PRs (extra architecture coverage).
+  # Main pushes, Renovate, and non-operator runs stay hosted.
   # The NixOS host pre-provisions the toolchain (fontconfig, freetype, mesa,
   # vulkan, X11, clang-tidy) and writes to a shared LAN Bazel cache over
   # gRPC, so there is no apt/setup-bazel step. The runner intentionally has
@@ -796,8 +790,8 @@ jobs:
     # hosted re-turnstile prerequisite above, NOT by a GitHub concurrency group.
     # A concurrency group caps the queue at one pending run and cancels any
     # older pending run when a third concurrent run arrives, so a parallel-PR
-    # burst (and every post-merge main run competing for the same group) drops
-    # pending runs. The turnstile instead holds each run until its turn, FIFO,
+    # burst drops pending PR runs. The turnstile instead holds each run until
+    # its turn, FIFO,
     # so N concurrent runs all execute in submission order and none are
     # cancelled. Bounding CI's demand on the backend also protects the
     # interactive host's latency.
@@ -1257,8 +1251,10 @@ jobs:
           # compiler, which is a separate ~700 MB downloadable component. The MSL
           # validation suite fails rather than skips when it cannot find that
           # compiler, so this lane drops it by tag and says so in the run summary
-          # instead of collecting silent skips. The macOS runner that has the
-          # toolchain runs it.
+          # instead of collecting silent skips. Trusted PRs run it on the
+          # capable self-hosted runner; every PR still needs exact-head full
+          # Metal validation before merge (docs/metal_validation.md). Main's
+          # hosted result alone does not establish that hardware signal.
           echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu \
@@ -1281,7 +1277,7 @@ jobs:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
   # Operator's ARM64 macOS runs on the operator's self-hosted runner.
-  # Replaces `macos` for trusted operator PRs and main pushes. Renovate and
+  # Replaces `macos` for trusted operator PRs. Main pushes, Renovate, and
   # non-operator runs stay hosted. The host pre-provisions Bazelisk, Homebrew
   # llvm@19, and Xcode Command Line Tools.
   # The host also provides the offline Metal compiler, which is why this lane
@@ -1314,8 +1310,9 @@ jobs:
       GEODE_EDITOR_TARGETS: >-
         //tools/ci:editor_geode
       # Free space, in GiB, required on every filesystem this job writes. It
-      # bounds the job's working set: main pushes and infrastructure PRs build
-      # and test all of //... with locally executed actions, and this is
+      # bounds the job's working set: infrastructure PRs and full-graph
+      # fallbacks build and test all of //... with locally executed actions.
+      # This is
       # intended to cover such a run with margin.
       MIN_FREE_DISK_GIB: "30"
     steps:
