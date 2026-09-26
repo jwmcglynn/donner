@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "platforms": {
+    "linux": {
+      "native": [
+        "//:donner",
+        "//donner/svg/tool:donner-svg",
+        "//donner/editor:editor_impl",
+        "//donner/editor:editor"
+      ],
+      "nativeGeode": [
+        "//:donner",
+        "//donner/svg/tool:donner-svg",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer/geode:geode_device",
+        "//donner/editor:editor_impl",
+        "//examples:geode_embed"
+      ],
+      "browser": [
+        "//donner/editor/wasm:wasm_web_package",
+        "//donner/svg/renderer/wasm:donner_wasm_geode",
+        "//donner/svg/renderer/wasm:geode_browser_test_package"
+      ],
+      "oracle": [
+        "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"
+      ]
+    },
+    "macos": {
+      "native": [
+        "//:donner",
+        "//donner/svg/tool:donner-svg",
+        "//donner/editor:editor_impl",
+        "//donner/editor:editor"
+      ],
+      "nativeGeode": [
+        "//:donner",
+        "//donner/svg/tool:donner-svg",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer/geode:geode_device",
+        "//donner/editor:editor_impl",
+        "//examples:geode_embed"
+      ],
+      "browser": [
+        "//donner/editor/wasm:wasm_web_package",
+        "//donner/svg/renderer/wasm:donner_wasm_geode",
+        "//donner/svg/renderer/wasm:geode_browser_test_package"
+      ],
+      "oracle": []
+    }
+  },
+  "forbiddenLabelFragments": [
+    "//third_party/webgpu-cpp:",
+    "//third_party/webgpu-cpp:webgpu_cpp",
+    "//third_party/webgpu-cpp:wgpu_native_platform",
+    "//third_party/webgpu-cpp:wgpu_native_linux",
+    "//third_party/webgpu-cpp:wgpu_native_macos",
+    "//:wgpu_native",
+    "//tests/rust_ffi:"
+  ],
+  "allowedArchiveRepositories": [
+    "wgpu_native_linux_aarch64",
+    "wgpu_native_linux_x86_64"
+  ],
+  "artifactRoots": {
+    "linux": {
+      "native": ["//donner/svg/tool:donner-svg"],
+      "browser": [
+        "//donner/editor/wasm:wasm_web_package",
+        "//donner/svg/renderer/wasm:geode_browser_test_package"
+      ]
+    },
+    "macos": {
+      "native": ["//donner/svg/tool:donner-svg"]
+    }
+  },
+  "oracleLabel": "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"
+}

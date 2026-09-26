@@ -1,5 +1,28 @@
 # GPU runtime inventory (design doc 0053)
 
+## Configured no-Rust closure gate
+
+`configured_rust_roots.json` declares native product, editor, embed, shipped
+browser package, and the sole Linux resvg comparison roots. The named
+`CI / no-rust-configured-closure` job requires Linux and macOS receipts from
+`configured_rust_closure.py`. Each receipt records Bazel's selected dependency
+closure for every declared root and binds it to the commit, Git tree, inventory,
+and platform. The Linux oracle receipt also binds the generated dependency lock.
+A production root that reaches the
+WebGPU-C++ wrapper, a wgpu-native archive, or the Rust FFI oracle fails. The
+Linux resvg test root must reach its checksum-pinned wrapper and archive;
+macOS has no oracle exception. Missing or stale platform receipts fail the
+aggregate job.
+
+The Linux leg validates generated CMake, builds and runs the existing CMake
+consumer, and explicitly records that Donner currently has no CMake install
+surface. Any new generated `install()` rule fails until an actual install
+payload scanner is added. Linux also builds and hashes the shipped CLI and two
+browser package outputs; macOS builds and hashes the CLI. Empty or Rust-backed
+outputs fail. The checked-in unit tests include a synthetic product-to-oracle
+edge, stale receipts, missing roots, a newly added CMake install rule, and a
+contaminated artifact; they run under ordinary `bazel test //...`.
+
 Machine-readable manifests of Donner's current GPU surface, plus the
 no-Rust-dependency verifier. See
 [docs/design_docs/0053-native_gpu_hal.md](../../docs/design_docs/0053-native_gpu_hal.md).
