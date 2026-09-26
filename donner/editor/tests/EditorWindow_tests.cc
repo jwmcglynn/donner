@@ -1807,12 +1807,9 @@ TEST_P(EditorWindowLifecycleTest, AResizedWindowDrawsAtItsNewExtent) {
       << "a texel outside the old extent was not drawn at the new one";
 }
 
-/// A device declared lost stops the window reading its frames back, and no frame after it spends
-/// the readback bound. The loss reaches the window through the condition its framebuffer context
-/// shares with the runtime device it draws on, whichever backend that is. The frame itself is
-/// still drawn; its readback asks nothing of a device already lost, and a map started on one would
-/// end at its first wait slice too, so this checks that the frames end within the bound with
-/// nothing read, not which of those two stops them.
+/// A device declared lost stops the window before another surface acquisition or draw, and no
+/// frame after it spends the readback bound. The loss reaches the window through the condition
+/// its framebuffer context shares with the runtime device on either backend.
 TEST_P(EditorWindowLifecycleTest, FramesAfterADeclaredLossReadBackNothingWithinTheBound) {
   EditorWindow window(options());
   ASSERT_THAT(window.valid(), testing::IsTrue());
@@ -1840,6 +1837,9 @@ TEST_P(EditorWindowLifecycleTest, FramesAfterADeclaredLossReadBackNothingWithinT
     const svg::RendererBitmap lost = window.endFrameAndReadPixels();
     const auto frameTime = std::chrono::steady_clock::now() - frameStart;
     EXPECT_THAT(lost.empty(), testing::IsTrue()) << "a lost device's frame was read back";
+    EXPECT_THAT(drawnFrames, testing::ElementsAre(DrawnAt(window.framebufferSize())))
+        << "a known-lost device must not attempt another frame";
+    EXPECT_THAT(window.framebufferReadbackAvailable(), testing::IsFalse());
     EXPECT_THAT(std::chrono::duration_cast<std::chrono::milliseconds>(frameTime),
                 testing::Lt(geode::kDefaultGpuWaitTimeout))
         << "the frame waited out the readback bound on a lost device";

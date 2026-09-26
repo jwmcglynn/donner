@@ -1511,10 +1511,11 @@ struct EditorWindow::WgpuState {
   std::chrono::milliseconds readbackBudget = geode::kDefaultGpuWaitTimeout;
 
   /// A constructor that gave up before the framebuffer context existed leaves it null with the
-  /// rest of the state in place. A visible window may attempt to rebuild a missing surface.
+  /// rest of the state in place. A visible window may rebuild a missing surface only while its
+  /// device is healthy; a terminal device loss cannot be repaired by attaching another surface.
   /// @return Whether this state can attempt a frame on its selected target.
   bool canPresentFrames() const {
-    return framebufferGeodeDevice != nullptr &&
+    return framebufferGeodeDevice != nullptr && !framebufferGeodeDevice->isDeviceLost() &&
            (presentationRequired || offscreenTexture.isValid());
   }
 };
@@ -2143,7 +2144,7 @@ bool EditorWindow::usingOffscreenRenderTarget() const {
 }
 
 bool EditorWindow::framebufferReadbackAvailable() const {
-  return wgpuState_ != nullptr && wgpuState_->framebufferGeodeDevice != nullptr &&
+  return wgpuState_ != nullptr && wgpuState_->canPresentFrames() &&
          (wgpuState_->presentation != nullptr || wgpuState_->offscreenTexture.isValid()) &&
          SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage);
 }
@@ -2588,8 +2589,8 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   }
   if (wgpuState_ == nullptr || !wgpuState_->canPresentFrames() || displayW <= 0 || displayH <= 0) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-    // There is no persistent WGPU state in which to count retries. Complete this diagnostic
-    // request as a terminal setup failure rather than rearming an impossible capture forever.
+    // No usable WGPU frame target remains, including after a terminal device loss. Complete this
+    // diagnostic request as a terminal failure rather than rearming an impossible capture.
     if (smokeReadbackRequestId > 0) {
       PublishWgpuReadbackFailure(smokeReadbackRequestId);
       WakeWasmEditorForPendingWgpuReadback();
