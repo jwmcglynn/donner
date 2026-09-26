@@ -762,22 +762,6 @@
         "Texture"
       ]
     },
-    "donner/svg/renderer/tests/RendererGeode_tests.cc": {
-      "operations": [
-        "createCommandEncoder",
-        "createTexture",
-        "draw",
-        "submit",
-        "writeTexture"
-      ],
-      "wgpuCFunctions": [
-        "wgpuTextureOf"
-      ],
-      "wgpuCppTokens": [
-        "Texture",
-        "TextureFormat"
-      ]
-    },
     "donner/svg/renderer/tests/RendererTestBackendGeode.cc": {
       "operations": [
         "draw"
