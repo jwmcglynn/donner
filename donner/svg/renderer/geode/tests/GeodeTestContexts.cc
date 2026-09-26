@@ -1,52 +1,15 @@
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <cstddef>
-#include <iostream>
 #include <span>
 #include <sstream>
-#include <string>
 #include <utility>
 
 #include "donner/gpu/CommandEncoder.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#include "donner/svg/renderer/geode/GeodeDevice.h"
 
 namespace donner::geode {
-
-namespace {
-
-/// The running test's full name, or a note that no test is running.
-std::string CurrentTestName() {
-  const testing::TestInfo* test = testing::UnitTest::GetInstance()->current_test_info();
-  if (test == nullptr) {
-    return "code outside a test";
-  }
-  return std::string(test->test_suite_name()) + "." + test->name();
-}
-
-}  // namespace
-
-std::unique_ptr<GeodeDevice> CreateTransitionalAdapterContext(std::string_view reason,
-                                                              gpu::TextureFormat textureFormat) {
-  // Only a request for another backend makes this worth saying. A malformed request is reported
-  // by the selections that read it; this one names its backend instead.
-  if (const gpu::Result<GpuBackendKind> processDefault = ProcessDefaultGpuBackendKind();
-      !processDefault.hasError() && processDefault.result() != GpuBackendKind::TransitionalWgpu) {
-    std::cerr << "[Geode] " << CurrentTestName()
-              << " uses a transitional wgpu adapter context, not the process default "
-              << processDefault.result() << ": " << reason << "\n";
-  }
-  GpuRootSelection selection;
-  selection.label = "GeodeTransitionalAdapterTest";
-  selection.backend = GpuBackendKind::TransitionalWgpu;
-  std::shared_ptr<GeodeGpuRoot> root = SelectGpuRoot(selection);
-  if (root == nullptr) {
-    return nullptr;
-  }
-  return GeodeDevice::CreateOverSelectedRoot(std::move(root), textureFormat);
-}
 
 gpu::Result<std::vector<uint8_t>> ReadTexturePixels(gpu::Device& device,
                                                     const gpu::Texture& texture,

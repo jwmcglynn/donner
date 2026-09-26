@@ -58,6 +58,9 @@ public:
   /// Largest 2D texture dimension reported by this root's physical device.
   uint32_t maxTextureDimension2D() const;
 
+  /// Owning copy of the selected physical device's Vulkan-reported name. Empty if unavailable.
+  std::string adapterName() const;
+
   /// Sticky loss condition shared by every runtime device opened over this root.
   const std::shared_ptr<DeviceLostState>& lostState() const;
 

@@ -798,6 +798,38 @@ genrule(
     tools = [":dump_math_primitive_fixture"],
 )
 
+donner_cc_binary(
+    name = "dump_slug_endpoint_wgsl",
+    testonly = 1,
+    srcs = [
+        "tests/DumpSlugEndpointWgsl.cc",
+        "tests/JsonWrite.h",
+    ],
+    deps = [
+        ":programs",
+        ":shader",
+        ":slug_fill_artifact",
+        ":slug_gradient_artifact",
+        ":slug_mask_artifact",
+        ":wgsl_emitter",
+    ],
+)
+
+genrule(
+    name = "slug_endpoint_wgsl_fixture",
+    testonly = 1,
+    outs = ["slug_endpoint_wgsl_fixture.json"],
+    cmd = "$(location :dump_slug_endpoint_wgsl) > $@",
+    tools = [":dump_slug_endpoint_wgsl"],
+)
+
+configured_dependency_audit_test(
+    name = "slug_endpoint_fixture_no_rust_audit_test",
+    forbidden_packages = ["//third_party/webgpu-cpp"],
+    required = ["//donner/gpu/shader:wgsl_emitter"],
+    target = "//donner/gpu/shader:dump_slug_endpoint_wgsl",
+)
+
 configured_dependency_audit_test(
     name = "wgsl_manifest_no_rust_audit_test",
     forbidden_packages = ["//third_party/webgpu-cpp"],
@@ -844,6 +876,35 @@ forbidden_transitive_dep_test(
     name = "wgsl_browser_no_webgpu_wrapper_test",
     forbidden = "//third_party/webgpu-cpp:webgpu_cpp",
     target = "//donner/gpu/shader:wgsl_chromium_compilation_tests",
+)
+
+# Executes the migrated Slug endpoint coverage probes on the pinned browser WebGPU device.
+js_test(
+    name = "slug_endpoint_chromium_tests",
+    size = "large",
+    copy_data_to_bin = False,
+    data = [
+        ":slug_endpoint_wgsl_fixture",
+        "//donner/editor/wasm/tests:node_modules/@playwright/test",
+        "@playwright//:chromium",
+    ],
+    entry_point = "tests/SlugEndpointChromium_tests.mjs",
+    env = {
+        "DONNER_SLUG_ENDPOINT_WGSL": "$(rootpath :slug_endpoint_wgsl_fixture)",
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    node_options = ["--test"],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)
+
+forbidden_transitive_dep_test(
+    name = "slug_endpoint_browser_no_webgpu_wrapper_test",
+    forbidden = "//third_party/webgpu-cpp:webgpu_cpp",
+    target = "//donner/gpu/shader:slug_endpoint_chromium_tests",
 )
 
 donner_cc_library(

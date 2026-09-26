@@ -160,9 +160,8 @@ donner_cc_library(
     testonly = 1,
     # The shared dispatcher (RendererTestBackend.cc) plus the tiny-skia backend
     # TU are always linked; the geode build additionally links the geode
-    # backend TU so a single binary can dispatch to *both* renderers at runtime
-    # (geode-vs-tiny-skia parity — see docs/design_docs/0017 §Phase 4b). Each
-    # backend TU registers its ops into the dispatcher's table.
+    # backend TU so tests can select either renderer at runtime. Each backend
+    # TU registers its ops into the dispatcher's table.
     srcs = [
         "RendererTestBackend.cc",
         "RendererTestBackendTinySkia.cc",
@@ -203,6 +202,38 @@ donner_cc_library(
     }),
 )
 
+# The resvg comparison registers the same TinyGolden and GeodeGolden backends, but its Geode
+# registration is linked only to the Linux test-only wgpu reference renderer. In particular this
+# target has no dependency on the ordinary renderer dispatcher or native Geode implementation.
+donner_cc_library(
+    name = "renderer_test_backend_wgpu_reference_linux",
+    testonly = 1,
+    srcs = [
+        "RendererTestBackend.cc",
+        "RendererTestBackendGeode.cc",
+        "RendererTestBackendTinySkia.cc",
+    ],
+    hdrs = ["RendererTestBackend.h"],
+    defines = [
+        "DONNER_GEODE_BACKEND_AVAILABLE",
+        "DONNER_GEODE_WGPU_REFERENCE=1",
+    ] + select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
+    target_compatible_with = ["@platforms//os:linux"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//donner/svg/renderer/tests:__pkg__"],
+    deps = [
+        "//donner/svg/renderer:renderer_geode_wgpu_reference_linux",
+        "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 donner_cc_library(
     name = "image_comparison_test_fixture",
     testonly = 1,
@@ -226,6 +257,35 @@ donner_cc_library(
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:terminal_image_viewer",
+        "//donner/svg/resources:font_metadata",
+        "@com_google_gtest//:gtest",
+        "@pixelmatch-cpp17",
+    ],
+)
+
+# Same image-comparison source and golden rules as the native fixture, but with only the explicit
+# Linux wgpu reference backend linked. No ordinary renderer dispatcher is in this closure.
+donner_cc_library(
+    name = "image_comparison_test_fixture_wgpu_reference_linux",
+    testonly = 1,
+    srcs = ["ImageComparisonTestFixture.cc"],
+    hdrs = ["ImageComparisonTestFixture.h"],
+    target_compatible_with = ["@platforms//os:linux"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//donner/svg/renderer/tests:__pkg__"],
+    deps = [
+        ":renderer_image_test_utils",
+        ":renderer_test_backend_wgpu_reference_linux",
+        ":rgba_test_matchers",
+        "//donner/base:base_test_utils",
+        "//donner/css:core",
+        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:terminal_image_viewer",
         "//donner/svg/resources:font_metadata",
         "@com_google_gtest//:gtest",
@@ -381,10 +441,8 @@ donner_cc_test(
     data = [
         "//donner/svg/renderer/testdata",
     ],
-    # Geode runs through this suite too, using the shared (tiny-skia-authored)
-    # goldens with a widened default threshold. Per-test Geode overrides live
-    # in `geodeOverrides()` in `Renderer_tests.cc` — see the Phase 5b section
-    # of `docs/design_docs/0017-geode_renderer.md`.
+    # Geode runs through this suite using the shared goldens. Its default threshold and
+    # per-test overrides are defined in `Renderer_tests.cc`.
     deps = [
         ":image_comparison_test_fixture",
         ":renderer_test_utils",
@@ -825,7 +883,6 @@ objc_library(
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:stroke_params",
         "//donner/svg/renderer/geode:geode_device",
-        "//donner/svg/renderer/tests:rgba_test_matchers",
         "@com_google_gtest//:gtest",
     ],
     alwayslink = True,
@@ -1026,9 +1083,10 @@ donner_cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        ":image_comparison_test_fixture",
+        ":image_comparison_test_fixture_wgpu_reference_linux",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
+        "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
     ],
 )
 

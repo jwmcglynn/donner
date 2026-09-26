@@ -35,7 +35,7 @@ bug fixes that the analytic rewrite *revealed* were never coverage issues — se
 
 **Related:** [0042 Slug pipeline](0042-geode_slug_conformance.md) (encoder/band
 internals — extended by this plan), [0038 text parity](0038-geode_tinyskia_text_parity.md),
-[0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison),
+[0017 Geode renderer](0017-geode_renderer.md),
 [0021 §Geode policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy).
 
 ---

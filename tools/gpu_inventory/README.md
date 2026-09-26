@@ -1,5 +1,28 @@
 # GPU runtime inventory (design doc 0053)
 
+## Configured no-Rust closure gate
+
+`configured_rust_roots.json` declares native product, editor, embed, shipped
+browser package, and the sole Linux resvg comparison roots. The named
+`CI / no-rust-configured-closure` job requires Linux and macOS receipts from
+`configured_rust_closure.py`. Each receipt records Bazel's selected dependency
+closure for every declared root and binds it to the commit, Git tree, inventory,
+and platform. The Linux oracle receipt also binds the generated dependency lock.
+A production root that reaches the WebGPU-C++ wrapper, a wgpu-native archive,
+or the Rust FFI oracle fails. The
+Linux resvg test root must reach its checksum-pinned wrapper and archive;
+macOS has no oracle exception. Missing or stale platform receipts fail the
+aggregate job.
+
+The Linux leg validates generated CMake, builds and runs the existing CMake
+consumer, and explicitly records that Donner currently has no CMake install
+surface. Any new generated `install()` rule fails until an actual install
+payload scanner is added. Linux also builds and hashes the shipped CLI and two
+browser package outputs; macOS builds and hashes the CLI. Empty or Rust-backed
+outputs fail. The checked-in unit tests include a synthetic product-to-oracle
+edge, stale receipts, missing roots, a newly added CMake install rule, and a
+contaminated artifact; they run under ordinary `bazel test //...`.
+
 Machine-readable manifests of Donner's current GPU surface, plus the
 no-Rust-dependency verifier. See
 [docs/design_docs/0053-native_gpu_hal.md](../../docs/design_docs/0053-native_gpu_hal.md).
@@ -90,6 +113,13 @@ scopes and the verifier enforces the boundary of each:
 - `testOnlyConsumerPrefixes` - the only build files that may name the oracle's
   targets. This is what keeps it out of every non-test closure, and it is
   checked alongside the oracle's own visibility.
+- `testOnlyGpuOracleArchives` - the exact Linux aarch64 and x86_64 wgpu-native
+  release assets and reviewed SHA-256 pins for the sole resvg comparison lane.
+  The verifier checks the fetch rule, root module names, Linux-only overlay,
+  test-only wrapper alias chain, and resvg test consumer as one narrow declared
+  boundary. The full tracked-tree scan also fails if any of these five files
+  disappears. The separate configured closure receipt proves the selected
+  Linux oracle actually reaches that archive.
 
 The visibility check reads the raw file and fails closed on anything it cannot
 parse as a literal list of quoted labels, a comment included: a comment
@@ -99,9 +129,13 @@ only labels it accepts are `__pkg__` and `__subpackages__` targets under the
 vendored `//tests` tree, so a package_group label, whose membership is declared
 elsewhere, is a finding.
 
-The Lint workflow runs `--blocking default`, which is every category except
-`rust-built-archive`: the prebuilt `wgpu-native` tarballs are the Rust that
-actually ships today, and they leave with the Metal and Linux cutovers.
+The Lint workflow runs `--blocking default`, which includes
+`rust-built-archive`. The two pinned Linux test-oracle archives are its only
+exception; an extra archive, production reference, or missing test-only guard
+fails. On the pre-cutover tree this check intentionally reports five blocking
+archive findings: the macOS fetch, overlay, module, and runtime references,
+plus the missing direct resvg test consumer edge. The source cutover resolves
+these sites together.
 
 Bazel files are scanned for Rust rule-set names and, outside comments, for bare
 `cargo`, `rustc`, and `rustup` commands, because a `genrule` command or a `.bzl`
