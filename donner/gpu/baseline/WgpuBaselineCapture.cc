@@ -1,7 +1,5 @@
 #include "donner/gpu/baseline/WgpuBaselineCapture.h"
 
-#include <atomic>
-#include <cctype>
 #include <fstream>
 #include <string_view>
 #include <utility>
@@ -9,107 +7,36 @@
 #include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
-#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
+#if defined(__APPLE__)
+#include "donner/gpu/metal/MetalDevice.h"
+#endif
+#if defined(__linux__)
+#include "donner/gpu/vulkan/VulkanDevice.h"
+#endif
 
 namespace donner::gpu::baseline {
 namespace {
 
-constexpr uint32_t kBytesPerRow = kCorpusSize * 4;  // 1024, already 256-byte aligned.
-constexpr uint32_t kReadbackBytes = kBytesPerRow * kCorpusSize;
-
-std::string_view BackendName(WGPUBackendType backend) {
-  switch (backend) {
-    case WGPUBackendType_Vulkan: return "Vulkan";
-    case WGPUBackendType_Metal: return "Metal";
-    case WGPUBackendType_D3D12: return "D3D12";
-    case WGPUBackendType_D3D11: return "D3D11";
-    case WGPUBackendType_OpenGL: return "OpenGL";
-    case WGPUBackendType_OpenGLES: return "OpenGLES";
-    case WGPUBackendType_WebGPU: return "WebGPU";
-    case WGPUBackendType_Null: return "Null";
-    default: return "Unknown";
-  }
-}
-
-std::string_view AdapterTypeName(WGPUAdapterType type) {
-  switch (type) {
-    case WGPUAdapterType_DiscreteGPU: return "DiscreteGPU";
-    case WGPUAdapterType_IntegratedGPU: return "IntegratedGPU";
-    case WGPUAdapterType_CPU: return "CPU";
-    default: return "Unknown";
-  }
-}
-
-std::string ToString(const WGPUStringView& view) {
-  return view.data != nullptr ? std::string(view.data, view.length) : std::string();
-}
-
-/// Joins the adapter's vendor and device strings into one name, skipping either when empty so a
-/// driver that reports only one does not leave a stray separator in the frozen record.
-std::string JoinAdapterName(const std::string& vendor, const std::string& device) {
-  if (vendor.empty()) {
-    return device;
-  }
-  if (device.empty()) {
-    return vendor;
-  }
-  return vendor + " " + device;
-}
-
-CaptureEnvironment DescribeAdapter(const wgpu::Adapter& adapter) {
+CaptureEnvironment DescribeAdapter(const geode::GeodeDevice& device) {
   CaptureEnvironment environment;
-  environment.adapterName = "unknown";
-  environment.adapterBackend = "Unknown";
   environment.adapterType = "Unknown";
-
-  WGPUAdapterInfo info = {};
-  if (wgpuAdapterGetInfo(adapter, &info) != WGPUStatus_Success) {
-    return environment;
+#if defined(__APPLE__)
+  environment.adapterBackend = "Metal";
+  environment.adapterName =
+      static_cast<const gpu::metal::MetalDevice&>(device.runtimeDevice()).adapterName();
+#elif defined(__linux__)
+  environment.adapterBackend = "Vulkan";
+  const auto& nativeRoot = device.physicalDeviceOwner()->root().vulkanRoot();
+  if (nativeRoot != nullptr) {
+    environment.adapterName = nativeRoot->adapterName();
   }
-  const std::string name = JoinAdapterName(ToString(info.vendor), ToString(info.device));
-  if (!name.empty()) {
-    environment.adapterName = name;
-  }
-  environment.adapterBackend = BackendName(info.backendType);
-  environment.adapterType = AdapterTypeName(info.adapterType);
-  wgpuAdapterInfoFreeMembers(info);
+#endif
   return environment;
-}
-
-/// Names the render target through the runtime device so the encoder can bind it. Returns a
-/// default-constructed handle on failure; the caller checks `hasResult()` before that happens.
-gpu::Result<gpu::Texture> NameRenderTarget(geode::GeodeDevice& device,
-                                           const wgpu::Texture& target) {
-  return device.adapterDevice().importExternalTexture(
-      target, gpu::Extent2d{kCorpusSize, kCorpusSize}, gpu::TextureFormat::RGBA8Unorm,
-      gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc);
-}
-
-wgpu::Texture CreateRenderTarget(geode::GeodeDevice& device) {
-  wgpu::TextureDescriptor descriptor = {};
-  descriptor.label = geode::wgpuLabel("BaselineTarget");
-  descriptor.size = {kCorpusSize, kCorpusSize, 1};
-  descriptor.format = wgpu::TextureFormat::RGBA8Unorm;
-  descriptor.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
-  descriptor.mipLevelCount = 1;
-  descriptor.sampleCount = 1;
-  descriptor.dimension = wgpu::TextureDimension::_2D;
-  return device.adapterDevice().root().device().createTexture(descriptor);
-}
-
-wgpu::Buffer CreateReadbackBuffer(geode::GeodeDevice& device) {
-  wgpu::BufferDescriptor descriptor = {};
-  descriptor.label = geode::wgpuLabel("BaselineReadback");
-  descriptor.size = kReadbackBytes;
-  descriptor.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  return device.adapterDevice().root().device().createBuffer(descriptor);
 }
 
 void RecordScene(geode::GeodeDevice& device, const gpu::Texture& target, const CorpusScene& scene) {
@@ -124,70 +51,9 @@ void RecordScene(geode::GeodeDevice& device, const gpu::Texture& target, const C
   encoder.finish();
 }
 
-void RecordCopyToReadback(geode::GeodeDevice& device, const wgpu::Texture& target,
-                          const wgpu::Buffer& readback) {
-  wgpu::CommandEncoder encoder = device.adapterDevice().root().device().createCommandEncoder();
-  wgpu::TexelCopyTextureInfo source = {};
-  source.texture = target;
-  source.mipLevel = 0;
-  source.origin = {0, 0, 0};
-  wgpu::TexelCopyBufferInfo destination = {};
-  destination.buffer = readback;
-  destination.layout.bytesPerRow = kBytesPerRow;
-  destination.layout.rowsPerImage = kCorpusSize;
-  const wgpu::Extent3D copySize = {kCorpusSize, kCorpusSize, 1};
-  encoder.copyTextureToBuffer(source, destination, copySize);
-  wgpu::CommandBuffer commands = encoder.finish();
-  device.adapterDevice().root().queue().submit(1, &commands);
-}
-
-struct MapState {
-  std::atomic<bool> done = false;
-  std::atomic<bool> ok = false;
-};
-
-void OnBufferMapped(WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
-                    void* /*userdata2*/) {
-  const std::shared_ptr<MapState> state = geode::takeWgpuCallbackState<MapState>(userdata1);
-  state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
-  state->done.store(true, std::memory_order_release);
-}
-
-/// Maps the readback buffer and copies its bytes out. Returns an empty string on success.
-std::string ReadPixels(geode::GeodeDevice& device, const wgpu::Buffer& readback,
-                       std::vector<uint8_t>& pixelsOut) {
-  auto state = std::make_shared<MapState>();
-  wgpu::BufferMapCallbackInfo callbackInfo{wgpu::Default};
-  callbackInfo.callback = &OnBufferMapped;
-  callbackInfo.userdata1 = geode::retainWgpuCallbackState(state);
-  callbackInfo.userdata2 = nullptr;
-  readback.mapAsync(wgpu::MapMode::Read, 0, kReadbackBytes, callbackInfo);
-
-  const geode::GpuWaitResult waitResult = geode::BoundedGpuWait(
-      [&] {
-        device.adapterDevice().root().device().poll(false, nullptr);
-        return state->done.load(std::memory_order_acquire);
-      },
-      geode::kDefaultGpuWaitTimeout);
-  if (waitResult != geode::GpuWaitResult::Complete) {
-    return "readback buffer map wait timed out";
-  }
-  if (!state->ok.load(std::memory_order_relaxed)) {
-    return "readback buffer map failed";
-  }
-
-  const auto* mapped = static_cast<const uint8_t*>(readback.getConstMappedRange(0, kReadbackBytes));
-  if (mapped == nullptr) {
-    return "readback buffer produced no mapped range";
-  }
-  pixelsOut.assign(mapped, mapped + kReadbackBytes);
-  readback.unmap();
-  return {};
-}
-
 /// Identifies the renderer the frozen bytes came from. The freeze is only an oracle for a
 /// replacement backend if it is unambiguous which implementation produced it.
-constexpr const char* kRendererPath = "wgpu-native Geode production path (GeodeDevice+GeoEncoder)";
+constexpr const char* kRendererPath = "native Geode production path (GeodeDevice+GeoEncoder)";
 constexpr const char* kRendererBackend = "geode";
 constexpr const char* kTargetFormat = "RGBA8Unorm premultiplied, transparent background";
 
@@ -237,34 +103,46 @@ std::string EnvironmentSlug(const CaptureEnvironment& environment) {
 }
 
 WgpuBaselineCapturer::WgpuBaselineCapturer(std::unique_ptr<geode::GeodeDevice> device)
-    : device_(std::move(device)),
-      environment_(DescribeAdapter(device_->adapterDevice().root().adapter())) {}
+    : device_(std::move(device)), environment_(DescribeAdapter(*device_)) {}
 
 WgpuBaselineCapturer::~WgpuBaselineCapturer() = default;
 
 std::unique_ptr<WgpuBaselineCapturer> WgpuBaselineCapturer::Create() {
-  // The oracle is the transitional adapter's renderer, so it is selected by name whatever backend
-  // the process selects by default.
-  std::unique_ptr<geode::GeodeDevice> device = geode::CreateTransitionalAdapterContext(
-      "the baseline oracle is the transitional adapter's renderer");
+  geode::GpuRootSelection selection;
+  selection.label = "FrozenBaselineCapture";
+#if defined(__APPLE__)
+  selection.backend = geode::GpuBackendKind::NativeMetal;
+#elif defined(__linux__)
+  selection.backend = geode::GpuBackendKind::NativeVulkan;
+#else
+  return nullptr;
+#endif
+  std::unique_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateOverSelectedRoot(
+      geode::SelectGpuRoot(selection), gpu::TextureFormat::RGBA8Unorm);
   if (!device) {
     return nullptr;
   }
-  return std::unique_ptr<WgpuBaselineCapturer>(new WgpuBaselineCapturer(std::move(device)));
+  auto capturer =
+      std::unique_ptr<WgpuBaselineCapturer>(new WgpuBaselineCapturer(std::move(device)));
+  return capturer->environment().adapterName.empty() ? nullptr : std::move(capturer);
 }
 
 std::string WgpuBaselineCapturer::capture(const CorpusScene& scene,
                                           std::vector<uint8_t>& pixelsOut) {
-  const wgpu::Texture target = CreateRenderTarget(*device_);
-  gpu::Result<gpu::Texture> targetHandle = NameRenderTarget(*device_, target);
-  if (!targetHandle.hasResult()) {
-    return "failed to name the baseline render target";
+  gpu::Result<gpu::Texture> target = device_->runtimeDevice().createTexture(gpu::TextureDescriptor{
+      "BaselineTarget", gpu::Extent2d{kCorpusSize, kCorpusSize}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc});
+  if (target.hasError()) {
+    return "failed to create the baseline render target: " + target.error().message;
   }
-  const wgpu::Buffer readback = CreateReadbackBuffer(*device_);
-
-  RecordScene(*device_, std::move(targetHandle).result(), scene);
-  RecordCopyToReadback(*device_, target, readback);
-  return ReadPixels(*device_, readback, pixelsOut);
+  RecordScene(*device_, target.result(), scene);
+  gpu::Result<std::vector<uint8_t>> pixels = geode::ReadTexturePixels(
+      device_->runtimeDevice(), target.result(), gpu::Extent2d{kCorpusSize, kCorpusSize});
+  if (pixels.hasError()) {
+    return "failed to read the baseline pixels: " + pixels.error().message;
+  }
+  pixelsOut = std::move(pixels).result();
+  return {};
 }
 
 std::string WriteFrozenBaselineSet(WgpuBaselineCapturer& capturer,

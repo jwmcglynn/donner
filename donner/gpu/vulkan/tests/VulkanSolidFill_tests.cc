@@ -1,15 +1,15 @@
 /// @file
 /// The Vulkan solid-fill vertical slice: renders the shared baseline scene through
 /// donner::gpu::vulkan::VulkanDevice with the SPIR-V emitted from the solid-fill IR program,
-/// renders the IDENTICAL scene through the production wgpu path in the same process
-/// (GeodeDevice::CreateHeadless + GeoEncoder, exactly like the baseline capture tool), and compares
+/// renders the IDENTICAL scene through the production Geode path on native Vulkan in the same
+/// process (GeodeDevice + GeoEncoder, exactly like the baseline capture tool), and compares
 /// the two renders with the blessed pixelmatch comparator at strict identity.
 ///
 /// Why a same-process A/B instead of a committed PNG: this is the frozen-baseline pattern
 /// executed per-device. Both halves run on the same physical (or software) Vulkan
 /// implementation, so the identity gate stays valid on the CI default (Mesa lavapipe software
 /// Vulkan) and on physical-GPU remote-execution workers alike, without one committed PNG having
-/// to match every rasterizer. The wgpu render is also written to TEST_UNDECLARED_OUTPUTS_DIR so
+/// to match every rasterizer. The Geode render is also written to TEST_UNDECLARED_OUTPUTS_DIR so
 /// any run can freeze a device-specific PNG artifact.
 ///
 /// The geometry, uniforms, and draw sequence mirror the production encoder's fillPath data flow
@@ -23,7 +23,6 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -46,13 +45,11 @@
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
-#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 
 namespace donner::gpu::vulkan::tests {
@@ -77,15 +74,16 @@ constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte 
 /// C++ mirror of the shader's 288-byte Uniforms struct (layout anchored by the shader IR layout
 /// tests; field order matches slug_fill/the solid-fill IR program).
 
-/// Renders the shared baseline scene through the production wgpu path as a black box (the same
-/// flow //donner/gpu/baseline:capture_baselines uses to write the frozen corpus:
-/// GeodeDevice::CreateHeadless + GeoEncoder + mapped readback) and returns the RGBA8 pixels, or
+/// Renders the shared baseline scene through the production Geode path as a black box (the same
+/// flow //donner/gpu/baseline:capture_baselines uses: native GeodeDevice + GeoEncoder + runtime
+/// readback) and returns the RGBA8 pixels, or
 /// empty on failure.
-std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
-  // The reference is the transitional adapter's renderer, selected by name whatever the process
-  // default is.
-  auto device =
-      geode::CreateTransitionalAdapterContext("the reference render is the transitional adapter's");
+std::optional<std::vector<uint8_t>> RenderNativeGeodeBaseline() {
+  geode::GpuRootSelection selection;
+  selection.label = "VulkanSolidFillProductionReference";
+  selection.backend = geode::GpuBackendKind::NativeVulkan;
+  auto device = geode::GeodeDevice::CreateOverSelectedRoot(geode::SelectGpuRoot(selection),
+                                                           gpu::TextureFormat::RGBA8Unorm);
   if (!device) {
     return std::nullopt;
   }
@@ -94,31 +92,16 @@ std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
   geode::GeodeGradientPipeline& gradientPipeline = device->gradientPipeline();
   geode::GeodeImagePipeline& imagePipeline = device->imagePipeline();
 
-  wgpu::TextureDescriptor td = {};
-  td.label = geode::wgpuLabel("VulkanSliceBaselineTarget");
-  td.size = {kBaselineSize, kBaselineSize, 1};
-  td.format = wgpu::TextureFormat::RGBA8Unorm;
-  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture target = device->adapterDevice().root().device().createTexture(td);
-  gpu::Result<gpu::Texture> targetHandleResult = device->adapterDevice().importExternalTexture(
-      target, gpu::Extent2d{kBaselineSize, kBaselineSize}, gpu::TextureFormat::RGBA8Unorm,
-      gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc);
-  if (!targetHandleResult.hasResult()) {
+  gpu::Result<gpu::Texture> target = device->runtimeDevice().createTexture(gpu::TextureDescriptor{
+      "VulkanSliceBaselineTarget", gpu::Extent2d{kBaselineSize, kBaselineSize},
+      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc});
+  if (target.hasError()) {
     return std::nullopt;
   }
-  const gpu::Texture targetHandle = std::move(targetHandleResult).result();
-
-  wgpu::BufferDescriptor bd = {};
-  bd.label = geode::wgpuLabel("VulkanSliceBaselineReadback");
-  bd.size = kBytesPerRow * kBaselineSize;
-  bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  wgpu::Buffer readback = device->adapterDevice().root().device().createBuffer(bd);
 
   {
-    geode::GeoEncoder encoder(*device, pipeline, gradientPipeline, imagePipeline, targetHandle,
+    geode::GeoEncoder encoder(*device, pipeline, gradientPipeline, imagePipeline, target.result(),
                               gpu::Extent2d{kBaselineSize, kBaselineSize});
     encoder.clear(css::RGBA(0, 0, 0, 0));  // Transparent background.
     encoder.setTransform(BaselinePixelFromScene());
@@ -128,50 +111,12 @@ std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
     encoder.finish();
   }
 
-  // Copy the render target into the mappable readback buffer.
-  {
-    wgpu::CommandEncoder enc = device->adapterDevice().root().device().createCommandEncoder();
-    wgpu::TexelCopyTextureInfo src = {};
-    src.texture = target;
-    src.mipLevel = 0;
-    src.origin = {0, 0, 0};
-    wgpu::TexelCopyBufferInfo dst = {};
-    dst.buffer = readback;
-    dst.layout.bytesPerRow = kBytesPerRow;
-    dst.layout.rowsPerImage = kBaselineSize;
-    wgpu::Extent3D copySize = {kBaselineSize, kBaselineSize, 1};
-    enc.copyTextureToBuffer(src, dst, copySize);
-    wgpu::CommandBuffer cmd = enc.finish();
-    device->adapterDevice().root().queue().submit(1, &cmd);
-  }
-
-  struct MapState {
-    std::atomic<bool> done = false;
-    std::atomic<bool> ok = false;
-  };
-  auto mapState = std::make_shared<MapState>();
-  wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
-  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
-                      void* /*userdata2*/) {
-    const std::shared_ptr<MapState> state = geode::takeWgpuCallbackState<MapState>(userdata1);
-    state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
-    state->done.store(true, std::memory_order_release);
-  };
-  mapCb.userdata1 = geode::retainWgpuCallbackState(mapState);
-  mapCb.userdata2 = nullptr;
-  readback.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow * kBaselineSize, mapCb);
-  while (!mapState->done.load(std::memory_order_acquire)) {
-    device->adapterDevice().root().device().poll(true, nullptr);
-  }
-  if (!mapState->ok.load(std::memory_order_relaxed)) {
+  gpu::Result<std::vector<uint8_t>> pixels = geode::ReadTexturePixels(
+      device->runtimeDevice(), target.result(), gpu::Extent2d{kBaselineSize, kBaselineSize});
+  if (pixels.hasError()) {
     return std::nullopt;
   }
-
-  const uint8_t* mapped =
-      static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBytesPerRow * kBaselineSize));
-  std::vector<uint8_t> pixels(mapped, mapped + kBytesPerRow * kBaselineSize);
-  readback.unmap();
-  return pixels;
+  return std::move(pixels).result();
 }
 
 /// Writes \p pixels as a PNG artifact under TEST_UNDECLARED_OUTPUTS_DIR (best-effort) so any
@@ -423,12 +368,13 @@ void ExpectRendersMatchWithinQuantization(const svg::RendererBitmap& actual,
                 << "First: " << firstFailure;
 }
 
+// Keep the historical case identity for qualification reports across the reference cutover.
 TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
-  // ----- The production wgpu half: the frozen-baseline pattern executed per-device -----
-  std::optional<std::vector<uint8_t>> productionPixels = RenderWgpuBaseline();
+  // ----- Independent production Geode render through native Vulkan -----
+  std::optional<std::vector<uint8_t>> productionPixels = RenderNativeGeodeBaseline();
   ASSERT_TRUE(productionPixels.has_value())
-      << "The production wgpu path could not render the baseline scene on this device";
-  WriteUndeclaredOutputPng(*productionPixels, "wgpu_solid_fill_baseline.png");
+      << "The production Geode path could not render the baseline scene on native Vulkan";
+  WriteUndeclaredOutputPng(*productionPixels, "geode_solid_fill_baseline.png");
 
   // ----- Shader module and pipeline from the emitted SPIR-V -----
   shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildSolidFillModule();
@@ -637,7 +583,7 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
       << "Submission did not complete cleanly: " << device_->lastErrorForTest();
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 
-  // ----- Pixel comparison: Vulkan slice vs the in-process production wgpu render -----
+  // ----- Pixel comparison: Vulkan slice vs the independent native Geode render -----
   Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
   ASSERT_FALSE(pixels.hasError()) << pixels.error();
 
