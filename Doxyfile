@@ -1049,6 +1049,17 @@ RECURSIVE              = YES
 EXCLUDE                = docs/reports \
                          docs/handoffs
 
+# These exact WGSL implementation headers belong to Bazel targets with
+# donner_internal_visibility(). They implement literal arithmetic, uniformity
+# solving, consteval compilation, and backend emission rather than the public
+# shader artifact interface. Keep the typed Module model and public
+# CompiledShader interface in the generated API reference.
+EXCLUDE               += donner/gpu/shader/wgsl/Number.h \
+                         donner/gpu/shader/wgsl/Uniformity.h \
+                         donner/gpu/shader/wgsl/Compiler.h \
+                         donner/gpu/shader/wgsl/SpirvEmitter.h \
+                         donner/gpu/shader/wgsl/TextEmitter.h
+
 # The EXCLUDE_SYMLINKS tag can be used to select whether or not files or
 # directories that are symbolic links (a Unix file system feature) are excluded
 # from the input.
