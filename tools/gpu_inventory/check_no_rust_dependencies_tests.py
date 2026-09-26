@@ -39,7 +39,6 @@ def categories(findings):
 class CheckTest(unittest.TestCase):
     def test_clean_tree_has_no_findings(self):
         files = {
-            "MODULE.bazel": 'bazel_dep(name = "googletest", version = "1.15")\n',
             "donner/base/BUILD.bazel": 'donner_cc_library(name = "base")\n',
         }
         self.assertEqual(verifier.check(files, SCOPES), [])
@@ -58,7 +57,7 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(findings[0].path, "donner/experiment/helper.rs")
 
     def test_rust_build_edge_in_module_bazel(self):
-        files = {"MODULE.bazel": 'bazel_dep(name = "rules_rust", version = "0.71.3")\n'}
+        files = {"third_party/example/MODULE.bazel": 'bazel_dep(name = "rules_rust", version = "0.71.3")\n'}
         findings = verifier.check(files, SCOPES)
         self.assertEqual(categories(findings), ["rust-build-edge"])
         self.assertIn("rules_rust", findings[0].detail)
@@ -101,7 +100,7 @@ class CheckTest(unittest.TestCase):
         self.assertEqual(categories(findings), ["rust-built-archive"])
 
     def test_archive_name_in_comment_is_not_a_build_edge(self):
-        files = {"third_party/BUILD.wgpu_native_platform": "# old wgpu_native_macos archive\n"}
+        files = {"donner/gpu/BUILD.bazel": "# old wgpu_native_macos archive\n"}
         self.assertEqual(verifier.check(files, SCOPES), [])
 
     def test_non_build_files_are_not_scanned_for_edges(self):
@@ -533,7 +532,7 @@ class DirectToolInvocationTest(unittest.TestCase):
 
     def test_rule_set_names_are_not_split_into_bare_commands(self):
         """`cargo_bazel` is one identifier, not the `cargo` command."""
-        files = {"MODULE.bazel": 'use_extension("@rules_rust//crate_universe:cargo_bazel.bzl")\n'}
+        files = {"third_party/example/MODULE.bazel": 'use_extension("@rules_rust//crate_universe:cargo_bazel.bzl")\n'}
         findings = verifier.check(files, SCOPES)
         self.assertEqual(categories(findings), ["rust-build-edge"])
         self.assertEqual(
@@ -707,7 +706,8 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 '    srcs = ["lib/libwgpu_native.so"],\n)\n'
             ),
             "third_party/webgpu-cpp/BUILD.bazel": (
-                'cc_library(\n    name = "webgpu_cpp",\n    testonly = True,\n)\n'
+                'cc_library(\n    name = "webgpu_cpp",\n    testonly = True,\n'
+                '    deps = [":wgpu_native_platform"],\n)\n'
                 'cc_library(\n    name = "wgpu_native_reference_runtime",\n'
                 '    testonly = True,\n'
                 '    target_compatible_with = ["@platforms//os:linux"],\n'
@@ -730,6 +730,29 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
 
     def test_exact_linux_oracle_is_allowed(self):
         self.assertEqual(categories(verifier.check(self.allowed_files(), SCOPES)), [])
+
+    def test_each_required_oracle_edge_fails_closed_when_removed(self):
+        omissions = {
+            "third_party/bazel/non_bcr_deps.bzl": "def non_bcr_deps(ctx):\n    pass\n",
+            "MODULE.bazel": "use_repo(non_bcr_deps)\n",
+            "third_party/BUILD.wgpu_native_platform": (
+                'cc_library(\n    name = "headers_only",\n)\n'
+            ),
+            "third_party/webgpu-cpp/BUILD.bazel": (
+                'cc_library(\n    name = "webgpu_cpp_headers",\n)\n'
+            ),
+            "donner/svg/renderer/tests/BUILD.bazel": (
+                'donner_cc_test(\n    name = "resvg_test_suite_wgpu_reference_linux_impl",\n'
+                '    deps = [],\n)\n'
+            ),
+        }
+        for path, replacement in omissions.items():
+            with self.subTest(path=path):
+                files = self.allowed_files()
+                files[path] = replacement
+                findings = verifier.check(files, SCOPES)
+                self.assertIn("rust-built-archive", categories(findings))
+                self.assertIn(path, [finding.path for finding in findings])
 
     def test_new_macos_archive_fails_default_blocking(self):
         files = self.allowed_files()
@@ -772,6 +795,32 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
         files["third_party/BUILD.wgpu_native_platform"] = files["third_party/BUILD.wgpu_native_platform"].replace(
             'srcs = ["lib/libwgpu_native.so"]',
             'srcs = ["lib/libwgpu_native.so", "lib/libwgpu_native.dylib"]',
+        )
+        self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
+
+    def test_each_wrapper_alias_link_is_required(self):
+        removals = (
+            (':webgpu_cpp', ':missing_wrapper'),
+            (':wgpu_native_platform', ':missing_platform'),
+            (':wgpu_native_linux', ':missing_linux'),
+            ('@wgpu_native_linux_aarch64//:wgpu_native', '@missing_archive//:wgpu_native'),
+        )
+        for old, new in removals:
+            with self.subTest(edge=old):
+                files = self.allowed_files()
+                files["third_party/webgpu-cpp/BUILD.bazel"] = files[
+                    "third_party/webgpu-cpp/BUILD.bazel"
+                ].replace(old, new)
+                findings = verifier.check(files, SCOPES)
+                self.assertIn("rust-built-archive", categories(findings))
+
+    def test_label_in_tags_does_not_count_as_wrapper_dependency(self):
+        files = self.allowed_files()
+        files["third_party/webgpu-cpp/BUILD.bazel"] = files[
+            "third_party/webgpu-cpp/BUILD.bazel"
+        ].replace(
+            'deps = [":wgpu_native_platform"],',
+            'deps = [],\n    tags = [":wgpu_native_platform"],',
         )
         self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
         files = self.allowed_files()

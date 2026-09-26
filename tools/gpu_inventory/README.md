@@ -116,7 +116,9 @@ scopes and the verifier enforces the boundary of each:
 - `testOnlyGpuOracleArchives` - the exact Linux aarch64 and x86_64 wgpu-native
   release assets and reviewed SHA-256 pins for the sole resvg comparison lane.
   The verifier checks the fetch rule, root module names, Linux-only overlay,
-  test-only runtime, and resvg test consumer as one narrow boundary.
+  test-only wrapper alias chain, and resvg test consumer as one narrow declared
+  boundary. The separate configured closure receipt proves the selected Linux
+  oracle actually reaches that archive.
 
 The visibility check reads the raw file and fails closed on anything it cannot
 parse as a literal list of quoted labels, a comment included: a comment
@@ -129,9 +131,10 @@ elsewhere, is a finding.
 The Lint workflow runs `--blocking default`, which includes
 `rust-built-archive`. The two pinned Linux test-oracle archives are its only
 exception; an extra archive, production reference, or missing test-only guard
-fails. On the pre-cutover four-archive tree this check intentionally reports
-four blocking archive findings until the macOS fetch, overlay, module, and
-runtime references are removed.
+fails. On the pre-cutover tree this check intentionally reports five blocking
+archive findings: the macOS fetch, overlay, module, and runtime references,
+plus the missing direct resvg test consumer edge. The source cutover resolves
+these sites together.
 
 Bazel files are scanned for Rust rule-set names and, outside comments, for bare
 `cargo`, `rustc`, and `rustup` commands, because a `genrule` command or a `.bzl`

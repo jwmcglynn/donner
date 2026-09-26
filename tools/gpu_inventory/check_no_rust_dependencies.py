@@ -535,6 +535,11 @@ def _rule_blocks(text: str) -> list[tuple[str, str, str]]:
     return result
 
 
+def _rule_has_edge(body: str, token: str, attribute: str) -> bool:
+    return any(token in line and owner == attribute
+               for line, owner in zip(body.splitlines(), attribute_of_each_line(body)))
+
+
 def _archive_fetch_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
     expected = _archive_allowlist(scopes)
     required_names = {"wgpu_native_linux_aarch64", "wgpu_native_linux_x86_64"}
@@ -605,6 +610,12 @@ def _archive_runtime_findings(path: str, text: str, scopes: RustScopes) -> list[
        "//visibility:public" in reference or \
        "//donner/svg/renderer/tests:__pkg__" not in reference:
         return _archive_finding(path, "reference runtime lacks Linux-only compatibility or narrow test visibility")
+    if not _rule_has_edge(blocks["webgpu_cpp"][1], ":wgpu_native_platform", "deps") or \
+       not _rule_has_edge(blocks["wgpu_native_platform"][1], ":wgpu_native_linux", "actual") or \
+       any(not _rule_has_edge(blocks["wgpu_native_linux"][1],
+                              "@" + name + "//:wgpu_native", "actual")
+           for name in expected_names):
+        return _archive_finding(path, "test-only wrapper-to-Linux-archive alias chain is incomplete")
     return []
 
 
@@ -620,9 +631,9 @@ def _archive_consumer_findings(path: str, text: str) -> list[Finding]:
 
 def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
     """Allow only the checksum-pinned Linux test oracle's complete build boundary."""
-    active = text_without_comments(text)
-    if not tokens_in(active, RUST_BUILT_ARCHIVE_TOKENS):
-        return []
+    # These five files are the complete allowed boundary. Inspect them even if
+    # their last Rust token was deleted: absence of the required oracle edge is
+    # a failure, not a clean scan.
     if path == ARCHIVE_FETCH_RULE:
         return _archive_fetch_findings(path, text, scopes)
     if path == ARCHIVE_MODULE:
@@ -633,6 +644,9 @@ def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> lis
         return _archive_runtime_findings(path, text, scopes)
     if path == ARCHIVE_ORACLE_CONSUMER:
         return _archive_consumer_findings(path, text)
+    active = text_without_comments(text)
+    if not tokens_in(active, RUST_BUILT_ARCHIVE_TOKENS):
+        return []
     attributes = attribute_of_each_line(text)
     for line, attribute in zip(active.splitlines(), attributes):
         if tokens_in(line, RUST_BUILT_ARCHIVE_TOKENS) and \
