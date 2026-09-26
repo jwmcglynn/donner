@@ -5,6 +5,9 @@
 
 #include <array>
 #include <fstream>
+#include <span>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #define STBTT_DEF extern
@@ -43,6 +46,19 @@ void writeBigEndianU32(std::span<uint8_t> data, size_t offset, uint32_t value) {
   data[offset + 1] = static_cast<uint8_t>(value >> 16);
   data[offset + 2] = static_cast<uint8_t>(value >> 8);
   data[offset + 3] = static_cast<uint8_t>(value);
+}
+
+// Build a complete header and an exact-length directory so truncation reaches our preflight
+// rather than being hidden by trailing padding or by the WOFF2 decoder's allocation path.
+std::vector<uint8_t> woff2PreflightInput(std::span<const uint8_t> directory,
+                                         uint32_t flavor = 0x00010000u) {
+  const auto header = minimalWoff2Header();
+  std::vector<uint8_t> data(header.begin(), header.end());
+  data.insert(data.end(), directory.begin(), directory.end());
+  writeBigEndianU32(data, 4, flavor);
+  writeBigEndianU32(data, 8, static_cast<uint32_t>(data.size()));
+  writeBigEndianU32(data, 16, 1024u);
+  return data;
 }
 
 size_t writeBase128(std::span<uint8_t> data, size_t offset, uint32_t value) {
@@ -210,6 +226,123 @@ TEST(Woff2ParserTest, RejectsNonzeroReservedFieldBeforeDecompression) {
   auto result = Woff2Parser::Decompress(data);
   ASSERT_TRUE(result.hasError());
   EXPECT_EQ(result.error().reason, "WOFF2: reserved header field must be zero");
+}
+
+TEST(Woff2ParserTest, RejectsMalformedTableDirectoriesBeforeDecoderEntry) {
+  const std::vector<std::pair<std::string_view, std::vector<uint8_t>>> cases = {
+      {"missing flags", {}},
+      {"truncated explicit tag", {0x3F, 0x67, 0x6C, 0x79}},
+      {"missing length", {0}},
+      {"forbidden base128 leading zero", {0, 0x80}},
+      {"base128 exceeds five bytes", {0, 0x81, 0x80, 0x80, 0x80, 0x80}},
+      {"transformed glyf missing length", {10, 1}},
+      {"transformed loca has a nonzero length", {11, 1, 1}},
+      {"transformed non-glyf missing length", {0x40, 1}},
+  };
+  for (const auto& [scenario, directory] : cases) {
+    SCOPED_TRACE(scenario);
+    const auto result = Woff2Parser::Decompress(woff2PreflightInput(directory));
+    ASSERT_TRUE(result.hasError());
+    EXPECT_EQ(result.error().reason, "WOFF2: invalid table directory");
+  }
+}
+
+TEST(Woff2ParserTest, CatalogRejectsWrongFlavorAndCffTablesBeforeDecoderEntry) {
+  Woff2Parser::Options options;
+  options.requireTrueTypeOutlines = true;
+  struct Case {
+    std::string_view scenario;
+    std::vector<uint8_t> directory;
+    uint32_t flavor;
+    std::string_view reason;
+  };
+  const std::array cases = {
+      Case{"wrong standalone flavor",
+           {0, 1},
+           0x4F54544Fu,
+           "WOFF2: catalog requires standalone TrueType outlines"},
+      Case{"known CFF tag",
+           {13, 1},
+           0x00010000u,
+           "WOFF2: catalog requires TrueType outlines without CFF tables"},
+      Case{"explicit CFF2 tag",
+           {0x3F, 0x43, 0x46, 0x46, 0x32, 1},
+           0x00010000u,
+           "WOFF2: catalog requires TrueType outlines without CFF tables"},
+  };
+  for (const Case& testCase : cases) {
+    SCOPED_TRACE(testCase.scenario);
+    const auto result =
+        Woff2Parser::Decompress(woff2PreflightInput(testCase.directory, testCase.flavor), options);
+    ASSERT_TRUE(result.hasError());
+    EXPECT_EQ(result.error().reason, testCase.reason);
+  }
+}
+
+TEST(Woff2ParserTest, RejectsMalformedCollectionDirectoriesBeforeDecoderEntry) {
+  constexpr uint32_t kCollectionFlavor = 0x74746366u;  // ttcf
+  struct Case {
+    std::string_view scenario;
+    std::vector<uint8_t> directory;
+    std::string_view reason;
+  };
+  const std::array cases = {
+      Case{"missing version", {0, 1}, "WOFF2: invalid collection directory"},
+      Case{"unsupported version", {0, 1, 0, 3, 0, 0, 1}, "WOFF2: invalid collection directory"},
+      Case{"zero fonts", {0, 1, 0, 1, 0, 0, 0}, "WOFF2: invalid collection directory"},
+      Case{"truncated 16-bit font count",
+           {0, 1, 0, 1, 0, 0, 253, 1},
+           "WOFF2: invalid collection directory"},
+      Case{"truncated high font count",
+           {0, 1, 0, 1, 0, 0, 254},
+           "WOFF2: invalid collection directory"},
+      Case{"truncated medium font count",
+           {0, 1, 0, 1, 0, 0, 255},
+           "WOFF2: invalid collection directory"},
+      Case{"16-bit font count over limit",
+           {0, 1, 0, 1, 0, 0, 253, 1, 1},
+           "WOFF2: collection font count exceeds limit"},
+      Case{"high font count over limit",
+           {0, 1, 0, 1, 0, 0, 254, 0},
+           "WOFF2: collection font count exceeds limit"},
+      Case{"medium font count over limit",
+           {0, 1, 0, 1, 0, 0, 255, 4},
+           "WOFF2: collection font count exceeds limit"},
+      Case{"zero tables in font", {0, 1, 0, 1, 0, 0, 1, 0}, "WOFF2: invalid collection directory"},
+      Case{
+          "truncated font flavor", {0, 1, 0, 1, 0, 0, 1, 1}, "WOFF2: invalid collection directory"},
+      Case{"table references over limit",
+           {0, 1, 0, 1, 0, 0, 1, 253, 0x40, 1, 0, 1, 0, 0},
+           "WOFF2: collection table references exceed limit"},
+      Case{"missing table index",
+           {0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0},
+           "WOFF2: invalid collection directory"},
+      Case{"table index beyond directory",
+           {0, 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1},
+           "WOFF2: invalid collection directory"},
+  };
+  for (const Case& testCase : cases) {
+    SCOPED_TRACE(testCase.scenario);
+    const auto result =
+        Woff2Parser::Decompress(woff2PreflightInput(testCase.directory, kCollectionFlavor));
+    ASSERT_TRUE(result.hasError());
+    EXPECT_EQ(result.error().reason, testCase.reason);
+  }
+}
+
+TEST(Woff2ParserTest, CompleteCollectionDirectoryPassesResourcePreflight) {
+  constexpr uint32_t kCollectionFlavor = 0x74746366u;  // ttcf
+  const std::array<uint8_t, 13> directory = {
+      0, 1,        // One table with a one-byte original length.
+      0, 1, 0, 0,  // TTC version 1.0.
+      1,           // One font.
+      1,           // One table reference.
+      0, 1, 0, 0,  // TrueType flavor.
+      0,           // Reference to table zero.
+  };
+  const auto result = Woff2Parser::Decompress(woff2PreflightInput(directory, kCollectionFlavor));
+  ASSERT_TRUE(result.hasError());  // The intentionally absent Brotli stream still fails decode.
+  EXPECT_EQ(result.error().reason, "WOFF2: decompression failed");
 }
 
 TEST(Woff2ParserTest, RejectsMalformedStreamWithoutAllocatingDeclaredOutput) {
