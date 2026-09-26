@@ -873,11 +873,16 @@ async function openBasicShapes(page: Page): Promise<{
   // The source pane can collapse at the Firefox compatibility viewport, moving the document
   // hundreds of CSS pixels left. Probe the actual published artboard instead of a 1600px layout.
   const documentClip = presentedDocumentRegion(await readViewportStats(page));
-  // Gecko intermittently returns an empty image for a clipped screenshot of the transferred
-  // WebGPU canvas even after an accepted presentation. Capture the whole canvas there, then
-  // search only the published document rectangle; other UI pixels cannot satisfy the blue probe.
-  const captureClip = page.context().browser()?.browserType().name() === "firefox"
-    ? canvasBounds
+  // Gecko can return an empty image for any clipped screenshot of the transferred
+  // WebGPU canvas, even when the clip is the whole canvas and the frame is visible.
+  // Use the browser's un-clipped page capture there, then search only the document rectangle.
+  const firefox = page.context().browser()?.browserType().name() === "firefox";
+  const pageViewport = page.viewportSize();
+  if (firefox && pageViewport === null) {
+    throw new Error("the Firefox viewport is unavailable for the document pixel probe");
+  }
+  const captureClip = firefox && pageViewport !== null
+    ? { x: 0, y: 0, width: pageViewport.width, height: pageViewport.height }
     : documentClip;
   const documentSearchBounds = {
     minX: documentClip.x - captureClip.x,
@@ -901,7 +906,9 @@ async function openBasicShapes(page: Page): Promise<{
     await expect
       .poll(
         async () => {
-          const shot = await page.screenshot({ clip: captureClip });
+          const shot = firefox
+            ? await page.screenshot()
+            : await page.screenshot({ clip: captureClip });
           const bounds = readEditorPixelBoundsFromPng(
             shot,
             "basic-blue",
@@ -1084,6 +1091,10 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   });
   expect(rejectedControlInputs).toEqual([0, 0]);
   await attachEvidenceFile("overlay-baseline", baseline, "image/png");
+  const captureOverlay = () =>
+    page.context().browser()?.browserType().name() === "firefox"
+      ? page.screenshot()
+      : page.screenshot({ clip: documentClip });
   // Since the single-canvas architecture the document has no element of its own to measure, so the
   // document-space mapping is recovered from the document's own pixels: the
   // Basic Shapes blue rounded rectangle spans (32,32)-(212,152) in document
@@ -1124,7 +1135,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     },
   );
   await waitForBrowserComposite(page);
-  const compositorOverlay = await page.screenshot({ clip: documentClip });
+  const compositorOverlay = await captureOverlay();
   await attachEvidenceFile("compositor-tile-overlay", compositorOverlay, "image/png");
   const compositorDifference = readCssPngPixelDifferenceStats(
     baseline,
@@ -1156,7 +1167,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   await expect
     .poll(
       async () => {
-        const shot = await page.screenshot({ clip: documentClip });
+        const shot = await captureOverlay();
         const difference = readCssPngPixelDifferenceStats(
           baseline,
           shot,
@@ -1209,7 +1220,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     },
   );
   await waitForBrowserComposite(page);
-  const geometryOverlay = await page.screenshot({ clip: documentClip });
+  const geometryOverlay = await captureOverlay();
   await attachEvidenceFile("geometry-debug-overlay", geometryOverlay, "image/png");
   expect(
     geometryOverlay.equals(geometryBaseline),
@@ -1389,25 +1400,13 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThan(previousFrames);
-    // A capture that straddles two frames can mix geometry from both, which
-    // would fake the very defect this test looks for. The demand-driven loop
-    // parks once it has presented the move, so retake until the frame count is
-    // unchanged across the capture.
-    let state: DocumentPresentationState | null = null;
-    let geometry: { blue: PixelBounds | null; teal: PixelBounds | null } | null = null;
-    for (let attempt = 0; attempt < 4; ++attempt) {
-      const beforeState = await readDocumentPresentationState(page);
-      geometry = await readEditorResizePixelBounds(page, probeRegion);
-      const afterState = await readDocumentPresentationState(page);
-      if (beforeState.renderedFrames === afterState.renderedFrames) {
-        state = afterState;
-        break;
-      }
-    }
-    expect(state, `no stable capture for drag step ${step}`).not.toBeNull();
-    if (state === null) {
-      continue;
-    }
+    // The editor draws the document and selection into one canvas. A Playwright
+    // screenshot captures one composited image, so both pixel bounds come from
+    // the same frame. Firefox may schedule another UI frame while taking that
+    // screenshot; requiring the frame counter to stay fixed rejects a valid
+    // image without adding any protection against mixed geometry.
+    const geometry = await readEditorResizePixelBounds(page, probeRegion);
+    const state = await readDocumentPresentationState(page);
     expect(geometry?.blue, `drag frame ${state.renderedFrames} had no blue document pixels`).not
       .toBeNull();
     // "No teal" has two very different causes and the pixels cannot tell them

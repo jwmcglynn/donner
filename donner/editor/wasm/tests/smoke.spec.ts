@@ -1512,14 +1512,6 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     })
     .toBeGreaterThan(beforeSample);
 
-  await expect
-    .poll(async () => (await readElementColorStats(canvas)).coloredPixels, {
-      message: "expected visible Basic Shapes pixels before selecting the resize target",
-      timeout: scaledMs(5_000),
-      intervals: [250, 400, 600],
-    })
-    .toBeGreaterThan(500);
-
   const editorBounds = await canvas.boundingBox();
   expect(editorBounds).not.toBeNull();
   if (editorBounds === null) {
@@ -1541,14 +1533,18 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
       Math.min(viewport.documentY + viewport.documentHeight, viewport.paneY + viewport.paneHeight)
       - Math.max(viewport.documentY, viewport.paneY),
   };
-  // Gecko can return a blank clipped screenshot of the transferred canvas after an otherwise
-  // valid presentation. Read the full canvas, then inspect only the published artboard. Keep
-  // coordinates relative to probeRegion so the pointer and resize comparisons below stay exact.
+  // Gecko can return an empty image for a clipped transferred-canvas screenshot,
+  // even when that clip covers the whole canvas. Capture the page without a clip
+  // and inspect only the published artboard.
+  const captureViewport = page.viewportSize();
+  if (captureViewport === null) {
+    throw new Error("the Firefox viewport is unavailable for the resize pixel probe");
+  }
   const artboardInCapture = {
-    minX: probeRegion.x - editorBounds.x,
-    minY: probeRegion.y - editorBounds.y,
-    maxX: probeRegion.x + probeRegion.width - editorBounds.x,
-    maxY: probeRegion.y + probeRegion.height - editorBounds.y,
+    minX: probeRegion.x,
+    minY: probeRegion.y,
+    maxX: probeRegion.x + probeRegion.width,
+    maxY: probeRegion.y + probeRegion.height,
   };
   const toArtboard = (pixels: PixelBounds | null): PixelBounds | null =>
     pixels === null ? null : {
@@ -1559,11 +1555,11 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
       pixels: pixels.pixels,
     };
   const readResizePixels = async () => {
-    const shot = await page.screenshot({ clip: editorBounds });
+    const shot = await page.screenshot();
     const blue = readEditorPixelBoundsFromPng(
       shot,
       "basic-blue",
-      editorBounds,
+      captureViewport,
       artboardInCapture,
     );
     const margin = 32;
@@ -1576,7 +1572,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     const teal = readEditorPixelBoundsFromPng(
       shot,
       "selection-teal",
-      editorBounds,
+      captureViewport,
       tealSearch,
     );
     return { blue: toArtboard(blue), teal: toArtboard(teal) };

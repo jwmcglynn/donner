@@ -792,20 +792,38 @@ export async function readEditorResizePixelBounds(
   page: Page,
   region: CssRegion,
 ): Promise<{ blue: PixelBounds | null; teal: PixelBounds | null }> {
-  const image = decodePng(await page.screenshot({ clip: region }));
-  const blue = findPixelBounds(image, "basic-blue");
-  const selectionSearchMargin = 32;
-  return {
-    blue,
-    teal: blue === null
-      ? findPixelBounds(image, "selection-teal")
-      : findPixelBounds(image, "selection-teal", {
-        minX: blue.minX - selectionSearchMargin,
-        minY: blue.minY - selectionSearchMargin,
-        maxX: blue.maxX + selectionSearchMargin,
-        maxY: blue.maxY + selectionSearchMargin,
-      }),
+  const viewport = page.viewportSize();
+  if (viewport === null) {
+    throw new Error("the browser viewport is unavailable for the resize pixel probe");
+  }
+  // Firefox can return an empty clipped WebGPU canvas capture while the same
+  // frame is visible in a full-page screenshot. Take one un-clipped image and
+  // constrain both color searches to the published document rectangle.
+  const shot = await page.screenshot();
+  const documentBounds = {
+    minX: region.x,
+    minY: region.y,
+    maxX: region.x + region.width,
+    maxY: region.y + region.height,
   };
+  const blue = readEditorPixelBoundsFromPng(shot, "basic-blue", viewport, documentBounds);
+  const selectionSearchMargin = 32;
+  const tealBounds = blue === null ? documentBounds : {
+    minX: Math.max(documentBounds.minX, blue.minX - selectionSearchMargin),
+    minY: Math.max(documentBounds.minY, blue.minY - selectionSearchMargin),
+    maxX: Math.min(documentBounds.maxX, blue.maxX + selectionSearchMargin),
+    maxY: Math.min(documentBounds.maxY, blue.maxY + selectionSearchMargin),
+  };
+  const teal = readEditorPixelBoundsFromPng(shot, "selection-teal", viewport, tealBounds);
+  const relativeToDocument = (bounds: PixelBounds | null): PixelBounds | null =>
+    bounds === null ? null : {
+      minX: bounds.minX - region.x,
+      minY: bounds.minY - region.y,
+      maxX: bounds.maxX - region.x,
+      maxY: bounds.maxY - region.y,
+      pixels: bounds.pixels,
+    };
+  return { blue: relativeToDocument(blue), teal: relativeToDocument(teal) };
 }
 
 export interface EditorBackgroundCoverageStats {
