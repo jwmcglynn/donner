@@ -111,7 +111,8 @@ struct GeodePathCacheComponent {
       return *pathBytes + encodedBytes + dashBytes;
     }
   };
-  std::optional<StrokeSlot> strokeSlot;
+  std::optional<StrokeSlot>
+      strokeSlot;  //!< Cached encoded stroke geometry and its resident GPU resources.
   /// Live retained-byte charge for `strokeSlot`.
   GeodeGeometryCacheReservation strokeReservation;
 };

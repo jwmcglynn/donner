@@ -31,8 +31,10 @@ class VulkanSurfaceRetirement;
 /// owner observes that poison and retains the complete device graph, including every prerequisite
 /// of leaked native handles. The live count catches a child that escaped the owner's containers.
 struct VulkanSurfaceLifetime {
-  std::atomic<bool> unproven{false};
-  std::atomic<size_t> liveChildren{0};
+  std::atomic<bool> unproven{
+      false};  //!< Whether outstanding surface work lacks a completion proof.
+  std::atomic<size_t> liveChildren{
+      0};  //!< Number of live swapchain children retaining this surface lifetime.
 };
 
 /// Converts native surface formats into the formats the runtime can present.
@@ -68,11 +70,11 @@ inline constexpr VkPipelineStageFlags kAcquireWaitStage =
 /// The synchronization state a frame is in the moment it is acquired.
 ///
 /// Its contents are undefined, and the last thing to have touched it is the presentation engine's
-/// read, which the acquisition semaphore orders against \ref kAcquireWaitStage. Recording that
-/// stage rather than the top of the pipe is what places the frame's first layout transition after
-/// the wait; a transition from the top of the pipe is a write the wait does not cover, which
-/// synchronization validation reports as a write-after-read hazard against the presentation
-/// engine.
+/// read, which the acquisition semaphore orders against \ref donner::gpu::vulkan::kAcquireWaitStage
+/// "kAcquireWaitStage". Recording that stage rather than the top of the pipe is what places the
+/// frame's first layout transition after the wait; a transition from the top of the pipe is a write
+/// the wait does not cover, which synchronization validation reports as a write-after-read hazard
+/// against the presentation engine.
 inline TextureSyncState AcquiredFrameSyncState() {
   return TextureSyncState{VK_IMAGE_LAYOUT_UNDEFINED, kAcquireWaitStage, 0};
 }

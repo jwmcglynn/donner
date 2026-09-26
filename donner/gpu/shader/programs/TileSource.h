@@ -3,6 +3,7 @@
 /// Authoritative WGSL for feTile.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for feTile.
 inline constexpr wgsl::SourceText kTileSource{R"wgsl(struct TileParams {
   srcX: i32,
   srcY: i32,

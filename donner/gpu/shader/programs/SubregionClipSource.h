@@ -3,6 +3,7 @@
 /// Authoritative WGSL for per-primitive subregion clipping.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for per-primitive subregion clipping.
 inline constexpr wgsl::SourceText kSubregionClipSource{R"wgsl(struct SubregionClipParams {
   invA: f32,
   invB: f32,

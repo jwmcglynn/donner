@@ -1,6 +1,8 @@
 #pragma once
+// The umbrella header lists every SVG element directly; a full graph duplicates that inventory.
 /**
  * @file
+ * @hideincludegraph
  *
  * A single include that covers all SVG element types, plus \ref donner::svg::AllSVGElements which
  * can be used to perform constexpr lookups across all element types.

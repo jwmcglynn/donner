@@ -124,7 +124,7 @@ private:
 
 /**
  * Status of a fallible shader IR operation with no result value. Construct success values with
- * \ref OkShaderStatus().
+ * \ref donner::gpu::shader::OkShaderStatus "OkShaderStatus()".
  */
 using ShaderStatus = ShaderResult<std::monostate>;
 

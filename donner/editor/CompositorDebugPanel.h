@@ -79,6 +79,7 @@ public:
   /// @param coverageDiagnostics Active bounded-raster and overview-infill presentation coverage.
   /// @param fastPath Fast-path counters rendered as a summary line
   ///   above the table.
+  /// @param renderStats Renderer counters shown beside compositor diagnostics.
   void render(std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles,
               const svg::compositor::CompositorController::StateSnapshot& state,
               Entity workerCompositorEntity, double viewportZoom, double viewportDpr,

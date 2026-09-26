@@ -69,5 +69,3 @@ spec is what makes the two suites read as a set.
    art fails the build.
 3. Icons: add a case in `ToolbarIconSet.cc` (`ToolbarIcon` enum + SVG map). The
    registry-coverage test iterates the enum.
-</content>
-</invoke>

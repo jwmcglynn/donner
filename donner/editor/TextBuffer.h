@@ -106,6 +106,7 @@ struct Glyph {
  * This inherits from std::vector<Glyph> purely for convenience.
  */
 struct Line : public std::vector<Glyph> {
+  /// Glyph storage underlying a line of text.
   using Base = std::vector<Glyph>;
 
   // Convenience method to insert a glyph at an arbitrary iterator position
@@ -137,6 +138,7 @@ inline int CountLeadingWhitespace(const Line& line, int tabSize) {
  */
 class TextBuffer {
 public:
+  /// Ordered line storage for the text buffer.
   using Lines = std::vector<Line>;
 
   /**

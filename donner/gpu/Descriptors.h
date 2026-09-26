@@ -117,6 +117,7 @@ enum class NativeSurfaceKind : uint8_t {
   MetalLayer,      //!< Core Animation Metal layer.
   XlibWindow,      //!< X11 display plus window id.
   WaylandSurface,  //!< Wayland display plus surface.
+
   /// CSS selector naming a browser canvas element.
   ///
   /// A browser drives presentation from its own frame loop, so a surface of this kind presents

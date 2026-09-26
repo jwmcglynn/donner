@@ -7,6 +7,7 @@
 namespace donner::gpu::shader::programs {
 
 /// Matrix convolution over a bounded coefficient array and sampled input image.
+/// Authored WGSL for SVG matrix convolution.
 inline constexpr wgsl::SourceText kConvolveMatrixSource = R"wgsl(
 struct ConvolveMatrixParams {
   orderX: i32,

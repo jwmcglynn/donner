@@ -12,19 +12,20 @@ namespace donner::gpu::shader {
 /**
  * Emits deterministic MSL text for \p module.
  *
- * Follows the same determinism discipline as \ref EmitWgsl: declaration-order emission with
- * dependency-ordered struct definitions, two-space indentation, LF-only lines with no trailing
- * whitespace, shortest-round-trip float formatting (C++-legal: a `.0` is added when the shortest
- * form has no decimal point or exponent, then `f`), and fully parenthesized subexpressions.
+ * Follows the same determinism discipline as \ref donner::gpu::shader::EmitWgsl "EmitWgsl":
+ * declaration-order emission with dependency-ordered struct definitions, two-space indentation,
+ * LF-only lines with no trailing whitespace, shortest-round-trip float formatting (C++-legal: a
+ * `.0` is added when the shortest form has no decimal point or exponent, then `f`), and fully
+ * parenthesized subexpressions.
  *
  * Mapping highlights:
  * - Types: f32 -> float, vecN<T> -> floatN/intN/uintN/boolN, mat4x4f -> float4x4, sized arrays
  *   -> C arrays, structs -> C++ structs. Direct array-valued array elements are rejected.
  *   The MSL natural layout of every buffer-referenced
  *   struct is verified member-by-member against the WGSL layout engine
- *   (\ref ComputeStructLayout); any divergence (for example MSL's 16-byte float3, or a uniform
- *   array whose WGSL stride was padded to 16) fails closed instead of emitting a silently
- *   mismatched layout.
+ *   (\ref donner::gpu::shader::ComputeStructLayout "ComputeStructLayout"); any divergence (for
+ * example MSL's 16-byte float3, or a uniform array whose WGSL stride was padded to 16) fails closed
+ * instead of emitting a silently mismatched layout.
  * - Bindings use the argument-table map in MslBindingMap.h. MSL has no module-scope resources,
  *   so every module binding becomes a parameter: entry points receive them with
  *   `[[buffer]]`/`[[texture]]`/`[[sampler]]` attributes, plain functions receive them as leading

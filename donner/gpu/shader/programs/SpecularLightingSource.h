@@ -3,6 +3,7 @@
 /// Authoritative WGSL for Phong specular lighting over an alpha height map.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for Phong specular lighting over an alpha height map.
 inline constexpr wgsl::SourceText kSpecularLightingSource{R"wgsl(struct LightingParams {
   surfaceScale: f32,
   lightingConstant: f32,

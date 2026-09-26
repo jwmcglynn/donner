@@ -463,6 +463,7 @@ private:
   /// call into the backend, so it is atomic and outlives this record through a reference count
   /// the callback also holds.
   struct MappingSlot {
+    /// Shared completion state for an asynchronous buffer mapping.
     struct Completion {
       std::atomic<int> references{2};  //!< This record and the pending callback.
       std::atomic<bool> done{false};   //!< Set once the callback has run.

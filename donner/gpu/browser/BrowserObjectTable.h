@@ -13,7 +13,7 @@
 
 namespace donner::gpu::browser {
 
-/// Kind of browser object a \ref BrowserObjectId names.
+/// Kind of browser object a \ref donner::gpu::browser::BrowserObjectId "BrowserObjectId" names.
 ///
 /// The kind travels with every identifier so the browser side can refuse an identifier that names
 /// a live object of the wrong kind, rather than calling a texture method on a buffer and
