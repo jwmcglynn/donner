@@ -58,6 +58,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import subprocess
 import sys
@@ -634,42 +635,100 @@ def _archive_consumer_findings(path: str, text: str) -> list[Finding]:
     return []
 
 
-def _geode_archive_reference_lines(text: str) -> list[str] | None:
-    active = text_without_comments(text)
-    attributes = attribute_of_each_line(text)
-    references = []
-    for line, attribute in zip(active.splitlines(), attributes):
-        if attribute in {"forbidden", "required", "tags"}:
-            continue
-        if tokens_in(line, RUST_BUILT_ARCHIVE_TOKENS):
-            if "wgpu_native_reference_runtime" not in line or attribute != "deps":
-                return None
-            references.append(line)
-    return references
+GEODE_ORACLE_RUNTIME = "//third_party/webgpu-cpp:wgpu_native_reference_runtime"
+GEODE_ORACLE_VISIBILITY = {
+    "geode_wgpu_util": ("//visibility:private",),
+    "geode_device_wgpu_reference_linux": (
+        "//donner/svg/renderer:__pkg__", "//donner/svg/renderer/tests:__pkg__",
+    ),
+}
 
 
-def _guarded_geode_reference(kind: str, body: str) -> bool:
-    return kind == "donner_cc_library" and \
-        re.search(r"\btestonly\s*=\s*(?:True|1)\b", body) is not None and \
-        "@platforms//os:linux" in body and "//visibility:public" not in body
+def _ast_keyword(call: ast.Call, name: str) -> ast.expr | None:
+    return next((keyword.value for keyword in call.keywords if keyword.arg == name), None)
+
+
+def _ast_string_list(node: ast.expr | None) -> tuple[str, ...] | None:
+    if not isinstance(node, ast.List) or any(
+        not isinstance(item, ast.Constant) or not isinstance(item.value, str)
+        for item in node.elts
+    ):
+        return None
+    return tuple(item.value for item in node.elts)
+
+
+def _geode_archive_literals(node: ast.AST | None) -> list[str]:
+    if node is None:
+        return []
+    return [item.value for item in ast.walk(node)
+            if isinstance(item, ast.Constant) and isinstance(item.value, str) and
+            tokens_in(item.value, RUST_BUILT_ARCHIVE_TOKENS)]
+
+
+def _geode_reference_deps(call: ast.Call, name: str) -> tuple[str, ...] | None:
+    node = _ast_keyword(call, "deps")
+    if name == "geode_device_wgpu_reference_linux":
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Add) or \
+           not isinstance(node.left, ast.Name) or node.left.id != "_GEODE_DEVICE_COMMON_DEPS":
+            return None
+        node = node.right
+    return _ast_string_list(node)
+
+
+def _guarded_geode_reference(call: ast.Call, name: str) -> bool:
+    testonly = _ast_keyword(call, "testonly")
+    if not isinstance(testonly, ast.Constant) or testonly.value not in (True, 1):
+        return False
+    compatible = _ast_keyword(call, "target_compatible_with")
+    if isinstance(compatible, ast.BinOp) and isinstance(compatible.op, ast.Add) and \
+       isinstance(compatible.left, ast.Name) and compatible.left.id == "_GEODE_ONLY":
+        compatible = compatible.right
+    if _ast_string_list(compatible) != ("@platforms//os:linux",):
+        return False
+    if _ast_string_list(_ast_keyword(call, "visibility")) != GEODE_ORACLE_VISIBILITY[name]:
+        return False
+    expected_deps = (GEODE_ORACLE_RUNTIME,) if name == "geode_wgpu_util" else (
+        ":geode_wgpu_util", GEODE_ORACLE_RUNTIME,
+    )
+    return _geode_reference_deps(call, name) == expected_deps
+
+
+def _geode_archive_call_name(call: ast.Call, literals: list[str]) -> str | None:
+    kind = call.func.id if isinstance(call.func, ast.Name) else ""
+    if kind == "configured_dependency_audit_test":
+        if sorted(literals) != sorted(_geode_archive_literals(_ast_keyword(call, "forbidden"))):
+            raise ValueError("archive labels escaped an audit forbidden list")
+        return None
+    name_node = _ast_keyword(call, "name")
+    name = name_node.value if isinstance(name_node, ast.Constant) else ""
+    if kind != "donner_cc_library" or name not in GEODE_ORACLE_VISIBILITY or \
+       literals != [GEODE_ORACLE_RUNTIME] or not _guarded_geode_reference(call, name):
+        raise ValueError("unexpected Geode archive or production reference")
+    return name
+
+
+def _geode_statement_consumer(statement: ast.stmt, index: int) -> str | None:
+    if index == 0 and isinstance(statement, ast.Expr) and \
+       isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
+        return None  # BUILD module docstring, not an executable reference.
+    literals = _geode_archive_literals(statement)
+    if not literals:
+        return None
+    if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+        raise ValueError("unexpected Geode archive or production reference")
+    return _geode_archive_call_name(statement.value, literals)
 
 
 def _archive_geode_consumer_findings(path: str, text: str) -> list[Finding]:
     """Only the two Linux test-only Geode leaves may name the oracle runtime."""
-    references = _geode_archive_reference_lines(text)
-    if references is None:
-        return _archive_finding(path, "unexpected Geode archive or production reference")
-    if not references:
-        return []
-    allowed = {"geode_wgpu_util", "geode_device_wgpu_reference_linux"}
-    consumers = [(kind, name, body) for kind, name, body in _rule_blocks(text)
-                 if _rule_has_edge(body, "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
-                                   "deps")]
-    if len(references) != 2 or len(consumers) != 2 or {name for _, name, _ in consumers} != allowed:
+    try:
+        tree = ast.parse(text)
+        consumers = [name for index, statement in enumerate(tree.body)
+                     if (name := _geode_statement_consumer(statement, index)) is not None]
+    except (SyntaxError, ValueError) as error:
+        return _archive_finding(path, str(error))
+    if consumers and (len(consumers) != 2 or set(consumers) != set(GEODE_ORACLE_VISIBILITY)):
         return _archive_finding(path, "only the two Linux Geode test leaves may consume the runtime")
-    for kind, name, body in consumers:
-        if not _guarded_geode_reference(kind, body):
-            return _archive_finding(path, f"{name} must remain a Linux-compatible test-only leaf")
     return []
 
 

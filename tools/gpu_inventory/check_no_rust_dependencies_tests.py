@@ -735,8 +735,10 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 'donner_cc_library(\n    name = "geode_device_wgpu_reference_linux",\n'
                 '    testonly = 1,\n'
                 '    target_compatible_with = ["@platforms//os:linux"],\n'
-                '    visibility = ["//donner/svg/renderer/tests:__pkg__"],\n'
-                '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
+                '    visibility = ["//donner/svg/renderer:__pkg__", '
+                '"//donner/svg/renderer/tests:__pkg__"],\n'
+                '    deps = _GEODE_DEVICE_COMMON_DEPS + [":geode_wgpu_util", '
+                '"//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
                 'configured_dependency_audit_test(\n    name = "native_audit",\n'
                 '    forbidden = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
             ),
@@ -874,6 +876,27 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
         )
         for old, new in edits:
             with self.subTest(edit=old):
+                files = self.allowed_files()
+                files["donner/svg/renderer/geode/BUILD.bazel"] = files[
+                    "donner/svg/renderer/geode/BUILD.bazel"
+                ].replace(old, new, 1)
+                self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
+
+    def test_geode_rule_attribute_decoys_are_rejected(self):
+        edits = (
+            ('deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],',
+             'deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime", '
+             '"@wgpu_native_macos_aarch64//:wgpu_native"],'),
+            ('target_compatible_with = ["@platforms//os:linux"],',
+             'target_compatible_with = [],\n    tags = ["@platforms//os:linux"],'),
+            ('visibility = ["//visibility:private"],',
+             'visibility = ["//donner:__subpackages__"],'),
+            ('deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],',
+             'deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime", '
+             '"//third_party/webgpu-cpp:webgpu_cpp"],'),
+        )
+        for old, new in edits:
+            with self.subTest(decoy=new):
                 files = self.allowed_files()
                 files["donner/svg/renderer/geode/BUILD.bazel"] = files[
                     "donner/svg/renderer/geode/BUILD.bazel"
