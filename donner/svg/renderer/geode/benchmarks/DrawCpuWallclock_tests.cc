@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -45,11 +46,10 @@ void ReportSamples(const char* backend, gpu::Device& device) {
     const uint64_t recordMedianNs = recordingNs[kSamples / 2];
     const uint64_t submitMedianNs = submissionNs[kSamples / 2];
     std::fprintf(stderr,
-                 "gpu_draw_cpu backend=%s draws=%u samples=%u record_total_ns=%llu "
-                 "record_ns_per_draw=%.3f submit_total_ns=%llu submit_ns_per_draw=%.3f\n",
-                 backend, draws, kSamples, static_cast<unsigned long long>(recordMedianNs),
-                 static_cast<double>(recordMedianNs) / draws,
-                 static_cast<unsigned long long>(submitMedianNs),
+                 "gpu_draw_cpu backend=%s draws=%u samples=%u record_total_ns=%" PRIu64
+                 " record_ns_per_draw=%.3f submit_total_ns=%" PRIu64 " submit_ns_per_draw=%.3f\n",
+                 backend, draws, kSamples, recordMedianNs,
+                 static_cast<double>(recordMedianNs) / draws, submitMedianNs,
                  static_cast<double>(submitMedianNs) / draws);
   }
 }

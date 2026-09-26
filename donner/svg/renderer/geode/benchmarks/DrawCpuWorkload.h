@@ -66,101 +66,7 @@ public:
   /// Creates and uploads a small, valid fill scene before timing starts.
   bool initialize() {
     pipeline_ = std::make_unique<GeodePipeline>(device_, gpu::TextureFormat::RGBA8Unorm);
-    if (!take(device_.createTexture(gpu::TextureDescriptor{"drawCpuTarget",
-                                                           {16, 16},
-                                                           gpu::TextureFormat::RGBA8Unorm,
-                                                           gpu::TextureUsage::RenderAttachment}),
-              target_) ||
-        !take(device_.createTextureView(target_, {"drawCpuTargetView"}), targetView_) ||
-        !take(device_.createTexture(
-                  gpu::TextureDescriptor{"drawCpuSampled",
-                                         {1, 1},
-                                         gpu::TextureFormat::RGBA8Unorm,
-                                         gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst}),
-              sampled_) ||
-        !take(device_.createTextureView(sampled_, {"drawCpuSampledView"}), sampledView_) ||
-        !take(device_.createSampler(gpu::SamplerDescriptor{
-                  "drawCpuSampler", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
-                  gpu::AddressMode::Repeat, gpu::AddressMode::Repeat}),
-              sampler_)) {
-      return false;
-    }
-
-    const gpu::shader::CompiledShaderView& shader = gpu::shader::programs::SlugFillShader();
-    if (shader.resources.size() != 11) {
-      ADD_FAILURE() << "SlugFill resource count drifted: " << shader.resources.size();
-      return false;
-    }
-    uint64_t storageBytes = 1024;
-    for (const gpu::shader::ShaderResource& resource : shader.resources) {
-      if (resource.type == gpu::BindingType::ReadOnlyStorageBuffer) {
-        storageBytes = std::max(storageBytes, static_cast<uint64_t>(resource.minSizeBytes));
-      }
-    }
-    if (!take(device_.createBuffer(gpu::BufferDescriptor{
-                  "drawCpuUniform", sizeof(gpu::shader::programs::SlugFillParams),
-                  gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst}),
-              uniform_) ||
-        !take(device_.createBuffer(
-                  gpu::BufferDescriptor{"drawCpuStorage", storageBytes,
-                                        gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst}),
-              storage_)) {
-      return false;
-    }
-
-    gpu::shader::programs::SlugFillParams params{};
-    params.mvp[0] = params.mvp[5] = params.mvp[10] = params.mvp[15] = 1.0f;
-    params.patternFromPath[0] = params.patternFromPath[5] = 1.0f;
-    params.patternFromPath[10] = params.patternFromPath[15] = 1.0f;
-    params.viewport[0] = params.viewport[1] = 16.0f;
-    params.color[0] = params.color[3] = 1.0f;
-    params.boundingVertexCount = 3;
-    params.boundingVertices[0] = -0.5f;
-    params.boundingVertices[1] = -0.5f;
-    params.boundingVertices[2] = 0.5f;
-    params.boundingVertices[3] = -0.5f;
-    params.boundingVertices[4] = 0.0f;
-    params.boundingVertices[5] = 0.5f;
-    params.gridHStride = params.gridVStride = 1.0f;
-    params.pathFromPixel[0] = params.pathFromPixel[3] = 1.0f;
-    const std::span<const uint8_t> uniformData(reinterpret_cast<const uint8_t*>(&params),
-                                               sizeof(params));
-    const std::vector<uint8_t> zeroStorage(storageBytes, 0);
-    std::array<uint8_t, gpu::kTexelRowPitchAlignment> texelRow{};
-    texelRow[3] = 255;
-    if (!accept(device_.writeBuffer(uniform_, 0, uniformData)) ||
-        !accept(device_.writeBuffer(storage_, 0, zeroStorage)) ||
-        !accept(device_.writeTexture(sampled_, texelRow,
-                                     gpu::TexelCopyBufferLayout{0, gpu::kTexelRowPitchAlignment, 1},
-                                     gpu::Extent2d{1, 1}))) {
-      return false;
-    }
-
-    std::vector<gpu::BindGroupEntry> entries;
-    entries.reserve(shader.resources.size());
-    for (const gpu::shader::ShaderResource& resource : shader.resources) {
-      switch (resource.type) {
-        case gpu::BindingType::UniformBuffer:
-          entries.push_back({resource.binding, gpu::BufferBinding{uniform_, 0, sizeof(params)}});
-          break;
-        case gpu::BindingType::ReadOnlyStorageBuffer:
-          entries.push_back({resource.binding, gpu::BufferBinding{storage_, 0, storageBytes}});
-          break;
-        case gpu::BindingType::SampledTexture2dFloat:
-        case gpu::BindingType::SampledTexture2dUnfilterableFloat:
-          entries.push_back({resource.binding, gpu::TextureViewBinding{sampledView_}});
-          break;
-        case gpu::BindingType::FilteringSampler:
-          entries.push_back({resource.binding, gpu::SamplerBinding{sampler_}});
-          break;
-        default:
-          ADD_FAILURE() << "Unsupported SlugFill binding " << resource.name.view();
-          return false;
-      }
-    }
-    if (!take(device_.createBindGroup(gpu::BindGroupDescriptor{
-                  "drawCpuBindGroup", pipeline_->bindGroupLayout(), std::move(entries)}),
-              group_) ||
+    if (!createTexturesAndSampler() || !createBuffersAndUpload() || !createBindGroup() ||
         !accept(device_.installObserver(observer_))) {
       return false;
     }
@@ -185,25 +91,7 @@ public:
       return std::nullopt;
     }
     std::unique_ptr<gpu::CommandEncoder> encoder = std::move(encoderResult).result();
-    gpu::Result<gpu::RenderPassEncoder*> passResult = encoder->beginRenderPass(
-        gpu::RenderPassDescriptor{"drawCpuPass",
-                                  {gpu::RenderPassColorAttachment{
-                                      targetView_, gpu::LoadOp::Clear, gpu::StoreOp::Store, {}}}});
-    if (passResult.hasError()) {
-      ADD_FAILURE() << passResult.error();
-      return std::nullopt;
-    }
-    gpu::RenderPassEncoder* pass = passResult.result();
-    if (!accept(pass->setPipeline(pipeline_->pipeline())) ||
-        !accept(pass->setBindGroup(0, group_))) {
-      return std::nullopt;
-    }
-    for (uint32_t index = 0; index < draws; ++index) {
-      if (!accept(pass->draw(3))) {
-        return std::nullopt;
-      }
-    }
-    if (!accept(pass->end())) {
+    if (!recordPass(*encoder, draws)) {
       return std::nullopt;
     }
     gpu::Result<gpu::CommandBuffer> commandResult = encoder->finish();
@@ -219,15 +107,8 @@ public:
       ADD_FAILURE() << submission.error();
       return std::nullopt;
     }
-    if (observer_.submissions != submissionsBefore + 1 || observer_.lastDraws != draws) {
-      ADD_FAILURE() << "onSubmitted expected (1," << draws << ") once; observed "
-                    << (observer_.submissions - submissionsBefore) << " calls, last draw count "
-                    << observer_.lastDraws;
-      return std::nullopt;
-    }
     const uint64_t serial = submission.result();
-    if (!device_.waitForSerial(serial, 10.0)) {
-      ADD_FAILURE() << "GPU submission " << serial << " did not complete";
+    if (!verifySubmission(serial, submissionsBefore, draws)) {
       return std::nullopt;
     }
     return DrawCpuSample{
@@ -239,6 +120,149 @@ public:
   }
 
 private:
+  bool recordPass(gpu::CommandEncoder& encoder, uint32_t draws) {
+    gpu::Result<gpu::RenderPassEncoder*> passResult = encoder.beginRenderPass(
+        gpu::RenderPassDescriptor{"drawCpuPass",
+                                  {gpu::RenderPassColorAttachment{
+                                      targetView_, gpu::LoadOp::Clear, gpu::StoreOp::Store, {}}}});
+    if (passResult.hasError()) {
+      ADD_FAILURE() << passResult.error();
+      return false;
+    }
+    gpu::RenderPassEncoder* pass = passResult.result();
+    if (!accept(pass->setPipeline(pipeline_->pipeline())) ||
+        !accept(pass->setBindGroup(0, group_))) {
+      return false;
+    }
+    for (uint32_t index = 0; index < draws; ++index) {
+      if (!accept(pass->draw(3))) {
+        return false;
+      }
+    }
+    return accept(pass->end());
+  }
+
+  bool verifySubmission(uint64_t serial, uint64_t submissionsBefore, uint32_t draws) {
+    if (observer_.submissions != submissionsBefore + 1 || observer_.lastDraws != draws) {
+      ADD_FAILURE() << "onSubmitted expected (1," << draws << ") once; observed "
+                    << (observer_.submissions - submissionsBefore) << " calls, last draw count "
+                    << observer_.lastDraws;
+      return false;
+    }
+    if (!device_.waitForSerial(serial, 10.0)) {
+      ADD_FAILURE() << "GPU submission " << serial << " did not complete";
+      return false;
+    }
+    return true;
+  }
+
+  bool createTexturesAndSampler() {
+    if (!take(device_.createTexture(gpu::TextureDescriptor{"drawCpuTarget",
+                                                           {16, 16},
+                                                           gpu::TextureFormat::RGBA8Unorm,
+                                                           gpu::TextureUsage::RenderAttachment}),
+              target_) ||
+        !take(device_.createTextureView(target_, {"drawCpuTargetView"}), targetView_) ||
+        !take(device_.createTexture(
+                  gpu::TextureDescriptor{"drawCpuSampled",
+                                         {1, 1},
+                                         gpu::TextureFormat::RGBA8Unorm,
+                                         gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst}),
+              sampled_) ||
+        !take(device_.createTextureView(sampled_, {"drawCpuSampledView"}), sampledView_) ||
+        !take(device_.createSampler(gpu::SamplerDescriptor{
+                  "drawCpuSampler", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
+                  gpu::AddressMode::Repeat, gpu::AddressMode::Repeat}),
+              sampler_)) {
+      return false;
+    }
+    return true;
+  }
+
+  bool createBuffersAndUpload() {
+    const gpu::shader::CompiledShaderView& shader = gpu::shader::programs::SlugFillShader();
+    if (shader.resources.size() != 11) {
+      ADD_FAILURE() << "SlugFill resource count drifted: " << shader.resources.size();
+      return false;
+    }
+    storageBytes_ = 1024;
+    for (const gpu::shader::ShaderResource& resource : shader.resources) {
+      if (resource.type == gpu::BindingType::ReadOnlyStorageBuffer) {
+        storageBytes_ = std::max(storageBytes_, static_cast<uint64_t>(resource.minSizeBytes));
+      }
+    }
+    if (!take(device_.createBuffer(gpu::BufferDescriptor{
+                  "drawCpuUniform", sizeof(gpu::shader::programs::SlugFillParams),
+                  gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst}),
+              uniform_) ||
+        !take(device_.createBuffer(
+                  gpu::BufferDescriptor{"drawCpuStorage", storageBytes_,
+                                        gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst}),
+              storage_)) {
+      return false;
+    }
+
+    gpu::shader::programs::SlugFillParams params{};
+    params.mvp[0] = params.mvp[5] = params.mvp[10] = params.mvp[15] = 1.0f;
+    params.patternFromPath[0] = params.patternFromPath[5] = 1.0f;
+    params.patternFromPath[10] = params.patternFromPath[15] = 1.0f;
+    params.viewport[0] = params.viewport[1] = 16.0f;
+    params.color[0] = params.color[3] = 1.0f;
+    params.boundingVertexCount = 3;
+    params.boundingVertices[0] = -0.5f;
+    params.boundingVertices[1] = -0.5f;
+    params.boundingVertices[2] = 0.5f;
+    params.boundingVertices[3] = -0.5f;
+    params.boundingVertices[4] = 0.0f;
+    params.boundingVertices[5] = 0.5f;
+    params.gridHStride = params.gridVStride = 1.0f;
+    params.pathFromPixel[0] = params.pathFromPixel[3] = 1.0f;
+    const std::span<const uint8_t> uniformData(reinterpret_cast<const uint8_t*>(&params),
+                                               sizeof(params));
+    const std::vector<uint8_t> zeroStorage(storageBytes_, 0);
+    std::array<uint8_t, gpu::kTexelRowPitchAlignment> texelRow{};
+    texelRow[3] = 255;
+    if (!accept(device_.writeBuffer(uniform_, 0, uniformData)) ||
+        !accept(device_.writeBuffer(storage_, 0, zeroStorage)) ||
+        !accept(device_.writeTexture(sampled_, texelRow,
+                                     gpu::TexelCopyBufferLayout{0, gpu::kTexelRowPitchAlignment, 1},
+                                     gpu::Extent2d{1, 1}))) {
+      return false;
+    }
+    return true;
+  }
+
+  bool createBindGroup() {
+    const gpu::shader::CompiledShaderView& shader = gpu::shader::programs::SlugFillShader();
+    std::vector<gpu::BindGroupEntry> entries;
+    entries.reserve(shader.resources.size());
+    for (const gpu::shader::ShaderResource& resource : shader.resources) {
+      switch (resource.type) {
+        case gpu::BindingType::UniformBuffer:
+          entries.push_back(
+              {resource.binding,
+               gpu::BufferBinding{uniform_, 0, sizeof(gpu::shader::programs::SlugFillParams)}});
+          break;
+        case gpu::BindingType::ReadOnlyStorageBuffer:
+          entries.push_back({resource.binding, gpu::BufferBinding{storage_, 0, storageBytes_}});
+          break;
+        case gpu::BindingType::SampledTexture2dFloat:
+        case gpu::BindingType::SampledTexture2dUnfilterableFloat:
+          entries.push_back({resource.binding, gpu::TextureViewBinding{sampledView_}});
+          break;
+        case gpu::BindingType::FilteringSampler:
+          entries.push_back({resource.binding, gpu::SamplerBinding{sampler_}});
+          break;
+        default:
+          ADD_FAILURE() << "Unsupported SlugFill binding " << resource.name.view();
+          return false;
+      }
+    }
+    return take(device_.createBindGroup(gpu::BindGroupDescriptor{
+                    "drawCpuBindGroup", pipeline_->bindGroupLayout(), std::move(entries)}),
+                group_);
+  }
+
   template <typename T>
   static bool take(gpu::Result<T>&& result, T& output) {
     if (result.hasError()) {
@@ -266,6 +290,7 @@ private:
   gpu::Sampler sampler_;
   gpu::Buffer uniform_;
   gpu::Buffer storage_;
+  uint64_t storageBytes_ = 0;
   gpu::BindGroup group_;
   DrawCountObserver observer_;
   bool observerInstalled_ = false;
