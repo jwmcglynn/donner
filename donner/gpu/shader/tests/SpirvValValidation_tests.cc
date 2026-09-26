@@ -54,6 +54,7 @@
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
+#include "donner/gpu/shader/wgsl/Compiler.h"
 #include "donner/gpu/shader/wgsl/tests/GraphicsArtifact.h"
 
 using testing::HasSubstr;
@@ -117,14 +118,42 @@ std::string ValidateWordsForStatus(const std::string& spirvVal, const std::vecto
   return output;
 }
 
-/// Validates frozen SPIR-V words through the same external validator path.
-void ExpectWordsValidateForVulkan11(const std::string& spirvVal, std::span<const uint32_t> words,
-                                    const std::string& fileName) {
-  std::vector<uint32_t> copied(words.begin(), words.end());
+/// Reparse the frozen WGSL and require both native emitters to reproduce the frozen bytes.
+/// The independent SPIR-V validator then checks the reproduced module.
+/// @param spirvVal Path to the pinned validator.
+/// @param shader Frozen all-projection artifact.
+/// @param fileName Name for the validator input and assertion trace.
+void ExpectFrozenShaderValidatesForVulkan11(const std::string& spirvVal,
+                                            const CompiledShaderView& shader,
+                                            const std::string& fileName) {
+  SCOPED_TRACE(fileName);
+  ASSERT_THAT(shader.wgsl, Not(testing::IsEmpty()));
+  ASSERT_THAT(shader.msl, Not(testing::IsEmpty()));
+  ASSERT_THAT(shader.spirv, Not(testing::IsEmpty()));
+  const std::string runtimeSource(shader.wgsl);
+  const wgsl::ParseResult parsed = wgsl::Parse(runtimeSource);
+  ASSERT_THAT(parsed.diagnostic.code, testing::Eq(wgsl::ErrorCode::None))
+      << "diagnostic span [" << parsed.diagnostic.span.begin << ", " << parsed.diagnostic.span.end
+      << ")";
+  ASSERT_THAT(parsed.hasResult(), testing::IsTrue());
+
+  std::vector<char> text(shader.msl.size());
+  wgsl::TextSink textSink{text.data(), static_cast<uint32_t>(text.size())};
+  ASSERT_THAT(wgsl::EmitMsl(parsed.module, textSink).error, testing::Eq(wgsl::TextEmitError::None));
+  EXPECT_THAT(textSink.view(), testing::Eq(shader.msl));
+
+  std::vector<uint32_t> words(shader.spirv.size());
+  wgsl::SpirvSink wordSink{words.data(), static_cast<uint32_t>(words.size())};
+  ASSERT_THAT(wgsl::EmitSpirv(parsed.module, wordSink).error,
+              testing::Eq(wgsl::SpirvEmitError::None));
+  ASSERT_THAT(wordSink.size, testing::Eq(words.size()));
+  EXPECT_THAT(words, testing::ElementsAreArray(shader.spirv));
+
   int validationStatus = -1;
   const std::string validationOutput =
-      ValidateWordsForStatus(spirvVal, copied, fileName, &validationStatus);
-  EXPECT_EQ(validationStatus, 0) << "spirv-val rejected " << fileName << ":\n" << validationOutput;
+      ValidateWordsForStatus(spirvVal, words, fileName, &validationStatus);
+  EXPECT_THAT(validationStatus, testing::Eq(0)) << "spirv-val rejected " << fileName << ":\n"
+                                                << validationOutput;
   EXPECT_THAT(validationOutput, Not(HasSubstr("error"))) << validationOutput;
 }
 
@@ -215,50 +244,51 @@ ShaderResult<IrModule> BuildMatrixBlockModule() {
 }
 
 TEST(SpirvValValidation, EmittedCheckerboardPassesVulkan11Validation) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::CheckerboardAllProjections().spirv,
-                                 "checkerboard.spv");
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::CheckerboardMutatedAllProjections().spirv,
-                                 "checkerboard_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::CheckerboardAllProjections(),
+                                         "checkerboard.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::CheckerboardMutatedAllProjections(),
+                                         "checkerboard_mutated.spv");
 }
 
 TEST(SpirvValValidation, FinalFilterResolvePassesVulkan11Validation) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::FilterResolveAllProjections().spirv,
-                                 "filter_resolve.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::FilterResolveAllProjections(),
+                                         "filter_resolve.spv");
 }
 TEST(SpirvValValidation, EmittedCompositePassesVulkan11Validation) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::CompositeAllProjections().spirv,
-                                 "composite.spv");
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::CompositeMutatedAllProjections().spirv,
-                                 "composite_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::CompositeAllProjections(),
+                                         "composite.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::CompositeMutatedAllProjections(),
+                                         "composite_mutated.spv");
 }
 
 TEST(SpirvValValidation, SamplingSwitchPassesVulkan11Validation) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::SamplingSwitchShader().spirv,
-                                 "sampling_switch.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), wgsl::tests::SamplingSwitchShader(),
+                                         "sampling_switch.spv");
 }
 
 TEST(SpirvValValidation, CompiledGraphicsEntriesPassVulkan11Validation) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::GraphicsShader().spirv,
-                                 "compiled_graphics.spv");
-  ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::StorageArrayShader().spirv,
-                                 "storage_arrays.spv");
-  ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::ControlShader().spirv, "numeric_control");
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::SlugMaskAllProjections().spirv, "slug_mask");
-  ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::MatrixShader().spirv,
-                                 "compiled_matrices.spv");
-  ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::MatrixOperationsShader().spirv,
-                                 "matrix_operations.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), wgsl::tests::GraphicsShader(),
+                                         "compiled_graphics.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), wgsl::tests::StorageArrayShader(),
+                                         "storage_arrays.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), wgsl::tests::ControlShader(),
+                                         "numeric_control");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::SlugMaskAllProjections(), "slug_mask");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), wgsl::tests::MatrixShader(),
+                                         "compiled_matrices.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), wgsl::tests::MatrixOperationsShader(),
+                                         "matrix_operations.spv");
 }
 
 TEST(SpirvValValidation, EmittedConvolveMatrixPassesVulkan11Validation) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::ConvolveMatrixAllProjections().spirv,
-                                 "convolve_matrix.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::ConvolveMatrixAllProjections(),
+                                         "convolve_matrix.spv");
 }
 
 TEST(SpirvValValidation, EmittedMergePassesVulkan11Validation) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::MergeAllProjections().spirv, "merge.spv");
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::MergeMutatedAllProjections().spirv,
-                                 "merge_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::MergeAllProjections(), "merge.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::MergeMutatedAllProjections(),
+                                         "merge_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedSolidFillPassesVulkan11Validation) {
@@ -273,115 +303,115 @@ TEST(SpirvValValidation, EmittedColorMatrixComputePassesVulkan11Validation) {
 
 TEST(SpirvValValidation, EmittedFloodComputePassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::FloodAllProjections().spirv, "flood.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::FloodMutatedAllProjections().spirv,
-                                 "flood_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::FloodAllProjections(), "flood.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::FloodMutatedAllProjections(),
+                                         "flood_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedSubregionClipComputePassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::SubregionClipAllProjections().spirv,
-                                 "subregion_clip.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::SubregionClipMutatedAllProjections().spirv,
-                                 "subregion_clip_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::SubregionClipAllProjections(),
+                                         "subregion_clip.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::SubregionClipMutatedAllProjections(),
+                                         "subregion_clip_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedFilterColorMatrixPassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::FilterColorMatrixAllProjections().spirv,
-                                 "filter_color_matrix.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::FilterColorMatrixMutatedAllProjections().spirv,
-                                 "filter_color_matrix_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::FilterColorMatrixAllProjections(),
+                                         "filter_color_matrix.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::FilterColorMatrixMutatedAllProjections(),
+                                         "filter_color_matrix_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedFilterImagePassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::FilterImageAllProjections().spirv,
-                                 "filter_image.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::FilterImageMutatedAllProjections().spirv,
-                                 "filter_image_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::FilterImageAllProjections(),
+                                         "filter_image.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::FilterImageMutatedAllProjections(),
+                                         "filter_image_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedOffsetComputePassesVulkan11Validation) {
   // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::OffsetAllProjections().spirv, "offset.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::FloorAllProjections().spirv, "wgsl_floor.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::SignAllProjections().spirv, "wgsl_sign.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::OffsetAllProjections(), "offset.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::FloorAllProjections(), "wgsl_floor.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::SignAllProjections(), "wgsl_sign.spv");
 }
 
 TEST(SpirvValValidation, EmittedTileComputePassesVulkan11Validation) {
   // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::TileAllProjections().spirv, "tile.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::TileMutatedAllProjections().spirv,
-                                 "tile_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::TileAllProjections(), "tile.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::TileMutatedAllProjections(),
+                                         "tile_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedComponentTransferComputePassesVulkan11Validation) {
   // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::ComponentTransferAllProjections().spirv,
-                                 "component_transfer.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::ComponentTransferMutatedAllProjections().spirv,
-                                 "component_transfer_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::ComponentTransferAllProjections(),
+                                         "component_transfer.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::ComponentTransferMutatedAllProjections(),
+                                         "component_transfer_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedTurbulenceComputePassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::TurbulenceAllProjections().spirv,
-                                 "turbulence.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::EightArgumentCallAllProjections().spirv,
-                                 "eight_arguments.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::TurbulenceAllProjections(),
+                                         "turbulence.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::EightArgumentCallAllProjections(),
+                                         "eight_arguments.spv");
 }
 
 TEST(SpirvValValidation, EmittedDropShadowComputePassesVulkan11Validation) {
   // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::DropShadowAllProjections().spirv,
-                                 "drop_shadow.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::DropShadowMutatedAllProjections().spirv,
-                                 "drop_shadow_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::DropShadowAllProjections(),
+                                         "drop_shadow.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::DropShadowMutatedAllProjections(),
+                                         "drop_shadow_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedDisplacementMapComputePassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::DisplacementMapAllProjections().spirv,
-                                 "displacement_map.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::DisplacementMapMutatedAllProjections().spirv,
-                                 "displacement_map_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::DisplacementMapAllProjections(),
+                                         "displacement_map.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::DisplacementMapMutatedAllProjections(),
+                                         "displacement_map_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedGaussianBlurComputePassesVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::GaussianBlurAllProjections().spirv,
-                                 "gaussian_blur.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::GaussianBlurAllProjections(),
+                                         "gaussian_blur.spv");
 }
 
 TEST(SpirvValValidation, EmittedMorphologyComputePassesVulkan11Validation) {
   // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
   // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::MorphologyAllProjections().spirv,
-                                 "morphology.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::MorphologyMutatedAllProjections().spirv,
-                                 "morphology_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::MorphologyAllProjections(),
+                                         "morphology.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::MorphologyMutatedAllProjections(),
+                                         "morphology_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedLightingComputesPassVulkan11Validation) {
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::DiffuseLightingAllProjections().spirv,
-                                 "diffuse_lighting.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::DiffuseLightingMutatedAllProjections().spirv,
-                                 "diffuse_lighting_mutated.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::LightingMathAllProjections().spirv,
-                                 "lighting_vector_math.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::SpecularLightingAllProjections().spirv,
-                                 "specular_lighting.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::DiffuseLightingAllProjections(),
+                                         "diffuse_lighting.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::DiffuseLightingMutatedAllProjections(),
+                                         "diffuse_lighting_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::LightingMathAllProjections(),
+                                         "lighting_vector_math.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::SpecularLightingAllProjections(),
+                                         "specular_lighting.spv");
 }
 
 TEST(SpirvValValidation, EmittedColorSpaceConvertPassesVulkan11Validation) {
@@ -389,10 +419,10 @@ TEST(SpirvValValidation, EmittedColorSpaceConvertPassesVulkan11Validation) {
   // return out of a structured branch, so the validator is what confirms the merge blocks the
   // emitter writes around those returns are well formed.
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::ColorSpaceConvertAllProjections().spirv,
-                                 "color_space_convert.spv");
-  ExpectWordsValidateForVulkan11(spirvVal, tests::ColorSpaceConvertMutatedAllProjections().spirv,
-                                 "color_space_convert_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::ColorSpaceConvertAllProjections(),
+                                         "color_space_convert.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::ColorSpaceConvertMutatedAllProjections(),
+                                         "color_space_convert_mutated.spv");
 }
 
 TEST(SpirvValValidation, AStorageBlockHoldingBothMatrixTypesPassesVulkan11Validation) {
@@ -415,11 +445,11 @@ TEST(SpirvValValidation, EmittedSnapshotUnpremultiplyComputePassesVulkan11Valida
   // The first module to emit OpUGreaterThanEqual over a vector, OpAny, and OpShiftRightLogical,
   // so this is where the validator confirms those encodings and their result types.
   const std::string spirvVal = SpirvVal();
-  ExpectWordsValidateForVulkan11(spirvVal, tests::SnapshotUnpremultiplyAllProjections().spirv,
-                                 "snapshot_unpremultiply.spv");
-  ExpectWordsValidateForVulkan11(spirvVal,
-                                 tests::SnapshotUnpremultiplyMutatedAllProjections().spirv,
-                                 "snapshot_unpremultiply_mutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal, tests::SnapshotUnpremultiplyAllProjections(),
+                                         "snapshot_unpremultiply.spv");
+  ExpectFrozenShaderValidatesForVulkan11(spirvVal,
+                                         tests::SnapshotUnpremultiplyMutatedAllProjections(),
+                                         "snapshot_unpremultiply_mutated.spv");
 }
 
 TEST(SpirvValValidation, EmittedBoolVectorReductionsPassVulkan11Validation) {
@@ -463,73 +493,73 @@ TEST(SpirvValValidation, NegativeControlDetectsAMalformedModule) {
 }
 
 TEST(SpirvValValidation, ImageBlit) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::ImageBlitAllProjections().spirv,
-                                 "ImageBlit.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::ImageBlitAllProjections(),
+                                         "ImageBlit.spv");
 }
 TEST(SpirvValValidation, ImageBlitMutated) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::ImageBlitMutatedAllProjections().spirv,
-                                 "ImageBlitMutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::ImageBlitMutatedAllProjections(),
+                                         "ImageBlitMutated.spv");
 }
 TEST(SpirvValValidation, ImageBlitExplicitLevel) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::ImageBlitExplicitLevelAllProjections().spirv,
-                                 "ImageBlitExplicitLevel.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::ImageBlitExplicitLevelAllProjections(),
+                                         "ImageBlitExplicitLevel.spv");
 }
 TEST(SpirvValValidation, ArraySwitch) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::ArraySwitchAllProjections().spirv,
-                                 "ArraySwitch.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::ArraySwitchAllProjections(),
+                                         "ArraySwitch.spv");
 }
 TEST(SpirvValValidation, LoopSwitch) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::LoopSwitchAllProjections().spirv,
-                                 "LoopSwitch.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::LoopSwitchAllProjections(),
+                                         "LoopSwitch.spv");
 }
 TEST(SpirvValValidation, StructConstruction) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::StructConstructionAllProjections().spirv,
-                                 "StructConstruction.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::StructConstructionAllProjections(),
+                                         "StructConstruction.spv");
 }
 
 TEST(SpirvValValidation, PointerStruct) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::PointerStructAllProjections().spirv,
-                                 "PointerStruct.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::PointerStructAllProjections(),
+                                         "PointerStruct.spv");
 }
 TEST(SpirvValValidation, LoopWhile) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::LoopWhileAllProjections().spirv,
-                                 "LoopWhile.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::LoopWhileAllProjections(),
+                                         "LoopWhile.spv");
 }
 
 TEST(SpirvValValidation, VectorMix) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::VectorMixAllProjections().spirv,
-                                 "VectorMix.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::VectorMixAllProjections(),
+                                         "VectorMix.spv");
 }
 
 TEST(SpirvValValidation, SlugGradient) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::SlugGradientAllProjections().spirv,
-                                 "slug_gradient.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::SlugGradientAllProjections(),
+                                         "slug_gradient.spv");
 }
 TEST(SpirvValValidation, SlugGradientMutated) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::SlugGradientMutatedAllProjections().spirv,
-                                 "slug_gradientMutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::SlugGradientMutatedAllProjections(),
+                                         "slug_gradientMutated.spv");
 }
 TEST(SpirvValValidation, FilterBlend) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::FilterBlendAllProjections().spirv,
-                                 "filter_blend.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::FilterBlendAllProjections(),
+                                         "filter_blend.spv");
 }
 TEST(SpirvValValidation, FilterBlendMutated) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::FilterBlendMutatedAllProjections().spirv,
-                                 "filter_blendMutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::FilterBlendMutatedAllProjections(),
+                                         "filter_blendMutated.spv");
 }
 
 TEST(SpirvValValidation, SlugFill) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::SlugFillAllProjections().spirv,
-                                 "slug_fill.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::SlugFillAllProjections(),
+                                         "slug_fill.spv");
 }
 TEST(SpirvValValidation, SlugFillMutated) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::SlugFillMutatedAllProjections().spirv,
-                                 "slug_fillMutated.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::SlugFillMutatedAllProjections(),
+                                         "slug_fillMutated.spv");
 }
 
 TEST(SpirvValValidation, SlugFlatInterface) {
-  ExpectWordsValidateForVulkan11(SpirvVal(), tests::SlugFlatInterfaceAllProjections().spirv,
-                                 "slug_flat.spv");
+  ExpectFrozenShaderValidatesForVulkan11(SpirvVal(), tests::SlugFlatInterfaceAllProjections(),
+                                         "slug_flat.spv");
 }
 
 }  // namespace
