@@ -101,6 +101,63 @@ const DiagnosticCase kSemanticCases[] = {
      ErrorCode::InvalidSwitch},
 };
 
+TEST(Diagnostics, EvaluatesTypedIntegerArithmeticBeforeCheckingClampBounds) {
+  struct ClampCase {
+    const char* name;
+    const char* type;
+    const char* low;
+    const char* high;
+    ErrorCode expected;
+  };
+  const ClampCase cases[] = {
+      {"signed_add_subtract", "i32", "2i + 3i", "8i - 1i", ErrorCode::None},
+      {"signed_multiply_divide", "i32", "2i * 3i", "20i / 2i", ErrorCode::None},
+      {"signed_remainder_negation", "i32", "17i % 5i", "-(-3i)", ErrorCode::None},
+      {"signed_negative_bounds", "i32", "-9i / 2i", "-5i % 3i", ErrorCode::None},
+      {"signed_reversed", "i32", "8i / 2i", "2i + 1i", ErrorCode::InvalidConstantExpression},
+      {"signed_add_overflow", "i32", "2147483647i + 1i", "2147483647i",
+       ErrorCode::InvalidConstantExpression},
+      {"signed_subtract_underflow", "i32", "(-2147483647i - 1i) - 1i", "0i",
+       ErrorCode::InvalidConstantExpression},
+      {"signed_multiply_overflow", "i32", "1073741824i * 2i", "2147483647i",
+       ErrorCode::InvalidConstantExpression},
+      {"signed_divide_zero", "i32", "3i / 0i", "4i", ErrorCode::InvalidConstantExpression},
+      {"signed_remainder_zero", "i32", "3i % 0i", "4i", ErrorCode::InvalidConstantExpression},
+      {"unsigned_add_subtract", "u32", "2u + 3u", "8u - 1u", ErrorCode::None},
+      {"unsigned_multiply_divide", "u32", "2u * 3u", "20u / 2u", ErrorCode::None},
+      {"unsigned_remainder", "u32", "17u % 5u", "3u", ErrorCode::None},
+      {"unsigned_reversed", "u32", "8u / 2u", "2u + 1u", ErrorCode::InvalidConstantExpression},
+      {"unsigned_add_overflow", "u32", "4294967295u + 1u", "4294967295u",
+       ErrorCode::InvalidConstantExpression},
+      {"unsigned_subtract_underflow", "u32", "0u - 1u", "1u", ErrorCode::InvalidConstantExpression},
+      {"unsigned_multiply_overflow", "u32", "2147483648u * 2u", "4294967295u",
+       ErrorCode::InvalidConstantExpression},
+      {"unsigned_divide_zero", "u32", "3u / 0u", "4u", ErrorCode::InvalidConstantExpression},
+      {"unsigned_remainder_zero", "u32", "3u % 0u", "4u", ErrorCode::InvalidConstantExpression},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.name);
+    const std::string source = std::string("fn f(value: ") + item.type + ") -> " + item.type +
+                               " { return clamp(value, " + item.low + ", " + item.high + "); }";
+    if (item.expected == ErrorCode::None) {
+      EXPECT_THAT(source, ParsedSuccessfully());
+    } else {
+      EXPECT_THAT(source, RejectedWithCode(item.expected));
+    }
+  }
+}
+
+TEST(Diagnostics, ChecksEveryComponentOfNegatedAndSplatClampBounds) {
+  EXPECT_THAT(R"(fn f(value: vec2<f32>) -> vec2<f32> {
+    return clamp(value, -vec2<f32>(2f, 3f), vec2<f32>(1f));
+  })",
+              ParsedSuccessfully());
+  EXPECT_THAT(R"(fn f(value: vec2<f32>) -> vec2<f32> {
+    return clamp(value, -vec2<f32>(2f, 3f), -vec2<f32>(3f));
+  })",
+              RejectedWithCode(ErrorCode::InvalidConstantExpression));
+}
+
 TEST(Diagnostics, ReportsExactCodeForMinimalSemanticViolations) {
   for (const DiagnosticCase& item : kSemanticCases) {
     SCOPED_TRACE(item.name);
