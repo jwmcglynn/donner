@@ -3,6 +3,7 @@
 #include <cmath>
 #include <format>
 #include <functional>
+#include <limits>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -312,6 +313,12 @@ std::string Emitter::literalToWgsl(const IrExpr::Node& node) {
   if (!std::isfinite(value)) {
     latch(ShaderError{"non-finite float literals cannot be emitted as WGSL", "wgsl"});
     return "0f";
+  }
+  // The shortest round-trip decimal for float::max() is 3.4028235e+38, which lies just
+  // above the exact f32 maximum. WGSL rejects it before rounding. This in-range decimal
+  // rounds to the same f32 value, including for the negative maximum.
+  if (std::abs(value) == std::numeric_limits<float>::max()) {
+    return value < 0.0f ? "-3.402823466e38f" : "3.402823466e38f";
   }
   // Shortest round-trip formatting (same style as the IR serializer) with an explicit `f`
   // suffix so the literal is f32 regardless of context.
