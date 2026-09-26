@@ -1,8 +1,8 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@donner_config//:config.bzl", "DONNER_CONFIG")
-load("//build_defs:dep_audit.bzl", "forbidden_transitive_dep_test")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test", "forbidden_transitive_dep_test")
 load("//build_defs:package.bzl", "donner_package")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_perf_sensitive_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_test", "donner_perf_sensitive_cc_library")
 
 # Renderer backend used by //donner/svg/renderer:renderer.
 # Override with --//donner/svg/renderer:renderer_backend=<tiny_skia|geode>
@@ -60,9 +60,8 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
-# Geode (WebGPU + Slug) backend selection. Using this backend also requires
-# --//donner/svg/renderer/geode:enable_geode=true so that wgpu-native is
-# compiled; `--config=geode` in .bazelrc sets both flags together.
+# Geode backend selection. Using it also requires
+# --//donner/svg/renderer/geode:enable_geode=true; `--config=geode` sets both flags.
 config_setting(
     name = "renderer_backend_geode",
     flag_values = {":renderer_backend": "geode"},
@@ -402,9 +401,8 @@ donner_cc_library(
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }),
-    # Geode pulls in wgpu-native via GeoEncoder. Gate behind the same
-    # enable_geode build flag (historical name — see the Geode BUILD.bazel
-    # file-level docstring) that the rest of the geode/ targets use.
+    # Gate behind the same enable_geode build flag as the Geode device and
+    # shader targets. The ordinary native renderer excludes wgpu-native.
     target_compatible_with = select({
         "//donner/svg/renderer/geode:geode_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -446,6 +444,24 @@ donner_cc_library(
         ],
         "//conditions:default": [],
     }),
+)
+
+configured_dependency_audit_test(
+    name = "renderer_geode_no_wgpu_archive_audit_impl",
+    forbidden = [
+        "@wgpu_native_linux_aarch64//:wgpu_native",
+        "@wgpu_native_linux_x86_64//:wgpu_native",
+        "@wgpu_native_macos_aarch64//:wgpu_native",
+        "@wgpu_native_macos_x86_64//:wgpu_native",
+    ],
+    tags = ["manual"],
+    target = ":renderer_geode",
+)
+
+donner_multi_transitioned_test(
+    name = "renderer_geode_no_wgpu_archive_audit_test",
+    dep = ":renderer_geode_no_wgpu_archive_audit_impl",
+    renderer_backend = "geode",
 )
 
 donner_perf_sensitive_cc_library(

@@ -120,6 +120,16 @@
         "wgpu_native_"
       ]
     },
+    "donner/editor/gui/BUILD.bazel": {
+      "tokens": [
+        "wgpu_native_"
+      ]
+    },
+    "donner/svg/renderer/BUILD.bazel": {
+      "tokens": [
+        "wgpu_native_"
+      ]
+    },
     "donner/svg/renderer/geode/BUILD.bazel": {
       "tokens": [
         "wgpu_native_"
