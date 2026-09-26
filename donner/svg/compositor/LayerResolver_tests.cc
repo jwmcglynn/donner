@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/compositor/CompositorHintComponent.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/compositor/ScopedCompositorHint.h"
@@ -61,6 +62,74 @@ TEST_F(LayerResolverTest, SingleMandatoryHintGetsLayer1) {
   EXPECT_EQ(resolver_.stats().layersAssigned, 1u);
   EXPECT_EQ(resolver_.stats().budgetExhaustions, 0u);
   EXPECT_EQ(layerIdOf(entity), 1u) << "single mandatory should win layer 1";
+}
+
+TEST_F(LayerResolverTest, ExclusiveParentTemporarilyWithholdsDescendantAssignments) {
+  const Entity parent = registry_.create();
+  const Entity maskedChild = registry_.create();
+  const Entity clippedGrandchild = registry_.create();
+  const Entity peer = registry_.create();
+  for (Entity entity : {parent, maskedChild, clippedGrandchild, peer}) {
+    registry_.emplace<donner::components::TreeComponent>(entity, xml::XMLQualifiedNameRef("g"));
+  }
+  registry_.get<donner::components::TreeComponent>(parent).appendChild(registry_, maskedChild);
+  registry_.get<donner::components::TreeComponent>(maskedChild)
+      .appendChild(registry_, clippedGrandchild);
+
+  ScopedCompositorHint parentHint =
+      ScopedCompositorHint::Interaction(registry_, parent, InteractionHint::Selection);
+  ScopedCompositorHint maskHint = ScopedCompositorHint::Mandatory(registry_, maskedChild);
+  ScopedCompositorHint clipHint = ScopedCompositorHint::Mandatory(registry_, clippedGrandchild);
+  ScopedCompositorHint peerHint = ScopedCompositorHint::Mandatory(registry_, peer);
+  resolver_.resolve(registry_, kDefaultBudget);
+  ASSERT_TRUE(hasAssignment(maskedChild));
+  ASSERT_TRUE(hasAssignment(clippedGrandchild));
+
+  ResolveOptions exclusive;
+  exclusive.exclusiveInteractionRoot = parent;
+  resolver_.resolve(registry_, kDefaultBudget, exclusive);
+  EXPECT_TRUE(hasAssignment(parent));
+  EXPECT_FALSE(hasAssignment(maskedChild));
+  EXPECT_FALSE(hasAssignment(clippedGrandchild));
+  EXPECT_TRUE(hasAssignment(peer));
+  EXPECT_TRUE(registry_.all_of<CompositorHintComponent>(maskedChild));
+  EXPECT_TRUE(registry_.all_of<CompositorHintComponent>(clippedGrandchild));
+
+  resolver_.resolve(registry_, kDefaultBudget);
+  EXPECT_TRUE(hasAssignment(parent));
+  EXPECT_TRUE(hasAssignment(maskedChild));
+  EXPECT_TRUE(hasAssignment(clippedGrandchild));
+}
+
+TEST_F(LayerResolverTest, SelectedChildSuspendsOnlyOptionalBucketAncestors) {
+  const Entity bucket = registry_.create();
+  const Entity child = registry_.create();
+  const Entity mandatoryAncestor = registry_.create();
+  for (Entity entity : {bucket, child, mandatoryAncestor}) {
+    registry_.emplace<donner::components::TreeComponent>(entity, xml::XMLQualifiedNameRef("g"));
+  }
+  registry_.get<donner::components::TreeComponent>(bucket).appendChild(registry_, child);
+  registry_.get<donner::components::TreeComponent>(mandatoryAncestor)
+      .appendChild(registry_, bucket);
+  ScopedCompositorHint bucketHint(registry_, bucket, HintSource::ComplexityBucket, 0x4000);
+  ScopedCompositorHint childHint =
+      ScopedCompositorHint::Interaction(registry_, child, InteractionHint::Selection);
+  ScopedCompositorHint mandatoryHint =
+      ScopedCompositorHint::Mandatory(registry_, mandatoryAncestor);
+
+  resolver_.resolve(registry_, kDefaultBudget);
+  ASSERT_TRUE(hasAssignment(bucket));
+  ResolveOptions selected;
+  selected.selectedInteractionDescendant = child;
+  resolver_.resolve(registry_, kDefaultBudget, selected);
+  EXPECT_FALSE(hasAssignment(bucket));
+  EXPECT_TRUE(hasAssignment(child));
+  EXPECT_TRUE(hasAssignment(mandatoryAncestor))
+      << "A real compositing ancestor must never be dissolved for its selected child";
+  EXPECT_TRUE(registry_.all_of<CompositorHintComponent>(bucket));
+
+  resolver_.resolve(registry_, kDefaultBudget);
+  EXPECT_TRUE(hasAssignment(bucket)) << "The optional bucket resumes after selection ends";
 }
 
 TEST_F(LayerResolverTest, SingleExplicitHintGetsLayer1) {

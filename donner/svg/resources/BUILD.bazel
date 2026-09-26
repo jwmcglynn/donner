@@ -1,3 +1,4 @@
+load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 
@@ -129,8 +130,19 @@ donner_cc_library(
     }),
 )
 
+embed_resources(
+    name = "generic_sans_faces",
+    header_output = "embed_resources/NotoSansGenericFaces.h",
+    resources = {
+        "kNotoSansBoldTtf": "//third_party/resvg-test-suite:fonts/NotoSans-Bold.ttf",
+        "kNotoSansItalicTtf": "//third_party/resvg-test-suite:fonts/NotoSans-Italic.ttf",
+        "kNotoSansRegularTtf": "//third_party/resvg-test-suite:fonts/NotoSans-Regular.ttf",
+    },
+)
+
 # Concrete font catalog: curated bundled fonts plus platform system fonts. The editor installs
-# this provider on FontManager; Wasm excludes the compiled catalog payload dependency.
+# this provider on FontManager. Wasm reuses the renderer's existing Public Sans fallback face
+# for generic sans-serif; the larger native-only Noto faces and compiled catalog stay out of Wasm.
 donner_cc_library(
     name = "font_catalog",
     srcs = [
@@ -170,8 +182,11 @@ donner_cc_library(
         "//donner/base",
         "//third_party/google_fonts:google_fonts_catalog_inc",
     ] + select({
-        "@platforms//os:emscripten": [],
-        "//conditions:default": ["//third_party/google_fonts:google_fonts_data"],
+        "@platforms//os:emscripten": ["//third_party/public-sans"],
+        "//conditions:default": [
+            ":generic_sans_faces",
+            "//third_party/google_fonts:google_fonts_data",
+        ],
     }),
 )
 
@@ -236,6 +251,22 @@ donner_cc_test(
         ":font_catalog_types",
         ":font_manager",
         "//donner/svg/core",
+        "//donner/svg/text:text_backend_simple",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "font_catalog_variable_axes_tests",
+    srcs = ["tests/FontCatalogVariableAxes_tests.cc"],
+    target_compatible_with = select({
+        "//donner/svg/renderer:text_full_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":font_catalog",
+        ":font_manager",
+        "//donner/svg/text:text_backend_full",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -352,8 +383,8 @@ filegroup(
 donner_cc_fuzzer(
     name = "image_loader_production_fuzzer",
     srcs = ["tests/ImageLoader_fuzzer.cc"],
-    corpus = ":image_loader_production_corpus",
     copts = ["-DDONNER_IMAGE_LOADER_FUZZ_PRODUCTION_BUDGET=1"],
+    corpus = ":image_loader_production_corpus",
     per_input_timeout_seconds = 10,
     tags = ["manual"],
     deps = [

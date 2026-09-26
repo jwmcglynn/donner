@@ -2357,6 +2357,16 @@ ApplySourceEditResult ApplyParsedTextSourceEdit(XMLDocument& document, const XML
   const RcString parsedValue = parsedTextNode->value().value_or(RcString(""));
   XMLNode target = edit.node;
   target.setValue(parsedValue);
+  const SourceRange updatedValueLocation{FileOffset::Offset(updatedRange->start),
+                                         FileOffset::Offset(updatedRange->end)};
+  if (!edit.elementTextContent) {
+    // A replacement invalidates the old text-node anchors. Rebind both the node and its value
+    // to the reparsed source span so subsequent keystrokes and stylesheet source maps can still
+    // resolve this same text node without a whole-document reparse.
+    target.setSourceStartOffset(updatedValueLocation.start);
+    target.setSourceEndOffset(updatedValueLocation.end);
+  }
+  target.setValueLocation(updatedValueLocation);
   if (!edit.elementTextContent) {
     if (std::optional<XMLNode> parent = target.parentElement()) {
       parent->setValue(parsedValue);

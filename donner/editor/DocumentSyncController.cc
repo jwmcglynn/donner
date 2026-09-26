@@ -6,6 +6,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/xml/XMLTokenizer.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TextPatch.h"
@@ -16,6 +17,46 @@ namespace donner::editor {
 namespace {
 
 constexpr float kTextChangeDebounceSeconds = 0.15f;
+
+// Classify the source buffer rather than parsed CSS rules: an author may be creating a new rule
+// or pausing in an incomplete declaration, and those states still need immediate dispatch on the
+// next keystroke. XMLTokenizer recovers from incomplete markup and ignores comment text that
+// merely resembles a <style> tag. This path reads only the editor's text buffer, never the DOM
+// while the render worker may own it.
+bool IsCursorInStylesheetText(std::string_view source, std::size_t cursorOffset) {
+  bool inStyle = false;
+  bool inTag = false;
+  bool closingTag = false;
+  bool styleTag = false;
+  const std::string_view prefix = source.substr(0, std::min(cursorOffset, source.size()));
+  xml::Tokenize(prefix, [&](const xml::XMLToken& token) {
+    switch (token.type) {
+      case xml::XMLTokenType::TagOpen:
+        inTag = true;
+        closingTag = token.text(prefix).starts_with("</");
+        styleTag = false;
+        break;
+      case xml::XMLTokenType::TagName:
+        if (inTag) {
+          std::string_view name = token.text(prefix);
+          if (const std::size_t colon = name.rfind(':'); colon != std::string_view::npos) {
+            name.remove_prefix(colon + 1);
+          }
+          styleTag = name == "style";
+        }
+        break;
+      case xml::XMLTokenType::TagClose:
+        if (inTag && styleTag) {
+          inStyle = !closingTag;
+        }
+        inTag = false;
+        break;
+      case xml::XMLTokenType::TagSelfClose: inTag = false; break;
+      default: break;
+    }
+  });
+  return inStyle && !inTag;
+}
 
 struct SourceMirrorEdit {
   std::size_t offset = 0;
@@ -303,6 +344,7 @@ void DocumentSyncController::resetForLoadedDocument(const std::string& source) {
   lastSyncedDiagnosticsRevision_ = std::numeric_limits<std::uint64_t>::max();
   textChangePending_ = false;
   textDispatchThrottled_ = false;
+  stylesheetEditBurst_ = false;
   textChangeIdleTimer_ = 0.0f;
 }
 
@@ -355,16 +397,23 @@ void DocumentSyncController::handleTextEdits(EditorApp& app, TextEditor& textEdi
   if (textEditor.isTextChanged()) {
     const std::string newSource = textEditor.getText();
     std::vector<SourceEditIntent> editIntents = textEditor.takePendingSourceEditIntents();
+    const std::size_t cursorOffset =
+        textEditor.getByteOffsetAtCoordinates(textEditor.getCursorPosition());
+    // The cursor stays in the same stylesheet through a typing burst. Tokenize again only
+    // after the idle boundary, including when the user resumes an incomplete CSS rule.
+    const bool stylesheetEdit =
+        stylesheetEditBurst_ || IsCursorInStylesheetText(newSource, cursorOffset);
     pendingSourceEditIntents_.insert(pendingSourceEditIntents_.end(),
                                      std::make_move_iterator(editIntents.begin()),
                                      std::make_move_iterator(editIntents.end()));
     app.syncDirtyFromSource(newSource);
     textEditor.resetTextChanged();
 
-    if (!textDispatchThrottled_) {
+    if (!textDispatchThrottled_ || stylesheetEditBurst_ || stylesheetEdit) {
       dispatchTextChange(newSource);
       textDispatchThrottled_ = true;
       textChangePending_ = false;
+      stylesheetEditBurst_ = stylesheetEditBurst_ || stylesheetEdit;
     } else {
       textChangePending_ = true;
     }
@@ -379,6 +428,7 @@ void DocumentSyncController::handleTextEdits(EditorApp& app, TextEditor& textEdi
         textChangePending_ = false;
       }
       textDispatchThrottled_ = false;
+      stylesheetEditBurst_ = false;
       textChangeIdleTimer_ = 0.0f;
     }
   }

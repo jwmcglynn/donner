@@ -5,6 +5,8 @@
 
 #include <string_view>
 
+#include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
@@ -25,6 +27,70 @@ TEST(SVGClipPathElementTests, SetClipPathUnits) {
 
   clipPath->setClipPathUnits(ClipPathUnits::UserSpaceOnUse);
   EXPECT_EQ(clipPath->clipPathUnits(), ClipPathUnits::UserSpaceOnUse);
+}
+
+TEST(SVGClipPathElementTests, SimpleResolvedOutlineUsesDocumentTransformAndUnits) {
+  SVGDocument document = instantiateSubtree(R"svg(
+    <defs>
+      <clipPath id="user"><rect x="2" y="4" width="20" height="24"/></clipPath>
+      <clipPath id="box" clipPathUnits="objectBoundingBox">
+        <rect x="0.25" y="0.25" width="0.5" height="0.5"/>
+      </clipPath>
+    </defs>
+    <g transform="translate(10 5)">
+      <rect id="user-target" x="20" y="30" width="40" height="50" clip-path="url(#user)"/>
+      <rect id="box-target" x="20" y="30" width="40" height="50" clip-path="url(#box)"/>
+    </g>
+  )svg",
+                                            {}, Vector2i(120, 120));
+  Renderer renderer;
+  renderer.draw(document);
+
+  const auto userTarget = document.querySelector("#user-target");
+  const auto boxTarget = document.querySelector("#box-target");
+  ASSERT_TRUE(userTarget.has_value());
+  ASSERT_TRUE(boxTarget.has_value());
+  const auto userOutline = userTarget->cast<SVGGraphicsElement>().resolvedSimpleClipPathOutline(
+      /*maxVerbs=*/128, /*maxPoints=*/256, /*maxBytes=*/16u * 1024u);
+  const auto boxOutline = boxTarget->cast<SVGGraphicsElement>().resolvedSimpleClipPathOutline(
+      /*maxVerbs=*/128, /*maxPoints=*/256, /*maxBytes=*/16u * 1024u);
+  ASSERT_TRUE(userOutline.has_value());
+  ASSERT_TRUE(boxOutline.has_value());
+  EXPECT_EQ(userOutline->bounds(), Box2d::FromXYWH(12.0, 9.0, 20.0, 24.0));
+  EXPECT_EQ(boxOutline->bounds(), Box2d::FromXYWH(40.0, 47.5, 20.0, 25.0));
+  EXPECT_FALSE(boxTarget->cast<SVGGraphicsElement>().resolvedSimpleClipPathOutline(
+      /*maxVerbs=*/3, /*maxPoints=*/256, /*maxBytes=*/16u * 1024u));
+
+  userTarget->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(10.0, 0.0));
+  renderer.draw(document);
+  const auto movedResource = userTarget->cast<SVGGraphicsElement>().resolvedSimpleClipPathOutline(
+      /*maxVerbs=*/128, /*maxPoints=*/256, /*maxBytes=*/16u * 1024u);
+  ASSERT_TRUE(movedResource.has_value());
+  EXPECT_EQ(movedResource->bounds(), Box2d::FromXYWH(22.0, 9.0, 20.0, 24.0))
+      << "The effective userSpaceOnUse clip follows the referencing element transform";
+}
+
+TEST(SVGClipPathElementTests, SimpleResolvedOutlineRejectsBooleanAndGroupObjectBoxes) {
+  SVGDocument document = instantiateSubtree(R"svg(
+    <defs>
+      <clipPath id="many"><rect width="10" height="10"/><rect x="12" width="10" height="10"/></clipPath>
+      <clipPath id="box" clipPathUnits="objectBoundingBox"><rect width="1" height="1"/></clipPath>
+    </defs>
+    <rect id="multi-target" width="30" height="30" clip-path="url(#many)"/>
+    <g id="group-target" clip-path="url(#box)"><rect width="30" height="30"/></g>
+  )svg",
+                                            {}, Vector2i(120, 120));
+  Renderer renderer;
+  renderer.draw(document);
+  const auto multi = document.querySelector("#multi-target");
+  const auto group = document.querySelector("#group-target");
+  ASSERT_TRUE(multi.has_value());
+  ASSERT_TRUE(group.has_value());
+  bool hasClipPath = false;
+  EXPECT_FALSE(multi->cast<SVGGraphicsElement>().resolvedSimpleClipPathOutline(128, 256, 16384,
+                                                                               &hasClipPath));
+  EXPECT_TRUE(hasClipPath);
+  EXPECT_FALSE(group->cast<SVGGraphicsElement>().resolvedSimpleClipPathOutline(128, 256, 16384));
 }
 
 /**

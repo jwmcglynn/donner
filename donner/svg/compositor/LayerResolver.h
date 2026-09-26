@@ -18,6 +18,13 @@ struct ResolveOptions {
   bool enableInteractionHints = true;       ///< Include interaction-driven hint weights.
   bool enableAnimationHints = true;         ///< Include animation-driven hint weights.
   bool enableComplexityBucketHints = true;  ///< Include geometry-complexity hint weights.
+  /// During an exclusive parent interaction, descendants still render inside the parent's
+  /// rasterized subtree, so their own layer assignments must be withheld to avoid double paint.
+  /// Their authored hints remain in the registry and resume when this is cleared.
+  Entity exclusiveInteractionRoot = entt::null;
+  /// Optional complexity-bucket ancestors of this selected target are suspended while it owns a
+  /// separate interaction tile. Mandatory, explicit, and animated ancestors remain assigned.
+  Entity selectedInteractionDescendant = entt::null;
   // Mandatory and Explicit are always honored - they represent SVG semantics
   // and the explicit escape-hatch API, not optional optimizations.
 };

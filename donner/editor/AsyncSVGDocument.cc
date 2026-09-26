@@ -68,6 +68,7 @@ void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
   pendingStructuralRemap_.clear();
   frameVersion_.fetch_add(1, std::memory_order_release);
   documentGeneration_.fetch_add(1, std::memory_order_release);
+  ++nonTransformRevision_;
 }
 
 AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
@@ -107,6 +108,7 @@ AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
   publishParseDiagnostics({}, std::nullopt);
   frameVersion_.fetch_add(1, std::memory_order_release);
   documentGeneration_.fetch_add(1, std::memory_order_release);
+  ++nonTransformRevision_;
 
   if (structural) {
     pendingStructuralRemap_ = std::move(remap);
@@ -129,9 +131,17 @@ bool AsyncSVGDocument::flushFrame() {
 
   lastFlushResult_ = FlushResult{
       .appliedCommands = true,
+      .onlyTransformCommands = std::ranges::all_of(queueFlush.effectiveCommands,
+                                                   [](const EditorCommand& command) {
+                                                     return command.kind ==
+                                                            EditorCommand::Kind::SetTransform;
+                                                   }),
       .replacedDocument = queueFlush.hadReplaceDocument,
       .preserveUndoOnReparse = queueFlush.preserveUndoOnReparse,
   };
+  if (!lastFlushResult_.onlyTransformCommands) {
+    ++nonTransformRevision_;
+  }
 
   std::unordered_map<Entity, Entity> activeStructuralRemap;
   for (EditorCommand& cmd : queueFlush.effectiveCommands) {
@@ -165,6 +175,7 @@ bool AsyncSVGDocument::refreshFontResources() {
   }
   ++fontResourceRevision_;
   frameVersion_.fetch_add(1, std::memory_order_release);
+  ++nonTransformRevision_;
   return true;
 }
 
@@ -208,6 +219,7 @@ xml::ApplySourceEditResult AsyncSVGDocument::applySourceEdit(const xml::XMLEditI
 
   if (result.applied || !result.mutations.empty()) {
     frameVersion_.fetch_add(1, std::memory_order_release);
+    ++nonTransformRevision_;
   }
 
   return result;

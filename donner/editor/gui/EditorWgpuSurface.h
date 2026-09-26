@@ -18,6 +18,11 @@ namespace donner::editor::gui {
 /// @param window GLFW window whose content view receives the layer.
 /// @return The layer, or null when \p window has no native Cocoa window.
 [[nodiscard]] void* AttachMetalLayerToGlfwWindow(GLFWwindow* window);
+
+/// Keep the attached layer's point-to-pixel scale aligned with the Cocoa window after a backing
+/// scale change, such as moving the editor between Retina and standard-density displays.
+/// @param window GLFW window whose content view owns the Metal layer.
+void UpdateMetalLayerBackingScale(GLFWwindow* window);
 #else
 /// Create a WebGPU surface backed by the platform-native handle of \p window.
 ///

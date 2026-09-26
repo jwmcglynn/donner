@@ -653,6 +653,14 @@ TEST_F(CompositorGoldenTest, FilterGroupRotationDragReusesCachedBitmapForLockste
   EXPECT_FALSE(afterDrag->canvasFromBitmap().isTranslation())
       << "filter-group rotate drag must carry the affine in canvasFromBitmap for lockstep. got\n"
       << afterDrag->canvasFromBitmap();
+
+  // Reusing that soft preview is valid only for its original raster. A zoom changes the surface
+  // while the same affine gesture is held; the selected full-object filter would now exceed the
+  // interaction tile cap. Restore complete owning tiles without attempting the oversized target.
+  compositor.renderFrame(viewport, Transform2d::Scale(50.0));
+  EXPECT_FALSE(compositor.isPromoted(entity));
+  EXPECT_TRUE(compositor.hasCompleteTileSetForPresentation());
+  EXPECT_EQ(compositor.lastRenderFrameStats().textureAllocationFailureCount, 0);
 }
 
 TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScales) {

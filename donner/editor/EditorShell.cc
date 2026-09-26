@@ -54,6 +54,9 @@
 #include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/LockState.h"
 #include "donner/editor/NativeWindowChrome.h"
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+#include "donner/editor/NativeMenuMac.h"
+#endif
 #include "donner/editor/PinchZoomPolicy.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/ShapeClipboardCommands.h"
@@ -96,6 +99,28 @@ namespace donner::editor {
 namespace {
 
 thread_local std::string gIsolatedReplayClipboard;
+
+bool CanAttemptSelectedRedrag(bool selectToolActive, bool cacheMatchesSelection,
+                              const MouseModifiers& modifiers,
+                              SelectionTransformHandleIntent handleIntent) {
+  return selectToolActive && cacheMatchesSelection && !modifiers.shift && !modifiers.doubleClick &&
+         handleIntent.kind == SelectionTransformHandleKind::None;
+}
+
+bool IsOccludedSelectedBoundsPress(const Vector2d& documentPoint,
+                                   std::span<const Box2d> selectionBoundsDoc,
+                                   std::span<const Box2d> occludingBoundsDoc,
+                                   double pixelsPerDocUnit, bool redragEligible) {
+  if (!redragEligible || selectionBoundsDoc.size() != 1u) {
+    return false;
+  }
+  const double hitSlopDoc = pixelsPerDocUnit > 0.0 ? 2.0 / pixelsPerDocUnit : 0.0;
+  if (!selectionBoundsDoc.front().inflatedBy(hitSlopDoc).contains(documentPoint)) {
+    return false;
+  }
+  return std::ranges::any_of(occludingBoundsDoc,
+                             [&](const Box2d& bounds) { return bounds.contains(documentPoint); });
+}
 
 const char* GetIsolatedReplayClipboard(ImGuiContext*) {
   return gIsolatedReplayClipboard.c_str();
@@ -687,6 +712,13 @@ std::uint64_t FontPreviewKey(std::string_view family) {
     hash *= 1099511628211ULL;
   }
   return hash;
+}
+
+std::string PersistentFontIdentity(const svg::FontFaceAvailability& availability) {
+  if (availability.contentId.empty()) {
+    return {};
+  }
+  return availability.contentId + ":" + std::to_string(availability.contentGeneration);
 }
 
 bool ResourceDiagnosticsEnabled() {
@@ -1388,6 +1420,89 @@ void EditorShell::initializePresentationRenderers() {
 #endif
 }
 
+void EditorShell::initializeFontPreviewCache() {
+#ifndef __EMSCRIPTEN__
+  if (!options_.fontPreviewCachePath.empty() && !options_.editorBuildInfo.empty()) {
+    fontPreviewCache_ =
+        std::make_unique<FontPreviewCache>(options_.fontPreviewCachePath, options_.editorBuildInfo);
+  }
+#endif
+}
+
+void EditorShell::queueBackgroundFontPreviews() {
+  for (const auto& family : fontCatalog_.families()) {
+    backgroundFontPreviewFamilies_.push_back(family.family);
+    pendingFontPreviews_.push_back(family.family);
+  }
+  if (!pendingFontPreviews_.empty()) {
+    window_.wakeEventLoop();
+  }
+}
+
+void EditorShell::configureSourceAutocomplete() {
+  textEditor_.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
+                                          -> std::optional<TextEditor::AutocompleteResponse> {
+    XmlAutocompleteContext context =
+        DetectXmlAutocompleteContext(request.source, request.cursorOffset);
+    if (context.kind == XmlAutocompleteContextKind::Unknown) {
+      return std::nullopt;
+    }
+
+    TextEditor::AutocompleteResponse response;
+    response.replaceStartOffset = context.replaceStartOffset;
+    response.replaceEndOffset = context.replaceEndOffset;
+    for (const XmlAutocompleteSuggestion& suggestion : BuildXmlAutocompleteSuggestions(context)) {
+      response.suggestions.push_back(TextEditor::AutocompleteSuggestion{
+          .displayText = RcString(suggestion.displayText),
+          .insertText = RcString(suggestion.insertText),
+      });
+    }
+    return response;
+  });
+}
+
+void EditorShell::configureEditorFonts() {
+  ImGuiIO& io = ImGui::GetIO();
+  const gui::EditorWindowFonts& existingFonts = window_.editorFonts();
+  if (existingFonts.complete()) {
+    // Multiple EditorShell instances can share one EditorWindow in tests and
+    // document-replacement workflows. Re-adding fonts after the WGPU backend
+    // has uploaded the atlas clears its texture id, leaving the next draw with
+    // a null texture view. Reuse the window-owned context-local pointers
+    // without changing the fonts' ImGui debug names.
+    uiFontBold_ = existingFonts.uiBold;
+    codeFont_ = existingFonts.code;
+  } else {
+    ImFontConfig fontCfg;
+    fontCfg.FontDataOwnedByAtlas = false;
+    const double displayScale = window_.displayScale();
+    ImFont* uiFontRegular = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
+        static_cast<int>(embedded::kRobotoRegularTtf.size()),
+        static_cast<float>(15.0 * displayScale), &fontCfg, kEditorGlyphRanges);
+    uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
+        static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
+        &fontCfg, kEditorGlyphRanges);
+    codeFont_ = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
+        static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
+        static_cast<float>(14.0 * displayScale), &fontCfg, kEditorGlyphRanges);
+    ImFontConfig codeSymbolFontCfg = fontCfg;
+    codeSymbolFontCfg.MergeMode = true;
+    std::ignore = io.Fonts->AddFontFromMemoryTTF(
+        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
+        static_cast<int>(embedded::kRobotoRegularTtf.size()),
+        static_cast<float>(14.0 * displayScale), &codeSymbolFontCfg, kEditorSymbolGlyphRanges);
+    window_.setEditorFonts({
+        .uiRegular = uiFontRegular,
+        .uiBold = uiFontBold_,
+        .code = codeFont_,
+    });
+  }
+  io.FontDefault = window_.editorFonts().uiRegular;
+}
+
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     : window_(window),
       options_(std::move(options)),
@@ -1434,6 +1549,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       std::chrono::milliseconds(SampleThumbnailRendererCreationDelayMsForTesting()));
 #endif
   installCatalogFonts();
+  initializeFontPreviewCache();
   std::optional<std::string> initialSource = options_.initialSource;
   if (!initialSource.has_value() && !options_.svgPath.empty()) {
     initialSource = LoadFile(options_.svgPath);
@@ -1447,65 +1563,8 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   textEditor_.resetTextChanged();
   textEditor_.setActiveAutocomplete(true);
   shapeClipboard_ = std::make_unique<ImGuiClipboard>();
-  textEditor_.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
-                                          -> std::optional<TextEditor::AutocompleteResponse> {
-    XmlAutocompleteContext context =
-        DetectXmlAutocompleteContext(request.source, request.cursorOffset);
-    if (context.kind == XmlAutocompleteContextKind::Unknown) {
-      return std::nullopt;
-    }
-
-    TextEditor::AutocompleteResponse response;
-    response.replaceStartOffset = context.replaceStartOffset;
-    response.replaceEndOffset = context.replaceEndOffset;
-    for (const XmlAutocompleteSuggestion& suggestion : BuildXmlAutocompleteSuggestions(context)) {
-      response.suggestions.push_back(TextEditor::AutocompleteSuggestion{
-          .displayText = RcString(suggestion.displayText),
-          .insertText = RcString(suggestion.insertText),
-      });
-    }
-    return response;
-  });
-  ImGuiIO& io = ImGui::GetIO();
-  const gui::EditorWindowFonts& existingFonts = window_.editorFonts();
-  if (existingFonts.complete()) {
-    // Multiple EditorShell instances can share one EditorWindow in tests and
-    // document-replacement workflows. Re-adding fonts after the WGPU backend
-    // has uploaded the atlas clears its texture id, leaving the next draw with
-    // a null texture view. Reuse the window-owned context-local pointers
-    // without changing the fonts' ImGui debug names.
-    uiFontBold_ = existingFonts.uiBold;
-    codeFont_ = existingFonts.code;
-  } else {
-    ImFontConfig fontCfg;
-    fontCfg.FontDataOwnedByAtlas = false;
-    const double displayScale = window_.displayScale();
-    ImFont* uiFontRegular = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
-        static_cast<int>(embedded::kRobotoRegularTtf.size()),
-        static_cast<float>(15.0 * displayScale), &fontCfg, kEditorGlyphRanges);
-    uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
-        static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
-        &fontCfg, kEditorGlyphRanges);
-    codeFont_ = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
-        static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
-        static_cast<float>(14.0 * displayScale), &fontCfg, kEditorGlyphRanges);
-    ImFontConfig codeSymbolFontCfg = fontCfg;
-    codeSymbolFontCfg.MergeMode = true;
-    std::ignore = io.Fonts->AddFontFromMemoryTTF(
-        const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
-        static_cast<int>(embedded::kRobotoRegularTtf.size()),
-        static_cast<float>(14.0 * displayScale), &codeSymbolFontCfg, kEditorSymbolGlyphRanges);
-    window_.setEditorFonts({
-        .uiRegular = uiFontRegular,
-        .uiBold = uiFontBold_,
-        .code = codeFont_,
-    });
-  }
-  // Renderer startup may have inserted an unscaled fallback font before the editor fonts.
-  io.FontDefault = window_.editorFonts().uiRegular;
+  configureSourceAutocomplete();
+  configureEditorFonts();
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.
   }
@@ -1553,10 +1612,18 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   showSamplePicker_ = options_.showWelcome;
   welcomePlaceholderActive_ = options_.showWelcome;
   valid_ = true;
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+  nativeMenu_ = std::make_unique<NativeMenuMac>();
+  if (!nativeMenu_->install()) {
+    nativeMenu_.reset();
+  }
+#endif
   // Safari cannot safely resume a second WebGPU device's Promise completion while the main
   // pthread is suspended in the Asyncify readbacks used to rasterize custom cursors. Start the
   // renderer pthread only after all synchronous UI GPU setup and its wake callback are complete.
   renderCoordinator_.asyncRenderer().start();
+  // Background work runs one family at a time only when the foreground renderer is idle.
+  queueBackgroundFontPreviews();
 }
 
 std::optional<float> EditorShell::nextIdleWakeSeconds() const {
@@ -1576,6 +1643,11 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
   if (sampleThumbnailRetryPending_) {
     constexpr float kSampleThumbnailRetryWakeSeconds = 0.05f;
     includeWake(kSampleThumbnailRetryWakeSeconds);
+  }
+  if (pendingNativeSavePath_.has_value()) {
+    // Worker/font completion posts its own wake; this bounded poll catches a missed wake
+    // without running the entire editor frame ten times a second while a save is waiting.
+    includeWake(0.25f);
   }
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(renderCoordinator_.nextPixelCaptureCanvasCommitWakeSeconds());
@@ -2345,10 +2417,13 @@ void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalS
   dialogPresenter_.clearSaveFileError();
 }
 
-bool EditorShell::synchronizeSourceBeforeSave(std::string* error) {
+bool EditorShell::synchronizeSourceBeforeSave(std::string* error, bool* retryWhenReady) {
   documentSyncController_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/1.0f);
 
   if (renderCoordinator_.asyncRenderer().isBusy()) {
+    if (retryWhenReady != nullptr) {
+      *retryWhenReady = true;
+    }
     *error = "Cannot save while the renderer is applying pending edits.";
     return false;
   }
@@ -2363,6 +2438,9 @@ bool EditorShell::synchronizeSourceBeforeSave(std::string* error) {
   }
 
   if (!app_.document().queue().empty()) {
+    if (retryWhenReady != nullptr) {
+      *retryWhenReady = true;
+    }
     *error = "Cannot save while document edits are still pending.";
     return false;
   }
@@ -2370,7 +2448,10 @@ bool EditorShell::synchronizeSourceBeforeSave(std::string* error) {
   return true;
 }
 
-bool EditorShell::trySavePath(std::string_view path, std::string* error) {
+bool EditorShell::trySavePath(std::string_view path, std::string* error, bool* retryWhenReady) {
+  if (retryWhenReady != nullptr) {
+    *retryWhenReady = false;
+  }
   if (!options_.allowFileSystemActions) {
     *error = "File operations are disabled for this session.";
     return false;
@@ -2383,7 +2464,7 @@ bool EditorShell::trySavePath(std::string_view path, std::string* error) {
     *error = "No SVG document is loaded.";
     return false;
   }
-  if (!synchronizeSourceBeforeSave(error)) {
+  if (!synchronizeSourceBeforeSave(error, retryWhenReady)) {
     return false;
   }
   if (!app_.document().document().hasSourceStore()) {
@@ -2413,7 +2494,9 @@ void EditorShell::requestSaveAs(std::string error) {
   if (!options_.allowFileSystemActions) {
     return;
   }
+  pendingNativeSavePath_.reset();
   pendingViewportExport_ = false;
+  pendingViewportExportOverlay_ = false;
   dialogPresenter_.requestSaveFile(app_.currentFilePath(), std::move(error));
 }
 
@@ -2421,6 +2504,7 @@ void EditorShell::requestExportViewportSvg(bool includeOverlay, std::string erro
   if (!options_.allowFileSystemActions) {
     return;
   }
+  pendingNativeSavePath_.reset();
   pendingViewportExport_ = true;
   pendingViewportExportOverlay_ = includeOverlay;
   // Default export filename: "<stem>_viewport.svg" beside the source document,
@@ -2437,7 +2521,11 @@ void EditorShell::requestExportViewportSvg(bool includeOverlay, std::string erro
   dialogPresenter_.requestSaveFile(std::make_optional(defaultPath), std::move(error));
 }
 
-bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string* error) {
+bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string* error,
+                                             bool* retryWhenReady) {
+  if (retryWhenReady != nullptr) {
+    *retryWhenReady = false;
+  }
   if (!options_.allowFileSystemActions) {
     *error = "File operations are disabled for this session.";
     return false;
@@ -2446,12 +2534,13 @@ bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string*
     *error = "No document is open to export.";
     return false;
   }
-  if (!synchronizeSourceBeforeSave(error)) {
+  if (!synchronizeSourceBeforeSave(error, retryWhenReady)) {
     return false;
   }
 
   if (pendingViewportExportOverlay_ &&
-      !requireCatalogFontsForElement(app_.document().document().svgElement(), error)) {
+      !requireCatalogFontsForElement(app_.document().document().svgElement(), error,
+                                     retryWhenReady)) {
     return false;
   }
 
@@ -2502,10 +2591,74 @@ bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string*
   return true;
 }
 
+void EditorShell::queueNativeSaveSelection(std::string path) {
+  dialogPresenter_.consumeSaveFileModalRequest();
+  pendingNativeSavePath_ = std::move(path);
+  pendingNativeSaveDocumentGeneration_ =
+      app_.hasDocument() ? app_.document().documentGeneration() : 0;
+  pendingNativeSaveDeadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+  window_.wakeEventLoop();
+}
+
+EditorShell::NativeSaveOutcome EditorShell::tryPendingNativeSave(std::string* error) {
+  error->clear();
+  if (!pendingNativeSavePath_.has_value()) {
+    *error = "No native save path was selected.";
+    return NativeSaveOutcome::Failed;
+  }
+  if (std::chrono::steady_clock::now() >= pendingNativeSaveDeadline_) {
+    pendingNativeSavePath_.reset();
+    pendingViewportExport_ = false;
+    pendingViewportExportOverlay_ = false;
+    *error = "Saving timed out while rendering or fonts were being prepared. Try again.";
+    return NativeSaveOutcome::Failed;
+  }
+  if (!app_.hasDocument() ||
+      app_.document().documentGeneration() != pendingNativeSaveDocumentGeneration_) {
+    pendingNativeSavePath_.reset();
+    pendingViewportExport_ = false;
+    pendingViewportExportOverlay_ = false;
+    *error = "The document changed after choosing a save location. Choose a location again.";
+    return NativeSaveOutcome::Failed;
+  }
+
+  bool retryWhenReady = false;
+  const bool saved =
+      pendingViewportExport_
+          ? tryExportViewportSvgToPath(*pendingNativeSavePath_, error, &retryWhenReady)
+          : trySavePath(*pendingNativeSavePath_, error, &retryWhenReady);
+  if (saved) {
+    pendingNativeSavePath_.reset();
+    return NativeSaveOutcome::Saved;
+  }
+  if (retryWhenReady) {
+    pendingNativeSaveDocumentGeneration_ = app_.document().documentGeneration();
+    return NativeSaveOutcome::Deferred;
+  }
+
+  pendingNativeSavePath_.reset();
+  pendingViewportExport_ = false;
+  pendingViewportExportOverlay_ = false;
+  return NativeSaveOutcome::Failed;
+}
+
+void EditorShell::servicePendingNativeSave() {
+  if (!pendingNativeSavePath_.has_value()) {
+    return;
+  }
+  std::string error;
+  if (tryPendingNativeSave(&error) == NativeSaveOutcome::Failed) {
+    nativeDialogs_.showSaveError(window_.rawHandle(), error);
+  }
+}
+
 void EditorShell::requestSave() {
   if (!options_.allowFileSystemActions) {
     return;
   }
+  pendingNativeSavePath_.reset();
+  pendingViewportExport_ = false;
+  pendingViewportExportOverlay_ = false;
   if (!app_.currentFilePath().has_value()) {
     requestSaveAs();
     return;
@@ -2545,6 +2698,14 @@ void EditorShell::serviceNativeDialogs() {
   }
 
   if (dialogPresenter_.openFileModalRequested()) {
+    pendingNativeSavePath_.reset();
+    pendingViewportExport_ = false;
+    pendingViewportExportOverlay_ = false;
+  } else {
+    servicePendingNativeSave();
+  }
+
+  if (dialogPresenter_.openFileModalRequested()) {
     dialogPresenter_.consumeOpenFileModalRequest();
     if (const std::optional<std::string> chosen =
             nativeDialogs_.openFile(window_.rawHandle(), app_.currentFilePath())) {
@@ -2566,14 +2727,11 @@ void EditorShell::serviceNativeDialogs() {
         suggested.empty() ? std::nullopt : std::make_optional(suggested);
     if (const std::optional<std::string> chosen =
             nativeDialogs_.saveFile(window_.rawHandle(), suggestedOpt)) {
-      std::string error;
-      // Mirror the render() callback's routing: an in-flight viewport export
-      // writes cropped SVG, otherwise this is a normal document save.
-      const bool ok = pendingViewportExport_ ? tryExportViewportSvgToPath(*chosen, &error)
-                                             : trySavePath(*chosen, &error);
-      if (!ok) {
-        dialogPresenter_.requestSaveFile(std::make_optional(*chosen), std::move(error));
-      }
+      queueNativeSaveSelection(*chosen);
+      servicePendingNativeSave();
+    } else {
+      pendingViewportExport_ = false;
+      pendingViewportExportOverlay_ = false;
     }
     window_.wakeEventLoop();
   }
@@ -2647,7 +2805,27 @@ void EditorShell::applyPendingHistoryActions() {
   }
 }
 
+void EditorShell::applyMenuHistoryActions(const MenuBarActions& menuActions,
+                                          bool sourcePaneFocused) {
+  if (menuActions.undo) {
+    if (sourcePaneFocused) {
+      textEditor_.undo();
+    } else {
+      requestHistoryAction(HistoryAction::Undo);
+    }
+  }
+  if (menuActions.redo) {
+    if (sourcePaneFocused) {
+      textEditor_.redo();
+    } else {
+      requestHistoryAction(HistoryAction::Redo);
+    }
+  }
+}
+
 void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
+  const bool sourcePaneFocused =
+      !adaptiveUiLayout_.compactTouch() && sourcePaneVisible_ && textEditor_.isFocused();
   if (menuActions.openAbout) {
     dialogPresenter_.requestAbout();
   }
@@ -2683,30 +2861,23 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   if (menuActions.quit) {
     glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
   }
-  if (menuActions.undo) {
-    requestHistoryAction(HistoryAction::Undo);
-  }
-  if (menuActions.redo) {
-    requestHistoryAction(HistoryAction::Redo);
-  }
-  const bool sourcePaneFocusedForMenu =
-      !adaptiveUiLayout_.compactTouch() && sourcePaneVisible_ && textEditor_.isFocused();
+  applyMenuHistoryActions(menuActions, sourcePaneFocused);
   if (menuActions.cut) {
-    if (sourcePaneFocusedForMenu) {
+    if (sourcePaneFocused) {
       textEditor_.cut();
     } else {
       cutSelectedShapesToClipboard();
     }
   }
   if (menuActions.copy) {
-    if (sourcePaneFocusedForMenu) {
+    if (sourcePaneFocused) {
       textEditor_.copy();
     } else {
       copySelectedShapesToClipboard();
     }
   }
   if (menuActions.paste) {
-    if (sourcePaneFocusedForMenu) {
+    if (sourcePaneFocused) {
       textEditor_.paste();
     } else {
       pasteShapesFromClipboard(/*inFront=*/false);
@@ -3257,10 +3428,15 @@ FormatBarState EditorShell::computeFormatBarState() {
   if (hasSingleTextSelection) {
     ReadTextFormatState(selection.front(), &state);
   }
+  if (textTool_.isEditing()) {
+    const TextTool::ActiveStyle activeStyle = textTool_.activeStyle();
+    state.bold = activeStyle.bold;
+    state.italic = activeStyle.italic;
+    state.underline = activeStyle.underline;
+  }
 
-  // Preview bitmaps are generated lazily by the existing low-priority render
-  // worker. This keeps the 180-plus desktop System group out of startup and
-  // avoids mutating ImGui's atlas after its backend texture has been uploaded.
+  // Preview bitmaps are generated by the low-priority render worker and kept
+  // outside ImGui's atlas so the atlas stays unchanged after backend upload.
   state.boldToggleFont = uiFontBold_;
   state.families = BuildFormatBarFamilies(
       fontCatalog().families(),
@@ -3405,6 +3581,14 @@ void EditorShell::convertSelectedTextToOutlines() {
   app_.setSelection(std::move(newSelection));
 }
 
+void EditorShell::requestRenderForAcceptedSourceEdit(std::uint64_t documentVersionBeforeTextSync) {
+  // Incremental source edits update the DOM directly, bypassing the queued flush render request.
+  if (app_.document().currentFrameVersion() != documentVersionBeforeTextSync &&
+      !app_.document().lastParseError().has_value()) {
+    requestRenderAtEndOfFrame_ |= !showSamplePicker_ || samplePresentationPending_;
+  }
+}
+
 void EditorShell::renderSourcePane(float paneOriginX, float paneOriginY, float paneHeight,
                                    float paneWidth, ImFont* codeFont) {
   constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
@@ -3460,7 +3644,9 @@ void EditorShell::renderSourcePane(float paneOriginX, float paneOriginY, float p
     preserveSourceEditFocusCursor_ = sourceEditShouldPreserveCursor;
   }
   const std::vector<svg::SVGElement> selectionBeforeTextSync = app_.selectedElements();
+  const std::uint64_t documentVersionBeforeTextSync = app_.document().currentFrameVersion();
   documentSyncController_.handleTextEdits(app_, textEditor_, ImGui::GetIO().DeltaTime);
+  requestRenderForAcceptedSourceEdit(documentVersionBeforeTextSync);
   if (sourceEditShouldPreserveCursor && app_.selectedElements() != selectionBeforeTextSync) {
     sourceSelectionOriginatedInText_ = true;
   }
@@ -4106,8 +4292,10 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
       ImVec2(static_cast<float>(rect.bottomRight.x), static_cast<float>(rect.bottomRight.y)),
       WithAlpha(theme.borderStrong, 220), theme.radiusContainer);
 
+  const float paletteCenterY =
+      (static_cast<float>(rect.topLeft.y) + static_cast<float>(rect.bottomRight.y)) * 0.5f;
   ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(rect.topLeft.x) + kToolPalettePadding,
-                                   static_cast<float>(rect.topLeft.y) + kToolPalettePadding));
+                                   paletteCenterY - adaptiveUiLayout_.toolButtonSize * 0.5f));
   ImGui::PushID("tool_palette");
   ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, theme.radiusControl);
   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
@@ -4173,6 +4361,9 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
                eyedropperTooltip.c_str());
   if (adaptiveUiLayout_.showPaintControls) {
     ImGui::SameLine(0.0f, kToolPaletteGap);
+    const ImVec2 paintCursor = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(
+        ImVec2(paintCursor.x, paletteCenterY - kToolPalettePaintWidgetHeight * 0.5f));
     renderFillStrokeToolbarWidget();
   }
 
@@ -4356,18 +4547,26 @@ void EditorShell::dispatchBufferedRenderPaneClick(bool selectToolActive, bool pe
                                             /*includeRotate=*/!pendingClick.modifiers.shift,
                                             pointerHitTestPixelsPerDocUnit)
             : SelectionTransformHandleIntent{};
-    bool tookFastRedrag =
-        documentWriteAvailable && selectToolActive && !pendingClick.modifiers.doubleClick &&
-        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-        selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
-                                             pendingClick.modifiers, redragBoundsDoc,
-                                             redragOccludingBoundsDoc);
-    if (!tookFastRedrag && !pendingClick.modifiers.doubleClick && documentWriteAvailable &&
-        renderCoordinator_.asyncRenderer().isBusy() && selectToolActive && cacheMatchesSelection &&
-        pendingHandleIntent.kind == SelectionTransformHandleKind::None) {
-      // The occlusion cache uses broad AABBs for later-painted elements. When the worker is busy,
-      // prefer an optimistic re-drag of the current selection over freezing behind a conservative
-      // false-positive overlap; the idle path above still uses full hit-testing for retargets.
+    const bool redragEligible = CanAttemptSelectedRedrag(
+        selectToolActive, cacheMatchesSelection, pendingClick.modifiers, pendingHandleIntent);
+    const bool leftMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool selectDragIntent = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
+    const bool occludedSelectedPress = IsOccludedSelectedBoundsPress(
+        pendingClick.documentPoint, redragBoundsDoc, redragOccludingBoundsDoc,
+        pointerHitTestPixelsPerDocUnit, redragEligible);
+    if (occludedSelectedPress && leftMouseDown && !selectDragIntent) {
+      // Keep the click buffered until intent is known. A plain click should select the topmost
+      // covering path, while moving past the drag threshold should grab the already-selected
+      // object under its bounds. Both paths use only the cached bounds while the worker is busy.
+      return;
+    }
+    bool tookFastRedrag = documentWriteAvailable && redragEligible &&
+                          selectTool_.tryStartRedragOnSelected(
+                              app_, pendingClick.documentPoint, pendingClick.modifiers,
+                              redragBoundsDoc, redragOccludingBoundsDoc);
+    if (!tookFastRedrag && selectDragIntent && documentWriteAvailable && redragEligible) {
+      // Once the held pointer actually moves, give the current selection priority over broad
+      // later-painted AABBs. A click without movement reaches idle hit-testing below instead.
       tookFastRedrag = selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
                                                             pendingClick.modifiers, redragBoundsDoc,
                                                             std::span<const Box2d>());
@@ -4380,11 +4579,9 @@ void EditorShell::dispatchBufferedRenderPaneClick(bool selectToolActive, bool pe
         break;
 
       case PendingClickBusyAction::RunIdleClickPath: {
-        const bool leftMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
         const bool selectHoldElapsed =
             pendingSelectClickStartSeconds_.has_value() &&
             ImGui::GetTime() - *pendingSelectClickStartSeconds_ >= kSelectMarqueeHoldDelaySeconds;
-        const bool selectDragIntent = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
         const bool pendingClickHitsSelection =
             selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
             selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);
@@ -5232,28 +5429,55 @@ void EditorShell::requestCatalogFonts(std::span<const svg::FontFaceDependency> d
 #endif
 }
 
-bool EditorShell::requireCatalogFontsForElement(const svg::SVGElement& element,
-                                                std::string* error) {
+namespace {
+
+struct FontOutputPreflightFailure {
+  const char* message;
+  bool retryWhenReady;
+  bool requestRender;
+};
+
+std::optional<FontOutputPreflightFailure> ClassifyFontOutputPreflight(
+    svg::FontResourcePreflight::Status status) {
+  using Status = svg::FontResourcePreflight::Status;
+  switch (status) {
+    case Status::InvalidTarget:
+      return FontOutputPreflightFailure{"The output target is no longer in this document.", false,
+                                        false};
+    case Status::ResourceLimit:
+      return FontOutputPreflightFailure{"The document exceeds its font resource limit.", false,
+                                        false};
+    case Status::NeedsRender:
+      return FontOutputPreflightFailure{
+          "Rendering is still being prepared. Try again when it finishes.", true, true};
+    default: return std::nullopt;
+  }
+}
+
+void MarkFontOutputRetry(bool* retryWhenReady, bool shouldRetry) {
+  if (retryWhenReady != nullptr && shouldRetry) {
+    *retryWhenReady = true;
+  }
+}
+
+}  // namespace
+
+bool EditorShell::requireCatalogFontsForElement(const svg::SVGElement& element, std::string* error,
+                                                bool* retryWhenReady) {
   if (!renderCoordinator_.asyncRenderer().isFontResourceAdoptionSafe()) {
+    MarkFontOutputRetry(retryWhenReady, true);
     *error = "Rendering is still being prepared. Try again when it finishes.";
     return false;
   }
   const auto preflight = app_.document().document().preflightFontResourcesForElement(element);
-  using Status = svg::FontResourcePreflight::Status;
   const auto& dependencies = preflight.dependencies;
   rememberOutputFontDemand(dependencies);
   requestCatalogFonts(dependencies, 0);
-  if (preflight.status == Status::InvalidTarget || preflight.status == Status::ResourceLimit ||
-      preflight.status == Status::NeedsRender) {
-    switch (preflight.status) {
-      case Status::InvalidTarget:
-        *error = "The output target is no longer in this document.";
-        break;
-      case Status::ResourceLimit: *error = "The document exceeds its font resource limit."; break;
-      default:
-        *error = "Rendering is still being prepared. Try again when it finishes.";
-        requestRenderAtEndOfFrame_ = true;
-        break;
+  if (const auto failure = ClassifyFontOutputPreflight(preflight.status)) {
+    *error = failure->message;
+    MarkFontOutputRetry(retryWhenReady, failure->retryWhenReady);
+    if (failure->requestRender) {
+      requestRenderAtEndOfFrame_ = true;
     }
     window_.wakeEventLoop();
     return false;
@@ -5266,10 +5490,11 @@ bool EditorShell::requireCatalogFontsForElement(const svg::SVGElement& element,
     *error = dependency.state == svg::FontFaceLoadState::Failed
                  ? "Font unavailable: " + dependency.family + ". Retry the font, then try again."
                  : "Loading font: " + dependency.family + ". Try again when it finishes.";
+    MarkFontOutputRetry(retryWhenReady, dependency.state != svg::FontFaceLoadState::Failed);
     window_.wakeEventLoop();
     return false;
   }
-  return preflight.status == Status::Ready;
+  return preflight.status == svg::FontResourcePreflight::Status::Ready;
 }
 
 void EditorShell::retryCatalogFont(std::string_view family) {
@@ -5386,6 +5611,38 @@ void EditorShell::handleAuxiliaryPreviewResult(SampleThumbnailRenderResult resul
   }
 }
 
+void EditorShell::persistFontPreview(const std::string& family,
+                                     std::string_view outlinedSvg) const {
+#ifdef __EMSCRIPTEN__
+  (void)family;
+  (void)outlinedSvg;
+#else
+  if (!fontPreviewCache_ || outlinedSvg.empty()) {
+    return;
+  }
+  const auto identityIt = fontPreviewIdentities_.find(family);
+  const auto bitmapIt = fontPreviewBitmaps_.find(family);
+  if (identityIt == fontPreviewIdentities_.end() || bitmapIt == fontPreviewBitmaps_.end() ||
+      !bitmapIt->second.has_value()) {
+    return;
+  }
+  const auto& dependencies = identityIt->second.dependencies;
+  if (dependencies.size() != 1) {
+    return;
+  }
+  const svg::FontFaceAvailability current =
+      fontCatalog_.availability(family, svg::FontFaceRequest{});
+  const auto& dependency = dependencies.front();
+  if (FontPreviewKey(dependency.family) != FontPreviewKey(family) ||
+      dependency.request != svg::FontFaceRequest{} ||
+      dependency.availability.contentId != current.contentId ||
+      dependency.availability.contentGeneration != current.contentGeneration) {
+    return;
+  }
+  fontPreviewCache_->store(family, PersistentFontIdentity(current), outlinedSvg, *bitmapIt->second);
+#endif
+}
+
 void EditorShell::handleFontPreviewResult(SampleThumbnailRenderResult result, bool pending,
                                           bool rendered) {
   if (!fontPreviewInFlight_ || result.key != FontPreviewKey(*fontPreviewInFlight_)) {
@@ -5393,9 +5650,6 @@ void EditorShell::handleFontPreviewResult(SampleThumbnailRenderResult result, bo
   }
   const std::string family = std::move(*fontPreviewInFlight_);
   fontPreviewInFlight_.reset();
-  if (!visibleFontPreviewFamilies_.contains(family)) {
-    return;
-  }
   if (pending) {
     waitingFontPreviews_.insert_or_assign(
         family, PendingPreviewFonts{.dependencies = std::move(result.fontDependencies),
@@ -5406,8 +5660,15 @@ void EditorShell::handleFontPreviewResult(SampleThumbnailRenderResult result, bo
     fontPreviewIdentities_.insert_or_assign(
         family, PreviewFontIdentity{.resourceRevision = result.fontResourceRevision,
                                     .dependencies = std::move(result.fontDependencies)});
+    persistFontPreview(family, result.outlinedSvg);
+    std::erase(fontPreviewOrder_, family);
+    fontPreviewOrder_.push_back(family);
+    trimFontPreviewMemory();
   } else if (result.outcome != SampleThumbnailRenderOutcome::Cancelled) {
     fontPreviewBitmaps_.insert_or_assign(family, std::nullopt);
+    std::erase(fontPreviewOrder_, family);
+    fontPreviewOrder_.push_back(family);
+    trimFontPreviewMemory();
   }
 }
 
@@ -5494,6 +5755,10 @@ void EditorShell::invalidateChangedFontPreviews() {
       return false;
     }
     fontPreviewBitmaps_.erase(entry.first);
+    if (std::ranges::find(pendingFontPreviews_, entry.first) == pendingFontPreviews_.end() &&
+        fontPreviewInFlight_ != entry.first) {
+      pendingFontPreviews_.push_back(entry.first);
+    }
     return true;
   });
   std::erase_if(samplePreviewIdentities_, [&](const auto& entry) {
@@ -5509,18 +5774,12 @@ void EditorShell::invalidateChangedFontPreviews() {
 
 void EditorShell::updateVisiblePreviewTasks() {
   invalidateChangedFontPreviews();
-  std::erase_if(pendingFontPreviews_,
-                [&](const auto& family) { return !visibleFontPreviewFamilies_.contains(family); });
-  std::erase_if(waitingFontPreviews_, [&](const auto& entry) {
-    return !visibleFontPreviewFamilies_.contains(entry.first);
-  });
   std::erase_if(waitingSamplePreviews_, [&](const auto& entry) {
     return !showSamplePicker_ || !visibleSamplePreviewIndices_.contains(entry.first);
   });
-  if ((fontPreviewInFlight_ && !visibleFontPreviewFamilies_.contains(*fontPreviewInFlight_)) ||
-      (sampleThumbnailInFlightIndex_ &&
-       (!showSamplePicker_ ||
-        !visibleSamplePreviewIndices_.contains(*sampleThumbnailInFlightIndex_)))) {
+  if (sampleThumbnailInFlightIndex_ &&
+      (!showSamplePicker_ ||
+       !visibleSamplePreviewIndices_.contains(*sampleThumbnailInFlightIndex_))) {
     renderCoordinator_.asyncRenderer().cancelSampleThumbnailWork();
     ++previewTaskGeneration_;
     fontPreviewInFlight_.reset();
@@ -5605,18 +5864,24 @@ void EditorShell::cancelSampleThumbnailGeneration() {
   waitingSamplePreviews_.clear();
   visibleFontPreviewFamilies_.clear();
   visibleSamplePreviewIndices_.clear();
+  for (const auto& family : backgroundFontPreviewFamilies_) {
+    if (!fontPreviewBitmaps_.contains(family)) {
+      pendingFontPreviews_.push_back(family);
+    }
+  }
   publishSampleThumbnailStats();
 }
 
 void EditorShell::requestFontPreviews(const std::vector<std::string>& families) {
   bool queued = false;
-  for (const std::string& family : families) {
+  for (auto it = families.rbegin(); it != families.rend(); ++it) {
+    const std::string& family = *it;
     if (!fontCatalog_.hasFamily(family) || fontPreviewBitmaps_.contains(family) ||
-        waitingFontPreviews_.contains(family) || fontPreviewInFlight_ == family ||
-        std::ranges::find(pendingFontPreviews_, family) != pendingFontPreviews_.end()) {
+        waitingFontPreviews_.contains(family) || fontPreviewInFlight_ == family) {
       continue;
     }
-    pendingFontPreviews_.push_back(family);
+    std::erase(pendingFontPreviews_, family);
+    pendingFontPreviews_.push_front(family);
     queued = true;
   }
   if (queued) {
@@ -5635,10 +5900,31 @@ void EditorShell::advanceFontPreviewGeneration() {
   }
   std::string family = std::move(pendingFontPreviews_.front());
   pendingFontPreviews_.pop_front();
-  if (!visibleFontPreviewFamilies_.contains(family)) {
-    return;
-  }
   const double displayScale = window_.displayScale();
+  const Vector2i dimensions(
+      std::max(1, static_cast<int>(std::ceil(kFontPreviewWidth * displayScale))),
+      std::max(1, static_cast<int>(std::ceil(kFontPreviewHeight * displayScale))));
+#ifndef __EMSCRIPTEN__
+  if (fontPreviewCache_) {
+    const svg::FontFaceAvailability availability =
+        fontCatalog_.availability(family, svg::FontFaceRequest{});
+    if (auto bitmap =
+            fontPreviewCache_->load(family, PersistentFontIdentity(availability), dimensions)) {
+      fontPreviewBitmaps_.insert_or_assign(family, std::move(*bitmap));
+      fontPreviewIdentities_.insert_or_assign(
+          family, PreviewFontIdentity{.dependencies = {svg::FontFaceDependency{
+                                          .family = family,
+                                          .request = {},
+                                          .availability = availability,
+                                          .state = svg::FontFaceLoadState::Loaded}}});
+      std::erase(fontPreviewOrder_, family);
+      fontPreviewOrder_.push_back(family);
+      trimFontPreviewMemory();
+      window_.wakeEventLoop();
+      return;
+    }
+  }
+#endif
   const auto store = fontCatalog_.encodedStore();
   SampleThumbnailRenderRequest request{
       .kind = AuxiliaryPreviewKind::FontFamily,
@@ -5646,9 +5932,7 @@ void EditorShell::advanceFontPreviewGeneration() {
       .taskGeneration = previewTaskGeneration_,
       .fontWakeRevision = store ? store->wakeRevision() : 0,
       .source = FontPreviewSvg(family),
-      .dimensions =
-          Vector2i(std::max(1, static_cast<int>(std::ceil(kFontPreviewWidth * displayScale))),
-                   std::max(1, static_cast<int>(std::ceil(kFontPreviewHeight * displayScale)))),
+      .dimensions = dimensions,
   };
 #ifndef __EMSCRIPTEN__
   request.nativeRenderer = &renderCoordinator_.renderer();
@@ -5659,6 +5943,38 @@ void EditorShell::advanceFontPreviewGeneration() {
   } else {
     pendingFontPreviews_.push_front(std::move(family));
     sampleThumbnailRetryPending_ = true;
+  }
+}
+
+void EditorShell::trimFontPreviewMemory() {
+  constexpr std::size_t kMaxResidentPreviews = 256;
+  bool changed = false;
+  std::size_t protectedCount = 0;
+  while (fontPreviewBitmaps_.size() > kMaxResidentPreviews && !fontPreviewOrder_.empty()) {
+    const std::string family = std::move(fontPreviewOrder_.front());
+    fontPreviewOrder_.pop_front();
+    if (!fontPreviewBitmaps_.contains(family)) {
+      continue;
+    }
+    if (visibleFontPreviewFamilies_.contains(family)) {
+      fontPreviewOrder_.push_back(family);
+      if (++protectedCount < fontPreviewOrder_.size()) {
+        continue;
+      }
+      fontPreviewOrder_.pop_back();
+    }
+    protectedCount = 0;
+    fontPreviewBitmaps_.erase(family);
+    fontPreviewIdentities_.erase(family);
+    changed = true;
+  }
+  if (changed) {
+    std::vector<std::uint64_t> keys;
+    keys.reserve(fontPreviewBitmaps_.size());
+    for (const auto& [family, bitmap] : fontPreviewBitmaps_) {
+      keys.push_back(FontPreviewKey(family));
+    }
+    fontPreviewTextures_.retainThumbnailsOnly(keys);
   }
 }
 
@@ -7292,12 +7608,12 @@ bool EditorShell::flushInteractiveDragMutationAndRequestRender() {
   }
 
   // A worker can remain busy after SVG traversal while it packages or presents the completed
-  // frame. Never block the browser UI thread on that phase: claim the DOM only when the write
-  // guard is immediately available, then supersede the stale worker request with the moved state.
+  // frame. Never block the browser UI thread on that phase. Let the worker finish: repeatedly
+  // cancelling a >pointer-interval render can starve an unpromotable drag of every held frame.
+  // The latest queued transform flushes on the completion wake.
   std::optional<svg::DocumentWriteAccess> documentAccess =
       app_.document().document().tryWriteAccess();
   if (!documentAccess.has_value()) {
-    renderCoordinator_.asyncRenderer().cancelInFlight();
     window_.wakeEventLoop();
     return false;
   }
@@ -7318,7 +7634,7 @@ bool EditorShell::flushInteractiveDragMutationAndRequestRender() {
       selectionChromeDetailForActiveTool());
   const bool posted = renderCoordinator_.maybeRequestRender(
       app_, selectTool_, interactionController_.viewport(), &textures_,
-      /*supersedeInFlight=*/true);
+      /*supersedeInFlight=*/false);
   requestRenderAtEndOfFrame_ = !posted;
   window_.wakeEventLoop();
   return true;
@@ -7817,17 +8133,38 @@ void EditorShell::snapshotReproFrame() {
 }
 #endif
 
-void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
-#ifdef __EMSCRIPTEN__
-  applyBrowserOverlayStateRequest();
-#endif
+namespace {
+
+struct MenuHistoryAvailability {
+  bool canUndo;
+  bool canRedo;
+  bool canRevert;
+};
+
+MenuHistoryAvailability MenuHistoryForFocus(const EditorApp& app, const TextEditor& source,
+                                            bool sourcePaneFocused) {
+  return {
+      .canUndo = sourcePaneFocused ? source.canUndo() : app.canUndo(),
+      .canRedo = sourcePaneFocused ? source.canRedo() : app.canRedo(),
+      .canRevert = app.hasDocument() && app.isDirty() && !app.cleanSourceText().empty(),
+  };
+}
+
+}  // namespace
+
+MenuBarState EditorShell::buildMenuBarState(bool compactUi) {
   const bool rendererIdle = !renderCoordinator_.asyncRenderer().isBusy();
-  MenuBarState menuState{
-      .sourcePaneFocused = !compactUi && sourcePaneVisible_ && textEditor_.isFocused(),
+  const bool sourcePaneFocused = !compactUi && sourcePaneVisible_ && textEditor_.isFocused();
+  const MenuHistoryAvailability history = MenuHistoryForFocus(app_, textEditor_, sourcePaneFocused);
+  return MenuBarState{
+      .sourcePaneFocused = sourcePaneFocused,
+      .textToolEditing =
+          !sourcePaneFocused && activeTool_ == ActiveTool::Text && textTool_.isEditing(),
+      .inspectorTextInputFocused = !sourcePaneFocused && ImGui::GetIO().WantTextInput,
       .canSave = options_.allowFileSystemActions && app_.hasDocument(),
-      .canRevert = app_.hasDocument() && app_.isDirty() && !app_.cleanSourceText().empty(),
-      .canUndo = app_.canUndo(),
-      .canRedo = app_.canRedo(),
+      .canRevert = history.canRevert,
+      .canUndo = history.canUndo,
+      .canRedo = history.canRedo,
       .sourceFocusMode = sourceFocusMode_,
       .hasShapeSelection = app_.hasSelection(),
       .hasShapeClipboard = shapeClipboard_ != nullptr && shapeClipboard_->hasText(),
@@ -7842,11 +8179,29 @@ void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
       .compositedRenderingMode = compositedRenderingMode_,
       .panelLayoutLocked = dockLayoutLocked_,
   };
+}
+
+void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
+#ifdef __EMSCRIPTEN__
+  applyBrowserOverlayStateRequest();
+#endif
+  const MenuBarState menuState = buildMenuBarState(compactUi);
   MenuBarActions menuActions;
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+  if (nativeMenu_ != nullptr) {
+    nativeMenu_->update(menuState);
+  }
+#endif
   if (compactUi) {
     renderCompactTopBar();
   } else {
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+    if (nativeMenu_ == nullptr) {
+      menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
+    }
+#else
     menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
+#endif
   }
   applyMenuActions(menuActions);
 
@@ -8054,6 +8409,31 @@ void EditorShell::recordFrameTelemetry(
 #endif
 }
 
+float EditorShell::menuBarHeightForFrame(bool compactUi) const {
+  float height = compactUi ? adaptiveUiLayout_.topBarHeight : ImGui::GetFrameHeight();
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+  if (!compactUi && nativeMenu_ != nullptr) {
+    height = 0.0f;
+  }
+#endif
+  return height;
+}
+
+void EditorShell::handleFrameShortcuts([[maybe_unused]] bool compactUi) {
+  bool nativeKeyEquivalentActivated = false;
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
+  if (nativeMenu_ != nullptr) {
+    const MenuBarState menuState = buildMenuBarState(compactUi);
+    const NativeMenuMac::DrainResult activated = nativeMenu_->drain(menuState);
+    nativeKeyEquivalentActivated = activated.hadKeyEquivalent;
+    applyMenuActions(activated.actions);
+  }
+#endif
+  if (!nativeKeyEquivalentActivated) {
+    handleGlobalShortcuts();
+  }
+}
+
 void EditorShell::runFrame() {
   ZoneScopedN("EditorShell::runFrame");
   const ScopedHeapDelta uiFrameHeapDelta(MemoryStage::AppUiFrame);
@@ -8210,7 +8590,7 @@ void EditorShell::runFrame() {
   const bool compactUi = adaptiveUiLayout_.compactTouch();
   sourcePaneRevealProgress_ = AdvanceSourcePaneRevealProgress(
       sourcePaneRevealProgress_, !compactUi && sourcePaneVisible_, ImGui::GetIO().DeltaTime);
-  const float menuBarHeight = compactUi ? adaptiveUiLayout_.topBarHeight : ImGui::GetFrameHeight();
+  const float menuBarHeight = menuBarHeightForFrame(compactUi);
   const float paneOriginY = menuBarHeight;
   const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - paneOriginY);
   const EditorMainPaneLayout mainPaneLayout = ComputeEditorMainPaneLayout({
@@ -8261,7 +8641,7 @@ void EditorShell::runFrame() {
                                           /*preservePaneCenterDocumentPoint=*/true);
   markPhase(mainFrameCost.layoutMs);
 
-  handleGlobalShortcuts();
+  handleFrameShortcuts(compactUi);
   markPhase(mainFrameCost.shortcutsMs);
 
   visibleFontPreviewFamilies_.clear();

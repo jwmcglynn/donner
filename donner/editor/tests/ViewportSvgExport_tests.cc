@@ -122,9 +122,99 @@ TEST(ViewportSvgExportTest, ViewBoxMatchesScreenToDocumentOfRenderPaneRect) {
   ASSERT_TRUE(result.ok()) << result.error;
 
   EXPECT_THAT(result.value, HasSubstr("viewBox=\"60 70 200 150\""));
-  // Output dimensions are the render-pane size in CSS px.
-  EXPECT_THAT(result.value, HasSubstr("width=\"400\""));
-  EXPECT_THAT(result.value, HasSubstr("height=\"300\""));
+  // Output dimensions follow the cropped portion of the original document.
+  EXPECT_THAT(result.value, HasSubstr("<svg width=\"200\" height=\"150\""));
+}
+
+TEST(ViewportSvgExportTest, FullyVisibleDocumentKeepsOriginalBoundsAndDimensions) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"400\" "
+      "viewBox=\"10 20 400 200\"><rect x=\"10\" y=\"20\" width=\"400\" height=\"200\"/>"
+      "</svg>");
+  const ViewportState viewport =
+      MakeViewport(/*zoom=*/0.5, /*panDocPoint=*/Vector2d(0.0, 0.0),
+                   /*panScreenPoint=*/Vector2d(0.0, 0.0),
+                   /*paneOrigin=*/Vector2d(0.0, 0.0), /*paneSize=*/Vector2d(600.0, 400.0));
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, viewport, Recti(Vector2i(0, 0), Vector2i(600, 400)), ViewportExportOptions{});
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("width=\"800\" height=\"400\" viewBox=\"10 20 400 200\""));
+  EXPECT_THAT(result.value,
+              HasSubstr("<rect x=\"10\" y=\"20\" width=\"400\" height=\"200\"/></clipPath>"));
+}
+
+TEST(ViewportSvgExportTest, PartialViewportOnlyExportsOriginalDocumentIntersection) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"400\" "
+      "viewBox=\"10 20 400 200\"><rect x=\"10\" y=\"20\" width=\"400\" height=\"200\"/>"
+      "</svg>");
+  const ViewportState viewport =
+      MakeViewport(/*zoom=*/1.0, /*panDocPoint=*/Vector2d(-50.0, -30.0),
+                   /*panScreenPoint=*/Vector2d(0.0, 0.0),
+                   /*paneOrigin=*/Vector2d(0.0, 0.0), /*paneSize=*/Vector2d(200.0, 150.0));
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, viewport, Recti(Vector2i(0, 0), Vector2i(200, 150)), ViewportExportOptions{});
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("width=\"280\" height=\"200\" viewBox=\"10 20 140 100\""));
+  EXPECT_THAT(result.value,
+              HasSubstr("<rect x=\"10\" y=\"20\" width=\"140\" height=\"100\"/></clipPath>"));
+}
+
+TEST(ViewportSvgExportTest, ViewBoxlessRootUsesCurrentIntrinsicBoundsOverStaleViewportCache) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"100\">"
+      "<rect width=\"200\" height=\"100\" fill=\"red\"/></svg>");
+  ViewportState viewport = IdentityViewport();
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, viewport, Recti(Vector2i(0, 0), Vector2i(200, 100)), ViewportExportOptions{});
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" "
+                                      "height=\"100\" viewBox=\"0 0 200 100\""));
+}
+
+TEST(ViewportSvgExportTest, TinyPositiveCropRetainsNonzeroDimensions) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\" "
+      "viewBox=\"0 0 1000000000 1000000000\"/>");
+  const ViewportState viewport =
+      MakeViewport(/*zoom=*/32.0, /*panDocPoint=*/Vector2d(0.0, 0.0),
+                   /*panScreenPoint=*/Vector2d(0.0, 0.0),
+                   /*paneOrigin=*/Vector2d(0.0, 0.0), /*paneSize=*/Vector2d(1.0, 1.0));
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, viewport, Recti(Vector2i(0, 0), Vector2i(1, 1)), ViewportExportOptions{});
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, Not(HasSubstr("width=\"0\"")));
+  EXPECT_THAT(result.value, Not(HasSubstr("height=\"0\"")));
+  EXPECT_TRUE(ReparsesCleanly(result.value));
+}
+
+TEST(ViewportSvgExportTest, RejectsFiniteSourceDimensionsWhoseExportScaleOverflows) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1e200\" height=\"1\" "
+      "viewBox=\"0 0 1e-200 1\" preserveAspectRatio=\"none\"/>");
+  const ViewportState viewport = IdentityViewport();
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, viewport, Recti(Vector2i(0, 0), Vector2i(1, 1)), ViewportExportOptions{});
+  ASSERT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("dimensions cannot be represented"));
+}
+
+TEST(ViewportSvgExportTest, ViewportOutsideDocumentHasNoExportableRegion) {
+  const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
+  const ViewportState viewport =
+      MakeViewport(/*zoom=*/1.0, /*panDocPoint=*/Vector2d(700.0, 700.0),
+                   /*panScreenPoint=*/Vector2d(0.0, 0.0),
+                   /*paneOrigin=*/Vector2d(0.0, 0.0), /*paneSize=*/Vector2d(100.0, 100.0));
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, viewport, Recti(Vector2i(0, 0), Vector2i(100, 100)), ViewportExportOptions{});
+  ASSERT_FALSE(result.ok());
+  EXPECT_THAT(result.error, HasSubstr("does not overlap"));
 }
 
 TEST(ViewportSvgExportTest, RootIdWithDoubleHyphenSanitizedInComment) {
@@ -774,7 +864,7 @@ TEST(ViewportSvgExportTest, SelfClosingRootExportsEmptyContentGroup) {
   EXPECT_THAT(result.value, HasSubstr("<g clip-path=\"url(#donner-viewport-clip)\"></g>"));
 }
 
-TEST(ViewportSvgExportTest, NonFiniteViewportValuesFormatAsZero) {
+TEST(ViewportSvgExportTest, NonFiniteViewportValuesAreRejected) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   ViewportState viewport = IdentityViewport();
   const double infinity = std::numeric_limits<double>::infinity();
@@ -784,11 +874,11 @@ TEST(ViewportSvgExportTest, NonFiniteViewportValuesFormatAsZero) {
   const Result<std::string, std::string> result =
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("viewBox=\"0 0 0 0\""));
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error, "The viewport export dimensions are not finite and positive.");
 }
 
-TEST(ViewportSvgExportTest, NegativeZeroViewportValuesFormatAsZero) {
+TEST(ViewportSvgExportTest, ZeroSizedViewportWithNegativeZeroPanIsRejected) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   ViewportState viewport = IdentityViewport();
   viewport.panDocPoint = Vector2d(-0.0, -0.0);
@@ -797,12 +887,11 @@ TEST(ViewportSvgExportTest, NegativeZeroViewportValuesFormatAsZero) {
   const Result<std::string, std::string> result =
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("viewBox=\"0 0 0 0\""));
-  EXPECT_THAT(result.value, Not(HasSubstr("-0")));
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error, "The viewport export dimensions are not finite and positive.");
 }
 
-TEST(ViewportSvgExportTest, RoundedNegativeZeroViewportValuesFormatAsZero) {
+TEST(ViewportSvgExportTest, ZeroSizedViewportWithRoundedNegativeZeroPanIsRejected) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   ViewportState viewport = IdentityViewport();
   viewport.panDocPoint = Vector2d(-0.0000001, -0.0000001);
@@ -811,9 +900,8 @@ TEST(ViewportSvgExportTest, RoundedNegativeZeroViewportValuesFormatAsZero) {
   const Result<std::string, std::string> result =
       ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
 
-  ASSERT_TRUE(result.ok()) << result.error;
-  EXPECT_THAT(result.value, HasSubstr("viewBox=\"0 0 0 0\""));
-  EXPECT_THAT(result.value, Not(HasSubstr("-0")));
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error, "The viewport export dimensions are not finite and positive.");
 }
 
 TEST(ViewportSvgExportTest, FractionalViewportValuesTrimTrailingZeros) {
@@ -1515,6 +1603,79 @@ svg::RendererBitmap RenderSvg(std::string_view svgSource) {
   svg::Renderer renderer;
   renderer.draw(doc);
   return renderer.takeSnapshot();
+}
+
+TEST(ViewportSvgExportTest, MeetCropUsesOriginalUniformScaleWithoutLetterbox) {
+  constexpr std::string_view kArtwork =
+      "<rect width=\"400\" height=\"400\" fill=\"#e6e6e6\"/>"
+      "<rect x=\"25\" y=\"50\" width=\"80\" height=\"200\" fill=\"#db3131\"/>"
+      "<circle cx=\"170\" cy=\"300\" r=\"20\" fill=\"#315ee0\"/>";
+  const SVGDocument doc = ParseOrDie(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"400\" "
+      "viewBox=\"0 0 400 400\">" +
+      std::string(kArtwork) + "</svg>");
+  const ViewportState viewport = MakeViewport(1.0, Vector2d::Zero(), Vector2d::Zero(),
+                                              Vector2d::Zero(), Vector2d(200.0, 400.0));
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, viewport, Recti(Vector2i(0, 0), Vector2i(200, 400)), ViewportExportOptions{});
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("width=\"200\" height=\"400\" viewBox=\"0 0 200 400\""));
+
+  const std::string expectedSource =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"400\" "
+      "viewBox=\"0 0 200 400\">" +
+      std::string(kArtwork) + "</svg>";
+  tests::CompareBitmapToBitmap(RenderSvg(result.value), RenderSvg(expectedSource),
+                               "viewport_export_meet_crop");
+}
+
+TEST(ViewportSvgExportTest, NoneCropRetainsIndependentRootScale) {
+  constexpr std::string_view kArtwork =
+      "<rect width=\"400\" height=\"400\" fill=\"#e6e6e6\"/>"
+      "<rect x=\"25\" y=\"50\" width=\"80\" height=\"200\" fill=\"#db3131\"/>";
+  const SVGDocument doc = ParseOrDie(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"400\" "
+      "viewBox=\"0 0 400 400\" preserveAspectRatio=\"none\">" +
+      std::string(kArtwork) + "</svg>");
+  const ViewportState viewport = MakeViewport(1.0, Vector2d::Zero(), Vector2d::Zero(),
+                                              Vector2d::Zero(), Vector2d(200.0, 400.0));
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, viewport, Recti(Vector2i(0, 0), Vector2i(200, 400)), ViewportExportOptions{});
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("width=\"400\" height=\"400\" viewBox=\"0 0 200 400\""));
+
+  const std::string expectedSource =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"400\" "
+      "viewBox=\"0 0 200 400\" preserveAspectRatio=\"none\">" +
+      std::string(kArtwork) + "</svg>";
+  tests::CompareBitmapToBitmap(RenderSvg(result.value), RenderSvg(expectedSource),
+                               "viewport_export_none_crop");
+}
+
+TEST(ViewportSvgExportTest, SliceCropUsesOriginalUniformScale) {
+  constexpr std::string_view kArtwork =
+      "<rect width=\"400\" height=\"400\" fill=\"#e6e6e6\"/>"
+      "<circle cx=\"100\" cy=\"200\" r=\"60\" fill=\"#315ee0\"/>";
+  const SVGDocument doc = ParseOrDie(
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"800\" height=\"400\" "
+      "viewBox=\"0 0 400 400\" preserveAspectRatio=\"xMidYMid slice\">" +
+      std::string(kArtwork) + "</svg>");
+  const ViewportState viewport = MakeViewport(1.0, Vector2d(0.0, 100.0), Vector2d::Zero(),
+                                              Vector2d::Zero(), Vector2d(200.0, 200.0));
+
+  const Result<std::string, std::string> result = ExportViewportAsSvg(
+      doc, viewport, Recti(Vector2i(0, 0), Vector2i(200, 200)), ViewportExportOptions{});
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_THAT(result.value, HasSubstr("width=\"400\" height=\"400\" viewBox=\"0 100 200 200\""));
+
+  const std::string expectedSource =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"400\" height=\"400\" "
+      "viewBox=\"0 100 200 200\" preserveAspectRatio=\"xMidYMid slice\">" +
+      std::string(kArtwork) + "</svg>";
+  tests::CompareBitmapToBitmap(RenderSvg(result.value), RenderSvg(expectedSource),
+                               "viewport_export_slice_crop");
 }
 
 /// Count pixels in @p bmp satisfying @p pred (called with r, g, b, a in 0-255).

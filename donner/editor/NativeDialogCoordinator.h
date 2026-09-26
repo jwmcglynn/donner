@@ -45,6 +45,9 @@ public:
   [[nodiscard]] std::optional<std::string> saveFile(
       GLFWwindow* window, const std::optional<std::string>& suggestedPath);
 
+  /// Present a native alert when a save fails after its panel has closed.
+  void showSaveError(GLFWwindow* window, const std::string& message) const;
+
   /// In-process recent-files list, newest first.
   [[nodiscard]] const std::vector<std::string>& recentFiles() const { return state_.recentFiles(); }
 

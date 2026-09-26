@@ -41,6 +41,14 @@ constexpr double kSelectionStrokeLogicalPixels = 1.25;
 /// Desired on-screen stroke thickness for source-hover chrome, in logical UI pixels.
 constexpr double kHoverStrokeLogicalPixels = 1.5;
 
+/// Clip boundaries are guidance, not another selection outline.
+constexpr double kClipGuideStrokeLogicalPixels = 1.1;
+constexpr std::size_t kMaximumClipGuideAncestors = 32;
+constexpr std::size_t kMaximumClipGuides = 8;
+constexpr std::size_t kMaximumClipGuideVerbs = 256;
+constexpr std::size_t kMaximumClipGuidePoints = 768;
+constexpr std::size_t kMaximumClipGuideBytes = 32u * 1024u;
+
 /// Marquee stroke thickness, in logical UI pixels.
 constexpr double kMarqueeStrokeLogicalPixels = 1.5;
 
@@ -60,6 +68,17 @@ svg::PaintParams MakeSelectionStrokePaint(double worldStrokeWidth, double opacit
   paint.strokeParams.lineCap = svg::StrokeLinecap::Butt;
   paint.strokeParams.lineJoin = svg::StrokeLinejoin::Miter;
   paint.strokeParams.miterLimit = 4.0;
+  return paint;
+}
+
+svg::PaintParams MakeClipGuidePaint(double worldStrokeWidth) {
+  svg::PaintParams paint;
+  paint.fill = svg::PaintServer::None{};
+  paint.stroke = svg::PaintServer::Solid(css::Color(EditorTheme::Active().selectionRgba(0xb4)));
+  paint.strokeParams.strokeWidth = worldStrokeWidth;
+  paint.strokeParams.lineCap = svg::StrokeLinecap::Butt;
+  paint.strokeParams.lineJoin = svg::StrokeLinejoin::Round;
+  paint.strokeParams.dashArray = {worldStrokeWidth * 4.0, worldStrokeWidth * 3.0};
   return paint;
 }
 
@@ -313,6 +332,129 @@ bool BoxesIntersect(const Box2d& lhs, const Box2d& rhs) {
 
 bool BoxIntersectsCullRect(const Box2d& box, const std::optional<Box2d>& cullRectDoc) {
   return !cullRectDoc.has_value() || BoxesIntersect(box, *cullRectDoc);
+}
+
+bool FiniteClipGuideBox(const Box2d& box) {
+  return std::isfinite(box.topLeft.x) && std::isfinite(box.topLeft.y) &&
+         std::isfinite(box.bottomRight.x) && std::isfinite(box.bottomRight.y) && !box.isEmpty();
+}
+
+bool FiniteClipGuideTransform(const Transform2d& transform) {
+  return std::ranges::all_of(transform.data, [](double value) { return std::isfinite(value); });
+}
+
+std::vector<SelectionChromeSnapshot::ClipGuide> CaptureClipGuides(
+    const svg::SVGElement& selected, const Transform2d& representedDocumentFromLiveDocument) {
+  std::vector<SelectionChromeSnapshot::ClipGuide> guides;
+  std::size_t totalVerbs = 0;
+  std::size_t totalPoints = 0;
+  std::size_t totalBytes = 0;
+  std::optional<svg::SVGElement> owner = selected;
+  for (std::size_t depth = 0; owner.has_value() && depth < kMaximumClipGuideAncestors &&
+                              guides.size() < kMaximumClipGuides;
+       ++depth) {
+    const bool directClip = *owner == selected;
+    if (owner->isa<svg::SVGGraphicsElement>()) {
+      bool hasClipPath = false;
+      std::optional<Path> basePathDoc =
+          owner->cast<svg::SVGGraphicsElement>().resolvedSimpleClipPathOutline(
+              kMaximumClipGuideVerbs - totalVerbs, kMaximumClipGuidePoints - totalPoints,
+              kMaximumClipGuideBytes - totalBytes, &hasClipPath);
+      if (hasClipPath && !basePathDoc.has_value()) {
+        return {};
+      }
+      if (basePathDoc.has_value() &&
+          (!directClip || FiniteClipGuideTransform(representedDocumentFromLiveDocument))) {
+        Path pathDoc = directClip ? basePathDoc->transformed(representedDocumentFromLiveDocument)
+                                  : *basePathDoc;
+        const std::optional<std::size_t> bytes = pathDoc.retainedBytes();
+        if (bytes.has_value() && *bytes <= kMaximumClipGuideBytes - totalBytes &&
+            FiniteClipGuideBox(pathDoc.bounds())) {
+          totalVerbs += pathDoc.verbCount();
+          totalPoints += pathDoc.points().size();
+          totalBytes += *bytes;
+          guides.push_back(SelectionChromeSnapshot::ClipGuide{
+              .basePathDoc = std::move(*basePathDoc),
+              .pathDoc = std::move(pathDoc),
+              .followsSelection = directClip,
+          });
+        }
+      }
+    }
+    owner = owner->parentElement();
+  }
+  if (owner.has_value()) {
+    return {};
+  }
+  return guides;
+}
+
+std::vector<SelectionChromeSnapshot::ClipGuide> CaptureSelectedClipGuides(
+    std::span<const svg::SVGElement> selection,
+    const Transform2d& representedDocumentFromLiveDocument,
+    const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview) {
+  if (selection.size() != 1u) {
+    return {};
+  }
+  if (activeBoundsPreview.has_value()) {
+    return {};
+  }
+  if (HasDisplayNoneInAncestorChain(selection.front())) {
+    return {};
+  }
+  return CaptureClipGuides(selection.front(), representedDocumentFromLiveDocument);
+}
+
+std::vector<SelectionChromeSnapshot::ClipGuide> ProjectCachedClipGuidePaths(
+    const SelectionChromeSnapshot& prior,
+    const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
+    const Transform2d& representedDocumentFromLiveDocument) {
+  std::vector<SelectionChromeSnapshot::ClipGuide> guides = prior.clipGuidesDoc;
+  const Transform2d representedFromStart =
+      (activeBoundsPreview.has_value() ? activeBoundsPreview->documentFromStartDocument
+                                       : Transform2d()) *
+      representedDocumentFromLiveDocument;
+  if (!FiniteClipGuideTransform(representedFromStart)) {
+    return {};
+  }
+  for (auto& guide : guides) {
+    guide.pathDoc = guide.followsSelection ? guide.basePathDoc.transformed(representedFromStart)
+                                           : guide.basePathDoc;
+    if (!FiniteClipGuideBox(guide.pathDoc.bounds())) {
+      return {};
+    }
+  }
+  return guides;
+}
+
+void DrawClipGuidePaths(svg::RendererInterface& renderer, const SelectionChromeSnapshot& snapshot,
+                        double selectionStrokeWidthWorld) {
+  if (snapshot.clipGuidesDoc.empty()) {
+    return;
+  }
+  const double guideStrokeWidth =
+      selectionStrokeWidthWorld * (kClipGuideStrokeLogicalPixels / kSelectionStrokeLogicalPixels);
+  const svg::PaintParams paint = MakeClipGuidePaint(guideStrokeWidth);
+  renderer.setPaint(paint);
+  renderer.setTransform(snapshot.canvasFromDoc);
+  for (const auto& guide : snapshot.clipGuidesDoc) {
+    renderer.drawPath(svg::PathShape{&guide.pathDoc}, paint.strokeParams);
+  }
+}
+
+void DrawSelectedPathOutlines(svg::RendererInterface& renderer,
+                              const SelectionChromeSnapshot& snapshot,
+                              const svg::PaintParams& selectionPaint,
+                              const svg::PaintParams& hiddenSelectionPaint) {
+  if (snapshot.paths.empty()) {
+    return;
+  }
+  renderer.setTransform(snapshot.canvasFromDoc);
+  for (const auto& item : snapshot.paths) {
+    const svg::PaintParams& paint = item.displayNone ? hiddenSelectionPaint : selectionPaint;
+    renderer.setPaint(paint);
+    renderer.drawPath(svg::PathShape{&item.pathDoc}, paint.strokeParams);
+  }
 }
 
 bool ControlLineIntersectsCullRect(const SelectionChromeSnapshot::PathControlLine& lineDoc,
@@ -793,6 +935,9 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     return snapshot;
   }
 
+  snapshot.clipGuidesDoc = CaptureSelectedClipGuides(selection, representedDocumentFromLiveDocument,
+                                                     activeBoundsPreview);
+
   // Per-element path data + transforms. `computedSpline` and
   // `elementFromWorld` both read registry state - done here, before
   // returning, so the post-return snapshot is fully self-contained.
@@ -869,6 +1014,14 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   return snapshot;
 }
 
+void OverlayRenderer::projectCachedClipGuides(
+    SelectionChromeSnapshot* destination, const SelectionChromeSnapshot& prior,
+    const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
+    const Transform2d& representedDocumentFromLiveDocument) {
+  destination->clipGuidesDoc =
+      ProjectCachedClipGuidePaths(prior, activeBoundsPreview, representedDocumentFromLiveDocument);
+}
+
 Box2d OverlayRenderer::ChromeSquareForPoint(const SelectionChromeSnapshot& snapshot,
                                             ChromeSquare kind, const Vector2d& pointDoc) {
   const ChromeDrawScale drawScale =
@@ -888,15 +1041,16 @@ Box2d OverlayRenderer::ChromeSquareForPoint(const SelectionChromeSnapshot& snaps
 void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
                                              const SelectionChromeSnapshot& snapshot) {
   ZoneScopedN("OverlayRenderer::drawChromeFromSnapshot");
-  if (snapshot.paths.empty() && snapshot.hoverPaths.empty() && snapshot.aabbsDoc.empty() &&
-      snapshot.hoverAabbsDoc.empty() && !snapshot.orientedBoundsDoc.has_value() &&
-      snapshot.handleAnchorsDoc.empty() && snapshot.pathAnchorPointsDoc.empty() &&
-      snapshot.pathControlLinesDoc.empty() && snapshot.pathControlPointsDoc.empty() &&
-      !snapshot.marqueeDoc.has_value() && !snapshot.lockedFlash.has_value() &&
-      !snapshot.livePathPreview.has_value() && !snapshot.penPreviewSegmentDoc.has_value() &&
-      !snapshot.penCloseAffordanceDoc.has_value() && !snapshot.textCaretDoc.has_value() &&
-      snapshot.textSelectionQuadsDoc.empty() && !snapshot.textFrameCornersDoc.has_value() &&
-      !snapshot.textBoxDragPreviewDoc.has_value() && snapshot.textBaselinesDoc.empty()) {
+  if (snapshot.paths.empty() && snapshot.clipGuidesDoc.empty() && snapshot.hoverPaths.empty() &&
+      snapshot.aabbsDoc.empty() && snapshot.hoverAabbsDoc.empty() &&
+      !snapshot.orientedBoundsDoc.has_value() && snapshot.handleAnchorsDoc.empty() &&
+      snapshot.pathAnchorPointsDoc.empty() && snapshot.pathControlLinesDoc.empty() &&
+      snapshot.pathControlPointsDoc.empty() && !snapshot.marqueeDoc.has_value() &&
+      !snapshot.lockedFlash.has_value() && !snapshot.livePathPreview.has_value() &&
+      !snapshot.penPreviewSegmentDoc.has_value() && !snapshot.penCloseAffordanceDoc.has_value() &&
+      !snapshot.textCaretDoc.has_value() && snapshot.textSelectionQuadsDoc.empty() &&
+      !snapshot.textFrameCornersDoc.has_value() && !snapshot.textBoxDragPreviewDoc.has_value() &&
+      snapshot.textBaselinesDoc.empty()) {
     return;
   }
 
@@ -981,17 +1135,13 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
   const svg::PaintParams displayNoneSelectionStrokePaint =
       MakeDisplayNoneSelectionStrokePaint(drawScale.selectionStrokeWidthWorld);
 
-  // Per-element path outlines first - the user sees the exact shape of
-  // every selected element regardless of how many are picked.
-  if (!snapshot.paths.empty()) {
-    renderer.setTransform(snapshot.canvasFromDoc);
-    for (const auto& item : snapshot.paths) {
-      const svg::PaintParams& paint =
-          item.displayNone ? displayNoneSelectionStrokePaint : selectionStrokePaint;
-      renderer.setPaint(paint);
-      renderer.drawPath(svg::PathShape{&item.pathDoc}, paint.strokeParams);
-    }
-  }
+  // Guidance sits beneath the bright selected contour. Its thin dashed stroke uses real resolved
+  // clip geometry, never the selected path's AABB; it contributes no handles or hit target.
+  DrawClipGuidePaths(renderer, snapshot, drawScale.selectionStrokeWidthWorld);
+
+  // Bright selected contours remain legible above the dim clip guidance.
+  DrawSelectedPathOutlines(renderer, snapshot, selectionStrokePaint,
+                           displayNoneSelectionStrokePaint);
 
   // Pen hover chrome: the rubber-band segment preview strokes with the
   // control-line style (guidance, not committed geometry); the close-path

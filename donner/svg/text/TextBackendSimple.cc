@@ -29,17 +29,95 @@ uint32_t decodeUtf8(std::string_view str, size_t& i) {
 
 constexpr float kSmallCapScale = 0.8f;
 
+Path SyntheticOblique(const Path& upright) {
+  const Transform2d obliqueFromUpright = Transform2d::SkewX(-std::atan(0.22));
+  const auto point = [&](const Vector2d& uprightPoint) {
+    return obliqueFromUpright.transformPosition(uprightPoint);
+  };
+  PathBuilder builder;
+  upright.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
+    switch (verb) {
+      case Path::Verb::MoveTo: builder.moveTo(point(points[0])); break;
+      case Path::Verb::LineTo: builder.lineTo(point(points[0])); break;
+      case Path::Verb::QuadTo: builder.quadTo(point(points[0]), point(points[1])); break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(point(points[0]), point(points[1]), point(points[2]));
+        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
+    }
+  });
+  return builder.build();
+}
+
 bool HasCachedOutlineTables(const FontManager& fontManager, FontHandle font) {
   return fontManager.sfntTable(font, "glyf").has_value() ||
          fontManager.sfntTable(font, "CFF ").has_value() ||
          fontManager.sfntTable(font, "CFF2").has_value();
 }
 
+bool HasIntrinsicItalicStyle(const FontManager& fontManager, FontHandle font) {
+  if (const auto os2 = fontManager.sfntTable(font, "OS/2"); os2 && os2->size() >= 64) {
+    const uint16_t selection = static_cast<uint16_t>(ReadInt16Be(*os2, 62));
+    return (selection & ((1u << 0) | (1u << 9))) != 0;
+  }
+  if (const auto head = fontManager.sfntTable(font, "head"); head && head->size() >= 46) {
+    return (static_cast<uint16_t>(ReadInt16Be(*head, 44)) & (1u << 1)) != 0;
+  }
+  return false;
+}
+
 /// Cached stb_truetype parse state attached to a font entity.
 struct StbFontComponent {
   stbtt_fontinfo fontInfo{};
   bool valid = false;
+  bool intrinsicItalic = false;
 };
+
+Path OutlineFromStbVertices(const stbtt_vertex* vertices, int numVertices, float scale) {
+  PathBuilder builder;
+  bool hasContour = false;
+  for (int i = 0; i < numVertices; ++i) {
+    const double x = static_cast<double>(vertices[i].x) * scale;
+    // stb_truetype Y is up, SVG Y is down - flip.
+    const double y = -static_cast<double>(vertices[i].y) * scale;
+    switch (vertices[i].type) {
+      case STBTT_vmove:
+        if (hasContour) {
+          builder.closePath();
+        }
+        builder.moveTo(Vector2d(x, y));
+        hasContour = true;
+        break;
+      case STBTT_vline: builder.lineTo(Vector2d(x, y)); break;
+      case STBTT_vcurve: {
+        const double cx = static_cast<double>(vertices[i].cx) * scale;
+        const double cy = -static_cast<double>(vertices[i].cy) * scale;
+        builder.quadTo(Vector2d(cx, cy), Vector2d(x, y));
+        break;
+      }
+      case STBTT_vcubic: {
+        const double cx1 = static_cast<double>(vertices[i].cx) * scale;
+        const double cy1 = -static_cast<double>(vertices[i].cy) * scale;
+        const double cx2 = static_cast<double>(vertices[i].cx1) * scale;
+        const double cy2 = -static_cast<double>(vertices[i].cy1) * scale;
+        builder.curveTo(Vector2d(cx1, cy1), Vector2d(cx2, cy2), Vector2d(x, y));
+        break;
+      }
+      default: break;
+    }
+  }
+  if (hasContour) {
+    builder.closePath();
+  }
+  return builder.build();
+}
+
+bool NeedsSyntheticOblique(const FontManager& manager, const StbFontComponent& cached,
+                           FontHandle font) {
+  const auto request = manager.providerFaceRequest(font);
+  return request && request->style != FontStyle::Normal && !cached.intrinsicItalic &&
+         (manager.isImmutableCatalogFont(font) || manager.isGenericSansProviderFont(font));
+}
 
 }  // namespace
 
@@ -74,6 +152,7 @@ const stbtt_fontinfo* TextBackendSimple::getFontInfo(FontHandle font) const {
   const auto fontData = fontManager_.fontData(font);
   if (stbtt_InitFont(&cached.fontInfo, fontData.data(), 0)) {
     cached.valid = true;
+    cached.intrinsicItalic = HasIntrinsicItalicStyle(fontManager_, font);
   }
 
   return cached.valid ? &cached.fontInfo : nullptr;
@@ -196,51 +275,13 @@ Path TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, float scal
     return {};
   }
 
-  PathBuilder builder;
-  bool hasContour = false;
-
-  for (int i = 0; i < numVertices; ++i) {
-    const double x = static_cast<double>(vertices[i].x) * scale;
-    // stb_truetype Y is up, SVG Y is down - flip.
-    const double y = -static_cast<double>(vertices[i].y) * scale;
-
-    switch (vertices[i].type) {
-      case STBTT_vmove:
-        if (hasContour) {
-          builder.closePath();
-        }
-        builder.moveTo(Vector2d(x, y));
-        hasContour = true;
-        break;
-
-      case STBTT_vline: builder.lineTo(Vector2d(x, y)); break;
-
-      case STBTT_vcurve: {
-        const double cx = static_cast<double>(vertices[i].cx) * scale;
-        const double cy = -static_cast<double>(vertices[i].cy) * scale;
-        builder.quadTo(Vector2d(cx, cy), Vector2d(x, y));
-        break;
-      }
-
-      case STBTT_vcubic: {
-        const double cx1 = static_cast<double>(vertices[i].cx) * scale;
-        const double cy1 = -static_cast<double>(vertices[i].cy) * scale;
-        const double cx2 = static_cast<double>(vertices[i].cx1) * scale;
-        const double cy2 = -static_cast<double>(vertices[i].cy1) * scale;
-        builder.curveTo(Vector2d(cx1, cy1), Vector2d(cx2, cy2), Vector2d(x, y));
-        break;
-      }
-
-      default: break;
-    }
-  }
-
-  if (hasContour) {
-    builder.closePath();
-  }
-
+  Path outline = OutlineFromStbVertices(vertices, numVertices, scale);
   stbtt_FreeShape(info, vertices);
-  return builder.build();
+  const auto* cached = registry_.try_get<StbFontComponent>(font.entity());
+  if (cached != nullptr && NeedsSyntheticOblique(fontManager_, *cached, font)) {
+    outline = SyntheticOblique(outline);
+  }
+  return outline;
 }
 
 bool TextBackendSimple::isBitmapOnly(FontHandle font) const {

@@ -136,6 +136,72 @@ TEST_F(DocumentSyncControllerTest, ThrottledCompletedStyleEditReportsWakeAndAppl
   EXPECT_EQ(rect->getComputedStyle().display.get().value(), svg::Display::None);
 }
 
+TEST_F(DocumentSyncControllerTest, StylesheetColorAppliesAsSoonAsTypingCompletes) {
+  constexpr std::string_view kStyledSvg = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>.cls-5 { fill: blue; }</style>
+  <rect id="target" class="cls-5" width="20" height="20"/>
+</svg>)svg";
+  ASSERT_TRUE(app_.loadFromString(kStyledSvg));
+  app_.setCleanSourceText(kStyledSvg);
+  textEditor_.setText(kStyledSvg);
+  controller_.resetForLoadedDocument(std::string(kStyledSvg));
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+  const std::size_t colorOffset = textEditor_.getText().find("blue");
+  ASSERT_NE(colorOffset, std::string::npos);
+  textEditor_.setSelection(textEditor_.getCoordinatesAtByteOffset(colorOffset),
+                           textEditor_.getCoordinatesAtByteOffset(colorOffset + 4u));
+
+  for (const char ch : std::string_view("red")) {
+    textEditor_.insertText(std::string(1, ch));
+    controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+    (void)app_.flushFrame();
+  }
+
+  EXPECT_NE(app_.document().document().source().find("fill: red"), std::string_view::npos);
+  const std::optional<svg::SVGElement> target = app_.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_EQ(target->getComputedStyle().fill.get(),
+            std::optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+}
+
+TEST_F(DocumentSyncControllerTest, NewStylesheetRuleRecoversAfterPauseInIncompleteCss) {
+  constexpr std::string_view kIncompleteStyleSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style> </style>
+  <rect id="target" class="cls-5" width="20" height="20"/>
+</svg>)svg";
+  ASSERT_TRUE(app_.loadFromString(kIncompleteStyleSvg));
+  app_.setCleanSourceText(kIncompleteStyleSvg);
+  textEditor_.setText(kIncompleteStyleSvg);
+  controller_.resetForLoadedDocument(std::string(kIncompleteStyleSvg));
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+  const std::size_t openingOffset = textEditor_.getText().find("<style>");
+  ASSERT_NE(openingOffset, std::string::npos);
+  const std::size_t insertionOffset = openingOffset + std::string_view("<style>").size();
+  textEditor_.setCursorPosition(textEditor_.getCoordinatesAtByteOffset(insertionOffset));
+  textEditor_.insertText(".");
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  (void)app_.flushFrame();
+  // The user can pause while a new CSS rule is still invalid, then continue typing. The fast
+  // path must recognize the XML style context without relying on a parsed CSS rule.
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.2f);
+
+  for (const char ch : std::string_view("cls-5 { fill: red; }")) {
+    textEditor_.insertText(std::string(1, ch));
+    controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+    (void)app_.flushFrame();
+  }
+
+  EXPECT_NE(app_.document().document().source().find(".cls-5 { fill: red; }"),
+            std::string_view::npos);
+  const std::optional<svg::SVGElement> target = app_.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_EQ(target->getComputedStyle().fill.get(),
+            std::optional(svg::PaintServer::Solid(css::Color(css::RGBA(255, 0, 0, 255)))));
+}
+
 TEST_F(DocumentSyncControllerTest, PartialOpeningTagEditPreservesSelectionWhileInvalid) {
   controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
 

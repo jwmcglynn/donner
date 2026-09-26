@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <sstream>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -16,6 +18,7 @@
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/svg/DocumentState.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
 namespace {
@@ -30,6 +33,11 @@ constexpr std::string_view kInspectorSvg =
          <rect x="10" y="20" width="100" height="50" fill="red" id="target"/>
          <rect id="peer" x="0" y="0" width="10" height="10"/>
        </svg>)";
+
+ImVec2 RectCenter(const Box2d& rect) {
+  return ImVec2(static_cast<float>((rect.topLeft.x + rect.bottomRight.x) * 0.5),
+                static_cast<float>((rect.topLeft.y + rect.bottomRight.y) * 0.5));
+}
 
 const std::string* FindInspectorValue(std::span<const std::pair<std::string, std::string>> entries,
                                       std::string_view name) {
@@ -535,14 +543,14 @@ protected:
   static bool RenderInspectorFrame(SidebarPresenter& presenter, EditorApp* app,
                                    const char* windowName,
                                    const ImVec2 mouse = ImVec2(-1.0f, -1.0f),
-                                   bool mouseDown = false) {
+                                   bool mouseDown = false, float windowHeight = 280.0f) {
     ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(400, 300);
+    io.DisplaySize = ImVec2(400, std::max(300.0f, windowHeight + 20.0f));
     io.AddMousePosEvent(mouse.x, mouse.y);
     io.AddMouseButtonEvent(0, mouseDown);
     ImGui::NewFrame();
     ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(360, 280), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(360, windowHeight), ImGuiCond_Always);
     ImGui::Begin(windowName, nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
@@ -646,7 +654,7 @@ TEST_F(SidebarPresenterImGuiTest, InspectorRendersMultiSelectionAndSingleSelecti
   EXPECT_GT(singleDrawData->TotalVtxCount, 0);
 }
 
-TEST_F(SidebarPresenterImGuiTest, BusyFramePreservesInspectorSnapshotAppearance) {
+TEST_F(SidebarPresenterImGuiTest, BusyFrameKeepsInspectorSnapshotAppearance) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kInspectorSvg));
   app.setCleanSourceText(kInspectorSvg);
@@ -661,12 +669,441 @@ TEST_F(SidebarPresenterImGuiTest, BusyFramePreservesInspectorSnapshotAppearance)
   ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
   const std::vector<ImU32> idleColors = DrawVertexColors();
   ASSERT_FALSE(idleColors.empty());
+  const std::string title = std::string(presenter.inspectorTitleForTesting());
 
   ASSERT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindowName));
   const std::vector<ImU32> busyColors = DrawVertexColors();
   EXPECT_EQ(busyColors, idleColors)
-      << "Worker ownership must gate mutations without dimming or resetting inspector controls";
+      << "Busy frames should replay the captured inspector appearance";
+  EXPECT_EQ(presenter.inspectorTitleForTesting(), title);
+  EXPECT_THAT(presenter.inspectorXmlAttributesForTesting(),
+              ElementsAre(Pair("x", "10"), Pair("y", "20"), Pair("width", "100"),
+                          Pair("height", "50"), Pair("fill", "red"), Pair("id", "target")));
   EXPECT_FALSE(app.canUndo());
+}
+
+TEST_F(SidebarPresenterImGuiTest, StrokeWidthStepUpdatesEverySelectedElement) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  const auto peer = app.document().document().querySelector("#peer");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(peer.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*target, *peer});
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_stroke_step_test";
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+  const auto step = presenter.strokeIncrementRectForTesting();
+  ASSERT_TRUE(step.has_value());
+  const ImVec2 center(static_cast<float>((step->topLeft.x + step->bottomRight.x) * 0.5),
+                      static_cast<float>((step->topLeft.y + step->bottomRight.y) * 0.5));
+
+  RenderInspectorFrame(presenter, &app, kWindowName, center, /*mouseDown=*/true);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName, center, /*mouseDown=*/false));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_EQ(target->getAttribute("style"), "stroke-width: 2");
+  EXPECT_EQ(peer->getAttribute("style"), "stroke-width: 2");
+  ASSERT_TRUE(app.canUndo());
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(app.document().document().querySelector("#target")->getAttribute("style"),
+            std::nullopt);
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(app.document().document().querySelector("#target")->getAttribute("style"),
+            "stroke-width: 2");
+}
+
+TEST_F(SidebarPresenterImGuiTest, LockedSelectionKeepsStrokeControlsReadOnly) {
+  constexpr std::string_view kLockedSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <g data-donner-locked="true"><rect id="locked" width="40" height="40"
+              stroke="black" stroke-width="5"/></g>
+           <rect id="unlocked" x="60" width="40" height="40" stroke="black"/>
+         </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kLockedSvg));
+  const auto locked = app.document().document().querySelector("#locked");
+  const auto unlocked = app.document().document().querySelector("#unlocked");
+  ASSERT_TRUE(locked.has_value());
+  ASSERT_TRUE(unlocked.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*locked, *unlocked});
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##locked_stroke_controls";
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+  const auto step = presenter.strokeIncrementRectForTesting();
+  const auto cap = presenter.strokeCapRectForTesting(1);
+  ASSERT_TRUE(step.has_value());
+  ASSERT_TRUE(cap.has_value());
+  for (const Box2d& control : {*step, *cap}) {
+    EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(control), true));
+    EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(control), false));
+  }
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_FALSE(app.canUndo());
+  EXPECT_EQ(locked->getComputedStyle().strokeWidth.get().value(), Lengthd(5));
+  EXPECT_EQ(unlocked->getAttribute("style"), std::nullopt);
+}
+
+TEST_F(SidebarPresenterImGuiTest, WidthStepperPreservesEmUnitAndUndoRedo) {
+  constexpr std::string_view kRelativeWidthSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <rect id="target" width="100" height="50" font-size="16"
+                 stroke="black" stroke-width="2em"/>
+         </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kRelativeWidthSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##relative_width_step";
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+  const auto step = presenter.strokeIncrementRectForTesting();
+  ASSERT_TRUE(step.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*step), true);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*step), false));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->getAttribute("style"), "stroke-width: 3em");
+  ASSERT_TRUE(app.canUndo());
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  const auto undone = app.document().document().querySelector("#target");
+  ASSERT_TRUE(undone.has_value());
+  EXPECT_EQ(undone->getAttribute("style"), std::nullopt);
+  EXPECT_EQ(undone->getComputedStyle().strokeWidth.get().value(), Lengthd(2, LengthUnit::Em));
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  const auto redone = app.document().document().querySelector("#target");
+  ASSERT_TRUE(redone.has_value());
+  EXPECT_EQ(redone->getComputedStyle().strokeWidth.get().value(), Lengthd(3, LengthUnit::Em));
+}
+
+TEST_F(SidebarPresenterImGuiTest, MultiFrameWidthDragRecordsOneUndoEntry) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##stroke_width_drag_undo";
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+  const auto field = presenter.strokeWidthRectForTesting();
+  ASSERT_TRUE(field.has_value());
+  const ImVec2 start = RectCenter(*field);
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, start, false));
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, start, true));
+  bool applied = false;
+  ImVec2 end = start;
+  for (int step = 1; step <= 4; ++step) {
+    end.x = start.x + 10.0f * static_cast<float>(step);
+    applied = RenderInspectorFrame(presenter, &app, kWindowName, end, true) || applied;
+    if (step == 2 || step == 4) {
+      app.flushFrame();
+    }
+  }
+  EXPECT_TRUE(applied);
+  const std::string afterDrag(app.document().document().source());
+  EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
+  RenderInspectorFrame(presenter, &app, kWindowName, end, false);
+  app.flushFrame();  // The release can have no queued DOM mutation.
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(app.document().document().querySelector("#target")->getAttribute("style"),
+            std::nullopt);
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(std::string(app.document().document().source()), afterDrag);
+}
+
+TEST_F(SidebarPresenterImGuiTest, DashOffsetEditPreservesEmUnit) {
+  constexpr std::string_view kRelativeOffsetSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <path id="target" d="M10 40 L110 40" stroke="black"
+                 stroke-dasharray="4 2" stroke-dashoffset="2em"/>
+         </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kRelativeOffsetSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##relative_dash_offset";
+  constexpr float kTallInspector = 560.0f;
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), false,
+                                    kTallInspector));
+  const auto offset = presenter.strokeDashOffsetRectForTesting();
+  ASSERT_TRUE(offset.has_value());
+  ASSERT_TRUE(presenter.setStrokeDashOffsetForTesting(app, 3.0));
+  ASSERT_TRUE(app.flushFrame());
+  const Lengthd computedOffset = target->getComputedStyle().strokeDashoffset.get().value();
+  EXPECT_EQ(computedOffset.unit, LengthUnit::Em);
+  EXPECT_EQ(computedOffset.value, 3.0);
+}
+
+TEST_F(SidebarPresenterImGuiTest, SegmentedStrokeChoicesAlignAndApplyCss) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_stroke_segments_test";
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+
+  const auto butt = presenter.strokeCapRectForTesting(0);
+  const auto round = presenter.strokeCapRectForTesting(1);
+  const auto square = presenter.strokeCapRectForTesting(2);
+  const auto join = presenter.strokeJoinRectForTesting(2);
+  ASSERT_TRUE(butt.has_value());
+  ASSERT_TRUE(round.has_value());
+  ASSERT_TRUE(square.has_value());
+  ASSERT_TRUE(join.has_value());
+  EXPECT_NEAR(butt->topLeft.y, round->topLeft.y, 0.01);
+  EXPECT_NEAR(round->topLeft.y, square->topLeft.y, 0.01);
+  EXPECT_LT(butt->bottomRight.x, round->topLeft.x);
+  EXPECT_LT(round->bottomRight.x, square->topLeft.x);
+  EXPECT_GT(join->topLeft.y, butt->topLeft.y);
+  EXPECT_TRUE(presenter.strokeMiterLimitRectForTesting().has_value());
+
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*round), /*mouseDown=*/true);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*round),
+                                   /*mouseDown=*/false));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(target->getAttribute("style").has_value());
+  EXPECT_THAT(std::string(std::string_view(*target->getAttribute("style"))),
+              ::testing::HasSubstr("stroke-linecap: round"));
+
+  presenter.refreshSnapshot(app);
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+  const auto roundJoin = presenter.strokeJoinRectForTesting(2);
+  ASSERT_TRUE(roundJoin.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*roundJoin), /*mouseDown=*/true);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*roundJoin),
+                                   /*mouseDown=*/false));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(target->getAttribute("style").has_value());
+  EXPECT_THAT(std::string(std::string_view(*target->getAttribute("style"))),
+              ::testing::HasSubstr("stroke-linejoin: round"));
+  presenter.refreshSnapshot(app);
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+  EXPECT_FALSE(presenter.strokeMiterLimitRectForTesting().has_value());
+}
+
+TEST_F(SidebarPresenterImGuiTest, DashedLineToggleAppliesAndRestoresPattern) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_dash_toggle_test";
+  constexpr float kTallInspector = 520.0f;
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), false,
+                                    kTallInspector));
+  const auto toggle = presenter.strokeDashToggleRectForTesting();
+  ASSERT_TRUE(toggle.has_value());
+  ASSERT_LT(toggle->bottomRight.y, kTallInspector) << *toggle;
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*toggle), /*mouseDown=*/true,
+                       kTallInspector);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*toggle),
+                                   /*mouseDown=*/false, kTallInspector));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->getAttribute("style"), "stroke-dasharray: 4 2");
+  ASSERT_TRUE(app.hasSelection());
+
+  presenter.refreshSnapshot(app);
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), false,
+                                    kTallInspector));
+  const auto enabledToggle = presenter.strokeDashToggleRectForTesting();
+  ASSERT_TRUE(enabledToggle.has_value());
+  EXPECT_LT(enabledToggle->bottomRight.y, kTallInspector) << *enabledToggle;
+  EXPECT_EQ(enabledToggle->topLeft.y, toggle->topLeft.y);
+  const bool queuedOnDown =
+      RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*enabledToggle),
+                           /*mouseDown=*/true, kTallInspector);
+  EXPECT_FALSE(queuedOnDown);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*enabledToggle),
+                                   /*mouseDown=*/false, kTallInspector));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->getAttribute("style"), "stroke-dasharray: none");
+}
+
+TEST_F(SidebarPresenterImGuiTest, DashPreviewAndPresetReplaceCustomPattern) {
+  constexpr std::string_view kCustomDashSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <path id="target" d="M10 40 L110 40" stroke="black"
+                 stroke-dasharray="44 14"/>
+         </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kCustomDashSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_dash_preset_test";
+  constexpr float kTallInspector = 560.0f;
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), false,
+                                    kTallInspector));
+  const auto preview = presenter.strokeDashPreviewRectForTesting();
+  const auto dotPreset = presenter.strokeDashPresetRectForTesting(1);
+  ASSERT_TRUE(preview.has_value());
+  ASSERT_TRUE(dotPreset.has_value());
+  EXPECT_TRUE(presenter.strokeCustomDashSelectedForTesting());
+  EXPECT_GT(preview->width(), dotPreset->width());
+  EXPECT_GT(dotPreset->topLeft.y, preview->topLeft.y);
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*dotPreset), /*mouseDown=*/true,
+                       kTallInspector);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*dotPreset),
+                                   /*mouseDown=*/false, kTallInspector));
+  ASSERT_TRUE(app.flushFrame());
+  const auto style = target->getAttribute("style");
+  ASSERT_TRUE(style.has_value());
+  EXPECT_THAT(std::string(std::string_view(*style)), ::testing::HasSubstr("stroke-dasharray: 1 4"));
+  presenter.refreshSnapshot(app);
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), false,
+                                    kTallInspector));
+  EXPECT_FALSE(presenter.strokeCustomDashSelectedForTesting());
+}
+
+TEST(SidebarPresenterTest, InvalidDashPatternDoesNotQueueStyleMutation) {
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  EXPECT_FALSE(presenter.submitDashPatternForTesting(app, "4 bogus"));
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_EQ(target->getAttribute("style"), std::nullopt);
+
+  ASSERT_TRUE(presenter.submitDashPatternForTesting(app, "4 2"));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->getAttribute("style"), "stroke-dasharray: 4 2");
+  ASSERT_TRUE(presenter.submitDashPatternForTesting(app, "none"));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->getAttribute("style"), "stroke-dasharray: none");
+}
+
+TEST_F(SidebarPresenterImGuiTest, LongExistingDashPatternIsVisibleAndReadOnly) {
+  std::string pattern;
+  for (int i = 0; i < 70; ++i) {
+    if (!pattern.empty()) {
+      pattern += ' ';
+    }
+    pattern += "1 2";
+  }
+  const std::string svg =
+      "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"120\" height=\"80\">"
+      "<rect id=\"target\" width=\"100\" height=\"50\" stroke=\"black\" "
+      "stroke-dasharray=\"" +
+      pattern + "\"/></svg>";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, svg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_GT(pattern.size(), 127u);
+  EXPECT_FALSE(presenter.dashPatternEditableForTesting());
+  EXPECT_FALSE(presenter.submitDashPatternForTesting(app, pattern));
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, "##long_dash_pattern"));
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_EQ(target->getAttribute("stroke-dasharray"), pattern);
+  EXPECT_EQ(target->getAttribute("style"), std::nullopt);
+
+  const auto computedBefore = target->getComputedStyle().strokeDasharray.get();
+  ASSERT_TRUE(computedBefore.has_value());
+  std::ostringstream originalPattern;
+  originalPattern << *computedBefore;
+  constexpr char kWindowName[] = "##long_dash_toggle";
+  constexpr float kTallInspector = 560.0f;
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), false,
+                                    kTallInspector));
+  const auto toggle = presenter.strokeDashToggleRectForTesting();
+  ASSERT_TRUE(toggle.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*toggle), true, kTallInspector);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*toggle), false,
+                                   kTallInspector));
+  ASSERT_TRUE(app.flushFrame());
+  presenter.refreshSnapshot(app);
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), false,
+                                    kTallInspector));
+  const auto offToggle = presenter.strokeDashToggleRectForTesting();
+  ASSERT_TRUE(offToggle.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*offToggle), true, kTallInspector);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*offToggle), false,
+                                   kTallInspector));
+  ASSERT_TRUE(app.flushFrame());
+  const auto restored = target->getComputedStyle().strokeDasharray.get();
+  ASSERT_TRUE(restored.has_value());
+  std::ostringstream restoredPattern;
+  restoredPattern << *restored;
+  EXPECT_EQ(restoredPattern.str(), originalPattern.str());
+}
+
+TEST(SidebarPresenterTest, MarkerIdsAreCachedAndRefreshAfterSourceMutation) {
+  constexpr std::string_view kMarkerSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <defs><marker id="arrow"><path d="M0,0 L4,2 L0,4"/></marker></defs>
+           <path id="target" d="M10,10 L100,10" stroke="black"/>
+         </svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, kMarkerSvg));
+  EXPECT_THAT(presenter.markerIdsForTesting(), ElementsAre("arrow"));
+  const std::size_t scans = presenter.markerScanCountForTesting();
+  presenter.refreshSnapshot(app);
+  EXPECT_EQ(presenter.markerScanCountForTesting(), scans);
+
+  const auto marker = app.document().document().querySelector("#arrow");
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(marker.has_value());
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*marker);
+  ASSERT_TRUE(app.setAttributeOnSelection("id", "new-arrow"));
+  ASSERT_TRUE(app.flushFrame());
+  app.setSelection(*target);
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.markerIdsForTesting(), ElementsAre("new-arrow"));
+  EXPECT_EQ(presenter.markerScanCountForTesting(), scans + 1u);
+}
+
+TEST_F(SidebarPresenterImGuiTest, BusyStrokeWidthStepDoesNotQueueMutation) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  const auto peer = app.document().document().querySelector("#peer");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(peer.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*target, *peer});
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_busy_stroke_step_test";
+  ASSERT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindowName));
+  const auto step = presenter.strokeIncrementRectForTesting();
+  ASSERT_TRUE(step.has_value());
+  const ImVec2 center(static_cast<float>((step->topLeft.x + step->bottomRight.x) * 0.5),
+                      static_cast<float>((step->topLeft.y + step->bottomRight.y) * 0.5));
+
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindowName, center, /*mouseDown=*/true));
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindowName, center, /*mouseDown=*/false));
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_EQ(target->getAttribute("style"), std::nullopt);
 }
 
 TEST_F(SidebarPresenterImGuiTest, TreeViewOpensAncestorsForPendingScrollTarget) {
@@ -876,6 +1313,26 @@ TEST_F(SidebarPresenterImGuiTest, InspectorRendersEditableTransformFields) {
   EXPECT_FALSE(app.canUndo()) << "rendering alone must not record undo entries";
 }
 
+TEST_F(SidebarPresenterImGuiTest, TransformAppearsBeforeStroke) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, "##sidebar_section_order_test"));
+
+  const auto transform =
+      presenter.transformFieldRectForTesting(SidebarPresenter::TransformField::PositionX);
+  const auto stroke = presenter.strokeIncrementRectForTesting();
+  ASSERT_TRUE(transform.has_value());
+  ASSERT_TRUE(stroke.has_value());
+  EXPECT_LT(transform->bottomRight.y, stroke->topLeft.y);
+}
+
 TEST_F(SidebarPresenterImGuiTest, TransformFieldsUseAlignedValueColumns) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kInspectorSvg));
@@ -1030,17 +1487,17 @@ TEST_F(SidebarPresenterImGuiTest, MatrixDisclosureRendersRawComponentCells) {
 
   // Baseline frame with the disclosure collapsed.
   EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
-  const ImDrawData* collapsedDrawData = ImGui::GetDrawData();
-  ASSERT_NE(collapsedDrawData, nullptr);
-  const int collapsedVertices = collapsedDrawData->TotalVtxCount;
+  for (int index = 0; index < 6; ++index) {
+    EXPECT_FALSE(presenter.matrixFieldRectForTesting(index).has_value());
+  }
 
-  // Opening the disclosure renders the six raw matrix drag cells: strictly
-  // more geometry, still no queued mutation and no undo entry.
+  // Opening the disclosure builds all six raw matrix drag cells, still without
+  // a queued mutation or undo entry.
   EXPECT_FALSE(RenderInspectorFrameWithMatrixOpen(presenter, &app, kWindowName));
-  const ImDrawData* openDrawData = ImGui::GetDrawData();
-  ASSERT_NE(openDrawData, nullptr);
-  EXPECT_GT(openDrawData->TotalVtxCount, collapsedVertices)
-      << "The open matrix disclosure must draw the a-f component cells.";
+  for (int index = 0; index < 6; ++index) {
+    EXPECT_TRUE(presenter.matrixFieldRectForTesting(index).has_value())
+        << "Matrix component " << index << " should have an ImGui item.";
+  }
   EXPECT_FALSE(app.canUndo()) << "Rendering the matrix cells must not record undo entries.";
 
   // An in-progress matrix edit displays the edit-buffer value for its cell.
@@ -1052,9 +1509,9 @@ TEST_F(SidebarPresenterImGuiTest, MatrixDisclosureRendersRawComponentCells) {
 
   // Busy frame (no live app): the cells render disabled and stay inert.
   EXPECT_FALSE(RenderInspectorFrameWithMatrixOpen(presenter, nullptr, kWindowName));
-  const ImDrawData* busyDrawData = ImGui::GetDrawData();
-  ASSERT_NE(busyDrawData, nullptr);
-  EXPECT_GT(busyDrawData->TotalVtxCount, collapsedVertices);
+  for (int index = 0; index < 6; ++index) {
+    EXPECT_TRUE(presenter.matrixFieldRectForTesting(index).has_value());
+  }
 }
 
 TEST_F(SidebarPresenterImGuiTest, PathOperationButtonsRenderDisabledWithoutLiveApp) {

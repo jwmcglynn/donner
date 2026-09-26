@@ -109,7 +109,10 @@ TEST(EditorControlSessionTest, InspectorTextInputReplay) {
   replay.metadata.windowWidth = 1100;
   replay.metadata.windowHeight = 720;
   replay.metadata.displayScale = 1.0;
-  const int selectAllModifiers = ImGuiIO{}.ConfigMacOSXBehaviors ? (1 << 3) : (1 << 0);
+  const bool nativeMacMenu = ImGuiIO{}.ConfigMacOSXBehaviors;
+  const int selectAllModifiers = nativeMacMenu ? (1 << 3) : (1 << 0);
+  // The non-macOS ImGui menu occupies space above the Inspector's Position X input.
+  const double positionXInputY = nativeMacMenu ? 361.0 : 378.0;
   for (std::uint64_t index = 0; index <= 44; ++index) {
     repro::ReproFrame frame;
     frame.index = index;
@@ -119,7 +122,7 @@ TEST(EditorControlSessionTest, InspectorTextInputReplay) {
     frame.mouseY = 240;
     if (index >= 21) {
       frame.mouseX = 868;
-      frame.mouseY = 375;
+      frame.mouseY = positionXInputY;
     }
     if (index == 10 || index == 21 || index == 23) {
       frame.mouseButtonMask = 1;
@@ -143,6 +146,18 @@ TEST(EditorControlSessionTest, InspectorTextInputReplay) {
   }
   const std::filesystem::path rnrPath = TestTempDir() / "inspector_input.rnr";
   ASSERT_EQ(repro::WriteReproFile(rnrPath, replay), true);
+  repro::GlRnrReplayOptions focusOptions;
+  focusOptions.rnrPath = rnrPath;
+  focusOptions.maxFrame = 29;
+  focusOptions.captureFrames = {29};
+  const char* outputs = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  focusOptions.outputDir = outputs != nullptr ? outputs : TestTempDir();
+  repro::GlRnrReplayResult focusResult;
+  std::string focusError;
+  ASSERT_EQ(repro::RunGlRnrReplay(focusOptions, &focusResult, &focusError), true) << focusError;
+  ASSERT_THAT(focusResult.finalSelectedElementLabel,
+              ::testing::Optional(::testing::HasSubstr("target")))
+      << "Select All must remain inside the focused Position X input";
   EditorControlSession session;
   const ToolCallResult result =
       session.handleToolCall("replay_rnr", json{{"rnr_path", rnrPath.string()},

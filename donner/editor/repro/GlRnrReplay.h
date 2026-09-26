@@ -62,6 +62,10 @@ struct GlRnrReplayOptions {
   ///
   /// Frame zero captures the beginning of the slide-in transition.
   bool sourcePaneVisible = false;
+  /// Start with the sample picker open, matching a fresh editor launch.
+  bool showWelcome = false;
+  /// Render without compositor tiles for an independent pixel reference capture.
+  bool compositedOff = false;
   /// Suppress non-document render-pane chrome when writing captures.
   bool contentOnlyCapture = false;
   /// Read retained GPU textures back to count diagnostic pixels. Expensive and disabled unless a
@@ -155,6 +159,10 @@ struct GlRnrReplayFrameDiagnostics {
   std::string statusSuffix;
   /// Canvas size implied by the current viewport.
   Vector2i viewportDesiredCanvas = Vector2i::Zero();
+  /// Render-pane content size used to choose a full or viewport-bounded raster.
+  Vector2d viewportPaneSize = Vector2d::Zero();
+  /// Actual output surface size after viewport bounding.
+  Vector2i rasterOutputSize = Vector2i::Zero();
   /// Canvas size committed to the document path used by the editor shell.
   Vector2i documentCanvas = Vector2i::Zero();
   /// Canvas size last rasterized by the compositor.
