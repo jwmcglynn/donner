@@ -604,9 +604,11 @@ public:
   /// Remove one line and update fold, marker, and change positions.
   /// @param index Line to remove.
   void removeLine(int index);
-  /// Insert a line and update fold and marker positions.
-  /// @param index Index of the inserted line.
-  /// @param column Column where the preceding line is split.
+  /// Insert a blank line at index, or split the line at index when column is nonzero.
+  /// Fold and error-marker positions are updated after insertion.
+  /// @param index Blank-line insertion index, or existing line to split.
+  /// @param column Split column; zero inserts a blank line.
+  /// @return Inserted blank line at index, or split suffix at index + 1.
   Line& insertLine(int index, int column);
   /// Remove fold markers in a coordinate range.
   /// @param start First coordinate in the range.
