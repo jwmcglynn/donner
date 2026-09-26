@@ -60,7 +60,7 @@ flowchart TB
   host["Native window or browser host<br/>input, lifecycle, file bridge"]
   editor["Donner Editor<br/>visual SVG authoring system"]
   engine["Donner SVG Engine<br/>DOM, CSS, layout, rendering, compositing"]
-  graphics["Geode GPU runtime<br/>Metal, WebGPU, optional Vulkan"]
+  graphics["Geode GPU runtime<br/>Metal, Vulkan, browser WebGPU"]
 
   author -->|"edits and commands"| host
   files <-->|"open and save bytes"| host
@@ -331,11 +331,11 @@ an immediate ImGui overlay. `svg::Renderer` resolves at build time to tiny-skia
 (software) or Geode (GPU, `DONNER_EDITOR_WGPU`); the shipped `editor` target uses Geode.
 
 The editor settles a presentable surface's format before its UI and renderer pipelines
-are created. Native macOS uses a Metal layer by default. Native Linux uses a transitional
-WebGPU surface by default; `DONNER_GPU_BACKEND=vulkan` selects a GLFW Vulkan surface and
-its physical-device owner before device creation. The browser uses its transferred canvas.
-The editor's UI and framebuffer contexts share the selected physical owner. Explicit
-offscreen render targets serve headless and replay paths.
+are created. Native macOS uses a Metal layer and native Linux selects a GLFW Vulkan surface
+with its physical-device owner before device creation. Both are the platform defaults. The
+browser uses its transferred canvas through Donner's browser WebGPU bridge. The editor's UI
+and framebuffer contexts share the selected physical owner. Explicit offscreen render
+targets serve headless and replay paths.
 
 During an active transform, `SelectTool` exposes gesture-owned bounds and transform
 state. `OverlayRenderer` builds combined bounds and handles directly from that

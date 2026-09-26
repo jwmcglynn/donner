@@ -18,11 +18,11 @@ authoring paths.
   application. The compiler implements a documented v1 profile of WGSL rather than the full
   language; see `docs/wgsl_compiler.md` for the boundary.
 - **Geode default editor rendering** — the editor renders through the Geode GPU backend by default.
-- **Geode presentation** — the editor settles its surface format before compiling UI and
-  renderer pipelines. Native macOS uses a Metal layer by default, and native Linux defaults to a
-  transitional WebGPU surface. `DONNER_GPU_BACKEND=vulkan` selects a GLFW Vulkan surface before
-  device creation on Linux; the browser presents to its transferred canvas. Headless and replay
-  paths keep an explicit offscreen render target.
+- **Native GPU runtime** — Geode and the editor use Metal on macOS and Vulkan on Linux by
+  default; the browser uses Donner's browser WebGPU bridge. The editor settles each surface format
+  before compiling UI and renderer pipelines, while headless and replay paths use explicit
+  offscreen targets. Shipped native products do not link Rust-built GPU libraries; a pinned Linux
+  resvg comparison backend remains test-only and outside the shipped dependency closure.
 - **Fluid canvas rendering** — zoom, drag, overlay, and large selections stay responsive.
 - **In-tree path operations + editor pathfinder fixes** — boolean path operations backed by in-tree
   PathOps, with Pen/pathfinder stability fixes.
