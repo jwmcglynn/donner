@@ -870,26 +870,16 @@ async function openBasicShapes(page: Page): Promise<{
   );
   await waitForBrowserComposite(page);
 
-  // The source pane can collapse at the Firefox compatibility viewport, moving the document
-  // hundreds of CSS pixels left. Probe the actual published artboard instead of a 1600px layout.
-  const documentClip = presentedDocumentRegion(await readViewportStats(page));
   // Gecko can return an empty image for any clipped screenshot of the transferred
   // WebGPU canvas, even when the clip is the whole canvas and the frame is visible.
-  // Use the browser's un-clipped page capture there, then search only the document rectangle.
+  // Use the browser's un-clipped page capture there, then search only the current document
+  // rectangle. A worker result can arrive before the editor publishes its new viewport, so do
+  // not freeze that search rectangle until the same capture verifies Basic Shapes pixels.
   const firefox = page.context().browser()?.browserType().name() === "firefox";
   const pageViewport = page.viewportSize();
   if (firefox && pageViewport === null) {
     throw new Error("the Firefox viewport is unavailable for the document pixel probe");
   }
-  const captureClip = firefox && pageViewport !== null
-    ? { x: 0, y: 0, width: pageViewport.width, height: pageViewport.height }
-    : documentClip;
-  const documentSearchBounds = {
-    minX: documentClip.x - captureClip.x,
-    minY: documentClip.y - captureClip.y,
-    maxX: documentClip.x + documentClip.width - captureClip.x,
-    maxY: documentClip.y + documentClip.height - captureClip.y,
-  };
   // A completed worker result is not yet a presented document. The counter
   // above advances when the app thread polls the raster off the worker, at
   // least one UI frame before that frame reaches the browser composite - and
@@ -900,27 +890,69 @@ async function openBasicShapes(page: Page): Promise<{
   // Shapes blue rounded rectangle inside the render pane.
   // Last pixel count the probe measured, reported below on both paths.
   let lastBluePixels = -1;
+  let documentClip: CssRegion | null = null;
+  let captureClip: CssRegion | null = null;
   let baselinePng: Buffer | null = null;
   let blueRect: PixelBounds | null = null;
+  let lastProbe: {
+    shot: Buffer;
+    state: object;
+    documentClip: CssRegion | null;
+    captureClip: CssRegion | null;
+    bluePixels: number;
+  } | null = null;
   try {
     await expect
       .poll(
         async () => {
-          const shot = firefox
+          const state = await page.evaluate(() => ({
+            sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
+            completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+            presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+            viewport: window.__donnerViewportStats ?? null,
+          }));
+          const observedDocumentClip = state.viewport === null
+            ? null
+            : presentedDocumentRegion(state.viewport);
+          const currentDocumentClip = observedDocumentClip !== null
+              && observedDocumentClip.width > 0 && observedDocumentClip.height > 0
+            ? observedDocumentClip
+            : null;
+          const currentCaptureClip = currentDocumentClip === null
+            ? null
+            : firefox && pageViewport !== null
+            ? { x: 0, y: 0, width: pageViewport.width, height: pageViewport.height }
+            : currentDocumentClip;
+          const shot = firefox || currentCaptureClip === null
             ? await page.screenshot()
-            : await page.screenshot({ clip: captureClip });
-          const bounds = readEditorPixelBoundsFromPng(
+            : await page.screenshot({ clip: currentCaptureClip });
+          const bounds = currentDocumentClip !== null && currentCaptureClip !== null
+            ? readEditorPixelBoundsFromPng(shot, "basic-blue", currentCaptureClip, {
+              minX: currentDocumentClip.x - currentCaptureClip.x,
+              minY: currentDocumentClip.y - currentCaptureClip.y,
+              maxX: currentDocumentClip.x + currentDocumentClip.width - currentCaptureClip.x,
+              maxY: currentDocumentClip.y + currentDocumentClip.height - currentCaptureClip.y,
+            })
+            : null;
+          lastBluePixels = bounds?.pixels ?? 0;
+          lastProbe = {
             shot,
-            "basic-blue",
-            captureClip,
-            documentSearchBounds,
-          );
-          if (bounds !== null) {
+            state,
+            documentClip: currentDocumentClip,
+            captureClip: currentCaptureClip,
+            bluePixels: lastBluePixels,
+          };
+          if (
+            bounds !== null && state.sampleId === "basic-shapes"
+            && state.completedResults > beforeSampleResults && state.presentedAtMs !== null
+          ) {
+            documentClip = currentDocumentClip;
+            captureClip = currentCaptureClip;
             baselinePng = shot;
             blueRect = bounds;
+            return lastBluePixels;
           }
-          lastBluePixels = bounds === null ? 0 : bounds.pixels;
-          return lastBluePixels;
+          return 0;
         },
         {
           message: "expected the presented render pane to show the Basic Shapes blue rectangle",
@@ -949,16 +981,38 @@ async function openBasicShapes(page: Page): Promise<{
         activeSample: window.__donnerActiveSampleStats,
       }))
       .catch((error: unknown) => ({ unavailable: String(error) }));
-    // Only worth the extra page work when the pixels never arrived; a passing
-    // wait already proved the whole path.
-    const canvasDiagnosis = lastBluePixels > 0 ? null : await diagnosePresentedCanvas(page);
+    // Only worth the extra page work when no capture met the presented-sample and pixel checks.
+    const canvasDiagnosis = baselinePng === null ? await diagnosePresentedCanvas(page) : null;
+    if (baselinePng === null && lastProbe !== null) {
+      try {
+        await attachEvidenceFile("open-basic-shapes-last-probe", lastProbe.shot, "image/png");
+        await attachEvidenceFile(
+          "open-basic-shapes-last-probe-state",
+          JSON.stringify(
+            {
+              state: lastProbe.state,
+              documentClip: lastProbe.documentClip,
+              captureClip: lastProbe.captureClip,
+              bluePixels: lastProbe.bluePixels,
+              pageViewport,
+              beforeSampleResults,
+            },
+            null,
+            2,
+          ),
+          "application/json",
+        );
+      } catch (error) {
+        console.warn(`open-basic-shapes evidence unavailable: ${String(error)}`);
+      }
+    }
     console.log(
       `open-basic-shapes bluePixels=${lastBluePixels} state=${JSON.stringify(presentationState)}`
         + ` canvas=${JSON.stringify(canvasDiagnosis)}`,
     );
   }
 
-  if (baselinePng === null || blueRect === null) {
+  if (documentClip === null || captureClip === null || baselinePng === null || blueRect === null) {
     throw new Error("Basic Shapes never produced a verified blue artboard capture");
   }
   return { canvasBounds, documentClip, captureClip, baselinePng, blueRect };
