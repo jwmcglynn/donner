@@ -530,7 +530,7 @@ public:
    *
    * Also refused with \ref GpuErrorType::InvalidState for a registration of another device's
    * texture, which is exported from the device that allocated it; with
-   * \ref GpuErrorType::DeviceLost once this device is lost; and with
+   * `GpuErrorType::DeviceLost` once this device is lost; and with
    * \ref GpuErrorType::Unsupported by a backend whose runtime devices never share a native
    * device.
    *
@@ -543,7 +543,7 @@ public:
    *
    * Runs on this device's thread and reads only \p source, never the producer device. The
    * registration describes the texture as the producer does, except that its usage is limited to
-   * \ref TextureUsage::Sampled and \ref TextureUsage::CopySrc: a consumer reads what the producer
+   * \ref TextureUsage::Sampled and `TextureUsage::CopySrc`: a consumer reads what the producer
    * wrote and never writes it. It never owns the allocation (\ref ownsTextureBacking is false) but
    * holds it until this device recycles the registration's slot, which is after the last of this
    * device's submissions naming it has completed.
@@ -561,8 +561,8 @@ public:
    * released its handle; \ref GpuErrorType::InvalidState for this device's own export or while a
    * producer write to the texture is queued and not yet submitted; \ref
    * GpuErrorType::DeviceMismatch for another backend or native device; \ref
-   * GpuErrorType::UsageMismatch when the texture can be neither sampled nor copied from; \ref
-   * GpuErrorType::DeviceLost when either device is lost; and
+   * GpuErrorType::UsageMismatch when the texture can be neither sampled nor copied from;
+   * `GpuErrorType::DeviceLost` when either device is lost; and
    * \ref GpuErrorType::Unsupported by a backend that cannot name another device's textures.
    *
    * @param source Token from the producer's \ref exportTexture.
@@ -674,10 +674,10 @@ public:
    * Begins mapping a range of \p buffer for host access, and returns the handle that names the
    * mapping.
    *
-   * The mapping is not readable yet: \ref waitForMapping decides when it is. The returned handle
-   * is what keeps the mapped range reachable - \ref unmapBuffer consumes it and every copy of it
-   * goes stale at that moment, so a read through a handle whose mapping has been released is a
-   * reported validation failure rather than a read of memory that is no longer there.
+   * The mapping is not readable yet: \ref donner::gpu::Device::waitForMapping decides when it is.
+   * The returned handle is what keeps the mapped range reachable - \ref unmapBuffer consumes it and
+   * every copy of it goes stale at that moment, so a read through a handle whose mapping has been
+   * released is a reported validation failure rather than a read of memory that is no longer there.
    *
    * A buffer carries at most one mapping at a time: a second request while one is open is
    * refused with \ref GpuErrorType::InvalidState. Two mappings of one buffer would each be
@@ -695,6 +695,15 @@ public:
    */
   Result<BufferMapping> mapBufferAsync(const Buffer& buffer, MapMode mode, uint64_t offsetBytes,
                                        uint64_t byteCount);
+
+  /// Test seam for \ref donner::gpu::Device::waitForMapping. Production callers pass none; a test
+  /// injects a clock and a rest so a budget is verified deterministically and without spending it.
+  struct MapWaitTestHooks {
+    /// Clock the budget is measured against. Defaults to `std::chrono::steady_clock::now`.
+    std::function<std::chrono::steady_clock::time_point()> now;
+    /// Rests for the given duration. Defaults to `std::this_thread::sleep_for`.
+    std::function<void(std::chrono::microseconds)> rest;
+  };
 
   /**
    * Waits for a pending mapping in slices, until it completes, the caller stops it, the budget
@@ -717,16 +726,8 @@ public:
    * @param mapping Live mapping of this device.
    * @param params Slice length and total budget; both must be greater than zero.
    * @param shouldCancel Consulted before each slice; may be empty for an uncancellable wait.
+   * @param testHooks Optional clock/rest hooks for deterministic tests; production passes none.
    */
-  /// Test seam for \ref waitForMapping. Production callers pass none; a test injects a clock and
-  /// a rest so a budget is verified deterministically and without spending it.
-  struct MapWaitTestHooks {
-    /// Clock the budget is measured against. Defaults to `std::chrono::steady_clock::now`.
-    std::function<std::chrono::steady_clock::time_point()> now;
-    /// Rests for the given duration. Defaults to `std::this_thread::sleep_for`.
-    std::function<void(std::chrono::microseconds)> rest;
-  };
-
   Result<MapWaitReport> waitForMapping(const BufferMapping& mapping, const MapWaitParams& params,
                                        const std::function<bool()>& shouldCancel,
                                        const MapWaitTestHooks& testHooks = {});
@@ -736,10 +737,10 @@ public:
    *
    * Fails closed when the mapping is stale, belongs to another device, has not completed, named
    * a buffer that has since been destroyed, or belongs to a device that has been lost
-   * (\ref GpuErrorType::DeviceLost): the span is only valid while the handle names a live, ready
-   * mapping. Completion means a \ref waitForMapping on this mapping reported
-   * \ref MapWaitOutcome::Ready; until one has, reading is refused rather than racing whatever
-   * the GPU is still writing.
+   * (`GpuErrorType::DeviceLost`): the span is only valid while the handle names a
+   * live, ready mapping. Completion means a \ref donner::gpu::Device::waitForMapping on this
+   * mapping reported \ref MapWaitOutcome::Ready; until one has, reading is refused rather than
+   * racing whatever the GPU is still writing.
    *
    * The span aliases the backend's allocation rather than a copy of it, so it lives only as long
    * as the mapping does: \ref unmapBuffer, destroying the buffer, or losing the device all end
@@ -1062,7 +1063,7 @@ protected:
    * Backend hook: export the texture in \p slotIndex, which the runtime has already validated as a
    * live texture this device allocated and no surface has out.
    *
-   * The default refuses with \ref GpuErrorType::Unsupported: a backend that reaches each native
+   * The default refuses with `GpuErrorType::Unsupported`: a backend that reaches each native
    * device through exactly one runtime device has no other device that could name the texture.
    *
    * @param slotIndex Validated live texture slot.

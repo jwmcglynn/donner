@@ -29,7 +29,7 @@ namespace donner::gpu {
 template <typename T>
 struct IsBitmaskEnum : std::false_type {};
 
-/// Concept satisfied by enums marked with \ref IsBitmaskEnum.
+/// Concept satisfied by enums marked with \ref donner::gpu::IsBitmaskEnum.
 template <typename T>
 concept BitmaskEnum = IsBitmaskEnum<T>::value;
 
@@ -108,7 +108,7 @@ enum class BufferUsage : uint32_t {
   MapRead = 1 << 6,  //!< Host-readable after readback.
 };
 
-/// Platform object kind a \ref NativeSurfaceHandle names.
+/// Platform object kind a \ref donner::gpu::NativeSurfaceHandle names.
 ///
 /// One kind per windowing system this runtime can present to. A browser canvas is named by a CSS
 /// selector rather than by a pointer, which is why the handle below carries a string field
@@ -193,9 +193,9 @@ enum class MapMode : uint8_t {
 
 /// State of a pending buffer mapping after one backend wait slice.
 ///
-/// This is what a backend reports; \ref MapWaitOutcome is what the caller of a bounded wait
-/// sees, and the two differ because the deadline and the caller's cancellation are decisions the
-/// runtime makes, not the backend.
+/// This is what a backend reports; \ref donner::gpu::MapWaitOutcome is what the caller of a bounded
+/// wait sees, and the two differ because the deadline and the caller's cancellation are decisions
+/// the runtime makes, not the backend.
 enum class MapSliceState : uint8_t {
   Pending,     //!< The mapping has not completed yet.
   Ready,       //!< The mapping completed; its bytes are readable.
@@ -380,7 +380,7 @@ enum class StoreOp : uint8_t {
   Discard,  //!< Discard results (transient attachments).
 };
 
-/// Shader source language of a \ref ShaderModuleDescriptor.
+/// Shader source language of a \ref donner::gpu::ShaderModuleDescriptor.
 enum class ShaderSourceKind : uint8_t {
   Wgsl,   //!< WGSL text.
   Msl,    //!< Metal Shading Language text.
@@ -448,7 +448,7 @@ std::ostream& operator<<(std::ostream& os, const MapWaitReport& value);
 
 /// Returns true if \p value is a known enumerator. Every enum arriving through a descriptor is
 /// checked with these overloads so out-of-range casts fail closed with
-/// \ref GpuErrorType::InvalidDescriptor instead of flowing into layout or copy math.
+/// \ref donner::gpu::GpuErrorType::InvalidDescriptor instead of flowing into layout or copy math.
 /// @param value Value to check.
 bool IsKnownEnumValue(TextureFormat value);
 /// Returns true if \p value is a known enumerator. @param value Value to check.
@@ -495,14 +495,14 @@ bool IsValidBitmask(ShaderStage value);
 bool IsValidBitmask(ColorWriteMask value);
 
 /**
- * Bytes per texel for a \ref TextureFormat.
+ * Bytes per texel for a \ref donner::gpu::TextureFormat.
  *
  * @param format Texture format.
  */
 uint32_t TextureFormatBytesPerTexel(TextureFormat format);
 
 /**
- * Byte size of a \ref VertexFormat.
+ * Byte size of a \ref donner::gpu::VertexFormat.
  *
  * @param format Vertex attribute format.
  */
@@ -583,9 +583,10 @@ struct SurfaceCapabilities {
 /// Outcome of acquiring from or presenting to a surface.
 ///
 /// The three failures are different problems with different recoveries, so each is its own value.
-/// A surface whose configuration no longer matches its window is \ref Outdated and recovers by
-/// reconfiguring; a surface whose platform object is gone is \ref Lost and recovers only by
-/// creating a new surface from a fresh native handle; a lost device recovers by neither.
+/// A surface whose configuration no longer matches its window is \ref
+/// donner::gpu::SurfaceStatus::Outdated and recovers by reconfiguring; a surface whose platform
+/// object is gone is \ref donner::gpu::SurfaceStatus::Lost and recovers only by creating a new
+/// surface from a fresh native handle; a lost device recovers by neither.
 enum class SurfaceStatus : uint8_t {
   Success,     //!< The operation succeeded.
   Outdated,    //!< The configuration no longer matches the window. Reconfigure and retry.
@@ -611,9 +612,9 @@ struct BindGroupLayoutEntry {
   uint32_t binding = 0;                           //!< Shader binding index.
   ShaderStage visibility = ShaderStage::None;     //!< Stages that may access the binding.
   BindingType type = BindingType::UniformBuffer;  //!< Kind of resource bound.
-  /// Texel format a \ref BindingType::WriteOnlyStorageTexture2d binding writes; the bound
-  /// texture must have been created with this format. Ignored for every other binding type.
-  TextureFormat storageTextureFormat = TextureFormat::RGBA8Unorm;
+  TextureFormat storageTextureFormat = TextureFormat::RGBA8Unorm; /**< Texel format a
+    \ref BindingType::WriteOnlyStorageTexture2d binding writes. The bound texture must have been
+    created with this format. Ignored for every other binding type. */
 };
 
 /// Descriptor for `Device::createBindGroupLayout`.
@@ -689,17 +690,14 @@ struct ShaderModuleDescriptor {
   RcString sourceText;                                   //!< Shader source text (text kinds only).
   ShaderSourceKind sourceKind = ShaderSourceKind::Wgsl;  //!< Source language.
   std::vector<uint32_t> spirvWords;  //!< SPIR-V words (\ref ShaderSourceKind::Spirv only).
-  /// Compute entry points this module contains, with the workgroup size compiled into each.
-  /// Required to create a compute pipeline against this module; render-only modules leave it
-  /// empty. \ref donner::gpu::shader::ComputeEntryPointsOf fills it from the IR module the
-  /// source was emitted from, so the size is never transcribed by hand.
-  std::vector<ComputeEntryPointInfo> computeEntryPoints;
-  /// Buffer requirements derived from shader IR. An engaged empty list means no entry point
-  /// uses a buffer; absence means requirements were not supplied. Native Metal requires these
-  /// facts for every MSL module before native compilation, including an explicitly empty list
-  /// for modules without buffer bindings. Facts let pipeline creation reject mismatched binding
-  /// types and stage visibility before a shader can read an unbound native buffer argument.
-  std::optional<std::vector<ShaderBufferBindingInfo>> bufferBindings;
+  std::vector<ComputeEntryPointInfo> computeEntryPoints; /**< Compute entry points with their
+    compiled workgroup sizes. Required for compute pipelines; render-only modules leave it empty.
+    \ref donner::gpu::shader::ComputeEntryPointsOf fills it from the emitted IR module. */
+  std::optional<std::vector<ShaderBufferBindingInfo>> bufferBindings; /**< Buffer requirements
+    derived from shader IR. An engaged empty list means no entry point uses a buffer; absence means
+    requirements were not supplied. Native Metal requires these facts for every MSL module before
+    compilation, including an explicitly empty list for modules without buffer bindings. They
+    let pipeline creation reject binding-type and stage-visibility mismatches before shader use. */
 };
 
 /// One vertex attribute within a \ref VertexBufferLayout.
