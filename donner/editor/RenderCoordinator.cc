@@ -1552,6 +1552,13 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     return;
   }
 
+  // The worker only publishes its latest request, so the posted epoch identifies this result.
+  if (lastPostedAttempt_.has_value() &&
+      lastPostedAttempt_->presentationEpoch != presentationEpoch_) {
+    rejectPixelCaptureResult(resultOpt);
+    return;
+  }
+
   const auto& result = *resultOpt;
   const auto compositorStats = renderWorker_.asyncRenderer.compositorRenderFrameStats();
 #ifdef __EMSCRIPTEN__

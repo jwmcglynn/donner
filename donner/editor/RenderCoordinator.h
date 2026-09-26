@@ -295,6 +295,8 @@ public:
   void requestPresentationRefresh() {
     pendingPresentationRefresh_ = true;
     ++presentationEpoch_;
+    pendingOverviewResult_.reset();
+    overviewDocVersion_ = 0;
   }
   /// Arm or disarm the worker-owned document pixel capture.
   void setDocumentPixelCaptureEnabled(bool enabled);
