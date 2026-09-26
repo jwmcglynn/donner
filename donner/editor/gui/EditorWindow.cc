@@ -1224,7 +1224,7 @@ AcquiredFrame RebuildAndReacquire(
   if (surface == nullptr) {
     std::fprintf(stderr,
                  "EditorWindow: the presentation surface was lost and could not be rebuilt from "
-                 "the window; the window will stop presenting\n");
+                 "the window; this frame cannot be presented\n");
     configuredPx = Vector2i::Zero();
     return AcquiredFrame{gpu::Texture(), gpu::SurfaceStatus::Lost};
   }
@@ -1483,9 +1483,9 @@ struct EditorWindow::WgpuState {
   /// This window's own frame target, for a window with no presentable surface. Allocated on
   /// \ref framebufferGeodeDevice, so it is declared after that device and released before it.
   gpu::Texture offscreenTexture;
-  /// Where frames are presented, or null when this window renders into \ref offscreenTexture
-  /// instead of a presentable surface. Giving a surface up hands its frame back through the
-  /// device it was built on, so it is declared after that device and destroyed before it.
+  /// Where frames are presented. Null in explicit offscreen mode or temporarily after a lost
+  /// surface; \ref presentationRequired distinguishes those cases. Giving a surface up hands its
+  /// frame back through the device it was built on, so this is destroyed before that device.
   std::unique_ptr<internal::PresentationSurface> presentation;
   /// A window created for a visible surface must retry attaching it after a transient loss;
   /// a null surface must never silently become a headless target.

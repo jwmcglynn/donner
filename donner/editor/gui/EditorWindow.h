@@ -367,8 +367,9 @@ struct PresentationFrameOutcome {
  * can succeed are attempted here rather than costing the frame. A configuration that has drifted
  * out of date is followed to the current extent and the frame acquired again; a surface whose
  * platform object is gone is rebuilt from the window that still holds a handle to make a new one
- * from, and the frame acquired from the replacement. Each is attempted once, so a status that
- * repeats settles instead of looping.
+ * from, and the frame acquired from the replacement. A later call may rebuild a surface that a
+ * previous frame had to release. Each call attempts a rebuild once, so a status that repeats
+ * settles instead of looping.
  *
  * A lost device is not rebuilt: nothing here recovers it, so it gives the surface up and asks
  * the caller to report the loss.
