@@ -728,7 +728,7 @@ struct RendererResourceStats {
   bool textMaterializationBudgetRejected = false;
 };
 
-/// Backend type for \ref RendererTextureSnapshot payloads.
+/// Backend type for \ref donner::svg::RendererTextureSnapshot "RendererTextureSnapshot" payloads.
 enum class RendererTextureSnapshotBackend : uint8_t {
   Unknown,
   Geode,
