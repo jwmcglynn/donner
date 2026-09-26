@@ -441,9 +441,8 @@ donner_cc_test(
     data = [
         "//donner/svg/renderer/testdata",
     ],
-    # Geode runs through this suite using the shared goldens. The default
-    # threshold and per-test params live in `geodeOverrides()` in
-    # `Renderer_tests.cc`; the separate resvg override policy is in Design 0021.
+    # Geode runs through this suite using the shared goldens. Its default threshold and
+    # per-test overrides are defined in `Renderer_tests.cc`.
     deps = [
         ":image_comparison_test_fixture",
         ":renderer_test_utils",
