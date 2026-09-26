@@ -32,6 +32,9 @@
 #include "donner/css/Color.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
+#if defined(__APPLE__)
+#include "donner/gpu/metal/MetalDevice.h"
+#endif
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -1404,6 +1407,88 @@ TEST_F(RendererGeodeTest, ACancelledCaptureStopsHoldingItsSourceOnceItsWorkCompl
   EXPECT_EQ(device->lifetimeTextureReleases(), releasesBefore + 1u)
       << "the cancelled capture's registration must not keep the released target's backing "
          "owned after its readback completed";
+}
+
+/// The readback context can finish its lease after the editor's last frame. While the lease is
+/// active the owner must schedule idle maintenance without blocking on it; when cancellation
+/// releases the lease it must wake that owner, which then polls the capture context without
+/// requiring another draw or submit.
+TEST_F(RendererGeodeTest, CancelledCaptureWakesIdleOwnerWithoutAnotherFrame) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(device, nullptr);
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  renderer.endFrame();
+  ASSERT_EQ(device->waitForQueueIdle(), geode::GpuWaitResult::Complete);
+  device->pollIdle();
+  ASSERT_FALSE(device->hasIdleWork());
+
+  std::atomic<int> wakes{0};
+  device->setIdleWakeCallback([&] { wakes.fetch_add(1, std::memory_order_release); });
+#if defined(__APPLE__)
+  gpu::metal::MetalDevice* captureBackend = nullptr;
+  device->setSnapshotCaptureRuntimeHookForTesting([&](gpu::Device& runtime) {
+    captureBackend = &static_cast<gpu::metal::MetalDevice&>(runtime);
+    captureBackend->holdNextCompletionForTest();
+  });
+#endif
+  std::atomic<bool> cancel{false};
+  std::promise<void> mapReached;
+  std::future<void> atMap = mapReached.get_future();
+  std::latch resumeCapture(1);
+  device->setSnapshotReadbackHookForTesting([&](geode::GeodeDevice::SnapshotReadbackPhase phase) {
+    if (phase == geode::GeodeDevice::SnapshotReadbackPhase::MapRequested) {
+      cancel.store(true, std::memory_order_release);
+      mapReached.set_value();
+      resumeCapture.wait();
+    }
+  });
+
+  RendererBitmap captured;
+  std::thread reader([&] {
+    captured =
+        renderer.takeSnapshotInterruptibly([&] { return cancel.load(std::memory_order_acquire); });
+  });
+  if (atMap.wait_for(std::chrono::seconds(8)) != std::future_status::ready) {
+    cancel.store(true, std::memory_order_release);
+    resumeCapture.count_down();
+    reader.join();
+    device->setSnapshotReadbackHookForTesting({});
+#if defined(__APPLE__)
+    if (captureBackend) {
+      captureBackend->releaseHeldCompletionForTest();
+    }
+    device->setSnapshotCaptureRuntimeHookForTesting({});
+#endif
+    device->setIdleWakeCallback({});
+    FAIL() << "capture did not reach its in-flight readback map";
+  }
+
+  const auto pollStart = std::chrono::steady_clock::now();
+  EXPECT_TRUE(device->hasIdleWork()) << "an active capture needs an idle owner wake";
+  device->pollIdle();
+  EXPECT_LT(std::chrono::steady_clock::now() - pollStart, std::chrono::seconds(1))
+      << "an idle poll must not wait for a capture lease held on another thread";
+
+  resumeCapture.count_down();
+  reader.join();
+  device->setSnapshotReadbackHookForTesting({});
+  EXPECT_TRUE(captured.empty());
+  EXPECT_GT(wakes.load(std::memory_order_acquire), 0)
+      << "releasing the cancelled capture must wake the idle owner";
+#if defined(__APPLE__)
+  EXPECT_NE(captureBackend, nullptr);
+  EXPECT_TRUE(device->hasIdleWork())
+      << "the capture's held readback submission still has resources to retire";
+  if (captureBackend) {
+    captureBackend->releaseHeldCompletionForTest();
+  }
+  device->setSnapshotCaptureRuntimeHookForTesting({});
+#endif
+  ASSERT_EQ(device->waitForSnapshotCaptureIdleForTesting(), geode::GpuWaitResult::Complete);
+  device->pollIdle();
+  EXPECT_FALSE(device->hasIdleWork()) << "idle maintenance must reclaim capture work";
+  device->setIdleWakeCallback({});
 }
 
 TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {

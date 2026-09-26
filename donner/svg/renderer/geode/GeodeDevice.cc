@@ -199,7 +199,9 @@ struct GeodeDevice::Impl {
 
   std::timed_mutex snapshotCaptureMutex;
   std::unique_ptr<GeodeDevice> snapshotCaptureContext;
+  std::atomic<bool> snapshotCaptureIdlePollRequested{false};
   std::function<void(SnapshotReadbackPhase)> snapshotCaptureHook;
+  std::function<void(gpu::Device&)> snapshotCaptureRuntimeHook;
 };
 
 /// Distinct snapshot sizes retained by the readback pool: covers the main
@@ -297,8 +299,17 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateLogicalContext(
 }
 
 GeodeDevice::SnapshotCaptureLease::~SnapshotCaptureLease() {
-  if (lock.owns_lock() && owner && context) {
-    owner->finishSnapshotCapture(*context);
+  if (lock.owns_lock() && owner) {
+    if (context) {
+      owner->finishSnapshotCapture(*context);
+    }
+    const bool pending = context && context->runtimeDevice().hasPendingDestroys();
+    lock.unlock();
+    const bool pollRequested =
+        owner->impl_->snapshotCaptureIdlePollRequested.exchange(false, std::memory_order_acq_rel);
+    if (pending || pollRequested) {
+      owner->wakeIdleOwner();
+    }
   }
 }
 
@@ -460,6 +471,11 @@ void GeodeDevice::setSnapshotReadbackHookForTesting(
   impl_->snapshotCaptureHook = std::move(hook);
 }
 
+void GeodeDevice::setSnapshotCaptureRuntimeHookForTesting(std::function<void(gpu::Device&)> hook) {
+  std::lock_guard lock(impl_->snapshotCaptureMutex);
+  impl_->snapshotCaptureRuntimeHook = std::move(hook);
+}
+
 void GeodeDevice::notifySnapshotReadbackPhaseForTesting(SnapshotReadbackPhase phase) const {
   if (impl_->snapshotCaptureHook) {
     impl_->snapshotCaptureHook(phase);
@@ -524,6 +540,9 @@ GeodeDevice::SnapshotCaptureLease GeodeDevice::acquireSnapshotCapture(
   }
   lease.context = impl_->snapshotCaptureContext.get();
   lease.context->isolatedReadbackCounters_.reset();
+  if (impl_->snapshotCaptureRuntimeHook) {
+    impl_->snapshotCaptureRuntimeHook(lease.context->runtimeDevice());
+  }
   notifySnapshotReadbackPhaseForTesting(SnapshotReadbackPhase::ContextAcquired);
   if (shouldCancel && shouldCancel()) {
     readbackCaptureCancellations_.fetch_add(1, std::memory_order_relaxed);
@@ -545,8 +564,19 @@ void GeodeDevice::pollIdleSnapshotCaptureContext() {
   // The capture context is used only under its lease, from whatever thread captures; an owner
   // that finds it busy leaves the poll to that capture's own end.
   std::unique_lock lock(impl_->snapshotCaptureMutex, std::try_to_lock);
-  if (lock.owns_lock() && impl_->snapshotCaptureContext) {
+  if (!lock.owns_lock()) {
+    impl_->snapshotCaptureIdlePollRequested.store(true, std::memory_order_release);
+    return;
+  }
+  if (impl_->snapshotCaptureContext) {
     impl_->snapshotCaptureContext->runtimeDevice().poll();
+  }
+}
+
+void GeodeDevice::wakeIdleOwner() {
+  std::lock_guard lock(impl_->textureBackingRetirementMutex);
+  if (impl_->textureBackingWake) {
+    impl_->textureBackingWake();
   }
 }
 
@@ -1100,8 +1130,21 @@ bool GeodeDevice::hasIdleWork() const {
       runtimeDevice_->hasPendingDestroys()) {
     return true;
   }
-  std::lock_guard lock(impl_->textureBackingRetirementMutex);
-  return !impl_->textureBackingsAwaitingRetirement.empty();
+  {
+    std::lock_guard lock(impl_->textureBackingRetirementMutex);
+    if (!impl_->textureBackingsAwaitingRetirement.empty()) {
+      return true;
+    }
+  }
+  // The capture device has its own submission serials. Never block a UI or renderer owner on a
+  // capture running elsewhere; its lease posts a wake when it releases the context.
+  std::unique_lock lock(impl_->snapshotCaptureMutex, std::try_to_lock);
+  if (!lock.owns_lock()) {
+    impl_->snapshotCaptureIdlePollRequested.store(true, std::memory_order_release);
+    return true;
+  }
+  return impl_->snapshotCaptureContext != nullptr &&
+         impl_->snapshotCaptureContext->runtimeDevice().hasPendingDestroys();
 }
 
 void GeodeDevice::pollIdle() {
