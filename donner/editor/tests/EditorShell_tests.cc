@@ -43,7 +43,6 @@
 #ifdef DONNER_EDITOR_WGPU
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/resources/FontManager.h"
