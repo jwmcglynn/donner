@@ -43,6 +43,13 @@ commands, texture uploads, checkerboard targets, UI textures and compositor diag
 validated runtime handles. Production shader constructors select WGSL, MSL or SPIR-V projections
 from the same reflected program interfaces.
 
+All 27 shipped WGSL artifact families are checked against the production target census, reparsed
+and compared with their frozen host interfaces by the C++ validator, and compiled from their exact
+emitted bytes by pinned Chromium WebGPU. Invalid WGSL, resource and entry-point mismatches fail the
+named shader tests; a test-only rounding kernel still runs on the browser GPU against CPU values.
+These shader gates do not replace browser editor pixels or physical-device qualification, and they
+do not prove the remaining production dependency closure is free of Rust-built archives.
+
 Metal renderer and editor parity and Vulkan renderer parity are qualified. macOS Geode and editor
 roots default to native Metal while explicit WebGPU requests remain available. The served and
 shipped editor and default standalone Geode WebAssembly packages select the browser runtime; their
@@ -730,9 +737,13 @@ later default flip without changing Metal or browser surface ownership.
       registers 1,679 cases per comparison mode, including disabled registrations; its filtered
       GeodeGolden IDs match the native Vulkan variant at the same tree. The wrapper is tagged
       manual and CI selects it for relevant Linux changes; no macOS wgpu reference lane runs.
-- [ ] Replace `wgsl_emitter_geode_validation_tests` outside the resvg oracle with non-Rust
-      validation of every shipped WGSL projection. Keep real-browser shader/pixel execution as
-      a separate gate for Donner's browser backend.
+- [x] Validate every shipped WGSL projection without the native WebGPU-C++ wrapper or its
+      Rust-built archive. `//donner/gpu/shader:wgsl_projection_census_tests` fails if a production
+      artifact is omitted; `//donner/gpu/shader:wgsl_projection_validation_tests` reparses exact
+      WGSL bytes and checks frozen reflection and negative controls; and
+      `//donner/gpu/shader:wgsl_chromium_compilation_tests` uses the pinned browser compiler and
+      retains a GPU/CPU rounding check. Browser editor pixels and physical-device qualification
+      remain separate gates.
 - [ ] Remove the transitional adapter, `wgpu-native` archives/overlays, WebGPU-C++ headers,
       obsolete rules and orphaned code from every production and non-test closure. Preserve only
       pinned Linux archive(s) and the API wrapper needed by the resvg comparison target. Their
@@ -932,7 +943,7 @@ complete repository input set, with
 | Contract / remaining work                                      | Owning verification                                                                                                                                                                                                                                                                                                                                                               |
 | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Indexed draws, resource identity, command/lifetime validation  | `//donner/gpu:gpu_tests`; extend native Metal/Vulkan execution tests and browser contract tests for indexed draws.                                                                                                                                                                                                                                                                |
-| Compiled shader artifacts, reflection and projection isolation | `//donner/gpu/shader/wgsl:wgsl_tests`, `//donner/gpu/shader:shader_tests`, native projection validators, and `//donner/gpu/shader:wgsl_emitter_geode_validation_tests` for the explicitly exercised subset below.                                                                                                                                                                 |
+| Compiled shader artifacts, reflection and projection isolation | `//donner/gpu/shader/wgsl:wgsl_tests`, `//donner/gpu/shader:shader_tests`, `//donner/gpu/shader:wgsl_projection_census_tests`, `//donner/gpu/shader:wgsl_projection_validation_tests`, `//donner/gpu/shader:wgsl_chromium_compilation_tests`, and native projection validators.                                                                                                   |
 | Native vertex layouts and pixels                               | `//donner/gpu/metal/tests:metal_solid_fill_tests`, `//donner/gpu/vulkan/tests:vulkan_solid_fill_tests`; add the matching browser execution cases.                                                                                                                                                                                                                                 |
 | Resvg renderer pixel parity                                    | `//donner/svg/renderer/tests:resvg_test_suite_geode` on Linux native Vulkan and macOS native Metal; Linux-only `//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux` uses the same GeodeGolden cases and reviewed golden/pixelmatch rules. The default-text CPU variant already covers TinyGolden. Browser rendering remains separately qualified in browser lanes. |
 | Snapshot/target lifetime, alpha, cropping, refusal             | `//donner/svg/renderer/tests:renderer_geode_tests`; replace adapter-only coverage with native runtime execution as each caller migrates.                                                                                                                                                                                                                                          |
@@ -943,16 +954,14 @@ complete repository input set, with
 | Structural counters, memory, timing and size                   | `//donner/gpu/baseline:baseline_counters_tests`, `//donner/svg/renderer/geode:geode_perf_tests`, and the paired measurements required by the cutover gates.                                                                                                                                                                                                                       |
 | Dependency closure                                             | `//tools/gpu_inventory:check_no_rust_dependencies_tests`, the blocking lexical verifier, planned required `CI / no-rust-configured-closure` job over configured product roots, generated CMake validation, and source-archive/artifact evidence.                                                                                                                                  |
 
-The WebGPU fixture directly exercises the shipped checkerboard pipelines and WGSL modules or
-pipelines for `color_space_convert`, `filter_color_matrix`, `filter_resolve`, `flood`,
-`gaussian_blur`, `morphology`, `offset`, `subregion_clip`, and `tile`. Its test-only SolidFill,
-ColorMatrix, float-storage and math modules do not extend that production-family list. The
-following production families have no direct module or pipeline assertion in that fixture:
-`component_transfer`, `composite`, `convolve_matrix`, `diffuse_lighting`, `displacement_map`,
-`drop_shadow`, `filter_blend`, `filter_image`, `image_blit`, `merge`, `slug_fill`,
-`slug_gradient`, `slug_mask`, `snapshot_unpremultiply`, `specular_lighting`, and `turbulence`.
-Their compile-time artifacts and other runtime tests are separate evidence; the non-Rust
-replacement for this fixture must validate every shipped WGSL projection before its removal.
+The shader package's production artifact census currently contains 27 WGSL projections,
+including the checkerboard and UI draw families. The non-Rust CPU test reparses each frozen WGSL
+projection and compares every reflected resource, buffer member, entry point and interface
+variable; its invalid-source and altered-interface controls must fail acceptance. A separate
+Chromium test compiles all 27 exact emitted WGSL strings through `GPUShaderModule` and checks its
+invalid-source and wrong-entry controls. It also executes the test-only round-half-away compute
+module over half-boundary values and compares readback with a CPU reference. Native Metal/Vulkan
+execution and real browser renderer pixels retain their separate verification roles.
 
 The Linux native Vulkan resvg gate selects `DONNER_GPU_BACKEND=vulkan` with
 `DONNER_REQUIRE_VULKAN=1`; the macOS native Metal gate selects `DONNER_GPU_BACKEND=metal` with
