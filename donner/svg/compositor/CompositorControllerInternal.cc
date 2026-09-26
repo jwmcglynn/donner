@@ -176,7 +176,8 @@ Vector2i BitmapDimensionsForViewport(const RenderViewport& viewport) {
 LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Registry& registry,
                                                Entity firstEntity, Entity lastEntity,
                                                const RenderViewport& viewport,
-                                               const Transform2d& surfaceFromCanvas) {
+                                               const Transform2d& surfaceFromCanvas,
+                                               bool retainFullInteractionBounds) {
   LayerRasterGeometry result;
   result.viewport = viewport;
   result.surfaceFromCanvas = surfaceFromCanvas;
@@ -197,8 +198,20 @@ LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Regi
   {
     ZoneScopedN("Compositor::computeLayerRasterGeometry::computeBounds");
     RendererDriver boundsDriver(renderer);
-    tightBoundsCanvas = boundsDriver.computeEntityRangeBounds(registry, firstEntity, lastEntity,
-                                                              viewport, surfaceFromCanvas);
+    tightBoundsCanvas = boundsDriver.computeEntityRangeBounds(
+        registry, firstEntity, lastEntity, viewport, surfaceFromCanvas,
+        RendererDriver::EntityRangeBoundsOptions{
+            .clipToCanvas = !retainFullInteractionBounds,
+            // A mask can only remove source coverage. Bounding the unmasked source geometry is
+            // conservative, and lets expensive masked layers stay intrinsic-sized instead of
+            // allocating/rasterizing the full visible canvas on every child edit.
+            .allowMaskSuperset = true,
+        });
+  }
+  if (retainFullInteractionBounds && !tightBoundsCanvas.has_value()) {
+    result.interactionBoundsRejected = true;
+    result.interactionBoundsUnavailable = true;
+    return result;
   }
 
   // Snap to integer pixels and pad for AA. The padding matters: filter
@@ -212,17 +225,43 @@ LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Regi
   constexpr double kEdgePaddingPx = 2.0;
   Box2d tightBoundsSnapped;
   if (tightBoundsCanvas.has_value()) {
+    const bool finiteBounds = std::isfinite(tightBoundsCanvas->topLeft.x) &&
+                              std::isfinite(tightBoundsCanvas->topLeft.y) &&
+                              std::isfinite(tightBoundsCanvas->bottomRight.x) &&
+                              std::isfinite(tightBoundsCanvas->bottomRight.y);
+    if (!finiteBounds) {
+      result.interactionBoundsRejected = retainFullInteractionBounds;
+      result.interactionBoundsUnavailable = retainFullInteractionBounds;
+      return result;
+    }
     const Vector2d padding(kEdgePaddingPx, kEdgePaddingPx);
     Box2d padded(tightBoundsCanvas->topLeft - padding, tightBoundsCanvas->bottomRight + padding);
-    const Vector2d snapTL(std::floor(std::max(0.0, padded.topLeft.x)),
-                          std::floor(std::max(0.0, padded.topLeft.y)));
-    const Vector2d snapBR(std::ceil(std::min(viewport.size.x, padded.bottomRight.x)),
-                          std::ceil(std::min(viewport.size.y, padded.bottomRight.y)));
+    const Vector2d snapTL(
+        std::floor(retainFullInteractionBounds ? padded.topLeft.x
+                                               : std::max(0.0, padded.topLeft.x)),
+        std::floor(retainFullInteractionBounds ? padded.topLeft.y
+                                               : std::max(0.0, padded.topLeft.y)));
+    const Vector2d snapBR(
+        std::ceil(retainFullInteractionBounds ? padded.bottomRight.x
+                                              : std::min(viewport.size.x, padded.bottomRight.x)),
+        std::ceil(retainFullInteractionBounds ? padded.bottomRight.y
+                                              : std::min(viewport.size.y, padded.bottomRight.y)));
     if (snapBR.x > snapTL.x && snapBR.y > snapTL.y) {
       tightBoundsSnapped = Box2d(snapTL, snapBR);
       result.boundsCanvas = tightBoundsSnapped;
-      result.tight = tightBoundsSnapped.width() < viewport.size.x ||
-                     tightBoundsSnapped.height() < viewport.size.y;
+      if (retainFullInteractionBounds) {
+        const double width = tightBoundsSnapped.width();
+        const double height = tightBoundsSnapped.height();
+        result.interactionBoundsRejected =
+            width > kMaximumInteractionTileSidePx || height > kMaximumInteractionTileSidePx ||
+            width * height > static_cast<double>(kMaximumInteractionTilePixels) ||
+            std::abs(snapTL.x) > 10'000'000.0 || std::abs(snapTL.y) > 10'000'000.0 ||
+            std::abs(snapBR.x) > 10'000'000.0 || std::abs(snapBR.y) > 10'000'000.0;
+        result.tight = !result.interactionBoundsRejected;
+      } else {
+        result.tight = tightBoundsSnapped.width() < viewport.size.x ||
+                       tightBoundsSnapped.height() < viewport.size.y;
+      }
     }
   }
 

@@ -40,6 +40,8 @@ declare global {
     __donnerWorkerStats?: {
       cachedTileCount?: number;
       completedResults: number;
+      frameVersion?: number;
+      acceptedForPresentation?: boolean;
       sourceVersion?: number;
       undoEntryCount?: number;
       offscreenCreateCount?: number;
@@ -63,6 +65,7 @@ declare global {
       pendingClick: boolean;
       selectedCount: number;
       workerBusy: boolean;
+      moved: boolean;
       pointerX: number;
       pointerY: number;
       eyedropperArmed: boolean;
@@ -821,6 +824,9 @@ async function diagnosePresentedCanvas(
 async function openBasicShapes(page: Page): Promise<{
   canvasBounds: { x: number; y: number; width: number; height: number };
   documentClip: { x: number; y: number; width: number; height: number };
+  captureClip: { x: number; y: number; width: number; height: number };
+  baselinePng: Buffer;
+  blueRect: PixelBounds;
 }> {
   const editorCanvas = page.locator("canvas#canvas");
   const canvasBounds = await editorCanvas.boundingBox();
@@ -852,7 +858,7 @@ async function openBasicShapes(page: Page): Promise<{
   const beforeSampleResults = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  await page.mouse.click(canvasBounds.x + canvasBounds.width * 0.5, canvasBounds.y + 282);
+  await page.mouse.click(canvasBounds.x + canvasBounds.width * 0.76, canvasBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expectWorkerResultsToReach(
     page,
@@ -864,11 +870,25 @@ async function openBasicShapes(page: Page): Promise<{
   );
   await waitForBrowserComposite(page);
 
-  const documentClip = {
-    x: canvasBounds.x + 280,
-    y: canvasBounds.y + 250,
-    width: 660,
-    height: 430,
+  // The source pane can collapse at the Firefox compatibility viewport, moving the document
+  // hundreds of CSS pixels left. Probe the actual published artboard instead of a 1600px layout.
+  const documentClip = presentedDocumentRegion(await readViewportStats(page));
+  // Gecko can return an empty image for any clipped screenshot of the transferred
+  // WebGPU canvas, even when the clip is the whole canvas and the frame is visible.
+  // Use the browser's un-clipped page capture there, then search only the document rectangle.
+  const firefox = page.context().browser()?.browserType().name() === "firefox";
+  const pageViewport = page.viewportSize();
+  if (firefox && pageViewport === null) {
+    throw new Error("the Firefox viewport is unavailable for the document pixel probe");
+  }
+  const captureClip = firefox && pageViewport !== null
+    ? { x: 0, y: 0, width: pageViewport.width, height: pageViewport.height }
+    : documentClip;
+  const documentSearchBounds = {
+    minX: documentClip.x - captureClip.x,
+    minY: documentClip.y - captureClip.y,
+    maxX: documentClip.x + documentClip.width - captureClip.x,
+    maxY: documentClip.y + documentClip.height - captureClip.y,
   };
   // A completed worker result is not yet a presented document. The counter
   // above advances when the app thread polls the raster off the worker, at
@@ -880,24 +900,36 @@ async function openBasicShapes(page: Page): Promise<{
   // Shapes blue rounded rectangle inside the render pane.
   // Last pixel count the probe measured, reported below on both paths.
   let lastBluePixels = -1;
+  let baselinePng: Buffer | null = null;
+  let blueRect: PixelBounds | null = null;
   try {
     await expect
       .poll(
         async () => {
-          const shot = await page.screenshot({ clip: documentClip });
-          const bounds = readEditorPixelBoundsFromPng(shot, "basic-blue", documentClip, {
-            minX: 0,
-            minY: 0,
-            maxX: documentClip.width,
-            maxY: documentClip.height,
-          });
+          const shot = firefox
+            ? await page.screenshot()
+            : await page.screenshot({ clip: captureClip });
+          const bounds = readEditorPixelBoundsFromPng(
+            shot,
+            "basic-blue",
+            captureClip,
+            documentSearchBounds,
+          );
+          if (bounds !== null) {
+            baselinePng = shot;
+            blueRect = bounds;
+          }
           lastBluePixels = bounds === null ? 0 : bounds.pixels;
           return lastBluePixels;
         },
         {
           message: "expected the presented render pane to show the Basic Shapes blue rectangle",
           timeout: scaledMs(5_000),
-          intervals: [16, 25, 50, 100],
+          // Gecko's first WebGPU screenshot can be empty even after the worker publishes.
+          // Closely repeated readbacks starve the next browser composite; leave a frame window.
+          intervals: page.context().browser()?.browserType().name() === "firefox"
+            ? [250, 400, 600]
+            : [16, 25, 50, 100],
         },
       )
       .toBeGreaterThan(0);
@@ -926,7 +958,10 @@ async function openBasicShapes(page: Page): Promise<{
     );
   }
 
-  return { canvasBounds, documentClip };
+  if (baselinePng === null || blueRect === null) {
+    throw new Error("Basic Shapes never produced a verified blue artboard capture");
+  }
+  return { canvasBounds, documentClip, captureClip, baselinePng, blueRect };
 }
 
 // Drive the same overlay state transition as the View menu without making the
@@ -1043,7 +1078,10 @@ test("browser overlay control stays disabled after a normal editor frame", async
 
 test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ page }) => {
   const failures = await openEditor(page, "overlay");
-  const { canvasBounds, documentClip } = await openBasicShapes(page);
+  const { canvasBounds, captureClip: documentClip, baselinePng: baseline, blueRect } =
+    await openBasicShapes(
+      page,
+    );
   const rejectedControlInputs = await page.evaluate(() => {
     const control = window.Module?._donner_set_overlay_state;
     return [
@@ -1052,24 +1090,16 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     ];
   });
   expect(rejectedControlInputs).toEqual([0, 0]);
-  const baseline = await page.screenshot({ clip: documentClip });
   await attachEvidenceFile("overlay-baseline", baseline, "image/png");
+  const captureOverlay = () =>
+    page.context().browser()?.browserType().name() === "firefox"
+      ? page.screenshot()
+      : page.screenshot({ clip: documentClip });
   // Since the single-canvas architecture the document has no element of its own to measure, so the
   // document-space mapping is recovered from the document's own pixels: the
   // Basic Shapes blue rounded rectangle spans (32,32)-(212,152) in document
   // units. Both the probe points below and the "restored baseline" comparison
   // window are derived from it, so neither can drift onto render-pane chrome.
-  const blueRect = readEditorPixelBoundsFromPng(baseline, "basic-blue", documentClip, {
-    minX: 0,
-    minY: 0,
-    maxX: documentClip.width,
-    maxY: documentClip.height,
-  });
-  expect(blueRect, "the Basic Shapes blue rectangle was not visible in the render pane").not
-    .toBeNull();
-  if (blueRect === null) {
-    throw new Error("the Basic Shapes blue rectangle was not visible in the render pane");
-  }
   const documentScale =
     ((blueRect.maxX - blueRect.minX) / 180 + (blueRect.maxY - blueRect.minY) / 120) * 0.5;
   expect(documentScale, "the recovered document scale is degenerate").toBeGreaterThan(0.05);
@@ -1105,7 +1135,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     },
   );
   await waitForBrowserComposite(page);
-  const compositorOverlay = await page.screenshot({ clip: documentClip });
+  const compositorOverlay = await captureOverlay();
   await attachEvidenceFile("compositor-tile-overlay", compositorOverlay, "image/png");
   const compositorDifference = readCssPngPixelDifferenceStats(
     baseline,
@@ -1133,10 +1163,11 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   // around the document. Compare only the document's own extent; Firefox may
   // change those unrelated chrome pixels while menus close.
   let lastRestoreDifference = "";
+  let restoredPng: Buffer | null = null;
   await expect
     .poll(
       async () => {
-        const shot = await page.screenshot({ clip: documentClip });
+        const shot = await captureOverlay();
         const difference = readCssPngPixelDifferenceStats(
           baseline,
           shot,
@@ -1144,17 +1175,27 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
           documentPixelsInClip,
         );
         lastRestoreDifference = JSON.stringify(difference);
+        if (difference.changedPixels === 0) {
+          restoredPng = shot;
+        }
         return difference.changedPixels;
       },
       {
         message: "Disabling Compositor Tile Overlay must restore document pixels",
         timeout: scaledMs(5_000),
-        intervals: [50, 100, 250],
+        // Gecko can return a blank transferred-canvas capture immediately after the texture
+        // drop. Leave a frame window between readbacks while retaining exact pixel identity.
+        intervals: page.context().browser()?.browserType().name() === "firefox"
+          ? [250, 400, 600]
+          : [50, 100, 250],
       },
     )
     .toBe(0);
   await attachEvidenceFile("overlay-restore-difference", lastRestoreDifference, "application/json");
-  const geometryBaseline = await page.screenshot({ clip: documentClip });
+  if (restoredPng === null) {
+    throw new Error("overlay restore passed without a verified document capture");
+  }
+  const geometryBaseline = restoredPng;
   await attachEvidenceFile("overlay-disabled-baseline", geometryBaseline, "image/png");
 
   // The blue rounded rectangle spans (32,32)-(212,152). Its emitted
@@ -1179,7 +1220,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     },
   );
   await waitForBrowserComposite(page);
-  const geometryOverlay = await page.screenshot({ clip: documentClip });
+  const geometryOverlay = await captureOverlay();
   await attachEvidenceFile("geometry-debug-overlay", geometryOverlay, "image/png");
   expect(
     geometryOverlay.equals(geometryBaseline),
@@ -1302,37 +1343,13 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   // forward.
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const failures = await openEditor(page);
-  const editorCanvas = page.locator("canvas#canvas");
-  const editorBounds = await editorCanvas.boundingBox();
-  expect(editorBounds).not.toBeNull();
-  if (editorBounds === null) {
-    return;
-  }
-
-  const beforeSample = await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0);
-  await page.mouse.click(editorBounds.x + editorBounds.width * 0.5, editorBounds.y + 282);
-  await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
-  await expectWorkerResultsToReach(
-    page,
-    (completedResults) => completedResults > beforeSample,
-    {
-      message: "expected Basic Shapes to render before the drag",
-      timeout: scaledMs(5_000),
-    },
-  );
-
-  await expect
-    .poll(() => readElementColorStats(editorCanvas).then((stats) => stats.coloredPixels), {
-      message: "expected the initial Basic Shapes render before starting the drag",
-      timeout: scaledMs(2_000),
-      intervals: [16, 25, 50, 100],
-    })
+  const { documentClip: probeRegion, captureClip, blueRect: blueCss } = await openBasicShapes(page);
+  const baselineBluePixels = blueCss.pixels;
+  expect(baselineBluePixels, "expected the initial Basic Shapes render before starting the drag")
     .toBeGreaterThan(500);
-  const baseline = await readElementColorStats(editorCanvas);
-
   const dragStart = {
-    x: editorBounds.x + kBlueRectOffset.x,
-    y: editorBounds.y + kBlueRectOffset.y,
+    x: captureClip.x + (blueCss.minX + blueCss.maxX) / 2,
+    y: captureClip.y + (blueCss.minY + blueCss.maxY) / 2,
   };
   // The press must land on a settled editor: a mouse-down while the sample's
   // first render is still in flight is dropped by the busy worker (the same
@@ -1357,12 +1374,6 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     blue: PixelBounds;
     teal: PixelBounds;
   }> = [];
-  const probeRegion = {
-    x: editorBounds.x + 280,
-    y: editorBounds.y + 260,
-    width: 460,
-    height: 280,
-  };
   // An active drag presents by transforming the prewarmed selected-layer texture
   // inside UI frames; the worker does not re-rasterize the document until the
   // pointer releases. So the per-step signal that "the drag produced a frame" is
@@ -1389,25 +1400,13 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThan(previousFrames);
-    // A capture that straddles two frames can mix geometry from both, which
-    // would fake the very defect this test looks for. The demand-driven loop
-    // parks once it has presented the move, so retake until the frame count is
-    // unchanged across the capture.
-    let state: DocumentPresentationState | null = null;
-    let geometry: { blue: PixelBounds | null; teal: PixelBounds | null } | null = null;
-    for (let attempt = 0; attempt < 4; ++attempt) {
-      const beforeState = await readDocumentPresentationState(page);
-      geometry = await readEditorResizePixelBounds(page, probeRegion);
-      const afterState = await readDocumentPresentationState(page);
-      if (beforeState.renderedFrames === afterState.renderedFrames) {
-        state = afterState;
-        break;
-      }
-    }
-    expect(state, `no stable capture for drag step ${step}`).not.toBeNull();
-    if (state === null) {
-      continue;
-    }
+    // The editor draws the document and selection into one canvas. A Playwright
+    // screenshot captures one composited image, so both pixel bounds come from
+    // the same frame. Firefox may schedule another UI frame while taking that
+    // screenshot; requiring the frame counter to stay fixed rejects a valid
+    // image without adding any protection against mixed geometry.
+    const geometry = await readEditorResizePixelBounds(page, probeRegion);
+    const state = await readDocumentPresentationState(page);
     expect(geometry?.blue, `drag frame ${state.renderedFrames} had no blue document pixels`).not
       .toBeNull();
     // "No teal" has two very different causes and the pixels cannot tell them
@@ -1493,8 +1492,165 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   expect(blueCenters.at(-1) || 0).toBeGreaterThan(blueCenters[0] || 0);
   expect(
     samples.map((sample) => sample.coloredPixels),
-    `baseline=${baseline.coloredPixels}; frames=${JSON.stringify(samples)}`,
+    `baseline=${baselineBluePixels}; frames=${JSON.stringify(samples)}`,
   ).not.toContain(0);
+  expect(failures).toEqual([]);
+});
+
+test("Geode crown face paints at each held pointer position before release", async ({ page }) => {
+  test.slow();
+  const failures = await openEditor(page);
+  const canvas = page.locator("canvas#canvas");
+  const canvasBounds = await canvas.boundingBox();
+  expect(canvasBounds).not.toBeNull();
+  if (canvasBounds === null) {
+    return;
+  }
+  const resultsBeforeSample = await page.evaluate(() =>
+    window.__donnerWorkerStats?.completedResults ?? 0
+  );
+  await page.mouse.click(canvasBounds.x + canvasBounds.width * 0.5, canvasBounds.y + 282);
+  await expect(canvas).toHaveAttribute("data-active-sample-id", "geode-splash");
+  await expectWorkerResultsToReach(page, (results) => results > resultsBeforeSample, {
+    message: "Geode Splash must render before the crown drag",
+    timeout: scaledMs(5_000),
+  });
+  await waitForBrowserComposite(page);
+
+  const viewport = await readViewportStats(page);
+  const screenFromDocument = (x: number, y: number) => ({
+    x: viewport.documentX + x * viewport.documentWidth / 1536,
+    y: viewport.documentY + y * viewport.documentHeight / 1024,
+  });
+  // Native hit-testing identifies this interior point as #central-crown-face-2.
+  const press = screenFromDocument(537, 498);
+  const crop = { x: press.x - 50, y: press.y - 45, width: 145, height: 105 };
+  await page.mouse.move(press.x, press.y);
+  await waitForAppliedPointer(page, press, {
+    message: "Geode crown selection press",
+    timeoutMs: scaledMs(4_000),
+  });
+  await waitForPressReadiness(page, "Geode crown selection press");
+  await page.mouse.click(press.x, press.y);
+  await expect.poll(
+    () => page.evaluate(() => window.__donnerInteractionStats?.selectedCount ?? 0),
+    {
+      message: "the crown face must be selected before dragging",
+      timeout: scaledMs(4_000),
+    },
+  ).toBe(1);
+  await waitForPressReadiness(page, "Geode crown drag press");
+
+  const baseline = await page.screenshot({ clip: crop });
+  await attachEvidenceFile("geode-crown-selected-baseline", baseline, "image/png");
+  const expectedTopLeft = screenFromDocument(518, 481);
+  const expectedBottomRight = screenFromDocument(556, 515);
+  const handlePixels = (png: Buffer, anchor: { x: number; y: number }, delta: number) => {
+    // The clip-boundary guide stays at the original X and shares the selection's teal.
+    // A handle's white core distinguishes its known SVG corner from any guide line.
+    const centerX = anchor.x - crop.x + delta;
+    const centerY = anchor.y - crop.y;
+    const window = {
+      minX: centerX - 5,
+      minY: centerY - 5,
+      maxX: centerX + 5,
+      maxY: centerY + 5,
+    };
+    return {
+      teal: readEditorPixelBoundsFromPng(png, "selection-teal", crop, window)?.pixels ?? 0,
+      white: readEditorPixelBoundsFromPng(png, "selection-handle-white", crop, window)?.pixels ?? 0,
+    };
+  };
+  for (
+    const [corner, anchor] of [["top-left", expectedTopLeft], [
+      "bottom-right",
+      expectedBottomRight,
+    ]] as const
+  ) {
+    const handle = handlePixels(baseline, anchor, 0);
+    expect(handle.teal, `selected crown ${corner} handle must have a teal border`)
+      .toBeGreaterThan(20);
+    expect(handle.white, `selected crown ${corner} handle must have a white core`)
+      .toBeGreaterThan(20);
+  }
+
+  await page.mouse.move(press.x, press.y);
+  await waitForAppliedPointer(page, press, {
+    message: "Geode crown drag start",
+    timeoutMs: scaledMs(4_000),
+  });
+  await page.mouse.down();
+  try {
+    for (const delta of [24, 36]) {
+      const previousResults = await page.evaluate(() =>
+        window.__donnerWorkerStats?.completedResults ?? 0
+      );
+      const target = { x: press.x + delta, y: press.y };
+      await page.mouse.move(target.x, target.y);
+      await waitForAppliedPointer(page, target, {
+        message: `Geode crown held move ${delta}`,
+        timeoutMs: scaledMs(4_000),
+      });
+      await expect.poll(() =>
+        page.evaluate((before) => {
+          const worker = window.__donnerWorkerStats;
+          const interaction = window.__donnerInteractionStats;
+          const overlay = window.__donnerOverlayStats;
+          return !!interaction?.dragging && !!interaction.moved
+            && (worker?.completedResults ?? 0) > before && worker?.acceptedForPresentation === true
+            && (worker?.frameVersion ?? -1)
+              >= (overlay?.currentDocVersion ?? Number.POSITIVE_INFINITY)
+            && (overlay?.displayedDocVersion ?? -1)
+              >= (overlay?.currentDocVersion ?? Number.POSITIVE_INFINITY);
+        }, previousResults), {
+        message: `Geode crown move ${delta} must present a current document frame while held`,
+        timeout: scaledMs(5_000),
+        intervals: [16, 25, 50, 100],
+      }).toBe(true);
+      await waitForBrowserComposite(page);
+      const held = await page.screenshot({ clip: crop });
+      await attachEvidenceFile(`geode-crown-held-${delta}`, held, "image/png");
+      const heldHandle = handlePixels(held, expectedBottomRight, delta);
+      expect.soft(
+        heldHandle.teal,
+        `Geode crown move ${delta} lost the moved handle's teal border`,
+      ).toBeGreaterThan(20);
+      expect.soft(
+        heldHandle.white,
+        `Geode crown move ${delta} lost the moved handle's white core`,
+      ).toBeGreaterThan(20);
+      if (delta === 24) {
+        // At +24 the left handle is still clear of the former right-handle location. A stale
+        // selection frame would leave the white core here, even if the clip guide is teal.
+        expect.soft(
+          handlePixels(held, expectedBottomRight, 0).white,
+          "Geode crown kept its original right handle while the pointer was held",
+        ).toBeLessThan(8);
+      }
+      // The pale face must vacate its old interior while the mouse is held. This crop is inside
+      // the face and away from its teal bounds and the pointer tooltip; the settled frame shows
+      // the same dark underlying facet here.
+      const oldFaceInterior = { x: 40, y: 40, width: 15, height: 12 };
+      const signal = readCssPngPixelDifferenceStats(baseline, held, crop, oldFaceInterior);
+      expect.soft(
+        signal.changedPixelsAbove8,
+        `Geode crown content did not leave its old interior during held move ${delta}`,
+      )
+        .toBeGreaterThan(100);
+      const staticControl = readCssPngPixelDifferenceStats(
+        baseline,
+        held,
+        crop,
+        { x: 115, y: 70, width: 15, height: 15 },
+      );
+      expect(
+        staticControl.changedPixelsAbove8,
+        "a blank or stale screenshot cannot count as a moved crown face",
+      ).toBeLessThanOrEqual(5);
+    }
+  } finally {
+    await page.mouse.up();
+  }
   expect(failures).toEqual([]);
 });
 
@@ -1881,7 +2037,7 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
   }
 
   const beforeSample = await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0);
-  await page.mouse.click(editorBounds.x + editorBounds.width * 0.5, editorBounds.y + 282);
+  await page.mouse.click(editorBounds.x + editorBounds.width * 0.76, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expectWorkerResultsToReach(
     page,
@@ -2290,31 +2446,58 @@ test("WebGPU toolbar eyedropper gives new SVG text the sampled Donner fill", asy
     page.evaluate(() => ({
       selectedCount: window.__donnerInteractionStats?.selectedCount,
       selectedStyle: window.__donnerEyedropperTestState?.selectedStyle,
+      textEditing: window.__donnerEyedropperShortcutProbe?.current?.textEditing,
+      textToolActive: window.__donnerEyedropperShortcutProbe?.current?.textToolActive,
+      workerBusy: window.__donnerInteractionStats?.workerBusy,
+      pointerX: window.__donnerInteractionStats?.pointerX,
+      pointerY: window.__donnerInteractionStats?.pointerY,
+      sourceVersion: window.__donnerWorkerStats?.sourceVersion,
     })), {
-    message: "Text tool must create and select a text node with the sampled Fill before typing",
+    message: "Text tool must create and select a text editing session before typing",
     timeout: scaledMs(5_000),
-  }).toEqual({
+  }).toEqual(expect.objectContaining({
     selectedCount: 1,
-    selectedStyle: expect.stringContaining(expectedFill),
-  });
+    textEditing: true,
+    textToolActive: true,
+  }));
   await page.keyboard.type("SVG");
-  await expect.poll(() => page.evaluate(() => window.__donnerEyedropperTestState?.selectedText), {
-    message: "typed SVG text must reach the selected DOM element before the commit key",
+  await expect.poll(() =>
+    page.evaluate(() => ({
+      selectedText: window.__donnerEyedropperTestState?.selectedText,
+      selectedStyle: window.__donnerEyedropperTestState?.selectedStyle,
+      workerBusy: window.__donnerInteractionStats?.workerBusy,
+      workerSourceVersion: window.__donnerWorkerStats?.sourceVersion,
+    })), {
+    message: "typed SVG text must reach the selected DOM with its active sampled Fill",
     timeout: scaledMs(5_000),
-  }).toBe("SVG");
+  }).toEqual(expect.objectContaining({
+    selectedText: "SVG",
+    selectedStyle: expect.stringContaining(expectedFill),
+  }));
   const beforeEscapeFrame = await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
   await page.keyboard.down("Escape");
   await expectBrowserKeyFrame(page, beforeEscapeFrame, "Escape must wake a browser editor frame");
   await expect.poll(() =>
     page.evaluate(() => ({
       undoEntries: window.__donnerEyedropperTestState?.undoEntryCount ?? -1,
+      workerUndoEntries: window.__donnerWorkerStats?.undoEntryCount ?? -1,
+      workerBusy: window.__donnerInteractionStats?.workerBusy,
       shortcutProbe: window.__donnerEyedropperShortcutProbe ?? null,
     })), {
     message: "Escape must commit the newly created SVG text as one document edit",
     timeout: scaledMs(5_000),
   }).toEqual(expect.objectContaining({ undoEntries: beforeTextUndo + 1 }));
   await page.keyboard.up("Escape");
-  await expect.poll(() => page.evaluate(() => window.__donnerEyedropperTestState), {
+  await expect.poll(() =>
+    page.evaluate(() => ({
+      ...window.__donnerEyedropperTestState,
+      workerBusy: window.__donnerInteractionStats?.workerBusy,
+      completedResults: window.__donnerWorkerStats?.completedResults,
+      acceptedForPresentation: window.__donnerWorkerStats?.acceptedForPresentation,
+      workerSourceVersion: window.__donnerWorkerStats?.sourceVersion,
+      workerUndoEntryCount: window.__donnerWorkerStats?.undoEntryCount,
+      textEditing: window.__donnerEyedropperShortcutProbe?.current?.textEditing,
+    })), {
     message: "new text must inherit the eyedropper Fill through the DOM/source path",
     timeout: scaledMs(5_000),
   }).toEqual(expect.objectContaining({
@@ -2576,6 +2759,62 @@ test("WebGPU eyedropper Escape and an outside-document click cancel a ready capt
   expect(failures).toEqual([]);
 });
 
+async function readPastedSourceStats(page: Page) {
+  return page.evaluate(() => ({
+    viewport: window.__donnerViewportStats,
+    source: window.__donnerEyedropperTestState,
+    worker: window.__donnerWorkerStats,
+    interaction: window.__donnerInteractionStats,
+  }));
+}
+
+type PastedSourceStats = Awaited<ReturnType<typeof readPastedSourceStats>>;
+
+function pastedSourcePresentation(stats: PastedSourceStats) {
+  return {
+    documentGeneration: stats.source?.documentGeneration ?? -1,
+    workerGeneration: stats.worker?.documentGeneration ?? -1,
+    acceptedForPresentation: stats.worker?.acceptedForPresentation ?? false,
+    presentedAtMs: stats.worker?.presentedAtMs ?? -1,
+    hasPresentedAtMs: stats.worker?.presentedAtMs !== undefined,
+    sourceVersion: stats.worker?.sourceVersion ?? -1,
+    width: stats.viewport?.documentWidth ?? 0,
+    height: stats.viewport?.documentHeight ?? 0,
+    busy: stats.interaction?.workerBusy ?? true,
+  };
+}
+
+function pastedSourceDiagnostics(stats: PastedSourceStats) {
+  return {
+    sourcePaneFocused: stats.source?.sourcePaneFocused ?? false,
+    sourceSelectionActive: stats.source?.sourceSelectionActive ?? false,
+    sourceBytes: stats.source?.sourceBufferByteLength ?? -1,
+    selectionBytes: stats.source?.sourceSelectionByteLength ?? -1,
+    diagnostics: stats.source?.sourceDiagnosticCount ?? -1,
+    textSyncWakePending: stats.source?.textSyncWakePending ?? false,
+    completedResults: stats.worker?.completedResults ?? -1,
+  };
+}
+
+async function readPastedSourceSnapshot(page: Page) {
+  const stats = await readPastedSourceStats(page);
+  return {
+    ...pastedSourcePresentation(stats),
+    ...pastedSourceDiagnostics(stats),
+  };
+}
+
+function pastedSourceReady(
+  snapshot: Awaited<ReturnType<typeof readPastedSourceSnapshot>>,
+  beforeDocumentGeneration: number,
+): boolean {
+  return snapshot.documentGeneration > beforeDocumentGeneration
+    && snapshot.width > 0 && snapshot.height > 0
+    && Math.abs(snapshot.width - snapshot.height) < 1 && !snapshot.busy
+    && snapshot.workerGeneration === snapshot.documentGeneration
+    && snapshot.acceptedForPresentation && snapshot.hasPresentedAtMs;
+}
+
 test("WebGPU eyedropper copies translucent document alpha, not checkerboard alpha", async ({ page }) => {
   const failures = await openEditor(page, "eyedropper");
   await openDonnerSplash(page);
@@ -2712,36 +2951,13 @@ test("WebGPU eyedropper copies translucent document alpha, not checkerboard alph
     message: "Ctrl+V must replace the selected intermediate source with the full SVG fixture",
     timeout: scaledMs(4_000),
   }).toEqual(expect.objectContaining({ sourceBytes: fixture.length, selectedBytes: 0 }));
-  await expect.poll(() =>
-    page.evaluate((before) => {
-      const width = window.__donnerViewportStats?.documentWidth ?? 0;
-      const height = window.__donnerViewportStats?.documentHeight ?? 0;
-      const sourceVersion = window.__donnerWorkerStats?.sourceVersion ?? -1;
-      const busy = window.__donnerInteractionStats?.workerBusy ?? true;
-      const sourceState = window.__donnerEyedropperTestState;
-      const worker = window.__donnerWorkerStats;
-      return {
-        ready: (sourceState?.documentGeneration ?? -1) > before && width > 0 && height > 0
-          && Math.abs(width - height) < 1 && !busy
-          && worker?.documentGeneration === sourceState?.documentGeneration
-          && worker?.acceptedForPresentation === true && worker?.presentedAtMs !== undefined,
-        documentGeneration: sourceState?.documentGeneration ?? -1,
-        workerGeneration: worker?.documentGeneration ?? -1,
-        acceptedForPresentation: worker?.acceptedForPresentation ?? false,
-        presentedAtMs: worker?.presentedAtMs ?? -1,
-        sourceVersion,
-        width,
-        height,
-        busy,
-        sourcePaneFocused: sourceState?.sourcePaneFocused ?? false,
-        sourceSelectionActive: sourceState?.sourceSelectionActive ?? false,
-        sourceBytes: sourceState?.sourceBufferByteLength ?? -1,
-        selectionBytes: sourceState?.sourceSelectionByteLength ?? -1,
-        diagnostics: sourceState?.sourceDiagnosticCount ?? -1,
-        textSyncWakePending: sourceState?.textSyncWakePending ?? false,
-        completedResults: window.__donnerWorkerStats?.completedResults ?? -1,
-      };
-    }, beforeDocumentGeneration), {
+  await expect.poll(async () => {
+    const snapshot = await readPastedSourceSnapshot(page);
+    return {
+      ...snapshot,
+      ready: pastedSourceReady(snapshot, beforeDocumentGeneration),
+    };
+  }, {
     message: "the pasted translucent SVG must become a settled square document",
     timeout: scaledMs(5_000),
     intervals: [16, 25, 50, 100],

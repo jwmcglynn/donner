@@ -15,6 +15,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleElement.h"
+#include "donner/svg/SVGStyleQuery.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/ParsedPayloadResourceBudget.h"
@@ -427,7 +428,18 @@ TEST(SVGDocument, ApplySourceEditProjectsStyleMutationWithSourceMap) {
   EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
   const auto& stylesheet = style.entityHandle().get<components::StylesheetComponent>();
   EXPECT_EQ(stylesheet.stylesheet.rules().size(), 1u);
-  EXPECT_TRUE(stylesheet.sourceMap.empty());
+  const std::optional<xml::XMLNode> styleNode = xml::XMLNode::TryCast(style.entityHandle());
+  ASSERT_TRUE(styleNode.has_value());
+  const std::optional<SourceRange> textLocation = styleNode->getValueLocation();
+  ASSERT_TRUE(textLocation.has_value());
+  ASSERT_TRUE(styleNode->value().has_value());
+  EXPECT_EQ(textLocation->end.offset.value() - textLocation->start.offset.value(),
+            styleNode->value()->size());
+  EXPECT_FALSE(stylesheet.sourceMap.empty());
+  const std::optional<SVGStyleRuleAtSourceOffset> editedRule =
+      FindStyleRuleAtSourceOffset(document, valueOffset);
+  ASSERT_TRUE(editedRule.has_value());
+  EXPECT_EQ(editedRule->stylesheetEntity, style.unsafeEntityHandle().entity());
 }
 
 TEST(SVGDocument, StyleProjectionCombinesDataAndCDataTextChildren) {

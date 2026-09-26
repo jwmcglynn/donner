@@ -531,6 +531,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
           .allowFileSystemActions =
               kUntrustedReproReplaySecurityPolicy.allowEditorFileSystemActions,
           .allowHostClipboardAccess = kUntrustedReproReplaySecurityPolicy.allowHostClipboardAccess,
+          .showWelcome = options.showWelcome,
           .editorNoticeText = "",
       });
   if (!shell.valid()) {
@@ -539,6 +540,9 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
   shell.setSourcePaneVisibleForReplay(options.sourcePaneVisible);
 
   AsyncRenderer& replayRenderer = shell.asyncRendererForReplay();
+  if (options.compositedOff) {
+    replayRenderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
+  }
   replayRenderer.setReplayRenderDelayForTesting(
       std::chrono::milliseconds(options.workerRenderDelayMsForTesting));
   if (options.workerScheduling == GlRnrReplayWorkerScheduling::HoldFramesBehind) {
@@ -653,6 +657,8 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
         .canvasFreshness = layerStatus.canvasFreshness,
         .statusSuffix = layerStatus.statusSuffix,
         .viewportDesiredCanvas = layerStatus.viewportDesiredCanvas,
+        .viewportPaneSize = shell.viewportForReadback().paneSize,
+        .rasterOutputSize = shell.viewportForReadback().rasterViewport().outputSizePx,
         .documentCanvas = layerStatus.documentCanvas,
         .compositorCanvas = layerStatus.compositorCanvas,
         .metadataOnlyMissCount = layerStatus.metadataOnlyMissCount,

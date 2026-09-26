@@ -217,6 +217,19 @@ public:
   void drawDocumentIntoCurrentFrame(SVGDocument& document, const RenderViewport& viewport,
                                     const Transform2d& surfaceFromCanvas);
 
+  /// Skip fully off-viewport path leaves before resolving paint and clip resources. Enabled only
+  /// for bounded damage renders after their caller rules out nonlocal effects in the owner tree.
+  void setConservativeEarlyLeafCulling(bool enabled) { earlyLeafViewportCulling_ = enabled; }
+
+  struct EntityRangeBoundsOptions {
+    /// Ordinary scene tiles are bounded by the current raster viewport. A selected drag tile may
+    /// retain geometry outside it so those pixels can move into view without another raster pass.
+    bool clipToCanvas = true;
+    /// A mask can remove source pixels but cannot expand their geometric extent. When enabled,
+    /// accumulate the unmasked geometry as a conservative upper bound instead of giving up.
+    bool allowMaskSuperset = false;
+  };
+
   /**
    * Compute the canvas-space bounding box of every pixel a subsequent
    * `drawEntityRange(registry, firstEntity, lastEntity, viewport,
@@ -247,6 +260,11 @@ public:
                                                               Entity firstEntity, Entity lastEntity,
                                                               const RenderViewport& viewport,
                                                               const Transform2d& surfaceFromCanvas);
+  [[nodiscard]] std::optional<Box2d> computeEntityRangeBounds(Registry& registry,
+                                                              Entity firstEntity, Entity lastEntity,
+                                                              const RenderViewport& viewport,
+                                                              const Transform2d& surfaceFromCanvas,
+                                                              EntityRangeBoundsOptions options);
 
   /**
    * Capture a snapshot from the underlying backend after rendering.
@@ -380,6 +398,11 @@ private:
     bool hasEntityClip = false;
     int maskDepth = 0;
   };
+  void popEndedSubtrees(std::vector<DeferredPop>& markers, Entity entity);
+  [[nodiscard]] bool shouldCullEarlyLeaf(Registry& registry,
+                                         const components::RenderingInstanceComponent& instance,
+                                         const components::ComputedStyleComponent& style,
+                                         const std::vector<DeferredPop>& markers) const;
 
   /**
    * Draw-time context-paint state for a marker subtree: maps the coordinate spaces in which the
@@ -426,6 +449,7 @@ private:
   /// `TightBoundsRotatedEllipseWithRotatingGradient`.
   Transform2d surfaceFromCanvasTransform_;
   Vector2i renderingSize_ = Vector2i::Zero();
+  bool earlyLeafViewportCulling_ = false;
   TextPreparationStats textPreparationStats_;
   std::unique_ptr<RendererDriverTextFrameCache> textFrameCache_;
 

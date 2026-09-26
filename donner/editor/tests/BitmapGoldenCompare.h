@@ -79,9 +79,10 @@ void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view g
 /// On mismatch, writes `actual_<testLabel>.png`, `expected_<testLabel>.png`,
 /// `diff_<testLabel>.png`, and `side_by_side_<testLabel>.png` to
 /// `$TEST_UNDECLARED_OUTPUTS_DIR` (or `/tmp`) so a failing replay can
-/// be inspected immediately.
+/// be inspected immediately. If `mismatchedPixels` is non-null, it receives the
+/// pixelmatch count (-1 if bitmap dimensions or layout prevent comparison).
 void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::RendererBitmap& expected,
-                           std::string_view testLabel,
-                           const BitmapGoldenCompareParams& params = {});
+                           std::string_view testLabel, const BitmapGoldenCompareParams& params = {},
+                           int* mismatchedPixels = nullptr);
 
 }  // namespace donner::editor::tests

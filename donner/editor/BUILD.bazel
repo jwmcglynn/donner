@@ -14,6 +14,7 @@ graphs via `dev_dependency = True` in `MODULE.bazel`.
 
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
+load("//build_defs:macos_app_bundle.bzl", "donner_macos_app_bundle")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary")
 load(":editor_product_config.bzl", "EDITOR_RENDERER_BACKEND", "EDITOR_TEXT", "EDITOR_TEXT_FULL", "editor_full_text_compatible_with", "editor_full_text_guard")
@@ -396,6 +397,22 @@ objc_library(
     ],
 )
 
+objc_library(
+    name = "native_menu_macos",
+    srcs = ["NativeMenuMac.mm"],
+    hdrs = ["NativeMenuMac.h"],
+    copts = ["-fobjc-arc"],
+    sdk_frameworks = ["Cocoa"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":menu_bar_presenter",
+        "@glfw",
+    ],
+)
+
 donner_cc_library(
     name = "native_dialog_coordinator",
     srcs = ["NativeDialogCoordinator.cc"],
@@ -561,7 +578,17 @@ donner_cc_library(
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_driver",
-    ],
+    ] + select({
+        "@platforms//os:emscripten": [],
+        "//conditions:default": [":text_to_outlines"],
+    }),
+)
+
+donner_cc_library(
+    name = "font_preview_cache",
+    srcs = ["FontPreviewCache.cc"],
+    hdrs = ["FontPreviewCache.h"],
+    deps = ["//donner/svg/renderer:renderer_interface"],
 )
 
 donner_cc_library(
@@ -720,6 +747,7 @@ donner_cc_library(
         ":text_patch",
         ":transform_syntax_preserving",
         "//donner/base",
+        "//donner/base/xml",
     ],
 )
 
@@ -740,8 +768,14 @@ donner_cc_library(
 
 donner_cc_library(
     name = "menu_bar_presenter",
-    srcs = ["MenuBarPresenter.cc"],
-    hdrs = ["MenuBarPresenter.h"],
+    srcs = [
+        "EditorMenuModel.cc",
+        "MenuBarPresenter.cc",
+    ],
+    hdrs = [
+        "EditorMenuModel.h",
+        "MenuBarPresenter.h",
+    ],
     deps = [
         ":composited_rendering_mode",
         ":editor_theme",
@@ -1057,6 +1091,7 @@ donner_cc_library(
         ":gl_texture_cache",
         ":overlay_renderer",
         ":presentation_render_scheduler",
+        ":render_pane_presenter",
         ":select_tool",
         ":selection_aabb",
         ":tracy_wrapper",
@@ -1188,7 +1223,10 @@ donner_cc_library(
         "//conditions:default": [],
     }) + select({
         "@platforms//os:emscripten": [],
-        "//conditions:default": ["//donner/editor/repro:repro_recorder"],
+        "//conditions:default": [
+            ":font_preview_cache",
+            "//donner/editor/repro:repro_recorder",
+        ],
     }) + select({
         "//donner/editor/wasm:wasm_enabled": [
             "//third_party/emscripten-glfw",
@@ -1199,6 +1237,7 @@ donner_cc_library(
     }) + select({
         "@platforms//os:macos": [
             ":native_file_dialog_macos",
+            ":native_menu_macos",
             ":native_window_chrome_macos",
         ],
         "//conditions:default": [],
@@ -1457,6 +1496,7 @@ embed_resources(
     header_output = "donner/editor/EditorSplash.h",
     resources = {
         "kEditorSplashSvg": "//:donner_splash.svg",
+        "kEditorGeodeSplashSvg": "//:geode_splash.svg",
     },
 )
 
@@ -1514,6 +1554,10 @@ donner_cc_library(
 donner_cc_binary(
     name = "editor_impl",
     srcs = ["main.cc"],
+    linkopts = select({
+        "@platforms//os:macos": ["-Wl,-rpath,@executable_path/../Frameworks"],
+        "//conditions:default": [],
+    }),
     tags = ["manual"],
     target_compatible_with = select({
         "@platforms//os:macos": [],
@@ -1541,7 +1585,7 @@ donner_cc_binary(
 #
 #bazel run  // donner/editor -- donner_splash.svg
 donner_multi_transitioned_binary(
-    name = "editor",
+    name = "editor_binary",
     dep = ":editor_impl",
     full_text_only = True,
     renderer_backend = EDITOR_RENDERER_BACKEND,
@@ -1553,6 +1597,25 @@ donner_multi_transitioned_binary(
     }),
     text = EDITOR_TEXT,
     text_full = EDITOR_TEXT_FULL,
+)
+
+donner_macos_app_bundle(
+    name = "editor_macos_app",
+    binary = ":editor_binary",
+    icon = "art/Donner.icns",
+    plist = "art/Info.plist",
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
+alias(
+    name = "editor",
+    actual = select({
+        "@platforms//os:macos": ":editor_macos_app",
+        "//conditions:default": ":editor_binary",
+    }),
 )
 
 donner_cc_library(

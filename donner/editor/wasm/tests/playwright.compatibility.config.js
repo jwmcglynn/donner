@@ -8,6 +8,9 @@ module.exports = defineConfig({
   projects: [
     {
       name: "firefox-geode-resize",
+      // Gecko's first worker-presented WebGPU frame can arrive well after the worker finishes.
+      // Keep the visual pixel assertions intact while budgeting boot and first presentation.
+      timeout: 90000,
       grep: [
         /Geode Wasm View overlays render tile metadata and sparse Slug triangle edges/,
         /Firefox keeps Basic Shapes resize pixels and outline synchronized/,

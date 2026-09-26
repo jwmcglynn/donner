@@ -317,6 +317,38 @@ TEST(CompositedPresentationTest, CachedTilesRemainVisibleAtIdle) {
   EXPECT_TRUE(Snapshot(state).hasCachedTextures);
 }
 
+TEST(CompositedPresentationTest, OwningTilesRepresentOnlyTheMatchingActiveDragChrome) {
+  const SelectTool::ActiveDragPreview represented{
+      .entity = Entity(7),
+      .translation = Vector2d(24.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(24.0, 0.0)),
+      .dragGeneration = 9,
+  };
+  CompositedPresentation state;
+  state.noteCachedTextures(entt::null, /*version=*/4, Vector2i(100, 100), represented);
+  EXPECT_TRUE(Snapshot(state).cachedEntity == entt::null);
+
+  SelectTool::ActiveDragPreview active = represented;
+  active.translation = Vector2d(36.0, 0.0);
+  active.documentFromCachedDocument = Transform2d::Translate(Vector2d(36.0, 0.0));
+  const auto displayed = state.presentationPreview(active);
+  ASSERT_TRUE(displayed.has_value()) << "Owning tiles still represent the accepted drag version";
+  EXPECT_EQ(displayed->entity, Entity(7));
+  EXPECT_EQ(displayed->dragGeneration, 9u);
+  EXPECT_DOUBLE_EQ(displayed->translation.x, 24.0)
+      << "Chrome must follow the represented owner pixels, not a newer unrendered move";
+
+  active.dragGeneration = 10;
+  EXPECT_FALSE(state.presentationPreview(active).has_value())
+      << "A new gesture must not reuse the previous owner's represented preview";
+  active.dragGeneration = 9;
+  active.entity = Entity(8);
+  EXPECT_FALSE(state.presentationPreview(active).has_value())
+      << "Another selected entity must not inherit the owner's old chrome";
+  EXPECT_FALSE(state.presentationPreview(std::nullopt).has_value())
+      << "The represented drag preview is only live while its gesture remains active";
+}
+
 TEST(CompositedPresentationTest, ActiveDragUsesCachedRepresentedTranslation) {
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));

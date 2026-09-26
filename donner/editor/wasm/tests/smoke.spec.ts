@@ -3,9 +3,9 @@ import { writeFile } from "node:fs/promises";
 import {
   type CanvasColorStats,
   findElementColoredPixel,
+  type PixelBounds,
   readCanvasColorStats,
-  readEditorPixelBounds,
-  readEditorResizePixelBounds,
+  readEditorPixelBoundsFromPng,
   readElementColorStats,
   readTextStyleGlyphStats,
 } from "./canvas-color-stats";
@@ -621,11 +621,11 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
 
   await expect
     .poll(async () => page.evaluate(() => window.__donnerSampleThumbnailStats?.ready || 0), {
-      message: "expected all four catalog SVGs to publish real Donner-rendered thumbnails",
+      message: "expected all five catalog SVGs to publish real Donner-rendered thumbnails",
       timeout: 15000,
       intervals: [0, 25, 50, 100],
     })
-    .toBe(4);
+    .toBe(5);
 
   let geodeThumbnailStats: WgpuCarouselThumbnailStats[] | undefined;
   if (kBackend === "geode") {
@@ -654,17 +654,17 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     settled.thumbnails?.carouselFrame || 0,
   );
   expect(settled.thumbnails).toMatchObject({
-    rendered: 4,
-    ready: 4,
+    rendered: 5,
+    ready: 5,
     pending: false,
     active: false,
     resultReady: false,
   });
-  expect(settled.thumbnails?.requested).toBeGreaterThanOrEqual(4);
+  expect(settled.thumbnails?.requested).toBeGreaterThanOrEqual(5);
   expect(settled.thumbnails?.started).toBe(settled.thumbnails?.requested);
   expect(settled.thumbnails?.completed).toBe(settled.thumbnails?.started);
   expect(await page.evaluate(() => window.__catalogFetchErrors)).toEqual([]);
-  expect(settled.thumbnails?.publicationFrames).toHaveLength(4);
+  expect(settled.thumbnails?.publicationFrames).toHaveLength(5);
   const publicationFrames = settled.thumbnails?.publicationFrames || [];
   for (let index = 1; index < publicationFrames.length; ++index) {
     expect(publicationFrames[index]).toBeGreaterThan(publicationFrames[index - 1]);
@@ -673,14 +673,17 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
 
   const thumbnailSamples = [
     { id: "donner-splash", column: 0, row: 0 },
-    { id: "basic-shapes", column: 1, row: 0 },
-    { id: "text-style", column: 2, row: 0 },
-    { id: "gradients-clip", column: 0, row: 1 },
+    { id: "geode-splash", column: 1, row: 0 },
+    { id: "basic-shapes", column: 2, row: 0 },
+    { id: "text-style", column: 0, row: 1 },
+    { id: "gradients-clip", column: 1, row: 1 },
   ] as const;
   if (kBackend === "geode") {
-    expect(geodeThumbnailStats).toHaveLength(thumbnailSamples.length);
+    // The diagnostic readback samples at most four thumbnail textures even when the carousel
+    // displays more cards. Publication counts above still cover the full catalog.
+    expect(geodeThumbnailStats).toHaveLength(4);
     const fingerprints = new Set<number>();
-    for (let index = 0; index < thumbnailSamples.length; ++index) {
+    for (let index = 0; index < 4; ++index) {
       const sample = thumbnailSamples[index];
       const stats = geodeThumbnailStats?.[index];
       expect(stats, `${sample.id} should have final-frame WGPU readback stats`).toBeDefined();
@@ -695,9 +698,10 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
         .toBeLessThan(stats.samples - 32);
       fingerprints.add(stats.fingerprint);
     }
-    expect(fingerprints.size, "all four card interiors should contain distinct source art").toBe(4);
-    expect(geodeThumbnailStats?.[2].backgroundPixels).toBeGreaterThan(1000);
-    expect(geodeThumbnailStats?.[2].glyphPixels).toBeGreaterThan(20);
+    expect(fingerprints.size, "the four sampled card interiors should contain distinct source art")
+      .toBe(4);
+    expect(geodeThumbnailStats?.[3].backgroundPixels).toBeGreaterThan(1000);
+    expect(geodeThumbnailStats?.[3].glyphPixels).toBeGreaterThan(20);
   } else {
     const canvasBounds = await page.locator("canvas#canvas").boundingBox();
     expect(canvasBounds).not.toBeNull();
@@ -834,7 +838,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
     .toEqual({
       active: false,
       pending: false,
-      ready: 4,
+      ready: 5,
       resultReady: false,
     });
   await expect
@@ -889,7 +893,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
       .__donnerDiagnosticHeartbeat = heartbeat;
   });
 
-  await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + 282);
+  await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
   await expect(canvas).toHaveAttribute("data-active-sample-id", "basic-shapes", {
     timeout: scaledMs(1000),
   });
@@ -1039,9 +1043,10 @@ test("Firefox hands a blocked thumbnail renderer to a foreground sample load", a
 for (
   const sample of [
     { id: "donner-splash", name: "Donner Splash", xFraction: 0.24, y: 282 },
-    { id: "basic-shapes", name: "Basic Shapes", xFraction: 0.5, y: 282 },
-    { id: "text-style", name: "Text and Style", xFraction: 0.76, y: 282 },
-    { id: "gradients-clip", name: "Gradients and Clip", xFraction: 0.24, y: 390 },
+    { id: "geode-splash", name: "Geode Splash", xFraction: 0.5, y: 282 },
+    { id: "basic-shapes", name: "Basic Shapes", xFraction: 0.76, y: 282 },
+    { id: "text-style", name: "Text and Style", xFraction: 0.24, y: 390 },
+    { id: "gradients-clip", name: "Gradients and Clip", xFraction: 0.5, y: 390 },
   ] as const
 ) {
   test(`carousel loads ${sample.name} on the first interactive frame`, async ({ page }) => {
@@ -1183,6 +1188,7 @@ test(
     expect(inter.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(inter.path).toBe(`fonts/${inter.sha256}.woff2`);
     const interUrl = new URL(inter.path, baseUrl).href;
+    const catalogFontUrls = new Set(manifest.fonts.map((font) => new URL(font.path, baseUrl).href));
 
     await page.addInitScript(() => {
       const probe = {
@@ -1224,15 +1230,18 @@ test(
     try {
       const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
       expect(await page.evaluate(() => window.__catalogFontTest?.requestsAtFirstFrame)).toBe(0);
-      // The visible Text and Style card requests Inter before its document is opened.
-      await expect.poll(() => networkRequests, { timeout: scaledMs(2000) }).toEqual([interUrl]);
+      // Background previews may request other catalog faces, while Inter must be requested once
+      // for the visible Text and Style card before its document is opened.
+      await expect.poll(() => networkRequests.filter((url) => url === interUrl), {
+        timeout: scaledMs(2000),
+      }).toEqual([interUrl]);
       const canvas = page.locator("canvas#canvas");
       const bounds = await canvas.boundingBox();
       if (!bounds) throw new Error("The presented editor canvas must have bounds");
       const priorDocumentGeneration = await page.evaluate(() =>
         window.__donnerWorkerStats?.documentGeneration ?? 0
       );
-      await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
+      await page.mouse.click(bounds.x + bounds.width * 0.24, bounds.y + 390);
       await expect(canvas).toHaveAttribute("data-active-sample-id", "text-style", {
         timeout: 1000,
       });
@@ -1258,8 +1267,13 @@ test(
       expect(fallbackGlyphs.glyphPixels).toBeGreaterThan(200);
       const fallback = await page.evaluate(() => window.__donnerWorkerStats!);
       expect(fallback.undoEntryCount).toBe(0);
-      expect(networkRequests).toEqual([interUrl]);
-      expect(await page.evaluate(() => window.__catalogFontTest?.requests)).toEqual([
+      expect(networkRequests.every((url) => catalogFontUrls.has(url))).toBe(true);
+      expect(networkRequests.filter((url) => url === interUrl)).toEqual([interUrl]);
+      expect(
+        (await page.evaluate(() => window.__catalogFontTest?.requests))?.filter(
+          (request) => request.url === interUrl,
+        ),
+      ).toEqual([
         { url: interUrl, afterFirstFrame: true },
       ]);
       await testInfo.attach("fallback.png", {
@@ -1292,8 +1306,13 @@ test(
       const loadedGlyphs = await readTextStyleGlyphStats(page, region);
       expect(loadedGlyphs.backgroundPixels).toBeGreaterThan(10_000);
       expect(loadedGlyphs.glyphPixels).toBeGreaterThan(200);
-      expect(networkRequests).toEqual([interUrl]);
-      expect(await page.evaluate(() => window.__catalogFontTest?.requests)).toEqual([
+      expect(networkRequests.every((url) => catalogFontUrls.has(url))).toBe(true);
+      expect(networkRequests.filter((url) => url === interUrl)).toEqual([interUrl]);
+      expect(
+        (await page.evaluate(() => window.__catalogFontTest?.requests))?.filter(
+          (request) => request.url === interUrl,
+        ),
+      ).toEqual([
         { url: interUrl, afterFirstFrame: true },
       ]);
       await testInfo.attach("loaded.png", {
@@ -1332,7 +1351,7 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
   const beforeSample = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + 282);
+  await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
   await expect(canvas).toHaveAttribute("data-active-sample-id", "basic-shapes", { timeout: 1000 });
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
@@ -1483,7 +1502,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   const beforeSample = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + 282);
+  await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
   await expect(canvas).toHaveAttribute("data-active-sample-id", "basic-shapes", { timeout: 1000 });
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
@@ -1493,39 +1512,103 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     })
     .toBeGreaterThan(beforeSample);
 
-  await expect
-    .poll(async () => (await readElementColorStats(canvas)).coloredPixels, {
-      message: "expected visible Basic Shapes pixels before selecting the resize target",
-      timeout: scaledMs(1000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(500);
-
   const editorBounds = await canvas.boundingBox();
   expect(editorBounds).not.toBeNull();
   if (editorBounds === null) {
     return;
   }
 
-  const blueRectCenter = {
-    x: editorBounds.x + kBlueRectOffset.x,
-    y: editorBounds.y + kBlueRectOffset.y,
-  };
-  const resizeHandle = { x: editorBounds.x + 498, y: editorBounds.y + 413 };
+  const viewport = await page.evaluate(() => window.__donnerViewportStats);
+  expect(viewport, "Basic Shapes must publish its visible document bounds").toBeDefined();
+  if (!viewport) {
+    return;
+  }
   const probeRegion = {
-    x: editorBounds.x + 300,
-    y: editorBounds.y + 270,
-    width: 360,
-    height: 240,
+    x: Math.max(viewport.documentX, viewport.paneX),
+    y: Math.max(viewport.documentY, viewport.paneY),
+    width:
+      Math.min(viewport.documentX + viewport.documentWidth, viewport.paneX + viewport.paneWidth)
+      - Math.max(viewport.documentX, viewport.paneX),
+    height:
+      Math.min(viewport.documentY + viewport.documentHeight, viewport.paneY + viewport.paneHeight)
+      - Math.max(viewport.documentY, viewport.paneY),
+  };
+  // Gecko can return an empty image for a clipped transferred-canvas screenshot,
+  // even when that clip covers the whole canvas. Capture the page without a clip
+  // and inspect only the published artboard.
+  const captureViewport = page.viewportSize();
+  if (captureViewport === null) {
+    throw new Error("the Firefox viewport is unavailable for the resize pixel probe");
+  }
+  const artboardInCapture = {
+    minX: probeRegion.x,
+    minY: probeRegion.y,
+    maxX: probeRegion.x + probeRegion.width,
+    maxY: probeRegion.y + probeRegion.height,
+  };
+  const toArtboard = (pixels: PixelBounds | null): PixelBounds | null =>
+    pixels === null ? null : {
+      minX: pixels.minX - artboardInCapture.minX,
+      minY: pixels.minY - artboardInCapture.minY,
+      maxX: pixels.maxX - artboardInCapture.minX,
+      maxY: pixels.maxY - artboardInCapture.minY,
+      pixels: pixels.pixels,
+    };
+  const readResizePixels = async () => {
+    const shot = await page.screenshot();
+    const blue = readEditorPixelBoundsFromPng(
+      shot,
+      "basic-blue",
+      captureViewport,
+      artboardInCapture,
+    );
+    const margin = 32;
+    const tealSearch = blue === null ? artboardInCapture : {
+      minX: Math.max(artboardInCapture.minX, blue.minX - margin),
+      minY: Math.max(artboardInCapture.minY, blue.minY - margin),
+      maxX: Math.min(artboardInCapture.maxX, blue.maxX + margin),
+      maxY: Math.min(artboardInCapture.maxY, blue.maxY + margin),
+    };
+    const teal = readEditorPixelBoundsFromPng(
+      shot,
+      "selection-teal",
+      captureViewport,
+      tealSearch,
+    );
+    return { blue: toArtboard(blue), teal: toArtboard(teal) };
+  };
+  let blueCss: PixelBounds | null = null;
+  await expect.poll(async () => {
+    blueCss = (await readResizePixels()).blue;
+    return blueCss?.pixels ?? 0;
+  }, {
+    message: "the resize target must be visibly blue in the artboard capture",
+    timeout: scaledMs(5_000),
+    intervals: [250, 400, 600],
+  }).toBeGreaterThan(500);
+  if (blueCss === null) {
+    throw new Error("resize target disappeared after a verified blue artboard capture");
+  }
+  const blueRectCenter = {
+    x: probeRegion.x + (blueCss.minX + blueCss.maxX) / 2,
+    y: probeRegion.y + (blueCss.minY + blueCss.maxY) / 2,
+  };
+  const resizeHandle = {
+    x: probeRegion.x + blueCss.maxX + 1,
+    y: probeRegion.y + blueCss.maxY + 1,
   };
   await page.mouse.click(blueRectCenter.x, blueRectCenter.y);
-  await expect
-    .poll(async () =>
-      (await readEditorPixelBounds(page, probeRegion, "selection-teal"))?.pixels || 0
-    )
-    .toBeGreaterThan(50);
-
-  const initialPixels = await readEditorResizePixelBounds(page, probeRegion);
+  // Gecko can also hand back one empty capture after selection. Require blue and teal from the
+  // same verified image before using its bounds as the resize baseline.
+  let initialPixels = await readResizePixels();
+  await expect.poll(async () => {
+    initialPixels = await readResizePixels();
+    return (initialPixels.blue?.pixels ?? 0) > 500 && (initialPixels.teal?.pixels ?? 0) > 50;
+  }, {
+    message: "the selected resize target and outline must share a visible artboard capture",
+    timeout: scaledMs(5_000),
+    intervals: [250, 400, 600],
+  }).toBe(true);
   expect(initialPixels.blue).not.toBeNull();
   if (initialPixels.blue === null) {
     return;
@@ -1565,7 +1648,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
 
   await expect
     .poll(async () => {
-      const { blue, teal } = await readEditorResizePixelBounds(page, probeRegion);
+      const { blue, teal } = await readResizePixels();
       if (blue === null || teal === null) {
         return false;
       }
@@ -1613,7 +1696,7 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
   const beforeSample = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + 282);
+  await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
       message: "expected the Basic Shapes sample render to finish",
@@ -1826,7 +1909,7 @@ test("production Geode wasm presents visible editor pixels", async ({ page }) =>
     return;
   }
 
-  await page.mouse.click(canvasBox.x + canvasBox.width * 0.5, canvasBox.y + 282);
+  await page.mouse.click(canvasBox.x + canvasBox.width * 0.76, canvasBox.y + 282);
   await expect(canvas).toHaveAttribute("data-active-sample-id", "basic-shapes", {
     timeout: 20000,
   });
@@ -1863,7 +1946,7 @@ test("wasm editor renders layer panel previews after loading a document", async 
   }
 
   const beforeSample = await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0);
-  await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + 282);
+  await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
   await expect(canvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
@@ -2265,7 +2348,7 @@ test("Geode WASM presents selection path overlay pixels", async ({ page }) => {
   const beforeSampleResult = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
-  await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + 282);
+  await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
   await expect(canvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expect
     .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {

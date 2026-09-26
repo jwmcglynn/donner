@@ -288,6 +288,15 @@ public:
    */
   std::span<const uint8_t> fontData(FontHandle handle) const;
 
+  /// Requested catalog face attributes for a loaded provider font, if any.
+  [[nodiscard]] std::optional<FontFaceRequest> providerFaceRequest(FontHandle handle) const;
+
+  /// Whether a loaded provider face is the editor's generic sans-serif family.
+  [[nodiscard]] bool isGenericSansProviderFont(FontHandle handle) const;
+
+  /// Whether a loaded provider face is backed by an immutable catalog asset.
+  [[nodiscard]] bool isImmutableCatalogFont(FontHandle handle) const;
+
   /// Returns whether @p handle was loaded from an explicitly trusted source.
   bool isTrustedFont(FontHandle handle) const;
 

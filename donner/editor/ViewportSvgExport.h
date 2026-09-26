@@ -4,10 +4,12 @@
 /// Viewport SVG export.
 ///
 /// Exports the document region currently visible in the editor render pane as a
-/// standalone, cropped SVG. The export is **vector-first**: the source SVG
+/// standalone, cropped SVG. The crop is limited to the original document bounds, so a viewport
+/// that contains the whole image preserves the source `viewBox` and intrinsic dimensions. The
+/// export is **vector-first**: the source SVG
 /// children are copied verbatim into a clipped `<g>`, never snapshotted as a
-/// raster `<image>`. The crop is derived entirely from \ref ViewportState - it
-/// is the single source of truth for the screen↔document mapping.
+/// raster `<image>`. \ref ViewportState supplies the screen↔document mapping;
+/// the source root supplies the document bounds when its viewBox is available.
 ///
 /// Content export is vector-first as described above. When
 /// \ref ViewportExportOptions::includeSelectionOverlay is set and a
@@ -91,12 +93,15 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
 /**
  * Export the currently-visible document region as a cropped, standalone SVG.
  *
- * The exported root `viewBox` is `viewport.screenToDocument(renderPaneRect)`
- * formatted as `min-x min-y width height`; `width`/`height` are the render pane
- * dimensions in CSS pixels. Source root attributes (`xmlns`, etc.) are carried
+ * The exported root `viewBox` is the intersection of the original document bounds and
+ * `viewport.screenToDocument(renderPaneRect)`, formatted as `min-x min-y width height`.
+ * `width`/`height` retain the source root's effective `preserveAspectRatio` scale for a clipped
+ * region. An export that contains the entire document retains its intrinsic dimensions, including
+ * any original letterbox space.
+ * Source root attributes (`xmlns`, etc.) are carried
  * onto the exported root with `viewBox`/`width`/`height` replaced. The source
  * SVG children are wrapped verbatim in a `<g>` clipped to the document-space
- * viewport rect.
+ * crop rect.
  *
  * The export reads from \p doc only; it does not reparse the active document
  * or clear any compositor cache. The source document is never mutated.

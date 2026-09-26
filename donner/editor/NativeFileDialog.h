@@ -63,6 +63,15 @@ struct NativeSaveDialogRequest {
 [[nodiscard]] std::optional<std::string> ShowNativeSaveFileDialog(
     GLFWwindow* parent, const NativeSaveDialogRequest& request);
 
+/// Show a native error alert for a failed file operation. No-op when native dialogs are
+/// unavailable.
+///
+/// @param parent Owning window (may be nullptr; used for association).
+/// @param title Short operation-specific error title.
+/// @param message Human-readable failure reason.
+void ShowNativeFileDialogError(GLFWwindow* parent, const std::string& title,
+                               const std::string& message);
+
 /// Register \p path with the OS recent-documents list (macOS
 /// `NSDocumentController noteNewRecentDocumentURL:`). No-op where native
 /// dialogs are unavailable or for empty paths.

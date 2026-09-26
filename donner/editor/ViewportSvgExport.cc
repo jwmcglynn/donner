@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -12,6 +13,7 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/Length.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/RcString.h"
 #include "donner/base/StringUtils.h"
@@ -19,6 +21,7 @@
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/OverlayRenderer.h"
+#include "donner/svg/SVGSVGElement.h"
 
 namespace donner::editor {
 
@@ -68,6 +71,42 @@ std::string FormatNumber(double value) {
     return "0";
   }
   return text;
+}
+
+/// Keep a positive SVG dimension nonzero when six fixed decimals would erase it.
+std::string FormatDimension(double value) {
+  const std::string formatted = FormatNumber(value);
+  if (!std::isfinite(value) || value <= 0.0 || formatted != "0") {
+    return formatted;
+  }
+  std::ostringstream precise;
+  precise.precision(std::numeric_limits<double>::max_digits10);
+  precise << value;
+  return precise.str();
+}
+
+/// Whether a document-space box has finite coordinates and positive dimensions.
+bool HasUsableBounds(const Box2d& box) {
+  return std::isfinite(box.topLeft.x) && std::isfinite(box.topLeft.y) &&
+         std::isfinite(box.bottomRight.x) && std::isfinite(box.bottomRight.y) &&
+         std::isfinite(box.width()) && std::isfinite(box.height()) && box.width() > 0.0 &&
+         box.height() > 0.0;
+}
+
+/// Intrinsic root size in CSS pixels, when both dimensions are absolute lengths.
+std::optional<Vector2d> IntrinsicRootSize(const svg::SVGSVGElement& root) {
+  const std::optional<Lengthd> width = root.width();
+  const std::optional<Lengthd> height = root.height();
+  if (!width || !height || !width->isAbsoluteSize() || !height->isAbsoluteSize()) {
+    return std::nullopt;
+  }
+  const Box2d reference = Box2d::FromXYWH(0.0, 0.0, 0.0, 0.0);
+  const Vector2d size(width->toPixels(reference, FontMetrics()),
+                      height->toPixels(reference, FontMetrics()));
+  if (!std::isfinite(size.x) || !std::isfinite(size.y) || size.x <= 0.0 || size.y <= 0.0) {
+    return std::nullopt;
+  }
+  return size;
 }
 
 /// Append \p ch to \p out, escaped for XML. When \p inAttributeValue, tab, line feed and
@@ -544,18 +583,77 @@ Result<std::string, std::string> ExportViewportAsSvg(
                                      static_cast<double>(renderPaneRect.bottomRight.y)));
   const Box2d documentViewportBox = viewport.screenToDocument(paneScreenBox);
 
-  const double viewBoxMinX = documentViewportBox.topLeft.x;
-  const double viewBoxMinY = documentViewportBox.topLeft.y;
-  const double viewBoxWidth = documentViewportBox.width();
-  const double viewBoxHeight = documentViewportBox.height();
+  std::optional<Vector2d> intrinsicSize;
+  std::optional<Box2d> rootViewBox;
+  svg::PreserveAspectRatio rootAspectRatio = svg::PreserveAspectRatio::Default();
+  {
+    [[maybe_unused]] svg::DocumentReadAccess access = doc.readAccess();
+    const svg::SVGSVGElement root = doc.svgElement();
+    intrinsicSize = IntrinsicRootSize(root);
+    rootViewBox = root.viewBox();
+    rootAspectRatio = root.preserveAspectRatio();
+  }
+  Box2d originalBounds = documentViewportBox;
+  if (rootViewBox && HasUsableBounds(*rootViewBox)) {
+    originalBounds = *rootViewBox;
+  } else if (intrinsicSize) {
+    originalBounds = Box2d::FromXYWH(0.0, 0.0, intrinsicSize->x, intrinsicSize->y);
+  } else if (HasUsableBounds(viewport.documentViewBox)) {
+    originalBounds = viewport.documentViewBox;
+  }
 
-  // Output dimensions match the render pane size in CSS pixels.
-  const int outputWidth = renderPaneRect.bottomRight.x - renderPaneRect.topLeft.x;
-  const int outputHeight = renderPaneRect.bottomRight.y - renderPaneRect.topLeft.y;
+  Box2d exportBox = documentViewportBox;
+  if (HasUsableBounds(originalBounds) && HasUsableBounds(documentViewportBox)) {
+    exportBox.topLeft.x = std::max(originalBounds.topLeft.x, documentViewportBox.topLeft.x);
+    exportBox.topLeft.y = std::max(originalBounds.topLeft.y, documentViewportBox.topLeft.y);
+    exportBox.bottomRight.x =
+        std::min(originalBounds.bottomRight.x, documentViewportBox.bottomRight.x);
+    exportBox.bottomRight.y =
+        std::min(originalBounds.bottomRight.y, documentViewportBox.bottomRight.y);
+    if (exportBox.width() <= 0.0 || exportBox.height() <= 0.0) {
+      return ResultType::Err("The visible viewport does not overlap the SVG document.");
+    }
+  }
+
+  const double viewBoxMinX = exportBox.topLeft.x;
+  const double viewBoxMinY = exportBox.topLeft.y;
+  const double viewBoxWidth = exportBox.width();
+  const double viewBoxHeight = exportBox.height();
+
+  // A cropped root must keep the source root's viewBox-to-viewport scale. Otherwise retaining
+  // preserveAspectRatio can introduce a new letterbox or slice offset around the smaller viewBox.
+  Vector2d outputScale(1.0, 1.0);
+  if (intrinsicSize && HasUsableBounds(originalBounds)) {
+    outputScale = *intrinsicSize / originalBounds.size();
+    if (rootViewBox && rootAspectRatio.align != svg::PreserveAspectRatio::Align::None) {
+      const double uniformScale =
+          rootAspectRatio.meetOrSlice == svg::PreserveAspectRatio::MeetOrSlice::Meet
+              ? std::min(outputScale.x, outputScale.y)
+              : std::max(outputScale.x, outputScale.y);
+      outputScale = Vector2d(uniformScale, uniformScale);
+    }
+  }
+  if (!std::isfinite(outputScale.x) || !std::isfinite(outputScale.y) || outputScale.x <= 0.0 ||
+      outputScale.y <= 0.0) {
+    return ResultType::Err("The SVG dimensions cannot be represented for viewport export.");
+  }
+  const bool entireDocumentVisible = exportBox.topLeft == originalBounds.topLeft &&
+                                     exportBox.bottomRight == originalBounds.bottomRight;
+  const double outputWidth =
+      entireDocumentVisible && intrinsicSize ? intrinsicSize->x : viewBoxWidth * outputScale.x;
+  const double outputHeight =
+      entireDocumentVisible && intrinsicSize ? intrinsicSize->y : viewBoxHeight * outputScale.y;
+  if (!std::isfinite(outputWidth) || !std::isfinite(outputHeight) || outputWidth <= 0.0 ||
+      outputHeight <= 0.0) {
+    return ResultType::Err("The viewport export dimensions are not finite and positive.");
+  }
+  const std::string outputWidthText = FormatDimension(outputWidth);
+  const std::string outputHeightText = FormatDimension(outputHeight);
+  const std::string viewBoxWidthText = FormatDimension(viewBoxWidth);
+  const std::string viewBoxHeightText = FormatDimension(viewBoxHeight);
 
   const std::string viewBoxValue = FormatNumber(viewBoxMinX) + " " + FormatNumber(viewBoxMinY) +
-                                   " " + FormatNumber(viewBoxWidth) + " " +
-                                   FormatNumber(viewBoxHeight);
+                                   " " + viewBoxWidthText + " " + viewBoxHeightText;
 
   // Source document name for provenance metadata (no absolute local paths).
   std::string sourceName = "untitled";
@@ -592,20 +690,20 @@ Result<std::string, std::string> ExportViewportAsSvg(
       output += " viewBox=\"" + EscapeXmlAttributeValue(viewBoxValue) + "\"";
       wroteViewBox = true;
     } else if (attribute.name == "width") {
-      output += " width=\"" + std::to_string(outputWidth) + "\"";
+      output += " width=\"" + outputWidthText + "\"";
       wroteWidth = true;
     } else if (attribute.name == "height") {
-      output += " height=\"" + std::to_string(outputHeight) + "\"";
+      output += " height=\"" + outputHeightText + "\"";
       wroteHeight = true;
     } else {
       output += " " + attribute.name + "=\"" + EscapeXmlAttributeValue(attribute.value) + "\"";
     }
   }
   if (!wroteWidth) {
-    output += " width=\"" + std::to_string(outputWidth) + "\"";
+    output += " width=\"" + outputWidthText + "\"";
   }
   if (!wroteHeight) {
-    output += " height=\"" + std::to_string(outputHeight) + "\"";
+    output += " height=\"" + outputHeightText + "\"";
   }
   if (!wroteViewBox) {
     output += " viewBox=\"" + EscapeXmlAttributeValue(viewBoxValue) + "\"";
@@ -616,15 +714,15 @@ Result<std::string, std::string> ExportViewportAsSvg(
   output += "  <" + injectedPrefix + "defs><" + injectedPrefix + "clipPath id=\"";
   output += clipPathId;
   output += "\"><" + injectedPrefix + "rect x=\"" + FormatNumber(viewBoxMinX) + "\" y=\"" +
-            FormatNumber(viewBoxMinY) + "\" width=\"" + FormatNumber(viewBoxWidth) +
-            "\" height=\"" + FormatNumber(viewBoxHeight) + "\"/></" + injectedPrefix +
-            "clipPath></" + injectedPrefix + "defs>\n";
+            FormatNumber(viewBoxMinY) + "\" width=\"" + viewBoxWidthText + "\" height=\"" +
+            viewBoxHeightText + "\"/></" + injectedPrefix + "clipPath></" + injectedPrefix +
+            "defs>\n";
 
   // Optional covering background rect (non-transparent export).
   if (!options.transparentBackground) {
     output += "  <" + injectedPrefix + "rect x=\"" + FormatNumber(viewBoxMinX) + "\" y=\"" +
-              FormatNumber(viewBoxMinY) + "\" width=\"" + FormatNumber(viewBoxWidth) +
-              "\" height=\"" + FormatNumber(viewBoxHeight) + "\" fill=\"#ffffff\"/>\n";
+              FormatNumber(viewBoxMinY) + "\" width=\"" + viewBoxWidthText + "\" height=\"" +
+              viewBoxHeightText + "\" fill=\"#ffffff\"/>\n";
   }
 
   // Source stylesheets remain active in the exported SVG. Define the editor

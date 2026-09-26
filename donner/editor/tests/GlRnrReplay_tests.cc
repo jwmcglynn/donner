@@ -3561,6 +3561,112 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
   RemoveDiagnosticOutputOnSuccess(outputDir);
 }
 
+TEST(GlRnrReplayTest, GeodeSplashPickerClickPublishesTiledFrame) {
+  if (!UsesGeodePresentation()) {
+    GTEST_SKIP() << "Geode texture presentation is unavailable in this configuration";
+  }
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "gl_geode_splash_click";
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = RunfilePath("donner/editor/tests/geode_splash_click.rnr");
+  options.outputDir = outputDir;
+  options.captureFrames = {16};
+  options.maxFrame = 16;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.showWelcome = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+  const repro::GlRnrReplayFrameDiagnostics* frame = FindFrameDiagnostics(result, 16);
+  ASSERT_NE(frame, nullptr);
+  EXPECT_EQ(frame->displayedDocVersion, 2u);
+  EXPECT_THAT(frame->tiles, ::testing::Not(::testing::IsEmpty()));
+  EXPECT_LT(frame->rasterOutputSize.x, frame->documentCanvas.x);
+  EXPECT_LE(frame->rasterOutputSize.y, frame->documentCanvas.y);
+
+  const std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, 16);
+  ASSERT_TRUE(capture.has_value());
+  EXPECT_GT(capture->dimensions.x, 0);
+  EXPECT_GT(capture->dimensions.y, 0);
+  RemoveDiagnosticOutputOnSuccess(outputDir);
+}
+
+TEST(GlRnrReplayTest, GeodeSplashSelectionPreservesArtworkPixels) {
+  if (!UsesGeodePresentation()) {
+    GTEST_SKIP() << "Geode texture presentation is unavailable in this configuration";
+  }
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "gl_geode_splash_selection";
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  ASSERT_FALSE(createDirError) << createDirError.message();
+
+  repro::ReproFile replay;
+  replay.metadata.svgPath = "geode_splash.svg";
+  replay.metadata.windowWidth = 1600;
+  replay.metadata.windowHeight = 900;
+  replay.metadata.displayScale = 2.0;
+  for (std::uint64_t index = 0; index <= 20; ++index) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseDocX = 790.0;
+    frame.mouseDocY = 535.0;
+    if (index == 9) {
+      frame.mouseButtonMask = 1;
+      repro::ReproEvent down;
+      down.kind = repro::ReproEvent::Kind::MouseDown;
+      down.mouseButton = 0;
+      down.hit = repro::ReproHit{.id = "letter-G", .tag = "path"};
+      frame.events.push_back(std::move(down));
+    } else if (index == 10) {
+      repro::ReproEvent up;
+      up.kind = repro::ReproEvent::Kind::MouseUp;
+      up.mouseButton = 0;
+      frame.events.push_back(std::move(up));
+    }
+    replay.frames.push_back(std::move(frame));
+  }
+  const std::filesystem::path replayPath = outputDir / "geode_splash_select_g.rnr";
+  ASSERT_TRUE(repro::WriteReproFile(replayPath, replay));
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = replayPath;
+  options.svgPathOverride = RunfilePath("geode_splash.svg");
+  options.outputDir = outputDir;
+  options.captureFrames = {8, 20};
+  options.maxFrame = 20;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+  options.contentOnlyCapture = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+  ASSERT_THAT(result.finalSelectedElementLabel,
+              ::testing::Optional(::testing::HasSubstr("letter-G")));
+  const repro::GlRnrReplayFrameDiagnostics* beforeFrame = FindFrameDiagnostics(result, 8);
+  const repro::GlRnrReplayFrameDiagnostics* afterFrame = FindFrameDiagnostics(result, 20);
+  ASSERT_NE(beforeFrame, nullptr);
+  ASSERT_NE(afterFrame, nullptr);
+  EXPECT_EQ(beforeFrame->displayedDocVersion, afterFrame->displayedDocVersion);
+  EXPECT_EQ(beforeFrame->viewportDesiredCanvas, afterFrame->viewportDesiredCanvas);
+  EXPECT_EQ(beforeFrame->rasterOutputSize, afterFrame->rasterOutputSize);
+  EXPECT_THAT(afterFrame->tiles, ::testing::Not(::testing::IsEmpty()));
+
+  const std::optional<svg::RendererBitmap> before = LoadCaptureBitmap(result, 8);
+  const std::optional<svg::RendererBitmap> after = LoadCaptureBitmap(result, 20);
+  ASSERT_TRUE(before.has_value());
+  ASSERT_TRUE(after.has_value());
+  tests::CompareBitmapToBitmap(NormalizeBitmap(*after), NormalizeBitmap(*before),
+                               "gl_geode_splash_selection_content_stable",
+                               tests::PixelmatchIdentityParams());
+  RemoveDiagnosticOutputOnSuccess(outputDir);
+}
+
 TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDPathAndBoundsEveryPresentedFrame) {
   constexpr std::uint64_t kFirstZoomFrame = 31;
   constexpr std::uint64_t kLastZoomFrame = 40;

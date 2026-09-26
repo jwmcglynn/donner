@@ -56,6 +56,54 @@ struct RenderCoordinatorTestAccess {
     }
     return coordinator.requestedPixelCapture_->canvasCommitGeneration;
   }
+
+  static void noteSelectedPrewarmFailure(RenderCoordinator& coordinator,
+                                         std::uint64_t documentGeneration, std::uint64_t version,
+                                         Entity selectedEntity, const ViewportState& viewport) {
+    const EditorRasterViewport expanded = viewport.selectedPrewarmRasterViewport();
+    coordinator.lastPostedAttempt_ = RenderAttemptIdentity{
+        .documentGeneration = documentGeneration,
+        .version = version,
+        .rasterViewport = expanded,
+        .selectedEntity = selectedEntity,
+    };
+    std::optional<RenderResult> result(std::in_place);
+    result->documentGeneration = documentGeneration;
+    result->version = version;
+    result->rasterViewport = expanded;
+    result->viewport = viewport;
+    coordinator.noteResultWithNothingToPresent(result);
+  }
+
+  static std::optional<EditorRasterViewport> lastPostedRasterViewport(
+      const RenderCoordinator& coordinator) {
+    return coordinator.lastPostedAttempt_.has_value()
+               ? std::optional<EditorRasterViewport>(coordinator.lastPostedAttempt_->rasterViewport)
+               : std::nullopt;
+  }
+
+  static std::optional<RenderAttemptIdentity> lastPostedAttempt(
+      const RenderCoordinator& coordinator) {
+    return coordinator.lastPostedAttempt_;
+  }
+
+  static void noteRenderCompleted(RenderCoordinator& coordinator, std::uint64_t version,
+                                  const EditorRasterViewport& rasterViewport) {
+    coordinator.renderScheduler_.noteRenderCompleted(version, rasterViewport.outputSizePx,
+                                                     rasterViewport);
+  }
+
+  static bool selectedPrewarmFallbackApplies(RenderCoordinator& coordinator,
+                                             std::uint64_t documentGeneration,
+                                             Entity selectedEntity,
+                                             const EditorRasterViewport& visibleRaster) {
+    return coordinator.selectedPrewarmFallbackApplies(documentGeneration, selectedEntity,
+                                                      visibleRaster);
+  }
+
+  static bool selectedPrewarmRecoveryPending(const RenderCoordinator& coordinator) {
+    return coordinator.selectedPrewarmRecoveryPending_;
+  }
 };
 
 }  // namespace donner::editor

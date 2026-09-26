@@ -10,4 +10,8 @@ namespace donner::editor::gui {
 /// The view retains the layer for the window's lifetime.
 [[nodiscard]] void* AttachMetalLayerToGlfwWindow(GLFWwindow* window);
 
+/// Keep the layer's point-to-pixel scale aligned with the Cocoa window after a backing-scale
+/// change, such as moving between Retina and standard-density displays.
+void UpdateMetalLayerBackingScale(GLFWwindow* window);
+
 }  // namespace donner::editor::gui

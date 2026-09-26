@@ -7,6 +7,7 @@ import {
   type CompositedProbeResult,
   type CompositedSample,
   contentMotionFraction,
+  type DragRegression,
   dragRegressions,
   installCompositedPixelClassifier,
   installCompositedProbe,
@@ -379,7 +380,7 @@ async function openBasicShapes(page: Page): Promise<{
     (window as unknown as { __donnerWorkerStats?: { completedResults?: number } })
       .__donnerWorkerStats?.completedResults ?? 0
   );
-  await page.mouse.click(editorBounds.x + editorBounds.width * 0.5, editorBounds.y + 282);
+  await page.mouse.click(editorBounds.x + editorBounds.width * 0.76, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expect.poll(
     () =>
@@ -462,6 +463,110 @@ function assertProbeUsable(result: CompositedProbeResult, minimumSamples: number
   ).toBeGreaterThan(0.8);
 }
 
+/**
+ * Confirm a centroid-based ordering candidate using the filled body below the position chip.
+ * The chip can cover the blue rectangle's top edge as it enters the artboard corner. Its first
+ * appearance changes both the full blue centroid and the quantized top extent, even when the
+ * unoccluded body holds its position. A genuine older frame moves the body's side and bottom
+ * edges too. Missing or insufficient retained pixels keep the original violation fail-closed.
+ */
+function confirmBlueBodyRegressions(
+  candidates: readonly DragRegression[],
+  bodies: ReadonlyArray<readonly [CompositedSample, CompositedSample] | null>,
+  trace: ReadonlyArray<readonly [number, number, number]>,
+  maxLatencyMs: number,
+): DragRegression[] {
+  return candidates.filter((_, index) => {
+    const pair = bodies[index];
+    return pair === null || dragRegressions(pair, trace, 1.0, 2.0, maxLatencyMs).length > 0;
+  });
+}
+
+async function retainedBlueBodyPairs(
+  page: Page,
+  candidates: readonly DragRegression[],
+): Promise<Array<readonly [CompositedSample, CompositedSample] | null>> {
+  return page.evaluate((indices) => {
+    const probe = window.__donnerCompositedProbe as unknown as {
+      running: boolean;
+      samples: CompositedSample[];
+      rawReadbacks: Array<Uint8ClampedArray | null>;
+      rawReadbackWidth: number;
+      rawReadbackHeight: number;
+      rawReadbackOverflow: boolean;
+    } | undefined;
+    const matchesBlue = (window as unknown as {
+      __donnerMatchesCompositedContentPixel?: (
+        red: number,
+        green: number,
+        blue: number,
+        alpha: number,
+      ) => boolean;
+    }).__donnerMatchesCompositedContentPixel;
+    if (probe === undefined || probe.running || probe.rawReadbackOverflow || !matchesBlue) {
+      return indices.map(() => null);
+    }
+    const { rawReadbackWidth: width, rawReadbackHeight: height } = probe;
+    if (!(width > 0 && height > 0)) return indices.map(() => null);
+    const measure = (
+      index: number,
+      startY: number,
+      referenceHeight: number,
+      minimumPixels: number,
+    ) => {
+      const pixels = probe.rawReadbacks[index];
+      const sample = probe.samples[index];
+      if (
+        !(pixels instanceof Uint8ClampedArray) || pixels.length !== width * height * 4
+        || sample === undefined
+      ) return null;
+      let count = 0;
+      let sumX = 0;
+      let minX = width;
+      let maxX = -1;
+      let bottom = -1;
+      for (let y = startY; y < height; ++y) {
+        for (let x = 0; x < width; ++x) {
+          const offset = (y * width + x) * 4;
+          if (
+            !matchesBlue(
+              pixels[offset],
+              pixels[offset + 1],
+              pixels[offset + 2],
+              pixels[offset + 3],
+            )
+          ) continue;
+          ++count;
+          sumX += x;
+          minX = Math.min(minX, x);
+          maxX = Math.max(maxX, x);
+          bottom = y;
+        }
+      }
+      if (count < minimumPixels) return null;
+      return {
+        ...sample,
+        coloredPixels: count,
+        coloredCentroidX: sumX / count,
+        coloredCentroidY: bottom,
+        coloredMinX: minX,
+        coloredMinY: bottom - referenceHeight + 1,
+        coloredWidth: maxX - minX + 1,
+        coloredHeight: referenceHeight,
+      };
+    };
+    return indices.map(([previousIndex, sampleIndex]) => {
+      const previous = probe.samples[previousIndex];
+      if (previous === undefined || previous.coloredHeight <= 0) return null;
+      const startY = Math.ceil(previous.coloredMinY + previous.coloredHeight * 0.25);
+      const minimumPixels = previous.coloredPixels * 0.25;
+      const before = measure(previousIndex, startY, previous.coloredHeight, minimumPixels);
+      const after = measure(sampleIndex, startY, previous.coloredHeight, minimumPixels);
+      return before === null || after === null ? null : [before, after] as const;
+    });
+  }, candidates.map(({ predecessorIndex, sampleIndex }) => [predecessorIndex, sampleIndex]));
+}
+
 // The composited read-back of a worker-owned WebGPU canvas is not free, and it
 // runs on the same thread as the editor. Sampling every animation frame across
 // a drag measurably depresses the frame rate it is measuring - on stock
@@ -481,6 +586,9 @@ test.describe("composited drag invariants", () => {
     const target = { x: editorBounds.x + kBlueRectOffset.x, y: editorBounds.y + kBlueRectOffset.y };
     // The earlier manual shortfall was 50 -> about 43 document units. A
     // controlled 1.15 zoom makes that ratio explicit in a browser gesture.
+    // The editor's GLFW scroll callback uses the current pointer position. Move it from the
+    // carousel card into the render pane before dispatching the synthetic ctrl-wheel event.
+    await page.mouse.move(target.x, target.y);
     await page.evaluate(({ x, y }) => {
       document.querySelector("canvas#canvas")?.dispatchEvent(
         new WheelEvent("wheel", {
@@ -551,6 +659,11 @@ test.describe("composited drag invariants", () => {
       )
     ).toBe(true);
     await page.mouse.up();
+    const moves = await page.evaluate(() =>
+      (window as unknown as { __dragDistanceProbe?: Array<{ x: number; y: number }> })
+        .__dragDistanceProbe ?? []
+    );
+    expect(moves.at(-1)).toEqual({ x: target.x + 50, y: target.y + 30 });
 
     let finalBlue: ReturnType<typeof readEditorPixelBoundsFromPng> = null;
     await expect.poll(async () => {
@@ -563,16 +676,11 @@ test.describe("composited drag invariants", () => {
       });
       return finalBlue?.minX ?? -1;
     }, { timeout: scaledMs(10_000) }).toBeGreaterThan(initialBlue.minX + 30);
-    const moves = await page.evaluate(() =>
-      (window as unknown as { __dragDistanceProbe?: Array<{ x: number; y: number }> })
-        .__dragDistanceProbe ?? []
-    );
     console.log(
       `drag-distance-evidence ${
         JSON.stringify({ viewport, target, moves, initialBlue, finalBlue })
       }`,
     );
-    expect(moves.at(-1)).toEqual({ x: target.x + 50, y: target.y + 30 });
     expect(finalBlue).not.toBeNull();
     if (finalBlue === null) throw new Error("blue shape is missing after drag");
     expect(Math.abs(finalBlue.minX - initialBlue.minX - 50)).toBeLessThan(3);
@@ -636,14 +744,14 @@ test.describe("composited drag invariants", () => {
 
     // A centroid change needs object-identity evidence before it can establish an older frame.
     // Keep the existing latency window while retaining the exact images behind each candidate.
-    const violations = dragRegressions(result.samples, stream.trace, 1.0, 2.0, scaledMs(150));
-    if (violations.length > 0) {
+    const candidates = dragRegressions(result.samples, stream.trace, 1.0, 2.0, scaledMs(150));
+    if (candidates.length > 0) {
       const baselineIndex = result.samples.findIndex((sample) =>
         sample.drawOk && sample.coloredWidth > 0
       );
       const indices = [
         baselineIndex,
-        ...violations.slice(0, 5).flatMap((violation) => [
+        ...candidates.slice(0, 5).flatMap((violation) => [
           violation.predecessorIndex,
           violation.sampleIndex,
           violation.sampleIndex + 1,
@@ -652,6 +760,13 @@ test.describe("composited drag invariants", () => {
       const readbacks = await attachCompositedReadbacks(page, test.info(), indices);
       console.log(`drag-readback-evidence ${JSON.stringify({ baselineIndex, ...readbacks })}`);
     }
+    const bodies = await retainedBlueBodyPairs(page, candidates);
+    const violations = confirmBlueBodyRegressions(
+      candidates,
+      bodies,
+      stream.trace,
+      scaledMs(150),
+    );
     const presentedFrames = new Set(
       result.samples.filter((sample) => sample.drawOk && sample.coloredWidth > 0).map((sample) =>
         `${Math.round(sample.coloredCentroidX)}x${Math.round(sample.coloredCentroidY)}`
@@ -659,7 +774,8 @@ test.describe("composited drag invariants", () => {
     );
     console.log(
       `drag-frame-monotonicity engine=${browserName} samples=${result.samples.length}`
-        + ` presentedFrames=${presentedFrames.size} violations=${violations.length}`
+        + ` presentedFrames=${presentedFrames.size} candidates=${candidates.length}`
+        + ` violations=${violations.length}`
         + ` pointerEvents=${stream.pointerEvents}`
         + ` meanIntervalMs=${stream.meanIntervalMs.toFixed(1)}`,
     );
@@ -1339,6 +1455,77 @@ test.describe("dragRegressions classifier (pure)", () => {
       "each pair's two frames share one bounding box, so the shape held its position"
         + " and the centroid shift is the hidden pixels, not a presented position",
     ).toEqual(Object.fromEntries(kPartlyHiddenFramePairs.map((pair) => [pair.name, []])));
+  });
+
+  test("a position chip entering the blue top edge is not an older frame", () => {
+    // Measured from the retained Firefox CI frame pair. The chip first covered the top-left
+    // blue pixels between samples, while the unoccluded filled body did not move backwards.
+    const trace = Array.from(
+      { length: 32 },
+      (_, index) => [index * 10, 100 - index * 0.25, 200 - index * 0.25] as const,
+    );
+    const before = {
+      ...sampleAt(200, 62.8753488372093),
+      coloredCentroidY: 43.54,
+      coloredPixels: 2150,
+      coloredMinX: 40,
+      coloredMinY: 21,
+      coloredWidth: 47,
+      coloredHeight: 46,
+    };
+    const after = {
+      ...sampleAt(260, 63.26093514328809),
+      coloredCentroidY: 45.52187028657617,
+      coloredPixels: 1989,
+      coloredMinX: 40,
+      coloredMinY: 22,
+      coloredWidth: 46,
+      coloredHeight: 46,
+    };
+    const candidates = dragRegressions([before, after], trace, 1.0, 2.0, 150);
+    expect(candidates.map((candidate) => candidate.sampleIndex)).toEqual([1]);
+    const beforeBody = {
+      ...before,
+      coloredPixels: 1641,
+      coloredCentroidX: 62.945,
+      coloredCentroidY: 66,
+      coloredMinY: 21,
+      coloredWidth: 47,
+    };
+    const afterBody = {
+      ...after,
+      coloredPixels: 1649,
+      coloredCentroidX: 62.407,
+      coloredCentroidY: 67,
+      coloredMinY: 22,
+      coloredWidth: 46,
+    };
+    expect(confirmBlueBodyRegressions(candidates, [[beforeBody, afterBody]], trace, 150))
+      .toEqual([]);
+
+    // A rigid stale frame moves the unoccluded filled body as well. It must still fail at the
+    // same one-pixel ordering tolerance even when the chip is present in another part of a frame.
+    const stale = {
+      ...after,
+      coloredCentroidX: before.coloredCentroidX + 4,
+      coloredCentroidY: before.coloredCentroidY + 4,
+      coloredMinX: before.coloredMinX + 4,
+      coloredMinY: before.coloredMinY + 4,
+      coloredWidth: before.coloredWidth,
+    };
+    const staleBody = {
+      ...beforeBody,
+      t: after.t,
+      coloredCentroidX: beforeBody.coloredCentroidX + 4,
+      coloredCentroidY: beforeBody.coloredCentroidY + 4,
+      coloredMinX: beforeBody.coloredMinX + 4,
+      coloredMinY: beforeBody.coloredMinY + 4,
+    };
+    const staleCandidates = dragRegressions([before, stale], trace, 1.0, 2.0, 150);
+    expect(
+      confirmBlueBodyRegressions(staleCandidates, [[beforeBody, staleBody]], trace, 150)
+        .map((candidate) => candidate.sampleIndex),
+    ).toEqual([1]);
   });
 
   test("a shape that really moved back is still reported", () => {

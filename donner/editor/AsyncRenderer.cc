@@ -14,6 +14,9 @@
 #include "donner/base/MemoryAttribution.h"
 #include "donner/base/Utils.h"
 #include "donner/editor/OverlayRenderer.h"
+#ifndef __EMSCRIPTEN__
+#include "donner/editor/TextToOutlines.h"
+#endif
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/compositor/CompositorController.h"
@@ -306,6 +309,32 @@ SampleThumbnailRenderResult RenderSampleThumbnail(
   }
   if (!result.bitmap.empty()) {
     result.outcome = SampleThumbnailRenderOutcome::Rendered;
+#ifndef __EMSCRIPTEN__
+    if (request.kind == AuxiliaryPreviewKind::FontFamily) {
+      const auto text = document.querySelector("text");
+      if (text) {
+        ConvertTextToOutlinesResult outlines = convertTextToOutlines(document, *text);
+        if (outlines.ok && outlines.outlineGroup && !outlines.outlinePaths.empty()) {
+          const auto parent = text->parentElement();
+          if (parent) {
+            const auto inserted = document.insertElement(*parent, *outlines.outlineGroup, *text);
+            if (!inserted.diagnostic) {
+              bool complete = true;
+              for (auto& path : outlines.outlinePaths) {
+                if (document.insertElement(*outlines.outlineGroup, path).diagnostic) {
+                  complete = false;
+                  break;
+                }
+              }
+              if (complete && !document.removeElement(*text).diagnostic) {
+                result.outlinedSvg = std::string(document.source());
+              }
+            }
+          }
+        }
+      }
+    }
+#endif
   }
   return result;
 }
@@ -349,6 +378,11 @@ void CaptureFullCanvasTextureForResult(svg::RendererInterface& renderer,
   if (CaptureFullCanvasTextureSnapshot(renderer, plan, bitmap, texture)) {
     ++allocationFailureCount;
   }
+}
+
+bool CanUseFullCanvasPresentation(bool hasCompositor, bool overviewInfillOnly,
+                                  bool geometryDebugOverlay) {
+  return !hasCompositor || overviewInfillOnly || geometryDebugOverlay;
 }
 
 }  // namespace
@@ -1402,6 +1436,9 @@ void AsyncRenderer::workerLoop() {
       if (!CanPublishCompositorTiles(compositor_.get())) {
         return std::nullopt;
       }
+      if (!compositor_->hasCompleteTileSetForPresentation()) {
+        return std::nullopt;
+      }
       const std::vector<Entity> dragPreviewEntities =
           request.dragPreview.has_value() ? DragPreviewEntities(*request.dragPreview)
                                           : std::vector<Entity>();
@@ -1713,8 +1750,8 @@ void AsyncRenderer::workerLoop() {
     std::shared_ptr<const svg::RendererTextureSnapshot> fullCanvasTexture;
     // Only the explicit Off mode, overview infill, and the geometry-debug diagnostic use a flat
     // payload. Normal On and FilterOnly presentation is the compositor's tile set or nothing.
-    const bool fullCanvasPresentationAllowed =
-        compositor_ == nullptr || request.overviewInfillOnly || geometryDebugOverlay;
+    const bool fullCanvasPresentationAllowed = CanUseFullCanvasPresentation(
+        compositor_ != nullptr, request.overviewInfillOnly, geometryDebugOverlay);
     const PresentationSnapshotPlan snapshotPlan = ChoosePresentationSnapshotPlan(
         compositedPreview.has_value(), fullCanvasPresentationAllowed,
         requestRenderer.requiresTextureSnapshotPresentation(), request.captureCpuSnapshot);

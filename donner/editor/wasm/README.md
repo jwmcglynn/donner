@@ -45,8 +45,11 @@ The package includes `CatalogFontNotices.txt`; preserve it with the assets.
 The [catalog documentation](../../../third_party/google_fonts/README.md) describes
 generation, pins, codec limits, and semantic equivalence checks.
 
-The Wasm module goal is approximately 3 MB with gzip level 9 and a zero timestamp.
-The measured module is 3,026,849 bytes; the regression gate allows 3,060,000 bytes
-for modest growth. Deferred font bytes, JavaScript, and
-total package size are measured separately. The dependency audit rejects native
-catalog payloads, TinySkia, and ReproFile infrastructure in the Wasm runtime graph.
+The Wasm module goal is approximately 3.2 MB with gzip level 9 and a zero timestamp.
+With rich text, visual stroke controls, and background font previews, the measured
+module is 3,170,662 bytes; the regression gate allows 3,205,000 bytes. The generic
+sans-serif face reuses the renderer's existing Public Sans font on Web, while
+desktop-only preview-cache persistence and Noto faces stay out of the module.
+Deferred font bytes, JavaScript, and total package size are measured separately.
+The dependency audit rejects native catalog payloads, TinySkia, and ReproFile
+infrastructure in the Wasm runtime graph.

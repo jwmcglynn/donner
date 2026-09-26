@@ -54,7 +54,7 @@ an unknown element).
 | Structural                | [`<svg>`](https://jwmcglynn.github.io/donner/xml_svg.html) [`<g>`](https://jwmcglynn.github.io/donner/xml_g.html) [`<defs>`](https://jwmcglynn.github.io/donner/xml_defs.html) [`<symbol>`](https://jwmcglynn.github.io/donner/xml_symbol.html) [`<use>`](https://jwmcglynn.github.io/donner/xml_use.html) [`<style>`](https://jwmcglynn.github.io/donner/xml_style.html) [`<switch>`](https://jwmcglynn.github.io/donner/xml_switch.html)                         | Yes                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Hyperlink                 | [`<a>`](https://jwmcglynn.github.io/donner/xml_a.html)                                                                                                                                                                                                                                                                                                                                                                                                             | Yes. Renders as a transparent group (its children draw in place); the link target (`href` / `xlink:href`) is retained on the DOM.                                                                                                                                                                                                                                                                                                 |
 | Shapes                    | [`<circle>`](https://jwmcglynn.github.io/donner/xml_circle.html) [`<ellipse>`](https://jwmcglynn.github.io/donner/xml_ellipse.html) [`<line>`](https://jwmcglynn.github.io/donner/xml_line.html) [`<path>`](https://jwmcglynn.github.io/donner/xml_path.html) [`<polygon>`](https://jwmcglynn.github.io/donner/xml_polygon.html) [`<polyline>`](https://jwmcglynn.github.io/donner/xml_polyline.html) [`<rect>`](https://jwmcglynn.github.io/donner/xml_rect.html) | Yes                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| Raster image              | [`<image>`](https://jwmcglynn.github.io/donner/xml_image.html)                                                                                                                                                                                                                                                                                                                                                                                                     | Partial. Embedded (data URI) images render, and file references load through a host-supplied resource loader; network URLs are not fetched ([#1183](https://github.com/jwmcglynn/donner/issues/1183)).                                                                                                                                                                                                                                                                                                                                |
+| Raster image              | [`<image>`](https://jwmcglynn.github.io/donner/xml_image.html)                                                                                                                                                                                                                                                                                                                                                                                                     | Yes. Embedded data URIs and external resources returned by a host-supplied loader render; the caller controls whether and how external URLs are fetched.                                                                                                                                                                                                                                                                                                                                |
 | Text                      | [`<text>`](https://jwmcglynn.github.io/donner/xml_text.html) [`<tspan>`](https://jwmcglynn.github.io/donner/xml_tspan.html) [`<textPath>`](https://jwmcglynn.github.io/donner/xml_textPath.html)                                                                                                                                                                                                                                                                   | Partial. See Text features below. Text requires a text-enabled build; the size-optimized build can omit it.                                                                                                                                                                                                                                                                                                                       |
 | Paint servers and markers | [`<linearGradient>`](https://jwmcglynn.github.io/donner/xml_linearGradient.html) [`<radialGradient>`](https://jwmcglynn.github.io/donner/xml_radialGradient.html) [`<stop>`](https://jwmcglynn.github.io/donner/xml_stop.html) [`<pattern>`](https://jwmcglynn.github.io/donner/xml_pattern.html) [`<marker>`](https://jwmcglynn.github.io/donner/xml_marker.html)                                                                                                 | Yes. Linear and radial gradients (all spread methods, radial focal point) and patterns are supported; conic/sweep gradients are not.                                                                                                                                                                                                                                                                                              |
 | Masking and clipping      | [`<mask>`](https://jwmcglynn.github.io/donner/xml_mask.html) [`<clipPath>`](https://jwmcglynn.github.io/donner/xml_clipPath.html)                                                                                                                                                                                                                                                                                                                                  | Partial. Core masking and clipping, `mask-type`, and vector text children in clip paths work; bitmap text silhouettes, some nested clip-path intersections, and a few mask-unit edge cases are not yet handled ([#1179](https://github.com/jwmcglynn/donner/issues/1179), [#1180](https://github.com/jwmcglynn/donner/issues/1180), [#1231](https://github.com/jwmcglynn/donner/issues/1231)).                                                                                                                                                                                                                   |
@@ -88,10 +88,29 @@ line, style, and color; [#1177](https://github.com/jwmcglynn/donner/issues/1177)
 ([#1172](https://github.com/jwmcglynn/donner/issues/1172)). `<tref>` is intentionally unsupported
 because SVG 2 removed it.
 
+### External resource policy
+
+Donner does not make network requests on its own. An embedding application supplies a
+[`ResourceLoaderInterface`](donner/svg/resources/ResourceLoaderInterface.h) through the document
+settings to resolve external URLs using its own network or file stack, credentials, cache, and
+access policy. Leaving that loader unset keeps external requests unavailable by design. Embedded
+data URIs remain self-contained; secure processing modes also disable external loading.
+
+### Not yet supported
+
+- Bidirectional text, `textLength` / `lengthAdjust`, and several SVG 2 `textPath` and vertical-text
+  options remain incomplete. The text feature list above links each tracked gap.
+- CSS `filter:` function lists, `enable-background` / `BackgroundImage`, and some `feImage`
+  subregion cases remain incomplete even though the `<filter>` primitive elements are supported.
+- `<foreignObject>`, `<script>`, SVG 1.1 fonts, and `<tref>` are not rendered as SVG elements.
+  The [SVG 1.x exclusions](docs/unsupported_svg1_features.md) distinguish retired features from
+  work still planned for SVG 2.
+
 ### Renderers
 
 Donner ships two backends behind one renderer interface. The tiny_skia CPU backend is the default.
-The Geode GPU backend drives the editor canvas. Both backends honor
+The Geode GPU backend drives the editor canvas with Vulkan, Metal, and WebGPU rendering across
+macOS, Linux, and Wasm. Both backends honor
 `paint-order` for shapes, markers, text, and tspans, and share the same DOM, layout, paint
 resolution, markers, and filter graph.
 
@@ -112,92 +131,59 @@ bazel run //donner/svg/tool:donner-svg -- donner_splash.svg --interactive
 
 Tool docs: [donner-svg CLI tool](https://jwmcglynn.github.io/donner/DonnerSvgTool.html)
 
-## Example: Saving an SVG to PNG
+## C++ API examples
 
-```sh
-bazel run //examples:svg_to_png -- donner_splash.svg
-```
+These short excerpts show the core calls inside `main`. The linked examples include headers,
+diagnostics, and complete programs you can build and run.
 
-How it works: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc-example.html)
+### Inspect and edit an SVG
 
-## API Demo
-
-```cpp
-// This is the base SVG we are loading, a simple path containing a line
-const std::string_view svgContents(R"(
-  <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 10 10">
-    <path d="M 1 1 L 4 5" stroke="blue" />
-  </svg>
-)");
-
-// Call ParseSVG to load the SVG file
-donner::ParseWarningSink disabled = donner::ParseWarningSink::Disabled();
-donner::ParseResult<donner::svg::SVGDocument> maybeResult =
-    donner::svg::parser::SVGParser::ParseSVG(svgContents, disabled);
-
-if (maybeResult.hasError()) {
-  std::cerr << "Parse Error " << maybeResult.error() << "\n";  // Includes line:column and reason
-  std::abort();
-  // - or - handle the error per your project's conventions
-}
-
-donner::svg::SVGDocument document = std::move(maybeResult.result());
-
-// querySelector supports standard CSS selectors, anything that's valid when defining a CSS rule
-// works here too, for example querySelector("svg > path[fill='blue']") is also valid and will
-// match the same element.
-std::optional<donner::svg::SVGElement> maybePath = document.querySelector("path");
-UTILS_RELEASE_ASSERT_MSG(maybePath, "Failed to find path element");
-
-// The result of querySelector is a generic SVGElement, but we know it's a path, so we can cast
-// it. If the cast fails, an assertion will be triggered.
-donner::svg::SVGPathElement path = maybePath->cast<donner::svg::SVGPathElement>();
-
-if (std::optional<donner::Path> computedPath = path.computedPath()) {
-  std::cout << "Path: " << *computedPath << "\n";
-  std::cout << "Length: " << computedPath->pathLength() << " userspace units\n";
-} else {
-  std::cout << "Path is empty\n";
-}
-```
-
-Detailed docs: [svg_tree_interaction.cc](https://jwmcglynn.github.io/donner/svg_tree_interaction_8cc-example.html)
-
-## API Demo 2: Rendering an SVG to PNG
+Parse a document, find a path, read its geometry, and change its style:
 
 ```cpp
-using namespace donner;
-using namespace donner::svg;
-using namespace donner::svg::parser;
+const std::string_view source =
+    R"(<svg xmlns="http://www.w3.org/2000/svg"><path d="M1 1 L4 5"/></svg>)";
+donner::ParseWarningSink warnings;
+auto parsed = donner::svg::parser::SVGParser::ParseSVG(source, warnings);
+if (parsed.hasError()) return 1;
 
-std::ifstream file("test.svg");
-if (!file) {
-  std::cerr << "Could not open file\n";
-  std::abort();
+auto document = std::move(parsed.result());
+auto element = document.querySelector("path");
+if (!element || !element->isa<donner::svg::SVGPathElement>()) return 1;
+auto path = element->cast<donner::svg::SVGPathElement>();
+if (auto spline = path.computedSpline()) {
+  std::cout << spline->pathLength() << '\n';
 }
-
-std::string fileData;
-file.seekg(0, std::ios::end);
-const std::streamsize fileLength = file.tellg();
-file.seekg(0);
-
-fileData.resize(fileLength);  
-file.read(fileData.data(), fileLength);
-
-ParseWarningSink warnings;
-ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(fileData, warnings);
-if (maybeDocument.hasError()) {
-  std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
-  std::abort();
-}
-
-Renderer renderer;
-renderer.draw(maybeDocument.result());
-
-const bool success = renderer.save("output.png");
+path.setStyle("stroke: red");
 ```
 
-Detailed docs: [svg_to_png.cc](https://jwmcglynn.github.io/donner/svg_to_png_8cc-example.html)
+[Complete SVG tree example](examples/svg_tree_interaction.cc);
+[annotated example](https://jwmcglynn.github.io/donner/svg_tree_interaction_8cc-example.html).
+Run: `bazel run //examples:svg_tree_interaction`
+
+### Render an SVG to PNG
+
+Read a bounded file, parse it, draw it, and save the rendered image:
+
+```cpp
+if (argc != 2) return 1;
+auto file = donner::ReadFileBounded(
+    argv[1], donner::svg::parser::SVGParser::kDefaultMaximumInputSize);
+const auto* source = std::get_if<std::string>(&file);
+if (!source) return 1;
+donner::ParseWarningSink warnings;
+auto parsed = donner::svg::parser::SVGParser::ParseSVG(*source, warnings);
+if (parsed.hasError()) return 1;
+
+auto document = std::move(parsed.result());
+donner::svg::Renderer renderer;
+renderer.draw(document);
+return renderer.save("output.png") ? 0 : 1;
+```
+
+[Complete PNG example](examples/svg_to_png.cc);
+[annotated example](https://jwmcglynn.github.io/donner/svg_to_png_8cc-example.html).
+Run: `bazel run //examples:svg_to_png -- donner_splash.svg`
 
 ## Documentation
 

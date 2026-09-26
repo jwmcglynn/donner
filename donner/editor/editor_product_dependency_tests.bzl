@@ -5,7 +5,9 @@ load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load(":editor_product_config.bzl", "editor_full_text_guard")
 
 _EDITOR_ROOTS = {
-    "native": "//donner/editor:editor",
+    # The macOS app-bundle rule wraps the transitioned binary; the configured
+    # dependency audit follows the binary provider's actual C++ graph.
+    "native": "//donner/editor:editor_binary",
     "render_repl": "//donner/editor/app:render_repl",
     "replay": "//donner/editor/tests:editor_rnr_gl_replay",
     "mcp": "//tools/mcp-servers/editor-control:editor_control_mcp_server",

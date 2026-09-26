@@ -257,6 +257,9 @@ struct FontManager::LoadedFontComponent {
   fonts::SfntFont sfnt;
   std::string actualFamily;  // Owning storage with capacity charged to the font budget.
   FontDataTrust trust = FontDataTrust::Untrusted;
+  std::optional<FontFaceRequest> providerRequest;
+  bool genericSans = false;
+  bool immutableCatalog = false;
   FontBudgetReservation reservation;
 
   std::span<const uint8_t> fontData() const {
@@ -801,6 +804,10 @@ FontHandle FontManager::loadProviderFont(const ProviderLookup& lookup,
       loadFontDataIntoEntity(entity, data, FontDataTrust::Trusted,
                              lookup.isCatalog() ? &lookup.availability : nullptr,
                              &retainedBudgetExceeded)) {
+    registry_.get<LoadedFontComponent>(entity).providerRequest = lookup.request;
+    registry_.get<LoadedFontComponent>(entity).genericSans =
+        lookup.dependencyKey.family == "sans-serif";
+    registry_.get<LoadedFontComponent>(entity).immutableCatalog = lookup.isCatalog();
     const FontHandle font(entity);
     providerFonts_[lookup.contentKey] = font;
     rememberProviderDependency(lookup, FontFaceLoadState::Loaded);
@@ -966,6 +973,30 @@ std::span<const uint8_t> FontManager::fontData(FontHandle handle) const {
 
   const auto* font = registry_.try_get<LoadedFontComponent>(handle.entity());
   return font ? font->fontData() : std::span<const uint8_t>();
+}
+
+std::optional<FontFaceRequest> FontManager::providerFaceRequest(FontHandle handle) const {
+  if (!isValidHandle(handle)) {
+    return std::nullopt;
+  }
+  const auto* font = registry_.try_get<LoadedFontComponent>(handle.entity());
+  return font ? font->providerRequest : std::nullopt;
+}
+
+bool FontManager::isGenericSansProviderFont(FontHandle handle) const {
+  if (!isValidHandle(handle)) {
+    return false;
+  }
+  const auto* font = registry_.try_get<LoadedFontComponent>(handle.entity());
+  return font && font->genericSans;
+}
+
+bool FontManager::isImmutableCatalogFont(FontHandle handle) const {
+  if (!isValidHandle(handle)) {
+    return false;
+  }
+  const auto* font = registry_.try_get<LoadedFontComponent>(handle.entity());
+  return font && font->immutableCatalog;
 }
 
 bool FontManager::isTrustedFont(FontHandle handle) const {

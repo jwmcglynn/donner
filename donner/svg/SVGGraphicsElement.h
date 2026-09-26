@@ -1,6 +1,10 @@
 #pragma once
 /// @file
 
+#include <cstddef>
+#include <optional>
+
+#include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/SVGElement.h"
 
@@ -43,6 +47,17 @@ public:
 
   /// Get the absolute element-from-world transform for this element.
   Transform2d elementFromWorld() const;
+
+  /// Return this element's single effective clip outline in document coordinates. The transform
+  /// includes the referencing element's own transform, as required for userSpaceOnUse and
+  /// objectBoundingBox clips; callers can distinguish an inherited clip by querying the ancestor
+  /// that owns it. An absent, invalid, nested, or multi-shape boolean clip returns nullopt rather
+  /// than a misleading source outline. If provided, `hasClipPath` distinguishes absence from an
+  /// unsupported effective clip; callers combining ancestor clips must fail closed in the latter
+  /// case. Explicit limits bound source and returned path storage.
+  std::optional<Path> resolvedSimpleClipPathOutline(std::size_t maxVerbs, std::size_t maxPoints,
+                                                    std::size_t maxBytes,
+                                                    bool* hasClipPath = nullptr) const;
 };
 
 }  // namespace donner::svg

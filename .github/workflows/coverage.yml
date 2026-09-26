@@ -70,16 +70,10 @@ concurrency:
 
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 #
-# Self-hosted coverage uses the same operator-only gate as CI's Linux lane:
-# SELFHOSTED_LINUX_RUNNER must be "true", and both actor identities must be
-# jwmcglynn. That prevents collaborator reruns from executing on the homelab
-# runner or seeing the Codecov secret there. Everyone else stays on hosted
-# Ubuntu.
-#
-# Trusted operator PRs and main pushes generate coverage on the self-hosted
-# runner when SELFHOSTED_LINUX_RUNNER is enabled. Renovate and non-operator
-# diffs stay on hosted Ubuntu. The Codecov upload remains a tiny hosted handoff
-# for self-hosted coverage so the Codecov secret is not exposed to the runner.
+# Self-hosted coverage uses the same gate as native CI: an enabled
+# SELFHOSTED_LINUX_RUNNER switch admits only same-repository operator PRs.
+# Main coverage and untrusted PR coverage run on hosted Ubuntu. The Codecov
+# upload remains a hosted handoff so its secret stays off the runner.
 jobs:
   determine-targets:
     runs-on: ubuntu-24.04
@@ -171,10 +165,7 @@ jobs:
         env:
           ACTOR: ${{ github.actor }}
           EVENT_NAME: ${{ github.event_name }}
-          GH_TOKEN: ${{ github.token }}
-          REF: ${{ github.ref }}
           REPOSITORY: ${{ github.repository }}
-          SHA: ${{ github.sha }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
         run: |
@@ -217,32 +208,33 @@ jobs:
           PY
           )"
 
-          pr_author="$(
+          pr_fields="$(
             python3 - <<'PY'
           import json
           import os
 
           event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-          print(event.get("pull_request", {}).get("user", {}).get("login", ""))
+          pr = event.get("pull_request") or {}
+          fields = (
+              (pr.get("user") or {}).get("login", ""),
+              ((pr.get("head") or {}).get("repo") or {}).get("full_name", ""),
+              ((pr.get("base") or {}).get("repo") or {}).get("full_name", ""),
+          )
+          print("\x1f".join(fields))
           PY
           )"
-
-          if [[ -z "$pr_author" && "$EVENT_NAME" == "push" && "$REF" == "refs/heads/main" ]]; then
-            if ! pr_author="$(gh api -H "Accept: application/vnd.github+json" \
-              "/repos/$REPOSITORY/commits/$SHA/pulls" \
-              --jq '.[0].user.login // ""')"; then
-              pr_author="unknown"
-            fi
-          fi
+          IFS=$'\x1f' read -r pr_author pr_head_repo pr_base_repo <<< "$pr_fields"
 
           use_self_hosted_linux=false
-          if [[ "$ACTOR" == "jwmcglynn" && "$TRIGGERING_ACTOR" == "jwmcglynn" && "$is_renovate" != "true" && "$SELFHOSTED_LINUX_RUNNER" == "true" ]]; then
-            if [[ -z "$pr_author" || "$pr_author" == "jwmcglynn" ]]; then
-              use_self_hosted_linux=true
-            fi
+          if [[ "$EVENT_NAME" == "pull_request" && "$REPOSITORY" == "jwmcglynn/donner" &&
+                "$ACTOR" == "jwmcglynn" && "$TRIGGERING_ACTOR" == "jwmcglynn" &&
+                "$pr_author" == "jwmcglynn" && "$pr_head_repo" == "$REPOSITORY" &&
+                "$pr_base_repo" == "$REPOSITORY" &&
+                "$is_renovate" != "true" && "$SELFHOSTED_LINUX_RUNNER" == "true" ]]; then
+            use_self_hosted_linux=true
           fi
           echo "use_self_hosted_linux=$use_self_hosted_linux" >> "$GITHUB_OUTPUT"
-          echo "coverage_runner=self_hosted_linux:$use_self_hosted_linux renovate:$is_renovate pr_author:$pr_author"
+          echo "coverage_runner event=$EVENT_NAME self_hosted_linux:$use_self_hosted_linux renovate:$is_renovate pr_author:$pr_author head_repo:$pr_head_repo"
 
           # Single source of truth for "does a coverage lane actually run?".
           #
@@ -964,8 +956,8 @@ jobs:
     runs-on: [self-hosted, linux, arm64]
     needs: [determine-targets, coverage-self-hosted-turnstile]
     # here on PRs, plus explicit ci:full-test opt-ins. A full //... fallback is
-    # skipped on PRs (main-push baseline covers it). Trusted main pushes run
-    # here instead of hosted Ubuntu.
+    # skipped on PRs (the hosted main-push baseline covers it). This lane
+    # runs selected coverage only for trusted operator PRs.
     if: ${{ needs.determine-targets.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.runs_coverage == 'true' }}
     # Coverage healthy median is ~21 min. This budget starts only after the
     # hosted turnstile admits this job, so queued work does not consume it or
@@ -984,8 +976,7 @@ jobs:
     # enforced by the hosted re-turnstile prerequisite above, NOT by a GitHub
     # concurrency group. A concurrency group caps the queue at one pending run
     # and cancels any older pending run when a third concurrent run arrives, so
-    # a parallel-PR burst (and every post-merge main coverage run competing for
-    # the same group) drops pending runs and self-clogs. The turnstile instead
+    # a parallel-PR burst drops pending runs and self-clogs. The turnstile instead
     # holds each run until its turn, FIFO, so N concurrent runs all execute in
     # submission order and none are cancelled.
     #

@@ -267,6 +267,61 @@ TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCapturesFallbackWhenTil
   EXPECT_FALSE(plan.captureTextureSnapshot);
 }
 
+class GeodeSplashReplacementTest : public ::testing::TestWithParam<bool> {};
+
+TEST_P(GeodeSplashReplacementTest, PublishesTilesAfterDocumentReplacement) {
+  svg::Renderer renderer;
+  if (!renderer.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode texture presentation is unavailable in this configuration";
+  }
+  const donner::tests::RequiredRunfile source =
+      donner::tests::ReadRequiredRunfile("geode_splash.svg");
+  DONNER_REQUIRE_RUNFILE(source);
+  svg::SVGDocument welcome = svg::instantiateSubtree(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400"><rect width="640" height="400"/></svg>)");
+  welcome.setCanvasSize(640, 400);
+  svg::SVGDocument splash = svg::instantiateSubtree(source.contents);
+  splash.setCanvasSize(1536, 1024);
+
+  AsyncRenderer asyncRenderer;
+  RenderRequest initial(renderer, welcome);
+  initial.version = 1;
+  initial.documentGeneration = 1;
+  asyncRenderer.requestRender(initial);
+  ASSERT_THAT(WaitForRenderResult(asyncRenderer), ::testing::Optional(::testing::_));
+
+  if (GetParam()) {
+    asyncRenderer.setSampleThumbnailRenderDelayForTesting(std::chrono::milliseconds(100));
+    SampleThumbnailRenderRequest preview{
+        .kind = AuxiliaryPreviewKind::FontFamily,
+        .key = 1,
+        .source =
+            R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 196 24"><text x="1" y="18">Preview</text></svg>)",
+        .dimensions = Vector2i(196, 24),
+        .nativeRenderer = &renderer,
+    };
+    ASSERT_TRUE(asyncRenderer.requestSampleThumbnail(std::move(preview)));
+    for (int attempt = 0; attempt < 200 && asyncRenderer.sampleThumbnailRenderStats().started == 0;
+         ++attempt) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_GT(asyncRenderer.sampleThumbnailRenderStats().started, 0u);
+    asyncRenderer.cancelSampleThumbnailWork();
+  }
+
+  RenderRequest replacement(renderer, splash);
+  replacement.version = 2;
+  replacement.documentGeneration = 2;
+  asyncRenderer.requestRender(replacement);
+  const auto result = WaitForRenderResult(asyncRenderer);
+  ASSERT_THAT(result, ::testing::Optional(::testing::_));
+  ASSERT_THAT(result->compositedPreview, ::testing::Optional(::testing::_));
+  EXPECT_THAT(result->compositedPreview->tiles, ::testing::Not(::testing::IsEmpty()));
+}
+
+INSTANTIATE_TEST_SUITE_P(WithoutAndWithCancelledPreview, GeodeSplashReplacementTest,
+                         ::testing::Values(false, true));
+
 TEST(AsyncRendererPresentationPolicyTest, MissingTilesCaptureNothingWhenFullCanvasIsForbidden) {
   for (const bool requiresTexture : {false, true}) {
     for (const bool captureCpuSnapshot : {false, true}) {
@@ -3700,6 +3755,105 @@ TEST(AsyncRendererTest, SelectedPathStyleChangePublishesFreshPromotedLayerPixels
       << testing::PrintToString(*afterInterior);
 }
 
+TEST(AsyncRendererTest, SelectedSplashStylesheetSourceEditMatchesFreshCompositorPixels) {
+  const donner::tests::RequiredRunfile splash =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splash);
+  std::string source = splash.contents;
+  const std::size_t ruleOffset = source.find(".cls-5 {");
+  ASSERT_NE(ruleOffset, std::string::npos);
+  const std::string originalFill = "fill: url(#linear-gradient);";
+  const std::size_t initialFillOffset = source.find(originalFill, ruleOffset);
+  ASSERT_NE(initialFillOffset, std::string::npos);
+  source.replace(initialFillOffset, originalFill.size(), "fill: red;");
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  app.document().document().setCanvasSize(892, 512);
+  const auto selected = app.document().document().querySelector("#Donner_D");
+  ASSERT_TRUE(selected.has_value());
+  app.setSelection(*selected);
+  const Entity entity = selected->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  const auto renderSelected = [&](std::uint64_t version) {
+    RenderRequest request(renderer, app.document().document());
+    request.version = version;
+    request.documentGeneration = app.document().documentGeneration();
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = svg::compositor::InteractionHint::Selection,
+    };
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+  const auto findSelectedLayer = [entity](const auto& tiles) {
+    return std::find_if(tiles.begin(), tiles.end(),
+                        [entity](const auto& tile) { return tile.layerEntity == entity; });
+  };
+
+  const std::optional<RenderResult> red = renderSelected(1);
+  ASSERT_TRUE(red.has_value());
+  ASSERT_TRUE(red->compositedPreview.has_value());
+  const auto redLayer = findSelectedLayer(red->compositedPreview->tiles);
+  ASSERT_NE(redLayer, red->compositedPreview->tiles.end());
+  const auto countersBefore = asyncRenderer.compositorFastPathCountersForTesting();
+
+  const std::size_t greenEditOffset =
+      app.document().document().source().find("fill: red;", ruleOffset);
+  ASSERT_NE(greenEditOffset, std::string_view::npos);
+  const xml::ApplySourceEditResult edit =
+      app.document().document().applySourceEdit(xml::XMLEditIntent{
+          .range = SourceRange{FileOffset::Offset(greenEditOffset + 6),
+                               FileOffset::Offset(greenEditOffset + 9)},
+          .replacement = "green",
+          .sourceVersion = app.document().document().sourceVersion(),
+      });
+  ASSERT_TRUE(edit.applied);
+  ASSERT_FALSE(edit.diagnostic.has_value());
+  EXPECT_TRUE(app.document().document().hasPendingRenderInvalidation());
+  EXPECT_THAT(std::string(app.document().document().source()),
+              ::testing::HasSubstr(".cls-5 {\n      fill: green;"));
+
+  const std::optional<RenderResult> green = renderSelected(2);
+  ASSERT_TRUE(green.has_value());
+  ASSERT_TRUE(green->compositedPreview.has_value());
+  EXPECT_GT(asyncRenderer.compositorRenderFrameStats().cachedTileCount, 0)
+      << "stylesheet edits must re-rasterize cached compositor layers";
+  const auto greenLayer = findSelectedLayer(green->compositedPreview->tiles);
+  ASSERT_NE(greenLayer, green->compositedPreview->tiles.end());
+  const auto countersAfter = asyncRenderer.compositorFastPathCountersForTesting();
+  ASSERT_GT(greenLayer->generation, redLayer->generation)
+      << "noDirtyFrames " << countersBefore.noDirtyFrames << " -> " << countersAfter.noDirtyFrames
+      << ", slowPathFramesWithDirty " << countersBefore.slowPathFramesWithDirty << " -> "
+      << countersAfter.slowPathFramesWithDirty << ", pending render invalidation "
+      << app.document().document().hasPendingRenderInvalidation();
+
+  svg::Renderer freshRenderer;
+  svg::SVGDocument referenceDocument = svg::instantiateSubtree(app.document().document().source());
+  referenceDocument.setCanvasSize(892, 512);
+  const auto referenceSelected = referenceDocument.querySelector("#Donner_D");
+  ASSERT_TRUE(referenceSelected.has_value());
+  const Entity referenceEntity = referenceSelected->unsafeEntityHandle().entity();
+  svg::compositor::CompositorConfig config;
+  config.deferFirstFrameWarmup = false;
+  svg::compositor::CompositorController fresh(referenceDocument, freshRenderer, config);
+  ASSERT_TRUE(fresh.promoteEntity(referenceEntity, svg::compositor::InteractionHint::Selection));
+  fresh.renderFrame(svg::RenderViewport{Vector2d(892, 512)});
+  const auto expectedTiles = fresh.snapshotTilesForUpload();
+  const auto expectedLayer = std::find_if(
+      expectedTiles.begin(), expectedTiles.end(),
+      [referenceEntity](const auto& tile) { return tile.layerEntity == referenceEntity; });
+  ASSERT_NE(expectedLayer, expectedTiles.end());
+  tests::CompareBitmapToBitmap(
+      MaterializeTileBitmap(*greenLayer),
+      !expectedLayer->bitmap.empty() ? expectedLayer->bitmap
+                                     : expectedLayer->textureSnapshot->takeSnapshot(),
+      "selected_splash_stylesheet_source_edit", tests::PixelmatchIdentityParams());
+}
+
 TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGenerations) {
   const donner::tests::RequiredRunfile splashFile =
       donner::tests::ReadRequiredRunfile("donner_splash.svg");
@@ -6033,11 +6187,15 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
       << "Once the viewport has settled, the coordinator should request one crisp selected "
          "prewarm.";
   EXPECT_TRUE(waitForCoordinator());
+  const Vector2i visibleCanvas = viewport.rasterViewport().outputSizePx;
   const Vector2i paddedCanvas = viewport.selectedPrewarmRasterViewport().outputSizePx;
+  ASSERT_NE(visibleCanvas, paddedCanvas)
+      << "The test must exercise a selected prewarm larger than the visible raster";
   ASSERT_FALSE(textures.tiles().empty());
   for (const GlTextureCache::TileView& tile : textures.tiles()) {
-    EXPECT_EQ(tile.rasterCanvasSize, paddedCanvas)
-        << "Settled selected prewarm should use the overdraw-padded raster viewport.";
+    EXPECT_EQ(tile.rasterCanvasSize, visibleCanvas)
+        << "A selected zoom must keep the complete visible raster instead of rebuilding the "
+           "scene for a much larger padded prewarm.";
   }
 }
 
@@ -6147,9 +6305,86 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
   ASSERT_TRUE(waitForCoordinator());
-  EXPECT_FALSE(textures.tiles().empty());
+  const auto posted = RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
+  ASSERT_TRUE(posted.has_value());
+  const auto cached = coordinator.compositedPresentation().diagnostics();
+  const auto frameStats = coordinator.asyncRenderer().compositorRenderFrameStats();
+  EXPECT_EQ(frameStats.textureAllocationFailureCount, 0)
+      << "Oversized selected geometry should fall back before attempting a rejected tile";
+  EXPECT_FALSE(textures.tiles().empty())
+      << "selected bounded render must publish active tiles: metadata misses="
+      << textures.metadataOnlyMissCount() << " overview tiles=" << textures.overviewTiles().size()
+      << " active raster=" << viewport.rasterViewport().outputSizePx
+      << " selected prewarm=" << viewport.selectedPrewarmRasterViewport().outputSizePx
+      << " posted overview=" << posted->overviewInfillOnly
+      << " posted raster=" << posted->rasterViewport.outputSizePx
+      << " posted selected=" << static_cast<unsigned>(posted->selectedEntity)
+      << " cached entity=" << static_cast<unsigned>(cached.cachedEntity)
+      << " cached version=" << cached.cachedVersion
+      << " alloc failures=" << frameStats.textureAllocationFailureCount;
   EXPECT_FALSE(textures.overviewTiles().empty())
       << "Publishing the crisp bounded selected prewarm must preserve the overview fallback.";
+  for (int idleFrame = 0; idleFrame < 4; ++idleFrame) {
+    EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+        << "An unavailable selected tile must not launch the same prewarm on every idle frame "
+        << idleFrame;
+    EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
+  }
+}
+
+TEST(RenderCoordinatorTest, UnsupportedTextSelectionDoesNotRepeatIdlePrewarm) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+      <text id="label" x="10" y="40">SVG</text>
+    </svg>
+  )svg"));
+  const auto text = app.document().document().querySelector("#label");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.devicePixelRatio = 1.0;
+  viewport.resetTo100Percent();
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode-only owning-tile presentation regression";
+  }
+
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  ASSERT_TRUE(PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                        [&] { return !coordinator.asyncRenderer().isBusy(); }, deadline));
+  ASSERT_FALSE(textures.tiles().empty()) << "The selected text must remain visible in owning tiles";
+  EXPECT_TRUE(coordinator.compositedPresentation().diagnostics().cachedEntity == entt::null)
+      << "Text has no complete independently movable tile";
+  for (int idleFrame = 0; idleFrame < 4; ++idleFrame) {
+    EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+        << "An unsupported selected text tile must not keep the worker busy on idle frame "
+        << idleFrame;
+    EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
+  }
+
+  ASSERT_TRUE(app.setStylePropertyOnSelection("fill", "#00ff00"));
+  ASSERT_TRUE(app.flushFrame());
+  coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
+  ASSERT_EQ(coordinator.pendingSelectedLayerRasterizationEntityForDiagnostics(),
+            text->unsafeEntityHandle().entity());
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+  const auto styleDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  ASSERT_TRUE(PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                        [&] { return !coordinator.asyncRenderer().isBusy(); }, styleDeadline));
+  EXPECT_TRUE(coordinator.pendingSelectedLayerRasterizationEntityForDiagnostics() == entt::null)
+      << "A forced owning-tile style refresh must clear the selected rasterization obligation";
+  for (int idleFrame = 0; idleFrame < 4; ++idleFrame) {
+    EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+        << "Text style refresh must not restart the selected prewarm on idle frame " << idleFrame;
+    EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
+  }
 }
 
 TEST(RenderCoordinatorTest, ViewportBoundedResultWithoutOverviewIsDiscarded) {

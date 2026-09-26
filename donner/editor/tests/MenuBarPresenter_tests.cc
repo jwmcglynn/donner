@@ -2,10 +2,180 @@
 
 #include <gtest/gtest.h>
 
+#include <set>
+#include <string_view>
+#include <vector>
+
+#include "donner/editor/EditorMenuModel.h"
 #include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
 namespace {
+
+void CollectCommands(std::span<const EditorMenuNode> nodes,
+                     std::vector<const EditorMenuNode*>* commands) {
+  for (const EditorMenuNode& node : nodes) {
+    if (node.kind == EditorMenuNode::Kind::Command) {
+      commands->push_back(&node);
+    } else if (node.kind == EditorMenuNode::Kind::Submenu) {
+      CollectCommands(node.children, commands);
+    }
+  }
+}
+
+const EditorMenuNode* FindCommand(MenuBarCommand command) {
+  std::vector<const EditorMenuNode*> commands;
+  for (const EditorMenu& menu : EditorMenuModel()) {
+    CollectCommands(menu.items, &commands);
+  }
+  for (const EditorMenuNode* node : commands) {
+    if (node->command == command) {
+      return node;
+    }
+  }
+  return nullptr;
+}
+
+TEST(EditorMenuModelTest, EverySemanticCommandAppearsOnceWithDistinctAccelerator) {
+  const std::span<const EditorMenu> menus = EditorMenuModel();
+  ASSERT_EQ(menus.size(), 4u);
+  EXPECT_EQ(menus[0].title, "DONNER");
+  EXPECT_EQ(menus[1].title, "File");
+  EXPECT_EQ(menus[2].title, "Edit");
+  EXPECT_EQ(menus[3].title, "View");
+
+  std::vector<const EditorMenuNode*> commands;
+  for (const EditorMenu& menu : menus) {
+    CollectCommands(menu.items, &commands);
+  }
+  std::set<int> commandIds;
+  std::set<std::string_view> shortcuts;
+  for (const EditorMenuNode* node : commands) {
+    EXPECT_FALSE(node->label.empty());
+    EXPECT_TRUE(commandIds.insert(static_cast<int>(node->command)).second) << node->label;
+    if (!node->shortcut.empty()) {
+      EXPECT_TRUE(shortcuts.insert(node->shortcut).second) << node->shortcut;
+    }
+  }
+  EXPECT_EQ(commandIds.size(), static_cast<std::size_t>(MenuBarCommand::ResetLayout) + 1u);
+  const EditorMenuNode* saveAs = FindCommand(MenuBarCommand::SaveFileAs);
+  const EditorMenuNode* sourceFocus = FindCommand(MenuBarCommand::ToggleSourceFocusMode);
+  ASSERT_NE(saveAs, nullptr);
+  ASSERT_NE(sourceFocus, nullptr);
+  EXPECT_EQ(saveAs->shortcut, "Cmd+Shift+S");
+  EXPECT_EQ(sourceFocus->shortcut, "Cmd+Enter");
+}
+
+TEST(EditorMenuModelTest, EnabledAndCheckStateFollowFocusAndViewState) {
+  MenuBarState state;
+  const EditorMenuNode* copy = FindCommand(MenuBarCommand::Copy);
+  const EditorMenuNode* selectAll = FindCommand(MenuBarCommand::SelectAll);
+  const EditorMenuNode* save = FindCommand(MenuBarCommand::SaveFile);
+  const EditorMenuNode* compositor = FindCommand(MenuBarCommand::SetCompositedRenderingFilterOnly);
+  ASSERT_NE(copy, nullptr);
+  ASSERT_NE(selectAll, nullptr);
+  ASSERT_NE(save, nullptr);
+  ASSERT_NE(compositor, nullptr);
+
+  EXPECT_FALSE(PresentEditorMenuItem(*copy, state).enabled);
+  EXPECT_FALSE(PresentEditorMenuItem(*selectAll, state).enabled);
+  EXPECT_FALSE(PresentEditorMenuItem(*save, state).enabled);
+  EXPECT_FALSE(PresentEditorMenuItem(*compositor, state).checked);
+
+  state.sourcePaneFocused = true;
+  state.canSave = true;
+  state.compositedRenderingMode = CompositedRenderingMode::FilterOnly;
+  EXPECT_TRUE(PresentEditorMenuItem(*copy, state).enabled);
+  EXPECT_TRUE(PresentEditorMenuItem(*selectAll, state).enabled);
+  EXPECT_TRUE(PresentEditorMenuItem(*save, state).enabled);
+  EXPECT_TRUE(PresentEditorMenuItem(*compositor, state).checked);
+}
+
+TEST(EditorMenuModelTest, NativeTextToolCaptureCannotDispatchCanvasEditCommands) {
+  MenuBarState state;
+  state.textToolEditing = true;
+  state.hasShapeSelection = true;
+  state.hasShapeClipboard = true;
+  state.hasSelectableElements = true;
+  state.canUndo = true;
+
+  EXPECT_TRUE(SuppressNativeMenuShortcuts(state));
+  const EditorMenuNode* newFile = FindCommand(MenuBarCommand::NewFile);
+  ASSERT_NE(newFile, nullptr);
+  EXPECT_FALSE(NativeMenuActivationAllowed(*newFile, state, /*keyEquivalent=*/true));
+  EXPECT_TRUE(NativeMenuActivationAllowed(*newFile, state, /*keyEquivalent=*/false));
+  for (const MenuBarCommand command :
+       {MenuBarCommand::Undo, MenuBarCommand::Cut, MenuBarCommand::Copy, MenuBarCommand::Paste,
+        MenuBarCommand::PasteInFront, MenuBarCommand::SelectAll, MenuBarCommand::DeselectAll}) {
+    const EditorMenuNode* item = FindCommand(command);
+    ASSERT_NE(item, nullptr);
+    EXPECT_FALSE(PresentEditorMenuItem(*item, state, EditorMenuSurface::Native).enabled)
+        << item->label;
+    EXPECT_FALSE(NativeMenuActivationAllowed(*item, state, /*keyEquivalent=*/false));
+    EXPECT_TRUE(PresentEditorMenuItem(*item, state).enabled) << item->label;
+  }
+}
+
+TEST(EditorMenuModelTest, NativeInspectorTextInputCaptureCannotDispatchCanvasEditCommands) {
+  MenuBarState state;
+  state.inspectorTextInputFocused = true;
+  state.hasShapeSelection = true;
+  state.hasShapeClipboard = true;
+  state.hasSelectableElements = true;
+
+  EXPECT_TRUE(SuppressNativeMenuShortcuts(state));
+  const EditorMenuNode* newFile = FindCommand(MenuBarCommand::NewFile);
+  ASSERT_NE(newFile, nullptr);
+  EXPECT_FALSE(NativeMenuActivationAllowed(*newFile, state, /*keyEquivalent=*/true));
+  for (const MenuBarCommand command : {MenuBarCommand::Cut, MenuBarCommand::Copy,
+                                       MenuBarCommand::Paste, MenuBarCommand::SelectAll}) {
+    const EditorMenuNode* item = FindCommand(command);
+    ASSERT_NE(item, nullptr);
+    EXPECT_FALSE(PresentEditorMenuItem(*item, state, EditorMenuSurface::Native).enabled)
+        << item->label;
+  }
+  state.inspectorTextInputFocused = false;
+  EXPECT_FALSE(SuppressNativeMenuShortcuts(state));
+  const EditorMenuNode* copy = FindCommand(MenuBarCommand::Copy);
+  ASSERT_NE(copy, nullptr);
+  EXPECT_TRUE(PresentEditorMenuItem(*copy, state, EditorMenuSurface::Native).enabled);
+  EXPECT_TRUE(NativeMenuActivationAllowed(*copy, state, /*keyEquivalent=*/true));
+}
+
+TEST(EditorMenuModelTest, SourceFocusKeepsTextEditingCommandsAndDisablesCanvasOnlyActions) {
+  MenuBarState state;
+  state.sourcePaneFocused = true;
+  state.canUndo = true;
+  state.canRedo = true;
+  state.hasShapeClipboard = true;
+  state.hasTextSelection = true;
+  state.canGroup = true;
+  state.canUngroup = true;
+
+  for (const MenuBarCommand command :
+       {MenuBarCommand::Undo, MenuBarCommand::Redo, MenuBarCommand::Paste}) {
+    const EditorMenuNode* item = FindCommand(command);
+    ASSERT_NE(item, nullptr);
+    EXPECT_TRUE(NativeMenuActivationAllowed(*item, state, /*keyEquivalent=*/true)) << item->label;
+  }
+  for (const MenuBarCommand command :
+       {MenuBarCommand::PasteInFront, MenuBarCommand::ConvertTextToOutlines, MenuBarCommand::Group,
+        MenuBarCommand::Ungroup}) {
+    const EditorMenuNode* item = FindCommand(command);
+    ASSERT_NE(item, nullptr);
+    EXPECT_FALSE(PresentEditorMenuItem(*item, state, EditorMenuSurface::Native).enabled)
+        << item->label;
+    EXPECT_FALSE(PresentEditorMenuItem(*item, state, EditorMenuSurface::ImGui).enabled)
+        << item->label;
+    EXPECT_FALSE(NativeMenuActivationAllowed(*item, state, /*keyEquivalent=*/true));
+  }
+  // Source focus wins even if an in-canvas TextTool session has not committed.
+  state.textToolEditing = true;
+  EXPECT_FALSE(SuppressNativeMenuShortcuts(state));
+  const EditorMenuNode* undo = FindCommand(MenuBarCommand::Undo);
+  ASSERT_NE(undo, nullptr);
+  EXPECT_TRUE(NativeMenuActivationAllowed(*undo, state, /*keyEquivalent=*/true));
+}
 
 class MenuBarPresenterTest : public ::testing::Test {
 protected:

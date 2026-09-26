@@ -96,7 +96,7 @@ test("the raster worker selects the backend its package was built for", async ({
   const editorCanvas = page.locator("canvas#canvas");
   const bounds = await editorCanvas.boundingBox();
   expect(bounds, "the editor canvas is missing").not.toBeNull();
-  await page.mouse.click(bounds!.x + bounds!.width * 0.5, bounds!.y + 282);
+  await page.mouse.click(bounds!.x + bounds!.width * 0.76, bounds!.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
   await expect
     .poll(

@@ -43,6 +43,10 @@ std::optional<std::string> NativeDialogCoordinator::saveFile(
   return chosen;
 }
 
+void NativeDialogCoordinator::showSaveError(GLFWwindow* window, const std::string& message) const {
+  ShowNativeFileDialogError(window, "Unable to save SVG", message);
+}
+
 void NativeDialogCoordinator::recordChosen(const std::string& path) {
   state_.noteChosenPath(path);
   NoteNativeRecentDocument(path);
