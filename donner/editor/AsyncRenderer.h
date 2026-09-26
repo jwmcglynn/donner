@@ -101,9 +101,10 @@ private:
 /// Per-request handoff data captured at render-request time so the
 /// worker has everything it needs without touching live UI state.
 struct RenderRequest {
+  /// Drag state snapshotted with one worker render request.
   struct DragPreview {
-    Entity entity = entt::null;
-    /// Additional entities moving with \ref entity under the same active drag transform.
+    Entity entity = entt::null;  //!< Primary entity whose drag this request represents.
+    /// Additional entities moving with `entity` under the same active drag transform.
     std::vector<Entity> extraEntities;
     /// Which interaction phase drove this preview. `Selection` means the
     /// editor is pre-warming a layer for the selected entity before any
@@ -313,31 +314,24 @@ struct RenderResult {
     bool nothingToPresent = false;
   };
 
-  /// One composite tile from the worker's `CompositorController::
-  /// snapshotCompositorTiles()` snapshot. The editor uploads one GL texture per tile (keyed on
-  /// `id`). The GL presenter composes those cached textures into one pane-sized presentation
-  /// texture; the WebGPU presenter composites them directly into the framebuffer. Immediate tiles
-  /// intentionally use
-  /// transient ids and always carry a fresh payload. Geometry fields are
-  /// doc-unit quantities so the editor can scale them by the current
-  /// `pixelsPerDocUnit` during canvas-resize debouncing.
+  /// One paint-order tile from the worker's compositor snapshot. Ids and generations let
+  /// presentation reuse unchanged GL textures or Geode UI registrations, including regular
+  /// immediate static segments. A matching published tile may carry metadata without a fresh
+  /// payload. Geometry is in document units so the presenter follows live zoom while a new
+  /// canvas raster is deferred.
   struct CompositedTile {
+    /// Static segment, promoted layer, or immediate tile category.
     enum class Kind : std::uint8_t { Segment, Layer, Immediate };
 
+    /// Category of this composited tile.
     Kind kind = Kind::Segment;
-    /// Stable id from the compositor - `"seg:{i}"` or
-    /// `"layer:{entity}"`. The editor's per-tile texture cache uses
-    /// this to reuse GL textures across frames when the tile's
-    /// `generation` hasn't bumped.
+    /// Compositor id used to find a reusable cached payload.
     std::string id;
-    /// Promoted entity represented by this layer tile. Null for static segment and full-canvas
-    /// tiles. The presenter uses this to suppress stale cached pixels for a selected element that
-    /// became non-rendering while keeping editor chrome visible.
+    /// Promoted layer, null for segment and full-canvas tiles.
     Entity layerEntity = entt::null;
-    /// Monotonic generation from the compositor. Editor re-uploads
-    /// the bitmap only when this advances.
+    /// Monotonic tile-payload generation.
     std::uint64_t generation = 0;
-    /// Source bitmap; uploaded as the tile's GL texture content.
+    /// CPU bitmap payload, uploaded for software or fallback presentation.
     svg::RendererBitmap bitmap;
     /// Backend-owned texture payload. Geode editor builds present this directly via ImGui WGPU.
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
@@ -371,6 +365,7 @@ struct RenderResult {
     bool isDragTarget = false;
   };
 
+  /// Paint-ordered composited tiles and promoted interaction state.
   struct CompositedPreview {
     /// Paint-order tile list. Presentation samples the tiles in this order at
     /// `(canvasOffsetDoc + dragTranslationDoc) * pixelsPerDocUnit`, with size
@@ -384,34 +379,25 @@ struct RenderResult {
     /// Drag preview state represented by the tile transforms in this result.
     std::optional<RenderRequest::DragPreview> representedDragPreview;
 
+    /// True when the tile list is nonempty; presentation validates payloads later.
     [[nodiscard]] bool valid() const { return !tiles.empty(); }
   };
 
-  svg::RendererBitmap bitmap;
-  std::optional<CompositedPreview> compositedPreview;
-  /// Raster viewport used to produce this result.
-  EditorRasterViewport rasterViewport;
-  /// Editor viewport \ref rasterViewport was derived from, copied from the request.
-  ViewportState viewport;
-  /// True when this result should update only retained overview infill.
-  bool overviewInfillOnly = false;
-  std::uint64_t version = 0;
-  /// Nonzero identity of an explicit editor pixel capture.
-  std::uint64_t cpuSnapshotRequestId = 0;
-  /// Document generation captured by the render request.
-  std::uint64_t documentGeneration = 0;
-  std::uint64_t fontResourceRevision = 0;
-  /// Pending faces make an interactive fallback frame unsuitable for a final pixel export.
-  std::vector<svg::FontFaceDependency> fontDependencies;
-  /// Wall-clock milliseconds spent in the worker iteration after a request is
-  /// dequeued, including `CompositorController::renderFrame`, final
-  /// snapshot/readback work, and diagnostic snapshots that gate presentation.
-  /// Reported so the editor can plot worker latency alongside ImGui frame time
-  /// on the frame graph. Zero means no worker timing was recorded.
-  double workerMs = 0.0;
-  WorkerTimingBreakdown workerTiming;
-  /// Internal completion timestamp used to populate `workerTiming.pollDelayMs` on acceptance.
-  std::chrono::steady_clock::time_point workerCompletedAt;
+  svg::RendererBitmap bitmap;  //!< Optional CPU-readable full-canvas frame.
+  std::optional<CompositedPreview>
+      compositedPreview;                   //!< Paint-ordered compositor tiles, when produced.
+  EditorRasterViewport rasterViewport;     //!< Raster viewport used to produce this result.
+  ViewportState viewport;                  //!< Editor viewport copied from the request.
+  bool overviewInfillOnly = false;         //!< Update retained overview infill only.
+  std::uint64_t version = 0;               //!< Document frame version represented by the result.
+  std::uint64_t cpuSnapshotRequestId = 0;  //!< Nonzero explicit pixel-capture identity.
+  std::uint64_t documentGeneration = 0;    //!< Document generation from the request.
+  std::uint64_t fontResourceRevision = 0;  //!< Font-resource revision used by the worker.
+  std::vector<svg::FontFaceDependency>
+      fontDependencies;   //!< Faces pending before final pixel export.
+  double workerMs = 0.0;  //!< Worker iteration latency in milliseconds, zero if unavailable.
+  WorkerTimingBreakdown workerTiming;  //!< Phase and handoff timings for this worker iteration.
+  std::chrono::steady_clock::time_point workerCompletedAt;  //!< Worker completion timestamp.
 };
 
 /// Terminal outcome for one low-priority sample-thumbnail render attempt.
@@ -439,15 +425,17 @@ enum class AuxiliaryPreviewKind : std::uint8_t {
 
 /// One SVG source queued for bounded, low-priority rendering on the existing render worker.
 struct SampleThumbnailRenderRequest {
+  /// Caller lane for this preview task.
   AuxiliaryPreviewKind kind = AuxiliaryPreviewKind::Sample;
-  /// Caller-defined key copied into the result (the sample-catalog index in `EditorShell`).
+  /// Caller-defined key echoed in the result.
   std::uint64_t key = 0;
+  /// Generation used by the caller to reject stale tasks.
   std::uint64_t taskGeneration = 0;
-  /// Shared store wake counter when this stable coordinator task issued the attempt.
+  /// Font-store wake at task submission.
   std::uint64_t fontWakeRevision = 0;
-  /// Complete SVG source. The request owns its copy until the worker finishes parsing it.
+  /// Owned SVG source for the worker's parse.
   std::string source;
-  /// Output bitmap dimensions in device pixels.
+  /// Output dimensions in device pixels.
   Vector2i dimensions = Vector2i::Zero();
   /// Root renderer used to create the worker-local offscreen on native builds.
   ///
@@ -458,34 +446,45 @@ struct SampleThumbnailRenderRequest {
 
 /// CPU bitmap returned by one asynchronous sample-thumbnail attempt.
 struct SampleThumbnailRenderResult {
-  AuxiliaryPreviewKind kind = AuxiliaryPreviewKind::Sample;
-  std::uint64_t key = 0;
-  std::uint64_t taskGeneration = 0;
-  std::uint64_t fontWakeRevision = 0;
-  std::uint64_t fontResourceRevision = 0;
-  std::vector<svg::FontFaceDependency> fontDependencies;
-  SampleThumbnailRenderOutcome outcome = SampleThumbnailRenderOutcome::RenderError;
-  svg::RendererBitmap bitmap;
+  AuxiliaryPreviewKind kind =
+      AuxiliaryPreviewKind::Sample;        //!< Caller lane that produced this result.
+  std::uint64_t key = 0;                   //!< Caller-defined key echoed from the request.
+  std::uint64_t taskGeneration = 0;        //!< Task generation echoed from the request.
+  std::uint64_t fontWakeRevision = 0;      //!< Shared font-store wake revision for this attempt.
+  std::uint64_t fontResourceRevision = 0;  //!< Font-resource revision observed by the worker.
+  std::vector<svg::FontFaceDependency> fontDependencies;  //!< Fonts on which this preview depends.
+  SampleThumbnailRenderOutcome outcome =
+      SampleThumbnailRenderOutcome::RenderError;  //!< Terminal outcome of this preview attempt.
+  svg::RendererBitmap bitmap;  //!< Captured bitmap; it may be empty even when outcome is Rendered.
 };
 
 /// Observable state and monotonic counters for the bounded sample-thumbnail lane.
 struct SampleThumbnailRenderStats {
+  /// Requests accepted into the thumbnail lane.
   std::uint64_t requested = 0;
+  /// Attempts started on the worker.
   std::uint64_t started = 0;
+  /// Attempts completed, including cancellation.
   std::uint64_t completed = 0;
+  /// Requests classified with a Rendered outcome.
   std::uint64_t rendered = 0;
+  /// Requests cancelled before a publishable result.
   std::uint64_t cancelled = 0;
+  /// Worker-local offscreen renderer creations.
   std::uint64_t offscreenRendererCreations = 0;
-  /// Offscreen constructors entered before any test-only construction block.
+  /// Offscreen constructor entries.
   std::uint64_t offscreenRendererConstructionStarts = 0;
-  /// True only while the test-controlled block is active inside construction.
+  /// Test-held constructor is active.
   bool offscreenRendererConstructionBlocked = false;
-  /// Foreground renders queued while the first worker-local offscreen attempt was still active.
+  /// Foreground handoffs during worker-local offscreen construction.
   std::uint64_t foregroundHandoffWaits = 0;
   /// True once the first worker-local offscreen renderer initialization has completed.
   bool firstAttemptCompleted = false;
+  /// Whether one thumbnail task is queued.
   bool pending = false;
+  /// Whether the worker is processing a thumbnail task.
   bool active = false;
+  /// Whether a result awaits polling.
   bool resultReady = false;
 };
 
@@ -495,8 +494,11 @@ enum class AsyncRendererStartMode : std::uint8_t {
   Deferred,
 };
 
+/// Background render worker with foreground document and low-priority thumbnail lanes.
 class AsyncRenderer {
 public:
+  /// Construct the worker, starting its thread unless deferred.
+  /// @param startMode Whether to start immediately or wait for an explicit start call.
   explicit AsyncRenderer(AsyncRendererStartMode startMode = AsyncRendererStartMode::Immediate);
   ~AsyncRenderer();
 
@@ -710,7 +712,7 @@ public:
   /// modes reconstructs it with the matching `CompositorConfig`. Every mode
   /// produces identical pixels.
   ///
-  /// Same threading contract as \ref setTightBoundedSegmentsEnabled:
+  /// Same threading contract as `setTightBoundedSegmentsEnabled`:
   /// safe to call from the UI thread while a render is in flight.
   void setCompositedRenderingMode(CompositedRenderingMode mode) {
     compositedRenderingMode_.store(mode, std::memory_order_release);
@@ -731,7 +733,7 @@ public:
   /// or cover the frame-final wireframe. Disabling performs one transition
   /// reset, then normal retained promotion resumes.
   ///
-  /// Same threading contract as \ref setTightBoundedSegmentsEnabled:
+  /// Same threading contract as `setTightBoundedSegmentsEnabled`:
   /// safe to call from the UI thread while a render is in flight.
   void setGeometryDebugOverlayEnabled(bool enabled) {
     geometryDebugOverlay_.store(enabled, std::memory_order_release);

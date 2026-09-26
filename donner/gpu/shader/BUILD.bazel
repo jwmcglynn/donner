@@ -1,5 +1,7 @@
+load("@aspect_rules_js//js:defs.bzl", "js_test")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test", "forbidden_transitive_dep_test")
 load("//build_defs:package.bzl", "donner_package")
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 donner_cc_library(
@@ -682,70 +684,166 @@ donner_cc_test(
     ],
 )
 
-# Black-box validation fixture: creates a real pipeline from each emitted WGSL
-# program through the renderer's own WebGPU device, so acceptance comes from the
-# shader front end that ships rather than from a parser in this repository. Runs
-# in the geode variant lane; incompatible otherwise.
-donner_cc_test(
-    name = "wgsl_emitter_geode_validation_tests_impl",
-    srcs = [
-        "tests/MathPrimitiveCoverageModule.h",
-        "tests/ShaderTestUtils.h",
-        "tests/WgslEmitterGeodeValidation_tests.cc",
+# Shader validation runs without the transitional WebGPU-C++ wrapper or its native archive.
+configured_dependency_audit_test(
+    name = "wgsl_validation_no_rust_audit_test",
+    forbidden_packages = ["//third_party/webgpu-cpp"],
+    required = [
+        "//donner/gpu/shader:shipped_wgsl_catalog",
+        "//donner/gpu/shader/wgsl:compiler",
     ],
-    target_compatible_with = select({
-        "//donner/svg/renderer/geode:geode_enabled": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
+    target = "//donner/gpu/shader:wgsl_projection_validation_tests",
+)
+
+donner_cc_library(
+    name = "shipped_wgsl_catalog",
+    testonly = 1,
+    srcs = ["tests/ShippedWgslCatalog.cc"],
+    hdrs = ["tests/ShippedWgslCatalog.h"],
+    visibility = donner_internal_visibility(),
     deps = [
-        ":color_space_convert_api",
+        ":checkerboard_artifact",
         ":color_space_convert_artifact",
-        ":filter_color_matrix_api",
+        ":compiled_shader",
+        ":component_transfer_artifact",
+        ":composite_artifact",
+        ":convolve_matrix_artifact",
+        ":diffuse_lighting_artifact",
+        ":displacement_map_artifact",
+        ":drop_shadow_artifact",
+        ":filter_blend_artifact",
         ":filter_color_matrix_artifact",
-        ":filter_resolve_api",
+        ":filter_image_artifact",
         ":filter_resolve_artifact",
-        ":filter_resolve_test_artifact",
-        ":float_storage_test_module",
-        ":flood_api",
         ":flood_artifact",
-        ":gaussian_blur_api",
         ":gaussian_blur_artifact",
-        ":image_blit_test_artifact",
-        ":morphology_api",
+        ":image_blit_artifact",
+        ":merge_artifact",
         ":morphology_artifact",
-        ":offset_api",
         ":offset_artifact",
-        ":programs",
-        ":shader",
-        ":specular_lighting_api",
+        ":slug_fill_artifact",
+        ":slug_gradient_artifact",
+        ":slug_mask_artifact",
+        ":snapshot_unpremultiply_artifact",
         ":specular_lighting_artifact",
-        ":specular_lighting_test_artifact",
-        ":subregion_clip_api",
         ":subregion_clip_artifact",
-        ":tile_api",
         ":tile_artifact",
-        ":turbulence_api",
         ":turbulence_artifact",
-        ":turbulence_test_artifact",
-        ":wgsl_emitter",
-        "//donner/base:gtest_timeout_main",
-        "//donner/editor/tests:bitmap_golden_compare",
-        "//donner/svg/renderer/geode:geode_device",
-        "//donner/svg/renderer/geode:geode_gpu_wait",
-        "//donner/svg/renderer/geode:geode_test_contexts",
-        "//donner/svg/renderer/geode:geode_wgpu_util",
-        "//third_party/webgpu-cpp:webgpu_cpp",
-        "@tiny-skia-cpp//src/tiny_skia/filter",
+        ":ui_draw_artifact",
     ],
 )
 
-donner_multi_transitioned_test(
-    name = "wgsl_emitter_geode_validation_tests",
-    timeout = "short",
+donner_cc_test(
+    name = "wgsl_projection_validation_tests",
+    srcs = ["tests/WgslProjectionValidation_tests.cc"],
+    deps = [
+        ":compiled_shader",
+        ":shipped_wgsl_catalog",
+        "//donner/gpu/shader/wgsl:compiler",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+py_test(
+    name = "wgsl_projection_census_tests",
+    srcs = ["tests/WgslProjectionCensus_tests.py"],
+    data = [
+        "BUILD.bazel",
+        "tests/ShippedWgslCatalog.cc",
+    ],
+    main = "tests/WgslProjectionCensus_tests.py",
+)
+
+donner_cc_binary(
+    name = "dump_shipped_wgsl_catalog",
     testonly = 1,
-    dep = ":wgsl_emitter_geode_validation_tests_impl",
-    opens_gpu_device = True,
-    renderer_backend = "geode",
+    srcs = [
+        "tests/DumpShippedWgslCatalog.cc",
+        "tests/JsonWrite.h",
+    ],
+    deps = [
+        ":compiled_shader",
+        ":shipped_wgsl_catalog",
+    ],
+)
+
+genrule(
+    name = "shipped_wgsl_manifest",
+    testonly = 1,
+    outs = ["shipped_wgsl_manifest.json"],
+    cmd = "$(location :dump_shipped_wgsl_catalog) > $@",
+    tools = [":dump_shipped_wgsl_catalog"],
+)
+
+donner_cc_binary(
+    name = "dump_math_primitive_fixture",
+    testonly = 1,
+    srcs = [
+        "tests/DumpMathPrimitiveFixture.cc",
+        "tests/JsonWrite.h",
+        "tests/MathPrimitiveCoverageModule.h",
+    ],
+    deps = [
+        ":programs",
+        ":shader",
+        ":wgsl_emitter",
+    ],
+)
+
+genrule(
+    name = "math_primitive_fixture",
+    testonly = 1,
+    outs = ["math_primitive_fixture.json"],
+    cmd = "$(location :dump_math_primitive_fixture) > $@",
+    tools = [":dump_math_primitive_fixture"],
+)
+
+configured_dependency_audit_test(
+    name = "wgsl_manifest_no_rust_audit_test",
+    forbidden_packages = ["//third_party/webgpu-cpp"],
+    required = ["//donner/gpu/shader:shipped_wgsl_catalog"],
+    target = "//donner/gpu/shader:dump_shipped_wgsl_catalog",
+)
+
+configured_dependency_audit_test(
+    name = "wgsl_math_fixture_no_rust_audit_test",
+    forbidden_packages = ["//third_party/webgpu-cpp"],
+    required = ["//donner/gpu/shader:wgsl_emitter"],
+    target = "//donner/gpu/shader:dump_math_primitive_fixture",
+)
+
+# The browser compiler checks the emitted bytes independently of Donner's own WGSL frontend.
+# It validates modules only; editor/browser pixel acceptance remains a separate target.
+js_test(
+    name = "wgsl_chromium_compilation_tests",
+    size = "large",
+    copy_data_to_bin = False,
+    data = [
+        "BUILD.bazel",
+        ":math_primitive_fixture",
+        ":shipped_wgsl_manifest",
+        "//donner/editor/wasm/tests:node_modules/@playwright/test",
+        "@playwright//:chromium",
+    ],
+    entry_point = "tests/WgslChromiumCompilation_tests.mjs",
+    env = {
+        "DONNER_MATH_FIXTURE": "$(rootpath :math_primitive_fixture)",
+        "DONNER_SHADER_BUILD": "$(rootpath :BUILD.bazel)",
+        "DONNER_WGSL_MANIFEST": "$(rootpath :shipped_wgsl_manifest)",
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    node_options = ["--test"],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)
+
+forbidden_transitive_dep_test(
+    name = "wgsl_browser_no_webgpu_wrapper_test",
+    forbidden = "//third_party/webgpu-cpp:webgpu_cpp",
+    target = "//donner/gpu/shader:wgsl_chromium_compilation_tests",
 )
 
 donner_cc_library(

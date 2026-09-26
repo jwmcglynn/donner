@@ -127,8 +127,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_failed_hosted_perf_retains_test_failure_artifacts(self):
         workflow = self.supply_chain_files[".github/workflows/perf.yml"]
-        job = workflow.split("\n  macos:\n", 1)[1]
-        self.assertIn("runs-on: macos-26", job)
+        job = workflow.split("\n  perf:\n", 1)[1]
+        self.assertIn("- os: macos-26", job)
+        self.assertIn("- os: ubuntu-24.04", job)
+        self.assertIn("runs-on: ${{ matrix.os }}", job)
         test_step = _step_body(job, "Test perf-tagged targets")
         self.assertIn("id: perf", test_step)
         artifacts = _step_body(job, "Upload perf test failure artifacts")
