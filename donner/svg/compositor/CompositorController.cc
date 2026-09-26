@@ -448,12 +448,31 @@ bool CompositorController::hasDirtyFilteredInteraction(
   return false;
 }
 
+bool CompositorController::hasDirtyMarkedInteraction(
+    Registry& registry, const std::vector<Entity>& dirtyEntities) const {
+  for (const auto& [entity, hint] : activeHints_) {
+    if (std::ranges::find(dirtyEntities, entity) == dirtyEntities.end()) {
+      continue;
+    }
+    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+    if (instance != nullptr &&
+        (instance->markerStart.has_value() || instance->markerMid.has_value() ||
+         instance->markerEnd.has_value())) {
+      return true;
+    }
+  }
+  return false;
+}
+
 void CompositorController::dropOversizedInteractionHintsForViewport(
     Registry& registry, const RenderViewport& viewport, const Transform2d& surfaceFromCanvas,
     bool firstViewport, bool surfaceChanged, bool viewportSizeChanged,
-    const std::vector<Entity>& transformDirtyEntities, bool allowAffineDragPreview) {
+    const std::vector<Entity>& dirtyEntities, const std::vector<Entity>& transformDirtyEntities,
+    bool allowAffineDragPreview) {
+  // A style edit can add unbounded marker geometry to an already-promoted shape.
   if (!firstViewport && !surfaceChanged && !viewportSizeChanged &&
-      !hasDirtyFilteredInteraction(registry, transformDirtyEntities)) {
+      !hasDirtyFilteredInteraction(registry, transformDirtyEntities) &&
+      !hasDirtyMarkedInteraction(registry, dirtyEntities)) {
     return;
   }
   std::vector<std::pair<Entity, PromoteRefusalReason>> refused;
@@ -1301,7 +1320,7 @@ bool CompositorController::remapAfterStructuralReplace(
   // raster so the root clip is evaluated against the new SVG transform.
   dropOversizedInteractionHintsForViewport(registry, viewport, surfaceFromCanvas,
                                            /*firstViewport=*/true, /*surfaceChanged=*/false,
-                                           /*viewportSizeChanged=*/false, {},
+                                           /*viewportSizeChanged=*/false, {}, {},
                                            /*allowAffineDragPreview=*/false);
   for (auto& layer : layers_) {
     if (layer.isDirty() || !layer.hasRenderablePayload()) {
@@ -2112,7 +2131,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // against this frame's zoom before allocating any tiles, and restore owning tiles now if it
   // no longer fits. The old complete frame remains presentable until this frame is ready.
   dropOversizedInteractionHintsForViewport(registry, viewport, surfaceFromCanvas, firstViewport,
-                                           surfaceChanged, viewportSizeChanged,
+                                           surfaceChanged, viewportSizeChanged, dirtyEntitySnapshot,
                                            transformDirtyEntities);
 
   if (layers_.empty()) {

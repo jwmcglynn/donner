@@ -451,7 +451,8 @@ protected:
   static constexpr float kBarY = 80.0f;
   static constexpr float kPadding = 8.0f;
   static constexpr float kFamilyInputWidth = 180.0f;
-  static constexpr float kSizeDragWidth = 64.0f;
+  static constexpr float kSizeDragWidth = 128.0f;
+  static constexpr float kSizeStepperWidth = 22.0f;
 
   void SetUp() override {
     IMGUI_CHECKVERSION();
@@ -545,15 +546,15 @@ protected:
     return merged;
   }
 
-  // Horizontal layout of the single control row (left to right): family input,
-  // family combo arrow, size drag, size combo arrow, B, I, U.
+  // Horizontal layout: family input, family menu, size input with attached
+  // steps, B, I, U. Focusing the size input opens its preset popup.
   float RowCenterY() const { return kBarY + kPadding + frameHeight_ * 0.5f; }
   float RowBottomY() const { return kBarY + kPadding + frameHeight_; }
   float FamilyInputLeft() const { return kBarX + kPadding; }
   float FamilyArrowLeft() const { return FamilyInputLeft() + kFamilyInputWidth; }
   float SizeDragLeft() const { return FamilyArrowLeft() + frameHeight_ + itemSpacingX_; }
-  float SizeArrowLeft() const { return SizeDragLeft() + kSizeDragWidth; }
-  float BoldLeft() const { return SizeArrowLeft() + frameHeight_ + itemSpacingX_; }
+  float SizeStepperLeft() const { return SizeDragLeft() + kSizeDragWidth; }
+  float BoldLeft() const { return SizeStepperLeft() + kSizeStepperWidth + itemSpacingX_; }
   float ItalicLeft() const { return BoldLeft() + frameHeight_ + itemSpacingX_; }
   float UnderlineLeft() const { return ItalicLeft() + frameHeight_ + itemSpacingX_; }
 
@@ -638,26 +639,40 @@ TEST_F(TextFormatBarPresenterInputTest, OpenFamilyMenuRequestsVisibleMissingPrev
             (std::vector<std::string>{"Roboto", "Fira Code", "Zilla Slab"}));
 }
 
-TEST_F(TextFormatBarPresenterInputTest, DraggingSizeControlCommitsNewFontSize) {
+TEST_F(TextFormatBarPresenterInputTest, ClickingSizeFieldFocusesTextAndOpensPresets) {
   const FormatBarState state = MakeState();  // fontSize == 16.
-
   Frame(state);
-  const ImVec2 dragCenter(SizeDragLeft() + kSizeDragWidth * 0.5f, RowCenterY());
+  const ImVec2 fieldCenter(SizeDragLeft() + kSizeDragWidth * 0.5f, RowCenterY());
+  Click(state, fieldCenter);
+  Frame(state);
+  EXPECT_TRUE(ImGui::GetIO().WantTextInput);
+  EXPECT_TRUE(bar_.fontSizePresetRectForTesting(0).has_value());
+}
 
-  // Press on the drag control and pull it 30px to the right before releasing;
-  // the presenter commits the edited value on the release frame.
-  Frame(state, dragCenter);
-  FormatBarActions merged = Frame(state, dragCenter, /*mouseDown=*/true);
-  for (float dx = 10.0f; dx <= 30.0f; dx += 10.0f) {
-    MergeActions(merged, Frame(state, ImVec2(dragCenter.x + dx, dragCenter.y),
-                               /*mouseDown=*/true));
-  }
-  MergeActions(merged, Frame(state, ImVec2(dragCenter.x + 30.0f, dragCenter.y),
-                             /*mouseDown=*/false));
+TEST_F(TextFormatBarPresenterInputTest, TypingFontSizeCommitsOnBlur) {
+  const FormatBarState state = MakeState();
+  Frame(state);
+  Click(state, ImVec2(SizeDragLeft() + kSizeDragWidth * 0.5f, RowCenterY()));
+  ImGui::GetIO().AddInputCharacter('3');
+  EXPECT_FALSE(Frame(state).setFontSize);
+  const FormatBarActions actions = Click(state, ImVec2(1000.0f, 300.0f));
+  EXPECT_TRUE(actions.setFontSize);
+  EXPECT_FLOAT_EQ(actions.fontSize, 3.0f);
+}
 
-  EXPECT_TRUE(merged.setFontSize);
-  EXPECT_GT(merged.fontSize, 16.0f);
-  EXPECT_FALSE(merged.setFontFamily);
+TEST_F(TextFormatBarPresenterInputTest, AttachedFontSizeStepsCommitOnePointChanges) {
+  const FormatBarState state = MakeState();
+  Frame(state);
+  const float x = SizeStepperLeft() + kSizeStepperWidth * 0.5f;
+  const float top = kBarY + kPadding;
+
+  const FormatBarActions up = Click(state, ImVec2(x, top + frameHeight_ * 0.25f));
+  EXPECT_TRUE(up.setFontSize);
+  EXPECT_EQ(up.fontSize, 17.0f);
+
+  const FormatBarActions down = Click(state, ImVec2(x, top + frameHeight_ * 0.75f));
+  EXPECT_TRUE(down.setFontSize);
+  EXPECT_EQ(down.fontSize, 15.0f);
 }
 
 TEST_F(TextFormatBarPresenterInputTest, SizePresetMenuSelectsPreset) {
@@ -665,8 +680,9 @@ TEST_F(TextFormatBarPresenterInputTest, SizePresetMenuSelectsPreset) {
   state.fontSize = 8.0f;  // Matches the first preset so its row shows selected.
 
   Frame(state);
-  // Open the size preset combo (the arrow-only control right of the drag box).
-  OpenComboPopup(state, ImVec2(SizeArrowLeft() + frameHeight_ * 0.5f, RowCenterY()));
+  // One click on the editable size field opens the preset popup as well.
+  Click(state, ImVec2(SizeDragLeft() + kSizeDragWidth * 0.5f, RowCenterY()));
+  Frame(state);
 
   // One frame with no resolved size: the open popup renders every preset row
   // unselected without emitting actions.
@@ -674,8 +690,12 @@ TEST_F(TextFormatBarPresenterInputTest, SizePresetMenuSelectsPreset) {
   noSizeState.hasFontSize = false;
   EXPECT_FALSE(Frame(noSizeState).setFontSize);
 
-  const FormatBarActions actions = ClickFirstActionRowInPopup(
-      state, SizeArrowLeft(), [](const FormatBarActions& a) { return a.setFontSize; });
+  const auto firstPreset = bar_.fontSizePresetRectForTesting(0);
+  ASSERT_TRUE(firstPreset.has_value());
+  const ImVec2 presetCenter(
+      static_cast<float>((firstPreset->topLeft.x + firstPreset->bottomRight.x) * 0.5),
+      static_cast<float>((firstPreset->topLeft.y + firstPreset->bottomRight.y) * 0.5));
+  const FormatBarActions actions = Click(state, presetCenter);
 
   ASSERT_TRUE(actions.setFontSize) << "No preset row found in the size popup";
   EXPECT_FLOAT_EQ(actions.fontSize, static_cast<float>(kFormatBarFontSizePresets.front()));

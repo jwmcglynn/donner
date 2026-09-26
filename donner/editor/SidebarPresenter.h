@@ -21,6 +21,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/StrokeMarkerPrefabs.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
@@ -196,8 +197,15 @@ public:
   [[nodiscard]] std::optional<Box2d> strokeIncrementRectForTesting() const {
     return strokeIncrementRect_;
   }
+  [[nodiscard]] std::optional<Box2d> strokeDecrementRectForTesting() const {
+    return strokeDecrementRect_;
+  }
   /// Last rendered width value field, for drag and unit-preservation checks.
   [[nodiscard]] std::optional<Box2d> strokeWidthRectForTesting() const { return strokeWidthRect_; }
+  /// Quick-width preset row bounds while the hybrid popup is open.
+  [[nodiscard]] std::optional<Box2d> strokeWidthPresetRectForTesting(std::size_t index) const {
+    return index < strokeWidthPresetRects_.size() ? strokeWidthPresetRects_[index] : std::nullopt;
+  }
 
   /// Last rendered cap/join icon rectangle, for interaction and alignment checks.
   [[nodiscard]] std::optional<Box2d> strokeCapRectForTesting(std::size_t index) const {
@@ -230,6 +238,12 @@ public:
   [[nodiscard]] std::optional<Box2d> strokeMiterLimitRectForTesting() const {
     return strokeMiterLimitRect_;
   }
+  [[nodiscard]] std::optional<Box2d> strokeMiterIncrementRectForTesting() const {
+    return strokeMiterIncrementRect_;
+  }
+  [[nodiscard]] std::optional<Box2d> strokeMiterDecrementRectForTesting() const {
+    return strokeMiterDecrementRect_;
+  }
   /// Last rendered dash-offset field when its advanced row is visible.
   [[nodiscard]] std::optional<Box2d> strokeDashOffsetRectForTesting() const {
     return strokeDashOffsetRect_;
@@ -242,6 +256,16 @@ public:
 
   /// Cached IDs offered by the marker selectors.
   [[nodiscard]] std::span<const std::string> markerIdsForTesting() const { return markerCacheIds_; }
+
+  [[nodiscard]] std::optional<Box2d> markerDisclosureRectForTesting() const {
+    return markerDisclosureRect_;
+  }
+  [[nodiscard]] std::optional<Box2d> markerPickerRectForTesting(std::size_t index) const {
+    return index < markerPickerRects_.size() ? markerPickerRects_[index] : std::nullopt;
+  }
+  [[nodiscard]] std::optional<Box2d> markerPrefabRectForTesting(std::size_t index) const {
+    return index < markerPrefabRects_.size() ? markerPrefabRects_[index] : std::nullopt;
+  }
 
   /// Number of bounded marker scans performed by this presenter.
   [[nodiscard]] std::size_t markerScanCountForTesting() const { return markerScanCount_; }
@@ -377,7 +401,8 @@ private:
   bool renderTransformPanel(EditorApp* liveApp);
 
   /// Render SVG stroke controls from the captured selection, queuing style mutations when idle.
-  bool renderStrokeControlsPanel(EditorApp* liveApp);
+  bool renderStrokeControlsPanel(EditorApp* liveApp,
+                                 const IconTextureProvider& iconTextureProvider);
 
   enum class StrokeScalarField;
   struct StrokeRenderContext {
@@ -385,15 +410,24 @@ private:
     const EditorTheme& theme;
     float rowStartX;
     bool canMutate;
+    const IconTextureProvider& iconTextureProvider;
   };
   bool renderStrokeWidthRow(const StrokeRenderContext& context);
   bool renderStrokeWidthField(const StrokeRenderContext& context, const Lengthd& widthLength,
                               float* width);
   bool renderStrokeWidthStepper(const StrokeRenderContext& context, const Lengthd& widthLength,
                                 float width);
+  bool renderStrokeWidthPresetPopup(const StrokeRenderContext& context, const Lengthd& widthLength,
+                                    bool fieldActivated);
+  bool renderStrokeWidthPresetRow(const StrokeRenderContext& context, const Lengthd& widthLength,
+                                  const IconTexture& texture, std::size_t index);
   bool renderStrokeCapRow(const StrokeRenderContext& context);
   bool renderStrokeJoinRow(const StrokeRenderContext& context);
   bool renderStrokeMiterRow(const StrokeRenderContext& context);
+  bool renderStrokeMiterInputValue(const StrokeRenderContext& context, float miterlimit,
+                                   bool inputChanged);
+  bool renderStrokeMiterStepper(const StrokeRenderContext& context, const Box2d& field,
+                                float miterlimit);
   bool renderStrokeDashSection(const StrokeRenderContext& context);
   bool renderDashPresetRow(const StrokeRenderContext& context,
                            std::span<const float> currentLengths);
@@ -404,6 +438,10 @@ private:
   bool renderStrokeMarkers(const StrokeRenderContext& context);
   bool renderStrokeMarkerPicker(const StrokeRenderContext& context, const char* label,
                                 const char* property, const std::string& current);
+  bool renderMarkerPrefabChoices(const StrokeRenderContext& context, const char* property,
+                                 std::optional<StrokeMarkerPrefab> currentPrefab);
+  bool renderDocumentMarkerChoices(const StrokeRenderContext& context, const char* property,
+                                   const std::string& current);
   /// Track activation and release of the just-rendered scalar widget.
   void trackStrokeScalarItem(const StrokeRenderContext& context, StrokeScalarField field);
 
@@ -448,7 +486,9 @@ private:
   std::array<std::optional<Box2d>, 5> transformFieldRects_;
   std::array<std::optional<Box2d>, 6> matrixFieldRects_;
   std::optional<Box2d> strokeIncrementRect_;
+  std::optional<Box2d> strokeDecrementRect_;
   std::optional<Box2d> strokeWidthRect_;
+  std::array<std::optional<Box2d>, 8> strokeWidthPresetRects_;
   std::array<std::optional<Box2d>, 3> strokeCapRects_;
   std::array<std::optional<Box2d>, 5> strokeJoinRects_;
   std::optional<Box2d> strokeDashToggleRect_;
@@ -456,6 +496,8 @@ private:
   std::array<std::optional<Box2d>, 3> strokeDashPresetRects_;
   bool strokeCustomDashSelected_ = false;
   std::optional<Box2d> strokeMiterLimitRect_;
+  std::optional<Box2d> strokeMiterIncrementRect_;
+  std::optional<Box2d> strokeMiterDecrementRect_;
   std::optional<Box2d> strokeDashOffsetRect_;
   std::array<char, 128> strokeDasharrayBuffer_{};
   bool strokeDasharrayEditing_ = false;
@@ -474,6 +516,9 @@ private:
   std::uint64_t markerCacheSourceVersion_ = 0;
   std::string markerCacheSourceText_;
   std::vector<std::string> markerCacheIds_;
+  std::optional<Box2d> markerDisclosureRect_;
+  std::array<std::optional<Box2d>, 2> markerPickerRects_{};
+  std::array<std::optional<Box2d>, kStrokeMarkerPrefabOptions.size()> markerPrefabRects_{};
   bool markerCacheTruncated_ = false;
   std::size_t markerScanCount_ = 0;
 
@@ -489,6 +534,37 @@ private:
 /// available, so batching them with the boot icons keeps that first selection
 /// from stalling on a run of GPU readbacks.
 [[nodiscard]] std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests();
+
+/// Stroke-cap and stroke-join previews drawn by the SVG renderer, in button order.
+enum class StrokePreviewIcon : std::uint8_t {
+  ButtCap,
+  RoundCap,
+  SquareCap,
+  MiterJoin,
+  RoundJoin,
+  BevelJoin,
+};
+
+inline constexpr std::array<StrokePreviewIcon, 6> kStrokePreviewIcons = {
+    StrokePreviewIcon::ButtCap,   StrokePreviewIcon::RoundCap,  StrokePreviewIcon::SquareCap,
+    StrokePreviewIcon::MiterJoin, StrokePreviewIcon::RoundJoin, StrokePreviewIcon::BevelJoin,
+};
+
+/// Common user-unit widths represented at one SVG unit per logical pixel in the preset sprite.
+inline constexpr std::array<float, 8> kStrokeWidthPresetValues = {0.5f, 1.0f, 2.0f, 3.0f,
+                                                                  4.0f, 6.0f, 8.0f, 12.0f};
+
+/// One SVG sprite with one true-scale stroke sample for each quick-width preset.
+[[nodiscard]] std::span<const unsigned char> StrokeWidthPresetSvg();
+
+/// Stable uploaded texture key for the stroke-width preset sprite.
+[[nodiscard]] std::uint64_t StrokeWidthPresetTextureKey();
+
+/// Embedded SVG source whose actual stroke property produces this preview.
+[[nodiscard]] std::span<const unsigned char> StrokePreviewIconSvg(StrokePreviewIcon icon);
+
+/// Unique UI texture key for a rendered stroke preview.
+[[nodiscard]] std::uint64_t StrokePreviewIconTextureKey(StrokePreviewIcon icon);
 
 /// The path operations the inspector shows a button for, in button order.
 inline constexpr std::array<PathOperationKind, 4> kInspectorPathOperations = {

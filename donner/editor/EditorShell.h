@@ -444,10 +444,14 @@ private:
   /// otherwise (and always for family/size) through the selection attribute
   /// writes.
   void applyFormatBarActions(const FormatBarState& state, const FormatBarActions& actions);
+  bool applyTextEditingFormatToggles(const FormatBarActions& actions);
   /// Whether the contextual text-format bar should participate in this frame's
   /// input and presentation passes.
   [[nodiscard]] bool formatBarShouldShow() const;
   void handleGlobalShortcuts();
+  bool handleSelectionTextFormatShortcuts(bool cmd, bool shift, bool anyPopupOpen,
+                                          bool sourcePaneFocused);
+  void handleHistoryShortcuts(bool pressedZ, bool cmd, bool shift, bool sourcePaneFocused);
   void handleFrameShortcuts(bool compactUi);
   [[nodiscard]] float menuBarHeightForFrame(bool compactUi) const;
   void handleFileShortcuts(bool anyPopupOpen, bool cmd, bool shift);
