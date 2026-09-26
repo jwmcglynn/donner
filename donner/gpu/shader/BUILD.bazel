@@ -1,3 +1,4 @@
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
@@ -746,6 +747,13 @@ donner_multi_transitioned_test(
     dep = ":wgsl_emitter_geode_validation_tests_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
+)
+
+# Shader validation runs without the transitional WebGPU-C++ wrapper or its native archive.
+configured_dependency_audit_test(
+    name = "wgsl_validation_no_rust_audit_test",
+    forbidden_packages = ["//third_party/webgpu-cpp"],
+    target = ":wgsl_emitter_geode_validation_tests",
 )
 
 donner_cc_library(
