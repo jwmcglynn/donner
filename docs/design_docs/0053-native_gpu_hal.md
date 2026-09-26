@@ -82,9 +82,9 @@ the native backend, and a separate change then flips that platform's default. Un
 - Geode, renderer and GPU-shader fixtures execute through the selected native runtime. Snapshot
   ownership and retirement are checked with `GeodeDevice::lifetimeTextureReleases()` on every
   native backend, including `GlTextureCacheTest.RetiredSnapshotsAgeByPresentationFrame`. The
-  Linux-only resvg target runs the old adapter solely for reviewed pixel comparison. A snapshot
-  that was not read back fails the shared Geode and renderer pixel helpers instead of reading as
-  transparent, blank or identical.
+  transitional adapter remains for Linux resvg pixel comparison; static build rules must still
+  confine it to that test-only closure. A snapshot that was not read back fails the shared Geode
+  and renderer pixel helpers instead of reading as transparent, blank or identical.
 - The editor window opens on the selected device. On Apple its Metal layer is attached before
   selection and constrains none, the surface settles BGRA8Unorm without an adapter, and the
   surface, UI renderer and UI texture registry take the runtime device. The frame clear and the
