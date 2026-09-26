@@ -393,15 +393,41 @@ donner_perf_sensitive_cc_library(
     ],
 )
 
+_RENDERER_GEODE_COMMON_DEPS = [
+    ":headless_device_pool",
+    ":pattern_tile",
+    ":renderer_driver",
+    ":renderer_interface",
+    "//donner/base",
+    "//donner/gpu",
+    "//donner/svg",
+    "//donner/svg/components",
+    "//donner/svg/renderer/geode:geo_encoder",
+    "//donner/svg/renderer/geode:geode_counters",
+    "//donner/svg/renderer/geode:geode_glyph_residency",
+    "//donner/svg/renderer/geode:geode_handle_retirement",
+    "//donner/svg/renderer/geode:geode_path_cache_component",
+    "//donner/svg/renderer/geode:geode_resident_path_component",
+    "//donner/svg/renderer/geode:geode_path_encoder",
+    "//donner/svg/renderer/geode:geode_resource_budget",
+    "//donner/svg/renderer/geode:geode_fill_tolerance",
+    "//donner/svg/renderer/geode:geode_stroke_tolerance",
+    "//donner/svg/resources:image_resource",
+] + select({
+    ":text_enabled": [
+        ":placed_text_geometry",
+        "//donner/svg/text:text_engine",
+        "//donner/svg/text:text_layout_params",
+    ],
+    "//conditions:default": [],
+})
+
 donner_cc_library(
     name = "renderer_geode",
     srcs = ["RendererGeode.cc"],
     hdrs = ["RendererGeode.h"],
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
-        "//conditions:default": [],
-    }) + select({
-        "//donner/svg/renderer/geode:wgpu_reference_backend_enabled": ["DONNER_GEODE_WGPU_REFERENCE=1"],
         "//conditions:default": [],
     }),
     # Gate behind the same enable_geode build flag as the Geode device and
@@ -411,47 +437,36 @@ donner_cc_library(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     visibility = ["//visibility:public"],
-    deps = [
-        ":headless_device_pool",
-        ":pattern_tile",
-        ":renderer_driver",
-        ":renderer_interface",
-        "//donner/base",
-        "//donner/gpu",
-        "//donner/svg",
-        "//donner/svg/components",
-        "//donner/svg/renderer/geode:geo_encoder",
-        "//donner/svg/renderer/geode:geode_counters",
-        # :geode_device now also carries the shared pipelines +
-        # GeodeFilterEngine that were previously separate libraries
-        # (see that target's comment).
-        "//donner/svg/renderer/geode:geode_device",
-        "//donner/svg/renderer/geode:geode_glyph_residency",
-        "//donner/svg/renderer/geode:geode_handle_retirement",
-        "//donner/svg/renderer/geode:geode_path_cache_component",
-        "//donner/svg/renderer/geode:geode_resident_path_component",
-        "//donner/svg/renderer/geode:geode_path_encoder",
-        "//donner/svg/renderer/geode:geode_resource_budget",
-        "//donner/svg/renderer/geode:geode_fill_tolerance",
-        "//donner/svg/renderer/geode:geode_stroke_tolerance",
-        "//donner/svg/resources:image_resource",
-    ] + select({
-        "@platforms//cpu:wasm32": [],
-        "//donner/svg/renderer/geode:wgpu_reference_backend_enabled": ["//third_party/webgpu-cpp:webgpu_cpp"],
-        "//conditions:default": [],
-    }) + select({
-        ":text_enabled": [
-            ":placed_text_geometry",
-            "//donner/svg/text:text_engine",
-            "//donner/svg/text:text_layout_params",
-        ],
+    deps = _RENDERER_GEODE_COMMON_DEPS + ["//donner/svg/renderer/geode:geode_device"],
+)
+
+# Only the Linux resvg comparison links this renderer implementation over the transitional root.
+donner_cc_library(
+    name = "renderer_geode_wgpu_reference_linux",
+    testonly = 1,
+    srcs = ["RendererGeode.cc"],
+    hdrs = ["RendererGeode.h"],
+    defines = select({
+        ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
     }),
+    target_compatible_with = ["@platforms//os:linux"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//donner/svg/renderer/tests:__pkg__"],
+    deps = _RENDERER_GEODE_COMMON_DEPS + [
+        "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
+    ],
 )
 
 configured_dependency_audit_test(
     name = "renderer_geode_no_wgpu_archive_audit_impl",
     forbidden = [
+        "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
+        "//donner/svg/renderer:renderer_geode_wgpu_reference_linux",
+        "//donner/svg/renderer/tests:image_comparison_test_fixture_wgpu_reference_linux",
+        "//donner/svg/renderer/tests:renderer_test_backend_wgpu_reference_linux",
         "//third_party/webgpu-cpp:webgpu_cpp",
         "//third_party/webgpu-cpp:webgpu_cpp_compat_headers",
         "//third_party/webgpu-cpp:webgpu_cpp_headers",

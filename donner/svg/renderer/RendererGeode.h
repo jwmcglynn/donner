@@ -11,9 +11,6 @@
 #include <memory>
 #include <optional>
 #include <vector>
-#ifdef DONNER_GEODE_WGPU_REFERENCE
-#include <webgpu/webgpu.hpp>
-#endif
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
@@ -37,7 +34,7 @@ class GeoEncoder;
 namespace donner::svg {
 
 /**
- * WebGPU texture snapshot exported by \ref RendererGeode.
+ * GPU runtime texture snapshot exported by \ref RendererGeode.
  *
  * The snapshot keeps the backing \ref geode::GeodeDevice and texture alive so
  * editor presentation code can sample the texture after the renderer has moved
@@ -71,13 +68,6 @@ public:
   static RendererGeodeTextureSnapshot AdoptRuntimeTexture(
       std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
       gpu::TextureFormat format, AlphaType alphaType);
-
-#ifdef DONNER_GEODE_WGPU_REFERENCE
-  /// Compatibility entry point for native hosts still holding a WebGPU texture format.
-  static RendererGeodeTextureSnapshot AdoptRuntimeTexture(
-      std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
-      wgpu::TextureFormat format, AlphaType alphaType);
-#endif
 
   ~RendererGeodeTextureSnapshot() override;
 

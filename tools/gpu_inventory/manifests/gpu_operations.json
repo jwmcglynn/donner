@@ -108,14 +108,6 @@
       ],
       "wgpuCFunctions": [
         "wgpuDevicePoll"
-      ],
-      "wgpuCppTokens": [
-        "TextureFormat"
-      ]
-    },
-    "donner/svg/renderer/RendererGeode.h": {
-      "wgpuCppTokens": [
-        "TextureFormat"
       ]
     },
     "donner/svg/renderer/geode/GeodeCallbackState.h": {

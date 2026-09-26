@@ -9,6 +9,10 @@ package(default_visibility = ["//visibility:public"])
 configured_dependency_audit_test(
     name = "native_editor_no_wgpu_archive_audit_test",
     forbidden = [
+        "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
+        "//donner/svg/renderer:renderer_geode_wgpu_reference_linux",
+        "//donner/svg/renderer/tests:image_comparison_test_fixture_wgpu_reference_linux",
+        "//donner/svg/renderer/tests:renderer_test_backend_wgpu_reference_linux",
         "//third_party/webgpu-cpp:webgpu_cpp",
         "//third_party/webgpu-cpp:webgpu_cpp_compat_headers",
         "//third_party/webgpu-cpp:webgpu_cpp_headers",

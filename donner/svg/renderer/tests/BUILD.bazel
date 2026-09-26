@@ -203,6 +203,38 @@ donner_cc_library(
     }),
 )
 
+# The resvg comparison registers the same TinyGolden and GeodeGolden backends, but its Geode
+# registration is linked only to the Linux test-only wgpu reference renderer. In particular this
+# target has no dependency on the ordinary renderer dispatcher or native Geode implementation.
+donner_cc_library(
+    name = "renderer_test_backend_wgpu_reference_linux",
+    testonly = 1,
+    srcs = [
+        "RendererTestBackend.cc",
+        "RendererTestBackendGeode.cc",
+        "RendererTestBackendTinySkia.cc",
+    ],
+    hdrs = ["RendererTestBackend.h"],
+    defines = [
+        "DONNER_GEODE_BACKEND_AVAILABLE",
+        "DONNER_GEODE_WGPU_REFERENCE=1",
+    ] + select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
+    target_compatible_with = ["@platforms//os:linux"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//donner/svg/renderer/tests:__pkg__"],
+    deps = [
+        "//donner/svg/renderer:renderer_geode_wgpu_reference_linux",
+        "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
 donner_cc_library(
     name = "image_comparison_test_fixture",
     testonly = 1,
@@ -226,6 +258,35 @@ donner_cc_library(
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:terminal_image_viewer",
+        "//donner/svg/resources:font_metadata",
+        "@com_google_gtest//:gtest",
+        "@pixelmatch-cpp17",
+    ],
+)
+
+# Same image-comparison source and golden rules as the native fixture, but with only the explicit
+# Linux wgpu reference backend linked. No ordinary renderer dispatcher is in this closure.
+donner_cc_library(
+    name = "image_comparison_test_fixture_wgpu_reference_linux",
+    testonly = 1,
+    srcs = ["ImageComparisonTestFixture.cc"],
+    hdrs = ["ImageComparisonTestFixture.h"],
+    target_compatible_with = ["@platforms//os:linux"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//donner/svg/renderer/tests:__pkg__"],
+    deps = [
+        ":renderer_image_test_utils",
+        ":renderer_test_backend_wgpu_reference_linux",
+        ":rgba_test_matchers",
+        "//donner/base:base_test_utils",
+        "//donner/css:core",
+        "//donner/svg/components/resources:resource_manager_context",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer:terminal_image_viewer",
         "//donner/svg/resources:font_metadata",
         "@com_google_gtest//:gtest",
@@ -1024,7 +1085,7 @@ donner_cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        ":image_comparison_test_fixture",
+        ":image_comparison_test_fixture_wgpu_reference_linux",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
         "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
@@ -1045,7 +1106,6 @@ donner_multi_transitioned_test(
     target_compatible_with = ["@platforms//os:linux"],
     text = "true",
     text_full = "false",
-    wgpu_reference_backend = True,
 )
 
 donner_cc_fuzzer(

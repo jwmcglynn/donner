@@ -341,7 +341,6 @@ def _multi_transition_impl(settings, attr):
         "//donner/svg/renderer:text": text,
         "//donner/svg/renderer:text_full": text_full,
         "//donner/svg/renderer/geode:enable_geode": settings["//donner/svg/renderer/geode:enable_geode"] if preserve_backend else backend == "geode",
-        "//donner/svg/renderer/geode:wgpu_reference_backend": getattr(attr, "wgpu_reference_backend", False),
     }
 
 _multi_transition = transition(
@@ -352,14 +351,12 @@ _multi_transition = transition(
         "//donner/svg/renderer:text",
         "//donner/svg/renderer:text_full",
         "//donner/svg/renderer/geode:enable_geode",
-        "//donner/svg/renderer/geode:wgpu_reference_backend",
     ],
     outputs = [
         "//donner/svg/renderer:renderer_backend",
         "//donner/svg/renderer:text",
         "//donner/svg/renderer:text_full",
         "//donner/svg/renderer/geode:enable_geode",
-        "//donner/svg/renderer/geode:wgpu_reference_backend",
     ],
 )
 
@@ -379,7 +376,6 @@ _donner_multi_transitioned_test = rule(
             mandatory = True,
             values = ["tiny_skia", "geode", "inherit"],
         ),
-        "wgpu_reference_backend": attr.bool(default = False),
         "full_text_only": attr.bool(default = False),
         "text": attr.string(
             default = "false",

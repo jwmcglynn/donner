@@ -19,9 +19,6 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#ifdef DONNER_GEODE_WGPU_REFERENCE
-#include <webgpu/webgpu.hpp>
-#endif
 
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
@@ -58,9 +55,6 @@
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeStrokeTolerance.h"
-#ifdef DONNER_GEODE_WGPU_REFERENCE
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#endif
 #include "donner/svg/resources/ImageResource.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/base/MathUtils.h"
@@ -73,18 +67,6 @@
 namespace donner::svg {
 
 namespace {
-#ifdef DONNER_GEODE_WGPU_REFERENCE
-std::optional<gpu::TextureFormat> SnapshotRuntimeFormat(wgpu::TextureFormat format) {
-  if (format == wgpu::TextureFormat::RGBA8Unorm) {
-    return gpu::TextureFormat::RGBA8Unorm;
-  }
-  if (format == wgpu::TextureFormat::BGRA8Unorm) {
-    return gpu::TextureFormat::BGRA8Unorm;
-  }
-  return std::nullopt;
-}
-#endif
-
 bool SnapshotExtentFits(Vector2i content, Vector2i allocation) {
   return content.x > 0 && content.y > 0 && content.x <= allocation.x && content.y <= allocation.y;
 }
@@ -166,19 +148,6 @@ RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
   result.alphaType_ = alphaType;
   return result;
 }
-
-#ifdef DONNER_GEODE_WGPU_REFERENCE
-RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-    std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
-    wgpu::TextureFormat format, AlphaType alphaType) {
-  const std::optional<gpu::TextureFormat> runtimeFormat = SnapshotRuntimeFormat(format);
-  if (!runtimeFormat) {
-    return {};
-  }
-  return AdoptRuntimeTexture(std::move(device), std::move(texture), dimensions, *runtimeFormat,
-                             alphaType);
-}
-#endif
 
 RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
     RendererGeodeTextureSnapshot&& other) noexcept {
