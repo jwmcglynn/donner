@@ -102,6 +102,25 @@ void DestroyPooledReadbackBuffer(gpu::Device* device, gpu::Buffer& buffer) {
   (void)destroyed;  // A pooled buffer is always live; a stale handle is already gone.
 }
 
+struct NativeQueueIdleWait {
+  GpuWaitResult result;
+  std::chrono::milliseconds elapsed;
+};
+
+/// Waits for this context's last native submission, retaining the measured wait on timeout.
+NativeQueueIdleWait WaitForNativeQueueIdle(gpu::Device& device, std::chrono::milliseconds timeout) {
+  const auto start = std::chrono::steady_clock::now();
+  if (device.waitForSerial(device.lastSubmittedSerial(),
+                           std::chrono::duration<double>(timeout).count())) {
+    return {GpuWaitResult::Complete, std::chrono::milliseconds{0}};
+  }
+  if (device.isLost()) {
+    return {GpuWaitResult::DeviceLost, std::chrono::milliseconds{0}};
+  }
+  return {GpuWaitResult::TimedOut, std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - start)};
+}
+
 }  // namespace
 
 /// Context-local pipelines, runtime tables, counters, and retirement state.
@@ -357,19 +376,12 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
   if (transitionalAdapter_ == nullptr) {
     // A native backend reports completion from its own submissions rather than through a poll of
     // the backend device, so the queue is idle exactly when the last submission has retired.
-    const auto nativeWaitStart = std::chrono::steady_clock::now();
-    if (runtimeDevice_->waitForSerial(runtimeDevice_->lastSubmittedSerial(),
-                                      std::chrono::duration<double>(timeout).count())) {
-      return GpuWaitResult::Complete;
+    const NativeQueueIdleWait wait = WaitForNativeQueueIdle(*runtimeDevice_, timeout);
+    if (wait.result == GpuWaitResult::TimedOut) {
+      markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle, wait.elapsed,
+                                     "GPU queue did not go idle within the bounded wait deadline");
     }
-    if (runtimeDevice_->isLost()) {
-      return GpuWaitResult::DeviceLost;
-    }
-    markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle,
-                                   std::chrono::duration_cast<std::chrono::milliseconds>(
-                                       std::chrono::steady_clock::now() - nativeWaitStart),
-                                   "GPU queue did not go idle within the bounded wait deadline");
-    return GpuWaitResult::TimedOut;
+    return wait.result;
   }
 #if defined(DONNER_GEODE_WGPU_REFERENCE) || defined(__EMSCRIPTEN__)
 #if defined(__EMSCRIPTEN__) && !defined(DONNER_GEODE_BROWSER_BACKEND)
