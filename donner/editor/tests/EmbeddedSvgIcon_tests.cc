@@ -17,6 +17,8 @@
 #include <string_view>
 #include <vector>
 
+#include "embed_resources/EditorIcons.h"
+
 #ifdef DONNER_GEODE_BACKEND_AVAILABLE
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -292,6 +294,28 @@ TEST(EmbeddedSvgIcon, AtlasSlicesMatchStandaloneRenders) {
   EXPECT_TRUE(BitmapsMatch(*standaloneTriangle, *batched[0]));
   EXPECT_TRUE(BitmapsMatch(*standaloneRing, *batched[1]));
   EXPECT_TRUE(BitmapsMatch(*standaloneArtwork, *batched[2]));
+}
+
+// Real stroke-cap previews share an atlas row. Their geometry stays within
+// each viewBox so batch rendering preserves the standalone silhouettes.
+TEST(EmbeddedSvgIcon, AtlasStrokeCapsRemainIsolated) {
+  const std::array<EmbeddedSvgIconRequest, 3> requests = {{
+      {embedded::kStrokeCapButtSvg, 96, /*tintableMask=*/false},
+      {embedded::kStrokeCapRoundSvg, 96, /*tintableMask=*/false},
+      {embedded::kStrokeCapSquareSvg, 96, /*tintableMask=*/false},
+  }};
+  std::array<std::optional<svg::RendererBitmap>, 3> standalone;
+  for (std::size_t index = 0; index < requests.size(); ++index) {
+    standalone[index] = RenderEmbeddedSvgArtwork(requests[index].svgBytes, 96);
+    ASSERT_TRUE(standalone[index].has_value());
+  }
+  const std::vector<std::optional<svg::RendererBitmap>> batched =
+      RenderEmbeddedSvgIconBatch(requests);
+  ASSERT_EQ(batched.size(), requests.size());
+  for (std::size_t index = 0; index < requests.size(); ++index) {
+    ASSERT_TRUE(batched[index].has_value());
+    EXPECT_TRUE(BitmapsMatch(*standalone[index], *batched[index])) << "cap icon " << index;
+  }
 }
 
 // Two solid-filled icons of the same size in one atlas pass are the case the

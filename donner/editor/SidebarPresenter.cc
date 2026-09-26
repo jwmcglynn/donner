@@ -139,18 +139,25 @@ bool IsValidStrokeDasharray(std::string_view value) {
 }
 
 constexpr int kStrokePreviewRasterSizePx = 96;
+constexpr int kStrokeWidthPresetRasterSizePx = 256;
 
 const std::optional<svg::RendererBitmap>& CachedStrokePreviewBitmap(StrokePreviewIcon icon) {
   static const std::array<std::optional<svg::RendererBitmap>, kStrokePreviewIcons.size()> bitmaps =
       [] {
         std::array<std::optional<svg::RendererBitmap>, kStrokePreviewIcons.size()> result;
         for (std::size_t index = 0; index < kStrokePreviewIcons.size(); ++index) {
-          result[index] = RenderEmbeddedSvgIcon(StrokePreviewIconSvg(kStrokePreviewIcons[index]),
-                                                kStrokePreviewRasterSizePx);
+          result[index] = RenderEmbeddedSvgArtwork(StrokePreviewIconSvg(kStrokePreviewIcons[index]),
+                                                   kStrokePreviewRasterSizePx);
         }
         return result;
       }();
   return bitmaps[static_cast<std::size_t>(icon)];
+}
+
+const std::optional<svg::RendererBitmap>& CachedStrokeWidthPresetBitmap() {
+  static const std::optional<svg::RendererBitmap> bitmap =
+      RenderEmbeddedSvgArtwork(StrokeWidthPresetSvg(), kStrokeWidthPresetRasterSizePx);
+  return bitmap;
 }
 
 bool RenderStrokeChoice(const char* id, const char* tooltip, StrokePreviewIcon icon, bool selected,
@@ -179,7 +186,7 @@ bool RenderStrokeChoice(const char* id, const char* tooltip, StrokePreviewIcon i
         const ImVec2 uvMax(static_cast<float>(texture.uvBottomRight.x),
                            static_cast<float>(texture.uvBottomRight.y));
         draw->AddImage(texture.texture, iconMin, iconMax, ImVec2(0.0f, 0.0f), uvMax,
-                       selected ? theme.accentDefault : theme.textPrimary);
+                       IM_COL32(255, 255, 255, 255));
       }
     }
   }
@@ -601,6 +608,14 @@ constexpr double kMinimumSpanForScale = 1e-6;
 
 }  // namespace
 
+std::span<const unsigned char> StrokeWidthPresetSvg() {
+  return embedded::kStrokeWidthPresetsSvg;
+}
+
+std::uint64_t StrokeWidthPresetTextureKey() {
+  return 0xf800000000000008ull;
+}
+
 std::span<const unsigned char> StrokePreviewIconSvg(StrokePreviewIcon icon) {
   switch (icon) {
     case StrokePreviewIcon::ButtCap: return embedded::kStrokeCapButtSvg;
@@ -644,7 +659,7 @@ std::uint64_t PathOperationIconTextureKey(PathOperationKind operation) {
 }
 
 std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests() {
-  static const std::array<EmbeddedSvgIconRequest, 11> kRequests = {{
+  static const std::array<EmbeddedSvgIconRequest, 12> kRequests = {{
       {PathOperationIconSvg(PathOperationKind::Union), kPathOperationIconRasterSizePx,
        /*tintableMask=*/true},
       {PathOperationIconSvg(PathOperationKind::Intersect), kPathOperationIconRasterSizePx,
@@ -656,17 +671,18 @@ std::span<const EmbeddedSvgIconRequest> SidebarIconPrewarmRequests() {
       {PathOperationIconSvg(PathOperationKind::Exclude), kPathOperationIconRasterSizePx,
        /*tintableMask=*/true},
       {StrokePreviewIconSvg(StrokePreviewIcon::ButtCap), kStrokePreviewRasterSizePx,
-       /*tintableMask=*/true},
+       /*tintableMask=*/false},
       {StrokePreviewIconSvg(StrokePreviewIcon::RoundCap), kStrokePreviewRasterSizePx,
-       /*tintableMask=*/true},
+       /*tintableMask=*/false},
       {StrokePreviewIconSvg(StrokePreviewIcon::SquareCap), kStrokePreviewRasterSizePx,
-       /*tintableMask=*/true},
+       /*tintableMask=*/false},
       {StrokePreviewIconSvg(StrokePreviewIcon::MiterJoin), kStrokePreviewRasterSizePx,
-       /*tintableMask=*/true},
+       /*tintableMask=*/false},
       {StrokePreviewIconSvg(StrokePreviewIcon::RoundJoin), kStrokePreviewRasterSizePx,
-       /*tintableMask=*/true},
+       /*tintableMask=*/false},
       {StrokePreviewIconSvg(StrokePreviewIcon::BevelJoin), kStrokePreviewRasterSizePx,
-       /*tintableMask=*/true},
+       /*tintableMask=*/false},
+      {StrokeWidthPresetSvg(), kStrokeWidthPresetRasterSizePx, /*tintableMask=*/false},
   }};
   return kRequests;
 }
@@ -1058,7 +1074,10 @@ bool SidebarPresenter::renderStrokeWidthRow(const StrokeRenderContext& context) 
       context.canMutate ? FirstSelectedStrokeWidth(*context.app) : inspectorSnapshot_.strokeWidth;
   float width = static_cast<float>(widthLength.value);
   bool queuedMutation = renderStrokeWidthField(context, widthLength, &width);
+  const bool fieldActivated = ImGui::IsItemActivated();
   queuedMutation = renderStrokeWidthStepper(context, widthLength, width) || queuedMutation;
+  queuedMutation =
+      renderStrokeWidthPresetPopup(context, widthLength, fieldActivated) || queuedMutation;
   return queuedMutation;
 }
 
@@ -1069,9 +1088,9 @@ bool SidebarPresenter::renderStrokeWidthField(const StrokeRenderContext& context
   std::ostringstream widthUnit;
   widthUnit << widthLength.unit;
   const std::string widthFormat = "%.1f" + widthUnit.str();
-  ImGui::SetNextItemWidth(90.0f);
-  const bool widthChanged =
-      ImGui::DragFloat("##stroke_width", width, 0.1f, 0.0f, 200.0f, widthFormat.c_str());
+  ImGui::SetNextItemWidth(96.0f);
+  const bool widthChanged = ImGui::InputFloat(
+      "##stroke_width", width, 0.0f, 0.0f, widthFormat.c_str(), ImGuiInputTextFlags_AutoSelectAll);
   {
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
@@ -1079,6 +1098,7 @@ bool SidebarPresenter::renderStrokeWidthField(const StrokeRenderContext& context
   }
   bool queuedMutation = false;
   if (widthChanged && canMutate) {
+    *width = std::isfinite(*width) ? std::clamp(*width, 0.0f, 200.0f) : 0.0f;
     beginStrokeScalarEdit(*liveApp, StrokeScalarField::Width);
     if (widthLength.unit == LengthUnit::None || widthLength.unit == LengthUnit::Px) {
       liveApp->setActiveStrokeWidth(*width);
@@ -1119,6 +1139,75 @@ bool SidebarPresenter::renderStrokeWidthStepper(const StrokeRenderContext& conte
   }
   const RcString cssWidth = Lengthd(width, widthLength.unit).toRcString();
   return applyStrokeStyle(*context.app, "stroke-width", cssWidth, "Change stroke width");
+}
+
+bool SidebarPresenter::renderStrokeWidthPresetPopup(const StrokeRenderContext& context,
+                                                    const Lengthd& widthLength,
+                                                    bool fieldActivated) {
+  strokeWidthPresetRects_.fill(std::nullopt);
+  if (!strokeWidthRect_.has_value()) {
+    return false;
+  }
+  const Box2d& field = *strokeWidthRect_;
+  const ImVec2 fieldMin(static_cast<float>(field.topLeft.x), static_cast<float>(field.topLeft.y));
+  const ImVec2 fieldMax(static_cast<float>(field.bottomRight.x),
+                        static_cast<float>(field.bottomRight.y));
+  if (!BeginHybridNumericPresetPopup("##stroke_width_presets", fieldMin, fieldMax,
+                                     fieldActivated && context.canMutate, fieldMax.x - fieldMin.x,
+                                     300.0f)) {
+    return false;
+  }
+
+  bool queuedMutation = false;
+  const std::optional<svg::RendererBitmap>& bitmap = CachedStrokeWidthPresetBitmap();
+  IconTexture texture;
+  if (bitmap.has_value() && context.iconTextureProvider) {
+    texture = context.iconTextureProvider(StrokeWidthPresetTextureKey(), *bitmap);
+  }
+  for (std::size_t index = 0; index < kStrokeWidthPresetValues.size(); ++index) {
+    queuedMutation =
+        renderStrokeWidthPresetRow(context, widthLength, texture, index) || queuedMutation;
+  }
+  ImGui::EndPopup();
+  return queuedMutation;
+}
+
+bool SidebarPresenter::renderStrokeWidthPresetRow(const StrokeRenderContext& context,
+                                                  const Lengthd& widthLength,
+                                                  const IconTexture& texture, std::size_t index) {
+  constexpr float kPreviewWidth = 32.0f;
+  constexpr float kRowHeight = 32.0f;
+  ImGui::PushID(static_cast<int>(index));
+  const float preset = kStrokeWidthPresetValues[index];
+  const bool selected =
+      (widthLength.unit == LengthUnit::None || widthLength.unit == LengthUnit::Px) &&
+      std::abs(widthLength.value - preset) < 0.001;
+  const bool chosen = ImGui::Selectable("##width_preset", selected, 0, ImVec2(0.0f, kRowHeight));
+  const ImVec2 rowMin = ImGui::GetItemRectMin();
+  const ImVec2 rowMax = ImGui::GetItemRectMax();
+  strokeWidthPresetRects_[index] =
+      Box2d(Vector2d(rowMin.x, rowMin.y), Vector2d(rowMax.x, rowMax.y));
+  if (texture.texture != 0) {
+    const float uScale = static_cast<float>(texture.uvBottomRight.x) / 256.0f;
+    const float vScale = static_cast<float>(texture.uvBottomRight.y) / 256.0f;
+    ImGui::GetWindowDrawList()->AddImage(
+        texture.texture, ImVec2(rowMin.x + 6.0f, rowMin.y),
+        ImVec2(rowMin.x + 6.0f + kPreviewWidth, rowMin.y + kRowHeight),
+        ImVec2(0.0f, static_cast<float>(index) * 32.0f * vScale),
+        ImVec2(kPreviewWidth * uScale, static_cast<float>(index + 1u) * 32.0f * vScale));
+  }
+  const std::string label = donner::detail::FormatNumberForSVG(preset);
+  ImGui::GetWindowDrawList()->AddText(
+      ImVec2(rowMin.x + 51.0f, rowMin.y + (kRowHeight - ImGui::GetFontSize()) * 0.5f),
+      selected ? context.theme.accentDefault : context.theme.textPrimary, label.c_str());
+  bool changed = false;
+  if (chosen && context.canMutate) {
+    context.app->setActiveStrokeWidth(preset);
+    changed = applyStrokeStyle(*context.app, "stroke-width", label, "Choose stroke width");
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::PopID();
+  return changed;
 }
 
 bool SidebarPresenter::renderStrokeCapRow(const StrokeRenderContext& context) {
@@ -1189,10 +1278,8 @@ bool SidebarPresenter::renderStrokeJoinRow(const StrokeRenderContext& context) {
 }
 
 bool SidebarPresenter::renderStrokeMiterRow(const StrokeRenderContext& context) {
-  EditorApp* liveApp = context.app;
   const EditorTheme& theme = context.theme;
   const float rowStartX = context.rowStartX;
-  const bool canMutate = context.canMutate;
   bool queuedMutation = false;
   const int join = std::clamp(inspectorSnapshot_.strokeLinejoin, 0, 4);
   strokeMiterLimitRect_.reset();
@@ -1204,35 +1291,15 @@ bool SidebarPresenter::renderStrokeMiterRow(const StrokeRenderContext& context) 
     ImGui::SetNextItemWidth(90.0f);
     const bool limitChanged =
         ImGui::InputFloat("##stroke_miter_limit", &miterlimit, 0.0f, 0.0f, "%.1f");
-    if (limitChanged && canMutate) {
-      if (std::isfinite(miterlimit) && miterlimit >= 1.0f) {
-        beginStrokeScalarEdit(*liveApp, StrokeScalarField::MiterLimit);
-        const bool changed =
-            liveApp->setStylePropertyOnSelection("stroke-miterlimit", std::to_string(miterlimit));
-        strokeScalarEdit_->changed |= changed;
-        queuedMutation = changed || queuedMutation;
-        strokeMiterError_.clear();
-      } else {
-        strokeMiterError_ = "Limit must be at least 1";
-      }
-    }
+    queuedMutation =
+        renderStrokeMiterInputValue(context, miterlimit, limitChanged) || queuedMutation;
     trackStrokeScalarItem(context, StrokeScalarField::MiterLimit);
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
     const bool fieldHovered = ImGui::IsItemHovered();
     strokeMiterLimitRect_ = Box2d(Vector2d(min.x, min.y), Vector2d(max.x, max.y));
-    const AttachedNumericStepperResult steps =
-        RenderAttachedNumericStepper("stroke_miter_steps", min, max, theme);
-    strokeMiterIncrementRect_ = steps.incrementRect;
-    strokeMiterDecrementRect_ = steps.decrementRect;
-    if (context.canMutate && (steps.increment || steps.decrement)) {
-      miterlimit = std::max(1.0f, miterlimit + (steps.increment ? 1.0f : -1.0f));
-      queuedMutation = applyStrokeStyle(*liveApp, "stroke-miterlimit",
-                                        donner::detail::FormatNumberForSVG(miterlimit),
-                                        "Change stroke miter limit") ||
-                       queuedMutation;
-      strokeMiterError_.clear();
-    }
+    queuedMutation =
+        renderStrokeMiterStepper(context, *strokeMiterLimitRect_, miterlimit) || queuedMutation;
     if (fieldHovered) {
       ImGui::SetTooltip("Maximum sharp-corner length relative to stroke width");
     }
@@ -1243,6 +1310,43 @@ bool SidebarPresenter::renderStrokeMiterRow(const StrokeRenderContext& context) 
   }
 
   return queuedMutation;
+}
+
+bool SidebarPresenter::renderStrokeMiterInputValue(const StrokeRenderContext& context,
+                                                   float miterlimit, bool inputChanged) {
+  if (!inputChanged || !context.canMutate) {
+    return false;
+  }
+  if (!std::isfinite(miterlimit) || miterlimit < 1.0f) {
+    strokeMiterError_ = "Limit must be at least 1";
+    return false;
+  }
+  beginStrokeScalarEdit(*context.app, StrokeScalarField::MiterLimit);
+  const bool changed =
+      context.app->setStylePropertyOnSelection("stroke-miterlimit", std::to_string(miterlimit));
+  strokeScalarEdit_->changed |= changed;
+  strokeMiterError_.clear();
+  return changed;
+}
+
+bool SidebarPresenter::renderStrokeMiterStepper(const StrokeRenderContext& context,
+                                                const Box2d& field, float miterlimit) {
+  const ImVec2 min(static_cast<float>(field.topLeft.x), static_cast<float>(field.topLeft.y));
+  const ImVec2 max(static_cast<float>(field.bottomRight.x),
+                   static_cast<float>(field.bottomRight.y));
+  const AttachedNumericStepperResult steps =
+      RenderAttachedNumericStepper("stroke_miter_steps", min, max, context.theme);
+  strokeMiterIncrementRect_ = steps.incrementRect;
+  strokeMiterDecrementRect_ = steps.decrementRect;
+  if (!context.canMutate || (!steps.increment && !steps.decrement)) {
+    return false;
+  }
+  miterlimit = std::max(1.0f, miterlimit + (steps.increment ? 1.0f : -1.0f));
+  const bool changed =
+      applyStrokeStyle(*context.app, "stroke-miterlimit",
+                       donner::detail::FormatNumberForSVG(miterlimit), "Change stroke miter limit");
+  strokeMiterError_.clear();
+  return changed;
 }
 
 bool SidebarPresenter::renderStrokeDashSection(const StrokeRenderContext& context) {

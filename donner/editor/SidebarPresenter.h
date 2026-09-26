@@ -201,6 +201,10 @@ public:
   }
   /// Last rendered width value field, for drag and unit-preservation checks.
   [[nodiscard]] std::optional<Box2d> strokeWidthRectForTesting() const { return strokeWidthRect_; }
+  /// Quick-width preset row bounds while the hybrid popup is open.
+  [[nodiscard]] std::optional<Box2d> strokeWidthPresetRectForTesting(std::size_t index) const {
+    return index < strokeWidthPresetRects_.size() ? strokeWidthPresetRects_[index] : std::nullopt;
+  }
 
   /// Last rendered cap/join icon rectangle, for interaction and alignment checks.
   [[nodiscard]] std::optional<Box2d> strokeCapRectForTesting(std::size_t index) const {
@@ -402,9 +406,17 @@ private:
                               float* width);
   bool renderStrokeWidthStepper(const StrokeRenderContext& context, const Lengthd& widthLength,
                                 float width);
+  bool renderStrokeWidthPresetPopup(const StrokeRenderContext& context, const Lengthd& widthLength,
+                                    bool fieldActivated);
+  bool renderStrokeWidthPresetRow(const StrokeRenderContext& context, const Lengthd& widthLength,
+                                  const IconTexture& texture, std::size_t index);
   bool renderStrokeCapRow(const StrokeRenderContext& context);
   bool renderStrokeJoinRow(const StrokeRenderContext& context);
   bool renderStrokeMiterRow(const StrokeRenderContext& context);
+  bool renderStrokeMiterInputValue(const StrokeRenderContext& context, float miterlimit,
+                                   bool inputChanged);
+  bool renderStrokeMiterStepper(const StrokeRenderContext& context, const Box2d& field,
+                                float miterlimit);
   bool renderStrokeDashSection(const StrokeRenderContext& context);
   bool renderDashPresetRow(const StrokeRenderContext& context,
                            std::span<const float> currentLengths);
@@ -461,6 +473,7 @@ private:
   std::optional<Box2d> strokeIncrementRect_;
   std::optional<Box2d> strokeDecrementRect_;
   std::optional<Box2d> strokeWidthRect_;
+  std::array<std::optional<Box2d>, 8> strokeWidthPresetRects_;
   std::array<std::optional<Box2d>, 3> strokeCapRects_;
   std::array<std::optional<Box2d>, 5> strokeJoinRects_;
   std::optional<Box2d> strokeDashToggleRect_;
@@ -518,6 +531,16 @@ inline constexpr std::array<StrokePreviewIcon, 6> kStrokePreviewIcons = {
     StrokePreviewIcon::ButtCap,   StrokePreviewIcon::RoundCap,  StrokePreviewIcon::SquareCap,
     StrokePreviewIcon::MiterJoin, StrokePreviewIcon::RoundJoin, StrokePreviewIcon::BevelJoin,
 };
+
+/// Common user-unit widths represented at one SVG unit per logical pixel in the preset sprite.
+inline constexpr std::array<float, 8> kStrokeWidthPresetValues = {0.5f, 1.0f, 2.0f, 3.0f,
+                                                                  4.0f, 6.0f, 8.0f, 12.0f};
+
+/// One SVG sprite with one true-scale stroke sample for each quick-width preset.
+[[nodiscard]] std::span<const unsigned char> StrokeWidthPresetSvg();
+
+/// Stable uploaded texture key for the stroke-width preset sprite.
+[[nodiscard]] std::uint64_t StrokeWidthPresetTextureKey();
 
 /// Embedded SVG source whose actual stroke property produces this preview.
 [[nodiscard]] std::span<const unsigned char> StrokePreviewIconSvg(StrokePreviewIcon icon);

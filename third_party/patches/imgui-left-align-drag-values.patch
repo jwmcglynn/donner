@@ -5,4 +5,4 @@ diff --git a/imgui_widgets.cpp b/imgui_widgets.cpp
      if (g.LogEnabled)
          LogSetNextTextDecoration("{", "}");
 -    RenderTextClipped(frame_bb.Min, frame_bb.Max, value_buf, value_buf_end, NULL, ImVec2(0.5f, 0.5f));
-+    RenderTextClipped(frame_bb.Min, frame_bb.Max, value_buf, value_buf_end, NULL, ImVec2(0.0f, 0.5f));
++    RenderTextClipped(frame_bb.Min + style.FramePadding, frame_bb.Max - style.FramePadding, value_buf, value_buf_end, NULL, ImVec2(0.0f, 0.5f));

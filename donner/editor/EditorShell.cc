@@ -3091,31 +3091,10 @@ void EditorShell::handleGlobalShortcuts() {
     return;
   }
 
-  if (!sourcePaneFocused) {
-    if (pressedZ && cmd && !shift) {
-      requestHistoryAction(HistoryAction::Undo);
-    } else if (pressedZ && cmd && shift) {
-      requestHistoryAction(HistoryAction::Redo);
-    }
-  }
+  handleHistoryShortcuts(pressedZ, cmd, shift, sourcePaneFocused);
 
-  // A selected text object accepts the same B/I/U actions as the format bar.
-  // The active Text tool handles its own character-range shortcuts above; the
-  // source pane and focused ImGui inputs keep their keyboard ownership.
-  if (activeTool_ == ActiveTool::Select && !sourcePaneFocused && !anyPopupOpen && cmd && !shift) {
-    const std::vector<svg::SVGElement>& selection = app_.selectedElements();
-    if (selection.size() == 1u && selection.front().type() == svg::ElementType::Text) {
-      FormatBarActions actions;
-      actions.toggleBold = ImGui::IsKeyPressed(ImGuiKey_B, /*repeat=*/false);
-      actions.toggleItalic = ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false);
-      actions.toggleUnderline = ImGui::IsKeyPressed(ImGuiKey_U, /*repeat=*/false);
-      if (actions.toggleBold || actions.toggleItalic || actions.toggleUnderline) {
-        FormatBarState state;
-        ReadTextFormatState(selection.front(), &state);
-        applyFormatBarActions(state, actions);
-        return;
-      }
-    }
+  if (handleSelectionTextFormatShortcuts(cmd, shift, anyPopupOpen, sourcePaneFocused)) {
+    return;
   }
 
   if (!anyPopupOpen && cmd &&
@@ -3292,6 +3271,40 @@ void EditorShell::handleGlobalShortcuts() {
   if (CanDeleteSelectedElementsFromShortcut(deleteKey, app_.hasSelection(), anyPopupOpen,
                                             sourcePaneFocused)) {
     std::ignore = app_.deleteSelectionWithUndo(textEditor_.getText());
+  }
+}
+
+bool EditorShell::handleSelectionTextFormatShortcuts(bool cmd, bool shift, bool anyPopupOpen,
+                                                     bool sourcePaneFocused) {
+  if (activeTool_ != ActiveTool::Select || sourcePaneFocused || anyPopupOpen || !cmd || shift) {
+    return false;
+  }
+  const std::vector<svg::SVGElement>& selection = app_.selectedElements();
+  if (selection.size() != 1u || selection.front().type() != svg::ElementType::Text) {
+    return false;
+  }
+  FormatBarActions actions;
+  actions.toggleBold = ImGui::IsKeyPressed(ImGuiKey_B, /*repeat=*/false);
+  actions.toggleItalic = ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false);
+  actions.toggleUnderline = ImGui::IsKeyPressed(ImGuiKey_U, /*repeat=*/false);
+  if (!actions.toggleBold && !actions.toggleItalic && !actions.toggleUnderline) {
+    return false;
+  }
+  FormatBarState state;
+  ReadTextFormatState(selection.front(), &state);
+  applyFormatBarActions(state, actions);
+  return true;
+}
+
+void EditorShell::handleHistoryShortcuts(bool pressedZ, bool cmd, bool shift,
+                                         bool sourcePaneFocused) {
+  if (sourcePaneFocused) {
+    return;
+  }
+  if (pressedZ && cmd && !shift) {
+    requestHistoryAction(HistoryAction::Undo);
+  } else if (pressedZ && cmd && shift) {
+    requestHistoryAction(HistoryAction::Redo);
   }
 }
 

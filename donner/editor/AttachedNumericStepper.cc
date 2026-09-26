@@ -52,14 +52,26 @@ AttachedNumericStepperResult RenderAttachedNumericStepper(const char* id, const 
   draw->AddRect(fieldMin, downMax, theme.borderSubtle, radius);
 
   const ImU32 ink = theme.textPrimary;
-  const float centerX = (upMin.x + upMax.x) * 0.5f;
-  const float upY = (upMin.y + upMax.y) * 0.5f;
-  const float downY = (downMin.y + downMax.y) * 0.5f;
-  draw->AddTriangleFilled(ImVec2(centerX, upY - 2.5f), ImVec2(centerX - 3.4f, upY + 1.5f),
-                          ImVec2(centerX + 3.4f, upY + 1.5f), ink);
-  draw->AddTriangleFilled(ImVec2(centerX, downY + 2.5f), ImVec2(centerX - 3.4f, downY - 1.5f),
-                          ImVec2(centerX + 3.4f, downY - 1.5f), ink);
+  const float centerX = std::floor((upMin.x + upMax.x) * 0.5f);
+  const float upY = std::floor((upMin.y + upMax.y) * 0.5f);
+  const float downY = std::floor((downMin.y + downMax.y) * 0.5f);
+  draw->AddTriangleFilled(ImVec2(centerX, upY - 2.0f), ImVec2(centerX - 3.0f, upY + 2.0f),
+                          ImVec2(centerX + 3.0f, upY + 2.0f), ink);
+  draw->AddTriangleFilled(ImVec2(centerX, downY + 2.0f), ImVec2(centerX - 3.0f, downY - 2.0f),
+                          ImVec2(centerX + 3.0f, downY - 2.0f), ink);
   return result;
+}
+
+bool BeginHybridNumericPresetPopup(const char* popupId, const ImVec2& fieldMin,
+                                   const ImVec2& fieldMax, bool fieldActivated, float width,
+                                   float maximumHeight) {
+  if (fieldActivated) {
+    ImGui::OpenPopup(popupId);
+  }
+  ImGui::SetNextWindowPos(ImVec2(fieldMin.x, fieldMax.y + 3.0f), ImGuiCond_Appearing);
+  ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, maximumHeight));
+  return ImGui::BeginPopup(popupId,
+                           ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNavFocus);
 }
 
 }  // namespace donner::editor

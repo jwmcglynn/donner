@@ -835,6 +835,7 @@ embed_resources(
         "kStrokeJoinMiterSvg": "icons/stroke-join-miter.svg",
         "kStrokeJoinRoundSvg": "icons/stroke-join-round.svg",
         "kStrokeJoinBevelSvg": "icons/stroke-join-bevel.svg",
+        "kStrokeWidthPresetsSvg": "icons/stroke-width-presets.svg",
     },
     visibility = ["//donner:__subpackages__"],
 )

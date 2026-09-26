@@ -214,6 +214,27 @@ std::vector<FormatBarFontFamily> BuildFormatBarFamilies(
   return families;
 }
 
+namespace {
+
+bool RenderFormatToggle(const char* label, bool active, ImFont* face, float width) {
+  if (active) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+  }
+  if (face != nullptr) {
+    ImGui::PushFont(face);
+  }
+  const bool clicked = ImGui::Button(label, ImVec2(width, 0.0f));
+  if (face != nullptr) {
+    ImGui::PopFont();
+  }
+  if (active) {
+    ImGui::PopStyleColor();
+  }
+  return clicked;
+}
+
+}  // namespace
+
 float TextFormatBarPresenter::BarHeight() {
   return ImGui::GetFrameHeight() + 16.0f;
 }
@@ -221,6 +242,7 @@ float TextFormatBarPresenter::BarHeight() {
 FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, const ImVec2& topLeft,
                                                 float width) {
   FormatBarActions actions;
+  fontSizePresetRects_.fill(std::nullopt);
   if (!state.visible) {
     return actions;
   }
@@ -301,20 +323,24 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
       ImGui::EndCombo();
     }
 
-    // --- Font size: editable drag box, attached steps, and presets. ---
+    // --- Font size: one-click text edit, attached steps, and focused presets. ---
     ImGui::SameLine();
     if (!sizeControlActive_) {
       sizeEditValue_ = state.hasFontSize ? state.fontSize : 0.0f;
     }
-    ImGui::SetNextItemWidth(64.0f);
-    ImGui::DragFloat("##format_bar_font_size", &sizeEditValue_, 0.5f, 1.0f, 512.0f, "%.0f");
+    ImGui::SetNextItemWidth(128.0f);
+    ImGui::InputFloat("##format_bar_font_size", &sizeEditValue_, 0.0f, 0.0f, "%.0f",
+                      ImGuiInputTextFlags_AutoSelectAll);
     sizeControlActive_ = ImGui::IsItemActive();
+    const bool sizeFieldActivated = ImGui::IsItemActivated();
     const bool sizeEditCommitted = ImGui::IsItemDeactivatedAfterEdit();
     const ImVec2 sizeFieldMin = ImGui::GetItemRectMin();
     const ImVec2 sizeFieldMax = ImGui::GetItemRectMax();
     const AttachedNumericStepperResult sizeSteps = RenderAttachedNumericStepper(
         "format_bar_font_size_steps", sizeFieldMin, sizeFieldMax, theme);
     if (sizeEditCommitted) {
+      sizeEditValue_ =
+          std::isfinite(sizeEditValue_) ? std::clamp(sizeEditValue_, 1.0f, 512.0f) : 16.0f;
       actions.setFontSize = true;
       actions.fontSize = sizeEditValue_;
     }
@@ -325,54 +351,22 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
       actions.setFontSize = true;
       actions.fontSize = sizeEditValue_;
     }
-    ImGui::SameLine(0.0f, 0.0f);
-    ImGui::SetNextItemWidth(ImGui::GetFrameHeight());
-    if (ImGui::BeginCombo("##format_bar_font_size_menu", "", ImGuiComboFlags_NoPreview)) {
-      for (const int preset : kFormatBarFontSizePresets) {
-        const bool selected =
-            state.hasFontSize && static_cast<int>(state.fontSize + 0.5f) == preset;
-        char label[8];
-        std::snprintf(label, sizeof(label), "%d", preset);
-        if (ImGui::Selectable(label, selected)) {
-          actions.setFontSize = true;
-          actions.fontSize = static_cast<float>(preset);
-          sizeEditValue_ = actions.fontSize;
-        }
-      }
-      ImGui::EndCombo();
-    }
-
     // --- Bold / Italic / Underline toggles. ---
     const float toggleWidth = ImGui::GetFrameHeight();
-    const auto toggle = [&](const char* label, bool active, ImFont* face) -> bool {
-      if (active) {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-      }
-      if (face != nullptr) {
-        ImGui::PushFont(face);
-      }
-      const bool clicked = ImGui::Button(label, ImVec2(toggleWidth, 0.0f));
-      if (face != nullptr) {
-        ImGui::PopFont();
-      }
-      if (active) {
-        ImGui::PopStyleColor();
-      }
-      return clicked;
-    };
-
     ImGui::SameLine();
-    if (toggle("B##format_bar_bold", state.bold, state.boldToggleFont)) {
+    if (RenderFormatToggle("B##format_bar_bold", state.bold, state.boldToggleFont, toggleWidth)) {
       actions.toggleBold = true;
     }
     ImGui::SameLine();
-    if (toggle("I##format_bar_italic", state.italic, nullptr)) {
+    if (RenderFormatToggle("I##format_bar_italic", state.italic, nullptr, toggleWidth)) {
       actions.toggleItalic = true;
     }
     ImGui::SameLine();
-    if (toggle("U##format_bar_underline", state.underline, nullptr)) {
+    if (RenderFormatToggle("U##format_bar_underline", state.underline, nullptr, toggleWidth)) {
       actions.toggleUnderline = true;
     }
+
+    renderFontSizePresetPopup(state, sizeFieldMin, sizeFieldMax, sizeFieldActivated, &actions);
   }
   ImGui::EndChild();
   ImGui::PopStyleColor(2);
@@ -380,6 +374,47 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
   ImGui::SetCursorPos(savedCursorPos);
 
   return actions;
+}
+
+void TextFormatBarPresenter::renderFontSizePresetPopup(const FormatBarState& state,
+                                                       const ImVec2& fieldMin,
+                                                       const ImVec2& fieldMax, bool fieldActivated,
+                                                       FormatBarActions* actions) {
+  if (!BeginHybridNumericPresetPopup("##format_bar_font_size_presets", fieldMin, fieldMax,
+                                     fieldActivated, fieldMax.x - fieldMin.x, 320.0f)) {
+    return;
+  }
+  const EditorTheme& theme = EditorTheme::Active();
+  for (std::size_t index = 0; index < kFormatBarFontSizePresets.size(); ++index) {
+    ImGui::PushID(static_cast<int>(index));
+    const int preset = kFormatBarFontSizePresets[index];
+    const float previewSize = static_cast<float>(preset);
+    const float rowHeight = std::max(30.0f, previewSize + 10.0f);
+    const bool selected = state.hasFontSize && static_cast<int>(state.fontSize + 0.5f) == preset;
+    const bool chosen = ImGui::Selectable("##size_preset", selected, 0, ImVec2(0.0f, rowHeight));
+    const ImVec2 rowMin = ImGui::GetItemRectMin();
+    const ImVec2 rowMax = ImGui::GetItemRectMax();
+    fontSizePresetRects_[index] = Box2d(Vector2d(rowMin.x, rowMin.y), Vector2d(rowMax.x, rowMax.y));
+    ImDrawList* previewDraw = ImGui::GetWindowDrawList();
+    previewDraw->PushClipRect(ImVec2(rowMin.x + 4.0f, rowMin.y), ImVec2(rowMin.x + 78.0f, rowMax.y),
+                              true);
+    previewDraw->AddText(ImGui::GetFont(), previewSize, ImVec2(rowMin.x + 8.0f, rowMin.y + 4.0f),
+                         theme.textPrimary, "A");
+    previewDraw->PopClipRect();
+    char label[8];
+    std::snprintf(label, sizeof(label), "%d", preset);
+    previewDraw->AddText(
+        ImVec2(rowMin.x + 88.0f, rowMin.y + (rowHeight - ImGui::GetFontSize()) * 0.5f),
+        selected ? theme.accentDefault : theme.textPrimary, label);
+    if (chosen) {
+      actions->setFontSize = true;
+      actions->fontSize = previewSize;
+      sizeEditValue_ = previewSize;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::PopID();
+  }
+  ImGui::EndPopup();
 }
 
 }  // namespace donner::editor

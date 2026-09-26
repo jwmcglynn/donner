@@ -448,6 +448,9 @@ private:
   /// input and presentation passes.
   [[nodiscard]] bool formatBarShouldShow() const;
   void handleGlobalShortcuts();
+  bool handleSelectionTextFormatShortcuts(bool cmd, bool shift, bool anyPopupOpen,
+                                          bool sourcePaneFocused);
+  void handleHistoryShortcuts(bool pressedZ, bool cmd, bool shift, bool sourcePaneFocused);
   void handleFrameShortcuts(bool compactUi);
   [[nodiscard]] float menuBarHeightForFrame(bool compactUi) const;
   void handleFileShortcuts(bool anyPopupOpen, bool cmd, bool shift);

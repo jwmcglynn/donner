@@ -1389,6 +1389,7 @@ donner_cc_test(
     variants = ["geode"],
     deps = [
         "//donner/base",
+        "//donner/editor:editor_icons",
         "//donner/editor:embedded_svg_icon",
         "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
