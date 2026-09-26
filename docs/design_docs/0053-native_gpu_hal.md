@@ -162,8 +162,9 @@ lifetime, synchronization, memory-residency, security or privacy requirements.
    binding, then select native Vulkan for the Linux production editor. The browser editor uses
    the selected runtime; hosted and physical-browser qualification remain.
 4. Remove the transitional WebGPU implementation and Rust-built GPU dependencies from
-   production; isolate the Linux resvg comparison backend, replace non-resvg WGSL validation,
-   then run final pixel, memory, performance, artifact-size and dependency-closure acceptance.
+   production while retaining only the Linux test-only resvg comparison backend. Enforce
+   configured dependency closure in CI, then complete integrated native/browser pixels,
+   physical-browser, memory, performance and artifact-size acceptance.
 
 ## Implementation Plan
 
