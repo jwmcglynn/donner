@@ -3,11 +3,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <limits>
 #include <span>
+#include <string_view>
 #include <tuple>
 #include <vector>
 
@@ -421,6 +423,24 @@ TEST_P(TextBackendTest, UnderlineMetricsNulloptForInvalidFont) {
   EXPECT_FALSE(backend().underlineMetrics(FontHandle{}).has_value());
 }
 
+TEST_P(TextBackendTest, StrikeoutMetricsMatchTheOS2TableAndRejectInvalidFonts) {
+  const FontHandle font = loadFont("NotoSans-Regular.ttf", "Noto Sans");
+  ASSERT_TRUE(static_cast<bool>(font));
+  const auto os2 = fontManager_.sfntTable(font, "OS/2");
+  ASSERT_TRUE(os2.has_value());
+  ASSERT_GE(os2->size(), 30u);
+  const int16_t expectedThickness = static_cast<int16_t>(ReadBe16(*os2, 26));
+  const int16_t expectedPosition = static_cast<int16_t>(ReadBe16(*os2, 28));
+  ASSERT_GT(expectedThickness, 0);
+  ASSERT_GT(expectedPosition, 0);
+
+  const auto strikeout = backend().strikeoutMetrics(font);
+  ASSERT_TRUE(strikeout.has_value());
+  EXPECT_DOUBLE_EQ(strikeout->thickness, expectedThickness);
+  EXPECT_DOUBLE_EQ(strikeout->position, expectedPosition);
+  EXPECT_FALSE(backend().strikeoutMetrics(FontHandle{}).has_value());
+}
+
 TEST_P(TextBackendTest, SubSuperMetricsPresent) {
   const FontHandle font = loadFont("NotoSans-Regular.ttf", "Noto Sans");
   ASSERT_TRUE(static_cast<bool>(font));
@@ -649,9 +669,29 @@ TEST(TextBackendFullCapabilities, DetectsCursiveScripts) {
   FontManager fontManager(registry);
   TextBackendFull backend(fontManager, registry);
 
-  EXPECT_TRUE(backend.isCursive(0x0627));   // Arabic alef
+  struct JoiningScriptCase {
+    std::string_view script;
+    uint32_t codepoint;
+  };
+  constexpr std::array kJoining = {
+      JoiningScriptCase{"Arabic", 0x0627},
+      JoiningScriptCase{"Arabic Supplement", 0x0750},
+      JoiningScriptCase{"Arabic Extended-A", 0x08A0},
+      JoiningScriptCase{"Arabic Presentation-A", 0xFB54},
+      JoiningScriptCase{"Arabic Presentation-B", 0xFE91},
+      JoiningScriptCase{"Syriac", 0x0710},
+      JoiningScriptCase{"Syriac Supplement", 0x0860},
+      JoiningScriptCase{"N'Ko", 0x07CA},
+      JoiningScriptCase{"Mandaic", 0x0847},
+  };
+  for (const auto& sample : kJoining) {
+    SCOPED_TRACE(sample.script);
+    EXPECT_TRUE(backend.isCursive(sample.codepoint));
+  }
   EXPECT_FALSE(backend.isCursive('A'));     // Latin
   EXPECT_FALSE(backend.isCursive(0x4E00));  // CJK
+  EXPECT_FALSE(backend.isCursive(0x0780));  // Thaana is right-to-left but non-cursive
+  EXPECT_FALSE(backend.isCursive(0xFF00));  // Just beyond Arabic Presentation Forms-B
 }
 
 TEST(TextBackendFullCapabilities, TinyFontAdvancesStayInScale) {
