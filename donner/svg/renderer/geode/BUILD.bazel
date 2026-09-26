@@ -606,26 +606,16 @@ donner_cc_library(
 
 donner_cc_test(
     name = "geode_shaders_tests_impl",
-    # 30 cases that each build and run a real shader pipeline, 66 s of test time measured on a
-    # software-rasterizer lane, so the implicit "small" this used to take is wrong by construction:
-    # that budget is 60 s. See the wrapper below for why this one does not keep the tight
-    # hang-detecting timeout its neighbours use.
-    size = "medium",
+    # Six native-runtime cases: the dynamic Slug endpoint WGSL cases run in pinned Chromium under
+    # //donner/gpu/shader:slug_endpoint_chromium_tests.
     srcs = ["tests/GeodeShaders_tests.cc"],
     target_compatible_with = _GEODE_ONLY,
     deps = [
                ":geode_device",
-               ":geode_gpu_wait",
                ":geode_shader_selection",
                ":geode_shaders",
-               ":geode_test_contexts",
-               ":geode_wgpu_util",
                "//donner/base:gtest_timeout_main",
-               "//donner/editor/tests:bitmap_golden_compare",
                "//donner/gpu:slug_fill_slice",
-               "//donner/gpu/shader:programs",
-               "//donner/gpu/shader:wgsl_emitter",
-               "//third_party/webgpu-cpp:webgpu_cpp",
            ] + shader_apis(SLUG_SHADER_FAMILIES) +
            shader_artifacts(SLUG_SHADER_FAMILIES) +
            native_shader_artifacts(SLUG_SHADER_FAMILIES),
@@ -633,12 +623,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_shaders_tests",
-    # Not the short timeout its neighbours use. That one is a hang detector for device creation,
-    # which should take seconds on a healthy driver; this suite legitimately runs 30 shader
-    # pipelines, and needs 66 s of them on a software rasterizer. Moderate keeps the intent -
-    # a hung driver is still killed, in five minutes rather than one - without failing a run
-    # where every case passes steadily.
-    timeout = "moderate",
+    timeout = "short",
     testonly = 1,
     dep = ":geode_shaders_tests_impl",
     opens_gpu_device = True,
@@ -728,7 +713,6 @@ donner_cc_test(
         ":geode_path_cache_component",
         ":geode_resource_budget",
         ":geode_test_contexts",
-        ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/css",
@@ -907,7 +891,6 @@ donner_cc_test(
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
-        ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu:gpu_test_utils",
@@ -941,7 +924,6 @@ donner_cc_test(
     target_compatible_with = ["@platforms//os:linux"] + _GEODE_ONLY,
     deps = [
         ":geode_device",
-        ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu:gpu_test_utils",
@@ -1114,7 +1096,6 @@ donner_cc_test(
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
-        ":geode_wgpu_util",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu:gpu_test_utils",
         "//donner/svg/components/filter:components",
