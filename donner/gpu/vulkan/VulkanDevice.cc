@@ -463,6 +463,162 @@ bool SelectGraphicsPhysicalDevice(const VulkanApi& api, VkInstance instance,
   return false;
 }
 
+const char* SelectMaintenanceExtension(const VulkanApi& api,
+                                       std::span<const char* const> instanceExtensions,
+                                       VkPhysicalDevice physicalDevice);
+
+enum class CandidateFormatSupport { Usable, Unusable, TerminalFailure };
+
+bool SurfaceQueryFailureIsTerminal(VkResult result) {
+  return result == VK_ERROR_SURFACE_LOST_KHR || result == VK_ERROR_OUT_OF_HOST_MEMORY;
+}
+
+CandidateFormatSupport QueryCandidateSurfaceFormat(const VulkanApi& api,
+                                                   VkPhysicalDevice physicalDevice,
+                                                   VkSurfaceKHR surface) {
+  if (api.vkGetPhysicalDeviceSurfaceFormatsKHR == nullptr) {
+    return CandidateFormatSupport::Unusable;
+  }
+  uint32_t count = 0;
+  VkResult result =
+      api.vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &count, nullptr);
+  if (SurfaceQueryFailureIsTerminal(result)) {
+    return CandidateFormatSupport::TerminalFailure;
+  }
+  if (result != VK_SUCCESS || count == 0) {
+    return CandidateFormatSupport::Unusable;
+  }
+  std::vector<VkSurfaceFormatKHR> nativeFormats(count);
+  result = api.vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &count,
+                                                    nativeFormats.data());
+  if (SurfaceQueryFailureIsTerminal(result)) {
+    return CandidateFormatSupport::TerminalFailure;
+  }
+  if (result != VK_SUCCESS) {
+    return CandidateFormatSupport::Unusable;
+  }
+  const std::vector<TextureFormat> formats = RuntimeSurfaceFormatsForTest(nativeFormats);
+  return std::ranges::any_of(formats,
+                             [](TextureFormat format) {
+                               return format == TextureFormat::BGRA8Unorm ||
+                                      format == TextureFormat::RGBA8Unorm;
+                             })
+             ? CandidateFormatSupport::Usable
+             : CandidateFormatSupport::Unusable;
+}
+
+/// Rejects a candidate before logical-device creation if any mandatory feature is absent.
+bool CandidateHasPresentationFeatures(const VulkanApi& api,
+                                      std::span<const char* const> instanceExtensions,
+                                      VkPhysicalDevice candidate) {
+  VkPhysicalDeviceProperties properties = {};
+  api.vkGetPhysicalDeviceProperties(candidate, &properties);
+  if (properties.apiVersion < kTargetApiVersion ||
+      SelectMaintenanceExtension(api, instanceExtensions, candidate) == nullptr) {
+    return false;
+  }
+  VkPhysicalDeviceFeatures features = {};
+  api.vkGetPhysicalDeviceFeatures(candidate, &features);
+  if (features.robustBufferAccess != VK_TRUE) {
+    return false;
+  }
+  VkPhysicalDeviceSwapchainMaintenance1FeaturesEXT maintenance = {};
+  maintenance.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SWAPCHAIN_MAINTENANCE_1_FEATURES_EXT;
+  VkPhysicalDeviceFeatures2 features2 = {};
+  features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+  features2.pNext = &maintenance;
+  api.vkGetPhysicalDeviceFeatures2(candidate, &features2);
+  return maintenance.swapchainMaintenance1 == VK_TRUE;
+}
+
+enum class CandidateQueueSupport { Unusable, Selected, TerminalFailure };
+
+/// Returns one graphics queue that presents a runtime-supported format, or why this candidate
+/// cannot serve the surface. @param selectedQueueFamily Set only on Selected.
+CandidateQueueSupport ProbeCandidatePresentingQueue(const VulkanApi& api,
+                                                    VkPhysicalDevice candidate,
+                                                    VkSurfaceKHR surface,
+                                                    uint32_t& selectedQueueFamily) {
+  uint32_t familyCount = 0;
+  api.vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, nullptr);
+  std::vector<VkQueueFamilyProperties> families(familyCount);
+  api.vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, families.data());
+  for (uint32_t familyIndex = 0; familyIndex < familyCount; ++familyIndex) {
+    if ((families[familyIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0) {
+      continue;
+    }
+    VkBool32 supported = VK_FALSE;
+    const VkResult result =
+        api.vkGetPhysicalDeviceSurfaceSupportKHR(candidate, familyIndex, surface, &supported);
+    if (SurfaceQueryFailureIsTerminal(result)) {
+      return CandidateQueueSupport::TerminalFailure;
+    }
+    if (result != VK_SUCCESS || supported != VK_TRUE) {
+      continue;
+    }
+    const CandidateFormatSupport format = QueryCandidateSurfaceFormat(api, candidate, surface);
+    if (format == CandidateFormatSupport::TerminalFailure) {
+      return CandidateQueueSupport::TerminalFailure;
+    }
+    if (format != CandidateFormatSupport::Usable) {
+      return CandidateQueueSupport::Unusable;
+    }
+    selectedQueueFamily = familyIndex;
+    return CandidateQueueSupport::Selected;
+  }
+  return CandidateQueueSupport::Unusable;
+}
+
+std::vector<VkPhysicalDevice> EnumeratePhysicalDevicesForSurface(const VulkanApi& api,
+                                                                 VkInstance instance) {
+  uint32_t deviceCount = 0;
+  if (api.vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr) != VK_SUCCESS ||
+      deviceCount == 0) {
+    return {};
+  }
+  std::vector<VkPhysicalDevice> devices(deviceCount);
+  if (api.vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data()) != VK_SUCCESS) {
+    return {};
+  }
+  return devices;
+}
+
+/// Selects a graphics queue that can present to the embedder's actual surface. A candidate also
+/// needs every extension and feature the logical device will request.
+bool SelectPresentablePhysicalDevice(const VulkanApi& api, VkInstance instance,
+                                     VkSurfaceKHR surface,
+                                     std::span<const char* const> instanceExtensions,
+                                     VkPhysicalDevice& selectedDevice,
+                                     uint32_t& selectedQueueFamily) {
+  if (surface == VK_NULL_HANDLE || api.vkGetPhysicalDeviceSurfaceSupportKHR == nullptr) {
+    return false;
+  }
+  for (VkPhysicalDevice candidate : EnumeratePhysicalDevicesForSurface(api, instance)) {
+    if (!CandidateHasPresentationFeatures(api, instanceExtensions, candidate)) {
+      continue;
+    }
+    uint32_t queueFamily = 0;
+    const CandidateQueueSupport result =
+        ProbeCandidatePresentingQueue(api, candidate, surface, queueFamily);
+    if (result == CandidateQueueSupport::TerminalFailure) {
+      return false;
+    }
+    if (result == CandidateQueueSupport::Selected) {
+      selectedDevice = candidate;
+      selectedQueueFamily = queueFamily;
+      return true;
+    }
+  }
+  return false;
+}
+
+VkSurfaceKHR SurfaceFromHandle(uint64_t handle) {
+  VkSurfaceKHR surface = VK_NULL_HANDLE;
+  static_assert(sizeof(surface) == sizeof(handle));
+  std::memcpy(&surface, &handle, sizeof(surface));
+  return surface;
+}
+
 /// Whether \p physicalDevice enumerates \p extensionName.
 /// @param api Resolved instance entry points. @param physicalDevice Device to query.
 /// @param extensionName Extension to look for.
@@ -1007,6 +1163,8 @@ struct VulkanSharedRoot::Impl {
   std::shared_ptr<DeviceLostState> lostState;
   std::mutex executionMutex;  //!< Serializes image barrier recording through state commit.
   std::mutex queueMutex;      //!< Vulkan requires external synchronization of one VkQueue.
+  std::mutex externalSurfaceMutex;
+  std::map<uint64_t, std::shared_ptr<VulkanSurfaceRetirement>> externalSurfaces;
 
   ~Impl() {
     if (api == nullptr) {
@@ -1021,10 +1179,129 @@ struct VulkanSharedRoot::Impl {
   }
 };
 
+struct VulkanPresentationProbe::Impl {
+  InstanceSetup setup;
+  std::vector<std::string> requiredExtensions;
+  std::shared_ptr<DeviceLostState> lostState;
+
+  ~Impl() {
+    if (setup.instance != VK_NULL_HANDLE && setup.loader != nullptr) {
+      setup.loader->api().vkDestroyInstance(setup.instance, nullptr);
+    }
+  }
+};
+
+VulkanPresentationProbe::VulkanPresentationProbe(std::unique_ptr<Impl> impl)
+    : impl_(std::move(impl)) {}
+VulkanPresentationProbe::~VulkanPresentationProbe() = default;
+void* VulkanPresentationProbe::nativeInstance() const {
+  return impl_ != nullptr ? impl_->setup.instance : nullptr;
+}
+
+void VulkanPresentationProbe::destroyExternalSurface(uint64_t surfaceHandle) {
+  if (impl_ != nullptr && impl_->setup.instance != VK_NULL_HANDLE && surfaceHandle != 0) {
+    impl_->setup.loader->api().vkDestroySurfaceKHR(impl_->setup.instance,
+                                                   SurfaceFromHandle(surfaceHandle), nullptr);
+  }
+}
+
+bool VulkanSurfaceRetirement::accept() {
+  VulkanSurfaceRetirementState expected = VulkanSurfaceRetirementState::Unattached;
+  return state_.compare_exchange_strong(expected, VulkanSurfaceRetirementState::Live,
+                                        std::memory_order_acq_rel);
+}
+
+void VulkanSurfaceRetirement::retire() {
+  VulkanSurfaceRetirementState expected = VulkanSurfaceRetirementState::Live;
+  (void)state_.compare_exchange_strong(expected, VulkanSurfaceRetirementState::Retired,
+                                       std::memory_order_release);
+}
+
+void VulkanSurfaceRetirement::markUnproven() {
+  VulkanSurfaceRetirementState expected = VulkanSurfaceRetirementState::Live;
+  (void)state_.compare_exchange_strong(expected, VulkanSurfaceRetirementState::Unproven,
+                                       std::memory_order_release);
+}
+
+bool VulkanSurfaceRetirement::claimPlatformRelease() {
+  VulkanSurfaceRetirementState current = state_.load(std::memory_order_acquire);
+  while (current == VulkanSurfaceRetirementState::Unattached ||
+         current == VulkanSurfaceRetirementState::Retired) {
+    if (state_.compare_exchange_weak(current, VulkanSurfaceRetirementState::Released,
+                                     std::memory_order_acq_rel, std::memory_order_acquire)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 VulkanSharedRoot::VulkanSharedRoot(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
 VulkanSharedRoot::~VulkanSharedRoot() = default;
 uint32_t VulkanSharedRoot::maxTextureDimension2D() const {
   return impl_->maxTextureDimension2D;
+}
+
+const std::shared_ptr<DeviceLostState>& VulkanSharedRoot::lostState() const {
+  return impl_->lostState;
+}
+
+std::shared_ptr<VulkanSurfaceRetirement> VulkanSharedRoot::registerExternalSurface(
+    uint64_t surfaceHandle) {
+  if (surfaceHandle == 0 || impl_ == nullptr || !impl_->presentationEnabled) {
+    return nullptr;
+  }
+  const std::lock_guard lock(impl_->externalSurfaceMutex);
+  if (impl_->externalSurfaces.contains(surfaceHandle)) {
+    return nullptr;
+  }
+  std::shared_ptr<VulkanSurfaceRetirement> retirement(new VulkanSurfaceRetirement());
+  impl_->externalSurfaces.emplace(surfaceHandle, retirement);
+  return retirement;
+}
+
+std::shared_ptr<VulkanSurfaceRetirement> VulkanSharedRoot::findExternalSurface(
+    uint64_t surfaceHandle) const {
+  const std::lock_guard lock(impl_->externalSurfaceMutex);
+  const auto found = impl_->externalSurfaces.find(surfaceHandle);
+  return found == impl_->externalSurfaces.end() ? nullptr : found->second;
+}
+
+bool VulkanSharedRoot::destroyExternalSurface(
+    uint64_t surfaceHandle, const std::shared_ptr<VulkanSurfaceRetirement>& retirement) {
+  if (retirement == nullptr || findExternalSurface(surfaceHandle) != retirement) {
+    return false;
+  }
+  if (!retirement->claimPlatformRelease()) {
+    return false;
+  }
+  impl_->api->vkDestroySurfaceKHR(impl_->instance, SurfaceFromHandle(surfaceHandle), nullptr);
+  return true;
+}
+
+std::optional<TextureFormat> VulkanSharedRoot::preferredExternalSurfaceFormat(
+    uint64_t surfaceHandle) const {
+  if (surfaceHandle == 0 || impl_ == nullptr || !impl_->presentationEnabled) {
+    return std::nullopt;
+  }
+  const VkSurfaceKHR surface = SurfaceFromHandle(surfaceHandle);
+  uint32_t count = 0;
+  if (impl_->api->vkGetPhysicalDeviceSurfaceFormatsKHR(impl_->physicalDevice, surface, &count,
+                                                       nullptr) != VK_SUCCESS ||
+      count == 0) {
+    return std::nullopt;
+  }
+  std::vector<VkSurfaceFormatKHR> formats(count);
+  if (impl_->api->vkGetPhysicalDeviceSurfaceFormatsKHR(impl_->physicalDevice, surface, &count,
+                                                       formats.data()) != VK_SUCCESS) {
+    return std::nullopt;
+  }
+  const std::vector<TextureFormat> runtimeFormats = RuntimeSurfaceFormatsForTest(formats);
+  for (TextureFormat preferred : {TextureFormat::BGRA8Unorm, TextureFormat::RGBA8Unorm}) {
+    if (std::ranges::find(runtimeFormats, preferred) != runtimeFormats.end()) {
+      return preferred;
+    }
+  }
+  return std::nullopt;
 }
 
 void* VulkanSharedRoot::nativeInstance() const {
@@ -1922,6 +2199,7 @@ struct VulkanDevice::Impl {
 
   std::vector<std::unique_ptr<VulkanSwapchain>> surfaces;  //!< Surface slots.
   std::unique_ptr<VulkanSwapchain> retainedSurfaces;       //!< Failed explicit destructions.
+  std::function<void()> beforeExternalSurfaceQueryForTest;
   /// Texture slot each surface's acquired frame occupies, empty while it holds none.
   std::vector<std::optional<uint32_t>> surfaceTextureSlots;
 
@@ -2366,6 +2644,90 @@ std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateSharedRootWithPresentation
   return CreateRootImpl(false, true, requiredInstanceExtensions, std::move(lostState));
 }
 
+std::unique_ptr<VulkanPresentationProbe> VulkanDevice::CreatePresentationProbe(
+    std::span<const char* const> requiredInstanceExtensions,
+    std::shared_ptr<DeviceLostState> lostState) {
+  Impl::AdmissionGate& gate = Impl::admissionGate();
+  const std::lock_guard admission(gate.mutex);
+  if (gate.closed) {
+    return nullptr;
+  }
+  std::unique_ptr<VulkanPresentationProbe::Impl> native =
+      std::make_unique<VulkanPresentationProbe::Impl>();
+  native->requiredExtensions.reserve(requiredInstanceExtensions.size());
+  for (const char* extension : requiredInstanceExtensions) {
+    if (extension == nullptr) {
+      return nullptr;
+    }
+    native->requiredExtensions.emplace_back(extension);
+  }
+  std::vector<const char*> stableExtensions;
+  stableExtensions.reserve(native->requiredExtensions.size());
+  for (const std::string& extension : native->requiredExtensions) {
+    stableExtensions.push_back(extension.c_str());
+  }
+  native->setup = CreateInstance(true, stableExtensions);
+  if (native->setup.loader == nullptr) {
+    return nullptr;
+  }
+  native->lostState = lostState ? std::move(lostState) : std::make_shared<DeviceLostState>();
+  return std::unique_ptr<VulkanPresentationProbe>(new VulkanPresentationProbe(std::move(native)));
+}
+
+std::shared_ptr<VulkanSharedRoot> VulkanDevice::CompletePresentationRoot(
+    VulkanPresentationProbe& probe, uint64_t surfaceHandle) {
+  Impl::AdmissionGate& gate = Impl::admissionGate();
+  const std::lock_guard admission(gate.mutex);
+  if (gate.closed || probe.impl_ == nullptr || probe.impl_->setup.instance == VK_NULL_HANDLE) {
+    return nullptr;
+  }
+  InstanceSetup& setup = probe.impl_->setup;
+  const VulkanApi& api = setup.loader->api();
+  const VkSurfaceKHR surface = SurfaceFromHandle(surfaceHandle);
+  VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
+  uint32_t queueFamily = 0;
+  if (!SelectPresentablePhysicalDevice(api, setup.instance, surface, setup.presentationExtensions,
+                                       physicalDevice, queueFamily)) {
+    return nullptr;
+  }
+
+  std::unique_ptr<VulkanSharedRoot::Impl> native = std::make_unique<VulkanSharedRoot::Impl>();
+  native->loader = setup.loader;
+  native->api = &api;
+  native->physicalDevice = physicalDevice;
+  native->queueFamilyIndex = queueFamily;
+  native->debugMessengerAvailable = setup.debugMessengerAvailable;
+  native->presentationEnabled = true;
+  native->headlessSurfaceEnabled = setup.headlessSurfaceAvailable;
+  native->lostState = probe.impl_->lostState;
+  native->device =
+      CreateLogicalDevice(api, physicalDevice, queueFamily, setup.presentationExtensions, false,
+                          true, native->fullDrawIndexUint32);
+  if (native->device == VK_NULL_HANDLE) {
+    return nullptr;
+  }
+  if (const Status status = LoadDeviceEntryPoints(*native->loader, native->device, true);
+      status.hasError()) {
+    std::fprintf(stderr, "[donner::gpu::vulkan] %s\n", status.error().message.c_str());
+    if (api.vkDestroyDevice == nullptr) {
+      gate.closed = true;
+      native->instance = setup.instance;
+      setup.instance = VK_NULL_HANDLE;
+      native.release();
+    }
+    return nullptr;
+  }
+  api.vkGetDeviceQueue(native->device, queueFamily, 0, &native->queue);
+  api.vkGetPhysicalDeviceMemoryProperties(physicalDevice, &native->memoryProperties);
+  VkPhysicalDeviceProperties properties = {};
+  api.vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+  native->maxTextureDimension2D =
+      std::min(properties.limits.maxImageDimension2D, kMaxTextureDimension);
+  native->instance = setup.instance;
+  setup.instance = VK_NULL_HANDLE;
+  return std::shared_ptr<VulkanSharedRoot>(new VulkanSharedRoot(std::move(native)));
+}
+
 std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateSharedRootWithTimelineSemaphoreForTest(
     std::shared_ptr<DeviceLostState> lostState) {
   return CreateRootImpl(true, false, {}, std::move(lostState));
@@ -2519,7 +2881,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateForTeardownTest(
 
 bool VulkanDevice::CreateNativeObjectsForPresentationTest(
     const VulkanApi& api, bool enablePresentation,
-    std::span<const char* const> requiredInstanceExtensions) {
+    std::span<const char* const> requiredInstanceExtensions, uint64_t surfaceHandle) {
   Impl::AdmissionGate& gate = Impl::admissionGate();
   const std::lock_guard admission(gate.mutex);
   if (gate.closed) {
@@ -2535,7 +2897,12 @@ bool VulkanDevice::CreateNativeObjectsForPresentationTest(
   VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
   uint32_t queueFamily = 0;
   VkDevice device = VK_NULL_HANDLE;
-  if (SelectGraphicsPhysicalDevice(api, instance, physicalDevice, queueFamily)) {
+  const bool selected =
+      surfaceHandle == 0
+          ? SelectGraphicsPhysicalDevice(api, instance, physicalDevice, queueFamily)
+          : SelectPresentablePhysicalDevice(api, instance, SurfaceFromHandle(surfaceHandle),
+                                            instanceExtensions, physicalDevice, queueFamily);
+  if (selected) {
     bool fullDrawIndexUint32 = false;
     device = CreateLogicalDevice(api, physicalDevice, queueFamily, instanceExtensions, false,
                                  enablePresentation, fullDrawIndexUint32);
@@ -4706,6 +5073,14 @@ void* VulkanDevice::nativeInstance() const {
   return impl_->presentationEnabled ? impl_->instance : nullptr;
 }
 
+void VulkanDevice::forceSurfaceRetirementUnprovenForTest() {
+  impl_->executionUncertain = true;
+}
+
+void VulkanDevice::setBeforeExternalSurfaceQueryHookForTest(std::function<void()> hook) {
+  impl_->beforeExternalSurfaceQueryForTest = std::move(hook);
+}
+
 Status VulkanDevice::onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor& descriptor) {
   if (impl_->hasError()) {
     return GpuError{GpuErrorType::InvalidState, impl_->errorMessage()};
@@ -4715,13 +5090,36 @@ Status VulkanDevice::onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor
                     "createSurface: this device was created without presentation support"};
   }
 
+  std::shared_ptr<VulkanSurfaceRetirement> retirement;
+  if (descriptor.native.kind == NativeSurfaceKind::EmbedderSurface && impl_->nativeRoot) {
+    retirement = impl_->nativeRoot->findExternalSurface(descriptor.native.window);
+    if (retirement == nullptr) {
+      return GpuError{GpuErrorType::InvalidState,
+                      "createSurface: the external surface is not registered on this root"};
+    }
+    if (!retirement->accept()) {
+      return GpuError{GpuErrorType::InvalidState,
+                      "createSurface: the external surface was already accepted or released"};
+    }
+    if (impl_->beforeExternalSurfaceQueryForTest) {
+      std::function<void()> hook = std::exchange(impl_->beforeExternalSurfaceQueryForTest, {});
+      hook();
+    }
+  }
+
   Result<std::unique_ptr<VulkanSwapchain>> surface =
       VulkanSwapchain::Create(impl_->surfaceContext(), descriptor);
   if (surface.hasError()) {
+    if (retirement != nullptr) {
+      retirement->retire();
+    }
     return std::move(surface).error();
   }
 
   std::unique_ptr<VulkanSwapchain> swapchain = std::move(surface).result();
+  if (retirement != nullptr) {
+    swapchain->setRetirementSignal(std::move(retirement));
+  }
   // Ending a frame submits on the queue from inside the swapchain, outside `submit`; the observer
   // still sees it, as it sees every other submission this device makes.
   swapchain->setQueueSubmissionCallback([this] { notifyObserverOfBackendSubmission(); });
@@ -4860,6 +5258,7 @@ void VulkanDevice::onDestroySurface(uint32_t slotIndex) {
   }
   if (impl_->executionUncertain || impl_->surfaceLifetimeUnproven() ||
       surface->prepareForDestruction().hasError()) {
+    surface->markRetirementUnproven();
     surface->retainBefore(std::move(impl_->retainedSurfaces));
     impl_->retainedSurfaces = std::move(surface);
   }

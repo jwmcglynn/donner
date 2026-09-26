@@ -1011,6 +1011,23 @@ TEST(GeodeNativeVulkanRoot, PresentationSelectionRejectsMissingRequiredExtension
   EXPECT_THAT(SelectGpuRoot(selection), IsNull());
 }
 
+TEST(GeodeNativeVulkanRoot, AdoptedRootRequiresTheExactLossOwner) {
+  auto loss = std::make_shared<gpu::DeviceLostState>();
+  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> native =
+      gpu::vulkan::VulkanDevice::CreateSharedRoot(loss);
+  ASSERT_THAT(native, NotNull()) << kNoVulkanDevice;
+  EXPECT_THAT(AdoptNativeVulkanRoot(nullptr, loss), IsNull());
+  EXPECT_THAT(AdoptNativeVulkanRoot(native, nullptr), IsNull());
+  EXPECT_THAT(AdoptNativeVulkanRoot(native, std::make_shared<gpu::DeviceLostState>()), IsNull());
+
+  std::shared_ptr<GeodeGpuRoot> root = AdoptNativeVulkanRoot(native, loss);
+  ASSERT_THAT(root, NotNull());
+  EXPECT_THAT(root->vulkanRoot(), Eq(native));
+  EXPECT_THAT(root->lostState(), Eq(loss));
+  EXPECT_THAT(root->capabilities().backend, Eq(GpuBackendKind::NativeVulkan));
+  EXPECT_THAT(root->capabilities().maxTextureDimension2D, native->maxTextureDimension2D());
+}
+
 /// Runtime devices over one selected Vulkan root share its native device and queue, while each
 /// retains its own submission serials and survives a sibling's teardown.
 TEST(GeodeNativeVulkanRoot, RuntimeDevicesShareOneNativeDeviceAndIndependentSerials) {

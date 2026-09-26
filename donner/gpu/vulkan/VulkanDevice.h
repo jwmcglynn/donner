@@ -2,6 +2,7 @@
 /// @file
 /// \c donner::gpu::vulkan::VulkanDevice - the Vulkan backend for the Donner GPU runtime.
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -17,6 +18,31 @@ namespace donner::gpu::vulkan {
 struct VulkanApi;
 struct VulkanSurfaceContext;
 class VulkanSwapchain;
+class VulkanPresentationProbe;
+class VulkanSurfaceRetirement;
+
+/// One external surface's irreversible backend retirement disposition.
+enum class VulkanSurfaceRetirementState { Unattached, Live, Retired, Unproven, Released };
+
+class VulkanSurfaceRetirement final {
+public:
+  /// Acquire-observed state; Retired permits releasing the external VkSurfaceKHR and window.
+  [[nodiscard]] VulkanSurfaceRetirementState state() const {
+    return state_.load(std::memory_order_acquire);
+  }
+
+private:
+  friend class VulkanSharedRoot;
+  friend class VulkanSwapchain;
+  friend class VulkanDevice;
+  friend class VulkanSwapchainTestAccess;
+  VulkanSurfaceRetirement() = default;
+  bool accept();
+  void retire();
+  void markUnproven();
+  bool claimPlatformRelease();
+  std::atomic<VulkanSurfaceRetirementState> state_{VulkanSurfaceRetirementState::Unattached};
+};
 
 /**
  * One native Vulkan instance, device and graphics queue shared by runtime devices.
@@ -32,6 +58,25 @@ public:
   /// Largest 2D texture dimension reported by this root's physical device.
   uint32_t maxTextureDimension2D() const;
 
+  /// Sticky loss condition shared by every runtime device opened over this root.
+  const std::shared_ptr<DeviceLostState>& lostState() const;
+
+  /// Registers an external surface once for this root, refusing duplicates and later reuse.
+  /// @param surfaceHandle VkSurfaceKHR bits from the instance this root owns.
+  std::shared_ptr<VulkanSurfaceRetirement> registerExternalSurface(uint64_t surfaceHandle);
+
+  /// Destroys an embedder surface after its registration proves retirement or no attachment.
+  /// @param surfaceHandle Registered VkSurfaceKHR bits.
+  /// @param retirement Exact registration returned by registerExternalSurface.
+  [[nodiscard]] bool destroyExternalSurface(
+      uint64_t surfaceHandle, const std::shared_ptr<VulkanSurfaceRetirement>& retirement);
+
+  /// Chooses a format offered by the selected physical device for an external surface.
+  /// Called before rendering pipelines are compiled for the editor window.
+  /// @param surfaceHandle VkSurfaceKHR bits owned by the embedder.
+  [[nodiscard]] std::optional<TextureFormat> preferredExternalSurfaceFormat(
+      uint64_t surfaceHandle) const;
+
   /// Borrowed instance for an embedder to create its own window-system surface, or null when
   /// this root was created for headless work. The root must outlive the embedder surface.
   [[nodiscard]] void* nativeInstance() const;
@@ -43,6 +88,32 @@ private:
   friend class VulkanDevice;
   struct Impl;
   explicit VulkanSharedRoot(std::unique_ptr<Impl> impl);
+  std::shared_ptr<VulkanSurfaceRetirement> findExternalSurface(uint64_t surfaceHandle) const;
+  std::unique_ptr<Impl> impl_;
+};
+
+/**
+ * Presentation instance held while an embedder creates its platform surface.
+ *
+ * Complete the shared root against that exact surface before opening a logical runtime device.
+ * The embedder must destroy its surface before releasing this probe on failure.
+ */
+class VulkanPresentationProbe final {
+public:
+  /// Destroys the provisional Vulkan instance when no root accepted it.
+  ~VulkanPresentationProbe();
+
+  /// Instance borrowed by the embedder to create its native surface.
+  [[nodiscard]] void* nativeInstance() const;
+
+  /// Releases an embedder surface before root completion fails and this instance goes away.
+  /// @param surfaceHandle VkSurfaceKHR bits created against nativeInstance().
+  void destroyExternalSurface(uint64_t surfaceHandle);
+
+private:
+  friend class VulkanDevice;
+  struct Impl;
+  explicit VulkanPresentationProbe(std::unique_ptr<Impl> impl);
   std::unique_ptr<Impl> impl_;
 };
 
@@ -185,6 +256,20 @@ public:
       std::span<const char* const> requiredInstanceExtensions,
       std::shared_ptr<DeviceLostState> lostState = nullptr);
 
+  /// Opens only a presentation-capable instance so an embedder can make its native surface.
+  /// @param requiredInstanceExtensions Surface extensions required by the embedder.
+  /// @param lostState Loss condition shared by the completed root and its runtime devices.
+  static std::unique_ptr<VulkanPresentationProbe> CreatePresentationProbe(
+      std::span<const char* const> requiredInstanceExtensions,
+      std::shared_ptr<DeviceLostState> lostState = nullptr);
+
+  /// Selects a presenting physical device and graphics queue for the probe's actual surface.
+  /// No logical device is created when the surface has no compatible candidate.
+  /// @param probe Live provisional instance used to create the surface.
+  /// @param surfaceHandle Native VkSurfaceKHR bits owned by the embedder.
+  static std::shared_ptr<VulkanSharedRoot> CompletePresentationRoot(VulkanPresentationProbe& probe,
+                                                                    uint64_t surfaceHandle);
+
   /// Opens a shared root with timeline-semaphore support solely for native queue-gate tests.
   /// Returns null when the test extension or physical-device feature is unavailable.
   static std::shared_ptr<VulkanSharedRoot> CreateSharedRootWithTimelineSemaphoreForTest(
@@ -237,6 +322,14 @@ public:
   /// Whether this device was created with presentation support. Test accessor, so a suite can
   /// say which device it is looking at rather than inferring it from a refusal.
   [[nodiscard]] bool supportsPresentation() const;
+
+  /// Test seam: make the next external-surface destruction retain its native prerequisites.
+  /// A test uses this only in a child process because the disposition is terminal.
+  void forceSurfaceRetirementUnprovenForTest();
+
+  /// Test seam run after accepting an external surface but before its first Vulkan query.
+  /// @param hook One-shot callback that may synchronize a concurrent platform close.
+  void setBeforeExternalSurfaceQueryHookForTest(std::function<void()> hook);
 
   /**
    * The Vulkan instance this device was created on, for an embedder that creates its own surface.
@@ -382,9 +475,10 @@ public:
   /// Exercises native instance/device creation through a fake API and immediately destroys them.
   /// @param api Fake Vulkan callbacks. @param enablePresentation Whether to enable presentation.
   /// @param requiredInstanceExtensions Embedder-required extension names.
+  /// @param surfaceHandle Fake external surface to require presentation support for, or zero.
   static bool CreateNativeObjectsForPresentationTest(
       const VulkanApi& api, bool enablePresentation,
-      std::span<const char* const> requiredInstanceExtensions = {});
+      std::span<const char* const> requiredInstanceExtensions = {}, uint64_t surfaceHandle = 0);
 
   /// Adds fake pending native work to the real ownership graph, without submitting to a GPU.
   /// @param upload Whether this is an internal texture upload instead of an ordinary submission.

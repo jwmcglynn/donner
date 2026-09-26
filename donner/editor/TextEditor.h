@@ -193,14 +193,17 @@ public:
   // `TextEditorCore`. These keep the existing `TextEditor::Palette`,
   // `TextEditor::LanguageDefinition`, etc. names working so call sites do
   // not change during the refactor.
-  using SelectionMode = ::donner::editor::SelectionMode;
-  using Identifier = ::donner::editor::Identifier;
-  using Identifiers = ::donner::editor::Identifiers;
-  using Keywords = ::donner::editor::Keywords;
-  using ErrorMarkers = ::donner::editor::ErrorMarkers;
-  using Palette = ::donner::editor::Palette;
-  using LanguageDefinition = ::donner::editor::LanguageDefinition;
-  using String = RcString;
+  using SelectionMode =
+      ::donner::editor::SelectionMode;  //!< Selection expansion modes shared with the core.
+  using Identifier = ::donner::editor::Identifier;    //!< Identifier metadata shared with the core.
+  using Identifiers = ::donner::editor::Identifiers;  //!< Identifier table shared with the core.
+  using Keywords = ::donner::editor::Keywords;        //!< Syntax keyword set shared with the core.
+  using ErrorMarkers =
+      ::donner::editor::ErrorMarkers;         //!< Line-keyed diagnostics shared with the core.
+  using Palette = ::donner::editor::Palette;  //!< Syntax color palette shared with the core.
+  using LanguageDefinition =
+      ::donner::editor::LanguageDefinition;  //!< Syntax language rules shared with the core.
+  using String = RcString;                   //!< Text storage string type.
 
   /// Visual role for a rendered source style chip.
   enum class SourceStyleChipKind {
@@ -229,11 +232,12 @@ public:
 
   /// Source structural-drag decoration supplied by the editor shell.
   struct SourceStructuralMoveDecoration {
-    SourceByteRange elementRange;
-    std::size_t insertionOffset = 0;
-    bool valid = false;
-    std::string message;
+    SourceByteRange elementRange;     //!< Source bytes occupied by the moving element.
+    std::size_t insertionOffset = 0;  //!< Proposed insertion byte offset.
+    bool valid = false;               //!< Whether the proposed move is valid.
+    std::string message;              //!< Message shown for an invalid move.
 
+    /// Compare all structural-move decoration fields.
     bool operator==(const SourceStructuralMoveDecoration&) const = default;
   };
 
@@ -251,8 +255,14 @@ public:
   TextEditor& operator=(TextEditor&&) = delete;
 
   // Configuration
+  /// Set syntax language rules and schedule recoloring.
+  /// @param langDef Language definition to use.
   void setLanguageDefinition(const LanguageDefinition& langDef);
+  /// Set the base syntax color palette.
+  /// @param value Palette to store.
   void setPalette(const Palette& value);
+  /// Replace line-keyed diagnostic markers.
+  /// @param markers Markers to display.
   void setErrorMarkers(const ErrorMarkers& markers) { core_.setErrorMarkers(markers); }
 
   // Search and replace
@@ -278,6 +288,10 @@ public:
                       bool replaceAll = false);
 
   // Core functionality
+  /// Render the editor in an ImGui child region unless child creation is disabled.
+  /// @param title ImGui identifier for the editor region.
+  /// @param size Requested child size; ImGui uses available space for zero dimensions.
+  /// @param showBorder Whether ImGui draws a border around the child.
   void render(std::string_view title, const ImVec2& size = ImVec2(), bool showBorder = false);
 
   /**
@@ -312,6 +326,7 @@ public:
 
   /// Byte counts for source diagnostics without copying the editor buffer.
   std::size_t textByteLength() const { return text_.byteLength(); }
+  /// Return the selected range length in UTF-8 bytes.
   std::size_t selectionByteLength() const {
     const std::size_t start = text_.getByteOffset(state_.selectionStart);
     const std::size_t end = text_.getByteOffset(state_.selectionEnd);
@@ -343,8 +358,11 @@ public:
   std::string getSelectedText() const;
 
   // State queries
+  /// Report whether the editor currently owns input focus.
   bool isFocused() const { return focused_; }
+  /// Report whether text changed since reset; external source mirroring clears the flag.
   bool isTextChanged() const { return core_.isTextChanged(); }
+  /// Report a pending cursor change; the flag resets when render begins.
   bool isCursorPositionChanged() const { return cursorPositionChanged_; }
   /// Whether mouse input moved the cursor during the current render frame.
   bool didMouseChangeCursorPosition() const { return cursorPositionChangedByMouse_; }
@@ -364,6 +382,7 @@ public:
   [[nodiscard]] bool takeSourceGutterDragCancelled();
   /// Cancel any active gutter drag without emitting a drop.
   void cancelSourceGutterDrag();
+  /// Clear the text-change flag and changed-line tracking.
   void resetTextChanged() { core_.resetTextChanged(); }
   /// True if user-facing edits have pending byte-level source intents.
   bool hasPendingSourceEditIntents() const { return core_.hasPendingSourceEditIntents(); }
@@ -373,7 +392,9 @@ public:
   }
 
   // Accessors
+  /// Return the active syntax language definition.
   const LanguageDefinition& getLanguageDefinition() const { return core_.getLanguageDefinition(); }
+  /// Return the configured base syntax color palette.
   const Palette& getPalette() const { return core_.getPalette(); }
 
   /**
@@ -414,13 +435,22 @@ public:
   void setCursorPosition(const Coordinates& position);
 
   // Input handling
+  /// Enable or disable mouse input handling in the editor region.
+  /// @param value Whether the editor handles mouse input.
   void setHandleMouseInputs(bool value) { handleMouseInputs_ = value; }
+  /// Return the keyboard-input flag currently exposed by this legacy mouse query.
   bool isHandleMouseInputsEnabled() const { return handleKeyboardInputs_; }
 
+  /// Enable or disable keyboard input handling in the editor region.
+  /// @param value Whether the editor handles keyboard input.
   void setHandleKeyboardInputs(bool value) { handleKeyboardInputs_ = value; }
+  /// Report whether keyboard input handling is enabled.
   bool isHandleKeyboardInputsEnabled() const { return handleKeyboardInputs_; }
 
+  /// Choose whether the caller, rather than this widget, owns the ImGui child region.
+  /// @param value True when a surrounding ImGui child is already active.
   void setImGuiChildIgnored(bool value) { ignoreImGuiChild_ = value; }
+  /// Report whether this widget skips creation of its ImGui child region.
   bool isImGuiChildIgnored() const { return ignoreImGuiChild_; }
 
   /// Show a source-focus toggle in the editor context menu.
@@ -443,6 +473,7 @@ public:
    * Show or hide whitespace characters in the editor.
    */
   void setShowWhitespaces(bool value) { showWhitespaces_ = value; }
+  /// Report whether whitespace markers are visible.
   bool isShowingWhitespaces() const { return showWhitespaces_; }
 
   /**
@@ -474,11 +505,27 @@ public:
    */
   void moveDown(int amount = 1, bool select = false);
 
+  /// Move the cursor left by character steps.
+  /// @param amount Number of character steps.
+  /// @param select Whether to extend the selection.
+  /// @param wordMode Reserved by the core; movement is currently characterwise.
   void moveLeft(int amount = 1, bool select = false, bool wordMode = false);
+  /// Move the cursor right by character steps.
+  /// @param amount Number of character steps.
+  /// @param select Whether to extend the selection.
+  /// @param wordMode Reserved by the core; movement is currently characterwise.
   void moveRight(int amount = 1, bool select = false, bool wordMode = false);
+  /// Move the cursor to the start of the first line.
+  /// @param select Whether to extend the selection.
   void moveTop(bool select = false);
+  /// Move the cursor to the start of the final line.
+  /// @param select Whether to extend the selection.
   void moveBottom(bool select = false);
+  /// Move the cursor to the start of its current line.
+  /// @param select Whether to extend the selection.
   void moveHome(bool select = false);
+  /// Move the cursor to the end of its current line.
+  /// @param select Whether to extend the selection.
   void moveEnd(bool select = false);
 
   // Selection
@@ -629,7 +676,10 @@ public:
   void redo(int steps = 1);
 
   // Line highlighting
+  /// Set source line numbers highlighted by the rendering shell.
+  /// @param lines Line numbers to highlight.
   void setHighlightedLines(const std::vector<int>& lines) { highlightedLines_ = lines; }
+  /// Clear source line highlights.
   void clearHighlightedLines() { highlightedLines_.clear(); }
   /// Set subtle source ranges to highlight while the source mouse hover is active.
   bool setHoverSourceRanges(std::vector<SourceByteRange> ranges);
@@ -652,11 +702,13 @@ public:
   [[nodiscard]] std::optional<std::uint64_t> hoveredSourceDiagnosticId() const;
   /// Emphasize a diagnostic selected or hovered by an external presenter.
   bool setActiveSourceDiagnosticId(std::optional<std::uint64_t> id);
+  /// Return the diagnostic currently emphasized by the shell, if any.
   [[nodiscard]] std::optional<std::uint64_t> activeSourceDiagnosticId() const {
     return activeSourceDiagnosticId_;
   }
   /// Set the current source structural-move preview decoration.
   bool setSourceStructuralMoveDecoration(std::optional<SourceStructuralMoveDecoration> decoration);
+  /// Return the active structural-move preview, if any.
   [[nodiscard]] const std::optional<SourceStructuralMoveDecoration>&
   sourceStructuralMoveDecoration() const {
     return sourceStructuralMoveDecoration_;
@@ -703,32 +755,74 @@ public:
   void tickSourceFlashes();
 
   // Editor settings
+  /// Set tab width in columns, clamped by the core to 0 through 32.
+  /// @param size Requested tab width.
   void setTabSize(int size) { core_.setTabSize(size); }
+  /// Return tab width in columns.
   int getTabSize() const { return core_.getTabSize(); }
 
+  /// Choose spaces instead of tabs for indentation.
+  /// @param value True to insert spaces.
   void setInsertSpaces(bool value) { core_.setInsertSpaces(value); }
+  /// Report whether indentation inserts spaces.
   bool getInsertSpaces() const { return core_.getInsertSpaces(); }
 
+  /// Enable or disable context-sensitive indentation.
+  /// @param value Whether smart indentation is active.
   void setSmartIndent(bool value) { core_.setSmartIndent(value); }
+  /// Enable or disable indentation of pasted lines.
+  /// @param value Whether pasted lines are auto-indented.
   void setAutoIndentOnPaste(bool value) { core_.setAutoIndentOnPaste(value); }
+  /// Enable or disable a highlight behind the current line.
+  /// @param value Whether to highlight the current line.
   void setHighlightLine(bool value) { highlightLine_ = value; }
+  /// Enable or disable automatic closing-brace insertion.
+  /// @param value Whether matching braces are completed.
   void setCompleteBraces(bool value) { core_.setCompleteBraces(value); }
+  /// Disable horizontal scrolling; the legacy argument is ignored.
   void setHorizontalScroll(bool /*value*/) { horizontalScroll_ = false; }
+  /// Store the legacy prediction preference; current rendering does not read it.
+  /// @param value Preference to store.
   void setSmartPredictions(bool value) { autocomplete_ = value; }
+  /// Enable or disable function declaration tooltips.
+  /// @param value Whether declaration tooltips are shown.
   void setFunctionDeclarationTooltip(bool value) { functionDeclarationTooltipEnabled_ = value; }
+  /// Store the legacy function-tooltip preference; current rendering does not read it.
+  /// @param value Preference to store.
   void setFunctionTooltips(bool value) { funcTooltips_ = value; }
+  /// Enable or disable active autocomplete requests.
+  /// @param value Whether autocomplete is active.
   void setActiveAutocomplete(bool value) { core_.setActiveAutocomplete(value); }
+  /// Show or hide changed-line markers in the scrollbar.
+  /// @param value Whether markers are shown.
   void setScrollbarMarkers(bool value) { core_.setScrollbarMarkers(value); }
+  /// Show or hide the editor sidebar.
+  /// @param value Whether the sidebar is visible.
   void setSidebarVisible(bool value) { sidebar_ = value; }
+  /// Store the legacy search preference; current rendering does not read it.
+  /// @param value Preference to store.
   void setSearchEnabled(bool value) { hasSearch_ = value; }
+  /// Store the legacy bracket-highlight preference; current rendering does not read it.
+  /// @param value Preference to store.
   void setHighlightBrackets(bool value) { highlightBrackets_ = value; }
+  /// Enable or disable source fold controls.
+  /// @param value Whether folding is enabled.
   void setFoldEnabled(bool value) { foldEnabled_ = value; }
+  /// Enable or disable visual line wrapping.
+  /// @param value Whether long lines wrap.
   void setWordWrapEnabled(bool value) { wordWrapEnabled_ = value; }
+  /// Report whether visual line wrapping is enabled.
   [[nodiscard]] bool wordWrapEnabled() const { return wordWrapEnabled_; }
 
   // UI scaling
+  /// Set the overall editor UI scale.
+  /// @param scale Scale applied to editor chrome.
   void setUIScale(float scale) { uiScale_ = scale; }
+  /// Set the size reference for find/replace control geometry; this does not select a font.
+  /// @param size UI sizing reference.
   void setUIFontSize(float size) { uiFontSize_ = size; }
+  /// Store a legacy editor-sizing reference; current rendering does not read it.
+  /// @param size Legacy sizing reference.
   void setEditorFontSize(float size) { editorFontSize_ = size; }
 
   /**
@@ -762,10 +856,14 @@ public:
   /**
    * Update color range for syntax highlighting.
    * @param fromLine Starting line number
-   * @param lines Number of lines to colorize (-1 for all remaining lines)
+   * @param count Number of lines to colorize (-1 for all remaining lines)
    */
   void colorize(int fromLine = 0, int count = -1);
+  /// Recolor the half-open source line range [fromLine, toLine).
+  /// @param fromLine First line in the range.
+  /// @param toLine First line after the range.
   void colorizeRange(int fromLine = 0, int toLine = 0);
+  /// Process the pending syntax-coloring range.
   void colorizeInternal();
 
   // Autocomplete
@@ -797,7 +895,9 @@ public:
   using AutocompleteProvider =
       std::function<std::optional<AutocompleteResponse>(const AutocompleteRequest&)>;
 
+  /// Compatibility no-op; structured autocomplete has no stored payload to clear.
   void clearAutocompleteData() {}
+  /// Clear generic autocomplete entries and their search terms.
   void clearAutocompleteEntries() {
     autocompleteEntries_.clear();
     autocompleteSearchTerms_.clear();
@@ -837,16 +937,26 @@ public:
    * @return A vector of Shortcut objects representing the default shortcuts.
    */
   static std::vector<Shortcut> getDefaultShortcuts();
+  /// Return the static default dark syntax palette.
   static const Palette& getDarkPalette();
 
   // Callbacks
+  /// Legacy identifier-hover callback slot; current rendering does not invoke it.
   std::function<void(TextEditor*, std::string_view)> onIdentifierHover;
+  /// Legacy identifier-hover availability slot; current rendering does not read it.
   std::function<bool(TextEditor*, std::string_view)> hasIdentifierHover;
+  /// Legacy expression-hover callback slot; current rendering does not invoke it.
   std::function<void(TextEditor*, std::string_view)> onExpressionHover;
+  /// Legacy expression-hover availability slot; current rendering does not read it.
   std::function<bool(TextEditor*, std::string_view)> hasExpressionHover;
+  /// Legacy modified-click callback slot; current input handling does not invoke it.
   std::function<void(TextEditor*, std::string_view, Coordinates)> onCtrlAltClick;
-  std::function<void(TextEditor*)> onContentUpdate;
+  std::function<void(TextEditor*)>
+      onContentUpdate;  //!< Called for core edit updates, not full setText loads.
 
+  /// Delete a coordinate range and update core text-change state.
+  /// @param start First coordinate to delete.
+  /// @param end Coordinate after the deleted range.
   void deleteRange(const Coordinates& start, const Coordinates& end);
 
   /**

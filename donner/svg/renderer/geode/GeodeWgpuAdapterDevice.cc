@@ -665,12 +665,7 @@ std::shared_ptr<GeodeGpuRoot> SelectNativeVulkanRoot(
     std::fprintf(stderr, "[Geode/vulkan] No Vulkan device available.\n");
     return nullptr;
   }
-  GeodeGpuRootCapabilities capabilities;
-  capabilities.backend = GpuBackendKind::NativeVulkan;
-  capabilities.maxTextureDimension2D = nativeRoot->maxTextureDimension2D();
-  capabilities.isVulkan = true;
-  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState),
-                                        nullptr, std::move(nativeRoot));
+  return AdoptNativeVulkanRoot(std::move(nativeRoot), std::move(lostState));
 #else
   (void)options;
   (void)lostState;
@@ -770,6 +765,8 @@ std::string_view ProcessBackendRequest() {
 GpuBackendKind PlatformDefaultGpuBackendKind() {
 #if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
   return GpuBackendKind::NativeMetal;
+#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
+  return GpuBackendKind::NativeVulkan;
 #else
   return GpuBackendKind::TransitionalWgpu;
 #endif
@@ -883,9 +880,8 @@ namespace {
 gpu::Result<ResolvedBackend> ResolveBackend(const GpuRootSelection& options,
                                             std::string_view request,
                                             std::optional<GpuBackendKind> buildDefault) {
-  // A WebGPU surface provider can only be served by the transitional adapter. Apple's editor
-  // attaches its Metal layer without one, so its window and offscreen roots take the native
-  // default.
+  // A WebGPU surface provider can only be served by the transitional adapter. Native editor
+  // windows attach their platform surfaces without one, so their roots take the native default.
   ResolvedBackend resolved{options.compatibleSurface ? GpuBackendKind::TransitionalWgpu
                                                      : PlatformDefaultGpuBackendKind(),
                            BackendRequestSource::Default};
@@ -1109,6 +1105,26 @@ std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots& handles,
   borrowed.deviceLostCallbackToken = nullptr;
   const GeodeGpuRootCapabilities capabilities = QueryRootCapabilities(handles);
   return std::make_shared<GeodeGpuRoot>(std::move(borrowed), capabilities, std::move(lostState));
+}
+
+std::shared_ptr<GeodeGpuRoot> AdoptNativeVulkanRoot(
+    std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeRoot,
+    std::shared_ptr<gpu::DeviceLostState> lostState) {
+#if defined(__linux__) && !defined(__EMSCRIPTEN__)
+  if (nativeRoot == nullptr || lostState == nullptr || nativeRoot->lostState() != lostState) {
+    return nullptr;
+  }
+  GeodeGpuRootCapabilities capabilities;
+  capabilities.backend = GpuBackendKind::NativeVulkan;
+  capabilities.maxTextureDimension2D = nativeRoot->maxTextureDimension2D();
+  capabilities.isVulkan = true;
+  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState),
+                                        nullptr, std::move(nativeRoot));
+#else
+  (void)nativeRoot;
+  (void)lostState;
+  return nullptr;
+#endif
 }
 
 GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {

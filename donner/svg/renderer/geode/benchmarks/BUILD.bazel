@@ -1,0 +1,64 @@
+"""CPU draw-path benchmark using the shipped Geode fill pipeline."""
+
+load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_test", "donner_multi_transitioned_test")
+
+_GEODE_ONLY = select({
+    "//donner/svg/renderer/geode:geode_enabled": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+_BENCH_DEPS = [
+    "//donner/gpu",
+    "//donner/gpu:recording_device",
+    "//donner/gpu/shader:slug_fill_api",
+    "//donner/svg/renderer/geode:geode_device",
+    "@com_google_gtest//:gtest_main",
+]
+
+donner_cc_test(
+    name = "draw_cpu_benchmark_impl_correctness",
+    srcs = [
+        "DrawCpuCorrectness_tests.cc",
+        "DrawCpuWorkload.h",
+    ],
+    target_compatible_with = _GEODE_ONLY,
+    deps = _BENCH_DEPS,
+)
+
+donner_cc_test(
+    name = "draw_cpu_benchmark_impl_wallclock",
+    size = "large",
+    srcs = [
+        "DrawCpuWallclock_tests.cc",
+        "DrawCpuWorkload.h",
+    ],
+    tags = ["manual"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = _BENCH_DEPS + select({
+        "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
+        "@platforms//os:linux": ["//donner/gpu/vulkan:vulkan_device"],
+        "//conditions:default": [],
+    }),
+)
+
+donner_multi_transitioned_test(
+    name = "draw_cpu_benchmark_correctness",
+    dep = ":draw_cpu_benchmark_impl_correctness",
+    renderer_backend = "geode",
+)
+
+donner_multi_transitioned_test(
+    name = "draw_cpu_benchmark_wallclock",
+    size = "large",
+    dep = ":draw_cpu_benchmark_impl_wallclock",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+    tags = [
+        "manual",
+        "perf",
+        "perf_linux",
+    ],
+)
+
+donner_package()

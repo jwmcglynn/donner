@@ -1,13 +1,9 @@
 # Design: Donner Native GPU Runtime and Rust-Independent Build
 
-**Status:** Implementing. Metal renderer/editor parity and Vulkan Geode/renderer parity are
-qualified. The served and shipped editor and standalone Geode Wasm packages use the browser runtime
-without linking the C WebGPU wrapper. Unconstrained macOS Geode/editor roots default to native Metal.
-Linux editor presentation, the Linux native default, physical-browser qualification, and native
-production dependency closure remain.
-Cross-device registration works on Metal, the browser, the transitional adapter and Vulkan-owned
-images; Vulkan acquired frames refuse export. The end state retains one Linux test-only wgpu-native resvg
-comparison backend.\
+**Status:** Implementing. macOS Geode/editor roots select native Metal; unconstrained Linux roots
+select native Vulkan, and its editor presents through a surface-selected device. The editor and
+standalone Geode Wasm packages use the browser runtime without the C WebGPU wrapper.
+Hosted/integrated and physical-browser qualification and native Rust dependency closure remain.\
 **Created:** 2026-07-05\
 **Updated:** 2026-09-25\
 **Author:** Claude Fable 5.1\
@@ -26,10 +22,10 @@ it does not validate Donner's browser bridge.
 backend execution, and compile-time shader artifacts: every production shader is authored as WGSL
 and compiled during C++ constant evaluation into the WGSL, MSL, or SPIR-V projection its consumer
 links, with the host interface reflected from the same compile
-([WGSL shader compilation](../wgsl_compiler.md)). Native transitional `GeodeDevice` and editor
-presentation paths still depend on concrete WebGPU objects. Native shader execution tests
-therefore establish individual capabilities; they do not establish a complete
-native editor or a Rust-independent build.
+([WGSL shader compilation](../wgsl_compiler.md)). Production `GeodeDevice`, filter resource
+plumbing and texture caches use runtime handles. Transitional WebGPU objects still remain in some
+production construction paths, so native execution tests and local editor presentation do not
+establish a Rust-independent build.
 
 The target is an original C++20 runtime serving Donner's own rendering requirements. It is not a
 WebGPU C ABI implementation, and its shader compiler accepts a documented WGSL profile at build time
@@ -50,13 +46,14 @@ named shader tests; a test-only rounding kernel still runs on the browser GPU ag
 These shader gates do not replace browser editor pixels or physical-device qualification, and they
 do not prove the remaining production dependency closure is free of Rust-built archives.
 
-Metal renderer and editor parity and Vulkan renderer parity are qualified. macOS Geode and editor
-roots default to native Metal while explicit WebGPU requests remain available. The served and
-shipped editor and default standalone Geode WebAssembly packages select the browser runtime; their
-configured dependency closures and link actions exclude the C WebGPU wrapper. Linux editor
-presentation, its native default, physical-browser qualification, and removal of Rust-built GPU
-archives remain. The implementation checklist identifies those open boundaries; git history carries
-the delivery chronology.
+Metal renderer and editor parity and Vulkan renderer parity are qualified. macOS Geode/editor roots
+select native Metal, while explicit WebGPU requests remain available. Linux unconstrained roots
+select native Vulkan, and displayed editor windows use its surface-selected presentation device.
+The served and shipped editor and standalone Geode WebAssembly packages select the browser runtime;
+their configured dependency closures and link actions exclude the C WebGPU wrapper. The Linux-only
+`//donner/editor/tests:editor_window_vulkan_default_tests` gate checks unset and empty backend
+requests with real displayed frames at initial and resized extents. Hosted and integrated acceptance
+remain, as does removal of Rust-built GPU archives.
 
 ### Native parity
 
@@ -111,9 +108,9 @@ select it. Hosted and physical-browser qualification remain required. A native w
 not browser-backend evidence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
-paths now use their reviewed runtime resource boundaries. Linux editor presentation and native
-adapter consumers still need their production cutovers; the browser editor canvas and
-diagnostic readback already use the selected runtime.
+paths use their reviewed runtime resource boundaries. Linux editor presentation uses native Vulkan;
+the browser editor canvas and diagnostic readback use the selected runtime. Native adapter
+consumers remain.
 
 Strict Wasm-size qualification is deferred until production Rust removal. The browser-selected
 WebAssembly packages now exclude emdawnwebgpu's C++ WebGPU C API implementation, its JavaScript
@@ -154,13 +151,13 @@ lifetime, synchronization, memory-residency, security or privacy requirements.
 
 ## Next Steps
 
-1. Complete Linux Vulkan editor presentation and surface recovery. Metal renderer/editor and
-   Vulkan Geode/renderer parity have passed; the Linux native default remains a separate cutover.
+1. Qualify the merged Linux Vulkan editor presentation and native default through final integrated
+   acceptance.
 2. Move counters and the remaining shared renderer services behind backend-neutral ownership
    without merging logical tables, serials, caches, or retirement.
-3. Remove remaining transitional snapshot/readback registrations and raw presentation-target
-   binding, then select native Vulkan for the Linux production editor. The browser editor uses
-   the selected runtime; hosted and physical-browser qualification remain.
+3. Remove remaining transitional WebGPU consumers and finish hosted and physical-browser
+   qualification. The browser editor uses the selected runtime for presentation and diagnostic
+   readback.
 4. Remove the transitional WebGPU implementation and Rust-built GPU dependencies from
    production while retaining only the Linux test-only resvg comparison backend. Enforce
    configured dependency closure in CI, then complete integrated native/browser pixels,
@@ -450,8 +447,8 @@ reads. `//donner/gpu/vulkan/tests:vulkan_surface_tests` checks the acquired-fram
 and checks exact capture pixels without a manual backend override. The native suite passes with
 Khronos synchronization validation on lavapipe; focused registration and snapshot cases pass on
 Intel Vulkan. The concurrent case also passes under ThreadSanitizer. The Geode/renderer variants and Geode
-package pass on lavapipe and Intel Arc under validation. Linux editor presentation, root-lock
-performance and final integrated gates remain open.
+package pass on lavapipe and Intel Arc under validation. Root-lock performance and final integrated
+gates remain open.
 
 ### Resource plumbing and uploads
 
@@ -529,10 +526,9 @@ performance and final integrated gates remain open.
       consumer once the runtime ImGui renderer landed, so the vendored ImGui WebGPU backend target,
       the three patches that customized it, and the duplicated copy in the examples module are
       deleted.
-- [ ] Migrate frame composition off the raw WebGPU frame encoder so the editor records its whole
-      frame through the runtime. The clear, document underlay, chrome, UI and framebuffer readback
-      do on every tier; the browser's asynchronous diagnostic readback also uses the runtime.
-      Native transitional surface setup remains until its platform cutover.
+- [x] Migrate frame composition off the raw WebGPU frame encoder. Clear, document underlay,
+      chrome, UI, framebuffer readback and the browser's asynchronous diagnostic copy/map use
+      `gpu::Device`; `//donner/editor/tests:editor_window_tests_geode` owns native frame ordering.
 
 ### Native surfaces
 
@@ -544,7 +540,7 @@ performance and final integrated gates remain open.
       [PR #1272](https://github.com/jwmcglynn/donner/pull/1272) is merged, including owner-lifetime,
       synchronization and failure-retention repairs. Native qualification passes 674 cases across
       12 targets, including 69 surface cases, with no skips or synchronization diagnostics.
-      Production window integration remains a separate item.
+      The Linux window uses this surface backend; final integrated acceptance remains in the next item.
 - [x] Update `EditorWindow` to use acquired runtime textures directly. One presentation surface
       serves every platform through the `Device` surface hooks; a frame is carried as a runtime
       texture borrowed for that frame, and the surface reports its format and usage as runtime
@@ -555,51 +551,35 @@ performance and final integrated gates remain open.
       selects, on the presented and the offscreen arm on Apple (a host without a display renders
       both offscreen); a lost surface and a minimized window are
       driven through a scripted surface only, because no real window on the hosts these suites run
-      on produces either. The window still reaches the backend's wgpu objects for the platform
-      surface object off Apple and for the browser's diagnostic readback; on Apple it opens and
-      draws on the selected native device.
+      on produces either. The transitional desktop surface still uses wgpu handles for adapter
+      selection. Browser diagnostic readback uses deferred copy/map through `gpu::Device`; native
+      Metal and Vulkan windows draw through the selected runtime device.
 - [ ] Present the Linux editor through a native Vulkan window under
-      [#1409](https://github.com/jwmcglynn/donner/issues/1409). Surface-result root-loss
-      propagation ([PR #1532](https://github.com/jwmcglynn/donner/pull/1532)) and an opt-in
-      presentation-capable shared root ([PR #1533](https://github.com/jwmcglynn/donner/pull/1533))
-      are open foundations, not evidence that the editor presents yet. With GLFW initialized and
-      a `GLFW_NO_API` window alive, copy `glfwGetRequiredInstanceExtensions` names into the root
-      selection before creating its Vulkan instance. Require native Vulkan and an instance-only
-      presentation probe, without committing to a physical device, queue family or logical device.
-      Create the `VkSurfaceKHR` with `glfwCreateWindowSurface` against that exact instance, then
-      enumerate physical devices and graphics queue families using
-      `vkGetPhysicalDeviceSurfaceSupportKHR` for this surface. Select a candidate that can present
-      and satisfies the swapchain extension and required runtime features before creating its
-      logical device and completing the shared root. The opt-in #1533 root is a foundation; its
-      first-graphics-queue selection needs this surface-aware, two-stage extension for editor
-      windows. Do not reject a usable later queue or physical device because the first choice
-      cannot present. If no candidate exists before root completion, destroy `VkSurfaceKHR` before
-      the provisional instance, then the GLFW window and its runtime claim on the main thread;
-      no logical device exists on this path. Before `GeodeDevice::CreateOverSelectedRoot` compiles
-      its pipelines, query the selected device's actual surface formats and choose a supported
-      runtime texture format.
-      Fail if no compatible candidate or format exists; do not call the existing pre-Geode
-      `chooseConfiguration(wgpu::Adapter&)` for a native root. Build the first Geode context for
-      that format, then add a backend-neutral factory for a second logical Geode context over its
-      `GeodePhysicalDeviceOwner` and the same format. The current framebuffer
-      `CreateFromExternal(GeodeEmbedConfig)` path requires WebGPU handles and cannot serve native
-      Vulkan. At runtime surface attachment, query capabilities again and require the configured
-      format to match the already compiled pipelines; settle usage, extent and alpha mode there.
-      A rejected capability, changed format or failed creation must refuse the native window path
-      rather than silently select another backend. Resize/minimize and outdated/lost results
-      rebuild or stop the surface through the runtime's existing frame contract; a replacement
-      format change requires rebuilding both Geode contexts and their pipelines before any frame.
+      [#1409](https://github.com/jwmcglynn/donner/issues/1409). The implementation and hosted PR
+      qualification are merged; final combined-tree acceptance remains. A `GLFW_NO_API` window
+      supplies its required instance extensions to an instance-only probe, then creates its
+      `VkSurfaceKHR` before physical-device, queue-family, or logical-device selection. The native
+      root selects a graphics queue that presents to that exact surface and a physical device
+      offering the required swapchain features and a runtime-supported surface format; later
+      candidates remain eligible when an earlier one cannot serve the window. Ordinary failed
+      selection destroys the surface before the provisional instance and GLFW window, without a
+      logical device. The selected format is fixed before Geode compiles pipelines; both the
+      document context over the selected root and the second UI context built through
+      `CreateOverPhysicalDeviceOwner` share the physical root and loss state. Attachment refuses
+      capabilities that do not match the pipeline format rather than changing backend. The frame
+      contract reconfigures resized/outdated surfaces, skips zero extents, and stops a lost
+      surface. A replacement format requires rebuilding both contexts before another frame.
 
 #### Linux Vulkan external-surface retirement gate
 
 The editor owns the GLFW window and its `VkSurfaceKHR`; Vulkan owns the swapchain it builds over
 that surface. `Device::destroySurface()` consuming a runtime handle is **not** proof that the
 native swapchain was destroyed: an uncertain queue or failed completion proof can move it to
-Vulkan's retained-surface list. Add a one-shot retirement disposition tied to the exact external
-surface and owning shared root. It starts unattached, becomes live only on explicit backend
-acceptance before any call that can create a swapchain or retain the surface. An error after
-acceptance still requires a retirement disposition. It becomes retired only after all swapchain
-objects and their pending submissions are destroyed. On an unproved native teardown it becomes
+Vulkan's retained-surface list. A one-shot retirement disposition is tied to the exact external
+surface and shared root. It starts unattached and becomes live before the backend's first surface
+query. A synchronous failure before a swapchain child exists retires it; successful retirement
+follows destruction of all swapchain objects and pending submissions. A terminal released state
+prevents platform destruction from racing backend acceptance. An unproved native teardown becomes
 unproven, a terminal state for the editor's platform capsule. A later Vulkan-side proof may
 release backend objects but cannot authorize asynchronous destruction of the quarantined GLFW
 resources; the capsule stays until process exit. The backend publishes successful retirement
@@ -612,29 +592,28 @@ On proven retirement, the editor stops frame work, returns any acquired frame, d
 runtime surface, verifies the native retirement disposition, then destroys `VkSurfaceKHR`, the
 GLFW window, the process-wide GLFW runtime claim, and finally the selected root/instance. GLFW
 window operations and destruction stay on the window's main thread. A bounded failure to prove
-retirement retains a typed lease of the surface, window, root and GLFW claim for process lifetime;
-no later window may call `glfwTerminate` while that lease exists, and a later incompatible
+retirement transfers a preallocated typed lease of the surface, window, root and GLFW claim to a
+process-lifetime list without allocating. No later window may call `glfwTerminate` while that
+lease exists, and a later incompatible
 `GLFW_PLATFORM_NULL` initialization is refused. This path reports the failed close without
 destroying native prerequisites or aborting the process. The order follows the
 [Vulkan WSI surface lifetime](https://docs.vulkan.org/spec/latest/chapters/VK_KHR_surface/wsi.html)
 and [GLFW Vulkan window contracts](https://www.glfw.org/docs/latest/group__vulkan.html).
 
-Extend `//donner/gpu/vulkan/tests:vulkan_surface_tests` with deterministic native-retirement
-proof, failed proof, acceptance-boundary and duplicate-ownership cases. Include a selection case
-whose first graphics queue cannot present to the actual surface but a later queue or physical
-device can, plus refusal when none can with pre-root cleanup order; no logical device is created
-before the surface query. Extend `//donner/editor/tests:editor_window_tests_geode` with explicit
-and destructor release order,
-multiwindow GLFW shutdown, retained-window quarantine, concurrent retirement observation, and
-pre-Geode format selection matching the runtime surface format at attach and rebuild. Extend
-`//donner/svg/renderer/geode:geode_device_tests` to require the UI framebuffer's second logical
-context to share the native Vulkan physical root and loss state without WebGPU embed handles.
-Add a Linux `//donner/editor/tests:editor_window_vulkan_surface_tests` CI target for real
-Xvfb/lavapipe present, resize/recreate and zero-extent window behavior, with deterministic
-lost/timeout result injection at the surface boundary; qualify the same path on Intel Arc with
-Khronos synchronization validation and no VUID or synchronization hazard. The Linux default
-stays on the current path until these gates pass; the opt-in root permits qualification and a
-later default flip without changing Metal or browser surface ownership.
+`//donner/gpu/vulkan/tests:vulkan_surface_tests` covers surface-aware later-queue/device/format
+selection, refusal before logical-device creation, registration and one-shot retirement,
+concurrent close before the first backend query, and failed-proof retention. Its focused Linux
+run passes 49 cases; `//donner/svg/renderer/geode:geode_device_tests` passes the shared-root UI
+context case. `//donner/editor/tests:editor_window_tests_geode` owns scripted loss, timeout and
+zero-extent behavior. The nonmanual Linux
+`//donner/editor/tests:editor_window_vulkan_surface_tests` runs real Xvfb presentation and
+asserted resize extent, plus scripted zero-frame handling, multiwindow GLFW lifetime and terminal
+quarantine. Real lost and minimized GLFW transitions remain unexercised. It
+passes five cases on lavapipe and five on Intel Arc under Khronos synchronization validation,
+with no logged VUID or synchronization hazard. Hosted Linux installs Xvfb and xauth; a tagged
+hosted lane runs the target when the ordinary Linux job routes to remote execution. Final integrated
+editor acceptance still gates this item. The native Linux default has a separate integrated
+acceptance gate.
 
 ### Browser bridge
 
@@ -697,14 +676,15 @@ later default flip without changing Metal or browser surface ownership.
 
 ### Device ownership and dependency closure
 
-- [x] Share one physical WebGPU root and sticky loss state across native editor contexts while
+- [x] Share one physical GPU root and sticky loss state across native editor contexts while
       preserving their independent handle tables, serials, caches, counters, and retirement.
       Headless creation uses the same owner; borrowed embedders retain host ownership; under
       WebAssembly each worker's contexts share the browser device that worker obtained.
 - [x] Register owned Vulkan images across runtime devices over one selected root. Registration,
       snapshot pixels, in-flight lifetime, acquired-frame refusal, synchronization validation and
       Geode renderer parity pass on lavapipe and a discrete GPU. Acquired swapchain frames remain
-      unexportable; Linux editor presentation is separate work.
+      unexportable; the Linux editor uses the same shared native root locally, with hosted and
+      integrated acceptance pending.
 - [ ] Make the selected `gpu::Device` the backend owner. Turn `GeodeDevice` into backend-neutral
       renderer services for counters, caches, dummy resources, and deferred retirement; update
       headless and embedded construction. The selected device owns its backend root
@@ -727,10 +707,13 @@ later default flip without changing Metal or browser surface ownership.
       suite with a Geode variant passes on native Metal under Metal API and shader validation,
       with the same case counts as the transitional adapter
       ([#1404](https://github.com/jwmcglynn/donner/issues/1404)).
-- [ ] Flip each platform's default after its renderer and editor suites pass. macOS now selects
-      native Metal for unconstrained Geode/editor roots; an explicit WebGPU request still selects
-      the transitional adapter. The browser editor already selects Browser. Linux Vulkan editor
-      presentation and its native default remain.
+- [ ] Flip each platform's default after its renderer and editor suites pass. macOS selects native
+      Metal for unconstrained Geode/editor roots; an explicit WebGPU request still selects the
+      transitional adapter. The browser editor selects Browser. On Linux, unconstrained roots
+      select native Vulkan and displayed editor windows use a surface-selected presentation root.
+      The nonmanual `//donner/editor/tests:editor_window_vulkan_default_tests` target runs fresh
+      processes with the backend unset and empty, asserting nonempty frames at initial and resized
+      extents. The platform defaults are merged; final integrated qualification gates completion.
 - [x] The Linux-only `resvg_test_suite_wgpu_reference_linux` target selects the test-only
       wgpu-native backend by name and fails closed if another backend is selected. It runs the
       same GeodeGolden case IDs and reviewed per-scene golden/pixelmatch rules as native Vulkan on
@@ -749,7 +732,7 @@ later default flip without changing Metal or browser surface ownership.
       obsolete rules and orphaned code from every production and non-test closure. Preserve only
       pinned Linux archive(s) and the API wrapper needed by the resvg comparison target. Their
       exported cc targets/aliases are `testonly`, Linux-compatible and visible only to the test
-      package; after replacing the native wgpu WGSL validator, remove macOS archive aliases and
+      package; remove macOS archive aliases now that the WGSL validator has been replaced, and
       prohibit any editor, Wasm or shipped-artifact edge. Pin the actual fetch rule and generated
       lock to reviewed bytes with nonempty matching SHA-256 checksums.
 - [ ] Make unexpected Rust-built archives blocking in `check_no_rust_dependencies.py`. Add the
@@ -935,8 +918,9 @@ and physical-hardware observations are evidence with their stated limits, not un
 ## Testing and Validation
 
 Extend existing targets where they own the changed behavior. The native mapping, Metal/Vulkan surface and
-browser backend targets own their merged hooks. Linux production window integration, browser
-hosted/physical-browser gates, and wrapper removal remain active. The GPU operation and
+browser backend targets own their merged hooks. Linux window implementation passed local Xvfb and
+hosted PR execution; its final integrated gate, browser hosted/physical-browser gates, and wrapper
+removal remain active. The GPU operation and
 shader manifests must use the
 complete repository input set, with
 `//tools/gpu_inventory:manifest_freshness_tests` as the freshness gate.
@@ -950,8 +934,8 @@ complete repository input set, with
 | Snapshot/target lifetime, alpha, cropping, refusal             | `//donner/svg/renderer/tests:renderer_geode_tests`; replace adapter-only coverage with native runtime execution as each caller migrates.                                                                                                                                                                                                                                          |
 | Filter resource ordering, scratch and working sets             | `//donner/svg/renderer/geode:geode_filter_engine_tests`, `//donner/svg/renderer/tests:renderer_geode_tests`, and native filter execution suites.                                                                                                                                                                                                                                  |
 | Upload reuse, UI texture lifetime and thumbnails               | `//donner/editor/tests:gl_texture_cache_tests`, `//donner/editor/tests:layer_thumbnail_golden_tests`; extend them for runtime-backed resources.                                                                                                                                                                                                                                   |
-| Mapping, loss, cancellation and native surfaces                | Shared `gpu_tests`, native mapping suites and owning Metal/Vulkan surface tests; Linux editor surface execution remains required. `//donner/gpu/browser:browser_tests` owns identifier, ownership, mapping and loss behavior; selected browser editor lanes exercise the runtime, with hosted and physical-browser gates remaining.                                               |
-| Editor ordering and presentation                               | The explicit Geode editor lane below, plus the browser rendering/interaction lanes for the selected bridge.                                                                                                                                                                                                                                                                       |
+| Mapping, loss, cancellation and native surfaces                | Shared `gpu_tests`, native mapping suites and owning Metal/Vulkan surface tests; `//donner/editor/tests:editor_window_vulkan_surface_tests` passes local and hosted CI; final integration pending. `//donner/gpu/browser:browser_tests` owns identifier, ownership, mapping and loss behavior; selected browser editor lanes exercise the runtime.                                |
+| Editor ordering and presentation                               | The explicit Geode editor lane below, the Linux Xvfb surface target above, and the browser rendering/interaction lanes for the selected bridge.                                                                                                                                                                                                                                   |
 | Structural counters, memory, timing and size                   | `//donner/gpu/baseline:baseline_counters_tests`, `//donner/svg/renderer/geode:geode_perf_tests`, and the paired measurements required by the cutover gates.                                                                                                                                                                                                                       |
 | Dependency closure                                             | `//tools/gpu_inventory:check_no_rust_dependencies_tests`, the blocking lexical verifier, planned required `CI / no-rust-configured-closure` job over configured product roots, generated CMake validation, and source-archive/artifact evidence.                                                                                                                                  |
 
@@ -963,6 +947,63 @@ Chromium test compiles all 27 exact emitted WGSL strings through `GPUShaderModul
 invalid-source and wrong-entry controls. It also executes the test-only round-half-away compute
 module over half-boundary values and compares readback with a CPU reference. Native Metal/Vulkan
 execution and real browser renderer pixels retain their separate verification roles.
+
+The per-draw CPU split is `//donner/svg/renderer/geode/benchmarks:draw_cpu_benchmark_correctness`
+in the normal Bazel test graph and the `perf`-tagged
+`//donner/svg/renderer/geode/benchmarks:draw_cpu_benchmark_wallclock` in the nightly Perf
+workflow. The wall-clock target records 1, 100 and 10,000 draws through the shipped SlugFill
+pipeline and all eleven reflected bind slots, reports command-recording and submission CPU
+nanoseconds per draw separately, and checks each submission's draw count through `DeviceObserver`.
+The Linux Perf lane runs native Vulkan and macOS runs native Metal; the recording backend runs on
+both. Only the Linux resvg pixelmatch oracle retains wgpu-native for ongoing validation.
+
+First local `-c opt` results on an Apple M4 Pro (2026-09-25; median of three post-warmup samples,
+nanoseconds per draw) are:
+
+| Backend   |  Draws | Record | Submit |
+| --------- | -----: | -----: | -----: |
+| Recording |      1 |  2,583 |  8,042 |
+| Recording |    100 |    258 |    541 |
+| Recording | 10,000 |    177 |    359 |
+| Metal     |      1 |  3,916 | 58,292 |
+| Metal     |    100 |    403 |    403 |
+| Metal     | 10,000 |    133 |     78 |
+
+Hosted Linux `--config=ci -c opt` [Perf run 36214557535](https://github.com/jwmcglynn/donner/actions/runs/36214557535)
+on Ubuntu 24.04 x86_64 (median of three post-warmup samples, nanoseconds per draw) passed all
+three cases. The test pins `WGPU_BACKEND=vulkan`; wgpu-native reported the Mesa llvmpipe CPU
+adapter. The native Vulkan case executed separately on that runner:
+
+| Backend        |  Draws | Record | Submit |
+| -------------- | -----: | -----: | -----: |
+| Recording      |      1 |  1,453 |  8,356 |
+| Recording      |    100 |    254 |    408 |
+| Recording      | 10,000 |    238 |    380 |
+| Vulkan         |      1 |  5,400 | 25,377 |
+| Vulkan         |    100 |    337 |    345 |
+| Vulkan         | 10,000 |    245 |    103 |
+| wgpu reference |      1 |  5,180 | 31,048 |
+| wgpu reference |    100 |    303 |    400 |
+| wgpu reference | 10,000 |    233 |     84 |
+
+The wgpu rows are a one-time transitional comparison from that run. The ongoing per-draw Perf
+target runs only the recording and native backends; wgpu-native remains in the Linux resvg oracle.
+
+The recording backend's submission includes command serialization, while Metal's includes driver
+encoding and queue submission. These microbenchmarks do not yet justify changing the compositor's
+0.05 ms per-draw-op estimate: that estimate also covers scene preparation and raster work. The
+paired frame and residency gates below still decide cutover performance.
+
+The WebGPU fixture directly exercises the shipped checkerboard pipelines and WGSL modules or
+pipelines for `color_space_convert`, `filter_color_matrix`, `filter_resolve`, `flood`,
+`gaussian_blur`, `morphology`, `offset`, `subregion_clip`, and `tile`. Its test-only SolidFill,
+ColorMatrix, float-storage and math modules do not extend that production-family list. The
+following production families have no direct module or pipeline assertion in that fixture:
+`component_transfer`, `composite`, `convolve_matrix`, `diffuse_lighting`, `displacement_map`,
+`drop_shadow`, `filter_blend`, `filter_image`, `image_blit`, `merge`, `slug_fill`,
+`slug_gradient`, `slug_mask`, `snapshot_unpremultiply`, `specular_lighting`, and `turbulence`.
+Their compile-time artifacts and other runtime tests are separate evidence; the non-Rust
+replacement for this fixture must validate every shipped WGSL projection before its removal.
 
 The Linux native Vulkan resvg gate selects `DONNER_GPU_BACKEND=vulkan` with
 `DONNER_REQUIRE_VULKAN=1`; the macOS native Metal gate selects `DONNER_GPU_BACKEND=metal` with
