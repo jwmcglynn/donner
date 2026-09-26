@@ -117,8 +117,12 @@ std::unique_ptr<WgpuBaselineCapturer> WgpuBaselineCapturer::Create() {
 #else
   return nullptr;
 #endif
-  std::unique_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateOverSelectedRoot(
-      geode::SelectGpuRoot(selection), gpu::TextureFormat::RGBA8Unorm);
+  std::shared_ptr<geode::GeodeGpuRoot> root = geode::SelectGpuRoot(selection);
+  if (root == nullptr) {
+    return nullptr;
+  }
+  std::unique_ptr<geode::GeodeDevice> device =
+      geode::GeodeDevice::CreateOverSelectedRoot(std::move(root), gpu::TextureFormat::RGBA8Unorm);
   if (!device) {
     return nullptr;
   }

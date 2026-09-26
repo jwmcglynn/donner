@@ -82,8 +82,12 @@ std::optional<std::vector<uint8_t>> RenderNativeGeodeBaseline() {
   geode::GpuRootSelection selection;
   selection.label = "VulkanSolidFillProductionReference";
   selection.backend = geode::GpuBackendKind::NativeVulkan;
-  auto device = geode::GeodeDevice::CreateOverSelectedRoot(geode::SelectGpuRoot(selection),
-                                                           gpu::TextureFormat::RGBA8Unorm);
+  std::shared_ptr<geode::GeodeGpuRoot> root = geode::SelectGpuRoot(selection);
+  if (root == nullptr) {
+    return std::nullopt;
+  }
+  auto device =
+      geode::GeodeDevice::CreateOverSelectedRoot(std::move(root), gpu::TextureFormat::RGBA8Unorm);
   if (!device) {
     return std::nullopt;
   }
