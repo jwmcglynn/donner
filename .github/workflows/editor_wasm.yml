@@ -82,10 +82,9 @@ jobs:
             //tools/ci:editor_wasm_shipped_browser_audit
           bazelisk test --config=wasm-size --test_output=errors \
             //tools/ci:wasm_size_tests
-          # Temporary payload measurement while the package still links the transitional
-          # WebGPU implementation. Remove only this test_arg once that dependency is gone;
-          # //tools:ci_runtime_workflow_tests reads the configured dependency graph and fails
-          # until it is removed and the strict payload ceilings are restored.
+          # Temporary payload measurement while the production Rust-built GPU dependencies are
+          # removed and the package is remeasured. Remove only this test_arg after production Rust-built GPU dependencies
+          # are removed and strict payload ceilings are restored.
           bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \
             --test_arg=--payload-budget-mode=measure \
             //tools/ci:editor_wasm_size_tests
@@ -115,14 +114,14 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      # The browser GPU bridge's link probes resolve every entry point the bridge declares against
-      # its JavaScript library, once without threads and once with them, as the editor's module is
-      # built. The editor does not link the bridge yet, so nothing else on a pull request catches an
-      # entry point one half no longer declares, or a threaded path that no longer builds.
+      # Both bridge link probes resolve every JavaScript entry point, with and without threads.
+      # The configured audit also pins Browser selection in the standalone Geode module.
       - name: Link the browser GPU bridge
         run: |
           bazelisk build --config=wasm-geode \
             //tools/ci:browser_bridge_link_probes
+          bazelisk test --config=wasm-geode --test_output=errors \
+            //tools/ci:geode_wasm_browser_default_audit
 
   test:
     runs-on: macos-26

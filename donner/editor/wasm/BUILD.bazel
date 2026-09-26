@@ -2,7 +2,7 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_python//python:defs.bzl", "py_binary", "py_test")
-load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test", "configured_dependency_labels")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//tools/http:serve_http.bzl", "serve_http")
 load(
@@ -52,11 +52,6 @@ _EMDAWNWEBGPU_LINKOPTS = [
     "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_struct_info.js)",
     "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_sig_info.js)",
     "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu.js)",
-    "-sASYNCIFY",
-    # WebGPU readback can suspend from the full EditorShell frame stack. The
-    # Emscripten's 4 KiB default overflows before waitAny rewinds. The
-    # readback smoke test passes at 8 KiB; use 16 KiB for 2x headroom.
-    "-sASYNCIFY_STACK_SIZE=16384",
 ]
 
 # Fixed size of the editor's Wasm linear memory. See the `INITIAL_MEMORY` /
@@ -146,6 +141,9 @@ _EDITOR_LINKOPTS = [
     # Geode's synchronous WebGPU bridge yields while creating devices and
     # waiting for mapped buffers.
     "-sASYNCIFY",
+    # Browser runtime device requests and mapped-buffer readback can suspend from the full
+    # EditorShell frame stack. The 4 KiB default overflows; 16 KiB retains measured headroom.
+    "-sASYNCIFY_STACK_SIZE=16384",
     # Linear memory is FIXED: `INITIAL_MEMORY == MAXIMUM_MEMORY` with
     # `ALLOW_MEMORY_GROWTH=0`. Growth is not a slow path here, it is the crash.
     #
@@ -165,7 +163,7 @@ _EDITOR_LINKOPTS = [
     "-sINITIAL_MEMORY={}".format(_EDITOR_FIXED_MEMORY_BYTES),
     "-sMAXIMUM_MEMORY={}".format(_EDITOR_FIXED_MEMORY_BYTES),
     "-sOFFSCREENCANVAS_SUPPORT=1",
-] + _EMDAWNWEBGPU_LINKOPTS
+]
 
 cc_library(
     name = "notice_inputs",
@@ -187,11 +185,11 @@ editor_wasm_geode_only_guard(
 cc_binary(
     name = "_editor_wasm_binary",
     srcs = ["//donner/editor:main.cc"],
-    additional_linker_inputs = _EMDAWNWEBGPU_JS_LIBS + [":_geode_only_guard"] + select({
+    additional_linker_inputs = [":_geode_only_guard"] + select({
         "//donner/svg/renderer/geode:browser_backend_enabled": [
             "//donner/gpu/browser:library_donner_gpu.js",
         ],
-        "//conditions:default": [],
+        "//conditions:default": _EMDAWNWEBGPU_JS_LIBS,
     }),
     copts = [
         "-pthread",
@@ -202,7 +200,7 @@ cc_binary(
         "//donner/svg/renderer/geode:browser_backend_enabled": [
             "--js-library=$(execpath //donner/gpu/browser:library_donner_gpu.js)",
         ],
-        "//conditions:default": [],
+        "//conditions:default": _EMDAWNWEBGPU_LINKOPTS,
     }),
     tags = [
         "manual",
@@ -307,6 +305,25 @@ configured_dependency_audit_test(
     target = ":wasm_web_package",
 )
 
+# Browser-selected editor bytes cannot depend on the transitional C API or its WebGPU-C++ wrapper.
+configured_dependency_audit_test(
+    name = "wasm_browser_no_c_webgpu_audit_test",
+    size = "small",
+    forbidden_packages = [
+        "//third_party/emdawnwebgpu",
+        "//third_party/webgpu-cpp",
+    ],
+    required = [
+        "//donner/gpu/browser:browser_device",
+        "//donner/gpu/browser:emscripten_browser_bridge",
+    ],
+    target = ":wasm_web_package",
+    target_compatible_with = select({
+        ":wasm_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+)
+
 genquery(
     name = "_wasm_package_size_test_definition",
     testonly = True,
@@ -326,12 +343,6 @@ genrule(
     srcs = [":_wasm_package_size_test_definition"],
     outs = ["wasm_package_size_test_arguments.txt"],
     cmd = "grep -E '^[[:space:]]*args = ' $< > $@ || true",
-)
-
-configured_dependency_labels(
-    name = "wasm_package_dependency_labels",
-    testonly = True,
-    target = ":_wasm_web_package_for_serve",
 )
 
 py_test(
@@ -409,16 +420,11 @@ py_test(
         # Measured catalog-delivery package: Wasm 9,105,242 raw / 3,026,849 gzip;
         # JS 175,960 raw / 49,695 gzip; complete package 11,156,939 raw bytes.
         # Keep about one percent growth room around the approximately 3 MB module goal.
-        # The raw budgets are temporarily wider while the editor carries both the
-        # transitional WebGPU adapter and the runtime-native UI path (measured
-        # 9,228,288 raw / 11,279,902 total at the cutover). TODO: return them to
-        # 9,200,000 / 11,270,000 once the transitional adapter is removed.
+        # These raw budgets remain measurement-only until production Rust-built GPU dependencies
+        # are removed and the shipped package is remeasured.
         "--max-wasm-raw-bytes",
         "9240000",
-        # Temporarily wider: the merged tree measures 3,060,523 compressed
-        # bytes, 523 over the goal, from main-side editor growth plus the
-        # shader-linkage payload. TODO: return to 3,060,000 once re-tightened
-        # or accepted.
+        # The compressed ceiling is restored after the same post-Rust remeasurement.
         "--max-wasm-gzip-bytes",
         "3100000",
         "--max-wasm-function-body-bytes",

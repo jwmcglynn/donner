@@ -694,11 +694,12 @@ async function openEditor(
   }
   await page.goto(editorUrl.toString(), { waitUntil: "domcontentloaded" });
   await expect.poll(() => page.evaluate(() => window.__donnerCanStartWasm)).toBe(true);
-  // Playwright's bundled WebKit ships no WebGPU, so the Geode-only package
-  // cannot boot there; real-Safari validation covers that engine. Skip
-  // instead of stalling on the loading screen.
   const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
-  test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
+  if (process.env.DONNER_WASM_REQUIRE_WEBGPU === "1") {
+    expect(hasWebGpu, "required browser lane must expose navigator.gpu").toBe(true);
+  } else {
+    test.skip(!hasWebGpu, "Browser does not expose navigator.gpu");
+  }
   await expect(page.locator("canvas#canvas")).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => window.__donnerFirstFramePresented === true), {

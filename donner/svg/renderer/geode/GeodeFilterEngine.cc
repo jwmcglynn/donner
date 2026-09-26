@@ -47,7 +47,6 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeShaderSelection.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 

@@ -5538,7 +5538,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsWrongFormatWithoutConsumingTheTe
   gpu::Texture texture = std::move(created).result();
   {
     auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-        sharedDevice(), std::move(texture), {4, 4}, wgpu::TextureFormat::BGRA8Unorm,
+        sharedDevice(), std::move(texture), {4, 4}, gpu::TextureFormat::BGRA8Unorm,
         AlphaType::Premultiplied);
     EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
     EXPECT_THAT(texture.isValid(), testing::IsTrue());
@@ -5622,7 +5622,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsNullOwnerAndUnsupportedFormatWit
     {
       auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
           missingOwner ? nullptr : sharedDevice(), std::move(texture), {4, 4},
-          missingOwner ? wgpu::TextureFormat::RGBA8Unorm : wgpu::TextureFormat::R8Unorm,
+          missingOwner ? gpu::TextureFormat::RGBA8Unorm : gpu::TextureFormat::R8Unorm,
           AlphaType::Premultiplied);
       EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
       EXPECT_THAT(texture.isValid(), testing::IsTrue());

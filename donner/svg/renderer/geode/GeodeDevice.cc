@@ -13,12 +13,16 @@
 
 #include "donner/gpu/GpuLimits.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
-#include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#ifdef DONNER_GEODE_BROWSER_BACKEND
+#include "donner/svg/renderer/geode/GeodeBrowserRoot.h"
+#else
+#include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#endif
 
 namespace donner::geode {
 
@@ -42,6 +46,10 @@ std::shared_ptr<GeodePhysicalDeviceOwner> GeodePhysicalDeviceOwner::Create(
 
 GeodePhysicalDeviceOwner::~GeodePhysicalDeviceOwner() = default;
 
+bool GeodePhysicalDeviceOwner::hasBackendDevice() const {
+  return root_->hasBackendDevice();
+}
+
 const std::shared_ptr<GeodeDeviceLostState>& GeodePhysicalDeviceOwner::lostState() const {
   return root_->lostState();
 }
@@ -51,13 +59,6 @@ GeodeRuntimeDevice GeodePhysicalDeviceOwner::createLogicalDevice() const {
 }
 
 namespace {
-
-template <typename Handle>
-void DestroyResourceBacking(ScopedWgpuHandle<Handle>& handle) {
-  if (handle) {
-    handle.get().destroy();
-  }
-}
 
 /// Destroys a pooled staging texture's backend object and drops the view naming it.
 ///
@@ -232,9 +233,11 @@ GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevic
   UTILS_RELEASE_ASSERT(
       (transitionalAdapter != nullptr) ==
       (physicalDevice_->root().capabilities().backend == GpuBackendKind::TransitionalWgpu));
+#ifndef DONNER_GEODE_BROWSER_BACKEND
   UTILS_RELEASE_ASSERT(transitionalAdapter == nullptr ||
                        (static_cast<gpu::Device*>(transitionalAdapter) == &runtimeDevice &&
                         &transitionalAdapter->root() == &physicalDevice_->root()));
+#endif
   // A context rendering through the owner's root device retires into the owner's retirement,
   // which lives as long as that device does; one with a device of its own has its own.
   handleRetirement_ = ownedRuntimeDevice != nullptr
@@ -362,7 +365,7 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
                                    "GPU queue did not go idle within the bounded wait deadline");
     return GpuWaitResult::TimedOut;
   }
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) && !defined(DONNER_GEODE_BROWSER_BACKEND)
   // emdawnwebgpu's poll yields the Asyncify thread for one browser task and
   // its return value does not report queue-idle, so a drain loop keyed on it
   // could spin for the full timeout every call. Keep the single poll-yield
@@ -371,7 +374,7 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
   (void)timeout;
   transitionalAdapter_->pollSuspending(true);
   return GpuWaitResult::Complete;
-#else
+#elif !defined(__EMSCRIPTEN__)
   const auto queueWaitStart = std::chrono::steady_clock::now();
   const GpuWaitResult result =
       BoundedGpuWait([this] { return transitionalAdapter_->pollSuspending(false); }, timeout);
@@ -386,6 +389,8 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
                                    "GPU queue did not go idle within the bounded wait deadline");
   }
   return result;
+#else
+  UTILS_UNREACHABLE();
 #endif
 }
 
@@ -795,6 +800,11 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
 }
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedConfig& config) {
+#ifdef DONNER_GEODE_BROWSER_BACKEND
+  (void)config;
+  std::fprintf(stderr, "[Geode/browser] External WebGPU roots are not supported\n");
+  return nullptr;
+#else
   if (config.physicalDevice != nullptr) {
     // A config that names both a shared owner and explicit roots is stating they are the same
     // objects; a mismatch means one of the two is wrong, and rendering through the wrong one is
@@ -826,6 +836,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
     return nullptr;
   }
   return CreateOverSelectedRoot(std::move(root), GpuTextureFormatFromWgpu(config.textureFormat));
+#endif
 }
 
 void GeodeDevice::initSharedBindSlotResources() {

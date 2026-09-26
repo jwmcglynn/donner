@@ -34,6 +34,7 @@ exports_files(
     [
         "GeodeDevice.cc",
         "GeodeDevice.h",
+        "GeodeBrowserRoot.cc",
         "GeodeWgpuAdapterDevice.cc",
     ],
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
@@ -52,9 +53,8 @@ config_setting(
     visibility = ["//visibility:public"],
 )
 
-# Build setting that selects the Donner GPU runtime's browser backend for headless work: selections
-# with no surface to present to, such as the editor's raster worker and the snapshot capture
-# contexts beside it. The window stays on the transitional adapter. WebAssembly only; it links the
+# Build setting that selects the Donner GPU runtime's browser backend for WebAssembly work,
+# including the editor canvas, its raster worker and the standalone Geode module. It links the
 # browser bridge into geode_device, and a binary that sets it links the bridge's JavaScript library
 # (see //donner/gpu/browser:emscripten_browser_bridge).
 bool_flag(
@@ -300,7 +300,6 @@ donner_cc_library(
         ":geode_path_encoder",
         ":geode_resident_path_component",
         "//donner/base",
-        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -399,22 +398,24 @@ donner_cc_library(
         "GeodeFilterEngine.cc",
         "GeodeImagePipeline.cc",
         "GeodePipeline.cc",
-        # TEMPORARY transition adapter (see GeodeWgpuAdapterDevice.h for the
-        # removal gates). Folded into geode_device like the pipelines so
-        # GeodeDevice can own the adapter alongside the shared pipelines it
-        # constructs, without a circular dependency.
-        "GeodeWgpuAdapterDevice.cc",
-    ],
+    ] + select({
+        ":browser_backend_enabled": ["GeodeBrowserRoot.cc"],
+        "//conditions:default": ["GeodeWgpuAdapterDevice.cc"],
+    }),
     hdrs = [
-        "GeodeCallbackState.h",
         "GeodeDevice.h",
-        "GeodeEmbed.h",
         "GeodeFilterEngine.h",
         "GeodeGpuContext.h",
         "GeodeImagePipeline.h",
         "GeodePipeline.h",
-        "GeodeWgpuAdapterDevice.h",
-    ],
+    ] + select({
+        ":browser_backend_enabled": ["GeodeBrowserRoot.h"],
+        "//conditions:default": [
+            "GeodeCallbackState.h",
+            "GeodeEmbed.h",
+            "GeodeWgpuAdapterDevice.h",
+        ],
+    }),
     # wgpu-native's prebuilt libwgpu_native.dylib ships with its Metal
     # backend already linked, so no per-target framework linkopts are
     # needed on macOS — unlike the previous Dawn cmake() build which
@@ -451,14 +452,12 @@ donner_cc_library(
                ":geode_handle_retirement",
                ":geode_shader_selection",
                ":geode_shaders",
-               ":geode_wgpu_util",
                "//donner/base",
                "//donner/base:asyncify_suspend_probe",
                "//donner/gpu",
                "//donner/gpu/shader:lighting_params",
                "//donner/svg/components/filter:components",
                "//donner/svg/renderer:pixel_format_utils",
-               "//third_party/webgpu-cpp:webgpu_cpp",
            ] + select({
                "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
                "@platforms//os:linux": ["//donner/gpu/vulkan:vulkan_device"],
@@ -468,7 +467,10 @@ donner_cc_library(
                    "//donner/gpu/browser:browser_device",
                    "//donner/gpu/browser:emscripten_browser_bridge",
                ],
-               "//conditions:default": [],
+               "//conditions:default": [
+                   ":geode_wgpu_util",
+                   "//third_party/webgpu-cpp:webgpu_cpp",
+               ],
            }) + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) +
            shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES) +
            native_shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES),
@@ -664,7 +666,6 @@ donner_cc_library(
     deps = [
         ":geode_device",
         "//donner/base",
-        "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
 
@@ -693,7 +694,6 @@ donner_cc_library(
                "//donner/svg/core",
                "//donner/svg/renderer:pixel_format_utils",
                "//donner/svg/resources:image_resource",
-               "//third_party/webgpu-cpp:webgpu_cpp",
            ] + shader_apis(GEODE_ENCODER_SHADER_FAMILIES) +
            shader_artifacts(GEODE_ENCODER_SHADER_FAMILIES) +
            native_shader_artifacts(GEODE_ENCODER_SHADER_FAMILIES),

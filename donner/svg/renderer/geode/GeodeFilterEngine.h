@@ -20,13 +20,11 @@
 #include <ostream>
 #include <string_view>
 #include <type_traits>
-#include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/gpu/Device.h"
 #include "donner/gpu/shader/CompiledShader.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::svg::components {
 class FilterExecutionBudget;

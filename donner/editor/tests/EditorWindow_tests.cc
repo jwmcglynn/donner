@@ -1932,13 +1932,6 @@ INSTANTIATE_TEST_SUITE_P(
     });
 
 TEST(EditorWindowTest, WgpuFramebufferGeodeDeviceSharingMatchesThreadingModel) {
-  EXPECT_TRUE(internal::ShouldShareWgpuFramebufferGeodeDevice(
-      /*emscriptenBuild=*/true, /*browserRuntimeSelected=*/false));
-  EXPECT_FALSE(internal::ShouldShareWgpuFramebufferGeodeDevice(
-      /*emscriptenBuild=*/true, /*browserRuntimeSelected=*/true));
-  EXPECT_FALSE(internal::ShouldShareWgpuFramebufferGeodeDevice(
-      /*emscriptenBuild=*/false, /*browserRuntimeSelected=*/false));
-
   EditorWindow window(EditorWindowOptions{
       .title = "Shared WGPU Geode Device Test",
       .initialWidth = 64,
@@ -1951,17 +1944,10 @@ TEST(EditorWindowTest, WgpuFramebufferGeodeDeviceSharingMatchesThreadingModel) {
   }
 
 #ifdef __EMSCRIPTEN__
-  const bool browserRuntimeSelected =
-      window.geodeDevice()->physicalDeviceOwner()->root().capabilities().backend ==
-      geode::GpuBackendKind::Browser;
-  EXPECT_EQ(window.geodeFramebufferDevice().get() == window.geodeDevice().get(),
-            internal::ShouldShareWgpuFramebufferGeodeDevice(/*emscriptenBuild=*/true,
-                                                            browserRuntimeSelected));
+  EXPECT_NE(window.geodeFramebufferDevice().get(), window.geodeDevice().get());
   EXPECT_EQ(window.geodeFramebufferDevice()->physicalDeviceOwner(),
             window.geodeDevice()->physicalDeviceOwner());
-  if (browserRuntimeSelected) {
-    EXPECT_NE(window.geodeFramebufferDevice()->deviceId(), window.geodeDevice()->deviceId());
-  }
+  EXPECT_NE(window.geodeFramebufferDevice()->deviceId(), window.geodeDevice()->deviceId());
 #else
   EXPECT_NE(window.geodeFramebufferDevice().get(), window.geodeDevice().get())
       << "Desktop background rendering shares the primary wrapper across threads. The UI-only "
