@@ -154,6 +154,28 @@ std::optional<Vector2d> FindMembershipSample(const svg::SVGElement& first,
   return std::nullopt;
 }
 
+TEST(EditorAppTest, QueuedSelectionPaintEditsPreserveEarlierProperties) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <rect id="target" width="50" height="50" style="fill: white; stroke: black; stroke-width: 5"/>
+    </svg>
+  )svg"));
+  const auto selected = app.document().document().querySelector("#target");
+  ASSERT_THAT(selected, testing::Optional(testing::_));
+  app.setSelection(*selected);
+
+  ASSERT_TRUE(app.setStylePropertyOnSelection("stroke", "#f0b429"));
+  ASSERT_TRUE(app.setStylePropertyOnSelection("fill", "#36c317"));
+  ASSERT_TRUE(app.setStrokeWidthOnSelection(8.0));
+  ASSERT_TRUE(app.flushFrame());
+  const auto paint = selected->getAttribute("style");
+  ASSERT_THAT(paint, testing::Optional(testing::_));
+  EXPECT_THAT(std::string(*paint), testing::AllOf(testing::HasSubstr("fill: #36c317"),
+                                                  testing::HasSubstr("stroke: #f0b429"),
+                                                  testing::HasSubstr("stroke-width: 8")));
+}
+
 TEST(EditorAppTest, EmptyByDefault) {
   EditorApp app;
   EXPECT_FALSE(app.hasDocument());
