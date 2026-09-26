@@ -101,6 +101,7 @@ ARCHIVE_MODULE = "MODULE.bazel"
 ARCHIVE_OVERLAY = "third_party/BUILD.wgpu_native_platform"
 ARCHIVE_RUNTIME = "third_party/webgpu-cpp/BUILD.bazel"
 ARCHIVE_ORACLE_CONSUMER = "donner/svg/renderer/tests/BUILD.bazel"
+ARCHIVE_GEODE_CONSUMER = "donner/svg/renderer/geode/BUILD.bazel"
 REQUIRED_ARCHIVE_SITES = tuple(sorted((
     ARCHIVE_FETCH_RULE, ARCHIVE_MODULE, ARCHIVE_OVERLAY, ARCHIVE_RUNTIME,
     ARCHIVE_ORACLE_CONSUMER,
@@ -633,6 +634,45 @@ def _archive_consumer_findings(path: str, text: str) -> list[Finding]:
     return []
 
 
+def _geode_archive_reference_lines(text: str) -> list[str] | None:
+    active = text_without_comments(text)
+    attributes = attribute_of_each_line(text)
+    references = []
+    for line, attribute in zip(active.splitlines(), attributes):
+        if attribute in {"forbidden", "required", "tags"}:
+            continue
+        if tokens_in(line, RUST_BUILT_ARCHIVE_TOKENS):
+            if "wgpu_native_reference_runtime" not in line or attribute != "deps":
+                return None
+            references.append(line)
+    return references
+
+
+def _guarded_geode_reference(kind: str, body: str) -> bool:
+    return kind == "donner_cc_library" and \
+        re.search(r"\btestonly\s*=\s*(?:True|1)\b", body) is not None and \
+        "@platforms//os:linux" in body and "//visibility:public" not in body
+
+
+def _archive_geode_consumer_findings(path: str, text: str) -> list[Finding]:
+    """Only the two Linux test-only Geode leaves may name the oracle runtime."""
+    references = _geode_archive_reference_lines(text)
+    if references is None:
+        return _archive_finding(path, "unexpected Geode archive or production reference")
+    if not references:
+        return []
+    allowed = {"geode_wgpu_util", "geode_device_wgpu_reference_linux"}
+    consumers = [(kind, name, body) for kind, name, body in _rule_blocks(text)
+                 if _rule_has_edge(body, "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
+                                   "deps")]
+    if len(references) != 2 or len(consumers) != 2 or {name for _, name, _ in consumers} != allowed:
+        return _archive_finding(path, "only the two Linux Geode test leaves may consume the runtime")
+    for kind, name, body in consumers:
+        if not _guarded_geode_reference(kind, body):
+            return _archive_finding(path, f"{name} must remain a Linux-compatible test-only leaf")
+    return []
+
+
 def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
     """Allow only the checksum-pinned Linux test oracle's complete build boundary."""
     # These five files are the complete allowed boundary. Inspect them even if
@@ -648,6 +688,8 @@ def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> lis
         return _archive_runtime_findings(path, text, scopes)
     if path == ARCHIVE_ORACLE_CONSUMER:
         return _archive_consumer_findings(path, text)
+    if path == ARCHIVE_GEODE_CONSUMER:
+        return _archive_geode_consumer_findings(path, text)
     active = text_without_comments(text)
     if not tokens_in(active, RUST_BUILT_ARCHIVE_TOKENS):
         return []

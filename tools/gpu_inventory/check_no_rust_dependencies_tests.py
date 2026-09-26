@@ -726,6 +726,20 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 '    target_compatible_with = ["@platforms//os:linux"],\n'
                 '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
             ),
+            "donner/svg/renderer/geode/BUILD.bazel": (
+                'donner_cc_library(\n    name = "geode_wgpu_util",\n'
+                '    testonly = 1,\n'
+                '    target_compatible_with = ["@platforms//os:linux"],\n'
+                '    visibility = ["//visibility:private"],\n'
+                '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
+                'donner_cc_library(\n    name = "geode_device_wgpu_reference_linux",\n'
+                '    testonly = 1,\n'
+                '    target_compatible_with = ["@platforms//os:linux"],\n'
+                '    visibility = ["//donner/svg/renderer/tests:__pkg__"],\n'
+                '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
+                'configured_dependency_audit_test(\n    name = "native_audit",\n'
+                '    forbidden = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
+            ),
         }
 
     def test_exact_linux_oracle_is_allowed(self):
@@ -832,6 +846,39 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
             'deps = [],\n    tags = [":wgpu_native_platform"],',
         )
         self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
+
+    def test_geode_production_or_extra_runtime_consumer_is_rejected(self):
+        additions = (
+            'donner_cc_library(\n    name = "geode_device",\n'
+            '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n',
+            'donner_cc_library(\n    name = "extra_reference_linux",\n'
+            '    testonly = 1,\n    target_compatible_with = ["@platforms//os:linux"],\n'
+            '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n',
+            'donner_cc_library(\n    name = "geode_device",\n'
+            '    deps = ["@wgpu_native_linux_x86_64//:wgpu_native"],\n)\n',
+        )
+        for addition in additions:
+            with self.subTest(addition=addition):
+                files = self.allowed_files()
+                files["donner/svg/renderer/geode/BUILD.bazel"] += addition
+                self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
+
+    def test_geode_reference_leaves_require_exact_names_and_guards(self):
+        edits = (
+            ('name = "geode_device_wgpu_reference_linux"', 'name = "renamed_reference_linux"'),
+            ('name = "geode_wgpu_util",\n    testonly = 1,', 'name = "geode_wgpu_util",'),
+            ('name = "geode_device_wgpu_reference_linux",\n    testonly = 1,',
+             'name = "geode_device_wgpu_reference_linux",'),
+            ('target_compatible_with = ["@platforms//os:linux"],',
+             'target_compatible_with = [],'),
+        )
+        for old, new in edits:
+            with self.subTest(edit=old):
+                files = self.allowed_files()
+                files["donner/svg/renderer/geode/BUILD.bazel"] = files[
+                    "donner/svg/renderer/geode/BUILD.bazel"
+                ].replace(old, new, 1)
+                self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
         files = self.allowed_files()
         files["third_party/webgpu-cpp/BUILD.bazel"] = files["third_party/webgpu-cpp/BUILD.bazel"].replace(
             'name = "webgpu_cpp",\n    testonly = True,',
