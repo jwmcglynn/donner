@@ -84,6 +84,23 @@ class CiRunnerRoutingTest(unittest.TestCase):
                 if workflow == "main":
                     self.assertEqual(route["use_self_hosted_macos"], "true")
 
+    def test_operator_stacked_pr_uses_self_hosted_lanes(self):
+        event = {
+            "sender": {"login": "jwmcglynn"},
+            "pull_request": {
+                "user": {"login": "jwmcglynn"},
+                "head": {"repo": {"full_name": "jwmcglynn/donner"}},
+                "base": {"repo": {"full_name": "jwmcglynn/donner"},
+                         "ref": "feature/dependency"},
+            },
+        }
+        for workflow in ("main", "coverage"):
+            with self.subTest(workflow=workflow):
+                route = self._route(workflow, event=event)
+                self.assertEqual(route["use_self_hosted_linux"], "true")
+                if workflow == "main":
+                    self.assertEqual(route["use_self_hosted_macos"], "true")
+
     def test_operator_main_push_uses_hosted_lanes(self):
         event = {"sender": {"login": "jwmcglynn"}}
         for workflow in ("main", "coverage"):
