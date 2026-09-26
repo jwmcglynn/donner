@@ -95,8 +95,10 @@ Run it with `bazel run --config=geode //examples:geode_embed -- path/to/drawing.
 ## Handle device loss and teardown
 
 A host that receives WebGPU device-loss callbacks can pass a shared
-`GeodeDeviceLostState` in `GeodeEmbedConfig::lostState`; the callback should set
-that state. Geode also marks it on a bounded GPU wait timeout.
+`GeodeDeviceLostState` in `GeodeEmbedConfig::lostState`. The callback must call
+`donner::gpu::DeclareDeviceLost(*lostState)`, not store directly to `lostState->lost`:
+the declaration also runs registered device-loss releases. Geode uses the same
+state when a bounded GPU wait times out.
 `GeodeDevice::isDeviceLost()` then gives the host and Geode the same condition.
 Stop submitting frames on a lost device. To resume, create new physical roots
 and a new Geode context and renderer; a lost context is not reused.

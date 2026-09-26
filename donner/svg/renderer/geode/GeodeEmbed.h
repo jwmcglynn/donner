@@ -60,7 +60,8 @@ struct GeodeEmbedConfig {
   wgpu::Adapter adapter;
 
   /// Optional shared device-lost flag for borrowed raw-root mode. Hosts that install their own
-  /// WebGPU device-lost callback should have that callback set this flag and pass the same state
+  /// WebGPU device-lost callback should call `gpu::DeclareDeviceLost(*state)`, not store to the
+  /// flag directly: the declaration also runs registered device-loss releases. Pass that state
   /// here, so a driver-reported loss on the host device and a bounded-wait timeout inside Geode
   /// converge on the same `GeodeDevice::isDeviceLost()` condition. When null, the GeodeDevice
   /// creates a private flag that only bounded-wait timeouts can set. When `physicalDevice` is set,
