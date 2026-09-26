@@ -17,6 +17,9 @@ const kAngleCompositorArgs = process.platform === "linux" ? [] : ["--use-gl=angl
 
 module.exports = defineConfig({
   testDir: ".",
+  // The .spec.mjs files use Node's test runner and have their own Bazel targets.
+  // Playwright's default discovery pattern would also run them without Bazel's archive inputs.
+  testMatch: "**/*.spec.ts",
   // The composited-invariant suite samples GPU-composited output every
   // animation frame; under this config's default headless Chromium the
   // rasterizer is SwiftShader, whose CPU cost for the editor's full-canvas
