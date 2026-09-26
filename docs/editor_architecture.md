@@ -60,7 +60,7 @@ flowchart TB
   host["Native window or browser host<br/>input, lifecycle, file bridge"]
   editor["Donner Editor<br/>visual SVG authoring system"]
   engine["Donner SVG Engine<br/>DOM, CSS, layout, rendering, compositing"]
-  graphics["Graphics runtime<br/>OpenGL and WebGPU"]
+  graphics["Geode GPU runtime<br/>Metal, Vulkan, WebGPU"]
 
   author -->|"edits and commands"| host
   files <-->|"open and save bytes"| host
@@ -226,7 +226,7 @@ points.
 ### Boot and frame loop
 
 - **`main()`** (`donner/editor/main.cc`) parses argv (a positional SVG path,
-  `--save-repro <path>`), constructs `gui::EditorWindow` (GLFW + OpenGL/WebGPU +
+  `--save-repro <path>`), constructs `gui::EditorWindow` (GLFW + Geode GPU runtime +
   ImGui, `donner/editor/gui/EditorWindow.h`) and `EditorShell`, then runs the
   event-driven loop: `waitEvents(timeout)` -> `window.beginFrame()` ->
   `shell.runFrame()` -> `window.endFrame()`. The timeout comes from
@@ -237,7 +237,7 @@ points.
   `DocumentSyncController`,
   the viewport/input controllers, and the presenters.
 - **`EditorShell::runFrame()`** each frame: (1) poll the latest async render into
-  GL textures through `RenderCoordinator::pollRenderResult`; (2) if `!isBusy()`,
+  presentation textures through `RenderCoordinator::pollRenderResult`; (2) if `!isBusy()`,
   flush queued edits (`EditorApp::flushFrame`) and refresh selection bounds; (3) sync
   parse-error markers and apply pending canvas-to-source writebacks through
   `DocumentSyncController`; (4) compute the adaptive UI profile and pane layout,
@@ -320,16 +320,22 @@ Attached live-DOM writes enter through two explicit, guarded paths:
 ### Compositor and presentation
 
 A render produces a `RenderResult` whose `CompositedPreview` is a paint-order list
-of `CompositedTile`s. Each tile carries either a CPU `RendererBitmap` or a backend
-`RendererTextureSnapshot`, plus document-unit geometry and a drag translation so
-tiles slide in real time without re-rasterizing. `GlTextureCache` uploads one GL
-texture per tile keyed on a stable tile id, reusing textures across frames while
-the tile `generation` is unchanged (and supporting metadata-only tiles).
-`RenderPanePresenter` blits the cached tiles into the ImGui draw list; editor chrome
-(selection outlines, marquee, handles) is drawn by `OverlayRenderer` or as an
-immediate ImGui overlay. `svg::Renderer` is backend-agnostic and resolves at build
-time to tiny-skia (software) or Geode (GPU, `DONNER_EDITOR_WGPU`); the shipped
-`editor` target uses Geode.
+of `CompositedTile`s. Each tile carries document-unit geometry and a drag translation
+so tiles slide in real time without re-rasterizing. It may include a CPU
+`RendererBitmap` or backend `RendererTextureSnapshot`; a metadata-only tile can reuse
+a cached texture when its identity matches. `GlTextureCache` retains stable tile ids
+and generations. On Geode builds, it registers GPU snapshots with the UI texture
+registry and uploads CPU bitmap tiles through the GPU runtime; the OpenGL build path
+uses GL textures. `RenderPanePresenter` draws cached tiles through the ImGui draw list;
+editor chrome (selection outlines, marquee, handles) is drawn by `OverlayRenderer` or
+an immediate ImGui overlay. `svg::Renderer` resolves at build time to tiny-skia
+(software) or Geode (GPU, `DONNER_EDITOR_WGPU`); the shipped `editor` target uses Geode.
+
+The editor settles a presentable surface's format before its UI and renderer pipelines
+are created. Geode presents through Metal on macOS, Vulkan on Linux, and WebGPU in Wasm.
+Native windows provide a Metal layer or GLFW Vulkan surface, and the Wasm host supplies a
+transferred canvas. The editor's UI and framebuffer contexts share the selected physical
+owner. Explicit offscreen render targets serve headless and replay paths.
 
 During an active transform, `SelectTool` exposes gesture-owned bounds and transform
 state. `OverlayRenderer` builds combined bounds and handles directly from that
