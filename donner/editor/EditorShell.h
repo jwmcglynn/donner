@@ -444,6 +444,7 @@ private:
   /// otherwise (and always for family/size) through the selection attribute
   /// writes.
   void applyFormatBarActions(const FormatBarState& state, const FormatBarActions& actions);
+  bool applyTextEditingFormatToggles(const FormatBarActions& actions);
   /// Whether the contextual text-format bar should participate in this frame's
   /// input and presentation passes.
   [[nodiscard]] bool formatBarShouldShow() const;

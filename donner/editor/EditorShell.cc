@@ -3491,40 +3491,64 @@ FormatBarState EditorShell::computeFormatBarState() {
   return state;
 }
 
+namespace {
+
+bool HasSelectionFormattingAction(const FormatBarActions& actions) {
+  return actions.setFontFamily || actions.setFontSize || actions.toggleBold ||
+         actions.toggleItalic || actions.toggleUnderline;
+}
+
+}  // namespace
+
 void EditorShell::applyFormatBarActions(const FormatBarState& state,
                                         const FormatBarActions& actions) {
   for (const auto& family : actions.retryFontFamilies) {
     retryCatalogFont(family);
   }
+  if (!app_.document().hasDocument()) {
+    return;
+  }
   const bool editing = activeTool_ == ActiveTool::Text && textTool_.isEditing();
 
-  bool changed = false;
   // Bold/Italic/Underline during an active editing session route to the
   // TextTool style toggles (they add/remove the attribute and flush). Family
   // and size, plus the selection-only B/I/U path, route to the attribute-write
   // seam shared with the Text inspector.
-  if (editing) {
-    if (actions.toggleBold) {
-      textTool_.toggleBold(app_);
-      changed = true;
-    }
-    if (actions.toggleItalic) {
-      textTool_.toggleItalic(app_);
-      changed = true;
-    }
-    if (actions.toggleUnderline) {
-      textTool_.toggleUnderline(app_);
-      changed = true;
-    }
-  }
+  bool changed = editing && applyTextEditingFormatToggles(actions);
 
-  changed = ApplyFormatBarActionsToSelection(actions, state, /*routeTogglesToSelection=*/!editing,
-                                             app_) ||
-            changed;
+  std::optional<std::string> sourceBeforeSelectionEdit;
+  if (!editing && HasSelectionFormattingAction(actions)) {
+    sourceBeforeSelectionEdit = std::string(app_.document().document().source());
+  }
+  const bool selectionChanged =
+      ApplyFormatBarActionsToSelection(actions, state, /*routeTogglesToSelection=*/!editing, app_);
+  if (selectionChanged && sourceBeforeSelectionEdit.has_value()) {
+    app_.recordDocumentSourceUndoOnNextFlush(
+        "Format selected text", app_.document().document().svgElement(), *sourceBeforeSelectionEdit,
+        /*preserveSelection=*/true);
+  }
+  changed = selectionChanged || changed;
 
   if (changed) {
     flushQueuedMutationAndRefreshOverlay();
   }
+}
+
+bool EditorShell::applyTextEditingFormatToggles(const FormatBarActions& actions) {
+  bool changed = false;
+  if (actions.toggleBold) {
+    textTool_.toggleBold(app_);
+    changed = true;
+  }
+  if (actions.toggleItalic) {
+    textTool_.toggleItalic(app_);
+    changed = true;
+  }
+  if (actions.toggleUnderline) {
+    textTool_.toggleUnderline(app_);
+    changed = true;
+  }
+  return changed;
 }
 
 bool EditorShell::requireCatalogFontsForSelection() {
