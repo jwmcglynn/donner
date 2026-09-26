@@ -17,6 +17,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 
 #include "donner/base/FileUtils.h"
@@ -37,6 +38,7 @@ namespace {
 
 constexpr int kWindowWidth = 800;
 constexpr int kWindowHeight = 600;
+constexpr int kMaxOneFrameAttempts = 32;
 
 void GlfwErrorCallback(int error, const char* description) {
   std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
@@ -80,14 +82,16 @@ int main(int argc, char* argv[]) {
   if (const char* bwd = std::getenv("BUILD_WORKING_DIRECTORY")) {
     std::filesystem::current_path(bwd);
   }
-  if (argc != 2) {
-    std::fprintf(stderr, "USAGE: geode_embed <svg-file>\n");
+  const bool oneFrame = argc == 3 && std::string_view(argv[1]) == "--one-frame";
+  if ((!oneFrame && argc != 2) || (argc == 2 && std::string_view(argv[1]) == "--one-frame")) {
+    std::fprintf(stderr, "USAGE: geode_embed [--one-frame] <svg-file>\n");
     return 1;
   }
+  const char* svgPath = oneFrame ? argv[2] : argv[1];
 
-  const std::string svgData = LoadFile(argv[1]);
+  const std::string svgData = LoadFile(svgPath);
   if (svgData.empty()) {
-    const std::string safePath = donner::EscapeTerminalText(argv[1]);
+    const std::string safePath = donner::EscapeTerminalText(svgPath);
     std::fprintf(stderr, "Failed to open or empty SVG: %s\n", safePath.c_str());
     return 1;
   }
@@ -179,9 +183,17 @@ int main(int argc, char* argv[]) {
   }
 
   int outcome = 0;
+  int oneFrameAttempts = 0;
+  bool presentedOneFrame = false;
   {
     donner::svg::RendererGeode renderer(context);
     while (!glfwWindowShouldClose(window)) {
+      if (oneFrame && ++oneFrameAttempts > kMaxOneFrameAttempts) {
+        std::fprintf(stderr, "One-frame smoke could not present within %d attempts\n",
+                     kMaxOneFrameAttempts);
+        outcome = 1;
+        break;
+      }
       glfwPollEvents();
       donner::gpu::Result<donner::gpu::SurfaceTexture> acquired =
           device.acquireCurrentTexture(surface);
@@ -225,7 +237,18 @@ int main(int argc, char* argv[]) {
         outcome = 1;
         break;
       }
+      if (oneFrame && presented.result() == donner::gpu::SurfaceStatus::Success) {
+        presentedOneFrame = true;
+        break;
+      }
     }
   }
-  return finish(outcome);
+  if (oneFrame && !presentedOneFrame) {
+    outcome = 1;
+  }
+  const int result = finish(outcome);
+  if (oneFrame && presentedOneFrame && result == 0) {
+    std::puts("GEODE_EMBED_PRESENTED=1");
+  }
+  return result;
 }

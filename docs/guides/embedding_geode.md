@@ -16,6 +16,16 @@ The example uses a fixed 800 by 600 framebuffer and exits when its window
 closes. It intentionally leaves input handling, resizing, and DPI adaptation to
 the host.
 
+For an automated native presentation smoke, pass `--one-frame` before the SVG
+path. This mode stops after one successful present, retires the surface through
+the normal teardown path, prints `GEODE_EMBED_PRESENTED=1`, and exits zero. It
+fails after 32 acquisition attempts without a successful present; the default
+interactive mode has no attempt limit.
+
+```sh
+bazel run --config=geode //examples:geode_embed -- --one-frame path/to/drawing.svg
+```
+
 ## Select for the actual window {#EmbeddingGeodeSelection}
 
 Create a GLFW window with `GLFW_NO_API` before selecting a GPU root. The
