@@ -64,7 +64,7 @@
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #endif
@@ -722,11 +722,8 @@ public:
   /// Makes every configuration refuse, standing in for a window the surface cannot follow.
   void refuseConfiguration() { configureSucceeds_ = false; }
 
-  bool attachToWindow(const wgpu::Instance&, GLFWwindow*) override { return true; }
-#ifndef __APPLE__
-  wgpu::Surface adapterSelectionSurface() const override { return {}; }
-#endif
-  bool chooseConfiguration(const wgpu::Adapter&, bool) override { return true; }
+  bool attachToWindow(GLFWwindow*) override { return true; }
+  bool chooseConfiguration(bool) override { return true; }
   bool attachToDevice(geode::GeodeDevice&) override { return true; }
 
   bool configure(int width, int height) override {
@@ -1214,20 +1211,15 @@ TEST_F(RuntimePresentationSurfaceTest, PresentingWithNoFrameHeldDoesNothing) {
 /// format its renderer compiles pipelines for without an adapter to ask. A native device's
 /// selection produces none, and the format is still checked against what the surface reports once
 /// the device exists.
-TEST_F(RuntimePresentationSurfaceTest, AMetalLayerSettlesItsFormatWithoutAnAdapter) {
-  EXPECT_THAT(surface_.chooseConfiguration(wgpu::Adapter(), /*enableReadback=*/false),
-              testing::IsTrue())
-      << "a Metal layer's format is not a question for an adapter";
+TEST_F(RuntimePresentationSurfaceTest, AMetalLayerSettlesItsFormat) {
+  EXPECT_THAT(surface_.chooseConfiguration(/*enableReadback=*/false), testing::IsTrue());
   EXPECT_THAT(surface_.format(), testing::Eq(gpu::TextureFormat::BGRA8Unorm));
 }
 #else
-/// Everywhere but Apple the window settles the format its renderer compiles pipelines for by
-/// asking the selected adapter what the surface can present. With no adapter there is nothing to
-/// ask, so answering anyway settles a format nothing checked: the browser arm of selection reached
-/// this with a null adapter and the window went on to configure the swapchain from the reply.
-TEST_F(RuntimePresentationSurfaceTest, ChoosingAConfigurationWithoutAnAdapterIsRefused) {
-  EXPECT_FALSE(surface_.chooseConfiguration(wgpu::Adapter(), /*enableReadback=*/false))
-      << "a selection that produced no adapter has not produced a surface configuration either";
+/// Native Vulkan settles its format from the selected GLFW surface before this helper is called.
+/// An unattached surface cannot invent a format for the renderer's pipelines.
+TEST_F(RuntimePresentationSurfaceTest, ChoosingAConfigurationWithoutNativeSurfaceIsRefused) {
+  EXPECT_FALSE(surface_.chooseConfiguration(/*enableReadback=*/false));
 }
 #endif
 
@@ -2080,40 +2072,6 @@ TEST(EditorWindowTest, WgpuPhysicalDeviceOutlivesWindowWhenContextIsRetained) {
   EXPECT_TRUE(physicalOwner.expired());
 }
 #endif
-
-/// A framebuffer readback whose map outlasts the editor's bound declares the framebuffer device
-/// lost at the readback-map wait site, so later frames fail at once instead of stalling, and the
-/// frame reads back nothing. The map is held pending through the transitional adapter's event-wait
-/// seam, under which every wait slice reports that it waited and learned nothing.
-TEST(EditorWindowTest, AReadbackMapThatOutlastsItsBoundDeclaresTheDeviceLost) {
-  EditorWindow window(EditorWindowOptions{
-      .title = "Readback Map Bound Test",
-      .initialWidth = 64,
-      .initialHeight = 48,
-      .visible = false,
-      .forceOffscreenRenderTarget = true,
-      .enableFramebufferReadback = true,
-  });
-  ASSERT_THAT(window.valid(), testing::IsTrue());
-  const std::shared_ptr<geode::GeodeDevice> framebufferDevice = window.geodeFramebufferDevice();
-  ASSERT_THAT(framebufferDevice, testing::NotNull());
-  if (!framebufferDevice->hasTransitionalAdapter()) {
-    GTEST_SKIP() << "holds the readback map pending through the transitional adapter's event-wait "
-                    "seam, which no native backend has";
-  }
-  framebufferDevice->adapterDevice().setSimulateEventWaitForTest(true);
-  window.setFramebufferReadbackBudgetForTesting(std::chrono::milliseconds(50));
-
-  window.beginFrame();
-  const svg::RendererBitmap bitmap = window.endFrameAndReadPixels();
-
-  EXPECT_THAT(bitmap.empty(), testing::IsTrue()) << "a frame whose map never completed was read";
-  EXPECT_THAT(framebufferDevice->isDeviceLost(), testing::IsTrue())
-      << "a map that outlasted the bound left the device answering";
-  EXPECT_THAT(framebufferDevice->consumeReadbackStats().timedOutWaitSite,
-              testing::Eq(geode::GpuWaitSite::ReadbackMap))
-      << "the loss was not attributed to the readback map's wait";
-}
 
 TEST(EditorWindowTest, WgpuCheckerboardRejectsAStaleFramebufferExtent) {
   EditorWindow window(EditorWindowOptions{

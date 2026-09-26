@@ -75,18 +75,10 @@ HBEOF""",
         ],
     )
 
-    # wgpu-native (Rust/wgpu-based WebGPU implementation) for the Geode GPU
-    # renderer. Only fetched when
-    # --//donner/svg/renderer/geode:enable_geode=true.
-    #
-    # Previous iteration built Dawn from source via rules_foreign_cc's cmake()
-    # rule. On GitHub Actions that took ~1 h 45 m per run — too slow for the
-    # interactive merge cycle. Swapping to a pre-built wgpu-native tarball
-    # drops the "build Dawn" critical path to a ~12 MB download (single
-    # shared library + two headers), measured in seconds.
-    #
-    # One http_archive per supported (os, cpu) tuple; the wgpu_native alias
-    # in third_party/BUILD.wgpu_native picks the right one via `select()`.
+    # Pinned wgpu-native archives for the Linux-only resvg pixel comparison. Ordinary native
+    # Geode, editor and renderer targets have no edge to these repositories.
+    # Only the Linux resvg comparison retains a wgpu-native archive. The alias in
+    # third_party/webgpu-cpp/BUILD.bazel selects its two supported CPU architectures.
     # Tag `v24.0.3.1` is pinned because eliemichel/WebGPU-distribution's
     # vendored `webgpu.hpp` tracks wgpu-native's v24 C API (see
     # `wgpu-native-git-tag.txt` in their repo). Bumping wgpu-native past
@@ -104,16 +96,6 @@ HBEOF""",
             name = "wgpu_native_linux_aarch64",
             asset = "wgpu-linux-aarch64-release.zip",
             sha256 = "97786f622d6d4f9aaa87c27d165de8db65daf1d391e0bcc32a2dd9bb45fcd299",
-        ),
-        struct(
-            name = "wgpu_native_macos_aarch64",
-            asset = "wgpu-macos-aarch64-release.zip",
-            sha256 = "f140ff27234ebfa9fcca2b492d0cb499f2e197424b9edc45134bcbad0f8d3a78",
-        ),
-        struct(
-            name = "wgpu_native_macos_x86_64",
-            asset = "wgpu-macos-x86_64-release.zip",
-            sha256 = "1fbc6930e2811b7fde7f046e5300ae5dc20c451d0c3e42a10ff71efae1f565ac",
         ),
     ]
     for p in _WGPU_NATIVE_PLATFORMS:

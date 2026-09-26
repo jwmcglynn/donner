@@ -21,14 +21,11 @@
 #include "donner/gpu/DeviceLost.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/tests/SharingTestDevice.h"
-#include "donner/svg/renderer/geode/GeodeCallbackState.h"
-#include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
@@ -45,12 +42,10 @@ using svg::test::RgbaEq;
 using testing::ElementsAreArray;
 using testing::Eq;
 using testing::Ge;
-using testing::HasSubstr;
 using testing::IsFalse;
 using testing::IsNull;
 using testing::IsTrue;
 using testing::Lt;
-using testing::Not;
 using testing::NotNull;
 
 /// Submits one empty command buffer through \p runtime and returns the serial it was given, or 0
@@ -71,37 +66,6 @@ uint64_t SubmitEmptyCommandBuffer(gpu::Device& runtime) {
   return serial.hasError() ? 0 : serial.result();
 }
 
-/// Marker that `GeodeDevice`'s uncaptured-error callback prints when wgpu
-/// rejects a descriptor. wgpu still returns a non-null handle in that case, so
-/// tests that need to know a resource was actually accepted watch for this.
-constexpr const char* kWgpuUncapturedErrorMarker = "Uncaptured error";
-
-TEST(GeodeCallbackState, CallbackOwnsStateAfterCallerReturns) {
-  struct State {};
-
-  auto state = std::make_shared<State>();
-  const std::weak_ptr<State> weakState = state;
-  void* userdata = retainWgpuCallbackState(state);
-
-  state.reset();
-  EXPECT_FALSE(weakState.expired());
-
-  std::shared_ptr<State> callbackState = takeWgpuCallbackState<State>(userdata);
-  EXPECT_EQ(callbackState.get(), weakState.lock().get());
-  callbackState.reset();
-  EXPECT_TRUE(weakState.expired());
-}
-
-/// Why a case below selects the transitional adapter by name rather than the process default.
-constexpr std::string_view kInspectsTheWgpuRoot =
-    "inspects the wgpu objects a transitional root holds";
-constexpr std::string_view kWgpuLossCallback = "the device-lost callback is a wgpu registration";
-constexpr std::string_view kBorrowsWgpuRootObjects =
-    "borrows the wgpu root objects an embedding host hands over";
-constexpr std::string_view kNamesTheAdapter = "pins the adapter accessor to the runtime device";
-constexpr std::string_view kHoldsAdapterWork =
-    "holds submitted work through the adapter's test seam";
-
 /// Smoke test: can we instantiate a headless device at all, on the backend the process selects?
 /// If this fails, the entire Geode backend is non-functional.
 TEST(GeodeDevice, CreateHeadlessSucceeds) {
@@ -112,145 +76,8 @@ TEST(GeodeDevice, CreateHeadlessSucceeds) {
   EXPECT_TRUE(device->physicalDeviceOwner()->root().hasBackendDevice());
 }
 
-/// A transitional root holds the wgpu objects every runtime device over it records against.
-TEST(GeodeDevice, ATransitionalRootHoldsTheWgpuObjectsItSelected) {
-  auto device = CreateTransitionalAdapterContext(kInspectsTheWgpuRoot);
-  ASSERT_NE(device, nullptr) << "no wgpu adapter is available on this host";
-
-  EXPECT_TRUE(static_cast<bool>(device->adapterDevice().root().device()));
-  EXPECT_TRUE(static_cast<bool>(device->adapterDevice().root().queue()));
-  EXPECT_TRUE(static_cast<bool>(device->adapterDevice().root().adapter()));
-}
-
-/// The device-lost callback is a wgpu registration, so this is a transitional-adapter case.
-TEST(GeodeDevice, DestructionConsumesDeviceLostCallbackState) {
-  const std::size_t before = GeodeDevice::outstandingDeviceLostCallbacksForTesting();
-  {
-    auto device = CreateTransitionalAdapterContext(kWgpuLossCallback);
-    ASSERT_NE(device, nullptr);
-    EXPECT_EQ(GeodeDevice::outstandingDeviceLostCallbacksForTesting(), before + 1u);
-  }
-
-  EXPECT_EQ(GeodeDevice::outstandingDeviceLostCallbacksForTesting(), before);
-}
-
-namespace {
-
-/// One `GeodeEmbedConfig` field that must agree with the shared physical owner the same config
-/// names.
-struct EmbedConfigConflictArm {
-  /// Field name, so a failure says which check is missing.
-  std::string_view field;
-  /// Overwrites that field with state that cannot belong to the owner.
-  void (*applyConflict)(GeodeEmbedConfig& config, GeodeDevice& foreign);
-};
-
-constexpr auto kEmbedConfigConflictArms = std::to_array<EmbedConfigConflictArm>(
-    {{"device",
-      [](GeodeEmbedConfig& config, GeodeDevice& foreign) {
-        config.device = foreign.adapterDevice().root().device();
-      }},
-     {"queue", [](GeodeEmbedConfig& config,
-                  GeodeDevice& foreign) { config.queue = foreign.adapterDevice().root().queue(); }},
-     {"instance",
-      [](GeodeEmbedConfig& config, GeodeDevice& foreign) {
-        config.instance = foreign.adapterDevice().root().instance();
-      }},
-     {"adapter",
-      [](GeodeEmbedConfig& config, GeodeDevice& foreign) {
-        config.adapter = foreign.adapterDevice().root().adapter();
-      }},
-     // The owner's own loss state is private to GeodeDevice and EditorWindow, so a second
-     // context's flag is not reachable here. The check is shared_ptr identity, so any distinct
-     // state is a faithful conflict.
-     {"lostState", [](GeodeEmbedConfig& config, GeodeDevice&) {
-        config.lostState = std::make_shared<GeodeDeviceLostState>();
-      }}});
-
-}  // namespace
-
-/// A config that names a shared physical owner may also repeat that owner's roots, but every
-/// repeated field has to name the same object. Mixing in a root that belongs elsewhere is a caller
-/// error with no safe resolution - silently preferring either side would hand the context a queue,
-/// instance, or loss flag that does not belong to the device it renders on - so creation is
-/// refused for each field independently, and accepted when the repeated roots agree.
-TEST(GeodeDevice, SharedPhysicalOwnerRejectsConflictingRoots) {
-  // The conflicting roots are wgpu objects, so both contexts are transitional-adapter contexts.
-  auto ownerContext = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
-  ASSERT_NE(ownerContext, nullptr);
-  auto foreignContext = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
-  ASSERT_NE(foreignContext, nullptr);
-  // Each root the arms below borrow has to be non-null, because the comparison skips a field the
-  // config leaves empty. A headless context imported from the browser leaves its adapter on the
-  // JavaScript side, and borrowing that null adapter would make the adapter arm assert nothing
-  // about the adapter comparison and then fail for a reason that has nothing to do with it. Say so
-  // here instead.
-  ASSERT_THAT(static_cast<WGPUAdapter>(foreignContext->adapterDevice().root().adapter()), NotNull())
-      << "the conflict arms need a second context with every root populated";
-
-  for (const EmbedConfigConflictArm& arm : kEmbedConfigConflictArms) {
-    SCOPED_TRACE(arm.field);
-
-    GeodeEmbedConfig config;
-    config.physicalDevice = ownerContext->physicalDeviceOwner();
-    arm.applyConflict(config, *foreignContext);
-
-    EXPECT_THAT(GeodeDevice::CreateFromExternal(config), IsNull())
-        << "CreateFromExternal accepted a config whose " << arm.field
-        << " belongs to a different physical device than its physical owner";
-  }
-
-  // Positive control: without it, a change that refused every config naming a physical owner
-  // would leave all five arms green while the comparisons they cover stopped running.
-  GeodeEmbedConfig agreeing;
-  agreeing.physicalDevice = ownerContext->physicalDeviceOwner();
-  agreeing.device = ownerContext->adapterDevice().root().device();
-  agreeing.queue = ownerContext->adapterDevice().root().queue();
-  agreeing.instance = ownerContext->adapterDevice().root().instance();
-  agreeing.adapter = ownerContext->adapterDevice().root().adapter();
-  EXPECT_THAT(GeodeDevice::CreateFromExternal(agreeing), NotNull())
-      << "CreateFromExternal refused a config that repeats its own physical owner's roots";
-}
-
-TEST(GeodeDevice, LegacyBorrowedAggregateConfigurationRemainsSupported) {
-  auto ownerContext = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
-  ASSERT_NE(ownerContext, nullptr);
-
-  GeodeEmbedConfig config{ownerContext->adapterDevice().root().instance(),
-                          ownerContext->adapterDevice().root().device(),
-                          ownerContext->adapterDevice().root().queue(),
-                          wgpu::TextureFormat::RGBA8Unorm,
-                          ownerContext->adapterDevice().root().adapter(),
-                          std::make_shared<GeodeDeviceLostState>()};
-  EXPECT_NE(GeodeDevice::CreateFromExternal(config), nullptr);
-}
-
-TEST(GeodeDevice, SharedPhysicalOwnerRejectsAlreadyLostDevice) {
-  auto ownerContext = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
-  ASSERT_NE(ownerContext, nullptr);
-
-  auto lostState = std::make_shared<GeodeDeviceLostState>();
-  GeodeEmbedConfig borrowed;
-  borrowed.instance = ownerContext->adapterDevice().root().instance();
-  borrowed.adapter = ownerContext->adapterDevice().root().adapter();
-  borrowed.device = ownerContext->adapterDevice().root().device();
-  borrowed.queue = ownerContext->adapterDevice().root().queue();
-  borrowed.lostState = lostState;
-  auto borrowedContext = GeodeDevice::CreateFromExternal(borrowed);
-  ASSERT_NE(borrowedContext, nullptr);
-  lostState->lost.store(true, std::memory_order_release);
-
-  GeodeEmbedConfig config;
-  config.physicalDevice = borrowedContext->physicalDeviceOwner();
-  EXPECT_EQ(GeodeDevice::CreateFromExternal(config), nullptr);
-
-  // A lost root skips every teardown wait, so let the borrowed context go before the headless
-  // owner whose backend objects it names.
-  borrowedContext.reset();
-}
-
 TEST(GeodeDevice, SecondLogicalContextUsesSelectedPhysicalOwnerWithoutEmbedHandles) {
-  auto first = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
+  auto first = GeodeDevice::CreateHeadless();
   ASSERT_THAT(first, NotNull());
   const std::shared_ptr<GeodePhysicalDeviceOwner> owner = first->physicalDeviceOwner();
   ASSERT_THAT(owner, NotNull());
@@ -265,7 +92,7 @@ TEST(GeodeDevice, SecondLogicalContextUsesSelectedPhysicalOwnerWithoutEmbedHandl
 TEST(GeodeDevice, SecondLogicalContextRejectsNullOrLostPhysicalOwner) {
   EXPECT_THAT(GeodeDevice::CreateOverPhysicalDeviceOwner(nullptr, gpu::TextureFormat::BGRA8Unorm),
               IsNull());
-  auto first = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
+  auto first = GeodeDevice::CreateHeadless();
   ASSERT_THAT(first, NotNull());
   const std::shared_ptr<GeodePhysicalDeviceOwner> owner = first->physicalDeviceOwner();
   ASSERT_THAT(owner, NotNull());
@@ -339,21 +166,6 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   EXPECT_THAT(firstPixel, RgbaEq(255, 0, 0, 255));
 }
 
-/// `runtimeDevice()` and `adapterDevice()` are two names for one object: the second only widens
-/// the static type for the callers that still need operations the runtime contract does not carry.
-/// If they ever came apart, renderer services would create resources in one handle table and the
-/// remaining raw callers would validate them against another, so a handle would go foreign for no
-/// visible reason. Pin the identity while both accessors exist.
-TEST(GeodeDevice, RuntimeAndAdapterAccessorsNameOneDevice) {
-  auto device = CreateTransitionalAdapterContext(kNamesTheAdapter);
-  ASSERT_NE(device, nullptr);
-
-  EXPECT_THAT(device->runtimeDevice().deviceId(), Eq(device->adapterDevice().deviceId()));
-  EXPECT_EQ(&device->runtimeDevice(), static_cast<gpu::Device*>(&device->adapterDevice()))
-      << "the two accessors named different objects, so renderer services would create resources "
-         "in one handle table while the remaining raw callers validate them against another";
-}
-
 /// Regression test for issue #575 (pipeline leak through wgpu-native):
 /// `GeodeDevice::pipeline()` / `gradientPipeline()` / `imagePipeline()` /
 /// `filterEngine()` must return the same object on every call - the
@@ -384,23 +196,14 @@ TEST(GeodeDevice, SharedPipelinesReturnSameInstance) {
 /// Compile it here on the real device, unconditionally and independent of the
 /// batching switch, so both variants stay covered.
 ///
-/// The returned handle alone proves nothing: the backend hands back a non-null
-/// error pipeline for a rejected descriptor and reports the reason through the
-/// device's uncaptured-error callback, so the real assertion is that the
-/// callback printed nothing. The shader-emitter validation tests keep a
-/// negative control proving this marker does fire on a bad descriptor.
+/// Native backends return no valid runtime pipeline for a rejected descriptor.
 TEST(GeodeDevice, BatchedFillPipelineCompilesWithoutValidationErrors) {
   auto device = GeodeDevice::CreateHeadless();
   ASSERT_NE(device, nullptr);
 
-  testing::internal::CaptureStderr();
   const gpu::RenderPipeline& batched = device->pipeline().batchedPipeline();
-  const std::string errors = testing::internal::GetCapturedStderr();
 
-  EXPECT_TRUE(batched.isValid()) << "Batched fill pipeline creation returned null.";
-  EXPECT_THAT(errors, Not(HasSubstr(kWgpuUncapturedErrorMarker)))
-      << "The backend rejected the record-reading fill pipeline:\n"
-      << errors;
+  ASSERT_TRUE(batched.isValid()) << "Native batched fill pipeline creation failed.";
 
   // Built on first use, then cached: a second call must hand back the same
   // pipeline rather than recompiling it.
@@ -476,196 +279,6 @@ TEST(GeodeDeviceLost, FirstWaitTimeoutAttributionWins) {
   const GeodeDevice::ReadbackStats stats = device->consumeReadbackStats();
   EXPECT_EQ(stats.timedOutWaitSite, GpuWaitSite::ReadbackMap);
   EXPECT_EQ(stats.timedOutWaitMs, static_cast<int>(kReadbackMapTimeout.count()));
-}
-
-/// Budget the deadline cases below give a wait, chosen so the measured elapsed time is
-/// unambiguously the budget rather than scheduling noise, and the case still runs in well under a
-/// second.
-constexpr double kSerialWaitBudgetSeconds = 0.25;
-
-/// A bounded wait for a submission serial that spends its whole budget without the work retiring
-/// has observed a device that stopped answering, and must declare it lost with the same
-/// attribution the other bounded waits record. Leaving the loss unpublished costs every later
-/// caller its own full budget on a device that can no longer complete anything, and leaves a
-/// renderer unable to tell "slow" from "gone".
-TEST(GeodeDeviceLost, RuntimeSerialWaitTimeoutDeclaresLossWithWaitAttribution) {
-  auto device = CreateTransitionalAdapterContext(kHoldsAdapterWork);
-  ASSERT_NE(device, nullptr);
-  ASSERT_FALSE(device->isDeviceLost());
-
-  GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
-  const uint64_t submitted = SubmitEmptyCommandBuffer(runtime);
-  ASSERT_THAT(submitted, testing::Gt(0u));
-  // Submitted work that stops retiring, on a device whose poll blocks the way a driver waiting on
-  // it does: the wait can only end by spending its budget.
-  runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(1));
-
-  EXPECT_THAT(runtime.waitForSerial(submitted, kSerialWaitBudgetSeconds), testing::IsFalse());
-
-  EXPECT_TRUE(device->isDeviceLost())
-      << "a bounded runtime wait that spent its deadline must publish the loss it observed";
-
-  const GeodeDevice::ReadbackStats stats = device->consumeReadbackStats();
-  EXPECT_THAT(stats.timedOutWaitSite, Eq(GpuWaitSite::QueueIdle));
-  EXPECT_THAT(stats.timedOutWaitMs, Ge(static_cast<int>(kSerialWaitBudgetSeconds * 1000.0) - 1))
-      << "the loss has to come from a deadline that actually elapsed, so the attribution reports "
-         "a wait that was really spent";
-
-  runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
-                                      std::chrono::milliseconds(0));
-}
-
-/// A wait whose polls return at once without its work completing has observed nothing about the
-/// device: another context's poll can have collected this wait's completion callback, or the driver
-/// may not block in poll at all. So once its poll bound is spent it waits, without polling in a
-/// tight loop, for a completion to be delivered, and a deadline that passes while it does declares
-/// nothing: declaring a permanent loss from it would fail every later caller on a device that is
-/// merely idle. The wait still ends by its own deadline.
-TEST(GeodeDeviceLost, RuntimeSerialWaitWhosePollsNeverBlockKeepsItsBudgetAndDeclaresNothing) {
-  auto device = CreateTransitionalAdapterContext(kHoldsAdapterWork);
-  ASSERT_NE(device, nullptr);
-  ASSERT_FALSE(device->isDeviceLost());
-
-  GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
-  const uint64_t submitted = SubmitEmptyCommandBuffer(runtime);
-  ASSERT_THAT(submitted, testing::Gt(0u));
-  // The same work held incomplete, but a poll that returns at once: the poll bound is reached in
-  // milliseconds, far inside the budget.
-  runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(0));
-
-  constexpr double kBudgetSeconds = 0.5;
-  const auto start = std::chrono::steady_clock::now();
-  EXPECT_THAT(runtime.waitForSerial(submitted, kBudgetSeconds), testing::IsFalse());
-  const double elapsedSeconds =
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-
-  EXPECT_THAT(elapsedSeconds, Ge(kBudgetSeconds))
-      << "the wait gave up with most of its budget unspent, so a completion delivered after its "
-         "poll bound is missed";
-  EXPECT_THAT(elapsedSeconds, Lt(kBudgetSeconds + 1.0)) << "the wait outlived its own budget";
-  EXPECT_FALSE(device->isDeviceLost())
-      << "a wait whose polls never blocked observed nothing to declare";
-
-  runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
-                                      std::chrono::milliseconds(0));
-}
-
-/// The poll bound and the deadline can fall on the same poll: a device whose polls block long
-/// enough reaches its bound on the very poll that carries the wait past its deadline. That wait
-/// spent its budget polling, so it must declare the loss with the same attribution as any wait that
-/// did; only a wait with budget left goes on to wait for a delivered completion. The bound is
-/// lowered to one poll that costs twice the budget, which makes the two coincide deterministically.
-TEST(GeodeDeviceLost,
-     RuntimeSerialWaitWhoseLastPollSpendsItsBudgetDeclaresLossWithWaitAttribution) {
-  auto device = CreateTransitionalAdapterContext(kHoldsAdapterWork);
-  ASSERT_NE(device, nullptr);
-  ASSERT_FALSE(device->isDeviceLost());
-
-  GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
-  const uint64_t submitted = SubmitEmptyCommandBuffer(runtime);
-  ASSERT_THAT(submitted, testing::Gt(0u));
-  const auto budgetMs = static_cast<int>(kSerialWaitBudgetSeconds * 1000.0);
-  runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(2 * budgetMs));
-  runtime.setSerialWaitPollBoundForTesting(1);
-
-  EXPECT_THAT(runtime.waitForSerial(submitted, kSerialWaitBudgetSeconds), testing::IsFalse());
-
-  EXPECT_TRUE(device->isDeviceLost())
-      << "a wait whose last poll before its bound spent its budget must publish the loss it "
-         "observed, as a wait that reached its deadline sooner does";
-
-  const GeodeDevice::ReadbackStats stats = device->consumeReadbackStats();
-  EXPECT_THAT(stats.timedOutWaitSite, Eq(GpuWaitSite::QueueIdle));
-  EXPECT_THAT(stats.timedOutWaitMs, Ge(budgetMs - 1))
-      << "the attribution has to report the budget the wait actually spent";
-
-  runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
-                                      std::chrono::milliseconds(0));
-}
-
-/// Contexts over one root drive its queue from different threads, and a completion callback runs
-/// on whichever thread's poll collected it. A wait can therefore find its polls returning at once
-/// while its own completion is still to be delivered by another thread, which is slow to do so
-/// under load. The wait must see that completion rather than give up with its budget unspent. The
-/// completion is held back and released from another thread well after the wait's poll bound is
-/// spent, which makes that interleaving deterministic.
-TEST(GeodeDeviceLost, RuntimeSerialWaitSeesACompletionAnotherThreadDeliversLate) {
-  auto device = CreateTransitionalAdapterContext(kHoldsAdapterWork);
-  ASSERT_NE(device, nullptr);
-
-  GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
-  const uint64_t submitted = SubmitEmptyCommandBuffer(runtime);
-  ASSERT_THAT(submitted, testing::Gt(0u));
-  runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(0));
-
-  constexpr double kBudgetSeconds = 5.0;
-  std::thread deliverer([&runtime] {
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-    runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
-                                        std::chrono::milliseconds(0));
-  });
-  const auto start = std::chrono::steady_clock::now();
-  const bool completed = runtime.waitForSerial(submitted, kBudgetSeconds);
-  const double elapsedSeconds =
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-  deliverer.join();
-
-  EXPECT_TRUE(completed) << "the wait for serial " << submitted << " gave up after "
-                         << elapsedSeconds << " s of a " << kBudgetSeconds
-                         << " s budget, before another thread delivered its completion";
-  EXPECT_THAT(elapsedSeconds, Lt(kBudgetSeconds))
-      << "the wait did not return when the completion was delivered";
-  EXPECT_FALSE(device->isDeviceLost());
-}
-
-/// A budget of zero is a question about what is already known rather than a wait, so its negative
-/// answer says nothing about the device's health and must not declare it lost.
-TEST(GeodeDeviceLost, RuntimeSerialWaitWithNoBudgetLeavesTheDeviceHealthy) {
-  auto device = CreateTransitionalAdapterContext(kHoldsAdapterWork);
-  ASSERT_NE(device, nullptr);
-
-  GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
-  const uint64_t submitted = SubmitEmptyCommandBuffer(runtime);
-  ASSERT_THAT(submitted, testing::Gt(0u));
-  runtime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(0));
-
-  EXPECT_THAT(runtime.waitForSerial(submitted, 0.0), testing::IsFalse());
-  EXPECT_FALSE(device->isDeviceLost())
-      << "a question about what is already known is not a wait, so its negative answer is no "
-         "evidence that the device stopped answering";
-
-  runtime.holdSubmittedWorkForTesting(GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
-                                      std::chrono::milliseconds(0));
-}
-
-/// Teardown drains what it submitted so deferred destructions can run, and tolerates its own
-/// timeout: wgpu retains every resource a submitted command buffer names until it completes, so
-/// an overrun is a slow teardown rather than a discovery. It is also routine - a loaded host, a
-/// software rasterizer, a contended driver - and the contexts sharing this root are still live.
-/// Declaring the root lost from it would make every one of them refuse to present, map or wait,
-/// and would leak the whole root, because a root declared lost is deliberately not released.
-TEST(GeodeDeviceLost, ATeardownDrainThatOverrunsDoesNotDeclareTheRootLost) {
-  auto context = CreateTransitionalAdapterContext(kHoldsAdapterWork);
-  ASSERT_NE(context, nullptr);
-  ASSERT_FALSE(context->isDeviceLost());
-
-  GeodeRuntimeDevice siblingRuntime = context->physicalDeviceOwner()->createLogicalDevice();
-  ASSERT_NE(siblingRuntime.device, nullptr);
-  ASSERT_THAT(siblingRuntime.transitionalAdapter, NotNull())
-      << "this case holds work through the transitional adapter's test seam";
-  // The adapter view names the same device, so ownership moves to it without a conversion.
-  (void)siblingRuntime.device.release();
-  std::unique_ptr<GeodeWgpuAdapterDevice> sibling(siblingRuntime.transitionalAdapter);
-  const uint64_t submitted = SubmitEmptyCommandBuffer(*sibling);
-  ASSERT_THAT(submitted, testing::Gt(0u));
-  sibling->holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(1));
-  sibling->setTeardownDrainBudgetForTesting(0.2);
-
-  sibling.reset();
-
-  EXPECT_FALSE(context->isDeviceLost())
-      << "only a wait a caller bounded for its own deadline has observed something worth "
-         "publishing; a teardown drain already proceeds on timeout";
 }
 
 /// A driver-reported loss has no wait to attribute it to, and must not borrow
@@ -750,36 +363,6 @@ TEST(GeodeDeviceLost, TeardownAfterLossSkipsGpuWaits) {
   const auto elapsed = std::chrono::steady_clock::now() - start;
   EXPECT_LT(elapsed, std::chrono::seconds(1))
       << "post-loss teardown must not run bounded GPU waits";
-}
-
-/// An embedder-shared lost flag (GeodeEmbedConfig::lostState) is observed by
-/// the wrapper, and a loss marked through the wrapper is visible to the
-/// embedder: the flag converges both directions.
-TEST(GeodeDeviceLost, ExternalConfigSharesLostState) {
-  auto headless = CreateTransitionalAdapterContext(kBorrowsWgpuRootObjects);
-  ASSERT_NE(headless, nullptr);
-
-  auto lostState = std::make_shared<GeodeDeviceLostState>();
-  GeodeEmbedConfig config;
-  config.device = headless->adapterDevice().root().device();
-  config.queue = headless->adapterDevice().root().queue();
-  config.lostState = lostState;
-  auto external = GeodeDevice::CreateFromExternal(config);
-  ASSERT_NE(external, nullptr);
-
-  EXPECT_FALSE(external->isDeviceLost());
-  lostState->lost.store(true, std::memory_order_release);
-  EXPECT_TRUE(external->isDeviceLost());
-
-  // Reset the shared flag and mark through the wrapper instead.
-  lostState->lost.store(false, std::memory_order_release);
-  external->markDeviceLost("wrapper-marked loss");
-  EXPECT_TRUE(lostState->lost.load(std::memory_order_acquire));
-
-  // The external wrapper's destructor must skip GPU waits (the flag is
-  // set); destroy it before the headless owner so the underlying device
-  // outlives the wrapper.
-  external.reset();
 }
 
 /// Milliseconds elapsed since \p start, as an integer a failure message prints.

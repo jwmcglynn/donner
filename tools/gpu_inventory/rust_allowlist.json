@@ -10,5 +10,17 @@
   ],
   "testOnlyConsumerPrefixes": [
     "third_party/tiny-skia-cpp/tests/"
+  ],
+  "testOnlyGpuOracleArchives": [
+    {
+      "name": "wgpu_native_linux_aarch64",
+      "asset": "wgpu-linux-aarch64-release.zip",
+      "sha256": "97786f622d6d4f9aaa87c27d165de8db65daf1d391e0bcc32a2dd9bb45fcd299"
+    },
+    {
+      "name": "wgpu_native_linux_x86_64",
+      "asset": "wgpu-linux-x86_64-release.zip",
+      "sha256": "86f3eb9f74d7f1ac82ee52d9b2ab15e366ef86a932759c750b7472652836ee59"
+    }
   ]
 }

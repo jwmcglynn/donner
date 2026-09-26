@@ -24,7 +24,6 @@
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::svg {
 
@@ -99,7 +98,7 @@ RendererGeodeTextureSnapshot createTestSnapshot(const std::shared_ptr<geode::Geo
   }
   RendererGeodeTextureSnapshot snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
       device, std::move(texture), Vector2i(static_cast<int>(kWidth), static_cast<int>(kHeight)),
-      wgpu::TextureFormat::RGBA8Unorm, AlphaType::Premultiplied);
+      gpu::TextureFormat::RGBA8Unorm, AlphaType::Premultiplied);
   if (!snapshot.isValid()) {
     ADD_FAILURE() << "the readback source was refused as a snapshot";
   }
@@ -278,8 +277,8 @@ TEST_F(GeodeSnapshotReadbackTest, AdoptingATextureOfAnotherDeviceIsRefused) {
 
   const RendererGeodeTextureSnapshot foreign = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
       consumer, std::move(ownedElsewhere),
-      Vector2i(static_cast<int>(kWidth), static_cast<int>(kHeight)),
-      wgpu::TextureFormat::RGBA8Unorm, AlphaType::Premultiplied);
+      Vector2i(static_cast<int>(kWidth), static_cast<int>(kHeight)), gpu::TextureFormat::RGBA8Unorm,
+      AlphaType::Premultiplied);
   EXPECT_THAT(foreign.isValid(), testing::IsFalse())
       << "a texture of another device must not be admitted as a snapshot of this one";
   EXPECT_THAT(producer->runtimeDevice().ownsTextureBacking(probe), testing::IsTrue())

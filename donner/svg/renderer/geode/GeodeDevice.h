@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// RAII wrapper around a WebGPU device - headless or host-provided.
+/// Logical rendering context over a selected native, browser, or test-reference GPU device.
 
 #include <algorithm>
 #include <atomic>
@@ -28,7 +28,7 @@ class RendererGeodeTextureSnapshot;
 
 namespace donner::geode {
 
-/// 256-align a tightly packed row-byte count per the WebGPU
+/// 256-align a tightly packed row-byte count per the GPU runtime's
 /// texture-to-buffer copy rules. Shared by the device's readback-buffer
 /// sizing and the renderer's map-range math; the two MUST agree, because a
 /// mapped-range request larger than the buffer returns null rather than
@@ -49,7 +49,6 @@ class GeodeImagePipeline;
 class GeodeMaskPipeline;
 class GeodeFilterEngine;
 class GeodeGpuRoot;
-struct GeodeEmbedConfig;
 struct GeodeRuntimeDevice;
 class GeodeWgpuAdapterDevice;
 class GeodeSnapshotReadbackPipeline;
@@ -58,8 +57,8 @@ class GeodeSnapshotReadbackPipeline;
  * Shared lifetime owner for one selected GPU runtime device and the backend root it drives.
  *
  * Logical \ref GeodeDevice contexts retain this owner while keeping their runtime handle tables,
- * submissions, pipelines, caches, counters and retirement queues independent. Owned roots are
- * released once, after the last context; borrowed roots remain the embedder's responsibility.
+ * submissions, pipelines, caches, counters and retirement queues independent. The native root is
+ * released once, after the last context.
  */
 class GeodePhysicalDeviceOwner {
 public:
@@ -180,15 +179,13 @@ gpu::Result<gpu::Texture> RegisterOrderedTexture(
     std::chrono::milliseconds bound = kDefaultGpuWaitTimeout);
 
 /**
- * Owns (or wraps) a WebGPU device/queue pair for GPU rendering.
+ * Owns a logical Geode context over a selected GPU runtime device.
  *
- * GeodeDevice is the entry point to the Geode rendering backend. In **headless
- * mode** (`CreateHeadless`), it creates a WebGPU instance, selects a default
- * adapter, and creates a device - all without any window system integration.
+ * GeodeDevice is the entry point to the Geode rendering backend. In headless mode it selects
+ * the platform's native GPU root and creates a device without window system integration.
  *
- * In **embedded mode** (`CreateFromExternal`), it creates a logical context
- * over either host-owned raw roots or a shared physical owner. Raw-root mode
- * remains borrowed; shared-owner mode retains that owner's ownership contract.
+ * A host that selects a presentation root creates its first context with
+ * CreateOverSelectedRoot, then creates sibling contexts with CreateOverPhysicalDeviceOwner.
  *
  * Typical headless usage:
  *
@@ -198,12 +195,6 @@ gpu::Result<gpu::Texture> RegisterOrderedTexture(
  *       return;
  *     }
  *
- * Typical embedded usage:
- *
- *     GeodeEmbedConfig config;
- *     config.device = hostDevice;
- *     config.queue = hostQueue;
- *     auto geodeDevice = GeodeDevice::CreateFromExternal(config);
  */
 class GeodeDevice {
 public:
@@ -211,31 +202,18 @@ public:
    * Create a headless GeodeDevice.
    *
    * @return A valid GeodeDevice on success, or an empty unique_ptr if the
-   *   runtime could not create an adapter/device (e.g., no GPU, no driver).
+   *   runtime could not create a GPU device (e.g., no GPU, no driver).
    */
   static std::unique_ptr<GeodeDevice> CreateHeadless(
       gpu::TextureFormat textureFormat = gpu::TextureFormat::RGBA8Unorm);
 
   /**
-   * Create a logical GeodeDevice context over existing physical roots.
-   *
-   * Raw-root configuration is borrowed and remains the host's responsibility.
-   * Shared-owner configuration retains that owner's owning or borrowed mode.
-   *
-   * @param config Embedding configuration with raw roots or a shared physical owner.
-   * @return A valid GeodeDevice on success, or null if roots are absent,
-   *   disagree with the owner, or name an already-lost physical device.
-   */
-  static std::unique_ptr<GeodeDevice> CreateFromExternal(const GeodeEmbedConfig& config);
-
-  /**
    * Creates the first logical context over a backend root the caller already selected.
    *
-   * For a host that has to drive the selection itself - the editor supplies the window surface
-   * the adapter must be able to present to - and then renders through the result like any other
-   * context. The context takes the root's runtime device rather than standing up a second one.
+   * The editor and native embed example select against their actual window surface before opening
+   * a logical device. This context takes the selected root's first runtime device.
    *
-   * @param root Root from \ref SelectGpuRoot or \ref AdoptGpuRoot; must not be null.
+   * @param root Selected backend root; must not be null.
    * @param textureFormat Format the context's render targets and pipelines are built for.
    * @return A valid context, or null when the root could not be retained.
    */
@@ -246,8 +224,8 @@ public:
    * Creates another logical context over the selected physical owner.
    *
    * It shares the backend root and loss condition with the first context while retaining its own
-   * runtime device, handle table, submission serials, counters, and pipelines. No WebGPU embed
-   * handles are needed, so native and browser roots use the same path.
+   * runtime device, handle table, submission serials, counters, and pipelines. Native and browser
+   * roots use the same shared-owner path.
    *
    * @param physicalDevice Owner retained by the first context; null or lost owners are refused.
    * @param textureFormat Format this context's render targets and pipelines are built for.
@@ -257,21 +235,16 @@ public:
       std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice, gpu::TextureFormat textureFormat);
 
   /// Number of \ref CreateHeadless calls made so far in this process. Each
-  /// headless creation stands up a full WebGPU instance/adapter/device, so
+  /// headless creation stands up a full physical GPU root, so
   /// hot paths must share one device instead of re-creating; tests pin that
   /// sharing by asserting this count stays flat across repeated operations.
   static int headlessCreationCountForTesting();
 
-  /// Number of retained headless-device loss callback states not yet consumed by WebGPU.
+  /// Number of retained transitional-reference loss callbacks; zero for native devices.
   static std::size_t outstandingDeviceLostCallbacksForTesting();
 
-  /// Destructor releases the device and all GPU resources. All teardown
-  /// waits are bounded; if the device has been declared lost (see
-  /// \ref isDeviceLost) the destructor performs no GPU waits at all and
-  /// deliberately leaks the root WebGPU handles (queue, device, adapter,
-  /// instance) rather than risking a blocking call into a hung driver. The
-  /// leak is bounded to one device's worth of driver objects per loss, and a
-  /// lost device is a process-fatal condition for GPU rendering anyway.
+  /// Destructor releases logical resources before their runtime device and selected root. Teardown
+  /// waits are bounded; a declared loss skips further waits into the failed device.
   ~GeodeDevice();
 
   // Non-copyable, non-movable. The device owns pipelines and a filter
@@ -292,33 +265,10 @@ public:
   /**
    * Wait, bounded, for all submitted GPU work to complete.
    *
-   * Replaces unbounded `poll(wait=true)` loops: the wait is a non-blocking
-   * poll at \ref kGpuWaitPollInterval cadence with a deadline, so a hung
-   * driver costs at most @p timeout instead of blocking the calling thread
-   * forever (in the worst case in uninterruptible kernel sleep). On timeout
-   * the device is marked lost (see \ref markDeviceLost) and later waits on
-   * this device return immediately.
-   *
-   * Completion condition: the wait observes "queue empty", not "the work
-   * submitted before this call completed". With a concurrent submitter on
-   * the same underlying queue (on native, the async-render thread and the
-   * editor framebuffer wrapper share one WebGPU queue), a healthy but
-   * continuously saturated queue could in principle be non-empty at every
-   * poll sample for the whole timeout and be falsely declared lost. This is
-   * accepted: real submit cadences leave idle gaps many orders of magnitude
-   * wider than the 100 us sampling interval, the exposure is bounded by the
-   * generous timeout, and a false positive degrades to the detection path
-   * (renderer reports device loss and tears down wait-free) rather than a
-   * hang or crash.
-   *
-   * Under Emscripten this performs the pre-existing single poll-yield
-   * instead of a bounded drain loop: emdawnwebgpu's poll return value does
-   * not report queue-idle, and browser device hangs surface through the
-   * readback map deadline and the browser's own device-loss reporting.
-   *
-   * On a native backend there is no poll that reports an empty queue: the
-   * wait is for this context's last submitted serial to complete, within the
-   * same budget, and so observes only this context's own submissions.
+   * Native backends wait for this context's last submitted serial, rather than asking whether a
+   * shared queue is momentarily empty. The explicit Linux test reference uses a bounded adapter
+   * poll; the browser's imported-device path performs one yielding poll. A timeout declares the
+   * device lost, and later waits return immediately.
    *
    * @param timeout Wait budget; defaults to the shared generous bound.
    * @return `Complete` when the queue drained, `TimedOut` when the deadline
@@ -333,8 +283,7 @@ public:
     queueWaitResultForTesting_ = result;
   }
 
-  /// True once this device has been declared lost, either by the WebGPU
-  /// device-lost callback (driver-reported) or by a bounded GPU wait
+  /// True once this device has been declared lost, either by its backend or by a bounded GPU wait
   /// exceeding its deadline. Sticky: never resets. Once lost, rendering
   /// output is undefined, snapshots return empty bitmaps promptly, and
   /// teardown skips all GPU waits.
@@ -350,7 +299,7 @@ public:
 
   /// Declare this device lost. Idempotent; the first call logs @p reason.
   /// Called from bounded waits on timeout, and available to embedders whose
-  /// own device-lost signal is not shared via `GeodeEmbedConfig::lostState`.
+  /// own device-lost signal is not shared through the selected root.
   /// Const because observers treat the flag as shared diagnostic state and
   /// waits that discover a hang run through const accessors.
   void markDeviceLost(const char* reason) const;
@@ -434,12 +383,10 @@ public:
     return physicalDevice_->lostState();
   }
 
-  /// Opaque lifetime token shared by logical contexts over the same physical roots. Raw roots
-  /// remain accessible only through a retained logical context.
+  /// Opaque lifetime token shared by logical contexts over the same native physical root.
   std::shared_ptr<GeodePhysicalDeviceOwner> physicalDeviceOwner() const { return physicalDevice_; }
 
-  /// Render-target texture format. Defaults to RGBA8Unorm for headless devices;
-  /// set by the host via `GeodeEmbedConfig::textureFormat` in embedded mode.
+  /// Render-target texture format, chosen by the caller or defaulted to RGBA8Unorm.
   gpu::TextureFormat textureFormat() const { return textureFormat_; }
 
   /**
@@ -491,9 +438,7 @@ public:
    *
    * Called at the top of each frame (before new allocations) so resources
    * from the previous frame's command buffer submission have had time to
-   * complete on the GPU. WebGPU internally reference-counts resources used
-   * by submitted command buffers, so dropping our handle here is safe even
-   * without an explicit `device.poll()`.
+   * complete on the GPU. The runtime retires backing resources after submitted work completes.
    */
   void drainDeferredDestroys();
 
@@ -524,19 +469,9 @@ public:
    * bind-group create count flat; the GeodePerf ceilings pin this).
    *
    * Buffers are identified by the process-unique ids handed out by
-   * `AllocateBufferId()`, NOT by their `WGPUBuffer` handle addresses. A
-   * cached bind group keeps the buffer's GPU-side resource alive inside
-   * WebGPU, but it does NOT keep the caller's handle object alive: when the
-   * document that owned a slab chunk is destroyed, its handles are released
-   * and their addresses become available to the allocator again. A device
-   * outlives the documents drawn on it (renderers lease devices from a
-   * small idle pool), so a later document's freshly created buffer can land
-   * on a recycled address and - with identical chunk sizes and record
-   * offsets, the norm for small documents - compare EQUAL to an entry left
-   * behind by the dead one. The lookup would then hand back the previous
-   * document's bind group and the batch would draw that document's records
-   * and geometry, which shows up as whole shapes rendered at another
-   * document's transform.
+   * `AllocateBufferId()`, rather than a backend handle address that may be recycled when a
+   * document releases its slab. A device outlives the documents drawn on it, so an address reused
+   * by another document must never retrieve the previous document's cached bind group.
    */
   struct SceneBatchBindGroupKey {
     uint64_t uniformBufferId = 0;
@@ -565,11 +500,9 @@ public:
    *
    * Anything that outlives a buffer and still has to answer "is this the
    * same buffer I saw before?" must compare these ids rather than
-   * `WGPUBuffer` handle addresses. Releasing the last handle reference frees
-   * the handle object even while WebGPU keeps the underlying resource alive
-   * for bind groups and recorded commands that already reference it, so a
-   * later allocation can reuse the address and make two unrelated buffers
-   * indistinguishable. `deviceId()` exists for the same reason one level up.
+   * backend handle addresses. The runtime may release a handle while submitted work still retains
+   * its allocation; a later allocation can reuse an address and make unrelated buffers appear
+   * identical. `deviceId()` exists for the same reason one level up.
    *
    * `0` is reserved for "no buffer", so a default-constructed id never
    * matches a real one.
@@ -604,7 +537,7 @@ public:
    * `GeodePerDevice`), so each device that draws a document finds its own
    * slabs and slots and never another's. Residence slots also record it, and
    * the draw path treats a slot whose id does not match as non-resident, a
-   * defensive cross-check since WebGPU rejects cross-device resources inside
+   * defensive cross-check since GPU backends reject cross-device resources inside
    * a render pass. A monotonic counter (rather than a raw `this` pointer)
    * avoids the ABA hazard of a freed device's address being recycled by a
    * later allocation.
@@ -697,14 +630,14 @@ public:
       ++counters_->pipelineSwitches;
     }
   }
-  /// Record one `wgpu::Queue::writeBuffer` call of `bytes` payload bytes.
+  /// Record one runtime buffer write of `bytes` payload bytes.
   void countBufferWrite(uint64_t bytes) const {
     if (counters_) {
       ++counters_->bufferWrites;
       counters_->bufferWriteBytes += bytes;
     }
   }
-  /// Record one `wgpu::Queue::writeTexture` call of `bytes` payload bytes.
+  /// Record one runtime texture write of `bytes` payload bytes.
   void countTextureWrite(uint64_t bytes) const {
     if (counters_) {
       counters_->textureWriteBytes += bytes;
@@ -817,7 +750,7 @@ public:
    */
   bool supportsTimestamps() const { return false; }
 
-  /// True when the active wgpu backend is Vulkan (Intel Arc hardware or Mesa
+  /// True when the active native backend is Vulkan (Intel Arc hardware or Mesa
   /// lavapipe software). GeodeFilterEngine uses this to force inter-pass
   /// serialization that eliminates a nondeterministic cross-submit
   /// storage-write -> sampled-read visibility race observed on Arc Vulkan.
@@ -844,21 +777,14 @@ public:
   /// @name Shared render / compute pipelines (issue #575 fix)
   /// @{
   ///
-  /// Every wgpu pipeline created by `createRenderPipeline` /
-  /// `createComputePipeline` is retained internally by wgpu-native even
-  /// after the public handle's refcount drops to zero - `wgpuDevicePoll`
-  /// does not drain it. Prior to this, `RendererGeode` constructed the
-  /// four pipeline objects below (~18 wgpu pipelines in total, most
-  /// inside `GeodeFilterEngine`) per-instance, so the image-comparison
-  /// suite leaked ~1.6 MB per test and ultimately exhausted the driver
-  /// memory budget (see issue #575). Moving ownership here - one copy
-  /// per `GeodeDevice` - caps the pipeline footprint at a fixed cost.
+  /// RendererGeode once constructed these pipeline objects per renderer instance, exhausting the
+  /// GPU memory budget in image-comparison runs (issue #575). Ownership here keeps one fixed set
+  /// per GeodeDevice instead.
   ///
   /// Every renderer that talks to this device shares the same pipeline
   /// objects; their state is intentionally immutable after construction
   /// (no per-draw mutation), so concurrent use from sibling renderers
-  /// is safe as long as it is serialized at the `wgpu::Queue` level
-  /// (which Donner's render path already is).
+  /// is safe as long as submissions are serialized by the selected runtime device.
 
   /// Slug solid-fill render pipeline.
   GeodePipeline& pipeline() const;
@@ -888,22 +814,17 @@ public:
 
   /// This context's GPU runtime device: the owner of its handle tables, submission serials, and
   /// resource retirement. Renderer services that need only the runtime contract take this instead
-  /// of naming the concrete backend type. On the transitional adapter it is the same object
-  /// \ref adapterDevice returns, which `GeodeDevice_tests.RuntimeAndAdapterAccessorsNameOneDevice`
-  /// pins while both accessors exist; on a native backend it is that backend's device.
+  /// of naming the concrete backend type.
   gpu::Device& runtimeDevice() const UTILS_LIFETIME_BOUND;
 
+#ifdef DONNER_GEODE_WGPU_REFERENCE
   /// Whether this context renders through the transitional adapter, so \ref adapterDevice names
-  /// a device. False on a native backend, where the operations that accessor exists for have no
-  /// wgpu object to reach.
+  /// a device. Available only to the explicit Linux resvg reference configuration.
   bool hasTransitionalAdapter() const;
 
-  /// The TEMPORARY transition adapter implementing \c donner::gpu::Device over this
-  /// device's wgpu objects. The same object \ref runtimeDevice returns, named by its concrete
-  /// type for the callers that still use operations the runtime contract does not carry yet; see
-  /// GeodeWgpuAdapterDevice.h for the removal gates. Halts when this context renders through a
-  /// native backend; \ref hasTransitionalAdapter is what a caller that can serve both asks first.
+  /// Transitional adapter used by the Linux resvg reference, never by a native product context.
   GeodeWgpuAdapterDevice& adapterDevice() const UTILS_LIFETIME_BOUND;
+#endif
 
   /// The recording context Geode's encoders record a frame against: this device's GPU runtime
   /// device, its shared bind-slot resources, and its counter sinks. Wired once with the shared
