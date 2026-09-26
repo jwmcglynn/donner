@@ -409,6 +409,7 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   assert.deepEqual(config.testMatch, [
     "smoke.spec.ts",
     "browser-presentation-regression.spec.ts",
+    "browser-surface-recovery.spec.ts",
   ]);
 
   const firefox = projects.get("firefox-geode-resize");
