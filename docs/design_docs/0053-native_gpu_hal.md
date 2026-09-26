@@ -109,9 +109,10 @@ not browser-backend evidence.
 
 The shared fill, gradient, mask, image, snapshot, checkerboard, texture-cache, and compositor-debug
 paths now use their reviewed runtime resource boundaries. Linux native editor presentation is
-locally qualified; its hosted/integrated acceptance and default flip remain, as do the remaining
-module/adapter consumers. The browser editor canvas and diagnostic readback use the selected
-runtime.
+locally qualified; its hosted/integrated acceptance and merge remain. The native Linux default is
+implemented in this candidate and awaits its dependent hosted/integrated gate and merge. Other
+module/adapter consumers remain. The browser editor canvas and diagnostic readback use the
+selected runtime.
 
 Strict Wasm-size qualification is deferred until production Rust removal. The remaining browser
 cutover removes the transitional WebGPU path from the WebAssembly build: emdawnwebgpu's C++
@@ -613,7 +614,8 @@ quarantine. Real lost and minimized GLFW transitions remain unexercised. It
 passes five cases on lavapipe and five on Intel Arc under Khronos synchronization validation,
 with no logged VUID or synchronization hazard. Hosted Linux installs Xvfb and xauth; a tagged
 hosted lane runs the target when the ordinary Linux job routes to remote execution. Hosted CI,
-the integrated editor matrix, and merge still gate this item and the Linux default flip.
+the integrated editor matrix, and merge still gate this item; the dependent Linux default
+candidate has its own hosted and integrated acceptance.
 
 ### Browser bridge
 
