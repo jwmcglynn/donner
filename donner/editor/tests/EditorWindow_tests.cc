@@ -1612,6 +1612,8 @@ TEST(EditorWindowDeathTest, UnprovenNativeRetirementQuarantinesTheWindowAndGlfwC
   if (selected.result() != geode::GpuBackendKind::NativeVulkan) {
     GTEST_SKIP() << "This run did not select native Vulkan";
   }
+  // Coverage instrumentation may start threads before any test runs; re-exec the death-test child.
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
   ASSERT_EXIT(([&] {
                 auto window = std::make_unique<EditorWindow>(EditorWindowOptions{
                     .title = "Retained Vulkan Window",
