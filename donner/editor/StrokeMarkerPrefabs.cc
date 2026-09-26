@@ -52,36 +52,45 @@ bool IsGeneratedPrefabId(std::string_view id, std::string_view key) {
          std::all_of(suffix.begin(), suffix.end(), [](char c) { return c >= '0' && c <= '9'; });
 }
 
-bool MatchesPrefabDefinition(const svg::SVGElement& marker, const MarkerSpec& spec) {
-  if (marker.attributes().size() != 8u) {
+bool AttributeIs(const svg::SVGElement& element, const char* name, std::string_view expected) {
+  const std::optional<RcString> value = element.getAttribute(name);
+  return value.has_value() && std::string_view(*value) == expected;
+}
+
+bool MatchesMarkerAttributes(const svg::SVGElement& marker, const MarkerSpec& spec) {
+  const std::string refX = std::to_string(spec.refX);
+  return AttributeIs(marker, "data-donner-prefab-marker", spec.key) &&
+         AttributeIs(marker, "viewBox", "0 0 8 8") && AttributeIs(marker, "markerWidth", "4") &&
+         AttributeIs(marker, "markerHeight", "4") && AttributeIs(marker, "refX", refX) &&
+         AttributeIs(marker, "refY", "4") && AttributeIs(marker, "orient", "auto-start-reverse");
+}
+
+bool MatchesOpenArrowPaint(const svg::SVGElement& shape) {
+  return AttributeIs(shape, "stroke", "context-stroke") &&
+         AttributeIs(shape, "stroke-width", "1.4") &&
+         AttributeIs(shape, "stroke-linecap", "round") &&
+         AttributeIs(shape, "stroke-linejoin", "round");
+}
+
+bool MatchesPrefabShape(const svg::SVGElement& shape, const MarkerSpec& spec) {
+  const RcString shapeTag = shape.tagName().name;
+  if (std::string_view(shapeTag) != "path" || shape.attributes().size() != (spec.open ? 6u : 2u) ||
+      !AttributeIs(shape, "d", spec.path) ||
+      !AttributeIs(shape, "fill", spec.open ? "none" : "context-stroke")) {
     return false;
   }
-  const auto attributeIs = [](const svg::SVGElement& element, const char* name,
-                              std::string_view expected) {
-    const std::optional<RcString> value = element.getAttribute(name);
-    return value.has_value() && std::string_view(*value) == expected;
-  };
-  const std::string refX = std::to_string(spec.refX);
-  if (!attributeIs(marker, "data-donner-prefab-marker", spec.key) ||
-      !attributeIs(marker, "viewBox", "0 0 8 8") || !attributeIs(marker, "markerWidth", "4") ||
-      !attributeIs(marker, "markerHeight", "4") || !attributeIs(marker, "refX", refX) ||
-      !attributeIs(marker, "refY", "4") || !attributeIs(marker, "orient", "auto-start-reverse")) {
+  return !spec.open || MatchesOpenArrowPaint(shape);
+}
+
+bool MatchesPrefabDefinition(const svg::SVGElement& marker, const MarkerSpec& spec) {
+  if (marker.attributes().size() != 8u || !MatchesMarkerAttributes(marker, spec)) {
     return false;
   }
   const std::optional<svg::SVGElement> shape = marker.firstChild();
   if (!shape.has_value() || shape->nextSibling().has_value()) {
     return false;
   }
-  const RcString shapeTag = shape->tagName().name;
-  if (std::string_view(shapeTag) != "path" || shape->attributes().size() != (spec.open ? 6u : 2u) ||
-      !attributeIs(*shape, "d", spec.path) ||
-      !attributeIs(*shape, "fill", spec.open ? "none" : "context-stroke")) {
-    return false;
-  }
-  return !spec.open || (attributeIs(*shape, "stroke", "context-stroke") &&
-                        attributeIs(*shape, "stroke-width", "1.4") &&
-                        attributeIs(*shape, "stroke-linecap", "round") &&
-                        attributeIs(*shape, "stroke-linejoin", "round"));
+  return MatchesPrefabShape(*shape, spec);
 }
 
 std::optional<std::string> ExistingPrefabId(svg::SVGDocument& document, const MarkerSpec& spec) {
