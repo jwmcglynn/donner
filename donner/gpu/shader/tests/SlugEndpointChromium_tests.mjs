@@ -118,11 +118,13 @@ async function runCase(page, shader, category) {
         input.sample[1] = 0;
       }
       if (["NearLinear", "LargeQuadratic", "SmallQuadratic"].includes(probe)) {
-        const scale = probe === "LargeQuadratic"
-          ? 1e30
-          : probe === "SmallQuadratic"
-          ? 1e-25
-          : 1e-6;
+        const scale = Math.fround(
+          probe === "LargeQuadratic"
+            ? 1e30
+            : probe === "SmallQuadratic"
+            ? 1e-25
+            : 1e-6,
+        );
         input.curves = [627, 0, 627, scale, 627, 4 * scale];
         input.sample[1] = 3 * scale;
       } else if (probe === "BelowStart") {
