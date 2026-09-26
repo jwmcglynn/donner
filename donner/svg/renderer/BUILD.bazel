@@ -258,9 +258,9 @@ donner_perf_sensitive_cc_library(
     hdrs = ["FilterGraphExecutor.h"],
     # Backend-agnostic pure-CPU code: no `target_compatible_with` so it builds
     # under every config (tiny_skia, geode, and the feature-flag variants). The
-    # geode test binary links the tiny-skia backend (which pulls this in) for
-    # in-process geode-vs-tiny-skia parity. Production geode never reaches this
-    # target — enforced by //donner/svg/renderer:geode_excludes_tiny_skia_audit.
+    # geode test binary links the tiny-skia backend for backend-specific tests.
+    # Production geode never reaches this target, as enforced by
+    # //donner/svg/renderer:geode_excludes_tiny_skia_audit.
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":image_sampling",
@@ -505,10 +505,9 @@ donner_perf_sensitive_cc_library(
     }),
     # The tiny-skia renderer is a pure-CPU library (no wgpu): no
     # `target_compatible_with` so it builds under every config, including geode.
-    # The geode-enabled test binary links both backends to run geode-vs-tiny-skia
-    # parity in one process (see docs/design_docs/0017-geode_renderer.md §Phase
-    # 4b). Production rendering still routes through `:renderer`, which selects
-    # exactly one backend per config — so production geode never links this
+    # Geode-enabled test binaries link both backends for their separately
+    # reviewed golden cases. Production rendering routes through `:renderer`,
+    # which selects exactly one backend per config, so production geode never links this
     # target. That invariant is enforced by
     # //donner/svg/renderer:geode_excludes_tiny_skia_audit.
     visibility = ["//visibility:public"],
@@ -573,9 +572,8 @@ donner_cc_library(
 
 # Dependency audit: the geode *production* renderer must never link the
 # tiny-skia backend. We dropped the `target_compatible_with` guards from the
-# pure-CPU tiny-skia libs so the geode *test* binary can embed both backends
-# for in-process geode-vs-tiny-skia parity (see
-# docs/design_docs/0017-geode_renderer.md §Phase 4b). With those analysis-time
+# pure-CPU tiny-skia libs so geode *test* binaries can run both backends
+# against their separately reviewed goldens. With those analysis-time
 # guards gone, this query-based test is what keeps the line honest: it asserts
 # `somepath(:renderer_geode, :renderer_tiny_skia)` is empty, so production geode
 # (which routes through :renderer_geode) carries zero tiny-skia code.
