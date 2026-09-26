@@ -653,6 +653,9 @@ void Device::retireResource(ResourceKind kind, uint32_t slotIndex, uint64_t last
 }
 
 void Device::poll() {
+  if (!pendingDestroys_.empty() && !isLost()) {
+    onPollBackend();
+  }
   const uint64_t completed = completedSerial();
   size_t writeIndex = 0;
   for (const PendingDestroy& pending : pendingDestroys_) {

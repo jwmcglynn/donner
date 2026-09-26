@@ -878,9 +878,13 @@ public:
    * Processes deferred destructions: releases the backend object of every destroyed resource
    * whose last referencing submission has completed (\ref completedSerial), and recycles its
    * slot. Called opportunistically by `destroy*` and \ref submit; call it directly after waiting
-   * for completion to reclaim resources promptly.
+   * for completion to reclaim resources promptly. A backend that delivers completion callbacks
+   * only while polled drives one nonblocking backend iteration before reclaiming slots.
    */
   void poll();
+
+  /// Whether a completed submission can still release a backend object. Owner-thread only.
+  [[nodiscard]] bool hasPendingDestroys() const { return !pendingDestroys_.empty(); }
 
   /// Serial assigned to the most recent submission (0 if none yet).
   uint64_t lastSubmittedSerial() const { return lastSubmittedSerial_; }
@@ -946,6 +950,10 @@ public:
 protected:
   /// Constructor for backends; assigns the process-unique device identity.
   Device();
+
+  /// One nonblocking backend event iteration before a pending-destroy scan. Native devices
+  /// report completion directly; callback-driven adapters override this hook.
+  virtual void onPollBackend() {}
 
   /**
    * Adopts the sticky loss condition of a backend root this device shares with another device.

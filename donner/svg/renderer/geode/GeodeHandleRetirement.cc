@@ -30,8 +30,23 @@ std::size_t TakeHandlesOf(uint64_t deviceId, std::vector<Handle>& from, std::vec
 std::size_t GeodeHandleRetirement::retire(std::vector<gpu::Buffer>& buffers,
                                           std::vector<gpu::BindGroup>& bindGroups) {
   std::lock_guard<std::mutex> lock(mutex_);
-  return TakeHandlesOf(runtimeDeviceId_, buffers, buffers_) +
-         TakeHandlesOf(runtimeDeviceId_, bindGroups, bindGroups_);
+  const std::size_t before = buffers_.size() + bindGroups_.size();
+  const std::size_t remaining = TakeHandlesOf(runtimeDeviceId_, buffers, buffers_) +
+                                TakeHandlesOf(runtimeDeviceId_, bindGroups, bindGroups_);
+  if (buffers_.size() + bindGroups_.size() > before && wakeCallback_) {
+    wakeCallback_();
+  }
+  return remaining;
+}
+
+void GeodeHandleRetirement::setWakeCallback(std::function<void()> callback) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  wakeCallback_ = std::move(callback);
+}
+
+bool GeodeHandleRetirement::hasPending() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return !buffers_.empty() || !bindGroups_.empty();
 }
 
 void GeodeHandleRetirement::release() {
@@ -47,7 +62,11 @@ void GeodeHandleRetirement::release() {
 }
 
 void GeodeHandleRetirement::close() {
-  closed_.store(true, std::memory_order_release);
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    closed_.store(true, std::memory_order_release);
+    wakeCallback_ = {};
+  }
   release();
 }
 

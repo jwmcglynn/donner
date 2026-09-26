@@ -478,6 +478,22 @@ void AsyncRenderer::shutdown() {
   }
 }
 
+void AsyncRenderer::setIdleMaintenance(std::function<void()> poll, std::function<bool()> hasWork) {
+  {
+    std::lock_guard lock(mutex_);
+    idlePoll_ = std::move(poll);
+    idleHasWork_ = std::move(hasWork);
+  }
+  requestIdleMaintenance();
+}
+
+void AsyncRenderer::requestIdleMaintenance() {
+  // A retirement may happen while the renderer mutex is held (for example while replacing a
+  // staged document). Do not take that mutex from the mailbox callback.
+  idleWakeRequested_.store(true, std::memory_order_release);
+  cv_.notify_one();
+}
+
 void AsyncRenderer::noteGpuWaitOutcome(const svg::RendererReadbackStats& readbackStats) {
   if (!readbackStats.deviceLost) {
     return;
@@ -878,6 +894,56 @@ void AsyncRenderer::finishSampleThumbnailRendererCreation() {
   }
 }
 
+bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock) {
+  std::function<void()> idlePoll;
+  std::function<bool()> idleHasWork;
+  {
+    std::lock_guard stateLock(mutex_);
+    idlePoll = idlePoll_;
+    idleHasWork = idleHasWork_;
+    idleWakeRequested_.store(false, std::memory_order_release);
+  }
+  if (idlePoll) {
+    idlePoll();
+  }
+  const bool pollWhileIdle = idleHasWork && idleHasWork();
+  lock.lock();
+  const auto ready = [this] {
+    return std::holds_alternative<RenderingState>(workerState_) ||
+           std::holds_alternative<CancellingState>(workerState_) ||
+           std::holds_alternative<ShutdownState>(workerState_) ||
+           (std::holds_alternative<IdleState>(workerState_) &&
+            (pendingCompositorWarmup_ || pendingSampleThumbnail_.has_value()));
+  };
+  const auto wakeRequested = [this, &ready] {
+    return ready() || idleWakeRequested_.load(std::memory_order_acquire);
+  };
+  if (pollWhileIdle) {
+    cv_.wait_for(lock, std::chrono::milliseconds(100), wakeRequested);
+  } else if (idlePoll) {
+    // The mailbox callback intentionally avoids the renderer mutex. A sparse timer bounds a
+    // notification that races with cv_.wait's lock handoff without rendering a frame.
+    cv_.wait_for(lock, std::chrono::seconds(1), wakeRequested);
+  } else {
+    cv_.wait(lock, wakeRequested);
+  }
+  return ready();
+}
+
+bool AsyncRenderer::finishCancelledBeforeRender(std::unique_lock<std::mutex>& lock) {
+  if (!std::holds_alternative<CancellingState>(workerState_)) {
+    return false;
+  }
+  std::function<void()> wake = wakeCallback_;
+  workerState_ = IdleState{};
+  lock.unlock();
+  cv_.notify_all();
+  if (wake) {
+    wake();
+  }
+  return true;
+}
+
 void AsyncRenderer::workerLoop() {
 #if defined(__EMSCRIPTEN__)
   // Emscripten's WebGPU object table is per-worker. Construct and use the
@@ -893,14 +959,10 @@ void AsyncRenderer::workerLoop() {
     bool runCompositorWarmup = false;
     [[maybe_unused]] bool delaySampleThumbnailRendererCreation = false;
     {
-      std::unique_lock<std::mutex> lock(mutex_);
-      cv_.wait(lock, [this] {
-        return std::holds_alternative<RenderingState>(workerState_) ||
-               std::holds_alternative<CancellingState>(workerState_) ||
-               std::holds_alternative<ShutdownState>(workerState_) ||
-               (std::holds_alternative<IdleState>(workerState_) &&
-                (pendingCompositorWarmup_ || pendingSampleThumbnail_.has_value()));
-      });
+      std::unique_lock<std::mutex> lock(mutex_, std::defer_lock);
+      if (!waitForRenderOrIdleMaintenance(lock)) {
+        continue;  // A mailbox wake or completion timer needs maintenance, not a render.
+      }
       if (std::holds_alternative<ShutdownState>(workerState_)) {
 #ifdef __EMSCRIPTEN__
         // `workerRenderer` is destroyed here in Emscripten builds, i.e. on
@@ -908,16 +970,7 @@ void AsyncRenderer::workerLoop() {
 #endif
         return;
       }
-      if (std::holds_alternative<CancellingState>(workerState_)) {
-        // `cancelInFlight` raced with the worker before it could
-        // start renderFrame. Transition to Idle and loop back to cv_.wait.
-        std::function<void()> wake = wakeCallback_;
-        workerState_ = IdleState{};
-        lock.unlock();
-        cv_.notify_all();
-        if (wake) {
-          wake();
-        }
+      if (finishCancelledBeforeRender(lock)) {
         continue;
       }
       if (auto* rendering = std::get_if<RenderingState>(&workerState_)) {

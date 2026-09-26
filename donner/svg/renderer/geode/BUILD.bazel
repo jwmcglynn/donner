@@ -39,6 +39,13 @@ exports_files(
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
 
+# This one source is also compiled by the existing Linux resvg comparison target. That target
+# remains the sole test closure permitted to link the wgpu-native reference.
+exports_files(
+    ["tests/GeodeIdleRetirement_tests.cc"],
+    visibility = ["//donner/svg/renderer/tests:__pkg__"],
+)
+
 # Build flag controlling whether Geode's WebGPU-backed targets are compiled.
 bool_flag(
     name = "enable_geode",
@@ -575,6 +582,27 @@ donner_multi_transitioned_test(
     timeout = "short",
     testonly = 1,
     dep = ":geode_device_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
+
+# One source exercises the product-native device and the Linux-only test reference. The latter
+# catches callback delivery that requires a nonblocking wgpu poll after the final submission.
+donner_cc_test(
+    name = "geode_idle_retirement_native_test_impl",
+    srcs = ["tests/GeodeIdleRetirement_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_device",
+        "//donner/base:gtest_timeout_main",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_idle_retirement_native_test",
+    dep = ":geode_idle_retirement_native_test_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
 )

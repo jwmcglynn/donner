@@ -686,6 +686,13 @@ public:
   /// the window's event queue is the intended use.
   void setWakeCallback(std::function<void()> callback);
 
+  /// Owner-thread GPU maintenance for a renderer that has stopped drawing. The worker runs poll
+  /// before sleeping and on short timed wakes only while completed work may free resources.
+  void setIdleMaintenance(std::function<void()> poll, std::function<bool()> hasWork);
+
+  /// Wake the worker when another thread retires a handle to its GPU context.
+  void requestIdleMaintenance();
+
   /// Toggle whether the compositor uses tight-bounded segment
   /// rasterization. The change applies at the start
   /// of the next worker iteration - `renderFrame` calls
@@ -893,6 +900,11 @@ public:
 
 private:
   void workerLoop();
+  /// Poll an idle GPU context, then wait for work with a short completion timer only while needed.
+  /// Returns with \p lock held so the worker can consume its state without a race.
+  bool waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock);
+  /// Complete a cancellation dequeued before rendering and notify its waiting owner.
+  bool finishCancelledBeforeRender(std::unique_lock<std::mutex>& lock);
   bool prepareSampleThumbnailRendererForRequest(std::unique_ptr<svg::RendererInterface>& renderer,
                                                 svg::RendererInterface*& rendererRoot,
                                                 svg::RendererInterface* requestedRoot);
@@ -903,6 +915,9 @@ private:
   std::thread thread_;
   mutable std::mutex mutex_;
   std::condition_variable cv_;
+  std::function<void()> idlePoll_;
+  std::function<bool()> idleHasWork_;
+  std::atomic<bool> idleWakeRequested_{false};
 
   struct IdleState {};
   struct RenderingState {

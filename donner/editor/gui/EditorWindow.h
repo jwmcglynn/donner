@@ -646,6 +646,13 @@ public:
   /// @param timeoutSeconds Maximum wait duration in seconds.
   void waitEventsTimeout(double timeoutSeconds);
 
+  /// Maintain the GPU contexts owned by this event-loop thread without drawing another frame.
+  /// The render worker maintains its own context on that worker thread.
+  void pollIdleGpu();
+
+  /// Whether a completion timer should wake this event loop for another cheap idle poll.
+  [[nodiscard]] bool hasIdleGpuWork() const;
+
   /// Post an empty event into the window's queue, waking a concurrent
   /// `waitEvents()` call. Safe to call from any thread. Used by the
   /// async renderer worker to wake the UI thread when a render result
