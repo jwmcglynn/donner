@@ -6332,6 +6332,88 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
   }
 }
 
+TEST(RenderCoordinatorTest, ZoomedPaintChangesRefreshOverviewAndSettle) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="target" d="M 20 20 L 80 20 L 50 80 Z" fill="white" stroke="black" transform="translate(3 5) rotate(15 50 50)"/>
+    </svg>
+  )svg"));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.resetTo100Percent();
+  viewport.zoomAround(32.0, viewport.paneCenter());
+  ASSERT_TRUE(viewport.rasterViewport().viewportBounded);
+
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Requires native texture presentation";
+  }
+  const auto render = [&]() {
+    if (!coordinator.maybeRequestRender(app, selectTool, viewport, &textures)) {
+      return false;
+    }
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); },
+                     std::chrono::steady_clock::now() + std::chrono::seconds(5));
+  };
+  ASSERT_TRUE(render());
+  ASSERT_THAT(textures.overviewTiles(), testing::Not(testing::IsEmpty()));
+
+  RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+  ASSERT_TRUE(render());
+  ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
+  const auto generations = [](const auto& tiles) {
+    std::vector<std::uint64_t> result;
+    for (const auto& tile : tiles) {
+      result.push_back(tile.generation);
+    }
+    return result;
+  };
+
+  for (std::string_view property : {"fill", "stroke"}) {
+    SCOPED_TRACE(property);
+    const auto oldOverview = generations(textures.overviewTiles());
+    const auto oldActive = generations(textures.tiles());
+    const auto oldDisplayedVersion = coordinator.displayedDocVersion();
+    ASSERT_TRUE(app.setStylePropertyOnSelection(property, "#f0b429"));
+    ASSERT_TRUE(app.flushFrame());
+    coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
+    ASSERT_TRUE(render());
+    const auto posted = RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
+    ASSERT_THAT(posted, testing::Optional(testing::_));
+    EXPECT_TRUE(posted->overviewInfillOnly)
+        << "A paint edit must replace the overview retained beneath zoomed tiles";
+    EXPECT_THAT(generations(textures.overviewTiles()), testing::ContainerEq(oldOverview));
+    EXPECT_THAT(generations(textures.tiles()), testing::ContainerEq(oldActive));
+    EXPECT_EQ(coordinator.displayedDocVersion(), oldDisplayedVersion);
+    if (property == "stroke") {
+      ASSERT_TRUE(app.setStylePropertyOnSelection("stroke", "#0044ff"));
+      ASSERT_TRUE(app.flushFrame());
+      coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
+      ASSERT_TRUE(render());
+      ASSERT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly);
+      EXPECT_THAT(generations(textures.overviewTiles()), testing::ContainerEq(oldOverview));
+      EXPECT_EQ(coordinator.displayedDocVersion(), oldDisplayedVersion);
+    }
+    ASSERT_TRUE(render());
+    EXPECT_FALSE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly);
+    EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
+    EXPECT_THAT(generations(textures.overviewTiles()),
+                testing::Not(testing::ContainerEq(oldOverview)));
+    EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+        << "The refreshed overview and selected layer must settle without repeated rendering";
+  }
+}
+
 TEST(RenderCoordinatorTest, UnsupportedTextSelectionDoesNotRepeatIdlePrewarm) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
@@ -6512,7 +6594,7 @@ TEST(RenderCoordinatorTest, DeletedSelectionSuppressesStaleCachedLayer) {
          "cached texture metadata.";
 }
 
-TEST(RenderCoordinatorTest, StyleMutationOnSelectedElementDropsPromotedLayerCache) {
+TEST(RenderCoordinatorTest, StyleMutationOnSelectedElementRetainsPresentationUntilFreshRaster) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
@@ -6535,9 +6617,9 @@ TEST(RenderCoordinatorTest, StyleMutationOnSelectedElementDropsPromotedLayerCach
   EXPECT_THAT(app.document().lastFlushResult().cacheInvalidatedElements, Contains(targetEntity));
 
   coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
-  EXPECT_FALSE(coordinator.compositedPresentation().hasCachedTextures())
-      << "A selected style edit changes the promoted layer pixels even when the entity stays the "
-         "same; keeping the old cache lets the canvas display a stale no-fill texture.";
+  EXPECT_TRUE(coordinator.compositedPresentation().hasCachedTextures())
+      << "Keep the presented transform until the replacement pixels land";
+  EXPECT_EQ(coordinator.pendingSelectedLayerRasterizationEntityForDiagnostics(), targetEntity);
 }
 
 TEST(RenderCoordinatorTest, DeletedBackgroundKeepsPresentationUntilReplacementRender) {
@@ -6579,7 +6661,7 @@ TEST(RenderCoordinatorTest, DeletedBackgroundKeepsPresentationUntilReplacementRe
   const std::uint64_t deletedVersion = app.document().currentFrameVersion();
   ASSERT_NE(deletedVersion, cachedVersion);
 
-  coordinator.invalidatePresentationAfterDocumentFlush(app.document().lastFlushResult());
+  coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
   EXPECT_TRUE(coordinator.compositedPresentation().hasCachedTextures())
       << "A delete must not blank the whole canvas while the replacement render is pending; that "
          "creates a one-frame checkerboard flicker.";
