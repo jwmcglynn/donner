@@ -2544,6 +2544,11 @@ std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentation
 
 #ifdef DONNER_EDITOR_WGPU
 bool EditorWindow::configureFrameTarget(int displayW, int displayH) {
+#ifdef __APPLE__
+  if (wgpuState_->presentation != nullptr) {
+    UpdateMetalLayerBackingScale(window_);
+  }
+#endif
   if (displayW == wgpuState_->configuredWidth && displayH == wgpuState_->configuredHeight) {
     return true;
   }
