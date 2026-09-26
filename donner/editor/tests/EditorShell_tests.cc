@@ -1574,6 +1574,13 @@ public:
     return shell.computeFormatBarState();
   }
 
+  static void ApplyFormatBarActions(EditorShell& shell, const FormatBarState& state,
+                                    const FormatBarActions& actions) {
+    shell.applyFormatBarActions(state, actions);
+  }
+
+  static bool CommitTextEditing(EditorShell& shell) { return shell.textTool_.commit(shell.app_); }
+
   static void ToggleTextBold(EditorShell& shell) { shell.textTool_.toggleBold(shell.app_); }
   static void ToggleTextItalic(EditorShell& shell) { shell.textTool_.toggleItalic(shell.app_); }
   static void ToggleTextUnderline(EditorShell& shell) {
@@ -4448,6 +4455,117 @@ TEST(EditorShellTest, SelectDoubleClickOnTextSwitchesToTextEditingAtClick) {
   EXPECT_TRUE(after.bold);
   EXPECT_TRUE(after.italic);
   EXPECT_TRUE(after.underline);
+}
+
+TEST(EditorShellTest, SelectToolShortcutsComposeTextBoldItalicAndUnderline) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "shortcut-text.svg"));
+  ASSERT_TRUE(shell.valid());
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto label = app.document().document().querySelector("#label");
+  ASSERT_TRUE(label.has_value());
+  app.setSelection(*label);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_B}, /*ctrl=*/false, /*shift=*/false, /*super=*/true);
+  EXPECT_EQ(label->getAttribute("font-weight"), "bold");
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  DriveGlobalShortcut(shell, {ImGuiKey_I}, /*ctrl=*/false, /*shift=*/false, /*super=*/true);
+  EXPECT_EQ(label->getAttribute("font-weight"), "bold");
+  EXPECT_EQ(label->getAttribute("font-style"), "italic");
+  EXPECT_EQ(app.undoTimeline().entryCount(), 2u);
+  DriveGlobalShortcut(shell, {ImGuiKey_U}, /*ctrl=*/false, /*shift=*/false, /*super=*/true);
+  EXPECT_EQ(label->getAttribute("text-decoration"), "underline");
+  EXPECT_EQ(app.undoTimeline().entryCount(), 3u);
+  ASSERT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+
+  DriveGlobalShortcut(shell, {ImGuiKey_B}, /*ctrl=*/false, /*shift=*/false, /*super=*/true);
+  EXPECT_EQ(label->getAttribute("font-weight"), "normal");
+  EXPECT_EQ(label->getAttribute("font-style"), "italic");
+  EXPECT_EQ(label->getAttribute("text-decoration"), "underline");
+  EXPECT_EQ(app.undoTimeline().entryCount(), 4u);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_I}, /*ctrl=*/false, /*shift=*/false, /*super=*/true,
+                      /*textInputActive=*/true);
+  EXPECT_EQ(label->getAttribute("font-style"), "italic");
+  EXPECT_EQ(app.undoTimeline().entryCount(), 4u);
+}
+
+TEST(EditorShellTest, SelectToolFormattingShortcutRecordsUndo) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "shortcut-undo.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto label = app.document().document().querySelector("#label");
+  ASSERT_TRUE(label.has_value());
+  app.setSelection(*label);
+  const std::string before(app.document().document().source());
+
+  DriveGlobalShortcut(shell, {ImGuiKey_B}, /*ctrl=*/false, /*shift=*/false, /*super=*/true);
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  EXPECT_EQ(app.document().document().querySelector("#label")->getAttribute("font-weight"), "bold");
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), before);
+  EXPECT_TRUE(app.hasSelection());
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(app.document().document().querySelector("#label")->getAttribute("font-weight"), "bold");
+}
+
+TEST(EditorShellTest, TextToolFamilyChangeUsesOneSessionUndo) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "family-session-undo.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto label = app.document().document().querySelector("#label");
+  ASSERT_TRUE(label.has_value());
+  svg::SVGTextElement labelText = label->cast<svg::SVGTextElement>();
+  const Box2d extent =
+      labelText.withWriteAccess([&labelText](svg::DocumentWriteAccess&, EntityHandle) {
+        return labelText.getExtentOfChar(2u);
+      });
+  MouseModifiers modifiers;
+  modifiers.doubleClick = true;
+  shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
+      .documentPoint = extent.topLeft + extent.size() * 0.5,
+      .leftMouseDown = true,
+      .leftMousePressed = true,
+      .modifiers = modifiers,
+      .hitElementId = std::string("label"),
+  });
+  EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
+  ASSERT_TRUE(EditorShellTestAccess::TextToolIsEditing(shell));
+  const std::string before(app.document().document().source());
+  const FormatBarState state = EditorShellTestAccess::ComputeFormatBarState(shell);
+  FormatBarActions actions;
+  actions.setFontFamily = true;
+  actions.fontFamily = "Fira Code";
+  EditorShellTestAccess::ApplyFormatBarActions(shell, state, actions);
+  EXPECT_EQ(app.undoTimeline().entryCount(), 0u)
+      << "the active text session owns family changes until commit";
+  ASSERT_TRUE(EditorShellTestAccess::CommitTextEditing(shell));
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), before);
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(app.document().document().querySelector("#label")->getAttribute("font-family"),
+            "Fira Code");
 }
 
 TEST(EditorShellTest, DocumentSpaceReplayInputRoutesTextToolPlainClickCreatesNothing) {

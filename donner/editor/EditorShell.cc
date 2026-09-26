@@ -3091,12 +3091,10 @@ void EditorShell::handleGlobalShortcuts() {
     return;
   }
 
-  if (!sourcePaneFocused) {
-    if (pressedZ && cmd && !shift) {
-      requestHistoryAction(HistoryAction::Undo);
-    } else if (pressedZ && cmd && shift) {
-      requestHistoryAction(HistoryAction::Redo);
-    }
+  handleHistoryShortcuts(pressedZ, cmd, shift, sourcePaneFocused);
+
+  if (handleSelectionTextFormatShortcuts(cmd, shift, anyPopupOpen, sourcePaneFocused)) {
+    return;
   }
 
   if (!anyPopupOpen && cmd &&
@@ -3273,6 +3271,40 @@ void EditorShell::handleGlobalShortcuts() {
   if (CanDeleteSelectedElementsFromShortcut(deleteKey, app_.hasSelection(), anyPopupOpen,
                                             sourcePaneFocused)) {
     std::ignore = app_.deleteSelectionWithUndo(textEditor_.getText());
+  }
+}
+
+bool EditorShell::handleSelectionTextFormatShortcuts(bool cmd, bool shift, bool anyPopupOpen,
+                                                     bool sourcePaneFocused) {
+  if (activeTool_ != ActiveTool::Select || sourcePaneFocused || anyPopupOpen || !cmd || shift) {
+    return false;
+  }
+  const std::vector<svg::SVGElement>& selection = app_.selectedElements();
+  if (selection.size() != 1u || selection.front().type() != svg::ElementType::Text) {
+    return false;
+  }
+  FormatBarActions actions;
+  actions.toggleBold = ImGui::IsKeyPressed(ImGuiKey_B, /*repeat=*/false);
+  actions.toggleItalic = ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false);
+  actions.toggleUnderline = ImGui::IsKeyPressed(ImGuiKey_U, /*repeat=*/false);
+  if (!actions.toggleBold && !actions.toggleItalic && !actions.toggleUnderline) {
+    return false;
+  }
+  FormatBarState state;
+  ReadTextFormatState(selection.front(), &state);
+  applyFormatBarActions(state, actions);
+  return true;
+}
+
+void EditorShell::handleHistoryShortcuts(bool pressedZ, bool cmd, bool shift,
+                                         bool sourcePaneFocused) {
+  if (sourcePaneFocused) {
+    return;
+  }
+  if (pressedZ && cmd && !shift) {
+    requestHistoryAction(HistoryAction::Undo);
+  } else if (pressedZ && cmd && shift) {
+    requestHistoryAction(HistoryAction::Redo);
   }
 }
 
@@ -3459,40 +3491,64 @@ FormatBarState EditorShell::computeFormatBarState() {
   return state;
 }
 
+namespace {
+
+bool HasSelectionFormattingAction(const FormatBarActions& actions) {
+  return actions.setFontFamily || actions.setFontSize || actions.toggleBold ||
+         actions.toggleItalic || actions.toggleUnderline;
+}
+
+}  // namespace
+
 void EditorShell::applyFormatBarActions(const FormatBarState& state,
                                         const FormatBarActions& actions) {
   for (const auto& family : actions.retryFontFamilies) {
     retryCatalogFont(family);
   }
+  if (!app_.document().hasDocument()) {
+    return;
+  }
   const bool editing = activeTool_ == ActiveTool::Text && textTool_.isEditing();
 
-  bool changed = false;
   // Bold/Italic/Underline during an active editing session route to the
   // TextTool style toggles (they add/remove the attribute and flush). Family
   // and size, plus the selection-only B/I/U path, route to the attribute-write
   // seam shared with the Text inspector.
-  if (editing) {
-    if (actions.toggleBold) {
-      textTool_.toggleBold(app_);
-      changed = true;
-    }
-    if (actions.toggleItalic) {
-      textTool_.toggleItalic(app_);
-      changed = true;
-    }
-    if (actions.toggleUnderline) {
-      textTool_.toggleUnderline(app_);
-      changed = true;
-    }
-  }
+  bool changed = editing && applyTextEditingFormatToggles(actions);
 
-  changed = ApplyFormatBarActionsToSelection(actions, state, /*routeTogglesToSelection=*/!editing,
-                                             app_) ||
-            changed;
+  std::optional<std::string> sourceBeforeSelectionEdit;
+  if (!editing && HasSelectionFormattingAction(actions)) {
+    sourceBeforeSelectionEdit = std::string(app_.document().document().source());
+  }
+  const bool selectionChanged =
+      ApplyFormatBarActionsToSelection(actions, state, /*routeTogglesToSelection=*/!editing, app_);
+  if (selectionChanged && sourceBeforeSelectionEdit.has_value()) {
+    app_.recordDocumentSourceUndoOnNextFlush(
+        "Format selected text", app_.document().document().svgElement(), *sourceBeforeSelectionEdit,
+        /*preserveSelection=*/true);
+  }
+  changed = selectionChanged || changed;
 
   if (changed) {
     flushQueuedMutationAndRefreshOverlay();
   }
+}
+
+bool EditorShell::applyTextEditingFormatToggles(const FormatBarActions& actions) {
+  bool changed = false;
+  if (actions.toggleBold) {
+    textTool_.toggleBold(app_);
+    changed = true;
+  }
+  if (actions.toggleItalic) {
+    textTool_.toggleItalic(app_);
+    changed = true;
+  }
+  if (actions.toggleUnderline) {
+    textTool_.toggleUnderline(app_);
+    changed = true;
+  }
+  return changed;
 }
 
 bool EditorShell::requireCatalogFontsForSelection() {

@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -15,6 +16,7 @@
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/Transform.h"
+#include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/svg/DocumentState.h"
@@ -24,6 +26,7 @@ namespace donner::editor {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::Not;
 using ::testing::Pair;
@@ -697,7 +700,15 @@ TEST_F(SidebarPresenterImGuiTest, StrokeWidthStepUpdatesEverySelectedElement) {
   constexpr char kWindowName[] = "##sidebar_stroke_step_test";
   ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
   const auto step = presenter.strokeIncrementRectForTesting();
+  const auto downStep = presenter.strokeDecrementRectForTesting();
+  const auto field = presenter.strokeWidthRectForTesting();
   ASSERT_TRUE(step.has_value());
+  ASSERT_TRUE(downStep.has_value());
+  ASSERT_TRUE(field.has_value());
+  EXPECT_NEAR(field->bottomRight.x, step->topLeft.x, 0.001);
+  EXPECT_NEAR(field->topLeft.y, step->topLeft.y, 0.001);
+  EXPECT_NEAR(step->bottomRight.y, downStep->topLeft.y, 0.001);
+  EXPECT_NEAR(field->bottomRight.y, downStep->bottomRight.y, 0.001);
   const ImVec2 center(static_cast<float>((step->topLeft.x + step->bottomRight.x) * 0.5),
                       static_cast<float>((step->topLeft.y + step->bottomRight.y) * 0.5));
 
@@ -716,6 +727,64 @@ TEST_F(SidebarPresenterImGuiTest, StrokeWidthStepUpdatesEverySelectedElement) {
   ASSERT_TRUE(app.flushFrame());
   EXPECT_EQ(app.document().document().querySelector("#target")->getAttribute("style"),
             "stroke-width: 2");
+}
+
+TEST_F(SidebarPresenterImGuiTest, WidthFieldFocusOpensEditableTrueScalePresetPopup) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_width_presets_test";
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f),
+                                    /*mouseDown=*/false, /*windowHeight=*/600.0f));
+  const auto field = presenter.strokeWidthRectForTesting();
+  ASSERT_TRUE(field.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/true,
+                       /*windowHeight=*/600.0f);
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*field), /*mouseDown=*/false,
+                       /*windowHeight=*/600.0f);
+  EXPECT_TRUE(ImGui::GetIO().WantTextInput) << "single click should keep numeric typing active";
+  const auto preset = presenter.strokeWidthPresetRectForTesting(6);
+  ASSERT_TRUE(preset.has_value()) << "focused width input should expand the preset menu";
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*preset), /*mouseDown=*/true,
+                       /*windowHeight=*/600.0f);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*preset),
+                                   /*mouseDown=*/false, /*windowHeight=*/600.0f));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->getAttribute("style"), "stroke-width: 8");
+}
+
+TEST_F(SidebarPresenterImGuiTest, MiterLimitStepsMatchFieldHeightAndUpdateStyle) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##sidebar_miter_step_test";
+  ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
+  const auto field = presenter.strokeMiterLimitRectForTesting();
+  const auto up = presenter.strokeMiterIncrementRectForTesting();
+  const auto down = presenter.strokeMiterDecrementRectForTesting();
+  ASSERT_TRUE(field.has_value());
+  ASSERT_TRUE(up.has_value());
+  ASSERT_TRUE(down.has_value());
+  EXPECT_NEAR(field->bottomRight.x, up->topLeft.x, 0.001);
+  EXPECT_NEAR(field->topLeft.y, up->topLeft.y, 0.001);
+  EXPECT_NEAR(up->bottomRight.y, down->topLeft.y, 0.001);
+  EXPECT_NEAR(field->bottomRight.y, down->bottomRight.y, 0.001);
+
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*up), /*mouseDown=*/true);
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*up),
+                                   /*mouseDown=*/false));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->getComputedStyle().strokeMiterlimit.get().value(), 5.0);
 }
 
 TEST_F(SidebarPresenterImGuiTest, LockedSelectionKeepsStrokeControlsReadOnly) {
@@ -786,7 +855,7 @@ TEST_F(SidebarPresenterImGuiTest, WidthStepperPreservesEmUnitAndUndoRedo) {
   EXPECT_EQ(redone->getComputedStyle().strokeWidth.get().value(), Lengthd(3, LengthUnit::Em));
 }
 
-TEST_F(SidebarPresenterImGuiTest, MultiFrameWidthDragRecordsOneUndoEntry) {
+TEST_F(SidebarPresenterImGuiTest, MultiFrameWidthTypingRecordsOneUndoEntry) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kInspectorSvg));
   const auto target = app.document().document().querySelector("#target");
@@ -794,27 +863,28 @@ TEST_F(SidebarPresenterImGuiTest, MultiFrameWidthDragRecordsOneUndoEntry) {
   app.setSelection(*target);
   SidebarPresenter presenter;
   presenter.refreshSnapshot(app);
-  constexpr char kWindowName[] = "##stroke_width_drag_undo";
+  constexpr char kWindowName[] = "##stroke_width_typing_undo";
   ASSERT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName));
   const auto field = presenter.strokeWidthRectForTesting();
   ASSERT_TRUE(field.has_value());
-  const ImVec2 start = RectCenter(*field);
-  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, start, false));
-  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, start, true));
-  bool applied = false;
-  ImVec2 end = start;
-  for (int step = 1; step <= 4; ++step) {
-    end.x = start.x + 10.0f * static_cast<float>(step);
-    applied = RenderInspectorFrame(presenter, &app, kWindowName, end, true) || applied;
-    if (step == 2 || step == 4) {
-      app.flushFrame();
-    }
-  }
-  EXPECT_TRUE(applied);
-  const std::string afterDrag(app.document().document().source());
+  const ImVec2 center = RectCenter(*field);
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, center, true));
+  EXPECT_FALSE(RenderInspectorFrame(presenter, &app, kWindowName, center, false));
+  ImGui::GetIO().AddInputCharacter('3');
+  EXPECT_TRUE(RenderInspectorFrame(presenter, &app, kWindowName));
+  EXPECT_TRUE(ImGui::GetIO().WantTextInput);
+  ASSERT_TRUE(app.flushFrame());
+  ImGui::GetIO().AddInputCharacter('4');
+  RenderInspectorFrame(presenter, &app, kWindowName);
+  EXPECT_TRUE(ImGui::GetIO().WantTextInput);
   EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
-  RenderInspectorFrame(presenter, &app, kWindowName, end, false);
-  app.flushFrame();  // The release can have no queued DOM mutation.
+  // Leaving the field commits both updates as one undoable edit.
+  const ImVec2 outside(20.0f, 20.0f);
+  RenderInspectorFrame(presenter, &app, kWindowName, outside, true);
+  RenderInspectorFrame(presenter, &app, kWindowName, outside, false);
+  app.flushFrame();
+  const std::string afterTyping(app.document().document().source());
+  EXPECT_EQ(target->getAttribute("style"), "stroke-width: 34");
   EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
   app.undo();
   ASSERT_TRUE(app.flushFrame());
@@ -822,7 +892,7 @@ TEST_F(SidebarPresenterImGuiTest, MultiFrameWidthDragRecordsOneUndoEntry) {
             std::nullopt);
   app.redo();
   ASSERT_TRUE(app.flushFrame());
-  EXPECT_EQ(std::string(app.document().document().source()), afterDrag);
+  EXPECT_EQ(std::string(app.document().document().source()), afterTyping);
 }
 
 TEST_F(SidebarPresenterImGuiTest, DashOffsetEditPreservesEmUnit) {
@@ -1081,6 +1151,57 @@ TEST(SidebarPresenterTest, MarkerIdsAreCachedAndRefreshAfterSourceMutation) {
   EXPECT_EQ(presenter.markerScanCountForTesting(), scans + 1u);
 }
 
+TEST(SidebarPresenterTest, ModifiedTaggedMarkerRemainsAvailableByDocumentId) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <defs><marker id="donner-marker-open-arrow" data-donner-prefab-marker="open-arrow">
+             <path d="M1 1 L7 4 L1 7" fill="red"/>
+           </marker></defs>
+           <path id="target" d="M10 40 L110 40" stroke="black"/>
+         </svg>)";
+  EditorApp app;
+  SidebarPresenter presenter;
+  ASSERT_NO_FATAL_FAILURE(LoadAndSelectTarget(app, presenter, source));
+  EXPECT_THAT(presenter.markerIdsForTesting(), ElementsAre("donner-marker-open-arrow"));
+}
+
+TEST_F(SidebarPresenterImGuiTest, MarkerPresetPickerInsertsArrowIntoDocument) {
+  constexpr std::string_view kLineSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
+           <path id="target" d="M10 40 L110 40" fill="none" stroke="black"/>
+         </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kLineSvg));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindowName[] = "##marker_prefab_picker_test";
+  constexpr float kWindowHeight = 900.0f;
+  RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), false, kWindowHeight);
+  const auto disclosure = presenter.markerDisclosureRectForTesting();
+  ASSERT_TRUE(disclosure.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*disclosure), true, kWindowHeight);
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*disclosure), false, kWindowHeight);
+  const auto endPicker = presenter.markerPickerRectForTesting(1);
+  ASSERT_TRUE(endPicker.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*endPicker), true, kWindowHeight);
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*endPicker), false, kWindowHeight);
+  RenderInspectorFrame(presenter, &app, kWindowName, ImVec2(-1.0f, -1.0f), false, kWindowHeight);
+  const auto arrow = presenter.markerPrefabRectForTesting(0);
+  ASSERT_TRUE(arrow.has_value());
+  RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*arrow), true, kWindowHeight);
+  EXPECT_TRUE(
+      RenderInspectorFrame(presenter, &app, kWindowName, RectCenter(*arrow), false, kWindowHeight));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_TRUE(app.document().document().querySelector("#donner-marker-filled-arrow").has_value());
+  presenter.refreshSnapshot(app);
+  EXPECT_THAT(presenter.markerIdsForTesting(), IsEmpty());
+  EXPECT_THAT(std::string(app.document().document().source()),
+              HasSubstr("marker-end: url(#donner-marker-filled-arrow)"));
+}
+
 TEST_F(SidebarPresenterImGuiTest, BusyStrokeWidthStepDoesNotQueueMutation) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kInspectorSvg));
@@ -1237,11 +1358,20 @@ TEST_F(SidebarPresenterImGuiTest, PathOperationButtonsRenderSvgBitmapIcons) {
 
   constexpr ImTextureID kIconTexture = static_cast<ImTextureID>(0x9876);
   int providerCalls = 0;
+  int pathCalls = 0;
+  int strokeCalls = 0;
   int nonEmptyBitmaps = 0;
   int retinaBitmaps = 0;
   const SidebarPresenter::IconTextureProvider iconTextureProvider =
-      [&](std::uint64_t, const svg::RendererBitmap& bitmap) {
+      [&](std::uint64_t stableId, const svg::RendererBitmap& bitmap) {
         ++providerCalls;
+        pathCalls +=
+            std::ranges::any_of(kInspectorPathOperations, [&](PathOperationKind operation) {
+              return stableId == PathOperationIconTextureKey(operation);
+            });
+        strokeCalls += std::ranges::any_of(kStrokePreviewIcons, [&](StrokePreviewIcon icon) {
+          return stableId == StrokePreviewIconTextureKey(icon);
+        });
         if (!bitmap.empty() && bitmap.dimensions.x > 0 && bitmap.dimensions.y > 0) {
           ++nonEmptyBitmaps;
         }
@@ -1276,15 +1406,15 @@ TEST_F(SidebarPresenterImGuiTest, PathOperationButtonsRenderSvgBitmapIcons) {
   ImGui::End();
   ImGui::Render();
 
-  EXPECT_EQ(providerCalls, 4)
-      << "the path operation UI should request Union, Intersect, Subtract Front, and Exclude "
-         "icon textures";
+  EXPECT_EQ(pathCalls, 4)
+      << "the path operation UI should request Union, Intersect, Subtract Front, and Exclude";
+  EXPECT_EQ(strokeCalls, 6) << "the stroke controls should request all six SVG previews";
+  EXPECT_EQ(providerCalls, pathCalls + strokeCalls);
   EXPECT_EQ(nonEmptyBitmaps, providerCalls)
-      << "path operation buttons must receive Donner-rendered Bootstrap SVG bitmaps";
+      << "inspector icons must receive Donner-rendered SVG bitmaps";
   EXPECT_EQ(retinaBitmaps, providerCalls)
-      << "path operation icons are drawn at 18 logical px and must be rasterized at 2x or "
-         "higher before ImGui scales them";
-  EXPECT_EQ(imageQuads, 4) << "path operation buttons should render as image quads";
+      << "inspector icons must be rasterized above their display size";
+  EXPECT_EQ(imageQuads, providerCalls) << "every inspector icon should render as an image quad";
 }
 
 TEST_F(SidebarPresenterImGuiTest, InspectorRendersEditableTransformFields) {
@@ -1526,10 +1656,17 @@ TEST_F(SidebarPresenterImGuiTest, PathOperationButtonsRenderDisabledWithoutLiveA
   presenter.refreshSnapshot(app);
 
   constexpr ImTextureID kIconTexture = static_cast<ImTextureID>(0x5432);
-  int providerCalls = 0;
+  int pathCalls = 0;
+  int strokeCalls = 0;
   const SidebarPresenter::IconTextureProvider iconTextureProvider =
-      [&](std::uint64_t, const svg::RendererBitmap&) {
-        ++providerCalls;
+      [&](std::uint64_t stableId, const svg::RendererBitmap&) {
+        pathCalls +=
+            std::ranges::any_of(kInspectorPathOperations, [&](PathOperationKind operation) {
+              return stableId == PathOperationIconTextureKey(operation);
+            });
+        strokeCalls += std::ranges::any_of(kStrokePreviewIcons, [&](StrokePreviewIcon icon) {
+          return stableId == StrokePreviewIconTextureKey(icon);
+        });
         return SidebarPresenter::IconTexture{
             .texture = kIconTexture,
             .uvBottomRight = Vector2d(1.0, 1.0),
@@ -1554,8 +1691,8 @@ TEST_F(SidebarPresenterImGuiTest, PathOperationButtonsRenderDisabledWithoutLiveA
   ImGui::Render();
 
   EXPECT_FALSE(queuedMutation);
-  EXPECT_EQ(providerCalls, 4)
-      << "Disabled path-operation buttons must still request all four icon textures.";
+  EXPECT_EQ(pathCalls, 4) << "disabled path buttons still request all four icon textures";
+  EXPECT_EQ(strokeCalls, 6) << "read-only stroke buttons still request their SVG previews";
   EXPECT_FALSE(app.canUndo());
 }
 
@@ -1691,6 +1828,67 @@ TEST(SidebarPathOperationIcons, PrewarmRequestsCoverEveryInspectorButton) {
         });
     EXPECT_TRUE(present) << "operation " << static_cast<int>(operation)
                          << "'s icon is not in the startup prewarm batch";
+  }
+}
+
+TEST(SidebarStrokePreviewIcons, SvgStrokesRenderDistinctCapsAndJoins) {
+  constexpr std::array<std::string_view, 6> kAttributes = {
+      "stroke-linecap=\"butt\"",   "stroke-linecap=\"round\"",  "stroke-linecap=\"square\"",
+      "stroke-linejoin=\"miter\"", "stroke-linejoin=\"round\"", "stroke-linejoin=\"bevel\"",
+  };
+  std::array<std::vector<std::uint8_t>, kStrokePreviewIcons.size()> pixels;
+  std::array<std::uint64_t, kStrokePreviewIcons.size()> textureKeys;
+  for (std::size_t index = 0; index < kStrokePreviewIcons.size(); ++index) {
+    const StrokePreviewIcon icon = kStrokePreviewIcons[index];
+    const std::span<const unsigned char> source = StrokePreviewIconSvg(icon);
+    ASSERT_FALSE(source.empty());
+    const std::string_view svg(reinterpret_cast<const char*>(source.data()), source.size());
+    EXPECT_NE(svg.find(kAttributes[index]), std::string_view::npos);
+    const std::optional<svg::RendererBitmap> bitmap = RenderEmbeddedSvgArtwork(source, 96);
+    ASSERT_TRUE(bitmap.has_value());
+    ASSERT_FALSE(bitmap->empty());
+    pixels[index] = bitmap->pixels;
+    textureKeys[index] = StrokePreviewIconTextureKey(icon);
+  }
+  for (std::size_t first = 0; first < kStrokePreviewIcons.size(); ++first) {
+    for (std::size_t second = first + 1u; second < kStrokePreviewIcons.size(); ++second) {
+      EXPECT_NE(textureKeys[first], textureKeys[second]);
+      if ((first < 3u) == (second < 3u)) {
+        EXPECT_NE(pixels[first], pixels[second]) << "SVG preview variants must render differently";
+      }
+    }
+  }
+}
+
+TEST(SidebarStrokePreviewIcons, WidthPresetSpriteUsesOnePixelPerUserUnitAtActualSize) {
+  const std::optional<svg::RendererBitmap> bitmap =
+      RenderEmbeddedSvgArtwork(StrokeWidthPresetSvg(), 256);
+  ASSERT_TRUE(bitmap.has_value());
+  ASSERT_EQ(bitmap->dimensions, Vector2i(256, 256));
+  for (std::size_t index = 0; index < kStrokeWidthPresetValues.size(); ++index) {
+    float alphaCoverage = 0.0f;
+    const int rowStart = static_cast<int>(index) * 32;
+    for (int y = rowStart; y < rowStart + 32; ++y) {
+      const std::size_t offset = static_cast<std::size_t>(y) * bitmap->rowBytes + 16u * 4u;
+      alphaCoverage += static_cast<float>(bitmap->pixels[offset + 3u]) / 255.0f;
+    }
+    EXPECT_LE(kStrokeWidthPresetValues[index], 12.0f);
+    EXPECT_NEAR(alphaCoverage, kStrokeWidthPresetValues[index], 1.5f)
+        << "preset " << index << " should show true-scale width inside its 32px row";
+    EXPECT_LT(alphaCoverage, 16.0f) << "quick-width stroke must not fill its icon";
+  }
+}
+
+TEST(SidebarStrokePreviewIcons, PrewarmRequestsIncludeEveryStrokeSvg) {
+  const std::span<const EmbeddedSvgIconRequest> requests = SidebarIconPrewarmRequests();
+  for (const StrokePreviewIcon icon : kStrokePreviewIcons) {
+    const std::span<const unsigned char> source = StrokePreviewIconSvg(icon);
+    const bool present =
+        std::any_of(requests.begin(), requests.end(), [&](const EmbeddedSvgIconRequest& request) {
+          return request.svgBytes.data() == source.data() && request.outputSizePx == 96 &&
+                 !request.tintableMask;
+        });
+    EXPECT_TRUE(present) << "stroke SVG preview is missing from startup prewarm";
   }
 }
 

@@ -794,6 +794,7 @@ donner_cc_library(
     srcs = ["TextFormatBarPresenter.cc"],
     hdrs = ["TextFormatBarPresenter.h"],
     deps = [
+        ":attached_numeric_stepper",
         ":editor_app",
         ":editor_theme",
         ":imgui_headers",
@@ -828,6 +829,13 @@ embed_resources(
     resources = {
         "kEditorChevronDownSvg": "icons/chevron-down.svg",
         "kEditorChevronSvg": "icons/chevron.svg",
+        "kStrokeCapButtSvg": "icons/stroke-cap-butt.svg",
+        "kStrokeCapRoundSvg": "icons/stroke-cap-round.svg",
+        "kStrokeCapSquareSvg": "icons/stroke-cap-square.svg",
+        "kStrokeJoinMiterSvg": "icons/stroke-join-miter.svg",
+        "kStrokeJoinRoundSvg": "icons/stroke-join-round.svg",
+        "kStrokeJoinBevelSvg": "icons/stroke-join-bevel.svg",
+        "kStrokeWidthPresetsSvg": "icons/stroke-width-presets.svg",
     },
     visibility = ["//donner:__subpackages__"],
 )
@@ -863,18 +871,45 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "attached_numeric_stepper",
+    srcs = ["AttachedNumericStepper.cc"],
+    hdrs = ["AttachedNumericStepper.h"],
+    deps = [
+        ":editor_theme",
+        ":imgui_headers",
+        "//donner/base",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
+    name = "stroke_marker_prefabs",
+    srcs = ["StrokeMarkerPrefabs.cc"],
+    hdrs = ["StrokeMarkerPrefabs.h"],
+    deps = [
+        ":command_queue",
+        ":editor_app",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "sidebar_presenter",
     srcs = ["SidebarPresenter.cc"],
     hdrs = ["SidebarPresenter.h"],
     deps = [
+        ":attached_numeric_stepper",
         ":attribute_writeback",
         ":command_queue",
         ":disclosure_chevron",
         ":editor_app",
+        ":editor_icons",
         ":editor_theme",
         ":embedded_svg_icon",
         ":imgui_headers",
         ":lock_state",
+        ":stroke_marker_prefabs",
         ":undo_timeline",
         ":viewport_state",
         "//donner/base",

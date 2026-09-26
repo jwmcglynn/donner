@@ -6,8 +6,8 @@
 /// context: when the canvas selection is a single `<text>` element or an
 /// in-canvas text editing session is active. It offers a searchable font-family
 /// picker (each known family previewed in its own face, with a free-text
-/// fallback for families the editor lacks), a font-size combo with drag and
-/// preset behavior, and Bold/Italic/Underline toggles.
+/// fallback for families the editor lacks), an editable font-size control with
+/// attached steps and a focus-opened preset list, and Bold/Italic/Underline toggles.
 ///
 /// Following the `MenuBarPresenter` pattern, the presenter is a thin, testable
 /// surface: `render()` draws the imgui controls and returns edge-triggered
@@ -20,9 +20,11 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/resources/FontCatalogTypes.h"
 
@@ -127,7 +129,7 @@ struct FormatBarActions {
   std::vector<std::string> retryFontFamilies;
 };
 
-/// Common font-size presets offered by the size combo (document units).
+/// Common font-size presets offered by the editable size field (document units).
 inline constexpr std::array<int, 12> kFormatBarFontSizePresets = {8,  9,  10, 11, 12, 14,
                                                                   16, 18, 24, 36, 48, 72};
 
@@ -167,7 +169,7 @@ bool ApplyFormatBarActionsToSelection(const FormatBarActions& actions, const For
 class TextFormatBarPresenter {
 public:
   /// Preferred width of the compact single-row toolbar.
-  [[nodiscard]] static constexpr float PreferredWidth() { return 460.0f; }
+  [[nodiscard]] static constexpr float PreferredWidth() { return 524.0f; }
   /// Toolbar height for the current ImGui frame metrics.
   [[nodiscard]] static float BarHeight();
 
@@ -185,7 +187,15 @@ public:
   [[nodiscard]] FormatBarActions render(const FormatBarState& state, const ImVec2& topLeft,
                                         float width);
 
+  /// Screen-space bounds of a visible font-size preset row in the last frame.
+  [[nodiscard]] std::optional<Box2d> fontSizePresetRectForTesting(std::size_t index) const {
+    return index < fontSizePresetRects_.size() ? fontSizePresetRects_[index] : std::nullopt;
+  }
+
 private:
+  void renderFontSizePresetPopup(const FormatBarState& state, const ImVec2& fieldMin,
+                                 const ImVec2& fieldMax, bool fieldActivated,
+                                 FormatBarActions* actions);
   /// Free-text font-family buffer, re-seeded when the underlying value changes.
   std::array<char, 256> fontFamilyBuffer_{};
   /// Family the buffer was last seeded from, to detect external changes.
@@ -193,10 +203,10 @@ private:
   bool trackedFamily_ = false;
   /// Filter text for the searchable family dropdown.
   std::array<char, 64> familySearchBuffer_{};
-  /// Working value for the size drag; only re-seeded from state while the drag
-  /// control is idle, so an in-progress drag is not clobbered each frame.
+  /// Working size edit, re-seeded from state only while the input is idle.
   float sizeEditValue_ = 0.0f;
   bool sizeControlActive_ = false;
+  std::array<std::optional<Box2d>, kFormatBarFontSizePresets.size()> fontSizePresetRects_{};
 };
 
 }  // namespace donner::editor
