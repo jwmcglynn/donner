@@ -6332,6 +6332,61 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
   }
 }
 
+TEST(RenderCoordinatorTest, ZoomedPaintChangesRefreshOverviewAndSettle) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="target" d="M 20 20 L 80 20 L 50 80 Z" fill="white" stroke="black"/>
+    </svg>
+  )svg"));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.resetTo100Percent();
+  viewport.zoomAround(32.0, viewport.paneCenter());
+  ASSERT_TRUE(viewport.rasterViewport().viewportBounded);
+
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Requires native texture presentation";
+  }
+  const auto render = [&]() {
+    if (!coordinator.maybeRequestRender(app, selectTool, viewport, &textures)) {
+      return false;
+    }
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); },
+                     std::chrono::steady_clock::now() + std::chrono::seconds(5));
+  };
+  ASSERT_TRUE(render());
+  ASSERT_THAT(textures.overviewTiles(), testing::Not(testing::IsEmpty()));
+
+  for (std::string_view property : {"fill", "stroke"}) {
+    SCOPED_TRACE(property);
+    ASSERT_TRUE(app.setStylePropertyOnSelection(property, "#f0b429"));
+    ASSERT_TRUE(app.flushFrame());
+    coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
+    ASSERT_TRUE(render());
+    const auto posted = RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
+    ASSERT_THAT(posted, testing::Optional(testing::_));
+    EXPECT_TRUE(posted->overviewInfillOnly)
+        << "A paint edit must replace the overview retained beneath zoomed tiles";
+    EXPECT_FALSE(app.flushFrame());
+    ASSERT_TRUE(render());
+    EXPECT_FALSE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly);
+    EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
+    EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+        << "The refreshed overview and selected layer must settle without repeated rendering";
+  }
+}
+
 TEST(RenderCoordinatorTest, UnsupportedTextSelectionDoesNotRepeatIdlePrewarm) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
