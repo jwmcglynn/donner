@@ -33,20 +33,19 @@ class SelectTool;
 
 /// Identity shared by a worker pixel request and its accepted presentation.
 struct DocumentPixelCaptureIdentity {
-  std::uint64_t sessionId = 0;
-  std::uint64_t documentGeneration = 0;
-  std::uint64_t version = 0;
-  std::uint64_t fontResourceRevision = 0;
-  /// Monotonic editor canvas-size commit represented by this render.
-  std::uint64_t canvasCommitGeneration = 0;
-  EditorRasterViewport rasterViewport;
-  ViewportState viewport;
+  std::uint64_t sessionId = 0;               //!< Pixel-capture session that owns this request.
+  std::uint64_t documentGeneration = 0;      //!< Document generation represented by the capture.
+  std::uint64_t version = 0;                 //!< Document frame version represented by the capture.
+  std::uint64_t fontResourceRevision = 0;    //!< Font-resource revision used for the capture.
+  std::uint64_t canvasCommitGeneration = 0;  //!< Canvas-size commit represented by this render.
+  EditorRasterViewport rasterViewport;       //!< Raster viewport used to produce document pixels.
+  ViewportState viewport;                    //!< Viewport transform associated with the capture.
 };
 
 /// One immutable document-only pixel capture retained while the picker is armed.
 struct DocumentPixelCapture {
-  DocumentPixelCaptureIdentity identity;
-  svg::RendererBitmap bitmap;
+  DocumentPixelCaptureIdentity identity;  //!< Request identity required to accept the capture.
+  svg::RendererBitmap bitmap;             //!< Document-only pixels, without editor chrome.
 };
 
 /// What a posted render request asked the worker for, as far as deciding whether a later request
@@ -58,9 +57,7 @@ struct RenderAttemptIdentity {
   bool overviewInfillOnly = false;       //!< True for an overview infill request.
   Entity selectedEntity = entt::null;    //!< Selected entity the request kept promoted.
   std::optional<RenderRequest::DragPreview> dragPreview;  //!< Drag state the request carried.
-  /// Presentation refreshes requested before the request was posted. A renderer-setting change
-  /// (composited mode, geometry debug, the eyedropper) changes only this.
-  std::uint64_t presentationEpoch = 0;
+  std::uint64_t presentationEpoch = 0;  //!< Presentation-refresh epoch for renderer settings.
 };
 
 /**
@@ -74,6 +71,7 @@ struct RenderAttemptIdentity {
  */
 class NothingToPresentRetry {
 public:
+  /// Steady clock used to pace identical retry attempts.
   using Clock = std::chrono::steady_clock;
 
   /// Delay before each successive retry of the same failed request.
@@ -232,18 +230,27 @@ OverlayRepresentedDragPreviewForPresentation(
 /// composited drag presentation, and selection-bounds cache promotion.
 class RenderCoordinator {
 public:
+  /// Construct rendering and presentation coordination for the selected backend.
+  /// @param geodeDevice Shared Geode device, or null for a non-Geode renderer.
   explicit RenderCoordinator(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr);
 
+  /// Expose the background render worker.
   [[nodiscard]] AsyncRenderer& asyncRenderer() { return renderWorker_.asyncRenderer; }
+  /// Return the background render worker.
   [[nodiscard]] const AsyncRenderer& asyncRenderer() const { return renderWorker_.asyncRenderer; }
+  /// Expose the renderer owned by the worker bundle.
   [[nodiscard]] svg::Renderer& renderer() { return renderWorker_.renderer; }
+  /// Return cached selection bounds and their document versions.
   [[nodiscard]] const SelectionBoundsCache& selectionBoundsCache() const {
     return selectionBoundsCache_;
   }
+  /// Expose composited presentation state for the UI thread.
   [[nodiscard]] CompositedPresentation& compositedPresentation() { return compositedPresentation_; }
+  /// Return composited presentation state.
   [[nodiscard]] const CompositedPresentation& compositedPresentation() const {
     return compositedPresentation_;
   }
+  /// Return the document version last accepted for visible presentation.
   [[nodiscard]] std::uint64_t displayedDocVersion() const { return displayedDocVersion_; }
   /// Latest editor rendering cost counters observed by this coordinator.
   [[nodiscard]] const FrameCostBreakdown& lastFrameCostBreakdown() const {
@@ -363,7 +370,10 @@ public:
    * @param documentGeneration Generation of the newly loaded document.
    */
   void resetForLoadedDocument(std::uint64_t documentGeneration);
+  /// Refresh selected-element bounds from the live document, or clear them if no document exists.
+  /// @param app Editor application holding the current selection.
   void refreshSelectionBoundsCache(EditorApp& app);
+  /// Promote pending selection bounds once their document version is displayed.
   void promoteSelectionBoundsIfReady();
   /// Capture the editor chrome (path outlines, selection AABBs, marquee) for immediate
   /// presentation. `marqueeRectDoc` is the active marquee rectangle in document space (nullopt when
@@ -393,6 +403,14 @@ public:
   /// is allowed for callers that don't care about backend timing.
   void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
                         FrameHistory* frameHistory = nullptr);
+  /// Post a worker render when document, viewport, and presentation state require one.
+  /// @param app Editor application and current document.
+  /// @param selectTool Active drag and selection preview source.
+  /// @param viewport Desired canvas and raster viewport.
+  /// @param textures Optional cache for viewport-coverage diagnostics.
+  /// @param supersedeInFlight Whether an in-flight worker render may be replaced.
+  /// @param directSurfaceSelectionDetail Reserved; scheduling currently ignores this value.
+  /// @return True only when a new worker request was posted.
   bool maybeRequestRender(
       EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
       GlTextureCache* textures = nullptr, bool supersedeInFlight = false,

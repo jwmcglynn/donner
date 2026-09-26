@@ -360,14 +360,15 @@ TEST(GeodeTestContextsTest, AnAdapterSelectionUnderAnotherDefaultLogsTheCaseAndI
     ASSERT_THAT(context, testing::NotNull()) << "no wgpu adapter is available on this host";
 #if defined(__APPLE__)
     EXPECT_THAT(log, HasSubstr("not the process default native Metal: the reason under test"));
+#elif defined(__linux__)
+    EXPECT_THAT(log, HasSubstr("not the process default native Vulkan: the reason under test"));
 #else
     EXPECT_THAT(log, Not(HasSubstr("the reason under test")));
 #endif
   }
 }
 
-/// An unset or empty request selects the qualified native backend on Apple and retains the
-/// transitional adapter elsewhere until that platform's editor presentation passes natively.
+/// An unset or empty request selects the qualified native backend on Apple and Linux.
 TEST(GeodeGpuRootSelection, AnUnsetOrEmptyRequestSelectsThePlatformDefault) {
   for (const char* request : {static_cast<const char*>(nullptr), ""}) {
     SCOPED_TRACE(request == nullptr ? "DONNER_GPU_BACKEND unset" : "DONNER_GPU_BACKEND empty");
@@ -376,6 +377,8 @@ TEST(GeodeGpuRootSelection, AnUnsetOrEmptyRequestSelectsThePlatformDefault) {
     ASSERT_THAT(selected, gpu::HasResult());
 #if defined(__APPLE__)
     EXPECT_THAT(selected.result(), testing::Eq(GpuBackendKind::NativeMetal));
+#elif defined(__linux__)
+    EXPECT_THAT(selected.result(), testing::Eq(GpuBackendKind::NativeVulkan));
 #else
     EXPECT_THAT(selected.result(), testing::Eq(GpuBackendKind::TransitionalWgpu));
 #endif
@@ -562,8 +565,8 @@ TEST(GeodeGpuBackendResolution, AWindowStaysOnTheTransitionalAdapterUnderABuildD
               testing::Eq(GpuBackendKind::TransitionalWgpu));
 }
 
-/// A caller supplying a WebGPU surface still gets the backend that can serve that surface even
-/// after an unconstrained root's platform default moves to native Metal.
+/// A caller supplying a WebGPU surface still gets the backend that can serve that surface after
+/// the unconstrained platform default moves to a native backend.
 TEST(GeodeGpuBackendResolution, AWebGpuSurfaceProviderKeepsTheTransitionalAdapter) {
   EXPECT_THAT(ResolvedKind(WindowSelection(), "", std::nullopt),
               testing::Eq(GpuBackendKind::TransitionalWgpu));
@@ -585,7 +588,7 @@ TEST(GeodeGpuBackendResolution, ARequestAndACallerBothOutrankTheBuildDefault) {
 TEST(GeodeGpuBackendResolution, VulkanPresentationRefusesAnUnrelatedBackend) {
   GpuRootSelection selection = HeadlessSelection();
   selection.requireVulkanPresentation = true;
-  EXPECT_THAT(ResolveGpuBackendKind(selection, "", std::nullopt),
+  EXPECT_THAT(ResolveGpuBackendKind(selection, "wgpu", std::nullopt),
               gpu::IsGpuErrorWithMessage(gpu::GpuErrorType::InvalidDescriptor,
                                          HasSubstr("Vulkan presentation")));
   selection.backend = GpuBackendKind::NativeMetal;
@@ -607,6 +610,9 @@ TEST(GeodeGpuBackendResolution, WithoutABuildDefaultHeadlessWorkUsesThePlatformD
 #if defined(__APPLE__)
   EXPECT_THAT(ResolvedKind(HeadlessSelection(), "", std::nullopt),
               testing::Eq(GpuBackendKind::NativeMetal));
+#elif defined(__linux__)
+  EXPECT_THAT(ResolvedKind(HeadlessSelection(), "", std::nullopt),
+              testing::Eq(GpuBackendKind::NativeVulkan));
 #else
   EXPECT_THAT(ResolvedKind(HeadlessSelection(), "", std::nullopt),
               testing::Eq(GpuBackendKind::TransitionalWgpu));
