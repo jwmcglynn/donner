@@ -36,23 +36,41 @@ async function openWebGpuPage(context) {
     headless: true,
     args: ["--enable-unsafe-webgpu", "--use-gl=angle"],
   });
-  const server = createServer((_request, response) => {
+  let server;
+  let page;
+  context.after(async () => {
+    try {
+      if (page && !page.isClosed()) {
+        await page.evaluate(() => window.slugEndpointDevice?.destroy());
+      }
+    } finally {
+      try {
+        await browser.close();
+      } finally {
+        if (server?.listening) {
+          await new Promise((closed) => server.close(closed));
+        }
+      }
+    }
+  });
+  server = createServer((_request, response) => {
     response.writeHead(200, { "Content-Type": "text/html" });
     response.end("<!doctype html><title>Slug endpoint WebGPU execution</title>");
   });
-  await new Promise((ready) => server.listen(0, "127.0.0.1", ready));
-  const page = await browser.newPage();
+  await new Promise((ready, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      ready();
+    });
+  });
+  page = await browser.newPage();
   await page.goto(`http://127.0.0.1:${server.address().port}/`, { waitUntil: "domcontentloaded" });
   await page.evaluate(async () => {
     if (!navigator.gpu) throw new Error("pinned Chromium has no WebGPU service");
     const adapter = await navigator.gpu.requestAdapter();
     if (!adapter) throw new Error("pinned Chromium found no WebGPU adapter");
     window.slugEndpointDevice = await adapter.requestDevice();
-  });
-  context.after(async () => {
-    await page.evaluate(() => window.slugEndpointDevice?.destroy());
-    await browser.close();
-    await new Promise((closed) => server.close(closed));
   });
   return page;
 }
