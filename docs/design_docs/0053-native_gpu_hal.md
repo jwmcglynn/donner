@@ -927,6 +927,52 @@ complete repository input set, with
 | Structural counters, memory, timing and size                   | `//donner/gpu/baseline:baseline_counters_tests`, `//donner/svg/renderer/geode:geode_perf_tests`, and the paired measurements required by the cutover gates.                                                                                                                                                                                                                       |
 | Dependency closure                                             | `//tools/gpu_inventory:check_no_rust_dependencies_tests`, the blocking lexical verifier, planned required `CI / no-rust-configured-closure` job over configured product roots, generated CMake validation, and source-archive/artifact evidence.                                                                                                                                  |
 
+The per-draw CPU split is `//donner/svg/renderer/geode/benchmarks:draw_cpu_benchmark_correctness`
+in the normal Bazel test graph and the `perf`-tagged
+`//donner/svg/renderer/geode/benchmarks:draw_cpu_benchmark_wallclock` in the nightly Perf
+workflow. The wall-clock target records 1, 100 and 10,000 draws through the shipped SlugFill
+pipeline and all eleven reflected bind slots, reports command-recording and submission CPU
+nanoseconds per draw separately, and checks each submission's draw count through `DeviceObserver`.
+The Linux Perf lane runs native Vulkan and macOS runs native Metal; the recording backend runs on
+both. Only the Linux resvg pixelmatch oracle retains wgpu-native for ongoing validation.
+
+First local `-c opt` results on an Apple M4 Pro (2026-09-25; median of three post-warmup samples,
+nanoseconds per draw) are:
+
+| Backend   |  Draws | Record | Submit |
+| --------- | -----: | -----: | -----: |
+| Recording |      1 |  2,583 |  8,042 |
+| Recording |    100 |    258 |    541 |
+| Recording | 10,000 |    177 |    359 |
+| Metal     |      1 |  3,916 | 58,292 |
+| Metal     |    100 |    403 |    403 |
+| Metal     | 10,000 |    133 |     78 |
+
+Hosted Linux `--config=ci -c opt` [Perf run 36214557535](https://github.com/jwmcglynn/donner/actions/runs/36214557535)
+on Ubuntu 24.04 x86_64 (median of three post-warmup samples, nanoseconds per draw) passed all
+three cases. The test pins `WGPU_BACKEND=vulkan`; wgpu-native reported the Mesa llvmpipe CPU
+adapter. The native Vulkan case executed separately on that runner:
+
+| Backend        |  Draws | Record | Submit |
+| -------------- | -----: | -----: | -----: |
+| Recording      |      1 |  1,453 |  8,356 |
+| Recording      |    100 |    254 |    408 |
+| Recording      | 10,000 |    238 |    380 |
+| Vulkan         |      1 |  5,400 | 25,377 |
+| Vulkan         |    100 |    337 |    345 |
+| Vulkan         | 10,000 |    245 |    103 |
+| wgpu reference |      1 |  5,180 | 31,048 |
+| wgpu reference |    100 |    303 |    400 |
+| wgpu reference | 10,000 |    233 |     84 |
+
+The wgpu rows are a one-time transitional comparison from that run. The ongoing per-draw Perf
+target runs only the recording and native backends; wgpu-native remains in the Linux resvg oracle.
+
+The recording backend's submission includes command serialization, while Metal's includes driver
+encoding and queue submission. These microbenchmarks do not yet justify changing the compositor's
+0.05 ms per-draw-op estimate: that estimate also covers scene preparation and raster work. The
+paired frame and residency gates below still decide cutover performance.
+
 The WebGPU fixture directly exercises the shipped checkerboard pipelines and WGSL modules or
 pipelines for `color_space_convert`, `filter_color_matrix`, `filter_resolve`, `flood`,
 `gaussian_blur`, `morphology`, `offset`, `subregion_clip`, and `tile`. Its test-only SolidFill,
