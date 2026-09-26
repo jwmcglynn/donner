@@ -1567,9 +1567,12 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
   }
   if (!result.compositedPreview.has_value() || !result.compositedPreview->valid()) {
-    // Nothing to present: the previous frame, and the overlays gated to its version, stay on
-    // screen. Every result past this point carries a valid preview.
     noteResultWithNothingToPresent(resultOpt);
+    if (hasMatchingPendingOverview(result, app)) {
+      RenderResult overview = std::move(*pendingOverviewResult_);
+      pendingOverviewResult_.reset();
+      presentCompositedResult(overview, app, viewport, textures);
+    }
     return;
   }
   nothingToPresentRetry_.reset();
@@ -1598,6 +1601,13 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     return;
   }
 
+  presentCompositedResult(*resultOpt, app, viewport, textures);
+}
+
+void RenderCoordinator::presentCompositedResult(RenderResult& result, EditorApp& app,
+                                                const ViewportState& viewport,
+                                                GlTextureCache& textures) {
+  const Vector2i resultCanvasSize = result.rasterViewport.outputSizePx;
   if (hasMatchingPendingOverview(result, app)) {
     textures.uploadCompositedOverview(*pendingOverviewResult_->compositedPreview,
                                       pendingOverviewResult_->rasterViewport);
@@ -1649,7 +1659,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     compositedPresentation_.noteChromeRefreshCompleted(displayedDocVersion_);
   }
   promoteSelectionBoundsIfReady();
-  acceptPixelCaptureResult(*resultOpt, app, viewport);
+  acceptPixelCaptureResult(result, app, viewport);
 }
 
 bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,

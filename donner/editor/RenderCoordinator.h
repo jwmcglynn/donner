@@ -633,6 +633,9 @@ private:
   std::vector<std::array<Vector2d, 4>> lastOverlayTextEditingSelectionQuadsDoc_;
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> lastOverlayTextBoxDragPreviewDoc_;
 
+  /// Publish a validated tile set and advance its matching presentation and selection state.
+  void presentCompositedResult(RenderResult& result, EditorApp& app, const ViewportState& viewport,
+                               GlTextureCache& textures);
   /// Hold a refreshed overview until detailed tiles can publish the same document version.
   void acceptOverviewResult(RenderResult result, EditorApp& app, GlTextureCache& textures);
   /// Whether the staged overview and detailed result describe the current document.
