@@ -1521,96 +1521,6 @@ test("the surface frame probe reports canvas work submitted after its task ended
   expect(failures).toEqual([]);
 });
 
-test("Firefox restores the Splash canvas after transient surface loss", async ({ browserName, page }) => {
-  test.skip(browserName !== "firefox", "Firefox canvas recovery regression");
-  const failures = await openEditor(page);
-  await openDonnerSplash(page);
-  const viewport = await readViewportStats(page);
-  const documentRegion = presentedDocumentRegion(viewport);
-  const letterWindow = splashLetterTrackingWindow(viewport);
-
-  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
-  await page.evaluate(() => {
-    window.__donnerEditorFrameRequested = true;
-  });
-  await expect.poll(async () => (await readSurfaceFrameProbe(page)).canvasWorkers, {
-    message: "the probe must identify the editor canvas worker",
-    timeout: scaledMs(2_000),
-  }).toBe(1);
-  const owner = await findCanvasOwnerWorker(page);
-  expect(owner).not.toBeNull();
-  if (owner === null) {
-    return;
-  }
-
-  await owner.evaluate(() => {
-    const scope = globalThis as typeof globalThis & {
-      __donnerInjectedSurfaceFailures?: {
-        remaining: number;
-        observed: number;
-        successfulAfterFault: number;
-      };
-    };
-    const injected = { remaining: 2, observed: 0, successfulAfterFault: 0 };
-    scope.__donnerInjectedSurfaceFailures = injected;
-    const original = GPUCanvasContext.prototype.getCurrentTexture;
-    GPUCanvasContext.prototype.getCurrentTexture = function(this: GPUCanvasContext) {
-      const editorCanvas = this.canvas.width >= 500 && this.canvas.height >= 500;
-      if (editorCanvas && injected.remaining > 0) {
-        --injected.remaining;
-        ++injected.observed;
-        throw new Error("injected transient canvas surface loss");
-      }
-      const texture = original.call(this);
-      if (editorCanvas && injected.observed === 2) {
-        ++injected.successfulAfterFault;
-      }
-      return texture;
-    };
-  });
-  await page.evaluate(() => {
-    window.__donnerEditorFrameRequested = true;
-  });
-  await expect.poll(() =>
-    owner.evaluate(() => {
-      const scope = globalThis as typeof globalThis & {
-        __donnerInjectedSurfaceFailures?: { observed: number };
-      };
-      return scope.__donnerInjectedSurfaceFailures?.observed ?? 0;
-    }), {
-    message: "the two injected surface acquisitions must both fail",
-    timeout: scaledMs(2_000),
-  }).toBe(2);
-
-  const framesAfterLoss = (await readSurfaceFrameProbe(page)).frames;
-  await page.evaluate(() => {
-    window.__donnerEditorFrameRequested = true;
-  });
-  await expect.poll(async () => (await readSurfaceFrameProbe(page)).frames, {
-    message: "the editor canvas must acquire another frame after the lost surface",
-    timeout: scaledMs(2_000),
-  }).toBeGreaterThan(framesAfterLoss);
-  await expect.poll(() =>
-    owner.evaluate(() => {
-      const scope = globalThis as typeof globalThis & {
-        __donnerInjectedSurfaceFailures?: { successfulAfterFault: number };
-      };
-      return scope.__donnerInjectedSurfaceFailures?.successfulAfterFault ?? 0;
-    }), {
-    message: "the recovered editor canvas must acquire a texture after both injected losses",
-    timeout: scaledMs(2_000),
-  }).toBeGreaterThan(0);
-  const frame = await captureSplashDragFrame(
-    page,
-    documentRegion,
-    letterWindow,
-    "after transient surface loss",
-  );
-  expect(frame.letter, "the recovered canvas must show the Splash letter").not.toBeNull();
-  expect(frame.census.darkBackgroundPixels).toBeGreaterThan(frame.census.samples * 0.25);
-  expect(failures).toEqual([]);
-});
-
 test("Firefox never exposes the checkerboard while dragging a Splash letter", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const caseStartedAtMs = performance.now();
@@ -3626,5 +3536,95 @@ test("an idle editor parks the frame loop and wakes on demand", async ({ page })
     woken.callbacks - afterIdle.callbacks,
     "the driver must have kept clocking the loop across the idle window",
   ).toBeGreaterThanOrEqual(kMinDeclinedTicks);
+  expect(failures).toEqual([]);
+});
+
+test("Firefox restores the Splash canvas after transient surface loss", async ({ browserName, page }) => {
+  test.skip(browserName !== "firefox", "Firefox canvas recovery regression");
+  const failures = await openEditor(page);
+  await openDonnerSplash(page);
+  const viewport = await readViewportStats(page);
+  const documentRegion = presentedDocumentRegion(viewport);
+  const letterWindow = splashLetterTrackingWindow(viewport);
+
+  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+  await page.evaluate(() => {
+    window.__donnerEditorFrameRequested = true;
+  });
+  await expect.poll(async () => (await readSurfaceFrameProbe(page)).canvasWorkers, {
+    message: "the probe must identify the editor canvas worker",
+    timeout: scaledMs(2_000),
+  }).toBe(1);
+  const owner = await findCanvasOwnerWorker(page);
+  expect(owner).not.toBeNull();
+  if (owner === null) {
+    return;
+  }
+
+  await owner.evaluate(() => {
+    const scope = globalThis as typeof globalThis & {
+      __donnerInjectedSurfaceFailures?: {
+        remaining: number;
+        observed: number;
+        successfulAfterFault: number;
+      };
+    };
+    const injected = { remaining: 2, observed: 0, successfulAfterFault: 0 };
+    scope.__donnerInjectedSurfaceFailures = injected;
+    const original = GPUCanvasContext.prototype.getCurrentTexture;
+    GPUCanvasContext.prototype.getCurrentTexture = function(this: GPUCanvasContext) {
+      const editorCanvas = this.canvas.width >= 500 && this.canvas.height >= 500;
+      if (editorCanvas && injected.remaining > 0) {
+        --injected.remaining;
+        ++injected.observed;
+        throw new Error("injected transient canvas surface loss");
+      }
+      const texture = original.call(this);
+      if (editorCanvas && injected.observed === 2) {
+        ++injected.successfulAfterFault;
+      }
+      return texture;
+    };
+  });
+  await page.evaluate(() => {
+    window.__donnerEditorFrameRequested = true;
+  });
+  await expect.poll(() =>
+    owner.evaluate(() => {
+      const scope = globalThis as typeof globalThis & {
+        __donnerInjectedSurfaceFailures?: { observed: number };
+      };
+      return scope.__donnerInjectedSurfaceFailures?.observed ?? 0;
+    }), {
+    message: "the two injected surface acquisitions must both fail",
+    timeout: scaledMs(2_000),
+  }).toBe(2);
+
+  const framesAfterLoss = (await readSurfaceFrameProbe(page)).frames;
+  await page.evaluate(() => {
+    window.__donnerEditorFrameRequested = true;
+  });
+  await expect.poll(async () => (await readSurfaceFrameProbe(page)).frames, {
+    message: "the editor canvas must acquire another frame after the lost surface",
+    timeout: scaledMs(2_000),
+  }).toBeGreaterThan(framesAfterLoss);
+  await expect.poll(() =>
+    owner.evaluate(() => {
+      const scope = globalThis as typeof globalThis & {
+        __donnerInjectedSurfaceFailures?: { successfulAfterFault: number };
+      };
+      return scope.__donnerInjectedSurfaceFailures?.successfulAfterFault ?? 0;
+    }), {
+    message: "the recovered editor canvas must acquire a texture after both injected losses",
+    timeout: scaledMs(2_000),
+  }).toBeGreaterThan(0);
+  const frame = await captureSplashDragFrame(
+    page,
+    documentRegion,
+    letterWindow,
+    "after transient surface loss",
+  );
+  expect(frame.letter, "the recovered canvas must show the Splash letter").not.toBeNull();
+  expect(frame.census.darkBackgroundPixels).toBeGreaterThan(frame.census.samples * 0.25);
   expect(failures).toEqual([]);
 });

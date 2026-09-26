@@ -1205,21 +1205,23 @@ AcquiredFrame FollowWindowAndReacquire(PresentationSurface& surface, Vector2i si
   return surface.acquire();
 }
 
-/// Replaces a surface whose platform object is gone with one built from the window, and acquires
-/// from the replacement. Reports the loss unchanged when no replacement could be built, leaving
-/// \p surface cleared so the caller gives it up.
+/// Replaces a lost or missing surface with one built from the window, and acquires from it.
+/// Reports loss when no replacement can be built, leaving \p surface clear for a later retry.
 ///
-/// @param surface Surface to replace; cleared, then set to the replacement when there is one.
+/// @param surface Surface to replace, or null after an earlier failed rebuild; set to the
+///   replacement when there is one.
 /// @param sizePx Framebuffer extent in pixels.
 /// @param configuredPx Extent the surface is configured for.
 /// @param rebuild Builds the replacement, already configured for \p sizePx.
 AcquiredFrame RebuildAndReacquire(
     std::unique_ptr<PresentationSurface>& surface, Vector2i sizePx, Vector2i& configuredPx,
     const std::function<std::unique_ptr<PresentationSurface>()>& rebuild) {
-  // The surface that was lost is given up before its replacement is built, so the window never
-  // has two surfaces on the same platform object at once.
-  surface->abandon();
-  surface->shutdown();
+  // Give up the old surface before building a replacement, so the window never has two
+  // surfaces on the same platform object at once. A later frame may arrive with none left.
+  if (surface != nullptr) {
+    surface->abandon();
+    surface->shutdown();
+  }
   surface = rebuild ? rebuild() : nullptr;
   if (surface == nullptr) {
     std::fprintf(stderr,
@@ -1246,18 +1248,9 @@ PresentationFrameOutcome AcquirePresentationFrame(
 
   const auto acquireStart = std::chrono::steady_clock::now();
   const bool rebuiltMissingSurface = surface == nullptr;
-  if (rebuiltMissingSurface) {
-    surface = rebuild ? rebuild() : nullptr;
-    if (surface == nullptr) {
-      outcome.status = gpu::SurfaceStatus::Lost;
-      outcome.released = true;
-      configuredPx = Vector2i::Zero();
-      outcome.acquireMs = ElapsedMs(acquireStart);
-      return outcome;
-    }
-    configuredPx = sizePx;
-  }
-  AcquiredFrame frame = surface->acquire();
+  AcquiredFrame frame = rebuiltMissingSurface
+                            ? RebuildAndReacquire(surface, sizePx, configuredPx, rebuild)
+                            : surface->acquire();
   outcome.acquireMs = ElapsedMs(acquireStart);
   if (outcome.acquireMs > 250.0) {
     std::fprintf(stderr, "[Editor/WGPU] surface acquire took %.1fms (status=%d, size=%dx%d)\n",
