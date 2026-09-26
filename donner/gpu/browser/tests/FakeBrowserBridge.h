@@ -232,6 +232,9 @@ public:
   /// looks at what teardown did would otherwise be reading a destroyed vector.
   std::shared_ptr<std::vector<std::string>> calls = std::make_shared<std::vector<std::string>>();
 
+  /// Owned copy of the most recently accepted render-pipeline descriptor.
+  std::optional<BrowserRenderPipelineRequest> lastRenderPipeline;
+
   /// The objects this bridge holds, by identifier.
   ///
   /// Shared rather than owned outright because the device owns the bridge: a test that watches
@@ -461,7 +464,7 @@ public:
         return status;
       }
     }
-    return create(
+    const BridgeStatus status = create(
         BrowserObjectKind::RenderPipeline, id,
         std::format("createRenderPipeline id={} layout={} vertex={}:{} fragment={}:{} "
                     "vertexBuffers={} targets={} topology={} cull={}",
@@ -469,6 +472,10 @@ public:
                     request.fragmentModuleId, request.fragmentEntryPoint.str(),
                     request.vertexBuffers.size(), request.colorTargets.size(), request.topologyCode,
                     request.cullModeCode));
+    if (status == BridgeStatus::Success) {
+      lastRenderPipeline = request;
+    }
+    return status;
   }
 
   BridgeStatus createComputePipeline(BrowserObjectId id,
