@@ -142,6 +142,28 @@ std::vector<std::string> SurfaceCalls(const std::vector<std::string>& calls) {
   return selected;
 }
 
+/// A refused bridge allocation must preserve existing objects and permit a clean retry.
+template <typename Factory>
+void ExpectBridgeCreateFailureAndRetry(BrowserFixture& fixture, std::string_view operation,
+                                       Factory&& create) {
+  SCOPED_TRACE(operation);
+  const auto existing = *fixture.bridge->objects;
+  fixture.bridge->failOperation = std::string(operation);
+  fixture.bridge->failStatus = BridgeStatus::Failed;
+  auto refused = create();
+  EXPECT_THAT(refused,
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState,
+                                    AllOf(HasSubstr(operation), HasSubstr("browser refused"))));
+  EXPECT_THAT(*fixture.bridge->objects, testing::ContainerEq(existing));
+  fixture.bridge->failOperation.clear();
+  {
+    auto retried = create();
+    ASSERT_THAT(retried, HasResult());
+    EXPECT_THAT(fixture.bridge->objects->size(), testing::Eq(existing.size() + 1));
+  }
+  EXPECT_THAT(*fixture.bridge->objects, testing::ContainerEq(existing));
+}
+
 }  // namespace
 
 TEST(BrowserDeviceRequest, PendingRequestYieldsNoDevice) {
@@ -603,6 +625,189 @@ TEST(BrowserDevice, SurfacesAKindMismatchAsAnIdentifierFailure) {
   EXPECT_THAT(
       fixture.device->createTexture(SimpleTexture(TextureUsage::Sampled)),
       IsGpuErrorWithMessage(GpuErrorType::InvalidHandle, HasSubstr("object of another kind")));
+}
+
+TEST(BrowserDevice, FailedBridgeCreatesPreserveLiveObjectsAndPermitRetry) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  auto texture = fixture.device->createTexture(SimpleTexture(TextureUsage::Sampled));
+  ASSERT_THAT(texture, HasResult());
+  auto view = fixture.device->createTextureView(texture.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+  auto sampler = fixture.device->createSampler(SamplerDescriptor{});
+  ASSERT_THAT(sampler, HasResult());
+  BindGroupLayoutDescriptor layoutDescriptor;
+  layoutDescriptor.entries = {
+      {0, ShaderStage::Fragment, BindingType::SampledTexture2dFloat, TextureFormat::RGBA8Unorm},
+      {1, ShaderStage::Fragment, BindingType::FilteringSampler, TextureFormat::RGBA8Unorm}};
+  auto groupLayout = fixture.device->createBindGroupLayout(layoutDescriptor);
+  ASSERT_THAT(groupLayout, HasResult());
+  BindGroupDescriptor groupDescriptor;
+  groupDescriptor.layout = BindGroupLayoutRef(groupLayout.result());
+  groupDescriptor.entries = {{0, TextureViewBinding{TextureViewRef(view.result())}},
+                             {1, SamplerBinding{SamplerRef(sampler.result())}}};
+  PipelineLayoutDescriptor pipelineLayoutDescriptor;
+  pipelineLayoutDescriptor.bindGroupLayouts = {BindGroupLayoutRef(groupLayout.result())};
+  auto pipelineLayout = fixture.device->createPipelineLayout(PipelineLayoutDescriptor{});
+  ASSERT_THAT(pipelineLayout, HasResult());
+  auto vertex = fixture.device->createShaderModule(SimpleShaderModule("vertex"));
+  ASSERT_THAT(vertex, HasResult());
+  auto fragment = fixture.device->createShaderModule(SimpleShaderModule("fragment"));
+  ASSERT_THAT(fragment, HasResult());
+  RenderPipelineDescriptor pipelineDescriptor;
+  pipelineDescriptor.layout = PipelineLayoutRef(pipelineLayout.result());
+  pipelineDescriptor.vertex.module = ShaderModuleRef(vertex.result());
+  pipelineDescriptor.vertex.entryPoint = RcString("vertexMain");
+  pipelineDescriptor.fragment.module = ShaderModuleRef(fragment.result());
+  pipelineDescriptor.fragment.entryPoint = RcString("fragmentMain");
+  pipelineDescriptor.fragment.targets.push_back(ColorTargetState{});
+
+  ExpectBridgeCreateFailureAndRetry(fixture, "createBuffer", [&] {
+    return fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst));
+  });
+  ExpectBridgeCreateFailureAndRetry(fixture, "createTexture", [&] {
+    return fixture.device->createTexture(SimpleTexture(TextureUsage::Sampled));
+  });
+  ExpectBridgeCreateFailureAndRetry(fixture, "createTextureView", [&] {
+    return fixture.device->createTextureView(texture.result(), TextureViewDescriptor{});
+  });
+  ExpectBridgeCreateFailureAndRetry(
+      fixture, "createSampler", [&] { return fixture.device->createSampler(SamplerDescriptor{}); });
+  ExpectBridgeCreateFailureAndRetry(fixture, "createBindGroupLayout", [&] {
+    return fixture.device->createBindGroupLayout(layoutDescriptor);
+  });
+  ExpectBridgeCreateFailureAndRetry(
+      fixture, "createBindGroup", [&] { return fixture.device->createBindGroup(groupDescriptor); });
+  ExpectBridgeCreateFailureAndRetry(fixture, "createPipelineLayout", [&] {
+    return fixture.device->createPipelineLayout(pipelineLayoutDescriptor);
+  });
+  ExpectBridgeCreateFailureAndRetry(fixture, "createShaderModule", [&] {
+    return fixture.device->createShaderModule(SimpleShaderModule("retry"));
+  });
+  ExpectBridgeCreateFailureAndRetry(fixture, "createRenderPipeline", [&] {
+    return fixture.device->createRenderPipeline(pipelineDescriptor);
+  });
+}
+
+TEST(BrowserDevice, PreservesSamplerSettingsAndTextureBindingIdentities) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  fixture.bridge->calls->clear();
+
+  SamplerDescriptor samplerDescriptor{RcString("sampler"), FilterMode::Linear, FilterMode::Nearest,
+                                      AddressMode::Repeat, AddressMode::ClampToEdge};
+  auto sampler = fixture.device->createSampler(samplerDescriptor);
+  ASSERT_THAT(sampler, HasResult());
+  auto texture = fixture.device->createTexture(SimpleTexture(TextureUsage::Sampled));
+  ASSERT_THAT(texture, HasResult());
+  auto view = fixture.device->createTextureView(texture.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+
+  BindGroupLayoutDescriptor layoutDescriptor;
+  layoutDescriptor.entries = {
+      {3, ShaderStage::Fragment, BindingType::SampledTexture2dFloat, TextureFormat::RGBA8Unorm},
+      {7, ShaderStage::Fragment, BindingType::FilteringSampler, TextureFormat::RGBA8Unorm}};
+  auto layout = fixture.device->createBindGroupLayout(layoutDescriptor);
+  ASSERT_THAT(layout, HasResult());
+  BindGroupDescriptor groupDescriptor;
+  groupDescriptor.layout = BindGroupLayoutRef(layout.result());
+  groupDescriptor.entries = {{3, TextureViewBinding{TextureViewRef(view.result())}},
+                             {7, SamplerBinding{SamplerRef(sampler.result())}}};
+  auto group = fixture.device->createBindGroup(groupDescriptor);
+  ASSERT_THAT(group, HasResult());
+
+  EXPECT_THAT(
+      *fixture.bridge->calls,
+      ElementsAre("createSampler id=1 mag=2 min=1 addressU=2 addressV=1",
+                  testing::StartsWith("createTexture id=2 "), "createTextureView id=3 texture=2",
+                  testing::StartsWith("createBindGroupLayout id=4 "),
+                  "createBindGroup id=5 layout=4 entries=["
+                  "(binding=3 resource=3 offset=0 size=0)"
+                  "(binding=7 resource=1 offset=0 size=0)]"));
+}
+
+TEST(BrowserDevice, PreservesVertexBlendAndIndexedDrawParameters) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  auto target = fixture.device->createTexture(SimpleTexture(TextureUsage::RenderAttachment));
+  ASSERT_THAT(target, HasResult());
+  auto view = fixture.device->createTextureView(target.result(), TextureViewDescriptor{});
+  ASSERT_THAT(view, HasResult());
+  auto layout = fixture.device->createPipelineLayout(PipelineLayoutDescriptor{});
+  ASSERT_THAT(layout, HasResult());
+  auto vertex = fixture.device->createShaderModule(SimpleShaderModule("vertex"));
+  ASSERT_THAT(vertex, HasResult());
+  auto fragment = fixture.device->createShaderModule(SimpleShaderModule("fragment"));
+  ASSERT_THAT(fragment, HasResult());
+
+  RenderPipelineDescriptor descriptor;
+  descriptor.layout = PipelineLayoutRef(layout.result());
+  descriptor.vertex.module = ShaderModuleRef(vertex.result());
+  descriptor.vertex.entryPoint = RcString("vertexMain");
+  descriptor.vertex.buffers = {
+      {12, VertexStepMode::Vertex, {{VertexFormat::Float32x2, 0, 0}, {VertexFormat::Uint32, 8, 1}}},
+      {16, VertexStepMode::Instance, {{VertexFormat::Float32x4, 0, 2}}}};
+  descriptor.fragment.module = ShaderModuleRef(fragment.result());
+  descriptor.fragment.entryPoint = RcString("fragmentMain");
+  descriptor.fragment.targets = {
+      {TextureFormat::RGBA8Unorm,
+       BlendState{{BlendFactor::SrcAlpha, BlendFactor::OneMinusSrcAlpha, BlendOperation::Add},
+                  {BlendFactor::One, BlendFactor::One, BlendOperation::Max}},
+       ColorWriteMask::Red | ColorWriteMask::Alpha}};
+  auto pipeline = fixture.device->createRenderPipeline(descriptor);
+  ASSERT_THAT(pipeline, HasResult());
+  ASSERT_THAT(fixture.bridge->lastRenderPipeline, testing::Optional(testing::_));
+  const auto& translated = *fixture.bridge->lastRenderPipeline;
+  EXPECT_THAT(
+      translated.vertexBuffers,
+      ElementsAre(
+          testing::FieldsAre(
+              12u, 1u, ElementsAre(testing::FieldsAre(1u, 0u, 0u), testing::FieldsAre(3u, 8u, 1u))),
+          testing::FieldsAre(16u, 2u, ElementsAre(testing::FieldsAre(2u, 0u, 2u)))));
+  EXPECT_THAT(translated.colorTargets,
+              ElementsAre(testing::FieldsAre(1u, true, testing::FieldsAre(3u, 4u, 1u),
+                                             testing::FieldsAre(2u, 2u, 2u), 9u)));
+
+  auto vertices =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::Vertex | BufferUsage::CopyDst));
+  ASSERT_THAT(vertices, HasResult());
+  auto indices =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::Index | BufferUsage::CopyDst));
+  ASSERT_THAT(indices, HasResult());
+  const std::array<uint8_t, 48> vertexBytes{};
+  const std::array<uint8_t, 12> indexBytes{0, 0, 1, 0, 2, 0, 0, 0, 2, 0, 1, 0};
+  ASSERT_THAT(fixture.device->writeBuffer(vertices.result(), 16, vertexBytes), IsOk());
+  ASSERT_THAT(fixture.device->writeBuffer(indices.result(), 4, indexBytes), IsOk());
+  EXPECT_THAT(*fixture.bridge->calls, Contains("writeBuffer buffer=7 offset=16 bytes=48"));
+  EXPECT_THAT(*fixture.bridge->calls, Contains("writeBuffer buffer=8 offset=4 bytes=12"));
+
+  auto encoder = fixture.device->createCommandEncoder();
+  ASSERT_THAT(encoder, HasResult());
+  RenderPassDescriptor passDescriptor;
+  passDescriptor.colorAttachments.push_back(RenderPassColorAttachment{
+      TextureViewRef(view.result()), LoadOp::Clear, StoreOp::Store, {0.0, 0.0, 0.0, 1.0}});
+  auto pass = encoder.result()->beginRenderPass(passDescriptor);
+  ASSERT_THAT(pass, HasResult());
+  ASSERT_THAT(pass.result()->setPipeline(pipeline.result()), IsOk());
+  ASSERT_THAT(pass.result()->setVertexBuffer(0, vertices.result(), 16), IsOk());
+  ASSERT_THAT(pass.result()->setVertexBuffer(1, vertices.result(), 64), IsOk());
+  ASSERT_THAT(pass.result()->setIndexBuffer(indices.result(), IndexFormat::Uint16, 4), IsOk());
+  ASSERT_THAT(pass.result()->drawIndexed(6, 2), IsOk());
+  ASSERT_THAT(pass.result()->end(), IsOk());
+  auto commands = encoder.result()->finish();
+  ASSERT_THAT(commands, HasResult());
+  fixture.bridge->calls->clear();
+  ASSERT_THAT(fixture.device->submit(std::move(commands).result()), HasResult());
+  EXPECT_THAT(
+      *fixture.bridge->calls,
+      ElementsAre(
+          "beginCommandBuffer serial=1 index=0",
+          "beginRenderPass attachments=[(view=2 load=1 store=1 "
+          "clear=[0.000,0.000,0.000,1.000])]",
+          "setRenderPipeline pipeline=6", "setVertexBuffer slot=0 buffer=7 offset=16",
+          "setVertexBuffer slot=1 buffer=7 offset=64", "setIndexBuffer buffer=8 format=1 offset=4",
+          "drawIndexed indexCount=6 instanceCount=2 firstIndex=0 baseVertex=0 firstInstance=0",
+          "endRenderPass", "endCommandBuffer serial=1", "submitCommandBuffers serial=1 count=1"));
 }
 
 TEST(BrowserDevice, MirrorsARecordedRenderPassOntoTheBridgeInRecordingOrder) {

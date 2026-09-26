@@ -2153,6 +2153,50 @@
         "Item"
       ]
     },
+    "donner/gpu/shader/wgsl/tests/ControlSource.h#inline1": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "image",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "imageSampler",
+          "type": "sampler"
+        },
+        {
+          "addressSpace": "uniform",
+          "binding": 2,
+          "group": 0,
+          "name": "params",
+          "type": "Params"
+        }
+      ],
+      "builtins": [
+        "position"
+      ],
+      "entryPoints": [
+        {
+          "name": "fs_main",
+          "stage": "fragment"
+        }
+      ],
+      "features": [
+        "let",
+        "return",
+        "switch",
+        "textureLoad",
+        "textureSample",
+        "textureSampleLevel",
+        "var"
+      ],
+      "structs": [
+        "Params"
+      ]
+    },
     "donner/gpu/shader/wgsl/tests/GraphicsSource.h#inline0": {
       "bindings": [],
       "builtins": [

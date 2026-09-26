@@ -50,7 +50,7 @@ void writeBigEndianU32(std::span<uint8_t> data, size_t offset, uint32_t value) {
 
 // Build a complete header and an exact-length directory so truncation reaches our preflight
 // rather than being hidden by trailing padding or by the WOFF2 decoder's allocation path.
-std::vector<uint8_t> woff2PreflightInput(std::span<const uint8_t> directory,
+std::vector<uint8_t> Woff2PreflightInput(std::span<const uint8_t> directory,
                                          uint32_t flavor = 0x00010000u) {
   const auto header = minimalWoff2Header();
   std::vector<uint8_t> data(header.begin(), header.end());
@@ -241,7 +241,7 @@ TEST(Woff2ParserTest, RejectsMalformedTableDirectoriesBeforeDecoderEntry) {
   };
   for (const auto& [scenario, directory] : cases) {
     SCOPED_TRACE(scenario);
-    const auto result = Woff2Parser::Decompress(woff2PreflightInput(directory));
+    const auto result = Woff2Parser::Decompress(Woff2PreflightInput(directory));
     ASSERT_TRUE(result.hasError());
     EXPECT_EQ(result.error().reason, "WOFF2: invalid table directory");
   }
@@ -273,7 +273,7 @@ TEST(Woff2ParserTest, CatalogRejectsWrongFlavorAndCffTablesBeforeDecoderEntry) {
   for (const Case& testCase : cases) {
     SCOPED_TRACE(testCase.scenario);
     const auto result =
-        Woff2Parser::Decompress(woff2PreflightInput(testCase.directory, testCase.flavor), options);
+        Woff2Parser::Decompress(Woff2PreflightInput(testCase.directory, testCase.flavor), options);
     ASSERT_TRUE(result.hasError());
     EXPECT_EQ(result.error().reason, testCase.reason);
   }
@@ -324,7 +324,7 @@ TEST(Woff2ParserTest, RejectsMalformedCollectionDirectoriesBeforeDecoderEntry) {
   for (const Case& testCase : cases) {
     SCOPED_TRACE(testCase.scenario);
     const auto result =
-        Woff2Parser::Decompress(woff2PreflightInput(testCase.directory, kCollectionFlavor));
+        Woff2Parser::Decompress(Woff2PreflightInput(testCase.directory, kCollectionFlavor));
     ASSERT_TRUE(result.hasError());
     EXPECT_EQ(result.error().reason, testCase.reason);
   }
@@ -340,7 +340,7 @@ TEST(Woff2ParserTest, CompleteCollectionDirectoryPassesResourcePreflight) {
       0, 1, 0, 0,  // TrueType flavor.
       0,           // Reference to table zero.
   };
-  const auto result = Woff2Parser::Decompress(woff2PreflightInput(directory, kCollectionFlavor));
+  const auto result = Woff2Parser::Decompress(Woff2PreflightInput(directory, kCollectionFlavor));
   ASSERT_TRUE(result.hasError());  // The intentionally absent Brotli stream still fails decode.
   EXPECT_EQ(result.error().reason, "WOFF2: decompression failed");
 }

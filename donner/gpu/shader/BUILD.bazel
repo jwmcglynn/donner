@@ -679,6 +679,7 @@ donner_cc_test(
         ":tile_test_artifact",
         ":turbulence_test_artifact",
         "//donner/base:base_test_utils",
+        "//donner/gpu/shader/wgsl:compiler",
         "//donner/gpu/shader/wgsl:graphics_test_artifact",
         "@com_google_gtest//:gtest_main",
     ],
