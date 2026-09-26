@@ -47,19 +47,26 @@ class GeodeGpuRoot {
 public:
   /// Retains a selected native backend; the external kind is refused, because only an adopted
   /// \ref GeodeRuntimeDeviceSource can open its devices.
+  /// @param capabilities Capabilities of the selected native backend.
+  /// @param lostState Non-null loss condition shared by logical devices.
+  /// @param vulkanRoot Shared Vulkan physical owner; null unless the backend is native Vulkan.
   GeodeGpuRoot(GeodeGpuRootCapabilities capabilities,
                std::shared_ptr<gpu::DeviceLostState> lostState,
                std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot = nullptr);
 
+  /// Return the backend capabilities shared by runtime devices over this root.
   const GeodeGpuRootCapabilities& capabilities() const UTILS_LIFETIME_BOUND {
     return capabilities_;
   }
+  /// Return the shared device-loss condition.
   const std::shared_ptr<gpu::DeviceLostState>& lostState() const UTILS_LIFETIME_BOUND {
     return lostState_;
   }
+  /// Return the retained Vulkan owner; null unless the root is native Vulkan.
   const std::shared_ptr<gpu::vulkan::VulkanSharedRoot>& vulkanRoot() const UTILS_LIFETIME_BOUND {
     return vulkanRoot_;
   }
+  /// Return whether the root holds the owner its backend needs to open runtime devices.
   bool hasBackendDevice() const;
 
 private:
