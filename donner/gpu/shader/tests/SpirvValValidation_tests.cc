@@ -232,6 +232,11 @@ TEST(SpirvValValidation, EmittedCompositePassesVulkan11Validation) {
                                  "composite_mutated.spv");
 }
 
+TEST(SpirvValValidation, SamplingSwitchPassesVulkan11Validation) {
+  ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::SamplingSwitchShader().spirv,
+                                 "sampling_switch.spv");
+}
+
 TEST(SpirvValValidation, CompiledGraphicsEntriesPassVulkan11Validation) {
   ExpectWordsValidateForVulkan11(SpirvVal(), wgsl::tests::GraphicsShader().spirv,
                                  "compiled_graphics.spv");
