@@ -45,6 +45,8 @@
 
 struct GLFWwindow;
 struct ImFont;
+
+/// GLFW-compatible callback for horizontal and vertical scroll offsets.
 using GLFWscrollfun = void (*)(GLFWwindow*, double, double);
 
 namespace donner::geode {
@@ -86,6 +88,7 @@ inline constexpr std::array<float, 4> kWasmOpaqueSurfaceClearColor = {
   return premultipliedAlphaSupported ? transparentClearColor : kWasmOpaqueSurfaceClearColor;
 }
 
+/// Classification used to choose surface recovery behavior.
 enum class WgpuSurfaceFailureKind {
   Timeout,
   OutdatedOrLost,
@@ -424,9 +427,10 @@ struct PresentationFrameOutcome {
 }
 #endif
 
+/// Frame scheduling and reconfiguration actions after surface acquisition fails.
 struct WgpuSurfaceRetryDecision {
-  bool requestFrame = false;
-  bool reconfigure = false;
+  bool requestFrame = false;  //!< Whether the host should schedule another presentation frame.
+  bool reconfigure = false;   //!< Whether the surface must be reconfigured before retrying.
 
   bool operator==(const WgpuSurfaceRetryDecision&) const = default;
 };
@@ -445,9 +449,11 @@ struct WgpuSurfaceRetryDecision {
   };
 }
 
+/// Retry and completion actions for one diagnostic readback result.
 struct WgpuDiagnosticReadbackDecision {
-  bool retry = false;
-  bool completeRequest = false;
+  bool retry = false;  //!< Whether diagnostic readback should be attempted again.
+  bool completeRequest =
+      false;  //!< Whether the outstanding diagnostic request should be completed.
 
   bool operator==(const WgpuDiagnosticReadbackDecision&) const = default;
 };
@@ -483,7 +489,7 @@ struct WgpuDiagnosticReadbackDecision {
 
 /// HiDPI settings derived from the native window/display scale.
 struct UiScaleConfig {
-  double displayScale = 1.0;
+  double displayScale = 1.0;  //!< Display scaling factor applied to logical UI sizing.
 
   [[nodiscard]] float scaledPixels(double basePixels) const {
     return static_cast<float>(basePixels * displayScale);
@@ -497,10 +503,11 @@ struct UiScaleConfig {
 [[nodiscard]] UiScaleConfig ComputeUiScaleConfig(int logicalWindowWidth, int framebufferWidth,
                                                  double contentScaleX);
 
+/// Window creation settings and host UI configuration.
 struct EditorWindowOptions {
-  std::string title = "Donner SVG Editor";
-  int initialWidth = 1280;
-  int initialHeight = 720;
+  std::string title = "Donner SVG Editor";  //!< Native window title.
+  int initialWidth = 1280;                  //!< Requested initial window width.
+  int initialHeight = 720;                  //!< Requested initial window height.
   /// Whether the native desktop window should be shown. Hidden windows still
   /// create a real OpenGL context and are useful for framebuffer replay tests.
   /// They are additionally created undecorated: a titled window's frame is
@@ -529,8 +536,10 @@ struct EditorWindowOptions {
   /// Background clear color (RGBA, 0..1). Matches the viewport surround
   /// when the document doesn't fill the whole window.
   float clearColor[4] = {0.11f, 0.11f, 0.13f, 1.0f};
-  /// Enable framebuffer CPU readback from \ref endFrameAndReadPixels. Intended for replay tests;
-  /// disabled by default so production WGPU editor frames cannot read back by accident.
+  /// Enable framebuffer CPU readback from \ref
+  /// donner::editor::gui::EditorWindow::endFrameAndReadPixels "endFrameAndReadPixels". Intended for
+  /// replay tests; disabled by default so production WGPU editor frames cannot read back by
+  /// accident.
   bool enableFramebufferReadback = false;
   /// Absolute path to the ImGui settings (.ini) file used to persist the dock
   /// layout and window state across sessions. Empty (the default) keeps ImGui
@@ -570,9 +579,9 @@ struct EditorWindowFrameTiming {
 
 /// Fonts loaded into this window's ImGui context for the editor shell.
 struct EditorWindowFonts {
-  ImFont* uiRegular = nullptr;
-  ImFont* uiBold = nullptr;
-  ImFont* code = nullptr;
+  ImFont* uiRegular = nullptr;  //!< Regular UI font owned by the ImGui font atlas.
+  ImFont* uiBold = nullptr;     //!< Bold UI font owned by the ImGui font atlas.
+  ImFont* code = nullptr;       //!< Monospaced source font owned by the ImGui font atlas.
 
   [[nodiscard]] bool complete() const {
     return uiRegular != nullptr && uiBold != nullptr && code != nullptr;
@@ -592,7 +601,7 @@ struct EditorWindowInputOverride {
   bool keyAlt = false;    //!< Alt modifier state.
   bool keySuper = false;  //!< Super/Command modifier state.
   /// Horizontal mouse-wheel delta for this frame.
-  float mouseWheelH = 0.0f;
+  float mouseWheelH = 0.0f;  //!< Horizontal wheel delta injected for this frame.
   /// Vertical mouse-wheel delta for this frame.
   float mouseWheel = 0.0f;
   /// ImGui key enum values pressed during this frame.
@@ -736,7 +745,8 @@ public:
 
   /// Physical framebuffer size in pixels. Equals \ref windowSize scaled by the
   /// backing display scale, and matches the dimensions of a bitmap returned by
-  /// \ref endFrameAndReadPixels. (0, 0) when the window failed to initialize.
+  /// \ref donner::editor::gui::EditorWindow::endFrameAndReadPixels "endFrameAndReadPixels". (0, 0)
+  /// when the window failed to initialize.
   [[nodiscard]] Vector2i framebufferSize() const;
 
   /// Backing display content scale (for example 2.0 on a Retina display).
@@ -781,12 +791,12 @@ public:
   /// False in OpenGL builds and before the WebGPU device came up.
   [[nodiscard]] bool usingOffscreenRenderTarget() const;
 
-  /// Whether \ref endFrameAndReadPixels returns this window's frames on a live device: readback
-  /// was asked for, through \ref EditorWindowOptions::enableFramebufferReadback or the browser's
-  /// readback diagnostic, and the frames this window draws into can be copied from. A surface
-  /// that reports its frames cannot be copied from still presents them, and the window drops the
-  /// readback rather than the surface, so its frames then read back empty. False before the
-  /// device came up.
+  /// Whether \ref donner::editor::gui::EditorWindow::endFrameAndReadPixels "endFrameAndReadPixels"
+  /// returns this window's frames on a live device: readback was asked for, through \ref
+  /// EditorWindowOptions::enableFramebufferReadback or the browser's readback diagnostic, and the
+  /// frames this window draws into can be copied from. A surface that reports its frames cannot be
+  /// copied from still presents them, and the window drops the readback rather than the surface, so
+  /// its frames then read back empty. False before the device came up.
   [[nodiscard]] bool framebufferReadbackAvailable() const;
 
   /// Shared Geode device for direct append passes into the editor framebuffer.
@@ -800,9 +810,10 @@ public:
   void setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback);
 
   /**
-   * Test seam: bounds how long \ref endFrameAndReadPixels waits for its readback map, in place of
-   * the editor's readback bound, so a case can reach the bound without spending it. A map that
-   * outlasts the bound declares the framebuffer device lost either way.
+   * Test seam: bounds how long \ref donner::editor::gui::EditorWindow::endFrameAndReadPixels
+   * "endFrameAndReadPixels" waits for its readback map, in place of the editor's readback bound, so
+   * a case can reach the bound without spending it. A map that outlasts the bound declares the
+   * framebuffer device lost either way.
    *
    * @param budget Longest the map may take. Clamped to the editor's bound; zero or less restores
    *   it.

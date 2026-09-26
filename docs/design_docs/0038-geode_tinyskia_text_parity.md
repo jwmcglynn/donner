@@ -9,7 +9,7 @@ finite-sample coverage can legitimately differ.
 **Related:** [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison),
 [0041 anti-aliasing](0041-geode_analytical_aa.md),
 [0042 Slug implementation](0042-geode_slug_conformance.md),
-[0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy)
+[0021 §Geode / Resvg Override Policy](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/0021-resvg_feature_gaps.md#geode--resvg-override-policy)
 
 ---
 
@@ -93,7 +93,7 @@ Both modes use the case's local `ImageComparisonParams`. There is no category si
 disable list, or direct Geode-to-tiny comparison mode. A legitimate backend-specific reference is
 attached to that case with `withGeodeGoldenOverride` and a current reason. A structural or semantic
 error is fixed in the shared layer or backend consumer; it is not absorbed by a wider threshold.
-See [0021](0021-resvg_feature_gaps.md#geode--resvg-override-policy) for the active policy.
+See [0021](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/0021-resvg_feature_gaps.md#geode--resvg-override-policy) for the active policy.
 
 ---
 
@@ -203,12 +203,12 @@ For the record — these were surfaced by the same parity run and are tracked el
   divergences. **All resolved** — the common root was geode inconsistently applying
   `color-interpolation-filters` (linearRGB default) plus a handful of genuine
   conformance/CTM bugs; details and the close-out are in the appendix and
-  [0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy).
+  [0021 §Geode / Resvg Override Policy](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/0021-resvg_feature_gaps.md#geode--resvg-override-policy).
 - **Sub-visual premultiply fills (~137):** at strict-0, ~137 non-text tests show a
   whole-fill diff that collapses to <100 px at 0.02 (a uniform sub-perceptual
   premultiplied-alpha / color-space rounding offset). They PASS parity within their
   normal budgets; tracked as one root-cause item in
-  [0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy).
+  [0021 §Geode / Resvg Override Policy](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/0021-resvg_feature_gaps.md#geode--resvg-override-policy).
 
 ---
 

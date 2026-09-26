@@ -44,6 +44,7 @@ struct RenderSessionReplOptions {
   bool printBanner = true;
 };
 
+/// Line-oriented command interface for inspecting and controlling a render session.
 class RenderSessionRepl {
 public:
   RenderSessionRepl(RenderSession& app, std::istream& in, std::ostream& out,

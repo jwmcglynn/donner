@@ -34,14 +34,24 @@ public:
   /// Aggregate limits for frame-wide filter graph preparation and feImage snapshots.
   static constexpr std::size_t kMaximumPreparedFilterGraphs =
       RendererFilterPreparationBudget::kMaximumGraphs;
+
+  /// Maximum filter nodes admitted during render preparation.
   static constexpr std::size_t kMaximumPreparedFilterNodes =
       RendererFilterPreparationBudget::kMaximumNodes;
+
+  /// Maximum decoded filter-image bytes admitted during preparation.
   static constexpr std::uint64_t kMaximumPreparedFilterImageBytes =
       RendererFilterPreparationBudget::kMaximumImageBytes;
+
+  /// Maximum filter materialization bytes admitted during preparation.
   static constexpr std::uint64_t kMaximumPreparedFilterMaterializationBytes =
       RendererFilterPreparationBudget::kMaximumMaterializationBytes;
+
+  /// Maximum retained filter payload bytes admitted during preparation.
   static constexpr std::uint64_t kMaximumPreparedFilterPayloadBytes =
       RendererFilterPreparationBudget::kMaximumPayloadBytes;
+
+  /// Maximum shadow entities admitted for prepared filter content.
   static constexpr std::size_t kMaximumPreparedFilterShadowEntities =
       RendererFilterPreparationBudget::kMaximumShadowEntities;
   /// Clip-path shapes copied per frame.
@@ -182,9 +192,9 @@ public:
   /**
    * Render a range of entities into the renderer's already-active frame.
    *
-   * This is the current-frame form of \ref drawEntityRange: the caller owns
-   * `RendererInterface::beginFrame()` / `endFrame()`, and this method only
-   * emits the entity-range draw commands. It is used by the compositor when an
+   * This is the current-frame form of \ref donner::svg::RendererDriver::drawEntityRange
+   * "drawEntityRange": the caller owns `RendererInterface::beginFrame()` / `endFrame()`, and this
+   * method only emits the entity-range draw commands. It is used by the compositor when an
    * immediate-mode span should be drawn directly into the composition render
    * target instead of first being rasterized into an offscreen tile.
    *
@@ -221,6 +231,7 @@ public:
   /// for bounded damage renders after their caller rules out nonlocal effects in the owner tree.
   void setConservativeEarlyLeafCulling(bool enabled) { earlyLeafViewportCulling_ = enabled; }
 
+  /// Controls visibility and transform handling when computing an entity range's bounds.
   struct EntityRangeBoundsOptions {
     /// Ordinary scene tiles are bounded by the current raster viewport. A selected drag tile may
     /// retain geometry outside it so those pixels can move into view without another raster pass.

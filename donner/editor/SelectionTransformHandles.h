@@ -27,8 +27,10 @@ enum class SelectionTransformHandleKind {
 
 /// Hit-test result for selection transform handles.
 struct SelectionTransformHandleIntent {
-  SelectionTransformHandleKind kind = SelectionTransformHandleKind::None;
-  SelectionTransformCorner corner = SelectionTransformCorner::TopLeft;
+  SelectionTransformHandleKind kind =
+      SelectionTransformHandleKind::None;  //!< Transform operation selected by the hit test.
+  SelectionTransformCorner corner =
+      SelectionTransformCorner::TopLeft;  //!< Corner associated with a resize or rotation handle.
 
   friend bool operator==(const SelectionTransformHandleIntent&,
                          const SelectionTransformHandleIntent&) = default;
@@ -36,7 +38,7 @@ struct SelectionTransformHandleIntent {
 
 /// Visual handle boxes for one selection envelope, in document coordinates.
 struct SelectionTransformHandleBoxes {
-  std::array<Box2d, 4> boxes;
+  std::array<Box2d, 4> boxes;  //!< Screen-space hit rectangles for the four corner handles.
 };
 
 /// Return a combined AABB for a selection-bounds span.

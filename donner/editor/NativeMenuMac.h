@@ -15,6 +15,7 @@ namespace donner::editor {
 /// them on its UI frame before applying actions to the editor.
 class NativeMenuMac {
 public:
+  /// Actions collected while draining the native menu command queue.
   struct DrainResult {
     MenuBarActions actions;
     /// An AppKit key equivalent fired. The shell should skip its matching GLFW

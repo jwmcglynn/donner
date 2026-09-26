@@ -33,6 +33,7 @@ namespace donner::editor {
 /// operation is `currentFrameVersion()` which the render thread can poll.
 class AsyncSVGDocument {
 public:
+  /// Outcome of applying queued document mutations.
   struct FlushResult {
     bool appliedCommands = false;
     /// True only when every applied command changed an element transform. An overlay guide captured

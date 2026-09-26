@@ -14,6 +14,7 @@
 
 namespace donner::editor {
 
+/// Number of UI-frame samples retained in the timing ring.
 constexpr std::size_t kFrameHistoryCapacity = 120;
 
 /// Render-pane profiler costs aligned with one UI frame-history sample.
@@ -105,6 +106,7 @@ struct FrameMemorySample {
   std::uint64_t wgpuLifetimeBufferCreates = 0;
 };
 
+/// Bounded ring of aligned UI, worker, profiler, and presentation-memory samples.
 struct FrameHistory {
   /// ImGui frame delta per UI-thread frame - populated from
   /// `ImGui::GetIO().DeltaTime` by `noteFrameDelta`.
@@ -119,7 +121,9 @@ struct FrameHistory {
   std::array<FrameProfilerSample, kFrameHistoryCapacity> profiler{};
   /// Presentation memory retained by the editor texture cache.
   std::array<FrameMemorySample, kFrameHistoryCapacity> memory{};
+  /// Ring slot that receives the next frame sample.
   std::size_t writeIndex = 0;
+  /// Number of valid samples currently retained, bounded by capacity.
   std::size_t samples = 0;
   /// Most recent non-zero worker sample, so latched-worker-latency
   /// readers (the numeric readout, sticky-line rendering) have something
@@ -150,9 +154,10 @@ struct FrameHistory {
   [[nodiscard]] float max() const;
 };
 
+/// Document-space click buffered until the document is available for interaction.
 struct PendingClick {
-  Vector2d documentPoint;
-  MouseModifiers modifiers;
+  Vector2d documentPoint;    //!< Buffered click position in document coordinates.
+  MouseModifiers modifiers;  //!< Keyboard modifiers captured with the click.
 };
 
 /// Result of consuming render-pane scroll events for one UI frame.

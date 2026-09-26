@@ -373,6 +373,7 @@ public:
   void markDeviceLostAfterWaitTimeout(GpuWaitSite site, std::chrono::milliseconds elapsed,
                                       const char* reason) const;
 
+  /// Readback timing, completion, loss, cancellation, and resource counters.
   struct ReadbackStats {
     int count = 0;
     int pollIterations = 0;
@@ -539,14 +540,14 @@ public:
    * document's transform.
    */
   struct SceneBatchBindGroupKey {
-    uint64_t uniformBufferId = 0;
-    uint64_t uniformOffset = 0;
-    uint64_t uniformSize = 0;
-    uint64_t chunkBufferId = 0;
-    uint64_t chunkBytes = 0;
-    uint64_t recordBufferId = 0;
-    uint64_t recordOffset = 0;
-    uint64_t recordBytes = 0;
+    uint64_t uniformBufferId = 0;  //!< Identity of the batch uniform buffer.
+    uint64_t uniformOffset = 0;    //!< Byte offset of the uniform binding.
+    uint64_t uniformSize = 0;      //!< Byte length of the uniform binding.
+    uint64_t chunkBufferId = 0;    //!< Identity of the encoded geometry chunk buffer.
+    uint64_t chunkBytes = 0;       //!< Byte length of the bound geometry chunks.
+    uint64_t recordBufferId = 0;   //!< Identity of the scene-record buffer.
+    uint64_t recordOffset = 0;     //!< Byte offset of the scene-record binding.
+    uint64_t recordBytes = 0;      //!< Byte length of the scene-record binding.
 
     friend bool operator==(const SceneBatchBindGroupKey& a,
                            const SceneBatchBindGroupKey& b) = default;

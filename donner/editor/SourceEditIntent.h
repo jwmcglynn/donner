@@ -31,7 +31,9 @@ struct SourceEditIntent {
   std::size_t offset = 0;         ///< Byte offset where the edit starts.
   std::size_t removedLength = 0;  ///< Number of bytes removed at \ref offset.
   std::string replacement;        ///< Bytes inserted at \ref offset.
-  SourceEditIntentKind kind = SourceEditIntentKind::Unknown;
+  SourceEditIntentKind kind =
+      SourceEditIntentKind::Unknown;  //!< Structural or textual editing intent represented by this
+                                      //!< record.
   std::uint64_t bufferVersion = 0;  ///< Monotonic text-buffer edit version.
   SourceEditPoint start;            ///< Edit start in the pre-edit source buffer.
   SourceEditPoint removedEnd;       ///< End of the removed range in the pre-edit buffer.

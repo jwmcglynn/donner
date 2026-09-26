@@ -13,9 +13,9 @@ namespace donner::editor {
  * between screen coordinates and document coordinates.
  */
 struct DrawingViewportLayout {
-  Vector2d imageOrigin;
-  Vector2d imageSize;
-  Box2d documentViewBox;
+  Vector2d imageOrigin;   //!< Displayed image origin in logical UI coordinates.
+  Vector2d imageSize;     //!< Displayed image dimensions in logical UI pixels.
+  Box2d documentViewBox;  //!< Document-space bounds represented by the drawing viewport.
 
   [[nodiscard]] bool hasImage() const;
   [[nodiscard]] bool containsScreenPoint(const Vector2d& screenPoint) const;

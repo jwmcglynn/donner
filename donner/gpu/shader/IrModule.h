@@ -4,8 +4,9 @@
 ///
 /// A module holds module-scope constants, resource bindings, and functions (plain functions
 /// plus vertex/fragment/compute entry points). \c ModuleBuilder and \c FunctionBuilder validate
-/// every construction step and fail closed with \ref ShaderError on ill-typed input; a
-/// successfully built \c IrModule is immutable and serializes deterministically.
+/// every construction step and fail closed with \ref donner::gpu::shader::ShaderError "ShaderError"
+/// on ill-typed input; a successfully built \c IrModule is immutable and serializes
+/// deterministically.
 
 #include <array>
 #include <cstdint>
@@ -338,8 +339,8 @@ private:
 };
 
 /**
- * Builds an \ref IrModule: module-scope constants, resource bindings with (group, binding)
- * uniqueness validation, and functions.
+ * Builds an \ref donner::gpu::shader::IrModule "IrModule": module-scope constants, resource
+ * bindings with (group, binding) uniqueness validation, and functions.
  */
 class ModuleBuilder {
 public:

@@ -3,6 +3,7 @@
 /// Authoritative WGSL for sRGB and linear RGB conversion through a sampled transfer table.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for sRGB and linear RGB conversion through a sampled transfer table.
 inline constexpr wgsl::SourceText kColorSpaceConvertSource{R"wgsl(struct ColorSpaceConvertParams {
   direction: u32,
   pad0: u32,

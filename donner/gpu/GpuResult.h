@@ -12,7 +12,8 @@
 namespace donner::gpu {
 
 /**
- * Result of a fallible GPU operation: exactly one of a value of type \a T or a \ref GpuError.
+ * Result of a fallible GPU operation: exactly one of a value of type \a T or a \ref
+ * donner::gpu::GpuError "GpuError".
  *
  * The GPU runtime uses no exceptions; this is the only failure channel. The accessor shape
  * (\ref hasResult / \ref result / \ref error) mirrors \ref donner::ParseResult so call sites read
@@ -127,7 +128,8 @@ private:
 
 /**
  * Status of a fallible GPU operation with no result value: either success (a \c std::monostate
- * result) or a \ref GpuError. Construct success values with \ref OkStatus().
+ * result) or a \ref donner::gpu::GpuError "GpuError". Construct success values with \ref
+ * donner::gpu::OkStatus "OkStatus()".
  */
 using Status = Result<std::monostate>;
 

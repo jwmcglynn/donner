@@ -71,7 +71,7 @@ struct StructLayout {
  * Computes alignment and size of \p type in \p addressSpace per the WGSL layout rules. Fails
  * closed for types with no host-shareable layout: bool (and vectors of bool), textures,
  * samplers, and runtime arrays (which have a stride but no fixed size; use
- * \ref ComputeArrayStride).
+ * \ref donner::gpu::shader::ComputeArrayStride "ComputeArrayStride").
  *
  * @param type Type to lay out.
  * @param addressSpace Address space the layout is computed for.
@@ -85,9 +85,10 @@ ShaderResult<TypeLayout> ComputeTypeLayout(const IrType& type, AddressSpace addr
  *
  * The uniform rounding is a deliberate policy choice: WGSL validation would reject a uniform
  * array whose natural stride is not a multiple of 16 (there is no stride attribute), so this
- * engine defines the layout as the rounded stride and \ref ComputeArrayStrideInfo reports when
- * rounding occurred. Emitters must materialize padded element wrappers in that case (see
- * \ref ArrayStrideInfo).
+ * engine defines the layout as the rounded stride and \ref
+ * donner::gpu::shader::ComputeArrayStrideInfo "ComputeArrayStrideInfo" reports when rounding
+ * occurred. Emitters must materialize padded element wrappers in that case (see \ref
+ * donner::gpu::shader::ArrayStrideInfo "ArrayStrideInfo").
  *
  * @param arrayType Sized or runtime array type.
  * @param addressSpace Address space the stride is computed for.
@@ -115,9 +116,9 @@ struct ArrayStrideInfo {
 };
 
 /**
- * Like \ref ComputeArrayStride, additionally reporting whether the uniform 16-byte rule raised
- * the natural stride - the flag backend emitters consult to decide whether a padded element
- * wrapper is required.
+ * Like \ref donner::gpu::shader::ComputeArrayStride "ComputeArrayStride", additionally reporting
+ * whether the uniform 16-byte rule raised the natural stride - the flag backend emitters consult to
+ * decide whether a padded element wrapper is required.
  *
  * @param arrayType Sized or runtime array type.
  * @param addressSpace Address space the stride is computed for.

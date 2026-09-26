@@ -4,7 +4,8 @@
 ///
 /// Limits exist so that untrusted SVG-derived dimensions (geometry volume, image sizes,
 /// render-target extents, dispatch counts) fail deterministically with
-/// \ref GpuErrorType::LimitExceeded instead of exhausting a driver.
+/// \ref donner::gpu::GpuErrorType::LimitExceeded "GpuErrorType::LimitExceeded" instead of
+/// exhausting a driver.
 
 #include <cstdint>
 

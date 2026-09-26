@@ -6,6 +6,7 @@
 
 namespace donner::gpu::shader::programs {
 
+/// Authored WGSL source for the Gaussian and box blur compute program.
 inline constexpr wgsl::SourceText kGaussianBlurSource = R"wgsl(
 struct BlurParams {
   stdDeviation: f32,

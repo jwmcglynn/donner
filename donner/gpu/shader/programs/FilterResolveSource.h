@@ -3,6 +3,7 @@
 /// Authoritative WGSL for clipping and resolving float filter output to RGBA8.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for clipping and resolving float filter output to RGBA8.
 inline constexpr wgsl::SourceText kFilterResolveSource{R"wgsl(const kTransferCount: u32 = 8192u;
 
 struct SubregionClipParams {

@@ -47,10 +47,10 @@ public:
   const gpu::RenderPipeline& pipeline() const { return pipeline_; }
 
   /**
-   * The cross-entity batch variant of @ref pipeline: same layout, same
-   * shader module and same blending, but the entry points that take paint
-   * and geometry from each instance's record. Compiled on first call,
-   * because only a cross-entity batch needs it.
+   * The cross-entity batch variant of \ref donner::geode::GeodePipeline::pipeline "pipeline": same
+   * layout, same shader module and same blending, but the entry points that take paint and geometry
+   * from each instance's record. Compiled on first call, because only a cross-entity batch needs
+   * it.
    */
   const gpu::RenderPipeline& batchedPipeline() const;
 

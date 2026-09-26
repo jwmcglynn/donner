@@ -51,7 +51,7 @@ struct ReproRecorderOptions {
   std::optional<std::string> svgSource;
   /// Initial logical window dimensions at recording start.
   int windowWidth = 0;
-  int windowHeight = 0;
+  int windowHeight = 0;  //!< Recorded host window height.
   /// Initial HiDPI scale.
   double displayScale = 1.0;
   /// Legacy composited-mode metadata kept for old `.rnr` compatibility.

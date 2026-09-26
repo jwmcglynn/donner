@@ -56,8 +56,8 @@ struct PathOperationAvailability {
 
 /// Whether a lossless group or ungroup operation can currently be applied.
 struct GroupOperationAvailability {
-  bool canApply = false;
-  std::string reason;
+  bool canApply = false;  //!< Whether the requested group operation is currently permitted.
+  std::string reason;     //!< Explanation when the group operation is unavailable.
 };
 
 /// Whether @p command is a geometry-changing or destructive mutation targeting
@@ -202,7 +202,7 @@ public:
   void setElementVisible(svg::SVGElement element, bool visible);
 
   /// Number of cached hidden-element author-display entries. Test observable for the
-  /// retention invariant enforced by \ref pruneHiddenElementDisplayCache.
+  /// retention invariant enforced by `pruneHiddenElementDisplayCache`.
   [[nodiscard]] std::size_t hiddenElementAuthorDisplayCountForTesting() const {
     return hiddenElementAuthorDisplay_.size();
   }
@@ -461,8 +461,8 @@ public:
   /**
    * Queue a destructive path operation over the current selection.
    *
-   * Inputs are sorted by SVG paint order before dispatching to \ref PathOps so
-   * selection click order cannot change Subtract Front / Subtract Back
+   * Inputs are sorted by SVG paint order before dispatching to \ref donner::ApplyPathBoolean
+   * "ApplyPathBoolean" so selection click order cannot change Subtract Front / Subtract Back
    * semantics. The result is rejected if the operation is over the editor's
    * complexity limits or produces geometry outside the selected inputs' union
    * bounds.
@@ -600,6 +600,7 @@ public:
     bool restoreSourceTransformAttributeValue = false;
   };
 
+  /// Source writeback information retained after an element removal completes.
   struct CompletedElementRemoveWriteback {
     AttributeWritebackTarget target;
   };

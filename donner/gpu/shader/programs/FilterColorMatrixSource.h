@@ -3,6 +3,7 @@
 /// Authoritative WGSL for feColorMatrix.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for feColorMatrix.
 inline constexpr wgsl::SourceText kFilterColorMatrixSource{R"wgsl(struct FilterColorMatrixParams {
   col0: vec4<f32>,
   col1: vec4<f32>,

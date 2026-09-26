@@ -3,6 +3,7 @@
 /// Authoritative WGSL for SVG Perlin turbulence and fractal noise.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for SVG Perlin turbulence and fractal noise.
 inline constexpr wgsl::SourceText kTurbulenceSource{R"wgsl(struct TurbulenceParams {
   baseFreqX: f32,
   baseFreqY: f32,

@@ -36,6 +36,7 @@ class SVGDocumentMutation;
 
 /// Readiness of catalog-dependent geometry or pixels for an explicit element target.
 struct FontResourcePreflight {
+  /// Readiness or refusal category from font-resource preflight.
   enum class Status {
     Ready,          ///< Every known catalog dependency is resolved.
     PendingFonts,   ///< Bytes or decode admission are still pending.
@@ -45,7 +46,7 @@ struct FontResourcePreflight {
     ResourceLimit,  ///< A bounded dependency traversal or font resource limit was exceeded.
   };
 
-  Status status = Status::NeedsRender;
+  Status status = Status::NeedsRender;  //!< Current readiness of the target's font resources.
   std::vector<FontFaceDependency> dependencies;  ///< Full face identities and current states.
 };
 

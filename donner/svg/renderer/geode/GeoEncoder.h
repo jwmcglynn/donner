@@ -188,6 +188,7 @@ public:
    * @param target Single-sample render target. Usage must include
    *   `RenderAttachment`; add `TextureBinding` or `CopySrc` when callers
    *   sample or read it after rendering. The texture must outlive `finish()`.
+   * @param targetSize Render-target dimensions in physical pixels.
    */
   GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
              const GeodeGradientPipeline& gradientPipeline, const GeodeImagePipeline& imagePipeline,
@@ -378,6 +379,8 @@ public:
   ///   non-null, the encoder skips `GeodePathEncoder::encode` and the
   ///   `pathEncodes` counter bump. Used by `RendererGeode` to plumb a
   ///   cached `GeodePathCacheComponent::strokeSlot` result.
+  /// @param path Path geometry to fill into the open mask pass.
+  /// @param rule Fill rule for resolving interior coverage.
   void fillPathIntoMask(const Path& path, FillRule rule,
                         const EncodedPath* precomputedEncoded = nullptr);
 
@@ -607,9 +610,12 @@ public:
    * the duration of the call only.
    */
   struct ScenePaint {
-    css::RGBA color = css::RGBA(0, 0, 0, 255);
-    const LinearGradientParams* linearGradient = nullptr;
-    const RadialGradientParams* radialGradient = nullptr;
+    css::RGBA color = css::RGBA(
+        0, 0, 0, 255);  //!< Unpremultiplied solid fill color when no gradient is selected.
+    const LinearGradientParams* linearGradient =
+        nullptr;  //!< Borrowed linear-gradient parameters for the duration of the call.
+    const RadialGradientParams* radialGradient =
+        nullptr;  //!< Borrowed radial-gradient parameters for the duration of the call.
 
     /// True when this instance paints with a gradient rather than a colour.
     bool isGradient() const { return linearGradient != nullptr || radialGradient != nullptr; }
@@ -646,7 +652,7 @@ public:
    * @param slot Resident slot (geometry + record slab wiring installed by
    *   the renderer).
    * @param encoded Precomputed `EncodedPath` shared with the cache.
-   * @param color Solid fill color (NOT premultiplied).
+   * @param paint Solid color or borrowed gradient parameters for this instance.
    * @param rule Fill rule.
    * @param recordTransform The full deviceFromLocal transform to bake
    *   into the record (the batch uniform is orthographic-only).
@@ -746,6 +752,7 @@ public:
    *   stops are honored; excess are silently truncated with a one-shot
    *   verbose warning at the call site in `RendererGeode`.
    * @param rule Fill rule (NonZero or EvenOdd).
+   * @param precomputedEncoded Optional cached path encoding; null encodes the path for this draw.
    */
   void fillPathLinearGradient(const Path& path, const LinearGradientParams& params, FillRule rule,
                               const EncodedPath* precomputedEncoded = nullptr);
@@ -765,6 +772,7 @@ public:
    * @param params Radial gradient parameters (center + radius, optional
    *   focal point + radius, shared transform and stops).
    * @param rule Fill rule (NonZero or EvenOdd).
+   * @param precomputedEncoded Optional cached path encoding; null encodes the path for this draw.
    */
   void fillPathRadialGradient(const Path& path, const RadialGradientParams& params, FillRule rule,
                               const EncodedPath* precomputedEncoded = nullptr);

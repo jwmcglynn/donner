@@ -76,8 +76,8 @@ inline constexpr std::array<EditorCursor, 10> kEditorCursors = {
 
 /// Pointer hotspot for a cursor, in 32x32 cursor-image pixels.
 struct CursorHotspot {
-  int x = 0;
-  int y = 0;
+  int x = 0;  //!< Horizontal hotspot coordinate in cursor pixels.
+  int y = 0;  //!< Vertical hotspot coordinate in cursor pixels.
 };
 
 /// Hotspot (pointer origin) for @p cursor, in cursor-image pixels. See

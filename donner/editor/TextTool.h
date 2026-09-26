@@ -98,8 +98,8 @@ public:
   /// exclusive. Newline code points participate in the logical range even
   /// though they do not produce highlight geometry.
   struct SelectionRange {
-    std::size_t start = 0;
-    std::size_t end = 0;
+    std::size_t start = 0;  //!< Inclusive start of the logical text range.
+    std::size_t end = 0;    //!< Exclusive end of the logical text range.
 
     bool operator==(const SelectionRange&) const = default;
   };

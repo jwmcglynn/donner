@@ -40,7 +40,7 @@ struct GeodeWgpuRoots {
   wgpu::Queue queue;        //!< Default queue of \ref device.
   /// Whether releasing the handles above is Donner's job. False for an embedder's roots, which
   /// outlive every context built over them and belong to the embedder.
-  bool owned = false;
+  bool owned = false;  //!< Whether this root owns the underlying WebGPU objects.
   /// Token the device-lost callback this process installed retains, or null when it installed
   /// none. Released with the handles.
   void* deviceLostCallbackToken = nullptr;
@@ -64,7 +64,7 @@ enum class GpuBackendKind : uint8_t {
 /// @param kind Backend kind to name.
 std::string_view GpuBackendKindName(GpuBackendKind kind);
 
-/// Prints \p kind by \ref GpuBackendKindName.
+/// Prints \p kind by \ref donner::geode::GpuBackendKindName "GpuBackendKindName".
 /// @param os Stream to print to. @param kind Backend kind to print.
 std::ostream& operator<<(std::ostream& os, GpuBackendKind kind);
 
@@ -97,9 +97,9 @@ struct GeodeGpuRootCapabilities {
  * open between runtime devices, so each runtime device over it joins that device rather than
  * asking the browser again.
  *
- * Produced only by \ref SelectGpuRoot and \ref AdoptGpuRoot: assembling roots field by
- * field is what let a half-populated set escape to a caller, and a root that exists is a root
- * that is complete.
+ * Produced only by \ref donner::geode::SelectGpuRoot "SelectGpuRoot" and \ref
+ * donner::geode::AdoptGpuRoot "AdoptGpuRoot": assembling roots field by field is what let a
+ * half-populated set escape to a caller, and a root that exists is a root that is complete.
  */
 class GeodeGpuRoot {
 public:
@@ -220,11 +220,12 @@ struct GpuRootSelection {
 };
 
 /**
- * Selects a backend root: the backend \ref ResolveGpuBackendKind resolves for \p options. For
- * the transitional adapter it creates an instance, requests an adapter and a device, and takes the
- * default queue; for native Metal it queries the system Metal device's capabilities, for
- * native Vulkan it opens one instance, logical device and queue, and for the browser backend it
- * holds this worker's GPU device for runtime devices over the root.
+ * Selects a backend root: the backend \ref donner::geode::ResolveGpuBackendKind
+ * "ResolveGpuBackendKind" resolves for \p options. For the transitional adapter it creates an
+ * instance, requests an adapter and a device, and takes the default queue; for native Metal it
+ * queries the system Metal device's capabilities, for native Vulkan it opens one instance, logical
+ * device and queue, and for the browser backend it holds this worker's GPU device for runtime
+ * devices over the root.
  *
  * The one selection every caller shares. Headless, editor and embedded construction differ only
  * in \p options, so the adapter retries under load, the backend requests, the force-fallback
@@ -320,19 +321,20 @@ gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind();
  * backend in a WebAssembly build with the `//donner/svg/renderer/geode:browser_backend` build
  * setting, and none otherwise. The selected browser editor names its canvas after root selection.
  *
- * It applies only where nothing else decides, see \ref ResolveGpuBackendKind.
+ * It applies only where nothing else decides, see \ref donner::geode::ResolveGpuBackendKind
+ * "ResolveGpuBackendKind".
  *
  * @return The kind, or empty when this build leaves headless work on the platform default.
  */
 std::optional<GpuBackendKind> BuildDefaultGpuBackendKind();
 
 /**
- * The backend \ref SelectGpuRoot builds from for \p options. The first of these that applies
- * decides: the backend the caller names, the one \p request names, \p buildDefault for a
- * selection with no surface provider, and the platform default. A selection constrained by a
- * WebGPU surface provider retains the transitional adapter by default because native backends
- * cannot serve that surface. Native editor windows attach their platform surfaces without such a
- * provider.
+ * The backend \ref donner::geode::SelectGpuRoot "SelectGpuRoot" builds from for \p options. The
+ * first of these that applies decides: the backend the caller names, the one \p request names, \p
+ * buildDefault for a selection with no surface provider, and the platform default. A selection
+ * constrained by a WebGPU surface provider retains the transitional adapter by default because
+ * native backends cannot serve that surface. Native editor windows attach their platform surfaces
+ * without such a provider.
  *
  * A selection with a WebGPU surface provider stays on the transitional adapter when only the
  * build default names a backend. The selected browser editor has no such provider: it names its
@@ -344,7 +346,7 @@ std::optional<GpuBackendKind> BuildDefaultGpuBackendKind();
  * @param options Caller-supplied inputs.
  * @param request Value of `DONNER_GPU_BACKEND`; empty when it is unset or empty.
  * @param buildDefault Backend the build selects for headless work, as
- *   \ref BuildDefaultGpuBackendKind reports it.
+ *   \ref donner::geode::BuildDefaultGpuBackendKind "BuildDefaultGpuBackendKind" reports it.
  * @return The kind, or an error naming \p request and the accepted values when the caller names
  *   no backend and \p request names none this build knows.
  */
@@ -468,7 +470,7 @@ public:
   /// @param seconds Budget in seconds.
   void setTeardownDrainBudgetForTesting(double seconds) { teardownDrainSeconds_ = seconds; }
 
-  /// Polls a serial wait makes before it stops polling, in place of \ref kMaxSerialWaitPolls.
+  /// Polls a serial wait makes before it stops polling, in place of `kMaxSerialWaitPolls`.
   /// Lowered by tests so a wait reaches its poll bound on a poll that also carries it past its
   /// deadline, which twenty thousand polls cannot do deterministically. Test seam.
   ///
@@ -658,7 +660,7 @@ protected:
   void onDestroyTextureBacking(uint32_t slotIndex) override;
 
   /// Whether \p slotIndex holds a texture this adapter allocated, rather than a borrowed one named
-  /// through \ref registerBorrowedTexture or \ref onRegisterTexture.
+  /// through `registerBorrowedTexture` or \ref onRegisterTexture.
   /// @param slotIndex Validated live texture slot.
   [[nodiscard]] bool onOwnsTextureBacking(uint32_t slotIndex) const override;
 
@@ -871,13 +873,14 @@ private:
   /// call into the backend, so it is atomic and outlives this record through a reference count
   /// the callback also holds.
   struct MappingSlot {
+    /// Shared completion state for an asynchronous buffer mapping.
     struct Completion {
       std::atomic<int> references{2};  //!< This record and the pending callback.
       std::atomic<bool> done{false};   //!< Set once the callback has run.
       std::atomic<bool> ok{false};     //!< Whether the map succeeded.
       /// Set once the mapping handle is gone, which makes whichever side observes the finished
       /// map responsible for giving the buffer back.
-      std::atomic<bool> abandoned{false};
+      std::atomic<bool> abandoned{false};  //!< Whether the mapping handle has been released.
       /// Claimed once by whichever side unmaps, so the two never both unmap and never both
       /// leave it to the other.
       std::atomic<bool> unmapClaimed{false};
@@ -975,7 +978,7 @@ private:
 
   std::shared_ptr<CompletionState> completionState_ = std::make_shared<CompletionState>();
 
-  /// Set only inside \ref registerBorrowedTexture so \ref onCreateTexture names that texture in
+  /// Set only inside `registerBorrowedTexture` so \ref onCreateTexture names that texture in
   /// the slot instead of allocating one.
   wgpu::Texture pendingRegistration_;
 };

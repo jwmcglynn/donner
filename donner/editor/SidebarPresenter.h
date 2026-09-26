@@ -28,9 +28,13 @@ namespace donner::editor {
 
 struct EditorTheme;
 
+/// Selection and scrolling requests shared with the tree presenter.
 struct TreeViewState {
+  /// Element to reveal in the tree when a scroll request is pending.
   std::optional<svg::SVGElement> scrollTarget;
+  /// Whether the tree should reveal scrollTarget on its next presentation.
   bool pendingScroll = false;
+  /// Whether a tree interaction changed the document selection during this pass.
   bool selectionChangedInTree = false;
 };
 
@@ -115,6 +119,7 @@ public:
     ImTextureID texture = 0;                      ///< ImGui texture handle.
     Vector2d uvBottomRight = Vector2d(1.0, 1.0);  ///< Bottom-right valid payload UV.
   };
+  /// Callback that uploads a static icon bitmap and returns its ImGui handle and valid UV range.
   using IconTextureProvider =
       std::function<IconTexture(std::uint64_t stableId, const svg::RendererBitmap& bitmap)>;
 
@@ -130,6 +135,8 @@ public:
   /// @param iconTextureProvider Uploads the shared disclosure-chevron mask to an
   ///   ImGui texture; pass null (e.g. headless tests) to skip chevron art while
   ///   keeping the disclosure interaction.
+  /// @param liveApp Live application for mutations, or null while the renderer owns the document.
+  /// @param state Tree selection and scroll requests consumed or updated during rendering.
   void renderTreeView(EditorApp* liveApp, TreeViewState& state,
                       const IconTextureProvider& iconTextureProvider = {}) const;
 

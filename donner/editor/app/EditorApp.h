@@ -42,11 +42,12 @@ struct SourceLoadOptions {
   std::size_t maxFileBytes = 16u * 1024u * 1024u;
 };
 
+/// Default viewport and source-loading policy for a render session.
 struct RenderSessionOptions {
   /// Default viewport used for navigations that don't carry an explicit
   /// width/height. Matches typical desktop editor previews.
   int defaultWidth = 512;
-  int defaultHeight = 384;
+  int defaultHeight = 384;  //!< Fallback viewport height when navigation omits an explicit size.
 
   /// Options forwarded to the internal source loader. Most tests override
   /// `baseDirectory` to isolate fixture files from the developer's CWD.
@@ -57,7 +58,8 @@ struct RenderSessionOptions {
 /// after `EditorApp::navigate` returns - subsequent navigations produce a
 /// new snapshot.
 struct RenderSessionSnapshot {
-  RenderSessionStatus status = RenderSessionStatus::kEmpty;
+  RenderSessionStatus status =
+      RenderSessionStatus::kEmpty;  //!< Current state of the render session.
   /// Resolved URI the snapshot corresponds to, or empty for `kEmpty`.
   std::string uri;
   /// RGBA snapshot of the rendered frame. Empty if no render has succeeded.
@@ -67,6 +69,7 @@ struct RenderSessionSnapshot {
   std::string message;
 };
 
+/// Document loading and rendering state for a host-driven session.
 class RenderSession {
 public:
   explicit RenderSession(RenderSessionOptions options = {});

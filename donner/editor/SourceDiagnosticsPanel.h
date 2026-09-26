@@ -12,8 +12,8 @@ namespace donner::editor {
 
 /// Severity totals shown in the source diagnostics header.
 struct SourceDiagnosticCounts {
-  std::size_t errors = 0;
-  std::size_t warnings = 0;
+  std::size_t errors = 0;    //!< Number of error diagnostics.
+  std::size_t warnings = 0;  //!< Number of warning diagnostics.
 
   bool operator==(const SourceDiagnosticCounts&) const = default;
 };
@@ -26,8 +26,9 @@ struct SourceDiagnosticCounts {
 
 /// User interaction emitted by one diagnostics panel frame.
 struct SourceDiagnosticsPanelAction {
-  std::optional<std::uint64_t> hoveredId;
-  std::optional<std::uint64_t> activatedId;
+  std::optional<std::uint64_t> hoveredId;  //!< Diagnostic identifier under the pointer, when any.
+  std::optional<std::uint64_t>
+      activatedId;  //!< Diagnostic identifier activated for source navigation, when any.
 };
 
 /// Compact bottom panel presenting source warnings and errors.

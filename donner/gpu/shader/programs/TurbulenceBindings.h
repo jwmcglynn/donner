@@ -15,8 +15,10 @@ inline constexpr uint32_t kTurbulenceWorkgroupSize = 8;
 
 /// Permutation and gradient table lengths required by the SVG noise algorithm.
 inline constexpr uint32_t kTurbulenceBaseTableSize = 256;
-inline constexpr uint32_t kTurbulenceTableSize = 514;
-inline constexpr uint32_t kTurbulenceGradientTableSize = 4 * kTurbulenceTableSize;
+inline constexpr uint32_t kTurbulenceTableSize =
+    514;  //!< Number of entries in the duplicated turbulence permutation table.
+inline constexpr uint32_t kTurbulenceGradientTableSize =
+    4 * kTurbulenceTableSize;  //!< Number of gradient entries across the four turbulence channels.
 
 /// Resources in bind group zero.
 enum class TurbulenceBinding : uint32_t {

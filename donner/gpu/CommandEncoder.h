@@ -19,7 +19,7 @@ namespace donner::gpu {
 
 class CommandEncoder;
 
-/// Which kind of pass a \ref CommandEncoder currently has open.
+/// Which kind of pass a \ref donner::gpu::CommandEncoder "CommandEncoder" currently has open.
 enum class PassKind : uint8_t {
   None,     //!< No pass is active; copies and pass begins are allowed.
   Render,   //!< A render pass is active.

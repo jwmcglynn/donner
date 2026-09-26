@@ -15,7 +15,7 @@ class EditorApp;
 
 /// Validation result for a source-initiated structural element move.
 enum class SourceStructuralMoveStatus : std::uint8_t {
-  Ready,
+  Ready,  //!< The structural move is validated and can be queued.
   DocumentUnavailable,
   StaleRevision,
   RootElement,
@@ -30,19 +30,29 @@ enum class SourceStructuralMoveStatus : std::uint8_t {
 
 /// Revision-bound, DOM-shaped move prepared from a source drag target.
 struct SourceStructuralMovePlan {
+  /// Element to move within the document.
   svg::SVGElement element;
+  /// Destination parent for the moved element.
   svg::SVGElement parent;
+  /// Insert before this sibling; an empty value appends to the parent.
   std::optional<svg::SVGElement> referenceElement;
+  /// Authored byte range to move in the XML source.
   SourceByteRange elementRange;
+  /// Destination byte offset in the original source.
   std::size_t insertionOffset = 0;
+  /// Document generation captured when the move was planned.
   std::uint64_t expectedDocumentGeneration = 0;
+  /// Document frame version captured when the move was planned.
   std::uint64_t expectedFrameVersion = 0;
+  /// Source hash used to reject a plan made against different text.
   std::uint64_t expectedSourceHash = 0;
 };
 
 /// Result of validating and building a structural move plan.
 struct SourceStructuralMoveEvaluation {
+  /// Whether the requested move is ready, deferred, or rejected.
   SourceStructuralMoveStatus status = SourceStructuralMoveStatus::Rejected;
+  /// Validated move plan when evaluation succeeds.
   std::optional<SourceStructuralMovePlan> plan;
 };
 
@@ -63,9 +73,11 @@ struct SourceStructuralMoveEvaluation {
  * Commit a previously validated plan if its source and document revisions are still current.
  *
  * @param app Current editor document owner.
- * @param plan Plan returned by \ref BuildSourceStructuralMovePlan.
+ * @param plan Plan returned by \ref donner::editor::BuildSourceStructuralMovePlan
+ * "BuildSourceStructuralMovePlan".
  * @param source Current editable source.
- * @return \ref SourceStructuralMoveStatus::Ready when the DOM move was queued.
+ * @return \ref donner::editor::SourceStructuralMoveStatus::Ready
+ * "SourceStructuralMoveStatus::Ready" when the DOM move was queued.
  */
 [[nodiscard]] SourceStructuralMoveStatus CommitSourceStructuralMove(
     EditorApp& app, const SourceStructuralMovePlan& plan, std::string_view source);

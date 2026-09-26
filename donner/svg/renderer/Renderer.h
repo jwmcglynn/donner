@@ -222,7 +222,6 @@ public:
    * Begins mask rendering.
    *
    * @param maskBounds Optional mask bounds clip.
-   * @param maskType Whether mask coverage comes from luminance or alpha.
    */
   void pushMask(const std::optional<Box2d>& maskBounds) override;
 

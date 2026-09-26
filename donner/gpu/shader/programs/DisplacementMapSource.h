@@ -3,6 +3,7 @@
 /// Authoritative WGSL for feDisplacementMap.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for feDisplacementMap.
 inline constexpr wgsl::SourceText kDisplacementMapSource{R"wgsl(struct DisplacementParams {
   scale: f32,
   xChannel: u32,
