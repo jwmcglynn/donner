@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <limits>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/fonts/CffOutlineComplexity.h"
@@ -110,7 +111,8 @@ std::vector<uint8_t> MakeCffIndex(const std::vector<std::vector<uint8_t>>& objec
 
 std::vector<uint8_t> MakeCff1WithSubrs(std::vector<uint8_t> charString,
                                        std::vector<std::vector<uint8_t>> localSubrs,
-                                       std::vector<std::vector<uint8_t>> globalSubrs = {}) {
+                                       std::vector<std::vector<uint8_t>> globalSubrs = {},
+                                       std::vector<uint8_t> topDictPrefix = {}) {
   const std::vector<uint8_t> nameIndex = MakeCffIndex({{'A'}}, false);
   const std::vector<uint8_t> stringIndex = MakeCffIndex({}, false);
   const std::vector<uint8_t> globalIndex = MakeCffIndex(globalSubrs, false);
@@ -133,7 +135,9 @@ std::vector<uint8_t> MakeCff1WithSubrs(std::vector<uint8_t> charString,
     const size_t charStringsOffset =
         privateOffset + privateDict.size() + (localSubrs.empty() ? 0 : localIndex.size());
 
-    std::vector<uint8_t> nextTop = EncodeDictInteger(charStringsOffset);
+    std::vector<uint8_t> nextTop = topDictPrefix;
+    const std::vector<uint8_t> encodedCharStrings = EncodeDictInteger(charStringsOffset);
+    nextTop.insert(nextTop.end(), encodedCharStrings.begin(), encodedCharStrings.end());
     nextTop.push_back(17);
     if (!privateDict.empty()) {
       const std::vector<uint8_t> privateSize = EncodeDictInteger(privateDict.size());
@@ -161,6 +165,15 @@ std::vector<uint8_t> MakeCff1WithSubrs(std::vector<uint8_t> charString,
   }
   result.insert(result.end(), charStrings.begin(), charStrings.end());
   return result;
+}
+
+// CFF1 UnderlinePosition (escaped operator 12 3) is real-valued metadata. Keep it before the
+// required offsets so the ordinary layout loop fixes those offsets after the prefix is inserted.
+std::vector<uint8_t> MakeCff1WithRealUnderlinePosition(std::vector<uint8_t> bcdBytes) {
+  std::vector<uint8_t> prefix{30};  // BCD real-number operand.
+  prefix.insert(prefix.end(), bcdBytes.begin(), bcdBytes.end());
+  prefix.insert(prefix.end(), {12, 3});  // UnderlinePosition.
+  return MakeCff1WithSubrs({14}, {}, {}, std::move(prefix));
 }
 
 std::vector<uint8_t> MakeCff1WithCharset(std::vector<std::vector<uint8_t>> charStrings,
@@ -704,6 +717,46 @@ TEST(SfntUtils, CffReportsActualWorkAndStopsAtCallerBudget) {
   EXPECT_EQ(limited.status, CffOutlineValidationStatus::WorkLimitExceeded);
   EXPECT_EQ(limited.work, 1u);
   EXPECT_THAT(limited.glyphs, testing::IsEmpty());
+}
+
+TEST(SfntUtils, Cff1AcceptsWellFormedRealValuedTopDictMetadata) {
+  struct Case {
+    std::string_view name;
+    std::vector<uint8_t> bcd;
+  };
+  const std::vector<Case> cases{
+      {"fraction", {0x1A, 0x2F}},                       // 1.2
+      {"negative exponent", {0xE2, 0xA5, 0xC3, 0xFF}},  // -2.5E-3
+      {"positive exponent", {0x1B, 0x2F}},              // 1E+2
+      {"leading decimal", {0xA5, 0xFF}},                // .5
+      {"zero before decimal", {0x0A, 0x1F}},            // 0.1
+  };
+  for (const Case& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    const CffOutlineValidationResult result =
+        ValidateCffOutlineComplexities(MakeCff1WithRealUnderlinePosition(testCase.bcd), false, 1);
+    EXPECT_EQ(result.status, CffOutlineValidationStatus::Complete);
+    EXPECT_EQ(result.glyphs.size(), 1u);
+  }
+}
+
+TEST(SfntUtils, Cff1RejectsMalformedRealValuedTopDictMetadata) {
+  struct Case {
+    std::string_view name;
+    std::vector<uint8_t> bcd;
+  };
+  const std::vector<Case> cases{
+      {"repeated decimal point", {0x1A, 0xAF}},  {"sign after digit", {0x1E, 0xFF}},
+      {"exponent without digits", {0x1B, 0xFF}}, {"reserved nibble", {0x1D, 0xFF}},
+      {"malformed terminator", {0xF0}},          {"nonfinite exponent", {0x1B, 0x99, 0x99, 0xFF}},
+  };
+  for (const Case& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    const CffOutlineValidationResult result =
+        ValidateCffOutlineComplexities(MakeCff1WithRealUnderlinePosition(testCase.bcd), false, 1);
+    EXPECT_EQ(result.status, CffOutlineValidationStatus::Invalid);
+    EXPECT_THAT(result.glyphs, testing::IsEmpty());
+  }
 }
 
 TEST(SfntUtils, Cff1LegacyEndcharCompositeAggregatesRenderableComponents) {
