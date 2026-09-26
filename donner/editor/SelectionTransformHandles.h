@@ -41,7 +41,7 @@ struct SelectionTransformHandleIntent {
 
 /// Visual handle boxes for one selection envelope, in document coordinates.
 struct SelectionTransformHandleBoxes {
-  std::array<Box2d, 4> boxes;  //!< Screen-space hit rectangles for the four corner handles.
+  std::array<Box2d, 4> boxes;  //!< Document-space hit rectangles for the four corner handles.
 };
 
 /// Return a combined AABB for a selection-bounds span.
