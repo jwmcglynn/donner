@@ -150,8 +150,8 @@ lifetime, synchronization, memory-residency, security or privacy requirements.
 
 ## Next Steps
 
-1. Qualify Linux Vulkan editor presentation and its native default through hosted and integrated
-   acceptance, then merge their dependent changes.
+1. Qualify the merged Linux Vulkan editor presentation and native default through final integrated
+   acceptance.
 2. Move counters and the remaining shared renderer services behind backend-neutral ownership
    without merging logical tables, serials, caches, or retirement.
 3. Remove remaining transitional WebGPU consumers and finish hosted and physical-browser
@@ -446,8 +446,8 @@ reads. `//donner/gpu/vulkan/tests:vulkan_surface_tests` checks the acquired-fram
 and checks exact capture pixels without a manual backend override. The native suite passes with
 Khronos synchronization validation on lavapipe; focused registration and snapshot cases pass on
 Intel Vulkan. The concurrent case also passes under ThreadSanitizer. The Geode/renderer variants and Geode
-package pass on lavapipe and Intel Arc under validation. Linux editor hosted acceptance,
-root-lock performance and final integrated gates remain open.
+package pass on lavapipe and Intel Arc under validation. Root-lock performance and final integrated
+gates remain open.
 
 ### Resource plumbing and uploads
 
@@ -539,7 +539,7 @@ root-lock performance and final integrated gates remain open.
       [PR #1272](https://github.com/jwmcglynn/donner/pull/1272) is merged, including owner-lifetime,
       synchronization and failure-retention repairs. Native qualification passes 674 cases across
       12 targets, including 69 surface cases, with no skips or synchronization diagnostics.
-      The Linux window uses this surface backend; its hosted acceptance remains in the next item.
+      The Linux window uses this surface backend; final integrated acceptance remains in the next item.
 - [x] Update `EditorWindow` to use acquired runtime textures directly. One presentation surface
       serves every platform through the `Device` surface hooks; a frame is carried as a runtime
       texture borrowed for that frame, and the surface reports its format and usage as runtime
@@ -554,8 +554,8 @@ root-lock performance and final integrated gates remain open.
       selection. Browser diagnostic readback uses deferred copy/map through `gpu::Device`; native
       Metal and Vulkan windows draw through the selected runtime device.
 - [ ] Present the Linux editor through a native Vulkan window under
-      [#1409](https://github.com/jwmcglynn/donner/issues/1409). The implementation is complete
-      locally; hosted CI, combined-tree acceptance, and merge remain. A `GLFW_NO_API` window
+      [#1409](https://github.com/jwmcglynn/donner/issues/1409). The implementation and hosted PR
+      qualification are merged; final combined-tree acceptance remains. A `GLFW_NO_API` window
       supplies its required instance extensions to an instance-only probe, then creates its
       `VkSurfaceKHR` before physical-device, queue-family, or logical-device selection. The native
       root selects a graphics queue that presents to that exact surface and a physical device
@@ -610,9 +610,9 @@ asserted resize extent, plus scripted zero-frame handling, multiwindow GLFW life
 quarantine. Real lost and minimized GLFW transitions remain unexercised. It
 passes five cases on lavapipe and five on Intel Arc under Khronos synchronization validation,
 with no logged VUID or synchronization hazard. Hosted Linux installs Xvfb and xauth; a tagged
-hosted lane runs the target when the ordinary Linux job routes to remote execution. Hosted CI,
-the integrated editor matrix, and merge still gate this item. The native Linux default has a
-separate hosted and integrated acceptance gate.
+hosted lane runs the target when the ordinary Linux job routes to remote execution. Final integrated
+editor acceptance still gates this item. The native Linux default has a separate integrated
+acceptance gate.
 
 ### Browser bridge
 
@@ -713,7 +713,7 @@ separate hosted and integrated acceptance gate.
       select native Vulkan and displayed editor windows use a surface-selected presentation root.
       The nonmanual `//donner/editor/tests:editor_window_vulkan_default_tests` target runs fresh
       processes with the backend unset and empty, asserting nonempty frames at initial and resized
-      extents. Hosted/integrated qualification and merge gate completion.
+      extents. The platform defaults are merged; final integrated qualification gates completion.
 - [x] The Linux-only `resvg_test_suite_wgpu_reference_linux` target selects the test-only
       wgpu-native backend by name and fails closed if another backend is selected. It runs the
       same GeodeGolden case IDs and reviewed per-scene golden/pixelmatch rules as native Vulkan on
@@ -920,9 +920,9 @@ and physical-hardware observations are evidence with their stated limits, not un
 ## Testing and Validation
 
 Extend existing targets where they own the changed behavior. The native mapping, Metal/Vulkan surface and
-browser backend targets own their merged hooks. Linux window implementation passes local Xvfb
-execution; its hosted/integrated gates, browser hosted/physical-browser gates, and wrapper removal
-remain active. The GPU operation and
+browser backend targets own their merged hooks. Linux window implementation passed local Xvfb and
+hosted PR execution; its final integrated gate, browser hosted/physical-browser gates, and wrapper
+removal remain active. The GPU operation and
 shader manifests must use the
 complete repository input set, with
 `//tools/gpu_inventory:manifest_freshness_tests` as the freshness gate.
@@ -936,7 +936,7 @@ complete repository input set, with
 | Snapshot/target lifetime, alpha, cropping, refusal             | `//donner/svg/renderer/tests:renderer_geode_tests` and `//donner/svg/renderer/geode:geode_target_texture_tests` execute through native runtime handles and device-observer release counters.                                                                                                                                                                                      |
 | Filter resource ordering, scratch and working sets             | `//donner/svg/renderer/geode:geode_filter_engine_tests`, `//donner/svg/renderer/tests:renderer_geode_tests`, and native filter execution suites.                                                                                                                                                                                                                                  |
 | Upload reuse, UI texture lifetime and thumbnails               | `//donner/editor/tests:gl_texture_cache_tests`, `//donner/editor/tests:layer_thumbnail_golden_tests`; extend them for runtime-backed resources.                                                                                                                                                                                                                                   |
-| Mapping, loss, cancellation and native surfaces                | Shared `gpu_tests`, native mapping suites and owning Metal/Vulkan surface tests; `//donner/editor/tests:editor_window_vulkan_surface_tests` passes local lavapipe and Intel Arc execution, with hosted CI pending. `//donner/gpu/browser:browser_tests` owns identifier, ownership, mapping and loss behavior; selected browser editor lanes exercise the runtime.                |
+| Mapping, loss, cancellation and native surfaces                | Shared `gpu_tests`, native mapping suites and owning Metal/Vulkan surface tests; `//donner/editor/tests:editor_window_vulkan_surface_tests` passes local and hosted CI; final integration pending. `//donner/gpu/browser:browser_tests` owns identifier, ownership, mapping and loss behavior; selected browser editor lanes exercise the runtime.                                |
 | Editor ordering and presentation                               | The explicit Geode editor lane below, the Linux Xvfb surface target above, and the browser rendering/interaction lanes for the selected bridge.                                                                                                                                                                                                                                   |
 | Structural counters, memory, timing and size                   | `//donner/gpu/baseline:baseline_counters_tests`, `//donner/svg/renderer/geode:geode_perf_tests`, and the paired measurements required by the cutover gates.                                                                                                                                                                                                                       |
 | Dependency closure                                             | `//tools/gpu_inventory:check_no_rust_dependencies_tests`, the blocking lexical verifier, planned required `CI / no-rust-configured-closure` job over configured product roots, generated CMake validation, and source-archive/artifact evidence.                                                                                                                                  |

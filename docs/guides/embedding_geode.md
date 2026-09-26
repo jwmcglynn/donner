@@ -9,7 +9,7 @@ The example does not create a WebGPU-C++ device or import a `wgpu::Texture`.
 Build the example with Geode enabled:
 
 ```sh
-bazel run --config=geode //examples:geode_embed -- path/to/drawing.svg
+bazel build --config=geode //examples:geode_embed
 ```
 
 The example uses a fixed 800 by 600 framebuffer and exits when its window
@@ -142,6 +142,5 @@ root, and GLFW window until process exit and reports the failure. Destroying
 the window in that state could invalidate a surface the driver still uses.
 The Metal layer remains owned by its Cocoa view until the GLFW window closes.
 
-The native example is an in-tree integration pattern. It does not make the old
-raw WebGPU `GeodeEmbedConfig` and `CreateFromExternal` path a supported native
-embedding API. Browser canvas presentation uses the separate browser runtime.
+The native example is an in-tree integration pattern. Browser canvas presentation uses the
+separate browser runtime.
