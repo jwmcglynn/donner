@@ -4183,6 +4183,8 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
     std::this_thread::sleep_for(std::chrono::milliseconds(3));
   }
   std::ostringstream heldDiagnostics;
+  std::optional<svg::RendererBitmap> lastHeldFrame;
+  std::optional<svg::RendererBitmap> lastHeldCrop;
   const auto awaitHeldPixels = [&](double dx, std::uint64_t minimumVersion,
                                    const svg::RendererBitmap& prior,
                                    std::string_view phase) -> std::optional<svg::RendererBitmap> {
@@ -4209,7 +4211,7 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
         (void)shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline);
         continue;
       }
-      const svg::RendererBitmap held = frame(pointer, true, true);
+      svg::RendererBitmap held = frame(pointer, true, true);
       requestsPosted += EditorShellTestAccess::RenderRequestsPosted(shell);
       const LayerInspectorStatusReadback capturedStatus = shell.layerInspectorStatusForReadback();
       const svg::RendererBitmap heldCrop =
@@ -4231,7 +4233,35 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
                               ? capturedStatus.activeDragPreview->translation.x
                               : std::numeric_limits<double>::quiet_NaN())
                       << " baselinePixels=" << baselinePixels
-                      << " successivePixels=" << successivePixels;
+                      << " successivePixels=" << successivePixels << " displayedPreviewX="
+                      << (capturedStatus.displayedDragPreview.has_value()
+                              ? capturedStatus.displayedDragPreview->translation.x
+                              : std::numeric_limits<double>::quiet_NaN())
+                      << " activeTileDraws="
+                      << capturedStatus.frameCost.directPresentation.activeTileDrawCount
+                      << " tiles=" << capturedStatus.tiles.size() << " pendingSelectedRaster="
+                      << (capturedStatus.pendingSelectedLayerRasterizationEntity != entt::null)
+                      << " pendingSelectedVersion="
+                      << capturedStatus.pendingSelectedLayerRasterizationVersion;
+      for (const LayerInspectorStatusReadback::Tile& tile : capturedStatus.tiles) {
+        if (tile.isDragTarget) {
+          heldDiagnostics << " targetTile=" << tile.id << ":" << tile.generation
+                          << " presentedX=" << tile.presentedDragTranslationDoc.x
+                          << " payload=" << tile.bitmapDimsPx.x << "x" << tile.bitmapDimsPx.y
+                          << " metadataOnly=" << tile.metadataOnly;
+        }
+      }
+      int loggedOwnerTiles = 0;
+      for (const LayerInspectorStatusReadback::Tile& tile : capturedStatus.tiles) {
+        if (tile.kind == RenderResult::CompositedTile::Kind::Layer && loggedOwnerTiles < 12) {
+          heldDiagnostics << " ownerTile=" << tile.id << ":" << tile.generation
+                          << " presentedX=" << tile.presentedDragTranslationDoc.x
+                          << " payload=" << tile.bitmapDimsPx.x << "x" << tile.bitmapDimsPx.y;
+          ++loggedOwnerTiles;
+        }
+      }
+      lastHeldFrame = std::move(held);
+      lastHeldCrop = heldCrop;
       if (successivePixels > 0 && capturedStatus.activeDragPreview.has_value() &&
           capturedStatus.activeDragPreview->entity == targetEntity &&
           std::abs(capturedStatus.activeDragPreview->translation.x - dx) < 0.5) {
@@ -4245,6 +4275,20 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
   // outside that clip, making two correctly rendered held frames identical; keep both probes
   // within the visible clip so pixel movement is a meaningful presentation oracle.
   const auto firstHeld = awaitHeldPixels(12.0, displayedBefore, beforeCrop, "first_held");
+  if (!firstHeld.has_value() && lastHeldFrame.has_value() && lastHeldCrop.has_value()) {
+    if (const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+      const std::array<std::pair<const char*, const svg::RendererBitmap*>, 4> frames = {
+          std::pair{"before_full", &before}, std::pair{"last_held_full", &*lastHeldFrame},
+          std::pair{"before_crop", &beforeCrop}, std::pair{"last_held_crop", &*lastHeldCrop}};
+      for (const auto& [stage, bitmap] : frames) {
+        const std::filesystem::path path =
+            std::filesystem::path(outputDir) / (std::string(id) + "_" + stage + ".png");
+        (void)svg::RendererImageIO::writeRgbaPixelsToPngFile(
+            path.string().c_str(), bitmap->pixels, bitmap->dimensions.x, bitmap->dimensions.y,
+            bitmap->rowBytes / 4u);
+      }
+    }
+  }
   ASSERT_TRUE(firstHeld.has_value())
       << "The first held position never reached the canvas before mouse-up; posted="
       << requestsPosted << " busy=" << EditorShellTestAccess::RendererBusy(shell)
