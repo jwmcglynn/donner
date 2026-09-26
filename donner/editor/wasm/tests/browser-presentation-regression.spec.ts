@@ -1544,28 +1544,35 @@ test("Geode crown face paints at each held pointer position before release", asy
 
   const baseline = await page.screenshot({ clip: crop });
   await attachEvidenceFile("geode-crown-selected-baseline", baseline, "image/png");
-  const selectedBounds = readEditorPixelBoundsFromPng(
-    baseline,
-    "selection-teal",
-    crop,
-    { minX: 10, minY: 5, maxX: 110, maxY: 95 },
-  );
-  expect(selectedBounds, "the selected crown face must have visible bounds").not.toBeNull();
-  if (selectedBounds === null) {
-    return;
-  }
   const expectedTopLeft = screenFromDocument(518, 481);
   const expectedBottomRight = screenFromDocument(556, 515);
+  const handlePixels = (png: Buffer, anchor: { x: number; y: number }, delta: number) => {
+    // The clip-boundary guide stays at the original X and shares the selection's teal.
+    // A handle's white core distinguishes its known SVG corner from any guide line.
+    const centerX = anchor.x - crop.x + delta;
+    const centerY = anchor.y - crop.y;
+    const window = {
+      minX: centerX - 5,
+      minY: centerY - 5,
+      maxX: centerX + 5,
+      maxY: centerY + 5,
+    };
+    return {
+      teal: readEditorPixelBoundsFromPng(png, "selection-teal", crop, window)?.pixels ?? 0,
+      white: readEditorPixelBoundsFromPng(png, "selection-handle-white", crop, window)?.pixels ?? 0,
+    };
+  };
   for (
-    const [actual, expected] of [
-      [selectedBounds.minX, expectedTopLeft.x - crop.x],
-      [selectedBounds.minY, expectedTopLeft.y - crop.y],
-      [selectedBounds.maxX, expectedBottomRight.x - crop.x],
-      [selectedBounds.maxY, expectedBottomRight.y - crop.y],
-    ]
+    const [corner, anchor] of [["top-left", expectedTopLeft], [
+      "bottom-right",
+      expectedBottomRight,
+    ]] as const
   ) {
-    expect(Math.abs(actual - expected), "selection bounds must identify crown face 2")
-      .toBeLessThanOrEqual(8);
+    const handle = handlePixels(baseline, anchor, 0);
+    expect(handle.teal, `selected crown ${corner} handle must have a teal border`)
+      .toBeGreaterThan(20);
+    expect(handle.white, `selected crown ${corner} handle must have a white core`)
+      .toBeGreaterThan(20);
   }
 
   await page.mouse.move(press.x, press.y);
@@ -1604,32 +1611,37 @@ test("Geode crown face paints at each held pointer position before release", asy
       await waitForBrowserComposite(page);
       const held = await page.screenshot({ clip: crop });
       await attachEvidenceFile(`geode-crown-held-${delta}`, held, "image/png");
-      const heldChrome = readEditorPixelBoundsFromPng(
-        held,
-        "selection-teal",
-        crop,
-        { minX: 10, minY: 5, maxX: 130, maxY: 95 },
-      );
-      expect.soft(heldChrome, `held crown move ${delta} lost its selection chrome`).not.toBeNull();
-      if (heldChrome !== null) {
+      const heldHandle = handlePixels(held, expectedBottomRight, delta);
+      expect.soft(
+        heldHandle.teal,
+        `Geode crown move ${delta} lost the moved handle's teal border`,
+      ).toBeGreaterThan(20);
+      expect.soft(
+        heldHandle.white,
+        `Geode crown move ${delta} lost the moved handle's white core`,
+      ).toBeGreaterThan(20);
+      if (delta === 24) {
+        // At +24 the left handle is still clear of the former right-handle location. A stale
+        // selection frame would leave the white core here, even if the clip guide is teal.
         expect.soft(
-          heldChrome.minX,
-          `Geode crown selection chrome stayed at its old X during held move ${delta}`,
-        ).toBeGreaterThan(selectedBounds.minX + delta - 8);
+          handlePixels(held, expectedBottomRight, 0).white,
+          "Geode crown kept its original right handle while the pointer was held",
+        ).toBeLessThan(8);
       }
       // The pale face must vacate its old interior while the mouse is held. This crop is inside
       // the face and away from its teal bounds and the pointer tooltip; the settled frame shows
       // the same dark underlying facet here.
       const oldFaceInterior = { x: 40, y: 40, width: 15, height: 12 };
-      const signal = readPngPixelDifferenceStats(baseline, held, oldFaceInterior);
+      const signal = readCssPngPixelDifferenceStats(baseline, held, crop, oldFaceInterior);
       expect.soft(
         signal.changedPixelsAbove8,
         `Geode crown content did not leave its old interior during held move ${delta}`,
       )
         .toBeGreaterThan(100);
-      const staticControl = readPngPixelDifferenceStats(
+      const staticControl = readCssPngPixelDifferenceStats(
         baseline,
         held,
+        crop,
         { x: 115, y: 70, width: 15, height: 15 },
       );
       expect(

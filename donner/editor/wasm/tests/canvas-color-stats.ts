@@ -262,7 +262,11 @@ export function readSplashCompositeFrameStatsFromPng(
   };
 }
 
-export type EditorPixelTarget = "basic-blue" | "selection-teal" | "splash-yellow";
+export type EditorPixelTarget =
+  | "basic-blue"
+  | "selection-teal"
+  | "selection-handle-white"
+  | "splash-yellow";
 
 export function readEditorPixelBoundsFromPng(
   png: Buffer,
@@ -525,6 +529,9 @@ function matchesEditorPixelTarget(
   if (target === "splash-yellow") {
     return red > 180 && green > 135 && blue < 150 && red > blue + 70 && green > blue + 45;
   }
+  if (target === "selection-handle-white") {
+    return red > 225 && green > 225 && blue > 225;
+  }
   // `selection-teal`: the editor's accent - (49,198,179) where the overlay
   // covers a whole pixel - anywhere the selection chrome lands, including the
   // blends it makes with what is behind it.
@@ -669,15 +676,16 @@ export async function captureSplashCompositeFrame(
   };
   const toCssBounds = (
     bounds: PixelBounds | null,
-  ): PixelBounds | null => bounds === null
-    ? null
-    : {
-      minX: bounds.minX / screenshotScaleX,
-      minY: bounds.minY / screenshotScaleY,
-      maxX: bounds.maxX / screenshotScaleX,
-      maxY: bounds.maxY / screenshotScaleY,
-      pixels: bounds.pixels,
-  };
+  ): PixelBounds | null =>
+    bounds === null
+      ? null
+      : {
+        minX: bounds.minX / screenshotScaleX,
+        minY: bounds.minY / screenshotScaleY,
+        maxX: bounds.maxX / screenshotScaleX,
+        maxY: bounds.maxY / screenshotScaleY,
+        pixels: bounds.pixels,
+      };
   const stats = readSplashCompositeFrameStatsFromPng(
     png,
     screenshotLetterSearchBounds,
