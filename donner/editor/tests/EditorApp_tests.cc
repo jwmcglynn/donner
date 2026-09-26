@@ -154,6 +154,21 @@ std::optional<Vector2d> FindMembershipSample(const svg::SVGElement& first,
   return std::nullopt;
 }
 
+TEST(EditorAppTest, QueuedPaintEditAfterStyleRemovalRemainsAfterRemoval) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  const auto selected = app.document().document().querySelector("#r1");
+  ASSERT_THAT(selected, testing::Optional(testing::_));
+  app.setSelection(*selected);
+  ASSERT_TRUE(app.setStylePropertyOnSelection("fill", "#36c317"));
+  app.applyMutation(EditorCommand::RemoveAttributeCommand(*selected, "style"));
+  ASSERT_TRUE(app.setStylePropertyOnSelection("stroke", "#f0b429"));
+  ASSERT_TRUE(app.flushFrame());
+  const auto paint = selected->getAttribute("style");
+  ASSERT_THAT(paint, testing::Optional(testing::_));
+  EXPECT_EQ(std::string(*paint), "stroke: #f0b429");
+}
+
 TEST(EditorAppTest, QueuedSelectionPaintEditsPreserveEarlierProperties) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
