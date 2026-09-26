@@ -22,7 +22,6 @@
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodeTextureEncoder.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
 
 namespace donner::geode {

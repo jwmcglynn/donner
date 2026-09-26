@@ -68,7 +68,19 @@ test_suite(
 test_suite(
     name = "editor_wasm_shipped_browser_audit",
     tags = ["manual"],
-    tests = ["//donner/editor/wasm:wasm_shipped_browser_dependency_audit_test"],
+    tests = [
+        "//donner/editor/wasm:wasm_browser_no_c_webgpu_audit_test",
+        "//donner/editor/wasm:wasm_shipped_browser_dependency_audit_test",
+    ],
+)
+
+test_suite(
+    name = "geode_wasm_browser_default_audit",
+    tags = ["manual"],
+    tests = [
+        "//donner/svg/renderer/wasm:geode_browser_default_audit_test",
+        "//donner/svg/renderer/wasm:geode_browser_no_c_webgpu_audit_test",
+    ],
 )
 
 test_suite(

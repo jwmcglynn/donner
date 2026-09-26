@@ -134,7 +134,7 @@ std::shared_ptr<svg::RendererGeodeTextureSnapshot> AcquireRuntimeUploadSnapshot(
   }
   svg::RendererGeodeTextureSnapshot snapshot =
       svg::RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-          device, std::move(texture).result(), dimensions, wgpu::TextureFormat::RGBA8Unorm,
+          device, std::move(texture).result(), dimensions, gpu::TextureFormat::RGBA8Unorm,
           alphaType);
   if (!snapshot.isValid()) {
     return nullptr;

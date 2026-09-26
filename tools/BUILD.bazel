@@ -222,7 +222,6 @@ py_test(
         "//donner/editor/tests:BUILD.bazel",
         "//donner/editor/tests:RunEditorWindowVulkanSurfaceTests.sh",
         "//donner/editor/wasm:catalog_package_integrity_test.py",
-        "//donner/editor/wasm:wasm_package_dependency_labels",
         "//donner/editor/wasm:wasm_package_size_test_arguments",
         "//tools:ci_bazel_test.sh",
         "//tools:coverage.sh",

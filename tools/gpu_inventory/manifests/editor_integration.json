@@ -58,15 +58,6 @@
     "donner/editor/RenderPanePresenter.cc": {
       "usesEditorWgpuDefine": true
     },
-    "donner/editor/RuntimeBitmapUpload.cc": {
-      "operations": [
-        "createTexture",
-        "writeTexture"
-      ],
-      "wgpuCppTokens": [
-        "TextureFormat"
-      ]
-    },
     "donner/editor/ViewportInteractionController.h": {
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
@@ -101,58 +92,32 @@
     "donner/editor/gui/EditorWindow.cc": {
       "operations": [
         "configure",
-        "copyTextureToBuffer",
         "createBuffer",
         "createCommandEncoder",
         "createTexture",
-        "finish",
         "getCapabilities",
-        "getConstMappedRange",
-        "mapAsync",
         "present",
         "release",
-        "submit",
-        "unmap"
+        "submit"
       ],
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
         "wgpuDirectRenderCallback_",
-        "wgpuInstanceCreateSurface",
-        "wgpuLabel",
         "wgpuReadbackStats",
         "wgpuState_",
-        "wgpuTextureOf",
         "wgpuUnderlayRenderCallback_"
       ],
       "wgpuCTypes": [
-        "WGPUEmscriptenSurfaceSourceCanvasHTMLSelector",
-        "WGPUMapAsyncStatus",
-        "WGPUMapAsyncStatus_Success",
-        "WGPUStringView",
         "WGPUSurface",
-        "WGPUSurfaceDescriptor",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
         "WGPUTextureFormat_RGBA8Unorm"
       ],
       "wgpuCppTokens": [
         "Adapter",
-        "Buffer",
-        "BufferDescriptor",
-        "BufferMapCallbackInfo",
-        "BufferUsage",
-        "CallbackMode",
-        "CommandBuffer",
-        "CommandEncoder",
-        "Default",
-        "Extent3D",
         "Instance",
-        "MapMode",
         "Surface",
-        "SurfaceCapabilities",
-        "TexelCopyBufferInfo",
-        "TexelCopyTextureInfo",
-        "Texture"
+        "SurfaceCapabilities"
       ]
     },
     "donner/editor/gui/EditorWindow.h": {

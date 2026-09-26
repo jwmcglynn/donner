@@ -28,13 +28,6 @@
 
 namespace donner::geode {
 
-/// Rows of one gradient paint block, in `vec4` units. The block holds the
-/// gradient transform, its two-point or two-circle geometry, and a full stop
-/// ramp; `paintData` in `donner/gpu/shader/programs/SlugFillSource.h` documents the row layout and
-/// `GeoEncoder` writes it. Shared here so the device's zero-filled dummy
-/// binding and the encoder's region reservation cannot drift apart.
-constexpr uint32_t kGradientPaintBlockRows = 25u;
-
 /// Wrap a NUL-terminated C string literal in a `wgpu::StringView`
 /// suitable for direct assignment to a descriptor's `label` field.
 /// `std::string_view{}` handles the `strlen()` at compile time when the

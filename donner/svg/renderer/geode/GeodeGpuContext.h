@@ -27,6 +27,10 @@ class GeodeMaskPipeline;
 /// copy is how they drift apart.
 inline constexpr uint64_t kUniformOffsetAlignment = 256u;
 
+/// Rows of one gradient paint block, in vec4 units. Shared by the runtime device's dummy binding
+/// and GeoEncoder's paint-data reservation so their layouts cannot drift apart.
+inline constexpr uint32_t kGradientPaintBlockRows = 25u;
+
 /**
  * Everything Geode's encoders need to record a frame through the \c donner::gpu runtime.
  *

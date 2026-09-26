@@ -21,7 +21,6 @@
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeHandleRetirement.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::svg {
 class RendererGeodeTextureSnapshot;
@@ -71,6 +70,9 @@ public:
 
   /// The backend root every runtime device over this owner drives.
   const GeodeGpuRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
+
+  /// Whether this owner has a backend device that requires queue-idle handling.
+  [[nodiscard]] bool hasBackendDevice() const;
 
   /// Sticky loss condition shared by every context and runtime device over this root. Retained
   /// because a backend device-lost callback can outlive everything that registered it.
