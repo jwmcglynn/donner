@@ -13,8 +13,8 @@ namespace donner::gpu {
  * Category of a GPU runtime error.
  *
  * Every invalid descriptor, handle, or state transition fails closed by returning one of these
- * categories wrapped in a \ref GpuError, in release builds too. Asserts are reserved for
- * programmer invariants inside the runtime; invalid input never aborts.
+ * categories wrapped in a \ref donner::gpu::GpuError, in release builds too. Asserts are reserved
+ * for programmer invariants inside the runtime; invalid input never aborts.
  */
 enum class GpuErrorType : uint8_t {
   InvalidDescriptor,  //!< A descriptor field is malformed (zero size, bad range, misalignment).
@@ -25,15 +25,13 @@ enum class GpuErrorType : uint8_t {
   LimitExceeded,      //!< A count or dimension exceeds a documented device limit.
   InvalidState,       //!< An operation was issued in an invalid state (encoder state machine).
   Unsupported,        //!< The requested feature is not supported by this runtime.
-  /// The device has taken a terminal failure. Work that was in flight can never complete, and
-  /// the results it was to produce cannot be trusted. Distinct from \ref InvalidState because a
-  /// caller recovers from the two differently: an invalid state is a mistake to correct and
-  /// retry, a lost device is gone and its resources with it.
-  DeviceLost,
+  DeviceLost, /**< Terminal device failure: in-flight work cannot complete and its results cannot
+    be trusted. Unlike \ref donner::gpu::GpuErrorType::InvalidState, retrying on the same device
+    cannot recover; the device and its resources are gone. */
 };
 
 /**
- * Ostream output operator for \ref GpuErrorType, e.g. `InvalidDescriptor`.
+ * Ostream output operator for \ref donner::gpu::GpuErrorType, e.g. `InvalidDescriptor`.
  *
  * @param os Output stream.
  * @param value Error type to output.

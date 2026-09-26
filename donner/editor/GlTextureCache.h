@@ -38,13 +38,15 @@ namespace donner::editor {
 /// Stable identity for deciding whether a metadata-only composited tile can reuse an existing
 /// presentation texture.
 struct CompositedTileTextureIdentity {
-  RenderResult::CompositedTile::Kind kind = RenderResult::CompositedTile::Kind::Segment;
-  std::uint64_t generation = 0;
-  /// Payload dimensions in pixels. This is intentionally the valid content size, not the
-  /// power-of-two backing allocation size.
-  Vector2i textureDimsPx = Vector2i::Zero();
-  Vector2i rasterCanvasSize = Vector2i::Zero();
+  RenderResult::CompositedTile::Kind kind =
+      RenderResult::CompositedTile::Kind::Segment;  //!< Kind of tile whose payload was cached.
+  std::uint64_t generation = 0;                     //!< Generation of the cached tile payload.
+  Vector2i textureDimsPx = Vector2i::Zero();        //!< Valid payload size, not backing allocation.
+  Vector2i rasterCanvasSize = Vector2i::Zero();     //!< Canvas size used to render this tile.
 
+  /// Compare all fields used for texture reuse.
+  /// @param lhs First identity.
+  /// @param rhs Second identity.
   friend bool operator==(const CompositedTileTextureIdentity& lhs,
                          const CompositedTileTextureIdentity& rhs) = default;
 };
@@ -155,31 +157,30 @@ struct PresentationCoverageDiagnostics {
     const RenderResult::CompositedPreview& preview);
 
 /**
- * Owns the GL textures the advanced editor uses for overlay and composited presentation.
+ * Retains editor presentation textures for composited tiles and Layers thumbnails.
  *
- * The cache is intentionally dumb: callers decide *when* textures should update; this class only
- * owns the texture names, uploads pixel buffers, and tracks the currently-valid dimensions.
- *
- * Composited preview rendering is per-tile: instead of three named bg/promoted/fg
- * textures, the cache owns one GL texture per `CompositedTile` (keyed on the tile id), allocated
- * lazily on first upload and freed when the tile leaves the snapshot. The GL presentation
- * compositor samples `tiles()` in paint order into one pane-sized texture. WebGPU builds retain
- * the direct-framebuffer presentation path.
+ * Stable tile ids and generations let metadata-only previews reuse prior payloads. Geode builds
+ * register renderer snapshots with the UI texture registry and upload CPU bitmaps into runtime
+ * textures; the desktop OpenGL path owns GL textures. Removed tiles and superseded GPU snapshots
+ * are released after their presentation lifetime, while thumbnail entries are retained by row key.
  */
 class GlTextureCache {
 public:
+  /// Construct a cache for the selected presentation backend.
+  /// @param geodeDevice Shared Geode context, or null for the OpenGL path.
   explicit GlTextureCache(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr);
   ~GlTextureCache();
 
   GlTextureCache(const GlTextureCache&) = delete;
   GlTextureCache& operator=(const GlTextureCache&) = delete;
 
+  /// Compatibility initialization hook; presentation resources are allocated lazily.
   void initialize();
 
-  /// Upload the worker's tile snapshot into per-tile GL textures.
-  /// Allocates/reuses one texture per tile id; bumps a per-tile
-  /// upload-generation so identity uploads short-circuit; evicts
-  /// textures whose tile is absent from the snapshot.
+  /// Register or upload each worker tile for the selected presentation backend.
+  /// Reuse unchanged tile identities and evict payloads absent from the new snapshot.
+  /// @param preview Paint-ordered worker tiles and metadata.
+  /// @param rasterViewport Raster coverage represented by the preview, when known.
   void uploadComposited(const RenderResult::CompositedPreview& preview,
                         std::optional<EditorRasterViewport> rasterViewport = std::nullopt);
   /// Upload a full-document overview preview without replacing active viewport-bounded tiles.
@@ -190,28 +191,27 @@ public:
   /// handles have aged past the backend's frames-in-flight window.
   void advancePresentationFrame();
 
+  /// Clear active and overview composited tiles while retaining thumbnail entries.
   void resetComposited();
 
-  /// Upload a Layers-panel preview thumbnail bitmap into a per-row GL/WGPU
-  /// texture and return its ImGui texture handle.
-  ///
-  /// Reuses the same Donner-bitmap -> texture path as the render pane
-  /// (`UploadBitmap` / `uploadBitmapToWgpu`). One texture is owned per @p key
-  /// (the Layers row stable id); it is reuploaded only when the bitmap's
-  /// dimensions or a cheap content fingerprint change, so calling this every
-  /// frame with an unchanged thumbnail does not re-upload. Donner renders the
-  /// thumbnail pixels; this only blits them to a texture -- see CLAUDE.md "No
-  /// Rendering Vector Graphics With ImGui".
-  ///
-  /// @param key Stable id of the Layers row the thumbnail belongs to.
-  /// @param bitmap Donner-rendered RGBA thumbnail bitmap.
-  /// @return ImGui texture handle plus the UV range that contains the valid
-  ///   payload, or an empty view if the texture could not be created.
+  /// ImGui texture handle and UV range for valid thumbnail content.
   struct ThumbnailTextureView {
     ImTextureID texture = 0;                      ///< ImGui texture handle.
     Vector2d uvBottomRight = Vector2d(1.0, 1.0);  ///< Bottom-right valid payload UV.
   };
+
+  /// Upload a Donner-rendered Layers thumbnail, reusing the row's unchanged texture.
+  /// The bitmap is keyed by row id and content fingerprint; ImGui only blits its pixels.
+  /// @param key Stable id of the Layers row.
+  /// @param bitmap Donner-rendered RGBA thumbnail bitmap.
+  /// @return Handle and valid UV range; a failed replacement keeps the prior view when one exists.
   ThumbnailTextureView uploadThumbnail(std::uint64_t key, const svg::RendererBitmap& bitmap);
+
+  /// Retain a renderer-owned GPU snapshot as a Layers thumbnail on Geode builds.
+  /// The OpenGL path returns an empty view; use `uploadThumbnail` there.
+  /// @param key Stable id of the Layers row.
+  /// @param textureSnapshot Renderer snapshot to retain until replacement or eviction.
+  /// @return Handle and valid UV range, or an empty view if registration fails.
   ThumbnailTextureView retainThumbnailTextureSnapshot(
       std::uint64_t key, std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot);
 
@@ -227,24 +227,28 @@ public:
   /// Number of thumbnail textures currently retained (testing/diagnostics).
   [[nodiscard]] std::size_t thumbnailTextureCount() const { return thumbnailTextures_.size(); }
 
-  /// One composite-tile entry as presentation sees it: the GL texture handle
-  /// (resolved from the upload cache) plus its paint-order geometry.
+  /// One cached tile's ImGui texture handle and paint-order geometry.
   struct TileView {
-    ImTextureID texture = 0;
-    std::string id;
-    RenderResult::CompositedTile::Kind kind = RenderResult::CompositedTile::Kind::Segment;
-    Entity layerEntity = entt::null;
-    std::uint64_t generation = 0;
-    Vector2i bitmapDimsPx = Vector2i::Zero();
-    Vector2i rasterCanvasSize = Vector2i::Zero();
-    Vector2d canvasOffsetDoc = Vector2d::Zero();
-    Vector2d bitmapDimsDoc = Vector2d::Zero();
-    Vector2d dragTranslationDoc = Vector2d::Zero();
-    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
-    Vector2d uvBottomRight = Vector2d(1.0, 1.0);
-    Transform2d documentFromCachedDocument = Transform2d();
-    bool metadataOnly = false;
-    bool isDragTarget = false;
+    ImTextureID texture =
+        0;           //!< ImGui handle for this tile, or zero when no cached payload can be reused.
+    std::string id;  //!< Stable composited tile identifier.
+    RenderResult::CompositedTile::Kind kind =
+        RenderResult::CompositedTile::Kind::Segment;  //!< Composited tile category.
+    Entity layerEntity = entt::null;               //!< Layer entity when this is a promoted layer.
+    std::uint64_t generation = 0;                  //!< Generation of the tile payload.
+    Vector2i bitmapDimsPx = Vector2i::Zero();      //!< Valid texture payload dimensions in pixels.
+    Vector2i rasterCanvasSize = Vector2i::Zero();  //!< Raster canvas size that produced this tile.
+    Vector2d canvasOffsetDoc = Vector2d::Zero();   //!< Document-space tile origin.
+    Vector2d bitmapDimsDoc = Vector2d::Zero();     //!< Document-space tile dimensions.
+    Vector2d dragTranslationDoc =
+        Vector2d::Zero();  //!< Document-space drag offset for presentation.
+    std::shared_ptr<const svg::RendererTextureSnapshot>
+        textureSnapshot;                          //!< Retained GPU snapshot backing a Geode tile.
+    Vector2d uvBottomRight = Vector2d(1.0, 1.0);  //!< Bottom-right UV of valid texture content.
+    Transform2d documentFromCachedDocument =
+        Transform2d();          //!< Transform from cached-document to current-document space.
+    bool metadataOnly = false;  //!< True when the tile carries no new texture payload.
+    bool isDragTarget = false;  //!< Whether this tile is the active drag target.
   };
 
   /// Paint-order tile view; metadata-only direct-surface entries have a zero texture handle.
@@ -338,9 +342,8 @@ private:
   std::unordered_map<ImTextureID, UiTextureBacking> registeredBackings_;
 #endif
 
-  /// Tile texture cache keyed on `CompositedTile::id`. Entries
-  /// persist across frames so identical tiles re-use the same GL
-  /// texture (only re-uploaded when their `generation` advances).
+  /// Tile payload cache keyed on `CompositedTile::id`; unchanged identities reuse their
+  /// GL texture or Geode UI registration across frames.
   std::unordered_map<std::string, CachedTextureEntry> tileTextures_;
   /// Separately-owned copy of the last unbounded tile set. Active
   /// high-zoom uploads may reuse the same tile ids at a smaller raster

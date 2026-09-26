@@ -3,9 +3,9 @@
 /// Typed, immutable expression nodes for the \c donner::gpu::shader IR.
 ///
 /// Every expression is type-checked at construction: the factory functions return
-/// \ref ShaderResult and fail closed on ill-typed operands, unknown swizzles, bad constructor
-/// arity, indexing of non-indexable types, and unknown builtin functions. Expression values are
-/// cheap immutable handles; sharing a subexpression is sharing, not mutation.
+/// \ref donner::gpu::shader::ShaderResult and fail closed on ill-typed operands, unknown swizzles,
+/// bad constructor arity, indexing of non-indexable types, and unknown builtin functions.
+/// Expression values are cheap immutable handles; sharing a subexpression is sharing, not mutation.
 
 #include <cstdint>
 #include <memory>
@@ -47,8 +47,9 @@ std::ostream& operator<<(std::ostream& os, BinaryOp value);
 /**
  * Builtin functions callable from IR (the program-supported subset; everything else is rejected).
  *
- * \ref Sign, \ref Floor, and \ref Pow take f32 scalars and f32 vectors and return the shape
- * they were given. Their semantics are stated here because callers depend on them:
+ * \ref donner::gpu::shader::BuiltinFn::Sign, \ref donner::gpu::shader::BuiltinFn::Floor, and \ref
+ * donner::gpu::shader::BuiltinFn::Pow take f32 scalars and f32 vectors and return the shape they
+ * were given. Their semantics are stated here because callers depend on them:
  *
  * - `sign(x)` is -1, 0, or 1, and `sign(0)` is 0 rather than 1. WGSL `sign`, MSL `sign`, and
  *   GLSL.std.450 `FSign` all agree on that, which is what makes `sign(x) * floor(abs(x) + 0.5)`
@@ -257,8 +258,6 @@ ShaderResult<IrExpr> Sub(const IrExpr& lhs, const IrExpr& rhs, const RcString& l
  * @param lhs Left operand. @param rhs Right operand. @param label Diagnostic label.
  */
 ShaderResult<IrExpr> Mul(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "mul");
-/// `lhs / rhs` for matching numeric scalar/vector types.
-/// @param lhs Left operand. @param rhs Right operand. @param label Diagnostic label.
 /**
  * Integer remainder `lhs % rhs`.
  *
@@ -268,16 +267,23 @@ ShaderResult<IrExpr> Mul(const IrExpr& lhs, const IrExpr& rhs, const RcString& l
  */
 ShaderResult<IrExpr> Mod(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = RcString());
 
+/// `lhs / rhs` for matching numeric scalars or vectors, or for a numeric vector and a scalar
+/// with the same element type. The scalar broadcasts in either operand position.
+/// @param lhs Left operand.
+/// @param rhs Right operand.
+/// @param label Diagnostic label.
 ShaderResult<IrExpr> Div(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "div");
 
 /// Every comparison below takes two operands of the same type, and both may be scalars or
 /// vectors: a scalar comparison yields `bool`, a vector comparison compares componentwise and
 /// yields a bool vector of the same size, which is how WGSL, MSL, and SPIR-V all define it.
-/// \ref Any and \ref All reduce such a vector back to a single bool.
+/// \ref donner::gpu::shader::BuiltinFn::Any and \ref donner::gpu::shader::BuiltinFn::All reduce
+/// such a vector back to a single bool.
 ///
-/// The ordered comparisons (\ref Lt, \ref Le, \ref Gt, \ref Ge) additionally require numeric
-/// operands, since bool has no ordering. \ref Eq and \ref Ne do not: comparing two bools, or
-/// two bool vectors, is meaningful and allowed.
+/// The ordered comparisons (\ref donner::gpu::shader::Lt, \ref donner::gpu::shader::Le, \ref
+/// donner::gpu::shader::Gt, \ref donner::gpu::shader::Ge) additionally require numeric operands,
+/// since bool has no ordering. \ref donner::gpu::shader::Eq and \ref donner::gpu::shader::Ne do
+/// not: comparing two bools, or two bool vectors, is meaningful and allowed.
 
 /// `lhs < rhs` componentwise; yields bool or a bool vector.
 /// @param lhs Left operand. @param rhs Right operand. @param label Diagnostic label.

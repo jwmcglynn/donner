@@ -4,10 +4,11 @@
 /// GPU service.
 ///
 /// Everything below the runtime's validation and above the browser's own API passes through this
-/// interface. It is deliberately narrow and flat: objects are named by \ref BrowserObjectId, every
-/// enumerated value arrives as a \ref BrowserWireCodes.h code, and every payload is a span of
-/// bytes the browser side copies out. Nothing that could name host memory - a pointer, a native
-/// handle, a callback address - crosses it.
+/// interface. It is deliberately narrow and flat: objects are named by \ref
+/// donner::gpu::browser::BrowserObjectId, every enumerated value arrives as a \ref
+/// BrowserWireCodes.h code, and every payload is a span of bytes the browser side copies out.
+/// Nothing that could name host memory - a pointer, a native handle, a callback address - crosses
+/// it.
 ///
 /// Recorded commands are replayed one call at a time rather than handed over as an encoded
 /// stream. That keeps the browser side free of a decoder: every operation it performs is one it
@@ -57,9 +58,10 @@ std::ostream& operator<<(std::ostream& os, BridgeStatus value);
  *
  * A browser hands over a device through promises, so the request has a lifetime of its own rather
  * than being an outcome the constructor can report. The two failures are separated because they
- * call for different responses: a browser with no GPU service at all is \ref Unavailable and the
- * caller falls back, while a service that refused this request is \ref Failed and the reason
- * says why.
+ * call for different responses: a browser with no GPU service at all is \ref
+ * donner::gpu::browser::BrowserDeviceRequestState::Unavailable and the caller falls back, while a
+ * service that refused this request is \ref donner::gpu::browser::BrowserDeviceRequestState::Failed
+ * and the reason says why.
  */
 enum class BrowserDeviceRequestState : uint8_t {
   Pending,      //!< The browser has not settled the request yet.
@@ -79,7 +81,7 @@ struct BrowserBindGroupLayoutEntry {
   uint32_t storageTextureFormat = 0;  //!< Encoded \ref TextureFormat of a storage-texture binding.
 };
 
-/// Which kind of resource a \ref BrowserBindGroupEntry binds.
+/// Which kind of resource a \ref donner::gpu::browser::BrowserBindGroupEntry binds.
 enum class BrowserBindingResource : uint8_t {
   Buffer,       //!< A range of a buffer.
   TextureView,  //!< A texture view.
@@ -92,8 +94,8 @@ std::ostream& operator<<(std::ostream& os, BrowserBindingResource value);
 /// One entry of a bind group, naming the bound object by identifier.
 struct BrowserBindGroupEntry {
   uint32_t binding = 0;  //!< Shader binding index.
-  /// Which resource kind \ref resourceId names.
-  BrowserBindingResource resource = BrowserBindingResource::Buffer;
+  BrowserBindingResource resource =
+      BrowserBindingResource::Buffer;             //!< Kind of resource `resourceId` names.
   BrowserObjectId resourceId = kNoBrowserObject;  //!< Bound object.
   uint64_t offsetBytes = 0;  //!< Byte offset of a bound buffer range; zero otherwise.
   uint64_t sizeBytes = 0;    //!< Byte size of a bound buffer range; zero otherwise.
@@ -317,8 +319,8 @@ public:
   /// Creates a sampler. @param id Identifier to register it under.
   /// @param magFilterCode Encoded magnification \ref FilterMode.
   /// @param minFilterCode Encoded minification \ref FilterMode.
-  /// @param addressUCode Encoded U \ref AddressMode. @param addressVCode Encoded V
-  /// \ref AddressMode.
+  /// @param addressUCode Encoded U \ref AddressMode.
+  /// @param addressVCode Encoded V \ref AddressMode.
   virtual BridgeStatus createSampler(BrowserObjectId id, uint32_t magFilterCode,
                                      uint32_t minFilterCode, uint32_t addressUCode,
                                      uint32_t addressVCode) = 0;
@@ -412,8 +414,10 @@ public:
   virtual BridgeStatus setVertexBuffer(uint32_t slot, BrowserObjectId bufferId,
                                        uint64_t offsetBytes) = 0;
 
-  /// Binds an index buffer. @param bufferId Buffer. @param indexFormatCode Encoded
-  /// \ref IndexFormat. @param offsetBytes Byte offset of the first index.
+  /// Binds an index buffer.
+  /// @param bufferId Buffer.
+  /// @param indexFormatCode Encoded \ref IndexFormat.
+  /// @param offsetBytes Byte offset of the first index.
   virtual BridgeStatus setIndexBuffer(BrowserObjectId bufferId, uint32_t indexFormatCode,
                                       uint64_t offsetBytes) = 0;
 
@@ -518,8 +522,10 @@ public:
                                            BrowserSurfaceCapabilities& capabilities) const = 0;
 
   /// Configures how a surface presents. @param surfaceId Surface to configure.
-  /// @param formatCode Encoded \ref TextureFormat. @param usageBits Encoded \ref TextureUsage
-  /// mask. @param width Width in texels. @param height Height in texels.
+  /// @param formatCode Encoded \ref TextureFormat.
+  /// @param usageBits Encoded \ref TextureUsage mask.
+  /// @param width Width in texels.
+  /// @param height Height in texels.
   /// @param alphaModeCode Encoded \ref SurfaceAlphaMode.
   virtual BridgeStatus configureSurface(BrowserObjectId surfaceId, uint32_t formatCode,
                                         uint32_t usageBits, uint32_t width, uint32_t height,

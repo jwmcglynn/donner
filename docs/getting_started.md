@@ -7,7 +7,8 @@
 Donner's root `@donner` library uses the tiny-skia renderer by default. A separate Bazel module
 can use a version from the Bazel Central Registry once that version is published, or build
 against a checked-out source tree. The checked-in
-[consumer example](../examples/bazel_consumer/README.md) exercises the latter path and is also
+[consumer example](https://github.com/jwmcglynn/donner/blob/main/examples/bazel_consumer/README.md)
+exercises the latter path and is also
 used by BCR preflight against the release candidate.
 
 For the current v0.8 prerelease source tree, put this in your `MODULE.bazel`:

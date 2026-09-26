@@ -647,6 +647,7 @@ donner_cc_test(
         "//donner/svg/renderer:resvg_test_suite_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+    variants = ["text_full"],
     deps = [
         "//donner/base:base_test_utils",
         "//donner/svg/text:text_backend_full",
@@ -712,6 +713,7 @@ donner_cc_test(
         "//donner/svg/renderer:resvg_test_suite_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+    variants = ["text_full"],
     deps = [
         "//donner/base:base_test_utils",
         "//donner/svg/text:text_backend",
