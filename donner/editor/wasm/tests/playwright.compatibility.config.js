@@ -8,6 +8,7 @@ module.exports = defineConfig({
   projects: [
     {
       name: "firefox-geode-resize",
+      repeatEach: 20,
       grep: [
         /Geode Wasm View overlays render tile metadata and sparse Slug triangle edges/,
         /Firefox keeps Basic Shapes resize pixels and outline synchronized/,
