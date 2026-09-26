@@ -15,8 +15,8 @@ cc_library(
     strip_include_prefix = ".",
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
-        ":wgpu_native_linux",
         ":wgpu_native_lsan_suppressions",
+        ":wgpu_native_platform",
     ],
 )
 
@@ -77,6 +77,13 @@ cc_library(
 )
 
 # Select the pinned Linux archive only for the test-only resvg comparison.
+alias(
+    name = "wgpu_native_platform",
+    testonly = True,
+    actual = ":wgpu_native_linux",
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
 alias(
     name = "wgpu_native_linux",
     testonly = True,

@@ -26,13 +26,11 @@ Categories:
   a build file outside that workspace's test tree.
 - reference-into-allowlist: a build-graph file compiling or linking the inert
   snapshot. Naming its golden images as test data is not a finding.
-- rust-built-archive: build rules that download Rust-built prebuilt archives
-  (the wgpu-native release tarballs). These are the Rust that actually ships;
-  they leave with the Metal and Linux cutovers.
+- rust-built-archive: a Rust-built GPU archive or reference outside the sole
+  checksum-pinned Linux test-only resvg comparison boundary.
 
 `--blocking` takes the categories that must fail the run. `--blocking default`
-is the set CI enforces: everything except rust-built-archive, which is still
-true of the tree and stays report-only until those cutovers land.
+enforces every category, including unexpected Rust-built archives.
 
 This is a static check over build-file text, and it is not the only defense.
 From the Donner root, `bazel query 'deps(@tiny-skia-cpp//tests/rust_ffi:tiny_skia_ffi)'`
@@ -60,6 +58,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import subprocess
 import sys
@@ -90,14 +89,33 @@ CATEGORIES = (
     "rust-built-archive",
 )
 
-# Categories that hold on the tree today and therefore block in CI. The
-# wgpu-native archives are still real, so their category is reported and not
-# enforced until those archives are removed from the build.
-DEFAULT_BLOCKING = tuple(c for c in CATEGORIES if c != "rust-built-archive")
+# Every category is blocking. The one retained test-only GPU oracle has an
+# exact, checksum-bound allowlist below; no archive category is waived.
+DEFAULT_BLOCKING = CATEGORIES
 
 # Rust-built prebuilt archive signatures. wgpu-native releases are compiled from
 # Rust; any build rule that downloads one is a Rust-built dependency edge.
-RUST_BUILT_ARCHIVE_TOKENS = ("gfx-rs/wgpu-native", "wgpu_native_")
+RUST_BUILT_ARCHIVE_TOKENS = ("gfx-rs/wgpu-native", "wgpu_native_", "libwgpu_native")
+
+ARCHIVE_FETCH_RULE = "third_party/bazel/non_bcr_deps.bzl"
+ARCHIVE_MODULE = "MODULE.bazel"
+ARCHIVE_OVERLAY = "third_party/BUILD.wgpu_native_platform"
+ARCHIVE_RUNTIME = "third_party/webgpu-cpp/BUILD.bazel"
+ARCHIVE_ORACLE_CONSUMER = "donner/svg/renderer/tests/BUILD.bazel"
+ARCHIVE_GEODE_CONSUMER = "donner/svg/renderer/geode/BUILD.bazel"
+REQUIRED_ARCHIVE_SITES = tuple(sorted((
+    ARCHIVE_FETCH_RULE, ARCHIVE_MODULE, ARCHIVE_OVERLAY, ARCHIVE_RUNTIME,
+    ARCHIVE_ORACLE_CONSUMER,
+)))
+ARCHIVE_NAME_RE = re.compile(r"\bwgpu_native_[a-z0-9_]+\b")
+ARCHIVE_STRUCT_RE = re.compile(
+    r"struct\(\s*name\s*=\s*\"(?P<name>[^\"]+)\"\s*,\s*"
+    r"asset\s*=\s*\"(?P<asset>[^\"]+)\"\s*,\s*"
+    r"sha256\s*=\s*\"(?P<sha256>[^\"]*)\"\s*,\s*\)",
+    re.DOTALL,
+)
+RULE_BLOCK_RE = re.compile(r"(?ms)^([A-Za-z_][A-Za-z0-9_]*)\(\s*\n(.*?)^\)\s*$")
+RULE_NAME_RE = re.compile(r"\bname\s*=\s*[\"']([^\"']+)[\"']")
 
 # Labels and paths that name the cross-validation oracle, directly or through
 # the two test_utils libraries built on it. A build file outside the vendored
@@ -483,23 +501,263 @@ def fixture_containment_findings(path: str, text: str, scopes: RustScopes) -> li
     ]
 
 
-def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
-    """Flags a download of a Rust-built prebuilt archive.
+def _archive_finding(path: str, detail: str) -> list[Finding]:
+    return [Finding("rust-built-archive", path, detail)]
 
-    Takes `scopes` for the rule-table signature and ignores it: there is no
-    scope in which shipping a Rust-built binary is allowed.
-    """
-    del scopes
-    archive_tokens = tokens_in(text, RUST_BUILT_ARCHIVE_TOKENS)
-    if not archive_tokens:
-        return []
-    return [
-        Finding(
-            category="rust-built-archive",
-            path=path,
-            detail="Declares Rust-built prebuilt archives: " + ", ".join(archive_tokens),
+
+def _archive_rules(text: str) -> dict[str, tuple[str, str, str]]:
+    """Read only literal wgpu-native release structs, never infer a pin from a URL."""
+    entries = {}
+    for match in ARCHIVE_STRUCT_RE.finditer(text):
+        name, asset, sha = match.group("name", "asset", "sha256")
+        if name.startswith("wgpu_native_") or asset.startswith("wgpu-"):
+            entries[name] = (name, asset, sha)
+    return entries
+
+
+def _active_archive_text(text: str) -> str:
+    """Exclude a BUILD file's opening docstring and comments, retaining rule strings."""
+    stripped = text.lstrip()
+    for quote in ('"""', "'''"):
+        if stripped.startswith(quote):
+            end = stripped.find(quote, len(quote))
+            if end >= 0:
+                stripped = stripped[end + len(quote):]
+            break
+    return text_without_comments(stripped)
+
+
+def _archive_allowlist(scopes: RustScopes) -> dict[str, tuple[str, str, str]]:
+    return {name: (name, asset, sha) for name, asset, sha in scopes.test_only_gpu_oracle_archives}
+
+
+def _rule_blocks(text: str) -> list[tuple[str, str, str]]:
+    """Top-level BUILD calls in buildifier's one-rule-per-block form."""
+    result = []
+    for kind, body in RULE_BLOCK_RE.findall(text):
+        name = RULE_NAME_RE.search(body)
+        if name:
+            result.append((kind, name.group(1), text_without_comments(body)))
+    return result
+
+
+def _rule_has_edge(body: str, token: str, attribute: str) -> bool:
+    return any(token in line and owner == attribute
+               for line, owner in zip(body.splitlines(), attribute_of_each_line(body)))
+
+
+def _archive_fetch_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
+    expected = _archive_allowlist(scopes)
+    required_names = {"wgpu_native_linux_aarch64", "wgpu_native_linux_x86_64"}
+    if len(scopes.test_only_gpu_oracle_archives) != 2 or set(expected) != required_names or any(
+        not re.fullmatch(r"[0-9a-f]{64}", item[2]) or item[2] == "0" * 64 or
+        item[1] != item[0].replace("wgpu_native_", "wgpu-").replace("_", "-", 1) + "-release.zip"
+        for item in expected.values()
+    ):
+        return _archive_finding(path, "Linux oracle archive allowlist is incomplete or unpinned")
+    actual = _archive_rules(text)
+    active_names = set(ARCHIVE_NAME_RE.findall(_active_archive_text(text))) - {
+        "wgpu_native_platform",
+    }
+    if actual != expected or len([
+        match for match in ARCHIVE_STRUCT_RE.finditer(text)
+        if match.group("name").startswith("wgpu_native_") or match.group("asset").startswith("wgpu-")
+    ]) != len(expected) or active_names != required_names:
+        return _archive_finding(
+            path, "Rust archive fetch rules differ from the two reviewed Linux SHA-256 pins: "
+            + ", ".join(sorted(actual)),
         )
-    ]
+    active = text_without_comments(text)
+    if not all(token in active for token in (
+        "gfx-rs/wgpu-native/releases/download", "sha256 = p.sha256",
+        "build_file = //third_party:BUILD.wgpu_native_platform",
+    )):
+        return _archive_finding(path, "Linux oracle fetch lacks its pinned URL, SHA-256, or overlay")
+    return []
+
+
+def _archive_module_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
+    active = _active_archive_text(text)
+    match = re.search(r"use_repo\(\s*non_bcr_deps\s*,(.*?)\)", active, re.DOTALL)
+    names = ARCHIVE_NAME_RE.findall(match.group(1)) if match else []
+    if len(names) != 2 or set(names) != set(_archive_allowlist(scopes)) or \
+       ARCHIVE_NAME_RE.findall(active) != names:
+        return _archive_finding(path, "root module must expose only the two Linux oracle archives")
+    return []
+
+
+def _archive_overlay_findings(path: str, text: str) -> list[Finding]:
+    rules = [(kind, name, body) for kind, name, body in _rule_blocks(text)
+             if "libwgpu_native" in body or name == "wgpu_native"]
+    if len(rules) != 1 or rules[0][0] != "cc_library" or rules[0][1] != "wgpu_native":
+        return _archive_finding(path, "archive overlay must define exactly one wgpu_native library")
+    body = rules[0][2]
+    if not re.search(r"\btestonly\s*=\s*(?:True|1)\b", body) or \
+       "lib/libwgpu_native.so" not in body or \
+       "lib/libwgpu_native.dylib" in body or "lib/libwgpu_native.a" in body:
+        return _archive_finding(path, "archive overlay must be test-only and Linux .so only")
+    return []
+
+
+def _archive_runtime_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
+    blocks = {name: (kind, body) for kind, name, body in _rule_blocks(text)}
+    expected_names = set(_archive_allowlist(scopes))
+    active = _active_archive_text(text)
+    repo_names = set(re.findall(r"@(?P<name>wgpu_native_[A-Za-z0-9_]+)//:wgpu_native", active))
+    if repo_names != expected_names or "wgpu_native_macos" in active:
+        return _archive_finding(path, "reference runtime must name only Linux archive repositories")
+    for name in ("webgpu_cpp", "wgpu_native_reference_runtime", "wgpu_native_platform",
+                 "wgpu_native_linux"):
+        rule = blocks.get(name)
+        if rule is None or not re.search(r"\btestonly\s*=\s*(?:True|1)\b", rule[1]):
+            return _archive_finding(path, f"{name} must be a test-only reference target")
+    reference = blocks["wgpu_native_reference_runtime"][1]
+    if "@platforms//os:linux" not in reference or ":webgpu_cpp" not in reference or \
+       "//visibility:public" in reference or \
+       "//donner/svg/renderer/tests:__pkg__" not in reference:
+        return _archive_finding(path, "reference runtime lacks Linux-only compatibility or narrow test visibility")
+    if not _rule_has_edge(blocks["webgpu_cpp"][1], ":wgpu_native_platform", "deps") or \
+       not _rule_has_edge(blocks["wgpu_native_platform"][1], ":wgpu_native_linux", "actual") or \
+       any(not _rule_has_edge(blocks["wgpu_native_linux"][1],
+                              "@" + name + "//:wgpu_native", "actual")
+           for name in expected_names):
+        return _archive_finding(path, "test-only wrapper-to-Linux-archive alias chain is incomplete")
+    return []
+
+
+def _archive_consumer_findings(path: str, text: str) -> list[Finding]:
+    consumers = [(kind, name, body) for kind, name, body in _rule_blocks(text)
+                 if "wgpu_native_reference_runtime" in body]
+    if len(consumers) != 1 or consumers[0][0] != "donner_cc_test" or \
+       consumers[0][1] != "resvg_test_suite_wgpu_reference_linux_impl" or \
+       "@platforms//os:linux" not in consumers[0][2]:
+        return _archive_finding(path, "only the Linux resvg test may consume the reference runtime")
+    return []
+
+
+GEODE_ORACLE_RUNTIME = "//third_party/webgpu-cpp:wgpu_native_reference_runtime"
+GEODE_ORACLE_VISIBILITY = {
+    "geode_wgpu_util": ("//visibility:private",),
+    "geode_device_wgpu_reference_linux": (
+        "//donner/svg/renderer:__pkg__", "//donner/svg/renderer/tests:__pkg__",
+    ),
+}
+
+
+def _ast_keyword(call: ast.Call, name: str) -> ast.expr | None:
+    return next((keyword.value for keyword in call.keywords if keyword.arg == name), None)
+
+
+def _ast_string_list(node: ast.expr | None) -> tuple[str, ...] | None:
+    if not isinstance(node, ast.List) or any(
+        not isinstance(item, ast.Constant) or not isinstance(item.value, str)
+        for item in node.elts
+    ):
+        return None
+    return tuple(item.value for item in node.elts)
+
+
+def _geode_archive_literals(node: ast.AST | None) -> list[str]:
+    if node is None:
+        return []
+    return [item.value for item in ast.walk(node)
+            if isinstance(item, ast.Constant) and isinstance(item.value, str) and
+            tokens_in(item.value, RUST_BUILT_ARCHIVE_TOKENS)]
+
+
+def _geode_reference_deps(call: ast.Call, name: str) -> tuple[str, ...] | None:
+    node = _ast_keyword(call, "deps")
+    if name == "geode_device_wgpu_reference_linux":
+        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Add) or \
+           not isinstance(node.left, ast.Name) or node.left.id != "_GEODE_DEVICE_COMMON_DEPS":
+            return None
+        node = node.right
+    return _ast_string_list(node)
+
+
+def _guarded_geode_reference(call: ast.Call, name: str) -> bool:
+    testonly = _ast_keyword(call, "testonly")
+    if not isinstance(testonly, ast.Constant) or testonly.value not in (True, 1):
+        return False
+    compatible = _ast_keyword(call, "target_compatible_with")
+    if isinstance(compatible, ast.BinOp) and isinstance(compatible.op, ast.Add) and \
+       isinstance(compatible.left, ast.Name) and compatible.left.id == "_GEODE_ONLY":
+        compatible = compatible.right
+    if _ast_string_list(compatible) != ("@platforms//os:linux",):
+        return False
+    if _ast_string_list(_ast_keyword(call, "visibility")) != GEODE_ORACLE_VISIBILITY[name]:
+        return False
+    expected_deps = (GEODE_ORACLE_RUNTIME,) if name == "geode_wgpu_util" else (
+        ":geode_wgpu_util", GEODE_ORACLE_RUNTIME,
+    )
+    return _geode_reference_deps(call, name) == expected_deps
+
+
+def _geode_archive_call_name(call: ast.Call, literals: list[str]) -> str | None:
+    kind = call.func.id if isinstance(call.func, ast.Name) else ""
+    if kind == "configured_dependency_audit_test":
+        if sorted(literals) != sorted(_geode_archive_literals(_ast_keyword(call, "forbidden"))):
+            raise ValueError("archive labels escaped an audit forbidden list")
+        return None
+    name_node = _ast_keyword(call, "name")
+    name = name_node.value if isinstance(name_node, ast.Constant) else ""
+    if kind != "donner_cc_library" or name not in GEODE_ORACLE_VISIBILITY or \
+       literals != [GEODE_ORACLE_RUNTIME] or not _guarded_geode_reference(call, name):
+        raise ValueError("unexpected Geode archive or production reference")
+    return name
+
+
+def _geode_statement_consumer(statement: ast.stmt, index: int) -> str | None:
+    if index == 0 and isinstance(statement, ast.Expr) and \
+       isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
+        return None  # BUILD module docstring, not an executable reference.
+    literals = _geode_archive_literals(statement)
+    if not literals:
+        return None
+    if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+        raise ValueError("unexpected Geode archive or production reference")
+    return _geode_archive_call_name(statement.value, literals)
+
+
+def _archive_geode_consumer_findings(path: str, text: str) -> list[Finding]:
+    """Only the two Linux test-only Geode leaves may name the oracle runtime."""
+    try:
+        tree = ast.parse(text)
+        consumers = [name for index, statement in enumerate(tree.body)
+                     if (name := _geode_statement_consumer(statement, index)) is not None]
+    except (SyntaxError, ValueError) as error:
+        return _archive_finding(path, str(error))
+    if consumers and (len(consumers) != 2 or set(consumers) != set(GEODE_ORACLE_VISIBILITY)):
+        return _archive_finding(path, "only the two Linux Geode test leaves may consume the runtime")
+    return []
+
+
+def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
+    """Allow only the checksum-pinned Linux test oracle's complete build boundary."""
+    # These five files are the complete allowed boundary. Inspect them even if
+    # their last Rust token was deleted: absence of the required oracle edge is
+    # a failure, not a clean scan.
+    if path == ARCHIVE_FETCH_RULE:
+        return _archive_fetch_findings(path, text, scopes)
+    if path == ARCHIVE_MODULE:
+        return _archive_module_findings(path, text, scopes)
+    if path == ARCHIVE_OVERLAY:
+        return _archive_overlay_findings(path, text)
+    if path == ARCHIVE_RUNTIME:
+        return _archive_runtime_findings(path, text, scopes)
+    if path == ARCHIVE_ORACLE_CONSUMER:
+        return _archive_consumer_findings(path, text)
+    if path == ARCHIVE_GEODE_CONSUMER:
+        return _archive_geode_consumer_findings(path, text)
+    active = text_without_comments(text)
+    if not tokens_in(active, RUST_BUILT_ARCHIVE_TOKENS):
+        return []
+    attributes = attribute_of_each_line(text)
+    for line, attribute in zip(active.splitlines(), attributes):
+        if tokens_in(line, RUST_BUILT_ARCHIVE_TOKENS) and \
+           attribute not in {"forbidden", "required", "tags"}:
+            return _archive_finding(path, "unexpected Rust-built archive or reference edge")
+    return []
 
 
 def inert_reference_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
@@ -550,6 +808,15 @@ def check(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
             continue
         for rule in BUILD_GRAPH_RULES:
             findings.extend(rule(path, files[path], scopes))
+    return findings
+
+
+def check_tracked_tree(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
+    """Apply the per-file rules and require every test-oracle boundary file to exist."""
+    findings = check(files, scopes)
+    for path in REQUIRED_ARCHIVE_SITES:
+        if path not in files:
+            findings.extend(_archive_finding(path, "required Linux test-oracle boundary file is missing"))
     return findings
 
 
@@ -631,7 +898,7 @@ def main() -> int:
 
     blocking = parse_blocking(args.blocking)
     scopes = load_rust_scopes(args.root / ALLOWLIST_RELPATH)
-    findings = check(collect_scannable_files(args.root), scopes)
+    findings = check_tracked_tree(collect_scannable_files(args.root), scopes)
     print(format_report(findings, blocking), end="")
 
     blocked = sorted({f.category for f in findings} & set(blocking))

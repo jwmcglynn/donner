@@ -31,6 +31,66 @@ permissions:
 # workflow.
 
 jobs:
+  configured-rust-closure-platform:
+    name: Configured Rust closure / ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    needs: gatekeeper
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            runner: ubuntu-24.04
+          - platform: macos
+            runner: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          external-cache: true
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        uses: ./.github/actions/apt-install
+        with:
+          packages: >-
+            ninja-build pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
+            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+            libgl1-mesa-dev libosmesa6
+
+      - name: Check configured product, browser, and oracle closures
+        run: python3 tools/gpu_inventory/configured_rust_closure.py scan --platform "${{ matrix.platform }}" --output "closure-${{ matrix.platform }}.json"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: configured-rust-closure-${{ matrix.platform }}
+          path: closure-${{ matrix.platform }}.json
+          if-no-files-found: error
+
+  no-rust-configured-closure:
+    name: CI / no-rust-configured-closure
+    runs-on: ubuntu-24.04
+    needs: [gatekeeper, configured-rust-closure-platform]
+    if: ${{ always() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: configured-rust-closure-*
+          merge-multiple: true
+
+      - name: Verify complete source-bound platform receipts
+        run: python3 tools/gpu_inventory/configured_rust_closure.py aggregate closure-linux.json closure-macos.json
+
   gatekeeper:
     runs-on: ubuntu-24.04
     outputs:
