@@ -101,7 +101,9 @@ public:
     std::size_t start = 0;  //!< Inclusive start of the logical text range.
     std::size_t end = 0;    //!< Exclusive end of the logical text range.
 
-    bool operator==(const SelectionRange&) const = default;
+    /// Compare all members for value equality.
+    /// @param other Value to compare.
+    bool operator==(const SelectionRange& other) const = default;
   };
 
   /// Effective B/I/U formatting for the active typing position.

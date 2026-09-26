@@ -50,6 +50,10 @@ struct FontResourcePreflight {
   std::vector<FontFaceDependency> dependencies;  ///< Full face identities and current states.
 };
 
+/// Write the font-preflight status type and numeric value for diagnostics.
+/// @param os Output stream.
+/// @param status Status value to format.
+/// @return The output stream.
 inline std::ostream& operator<<(std::ostream& os, FontResourcePreflight::Status status) {
   return os << "FontResourcePreflight::Status(" << static_cast<int>(status) << ")";
 }

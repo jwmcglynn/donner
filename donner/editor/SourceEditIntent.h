@@ -22,6 +22,8 @@ struct SourceEditPoint {
   int line = 0;    ///< Zero-based source line.
   int column = 0;  ///< Zero-based source column.
 
+  /// Compare all members for value equality.
+  /// @param other Value to compare.
   bool operator==(const SourceEditPoint& other) const = default;
 };
 
@@ -34,11 +36,13 @@ struct SourceEditIntent {
   SourceEditIntentKind kind =
       SourceEditIntentKind::Unknown;  //!< Structural or textual editing intent represented by this
                                       //!< record.
-  std::uint64_t bufferVersion = 0;  ///< Monotonic text-buffer edit version.
-  SourceEditPoint start;            ///< Edit start in the pre-edit source buffer.
-  SourceEditPoint removedEnd;       ///< End of the removed range in the pre-edit buffer.
-  SourceEditPoint replacementEnd;   ///< End of the inserted text in the post-edit buffer.
+  std::uint64_t bufferVersion = 0;    ///< Monotonic text-buffer edit version.
+  SourceEditPoint start;              ///< Edit start in the pre-edit source buffer.
+  SourceEditPoint removedEnd;         ///< End of the removed range in the pre-edit buffer.
+  SourceEditPoint replacementEnd;     ///< End of the inserted text in the post-edit buffer.
 
+  /// Compare all members for value equality.
+  /// @param other Value to compare.
   bool operator==(const SourceEditIntent& other) const = default;
 };
 

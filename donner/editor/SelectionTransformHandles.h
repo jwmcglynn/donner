@@ -32,8 +32,11 @@ struct SelectionTransformHandleIntent {
   SelectionTransformCorner corner =
       SelectionTransformCorner::TopLeft;  //!< Corner associated with a resize or rotation handle.
 
-  friend bool operator==(const SelectionTransformHandleIntent&,
-                         const SelectionTransformHandleIntent&) = default;
+  /// Compare all members for value equality.
+  /// @param lhs Value to compare.
+  /// @param rhs Value to compare.
+  friend bool operator==(const SelectionTransformHandleIntent& lhs,
+                         const SelectionTransformHandleIntent& rhs) = default;
 };
 
 /// Visual handle boxes for one selection envelope, in document coordinates.

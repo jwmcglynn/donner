@@ -29,7 +29,9 @@ struct AttributeWritebackPathSegment {
       0;  //!< Index among element children, excluding text and comment nodes.
   xml::XMLQualifiedName qualifiedName;  //!< Qualified name expected at this path segment.
 
-  bool operator==(const AttributeWritebackPathSegment&) const = default;
+  /// Compare all members for value equality.
+  /// @param other Value to compare.
+  bool operator==(const AttributeWritebackPathSegment& other) const = default;
 };
 
 /// Path to an element through element children only, from the SVG root down.
@@ -39,7 +41,9 @@ struct AttributeWritebackTarget {
   std::optional<RcString>
       elementId;  //!< Authored id captured for identifying the target when available.
 
-  bool operator==(const AttributeWritebackTarget&) const = default;
+  /// Compare all members for value equality.
+  /// @param other Value to compare.
+  bool operator==(const AttributeWritebackTarget& other) const = default;
 };
 
 /**

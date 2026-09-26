@@ -40,10 +40,12 @@ struct FormatBarFontPreview {
   /// Bottom-right UV for texture allocations larger than the preview payload.
   float uvMaxX = 1.0f;
   float uvMaxY = 1.0f;  //!< Lower valid texture coordinate for the preview payload.
+
   /// Logical row size used when the raster payload was produced.
   float width = 0.0f;
   float height = 0.0f;  //!< Preview row height in logical UI pixels.
 
+  /// Return whether a preview has a texture and positive logical dimensions.
   [[nodiscard]] bool available() const { return texture != 0 && width > 0.0f && height > 0.0f; }
 };
 
@@ -113,12 +115,14 @@ struct FormatBarActions {
   /// The user chose a family from the dropdown or committed the free-text box.
   bool setFontFamily = false;
   std::string fontFamily;  //!< Selected CSS font-family value for a family change.
+
   /// The user committed a new font size (drag release, typed entry, or preset).
   bool setFontSize = false;
   float fontSize = 0.0f;         //!< Selected font size for a size change.
   bool toggleBold = false;       //!< Request toggling bold at the active text selection.
   bool toggleItalic = false;     //!< Request toggling italic at the active text selection.
   bool toggleUnderline = false;  //!< Request toggling underline at the active text selection.
+
   /// Visible dropdown rows whose family-name previews are not cached yet.
   std::vector<std::string> requestFontPreviews;
   /// All currently visible rows, including rows whose preview is already cached.

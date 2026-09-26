@@ -118,9 +118,10 @@ struct EncodedPath {
   float vStride = 0.0f;             ///< Width of each vertical band cell (path space).
   uint32_t vBandCount = 0;          ///< Number of vertical band cells.
 
-  EncodingStats stats;  ///< Encode diagnostics; does not affect rendering.
+  EncodingStats stats;               ///< Encode diagnostics; does not affect rendering.
   Outcome outcome = Outcome::Empty;  //!< Result of encoding and resource admission.
 
+  /// Sum encoded curve, index, band, and grid item counts, saturating on overflow.
   [[nodiscard]] std::size_t geometryItemCount() const {
     std::size_t total = 0;
     for (const std::size_t count :
@@ -134,6 +135,7 @@ struct EncodedPath {
     return total;
   }
 
+  /// Return bytes reserved by encoded vector capacities, saturating on overflow.
   [[nodiscard]] std::size_t retainedBytes() const {
     std::size_t total = 0;
     const auto add = [&](std::size_t capacity, std::size_t itemSize) {
@@ -168,6 +170,8 @@ struct EncodedPath {
 
   /// Returns true if the encoded path has no bands (empty or degenerate path).
   bool empty() const { return bands.empty(); }
+
+  /// Return whether geometry encoding was rejected by validation or resource limits.
   bool rejected() const { return outcome == Outcome::Rejected; }
 };
 

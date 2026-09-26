@@ -549,9 +549,15 @@ public:
     uint64_t recordOffset = 0;     //!< Byte offset of the scene-record binding.
     uint64_t recordBytes = 0;      //!< Byte length of the scene-record binding.
 
+    /// Compare all members for value equality.
+    /// @param a Value to compare.
+    /// @param b Value to compare.
     friend bool operator==(const SceneBatchBindGroupKey& a,
                            const SceneBatchBindGroupKey& b) = default;
 
+    /// Order binding keys lexicographically for cache lookup.
+    /// @param a Value to compare.
+    /// @param b Value to compare.
     friend bool operator<(const SceneBatchBindGroupKey& a, const SceneBatchBindGroupKey& b) {
       return std::tie(a.uniformBufferId, a.uniformOffset, a.uniformSize, a.chunkBufferId,
                       a.chunkBytes, a.recordBufferId, a.recordOffset, a.recordBytes) <
@@ -632,17 +638,23 @@ public:
   // issue #575's leak hunt can measure unbounded growth across whole
   // test-suite runs where each `RendererGeode` has its own scoped
   // per-frame counters.
+
+  /// Record one buffer creation in lifetime and attached frame counters.
   void countBuffer() const {
     ++lifetimeBufferCreates_;
     if (counters_) {
       ++counters_->bufferCreates;
     }
   }
+
+  /// Record one bind-group creation in the attached frame counters.
   void countBindGroup() const {
     if (counters_) {
       ++counters_->bindgroupCreates;
     }
   }
+
+  /// Record one texture creation in lifetime and attached frame counters.
   void countTexture() const {
     ++lifetimeTextureCreates_;
     if (counters_) {
@@ -669,6 +681,8 @@ public:
   uint64_t lifetimeBufferCreates() const {
     return lifetimeBufferCreates_ + readbackLifetimeBufferCreates_.load(std::memory_order_relaxed);
   }
+
+  /// Record one queue submission in the attached frame counters.
   void countSubmit() const {
     if (counters_) {
       ++counters_->submits;
@@ -681,6 +695,8 @@ public:
       counters_->commandBuffers += count;
     }
   }
+
+  /// Record one path encoding in the attached frame counters.
   void countPathEncode() const {
     if (counters_) {
       ++counters_->pathEncodes;
@@ -693,6 +709,8 @@ public:
       counters_->drawCalls += count;
     }
   }
+
+  /// Record one pipeline switch in the attached frame counters.
   void countPipelineSwitch() const {
     if (counters_) {
       ++counters_->pipelineSwitches;

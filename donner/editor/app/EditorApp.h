@@ -60,6 +60,7 @@ struct RenderSessionOptions {
 struct RenderSessionSnapshot {
   RenderSessionStatus status =
       RenderSessionStatus::kEmpty;  //!< Current state of the render session.
+
   /// Resolved URI the snapshot corresponds to, or empty for `kEmpty`.
   std::string uri;
   /// RGBA snapshot of the rendered frame. Empty if no render has succeeded.
@@ -72,6 +73,8 @@ struct RenderSessionSnapshot {
 /// Document loading and rendering state for a host-driven session.
 class RenderSession {
 public:
+  /// Create a document rendering session with the requested loading policy.
+  /// @param options Default viewport and source-loading options.
   explicit RenderSession(RenderSessionOptions options = {});
   ~RenderSession();
 
@@ -94,8 +97,13 @@ public:
   /// than a full navigate because no fetch happens.
   const RenderSessionSnapshot& resize(int width, int height);
 
+  /// Return the current render-session snapshot.
   [[nodiscard]] const RenderSessionSnapshot& current() const { return current_; }
+
+  /// Return the current render width in pixels.
   [[nodiscard]] int width() const { return width_; }
+
+  /// Return the current render height in pixels.
   [[nodiscard]] int height() const { return height_; }
 
   /// The most recent successful bitmap, regardless of the current status.
@@ -108,6 +116,8 @@ public:
   /// `pollForChanges()` checks whether the loaded file's mtime has changed
   /// and auto-reloads if so.
   void setWatchEnabled(bool v) { watchEnabled_ = v; }
+
+  /// Return whether source-file watching is enabled.
   [[nodiscard]] bool watchEnabled() const { return watchEnabled_; }
 
   /// Checks if the currently-loaded file's modification time has changed

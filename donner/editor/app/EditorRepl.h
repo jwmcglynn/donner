@@ -47,6 +47,11 @@ struct RenderSessionReplOptions {
 /// Line-oriented command interface for inspecting and controlling a render session.
 class RenderSessionRepl {
 public:
+  /// Connect a rendering session to line-oriented command input and output.
+  /// @param app Session to control; it must outlive the REPL.
+  /// @param in Borrowed command input stream; it must outlive the REPL.
+  /// @param out Borrowed response output stream; it must outlive the REPL.
+  /// @param options REPL behavior and output options.
   RenderSessionRepl(RenderSession& app, std::istream& in, std::ostream& out,
                     RenderSessionReplOptions options = {});
 

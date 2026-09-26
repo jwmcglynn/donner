@@ -377,6 +377,7 @@ struct PresentationFrameOutcome {
   gpu::SurfaceStatus status = gpu::SurfaceStatus::Success;  //!< What the surface last reported.
   double acquireMs = 0.0;  //!< Wall time the acquire (including any retry) took.
   bool released = false;   //!< The surface was given up; the window holds none any more.
+
   /// Report a device loss through the window's existing renderer-failure path.
   bool markDeviceLost = false;
 };
@@ -432,7 +433,9 @@ struct WgpuSurfaceRetryDecision {
   bool requestFrame = false;  //!< Whether the host should schedule another presentation frame.
   bool reconfigure = false;   //!< Whether the surface must be reconfigured before retrying.
 
-  bool operator==(const WgpuSurfaceRetryDecision&) const = default;
+  /// Compare all members for value equality.
+  /// @param other Value to compare.
+  bool operator==(const WgpuSurfaceRetryDecision& other) const = default;
 };
 
 /// Bound retries so a permanently lost/device-fatal surface cannot turn the
@@ -455,7 +458,9 @@ struct WgpuDiagnosticReadbackDecision {
   bool completeRequest =
       false;  //!< Whether the outstanding diagnostic request should be completed.
 
-  bool operator==(const WgpuDiagnosticReadbackDecision&) const = default;
+  /// Compare all members for value equality.
+  /// @param other Value to compare.
+  bool operator==(const WgpuDiagnosticReadbackDecision& other) const = default;
 };
 
 /// Diagnostic readback is deliberately best-effort. A transient capture failure, including setup
@@ -491,10 +496,13 @@ struct WgpuDiagnosticReadbackDecision {
 struct UiScaleConfig {
   double displayScale = 1.0;  //!< Display scaling factor applied to logical UI sizing.
 
+  /// Scale a logical UI dimension using the configured display scale.
+  /// @param basePixels Unscaled logical dimension.
   [[nodiscard]] float scaledPixels(double basePixels) const {
     return static_cast<float>(basePixels * displayScale);
   }
 
+  /// Return the global font scale used with the configured font rasterization size.
   [[nodiscard]] float fontGlobalScale() const { return static_cast<float>(1.0 / displayScale); }
 };
 
@@ -508,6 +516,7 @@ struct EditorWindowOptions {
   std::string title = "Donner SVG Editor";  //!< Native window title.
   int initialWidth = 1280;                  //!< Requested initial window width.
   int initialHeight = 720;                  //!< Requested initial window height.
+
   /// Whether the native desktop window should be shown. Hidden windows still
   /// create a real OpenGL context and are useful for framebuffer replay tests.
   /// They are additionally created undecorated: a titled window's frame is
@@ -583,6 +592,7 @@ struct EditorWindowFonts {
   ImFont* uiBold = nullptr;     //!< Bold UI font owned by the ImGui font atlas.
   ImFont* code = nullptr;       //!< Monospaced source font owned by the ImGui font atlas.
 
+  /// Return whether regular, bold, and code fonts are all available.
   [[nodiscard]] bool complete() const {
     return uiRegular != nullptr && uiBold != nullptr && code != nullptr;
   }
@@ -600,8 +610,10 @@ struct EditorWindowInputOverride {
   bool keyShift = false;  //!< Shift modifier state.
   bool keyAlt = false;    //!< Alt modifier state.
   bool keySuper = false;  //!< Super/Command modifier state.
+
   /// Horizontal mouse-wheel delta for this frame.
   float mouseWheelH = 0.0f;  //!< Horizontal wheel delta injected for this frame.
+
   /// Vertical mouse-wheel delta for this frame.
   float mouseWheel = 0.0f;
   /// ImGui key enum values pressed during this frame.
@@ -636,6 +648,8 @@ using WgpuDirectRenderCallback = std::function<void(const EditorWindowWgpuRender
 /// means we can't easily have two at once.
 class EditorWindow {
 public:
+  /// Create and initialize a host window with the requested settings.
+  /// @param options Window title, dimensions, and UI configuration.
   explicit EditorWindow(EditorWindowOptions options = {});
   ~EditorWindow();
 
@@ -735,6 +749,8 @@ public:
   /// Dimensions of the most recently uploaded bitmap. (0, 0) before the
   /// first upload.
   [[nodiscard]] int textureWidth() const { return textureWidth_; }
+
+  /// Return the height of the most recently uploaded bitmap, or zero before the first upload.
   [[nodiscard]] int textureHeight() const { return textureHeight_; }
 
   /// Update the native window title.

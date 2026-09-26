@@ -45,6 +45,11 @@ class GeometryDebugSink {
 public:
   virtual ~GeometryDebugSink() = default;
 
+  /// Capture the geometry and transforms of a Slug draw for diagnostic presentation.
+  /// @param encoded Encoded path geometry for the draw.
+  /// @param targetFromPath Transform from path coordinates to target coordinates.
+  /// @param rootFromTarget Transform from target coordinates to root presentation coordinates.
+  /// @param instanceTransforms Packed per-instance transforms, when instancing is used.
   virtual void recordSlugDraw(const EncodedPath& encoded, const Transform2d& targetFromPath,
                               const Transform2d& rootFromTarget,
                               std::span<const float> instanceTransforms) = 0;
@@ -240,13 +245,6 @@ public:
   void injectScenePreparationFailureAfterForTesting(std::size_t successfulPreparations);
 
   /**
-   * Observe Slug draws recorded by this encoder.
-   *
-   * `rootFromTarget` maps this encoder's target pixels to the owning
-   * renderer's final target. Pass null to disable observation. The default
-   * path stores one pointer and one branch per actual Slug submission.
-   */
-  /**
    * Record one scene-batch instance's geometry into the debug-overlay sink
    * (no-op without a sink). Ordered batches issue a single GPU draw, so the
    * caller reports each batched instance here in paint order, passing the
@@ -257,6 +255,16 @@ public:
   void recordGeometryDebugInstance(const EncodedPath& encoded,
                                    std::span<const float> instanceTransforms);
 
+  /**
+   * Observe Slug draws recorded by this encoder.
+   *
+   * `rootFromTarget` maps this encoder's target pixels to the owning
+   * renderer's final target. Pass null to disable observation. The default
+   * path stores one pointer and one branch per actual Slug submission.
+   */
+  /// @param sink Borrowed debug sink; it must outlive its registration until cleared, replaced, or
+  /// encoder destruction. Null disables capture.
+  /// @param rootFromTarget Maps target-space geometry into the root presentation coordinate system.
   void setGeometryDebugSink(GeometryDebugSink* sink,
                             const Transform2d& rootFromTarget = Transform2d());
 
@@ -694,6 +702,7 @@ public:
   struct SceneBatchBinding {
     gpu::BufferRef chunkBuffer;   ///< Slab chunk holding every instance's geometry.
     gpu::BufferRef recordBuffer;  ///< Record-slab buffer holding the records.
+
     /// Stable identities of `chunkBuffer` / `recordBuffer` (see
     /// `GeodeDevice::AllocateBufferId`). The bind-group cache outlives the
     /// document that owns these buffers, so it keys on these ids; the raw
@@ -709,6 +718,7 @@ public:
     uint64_t firstRecordOffset = 0;
     uint32_t instanceCount = 1;
     uint32_t vertexCount = 0;  ///< Max fan vertex count over the instances.
+
     /// Record slab the instances' records live in. Supplies the persistent
     /// batch-uniform buffer so a steady frame writes nothing; null falls
     /// back to the encoder's per-frame uniform arena.

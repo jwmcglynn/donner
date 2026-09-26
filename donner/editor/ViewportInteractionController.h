@@ -148,9 +148,13 @@ struct FrameHistory {
   void setLatestMemorySample(const FrameMemorySample& sample);
   /// Return the newest non-zero presentation-memory sample, or zeroes if none exist.
   [[nodiscard]] FrameMemorySample latestNonZeroMemorySample() const;
+
+  /// Return the latest UI-frame duration in milliseconds, or zero when empty.
   [[nodiscard]] float latest() const;
   /// Return the async worker timing that landed on the newest frame, or zero.
   [[nodiscard]] float latestBackend() const;
+
+  /// Return the largest retained UI-frame duration in milliseconds, or zero when empty.
   [[nodiscard]] float max() const;
 };
 
@@ -181,17 +185,35 @@ struct ScrollConsumptionResult {
 /// timing history.
 class ViewportInteractionController {
 public:
+  /// Return the viewport used for render-pane layout and pointer transforms.
   [[nodiscard]] ViewportState& viewport() { return viewport_; }
+
+  /// Return the viewport used for render-pane layout and pointer transforms.
   [[nodiscard]] const ViewportState& viewport() const { return viewport_; }
 
+  /// Return the bounded history of frame timings and memory samples.
   [[nodiscard]] FrameHistory& frameHistory() { return frameHistory_; }
+
+  /// Return the bounded history of frame timings and memory samples.
   [[nodiscard]] const FrameHistory& frameHistory() const { return frameHistory_; }
 
+  /// Append one UI-frame duration to the timing history.
+  /// @param deltaMs Frame duration in milliseconds.
   void noteFrameDelta(float deltaMs) { frameHistory_.push(deltaMs); }
 
+  /// Update pane geometry and optionally retain the document point at its center.
+  /// @param paneOrigin Pane origin in logical screen pixels.
+  /// @param paneSize Pane size in logical pixels.
+  /// @param documentViewBox New document viewBox, or no value to preserve the current document
+  /// geometry.
+  /// @param preservePaneCenterDocumentPoint Whether layout changes keep the center document point
+  /// anchored.
   void updatePaneLayout(const Vector2d& paneOrigin, const Vector2d& paneSize,
                         const std::optional<Box2d>& documentViewBox,
                         bool preservePaneCenterDocumentPoint = false);
+
+  /// Update the physical-to-logical pixel ratio used by the viewport.
+  /// @param devicePixelRatio Current display pixel ratio.
   void updateDevicePixelRatio(double devicePixelRatio);
   /// Reset the viewport to 100%.
   ///
@@ -209,6 +231,8 @@ public:
   /// @return True if the viewport mapping changed.
   [[nodiscard]] bool updatePanState(bool paneHovered, bool spaceHeld, bool middleDown,
                                     bool leftDown, const ImVec2& mousePosition);
+
+  /// Return whether a mouse-pan gesture is in progress.
   [[nodiscard]] bool panning() const { return panning_; }
 
   /// Consume queued trackpad/wheel events.
@@ -218,8 +242,15 @@ public:
       std::vector<RenderPaneScrollEvent>& events, const Box2d& paneRect, bool modalCapturingInput,
       double wheelZoomStep, double panPixelsPerScrollUnit);
 
+  /// Retain a document-space click until it can be dispatched.
+  /// @param documentPoint Click position in document coordinates.
+  /// @param modifiers Keyboard modifiers captured with the click.
   void bufferPendingClick(const Vector2d& documentPoint, MouseModifiers modifiers);
+
+  /// Return the buffered click, if one is waiting.
   [[nodiscard]] const std::optional<PendingClick>& pendingClick() const { return pendingClick_; }
+
+  /// Discard the buffered click.
   void clearPendingClick() { pendingClick_.reset(); }
 
 private:

@@ -208,6 +208,25 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("if: github.event_name == 'workflow_dispatch'", deploy)
         self.assertIn("branches: [\"main\"]", workflow)
 
+    def test_documentation_pull_requests_only_validate(self):
+        """Pull requests exercise the docs gate without retaining release artifacts."""
+        workflow = self.supply_chain_files[".github/workflows/deploy_docs.yaml"]
+        self.assertIn("  pull_request:\n", workflow)
+        self.assertIn("permissions:\n  contents: read", workflow)
+        build = workflow.split("\n  build:\n", 1)[1].split("\n  deploy:\n", 1)[0]
+        self.assertIn("if: github.event_name == 'push' || github.event_name == 'pull_request'", build)
+        self.assertIn("tools/build_docs.sh", _step_body(build, "Generate Doxygen documentation"))
+        for step in (
+            "Bind the docs site to this source run",
+            "Setup Pages",
+            "Upload retained Pages artifact",
+            "Record the immutable docs selection",
+        ):
+            with self.subTest(step=step):
+                self.assertIn("if: github.event_name == 'push'", _step_body(build, step))
+        deploy = workflow.split("\n  deploy:\n", 1)[1]
+        self.assertIn("if: github.event_name == 'workflow_dispatch'", deploy)
+
     def test_release_only_verifies_retained_preflight_bytes_before_publication(self):
         release = self.supply_chain_files[".github/workflows/release.yml"]
         self.assertIn("types: [published]", release)

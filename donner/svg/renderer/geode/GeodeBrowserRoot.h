@@ -38,16 +38,25 @@ struct GeodeGpuRootCapabilities {
 /// Owns the browser GPU device and loss condition shared by logical Geode contexts.
 class GeodeGpuRoot {
 public:
+  /// Retain the selected GPU root, its capabilities, and shared device-loss state.
+  /// @param capabilities Capabilities exposed by the selected root.
+  /// @param lostState Shared loss condition observed by logical devices.
+  /// @param backendHold Opaque shared ownership keeping the backend device alive.
   GeodeGpuRoot(GeodeGpuRootCapabilities capabilities,
                std::shared_ptr<gpu::DeviceLostState> lostState,
                std::shared_ptr<const void> backendHold);
 
+  /// Return the selected root's capabilities.
   const GeodeGpuRootCapabilities& capabilities() const UTILS_LIFETIME_BOUND {
     return capabilities_;
   }
+
+  /// Return the shared device-loss state.
   const std::shared_ptr<gpu::DeviceLostState>& lostState() const UTILS_LIFETIME_BOUND {
     return lostState_;
   }
+
+  /// Return whether this root retains a backend device owner.
   bool hasBackendDevice() const { return backendHold_ != nullptr; }
 
 private:

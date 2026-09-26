@@ -30,6 +30,7 @@
 #include "tiny_skia/Pixmap.h"
 #include "tiny_skia/Transform.h"
 
+/// Run the rendering example and report its result.
 int main() {
   using namespace donner;
   using namespace donner::svg;

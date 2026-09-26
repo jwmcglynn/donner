@@ -61,6 +61,9 @@ struct RetainedSpanKey {
   /// zero-length-gap dash case does and which changes the outline the stroker expands.
   bool openDashSeam = false;
 
+  /// Compare keys for retained-span reuse.
+  /// @param lhs Value to compare.
+  /// @param rhs Value to compare.
   friend bool operator==(const RetainedSpanKey& lhs, const RetainedSpanKey& rhs);
 };
 
@@ -170,6 +173,7 @@ struct RetainedSpanStats {
   std::uint64_t capturedDraws = 0;     ///< Passes that rasterized and recorded their coverage.
   std::uint64_t invalidatedDraws = 0;  ///< Captures that replaced a recording whose key changed.
   std::uint64_t bypassedDraws = 0;     ///< Passes retention did not apply to.
+
   /// Draws whose recording was refused at replay, which then rasterized instead. A refusal is
   /// the surface-size guard doing its job, never a dropped shape.
   std::uint64_t refusedReplays = 0;

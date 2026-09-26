@@ -52,6 +52,7 @@ struct ReproRecorderOptions {
   /// Initial logical window dimensions at recording start.
   int windowWidth = 0;
   int windowHeight = 0;  //!< Recorded host window height.
+
   /// Initial HiDPI scale.
   double displayScale = 1.0;
   /// Legacy composited-mode metadata kept for old `.rnr` compatibility.
@@ -62,6 +63,8 @@ struct ReproRecorderOptions {
 /// invoked from the UI thread (where ImGui context is active).
 class ReproRecorder {
 public:
+  /// Initialize replay recording with the requested session metadata and output options.
+  /// @param options Recorder configuration.
   explicit ReproRecorder(ReproRecorderOptions options);
 
   /// Call ONCE per frame, after `ImGui::NewFrame` and before any widget

@@ -104,6 +104,7 @@ struct RenderRequest {
   /// Drag state snapshotted with one worker render request.
   struct DragPreview {
     Entity entity = entt::null;  //!< Primary entity whose drag this request represents.
+
     /// Additional entities moving with `entity` under the same active drag transform.
     std::vector<Entity> extraEntities;
     /// Which interaction phase drove this preview. `Selection` means the
@@ -456,6 +457,7 @@ struct SampleThumbnailRenderResult {
   SampleThumbnailRenderOutcome outcome =
       SampleThumbnailRenderOutcome::RenderError;  //!< Terminal outcome of this preview attempt.
   svg::RendererBitmap bitmap;  //!< Captured bitmap; it may be empty even when outcome is Rendered.
+
   /// Self-contained SVG with font-preview text replaced by glyph paths.
   std::string outlinedSvg;  //!< Serialized sample with text converted to paths when outline
                             //!< generation succeeds.

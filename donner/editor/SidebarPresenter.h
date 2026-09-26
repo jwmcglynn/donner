@@ -154,10 +154,12 @@ public:
   bool renderInspector(EditorApp* liveApp, const ViewportState& viewport,
                        const IconTextureProvider& iconTextureProvider = {});
 
+  /// Return whether the captured inspector snapshot has a selection.
   [[nodiscard]] bool inspectorHasSelectionForTesting() const {
     return inspectorSnapshot_.hasSelection;
   }
 
+  /// Return whether a tree snapshot has been captured.
   [[nodiscard]] bool hasTreeSnapshotForTesting() const { return treeSnapshot_.has_value(); }
 
   /// Whether the tree node for @p entityId is expanded. Keyed by the element's
@@ -172,29 +174,35 @@ public:
     toggleTreeNodeExpanded(entityId);
   }
 
+  /// Return the borrowed title from the captured inspector snapshot.
   [[nodiscard]] std::string_view inspectorTitleForTesting() const {
     return inspectorSnapshot_.titleText;
   }
 
+  /// Return the borrowed authored-attribute rows from the inspector snapshot.
   [[nodiscard]] std::span<const std::pair<std::string, std::string>>
   inspectorXmlAttributesForTesting() const {
     return inspectorSnapshot_.xmlAttributes;
   }
 
+  /// Return the borrowed computed-style rows from the inspector snapshot.
   [[nodiscard]] std::span<const std::pair<std::string, std::string>>
   inspectorComputedStyleForTesting() const {
     return inspectorSnapshot_.computedStyle;
   }
 
+  /// Return optional color swatches aligned with the computed-style rows.
   [[nodiscard]] std::span<const std::optional<ImU32>> inspectorComputedStyleSwatchesForTesting()
       const {
     return inspectorSnapshot_.computedStyleSwatches;
   }
 
+  /// Return document-space bounds captured for the inspector selection.
   [[nodiscard]] const std::optional<Box2d>& inspectorBoundsForTesting() const {
     return inspectorSnapshot_.bounds;
   }
 
+  /// Return the transform captured for the inspector selection.
   [[nodiscard]] const std::optional<Transform2d>& inspectorTransformForTesting() const {
     return inspectorSnapshot_.transform;
   }
@@ -210,6 +218,9 @@ public:
   [[nodiscard]] std::optional<Box2d> strokeCapRectForTesting(std::size_t index) const {
     return index < strokeCapRects_.size() ? strokeCapRects_[index] : std::nullopt;
   }
+
+  /// Return a stroke-join control's screen rectangle, or no value for an absent index.
+  /// @param index Control index to inspect.
   [[nodiscard]] std::optional<Box2d> strokeJoinRectForTesting(std::size_t index) const {
     return index < strokeJoinRects_.size() ? strokeJoinRects_[index] : std::nullopt;
   }
@@ -221,6 +232,9 @@ public:
   [[nodiscard]] std::optional<Box2d> strokeDashPreviewRectForTesting() const {
     return strokeDashPreviewRect_;
   }
+
+  /// Return a dash-preset control's screen rectangle, or no value for an absent index.
+  /// @param index Control index to inspect.
   [[nodiscard]] std::optional<Box2d> strokeDashPresetRectForTesting(std::size_t index) const {
     return index < strokeDashPresetRects_.size() ? strokeDashPresetRects_[index] : std::nullopt;
   }
@@ -352,14 +366,17 @@ private:
     Transform2d currentTransform;      ///< Last transform queued via SetTransformCommand.
     std::optional<Box2d> startBounds;  ///< Document-space bounds at activation, if any.
     std::optional<DecomposedTransform> startDecomposed;  ///< Decomposition of `startTransform`.
+
     /// Stable locator so undo / source writeback survive document identity changes.
     std::optional<AttributeWritebackTarget> writebackTarget;
     /// Verbatim `transform=` source bytes at activation, restored on undo.
     std::optional<RcString> sourceTransformAttributeValue;
     double fieldValue = 0.0;  ///< Current value of the active scalar field.
+
     /// Raw matrix components being edited for `TransformField::Matrix`.
     std::array<double, 6> matrixValues{};
     bool changed = false;  ///< Whether any mutation was queued for this edit.
+
     /// Set when the edit deactivated on a frame without live app access;
     /// the commit is finalized on the next frame that has it.
     bool pendingCommit = false;

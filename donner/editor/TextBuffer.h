@@ -97,6 +97,9 @@ struct Glyph {
   bool isComment : 1;                           //!< Part of a single-line comment
   bool isMultiLineComment : 1;                  //!< Part of a multi-line comment
 
+  /// Create a character with its syntax-color index.
+  /// @param c Character stored in the glyph.
+  /// @param color Syntax-color index.
   Glyph(char c, ColorIndex color)
       : character(c), colorIndex(color), isComment(false), isMultiLineComment(false) {}
 };
@@ -110,6 +113,11 @@ struct Line : public std::vector<Glyph> {
   using Base = std::vector<Glyph>;
 
   // Convenience method to insert a glyph at an arbitrary iterator position
+
+  /// Insert a colored character before the supplied iterator.
+  /// @param it Insertion position in the line.
+  /// @param ch Character to insert.
+  /// @param color Syntax-color index.
   void emplace(iterator it, char ch, ColorIndex color) { Base::insert(it, Glyph(ch, color)); }
 };
 

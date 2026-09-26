@@ -214,7 +214,9 @@ struct SelectionChromeSnapshot {
     /// Bottom endpoint of the caret in document coordinates.
     Vector2d bottomDoc;
 
-    bool operator==(const TextCaret&) const = default;
+    /// Compare all members for value equality.
+    /// @param other Value to compare.
+    bool operator==(const TextCaret& other) const = default;
   };
   /// The active text-editing caret, or nullopt when no text session is open.
   std::optional<TextCaret> textCaretDoc;
@@ -247,7 +249,9 @@ struct SelectionChromeSnapshot {
     /// Bottom endpoint of the placement I-beam in document coordinates.
     Vector2d ibeamBottomDoc;
 
-    bool operator==(const TextBoxDragPreview&) const = default;
+    /// Compare all members for value equality.
+    /// @param other Value to compare.
+    bool operator==(const TextBoxDragPreview& other) const = default;
   };
   /// The active drag-to-create preview, or nullopt when the text tool is not
   /// dragging out a box.
@@ -260,7 +264,9 @@ struct SelectionChromeSnapshot {
     /// Baseline end (advance end of the line's last glyph).
     Vector2d endDoc;
 
-    bool operator==(const TextBaseline&) const = default;
+    /// Compare all members for value equality.
+    /// @param other Value to compare.
+    bool operator==(const TextBaseline& other) const = default;
   };
   /// Baseline underlay for selected text: one document-space segment per
   /// laid-out text line, drawn beneath the selection chrome so the span of

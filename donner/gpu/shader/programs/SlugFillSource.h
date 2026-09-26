@@ -1251,4 +1251,4 @@ fn fs_main_batched(in: VertexOutput) -> FragOutput {
   return out;
 }
 )wgsl"};
-}
+}  // namespace donner::gpu::shader::programs

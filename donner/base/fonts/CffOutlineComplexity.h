@@ -29,6 +29,7 @@ enum class CffOutlineValidationStatus : uint8_t {
 struct CffOutlineValidationResult {
   CffOutlineValidationStatus status =
       CffOutlineValidationStatus::Invalid;  //!< Overall CFF validation outcome.
+
   /// Structure and CharString work actually consumed, including failed validation.
   std::size_t work = 0;
   /// Work spent resolving legacy CFF1 endchar component graphs.

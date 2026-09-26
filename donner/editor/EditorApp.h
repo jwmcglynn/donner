@@ -106,6 +106,8 @@ public:
   /// Direct access to the wrapped `AsyncSVGDocument`. Used by the main loop
   /// for `flushFrame()` and `currentFrameVersion()`, and by tests.
   [[nodiscard]] AsyncSVGDocument& document() { return document_; }
+
+  /// Return the asynchronous document owned by the application.
   [[nodiscard]] const AsyncSVGDocument& document() const { return document_; }
 
   // ---------------------------------------------------------------------------
@@ -528,6 +530,8 @@ public:
   /// canonical way to *apply* undo entries because it routes them
   /// through the command queue so the mutation seam is preserved.
   [[nodiscard]] UndoTimeline& undoTimeline() { return undoTimeline_; }
+
+  /// Return the application's recorded undo and redo timeline.
   [[nodiscard]] const UndoTimeline& undoTimeline() const { return undoTimeline_; }
 
   /**

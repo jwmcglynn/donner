@@ -38,9 +38,11 @@ struct GeodeWgpuRoots {
   wgpu::Adapter adapter;    //!< Adapter the device came from; null when a host supplied none.
   wgpu::Device device;      //!< Device every runtime device over this root records against.
   wgpu::Queue queue;        //!< Default queue of \ref device.
+
   /// Whether releasing the handles above is Donner's job. False for an embedder's roots, which
   /// outlive every context built over them and belong to the embedder.
   bool owned = false;  //!< Whether this root owns the underlying WebGPU objects.
+
   /// Token the device-lost callback this process installed retains, or null when it installed
   /// none. Released with the handles.
   void* deviceLostCallbackToken = nullptr;
@@ -749,6 +751,7 @@ private:
 
     std::atomic<uint64_t> completedSerial{0};  //!< Highest serial with no unfinished predecessor.
     std::mutex mutex;  //!< Protects ranges and their completed high-water mark.
+
     /// Signalled with \ref mutex whenever a completion is delivered.
     std::condition_variable progressed;
     SmallVector<Pending, 4> pending;  //!< Includes queued ranges until their callbacks run.
@@ -878,9 +881,11 @@ private:
       std::atomic<int> references{2};  //!< This record and the pending callback.
       std::atomic<bool> done{false};   //!< Set once the callback has run.
       std::atomic<bool> ok{false};     //!< Whether the map succeeded.
+
       /// Set once the mapping handle is gone, which makes whichever side observes the finished
       /// map responsible for giving the buffer back.
       std::atomic<bool> abandoned{false};  //!< Whether the mapping handle has been released.
+
       /// Claimed once by whichever side unmaps, so the two never both unmap and never both
       /// leave it to the other.
       std::atomic<bool> unmapClaimed{false};
@@ -918,6 +923,7 @@ private:
     wgpu::Buffer buffer;               //!< Buffer being mapped; borrowed from its slot.
     uint64_t offsetBytes = 0;          //!< Byte offset of the mapped range.
     uint64_t byteCount = 0;            //!< Length of the mapped range.
+
     /// Future the map request returned, so a wait slice can wait on the completion event itself
     /// where the platform supports it rather than polling for it.
     wgpu::Future mapFuture{};
@@ -954,6 +960,7 @@ private:
   /// One presentation surface and the texture it has handed out this frame.
   struct SurfaceSlot {
     ScopedWgpuHandle<wgpu::Surface> surface;  //!< Owned surface, or null for a dead slot.
+
     /// Texture the surface handed out for the current frame; borrowed, since the surface owns it.
     wgpu::Texture acquired;
     /// Slot the runtime gave that texture, so abandoning can clear the same one.
