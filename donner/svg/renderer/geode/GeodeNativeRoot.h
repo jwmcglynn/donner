@@ -37,22 +37,30 @@ struct GeodeGpuRootCapabilities {
   bool isVulkan = false;
 };
 
-/// Retains a native GPU owner and the loss condition shared by logical contexts.
+/// Retains native backend capabilities, shared loss state, and the Vulkan physical owner.
 class GeodeGpuRoot {
 public:
+  /// Capture backend capabilities and shared root state for logical contexts.
+  /// @param capabilities Capabilities of the selected native backend.
+  /// @param lostState Non-null loss condition shared by logical devices.
+  /// @param vulkanRoot Shared Vulkan physical owner, omitted for Metal.
   GeodeGpuRoot(GeodeGpuRootCapabilities capabilities,
                std::shared_ptr<gpu::DeviceLostState> lostState,
                std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot = nullptr);
 
+  /// Return the selected native backend capabilities.
   const GeodeGpuRootCapabilities& capabilities() const UTILS_LIFETIME_BOUND {
     return capabilities_;
   }
+  /// Return the shared device-loss condition.
   const std::shared_ptr<gpu::DeviceLostState>& lostState() const UTILS_LIFETIME_BOUND {
     return lostState_;
   }
+  /// Return the retained Vulkan owner; null for a Metal root.
   const std::shared_ptr<gpu::vulkan::VulkanSharedRoot>& vulkanRoot() const UTILS_LIFETIME_BOUND {
     return vulkanRoot_;
   }
+  /// Return whether the selected native backend has the required root state.
   bool hasBackendDevice() const;
 
 private:
