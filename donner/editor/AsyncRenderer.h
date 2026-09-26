@@ -900,6 +900,11 @@ public:
 
 private:
   void workerLoop();
+  /// Poll an idle GPU context, then wait for work with a short completion timer only while needed.
+  /// Returns with \p lock held so the worker can consume its state without a race.
+  bool waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock);
+  /// Complete a cancellation dequeued before rendering and notify its waiting owner.
+  bool finishCancelledBeforeRender(std::unique_lock<std::mutex>& lock);
   bool prepareSampleThumbnailRendererForRequest(std::unique_ptr<svg::RendererInterface>& renderer,
                                                 svg::RendererInterface*& rendererRoot,
                                                 svg::RendererInterface* requestedRoot);

@@ -1363,6 +1363,21 @@ std::shared_ptr<geode::GeodeDevice> UiGeodeDevice(gui::EditorWindow& window) {
 #endif
 }
 
+void ConfigureNativeGpuIdleMaintenance(AsyncRenderer& worker,
+                                       std::shared_ptr<geode::GeodeDevice> context) {
+#if defined(DONNER_EDITOR_WGPU) && !defined(__EMSCRIPTEN__)
+  if (!context) {
+    return;
+  }
+  worker.setIdleMaintenance([context] { context->pollIdle(); },
+                            [context] { return context->hasIdleWork(); });
+  context->setIdleWakeCallback([target = &worker] { target->requestIdleMaintenance(); });
+#else
+  (void)worker;
+  (void)context;
+#endif
+}
+
 /// Rasterize every embedded UI icon in one batched pass before the first frame.
 ///
 /// Each icon used to be rasterized lazily at its first draw, and each
@@ -1594,14 +1609,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   gui::EditorWindow* const wakeWindow = &window_;
   renderCoordinator_.asyncRenderer().setWakeCallback(
       [wakeWindow]() { wakeWindow->wakeEventLoop(); });
-#if defined(DONNER_EDITOR_WGPU) && !defined(__EMSCRIPTEN__)
-  if (const std::shared_ptr<geode::GeodeDevice> context = window_.geodeDevice()) {
-    AsyncRenderer& worker = renderCoordinator_.asyncRenderer();
-    worker.setIdleMaintenance([context] { context->pollIdle(); },
-                              [context] { return context->hasIdleWork(); });
-    context->setIdleWakeCallback([&worker] { worker.requestIdleMaintenance(); });
-  }
-#endif
+  ConfigureNativeGpuIdleMaintenance(renderCoordinator_.asyncRenderer(), window_.geodeDevice());
 #ifndef __EMSCRIPTEN__
   if (options_.reproOutputPath.has_value()) {
     repro::ReproRecorderOptions recorderOptions;
