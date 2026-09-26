@@ -37,6 +37,11 @@ struct RenderCoordinatorTestAccess {
         std::chrono::steady_clock::now() - std::chrono::milliseconds(200);
   }
 
+  static void makeRasterViewportSettled(RenderCoordinator& coordinator) {
+    coordinator.pendingRasterViewportSince_ =
+        std::chrono::steady_clock::now() - std::chrono::milliseconds(200);
+  }
+
   /// Replaces the steady clock that paces nothing-to-present retries with one the test advances.
   static void useFakeRetryClock(RenderCoordinator& coordinator) {
     fakeRetryNow = std::chrono::steady_clock::time_point{} + std::chrono::hours(1);

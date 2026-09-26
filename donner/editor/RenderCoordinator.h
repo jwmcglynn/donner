@@ -426,10 +426,6 @@ public:
       EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
       GlTextureCache* textures = nullptr, bool supersedeInFlight = false,
       SelectionChromeDetail directSurfaceSelectionDetail = SelectionChromeDetail::Full);
-  /// Record that a document mutation requires a current-version presentation handoff.
-  ///
-  /// @param flushResult Metadata from the just-flushed editor command batch.
-  void invalidatePresentationAfterDocumentFlush(const AsyncSVGDocument::FlushResult& flushResult);
   /// Record document-flush invalidation that depends on the live selected element.
   ///
   /// @param app Editor application state containing the live selection.
@@ -656,9 +652,10 @@ private:
   /// transforms already-cached composited textures during live zoom/pan.
   std::optional<EditorRasterViewport> pendingRasterViewport_;
   std::chrono::steady_clock::time_point pendingRasterViewportSince_{};
-  /// True after a structural mutation whose existing overview/full-document cache may contain
-  /// deleted pixels. The old presentation remains visible until the replacement render lands.
-  bool pendingDocumentMutationOverviewRefresh_ = false;
+  /// Document version represented by the published full-document overview.
+  std::uint64_t overviewDocVersion_ = 0;
+  /// A refreshed overview waiting for matching detailed tiles before either becomes visible.
+  std::optional<RenderResult> pendingOverviewResult_;
   /// Renderer-only state changed and must be represented by the next accepted worker frame.
   bool pendingPresentationRefresh_ = false;
   /// Count of presentation refreshes requested, carried by each posted request's identity.
