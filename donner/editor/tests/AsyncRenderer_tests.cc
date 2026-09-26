@@ -6332,6 +6332,66 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
   }
 }
 
+TEST(RenderCoordinatorTest, PresentationRefreshRejectsPriorOverviewAndDetailedResults) {
+  for (std::string_view phase : {"staged", "pending_overview", "pending_detail"}) {
+    SCOPED_TRACE(phase);
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+        <rect id="target" x="20" y="20" width="60" height="60" fill="white"/>
+      </svg>
+    )svg"));
+    const auto target = app.document().document().querySelector("#target");
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    app.setSelection(*target);
+    ViewportState viewport;
+    viewport.paneSize = Vector2d(200.0, 120.0);
+    viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+    viewport.devicePixelRatio = 2.0;
+    viewport.resetTo100Percent();
+    viewport.zoomAround(32.0, viewport.paneCenter());
+    SelectTool selectTool;
+    GlTextureCache textures;
+    RenderCoordinator coordinator;
+    if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+      GTEST_SKIP() << "Requires native texture presentation";
+    }
+    const auto drain = [&]() {
+      return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                       [&] { return !coordinator.asyncRenderer().isBusy(); },
+                       std::chrono::steady_clock::now() + std::chrono::seconds(5));
+    };
+    const auto render = [&]() {
+      return coordinator.maybeRequestRender(app, selectTool, viewport, &textures) && drain();
+    };
+    ASSERT_TRUE(render());
+    RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+    ASSERT_TRUE(render());
+    const auto oldVersion = coordinator.displayedDocVersion();
+    ASSERT_THAT(textures.overviewTiles(), testing::Not(testing::IsEmpty()));
+    const auto oldOverviewGeneration = textures.overviewTiles().front().generation;
+    ASSERT_TRUE(app.setStylePropertyOnSelection("fill", "gold"));
+    ASSERT_TRUE(app.flushFrame());
+    coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
+    if (phase != "pending_overview") {
+      ASSERT_TRUE(render());
+    }
+    if (phase != "staged") {
+      ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+    }
+    coordinator.requestPresentationRefresh();
+    ASSERT_TRUE(drain());
+    EXPECT_EQ(coordinator.displayedDocVersion(), oldVersion);
+    EXPECT_EQ(textures.overviewTiles().front().generation, oldOverviewGeneration);
+    ASSERT_TRUE(render());
+    EXPECT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly)
+        << "The refreshed renderer must regenerate the overview, including after an old result "
+           "lands";
+    ASSERT_TRUE(render());
+    EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
+  }
+}
+
 TEST(RenderCoordinatorTest, ZoomedPaintUsesCompletedOverviewWhenDetailedRenderFails) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
