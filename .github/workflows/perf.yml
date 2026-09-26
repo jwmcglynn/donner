@@ -122,10 +122,11 @@ jobs:
           TARGET_TAG: ${{ matrix.target_tag }}
         run: |
           # -c opt: budgets assume production-speed codegen, not fastbuild's default.
+          # Successful test output carries the measured nanoseconds per draw.
           bazelisk test \
             --config=ci \
             -c opt \
-            --test_output=errors \
+            --test_output=all \
             --build_tag_filters="$TARGET_TAG" \
             --test_tag_filters="$TARGET_TAG" \
             ${{ steps.discover.outputs.targets }}
