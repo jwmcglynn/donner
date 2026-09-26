@@ -400,6 +400,9 @@ donner_cc_library(
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
+    }) + select({
+        "//donner/svg/renderer/geode:wgpu_reference_backend_enabled": ["DONNER_GEODE_WGPU_REFERENCE=1"],
+        "//conditions:default": [],
     }),
     # Gate behind the same enable_geode build flag as the Geode device and
     # shader targets. The ordinary native renderer excludes wgpu-native.
@@ -435,7 +438,7 @@ donner_cc_library(
     ] + select({
         "@platforms//cpu:wasm32": [],
         "//donner/svg/renderer/geode:wgpu_reference_backend_enabled": ["//third_party/webgpu-cpp:webgpu_cpp"],
-        "//conditions:default": ["//third_party/webgpu-cpp:webgpu_cpp_headers"],
+        "//conditions:default": [],
     }) + select({
         ":text_enabled": [
             ":placed_text_geometry",
@@ -449,6 +452,10 @@ donner_cc_library(
 configured_dependency_audit_test(
     name = "renderer_geode_no_wgpu_archive_audit_impl",
     forbidden = [
+        "//third_party/webgpu-cpp:webgpu_cpp",
+        "//third_party/webgpu-cpp:webgpu_cpp_compat_headers",
+        "//third_party/webgpu-cpp:webgpu_cpp_headers",
+        "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
         "@wgpu_native_linux_aarch64//:wgpu_native",
         "@wgpu_native_linux_x86_64//:wgpu_native",
         "@wgpu_native_macos_aarch64//:wgpu_native",

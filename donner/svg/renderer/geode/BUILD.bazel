@@ -433,11 +433,16 @@ donner_cc_library(
         "GeodePipeline.h",
     ] + select({
         ":browser_backend_enabled": ["GeodeBrowserRoot.h"],
-        "//conditions:default": [
+        ":wgpu_reference_backend_enabled": [
             "GeodeCallbackState.h",
             "GeodeEmbed.h",
             "GeodeWgpuAdapterDevice.h",
         ],
+        "//conditions:default": ["GeodeNativeRoot.h"],
+    }),
+    defines = select({
+        ":wgpu_reference_backend_enabled": ["DONNER_GEODE_WGPU_REFERENCE=1"],
+        "//conditions:default": [],
     }),
     # Linux's native Vulkan device needs dl and pthread; the Linux reference
     # configuration also uses these when it links wgpu-native.
@@ -450,7 +455,6 @@ donner_cc_library(
     }),
     local_defines = select({
         ":browser_backend_enabled": ["DONNER_GEODE_BROWSER_BACKEND=1"],
-        ":wgpu_reference_backend_enabled": ["DONNER_GEODE_WGPU_REFERENCE=1"],
         "//conditions:default": [],
     }),
     target_compatible_with = _GEODE_ONLY,
@@ -490,10 +494,7 @@ donner_cc_library(
                    ":geode_wgpu_util",
                    "//third_party/webgpu-cpp:webgpu_cpp",
                ],
-               "//conditions:default": [
-                   ":geode_wgpu_util",
-                   "//third_party/webgpu-cpp:webgpu_cpp_headers",
-               ],
+               "//conditions:default": [],
            }) + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) +
            shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES) +
            native_shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES),
@@ -503,6 +504,10 @@ donner_cc_library(
 configured_dependency_audit_test(
     name = "geode_native_no_wgpu_archive_audit_impl",
     forbidden = [
+        "//third_party/webgpu-cpp:webgpu_cpp",
+        "//third_party/webgpu-cpp:webgpu_cpp_compat_headers",
+        "//third_party/webgpu-cpp:webgpu_cpp_headers",
+        "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
         "@wgpu_native_linux_aarch64//:wgpu_native",
         "@wgpu_native_linux_x86_64//:wgpu_native",
         "@wgpu_native_macos_aarch64//:wgpu_native",

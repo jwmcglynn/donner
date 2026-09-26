@@ -13,7 +13,7 @@
 #include <memory>
 #include <optional>
 #include <vector>
-#ifndef __EMSCRIPTEN__
+#ifdef DONNER_GEODE_WGPU_REFERENCE
 #include <webgpu/webgpu.hpp>
 #endif
 
@@ -75,7 +75,7 @@ public:
       std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
       gpu::TextureFormat format, AlphaType alphaType);
 
-#ifndef __EMSCRIPTEN__
+#ifdef DONNER_GEODE_WGPU_REFERENCE
   /// Compatibility entry point for native hosts still holding a WebGPU texture format.
   static RendererGeodeTextureSnapshot AdoptRuntimeTexture(
       std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,

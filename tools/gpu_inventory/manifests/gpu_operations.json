@@ -47,28 +47,12 @@
         "wgpuReadbackStats"
       ]
     },
-    "donner/editor/gui/EditorWgpuSurface.h": {
-      "wgpuCppTokens": [
-        "Instance",
-        "Surface"
-      ]
-    },
-    "donner/editor/gui/EditorWgpuSurface_linux.cc": {
-      "wgpuCppTokens": [
-        "Default",
-        "Instance",
-        "Surface",
-        "SurfaceDescriptor",
-        "SurfaceSourceXlibWindow"
-      ]
-    },
     "donner/editor/gui/EditorWindow.cc": {
       "operations": [
         "configure",
         "createBuffer",
         "createCommandEncoder",
         "createTexture",
-        "getCapabilities",
         "present",
         "release",
         "submit"
@@ -78,18 +62,6 @@
         "wgpuReadbackStats",
         "wgpuState_",
         "wgpuUnderlayRenderCallback_"
-      ],
-      "wgpuCTypes": [
-        "WGPUSurface",
-        "WGPUTextureFormat",
-        "WGPUTextureFormat_BGRA8Unorm",
-        "WGPUTextureFormat_RGBA8Unorm"
-      ],
-      "wgpuCppTokens": [
-        "Adapter",
-        "Instance",
-        "Surface",
-        "SurfaceCapabilities"
       ]
     },
     "donner/editor/gui/EditorWindow.h": {
@@ -97,11 +69,6 @@
         "wgpuDirectRenderCallback_",
         "wgpuState_",
         "wgpuUnderlayRenderCallback_"
-      ],
-      "wgpuCppTokens": [
-        "Adapter",
-        "Instance",
-        "Surface"
       ]
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
@@ -117,20 +84,6 @@
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
-      ]
-    },
-    "donner/editor/tests/EditorWindow_tests.cc": {
-      "operations": [
-        "configure",
-        "createBuffer",
-        "createTexture",
-        "draw",
-        "present"
-      ],
-      "wgpuCppTokens": [
-        "Adapter",
-        "Instance",
-        "Surface"
       ]
     },
     "donner/editor/tests/FrameMissTelemetry_tests.cc": {
@@ -429,26 +382,6 @@
     "donner/svg/renderer/geode/GeodeFilterEngine.h": {
       "wgpuCppTokens": [
         "Device"
-      ]
-    },
-    "donner/svg/renderer/geode/GeodeNativeRoot.cc": {
-      "wgpuCTypes": [
-        "WGPUAdapter",
-        "WGPUDevice",
-        "WGPUInstance",
-        "WGPUQueue",
-        "WGPUTextureFormat",
-        "WGPUTextureFormat_BGRA8Unorm",
-        "WGPUTextureFormat_R8Unorm",
-        "WGPUTextureFormat_RGBA32Float",
-        "WGPUTextureFormat_RGBA8Unorm"
-      ],
-      "wgpuCppTokens": [
-        "Adapter",
-        "Device",
-        "Instance",
-        "Queue",
-        "TextureFormat"
       ]
     },
     "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.cc": {

@@ -1,3 +1,5 @@
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -13,7 +15,6 @@
 #include "donner/base/StringUtils.h"
 #include "donner/base/Utils.h"
 #include "donner/gpu/GpuLimits.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #if defined(__APPLE__)
 #include "donner/gpu/metal/MetalDevice.h"
 #endif
@@ -70,9 +71,7 @@ gpu::Result<GpuBackendKind> ParseBackendRequest(std::string_view request) {
 gpu::Result<ResolvedBackend> ResolveBackend(const GpuRootSelection& options,
                                             std::string_view request,
                                             std::optional<GpuBackendKind> buildDefault) {
-  ResolvedBackend resolved{options.compatibleSurface ? GpuBackendKind::TransitionalWgpu
-                                                     : PlatformDefaultGpuBackendKind(),
-                           BackendRequestSource::Default};
+  ResolvedBackend resolved{PlatformDefaultGpuBackendKind(), BackendRequestSource::Default};
   if (options.backend.has_value()) {
     resolved = {*options.backend, BackendRequestSource::Caller};
   } else if (!request.empty()) {
@@ -81,7 +80,7 @@ gpu::Result<ResolvedBackend> ResolveBackend(const GpuRootSelection& options,
       return std::move(requested).error();
     }
     resolved = {requested.result(), BackendRequestSource::Environment};
-  } else if (buildDefault.has_value() && !options.compatibleSurface) {
+  } else if (buildDefault.has_value()) {
     resolved = {*buildDefault, BackendRequestSource::BuildSetting};
   }
   if (options.requireVulkanPresentation && resolved.kind != GpuBackendKind::NativeVulkan) {
@@ -135,10 +134,7 @@ void ReportSelectedBackendOnce(GpuBackendKind kind, BackendRequestSource source,
 std::shared_ptr<GeodeGpuRoot> SelectNativeMetalRoot(
     const GpuRootSelection& options, std::shared_ptr<gpu::DeviceLostState> lostState) {
 #if defined(__APPLE__)
-  if (options.compatibleSurface) {
-    std::fprintf(stderr, "[Geode/metal] A WebGPU surface cannot use native Metal.\n");
-    return nullptr;
-  }
+  (void)options;
   const auto metal = gpu::metal::MetalDevice::QuerySystemCapabilities();
   if (!metal.has_value()) {
     std::fprintf(stderr, "[Geode/metal] No Metal device available.\n");
@@ -147,7 +143,7 @@ std::shared_ptr<GeodeGpuRoot> SelectNativeMetalRoot(
   GeodeGpuRootCapabilities capabilities;
   capabilities.backend = GpuBackendKind::NativeMetal;
   capabilities.maxTextureDimension2D = metal->maxTextureDimension2D;
-  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState));
+  return std::make_shared<GeodeGpuRoot>(capabilities, std::move(lostState));
 #else
   (void)options;
   (void)lostState;
@@ -159,10 +155,6 @@ std::shared_ptr<GeodeGpuRoot> SelectNativeMetalRoot(
 std::shared_ptr<GeodeGpuRoot> SelectNativeVulkanRoot(
     const GpuRootSelection& options, std::shared_ptr<gpu::DeviceLostState> lostState) {
 #if defined(__linux__)
-  if (options.compatibleSurface) {
-    std::fprintf(stderr, "[Geode/vulkan] A WebGPU surface cannot use native Vulkan.\n");
-    return nullptr;
-  }
   if (!options.requireVulkanPresentation && !options.requiredVulkanInstanceExtensions.empty()) {
     std::fprintf(stderr, "[Geode/vulkan] Surface extensions need a presentation root.\n");
     return nullptr;
@@ -187,28 +179,13 @@ std::shared_ptr<GeodeGpuRoot> SelectNativeVulkanRoot(
 
 }  // namespace
 
-GeodeGpuRoot::GeodeGpuRoot(GeodeWgpuRoots handles, GeodeGpuRootCapabilities capabilities,
+GeodeGpuRoot::GeodeGpuRoot(GeodeGpuRootCapabilities capabilities,
                            std::shared_ptr<gpu::DeviceLostState> lostState,
-                           std::shared_ptr<const void> backendHold,
                            std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot)
-    : handles_(std::move(handles)),
-      capabilities_(capabilities),
-      lostState_(lostState ? std::move(lostState) : std::make_shared<gpu::DeviceLostState>()),
-      backendHold_(std::move(backendHold)),
+    : capabilities_(capabilities),
+      lostState_(std::move(lostState)),
       vulkanRoot_(std::move(vulkanRoot)) {
-  UTILS_RELEASE_ASSERT_MSG(!handles_.owned, "Native Geode cannot own WebGPU handles");
-}
-
-GeodeGpuRoot::~GeodeGpuRoot() = default;
-
-bool GeodeGpuRoot::names(const wgpu::Instance& instance, const wgpu::Adapter& adapter,
-                         const wgpu::Device& device, const wgpu::Queue& queue) const {
-  return (!instance ||
-          static_cast<WGPUInstance>(instance) == static_cast<WGPUInstance>(handles_.instance)) &&
-         (!adapter ||
-          static_cast<WGPUAdapter>(adapter) == static_cast<WGPUAdapter>(handles_.adapter)) &&
-         (!device || static_cast<WGPUDevice>(device) == static_cast<WGPUDevice>(handles_.device)) &&
-         (!queue || static_cast<WGPUQueue>(queue) == static_cast<WGPUQueue>(handles_.queue));
+  UTILS_RELEASE_ASSERT(lostState_ != nullptr);
 }
 
 bool GeodeGpuRoot::hasBackendDevice() const {
@@ -284,12 +261,6 @@ std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
   return root;
 }
 
-std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots&,
-                                           std::shared_ptr<gpu::DeviceLostState>) {
-  std::fprintf(stderr, "[Geode] External WebGPU roots are unavailable in this native build.\n");
-  return nullptr;
-}
-
 std::shared_ptr<GeodeGpuRoot> AdoptNativeVulkanRoot(
     std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeRoot,
     std::shared_ptr<gpu::DeviceLostState> lostState) {
@@ -301,8 +272,7 @@ std::shared_ptr<GeodeGpuRoot> AdoptNativeVulkanRoot(
   capabilities.backend = GpuBackendKind::NativeVulkan;
   capabilities.maxTextureDimension2D = nativeRoot->maxTextureDimension2D();
   capabilities.isVulkan = true;
-  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState),
-                                        nullptr, std::move(nativeRoot));
+  return std::make_shared<GeodeGpuRoot>(capabilities, std::move(lostState), std::move(nativeRoot));
 #else
   (void)nativeRoot;
   (void)lostState;
@@ -332,29 +302,6 @@ std::size_t OutstandingSelectionInstances() {
 }
 std::size_t OutstandingDeviceLostCallbacks() {
   return 0;
-}
-
-wgpu::TextureFormat WgpuTextureFormatFrom(gpu::TextureFormat format) {
-  switch (format) {
-    case gpu::TextureFormat::RGBA8Unorm: return wgpu::TextureFormat::RGBA8Unorm;
-    case gpu::TextureFormat::BGRA8Unorm: return wgpu::TextureFormat::BGRA8Unorm;
-    case gpu::TextureFormat::R8Unorm: return wgpu::TextureFormat::R8Unorm;
-    case gpu::TextureFormat::RGBA32Float: return wgpu::TextureFormat::RGBA32Float;
-  }
-  UTILS_RELEASE_ASSERT_MSG(false, "validated TextureFormat out of range");
-  return wgpu::TextureFormat::RGBA8Unorm;
-}
-
-gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format) {
-  switch (static_cast<WGPUTextureFormat>(format)) {
-    case WGPUTextureFormat_RGBA8Unorm: return gpu::TextureFormat::RGBA8Unorm;
-    case WGPUTextureFormat_BGRA8Unorm: return gpu::TextureFormat::BGRA8Unorm;
-    case WGPUTextureFormat_R8Unorm: return gpu::TextureFormat::R8Unorm;
-    case WGPUTextureFormat_RGBA32Float: return gpu::TextureFormat::RGBA32Float;
-    default: break;
-  }
-  UTILS_RELEASE_ASSERT_MSG(false, "WebGPU texture format is unsupported by Donner GPU");
-  return gpu::TextureFormat::RGBA8Unorm;
 }
 
 }  // namespace donner::geode

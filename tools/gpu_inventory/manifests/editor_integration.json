@@ -74,28 +74,12 @@
         "wgpuReadbackStats"
       ]
     },
-    "donner/editor/gui/EditorWgpuSurface.h": {
-      "wgpuCppTokens": [
-        "Instance",
-        "Surface"
-      ]
-    },
-    "donner/editor/gui/EditorWgpuSurface_linux.cc": {
-      "wgpuCppTokens": [
-        "Default",
-        "Instance",
-        "Surface",
-        "SurfaceDescriptor",
-        "SurfaceSourceXlibWindow"
-      ]
-    },
     "donner/editor/gui/EditorWindow.cc": {
       "operations": [
         "configure",
         "createBuffer",
         "createCommandEncoder",
         "createTexture",
-        "getCapabilities",
         "present",
         "release",
         "submit"
@@ -106,18 +90,6 @@
         "wgpuReadbackStats",
         "wgpuState_",
         "wgpuUnderlayRenderCallback_"
-      ],
-      "wgpuCTypes": [
-        "WGPUSurface",
-        "WGPUTextureFormat",
-        "WGPUTextureFormat_BGRA8Unorm",
-        "WGPUTextureFormat_RGBA8Unorm"
-      ],
-      "wgpuCppTokens": [
-        "Adapter",
-        "Instance",
-        "Surface",
-        "SurfaceCapabilities"
       ]
     },
     "donner/editor/gui/EditorWindow.h": {
@@ -126,11 +98,6 @@
         "wgpuDirectRenderCallback_",
         "wgpuState_",
         "wgpuUnderlayRenderCallback_"
-      ],
-      "wgpuCppTokens": [
-        "Adapter",
-        "Instance",
-        "Surface"
       ]
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
@@ -153,19 +120,7 @@
       "usesEditorWgpuDefine": true
     },
     "donner/editor/tests/EditorWindow_tests.cc": {
-      "operations": [
-        "configure",
-        "createBuffer",
-        "createTexture",
-        "draw",
-        "present"
-      ],
-      "usesEditorWgpuDefine": true,
-      "wgpuCppTokens": [
-        "Adapter",
-        "Instance",
-        "Surface"
-      ]
+      "usesEditorWgpuDefine": true
     },
     "donner/editor/tests/FrameMissTelemetry_tests.cc": {
       "wgpuCFunctions": [

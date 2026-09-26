@@ -1,7 +1,7 @@
 /// @file
 /// macOS (Cocoa/Metal) implementation of `AttachMetalLayerToGlfwWindow`.
 
-#include "donner/editor/gui/EditorWgpuSurface.h"
+#include "donner/editor/gui/EditorMetalLayer.h"
 
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/CAMetalLayer.h>

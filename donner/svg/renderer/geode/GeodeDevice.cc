@@ -19,9 +19,11 @@
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #ifdef DONNER_GEODE_BROWSER_BACKEND
 #include "donner/svg/renderer/geode/GeodeBrowserRoot.h"
-#else
+#elif defined(DONNER_GEODE_WGPU_REFERENCE)
 #include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#else
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #endif
 
 namespace donner::geode {
@@ -233,7 +235,7 @@ GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevic
   UTILS_RELEASE_ASSERT(
       (transitionalAdapter != nullptr) ==
       (physicalDevice_->root().capabilities().backend == GpuBackendKind::TransitionalWgpu));
-#ifndef DONNER_GEODE_BROWSER_BACKEND
+#ifdef DONNER_GEODE_WGPU_REFERENCE
   UTILS_RELEASE_ASSERT(transitionalAdapter == nullptr ||
                        (static_cast<gpu::Device*>(transitionalAdapter) == &runtimeDevice &&
                         &transitionalAdapter->root() == &physicalDevice_->root()));
@@ -265,7 +267,12 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateLogicalContext(
     return nullptr;
   }
   gpu::Device& borrowed = *runtimeDevice.device;
-  GeodeWgpuAdapterDevice* const transitionalAdapter = runtimeDevice.transitionalAdapter;
+  GeodeWgpuAdapterDevice* const transitionalAdapter =
+#if defined(DONNER_GEODE_WGPU_REFERENCE) || defined(DONNER_GEODE_BROWSER_BACKEND)
+      runtimeDevice.transitionalAdapter;
+#else
+      nullptr;
+#endif
   return std::unique_ptr<GeodeDevice>(new GeodeDevice(
       std::move(physicalDevice), borrowed, transitionalAdapter, std::move(runtimeDevice.device)));
 }
@@ -627,7 +634,12 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateOverSelectedRoot(std::shared_ptr
     return nullptr;
   }
   gpu::Device& borrowed = *rootDevice.device;
-  GeodeWgpuAdapterDevice* const transitionalAdapter = rootDevice.transitionalAdapter;
+  GeodeWgpuAdapterDevice* const transitionalAdapter =
+#if defined(DONNER_GEODE_WGPU_REFERENCE) || defined(DONNER_GEODE_BROWSER_BACKEND)
+      rootDevice.transitionalAdapter;
+#else
+      nullptr;
+#endif
   std::shared_ptr<GeodePhysicalDeviceOwner> owner =
       GeodePhysicalDeviceOwner::Create(std::move(root), std::move(rootDevice));
   if (owner == nullptr) {
@@ -804,6 +816,7 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
 }
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedConfig& config) {
+#ifdef DONNER_GEODE_WGPU_REFERENCE
 #ifdef DONNER_GEODE_BROWSER_BACKEND
   (void)config;
   std::fprintf(stderr, "[Geode/browser] External WebGPU roots are not supported\n");
@@ -840,6 +853,11 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
     return nullptr;
   }
   return CreateOverSelectedRoot(std::move(root), GpuTextureFormatFromWgpu(config.textureFormat));
+#endif
+#else
+  (void)config;
+  std::fprintf(stderr, "[Geode] External WebGPU roots are unavailable in this native build.\n");
+  return nullptr;
 #endif
 }
 

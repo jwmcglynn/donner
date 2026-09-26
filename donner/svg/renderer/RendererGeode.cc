@@ -19,7 +19,7 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#ifndef __EMSCRIPTEN__
+#ifdef DONNER_GEODE_WGPU_REFERENCE
 #include <webgpu/webgpu.hpp>
 #endif
 
@@ -58,7 +58,7 @@
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeStrokeTolerance.h"
-#ifndef __EMSCRIPTEN__
+#ifdef DONNER_GEODE_WGPU_REFERENCE
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
 #include "donner/svg/resources/ImageResource.h"
@@ -73,7 +73,7 @@
 namespace donner::svg {
 
 namespace {
-#ifndef __EMSCRIPTEN__
+#ifdef DONNER_GEODE_WGPU_REFERENCE
 std::optional<gpu::TextureFormat> SnapshotRuntimeFormat(wgpu::TextureFormat format) {
   if (format == wgpu::TextureFormat::RGBA8Unorm) {
     return gpu::TextureFormat::RGBA8Unorm;
@@ -167,7 +167,7 @@ RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
   return result;
 }
 
-#ifndef __EMSCRIPTEN__
+#ifdef DONNER_GEODE_WGPU_REFERENCE
 RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
     std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
     wgpu::TextureFormat format, AlphaType alphaType) {
