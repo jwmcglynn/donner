@@ -106,8 +106,8 @@ enum class BuiltinValue : uint8_t {
 
 /// A scalar/vector leaf in an entry-point interface.
 struct InterfaceDecoration {
-  BuiltinValue builtin = BuiltinValue::None;
-  uint32_t location = UINT32_MAX;
+  BuiltinValue builtin = BuiltinValue::None;  //!< Entry-point builtin, or None when absent.
+  uint32_t location = UINT32_MAX;             //!< User location, or UINT32_MAX when absent.
   bool flat = false;  //!< Explicit flat interpolation for an interstage value.
 
   /// Returns whether this value is decorated as shader IO.
@@ -261,7 +261,8 @@ enum class ExpressionKind : uint8_t {
 inline constexpr uint8_t kMaxExpressionOperands = 8;
 
 /**
- * Builds an expression operand array, filling every slot past \p ids with \ref kInvalidArenaId.
+ * Builds an expression operand array, filling every slot past \p ids with \ref
+ * donner::gpu::shader::wgsl::kInvalidArenaId.
  *
  * Zero is a valid arena identifier, so an unset slot left value-initialized would alias
  * expression zero. Every operand array is built here so no call site has to spell the sentinel
@@ -340,9 +341,9 @@ enum class Stage : uint8_t {
 
 /// A flattened scalar/vector input or output of one entry point.
 struct InterfaceVariable {
-  NameRef name;
-  Type type;
-  InterfaceDecoration decoration;
+  NameRef name;                      //!< Module-owned input or output name.
+  Type type;                         //!< Resolved input or output type.
+  InterfaceDecoration decoration;    //!< Builtin, location, and interpolation metadata.
   ArenaId symbol = kInvalidArenaId;  //!< Parameter symbol, or invalid for a return value.
   ArenaId member = kInvalidArenaId;  //!< Structure member, or invalid for a direct value.
 };
@@ -360,29 +361,31 @@ struct Function {
   InterfaceDecoration returnInterface;                //!< Direct return-value decoration.
   uint32_t resourceMask = 0;    //!< Resources statically accessed, including called helpers.
   bool hasLocalArrays = false;  //!< Requires function-local array storage or temporaries.
-  uint16_t firstInput = 0;
-  uint16_t inputCount = 0;
-  uint16_t firstOutput = 0;
-  uint16_t outputCount = 0;
+  uint16_t firstInput = 0;      //!< First flattened entry input in the interface-variable arena.
+  uint16_t inputCount = 0;      //!< Number of flattened entry inputs.
+  uint16_t firstOutput = 0;     //!< First flattened entry output in the interface-variable arena.
+  uint16_t outputCount = 0;     //!< Number of flattened entry outputs.
 };
 
 /// Fixed capacities for one frontend module.
 struct ModuleLimits {
-  static constexpr uint32_t kMaxSourceBytes = 65536;
-  static constexpr uint16_t kMaxTokens = 16384;
-  static constexpr uint16_t kMaxIdentifierBytes = 16384;
-  static constexpr uint16_t kMaxStructs = 16;
-  static constexpr uint16_t kMaxStructMembers = 256;
-  static constexpr uint16_t kMaxArrayElements = 8192;
-  static constexpr uint32_t kMaxTypeBytes = 1048576;
-  static constexpr uint16_t kMaxBindings = 16;
-  static constexpr uint16_t kMaxSymbols = 1024;
-  static constexpr uint16_t kMaxExpressions = 4096;
-  static constexpr uint16_t kMaxStatements = 1024;
-  static constexpr uint16_t kMaxFunctions = 64;
-  static constexpr uint16_t kMaxNesting = 16;
-  static constexpr uint16_t kMaxLoopDepth = 8;
-  static constexpr uint16_t kMaxInterfaceVariables = 64;
+  static constexpr uint32_t kMaxSourceBytes = 65536;  //!< Maximum WGSL source bytes in one module.
+  static constexpr uint16_t kMaxTokens = 16384;       //!< Maximum lexer tokens in one module.
+  static constexpr uint16_t kMaxIdentifierBytes =
+      16384;                                   //!< Maximum bytes of retained identifier spellings.
+  static constexpr uint16_t kMaxStructs = 16;  //!< Maximum structure declarations.
+  static constexpr uint16_t kMaxStructMembers = 256;   //!< Maximum total structure members.
+  static constexpr uint16_t kMaxArrayElements = 8192;  //!< Maximum elements in one fixed array.
+  static constexpr uint32_t kMaxTypeBytes = 1048576;   //!< Maximum byte size of a supported type.
+  static constexpr uint16_t kMaxBindings = 16;         //!< Maximum resource bindings.
+  static constexpr uint16_t kMaxSymbols = 1024;        //!< Maximum resolved symbols.
+  static constexpr uint16_t kMaxExpressions = 4096;    //!< Maximum expression nodes.
+  static constexpr uint16_t kMaxStatements = 1024;     //!< Maximum statement nodes.
+  static constexpr uint16_t kMaxFunctions = 64;        //!< Maximum function declarations.
+  static constexpr uint16_t kMaxNesting = 16;          //!< Maximum parser nesting depth.
+  static constexpr uint16_t kMaxLoopDepth = 8;         //!< Maximum nested loop depth.
+  static constexpr uint16_t kMaxInterfaceVariables =
+      64;  //!< Maximum flattened entry-interface variables.
 };
 
 /// A complete, immutable-on-success frontend module backed by fixed arenas.
@@ -443,26 +446,37 @@ struct Module {
   }
 
   bool valid = false;  //!< Set only after complete successful parsing and validation.
-  std::array<char, ModuleLimits::kMaxSourceBytes> sourceBytes = {};
-  uint32_t sourceByteCount = 0;
-  std::array<char, ModuleLimits::kMaxIdentifierBytes> identifierBytes = {};
-  uint16_t identifierByteCount = 0;
-  std::array<Struct, ModuleLimits::kMaxStructs> structs = {};
-  uint16_t structCount = 0;
-  std::array<StructMember, ModuleLimits::kMaxStructMembers> structMembers = {};
-  uint16_t structMemberCount = 0;
-  std::array<Binding, ModuleLimits::kMaxBindings> bindings = {};
-  uint16_t bindingCount = 0;
-  std::array<Symbol, ModuleLimits::kMaxSymbols> symbols = {};
-  uint16_t symbolCount = 0;
-  std::array<Expression, ModuleLimits::kMaxExpressions> expressions = {};
-  uint16_t expressionCount = 0;
-  std::array<Statement, ModuleLimits::kMaxStatements> statements = {};
-  uint16_t statementCount = 0;
-  std::array<Function, ModuleLimits::kMaxFunctions> functions = {};
-  uint16_t functionCount = 0;
-  std::array<InterfaceVariable, ModuleLimits::kMaxInterfaceVariables> interfaceVariables = {};
-  uint16_t interfaceVariableCount = 0;
+  std::array<char, ModuleLimits::kMaxSourceBytes> sourceBytes =
+      {};                        //!< Retained WGSL source storage.
+  uint32_t sourceByteCount = 0;  //!< Number of valid bytes in sourceBytes.
+  std::array<char, ModuleLimits::kMaxIdentifierBytes> identifierBytes =
+      {};                            //!< Module-owned identifier spelling storage.
+  uint16_t identifierByteCount = 0;  //!< Number of valid bytes in identifierBytes.
+  std::array<Struct, ModuleLimits::kMaxStructs> structs =
+      {};                    //!< Structure arena; only entries before structCount are valid.
+  uint16_t structCount = 0;  //!< Number of structure arena entries.
+  std::array<StructMember, ModuleLimits::kMaxStructMembers> structMembers =
+      {};  //!< Structure-member arena; only entries before structMemberCount are valid.
+  uint16_t structMemberCount = 0;  //!< Number of structure-member arena entries.
+  std::array<Binding, ModuleLimits::kMaxBindings> bindings =
+      {};  //!< Resource-binding arena; only entries before bindingCount are valid.
+  uint16_t bindingCount = 0;  //!< Number of resource-binding arena entries.
+  std::array<Symbol, ModuleLimits::kMaxSymbols> symbols =
+      {};                    //!< Resolved-symbol arena; only entries before symbolCount are valid.
+  uint16_t symbolCount = 0;  //!< Number of resolved-symbol arena entries.
+  std::array<Expression, ModuleLimits::kMaxExpressions> expressions =
+      {};  //!< Typed-expression arena; only entries before expressionCount are valid.
+  uint16_t expressionCount = 0;  //!< Number of expression arena entries.
+  std::array<Statement, ModuleLimits::kMaxStatements> statements =
+      {};  //!< Typed-statement arena; only entries before statementCount are valid.
+  uint16_t statementCount = 0;  //!< Number of statement arena entries.
+  std::array<Function, ModuleLimits::kMaxFunctions> functions =
+      {};                      //!< Function arena; only entries before functionCount are valid.
+  uint16_t functionCount = 0;  //!< Number of function arena entries.
+  std::array<InterfaceVariable, ModuleLimits::kMaxInterfaceVariables> interfaceVariables =
+      {};  //!< Flattened entry-interface arena; only entries before interfaceVariableCount are
+           //!< valid.
+  uint16_t interfaceVariableCount = 0;  //!< Number of flattened entry-interface arena entries.
 };
 
 }  // namespace donner::gpu::shader::wgsl
