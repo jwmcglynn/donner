@@ -19,9 +19,10 @@
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #ifdef DONNER_GEODE_BROWSER_BACKEND
 #include "donner/svg/renderer/geode/GeodeBrowserRoot.h"
-#else
-#include "donner/svg/renderer/geode/GeodeEmbed.h"
+#elif defined(DONNER_GEODE_WGPU_REFERENCE)
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#else
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #endif
 
 namespace donner::geode {
@@ -99,6 +100,25 @@ void DestroyPooledReadbackBuffer(gpu::Device* device, gpu::Buffer& buffer) {
   }
   const gpu::Status destroyed = device->destroyBufferBacking(std::move(buffer));
   (void)destroyed;  // A pooled buffer is always live; a stale handle is already gone.
+}
+
+struct NativeQueueIdleWait {
+  GpuWaitResult result;
+  std::chrono::milliseconds elapsed;
+};
+
+/// Waits for this context's last native submission, retaining the measured wait on timeout.
+NativeQueueIdleWait WaitForNativeQueueIdle(gpu::Device& device, std::chrono::milliseconds timeout) {
+  const auto start = std::chrono::steady_clock::now();
+  if (device.waitForSerial(device.lastSubmittedSerial(),
+                           std::chrono::duration<double>(timeout).count())) {
+    return {GpuWaitResult::Complete, std::chrono::milliseconds{0}};
+  }
+  if (device.isLost()) {
+    return {GpuWaitResult::DeviceLost, std::chrono::milliseconds{0}};
+  }
+  return {GpuWaitResult::TimedOut, std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - start)};
 }
 
 }  // namespace
@@ -233,7 +253,7 @@ GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevic
   UTILS_RELEASE_ASSERT(
       (transitionalAdapter != nullptr) ==
       (physicalDevice_->root().capabilities().backend == GpuBackendKind::TransitionalWgpu));
-#ifndef DONNER_GEODE_BROWSER_BACKEND
+#ifdef DONNER_GEODE_WGPU_REFERENCE
   UTILS_RELEASE_ASSERT(transitionalAdapter == nullptr ||
                        (static_cast<gpu::Device*>(transitionalAdapter) == &runtimeDevice &&
                         &transitionalAdapter->root() == &physicalDevice_->root()));
@@ -265,7 +285,12 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateLogicalContext(
     return nullptr;
   }
   gpu::Device& borrowed = *runtimeDevice.device;
-  GeodeWgpuAdapterDevice* const transitionalAdapter = runtimeDevice.transitionalAdapter;
+  GeodeWgpuAdapterDevice* const transitionalAdapter =
+#if defined(DONNER_GEODE_WGPU_REFERENCE) || defined(DONNER_GEODE_BROWSER_BACKEND)
+      runtimeDevice.transitionalAdapter;
+#else
+      nullptr;
+#endif
   return std::unique_ptr<GeodeDevice>(new GeodeDevice(
       std::move(physicalDevice), borrowed, transitionalAdapter, std::move(runtimeDevice.device)));
 }
@@ -351,20 +376,14 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
   if (transitionalAdapter_ == nullptr) {
     // A native backend reports completion from its own submissions rather than through a poll of
     // the backend device, so the queue is idle exactly when the last submission has retired.
-    const auto nativeWaitStart = std::chrono::steady_clock::now();
-    if (runtimeDevice_->waitForSerial(runtimeDevice_->lastSubmittedSerial(),
-                                      std::chrono::duration<double>(timeout).count())) {
-      return GpuWaitResult::Complete;
+    const NativeQueueIdleWait wait = WaitForNativeQueueIdle(*runtimeDevice_, timeout);
+    if (wait.result == GpuWaitResult::TimedOut) {
+      markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle, wait.elapsed,
+                                     "GPU queue did not go idle within the bounded wait deadline");
     }
-    if (runtimeDevice_->isLost()) {
-      return GpuWaitResult::DeviceLost;
-    }
-    markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle,
-                                   std::chrono::duration_cast<std::chrono::milliseconds>(
-                                       std::chrono::steady_clock::now() - nativeWaitStart),
-                                   "GPU queue did not go idle within the bounded wait deadline");
-    return GpuWaitResult::TimedOut;
+    return wait.result;
   }
+#if defined(DONNER_GEODE_WGPU_REFERENCE) || defined(__EMSCRIPTEN__)
 #if defined(__EMSCRIPTEN__) && !defined(DONNER_GEODE_BROWSER_BACKEND)
   // emdawnwebgpu's poll yields the Asyncify thread for one browser task and
   // its return value does not report queue-idle, so a drain loop keyed on it
@@ -389,6 +408,9 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
                                    "GPU queue did not go idle within the bounded wait deadline");
   }
   return result;
+#else
+  UTILS_UNREACHABLE();
+#endif
 #else
   UTILS_UNREACHABLE();
 #endif
@@ -623,7 +645,12 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateOverSelectedRoot(std::shared_ptr
     return nullptr;
   }
   gpu::Device& borrowed = *rootDevice.device;
-  GeodeWgpuAdapterDevice* const transitionalAdapter = rootDevice.transitionalAdapter;
+  GeodeWgpuAdapterDevice* const transitionalAdapter =
+#if defined(DONNER_GEODE_WGPU_REFERENCE) || defined(DONNER_GEODE_BROWSER_BACKEND)
+      rootDevice.transitionalAdapter;
+#else
+      nullptr;
+#endif
   std::shared_ptr<GeodePhysicalDeviceOwner> owner =
       GeodePhysicalDeviceOwner::Create(std::move(root), std::move(rootDevice));
   if (owner == nullptr) {
@@ -677,6 +704,7 @@ gpu::Device& GeodeDevice::runtimeDevice() const {
   return *runtimeDevice_;
 }
 
+#ifdef DONNER_GEODE_WGPU_REFERENCE
 bool GeodeDevice::hasTransitionalAdapter() const {
   return transitionalAdapter_ != nullptr;
 }
@@ -686,6 +714,8 @@ GeodeWgpuAdapterDevice& GeodeDevice::adapterDevice() const {
                            "GeodeDevice::adapterDevice: context renders through a native backend");
   return *transitionalAdapter_;
 }
+#endif
+
 GeodeFilterEngine& GeodeDevice::filterEngine() const {
   return *impl_->filterEngine;
 }
@@ -797,46 +827,6 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
         runtimeDevice(), textureFormat_, GeodeCheckerboardPipeline::BlendMode::DestinationOver);
   }
   return *impl_->checkerboardUnderlayPipeline;
-}
-
-std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedConfig& config) {
-#ifdef DONNER_GEODE_BROWSER_BACKEND
-  (void)config;
-  std::fprintf(stderr, "[Geode/browser] External WebGPU roots are not supported\n");
-  return nullptr;
-#else
-  if (config.physicalDevice != nullptr) {
-    // A config that names both a shared owner and explicit roots is stating they are the same
-    // objects; a mismatch means one of the two is wrong, and rendering through the wrong one is
-    // undiagnosable. `GeodeDevice_tests.SharedPhysicalOwnerRejectsConflictingRoots` has an arm per
-    // field compared here, so a new field needs one too or it is unenforced.
-    if ((config.lostState && config.lostState != config.physicalDevice->lostState()) ||
-        !config.physicalDevice->root().names(config.instance, config.adapter, config.device,
-                                             config.queue)) {
-      std::fprintf(stderr,
-                   "[Geode] CreateFromExternal: physical owner and explicit state disagree\n");
-      return nullptr;
-    }
-    if (config.physicalDevice->lostState()->lost.load(std::memory_order_acquire)) {
-      std::fprintf(stderr, "[Geode] CreateFromExternal: physical device is already lost\n");
-      return nullptr;
-    }
-    return CreateOverPhysicalDeviceOwner(config.physicalDevice,
-                                         GpuTextureFormatFromWgpu(config.textureFormat));
-  }
-
-  std::shared_ptr<GeodeGpuRoot> root =
-      AdoptGpuRoot(GeodeWgpuRoots{config.instance, config.adapter, config.device, config.queue},
-                   config.lostState);
-  if (root == nullptr) {
-    return nullptr;
-  }
-  if (root->lostState()->lost.load(std::memory_order_acquire)) {
-    std::fprintf(stderr, "[Geode] CreateFromExternal: physical device is already lost\n");
-    return nullptr;
-  }
-  return CreateOverSelectedRoot(std::move(root), GpuTextureFormatFromWgpu(config.textureFormat));
-#endif
 }
 
 void GeodeDevice::initSharedBindSlotResources() {

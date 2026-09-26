@@ -1,6 +1,6 @@
+load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
-load("//build_defs:package.bzl", "donner_package")
 
 # donner::gpu::vulkan - the Vulkan backend of the Donner GPU runtime.
 #
@@ -47,7 +47,7 @@ donner_cc_library(
         "@platforms//os:linux": ["-ldl"],
         "//conditions:default": [],
     }),
-    visibility = donner_internal_visibility(),
+    visibility = donner_internal_visibility() + ["//examples:__pkg__"],
     deps = [
         ":vulkan_resource_state",
         "//donner/base",

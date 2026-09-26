@@ -1,5 +1,5 @@
 /// @file
-/// macOS (Cocoa/Metal) implementation of `CreateSurfaceFromGlfwWindow`.
+/// macOS GLFW Metal layer setup for the native Geode embed example.
 
 #include "examples/geode_embed_surface.h"
 
@@ -14,14 +14,15 @@ extern "C" {
 
 namespace donner::example {
 
-wgpu::Surface CreateSurfaceFromGlfwWindow(const wgpu::Instance& instance, GLFWwindow* window) {
+NativeEmbedSurface PrepareNativeEmbedSurface(GLFWwindow* window) {
+  NativeEmbedSurface selected;
   if (window == nullptr) {
-    return {};
+    return selected;
   }
 
   NSWindow* nswindow = glfwGetCocoaWindow(window);
   if (nswindow == nil) {
-    return {};
+    return selected;
   }
 
   NSView* view = [nswindow contentView];
@@ -29,13 +30,17 @@ wgpu::Surface CreateSurfaceFromGlfwWindow(const wgpu::Instance& instance, GLFWwi
   [view setWantsLayer:YES];
   [view setLayer:metalLayer];
 
-  wgpu::SurfaceSourceMetalLayer source(wgpu::Default);
-  source.layer = (__bridge void*)metalLayer;
+  selected.native.kind = gpu::NativeSurfaceKind::MetalLayer;
+  selected.native.display = (__bridge void*)metalLayer;
+  selected.format = gpu::TextureFormat::BGRA8Unorm;
+  geode::GpuRootSelection selection;
+  selection.label = "GeodeEmbedMetal";
+  selected.root = geode::SelectGpuRoot(selection);
+  return selected;
+}
 
-  wgpu::SurfaceDescriptor desc(wgpu::Default);
-  desc.nextInChain = &source.chain;
-
-  return instance.createSurface(desc);
+bool RetireNativeEmbedSurface(NativeEmbedSurface& /*surface*/, GLFWwindow* /*window*/) {
+  return true;
 }
 
 }  // namespace donner::example

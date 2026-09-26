@@ -1,11 +1,9 @@
 #pragma once
 /// @file
-/// Geode (WebGPU/Slug) implementation of \ref donner::svg::RendererInterface.
+/// Geode GPU implementation of \ref donner::svg::RendererInterface.
 ///
-/// Geode is a GPU-native SVG rendering backend using WebGPU and the Slug
-/// algorithm for resolution-independent vector rasterization. It can run
-/// **headless** (creating its own device) or **embedded** inside a host
-/// application that provides an existing WebGPU device and render target.
+/// Geode uses native Metal or Vulkan and the Slug algorithm for resolution-independent vector
+/// rasterization. It can create a headless device or render over a selected shared GPU root.
 
 #include <chrono>
 #include <cstddef>
@@ -13,9 +11,6 @@
 #include <memory>
 #include <optional>
 #include <vector>
-#ifndef __EMSCRIPTEN__
-#include <webgpu/webgpu.hpp>
-#endif
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
@@ -31,7 +26,6 @@ namespace donner::geode {
 class GeodeDevice;
 class GeodePipeline;
 class GeoEncoder;
-struct GeodeEmbedConfig;
 }  // namespace donner::geode
 
 // Forward-declare std::shared_ptr specialization to avoid pulling <memory>
@@ -40,7 +34,7 @@ struct GeodeEmbedConfig;
 namespace donner::svg {
 
 /**
- * WebGPU texture snapshot exported by \ref RendererGeode.
+ * GPU runtime texture snapshot exported by \ref RendererGeode.
  *
  * The snapshot keeps the backing \ref geode::GeodeDevice and texture alive so
  * editor presentation code can sample the texture after the renderer has moved
@@ -74,13 +68,6 @@ public:
   static RendererGeodeTextureSnapshot AdoptRuntimeTexture(
       std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
       gpu::TextureFormat format, AlphaType alphaType);
-
-#ifndef __EMSCRIPTEN__
-  /// Compatibility entry point for native hosts still holding a WebGPU texture format.
-  static RendererGeodeTextureSnapshot AdoptRuntimeTexture(
-      std::shared_ptr<geode::GeodeDevice> device, gpu::Texture&& texture, Vector2i dimensions,
-      wgpu::TextureFormat format, AlphaType alphaType);
-#endif
 
   ~RendererGeodeTextureSnapshot() override;
 
@@ -242,7 +229,7 @@ struct RendererGeodeTexturePoolStats {
 };
 
 /**
- * Geode rendering backend - GPU-native via WebGPU + the Slug algorithm.
+ * Geode rendering backend - GPU-native via the Slug algorithm.
  *
  * `RendererGeode` implements `RendererInterface` by translating draw calls
  * into the lower-level `donner::geode::GeoEncoder` API.
@@ -259,12 +246,11 @@ struct RendererGeodeTexturePoolStats {
  *
  * ## Embedded rendering
  *
- * Host applications that already own a WebGPU device can:
- * 1. Create a `GeodeDevice` from their existing device via
- *    `GeodeDevice::CreateFromExternal(GeodeEmbedConfig{...})`.
- * 2. Optionally call `setTargetTexture()` to render directly into a
- *    swap-chain texture or other host-owned surface.
- * 3. Call `draw()` or the `beginFrame()`/`endFrame()` lifecycle as usual.
+ * Host applications select a native Geode root for their platform surface, create a context with
+ * `GeodeDevice::CreateOverSelectedRoot()`, and may create sibling contexts with
+ * `CreateOverPhysicalDeviceOwner()`. `setTargetTexture()` renders into a runtime texture owned by
+ * that context, including an acquired native surface frame. Draw with `draw()` or the
+ * `beginFrame()`/`endFrame()` lifecycle as usual.
  *
  * If `GeodeDevice::CreateHeadless()` fails (no GPU available), all draw
  * operations become no-ops and `takeSnapshot()` returns an empty bitmap.
@@ -320,11 +306,9 @@ public:
    *   `RGBA8Unorm`).
    * - Be at least as large as the viewport (in device pixels).
    *
-   * If the texture also has `CopySrc` usage, `takeSnapshot()` can read it back.
-   * If it lacks `CopySrc`, `takeSnapshot()` returns an empty bitmap. A frame a surface has out is
-   * read back where the device's contexts share one queue (the transitional adapter), before the
-   * frame is presented; a native backend gives the readback its own queue, whose read could land
-   * after the present, so there `takeSnapshot()` returns an empty bitmap for such a frame.
+   * A readable owned target can be captured through `CopySrc` or the supported sampled GPU path.
+   * A borrowed surface frame returns an empty bitmap: the native runtime refuses its export
+   * because the capture queue could read it after presentation recycles the frame.
    *
    * Only the identity is kept, so the caller retains ownership and the texture must remain live
    * from `beginFrame()` through `endFrame()`. A host that holds its target as a backend texture
@@ -425,7 +409,7 @@ public:
 
   /**
    * True once the GPU device backing this renderer has been declared lost,
-   * either by a driver-reported WebGPU device-lost callback or by a bounded
+   * either by a driver-reported GPU device loss or by a bounded
    * GPU wait exceeding its deadline (for example a snapshot readback map that
    * never completed). The condition is sticky.
    *

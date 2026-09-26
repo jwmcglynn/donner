@@ -6,16 +6,9 @@
 
 ## Summary
 
-Geode's per-draw pipeline allocates fresh WebGPU resources (4 buffers + 1 bind
-group) on every `submitFillDraw`, re-runs the full CPU encode path
-(`cubicToQuadratic` → `toMonotonic` → band decomposition) on every frame, and
-opens a new `CommandEncoder`/`queue().submit()` pair for every group
-opacity / filter / mask push. The design doc 0017 (Phase 5) promised
-"deep ECS integration for GPU resource caching"; that caching layer is not
-yet wired up. This design proposes a concrete set of optimizations, ordered by
-measured/suspected impact, that bring Geode's per-frame cost into a range
-consistent with Donner's composited-editor targets (`DragFrameOverhead` budgets
-in 0025) and unblock Phase 5 of 0017.
+This design addresses Geode's per-frame GPU resource, CPU encoding, and
+submission costs. It proposes caching, batching, and measurement work ordered
+by impact on the composited editor's `DragFrameOverhead` budgets in Design 0025.
 
 Scope: Geode only (`donner/svg/renderer/geode/**`, `RendererGeode.{cc,h}`).
 Boundary: no pipeline algorithm changes (Slug stays Slug; the single-sample
@@ -29,7 +22,7 @@ algorithm.
   the project's debugging discipline (`EXPECT_LT(measured_ms, budget_ms)`), so
   every optimization below lands with a measurable before/after and future
   regressions trip loudly.
-- Eliminate per-draw WebGPU resource creation for the steady-state path
+- Eliminate per-draw GPU runtime resource creation for the steady-state path
   (`submitFillDraw`, `fillPathLinearGradient`, `fillPathRadialGradient`,
   `fillPathIntoMask`, `GeodeTextureEncoder::drawTexturedQuad`). Target: one
   persistent vertex-buffer arena, one uniform ring, one bind-group per frame
@@ -51,18 +44,16 @@ algorithm.
 
 ## Non-Goals
 
-- Re-implementing Slug or changing the shader ABI. Shader source in
-  `donner/svg/renderer/geode/shaders/**` stays byte-identical for v1 of
-  this work.
-- Switching WebGPU vendoring (stays on `wgpu-native` v24).
+- Re-implementing Slug or changing the compiled shader ABI.
+- Changing native GPU backend selection or the Linux-only test reference;
+  [Design 0053](0053-native_gpu_hal.md) owns those boundaries.
 - Changing the anti-aliasing scheme. Geode renders analytic dual-ray
   coverage at one sample per pixel on every adapter (0041); AA work is
   out of scope here.
-- Expanding the resvg test-suite coverage. Phase 5b's widening of
-  `kGeodeDefaultMaxMismatchedPixels = 2000` is orthogonal to perf.
+- Expanding the resvg test-suite coverage or changing pixelmatch thresholds;
+  [Design 0021](0021-resvg_feature_gaps.md) owns those policies.
 - Adding runtime backend switching or re-plumbing `RendererInterface`.
-- GPU timestamp profiling on all platforms. Already listed in 0017 Phase 5
-  and stays there as a separate track.
+- GPU timestamp profiling on all platforms remains a separate track.
 - Any perf work on `RendererTinySkia` or the composited-rendering layer
   (0025 tracks those separately).
 
@@ -173,7 +164,7 @@ algorithm.
     Lion `bufferCreates` ceiling now 10 (down from 800); Lion
     `bindgroupCreates` ceiling stays 200 pending M1.f.2.
 - [x] Milestone 2: `GeodePathCacheComponent` — cache the CPU encode
-  (Tier 3 findings, maps to 0017 Phase 5 bullet 1). _Landed
+  (Tier 3 findings). _Landed
   2026-04-20._ Observed frame-2 `pathEncodes` deltas:
   SimpleShapes 3→0, Moderate 2→0, Lion 132→0,
   Ghostscript_Tiger 305→0. GPU-arena-handle retention (original
@@ -334,8 +325,8 @@ algorithm.
     the same document at the same size. Asserted by
     `{SimpleShapes,Moderate,Lion,GhostscriptTiger}_NoDirtyPath_ZeroTextures`.
 - [ ] Milestone 5: Filter engine caching (Tier 5 findings).
-  - [ ] Swap `std::unordered_map<std::string, wgpu::Texture> namedBuffers`
-    in `GeodeFilterEngine::execute` (`GeodeFilterEngine.cc:964`) for an
+  - [ ] Swap `std::unordered_map<std::string, FilterTexture> namedBuffers`
+    in `GeodeFilterEngine::execute` (`GeodeFilterEngine.cc:1686`) for an
     `RcString`-keyed hash map or a small fixed-size array indexed by the
     stable filter-node-index assigned at `FilterGraph` build. Current
     `.str()` copies per result lookup.
@@ -344,13 +335,12 @@ algorithm.
     the device-shared pool after frame submission, so an unchanged repeat
     blur drops from eight texture creations to zero without permitting
     unsafe same-frame reuse. Transparent short-circuit results use an explicit
-    render-pass clear because reacquired WebGPU textures retain prior contents.
+    render-pass clear because reacquired GPU render targets may retain prior contents.
   - [x] Merge the per-primitive `CommandEncoder` + `queue().submit()` pairs
     into the outer frame encoder. A Gaussian-blur counter regression records
     the filter source render, compute passes, and composite in one frame
     submission, plus the independent snapshot-readback submission.
-- [ ] Milestone 6: Batch draws sharing pipeline state (0017 Phase 5
-  bullet 6).
+- [ ] Milestone 6: Batch draws sharing pipeline state.
   - [x] **M6-A: instrumentation.** `drawCalls` + `pipelineSwitches`
     counters added to `GeodeCounters`, wired into every
     `pass.draw(...)` and pipeline-tracker switch site in
@@ -459,14 +449,12 @@ algorithm.
 
 ### Current state
 
-Geode is Phase 3 + Phase 4 + Phase 3d landed; Phase 5 (ECS cache) and
-the "batch draw calls" bullet are open checklist items in
-`docs/design_docs/0017-geode_renderer.md:1439-1448`. The backend is
-feature-complete enough to be the default for GPU-capable consumers
-(0017 Phase 4 text + filter work is green).
+Geode is feature-complete enough to be the default for GPU-capable consumers.
+This design tracks its cache and batch-draw optimization work; the
+[original Geode rationale](0017-geode_renderer.md#original-rationale) remains in Git history.
 
-Design doc 0017 establishes the *goal* of ECS-resident GPU caches but
-leaves the mechanism TBD. 0025's "Perf-gate waivers (v1)" table
+The original Geode plan left ECS-resident GPU cache mechanics open; this
+design addresses them. 0025's "Perf-gate waivers (v1)" table
 documents the current composited-rendering cost gap and attributes it
 to three concrete causes (dirty-walk, split-bitmap reblit, style
 cascade); none of those three are Geode-internal, but the Geode
@@ -592,9 +580,8 @@ when a path's `d`/transform/stroke changes (0005). A tiny
 `GeodePathCacheSystem` listens for those flags and drops the cache
 entry (or just bumps the epoch so the next draw re-uses the slot).
 
-This exactly matches 0017 Phase 5 bullet 1
-(`Implement GeodePathCacheComponent: cache encoded band data on path
-entities`) and bullet 2 (`Implement cache invalidation via dirty flags`).
+The cache keeps encoded band data on path entities and invalidates it through
+the same dirty flags that govern the path's other derived state.
 
 ### Single-encoder frames + render-target pool
 
@@ -677,8 +664,8 @@ Before each milestone is marked done:
 
 ## Dependencies
 
-- No new external deps. Uses existing `wgpu-native` v24 API
-  (dynamic-offset bind groups are core WebGPU, not an extension).
+- No new external deps. Uses Donner's GPU runtime buffer and bind-group APIs;
+  Design 0053 owns backend selection and test-only reference containment.
 - ECS dirty-flag plumbing comes from `0005-incremental_invalidation.md`;
   Milestone 2 depends on that system being online for path entities.
   If 0005's path-level invalidation isn't wired up yet, Milestone 2
@@ -696,16 +683,16 @@ Before each milestone is marked done:
 
 ## Alternatives Considered
 
-**Switch to a one-big-buffer-suballocator model at the wgpu layer
+**Switch to a one-big-buffer-suballocator model at the GPU runtime layer
 instead of per-`GeoEncoder` arenas.** Rejected for v1: adds a layer of
-indirection, complicates embedder integration (0017 Phase 6), and
+indirection, complicates the [native embedding contract](../guides/embedding_geode.md), and
 offers no measurable win over per-frame arenas in a single-threaded
 renderer.
 
 **Cache encoded paths keyed on `Path` pointer identity, not ECS
 entity.** Rejected: `Path` is immutable but copied/moved through the
-scene-graph build; entity identity is the correct key and aligns with
-0017's design intent.
+scene-graph build; entity identity is the correct key for the renderer's
+per-document ownership model.
 
 **Skip the harness, land the fixes eyeball-first.** Rejected per the
 repro-first rule in CLAUDE.md "Debugging Discipline". Also, the
@@ -734,16 +721,14 @@ required to hit the per-frame goals here.
 
 # Future Work
 
-- [ ] GPU timestamp profiling on all platforms (0017 Phase 5 bullet 4).
+- [ ] GPU timestamp profiling on all platforms.
   Exposing per-pass GPU time in `lastFrameTimings` lets the compositor
   attribute frame cost to specific draws.
-- [ ] Cross-process shader cache (Dawn/wgpu-native supports WGSL → SPIR-V
-  caching; currently every process-launch re-runs Tint).
-- [ ] Glyph-level path cache (0017 Phase 4 `GeodeGlyphCacheComponent`)
-  once text is a measured hotspot in a real editor workload.
+- [ ] Cross-process native shader artifact reuse if startup profiling warrants it.
+- [ ] Glyph-level path cache once text is a measured hotspot in a real editor workload.
 - [ ] Investigate whether `populateSharedGradientUniforms` can move
   gradient stops to a texture (freeing the >16-stop cap in
-  `slug_gradient.wgsl:28` that's already flagged as Phase 5 work).
+  `slug_gradient.wgsl:28`).
 
 ## Appendix - measured steady-state cost profile
 
@@ -756,9 +741,9 @@ bazel test //donner/svg/renderer/geode:geode_perf_tests \
     --test_output=all --nocache_test_results
 ```
 
-`bufferWrites` / `bufferWriteBytes` count every `wgpu::Queue::writeBuffer`
-call and its payload bytes; `textureWriteBytes` counts `writeTexture`
-payloads. "frame 2" rows are the steady state: a second render of an
+`bufferWrites` / `bufferWriteBytes` count accepted runtime buffer uploads
+and their payload bytes; `textureWriteBytes` counts texture upload payloads.
+"frame 2" rows are the steady state: a second render of an
 unchanged document by the same renderer (the `*_NoDirtyPath_*` tests),
 including one `takeSnapshot()` readback per frame.
 

@@ -1156,6 +1156,7 @@ struct VulkanSharedRoot::Impl {
   uint32_t queueFamilyIndex = 0;
   VkPhysicalDeviceMemoryProperties memoryProperties = {};
   uint32_t maxTextureDimension2D = 0;
+  std::string adapterName;
   bool fullDrawIndexUint32 = false;
   bool debugMessengerAvailable = false;
   bool presentationEnabled = false;
@@ -1239,6 +1240,10 @@ VulkanSharedRoot::VulkanSharedRoot(std::unique_ptr<Impl> impl) : impl_(std::move
 VulkanSharedRoot::~VulkanSharedRoot() = default;
 uint32_t VulkanSharedRoot::maxTextureDimension2D() const {
   return impl_->maxTextureDimension2D;
+}
+
+std::string VulkanSharedRoot::adapterName() const {
+  return impl_->adapterName;
 }
 
 const std::shared_ptr<DeviceLostState>& VulkanSharedRoot::lostState() const {
@@ -2721,6 +2726,7 @@ std::shared_ptr<VulkanSharedRoot> VulkanDevice::CompletePresentationRoot(
   api.vkGetPhysicalDeviceMemoryProperties(physicalDevice, &native->memoryProperties);
   VkPhysicalDeviceProperties properties = {};
   api.vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+  native->adapterName = properties.deviceName;
   native->maxTextureDimension2D =
       std::min(properties.limits.maxImageDimension2D, kMaxTextureDimension);
   native->instance = setup.instance;
@@ -2793,6 +2799,7 @@ std::shared_ptr<VulkanSharedRoot> VulkanDevice::CreateRootImpl(
   api.vkGetPhysicalDeviceMemoryProperties(native->physicalDevice, &native->memoryProperties);
   VkPhysicalDeviceProperties properties = {};
   api.vkGetPhysicalDeviceProperties(native->physicalDevice, &properties);
+  native->adapterName = properties.deviceName;
   native->maxTextureDimension2D =
       std::min(properties.limits.maxImageDimension2D, kMaxTextureDimension);
   return std::shared_ptr<VulkanSharedRoot>(new VulkanSharedRoot(std::move(native)));

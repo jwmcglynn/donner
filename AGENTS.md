@@ -55,7 +55,11 @@ Donner is a dynamic SVG engine (browser-like, not a static renderer). It builds 
 - **Styling** (`Property`, `PropertyRegistry`, `StyleSystem`): Consumes CSS data, implements SVG style model (presentation attributes, cascading, inheritance) → `ComputedStyleComponent`.
 - **Document Model (ECS)**: Built on **EnTT**. Entities = SVG elements, Components = data (`TreeComponent`, `StyleComponent`, `PathComponent`), Systems = logic (`LayoutSystem`, `StyleSystem`, `ShapeSystem`).
 - **API Frontend** (`donner::svg::SVG*Element`): User-facing wrappers around ECS entities/components.
-- **Rendering**: `RendererDriver` traverses the ECS and emits drawing commands via `RendererInterface`. Backends: **TinySkia** (`RendererTinySkia`, default — lightweight software rasterizer from `third_party/tiny-skia-cpp`) and **Geode** (`RendererGeode`, in-development GPU backend via wgpu-native/WebGPU; gated on `--//donner/svg/renderer/geode:enable_geode=true`). `Renderer` is the public facade. Select the default tiny-skia backend or `--config=geode` in Bazel; CMake uses `DONNER_RENDERER_BACKEND` where supported.
+- **Rendering**: `RendererDriver` emits commands through `RendererInterface`. **TinySkia** is the
+  default software renderer. **Geode** uses native Metal on macOS, native Vulkan on Linux and the
+  browser GPU runtime in WebAssembly; enable it with `--config=geode`. A pinned Linux test-only
+  wgpu-native implementation remains for resvg pixel comparison. `Renderer` is the public facade;
+  CMake uses `DONNER_RENDERER_BACKEND` where supported.
 - **Base Library** (`donner::base`): Common utilities (`RcString`, `Vector2`, `Transform`, `Length`).
 
 ### Rendering Pipeline
@@ -76,10 +80,10 @@ Stages transform components through the ECS:
 
 ## Editor: DOM-Level Editing Only
 
-- **All editor operations mutate the DOM (or above), never the source text directly.** Edits go DOM-first; the structured-editing infrastructure reflects the change back into the source (`SVGDocument::insertElement` / `removeElement` / attribute setters return `ApplySourceEditResult` source deltas the reflection layer applies). The source is a *projection* of the DOM, not what edits operate on.
+- **All editor operations mutate the DOM (or above), never the source text directly.** Edits go DOM-first; the structured-editing infrastructure reflects the change back into the source (`SVGDocument::insertElement` / `removeElement` / attribute setters return `ApplySourceEditResult` source deltas the reflection layer applies). The source is a _projection_ of the DOM, not what edits operate on.
 - **Source-string surgery is banned for structural edits** (reorder/z-order, rename, insert/delete/move element, group/ungroup, attribute change). Reorder = `removeElement` + `insertElement` on the DOM, not a text-span move. Rename = a DOM attribute change with reference updates on the DOM, not find/replace over source.
 - **Even text typing is DOM-aware:** the source/text-editor pane is where the user authors raw characters, but typing should **incrementally reparse and update the live DOM tree in place** (preserving entity identity where possible), not full-replace-and-reparse the document. It never licenses a destructive source-replace, nor structural ops skipping the DOM.
-- Actions issued *from* the text view (e.g. drag-handle reorder) are still DOM operations whose result is reflected back into the text — the text view is just another surface for DOM edits.
+- Actions issued _from_ the text view (e.g. drag-handle reorder) are still DOM operations whose result is reflected back into the text — the text view is just another surface for DOM edits.
 - See the project `CLAUDE.md` § "DOM-Level Editing Only" for the full rule.
 
 ## Pull Request Workflow
@@ -142,10 +146,10 @@ When creating a pull request:
 9. **Expect an automated code review** within the first few minutes after the PR is opened — address feedback promptly by pushing follow-up commits. An automated approval alone is not sufficient to merge — a `jwmcglynn` review is always required.
 10. **Transient CI failures** (apt/bazel fetch/chromium rate-limits) are retried automatically. Test, compile, linker, and pixel-diff failures are never transient — investigate the root cause, don't re-run blindly.
 11. **Fix CI diagnosability gaps** — if a CI failure cannot be diagnosed because logs, test output,
-   screenshots, undeclared outputs, pixel diffs, artifacts, or job summaries are missing or
-   inaccessible, treat that as a CI bug and fix the workflow/test harness to expose the missing
-   evidence. Do not leave failures opaque or rely on blind reruns when better GitHub Actions
-   artifacts or logs would make the next failure actionable.
+    screenshots, undeclared outputs, pixel diffs, artifacts, or job summaries are missing or
+    inaccessible, treat that as a CI bug and fix the workflow/test harness to expose the missing
+    evidence. Do not leave failures opaque or rely on blind reruns when better GitHub Actions
+    artifacts or logs would make the next failure actionable.
 
 See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behind these checks and the taxonomy of CI escapes they prevent.
 
@@ -212,7 +216,7 @@ python3 tools/cmake/gen_cmakelists.py && cmake -S . -B build && cmake --build bu
 
 ## Transform Naming Convention
 
-Use **destFromSource** naming for every `Transform2d` — locals, fields, parameters, struct members, return values, everything. The destFromSource name *is* the documentation; a value whose direction lives only in a comment will eventually be composed wrong.
+Use **destFromSource** naming for every `Transform2d` — locals, fields, parameters, struct members, return values, everything. The destFromSource name _is_ the documentation; a value whose direction lives only in a comment will eventually be composed wrong.
 
 - ✅ `entityFromWorldTransform`, `deviceFromPattern`, `canvasFromDocumentWorldTransform_`, `bitmapEntityFromEntity`, `worldFromPreviousWorld`.
 - ❌ `delta`, `xform`, `transform`, `mat`, `t`, `temp` — and `deviceToLocal` / `worldToEntity` (wrong direction word).
@@ -229,10 +233,10 @@ Features are controlled by Bazel flags under `--//donner/svg/renderer:`. Use `--
 
 Flag: `--//donner/svg/renderer:renderer_backend` (default: `tiny_skia`)
 
-| Config           | Backend                       | Notes                                              |
-| ---------------- | ----------------------------- | -------------------------------------------------- |
-| (default)        | TinySkia (`RendererTinySkia`) | Lightweight software rasterizer, no external deps  |
-| `--config=geode` | Geode (`RendererGeode`)       | GPU backend (WebGPU + Slug); default in the editor |
+| Config           | Backend                       | Notes                                                                        |
+| ---------------- | ----------------------------- | ---------------------------------------------------------------------------- |
+| (default)        | TinySkia (`RendererTinySkia`) | Lightweight software rasterizer, no external deps                            |
+| `--config=geode` | Geode (`RendererGeode`)       | Native Metal/Vulkan and browser GPU runtime with Slug; default in the editor |
 
 ### Text Rendering
 
@@ -275,7 +279,7 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 
 ## Pixel Diff & Threshold Philosophy
 
-- **Root-cause pixel diffs, always** — even in vendored libraries like tiny-skia-cpp. Don't bump thresholds or inflate max-diff pixels to mask failures; investigate *why* pixels differ. Threshold changes are a last resort requiring explicit human approval.
+- **Root-cause pixel diffs, always** — even in vendored libraries like tiny-skia-cpp. Don't bump thresholds or inflate max-diff pixels to mask failures; investigate _why_ pixels differ. Threshold changes are a last resort requiring explicit human approval.
 - **Red herrings**: "glyph outline differences" for resvg failures, "only N pixels off" for any failure. Treat as red herrings without strong evidence — even 200 pixels off can hide real bugs.
 
 ### Resvg Test Threshold Conventions

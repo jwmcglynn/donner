@@ -65,6 +65,19 @@ py_test(
 )
 
 py_test(
+    name = "configured_rust_closure_tests",
+    size = "small",
+    srcs = [
+        "configured_rust_closure.py",
+        "configured_rust_closure_tests.py",
+    ],
+    data = [
+        "configured_rust_roots.json",
+        "//third_party:bazel/non_bcr_deps.bzl",
+    ],
+)
+
+py_test(
     name = "manifests_integrity_tests",
     size = "small",
     srcs = ["manifests_integrity_tests.py"],
