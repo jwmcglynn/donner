@@ -161,8 +161,15 @@ public:
   ~GeodeMaskPipeline() = default;
   GeodeMaskPipeline(const GeodeMaskPipeline&) = delete;
   GeodeMaskPipeline& operator=(const GeodeMaskPipeline&) = delete;
-  GeodeMaskPipeline(GeodeMaskPipeline&&) noexcept = default;
-  GeodeMaskPipeline& operator=(GeodeMaskPipeline&&) noexcept = default;
+
+  /// Construct by moving another instance's state.
+  /// @param other Source object.
+  GeodeMaskPipeline(GeodeMaskPipeline&& other) noexcept = default;
+
+  /// Replace this object's state by moving another instance.
+  /// @param other Source object.
+  /// @return This object after the move.
+  GeodeMaskPipeline& operator=(GeodeMaskPipeline&& other) noexcept = default;
 
   /// The compiled render pipeline.
   const gpu::RenderPipeline& pipeline() const { return pipeline_; }
@@ -202,8 +209,16 @@ public:
   ~GeodeSnapshotReadbackPipeline() = default;
   GeodeSnapshotReadbackPipeline(const GeodeSnapshotReadbackPipeline&) = delete;
   GeodeSnapshotReadbackPipeline& operator=(const GeodeSnapshotReadbackPipeline&) = delete;
-  GeodeSnapshotReadbackPipeline(GeodeSnapshotReadbackPipeline&&) noexcept = default;
-  GeodeSnapshotReadbackPipeline& operator=(GeodeSnapshotReadbackPipeline&&) noexcept = default;
+
+  /// Construct by moving another instance's state.
+  /// @param other Source object.
+  GeodeSnapshotReadbackPipeline(GeodeSnapshotReadbackPipeline&& other) noexcept = default;
+
+  /// Replace this object's state by moving another instance.
+  /// @param other Source object.
+  /// @return This object after the move.
+  GeodeSnapshotReadbackPipeline& operator=(GeodeSnapshotReadbackPipeline&& other) noexcept =
+      default;
 
   /// True when the bind group layout and compute pipeline were created.
   bool valid() const { return pipeline_.isValid() && bindGroupLayout_.isValid(); }

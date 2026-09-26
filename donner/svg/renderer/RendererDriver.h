@@ -271,6 +271,15 @@ public:
                                                               Entity firstEntity, Entity lastEntity,
                                                               const RenderViewport& viewport,
                                                               const Transform2d& surfaceFromCanvas);
+
+  /// Compute conservative range bounds with explicit clipping and mask policy; no value requires
+  /// full-canvas fallback.
+  /// @param registry Registry containing the prepared render tree.
+  /// @param firstEntity First entity in the traversal range.
+  /// @param lastEntity Last entity in the traversal range.
+  /// @param viewport Viewport for the bounds calculation.
+  /// @param surfaceFromCanvas Transform from canvas to destination-surface coordinates.
+  /// @param options Clipping and conservative-mask policies.
   [[nodiscard]] std::optional<Box2d> computeEntityRangeBounds(Registry& registry,
                                                               Entity firstEntity, Entity lastEntity,
                                                               const RenderViewport& viewport,

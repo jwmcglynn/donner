@@ -70,6 +70,7 @@ struct ImageBarrierParams {
   VkPipelineStageFlags dstStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;  //!< Destination scope.
   VkAccessFlags srcAccess = 0;                                         //!< Access made available.
   VkAccessFlags dstAccess = 0;                                         //!< Access made visible.
+
   /// True when the usage pair fell outside the tracked set and the maximal barrier was used.
   bool conservative =
       false;  //!< Whether the resulting transition used the conservative synchronization barrier.
@@ -126,8 +127,15 @@ public:
   TextureSyncStateTable() = default;
   TextureSyncStateTable(const TextureSyncStateTable&) = delete;
   TextureSyncStateTable& operator=(const TextureSyncStateTable&) = delete;
-  TextureSyncStateTable(TextureSyncStateTable&&) = default;
-  TextureSyncStateTable& operator=(TextureSyncStateTable&&) = default;
+
+  /// Construct by moving another instance's state.
+  /// @param other Source object.
+  TextureSyncStateTable(TextureSyncStateTable&& other) = default;
+
+  /// Replace this object's state by moving another instance.
+  /// @param other Source object.
+  /// @return This object after the move.
+  TextureSyncStateTable& operator=(TextureSyncStateTable&& other) = default;
 
   /// One image's committed state, shared across runtime devices that register it.
   struct SharedState;

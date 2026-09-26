@@ -55,8 +55,15 @@ public:
   // the registry copies a component that reports itself copyable.
   GeodePerDevice(const GeodePerDevice&) = delete;
   GeodePerDevice& operator=(const GeodePerDevice&) = delete;
-  GeodePerDevice(GeodePerDevice&&) noexcept = default;
-  GeodePerDevice& operator=(GeodePerDevice&&) noexcept = default;
+
+  /// Construct by moving another instance's state.
+  /// @param other Source object.
+  GeodePerDevice(GeodePerDevice&& other) noexcept = default;
+
+  /// Replace this object's state by moving another instance.
+  /// @param other Source object.
+  /// @return This object after the move.
+  GeodePerDevice& operator=(GeodePerDevice&& other) noexcept = default;
 
   /// The entry for \p device, creating an empty one when it has none. Drops nothing.
   /// @param device Device the entry belongs to.

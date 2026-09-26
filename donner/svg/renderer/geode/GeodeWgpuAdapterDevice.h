@@ -339,6 +339,7 @@ private:
 
     std::atomic<uint64_t> completedSerial{0};  //!< Highest serial with no unfinished predecessor.
     std::mutex mutex;  //!< Protects ranges and their completed high-water mark.
+
     /// Signalled with \ref mutex whenever a completion is delivered.
     std::condition_variable progressed;
     SmallVector<Pending, 4> pending;  //!< Includes queued ranges until their callbacks run.
@@ -468,6 +469,7 @@ private:
       std::atomic<int> references{2};  //!< This record and the pending callback.
       std::atomic<bool> done{false};   //!< Set once the callback has run.
       std::atomic<bool> ok{false};     //!< Whether the map succeeded.
+
       /// Set once the mapping handle is gone, which makes whichever side observes the finished
       /// map responsible for giving the buffer back.
       std::atomic<bool> abandoned{false};
@@ -508,6 +510,7 @@ private:
     wgpu::Buffer buffer;               //!< Buffer being mapped; borrowed from its slot.
     uint64_t offsetBytes = 0;          //!< Byte offset of the mapped range.
     uint64_t byteCount = 0;            //!< Length of the mapped range.
+
     /// Future the map request returned; its id tells this request apart from a later one that
     /// reused the slot while a wait slice was polling.
     wgpu::Future mapFuture{};

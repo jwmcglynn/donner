@@ -47,6 +47,8 @@ namespace donner::editor {
 /// Construct and destroy on the presentation thread.
 class CompositorDebugPanel {
 public:
+  /// Create a diagnostic panel using the supplied GPU device when present.
+  /// @param geodeDevice Shared device for retaining GPU thumbnail resources, or null.
   explicit CompositorDebugPanel(
       std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr);
   ~CompositorDebugPanel();

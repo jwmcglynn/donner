@@ -11,19 +11,45 @@ namespace donner::editor {
 /// Owns the editor's popup/modal state and renders the corresponding ImGui dialogs.
 class DialogPresenter {
 public:
+  /// Create modal state with the host's notice and build information.
+  /// @param editorNoticeText Third-party notices shown in the Licenses dialog.
+  /// @param editorBuildInfo Optional version and commit lines.
   explicit DialogPresenter(std::string editorNoticeText,
                            std::string editorBuildInfo = std::string());
 
+  /// Queue the Open SVG dialog with an initial path.
+  /// @param currentFilePath Current file path when available.
   void requestOpenFile(const std::optional<std::string>& currentFilePath);
+
+  /// Queue the Save SVG dialog with an initial path and optional error.
+  /// @param currentFilePath Current or suggested destination path.
+  /// @param error Initial save error to display.
   void requestSaveFile(const std::optional<std::string>& currentFilePath,
                        std::string error = std::string());
+
+  /// Queue the About dialog for the next presentation pass.
   void requestAbout();
 
+  /// Draw requested dialogs and invoke host callbacks for accepted paths.
+  /// @param tryOpenFile Attempts an open and returns success; writes a failure message through its
+  /// string pointer.
+  /// @param trySaveFile Attempts a save and returns success; writes a failure message through its
+  /// string pointer.
   void render(const std::function<bool(std::string_view, std::string*)>& tryOpenFile,
               const std::function<bool(std::string_view, std::string*)>& trySaveFile);
+
+  /// Replace the error shown by the Open SVG dialog.
+  /// @param error New diagnostic text.
   void setOpenFileError(std::string error);
+
+  /// Clear the Open SVG dialog error.
   void clearOpenFileError();
+
+  /// Replace the error shown by the Save SVG dialog.
+  /// @param error New diagnostic text.
   void setSaveFileError(std::string error);
+
+  /// Clear the Save SVG dialog error.
   void clearSaveFileError();
 
   /// Whether an Open SVG modal has been requested but not yet opened by render().

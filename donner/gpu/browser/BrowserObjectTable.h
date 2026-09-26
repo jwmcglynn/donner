@@ -31,6 +31,7 @@ enum class BrowserObjectKind : uint8_t {
   ComputePipeline,  //!< A compute pipeline.
   Surface,          //!< A presentation surface and the canvas context behind it.
   BufferMapping,    //!< A host mapping of a buffer range.
+
   /// Number of kinds. Not a kind; it exists so per-kind storage and the protocol table below are
   /// sized by the enumeration itself rather than by a number kept in step with it by hand.
   kCount,

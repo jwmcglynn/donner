@@ -101,6 +101,7 @@ struct ConvertTextToOutlinesResult {
 struct ConvertTextsToOutlinesResult {
   bool ok = false;    //!< Whether every selected element was converted.
   std::string error;  //!< Failure reason; populated when ok is false.
+
   /// Detached conversions in input order. Empty on any failure.
   std::vector<ConvertTextToOutlinesResult>
       conversions;  //!< Per-element conversion outcomes in the requested batch.

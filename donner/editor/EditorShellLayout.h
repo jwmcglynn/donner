@@ -42,6 +42,7 @@ struct EditorAdaptiveUiLayout {
   float panelY = 0.0f;       //!< Vertical panel origin in logical UI pixels.
   float panelWidth = 0.0f;   //!< Panel width in logical UI pixels.
   float panelHeight = 0.0f;  //!< Panel height in logical UI pixels.
+
   /// Whether the canvas palette includes the combined fill/stroke control.
   bool showPaintControls = true;
   /// Whether the contextual text format bar is available.
@@ -221,11 +222,13 @@ struct RenderPaneLatchInput {
   /// Render-pane content region this frame.
   float paneContentWidth = 0.0f;
   float paneContentHeight = 0.0f;  //!< Current render-pane content height in logical pixels.
+
   /// Render-pane content region on the previous frame, or a negative size before any frame has
   /// reported one.
   float previousPaneContentWidth = -1.0f;
   float previousPaneContentHeight =
       -1.0f;  //!< Previous content height, or a negative value before any sample.
+
   /// Whether this frame's dock layout splits a sidebar column off the host. False in the
   /// compact-touch profile, whose root node *is* the canvas node.
   bool sidebarColumnIncluded = true;

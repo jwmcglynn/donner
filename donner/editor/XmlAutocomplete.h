@@ -21,9 +21,9 @@ enum class XmlAutocompleteContextKind {
 struct XmlAutocompleteContext {
   XmlAutocompleteContextKind kind =
       XmlAutocompleteContextKind::Unknown;  //!< XML syntactic context at the completion cursor.
-  std::size_t replaceStartOffset = 0;  ///< Inclusive byte offset to replace.
-  std::size_t replaceEndOffset = 0;    ///< Exclusive byte offset to replace.
-  std::string prefix;                  ///< Already-typed completion prefix.
+  std::size_t replaceStartOffset = 0;       ///< Inclusive byte offset to replace.
+  std::size_t replaceEndOffset = 0;         ///< Exclusive byte offset to replace.
+  std::string prefix;                       ///< Already-typed completion prefix.
 };
 
 /// A single XML autocomplete suggestion.

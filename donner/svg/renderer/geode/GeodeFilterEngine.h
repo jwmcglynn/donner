@@ -145,8 +145,15 @@ struct RetainedFilterResources {
   // another, so `std::vector` reallocation reached for that copy on one of them and not the other.
   RetainedFilterResources(const RetainedFilterResources&) = delete;
   RetainedFilterResources& operator=(const RetainedFilterResources&) = delete;
-  RetainedFilterResources(RetainedFilterResources&&) = default;
-  RetainedFilterResources& operator=(RetainedFilterResources&&) = default;
+
+  /// Construct by moving another instance's state.
+  /// @param other Source object.
+  RetainedFilterResources(RetainedFilterResources&& other) = default;
+
+  /// Replace this object's state by moving another instance.
+  /// @param other Source object.
+  /// @return This object after the move.
+  RetainedFilterResources& operator=(RetainedFilterResources&& other) = default;
 
   std::deque<gpu::TextureView> textureViews;  //!< Views the commands attach to or sample.
   std::deque<gpu::BindGroup> bindGroups;      //!< Bind groups the commands bind.
@@ -262,8 +269,14 @@ struct FilterTilePlan {
   uint32_t coreWidth = 0;   //!< Non-overlapping output step.
   uint32_t coreHeight = 0;  //!< Non-overlapping output step.
   uint64_t tiles = 1;       //!< Number of complete graph executions.
+
+  /// Return the pixel area of one padded filter tile.
   uint64_t pixels() const { return uint64_t{tileWidth} * tileHeight; }
+
+  /// Return the total tile pixel area processed across all tile executions.
   uint64_t workPixels() const { return pixels() * tiles; }
+
+  /// Return RGBA8 assembly and tile texture bytes needed by a tiled plan, or zero when untiled.
   uint64_t additionalTextureBytes() const {
     return tiles > 1 ? (uint64_t{width} * height + pixels()) * 4 : 0;
   }

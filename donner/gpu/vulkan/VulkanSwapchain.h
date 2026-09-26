@@ -384,6 +384,7 @@ private:
   VulkanSurfaceContext context_;  //!< Borrowed device objects.
   std::shared_ptr<VulkanSurfaceRetirement> retirement_;
   VkSurfaceKHR surface_ = VK_NULL_HANDLE;  //!< The surface presented to.
+
   /// Whether \ref surface_ is this object's to destroy. False for a surface the embedder created
   /// and still owns, which its windowing library generally destroys with the window.
   bool ownsSurface_ = true;
@@ -392,12 +393,14 @@ private:
   Extent2d extent_;                                    //!< Extent the swapchain was created with.
 
   std::vector<VkImage> images_;  //!< Swapchain images; owned by the swapchain, not by this.
+
   /// One semaphore per swapchain image, signalled by the submission that hands the image over
   /// and waited on by the present. Indexed by image index, so it is free to reuse exactly when
   /// that image comes back around.
   std::vector<VkSemaphore> handoverSemaphores_;
   std::vector<VkFence> presentFences_;     //!< Completion fence for each image's latest present.
   std::vector<bool> presentFencePending_;  //!< Whether the corresponding fence was enqueued.
+
   /// Ring of acquisition semaphores, one longer than the image count so the slot being reused is
   /// always one whose frame has already been presented or discarded.
   std::vector<VkSemaphore> acquireSemaphores_;
@@ -405,6 +408,7 @@ private:
   /// before that slot is reused.
   std::vector<VkFence> acquireRingFences_;
   uint64_t acquireCount_ = 0;  //!< Total acquisitions, which selects the ring slot.
+
   /// Ring slot the current frame was acquired on. Carried with the frame rather than recomputed
   /// from \ref acquireCount_ when the frame ends: a rebuild restarts that counter, so recomputing
   /// would file this frame's fence under a slot whose semaphore was never signalled for it.
@@ -420,6 +424,7 @@ private:
   bool forceNextAcquireOutOfDate_ = false;           //!< One-shot injected out-of-date acquisition.
   bool forceMinimumImageCount_ = false;              //!< One-shot smallest-allowed image count.
   std::optional<size_t> lastFencedRingSlot_;         //!< Ring slot the last handover fenced.
+
   /// True once a frame was discarded rather than presented: Vulkan reclaims it only when the
   /// swapchain that owns it is replaced.
   bool needsRecreation_ = false;
