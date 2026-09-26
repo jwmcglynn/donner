@@ -53,8 +53,9 @@ WebAssembly packages select the browser runtime without the C WebGPU wrapper. Th
 `//donner/editor/tests:editor_window_vulkan_default_tests` gate checks unset and empty backend
 requests with real displayed frames at initial and resized extents. Ordinary configured native
 Geode, renderer, editor and embed-example roots in this tree exclude WebGPU-C++ and wgpu-native.
-Static test-only containment of the Linux resvg reference, hosted/integrated acceptance and
-physical-browser qualification remain.
+The two checksum-pinned Linux archives are exposed through test-only Linux targets, and macOS
+archive fetches and aliases are removed. Configured Linux reference execution, the required
+cross-platform closure job, hosted/integrated acceptance and physical-browser qualification remain.
 
 ### Native parity
 
@@ -731,11 +732,11 @@ separate hosted and integrated acceptance gate.
       separate gates.
 - [ ] Remove the transitional adapter, `wgpu-native` archives/overlays, WebGPU-C++ headers,
       obsolete rules and orphaned code from every production and non-test closure. Preserve only
-      pinned Linux archive(s) and the API wrapper needed by the resvg comparison target. Their
-      exported cc targets/aliases must become `testonly`, Linux-compatible and visible only to the
-      test package. Remove macOS archive aliases and prohibit any editor, Wasm or shipped-artifact
-      edge. Pin the actual fetch rule and generated lock to reviewed bytes with nonempty matching
-      SHA-256 checksums.
+      the two pinned Linux archives and API wrapper needed by the resvg comparison target. The
+      source graph now separates its `testonly`, Linux-compatible targets from native products and
+      removes macOS archive fetches/aliases; the generated lock matches the reviewed Linux SHA-256
+      values. Complete configured Linux oracle execution, product/package closure receipts and
+      hosted acceptance before closing this item.
 - [ ] Make unexpected Rust-built archives blocking in `check_no_rust_dependencies.py`. Add the
       `no-rust-configured-closure` aggregate job to `.github/workflows/main.yml` and make
       `CI / no-rust-configured-closure` a required branch-protection check ([#1530](https://github.com/jwmcglynn/donner/issues/1530)).
