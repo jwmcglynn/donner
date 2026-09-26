@@ -765,6 +765,8 @@ std::string_view ProcessBackendRequest() {
 GpuBackendKind PlatformDefaultGpuBackendKind() {
 #if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
   return GpuBackendKind::NativeMetal;
+#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
+  return GpuBackendKind::NativeVulkan;
 #else
   return GpuBackendKind::TransitionalWgpu;
 #endif
@@ -878,9 +880,8 @@ namespace {
 gpu::Result<ResolvedBackend> ResolveBackend(const GpuRootSelection& options,
                                             std::string_view request,
                                             std::optional<GpuBackendKind> buildDefault) {
-  // A WebGPU surface provider can only be served by the transitional adapter. Apple's editor
-  // attaches its Metal layer without one, so its window and offscreen roots take the native
-  // default.
+  // A WebGPU surface provider can only be served by the transitional adapter. Native editor
+  // windows attach their platform surfaces without one, so their roots take the native default.
   ResolvedBackend resolved{options.compatibleSurface ? GpuBackendKind::TransitionalWgpu
                                                      : PlatformDefaultGpuBackendKind(),
                            BackendRequestSource::Default};
