@@ -530,8 +530,8 @@ public:
    *
    * Also refused with \ref GpuErrorType::InvalidState for a registration of another device's
    * texture, which is exported from the device that allocated it; with
-   * `GpuErrorType::DeviceLost` once this device is lost; and with
-   * \ref GpuErrorType::Unsupported by a backend whose runtime devices never share a native
+   * \ref donner::gpu::GpuErrorType::DeviceLost "GpuErrorType::DeviceLost" once this device is lost;
+   * and with \ref GpuErrorType::Unsupported by a backend whose runtime devices never share a native
    * device.
    *
    * @param texture Live texture of this device.
@@ -543,10 +543,10 @@ public:
    *
    * Runs on this device's thread and reads only \p source, never the producer device. The
    * registration describes the texture as the producer does, except that its usage is limited to
-   * \ref TextureUsage::Sampled and `TextureUsage::CopySrc`: a consumer reads what the producer
-   * wrote and never writes it. It never owns the allocation (\ref ownsTextureBacking is false) but
-   * holds it until this device recycles the registration's slot, which is after the last of this
-   * device's submissions naming it has completed.
+   * \ref TextureUsage::Sampled and \ref donner::gpu::TextureUsage::CopySrc "TextureUsage::CopySrc":
+   * a consumer reads what the producer wrote and never writes it. It never owns the allocation
+   * (\ref ownsTextureBacking is false) but holds it until this device recycles the registration's
+   * slot, which is after the last of this device's submissions naming it has completed.
    *
    * Work this device submits that names the registration is ordered after every submission the
    * producer had made referencing the texture before this call, and after the queued writes those
@@ -562,8 +562,9 @@ public:
    * producer write to the texture is queued and not yet submitted; \ref
    * GpuErrorType::DeviceMismatch for another backend or native device; \ref
    * GpuErrorType::UsageMismatch when the texture can be neither sampled nor copied from;
-   * `GpuErrorType::DeviceLost` when either device is lost; and
-   * \ref GpuErrorType::Unsupported by a backend that cannot name another device's textures.
+   * \ref donner::gpu::GpuErrorType::DeviceLost "GpuErrorType::DeviceLost" when either device is
+   * lost; and \ref GpuErrorType::Unsupported by a backend that cannot name another device's
+   * textures.
    *
    * @param source Token from the producer's \ref exportTexture.
    */
@@ -737,10 +738,10 @@ public:
    *
    * Fails closed when the mapping is stale, belongs to another device, has not completed, named
    * a buffer that has since been destroyed, or belongs to a device that has been lost
-   * (`GpuErrorType::DeviceLost`): the span is only valid while the handle names a
-   * live, ready mapping. Completion means a \ref donner::gpu::Device::waitForMapping on this
-   * mapping reported \ref MapWaitOutcome::Ready; until one has, reading is refused rather than
-   * racing whatever the GPU is still writing.
+   * (\ref donner::gpu::GpuErrorType::DeviceLost "GpuErrorType::DeviceLost"): the span is only valid
+   * while the handle names a live, ready mapping. Completion means a \ref
+   * donner::gpu::Device::waitForMapping on this mapping reported \ref MapWaitOutcome::Ready; until
+   * one has, reading is refused rather than racing whatever the GPU is still writing.
    *
    * The span aliases the backend's allocation rather than a copy of it, so it lives only as long
    * as the mapping does: \ref unmapBuffer, destroying the buffer, or losing the device all end
@@ -1063,8 +1064,9 @@ protected:
    * Backend hook: export the texture in \p slotIndex, which the runtime has already validated as a
    * live texture this device allocated and no surface has out.
    *
-   * The default refuses with `GpuErrorType::Unsupported`: a backend that reaches each native
-   * device through exactly one runtime device has no other device that could name the texture.
+   * The default refuses with \ref donner::gpu::GpuErrorType::Unsupported
+   * "GpuErrorType::Unsupported": a backend that reaches each native device through exactly one
+   * runtime device has no other device that could name the texture.
    *
    * @param slotIndex Validated live texture slot.
    */
