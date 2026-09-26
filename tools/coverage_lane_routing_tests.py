@@ -104,7 +104,14 @@ class CoverageLaneRoutingTest(unittest.TestCase):
         self.assertRegex(self.codecov, r"pr-incremental:\s*\n\s*carryforward: false")
         comment_layout = re.search(r'^  layout: "([^"]+)"', self.codecov, re.MULTILINE)
         self.assertIsNotNone(comment_layout)
-        self.assertNotIn("header", comment_layout.group(1).split(", "))
+        components = comment_layout.group(1).split(", ")
+        self.assertNotIn("header", components)
+        self.assertNotIn(
+            "diff", components,
+            "Codecov's expanded Coverage Diff table still shows a project-looking percentage "
+            "for the partial PR upload",
+        )
+        self.assertIn("flags", components, "the partial-upload flag must remain visible")
         # Omitting the header alone still leaves Codecov's project-percentage summary in PR
         # comments. A focused upload must show patch coverage without implying a full baseline.
         comment = self.codecov.split("\ncomment:\n", 1)[1].split("\nflags:\n", 1)[0]
