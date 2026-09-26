@@ -1,11 +1,9 @@
 """Geode: GPU-native SVG rendering backend.
 
 This backend is gated behind a build flag so default builds do not pull in the
-WebGPU runtime at all (the GPU/Dawn dependencies are not in the default graph),
-not because of maturity — Geode is the editor's default renderer. WebGPU is provided
-on native by a prebuilt `wgpu-native` archive (see
-`third_party/bazel/non_bcr_deps.bzl`) and on WASM by emdawnwebgpu (browser
-WebGPU bindings).
+GPU runtime at all. Geode is the editor's default renderer. Native macOS and
+Linux use Donner's Metal and Vulkan devices. The explicit Linux resvg comparison
+configuration retains the pinned wgpu-native reference implementation.
 
 To enable:
 
@@ -16,6 +14,7 @@ To enable:
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:defs.bzl", "py_test")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load(
@@ -278,10 +277,9 @@ donner_cc_library(
     deps = [
         "//donner/base",
         "//donner/gpu/shader:slug_fill_api",
-        # The slabs stamp every buffer they create with
-        # `GeodeDevice::AllocateBufferId`, which is defined out of line, so
-        # this is a link dependency and not just an include.
-        ":geode_device",
+        # The final renderer names the selected Geode implementation; this header needs only its
+        # API so the Linux comparison can link the reference implementation instead.
+        ":geode_device_api",
         ":geode_handle_retirement",
         ":geode_resource_budget",
     ],
@@ -295,7 +293,7 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
-        ":geode_device",
+        ":geode_device_api",
         ":geode_handle_retirement",
         ":geode_path_encoder",
         ":geode_resident_path_component",
@@ -334,35 +332,11 @@ donner_cc_test(
 
 donner_cc_library(
     name = "geode_wgpu_util",
-    hdrs = ["GeodeWgpuUtil.h"],
-    target_compatible_with = _GEODE_ONLY,
-    visibility = [
-        "//donner/editor/gui:__pkg__",
-        "//donner/gpu:__subpackages__",
-        "//donner/svg/renderer:__subpackages__",
-        "//examples:__pkg__",
-    ],
-    deps = [
-        "//third_party/webgpu-cpp:webgpu_cpp",
-    ],
-)
-
-donner_cc_test(
-    name = "geode_wgpu_util_tests_impl",
-    srcs = ["tests/GeodeWgpuUtil_tests.cc"],
-    target_compatible_with = _GEODE_ONLY,
-    deps = [
-        ":geode_wgpu_util",
-        "//donner/base:gtest_timeout_main",
-    ],
-)
-
-donner_multi_transitioned_test(
-    name = "geode_wgpu_util_tests",
-    timeout = "short",
     testonly = 1,
-    dep = ":geode_wgpu_util_tests_impl",
-    renderer_backend = "geode",
+    hdrs = ["GeodeWgpuUtil.h"],
+    target_compatible_with = _GEODE_ONLY + ["@platforms//os:linux"],
+    visibility = ["//visibility:private"],
+    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],
 )
 
 donner_cc_library(
@@ -384,6 +358,69 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "geode_device_api",
+    hdrs = [
+        "GeodeDevice.h",
+        "GeodeFilterEngine.h",
+        "GeodeGpuContext.h",
+        "GeodeImagePipeline.h",
+        "GeodePipeline.h",
+    ],
+    target_compatible_with = _GEODE_ONLY,
+    visibility = [
+        "//donner/gpu:__subpackages__",
+        "//donner/svg/renderer:__subpackages__",
+        "//examples:__pkg__",
+    ],
+    deps = [
+        ":geode_counters",
+        ":geode_gpu_wait",
+        ":geode_handle_retirement",
+        "//donner/base",
+        "//donner/gpu",
+        "//donner/gpu/shader:compiled_shader",
+    ],
+)
+
+_GEODE_DEVICE_COMMON_SRCS = [
+    "GeodeCheckerboardPass.cc",
+    "GeodeDevice.cc",
+    "GeodeFilterEngine.cc",
+    "GeodeImagePipeline.cc",
+    "GeodePipeline.cc",
+]
+
+_GEODE_DEVICE_COMMON_DEPS = ([
+                                 ":checkerboard_pipeline",
+                                 ":geode_counters",
+                                 ":geode_device_api",
+                                 ":geode_gpu_wait",
+                                 ":geode_handle_retirement",
+                                 ":geode_shader_selection",
+                                 ":geode_shaders",
+                                 "//donner/base",
+                                 "//donner/base:asyncify_suspend_probe",
+                                 "//donner/gpu",
+                                 "//donner/gpu/shader:lighting_params",
+                                 "//donner/svg/components/filter:components",
+                                 "//donner/svg/renderer:pixel_format_utils",
+                             ] + select({
+                                 "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
+                                 "@platforms//os:linux": ["//donner/gpu/vulkan:vulkan_device"],
+                                 "//conditions:default": [],
+                             }) + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) +
+                             shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES) +
+                             native_shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES))
+
+_GEODE_DEVICE_NATIVE_LINKOPTS = select({
+    "@platforms//os:linux": [
+        "-ldl",
+        "-lpthread",
+    ],
+    "//conditions:default": [],
+})
+
+donner_cc_library(
     name = "geode_device",
     # GeodeFilterEngine and GeodePipeline / GeodeImagePipeline are folded
     # into this library so `GeodeDevice` can own them as shared-across-
@@ -392,44 +429,15 @@ donner_cc_library(
     # they need `GeodeDevice::device()`/`queue()`). The filter engine
     # no longer has a meaningful life independent of a `GeodeDevice`,
     # so the merge is semantic rather than mechanical.
-    srcs = [
-        "GeodeCheckerboardPass.cc",
-        "GeodeDevice.cc",
-        "GeodeFilterEngine.cc",
-        "GeodeImagePipeline.cc",
-        "GeodePipeline.cc",
-    ] + select({
+    srcs = _GEODE_DEVICE_COMMON_SRCS + select({
         ":browser_backend_enabled": ["GeodeBrowserRoot.cc"],
-        "//conditions:default": ["GeodeWgpuAdapterDevice.cc"],
+        "//conditions:default": ["GeodeNativeRoot.cc"],
     }),
-    hdrs = [
-        "GeodeDevice.h",
-        "GeodeFilterEngine.h",
-        "GeodeGpuContext.h",
-        "GeodeImagePipeline.h",
-        "GeodePipeline.h",
-    ] + select({
+    hdrs = select({
         ":browser_backend_enabled": ["GeodeBrowserRoot.h"],
-        "//conditions:default": [
-            "GeodeCallbackState.h",
-            "GeodeEmbed.h",
-            "GeodeWgpuAdapterDevice.h",
-        ],
+        "//conditions:default": ["GeodeNativeRoot.h"],
     }),
-    # wgpu-native's prebuilt libwgpu_native.dylib ships with its Metal
-    # backend already linked, so no per-target framework linkopts are
-    # needed on macOS — unlike the previous Dawn cmake() build which
-    # required the consumer to link Metal/Foundation/QuartzCore/IOKit/
-    # IOSurface/CoreGraphics manually. Linux still needs dl + pthread
-    # because wgpu-native's .so references them but doesn't runtime-
-    # load them itself.
-    linkopts = select({
-        "@platforms//os:linux": [
-            "-ldl",
-            "-lpthread",
-        ],
-        "//conditions:default": [],
-    }),
+    linkopts = _GEODE_DEVICE_NATIVE_LINKOPTS,
     local_defines = select({
         ":browser_backend_enabled": ["DONNER_GEODE_BROWSER_BACKEND=1"],
         "//conditions:default": [],
@@ -445,35 +453,79 @@ donner_cc_library(
         "//donner/svg/renderer:__subpackages__",
         "//examples:__pkg__",
     ],
+    deps = _GEODE_DEVICE_COMMON_DEPS + select({
+        ":browser_backend_enabled": [
+            "//donner/gpu/browser:browser_device",
+            "//donner/gpu/browser:emscripten_browser_bridge",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+# The Linux resvg pixel comparison is the only consumer of the transitional adapter. This rule
+# is testonly and cannot enter an ordinary product's dependency graph.
+donner_cc_library(
+    name = "geode_device_wgpu_reference_linux",
+    testonly = 1,
+    srcs = _GEODE_DEVICE_COMMON_SRCS + ["GeodeWgpuAdapterDevice.cc"],
+    hdrs = [
+        "GeodeCallbackState.h",
+        "GeodeWgpuAdapterDevice.h",
+    ],
+    defines = ["DONNER_GEODE_WGPU_REFERENCE=1"],
+    linkopts = _GEODE_DEVICE_NATIVE_LINKOPTS,
+    target_compatible_with = _GEODE_ONLY + ["@platforms//os:linux"],
+    visibility = [
+        "//donner/svg/renderer:__pkg__",
+        "//donner/svg/renderer/tests:__pkg__",
+    ],
+    deps = _GEODE_DEVICE_COMMON_DEPS + [
+        ":geode_wgpu_util",
+        "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
+    ],
+)
+
+# The ordinary native Geode root must not fetch or link the test-only wgpu-native archive.
+configured_dependency_audit_test(
+    name = "geode_native_no_wgpu_archive_audit_impl",
+    forbidden = [
+        "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
+        "//donner/svg/renderer:renderer_geode_wgpu_reference_linux",
+        "//donner/svg/renderer/tests:image_comparison_test_fixture_wgpu_reference_linux",
+        "//donner/svg/renderer/tests:renderer_test_backend_wgpu_reference_linux",
+        "//third_party/webgpu-cpp:webgpu_cpp",
+        "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
+        "@wgpu_native_linux_aarch64//:wgpu_native",
+        "@wgpu_native_linux_x86_64//:wgpu_native",
+    ],
+    tags = ["manual"],
+    target = "//donner/svg/renderer/geode:geode_device",
+)
+
+donner_multi_transitioned_test(
+    name = "geode_native_no_wgpu_archive_audit_test",
+    dep = ":geode_native_no_wgpu_archive_audit_impl",
+    renderer_backend = "geode",
+)
+
+donner_cc_test(
+    name = "geode_native_root_tests_impl",
+    srcs = ["tests/GeodeNativeRoot_tests.cc"],
+    target_compatible_with = _GEODE_ONLY + select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
     deps = [
-               ":checkerboard_pipeline",
-               ":geode_counters",
-               ":geode_gpu_wait",
-               ":geode_handle_retirement",
-               ":geode_shader_selection",
-               ":geode_shaders",
-               "//donner/base",
-               "//donner/base:asyncify_suspend_probe",
-               "//donner/gpu",
-               "//donner/gpu/shader:lighting_params",
-               "//donner/svg/components/filter:components",
-               "//donner/svg/renderer:pixel_format_utils",
-           ] + select({
-               "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
-               "@platforms//os:linux": ["//donner/gpu/vulkan:vulkan_device"],
-               "//conditions:default": [],
-           }) + select({
-               ":browser_backend_enabled": [
-                   "//donner/gpu/browser:browser_device",
-                   "//donner/gpu/browser:emscripten_browser_bridge",
-               ],
-               "//conditions:default": [
-                   ":geode_wgpu_util",
-                   "//third_party/webgpu-cpp:webgpu_cpp",
-               ],
-           }) + shader_apis(GEODE_DEVICE_SHADER_FAMILIES) +
-           shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES) +
-           native_shader_artifacts(GEODE_DEVICE_SHADER_FAMILIES),
+        ":geode_device",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_native_root_tests",
+    dep = ":geode_native_root_tests_impl",
+    renderer_backend = "geode",
 )
 
 # Test support: a context over a backend a test names, and texture readback through the runtime.
@@ -490,37 +542,7 @@ donner_cc_library(
     deps = [
         ":geode_device",
         "//donner/gpu",
-        "@com_google_gtest//:gtest",
     ],
-)
-
-donner_cc_test(
-    name = "geode_wgpu_adapter_device_tests_impl",
-    srcs = ["tests/GeodeWgpuAdapterDevice_tests.cc"],
-    target_compatible_with = _GEODE_ONLY,
-    deps = [
-        ":geode_device",
-        ":geode_test_contexts",
-        "//donner/base:gtest_timeout_main",
-        "//donner/gpu",
-        "//donner/gpu:float_texture_slice",
-        "//donner/gpu:gpu_test_utils",
-        "//donner/gpu:sub_rectangle_copy_scene",
-        "//donner/gpu:sub_rectangle_upload_scene",
-        "//donner/gpu:vertex_input_slice",
-        "//donner/gpu/shader:float_storage_test_module",
-        "//donner/gpu/shader:module_interface",
-        "//donner/gpu/shader:wgsl_emitter",
-    ],
-)
-
-donner_multi_transitioned_test(
-    name = "geode_wgpu_adapter_device_tests",
-    # See geode_device_tests for the rationale on the short timeout.
-    timeout = "short",
-    testonly = 1,
-    dep = ":geode_wgpu_adapter_device_tests_impl",
-    renderer_backend = "geode",
 )
 
 donner_cc_test(
@@ -531,7 +553,6 @@ donner_cc_test(
         ":geode_device",
         ":geode_gpu_wait",
         ":geode_test_contexts",
-        ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu",
@@ -589,26 +610,16 @@ donner_cc_library(
 
 donner_cc_test(
     name = "geode_shaders_tests_impl",
-    # 30 cases that each build and run a real shader pipeline, 66 s of test time measured on a
-    # software-rasterizer lane, so the implicit "small" this used to take is wrong by construction:
-    # that budget is 60 s. See the wrapper below for why this one does not keep the tight
-    # hang-detecting timeout its neighbours use.
-    size = "medium",
+    # Six native-runtime cases: the dynamic Slug endpoint WGSL cases run in pinned Chromium under
+    # //donner/gpu/shader:slug_endpoint_chromium_tests.
     srcs = ["tests/GeodeShaders_tests.cc"],
     target_compatible_with = _GEODE_ONLY,
     deps = [
                ":geode_device",
-               ":geode_gpu_wait",
                ":geode_shader_selection",
                ":geode_shaders",
-               ":geode_test_contexts",
-               ":geode_wgpu_util",
                "//donner/base:gtest_timeout_main",
-               "//donner/editor/tests:bitmap_golden_compare",
                "//donner/gpu:slug_fill_slice",
-               "//donner/gpu/shader:programs",
-               "//donner/gpu/shader:wgsl_emitter",
-               "//third_party/webgpu-cpp:webgpu_cpp",
            ] + shader_apis(SLUG_SHADER_FAMILIES) +
            shader_artifacts(SLUG_SHADER_FAMILIES) +
            native_shader_artifacts(SLUG_SHADER_FAMILIES),
@@ -616,12 +627,7 @@ donner_cc_test(
 
 donner_multi_transitioned_test(
     name = "geode_shaders_tests",
-    # Not the short timeout its neighbours use. That one is a hang detector for device creation,
-    # which should take seconds on a healthy driver; this suite legitimately runs 30 shader
-    # pipelines, and needs 66 s of them on a software rasterizer. Moderate keeps the intent -
-    # a hung driver is still killed, in five minutes rather than one - without failing a run
-    # where every case passes steadily.
-    timeout = "moderate",
+    timeout = "short",
     testonly = 1,
     dep = ":geode_shaders_tests_impl",
     opens_gpu_device = True,
@@ -664,8 +670,9 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
-        ":geode_device",
+        ":geode_device_api",
         "//donner/base",
+        "//donner/gpu/shader:image_blit_api",
     ],
 )
 
@@ -684,7 +691,7 @@ donner_cc_library(
         "//donner/svg/renderer:__subpackages__",
     ],
     deps = [
-               ":geode_device",
+               ":geode_device_api",
                ":geode_fill_tolerance",
                ":geode_path_encoder",
                ":geode_resident_path_component",
@@ -711,7 +718,6 @@ donner_cc_test(
         ":geode_path_cache_component",
         ":geode_resource_budget",
         ":geode_test_contexts",
-        ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/css",
@@ -859,13 +865,11 @@ donner_multi_transitioned_test(
 )
 
 donner_cc_test(
-    name = "geode_embed_tests_impl",
-    srcs = ["tests/GeodeEmbed_tests.cc"],
+    name = "geode_target_texture_tests_impl",
+    srcs = ["tests/GeodeTargetTexture_tests.cc"],
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
-        ":geode_test_contexts",
-        ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu:gpu_test_utils",
@@ -876,10 +880,10 @@ donner_cc_test(
 )
 
 donner_multi_transitioned_test(
-    name = "geode_embed_tests",
+    name = "geode_target_texture_tests",
     size = "small",
     testonly = 1,
-    dep = ":geode_embed_tests_impl",
+    dep = ":geode_target_texture_tests_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
 )
@@ -892,7 +896,6 @@ donner_cc_test(
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
-        ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu:gpu_test_utils",
@@ -926,7 +929,6 @@ donner_cc_test(
     target_compatible_with = ["@platforms//os:linux"] + _GEODE_ONLY,
     deps = [
         ":geode_device",
-        ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu:gpu_test_utils",
@@ -1099,7 +1101,6 @@ donner_cc_test(
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
-        ":geode_wgpu_util",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu:gpu_test_utils",
         "//donner/svg/components/filter:components",

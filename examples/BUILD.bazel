@@ -91,10 +91,9 @@ donner_cc_binary(
 
 # --- Geode embedded-mode demo (linux/macos, --config=geode only) ---
 #
-# Minimal GLFW host app that wraps Geode's embedding API and renders an SVG
-# into the window's swap-chain texture every frame. Gated behind the
-# `geode_enabled` flag (see //donner/svg/renderer/geode:BUILD.bazel) so the
-# default build does not pull in wgpu-native.
+# Minimal GLFW host app that selects a native root against its window surface
+# and renders an SVG into each acquired runtime texture. Gated behind the
+# `geode_enabled` flag (see //donner/svg/renderer/geode:BUILD.bazel).
 objc_library(
     name = "geode_embed_surface_macos",
     srcs = ["geode_embed_surface_macos.mm"],
@@ -111,7 +110,7 @@ objc_library(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        "//third_party/webgpu-cpp:webgpu_cpp",
+        "//donner/svg/renderer/geode:geode_device",
         "@glfw",
     ],
 )
@@ -128,7 +127,8 @@ cc_library(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        "//third_party/webgpu-cpp:webgpu_cpp",
+        "//donner/gpu/vulkan:vulkan_device",
+        "//donner/svg/renderer/geode:geode_device",
         "@glfw",
     ],
 )
@@ -148,9 +148,7 @@ cc_library(
         "@platforms//os:macos": [":geode_embed_surface_macos"],
         "@platforms//os:linux": [":geode_embed_surface_linux"],
         "//conditions:default": [],
-    }) + [
-        "//third_party/webgpu-cpp:webgpu_cpp",
-    ],
+    }),
 )
 
 donner_cc_binary(
@@ -171,8 +169,6 @@ donner_cc_binary(
         "//donner/base",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer/geode:geode_device",
-        "//donner/svg/renderer/geode:geode_wgpu_util",
-        "//third_party/webgpu-cpp:webgpu_cpp",
         "@glfw",
     ],
 )

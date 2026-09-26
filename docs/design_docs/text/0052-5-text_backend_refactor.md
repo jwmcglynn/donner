@@ -373,7 +373,7 @@ public:
   TextBackendFull(FontManager& fontManager, Registry& registry);
 
   // All methods implemented via hb_*/FT_* calls.
-  // isCursive() → Unicode range checks for Arabic, Syriac, Thaana, N'Ko, Mandaic
+  // isCursive() → Unicode range checks for Arabic, Syriac, N'Ko, Mandaic
   // hasSmallCapsFeature() → hb_ot_layout_language_find_feature(HB_TAG('s','m','c','p'))
   // bitmapGlyph() → FT_Load_Glyph with FT_LOAD_COLOR
   // shapeRun() → hb_buffer_add_utf8 + hb_shape

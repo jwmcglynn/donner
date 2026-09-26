@@ -45,11 +45,9 @@
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeEmbed.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -1369,8 +1367,8 @@ TEST_F(RendererGeodeTest, InterruptibleSnapshotCancelsPromptlyAfterGpuSubmit) {
 
 /// A capture cancelled after its readback reached the queue still names the source texture on its
 /// capture context until that readback completes. Once it has, the owner must find nothing else
-/// holding the texture when it releases it: no bytes stay resident on the owner's behalf, and on
-/// the transitional adapter the backing is destroyed explicitly, as for any released target.
+/// holding the texture when it releases it: no bytes stay resident on the owner's behalf, and its
+/// runtime reports giving up ownership of the released target.
 ///
 /// The capture context submits to its own queue on a native backend, so the owner's queue going
 /// idle does not mean the capture's readback has. The test waits for the capture queue itself,
@@ -1393,8 +1391,7 @@ TEST_F(RendererGeodeTest, ACancelledCaptureStopsHoldingItsSourceOnceItsWorkCompl
           .empty());
   device->setSnapshotReadbackHookForTesting({});
 
-  const std::uint64_t destroysBefore =
-      geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting();
+  const std::uint64_t releasesBefore = device->lifetimeTextureReleases();
   std::shared_ptr<const RendererTextureSnapshot> snapshot = renderer.takeTextureSnapshot();
   ASSERT_NE(snapshot, nullptr);
   snapshot.reset();
@@ -1404,12 +1401,9 @@ TEST_F(RendererGeodeTest, ACancelledCaptureStopsHoldingItsSourceOnceItsWorkCompl
 
   EXPECT_EQ(renderer.consumeReadbackStats().sharedTextureTailBytes, 0u)
       << "no bytes may stay resident on the owner's behalf once every reader has finished";
-  if (device->hasTransitionalAdapter()) {
-    EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
-              destroysBefore + 1u)
-        << "the cancelled capture's registration must not keep the released target's backing "
-           "alive after its readback completed";
-  }
+  EXPECT_EQ(device->lifetimeTextureReleases(), releasesBefore + 1u)
+      << "the cancelled capture's registration must not keep the released target's backing "
+         "owned after its readback completed";
 }
 
 TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
@@ -1798,51 +1792,44 @@ TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
   EXPECT_EQ(secondTexture->dimensions(), texture->dimensions());
 }
 
-/// The destroyed backing is observed through the transitional adapter's wgpu handle counter, for
-/// which the runtime has no backend-neutral equivalent, so the renderer draws through a context
-/// that selects that backend by name.
-TEST_F(RendererGeodeTest, OwnedTextureSnapshotExplicitlyDestroysBackingWhenOwnerDrains) {
-  const std::shared_ptr<geode::GeodeDevice> adapterContext =
-      geode::CreateTransitionalAdapterContext("reads the wgpu backing-destroy counter");
-  ASSERT_THAT(adapterContext, testing::NotNull());
-  RendererGeode renderer(adapterContext);
+/// A released snapshot enters the owner-context retirement mailbox and gives up its native
+/// allocation only when the owner drains that mailbox.
+TEST_F(RendererGeodeTest, OwnedTextureSnapshotReleasesBackingWhenOwnerDrains) {
+  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
   beginFrame(renderer);
   renderer.endFrame();
 
-  const std::uint64_t destroysBefore =
-      geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting();
+  const std::uint64_t releasesBefore = device->lifetimeTextureReleases();
   std::shared_ptr<const RendererTextureSnapshot> snapshot = renderer.takeTextureSnapshot();
   ASSERT_NE(snapshot, nullptr);
   snapshot.reset();
 
-  EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
-            destroysBefore);
-  EXPECT_THAT(adapterContext->deferredTextureDestroyCountForTesting(), testing::Eq(1u));
-  adapterContext->drainDeferredTextureBackings();
-  EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(),
-            destroysBefore + 1u)
-      << "The owner-context drain must explicitly destroy released snapshot backing";
+  EXPECT_EQ(device->lifetimeTextureReleases(), releasesBefore);
+  EXPECT_THAT(device->deferredTextureDestroyCountForTesting(), testing::Eq(1u));
+  device->drainDeferredTextureBackings();
+  EXPECT_EQ(device->lifetimeTextureReleases(), releasesBefore + 1u)
+      << "The owner-context drain must give up released snapshot backing";
 }
 
-/// Observed through the transitional adapter's wgpu handle counter, as the case above is.
-TEST_F(RendererGeodeTest, BorrowedTextureSnapshotNeverDestroysBacking) {
-  const std::shared_ptr<geode::GeodeDevice> adapterContext =
-      geode::CreateTransitionalAdapterContext("reads the wgpu backing-destroy counter");
-  ASSERT_THAT(adapterContext, testing::NotNull());
-  RendererGeode renderer(adapterContext);
+/// A borrowed frame view does not give up ownership of the reusable native target.
+TEST_F(RendererGeodeTest, BorrowedTextureSnapshotKeepsBacking) {
+  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode renderer(device);
   beginFrame(renderer);
   renderer.endFrame();
 
-  const std::uint64_t destroysBefore =
-      geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting();
+  const std::uint64_t releasesBefore = device->lifetimeTextureReleases();
   const RendererTextureSnapshot* snapshot = renderer.borrowTextureSnapshot();
   ASSERT_NE(snapshot, nullptr);
 
   beginFrame(renderer);
   renderer.endFrame();
 
-  EXPECT_EQ(geode::ScopedWgpuHandle<wgpu::Texture>::backingDestroyCountForTesting(), destroysBefore)
-      << "A frame-local borrowed snapshot must not destroy the renderer's reusable target";
+  EXPECT_EQ(device->lifetimeTextureReleases(), releasesBefore)
+      << "A frame-local borrowed snapshot must not release the renderer's reusable target";
 }
 
 TEST_F(RendererGeodeTest, SynchronousDirectPresentationReusesSameSizeRenderTarget) {
@@ -3045,18 +3032,12 @@ TEST_F(RendererGeodeTest, GeometryEditKeepsSiblingResidentPaintsIntact) {
       << "The swap-and-pop survivor must keep its own record and paint";
 }
 
-TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
-  // An embedding host hands over wgpu objects, so the host selects the transitional adapter.
-  std::shared_ptr<geode::GeodeDevice> host =
-      geode::CreateTransitionalAdapterContext("an embedding host hands over wgpu objects");
+TEST_F(RendererGeodeTest, SharedPhysicalOwnerDrawPathExportsTextureSnapshot) {
+  std::shared_ptr<geode::GeodeDevice> host = geode::GeodeDevice::CreateHeadless();
   ASSERT_TRUE(host != nullptr);
 
-  geode::GeodeEmbedConfig config;
-  config.device = host->adapterDevice().root().device();
-  config.queue = host->adapterDevice().root().queue();
-  config.adapter = host->adapterDevice().root().adapter();
-  config.textureFormat = geode::WgpuTextureFormatFrom(host->textureFormat());
-  auto embeddedUnique = geode::GeodeDevice::CreateFromExternal(config);
+  auto embeddedUnique = geode::GeodeDevice::CreateOverPhysicalDeviceOwner(
+      host->physicalDeviceOwner(), host->textureFormat());
   ASSERT_NE(embeddedUnique, nullptr);
 
   std::shared_ptr<geode::GeodeDevice> embedded(std::move(embeddedUnique));
@@ -3090,19 +3071,15 @@ TEST_F(RendererGeodeTest, BgraTargetSnapshotReturnsStraightRgba) {
   expectBgraTargetSnapshotIsStraightRgba(bgraContext);
 }
 
-/// A BGRA target an embedding host hands over reads back the same way. Embedding hands over wgpu
-/// objects, so the host selects the transitional adapter.
-TEST_F(RendererGeodeTest, EmbeddedBgraTargetSnapshotReturnsStraightRgba) {
+/// A BGRA target rendered by a second logical context over the same native root reads back the
+/// same way as the selecting context's target.
+TEST_F(RendererGeodeTest, SharedBgraTargetSnapshotReturnsStraightRgba) {
   std::shared_ptr<geode::GeodeDevice> host =
-      geode::CreateTransitionalAdapterContext("an embedding host hands over wgpu objects");
+      geode::GeodeDevice::CreateHeadless(gpu::TextureFormat::BGRA8Unorm);
   ASSERT_NE(host, nullptr);
 
-  geode::GeodeEmbedConfig config;
-  config.device = host->adapterDevice().root().device();
-  config.queue = host->adapterDevice().root().queue();
-  config.adapter = host->adapterDevice().root().adapter();
-  config.textureFormat = wgpu::TextureFormat::BGRA8Unorm;
-  std::shared_ptr<geode::GeodeDevice> embedded = geode::GeodeDevice::CreateFromExternal(config);
+  std::shared_ptr<geode::GeodeDevice> embedded = geode::GeodeDevice::CreateOverPhysicalDeviceOwner(
+      host->physicalDeviceOwner(), gpu::TextureFormat::BGRA8Unorm);
   ASSERT_NE(embedded, nullptr);
   expectBgraTargetSnapshotIsStraightRgba(embedded);
 }
@@ -5561,7 +5538,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsInvalidContentBeforeTakingOwners
     gpu::Texture texture = std::move(created).result();
     {
       auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-          sharedDevice(), std::move(texture), dimensions, wgpu::TextureFormat::RGBA8Unorm,
+          sharedDevice(), std::move(texture), dimensions, gpu::TextureFormat::RGBA8Unorm,
           AlphaType::Premultiplied);
       EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
       EXPECT_THAT(texture.isValid(), testing::IsTrue());
@@ -5584,7 +5561,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsForeignOwnerWithoutConsumingTheT
   gpu::Texture texture = std::move(created).result();
   {
     auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-        other, std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        other, std::move(texture), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
         AlphaType::Premultiplied);
     EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
     EXPECT_THAT(texture.isValid(), testing::IsTrue());
@@ -5603,7 +5580,7 @@ TEST_F(RendererGeodeTest, SnapshotContentCannotGrowBeyondItsBacking) {
   ASSERT_FALSE(created.hasError()) << created.error();
   gpu::Texture texture = std::move(created).result();
   auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-      sharedDevice(), std::move(texture), {2, 3}, wgpu::TextureFormat::RGBA8Unorm,
+      sharedDevice(), std::move(texture), {2, 3}, gpu::TextureFormat::RGBA8Unorm,
       AlphaType::Premultiplied);
   snapshot.setDimensions({5, 3});
   EXPECT_THAT(snapshot.dimensions(), testing::Eq(Vector2i(2, 3)));
@@ -5650,7 +5627,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsStaleIdentityWithoutTouchingItsR
   gpu::Texture live = std::move(replacement).result();
   {
     auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-        sharedDevice(), std::move(stale), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        sharedDevice(), std::move(stale), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
         AlphaType::Premultiplied);
     EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
     EXPECT_THAT(stale.isValid(), testing::IsTrue());
@@ -5660,35 +5637,37 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsStaleIdentityWithoutTouchingItsR
   (void)runtime.destroyTextureBacking(std::move(live));
 }
 
-/// The borrowed registration is the transitional adapter's host-import escape hatch, so the case
-/// selects that backend by name.
-TEST_F(RendererGeodeTest, RuntimeSnapshotCannotAdoptABorrowedHostRegistration) {
-  const std::shared_ptr<geode::GeodeDevice> host =
-      geode::CreateTransitionalAdapterContext("registers a host wgpu texture through the adapter");
+/// A registration of another logical context's texture borrows the native allocation. A snapshot
+/// may own only its producer's allocation, so it must refuse that registration without consuming
+/// the handle or changing the producer's ownership.
+TEST_F(RendererGeodeTest, RuntimeSnapshotCannotAdoptABorrowedRegistration) {
+  const std::shared_ptr<geode::GeodeDevice> host = sharedDevice();
   ASSERT_THAT(host, testing::NotNull());
-  gpu::Device& runtime = host->runtimeDevice();
-  auto& adapter = host->adapterDevice();
-  auto created = runtime.createTexture({"host owner",
-                                        {4, 4},
-                                        gpu::TextureFormat::RGBA8Unorm,
-                                        gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  const std::shared_ptr<geode::GeodeDevice> consumer =
+      geode::GeodeDevice::CreateOverPhysicalDeviceOwner(host->physicalDeviceOwner(),
+                                                        host->textureFormat());
+  ASSERT_THAT(consumer, testing::NotNull());
+  gpu::Device& producerRuntime = host->runtimeDevice();
+  gpu::Device& consumerRuntime = consumer->runtimeDevice();
+  auto created =
+      producerRuntime.createTexture({"host owner",
+                                     {4, 4},
+                                     gpu::TextureFormat::RGBA8Unorm,
+                                     gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   ASSERT_FALSE(created.hasError()) << created.error();
   gpu::Texture owner = std::move(created).result();
-  auto imported = adapter.importExternalTexture(
-      adapter.wgpuTextureOf(owner), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
-      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc);
-  ASSERT_FALSE(imported.hasError()) << imported.error();
-  gpu::Texture registration = std::move(imported).result();
+  const gpu::TextureExport exported = gpu::GetResultOrFail(producerRuntime.exportTexture(owner));
+  gpu::Texture registration = gpu::GetResultOrFail(consumerRuntime.registerTexture(exported));
   {
     auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-        host, std::move(registration), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        consumer, std::move(registration), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
         AlphaType::Premultiplied);
     EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
     EXPECT_THAT(registration.isValid(), testing::IsTrue());
   }
-  EXPECT_THAT(static_cast<bool>(adapter.wgpuTextureOf(owner)), testing::IsTrue());
-  registration = {};
-  (void)runtime.destroyTextureBacking(std::move(owner));
+  EXPECT_THAT(producerRuntime.ownsTextureBacking(owner), testing::IsTrue());
+  (void)consumerRuntime.destroyTexture(std::move(registration));
+  (void)producerRuntime.destroyTextureBacking(std::move(owner));
 }
 
 void ExpectSolidRuntimeSnapshot(const RendererBitmap& actual, Vector2i dimensions,
@@ -5719,7 +5698,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotMovesPreserveTheResourceIdentity) {
   gpu::Texture texture = std::move(created).result();
   const uint32_t slot = texture.slotIndex(), generation = texture.generation();
   auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-      sharedDevice(), std::move(texture), {2, 3}, wgpu::TextureFormat::RGBA8Unorm,
+      sharedDevice(), std::move(texture), {2, 3}, gpu::TextureFormat::RGBA8Unorm,
       AlphaType::Premultiplied);
   ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
   EXPECT_THAT(texture.isValid(), testing::IsFalse());
@@ -5815,7 +5794,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotContentAlphaAndBothByteFormatsRemainExa
       ASSERT_FALSE(runtime.writeTexture(texture, pixels, {0, 256, 4}, {4, 4}).hasError());
       auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
           sharedDevice(), std::move(texture), {2, 3},
-          bgra ? wgpu::TextureFormat::BGRA8Unorm : wgpu::TextureFormat::RGBA8Unorm,
+          bgra ? gpu::TextureFormat::BGRA8Unorm : gpu::TextureFormat::RGBA8Unorm,
           straight ? AlphaType::Unpremultiplied : AlphaType::Premultiplied);
       ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
       ExpectSolidRuntimeSnapshot(snapshot.takeSnapshot(), {2, 3}, {128, 0, 0, 128},
@@ -5835,6 +5814,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotContentAlphaAndBothByteFormatsRemainExa
 std::shared_ptr<geode::GeodeDevice> CreateSharedBackendContext(
     const std::shared_ptr<geode::GeodeDevice>& device);
 
+#if defined(__linux__)
 /// An owning 4x4 snapshot of a texture \p owner creates, sampleable and copyable.
 /// @param owner Device the texture belongs to.
 RendererGeodeTextureSnapshot MakeOwnedSnapshot(const std::shared_ptr<geode::GeodeDevice>& owner) {
@@ -5844,34 +5824,22 @@ RendererGeodeTextureSnapshot MakeOwnedSnapshot(const std::shared_ptr<geode::Geod
        gpu::TextureFormat::RGBA8Unorm,
        gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc}));
   return RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-      owner, std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm, AlphaType::Premultiplied);
+      owner, std::move(texture), {4, 4}, gpu::TextureFormat::RGBA8Unorm, AlphaType::Premultiplied);
 }
 
-/// A snapshot whose owner the renderer's device refuses to register is rejected before anything
-/// is recorded. The owner has to be one registration genuinely refuses on the selected backend. On
-/// the transitional adapter a second headless device is another native device. On a native
-/// backend it shares the native device and registers, so there the owner is an adapter context,
-/// which registration refuses as another backend. The refusal's reason is asserted, and an
-/// identical snapshot made on a sibling device, which registration accepts, draws on the same
-/// renderer, so the owner is the only thing the renderer refused.
+/// Two separately selected Vulkan roots own different VkDevice objects, so a snapshot exported
+/// from one must be refused by the other. A sibling logical context over the renderer's root is
+/// the positive control: it registers and draws the same kind of snapshot.
 TEST_F(RendererGeodeTest, ForeignRuntimeSnapshotIsRejectedBeforeRecording) {
-  const bool onTransitionalAdapter = sharedDevice()->hasTransitionalAdapter();
-  const std::shared_ptr<geode::GeodeDevice> owner =
-      onTransitionalAdapter
-          ? std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless())
-          : std::shared_ptr<geode::GeodeDevice>(geode::CreateTransitionalAdapterContext(
-                "registration refuses another backend, so an adapter context is a foreign "
-                "owner on a native backend"));
+  const std::shared_ptr<geode::GeodeDevice> owner = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(owner, testing::NotNull());
   const RendererGeodeTextureSnapshot foreign = MakeOwnedSnapshot(owner);
   ASSERT_THAT(foreign.isValid(), testing::IsTrue());
   EXPECT_THAT(
       sharedDevice()->runtimeDevice().registerTexture(
           gpu::GetResultOrFail(owner->runtimeDevice().exportTexture(*foreign.runtimeTexture()))),
-      gpu::IsGpuErrorWithMessage(
-          gpu::GpuErrorType::DeviceMismatch,
-          testing::HasSubstr(onTransitionalAdapter ? "belongs to a different native device"
-                                                   : "belongs to a device of another backend")));
+      gpu::IsGpuErrorWithMessage(gpu::GpuErrorType::DeviceMismatch,
+                                 testing::HasSubstr("belongs to a different native device")));
 
   const std::shared_ptr<geode::GeodeDevice> sibling = CreateSharedBackendContext(sharedDevice());
   ASSERT_THAT(sibling, testing::NotNull());
@@ -5888,6 +5856,7 @@ TEST_F(RendererGeodeTest, ForeignRuntimeSnapshotIsRejectedBeforeRecording) {
               testing::IsFalse());
   renderer.endFrame();
 }
+#endif
 
 TEST_F(RendererGeodeTest, RuntimeReadbackPreservesSampledOnlyAndCopyOnlyRoutes) {
   for (bool sampled : {false, true}) {
@@ -5910,7 +5879,7 @@ TEST_F(RendererGeodeTest, RuntimeReadbackPreservesSampledOnlyAndCopyOnlyRoutes) 
     }
     ASSERT_FALSE(runtime.writeTexture(texture, pixels, {0, 256, 4}, {4, 4}).hasError());
     auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-        sharedDevice(), std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        sharedDevice(), std::move(texture), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
         AlphaType::Premultiplied);
     ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
     ExpectSolidRuntimeSnapshot(snapshot.takeSnapshot(), {4, 4}, {0, 255, 0, 255},
@@ -5931,7 +5900,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotRejectsUnusableCapabilitiesWithoutConsu
   gpu::Texture texture = std::move(created).result();
   {
     auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-        sharedDevice(), std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        sharedDevice(), std::move(texture), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
         AlphaType::Premultiplied);
     EXPECT_THAT(snapshot.isValid(), testing::IsFalse());
     EXPECT_THAT(texture.isValid(), testing::IsTrue());
@@ -5952,10 +5921,10 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotMoveAssignmentReleasesThePreviousBackin
   gpu::Texture oldIdentity = gpu::Texture::CreateForBackend(
       first.result().slotIndex(), first.result().generation(), first.result().deviceId());
   auto destination = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-      sharedDevice(), std::move(first).result(), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+      sharedDevice(), std::move(first).result(), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
       AlphaType::Premultiplied);
   auto source = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-      sharedDevice(), std::move(second).result(), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+      sharedDevice(), std::move(second).result(), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
       AlphaType::Premultiplied);
   destination = std::move(source);
   EXPECT_THAT(source.isValid(), testing::IsFalse());
@@ -6052,7 +6021,7 @@ TEST_F(RendererGeodeTest, UploadedSnapshotBackingSurvivesUntilConsumerSubmission
         sharedDevice()->runtimeDevice().writeTexture(texture, pixels, {0, 256, 4}, {4, 4});
     ASSERT_FALSE(written.hasError()) << written.error();
     auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-        sharedDevice(), std::move(texture), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        sharedDevice(), std::move(texture), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
         AlphaType::Premultiplied);
     ASSERT_THAT(snapshot.isValid(), testing::IsTrue());
     for (int draw = 0; draw < 100; ++draw) {
@@ -6079,7 +6048,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotBackingIsReleasedWhenConsumerFrameIsDis
     sourceIdentity =
         gpu::Texture::CreateForBackend(source.slotIndex(), source.generation(), source.deviceId());
     const auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-        sharedDevice(), std::move(source), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+        sharedDevice(), std::move(source), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
         AlphaType::Premultiplied);
     EXPECT_THAT(consumer.drawTextureSnapshot(snapshot, Box2d({0, 0}, {4, 4}), 1, true),
                 testing::IsTrue());
@@ -6096,10 +6065,8 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotBackingIsReleasedWhenConsumerFrameIsDis
 /// runtime device on the same backend, whichever backend that is.
 std::shared_ptr<geode::GeodeDevice> CreateSharedBackendContext(
     const std::shared_ptr<geode::GeodeDevice>& device) {
-  geode::GeodeEmbedConfig config;
-  config.physicalDevice = device->physicalDeviceOwner();
-  config.textureFormat = geode::WgpuTextureFormatFrom(device->textureFormat());
-  return geode::GeodeDevice::CreateFromExternal(config);
+  return geode::GeodeDevice::CreateOverPhysicalDeviceOwner(device->physicalDeviceOwner(),
+                                                           device->textureFormat());
 }
 
 TEST_F(RendererGeodeTest, SharedBackendSnapshotPreservesIdentityAndCroppedContent) {
@@ -6128,7 +6095,7 @@ TEST_F(RendererGeodeTest, SharedBackendSnapshotPreservesIdentityAndCroppedConten
   ASSERT_FALSE(
       producer->runtimeDevice().writeTexture(source, pixels, {0, 256, 4}, {4, 4}).hasError());
   auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-      producer, std::move(source), {2, 3}, wgpu::TextureFormat::RGBA8Unorm,
+      producer, std::move(source), {2, 3}, gpu::TextureFormat::RGBA8Unorm,
       AlphaType::Premultiplied);
   RendererGeode renderer(consumer);
   beginFrame(renderer);
@@ -6160,7 +6127,7 @@ TEST_F(RendererGeodeTest, SharedBackendSnapshotNeedsARegistrationNotMatchingBack
        gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   ASSERT_FALSE(created.hasError()) << created.error();
   auto snapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-      producer, std::move(created).result(), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+      producer, std::move(created).result(), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
       AlphaType::Premultiplied);
   // A second snapshot of the same shape on the same producer, left intact, is the control: the
   // consumer admits it, so the refusal below is about the registration and not about the context.
@@ -6171,7 +6138,7 @@ TEST_F(RendererGeodeTest, SharedBackendSnapshotNeedsARegistrationNotMatchingBack
        gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
   ASSERT_FALSE(control.hasError()) << control.error();
   auto registeredSnapshot = RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
-      producer, std::move(control).result(), {4, 4}, wgpu::TextureFormat::RGBA8Unorm,
+      producer, std::move(control).result(), {4, 4}, gpu::TextureFormat::RGBA8Unorm,
       AlphaType::Premultiplied);
 
   // The texture and its registration stay alive here, so the consumer is refused for the one
@@ -6232,7 +6199,7 @@ TEST_F(RendererGeodeTest, RuntimeSnapshotReleaseOnAnotherThreadDefersOwnerSlotRe
       gpu::Texture::CreateForBackend(source.slotIndex(), source.generation(), source.deviceId());
   auto snapshot = std::make_shared<RendererGeodeTextureSnapshot>(
       RendererGeodeTextureSnapshot::AdoptRuntimeTexture(owner, std::move(source), {4, 4},
-                                                        wgpu::TextureFormat::RGBA8Unorm,
+                                                        gpu::TextureFormat::RGBA8Unorm,
                                                         AlphaType::Premultiplied));
   std::thread releaser([snapshot = std::move(snapshot)]() mutable { snapshot.reset(); });
   releaser.join();

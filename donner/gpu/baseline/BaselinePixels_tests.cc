@@ -20,8 +20,10 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "donner/base/tests/Runfiles.h"
@@ -61,6 +63,102 @@ std::map<std::string, std::string> ReadProvenance(const std::string& path) {
     values[key] = valueStart == std::string::npos ? std::string() : value.substr(valueStart);
   }
   return values;
+}
+
+struct FrozenEnvironment {
+  std::string slug;
+  std::string adapterName;
+  std::string adapterBackend;
+};
+
+struct FrozenMatch {
+  std::optional<std::string> slug;
+  bool ambiguous = false;
+};
+
+/// The old Vulkan capture records WebGPU's vendor prefix before the Vulkan physical-device name.
+/// An exact name wins; a suffix is accepted only when one frozen adapter matches it.
+FrozenMatch MatchFrozenEnvironment(const CaptureEnvironment& live,
+                                   const std::vector<FrozenEnvironment>& frozen) {
+  if (live.adapterName.empty() || live.adapterBackend.empty()) {
+    return {};
+  }
+  std::optional<std::string> exact;
+  std::optional<std::string> legacy;
+  bool multipleLegacy = false;
+  for (const FrozenEnvironment& candidate : frozen) {
+    if (candidate.adapterBackend != live.adapterBackend) {
+      continue;
+    }
+    if (candidate.adapterName == live.adapterName) {
+      if (exact.has_value()) {
+        return {.ambiguous = true};
+      }
+      exact = candidate.slug;
+      continue;
+    }
+    if (live.adapterBackend != "Vulkan" ||
+        !std::string_view(candidate.adapterName).ends_with(live.adapterName) ||
+        candidate.adapterName.size() <= live.adapterName.size() ||
+        candidate.adapterName[candidate.adapterName.size() - live.adapterName.size() - 1] != ' ') {
+      continue;
+    }
+    if (legacy.has_value()) {
+      multipleLegacy = true;
+      continue;
+    }
+    legacy = candidate.slug;
+  }
+  if (exact.has_value()) {
+    return {.slug = std::move(exact)};
+  }
+  if (multipleLegacy) {
+    return {.ambiguous = true};
+  }
+  return {.slug = std::move(legacy)};
+}
+
+FrozenMatch FrozenSlugFor(const CaptureEnvironment& live) {
+  const std::filesystem::path root = Runfiles::instance().Rlocation(kBaselinesRunfileDir);
+  std::error_code error;
+  std::vector<FrozenEnvironment> frozen;
+  for (std::filesystem::directory_iterator it(root, error), end; !error && it != end;
+       it.increment(error)) {
+    if (!it->is_directory(error)) {
+      continue;
+    }
+    const std::filesystem::path provenancePath = it->path() / "capture_provenance.txt";
+    const std::map<std::string, std::string> values = ReadProvenance(provenancePath.string());
+    const auto name = values.find("adapterName");
+    const auto backend = values.find("adapterBackend");
+    if (name != values.end() && backend != values.end()) {
+      frozen.push_back({it->path().filename().string(), name->second, backend->second});
+    }
+  }
+  return error ? FrozenMatch{.ambiguous = true} : MatchFrozenEnvironment(live, frozen);
+}
+
+TEST(FrozenEnvironmentMatchTest, RequiresIdentityAndUniqueLegacySuffix) {
+  const std::vector<FrozenEnvironment> frozen = {
+      {"old_a", "llvmpipe llvmpipe (LLVM 20.1.2, 256 bits)", "Vulkan"},
+      {"old_b", "llvmpipe llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan"},
+  };
+  EXPECT_THAT(
+      MatchFrozenEnvironment({"llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan", ""}, frozen).slug,
+      testing::Optional(testing::Eq("old_b")));
+  EXPECT_THAT(MatchFrozenEnvironment({"", "Vulkan", ""}, frozen).slug, testing::Eq(std::nullopt));
+  EXPECT_THAT(MatchFrozenEnvironment({"missing", "Vulkan", ""}, frozen).slug,
+              testing::Eq(std::nullopt));
+  const FrozenMatch ambiguous = MatchFrozenEnvironment(
+      {"llvmpipe", "Vulkan", ""},
+      {{"a", "vendor llvmpipe", "Vulkan"}, {"b", "other llvmpipe", "Vulkan"}});
+  EXPECT_THAT(ambiguous.ambiguous, testing::IsTrue());
+  EXPECT_THAT(ambiguous.slug, testing::Eq(std::nullopt));
+  EXPECT_THAT(
+      MatchFrozenEnvironment({"llvmpipe", "Vulkan", ""}, {{"exact", "llvmpipe", "Vulkan"},
+                                                          {"legacy", "vendor llvmpipe", "Vulkan"}})
+          .slug,
+      testing::Optional(testing::Eq("exact")));
 }
 
 bool ProvenanceListsScene(const std::string& capturedScenes, std::string_view sceneName) {
@@ -144,7 +242,12 @@ protected:
       return;
     }
 
-    slug_ = EnvironmentSlug(capturer_->environment());
+    const FrozenMatch match = FrozenSlugFor(capturer_->environment());
+    if (match.ambiguous) {
+      FAIL() << "The selected adapter matches multiple frozen environments, or the baseline "
+                "directory could not be read; refusing an arbitrary pixel comparison";
+    }
+    slug_ = match.slug.value_or(EnvironmentSlug(capturer_->environment()));
     provenance_ = ReadProvenance(ProvenancePathFor(slug_));
     if (provenance_.empty()) {
       handleUnbaselinedEnvironment();

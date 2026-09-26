@@ -45,8 +45,6 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeEmbed.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
@@ -96,10 +94,8 @@ protected:
 /// A second logical context over the physical root `root` already holds, or null when the root
 /// refuses to share.
 std::unique_ptr<geode::GeodeDevice> siblingContextOf(const geode::GeodeDevice& root) {
-  geode::GeodeEmbedConfig config;
-  config.physicalDevice = root.physicalDeviceOwner();
-  config.textureFormat = geode::WgpuTextureFormatFrom(root.textureFormat());
-  return geode::GeodeDevice::CreateFromExternal(config);
+  return geode::GeodeDevice::CreateOverPhysicalDeviceOwner(root.physicalDeviceOwner(),
+                                                           root.textureFormat());
 }
 
 /// Submits one empty command buffer through `runtime` and returns the serial it was given, or 0
@@ -156,38 +152,25 @@ TEST_F(GeodeSharedDeviceFrameTest, ContextsOverOneRootKeepTheirRuntimeStateApart
   EXPECT_THAT(root->lifetimeBufferCreates(), testing::Eq(rootBuffersBefore));
 }
 
-/// The physical root is one device, so the condition "this device stopped answering" is one
-/// condition. A bounded wait on one context's runtime that reaches its deadline has observed the
-/// root hang, and every other context over that root renders through the same hung hardware: a
-/// context that still reports a healthy device goes on submitting work that can never complete
-/// and waiting its own full budget for each of it.
-TEST_F(GeodeSharedDeviceFrameTest, ALossOneContextsWaitObservesIsSharedByTheOthers) {
-  // A private root: this case declares the physical device lost, which is sticky, so it must not
-  // reach the shared device the rest of the file renders through. It holds work through the
-  // transitional adapter's test seam, so it selects that backend by name.
-  std::unique_ptr<geode::GeodeDevice> root = geode::CreateTransitionalAdapterContext(
-      "holds submitted work through the adapter's test seam");
-  ASSERT_NE(root, nullptr) << "no wgpu adapter is available on this host";
+/// Native runtime tests own completion-wait mechanics. Here the Geode queue-idle timeout policy
+/// must publish the same sticky loss and attribution to every context over one physical root.
+TEST_F(GeodeSharedDeviceFrameTest, AQueueIdleTimeoutIsSharedByAllLogicalContexts) {
+  std::unique_ptr<geode::GeodeDevice> root = geode::GeodeDevice::CreateHeadless();
+  ASSERT_NE(root, nullptr) << "no native GPU device is available on this host";
   std::unique_ptr<geode::GeodeDevice> sibling = siblingContextOf(*root);
   ASSERT_NE(sibling, nullptr);
   ASSERT_FALSE(root->isDeviceLost());
   ASSERT_FALSE(sibling->isDeviceLost());
 
-  geode::GeodeWgpuAdapterDevice& rootRuntime = root->adapterDevice();
-  const uint64_t submitted = submitEmptyCommandBuffer(rootRuntime);
-  ASSERT_THAT(submitted, testing::Gt(0u));
-  // Submitted work that stops retiring, on a device whose poll blocks the way a driver waiting on
-  // it does: the wait can only end by spending its budget.
-  rootRuntime.holdSubmittedWorkForTesting(submitted - 1, std::chrono::milliseconds(1));
-  EXPECT_THAT(rootRuntime.waitForSerial(submitted, 0.25), testing::IsFalse());
+  root->setQueueWaitResultForTesting(geode::GpuWaitResult::TimedOut);
+  EXPECT_THAT(root->waitForQueueIdle(std::chrono::milliseconds(1)),
+              testing::Eq(geode::GpuWaitResult::TimedOut));
 
   EXPECT_TRUE(root->isDeviceLost());
   EXPECT_TRUE(sibling->isDeviceLost())
-      << "a loss observed through one context's runtime is a loss of the root both contexts "
-         "render through";
-
-  rootRuntime.holdSubmittedWorkForTesting(geode::GeodeWgpuAdapterDevice::kNoCompletedSerialCeiling,
-                                          std::chrono::milliseconds(0));
+      << "a timeout attributed by one context is a loss of the root both contexts render through";
+  EXPECT_THAT(sibling->lostState()->timedOutSite.load(std::memory_order_acquire),
+              testing::Eq(geode::GpuWaitSite::QueueIdle));
 }
 
 /// An editor drives one context from its UI thread and another from its render worker, both over

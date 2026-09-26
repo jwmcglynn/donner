@@ -1,41 +1,36 @@
-"""C++ wrapper for wgpu-native, vendored from eliemichel/WebGPU-distribution.
+"""Pinned WebGPU-C++ wrapper for the Linux-only resvg pixel reference."""
 
-The `webgpu.hpp` header provides a Dawn-style `wgpu::` namespace with RAII
-handles and typed enum wrappers around wgpu-native's C API (webgpu.h +
-wgpu.h). It's a single generated header, checked in here alongside the
-project's MIT license file.
-
-The `wgpu_native_platform` select picks the correct pre-built wgpu-native
-archive for the current (os, cpu). Linux arm64 and macOS x86_64 are wired
-up in addition to the primary linux x86_64 / macOS arm64 combos so the
-same rule works across CI runners and local dev machines.
-
-For **Emscripten/WASM** builds the browser provides the WebGPU API natively
-via `-sUSE_WEBGPU=1`; no prebuilt archive is needed. The `wgpu_emscripten`
-target supplies a stub `wgpu.h` (the wgpu-native extensions header that
-`webgpu.hpp` includes unconditionally) plus link-time stub implementations
-so the C++ wrapper compiles and links.
-"""
-
-load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:package.bzl", "donner_package")
 
-package(default_visibility = ["//visibility:public"])
-
-exports_files(["webgpu.hpp"])
+package(default_visibility = ["//visibility:private"])
 
 cc_library(
     name = "webgpu_cpp",
+    testonly = True,
     hdrs = ["webgpu.hpp"],
     include_prefix = "webgpu",
     # The header includes <webgpu/webgpu.h> and <webgpu/wgpu.h> directly, so
     # the wgpu-native `cc_library` must be exported as part of this target's
     # public headers, not just a link-time dep.
     strip_include_prefix = ".",
-    deps = [":wgpu_native_platform"] + select({
-        "@platforms//os:linux": [":wgpu_native_lsan_suppressions"],
-        "//conditions:default": [],
-    }),
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        ":wgpu_native_lsan_suppressions",
+        ":wgpu_native_platform",
+    ],
+)
+
+# The Linux resvg comparison target names its native implementation dependency directly. Narrow
+# visibility prevents other packages from adopting the test-only reference target.
+cc_library(
+    name = "wgpu_native_reference_runtime",
+    testonly = True,
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = [
+        "//donner/svg/renderer/geode:__pkg__",
+        "//donner/svg/renderer/tests:__pkg__",
+    ],
+    deps = [":webgpu_cpp"],
 )
 
 # LeakSanitizer only runs on Linux, and the suppression is only meaningful for a binary that links
@@ -44,6 +39,7 @@ cc_library(
 # definition wins unless this object is force-linked into the executable.
 cc_library(
     name = "wgpu_native_lsan_suppressions",
+    testonly = True,
     srcs = ["wgpu_native_lsan_suppressions.cc"],
     linkstatic = True,
     target_compatible_with = select({
@@ -51,20 +47,6 @@ cc_library(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     alwayslink = True,
-)
-
-# Alias the active wgpu-native archive for the current (os, cpu). Each
-# archive was published by the `non_bcr_deps` module extension in
-# //third_party/bazel/non_bcr_deps.bzl and carries the same target name
-# (`wgpu_native`).  Emscripten (wasm32/wasm64) uses a stub that delegates
-# to the browser's built-in WebGPU implementation.
-alias(
-    name = "wgpu_native_platform",
-    actual = selects.with_or({
-        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): ":wgpu_emscripten",
-        "@platforms//os:macos": ":wgpu_native_macos",
-        "@platforms//os:linux": ":wgpu_native_linux",
-    }),
 )
 
 # Emscripten WebGPU target. The browser provides the standard webgpu.h
@@ -94,20 +76,22 @@ cc_library(
     ],
 )
 
+# Select the pinned Linux archive only for the test-only resvg comparison.
 alias(
-    name = "wgpu_native_macos",
-    actual = select({
-        "@platforms//cpu:aarch64": "@wgpu_native_macos_aarch64//:wgpu_native",
-        "@platforms//cpu:x86_64": "@wgpu_native_macos_x86_64//:wgpu_native",
-    }),
+    name = "wgpu_native_platform",
+    testonly = True,
+    actual = ":wgpu_native_linux",
+    target_compatible_with = ["@platforms//os:linux"],
 )
 
 alias(
     name = "wgpu_native_linux",
+    testonly = True,
     actual = select({
         "@platforms//cpu:aarch64": "@wgpu_native_linux_aarch64//:wgpu_native",
         "@platforms//cpu:x86_64": "@wgpu_native_linux_x86_64//:wgpu_native",
     }),
+    target_compatible_with = ["@platforms//os:linux"],
 )
 
 donner_package(gpu_inventory_globs = [

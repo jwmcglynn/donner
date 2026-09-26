@@ -12,10 +12,9 @@
 #include "GLFW/emscripten_glfw3.h"
 #include "donner/editor/WholeAppWorkerBridge.h"
 #elif defined(DONNER_EDITOR_WGPU)
-#include <webgpu/webgpu.h>
-
-#include <webgpu/webgpu.hpp>
-
+#if defined(__APPLE__)
+#include "donner/editor/gui/EditorMetalLayer.h"
+#endif
 #if defined(__linux__)
 #include <vulkan/vulkan.h>
 #endif
@@ -54,10 +53,6 @@ extern "C" {
 // platform, so this is no longer an Emscripten-only dependency.
 #include "donner/editor/ImGuiInternalIncludes.h"
 #ifdef DONNER_EDITOR_WGPU
-#ifndef __EMSCRIPTEN__
-// Presenting to a platform window is desktop-only; the browser tier presents through its canvas.
-#include "donner/editor/gui/EditorWgpuSurface.h"
-#endif
 // The UI is drawn through the runtime on every tier that defines DONNER_EDITOR_WGPU, including
 // the browser one, so these are not part of the desktop-only block above.
 #include "donner/editor/gui/ImGuiRuntimeRenderer.h"
@@ -70,9 +65,7 @@ extern "C" {
 #ifdef __EMSCRIPTEN__
 #include "donner/svg/renderer/geode/GeodeBrowserRoot.h"
 #else
-#include "donner/svg/renderer/geode/GeodeEmbed.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #endif
@@ -938,34 +931,6 @@ uint64_t GlfwTerminationCountForTesting() {
 }
 #endif
 
-#if !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
-/// Creates the surface object this platform's window library makes for \p window.
-///
-/// Adapter selection has to be constrained to the surface before there is a device, so the object
-/// is made here rather than through the runtime, and handed to the runtime afterwards.
-///
-/// @param instance Graphics instance the surface is scoped to.
-/// @param window Window whose platform object frames are presented to.
-wgpu::Surface CreateEditorWgpuSurface(const wgpu::Instance& instance, GLFWwindow* window) {
-  return CreateWgpuSurfaceFromGlfwWindow(instance, window);
-}
-
-/// Picks the format acquired textures carry, from what the platform's surface reports before
-/// there is a device to ask the runtime with. @param caps What the surface reported it supports.
-gpu::TextureFormat ChooseSurfaceFormat(const wgpu::SurfaceCapabilities& caps) {
-  for (size_t i = 0; i < caps.formatCount; ++i) {
-    const auto format = static_cast<WGPUTextureFormat>(caps.formats[i]);
-    if (format == WGPUTextureFormat_BGRA8Unorm) {
-      return gpu::TextureFormat::BGRA8Unorm;
-    }
-    if (format == WGPUTextureFormat_RGBA8Unorm) {
-      return gpu::TextureFormat::RGBA8Unorm;
-    }
-  }
-  return gpu::TextureFormat::BGRA8Unorm;
-}
-#endif  // !__APPLE__ && !__EMSCRIPTEN__
-
 /// How this platform's editor window wants its alpha channel composited with what is behind it.
 constexpr gpu::SurfaceAlphaMode kPreferredAlphaMode =
 #ifdef __EMSCRIPTEN__
@@ -1005,60 +970,26 @@ void RuntimePresentationSurface::attachNativeVulkanSurface(uint64_t surfaceHandl
 #endif
 
 #ifndef __EMSCRIPTEN__
-bool RuntimePresentationSurface::attachToWindow(const wgpu::Instance& instance,
-                                                GLFWwindow* window) {
+bool RuntimePresentationSurface::attachToWindow(GLFWwindow* window) {
 #ifdef __APPLE__
-  (void)instance;
   native_.kind = gpu::NativeSurfaceKind::MetalLayer;
   native_.display = AttachMetalLayerToGlfwWindow(window);
   return native_.display != nullptr;
 #else
-  platformSurface_ = CreateEditorWgpuSurface(instance, window);
-  if (!platformSurface_) {
-    return false;
-  }
-  native_.kind = gpu::NativeSurfaceKind::EmbedderSurface;
-  native_.window = static_cast<uint64_t>(
-      reinterpret_cast<uintptr_t>(static_cast<WGPUSurface>(platformSurface_)));
-  return true;
+  (void)window;
+  return false;
 #endif
 }
 
-#ifndef __APPLE__
-wgpu::Surface RuntimePresentationSurface::adapterSelectionSurface() const {
-  return platformSurface_;
-}
-#endif
-
-bool RuntimePresentationSurface::chooseConfiguration(const wgpu::Adapter& adapter,
-                                                     bool enableReadback) {
+bool RuntimePresentationSurface::chooseConfiguration(bool enableReadback) {
 #ifdef __APPLE__
-  // A Metal layer's format is not a question for an adapter, and a native device's selection
-  // produces none.
-  (void)adapter;
-#else
-  if (!adapter) {
-    // The format below is what the adapter reports its surface can present. Settling one without
-    // asking would compile the renderer's pipelines for a format nothing checked, and the window
-    // would then configure its swapchain from the same unchecked answer.
-    std::fprintf(stderr, "EditorWindow: no adapter to ask what the window surface can present\n");
-    return false;
-  }
-#endif
   readback_ = enableReadback;
-  // The renderer compiles its pipelines for this format before there is a device to ask the
-  // runtime for surface capabilities, so it is settled here and checked against what the surface
-  // reports as soon as there is one.
-#ifdef __APPLE__
-  // A Core Animation Metal layer presents BGRA8Unorm whichever device draws into it.
   format_ = gpu::TextureFormat::BGRA8Unorm;
-#else
-  wgpu::SurfaceCapabilities caps;
-  platformSurface_.getCapabilities(adapter, &caps);
-  format_ = ChooseSurfaceFormat(caps);
-  caps.freeMembers();
-#endif
   return true;
+#else
+  (void)enableReadback;
+  return false;
+#endif
 }
 #endif
 
@@ -1218,10 +1149,6 @@ void RuntimePresentationSurface::release() {
     }
     device_ = nullptr;
   }
-#if !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
-  // Release the native platform surface after the runtime surface built on it.
-  donner::geode::ReleaseWgpuHandle(platformSurface_);
-#endif
   native_ = gpu::NativeSurfaceHandle{};
 }
 
@@ -1243,37 +1170,19 @@ std::unique_ptr<PresentationSurface> CreateEditorBrowserCanvasSurface(gpu::Textu
  * Builds the surface \p window presents through, and readies \p selection for it.
  *
  * A Metal layer presents from any Metal device the system reports and belongs to no instance, so
- * on Apple it is attached here and the selection is left unconstrained; the native backend refuses
- * a selection constrained to a wgpu surface. The transitional WebGPU adapter must present to a
- * surface made from its own instance, so selection receives a provider that makes it. Native
- * Vulkan instead selects against the actual GLFW VkSurfaceKHR before opening a logical device.
+ * Apple attaches it before native root selection. Native Vulkan instead selects against the
+ * actual GLFW VkSurfaceKHR before opening a logical device.
  *
  * @param window Window whose platform object frames are presented to.
  * @param presentation Receives the surface; must outlive the selection.
- * @param selection Selection about to be made.
- * @param attachFailed Set when the window's platform object could not be obtained, here on Apple
- *   and while the selection runs elsewhere; must outlive the selection.
+ * @param attachFailed Set when the window's platform object could not be obtained.
  */
-#ifndef __EMSCRIPTEN__
+#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
 void PrepareSurfaceForSelection(GLFWwindow* window,
                                 std::unique_ptr<PresentationSurface>& presentation,
-                                geode::GpuRootSelection& selection, bool& attachFailed) {
-#ifdef __APPLE__
-  (void)selection;
+                                bool& attachFailed) {
   presentation = CreateEditorPresentationSurface();
-  attachFailed = !presentation->attachToWindow(wgpu::Instance(), window);
-#else
-  selection.compatibleSurface =
-      [window, &presentation,
-       &attachFailed](const wgpu::Instance& instance) -> std::optional<wgpu::Surface> {
-    presentation = CreateEditorPresentationSurface();
-    if (!presentation->attachToWindow(instance, window)) {
-      attachFailed = true;
-      return std::nullopt;
-    }
-    return presentation->adapterSelectionSurface();
-  };
-#endif
+  attachFailed = !presentation->attachToWindow(window);
 }
 #endif
 
@@ -1729,8 +1638,14 @@ NativeVulkanSelection SelectNativeVulkanWindow(GLFWwindow* window) {
 #endif
 
 #ifndef __EMSCRIPTEN__
-bool NeedsWgpuSelectionSurface(bool offscreen, bool browserRuntimeSelected) {
+bool NeedsWindowPresentationSurface(bool offscreen, bool browserRuntimeSelected) {
+#if defined(__APPLE__)
   return !offscreen && !browserRuntimeSelected;
+#else
+  (void)offscreen;
+  (void)browserRuntimeSelected;
+  return false;
+#endif
 }
 #endif
 
@@ -1751,10 +1666,11 @@ bool PrepareEditorSurfaceFormat(std::unique_ptr<internal::PresentationSurface>& 
     return true;
   }
 #else
+  (void)root;
   (void)browserRuntimeSelected;
   (void)offscreen;
   if (presentation != nullptr) {
-    if (!presentation->chooseConfiguration(root.adapter(), enableReadback)) {
+    if (!presentation->chooseConfiguration(enableReadback)) {
       return false;
     }
     format = presentation->format();
@@ -1803,7 +1719,6 @@ std::shared_ptr<geode::GeodeGpuRoot> EditorWindow::selectGpuRootForWindow(bool o
                                                                           bool enableReadback) {
   geode::GpuRootSelection selection;
   selection.label = "DonnerEditorWGPUDevice";
-  selection.usePlatformDefaultBackend = false;
   wgpuState_->browserRuntimeSelected = BrowserRuntimeSelectedForEditor(selection);
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
   if (NativeVulkanWindowSelected(selection, offscreen)) {
@@ -1825,9 +1740,10 @@ std::shared_ptr<geode::GeodeGpuRoot> EditorWindow::selectGpuRootForWindow(bool o
 #endif
 #ifndef __EMSCRIPTEN__
   bool attachFailed = false;
-  if (NeedsWgpuSelectionSurface(offscreen, wgpuState_->browserRuntimeSelected)) {
-    internal::PrepareSurfaceForSelection(window_, wgpuState_->presentation, selection,
-                                         attachFailed);
+  if (NeedsWindowPresentationSurface(offscreen, wgpuState_->browserRuntimeSelected)) {
+#if defined(__APPLE__)
+    internal::PrepareSurfaceForSelection(window_, wgpuState_->presentation, attachFailed);
+#endif
   }
   if (attachFailed) {
     return nullptr;
@@ -2543,13 +2459,10 @@ gpu::Texture EditorWindow::acquirePresentationFrame(int framebufferWidth, int fr
 std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentationSurface(
     int framebufferWidth, int framebufferHeight) {
 #if defined(__linux__) && !defined(__EMSCRIPTEN__)
-  if (wgpuState_->nativeVulkanSurface != 0) {
-    // A lost VkSurfaceKHR cannot be replaced without selecting a new physical owner and
-    // rebuilding both contexts' pipelines against its format. Stop this window's presentation
-    // rather than retrying an impossible rebuild on every later frame.
-    wgpuState_->presentationTerminal = true;
-    return nullptr;
-  }
+  // A lost VkSurfaceKHR cannot be replaced without selecting a new physical owner and rebuilding
+  // both contexts' pipelines against its format. Later frames cannot retry that rebuild.
+  wgpuState_->presentationTerminal = true;
+  return nullptr;
 #endif
 #ifdef __EMSCRIPTEN__
   return RebuildBrowserCanvasSurface(wgpuState_->framebufferGeodeDevice, wgpuState_->surfaceFormat,
@@ -2561,10 +2474,8 @@ std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentation
   // window hands one over.
   std::unique_ptr<internal::PresentationSurface> replacement =
       internal::CreateEditorPresentationSurface();
-  if (wgpuState_->root == nullptr ||
-      !replacement->attachToWindow(wgpuState_->root->instance(), window_) ||
-      !replacement->chooseConfiguration(wgpuState_->root->adapter(),
-                                        wgpuState_->surfaceReadbackEnabled)) {
+  if (wgpuState_->root == nullptr || !replacement->attachToWindow(window_) ||
+      !replacement->chooseConfiguration(wgpuState_->surfaceReadbackEnabled)) {
     return nullptr;
   }
   if (replacement->format() != wgpuState_->surfaceFormat) {
