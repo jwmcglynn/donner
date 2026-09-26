@@ -1941,6 +1941,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     closeWindow();
     return;
   }
+  // The framebuffer context belongs to this event-loop thread. A document or UI snapshot can
+  // retire its handles from another thread after the final frame; post a wake to drain them.
+  wgpuState_->framebufferGeodeDevice->setIdleWakeCallback([this] { wakeEventLoop(); });
 
   if (wgpuState_->presentation != nullptr) {
     if (!wgpuState_->presentation->attachToDevice(*wgpuState_->framebufferGeodeDevice) ||
@@ -2097,6 +2100,11 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 }
 
 EditorWindow::~EditorWindow() {
+#ifdef DONNER_EDITOR_WGPU
+  if (wgpuState_ != nullptr && wgpuState_->framebufferGeodeDevice != nullptr) {
+    wgpuState_->framebufferGeodeDevice->setIdleWakeCallback({});
+  }
+#endif
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   if (wgpuState_ != nullptr) {
     wgpuState_->smokeReadbackAlive->store(false, std::memory_order_release);
@@ -2309,6 +2317,38 @@ void EditorWindow::waitEventsTimeout(double timeoutSeconds) {
 #else
   glfwWaitEventsTimeout(std::max(0.0, timeoutSeconds));
 #endif
+}
+
+void EditorWindow::pollIdleGpu() {
+#ifdef DONNER_EDITOR_WGPU
+  if (wgpuState_ == nullptr) {
+    return;
+  }
+#ifdef __EMSCRIPTEN__
+  // Both browser contexts are used on this thread. The native render context is worker-owned.
+  if (wgpuState_->geodeDevice != nullptr) {
+    wgpuState_->geodeDevice->pollIdle();
+  }
+#endif
+  if (wgpuState_->framebufferGeodeDevice != nullptr) {
+    wgpuState_->framebufferGeodeDevice->pollIdle();
+  }
+#endif
+}
+
+bool EditorWindow::hasIdleGpuWork() const {
+#ifdef DONNER_EDITOR_WGPU
+  if (wgpuState_ != nullptr) {
+#ifdef __EMSCRIPTEN__
+    if (wgpuState_->geodeDevice != nullptr && wgpuState_->geodeDevice->hasIdleWork()) {
+      return true;
+    }
+#endif
+    return wgpuState_->framebufferGeodeDevice != nullptr &&
+           wgpuState_->framebufferGeodeDevice->hasIdleWork();
+  }
+#endif
+  return false;
 }
 
 void EditorWindow::wakeEventLoop() {

@@ -1479,6 +1479,10 @@ uint64_t GeodeWgpuAdapterDevice::completedSerial() const {
                   completedSerialCeiling_.load(std::memory_order_relaxed));
 }
 
+void GeodeWgpuAdapterDevice::onPollBackend() {
+  (void)pollSuspending(false);
+}
+
 void GeodeWgpuAdapterDevice::pollForSerialCompletion() {
   root_->device().poll(true, nullptr);
   const std::chrono::milliseconds pollCost{

@@ -146,6 +146,7 @@ struct GeodeDevice::Impl {
   uint64_t runtimeDeviceId = 0;
   std::mutex textureBackingRetirementMutex;
   std::vector<gpu::Texture> textureBackingsAwaitingRetirement;
+  std::function<void()> textureBackingWake;
 
   // Shared bind-slot resources used by every encoder's bind groups: 1x1 identity fills for the
   // pattern and clip-mask slots of draws that do not use them, one identity instance record,
@@ -302,6 +303,7 @@ GeodeDevice::SnapshotCaptureLease::~SnapshotCaptureLease() {
 }
 
 GeodeDevice::~GeodeDevice() {
+  setIdleWakeCallback({});
   // The owner's root device outlives a context that rendered through it, so stop attributing to a
   // context that is going away.
   runtimeDevice_->removeObserver(*runtimeCounterObserver_);
@@ -1078,7 +1080,33 @@ bool GeodeDevice::deferDestroyTextureBacking(gpu::Texture&& texture) {
   }
   std::lock_guard lock(impl_->textureBackingRetirementMutex);
   impl_->textureBackingsAwaitingRetirement.push_back(std::move(texture));
+  if (impl_->textureBackingWake) {
+    impl_->textureBackingWake();
+  }
   return true;
+}
+
+void GeodeDevice::setIdleWakeCallback(std::function<void()> callback) {
+  handleRetirement_->setWakeCallback(callback);
+  std::lock_guard lock(impl_->textureBackingRetirementMutex);
+  impl_->textureBackingWake = std::move(callback);
+}
+
+bool GeodeDevice::hasIdleWork() const {
+  if (runtimeDevice_->isLost()) {
+    return false;
+  }
+  if (handleRetirement_->hasPending() || !pendingBindGroups_.empty() ||
+      runtimeDevice_->hasPendingDestroys()) {
+    return true;
+  }
+  std::lock_guard lock(impl_->textureBackingRetirementMutex);
+  return !impl_->textureBackingsAwaitingRetirement.empty();
+}
+
+void GeodeDevice::pollIdle() {
+  drainDeferredDestroys();
+  runtimeDevice_->poll();
 }
 
 void GeodeDevice::drainDeferredTextureBackings() {

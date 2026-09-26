@@ -1594,6 +1594,14 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   gui::EditorWindow* const wakeWindow = &window_;
   renderCoordinator_.asyncRenderer().setWakeCallback(
       [wakeWindow]() { wakeWindow->wakeEventLoop(); });
+#if defined(DONNER_EDITOR_WGPU) && !defined(__EMSCRIPTEN__)
+  if (const std::shared_ptr<geode::GeodeDevice> context = window_.geodeDevice()) {
+    AsyncRenderer& worker = renderCoordinator_.asyncRenderer();
+    worker.setIdleMaintenance([context] { context->pollIdle(); },
+                              [context] { return context->hasIdleWork(); });
+    context->setIdleWakeCallback([&worker] { worker.requestIdleMaintenance(); });
+  }
+#endif
 #ifndef __EMSCRIPTEN__
   if (options_.reproOutputPath.has_value()) {
     repro::ReproRecorderOptions recorderOptions;
@@ -1669,6 +1677,11 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 }
 
 EditorShell::~EditorShell() {
+#if defined(DONNER_EDITOR_WGPU) && !defined(__EMSCRIPTEN__)
+  if (const std::shared_ptr<geode::GeodeDevice> context = window_.geodeDevice()) {
+    context->setIdleWakeCallback({});
+  }
+#endif
 #ifdef __EMSCRIPTEN__
   gBrowserOverlayControlEnabled.store(false, std::memory_order_release);
   gBrowserOverlayStateRequest.store(0, std::memory_order_release);

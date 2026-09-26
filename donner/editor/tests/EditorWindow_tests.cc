@@ -2042,6 +2042,30 @@ TEST(EditorWindowTest, WgpuFramebufferGeodeDeviceSharingMatchesThreadingModel) {
 #endif
 }
 
+TEST(EditorWindowTest, IdleGpuTickDrainsUiContextMailboxWithoutRendering) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Idle GPU retirement", .initialWidth = 64, .initialHeight = 64, .visible = false});
+  if (!window.valid() || window.geodeDevice() == nullptr ||
+      window.geodeFramebufferDevice() == nullptr) {
+    GTEST_SKIP() << "GPU editor window is unavailable on this host";
+  }
+
+  const std::shared_ptr<geode::GeodeDevice> context = window.geodeFramebufferDevice();
+  std::vector<gpu::Buffer> retired;
+  retired.push_back(gpu::GetResultOrFail(context->runtimeDevice().createBuffer(
+      gpu::BufferDescriptor{"idle UI buffer", 256, gpu::BufferUsage::CopyDst})));
+  std::vector<gpu::BindGroup> groups;
+  std::thread producer(
+      [&] { EXPECT_EQ(context->handleRetirement()->retire(retired, groups), 0u); });
+  producer.join();
+  ASSERT_EQ(context->retiredHandleCountsForTesting().buffers, 1u);
+  EXPECT_TRUE(window.hasIdleGpuWork());
+
+  window.pollIdleGpu();
+  EXPECT_EQ(context->retiredHandleCountsForTesting().buffers, 0u);
+  EXPECT_FALSE(window.hasIdleGpuWork());
+}
+
 #ifndef __EMSCRIPTEN__
 TEST(EditorWindowTest, WgpuPhysicalDeviceOutlivesWindowWhenContextIsRetained) {
   std::shared_ptr<geode::GeodeDevice> retainedContext;
