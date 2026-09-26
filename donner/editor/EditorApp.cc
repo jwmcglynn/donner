@@ -31,6 +31,48 @@ namespace donner::editor {
 
 namespace {
 
+std::string EscapedPaintReference(std::string_view href) {
+  constexpr std::string_view kHex = "0123456789abcdef";
+  std::string result = "url(";
+  for (const unsigned char character : href) {
+    if (character <= 0x20 || character == 0x7f) {
+      result.push_back('\\');
+      result.push_back(kHex[character >> 4]);
+      result.push_back(kHex[character & 0xf]);
+      result.push_back(' ');
+    } else {
+      if (character == '"' || character == '\'' || character == '(' || character == ')' ||
+          character == '\\') {
+        result.push_back('\\');
+      }
+      result.push_back(static_cast<char>(character));
+    }
+  }
+  result.push_back(')');
+  return result;
+}
+
+std::string AuthoringPaintValue(const svg::PaintServer& paint, const css::RGBA& currentColor) {
+  if (paint.is<svg::PaintServer::None>()) {
+    return "none";
+  }
+  if (paint.is<svg::PaintServer::Solid>()) {
+    return paint.get<svg::PaintServer::Solid>().color.resolve(currentColor, 1.0f).toHexString();
+  }
+  if (paint.is<svg::PaintServer::ContextFill>()) {
+    return "context-fill";
+  }
+  if (paint.is<svg::PaintServer::ContextStroke>()) {
+    return "context-stroke";
+  }
+  const auto& reference = paint.get<svg::PaintServer::ElementReference>();
+  std::string result = EscapedPaintReference(reference.reference.href);
+  if (reference.fallback.has_value()) {
+    result += " " + reference.fallback->resolve(currentColor, 1.0f).toHexString();
+  }
+  return result;
+}
+
 /// AABB-vs-AABB intersection test. Returns true if the two boxes
 /// overlap by any non-zero amount, including edge-touching contact.
 /// Used by `hitTestRect` to decide which elements a marquee covers.
@@ -1830,7 +1872,7 @@ bool EditorApp::setStrokeWidthOnSelection(double strokeWidth) {
 }
 
 void EditorApp::setActiveStrokeWidth(double strokeWidth) {
-  activePaintStyle_.strokeWidth = std::max(0.0, strokeWidth);
+  activePaintStyle_.strokeWidth = Lengthd(std::max(0.0, strokeWidth));
 }
 
 PathOperationAvailability EditorApp::pathOperationAvailability(PathOperationKind operation) const {
@@ -2038,7 +2080,25 @@ void EditorApp::refreshFirstSelectionCache() {
     cachedFirstSelection_.reset();
   } else {
     cachedFirstSelection_ = selection_.front();
+    rememberSelectionPaint();
   }
+}
+
+void EditorApp::rememberSelectionPaint() {
+  if (selection_.empty()) {
+    return;
+  }
+  const svg::SVGElement& selected = selection_.front();
+  selected.withWriteAccess([this, &selected](svg::DocumentWriteAccess&, EntityHandle) {
+    if (!selected.isa<svg::SVGGraphicsElement>()) {
+      return;
+    }
+    const svg::PropertyRegistry& style = selected.getComputedStyle();
+    const css::RGBA currentColor = style.color.get().value().resolve(css::RGBA(0, 0, 0, 255), 1.0f);
+    activePaintStyle_.fill = AuthoringPaintValue(style.fill.get().value(), currentColor);
+    activePaintStyle_.stroke = AuthoringPaintValue(style.stroke.get().value(), currentColor);
+    activePaintStyle_.strokeWidth = style.strokeWidth.get().value();
+  });
 }
 
 void EditorApp::undo() {

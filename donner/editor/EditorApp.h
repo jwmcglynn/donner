@@ -71,12 +71,10 @@ struct GroupOperationAvailability {
 
 /// Active paint settings used by authoring tools when creating new geometry.
 struct ActivePaintStyle {
-  // Foreground fill defaults to a visible white (design-tool convention) so new
-  // geometry on a fresh document is immediately visible rather than invisible
-  // `fill:none`. See Design 0013 W7 Fill/Stroke widget redesign.
+  // Defaults keep new geometry visible on a dark canvas.
   std::string fill = "white";    ///< SVG fill attribute for new geometry.
   std::string stroke = "black";  ///< SVG stroke attribute for new geometry.
-  double strokeWidth = 1.0;      ///< SVG stroke-width attribute for new geometry.
+  Lengthd strokeWidth{1.0};      ///< SVG stroke-width, retaining the selected shape's units.
 };
 
 /// Top-level editor shell.
@@ -420,6 +418,10 @@ public:
    * @return true if commands were queued.
    */
   bool setStrokeWidthOnSelection(double strokeWidth);
+
+  /// Remember the primary selected graphic's computed paints for subsequent path creation.
+  /// An empty selection leaves the last remembered paint unchanged.
+  void rememberSelectionPaint();
 
   /// Active paint settings used by path-authoring tools for newly-created elements.
   [[nodiscard]] const ActivePaintStyle& activePaintStyle() const { return activePaintStyle_; }

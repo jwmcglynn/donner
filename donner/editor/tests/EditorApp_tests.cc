@@ -949,7 +949,7 @@ TEST(EditorAppTest, SetActiveStrokeWidthClampsNegativeValues) {
 
   app.setActiveStrokeWidth(-4.0);
 
-  EXPECT_EQ(app.activePaintStyle().strokeWidth, 0.0);
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, Lengthd(0.0));
 }
 
 TEST(EditorAppTest, PathOperationAvailabilityReportsNoDocument) {
