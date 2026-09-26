@@ -3,6 +3,7 @@
 /// Authoritative WGSL for feMorphology.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for feMorphology.
 inline constexpr wgsl::SourceText kMorphologySource{R"wgsl(struct MorphologyParams {
   radiusX: i32,
   radiusY: i32,

@@ -97,6 +97,9 @@ struct Glyph {
   bool isComment : 1;                           //!< Part of a single-line comment
   bool isMultiLineComment : 1;                  //!< Part of a multi-line comment
 
+  /// Create a character with its syntax-color index.
+  /// @param c Character stored in the glyph.
+  /// @param color Syntax-color index.
   Glyph(char c, ColorIndex color)
       : character(c), colorIndex(color), isComment(false), isMultiLineComment(false) {}
 };
@@ -106,9 +109,15 @@ struct Glyph {
  * This inherits from std::vector<Glyph> purely for convenience.
  */
 struct Line : public std::vector<Glyph> {
+  /// Glyph storage underlying a line of text.
   using Base = std::vector<Glyph>;
 
   // Convenience method to insert a glyph at an arbitrary iterator position
+
+  /// Insert a colored character before the supplied iterator.
+  /// @param it Insertion position in the line.
+  /// @param ch Character to insert.
+  /// @param color Syntax-color index.
   void emplace(iterator it, char ch, ColorIndex color) { Base::insert(it, Glyph(ch, color)); }
 };
 
@@ -137,6 +146,7 @@ inline int CountLeadingWhitespace(const Line& line, int tabSize) {
  */
 class TextBuffer {
 public:
+  /// Ordered line storage for the text buffer.
   using Lines = std::vector<Line>;
 
   /**

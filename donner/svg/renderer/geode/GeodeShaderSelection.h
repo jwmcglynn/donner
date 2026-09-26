@@ -45,8 +45,9 @@ namespace donner::geode {
  * Vulkan device, and the authored WGSL artifact for every other device.
  *
  * A build that links no native artifact passes a null \p nativeShader, so a native device there
- * selects a view whose projection is empty. \ref gpu::Device::createShaderModule refuses that
- * descriptor rather than compiling nothing, which keeps the mismatch fail-closed.
+ * selects a view whose projection is empty. \ref donner::gpu::Device::createShaderModule
+ * "gpu::Device::createShaderModule" refuses that descriptor rather than compiling nothing, which
+ * keeps the mismatch fail-closed.
  *
  * Callers that also derive bindings, entry points or workgroup shapes from reflection must read
  * them from the returned view, so source and interface always come from the same artifact.

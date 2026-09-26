@@ -3,6 +3,7 @@
 /// Authoritative WGSL for feComponentTransfer.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for feComponentTransfer.
 inline constexpr wgsl::SourceText kComponentTransferSource{
     R"wgsl(@group(0) @binding(0) var inputTexture: texture_2d<f32>;
 @group(0) @binding(1) var outputTexture: texture_storage_2d<rgba32float, write>;

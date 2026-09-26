@@ -34,20 +34,21 @@ public:
 
   /**
    * The device's ownership of a texture allocation it made ended: its backing was released
-   * through \ref Device::destroyTextureBacking, or the texture was destroyed and the last
-   * submission using it completed and its slot was recycled. Reported at most once per owned
-   * allocation, on the thread using the device, to the observer installed at that moment. That
-   * includes an allocation made before this observer was installed, whose creation it never
-   * heard, so an observer installed late can count more releases than creations. An allocation
-   * still owned when the device is destroyed, and one whose retired slot is never recycled, are
-   * not reported. Releasing a registration of a texture the device does not own ends no ownership
-   * and is not reported.
+   * through \ref donner::gpu::Device::destroyTextureBacking "Device::destroyTextureBacking", or the
+   * texture was destroyed and the last submission using it completed and its slot was recycled.
+   * Reported at most once per owned allocation, on the thread using the device, to the observer
+   * installed at that moment. That includes an allocation made before this observer was installed,
+   * whose creation it never heard, so an observer installed late can count more releases than
+   * creations. An allocation still owned when the device is destroyed, and one whose retired slot
+   * is never recycled, are not reported. Releasing a registration of a texture the device does not
+   * own ends no ownership and is not reported.
    *
    * The allocation itself may outlive the report: an export of the texture keeps it alive until
-   * its last holder lets go, and \ref Device::sharedTextureTailBytes counts those bytes meanwhile.
-   * Nothing is reported when that holder finally releases it. A destroyed texture a holder still
-   * reads enters that gauge when it is retired but is reported here only when its slot is
-   * recycled, so while its last submission is in flight both count it.
+   * its last holder lets go, and \ref donner::gpu::Device::sharedTextureTailBytes
+   * "Device::sharedTextureTailBytes" counts those bytes meanwhile. Nothing is reported when that
+   * holder finally releases it. A destroyed texture a holder still reads enters that gauge when it
+   * is retired but is reported here only when its slot is recycled, so while its last submission is
+   * in flight both count it.
    */
   virtual void onTextureReleased() = 0;
 
@@ -67,10 +68,12 @@ public:
    * Work reached the backend's queue as one submission.
    *
    * @param commandBufferCount Command buffers the submission carried. Zero for a submission a
-   *   backend made on its own, outside \ref Device::submit, to make the queue progress.
+   *   backend made on its own, outside \ref donner::gpu::Device::submit "Device::submit", to make
+   * the queue progress.
    * @param drawCount Draws counted under one rule on every backend: each draw command, including
    *   one with no vertices or no instances, and each indexed draw command that is not empty (see
-   *   \ref IsEmptyIndexedDraw), whether or not the backend issues it natively.
+   *   \ref donner::gpu::IsEmptyIndexedDraw "IsEmptyIndexedDraw"), whether or not the backend issues
+   * it natively.
    */
   virtual void onSubmitted(uint64_t commandBufferCount, uint64_t drawCount) = 0;
 

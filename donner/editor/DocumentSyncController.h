@@ -20,10 +20,17 @@ class SelectTool;
 /// Owns source-pane debounce, parse-error markers, and XML-owned source view mirroring.
 class DocumentSyncController {
 public:
+  /// Initialize source synchronization from the displayed source.
+  /// @param initialSource Initial source text owned by the controller.
   explicit DocumentSyncController(std::string initialSource);
 
+  /// Reset pending synchronization state after a document replacement.
+  /// @param source Source text of the newly loaded document.
   void resetForLoadedDocument(const std::string& source);
 
+  /// Refresh source diagnostics and editor markers from the application parse state.
+  /// @param app Application containing the current document and diagnostics.
+  /// @param textEditor Source editor receiving diagnostic markers.
   void syncParseErrorMarkers(EditorApp& app, TextEditor& textEditor);
   /// Diagnostics normalized for the current source buffer and parse revision.
   [[nodiscard]] const SourceDiagnosticSnapshot& sourceDiagnostics() const {
@@ -44,11 +51,21 @@ public:
    */
   bool mirrorSourceDeltas(EditorApp& app, TextEditor& textEditor,
                           const std::vector<xml::XMLSourceDelta>& sourceDeltas);
+
+  /// Observe source edits and dispatch eligible document updates through the debounce policy.
+  /// @param app Application receiving source changes.
+  /// @param textEditor Source editor containing the current text.
+  /// @param deltaSeconds Elapsed frame time used by pending-edit timers.
   void handleTextEdits(EditorApp& app, TextEditor& textEditor, float deltaSeconds);
   /// Return the pending source-text sync wake interval, if a throttled edit is waiting.
   [[nodiscard]] std::optional<float> nextTextSyncWakeSeconds() const;
+
+  /// Apply queued document-to-source changes when document access permits.
+  /// @param app Application containing completed mutations.
+  /// @param selectTool Selection tool whose element handles may need remapping.
+  /// @param textEditor Source pane to synchronize.
   void applyPendingWritebacks(EditorApp& app, SelectTool& selectTool, TextEditor& textEditor);
-  /// True when \ref applyPendingWritebacks still has queued work. Writebacks accumulate while the
+  /// True when `applyPendingWritebacks` still has queued work. Writebacks accumulate while the
   /// async renderer owns the document and are drained by the first frame that finds it idle - so a
   /// frame that skips the document-sync stage while this holds would strand them until the next
   /// user input.

@@ -104,7 +104,10 @@ struct RenderRequest {
   /// Drag state snapshotted with one worker render request.
   struct DragPreview {
     Entity entity = entt::null;  //!< Primary entity whose drag this request represents.
-    /// Additional entities moving with `entity` under the same active drag transform.
+
+    /// Additional entities moving with
+    /// \ref donner::editor::RenderRequest::DragPreview::entity "entity" under the same active drag
+    /// transform.
     std::vector<Entity> extraEntities;
     /// Which interaction phase drove this preview. `Selection` means the
     /// editor is pre-warming a layer for the selected entity before any
@@ -456,8 +459,10 @@ struct SampleThumbnailRenderResult {
   SampleThumbnailRenderOutcome outcome =
       SampleThumbnailRenderOutcome::RenderError;  //!< Terminal outcome of this preview attempt.
   svg::RendererBitmap bitmap;  //!< Captured bitmap; it may be empty even when outcome is Rendered.
+
   /// Self-contained SVG with font-preview text replaced by glyph paths.
-  std::string outlinedSvg;
+  std::string outlinedSvg;  //!< Serialized sample with text converted to paths when outline
+                            //!< generation succeeds.
 };
 
 /// Observable state and monotonic counters for the bounded sample-thumbnail lane.
@@ -714,7 +719,9 @@ public:
   /// modes reconstructs it with the matching `CompositorConfig`. Every mode
   /// produces identical pixels.
   ///
-  /// Same threading contract as `setTightBoundedSegmentsEnabled`:
+  /// Same threading contract as
+  /// \ref donner::editor::AsyncRenderer::setTightBoundedSegmentsEnabled
+  /// "setTightBoundedSegmentsEnabled":
   /// safe to call from the UI thread while a render is in flight.
   void setCompositedRenderingMode(CompositedRenderingMode mode) {
     compositedRenderingMode_.store(mode, std::memory_order_release);
@@ -727,7 +734,8 @@ public:
   }
 
   /// Toggle the Geode geometry debug overlay
-  /// (`RendererInterface::setDebugGeometryOverlay`) on the root document
+  /// (\ref donner::svg::RendererInterface::setDebugGeometryOverlay
+  /// "RendererInterface::setDebugGeometryOverlay") on the root document
   /// renderer. The change applies at the start of the next worker iteration.
   /// Each state transition clears retained compositor state once. While
   /// enabled, selection promotion/prewarm remains suppressed and every render
@@ -735,7 +743,9 @@ public:
   /// or cover the frame-final wireframe. Disabling performs one transition
   /// reset, then normal retained promotion resumes.
   ///
-  /// Same threading contract as `setTightBoundedSegmentsEnabled`:
+  /// Same threading contract as
+  /// \ref donner::editor::AsyncRenderer::setTightBoundedSegmentsEnabled
+  /// "setTightBoundedSegmentsEnabled":
   /// safe to call from the UI thread while a render is in flight.
   void setGeometryDebugOverlayEnabled(bool enabled) {
     geometryDebugOverlay_.store(enabled, std::memory_order_release);

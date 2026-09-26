@@ -15,10 +15,11 @@
 namespace donner::svg {
 
 /**
- * Where a font family in the \ref FontCatalog originates.
+ * Where a font family in the \ref donner::svg::FontCatalog "FontCatalog" originates.
  *
  * The picker groups families by source, and resolution prefers `Bundled` over `System`
- * (see \ref FontCatalog and \ref FontManager).
+ * (see \ref donner::svg::FontCatalog "FontCatalog" and \ref donner::svg::FontManager
+ * "FontManager").
  */
 enum class FontSource {
   Bundled,  //!< Bundled with the build (curated fonts supplied by the application package).
@@ -172,9 +173,9 @@ struct FontFaceAdmission {
 
 /**
  * Interface implemented by each font source (embedded, system) and by the aggregate \ref
- * FontCatalog. Lets \ref FontManager resolve a `font-family` name against providers without
- * depending on the (potentially large) embedded font bytes: the core engine sees only this
- * interface, and the editor injects a concrete catalog.
+ * donner::svg::FontCatalog "FontCatalog". Lets \ref donner::svg::FontManager "FontManager" resolve
+ * a `font-family` name against providers without depending on the (potentially large) embedded font
+ * bytes: the core engine sees only this interface, and the editor injects a concrete catalog.
  *
  * All lookups by family name are case-insensitive.
  */

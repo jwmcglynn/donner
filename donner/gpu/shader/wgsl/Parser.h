@@ -76,6 +76,7 @@ struct ParseResult {
 
 namespace detail {
 
+/// Lexical token categories recognized by the WGSL parser.
 enum class TokenKind : uint8_t {
   BitAnd,
   End,
@@ -114,17 +115,20 @@ enum class TokenKind : uint8_t {
   MinusAssign,
 };
 
+/// Lexical token retaining its source spelling and location.
 struct Token {
-  TokenKind kind = TokenKind::End;
-  SourceSpan span;
-  std::string_view text;
+  TokenKind kind = TokenKind::End;  //!< Lexical token category.
+  SourceSpan span;                  //!< Source byte range occupied by the token.
+  std::string_view text;            //!< Borrowed spelling within the shader source.
 };
 
+/// Mapping from one punctuation character to its token category.
 struct PunctuationEntry {
-  char character;
-  TokenKind kind;
+  char character;  //!< Punctuation character recognized by this entry.
+  TokenKind kind;  //!< Lexical token category.
 };
 
+/// Single-character punctuation spellings and their token kinds.
 inline constexpr PunctuationEntry kSingleCharacterPunctuation[] = {
     {'@', TokenKind::At},           {'(', TokenKind::LeftParen},  {')', TokenKind::RightParen},
     {'{', TokenKind::LeftBrace},    {'}', TokenKind::RightBrace}, {'[', TokenKind::LeftBracket},
@@ -133,6 +137,7 @@ inline constexpr PunctuationEntry kSingleCharacterPunctuation[] = {
     {'/', TokenKind::Slash},        {'%', TokenKind::Percent},
 };
 
+/// Names disallowed for declarations by the supported WGSL grammar.
 inline constexpr std::string_view kReservedDeclarationNames[] = {
     "alias",
     "array",

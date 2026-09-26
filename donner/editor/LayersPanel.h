@@ -61,6 +61,7 @@ struct LayersLockedRejectionFlash {
 /// ImGui Layers panel backed by a `LayerTreeModel` snapshot.
 class LayersPanel {
 public:
+  /// Controls whether a snapshot refresh rasterizes thumbnails or only refreshes swatches.
   enum class ThumbnailRefreshMode {
     Render,
     RenderIncremental,
@@ -85,8 +86,12 @@ public:
     ImTextureID texture = 0;                      ///< ImGui texture handle.
     Vector2d uvBottomRight = Vector2d(1.0, 1.0);  ///< Bottom-right valid payload UV.
   };
+
+  /// Callback that uploads a rendered CPU thumbnail for UI display.
   using ThumbnailTextureProvider =
       std::function<ThumbnailTexture(std::uint64_t stableId, const svg::RendererBitmap& bitmap)>;
+
+  /// Callback that registers a GPU thumbnail snapshot for UI display.
   using ThumbnailTextureSnapshotProvider = std::function<ThumbnailTexture(
       std::uint64_t stableId,
       const std::shared_ptr<const svg::RendererTextureSnapshot>& textureSnapshot)>;
@@ -104,6 +109,8 @@ public:
     ImTextureID texture = 0;                      ///< ImGui texture handle.
     Vector2d uvBottomRight = Vector2d(1.0, 1.0);  ///< Bottom-right valid payload UV.
   };
+
+  /// Callback that uploads a static layer icon for UI display.
   using IconTextureProvider =
       std::function<IconTexture(std::uint64_t stableId, const svg::RendererBitmap& bitmap)>;
 
@@ -165,6 +172,7 @@ public:
   /// @param minimumInteractionHeight Minimum row and icon-button target height.
   ///   Compact touch sheets pass 44 logical pixels; desktop keeps the dense
   ///   default by passing zero.
+  /// @param textureSnapshotProvider Optional registration callback for GPU thumbnail snapshots.
   void render(EditorApp* liveApp, const ThumbnailTextureProvider& textureProvider = {},
               const IconTextureProvider& iconTextureProvider = {},
               float minimumInteractionHeight = 0.0f,

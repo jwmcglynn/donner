@@ -30,15 +30,25 @@ public:
 
   /// Immutable-by-copy presentation diagnostics for tests and MCP reporting.
   struct DiagnosticsSnapshot {
+    /// Current cached-presentation lifecycle phase.
     Phase phase = Phase::NoCache;
+    /// Whether a presentation texture cache is available.
     bool hasCachedTextures = false;
+    /// Entity associated with the retained presentation cache.
     Entity cachedEntity = entt::null;
+    /// Document frame version represented by the retained cache.
     std::uint64_t cachedVersion = 0;
+    /// Canvas dimensions of the retained cache, in pixels.
     Vector2i cachedCanvasSize = Vector2i::Zero();
+    /// Drag transform retained while the final raster result is pending.
     std::optional<SelectTool::ActiveDragPreview> settlingPreview;
+    /// Whether presentation is waiting for the final complete render.
     bool waitingForFullRender = false;
+    /// Document frame version needed to finish drag settling.
     std::uint64_t settlingTargetVersion = 0;
+    /// Whether selection chrome still needs a refresh.
     bool waitingForChromeRefresh = false;
+    /// Document frame version needed to refresh selection chrome.
     std::uint64_t chromeRefreshTargetVersion = 0;
   };
 

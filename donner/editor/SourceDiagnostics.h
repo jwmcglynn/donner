@@ -16,23 +16,28 @@ namespace donner::editor {
 /// Source diagnostic prepared for editor presentation.
 struct SourceDiagnostic {
   std::uint64_t id = 0;  ///< Stable within one parse revision.
-  DiagnosticSeverity severity = DiagnosticSeverity::Error;
-  SourceByteRange range;
-  std::size_t line = 1;       ///< One-based line number.
-  std::size_t column = 0;     ///< Zero-based byte column.
-  std::size_t endLine = 1;    ///< One-based line number for the exclusive range end.
-  std::size_t endColumn = 0;  ///< Zero-based byte column for the exclusive range end.
-  std::string message;
+  DiagnosticSeverity severity =
+      DiagnosticSeverity::Error;  //!< Diagnostic level used for display and counting.
+  SourceByteRange range;          //!< Affected byte range in the source.
+  std::size_t line = 1;           ///< One-based line number.
+  std::size_t column = 0;         ///< Zero-based byte column.
+  std::size_t endLine = 1;        ///< One-based line number for the exclusive range end.
+  std::size_t endColumn = 0;      ///< Zero-based byte column for the exclusive range end.
+  std::string message;            //!< Human-readable diagnostic text.
 
-  bool operator==(const SourceDiagnostic&) const = default;
+  /// Compare all members for value equality.
+  /// @param other Value to compare.
+  bool operator==(const SourceDiagnostic& other) const = default;
 };
 
 /// Immutable diagnostics published by one parse revision.
 struct SourceDiagnosticSnapshot {
-  std::uint64_t revision = 0;
-  std::vector<SourceDiagnostic> diagnostics;
+  std::uint64_t revision = 0;  //!< Source revision against which these diagnostics were produced.
+  std::vector<SourceDiagnostic> diagnostics;  //!< Diagnostics for the captured source revision.
 
-  bool operator==(const SourceDiagnosticSnapshot&) const = default;
+  /// Compare all members for value equality.
+  /// @param other Value to compare.
+  bool operator==(const SourceDiagnosticSnapshot& other) const = default;
 };
 
 /**

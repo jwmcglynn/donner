@@ -138,14 +138,7 @@ The document tree can be traversed and modified in memory:
 For multi-threaded DOM access and removed-element lifetime behavior, see
 \ref SvgDomThreadingAndLifetime.
 
-The snippet above prints:
-
-```
-Computed style: PropertyRegistry {
-  fill: PaintServer(solid Color(rgba(0, 0, 255, 255))) (set) @ Specificity(0, 0, 0)
-  stroke-width: 3px (set) @ Specificity(0, 0, 0)
-}
-```
+The complete example prints the path geometry, applies style edits, and then prints the computed style.
 
 ## Rendering an SVG
 

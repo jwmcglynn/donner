@@ -30,7 +30,8 @@ enum class CanvasFreshness {
 
 /// User-visible status suffix for a canvas freshness state.
 ///
-/// @param freshness State returned by \ref ClassifyCanvasFreshness.
+/// @param freshness State returned by \ref donner::editor::ClassifyCanvasFreshness
+/// "ClassifyCanvasFreshness".
 [[nodiscard]] std::string_view CanvasFreshnessStatusSuffix(CanvasFreshness freshness);
 
 /// Context fields written with a compositor heuristic telemetry snapshot.
@@ -85,7 +86,8 @@ struct CompositorHeuristicTelemetryContext {
 /// Append a compositor heuristic telemetry record to a JSONL file.
 ///
 /// @param path Destination file path.
-/// @param json One JSON object, normally returned by \ref BuildCompositorHeuristicTelemetryJson.
+/// @param json One JSON object, normally returned by \ref
+/// donner::editor::BuildCompositorHeuristicTelemetryJson "BuildCompositorHeuristicTelemetryJson".
 /// @param error Optional destination for a human-readable failure message.
 /// @return True when the record was appended.
 [[nodiscard]] bool AppendCompositorHeuristicTelemetry(std::string_view path, std::string_view json,

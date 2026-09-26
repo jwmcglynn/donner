@@ -21,25 +21,31 @@ namespace donner::example {
 /// Preallocated so an unproven Vulkan surface can retain its window and root without allocating
 /// at the point of failure. The process owns quarantined records until exit.
 struct RetainedVulkanWindow {
-  RetainedVulkanWindow* next = nullptr;
-  GLFWwindow* window = nullptr;
-  uint64_t surface = 0;
-  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> root;
-  std::shared_ptr<gpu::vulkan::VulkanSurfaceRetirement> retirement;
+  RetainedVulkanWindow* next = nullptr;  //!< Next node retained until process exit.
+  GLFWwindow* window = nullptr;  //!< GLFW window retained while surface retirement is unproven.
+  uint64_t surface = 0;          //!< Embedder-owned Vulkan surface handle.
+  std::shared_ptr<gpu::vulkan::VulkanSharedRoot>
+      root;  //!< Owner keeping the Vulkan instance alive.
+  std::shared_ptr<gpu::vulkan::VulkanSurfaceRetirement>
+      retirement;  //!< Shared proof of surface retirement.
 };
 #endif
 
 /// Platform object and selected root for the example's runtime surface.
 /// The GLFW window must outlive this object and its runtime surface.
 struct NativeEmbedSurface {
-  std::shared_ptr<geode::GeodeGpuRoot> root;
-  gpu::NativeSurfaceHandle native;
-  gpu::TextureFormat format = gpu::TextureFormat::BGRA8Unorm;
+  std::shared_ptr<geode::GeodeGpuRoot>
+      root;  //!< Selected Geode root used by the rendering context.
+  gpu::NativeSurfaceHandle
+      native;  //!< Handle naming the host-owned platform surface for runtime attachment.
+  gpu::TextureFormat format = gpu::TextureFormat::BGRA8Unorm;  //!< Chosen presentation format.
 #if defined(__linux__)
-  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot;
-  std::shared_ptr<gpu::vulkan::VulkanSurfaceRetirement> retirement;
-  uint64_t externalSurface = 0;
-  std::unique_ptr<RetainedVulkanWindow> quarantine;
+  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot;  //!< Vulkan instance/device owner.
+  std::shared_ptr<gpu::vulkan::VulkanSurfaceRetirement>
+      retirement;                //!< Shared proof of surface retirement.
+  uint64_t externalSurface = 0;  //!< Vulkan surface owned by the embedding helper.
+  std::unique_ptr<RetainedVulkanWindow>
+      quarantine;  //!< Retention storage when safe teardown cannot be proved.
 #endif
 };
 

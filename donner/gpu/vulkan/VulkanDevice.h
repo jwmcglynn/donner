@@ -24,6 +24,7 @@ class VulkanSurfaceRetirement;
 /// One external surface's irreversible backend retirement disposition.
 enum class VulkanSurfaceRetirementState { Unattached, Live, Retired, Unproven, Released };
 
+/// Shared, atomically readable retirement disposition for an external Vulkan surface.
 class VulkanSurfaceRetirement final {
 public:
   /// Acquire-observed state; Retired permits releasing the external VkSurfaceKHR and window.

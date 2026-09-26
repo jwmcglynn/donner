@@ -9,9 +9,12 @@ namespace donner::editor {
 /// DockBuilder binds to a node, so it must match the exact string passed to
 /// `ImGui::Begin()` when the panel is drawn.
 inline constexpr const char* kRenderPaneWindowName = "Render";
-inline constexpr const char* kLayersWindowName = "Layers";
-inline constexpr const char* kInspectorWindowName = "Inspector";
-inline constexpr const char* kCompositorDebugWindowName = "Compositor Debug Info";
+inline constexpr const char* kLayersWindowName =
+    "Layers";  //!< Stable ImGui window name for the layers panel.
+inline constexpr const char* kInspectorWindowName =
+    "Inspector";  //!< Stable ImGui window name for the inspector.
+inline constexpr const char* kCompositorDebugWindowName =
+    "Compositor Debug Info";  //!< Stable ImGui window name for compositor diagnostics.
 
 /// Stable string hashed into the editor's root DockSpace id.
 inline constexpr const char* kEditorDockSpaceName = "EditorDockSpace";
@@ -74,7 +77,8 @@ struct EditorDockLayoutParams {
  * Requires a live ImGui context. The bound windows do not need to have been
  * submitted yet; DockBuilder records the binding for their next `Begin()`.
  *
- * @param dockspaceId Root DockSpace id (see \ref kEditorDockSpaceName).
+ * @param dockspaceId Root DockSpace id (see \ref donner::editor::kEditorDockSpaceName
+ * "kEditorDockSpaceName").
  * @param params Layout proportions and panel inclusion.
  * @return Ids of the created nodes.
  */

@@ -438,9 +438,9 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
  * static DONNER_CONSTEXPR_MAP auto kColors = makeCompileTimeMap(std::to_array<std::pair<...>>({
  *     {"key1"sv, value1},
  *     {"key2"sv, value2},
+ * }));
  * ```
  */
-///   }));
 
 #ifdef __EMSCRIPTEN__
 // Emscripten's default constexpr step limit (~1M) is too low for large maps (Color.cc has 149
@@ -449,6 +449,8 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
 // fires on native builds.
 // NOLINTBEGIN(cppcoreguidelines-macro-usage)
 #define DONNER_CONSTEXPR_MAP const
+/// Construct a map from the supplied entry array; native builds reject invalid keys at compile
+/// time.
 #define makeCompileTimeMap(...)                                           \
   []() {                                                                  \
     const auto _compiletime_map_result =                                  \
@@ -459,6 +461,8 @@ constexpr CompileTimeMapResult<Key, Value, N, Hasher, KeyEqual> makeCompileTimeM
 #else
 // NOLINTBEGIN(cppcoreguidelines-macro-usage)
 #define DONNER_CONSTEXPR_MAP constexpr
+/// Construct a map from the supplied entry array; native builds reject invalid keys at compile
+/// time.
 #define makeCompileTimeMap(...)                                                          \
   []() constexpr {                                                                       \
     constexpr auto _compiletime_map_result =                                             \

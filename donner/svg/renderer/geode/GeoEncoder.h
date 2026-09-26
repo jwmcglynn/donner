@@ -45,6 +45,11 @@ class GeometryDebugSink {
 public:
   virtual ~GeometryDebugSink() = default;
 
+  /// Capture the geometry and transforms of a Slug draw for diagnostic presentation.
+  /// @param encoded Encoded path geometry for the draw.
+  /// @param targetFromPath Transform from path coordinates to target coordinates.
+  /// @param rootFromTarget Transform from target coordinates to root presentation coordinates.
+  /// @param instanceTransforms Packed per-instance transforms, when instancing is used.
   virtual void recordSlugDraw(const EncodedPath& encoded, const Transform2d& targetFromPath,
                               const Transform2d& rootFromTarget,
                               std::span<const float> instanceTransforms) = 0;
@@ -188,6 +193,7 @@ public:
    * @param target Single-sample render target. Usage must include
    *   `RenderAttachment`; add `TextureBinding` or `CopySrc` when callers
    *   sample or read it after rendering. The texture must outlive `finish()`.
+   * @param targetSize Render-target dimensions in physical pixels.
    */
   GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
              const GeodeGradientPipeline& gradientPipeline, const GeodeImagePipeline& imagePipeline,
@@ -239,13 +245,6 @@ public:
   void injectScenePreparationFailureAfterForTesting(std::size_t successfulPreparations);
 
   /**
-   * Observe Slug draws recorded by this encoder.
-   *
-   * `rootFromTarget` maps this encoder's target pixels to the owning
-   * renderer's final target. Pass null to disable observation. The default
-   * path stores one pointer and one branch per actual Slug submission.
-   */
-  /**
    * Record one scene-batch instance's geometry into the debug-overlay sink
    * (no-op without a sink). Ordered batches issue a single GPU draw, so the
    * caller reports each batched instance here in paint order, passing the
@@ -256,6 +255,16 @@ public:
   void recordGeometryDebugInstance(const EncodedPath& encoded,
                                    std::span<const float> instanceTransforms);
 
+  /**
+   * Observe Slug draws recorded by this encoder.
+   *
+   * `rootFromTarget` maps this encoder's target pixels to the owning
+   * renderer's final target. Pass null to disable observation. The default
+   * path stores one pointer and one branch per actual Slug submission.
+   */
+  /// @param sink Borrowed debug sink; it must outlive its registration until cleared, replaced, or
+  /// encoder destruction. Null disables capture.
+  /// @param rootFromTarget Maps target-space geometry into the root presentation coordinate system.
   void setGeometryDebugSink(GeometryDebugSink* sink,
                             const Transform2d& rootFromTarget = Transform2d());
 
@@ -378,6 +387,8 @@ public:
   ///   non-null, the encoder skips `GeodePathEncoder::encode` and the
   ///   `pathEncodes` counter bump. Used by `RendererGeode` to plumb a
   ///   cached `GeodePathCacheComponent::strokeSlot` result.
+  /// @param path Path geometry to fill into the open mask pass.
+  /// @param rule Fill rule for resolving interior coverage.
   void fillPathIntoMask(const Path& path, FillRule rule,
                         const EncodedPath* precomputedEncoded = nullptr);
 
@@ -607,9 +618,12 @@ public:
    * the duration of the call only.
    */
   struct ScenePaint {
-    css::RGBA color = css::RGBA(0, 0, 0, 255);
-    const LinearGradientParams* linearGradient = nullptr;
-    const RadialGradientParams* radialGradient = nullptr;
+    css::RGBA color = css::RGBA(
+        0, 0, 0, 255);  //!< Unpremultiplied solid fill color when no gradient is selected.
+    const LinearGradientParams* linearGradient =
+        nullptr;  //!< Borrowed linear-gradient parameters for the duration of the call.
+    const RadialGradientParams* radialGradient =
+        nullptr;  //!< Borrowed radial-gradient parameters for the duration of the call.
 
     /// True when this instance paints with a gradient rather than a colour.
     bool isGradient() const { return linearGradient != nullptr || radialGradient != nullptr; }
@@ -646,7 +660,7 @@ public:
    * @param slot Resident slot (geometry + record slab wiring installed by
    *   the renderer).
    * @param encoded Precomputed `EncodedPath` shared with the cache.
-   * @param color Solid fill color (NOT premultiplied).
+   * @param paint Solid color or borrowed gradient parameters for this instance.
    * @param rule Fill rule.
    * @param recordTransform The full deviceFromLocal transform to bake
    *   into the record (the batch uniform is orthographic-only).
@@ -688,6 +702,7 @@ public:
   struct SceneBatchBinding {
     gpu::BufferRef chunkBuffer;   ///< Slab chunk holding every instance's geometry.
     gpu::BufferRef recordBuffer;  ///< Record-slab buffer holding the records.
+
     /// Stable identities of `chunkBuffer` / `recordBuffer` (see
     /// `GeodeDevice::AllocateBufferId`). The bind-group cache outlives the
     /// document that owns these buffers, so it keys on these ids; the raw
@@ -703,6 +718,7 @@ public:
     uint64_t firstRecordOffset = 0;
     uint32_t instanceCount = 1;
     uint32_t vertexCount = 0;  ///< Max fan vertex count over the instances.
+
     /// Record slab the instances' records live in. Supplies the persistent
     /// batch-uniform buffer so a steady frame writes nothing; null falls
     /// back to the encoder's per-frame uniform arena.
@@ -746,6 +762,7 @@ public:
    *   stops are honored; excess are silently truncated with a one-shot
    *   verbose warning at the call site in `RendererGeode`.
    * @param rule Fill rule (NonZero or EvenOdd).
+   * @param precomputedEncoded Optional cached path encoding; null encodes the path for this draw.
    */
   void fillPathLinearGradient(const Path& path, const LinearGradientParams& params, FillRule rule,
                               const EncodedPath* precomputedEncoded = nullptr);
@@ -765,6 +782,7 @@ public:
    * @param params Radial gradient parameters (center + radius, optional
    *   focal point + radius, shared transform and stops).
    * @param rule Fill rule (NonZero or EvenOdd).
+   * @param precomputedEncoded Optional cached path encoding; null encodes the path for this draw.
    */
   void fillPathRadialGradient(const Path& path, const RadialGradientParams& params, FillRule rule,
                               const EncodedPath* precomputedEncoded = nullptr);

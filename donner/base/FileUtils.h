@@ -8,7 +8,7 @@
 
 namespace donner {
 
-/// Failure returned by \ref ReadFileBounded.
+/// Failure returned by \ref donner::ReadFileBounded "ReadFileBounded".
 enum class FileReadError {
   OpenFailed,
   TooLarge,

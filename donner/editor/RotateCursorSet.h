@@ -52,7 +52,8 @@ enum class PenCursorHint {
 
 /// Every custom editor cursor, so the cursor set and its completeness /
 /// snapshot tests share one enumeration. `Rotate` and `Scale` are oriented per
-/// selection corner (see \ref CursorUsesCorner); the rest ignore the corner.
+/// selection corner (see \ref donner::editor::CursorUsesCorner "CursorUsesCorner"); the rest ignore
+/// the corner.
 enum class EditorCursor : std::uint8_t {
   Select,
   Pen,
@@ -76,8 +77,8 @@ inline constexpr std::array<EditorCursor, 10> kEditorCursors = {
 
 /// Pointer hotspot for a cursor, in 32x32 cursor-image pixels.
 struct CursorHotspot {
-  int x = 0;
-  int y = 0;
+  int x = 0;  //!< Horizontal hotspot coordinate in cursor pixels.
+  int y = 0;  //!< Vertical hotspot coordinate in cursor pixels.
 };
 
 /// Hotspot (pointer origin) for @p cursor, in cursor-image pixels. See
@@ -88,9 +89,9 @@ struct CursorHotspot {
 [[nodiscard]] bool CursorUsesCorner(EditorCursor cursor);
 
 /// Render any editor cursor to straight-alpha RGBA pixels. @p corner is only
-/// consulted for corner-oriented cursors (\ref CursorUsesCorner); pass any
-/// value otherwise. This is the one render path the completeness / snapshot
-/// tests exercise, matching the pipeline the live cursors use.
+/// consulted for corner-oriented cursors (\ref donner::editor::CursorUsesCorner
+/// "CursorUsesCorner"); pass any value otherwise. This is the one render path the completeness /
+/// snapshot tests exercise, matching the pipeline the live cursors use.
 [[nodiscard]] std::optional<RotateCursorImage> RenderEditorCursorImage(
     EditorCursor cursor, SelectionTransformCorner corner,
     std::shared_ptr<geode::GeodeDevice> geodeDevice);

@@ -183,13 +183,13 @@ for the external-consumer setup.
 
 ### Bazel configuration options
 
-| Config / Flag          | Description                                                                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `--config=geode`       | Use the Geode GPU backend (the editor's default renderer); also enables `--//donner/svg/renderer/geode:enable_geode=true` |
-| `--config=text-full`   | Enable HarfBuzz text shaping + WOFF2 (advanced text layout)                                                               |
-| `--config=asan-fuzzer` | Build fuzzers with AddressSanitizer                                                                                       |
-| `--config=latest_llvm` | Use the latest LLVM toolchain (required for coverage)                                                                     |
-| `--config=lld`         | Force the `lld` linker; workaround for dev boxes whose default linker can't link the suite (see FAQ below)                |
+| Config / Flag          | Description                                                                                                       |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `--config=geode`       | Use the Geode GPU backend (the editor's renderer); also enables `--//donner/svg/renderer/geode:enable_geode=true` |
+| `--config=text-full`   | Enable HarfBuzz text shaping + WOFF2 (advanced text layout)                                                       |
+| `--config=asan-fuzzer` | Build fuzzers with AddressSanitizer                                                                               |
+| `--config=latest_llvm` | Use the latest LLVM toolchain (required for coverage)                                                             |
+| `--config=lld`         | Force the `lld` linker; workaround for dev boxes whose default linker can't link the suite (see FAQ below)        |
 
 For a separate Bazel module, the root `@donner` dependency uses tiny-skia by default. See
 \ref GettingStarted for the checked-in consumer example, the source-checkout override, and
@@ -257,19 +257,22 @@ dependency onto CI images that already link fine. See
 
 ### What's with the build times?
 
-Donner builds everything from source. The tiny-skia backend stays relatively fast because it has no large external rendering dependency, and incremental builds benefit from Bazel's caching.
+Donner builds its rendering implementation from source. Shipped native GPU products have no
+Rust-built GPU library dependency; the Linux resvg comparison uses a pinned test-only reference
+archive. The tiny-skia backend has no large external rendering dependency, and incremental builds
+benefit from Bazel's caching.
 
 ### How do I build the editor?
 
-The full native editor lives at `//donner/editor:editor` and uses Geode
-by default without requiring `--config=geode`:
+The full native editor lives at `//donner/editor:editor` and enables Geode
+without requiring `--config=geode`:
 
 ```sh
 bazel run //donner/editor -- donner_splash.svg
 bazel run //donner/editor -- path/to/file.svg
 ```
 
-The browser editor package uses Geode by default. The package target accepts the explicit
+The browser editor package uses Geode. The package target accepts the explicit
 configuration for build automation, while the local server applies that configuration through a
 build transition:
 

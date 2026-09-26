@@ -73,7 +73,14 @@ public:
 
   RendererGeodeTextureSnapshot(const RendererGeodeTextureSnapshot&) = delete;
   RendererGeodeTextureSnapshot& operator=(const RendererGeodeTextureSnapshot&) = delete;
+
+  /// Construct by moving another instance's state.
+  /// @param other Source object.
   RendererGeodeTextureSnapshot(RendererGeodeTextureSnapshot&& other) noexcept;
+
+  /// Replace this object's state by moving another instance.
+  /// @param other Source object.
+  /// @return This object after the move.
   RendererGeodeTextureSnapshot& operator=(RendererGeodeTextureSnapshot&& other) noexcept;
 
   [[nodiscard]] RendererTextureSnapshotBackend backend() const override {

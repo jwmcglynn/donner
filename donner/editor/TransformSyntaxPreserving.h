@@ -5,7 +5,7 @@
 /// syntax. Forward transform edits (inspector fields and canvas drags) used to
 /// canonicalize every author form into `matrix(a,b,c,d,e,f)` via
 /// \ref donner::toSVGTransformString. This module re-expresses an edited
-/// \ref Transform2d in the author's original function list where the edit is
+/// \ref donner::Transform2d "Transform2d" in the author's original function list where the edit is
 /// representable as an update to that list (a rotation change on `rotate(45)`
 /// writes `rotate(60)`, a move updates `translate(x, y)`, and so on), falling
 /// back to `matrix()` only when the edit cannot be represented in the author's

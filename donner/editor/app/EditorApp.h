@@ -42,11 +42,12 @@ struct SourceLoadOptions {
   std::size_t maxFileBytes = 16u * 1024u * 1024u;
 };
 
+/// Default viewport and source-loading policy for a render session.
 struct RenderSessionOptions {
   /// Default viewport used for navigations that don't carry an explicit
   /// width/height. Matches typical desktop editor previews.
   int defaultWidth = 512;
-  int defaultHeight = 384;
+  int defaultHeight = 384;  //!< Fallback viewport height when navigation omits an explicit size.
 
   /// Options forwarded to the internal source loader. Most tests override
   /// `baseDirectory` to isolate fixture files from the developer's CWD.
@@ -57,7 +58,9 @@ struct RenderSessionOptions {
 /// after `EditorApp::navigate` returns - subsequent navigations produce a
 /// new snapshot.
 struct RenderSessionSnapshot {
-  RenderSessionStatus status = RenderSessionStatus::kEmpty;
+  RenderSessionStatus status =
+      RenderSessionStatus::kEmpty;  //!< Current state of the render session.
+
   /// Resolved URI the snapshot corresponds to, or empty for `kEmpty`.
   std::string uri;
   /// RGBA snapshot of the rendered frame. Empty if no render has succeeded.
@@ -67,8 +70,11 @@ struct RenderSessionSnapshot {
   std::string message;
 };
 
+/// Document loading and rendering state for a host-driven session.
 class RenderSession {
 public:
+  /// Create a document rendering session with the requested loading policy.
+  /// @param options Default viewport and source-loading options.
   explicit RenderSession(RenderSessionOptions options = {});
   ~RenderSession();
 
@@ -91,8 +97,13 @@ public:
   /// than a full navigate because no fetch happens.
   const RenderSessionSnapshot& resize(int width, int height);
 
+  /// Return the current render-session snapshot.
   [[nodiscard]] const RenderSessionSnapshot& current() const { return current_; }
+
+  /// Return the current render width in pixels.
   [[nodiscard]] int width() const { return width_; }
+
+  /// Return the current render height in pixels.
   [[nodiscard]] int height() const { return height_; }
 
   /// The most recent successful bitmap, regardless of the current status.
@@ -105,6 +116,8 @@ public:
   /// `pollForChanges()` checks whether the loaded file's mtime has changed
   /// and auto-reloads if so.
   void setWatchEnabled(bool v) { watchEnabled_ = v; }
+
+  /// Return whether source-file watching is enabled.
   [[nodiscard]] bool watchEnabled() const { return watchEnabled_; }
 
   /// Checks if the currently-loaded file's modification time has changed

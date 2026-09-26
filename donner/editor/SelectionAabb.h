@@ -14,11 +14,10 @@
 
 namespace donner::editor {
 
-/// Collect every renderable \ref svg::SVGGeometryElement in @p root's
-/// subtree (including @p root itself if it is geometry). Skips container
-/// subtrees that are not part of the visual tree - \c defs, \c clipPath,
-/// \c mask, \c filter, \c pattern, gradients, \c symbol, \c marker, \c
-/// style.
+/// Collect every renderable \ref donner::svg::SVGGeometryElement "svg::SVGGeometryElement" in @p
+/// root's subtree (including @p root itself if it is geometry). Skips container subtrees that are
+/// not part of the visual tree - \c defs, \c clipPath, \c mask, \c filter, \c pattern, gradients,
+/// \c symbol, \c marker, \c style.
 ///
 /// Used by the editor to expand a group selection ("I picked this
 /// `<g filter>`") into the set of leaves whose outlines + world bounds
@@ -86,13 +85,18 @@ namespace donner::editor {
 
 /// Pending/displayed selection AABBs tracked across document-version changes.
 struct SelectionBoundsCache {
-  std::vector<svg::SVGElement> lastSelection;
-  std::vector<Box2d> pendingBoundsDoc;
-  std::vector<Box2d> pendingOccludingBoundsDoc;
-  std::uint64_t pendingVersion = 0;
-  std::vector<Box2d> displayedBoundsDoc;
-  std::vector<Box2d> displayedOccludingBoundsDoc;
-  std::uint64_t lastRefreshVersion = std::numeric_limits<std::uint64_t>::max();
+  std::vector<svg::SVGElement> lastSelection;  //!< Selection used to compute the cached bounds.
+  std::vector<Box2d>
+      pendingBoundsDoc;  //!< Document-space selection bounds waiting for presentation.
+  std::vector<Box2d>
+      pendingOccludingBoundsDoc;     //!< Document-space bounds used for pending overlay occlusion.
+  std::uint64_t pendingVersion = 0;  //!< Document frame version associated with the pending bounds.
+  std::vector<Box2d> displayedBoundsDoc;  //!< Selection bounds associated with the displayed frame.
+  std::vector<Box2d>
+      displayedOccludingBoundsDoc;  //!< Occluding bounds associated with the displayed frame.
+  std::uint64_t lastRefreshVersion =
+      std::numeric_limits<std::uint64_t>::max();  //!< Document frame version of the most recent
+                                                  //!< bounds refresh.
 };
 
 /// Promote pending bounds when the corresponding document bitmap is visible.

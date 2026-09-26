@@ -15,6 +15,9 @@ namespace donner::editor {
  */
 class EditorInputBridge {
 public:
+  /// Connect host window input to render-pane event collection.
+  /// @param window Borrowed host window supplying callbacks; it must outlive the bridge.
+  /// @param wheelZoomStep Zoom multiplier step for wheel input.
   EditorInputBridge(gui::EditorWindow& window, double wheelZoomStep);
   ~EditorInputBridge();
 
@@ -23,6 +26,8 @@ public:
 
   /// Returns the queued render-pane scroll events captured since the previous frame.
   [[nodiscard]] std::vector<RenderPaneScrollEvent>& events() { return pendingScrollEvents_.events; }
+
+  /// Return the queued input events collected from the host window.
   [[nodiscard]] const std::vector<RenderPaneScrollEvent>& events() const {
     return pendingScrollEvents_.events;
   }

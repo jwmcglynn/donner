@@ -25,18 +25,25 @@ namespace donner::editor {
 
 /// Stable element locator for canvas→text writeback and selection remap.
 struct AttributeWritebackPathSegment {
-  std::size_t elementChildIndex = 0;
-  xml::XMLQualifiedName qualifiedName;
+  std::size_t elementChildIndex =
+      0;  //!< Index among element children, excluding text and comment nodes.
+  xml::XMLQualifiedName qualifiedName;  //!< Qualified name expected at this path segment.
 
-  bool operator==(const AttributeWritebackPathSegment&) const = default;
+  /// Compare all members for value equality.
+  /// @param other Value to compare.
+  bool operator==(const AttributeWritebackPathSegment& other) const = default;
 };
 
 /// Path to an element through element children only, from the SVG root down.
 struct AttributeWritebackTarget {
-  std::vector<AttributeWritebackPathSegment> elementPath;
-  std::optional<RcString> elementId;
+  std::vector<AttributeWritebackPathSegment>
+      elementPath;  //!< Element-child path from the SVG root to the target.
+  std::optional<RcString>
+      elementId;  //!< Authored id captured for identifying the target when available.
 
-  bool operator==(const AttributeWritebackTarget&) const = default;
+  /// Compare all members for value equality.
+  /// @param other Value to compare.
+  bool operator==(const AttributeWritebackTarget& other) const = default;
 };
 
 /**
@@ -64,8 +71,9 @@ std::optional<svg::SVGElement> resolveAttributeWritebackTarget(
 /**
  * Resolve multiple writeback targets while holding one document read access.
  *
- * This is equivalent to calling \ref resolveAttributeWritebackTarget for each
- * target, but avoids repeated registry lock transitions for bulk editor work.
+ * This is equivalent to calling \ref donner::editor::resolveAttributeWritebackTarget
+ * "resolveAttributeWritebackTarget" for each target, but avoids repeated registry lock transitions
+ * for bulk editor work.
  *
  * @param document The current document.
  * @param targets Targets to resolve in input order.

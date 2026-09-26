@@ -14,7 +14,7 @@
 namespace donner::xml {
 
 /**
- * Token types emitted by the XML tokenizer (\ref Tokenize).
+ * Token types emitted by the XML tokenizer (\ref donner::xml::Tokenize "Tokenize").
  *
  * The token stream is **gap-free**: the concatenation of every token's
  * source range recovers the original input byte-for-byte. No byte is

@@ -3,6 +3,7 @@
 /// Authoritative WGSL for the feDropShadow composition pass.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for the feDropShadow composition pass.
 inline constexpr wgsl::SourceText kDropShadowSource{R"wgsl(struct DropShadowParams {
   color: vec4<f32>,
   dx: f32,

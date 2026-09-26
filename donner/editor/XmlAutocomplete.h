@@ -19,10 +19,11 @@ enum class XmlAutocompleteContextKind {
 
 /// Source replacement range and prefix for XML autocomplete.
 struct XmlAutocompleteContext {
-  XmlAutocompleteContextKind kind = XmlAutocompleteContextKind::Unknown;
-  std::size_t replaceStartOffset = 0;  ///< Inclusive byte offset to replace.
-  std::size_t replaceEndOffset = 0;    ///< Exclusive byte offset to replace.
-  std::string prefix;                  ///< Already-typed completion prefix.
+  XmlAutocompleteContextKind kind =
+      XmlAutocompleteContextKind::Unknown;  //!< XML syntactic context at the completion cursor.
+  std::size_t replaceStartOffset = 0;       ///< Inclusive byte offset to replace.
+  std::size_t replaceEndOffset = 0;         ///< Exclusive byte offset to replace.
+  std::string prefix;                       ///< Already-typed completion prefix.
 };
 
 /// A single XML autocomplete suggestion.
@@ -51,7 +52,8 @@ XmlAutocompleteContext DetectXmlAutocompleteContext(std::string_view source,
  * Element names come from the SVG element registry; attribute names come from SVG presentation
  * attributes plus structural XML/SVG attributes; CSS names come from PropertyRegistry.
  *
- * @param context Context returned by \ref DetectXmlAutocompleteContext.
+ * @param context Context returned by \ref donner::editor::DetectXmlAutocompleteContext
+ * "DetectXmlAutocompleteContext".
  * @return Matching suggestions, filtered by the context prefix.
  */
 std::vector<XmlAutocompleteSuggestion> BuildXmlAutocompleteSuggestions(

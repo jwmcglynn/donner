@@ -30,44 +30,50 @@ inline constexpr int kAccentCount = 3;
 /// Named design tokens for the editor chrome (Graphite ramp).
 struct EditorTheme {
   // --- Surfaces: neutral graphite ramp, deepest to lightest ---
-  ImU32 surfaceCanvas;   ///< #111215 artboard letterbox / deepest backdrop.
-  ImU32 surfaceSunken;   ///< #151619 scroll troughs, wells, inset regions.
-  ImU32 surfaceBase;     ///< #1B1D20 panels, sidebar, primary window bg.
-  ImU32 surfaceRaised;   ///< #24272B toolbar, menu bar, titlebars, field idle.
-  ImU32 surfaceOverlay;  ///< #2B2F34 popovers, dropdowns, tooltips, chips.
-  ImU32 surfaceHover;    ///< #343940 row / button hover.
-  ImU32 surfaceActive;   ///< #3C424A pressed / selected row background.
+  ImU32 surfaceCanvas;   ///< `#111215` artboard letterbox / deepest backdrop.
+  ImU32 surfaceSunken;   ///< `#151619` scroll troughs, wells, inset regions.
+  ImU32 surfaceBase;     ///< `#1B1D20` panels, sidebar, primary window bg.
+  ImU32 surfaceRaised;   ///< `#24272B` toolbar, menu bar, titlebars, field idle.
+  ImU32 surfaceOverlay;  ///< `#2B2F34` popovers, dropdowns, tooltips, chips.
+  ImU32 surfaceHover;    ///< `#343940` row / button hover.
+  ImU32 surfaceActive;   ///< `#3C424A` pressed / selected row background.
 
   // --- Borders ---
-  ImU32 borderSubtle;  ///< #30343A hairline dividers, panel edges.
-  ImU32 borderStrong;  ///< #464C55 field outlines, focused container.
+  ImU32 borderSubtle;  ///< `#30343A` hairline dividers, panel edges.
+  ImU32 borderStrong;  ///< `#464C55` field outlines, focused container.
 
   // --- Text (on surfaceBase) ---
-  ImU32 textPrimary;   ///< #F1F2F4 body text, values (AAA).
-  ImU32 textMuted;     ///< #A8ADB5 secondary labels, meta (AA).
-  ImU32 textDisabled;  ///< #656B74 disabled controls only (intentionally sub-AA).
+  ImU32 textPrimary;   ///< `#F1F2F4` body text, values (AAA).
+  ImU32 textMuted;     ///< `#A8ADB5` secondary labels, meta (AA).
+  ImU32 textDisabled;  ///< `#656B74` disabled controls only (intentionally sub-AA).
 
   // --- Accent: the chosen variant, three tints + dark ink ---
   ImU32 accentActive;   ///< Darker, pressed.
   ImU32 accentDefault;  ///< Base accent (foreground icons, focus ring, links).
   ImU32 accentHover;    ///< Lighter, hover.
-  ImU32 accentInk;      ///< #111215 dark ink for labels ON accent fills.
+  ImU32 accentInk;      ///< `#111215` dark ink for labels ON accent fills.
 
   // --- Selection: derived from the accent ---
   ImU32 selectionStroke;     ///< = accentDefault, opaque; marquee / handle stroke.
   float selectionFillAlpha;  ///< 0.22 fill alpha (accent-at-22%, not solid fill).
 
   // --- Semantic states ---
-  ImU32 warning;      ///< #E3B341 amber: promote-refused, over-budget frames.
-  ImU32 destructive;  ///< #F0616A red: delete, errors, stalls.
-  ImU32 success;      ///< #3FB984 green: committed / in-budget.
+  ImU32 warning;      ///< `#E3B341` amber: promote-refused, over-budget frames.
+  ImU32 destructive;  ///< `#F0616A` red: delete, errors, stalls.
+  ImU32 success;      ///< `#3FB984` green: committed / in-budget.
 
   // --- Spacing grid (logical px, multiples of 4) ---
+  /// One spacing unit, in logical UI pixels.
   float space1{4.0f};
+  /// Two spacing units, in logical UI pixels.
   float space2{8.0f};
+  /// Three spacing units, in logical UI pixels.
   float space3{12.0f};
+  /// Four spacing units, in logical UI pixels.
   float space4{16.0f};
+  /// Six spacing units, in logical UI pixels.
   float space6{24.0f};
+  /// Eight spacing units, in logical UI pixels.
   float space8{32.0f};
 
   // --- Rounding (logical px) ---
@@ -75,8 +81,11 @@ struct EditorTheme {
   float radiusContainer{6.0f};  ///< Panels, cards, popovers, tooltips.
 
   // --- Control metrics (logical px) ---
+  /// Tool-button edge length in logical UI pixels.
   float toolButtonSize{32.0f};
+  /// Tree-row height in logical UI pixels.
   float treeRowHeight{24.0f};
+  /// Scrollbar thickness in logical UI pixels.
   float scrollbarSize{12.0f};
 
   // --- The accent as a Donner css::RGBA, for the overlay's css color seam ---

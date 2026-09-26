@@ -84,8 +84,8 @@ inline double MaxAbsScaleFactor(const Transform2d& transform) {
  * flattening is at least as fine as the exact scale demands.
  *
  * The floor of 1 is what makes the derivation refine-only - see
- * \ref kMaxStrokeFlattenTolerance. Minified geometry keeps the path-local
- * default rather than being tessellated more coarsely.
+ * \ref donner::geode::kMaxStrokeFlattenTolerance "kMaxStrokeFlattenTolerance". Minified geometry
+ * keeps the path-local default rather than being tessellated more coarsely.
  *
  * @param scale Linear scale factor. Non-finite and non-positive inputs fall
  *   back to 1.0 (a degenerate transform paints nothing, so any bucket works).

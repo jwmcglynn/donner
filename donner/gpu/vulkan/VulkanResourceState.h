@@ -11,9 +11,9 @@
 /// only where a Vulkan loader exists.
 ///
 /// The tracked patterns are the ones the recorded command streams actually produce. Anything
-/// outside them resolves to \ref ConservativeImageBarrier, which is the maximal
-/// ALL_COMMANDS/memory barrier this backend used everywhere before: unknown usage costs
-/// precision, never correctness.
+/// outside them resolves to \ref donner::gpu::vulkan::ConservativeImageBarrier
+/// "ConservativeImageBarrier", which is the maximal ALL_COMMANDS/memory barrier this backend used
+/// everywhere before: unknown usage costs precision, never correctness.
 
 #include <vulkan/vulkan.h>
 
@@ -70,8 +70,10 @@ struct ImageBarrierParams {
   VkPipelineStageFlags dstStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;  //!< Destination scope.
   VkAccessFlags srcAccess = 0;                                         //!< Access made available.
   VkAccessFlags dstAccess = 0;                                         //!< Access made visible.
+
   /// True when the usage pair fell outside the tracked set and the maximal barrier was used.
-  bool conservative = false;
+  bool conservative =
+      false;  //!< Whether the resulting transition used the conservative synchronization barrier.
 
   /// Equality operator. @param other Parameters to compare against.
   bool operator==(const ImageBarrierParams& other) const = default;
@@ -125,11 +127,20 @@ public:
   TextureSyncStateTable() = default;
   TextureSyncStateTable(const TextureSyncStateTable&) = delete;
   TextureSyncStateTable& operator=(const TextureSyncStateTable&) = delete;
-  TextureSyncStateTable(TextureSyncStateTable&&) = default;
-  TextureSyncStateTable& operator=(TextureSyncStateTable&&) = default;
+
+  /// Construct by moving another instance's state.
+  /// @param other Source object.
+  TextureSyncStateTable(TextureSyncStateTable&& other) = default;
+
+  /// Replace this object's state by moving another instance.
+  /// @param other Source object.
+  /// @return This object after the move.
+  TextureSyncStateTable& operator=(TextureSyncStateTable&& other) = default;
 
   /// One image's committed state, shared across runtime devices that register it.
   struct SharedState;
+
+  /// Shared ownership of synchronization state used by aliased texture resources.
   using SharedStateHandle = std::shared_ptr<SharedState>;
 
   /// The state \p textureSlot will be in at this point of an encode: the staged state when one

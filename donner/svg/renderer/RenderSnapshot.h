@@ -97,6 +97,7 @@ public:
    * @param snapshot Snapshot receiving recorded commands.
    * @param offscreenFactory Backend used only for creating offscreen renderers
    *     while capture prepares filters, masks, and sub-documents.
+   * @param maximumCapturedFontBytes Maximum cumulative font bytes retained by this recorder.
    */
   RenderSnapshotRecorder(
       RenderSnapshot& snapshot, RendererInterface& offscreenFactory,

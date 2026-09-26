@@ -20,16 +20,23 @@ enum class PerfOverlayMode : std::uint8_t {
   FullGraph,
 };
 
+/// Availability, focus, and toggle state sampled before drawing the application menus.
 struct MenuBarState {
+  /// Whether the XML source pane owns keyboard editing commands.
   bool sourcePaneFocused = false;
   /// An in-canvas text session owns editing shortcuts.
   bool textToolEditing = false;
   /// A non-source ImGui text field owns editing shortcuts.
   bool inspectorTextInputFocused = false;
+  /// Whether the current document can be saved.
   bool canSave = false;
+  /// Whether the current document can be restored from its saved source.
   bool canRevert = false;
+  /// Whether the active editing context has an undo entry.
   bool canUndo = false;
+  /// Whether the active editing context has a redo entry.
   bool canRedo = false;
+  /// Whether source-focused editing mode is enabled.
   bool sourceFocusMode = true;
   /// True when the canvas has one or more selected shapes. Enables shape
   /// Cut/Copy when the source pane is not focused.
@@ -40,7 +47,9 @@ struct MenuBarState {
   /// True when the canvas selection is exactly one or more `<text>` elements,
   /// the precondition for "Convert Text to Outlines".
   bool hasTextSelection = false;
+  /// Whether the current selection can be grouped.
   bool canGroup = false;
+  /// Whether the current selection can be ungrouped.
   bool canUngroup = false;
   /// True when the document has at least one selectable element. Enables the canvas "Select All"
   /// when the source pane is not focused.
@@ -65,25 +74,45 @@ struct MenuBarState {
   bool panelLayoutLocked = true;
 };
 
+/// Edge-triggered commands selected during one menu presentation pass.
 struct MenuBarActions {
+  /// Request the About dialog.
   bool openAbout = false;
+  /// Request a new document.
   bool newFile = false;
+  /// Request the file-open dialog.
   bool openFile = false;
+  /// Request the sample picker.
   bool openSamples = false;
+  /// Request saving the current document.
   bool saveFile = false;
+  /// Request saving the document to a new path.
   bool saveFileAs = false;
+  /// Request an SVG export of the visible viewport.
   bool exportViewportSvg = false;
+  /// Request a viewport SVG export including selection overlays.
   bool exportViewportSvgWithOverlay = false;
+  /// Request restoring the last saved document.
   bool revertFile = false;
+  /// Request application shutdown.
   bool quit = false;
+  /// Request undo in the active editing context.
   bool undo = false;
+  /// Request redo in the active editing context.
   bool redo = false;
+  /// Request cutting the active source or shape selection.
   bool cut = false;
+  /// Request copying the active source or shape selection.
   bool copy = false;
+  /// Request pasting into the active editing context.
   bool paste = false;
+  /// Request pasting shapes without a positional offset.
   bool pasteInFront = false;
+  /// Request converting selected text to paths.
   bool convertTextToOutlines = false;
+  /// Request grouping the selected shapes.
   bool group = false;
+  /// Request ungrouping the selected groups.
   bool ungroup = false;
   /// Text Select-All in the source/XML pane (fires when the source pane owns keyboard focus).
   bool selectAll = false;
@@ -95,9 +124,13 @@ struct MenuBarActions {
   bool deselectAll = false;
   /// Canvas Deselect-All - clears the canvas selection (fires when the source pane is not focused).
   bool deselectAllCanvas = false;
+  /// Request increasing the viewport zoom.
   bool zoomIn = false;
+  /// Request decreasing the viewport zoom.
   bool zoomOut = false;
+  /// Request a one-to-one viewport zoom.
   bool actualSize = false;
+  /// Request toggling source-focused editing mode.
   bool toggleSourceFocusMode = false;
   /// Set when the user toggles the Compositor Debug Info panel via the View menu.
   bool toggleCompositorDebugPanel = false;
@@ -173,11 +206,14 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 
 /// Apply View-menu visibility toggle actions to persistent UI state.
 ///
-/// @param actions Edge-triggered menu actions from \ref MenuBarPresenter::render.
+/// @param actions Edge-triggered menu actions from \ref donner::editor::MenuBarPresenter::render
+/// "MenuBarPresenter::render".
 /// @param showCompositorDebugPanel Current Compositor Debug Info panel visibility.
 /// @param perfOverlayMode Current performance overlay mode.
 /// @param geometryDebugOverlay Current Geode geometry debug overlay state.
 ///   Optional (may be null) so callers without a document renderer skip it.
+/// @param compositorTileOverlay Optional tile-overlay toggle state; null leaves it untouched.
+/// @param compositedRenderingMode Optional compositing mode state; null leaves it untouched.
 void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showCompositorDebugPanel,
                                 PerfOverlayMode* perfOverlayMode,
                                 bool* geometryDebugOverlay = nullptr,
@@ -187,6 +223,9 @@ void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showComposi
 /// Renders the app's top menu bar and reports semantic actions back to the shell.
 class MenuBarPresenter {
 public:
+  /// Draw the menus and return commands activated during this pass.
+  /// @param state Availability, focus, and toggle values for the current frame.
+  /// @param boldMenuFont Optional font used to emphasize menu headings.
   [[nodiscard]] MenuBarActions render(const MenuBarState& state, ImFont* boldMenuFont) const;
 };
 

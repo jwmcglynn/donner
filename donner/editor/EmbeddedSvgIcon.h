@@ -21,8 +21,9 @@ struct EmbeddedSvgIconRequest {
   std::span<const unsigned char> svgBytes;
   /// Square output bitmap size in device pixels.
   int outputSizePx = 0;
-  /// True to normalize to a tintable white alpha mask (\ref RenderEmbeddedSvgIcon
-  /// semantics), false to preserve authored colors (\ref RenderEmbeddedSvgArtwork).
+  /// True to normalize to a tintable white alpha mask (\ref donner::editor::RenderEmbeddedSvgIcon
+  /// "RenderEmbeddedSvgIcon" semantics), false to preserve authored colors (\ref
+  /// RenderEmbeddedSvgArtwork).
   bool tintableMask = true;
 };
 
@@ -62,7 +63,8 @@ void ResetEmbeddedSvgIconRenderer(const svg::RendererInterface& expectedRenderer
  *
  * Use this for small multi-color assets such as the editor's black-core,
  * white-halo tool icons. Single-color affordances should continue to use
- * \ref RenderEmbeddedSvgIcon so ImGui can tint their alpha mask.
+ * \ref donner::editor::RenderEmbeddedSvgIcon "RenderEmbeddedSvgIcon" so ImGui can tint their alpha
+ * mask.
  *
  * @param svgBytes Embedded SVG source bytes.
  * @param outputSizePx Square output bitmap size in device pixels.
@@ -93,8 +95,9 @@ void ResetEmbeddedSvgIconRenderer(const svg::RendererInterface& expectedRenderer
  * The editor's first UI frame draws every affordance icon it shows, and each
  * one used to pay its own GPU readback while the frame was blocked on it. This
  * collapses that into one batched readback before the frame starts:
- * \ref RenderEmbeddedSvgIcon and \ref RenderEmbeddedSvgArtwork return the
- * prewarmed bitmap for any request already rasterized here.
+ * \ref donner::editor::RenderEmbeddedSvgIcon "RenderEmbeddedSvgIcon" and \ref
+ * donner::editor::RenderEmbeddedSvgArtwork "RenderEmbeddedSvgArtwork" return the prewarmed bitmap
+ * for any request already rasterized here.
  *
  * Requests that fail are simply not cached, so the matching single-icon call
  * still falls back to its own rasterization.

@@ -1,5 +1,7 @@
 #pragma once
 /// @file
+/// @hideincludedbygraph
+// This high-fan-in foundation has no useful page-sized reverse include graph.
 
 #include <entt/entity/entity.hpp>    // entt::entity, entt::null
 #include <entt/entity/fwd.hpp>       // Forward declarations

@@ -1545,7 +1545,7 @@ Each test renders both paths and asserts pixel identity.
 ### Hint-cascade and auto-promotion tests (Phase 2)
 
 - **`animation_isolation_test`** (Goal 7): 10k-node scene with one
-  animated `<rect>` (SMIL `<animateTransform type="translate">` over
+  animated rectangle (SMIL `animateTransform` with `type="translate"` over
   2 seconds). Assert (a) the animated subtree is on its own layer
   (queryable via `ComputedLayerAssignmentComponent`), (b) non-animated
   subtree layers are not re-rasterized across frames (observable via
@@ -1563,8 +1563,8 @@ Each test renders both paths and asserts pixel identity.
   all 10 captures are identical. Catches nondeterminism in the cost
   function or the greedy selection order.
 - **`bucket_boundary_respect_test`**: constructed document with
-  nested `<g clip-path="...">`, `<g filter="...">`, `<g mask="...">`,
-  `<g style="isolation: isolate">` chains. Assert `ComplexityBucketer`
+  nested groups with `clip-path`, `filter`, `mask`, and
+  `style="isolation: isolate"` chains. Assert `ComplexityBucketer`
   never places children of these groups in a different bucket from
   the group itself (deferred-pop correctness, § Correctness Analysis).
 - **`animation_dual_path_test`**: dual-path assertion with an active

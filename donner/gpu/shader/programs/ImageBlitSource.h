@@ -3,6 +3,7 @@
 /// Authoritative WGSL for textured quads, masks and CSS blend modes.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for textured quads, masks and CSS blend modes.
 inline constexpr wgsl::SourceText kImageBlitSource{
     R"wgsl(// Geode image blit pipeline: renders a textured quad.
 //

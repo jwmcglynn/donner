@@ -35,8 +35,8 @@ bool HighlightSourceByteRange(TextEditor& textEditor, SourceByteRange byteRange)
 /**
  * Return the serialized XML node byte range for an ECS entity.
  *
- * This is useful for resolved references where the caller has an \ref EntityHandle but not a
- * public \ref svg::SVGElement wrapper.
+ * This is useful for resolved references where the caller has an \ref donner::EntityHandle
+ * "EntityHandle" but not a public \ref donner::svg::SVGElement "svg::SVGElement" wrapper.
  *
  * @param handle Entity whose XML node source should be resolved.
  * @param source Source text corresponding to the entity's document.
@@ -92,9 +92,10 @@ std::optional<svg::SVGElement> FindElementAtSourceOffset(const svg::SVGDocument&
 /**
  * Finds the SVG element nearest a source caret-like offset.
  *
- * Unlike \ref FindElementAtSourceOffset, this treats positions immediately after an opening or
- * closing tag as still referring to that tag's element. This is useful for cursor and hover
- * interactions where the UI position can land on the character cell after the source token.
+ * Unlike \ref donner::editor::FindElementAtSourceOffset "FindElementAtSourceOffset", this treats
+ * positions immediately after an opening or closing tag as still referring to that tag's element.
+ * This is useful for cursor and hover interactions where the UI position can land on the character
+ * cell after the source token.
  *
  * @param document Source-backed SVG document to inspect.
  * @param source Source text corresponding to \p document.

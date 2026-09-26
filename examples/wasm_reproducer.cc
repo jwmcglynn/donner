@@ -13,6 +13,7 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/Renderer.h"
 
+/// Run the standalone WebAssembly rendering reproducer.
 int main() {
   using namespace donner;
   using namespace donner::svg;

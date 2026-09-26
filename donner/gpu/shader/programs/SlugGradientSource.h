@@ -3,6 +3,7 @@
 /// Authoritative WGSL for SlugGradient.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for SlugGradient.
 inline constexpr wgsl::SourceText kSlugGradientSource{
     R"wgsl(// Slug gradient-fill: analytic dual-ray coverage at 1 sample/pixel.
 //

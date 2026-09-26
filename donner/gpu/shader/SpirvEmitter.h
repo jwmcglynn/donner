@@ -60,7 +60,8 @@ namespace donner::gpu::shader {
  *   fragment inputs receive the Flat decoration as WGSL semantics require. Fragment entry
  *   points declare OriginUpperLeft.
  *
- * Fails closed with a \ref ShaderError (never emits invalid SPIR-V silently) when:
+ * Fails closed with a \ref donner::gpu::shader::ShaderError "ShaderError" (never emits invalid
+ * SPIR-V silently) when:
  * - a float literal is non-finite;
  * - a binding type has no host-shareable layout (the IrLayout engine's bool/resource rejection
  *   is propagated);

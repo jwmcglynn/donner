@@ -322,6 +322,7 @@ public:
   void markDeviceLostAfterWaitTimeout(GpuWaitSite site, std::chrono::milliseconds elapsed,
                                       const char* reason) const;
 
+  /// Readback timing, completion, loss, cancellation, and resource counters.
   struct ReadbackStats {
     int count = 0;
     int pollIterations = 0;
@@ -474,18 +475,24 @@ public:
    * by another document must never retrieve the previous document's cached bind group.
    */
   struct SceneBatchBindGroupKey {
-    uint64_t uniformBufferId = 0;
-    uint64_t uniformOffset = 0;
-    uint64_t uniformSize = 0;
-    uint64_t chunkBufferId = 0;
-    uint64_t chunkBytes = 0;
-    uint64_t recordBufferId = 0;
-    uint64_t recordOffset = 0;
-    uint64_t recordBytes = 0;
+    uint64_t uniformBufferId = 0;  //!< Identity of the batch uniform buffer.
+    uint64_t uniformOffset = 0;    //!< Byte offset of the uniform binding.
+    uint64_t uniformSize = 0;      //!< Byte length of the uniform binding.
+    uint64_t chunkBufferId = 0;    //!< Identity of the encoded geometry chunk buffer.
+    uint64_t chunkBytes = 0;       //!< Byte length of the bound geometry chunks.
+    uint64_t recordBufferId = 0;   //!< Identity of the scene-record buffer.
+    uint64_t recordOffset = 0;     //!< Byte offset of the scene-record binding.
+    uint64_t recordBytes = 0;      //!< Byte length of the scene-record binding.
 
+    /// Compare all members for value equality.
+    /// @param a Value to compare.
+    /// @param b Value to compare.
     friend bool operator==(const SceneBatchBindGroupKey& a,
                            const SceneBatchBindGroupKey& b) = default;
 
+    /// Order binding keys lexicographically for cache lookup.
+    /// @param a Value to compare.
+    /// @param b Value to compare.
     friend bool operator<(const SceneBatchBindGroupKey& a, const SceneBatchBindGroupKey& b) {
       return std::tie(a.uniformBufferId, a.uniformOffset, a.uniformSize, a.chunkBufferId,
                       a.chunkBytes, a.recordBufferId, a.recordOffset, a.recordBytes) <
@@ -564,17 +571,23 @@ public:
   // issue #575's leak hunt can measure unbounded growth across whole
   // test-suite runs where each `RendererGeode` has its own scoped
   // per-frame counters.
+
+  /// Record one buffer creation in lifetime and attached frame counters.
   void countBuffer() const {
     ++lifetimeBufferCreates_;
     if (counters_) {
       ++counters_->bufferCreates;
     }
   }
+
+  /// Record one bind-group creation in the attached frame counters.
   void countBindGroup() const {
     if (counters_) {
       ++counters_->bindgroupCreates;
     }
   }
+
+  /// Record one texture creation in lifetime and attached frame counters.
   void countTexture() const {
     ++lifetimeTextureCreates_;
     if (counters_) {
@@ -601,6 +614,8 @@ public:
   uint64_t lifetimeBufferCreates() const {
     return lifetimeBufferCreates_ + readbackLifetimeBufferCreates_.load(std::memory_order_relaxed);
   }
+
+  /// Record one queue submission in the attached frame counters.
   void countSubmit() const {
     if (counters_) {
       ++counters_->submits;
@@ -613,6 +628,8 @@ public:
       counters_->commandBuffers += count;
     }
   }
+
+  /// Record one path encoding in the attached frame counters.
   void countPathEncode() const {
     if (counters_) {
       ++counters_->pathEncodes;
@@ -625,6 +642,8 @@ public:
       counters_->drawCalls += count;
     }
   }
+
+  /// Record one pipeline switch in the attached frame counters.
   void countPipelineSwitch() const {
     if (counters_) {
       ++counters_->pipelineSwitches;

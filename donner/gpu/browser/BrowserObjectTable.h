@@ -13,7 +13,7 @@
 
 namespace donner::gpu::browser {
 
-/// Kind of browser object a \ref BrowserObjectId names.
+/// Kind of browser object a \ref donner::gpu::browser::BrowserObjectId "BrowserObjectId" names.
 ///
 /// The kind travels with every identifier so the browser side can refuse an identifier that names
 /// a live object of the wrong kind, rather than calling a texture method on a buffer and
@@ -31,6 +31,7 @@ enum class BrowserObjectKind : uint8_t {
   ComputePipeline,  //!< A compute pipeline.
   Surface,          //!< A presentation surface and the canvas context behind it.
   BufferMapping,    //!< A host mapping of a buffer range.
+
   /// Number of kinds. Not a kind; it exists so per-kind storage and the protocol table below are
   /// sized by the enumeration itself rather than by a number kept in step with it by hand.
   kCount,

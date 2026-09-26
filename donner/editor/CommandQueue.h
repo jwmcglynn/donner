@@ -33,8 +33,10 @@
 
 namespace donner::editor {
 
+/// Ordered queue of editor commands awaiting document access.
 class CommandQueue {
 public:
+  /// Outcome of flushing pending editor commands.
   struct FlushResult {
     std::vector<EditorCommand> effectiveCommands;
 

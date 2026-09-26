@@ -42,7 +42,7 @@ family is not promised. Network failures have one bounded automatic retry;
 subsequent retries are explicit and rate limited.
 
 The package includes `CatalogFontNotices.txt`; preserve it with the assets.
-The [catalog documentation](../../../third_party/google_fonts/README.md) describes
+The [catalog documentation](https://github.com/jwmcglynn/donner/blob/main/third_party/google_fonts/README.md) describes
 generation, pins, codec limits, and semantic equivalence checks.
 
 The Wasm module goal is approximately 3.2 MB with gzip level 9 and a zero timestamp.

@@ -24,14 +24,25 @@ enum class StyleContributionKind {
 /// One source-backed style contribution and its source-editor annotation metadata.
 struct StyleSourceContribution {
   std::size_t id = 0;  ///< Stable id within a single annotation computation.
+
+  /// Source range of the declaration, attribute, or referenced resource element.
   SourceByteRange sourceRange;
   SourceByteRange chipRange;  ///< Source range whose end anchors the selector chip.
+
+  /// CSS property name, or the resource tag name for a referenced resource element.
   std::string propertyName;
+  /// Category of the source annotation.
   StyleContributionKind kind = StyleContributionKind::StylesheetDeclaration;
-  bool effective = false;  ///< True when this contribution wins for at least one element.
-  bool showChip = false;   ///< True when a selector match-count chip should be shown.
+  bool effective =
+      false;  ///< True for a winning style contribution or a resource with at least one reference.
+  bool showChip =
+      false;  ///< True when a selector-match or resource-reference count chip should be shown.
+
+  /// Matched-element count, or total fragment-reference count for a resource element.
   int matchedElementCount = 0;
   bool showOverflowMarker = false;  ///< True when a chip should show an overflow marker.
+
+  /// Live matched or referencing elements while the document is available.
   std::vector<svg::SVGElement> matchedElements;
   std::string tooltip;          ///< Tooltip for the source range.
   std::string chipTooltip;      ///< Tooltip for the selector match-count chip.
@@ -40,6 +51,7 @@ struct StyleSourceContribution {
 
 /// Source annotations derived from CSS cascade analysis.
 struct StyleSourceAnnotations {
+  /// Source declarations contributing to the captured style annotations.
   std::vector<StyleSourceContribution> contributions;
 };
 
@@ -49,15 +61,20 @@ struct StyleSourceAnnotations {
 /// thread. Stable writeback targets preserve chip-action identity without
 /// sharing the parsed worker document.
 struct DetachedStyleSourceContribution {
+  /// Captured style contribution without retaining live element handles.
   StyleSourceContribution contribution;
+  /// Indices into the detached annotation set's elementTargets array.
   std::vector<std::size_t> matchedElementTargetIndices;
 };
 
 /// Registry-independent result of a source-only annotation computation.
 struct DetachedStyleSourceAnnotations {
   bool valid = false;  ///< False when the source could not be parsed.
+
   /// Deduplicated targets shared by contribution match lists.
+  /// Source-stable writeback targets replacing live element handles.
   std::vector<AttributeWritebackTarget> elementTargets;
+  /// Source declarations contributing to the captured style annotations.
   std::vector<DetachedStyleSourceContribution> contributions;
 };
 

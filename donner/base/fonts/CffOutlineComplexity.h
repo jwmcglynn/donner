@@ -13,8 +13,8 @@ inline constexpr std::size_t kMaximumCffOutlineValidationWork = 64 * 1024 * 1024
 
 /// Bounded outline cost proved for one CFF or CFF2 glyph.
 struct CffGlyphOutlineComplexity {
-  uint32_t maximumVertices = 0;
-  uint32_t work = 0;
+  uint32_t maximumVertices = 0;  //!< Conservative upper bound on vertices produced by this glyph.
+  uint32_t work = 0;             //!< Validation work charged while analyzing this glyph.
 };
 
 /// Outcome of bounded CFF outline validation.
@@ -27,12 +27,15 @@ enum class CffOutlineValidationStatus : uint8_t {
 
 /// Per-glyph complexities returned by the bounded CFF interpreter.
 struct CffOutlineValidationResult {
-  CffOutlineValidationStatus status = CffOutlineValidationStatus::Invalid;
+  CffOutlineValidationStatus status =
+      CffOutlineValidationStatus::Invalid;  //!< Overall CFF validation outcome.
+
   /// Structure and CharString work actually consumed, including failed validation.
   std::size_t work = 0;
   /// Work spent resolving legacy CFF1 endchar component graphs.
   std::size_t componentResolutionWork = 0;
-  std::vector<CffGlyphOutlineComplexity> glyphs;
+  std::vector<CffGlyphOutlineComplexity>
+      glyphs;  //!< Per-glyph outline complexity bounds for the validated font.
 };
 
 /**
