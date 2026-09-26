@@ -963,11 +963,27 @@ nanoseconds per draw) are:
 | Metal     |    100 |    403 |    403 |
 | Metal     | 10,000 |    133 |     78 |
 
+Hosted Linux `--config=ci -c opt` [Perf run 36214557535](https://github.com/jwmcglynn/donner/actions/runs/36214557535)
+on Ubuntu 24.04 x86_64 (median of three post-warmup samples, nanoseconds per draw) passed all
+three cases. The test pins `WGPU_BACKEND=vulkan`; wgpu-native reported the Mesa llvmpipe CPU
+adapter. The native Vulkan case executed separately on that runner:
+
+| Backend        |  Draws | Record | Submit |
+| -------------- | -----: | -----: | -----: |
+| Recording      |      1 |  1,453 |  8,356 |
+| Recording      |    100 |    254 |    408 |
+| Recording      | 10,000 |    238 |    380 |
+| Vulkan         |      1 |  5,400 | 25,377 |
+| Vulkan         |    100 |    337 |    345 |
+| Vulkan         | 10,000 |    245 |    103 |
+| wgpu reference |      1 |  5,180 | 31,048 |
+| wgpu reference |    100 |    303 |    400 |
+| wgpu reference | 10,000 |    233 |     84 |
+
 The recording backend's submission includes command serialization, while Metal's includes driver
 encoding and queue submission. These microbenchmarks do not yet justify changing the compositor's
 0.05 ms per-draw-op estimate: that estimate also covers scene preparation and raster work. The
-paired frame and residency gates below still decide cutover performance; Linux Vulkan and the
-test-only wgpu reference measurements remain to be recorded on the same fixture.
+paired frame and residency gates below still decide cutover performance.
 
 The WebGPU fixture directly exercises the shipped checkerboard pipelines and WGSL modules or
 pipelines for `color_space_convert`, `filter_color_matrix`, `filter_resolve`, `flood`,
