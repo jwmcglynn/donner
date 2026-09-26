@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <vector>
 
@@ -64,6 +65,13 @@ public:
   [[nodiscard]] std::size_t retire(std::vector<gpu::Buffer>& buffers,
                                    std::vector<gpu::BindGroup>& bindGroups);
 
+  /// Wake the owning event loop when another thread hands it work. The callback runs under this
+  /// mailbox's lock and must only post a nonblocking wake; clearing it waits for any call to end.
+  void setWakeCallback(std::function<void()> callback);
+
+  /// Whether an owner-thread idle pass has handles to release.
+  [[nodiscard]] bool hasPending() const;
+
   /// Releases everything held. Call on the thread of the context rendering through the device.
   void release();
 
@@ -87,6 +95,7 @@ private:
   std::atomic<bool> closed_ = false;
   std::vector<gpu::Buffer> buffers_;
   std::vector<gpu::BindGroup> bindGroups_;
+  std::function<void()> wakeCallback_;
 };
 
 }  // namespace donner::geode

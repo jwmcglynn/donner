@@ -1668,6 +1668,22 @@ constexpr bool kAsyncRendererWallclockTestsEnabled =
     false;
 #endif
 
+TEST(AsyncRendererTest, IdleMaintenanceWakeRunsOnWorkerWithoutAFrame) {
+  std::atomic<int> polls{0};
+  AsyncRenderer renderer;
+  renderer.setIdleMaintenance([&] { polls.fetch_add(1, std::memory_order_release); },
+                              [] { return false; });
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  ASSERT_TRUE(WaitUntil([&] { return polls.load(std::memory_order_acquire) > 0; }, deadline));
+  const int beforeWake = polls.load(std::memory_order_acquire);
+
+  renderer.requestIdleMaintenance();
+  EXPECT_TRUE(
+      WaitUntil([&] { return polls.load(std::memory_order_acquire) > beforeWake; }, deadline))
+      << "an idle worker must drain a cross-thread retirement without another render request";
+  renderer.shutdown();
+}
+
 // Preemptive swap-in. When the worker finishes a
 // render, the editor's main loop must learn about the result on the
 // NEXT ImGui frame, not on the next mouse event. The mechanism is the

@@ -442,6 +442,19 @@ public:
    */
   void drainDeferredDestroys();
 
+  /// Nonblocking owner-thread maintenance after a frame or while the renderer is idle. Drains
+  /// cross-thread mailboxes, pumps callback-driven backends once, and releases completed work.
+  /// No new submission or queue wait is required.
+  void pollIdle();
+
+  /// Whether idle maintenance can still free resources when a completion arrives. Owner-thread
+  /// only; event loops may use it to schedule a short maintenance wake instead of rendering.
+  [[nodiscard]] bool hasIdleWork() const;
+
+  /// Posts a cheap wake when a cross-thread retirement arrives. Callbacks must not reenter this
+  /// context and must be cleared before their event loop is destroyed.
+  void setIdleWakeCallback(std::function<void()> callback);
+
   /// Number of texture backings waiting for the next frame-boundary destroy pass.
   /// Exposed to pin resource-retirement behavior in renderer regression tests.
   [[nodiscard]] std::size_t deferredTextureDestroyCountForTesting() const;
