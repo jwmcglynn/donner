@@ -840,7 +840,10 @@ donner_cc_test(
         "//donner/svg/resources:image_resource",
         "@tiny-skia-cpp//src:tiny_skia_lib",
         "@tiny-skia-cpp//src/tiny_skia/filter",
-    ],
+    ] + select({
+        "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
+        "//conditions:default": [],
+    }),
 )
 
 # Transition wrapper: flips renderer_backend=geode + enable_geode=true so this

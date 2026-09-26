@@ -369,6 +369,11 @@ public:
   /// @param hook Hook to install; empty removes it. Set only while captures are quiescent.
   void setSnapshotReadbackHookForTesting(std::function<void(SnapshotReadbackPhase)> hook);
 
+  /// Test-only access to the capture runtime while its lease is held, before it submits work.
+  /// Set only while captures are quiescent; the callback must not retain the reference past the
+  /// capture context's lifetime.
+  void setSnapshotCaptureRuntimeHookForTesting(std::function<void(gpu::Device&)> hook);
+
   /// Record one completed CPU readback from a renderer sharing this device.
   void recordReadback(bool usedTimedWaitAny, int pollIterations);
 
@@ -895,6 +900,7 @@ private:
                                                const std::function<bool()>& shouldCancel,
                                                std::chrono::steady_clock::time_point deadline);
   void finishSnapshotCapture(GeodeDevice& context);
+  void wakeIdleOwner();
 
   /**
    * Recycles what the snapshot capture context has retired and the GPU has finished with, when no
@@ -903,7 +909,8 @@ private:
    * A capture that ends before its readback completes (cancelled, past its deadline, or failed)
    * retires its registration of the source texture with that readback in flight, and only a poll
    * of the capture context recycles it. Until then the registration holds the texture, so the
-   * owner could not release it. The owner calls this before releasing textures.
+   * owner could not release it. The owner calls this before releasing textures. A busy lease is
+   * never waited on by this idle path; its completion posts a wake instead.
    */
   void pollIdleSnapshotCaptureContext();
   void recordSnapshotCaptureTimeout();
