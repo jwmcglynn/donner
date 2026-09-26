@@ -1545,18 +1545,27 @@ test("Firefox restores the Splash canvas after transient surface loss", async ({
 
   await owner.evaluate(() => {
     const scope = globalThis as typeof globalThis & {
-      __donnerInjectedSurfaceFailures?: { remaining: number; observed: number };
+      __donnerInjectedSurfaceFailures?: {
+        remaining: number;
+        observed: number;
+        successfulAfterFault: number;
+      };
     };
-    const injected = { remaining: 2, observed: 0 };
+    const injected = { remaining: 2, observed: 0, successfulAfterFault: 0 };
     scope.__donnerInjectedSurfaceFailures = injected;
     const original = GPUCanvasContext.prototype.getCurrentTexture;
     GPUCanvasContext.prototype.getCurrentTexture = function(this: GPUCanvasContext) {
-      if (this.canvas.width >= 500 && this.canvas.height >= 500 && injected.remaining > 0) {
+      const editorCanvas = this.canvas.width >= 500 && this.canvas.height >= 500;
+      if (editorCanvas && injected.remaining > 0) {
         --injected.remaining;
         ++injected.observed;
         throw new Error("injected transient canvas surface loss");
       }
-      return original.call(this);
+      const texture = original.call(this);
+      if (editorCanvas && injected.observed === 2) {
+        ++injected.successfulAfterFault;
+      }
+      return texture;
     };
   });
   await page.evaluate(() => {
@@ -1573,9 +1582,24 @@ test("Firefox restores the Splash canvas after transient surface loss", async ({
     timeout: scaledMs(2_000),
   }).toBe(2);
 
+  const framesAfterLoss = (await readSurfaceFrameProbe(page)).frames;
   await page.evaluate(() => {
     window.__donnerEditorFrameRequested = true;
   });
+  await expect.poll(async () => (await readSurfaceFrameProbe(page)).frames, {
+    message: "the editor canvas must acquire another frame after the lost surface",
+    timeout: scaledMs(2_000),
+  }).toBeGreaterThan(framesAfterLoss);
+  await expect.poll(() =>
+    owner.evaluate(() => {
+      const scope = globalThis as typeof globalThis & {
+        __donnerInjectedSurfaceFailures?: { successfulAfterFault: number };
+      };
+      return scope.__donnerInjectedSurfaceFailures?.successfulAfterFault ?? 0;
+    }), {
+    message: "the recovered editor canvas must acquire a texture after both injected losses",
+    timeout: scaledMs(2_000),
+  }).toBeGreaterThan(0);
   const frame = await captureSplashDragFrame(
     page,
     documentRegion,
