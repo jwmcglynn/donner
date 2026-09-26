@@ -1245,6 +1245,18 @@ PresentationFrameOutcome AcquirePresentationFrame(
   }
 
   const auto acquireStart = std::chrono::steady_clock::now();
+  const bool rebuiltMissingSurface = surface == nullptr;
+  if (rebuiltMissingSurface) {
+    surface = rebuild ? rebuild() : nullptr;
+    if (surface == nullptr) {
+      outcome.status = gpu::SurfaceStatus::Lost;
+      outcome.released = true;
+      configuredPx = Vector2i::Zero();
+      outcome.acquireMs = ElapsedMs(acquireStart);
+      return outcome;
+    }
+    configuredPx = sizePx;
+  }
   AcquiredFrame frame = surface->acquire();
   outcome.acquireMs = ElapsedMs(acquireStart);
   if (outcome.acquireMs > 250.0) {
@@ -1260,7 +1272,7 @@ PresentationFrameOutcome AcquirePresentationFrame(
       // Only one of the two statuses that give a surface up can be recovered from here: a
       // platform object that is gone is replaced by a fresh one built from the window, while
       // nothing here brings a lost device back.
-      if (frame.status == gpu::SurfaceStatus::Lost) {
+      if (frame.status == gpu::SurfaceStatus::Lost && !rebuiltMissingSurface) {
         frame = RebuildAndReacquire(surface, sizePx, configuredPx, rebuild);
       }
       break;
@@ -1475,6 +1487,9 @@ struct EditorWindow::WgpuState {
   /// instead of a presentable surface. Giving a surface up hands its frame back through the
   /// device it was built on, so it is declared after that device and destroyed before it.
   std::unique_ptr<internal::PresentationSurface> presentation;
+  /// A window created for a visible surface must retry attaching it after a transient loss;
+  /// a null surface must never silently become a headless target.
+  bool presentationRequired = false;
   /// Registrations of the textures UI draw data may sample, and the renderer that resolves them.
   /// Both are created once the device exists and torn down before it.
   std::unique_ptr<UiTextureRegistry> uiTextureRegistry;
@@ -1497,12 +1512,11 @@ struct EditorWindow::WgpuState {
   std::chrono::milliseconds readbackBudget = geode::kDefaultGpuWaitTimeout;
 
   /// A constructor that gave up before the framebuffer context existed leaves it null with the
-  /// rest of the state in place. Asked of the context rather than of the root's wgpu objects,
-  /// which a native backend's root does not hold.
-  /// @return Whether this state names a device and something to draw into.
+  /// rest of the state in place. A visible window may attempt to rebuild a missing surface.
+  /// @return Whether this state can attempt a frame on its selected target.
   bool canPresentFrames() const {
     return framebufferGeodeDevice != nullptr &&
-           (presentation != nullptr || offscreenTexture.isValid());
+           (presentationRequired || offscreenTexture.isValid());
   }
 };
 #else
@@ -1853,6 +1867,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     // first point the frames it hands out are actually described. Reading the usage earlier would
     // let the frame loop copy out of frames that were never configured to be copied from.
     wgpuState_->surfaceUsage = wgpuState_->presentation->usage();
+    wgpuState_->presentationRequired = true;
 #ifdef __EMSCRIPTEN__
     ReportBrowserCanvasAttachment(browserRuntimeSelected);
 #endif
@@ -2129,7 +2144,8 @@ bool EditorWindow::usingOffscreenRenderTarget() const {
 }
 
 bool EditorWindow::framebufferReadbackAvailable() const {
-  return wgpuState_ != nullptr && wgpuState_->canPresentFrames() &&
+  return wgpuState_ != nullptr && wgpuState_->framebufferGeodeDevice != nullptr &&
+         (wgpuState_->presentation != nullptr || wgpuState_->offscreenTexture.isValid()) &&
          SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage);
 }
 
@@ -2321,6 +2337,11 @@ std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentation
 
 #ifdef DONNER_EDITOR_WGPU
 bool EditorWindow::configureFrameTarget(int displayW, int displayH) {
+  // The next acquire rebuilds a lost presentation surface. Never replace a visible canvas with
+  // an offscreen target when its surface temporarily disappears.
+  if (wgpuState_->presentationRequired && wgpuState_->presentation == nullptr) {
+    return true;
+  }
   if (displayW == wgpuState_->configuredWidth && displayH == wgpuState_->configuredHeight) {
     return true;
   }
@@ -2631,7 +2652,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   // Holds this frame's acquisition for as long as the frame is being drawn; presenting it below
   // ends the acquisition and leaves this handle stale.
   gpu::Texture acquiredFrame;
-  if (wgpuState_->presentation != nullptr) {
+  if (wgpuState_->presentationRequired) {
     gpu::SurfaceStatus acquireStatus = gpu::SurfaceStatus::Success;
     acquiredFrame = acquirePresentationFrame(displayW, displayH, timing, acquireStatus);
     if (!acquiredFrame.isValid()) {
@@ -2644,7 +2665,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   // Whichever of the two holds this frame's target keeps it alive for exactly as long as the
   // frame below draws into it, so everything downstream names it rather than owning it.
   const gpu::Texture& frameTarget =
-      wgpuState_->presentation != nullptr ? acquiredFrame : wgpuState_->offscreenTexture;
+      wgpuState_->presentationRequired ? acquiredFrame : wgpuState_->offscreenTexture;
   internal::SurfacePresentGuard presentGuard(wgpuState_->presentation.get());
   const bool canReadBack = SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage);
   const uint32_t readbackWidth = static_cast<uint32_t>(displayW);
