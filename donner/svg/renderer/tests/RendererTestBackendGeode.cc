@@ -7,7 +7,11 @@
 
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#ifdef DONNER_GEODE_WGPU_REFERENCE
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#else
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
+#endif
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 
 namespace donner::svg {

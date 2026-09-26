@@ -1,7 +1,7 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_binary", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
-load("//build_defs:package.bzl", "donner_package")
-load("@rules_python//python:defs.bzl", "py_test")
 
 # The frozen pre-cutover baseline: Donner-owned scenes captured from the current production
 # renderer, plus the check-mode targets that re-derive them and diff against what is committed.
@@ -61,9 +61,8 @@ donner_cc_library(
     ],
 )
 
-# The pre-cutover oracle: the current wgpu-backed production renderer, exercised as a black box.
-# Geode-gated because it links the wgpu backend; the transitioned wrappers below make both
-# consumers reachable without passing --config=geode.
+# The frozen pre-cutover oracle is checked against the current native Geode renderer. The
+# transitioned wrappers make both consumers reachable without passing --config=geode.
 donner_cc_library(
     name = "wgpu_baseline_capture",
     testonly = 1,
@@ -81,11 +80,12 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer/geode:geo_encoder",
         "//donner/svg/renderer/geode:geode_device",
-        "//donner/svg/renderer/geode:geode_gpu_wait",
         "//donner/svg/renderer/geode:geode_test_contexts",
-        "//donner/svg/renderer/geode:geode_wgpu_util",
-        "//third_party/webgpu-cpp:webgpu_cpp",
-    ],
+    ] + select({
+        "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
+        "@platforms//os:linux": ["//donner/gpu/vulkan:vulkan_device"],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_binary(

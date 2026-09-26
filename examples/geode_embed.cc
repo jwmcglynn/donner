@@ -1,58 +1,34 @@
 /**
- * @example geode_embed.cc Minimal windowed host for Geode's embedded mode.
+ * @example geode_embed.cc Minimal native windowed Geode host.
  *
- * Loads an SVG from disk, opens a fixed-size GLFW window, and renders the
- * document into the swap-chain texture on every frame via the Geode
- * embedding API:
+ * The host selects the GPU root against its actual GLFW window, creates a runtime surface,
+ * renders an SVG into each acquired frame, and retires the surface before the window. Metal
+ * attaches a Core Animation layer; Vulkan completes physical-device and queue selection against
+ * the exact VkSurfaceKHR it will present to. No WebGPU-C++ handle enters the product.
  *
- *   - The host creates a `wgpu::Instance`, selects an adapter, creates a
- *     `wgpu::Device`, and configures the window surface itself.
- *   - `GeodeDevice::CreateFromExternal(config)` wraps the host's
- *     device/queue/format without taking ownership of the underlying
- *     WebGPU objects.
- *   - The host registers the current swap-chain texture with the device and
- *     points the renderer at the name that registration returns; the renderer
- *     names textures of its device rather than backend handles.
- *   - `draw(document)` issues work into the host's device/queue;
- *     `wgpuSurfacePresent` ships the frame.
- *
- * Intentionally minimal: no input handling, no resize, no DPI scaling. The
- * goal is a clean walkthrough of the embedding boundary for the
- * `docs/guides/embedding_geode.md` guide.
- *
- * To run:
- *
- * ```sh
  * bazel run --config=geode //examples:geode_embed -- donner_splash.svg
- * ```
  */
 
-// Intentionally ordered: donner + webgpu-cpp headers first so their class
-// names (notably `wgpu::Status`) are fully declared before any platform
-// native header can `#define` colliding macros. The GLFW native-surface
-// extraction lives in separate TUs (`geode_embed_surface_linux.cc`,
-// `geode_embed_surface_macos.mm`) so X11 / Cocoa macros never leak into
-// donner headers.
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
-#include <webgpu/webgpu.hpp>
+#include <string_view>
+#include <utility>
 
 #include "donner/base/FileUtils.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/TerminalEscape.h"
+#include "donner/gpu/Device.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeEmbed.h"
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "examples/geode_embed_surface.h"
 
 extern "C" {
@@ -63,6 +39,7 @@ namespace {
 
 constexpr int kWindowWidth = 800;
 constexpr int kWindowHeight = 600;
+constexpr int kMaxOneFrameAttempts = 32;
 
 void GlfwErrorCallback(int error, const char* description) {
   std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
@@ -77,56 +54,54 @@ std::string LoadFile(const char* path) {
   return {};
 }
 
-/// Pick a surface format. The first entry in `formats` is the adapter's
-/// preferred format; we accept it if it is one of the two SRGB-less 8-bit
-/// formats Geode pipelines support, otherwise fall back to `BGRA8Unorm`
-/// which every desktop backend lists.
-wgpu::TextureFormat ChooseSurfaceFormat(const wgpu::SurfaceCapabilities& caps) {
-  for (size_t i = 0; i < caps.formatCount; ++i) {
-    const auto f = caps.formats[i];
-    if (f == WGPUTextureFormat_BGRA8Unorm || f == WGPUTextureFormat_RGBA8Unorm) {
-      return wgpu::TextureFormat{f};
-    }
-  }
-  return wgpu::TextureFormat::BGRA8Unorm;
+bool Supports(const donner::gpu::SurfaceCapabilities& caps, donner::gpu::TextureFormat format) {
+  return std::find(caps.formats.begin(), caps.formats.end(), format) != caps.formats.end() &&
+         (caps.usages & donner::gpu::TextureUsage::RenderAttachment) !=
+             donner::gpu::TextureUsage::None;
 }
 
-}  // namespace
+donner::gpu::SurfaceConfiguration Configuration(const donner::gpu::SurfaceCapabilities& caps,
+                                                donner::gpu::TextureFormat format) {
+  donner::gpu::SurfaceConfiguration config;
+  config.format = format;
+  config.usage = donner::gpu::TextureUsage::RenderAttachment;
+  config.size = {kWindowWidth, kWindowHeight};
+  config.presentMode = std::find(caps.presentModes.begin(), caps.presentModes.end(),
+                                 donner::gpu::PresentMode::Fifo) != caps.presentModes.end()
+                           ? donner::gpu::PresentMode::Fifo
+                           : caps.presentModes.front();
+  config.alphaMode = std::find(caps.alphaModes.begin(), caps.alphaModes.end(),
+                               donner::gpu::SurfaceAlphaMode::Opaque) != caps.alphaModes.end()
+                         ? donner::gpu::SurfaceAlphaMode::Opaque
+                         : caps.alphaModes.front();
+  return config;
+}
 
-int main(int argc, char* argv[]) {
-  if (const char* bwd = std::getenv("BUILD_WORKING_DIRECTORY")) {
-    std::filesystem::current_path(bwd);
-  }
-
-  if (argc != 2) {
-    std::fprintf(stderr, "USAGE: geode_embed <svg-file>\n");
-    return 1;
-  }
-
-  // --- Parse the SVG once up front ---
-  const std::string svgData = LoadFile(argv[1]);
+std::optional<donner::svg::SVGDocument> ParseDocument(const char* svgPath) {
+  const std::string svgData = LoadFile(svgPath);
   if (svgData.empty()) {
-    const std::string safePath = donner::EscapeTerminalText(argv[1]);
+    const std::string safePath = donner::EscapeTerminalText(svgPath);
     std::fprintf(stderr, "Failed to open or empty SVG: %s\n", safePath.c_str());
-    return 1;
+    return std::nullopt;
   }
-
   donner::ParseWarningSink warnings;
-  auto maybeDocument = donner::svg::parser::SVGParser::ParseSVG(svgData, warnings);
-  if (maybeDocument.hasError()) {
+  auto parsed = donner::svg::parser::SVGParser::ParseSVG(svgData, warnings);
+  if (parsed.hasError()) {
     std::ostringstream diagnostic;
-    diagnostic << maybeDocument.error();
+    diagnostic << parsed.error();
     std::cerr << "SVG parse error: " << donner::EscapeTerminalText(diagnostic.str()) << "\n";
-    return 1;
+    return std::nullopt;
   }
-  donner::svg::SVGDocument document = std::move(maybeDocument.result());
+  donner::svg::SVGDocument document = std::move(parsed.result());
   document.setCanvasSize(kWindowWidth, kWindowHeight);
+  return document;
+}
 
-  // --- GLFW window (no GL context; WebGPU drives the surface directly) ---
+GLFWwindow* CreateWindow() {
   glfwSetErrorCallback(GlfwErrorCallback);
   if (!glfwInit()) {
     std::fprintf(stderr, "glfwInit failed\n");
-    return 1;
+    return nullptr;
   }
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
@@ -135,132 +110,188 @@ int main(int argc, char* argv[]) {
   if (window == nullptr) {
     std::fprintf(stderr, "glfwCreateWindow failed\n");
     glfwTerminate();
-    return 1;
   }
+  return window;
+}
 
-  // --- WebGPU: instance / adapter / device on the HOST side ---
-  wgpu::Instance instance = wgpu::createInstance();
-  if (!instance) {
-    std::fprintf(stderr, "wgpuCreateInstance returned null\n");
-    glfwDestroyWindow(window);
-    glfwTerminate();
-    return 1;
-  }
+struct EmbedSession {
+  explicit EmbedSession(GLFWwindow* window)
+      : window(window), native(donner::example::PrepareNativeEmbedSurface(window)) {}
 
-  wgpu::Surface surface = donner::example::CreateSurfaceFromGlfwWindow(instance, window);
-  if (!surface) {
-    std::fprintf(stderr, "Failed to create WebGPU surface from GLFW window\n");
-    glfwDestroyWindow(window);
-    glfwTerminate();
-    return 1;
-  }
+  GLFWwindow* window;
+  donner::example::NativeEmbedSurface native;
+  std::shared_ptr<donner::geode::GeodeDevice> context;
+  donner::gpu::Surface surface;
+  donner::gpu::SurfaceConfiguration config;
 
-  // wgpu-native's sync `requestAdapter` and `requestDevice` internally loop on
-  // the callback-based C API; see `GeodeDevice.cc` for the same pattern used
-  // for the headless path. We rely on those wrappers here to keep the host
-  // code compact.
-  wgpu::RequestAdapterOptions adapterOptions = {};
-  adapterOptions.compatibleSurface = surface;
-  wgpu::Adapter adapter = instance.requestAdapter(adapterOptions);
-  if (!adapter) {
-    std::fprintf(stderr, "No WebGPU adapter available.\n");
-    return 1;
-  }
-
-  wgpu::DeviceDescriptor deviceDesc = {};
-  deviceDesc.label = wgpu::StringView{std::string_view{"GeodeEmbedDevice"}};
-  wgpu::Device device = adapter.requestDevice(deviceDesc);
-  if (!device) {
-    std::fprintf(stderr, "Failed to create WebGPU device.\n");
-    return 1;
-  }
-  wgpu::Queue queue = device.getQueue();
-
-  // --- Surface configuration ---
-  wgpu::SurfaceCapabilities caps;
-  surface.getCapabilities(adapter, &caps);
-  const wgpu::TextureFormat surfaceFormat = ChooseSurfaceFormat(caps);
-
-  wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
-  surfaceConfig.device = device;
-  surfaceConfig.format = surfaceFormat;
-  surfaceConfig.usage = wgpu::TextureUsage::RenderAttachment;
-  surfaceConfig.width = kWindowWidth;
-  surfaceConfig.height = kWindowHeight;
-  surfaceConfig.presentMode = wgpu::PresentMode::Fifo;
-  if (caps.alphaModeCount > 0) {
-    surfaceConfig.alphaMode = caps.alphaModes[0];
-  } else {
-    surfaceConfig.alphaMode = wgpu::CompositeAlphaMode::Auto;
-  }
-  surface.configure(surfaceConfig);
-  caps.freeMembers();
-
-  // --- Geode: wrap host device via the embedding API (non-owning) ---
-  donner::geode::GeodeEmbedConfig embedConfig;
-  embedConfig.instance = instance;
-  embedConfig.device = device;
-  embedConfig.queue = queue;
-  embedConfig.adapter = adapter;
-  embedConfig.textureFormat = surfaceFormat;
-
-  // `shared_ptr` so the constructed renderer can share ownership. The wrapper
-  // itself does NOT own the underlying wgpu handles - the locals above retain
-  // that responsibility.
-  std::shared_ptr<donner::geode::GeodeDevice> geodeDevice =
-      donner::geode::GeodeDevice::CreateFromExternal(embedConfig);
-  if (!geodeDevice) {
-    std::fprintf(stderr, "GeodeDevice::CreateFromExternal failed\n");
-    return 1;
-  }
-
-  // Scope the renderer so its destructor runs while the host's wgpu::Device
-  // is still alive, before we unconfigure the surface and tear down GLFW.
-  {
-    donner::svg::RendererGeode renderer(geodeDevice);
-
-    while (!glfwWindowShouldClose(window)) {
-      glfwPollEvents();
-
-      wgpu::SurfaceTexture surfaceTex;
-      surface.getCurrentTexture(&surfaceTex);
-
-      // wgpu-native distinguishes fully-fresh (`SuccessOptimal`) from
-      // stale-but-usable (`SuccessSuboptimal`) textures. Both are safe to
-      // render into; anything else means the swap chain needs reconfiguring
-      // (window minimized, display resumed) or the device is gone. For this
-      // minimal example we simply skip the frame.
-      if (surfaceTex.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
-          surfaceTex.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
-        donner::geode::ScopedWgpuHandle<wgpu::Texture> failedTexture(
-            wgpu::Texture(surfaceTex.texture));
-        continue;
+  int finish(int code) {
+    if (surface.isValid() && context != nullptr) {
+      if (donner::gpu::Status released =
+              context->runtimeDevice().destroySurface(std::move(surface));
+          released.hasError()) {
+        std::fprintf(stderr, "Could not retire runtime surface: %s\n",
+                     released.error().toString().c_str());
+        code = 1;
       }
+    }
+    context.reset();
+    native.root.reset();
+    if (donner::example::RetireNativeEmbedSurface(native, window)) {
+      glfwDestroyWindow(window);
+      glfwTerminate();
+    } else {
+      std::fprintf(stderr, "Native surface retirement is unproven; retaining its window\n");
+      code = 1;
+    }
+    return code;
+  }
+};
 
-      donner::geode::ScopedWgpuHandle<wgpu::Texture> target(wgpu::Texture(surfaceTex.texture));
-      // The renderer names textures of its device, never backend handles, so the host registers
-      // this frame's surface texture with the device and hands over the name. The registration
-      // takes no ownership and is forgotten when `frameTarget` goes out of scope below.
-      donner::gpu::Result<donner::gpu::Texture> frameTarget =
-          geodeDevice->adapterDevice().importExternalTexture(
-              target.get(),
-              donner::gpu::Extent2d{target.get().getWidth(), target.get().getHeight()},
-              geodeDevice->textureFormat(), donner::gpu::TextureUsage::RenderAttachment);
-      if (frameTarget.hasError()) {
-        continue;
-      }
-      renderer.setTargetTexture(frameTarget.result());
-      renderer.draw(document);
-      renderer.clearTargetTexture();
+bool InitializeSession(EmbedSession& session) {
+  if (session.native.root == nullptr) {
+    std::fprintf(stderr, "Could not select a native GPU root for this window\n");
+    return false;
+  }
+  session.context = std::shared_ptr<donner::geode::GeodeDevice>(
+      donner::geode::GeodeDevice::CreateOverSelectedRoot(session.native.root,
+                                                         session.native.format));
+  if (session.context == nullptr) {
+    std::fprintf(stderr, "Could not create a Geode context over the selected root\n");
+    return false;
+  }
+  donner::gpu::Device& device = session.context->runtimeDevice();
+  donner::gpu::SurfaceDescriptor descriptor;
+  descriptor.label = "GeodeEmbedSurface";
+  descriptor.native = session.native.native;
+  donner::gpu::Result<donner::gpu::Surface> created = device.createSurface(descriptor);
+  if (created.hasError()) {
+    std::fprintf(stderr, "Could not create runtime surface: %s\n",
+                 created.error().toString().c_str());
+    return false;
+  }
+  session.surface = std::move(created).result();
+  donner::gpu::Result<donner::gpu::SurfaceCapabilities> capabilities =
+      device.surfaceCapabilities(session.surface);
+  if (capabilities.hasError() || !Supports(capabilities.result(), session.native.format) ||
+      capabilities.result().presentModes.empty() || capabilities.result().alphaModes.empty()) {
+    std::fprintf(stderr, "Window surface cannot present Geode's selected format\n");
+    return false;
+  }
+  session.config = Configuration(capabilities.result(), session.native.format);
+  if (donner::gpu::Status configured = device.configureSurface(session.surface, session.config);
+      configured.hasError()) {
+    std::fprintf(stderr, "Could not configure runtime surface: %s\n",
+                 configured.error().toString().c_str());
+    return false;
+  }
+  return true;
+}
 
-      surface.present();
+enum class FrameOutcome { Continue, Presented, Failed };
+
+FrameOutcome HandleUnavailableFrame(EmbedSession& session, donner::gpu::Device& device,
+                                    const donner::gpu::SurfaceTexture& frame) {
+  if (frame.texture.isValid()) {
+    (void)device.abandonCurrentTexture(session.surface);
+  }
+  if (frame.status == donner::gpu::SurfaceStatus::Outdated) {
+    return device.configureSurface(session.surface, session.config).hasError()
+               ? FrameOutcome::Failed
+               : FrameOutcome::Continue;
+  }
+  if (frame.status == donner::gpu::SurfaceStatus::Timeout) {
+    return FrameOutcome::Continue;
+  }
+  std::fprintf(stderr, "Native presentation surface was lost\n");
+  return FrameOutcome::Failed;
+}
+
+FrameOutcome PresentFrame(EmbedSession& session, donner::gpu::Device& device) {
+  donner::gpu::Result<donner::gpu::SurfaceStatus> presented =
+      device.presentSurface(session.surface);
+  if (presented.hasError() || presented.result() == donner::gpu::SurfaceStatus::DeviceLost ||
+      presented.result() == donner::gpu::SurfaceStatus::Lost) {
+    std::fprintf(stderr, "Could not present the native frame\n");
+    return FrameOutcome::Failed;
+  }
+  if (presented.result() == donner::gpu::SurfaceStatus::Outdated &&
+      device.configureSurface(session.surface, session.config).hasError()) {
+    return FrameOutcome::Failed;
+  }
+  return presented.result() == donner::gpu::SurfaceStatus::Success ? FrameOutcome::Presented
+                                                                   : FrameOutcome::Continue;
+}
+
+FrameOutcome DrawFrame(EmbedSession& session, donner::svg::RendererGeode& renderer,
+                       donner::svg::SVGDocument& document) {
+  donner::gpu::Device& device = session.context->runtimeDevice();
+  donner::gpu::Result<donner::gpu::SurfaceTexture> acquired =
+      device.acquireCurrentTexture(session.surface);
+  if (acquired.hasError()) {
+    std::fprintf(stderr, "Could not acquire a native frame: %s\n",
+                 acquired.error().toString().c_str());
+    return FrameOutcome::Failed;
+  }
+  donner::gpu::SurfaceTexture frame = std::move(acquired).result();
+  if (frame.status != donner::gpu::SurfaceStatus::Success || !frame.texture.isValid()) {
+    return HandleUnavailableFrame(session, device, frame);
+  }
+  renderer.setTargetTexture(frame.texture);
+  renderer.draw(document);
+  renderer.clearTargetTexture();
+  return PresentFrame(session, device);
+}
+
+int RenderFrames(EmbedSession& session, donner::svg::SVGDocument& document, bool oneFrame) {
+  int oneFrameAttempts = 0;
+  donner::svg::RendererGeode renderer(session.context);
+  while (!glfwWindowShouldClose(session.window)) {
+    if (oneFrame && ++oneFrameAttempts > kMaxOneFrameAttempts) {
+      std::fprintf(stderr, "One-frame smoke could not present within %d attempts\n",
+                   kMaxOneFrameAttempts);
+      return 1;
+    }
+    glfwPollEvents();
+    switch (DrawFrame(session, renderer, document)) {
+      case FrameOutcome::Failed: return 1;
+      case FrameOutcome::Presented:
+        if (oneFrame) {
+          return 0;
+        }
+        break;
+      case FrameOutcome::Continue: break;
     }
   }
+  return oneFrame ? 1 : 0;
+}
 
-  geodeDevice.reset();
-  surface.unconfigure();
+}  // namespace
 
-  glfwDestroyWindow(window);
-  glfwTerminate();
-  return 0;
+int main(int argc, char* argv[]) {
+  if (const char* bwd = std::getenv("BUILD_WORKING_DIRECTORY")) {
+    std::filesystem::current_path(bwd);
+  }
+  const bool oneFrame = argc == 3 && std::string_view(argv[1]) == "--one-frame";
+  if ((!oneFrame && argc != 2) || (argc == 2 && std::string_view(argv[1]) == "--one-frame")) {
+    std::fprintf(stderr, "USAGE: geode_embed [--one-frame] <svg-file>\n");
+    return 1;
+  }
+  const char* svgPath = oneFrame ? argv[2] : argv[1];
+  std::optional<donner::svg::SVGDocument> document = ParseDocument(svgPath);
+  if (!document.has_value()) {
+    return 1;
+  }
+  GLFWwindow* window = CreateWindow();
+  if (window == nullptr) {
+    return 1;
+  }
+  EmbedSession session(window);
+  if (!InitializeSession(session)) {
+    return session.finish(1);
+  }
+  const int result = session.finish(RenderFrames(session, *document, oneFrame));
+  if (oneFrame && result == 0) {
+    std::puts("GEODE_EMBED_PRESENTED=1");
+  }
+  return result;
 }

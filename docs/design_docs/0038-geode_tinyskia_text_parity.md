@@ -6,7 +6,7 @@ backend-specific layout divergence. The resvg matrix runs two active modes in Ge
 direct Geode-to-tiny pixel comparison is not an active mode because their analytic and
 finite-sample coverage can legitimately differ.
 
-**Related:** [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison),
+**Related:** [0017 Geode renderer](0017-geode_renderer.md),
 [0041 anti-aliasing](0041-geode_analytical_aa.md),
 [0042 Slug implementation](0042-geode_slug_conformance.md),
 [0021 §Geode / Resvg Override Policy](https://github.com/jwmcglynn/donner/blob/main/docs/design_docs/0021-resvg_feature_gaps.md#geode--resvg-override-policy)
@@ -160,8 +160,7 @@ verified byte-identical across 96 text tests).
 
 All six now render correctly at the ~677–720 px edge floor. This same
 double-draw idempotency class also surfaced a production feImage-fragment bug
-(unrelated to text; see [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison)
-and the appendix).
+(unrelated to text; see the appendix).
 
 ### 4.4 Per-char `dy` / `rotate` lists (render-correct edge floor)
 

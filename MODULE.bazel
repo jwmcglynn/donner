@@ -62,8 +62,6 @@ use_repo(
     "tracy",
     "wgpu_native_linux_aarch64",
     "wgpu_native_linux_x86_64",
-    "wgpu_native_macos_aarch64",
-    "wgpu_native_macos_x86_64",
     "woff2",
 )
 

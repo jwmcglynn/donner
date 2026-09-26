@@ -32,10 +32,6 @@
 #include <vector>
 
 #ifdef DONNER_EDITOR_WGPU
-#ifndef __EMSCRIPTEN__
-#include <webgpu/webgpu.hpp>
-#endif
-
 #include "donner/gpu/Descriptors.h"
 #include "donner/gpu/Handles.h"
 #endif
@@ -194,19 +190,11 @@ public:
   /**
    * Takes hold of the platform object behind \p window.
    *
-   * @param instance WebGPU instance the surface belongs to; unused on Apple, where the Metal layer
-   *   belongs to none.
    * @param window Window whose platform object frames are presented to.
    * @return False when the platform object could not be obtained.
    */
 #ifndef __EMSCRIPTEN__
-  [[nodiscard]] virtual bool attachToWindow(const wgpu::Instance& instance, GLFWwindow* window) = 0;
-
-#ifndef __APPLE__
-  /// The surface adapter selection is constrained to, or a null handle when this surface places
-  /// no constraint on which adapter is chosen.
-  [[nodiscard]] virtual wgpu::Surface adapterSelectionSurface() const = 0;
-#endif
+  [[nodiscard]] virtual bool attachToWindow(GLFWwindow* window) = 0;
 
   /**
    * Settles the format acquired textures carry, and records whether finished frames are to be
@@ -214,14 +202,10 @@ public:
    * \ref format; everything else a frame carries is settled by \ref attachToDevice, which is the
    * first point the surface can say what it supports.
    *
-   * @param adapter Adapter the device will be created on. Not consulted on Apple, where a Metal
-   *   layer presents BGRA8Unorm whichever device draws into it; a native device's selection
-   *   produces no adapter.
    * @param enableReadback Whether finished frames are copied back to the host.
    * @return False when the surface cannot serve the editor's frames.
    */
-  [[nodiscard]] virtual bool chooseConfiguration(const wgpu::Adapter& adapter,
-                                                 bool enableReadback) = 0;
+  [[nodiscard]] virtual bool chooseConfiguration(bool enableReadback) = 0;
 #endif
 
   /**
@@ -304,11 +288,8 @@ public:
   ~RuntimePresentationSurface() override;
 
 #ifndef __EMSCRIPTEN__
-  bool attachToWindow(const wgpu::Instance& instance, GLFWwindow* window) override;
-#ifndef __APPLE__
-  wgpu::Surface adapterSelectionSurface() const override;
-#endif
-  bool chooseConfiguration(const wgpu::Adapter& adapter, bool enableReadback) override;
+  bool attachToWindow(GLFWwindow* window) override;
+  bool chooseConfiguration(bool enableReadback) override;
 #endif
   bool attachToDevice(geode::GeodeDevice& device) override;
 
@@ -358,11 +339,6 @@ private:
   gpu::Surface surface_;
   /// Platform object frames are presented to, filled in while attaching to the window.
   gpu::NativeSurfaceHandle native_;
-#if !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
-  /// The surface object this made from the window's platform handle. The runtime's swapchain is
-  /// built on it, so it is let go of only after the runtime's surface is gone.
-  wgpu::Surface platformSurface_;
-#endif
   gpu::TextureFormat format_ = gpu::TextureFormat::BGRA8Unorm;
   gpu::SurfaceAlphaMode alphaMode_ = gpu::SurfaceAlphaMode::Opaque;
   /// Whether finished frames are copied back to the host.

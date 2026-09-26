@@ -1,121 +1,146 @@
-# Embedding Geode in a host application {#EmbeddingGeode}
+# Embedding Geode in a native host {#EmbeddingGeode}
 
-Geode renders SVG through Donner's GPU runtime. A host can let Geode select a
-physical device for headless rendering, or lend Geode an existing WebGPU device
-and a surface texture. The latter is the public external-device embedding path
-in v0.8; the host still owns surface acquisition and presentation. Geode creates
-a logical rendering context and its own pipelines over the supplied device.
+This guide is for Donner developers integrating Geode with a macOS or Linux
+window. The in-tree [GLFW example](../../examples/geode_embed.cc) shows the
+current native runtime boundary. The host owns the window and its platform
+surface; Geode owns a rendering context over the selected Metal or Vulkan root.
+The example does not create a WebGPU-C++ device or import a `wgpu::Texture`.
 
-The complete, compiled GLFW example is
-[`examples/geode_embed.cc`](../../examples/geode_embed.cc), with platform
-surface helpers beside it. This guide describes the contracts that example
-implements.
-
-## Choose a GPU backend
-
-`GeodeDevice::CreateHeadless()` and editor-created roots use the shared backend
-selector. With no request, native macOS selects Metal, native Linux selects the
-transitional WebGPU adapter, and the browser-backend-enabled Wasm build selects its browser backend.
-An explicit `DONNER_GPU_BACKEND` value names `wgpu`, `metal`, or `vulkan`
-(case-insensitive). An unknown value or a requested backend unavailable on the
-host terminates selection with a diagnostic; it never silently substitutes a
-different backend. A caller-specified `GpuRootSelection::backend` takes
-precedence over the environment.
-
-`GeodeDevice::CreateFromExternal()` instead wraps the roots the host supplied.
-It does not select a replacement backend from `DONNER_GPU_BACKEND`. The current
-external texture import uses `GeodeWgpuAdapterDevice`, so this walkthrough is
-for a host with WebGPU roots. Native Metal and Vulkan windows use the selected
-root and presentation paths shown by the editor, rather than importing a native
-surface through `GeodeEmbedConfig`.
-
-Build the GPU renderer with `--config=geode`. For a compact software-only
-consumer, use the default tiny-skia build; it does not need this embedding API.
-
-## Create a borrowed logical context
-
-Include [`GeodeEmbed.h`](../../donner/svg/renderer/geode/GeodeEmbed.h) for
-`GeodeEmbedConfig`; `GeodeDevice.h` only forward-declares the configuration.
-The host creates a WebGPU instance, adapter, device, queue, and surface, then
-chooses a surface format supported by that adapter. The compiled example shows
-the full setup and error paths.
-
-Set `GeodeEmbedConfig::device`, `queue`, and `textureFormat` to the host's
-values, as the example does. On the transitional WebGPU adapter, an optional
-`instance` lets snapshot readback wait through `Instance::waitAny()`; it does
-not enable external-root embedding in the browser backend. `adapter` carries
-metadata about the selected device. `CreateFromExternal`
-returns null when required roots are absent, a supplied shared owner disagrees
-with explicit roots, or a supplied owner or loss state is already marked lost.
-
-The raw-root form borrows the host's WebGPU objects. Keep them alive until every
-`RendererGeode` and `GeodeDevice` using them has been destroyed. For several
-logical contexts over one physical device, pass the same
-`GeodePhysicalDeviceOwner` in `GeodeEmbedConfig::physicalDevice`; the owner and
-its loss state are then shared. Any explicit root or `lostState` supplied beside
-that owner must identify the same objects. Each logical context still has its
-own runtime device, resource handles, submission state, and pipelines.
-
-## Draw one surface frame
-
-1. Acquire a surface texture. The example accepts `SuccessOptimal` and
-   `SuccessSuboptimal`; it skips other statuses, and a resized or outdated
-   surface needs reconfiguration before another acquisition.
-2. Register that texture with the Geode context's adapter through
-   `importExternalTexture`. Supply the texture's actual extent, the renderer's
-   format, and `gpu::TextureUsage::RenderAttachment`. Registration returns a
-   `gpu::Texture` name for this context, or an error. The host still owns the
-   backend texture.
-3. Pass the registered name to `RendererGeode::setTargetTexture`, draw the SVG,
-   then call `clearTargetTexture` after `draw` and before presenting or
-   releasing the host's acquired surface frame. The renderer's `draw` call
-   performs its begin/end-frame pair. A renderer without an external target
-   uses its internal offscreen target; an invalid target is refused rather than
-   silently replaced by that offscreen path.
-4. Present through the host surface. Keep both the backend texture and its
-   registration alive through the draw. The example uses `ScopedWgpuHandle` for
-   the acquired texture, so early exits release it as well.
-
-The registration must describe the target accurately: the format must match the
-context's pipelines, sample count must be one, and the handle must belong to
-the renderer's own context. Add `gpu::TextureUsage::CopySrc` when a snapshot
-needs to read from that target. A name registered with another context does not
-identify this context's texture.
-
-Build the complete example with:
+Build the example with Geode enabled:
 
 ```sh
 bazel build --config=geode //examples:geode_embed
 ```
 
-It parses an SVG, opens a `GLFW_NO_API` window, creates and configures the
-WebGPU surface, wraps the host roots, and reuses one renderer across frames.
-Run it with `bazel run --config=geode //examples:geode_embed -- path/to/drawing.svg`.
+The example uses a fixed 800 by 600 framebuffer and exits when its window
+closes. It intentionally leaves input handling, resizing, and DPI adaptation to
+the host.
 
-## Handle device loss and teardown
+For an automated native presentation smoke, pass `--one-frame` before the SVG
+path. This mode stops after one successful present, retires the surface through
+the normal teardown path, prints `GEODE_EMBED_PRESENTED=1`, and exits zero. It
+fails after 32 acquisition attempts without a successful present; the default
+interactive mode has no attempt limit.
 
-A host that receives WebGPU device-loss callbacks can pass a shared
-`GeodeDeviceLostState` in `GeodeEmbedConfig::lostState`. The callback must call
-`donner::gpu::DeclareDeviceLost(*lostState)`, not store directly to `lostState->lost`:
-the declaration also runs registered device-loss releases. Geode uses the same
-state when a bounded GPU wait times out.
-`GeodeDevice::isDeviceLost()` then gives the host and Geode the same condition.
-Stop submitting frames on a lost device. To resume, create new physical roots
-and a new Geode context and renderer; a lost context is not reused.
+```sh
+bazel run --config=geode //examples:geode_embed -- --one-frame path/to/drawing.svg
+```
 
-Destroy renderers before their Geode context, then release host-owned textures,
-surface, queue, device, adapter, and instance according to the host's WebGPU
-lifetime rules. The example scopes the renderer before unconfiguring the
-surface and tearing down GLFW.
+## Select for the actual window {#EmbeddingGeodeSelection}
 
-## Platform notes
+Create a GLFW window with `GLFW_NO_API` before selecting a GPU root. The
+[platform helper](../../examples/geode_embed_surface.h) returns both the root
+and the native handle that the runtime surface will present to:
 
-On Linux, keep the GLFW native X11 surface helper in a separate translation
-unit. `<X11/Xlib.h>` defines `None`, `True`, `False`, and `Status`, which collide
-with WebGPU C++ names. The example's
-[`geode_embed_surface_linux.cc`](../../examples/geode_embed_surface_linux.cc)
-isolates and undefines those macros.
+```cpp
+donner::example::NativeEmbedSurface native =
+    donner::example::PrepareNativeEmbedSurface(window);
+if (native.root == nullptr) {
+  if (donner::example::RetireNativeEmbedSurface(native, window)) {
+    glfwDestroyWindow(window);
+    glfwTerminate();
+  }
+  return;
+}
+```
 
-For browser code, do not pass external WebGPU roots to
-`CreateFromExternal`: the browser backend does not support that entry point.
-Use the browser root selected for the editor or headless browser renderer.
+On macOS, the helper attaches a `CAMetalLayer` to the GLFW window before
+selecting the native Metal root. On Linux, it asks GLFW for Vulkan instance
+extensions, opens a presentation probe, creates the actual `VkSurfaceKHR`
+against that instance, and completes physical-device and queue selection
+against that surface. Selecting a headless Vulkan root first would not prove
+that its queue can present to this window.
+
+The helper settles `native.format` before Geode creates pipelines. Linux uses
+the selected device's preferred format for its surface; macOS uses
+`BGRA8Unorm`. The runtime's surface capabilities are checked again after
+attachment. A host must refuse a surface that cannot render and present the
+format its Geode context uses.
+
+## Create a context and runtime surface {#EmbeddingGeodeRuntimeSurface}
+
+Create one Geode context over the selected root, then create and configure a
+surface on that context's runtime device:
+
+```cpp
+auto context = std::shared_ptr<donner::geode::GeodeDevice>(
+    donner::geode::GeodeDevice::CreateOverSelectedRoot(native.root, native.format));
+if (context == nullptr) {
+  native.root.reset();
+  if (donner::example::RetireNativeEmbedSurface(native, window)) {
+    glfwDestroyWindow(window);
+    glfwTerminate();
+  }
+  return;
+}
+donner::gpu::Device& device = context->runtimeDevice();
+
+donner::gpu::SurfaceDescriptor descriptor;
+descriptor.label = "GeodeEmbedSurface";
+descriptor.native = native.native;
+auto created = device.createSurface(descriptor);
+if (created.hasError()) {
+  context.reset();
+  native.root.reset();
+  if (donner::example::RetireNativeEmbedSurface(native, window)) {
+    glfwDestroyWindow(window);
+    glfwTerminate();
+  }
+  return;
+}
+donner::gpu::Surface surface = std::move(created).result();
+```
+
+Query `device.surfaceCapabilities(surface)` and require the chosen format and
+`RenderAttachment` usage. Configure a nonzero framebuffer extent, a supported
+present mode, and a supported alpha mode with `device.configureSurface`.
+
+The host's window must outlive this runtime surface. The Geode context retains
+the selected root while it renders; its `gpu::Texture` handles belong to that
+context's runtime device.
+
+## Draw and present a frame {#EmbeddingGeodeFrame}
+
+Acquire one frame from the runtime surface, give its texture to the renderer
+only for that frame, then present it:
+
+```cpp
+donner::svg::RendererGeode renderer(context);
+auto acquired = device.acquireCurrentTexture(surface);
+if (acquired.hasResult() &&
+    acquired.result().status == donner::gpu::SurfaceStatus::Success) {
+  donner::gpu::SurfaceTexture frame = std::move(acquired).result();
+  renderer.setTargetTexture(frame.texture);
+  renderer.draw(document);
+  renderer.clearTargetTexture();
+  (void)device.presentSurface(surface);
+}
+```
+
+The acquired texture is borrowed from the surface. Do not release its backing,
+reuse its handle after presentation, or give its handle to another runtime
+device. `RendererGeode::setTargetTexture()` keeps its identity only for the
+frame; `clearTargetTexture()` removes that identity before presentation.
+
+`SurfaceStatus::Outdated` calls for reconfiguration before another acquire.
+`Timeout` can be retried; `Lost` and `DeviceLost` stop this fixed-window
+example. A host that discards an acquired frame calls
+`device.abandonCurrentTexture(surface)` before retrying. The example handles
+these statuses in its frame loop.
+
+## Retire in ownership order {#EmbeddingGeodeRetirement}
+
+Destroy the renderer, release the runtime surface with
+`device.destroySurface`, and release the Geode context before destroying the
+host's native surface or GLFW window. On Linux, the embedder-created
+`VkSurfaceKHR` is not owned by Donner's runtime surface. The helper registers
+it with the Vulkan root and calls `destroyExternalSurface` only after runtime
+surface teardown proves the swapchain is finished with it.
+
+If Vulkan cannot prove retirement, the example retains the native surface,
+root, and GLFW window until process exit and reports the failure. Destroying
+the window in that state could invalidate a surface the driver still uses.
+The Metal layer remains owned by its Cocoa view until the GLFW window closes.
+
+The native example is an in-tree integration pattern. Browser canvas presentation uses the
+separate browser runtime.
