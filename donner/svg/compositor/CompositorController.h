@@ -1286,10 +1286,13 @@ private:
       const Transform2d& surfaceFromCanvas, bool allowAffineDragPreview);
   bool hasDirtyFilteredInteraction(Registry& registry,
                                    const std::vector<Entity>& transformDirtyEntities) const;
+  bool hasDirtyMarkedInteraction(Registry& registry,
+                                 const std::vector<Entity>& dirtyEntities) const;
   void dropOversizedInteractionHintsForViewport(Registry& registry, const RenderViewport& viewport,
                                                 const Transform2d& surfaceFromCanvas,
                                                 bool firstViewport, bool surfaceChanged,
                                                 bool viewportSizeChanged,
+                                                const std::vector<Entity>& dirtyEntities,
                                                 const std::vector<Entity>& transformDirtyEntities,
                                                 bool allowAffineDragPreview = true);
   bool assignInteractionLayer(Registry& registry, Entity entity, InteractionHint interactionKind,

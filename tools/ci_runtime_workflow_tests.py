@@ -825,10 +825,26 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     def _stage_catalog_candidate(self, root):
         body = self._step_body(self.editor_wasm, "Stage immutable Geode deployment candidate")
         script = "#!/bin/bash\n" + textwrap.dedent(body.split("        run: |\n", 1)[1])
+        # The real staging job runs on macOS, where shasum is available. The
+        # workflow contract test also runs on Linux, so provide the same
+        # SHA-256 command from the fixture rather than relying on host tools.
+        (root / "shasum_fixture.py").write_text(
+            "import hashlib, sys\n"
+            "assert sys.argv[1:3] == ['-a', '256']\n"
+            "for name in sys.argv[3:]:\n"
+            "    with open(name, 'rb') as stream:\n"
+            "        digest = hashlib.sha256(stream.read()).hexdigest()\n"
+            "    print(f'{digest}  {name}')\n"
+        )
+        shasum = root / "shasum"
+        shasum.write_text('#!/bin/sh\nexec "$FIXTURE_PYTHON" "$FIXTURE_ROOT/shasum_fixture.py" "$@"\n')
+        shasum.chmod(0o755)
         return self._run_script(script, [], cwd=root, env={
             **os.environ, "RUNNER_TEMP": str(root), "GITHUB_SHA": "a" * 40,
             "GITHUB_RUN_ID": "12", "GITHUB_RUN_ATTEMPT": "2",
             "PACKAGE_TARGET": "//fixture:package", "GITHUB_OUTPUT": str(root / "output"),
+            "PATH": str(root) + os.pathsep + os.environ["PATH"],
+            "FIXTURE_PYTHON": sys.executable, "FIXTURE_ROOT": str(root),
         })
 
     def test_editor_wasm_candidate_preserves_deferred_catalog_assets(self):
@@ -937,6 +953,44 @@ run_quiet_with_progress "fixture" "$1" bash -c 'exit 23'
             result = self._run_script(fixture, [log], timeout=5)
             self.assertEqual(23, result.returncode, result.stderr)
             self.assertEqual([], list(Path(temp_dir).glob("*.progress-control.*")))
+
+    def test_quiet_coverage_progress_hides_raw_targets_and_runner_paths(self):
+        functions = self.coverage_script.split("\nTARGETS=()", 1)[0]
+        fixture = functions + """
+
+DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS=1
+export DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS
+run_quiet_with_progress "fixture" "$1" bash -c \
+  'printf "[1 / 2] Testing //donner/editor:sample_test /runner/secret\\n"; sleep 2; exit 23'
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log = str(Path(temp_dir) / "coverage.log")
+            result = self._run_script(fixture, [log], timeout=8)
+            self.assertEqual(23, result.returncode, result.stderr)
+            self.assertIn("[1 / 2]", result.stdout)
+            self.assertIn("//donner/editor:sample_test", result.stdout)
+            self.assertIn("coverage.log", result.stdout)
+            self.assertNotIn(temp_dir, result.stdout)
+            self.assertNotIn("/runner/secret", result.stdout)
+
+        sanitizer = functions + """
+safe_bazel_progress '[2 / 3] Linking /private/runner/secret'
+safe_bazel_progress '[3 / 4] Testing @@module+//pkg:target /private/runner/secret'
+safe_bazel_progress '[4 / 5] Testing //private/runner/path'
+safe_bazel_progress '[5 / 6] Testing //pkg:target$secret'
+safe_bazel_progress '[6 / 7] Linking output Testing //pkg:false_target'
+safe_bazel_progress '[7 / 8] 1 / 2 tests, 1 failed; Testing //pkg:real_target'
+"""
+        sanitizer += f"safe_bazel_progress '[8 / 9] Testing //pkg:{'x' * 513}'\n"
+        sanitizer += f"safe_bazel_progress '[{'9' * 65} / 1] Testing //pkg:too_long'\n"
+        result = self._run_script(sanitizer, [])
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(
+            "[2 / 3]\n[3 / 4] test @@module+//pkg:target\n"
+            "[4 / 5]\n[5 / 6]\n[6 / 7]\n"
+            "[7 / 8] test //pkg:real_target\n[8 / 9]\n",
+            result.stdout,
+        )
 
 
 if __name__ == "__main__":
