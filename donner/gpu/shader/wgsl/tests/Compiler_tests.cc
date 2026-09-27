@@ -1,13 +1,21 @@
 #include "donner/gpu/shader/wgsl/Compiler.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstddef>
+#include <ostream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/gpu/shader/programs/GaussianBlurSource.h"
+#include "donner/gpu/shader/wgsl/tests/ControlSource.h"
+#include "donner/gpu/shader/wgsl/tests/GraphicsArtifact.h"
+#include "donner/gpu/shader/wgsl/tests/GraphicsSource.h"
+#include "donner/gpu/shader/wgsl/tests/MatrixSource.h"
+#include "donner/gpu/shader/wgsl/tests/StorageArraySource.h"
 
 namespace donner::gpu::shader::wgsl {
 namespace {
@@ -88,43 +96,65 @@ TEST(Compiler, ReflectionTracksBindingAndWorkgroupMutations) {
   EXPECT_EQ(shader.entryPoints.front().workgroupSize, (std::array<uint32_t, 3>{4, 2, 1}));
 }
 
-TEST(Compiler, FrozenWgslProjectionReparsesToTheFrozenNativeBytes) {
-  const std::string_view projection = kGaussianArtifact.view().wgsl;
-  EXPECT_EQ(projection.find("//"), std::string_view::npos);
-  EXPECT_EQ(projection.find("\n "), std::string_view::npos);
-  EXPECT_EQ(projection.find("\n\n"), std::string_view::npos);
+struct ProjectionCase {
+  const char* name;
+  std::string_view authoredSource;
+  CompiledShaderView frozen;
+};
 
-  const ParseResult reparsed = Parse(projection);
-  ASSERT_TRUE(reparsed.hasResult());
-
-  std::array<char, kGaussianArtifact.msl.size()> text{};
-  TextSink textSink{text.data(), uint32_t(text.size())};
-  ASSERT_TRUE(EmitMsl(reparsed.module, textSink).ok());
-  EXPECT_EQ(std::string_view(text.data(), textSink.size), kGaussianArtifact.view().msl);
-
-  std::array<uint32_t, kGaussianArtifact.spirv.size()> words{};
-  SpirvSink wordSink{words.data(), uint32_t(words.size())};
-  ASSERT_TRUE(EmitSpirv(reparsed.module, wordSink).isSuccess());
-  ASSERT_EQ(wordSink.size, words.size());
-  EXPECT_EQ(words, kGaussianArtifact.spirv);
+void PrintTo(const ProjectionCase& value, std::ostream* os) {
+  *os << value.name;
 }
 
-TEST(Compiler, OrdinaryEvaluationMatchesFrozenProjections) {
-  const std::string source(programs::kGaussianBlurSource.view());
-  const ParseResult parsed = Parse(source);
-  ASSERT_TRUE(parsed.hasResult());
+class CompilerProjectionRoundTrip : public testing::TestWithParam<ProjectionCase> {};
 
-  std::array<char, kGaussianArtifact.msl.size()> text{};
-  TextSink textSink{text.data(), uint32_t(text.size())};
-  ASSERT_TRUE(EmitMsl(parsed.module, textSink).ok());
-  EXPECT_EQ(std::string_view(text.data(), textSink.size), kGaussianArtifact.view().msl);
+void ExpectNativeProjectionsMatch(std::string_view source, const CompiledShaderView& frozen) {
+  const std::string runtimeSource(source);
+  const ParseResult parsed = Parse(runtimeSource);
+  ASSERT_THAT(parsed.diagnostic.code, testing::Eq(ErrorCode::None))
+      << "diagnostic span [" << parsed.diagnostic.span.begin << ", " << parsed.diagnostic.span.end
+      << ")";
 
-  std::array<uint32_t, kGaussianArtifact.spirv.size()> words{};
-  SpirvSink wordSink{words.data(), uint32_t(words.size())};
-  ASSERT_TRUE(EmitSpirv(parsed.module, wordSink).isSuccess());
-  ASSERT_EQ(wordSink.size, words.size());
-  EXPECT_EQ(words, kGaussianArtifact.spirv);
+  std::vector<char> text(frozen.msl.size());
+  TextSink textSink{text.data(), static_cast<uint32_t>(text.size())};
+  ASSERT_THAT(EmitMsl(parsed.module, textSink).error, testing::Eq(TextEmitError::None));
+  EXPECT_THAT(textSink.view(), testing::Eq(frozen.msl));
+
+  std::vector<uint32_t> words(frozen.spirv.size());
+  SpirvSink wordSink{words.data(), static_cast<uint32_t>(words.size())};
+  ASSERT_THAT(EmitSpirv(parsed.module, wordSink).error, testing::Eq(SpirvEmitError::None));
+  ASSERT_THAT(wordSink.size, testing::Eq(words.size()));
+  EXPECT_THAT(words, testing::ElementsAreArray(frozen.spirv));
 }
+
+TEST_P(CompilerProjectionRoundTrip, FrozenWgslReparsesToTheFrozenNativeBytes) {
+  const auto& shader = GetParam().frozen;
+  EXPECT_THAT(shader.wgsl, testing::Not(testing::HasSubstr("//")));
+  EXPECT_THAT(shader.wgsl, testing::Not(testing::HasSubstr("\n ")));
+  EXPECT_THAT(shader.wgsl, testing::Not(testing::HasSubstr("\n\n")));
+  ExpectNativeProjectionsMatch(shader.wgsl, shader);
+}
+
+TEST_P(CompilerProjectionRoundTrip, OrdinaryEvaluationMatchesFrozenProjections) {
+  const auto& shader = GetParam();
+  ExpectNativeProjectionsMatch(shader.authoredSource, shader.frozen);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    ShaderFixtures, CompilerProjectionRoundTrip,
+    testing::Values(
+        ProjectionCase{"GaussianBlur", programs::kGaussianBlurSource.view(),
+                       kGaussianArtifact.view()},
+        ProjectionCase{"Graphics", tests::kGraphicsSource.view(), tests::GraphicsShader()},
+        ProjectionCase{"Matrix", tests::kMatrixSource.view(), tests::MatrixShader()},
+        ProjectionCase{"MatrixOperations", tests::kMatrixOperationsSource.view(),
+                       tests::MatrixOperationsShader()},
+        ProjectionCase{"StorageArrays", tests::kStorageArraySource.view(),
+                       tests::StorageArrayShader()},
+        ProjectionCase{"ControlFlow", tests::kControlSource.view(), tests::ControlShader()},
+        ProjectionCase{"SamplingSwitch", tests::kSamplingSwitchSource.view(),
+                       tests::SamplingSwitchShader()}),
+    [](const testing::TestParamInfo<ProjectionCase>& info) { return info.param.name; });
 
 TEST(Compiler, BindingMutationUpdatesDerivedReflection) {
   constexpr CompiledShaderView shader = kBindingArtifact.view();

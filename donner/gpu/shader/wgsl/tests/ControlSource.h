@@ -37,4 +37,22 @@ fn accumulate(index: u32) -> f32 {
 }
 )wgsl"};
 
+/// Uniform switch selection across implicit sampling, explicit LOD, and integer-coordinate loads.
+inline constexpr SourceText kSamplingSwitchSource{R"wgsl(
+struct Params { mode: u32, level: f32, padding: vec2f, }
+@group(0) @binding(0) var image: texture_2d<f32>;
+@group(0) @binding(1) var imageSampler: sampler;
+@group(0) @binding(2) var<uniform> params: Params;
+@fragment fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
+  let uv = position.xy * 0.01f;
+  var color = vec4f(0f);
+  switch (params.mode) {
+    case 0u: { color = textureSample(image, imageSampler, uv); }
+    case 1u: { color = textureSampleLevel(image, imageSampler, uv, params.level); }
+    default: { color = textureLoad(image, vec2i(position.xy), 0i); }
+  }
+  return color;
+}
+)wgsl"};
+
 }  // namespace donner::gpu::shader::wgsl::tests

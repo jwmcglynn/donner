@@ -21,4 +21,7 @@ const CompiledShaderView& StorageArrayShader();
 /// Returns the numeric/control graphics artifact with static storage duration.
 const CompiledShaderView& ControlShader();
 
+/// Returns the texture-sampling switch artifact with static storage duration.
+const CompiledShaderView& SamplingSwitchShader();
+
 }  // namespace donner::gpu::shader::wgsl::tests

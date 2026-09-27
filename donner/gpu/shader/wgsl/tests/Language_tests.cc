@@ -2,6 +2,9 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <bit>
+#include <cstdint>
+#include <limits>
 #include <string>
 
 #include "donner/gpu/shader/wgsl/Parser.h"
@@ -171,6 +174,116 @@ fn scalar(x: f32) -> f32 { let offset = 0; let next = offset + -1; return x * sc
   EXPECT_EQ(result.module.expressions[result.module.symbols[0].constantExpression].payload,
             0xffffffffu);
   EXPECT_EQ(result.module.symbols[1].type, (Type{TypeKind::AbstractFloat}));
+}
+
+TEST(Language, FoldsAbstractIntegerConstantsWithSignedArithmetic) {
+  struct Case {
+    const char* expression;
+    int64_t expected;
+  };
+  const Case cases[] = {
+      {"2 + 3", 5},
+      {"2 - 5", -3},
+      {"-2 + -3", -5},
+      {"-2 - -3", 1},
+      {"6 * 7", 42},
+      {"-6 * 7", -42},
+      {"-6 * -7", 42},
+      {"0 * -7", 0},
+      {"17 / 3", 5},
+      {"-17 / 3", -5},
+      {"17 % 3", 2},
+      {"-17 % 3", -2},
+      {"6 & 3", 2},
+      {"-1 & 7", 7},
+      {"9223372036854775807 - 1", std::numeric_limits<int64_t>::max() - 1},
+      {"-9223372036854775807 - 1", std::numeric_limits<int64_t>::min()},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.expression);
+    const ParseResult parsed = Parse(std::string("const result = ") + item.expression + ";");
+    ASSERT_THAT(parsed.diagnostic.code, testing::Eq(ErrorCode::None));
+    ASSERT_THAT(parsed.module.symbolCount, testing::Eq(1u));
+    const ArenaId id = parsed.module.symbols[0].constantExpression;
+    ASSERT_THAT(id, testing::Lt(parsed.module.expressionCount));
+    const Expression& expression = parsed.module.expressions[id];
+    EXPECT_THAT(expression.kind, testing::Eq(ExpressionKind::Literal));
+    EXPECT_THAT(expression.type, testing::Eq(Type{TypeKind::AbstractInt}));
+    const uint64_t bits =
+        uint64_t(expression.payload) | (uint64_t(expression.literalHighBits) << 32);
+    EXPECT_THAT(std::bit_cast<int64_t>(bits), testing::Eq(item.expected));
+  }
+}
+
+TEST(Language, FoldsAbstractFloatingConstantsBeforeMaterialization) {
+  struct Case {
+    const char* expression;
+    double expected;
+  };
+  const Case cases[] = {{"1.5 + 2.25", 3.75}, {"4.0 - 5.5", -1.5}, {"0.5 * 0.5", 0.25},
+                        {"3.0 / 2.0", 1.5},   {"2 + 1.5", 3.5},    {"-2.0 * -3.0", 6.0}};
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.expression);
+    const ParseResult parsed = Parse(std::string("const result = ") + item.expression + ";");
+    ASSERT_THAT(parsed.diagnostic.code, testing::Eq(ErrorCode::None));
+    ASSERT_THAT(parsed.module.symbolCount, testing::Eq(1u));
+    const ArenaId id = parsed.module.symbols[0].constantExpression;
+    ASSERT_THAT(id, testing::Lt(parsed.module.expressionCount));
+    const Expression& expression = parsed.module.expressions[id];
+    EXPECT_THAT(expression.kind, testing::Eq(ExpressionKind::Literal));
+    EXPECT_THAT(expression.type, testing::Eq(Type{TypeKind::AbstractFloat}));
+    const uint64_t bits =
+        uint64_t(expression.payload) | (uint64_t(expression.literalHighBits) << 32);
+    EXPECT_THAT(bits, testing::Eq(std::bit_cast<uint64_t>(item.expected)));
+  }
+}
+
+TEST(Language, FoldsAbstractComparisonsIncludingSignedZero) {
+  struct Case {
+    const char* expression;
+    bool expected;
+  };
+  const Case cases[] = {
+      {"2 < 3", true},       {"3 < 2", false},       {"2 <= 2", true},     {"3 <= 2", false},
+      {"3 > 2", true},       {"2 > 3", false},       {"2 >= 2", true},     {"2 >= 3", false},
+      {"2 == 2", true},      {"2 == 3", false},      {"2 != 3", true},     {"2 != 2", false},
+      {"-3.0 < -2.0", true}, {"-2.0 < -3.0", false}, {"-1.0 < 1.0", true}, {"1.0 < -1.0", false},
+      {"-0.0 == 0.0", true}, {"-0.0 != 0.0", false}, {"2.0 <= 2.0", true}, {"3.0 >= 2.0", true},
+      {"3.0 > 2.0", true},
+  };
+  for (const auto& item : cases) {
+    SCOPED_TRACE(item.expression);
+    const ParseResult parsed = Parse(std::string("const result = ") + item.expression + ";");
+    ASSERT_THAT(parsed.diagnostic.code, testing::Eq(ErrorCode::None));
+    ASSERT_THAT(parsed.module.symbolCount, testing::Eq(1u));
+    const ArenaId id = parsed.module.symbols[0].constantExpression;
+    ASSERT_THAT(id, testing::Lt(parsed.module.expressionCount));
+    const Expression& expression = parsed.module.expressions[id];
+    EXPECT_THAT(expression.kind, testing::Eq(ExpressionKind::Literal));
+    EXPECT_THAT(expression.type, testing::Eq(Type{TypeKind::Bool}));
+    EXPECT_THAT(expression.payload, testing::Eq(item.expected ? 1u : 0u));
+  }
+}
+
+TEST(Language, RejectsAbstractArithmeticOutsideFiniteRepresentableValues) {
+  for (const char* expression : {
+           "-9223372036854775807 + -2",
+           "9223372036854775807 - -1",
+           "(-9223372036854775807 - 1) - 1",
+           "9223372036854775807 * 2",
+           "(-9223372036854775807 - 1) * -1",
+           "(-9223372036854775807 - 1) / -1",
+           "7 / 0",
+           "7 % 0",
+           "1e308 + 1e308",
+           "1e308 * 10.0",
+           "1.0 / -0.0",
+       }) {
+    SCOPED_TRACE(expression);
+    const ParseResult parsed = Parse(std::string("const result = ") + expression + ";");
+    EXPECT_THAT(parsed.diagnostic.code, testing::Eq(ErrorCode::InvalidConstantExpression));
+    EXPECT_FALSE(parsed.hasResult());
+  }
 }
 
 TEST(Language, RejectsMalformedConstantDeclarationsWithoutInvalidArenaAccess) {
