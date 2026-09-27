@@ -61,6 +61,9 @@ public:
   /// Owning copy of the selected physical device's Vulkan-reported name. Empty if unavailable.
   std::string adapterName() const;
 
+  /// Vulkan-reported physical device type, using baseline provenance names.
+  std::string adapterType() const;
+
   /// Sticky loss condition shared by every runtime device opened over this root.
   const std::shared_ptr<DeviceLostState>& lostState() const;
 

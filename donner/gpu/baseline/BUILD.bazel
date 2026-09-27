@@ -109,6 +109,53 @@ donner_multi_transitioned_binary(
     visibility = donner_internal_visibility(),
 )
 
+# Re-capture the pre-cutover oracle on a Linux adapter through the retained, test-only
+# wgpu-native runtime. This cannot enter a production dependency closure.
+donner_cc_library(
+    name = "wgpu_reference_baseline_capture_linux",
+    testonly = 1,
+    srcs = ["WgpuBaselineCapture.cc"],
+    hdrs = ["WgpuBaselineCapture.h"],
+    defines = ["DONNER_GEODE_WGPU_REFERENCE=1"],
+    target_compatible_with = ["@platforms//os:linux"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:private"],
+    deps = [
+        ":baseline_corpus",
+        ":frozen_baseline_policy",
+        "//donner/gpu",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer/geode:geo_encoder",
+        "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
+        "//donner/svg/renderer/geode:geode_test_contexts_wgpu_reference_linux",
+    ],
+)
+
+donner_cc_binary(
+    name = "capture_baselines_wgpu_reference_linux_impl",
+    testonly = 1,
+    srcs = ["CaptureBaselines.cc"],
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"] + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:private"],
+    deps = [":wgpu_reference_baseline_capture_linux"],
+)
+
+donner_multi_transitioned_binary(
+    name = "capture_baselines_wgpu_reference_linux",
+    testonly = 1,
+    dep = ":capture_baselines_wgpu_reference_linux_impl",
+    renderer_backend = "geode",
+    tags = ["manual"],
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = donner_internal_visibility(),
+)
+
 donner_cc_test(
     name = "baseline_pixels_tests_impl",
     srcs = ["BaselinePixels_tests.cc"],

@@ -18,12 +18,15 @@ TEST(VulkanAdapterIdentityTest, NameBelongsToSelectedSharedRoot) {
 
   const std::string selectedName = root->adapterName();
   EXPECT_THAT(selectedName, testing::Not(testing::IsEmpty()));
+  const std::string selectedType = root->adapterType();
+  EXPECT_THAT(selectedType, testing::AnyOf("DiscreteGPU", "IntegratedGPU", "CPU", "Unknown"));
 
   const std::unique_ptr<VulkanDevice> first = VulkanDevice::CreateOverSharedRoot(root);
   const std::unique_ptr<VulkanDevice> second = VulkanDevice::CreateOverSharedRoot(root);
   ASSERT_NE(first, nullptr);
   ASSERT_NE(second, nullptr);
   EXPECT_THAT(root->adapterName(), testing::Eq(selectedName));
+  EXPECT_THAT(root->adapterType(), testing::Eq(selectedType));
 }
 
 }  // namespace

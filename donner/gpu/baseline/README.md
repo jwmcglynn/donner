@@ -36,6 +36,9 @@ Both run under plain `bazel test //...`:
   requires pixel identity against the committed pre-cutover PNG. On Vulkan, the original
   wgpu-native capture may prefix the physical-device name with a vendor string; the check accepts
   one exact or uniquely matching legacy adapter record and refuses missing or ambiguous matches.
+  Software Vulkan also requires the capture process's CPU architecture to match. The original
+  architecture-less wgpu-native llvmpipe records are accepted only on x86_64; ARM64 cannot use
+  them even when Vulkan reports the same llvmpipe device name.
 
 `//donner/gpu/metal/tests:metal_solid_fill_tests` is a third reader. It renders
 `solid_fill_baseline` through `donner::gpu` and the MSL emitted from the shader IR, with no wgpu
@@ -58,6 +61,14 @@ adapters cannot be attributed to a regression. Baselines are therefore filed one
 adapter, named from the adapter and backend the capture ran on, and the pixel check resolves its
 goldens from the live adapter. Adding coverage for another adapter means capturing a baseline set
 on it, not relaxing the comparison.
+
+New capture provenance records `hostArchitecture` (`x86_64` or `aarch64`) and the Vulkan physical
+device type. ARM64 software Vulkan uses an `_aarch64` directory suffix; existing x86_64 and Metal
+directory names remain unchanged. A missing ARM64 record fails closed in CI. Its native capture
+artifact diagnoses the run, but is not by itself an independent pre-cutover expectation: the
+committed corpus was captured through wgpu-native. Before freezing ARM64 parity, run the retained
+Linux test-only wgpu-native implementation on that same ARM64 adapter and corpus, record that
+renderer path and source revision, then compare native ARM64 output to the new reference capture.
 
 A run that finds no directory for its adapter captures one through native Geode into
 `$TEST_UNDECLARED_OUTPUTS_DIR`,
@@ -95,6 +106,25 @@ refresh; the extra capture does not turn the failed comparison into a pass.
 
 The PNG bytes are versioned in git, which is also their integrity record; the provenance file
 records what produced them, not a second hash of them.
+
+## ARM64 reference capture
+
+The existing llvmpipe PNGs are an x86_64 wgpu-native reference. A native ARM64 capture from a
+failed pixel check is diagnostic evidence, not a new frozen oracle. On the Linux ARM64 runner,
+capture the same corpus through the retained test-only wgpu-native device into a separate output
+directory:
+
+```sh
+WGPU_BACKEND=vulkan bazel run //donner/gpu/baseline:capture_baselines_wgpu_reference_linux -- \
+  /tmp/donner-arm64-wgpu-reference "$(git rev-parse HEAD)" \
+  "$(test -z "$(git status --porcelain --untracked-files=all)" && echo clean || echo dirty)"
+```
+
+The binary refuses a non-Vulkan adapter. Inspect its `capture_provenance.txt` for
+`rendererPath: wgpu-native Geode production path (GeodeDevice+GeoEncoder)`, `adapterType: CPU`,
+and `hostArchitecture: aarch64`, then compare its PNGs with the native diagnostic capture. The
+frozen pixel check will use the ARM64 reference only after that reviewed capture is committed;
+it continues to fail closed until then.
 
 ## Regenerating
 
