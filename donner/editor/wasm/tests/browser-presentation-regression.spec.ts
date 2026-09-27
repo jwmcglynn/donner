@@ -524,6 +524,7 @@ test("editor page capture leaves retries to the outer poll and keeps drags one-s
 
   // The baseline poll owns the retry schedule: black, timeout, then visible.
   let shots = 0;
+  let stateReads = 0;
   const baselinePage = {
     screenshot: async () => {
       ++shots;
@@ -535,12 +536,33 @@ test("editor page capture leaves retries to the outer poll and keeps drags one-s
       }
       return visible;
     },
+    evaluate: async () => {
+      ++stateReads;
+      return {
+        sampleId: "basic-shapes",
+        completedResults: 1,
+        presentedAtMs: 1,
+        viewport: {
+          paneX: 0,
+          paneY: 0,
+          paneWidth: 64,
+          paneHeight: 64,
+          documentX: 0,
+          documentY: 0,
+          documentWidth: 64,
+          documentHeight: 64,
+          zoom: 1,
+        },
+      };
+    },
   } as unknown as Page;
   await expect.poll(async () => {
-    const capture = await captureEditorPage(baselinePage);
-    return capture.usable ? capture.png.length : 0;
+    const probe = await takeBasicShapesProbe(baselinePage, true, { width: 64, height: 64 });
+    expect(stateReads).toBe(shots === 3 ? 1 : 0);
+    return probe.capture.usable ? probe.capture.png.length : 0;
   }, { intervals: [10], timeout: 1_000 }).toBeGreaterThan(0);
   expect(shots).toBe(3);
+  expect(stateReads).toBe(1);
 
   let dragShots = 0;
   const oneShotDragPage = {
@@ -969,6 +991,48 @@ function basicShapesBlueBounds(
   });
 }
 
+type BasicShapesProbe = {
+  capture: EditorPageCapture;
+  state: BasicShapesProbeState | null;
+  documentClip: CssRegion | null;
+  captureClip: CssRegion | null;
+  bounds: PixelBounds | null;
+};
+
+async function takeBasicShapesProbe(
+  page: Page,
+  firefox: boolean,
+  pageViewport: Pick<CssRegion, "width" | "height"> | null,
+): Promise<BasicShapesProbe> {
+  // Firefox can stall a page-state IPC for several seconds on the hosted
+  // runner. A black or timed-out screenshot needs no state at all, so let the
+  // outer poll schedule the next capture without paying that IPC cost.
+  const earlyCapture = firefox ? await captureBasicShapesProbePage(page, true, null) : null;
+  if (earlyCapture !== null && !earlyCapture.usable) {
+    return {
+      capture: earlyCapture,
+      state: null,
+      documentClip: null,
+      captureClip: null,
+      bounds: null,
+    };
+  }
+  const state = await readBasicShapesProbeState(page, firefox);
+  const { documentClip, captureClip } = basicShapesProbeClips(
+    state.viewport,
+    firefox,
+    pageViewport,
+  );
+  const capture = earlyCapture ?? await captureBasicShapesProbePage(page, false, captureClip);
+  return {
+    capture,
+    state,
+    documentClip,
+    captureClip,
+    bounds: basicShapesBlueBounds(capture, documentClip, captureClip),
+  };
+}
+
 async function openBasicShapes(page: Page): Promise<{
   canvasBounds: { x: number; y: number; width: number; height: number };
   documentClip: { x: number; y: number; width: number; height: number };
@@ -1053,20 +1117,21 @@ async function openBasicShapes(page: Page): Promise<{
     captureAttempts: number;
     timedOutCaptures: number;
     shotFromPriorAttempt: boolean;
+    stateSkipped: boolean;
   } | null = null;
   try {
     await expect
       .poll(
         async () => {
-          const state = await readBasicShapesProbeState(page, firefox);
-          const { documentClip: currentDocumentClip, captureClip: currentCaptureClip } =
-            basicShapesProbeClips(state.viewport, firefox, pageViewport);
-          const capture = await captureBasicShapesProbePage(page, firefox, currentCaptureClip);
+          const probe = await takeBasicShapesProbe(page, firefox, pageViewport);
+          const { capture, documentClip: currentDocumentClip, captureClip: currentCaptureClip } =
+            probe;
+          const state = probe.state ?? { unavailable: "capture unusable before state read" };
           screenshotTimeouts += capture.timedOutCaptures;
           const shotFromPriorAttempt = capture.png.length === 0
             && (lastProbe?.shot.length ?? 0) > 0;
           const shot = capture.png.length > 0 ? capture.png : lastProbe?.shot ?? Buffer.alloc(0);
-          const bounds = basicShapesBlueBounds(capture, currentDocumentClip, currentCaptureClip);
+          const bounds = probe.bounds;
           lastBluePixels = bounds?.pixels ?? 0;
           lastProbe = {
             shot,
@@ -1078,10 +1143,12 @@ async function openBasicShapes(page: Page): Promise<{
             captureAttempts: capture.attempts,
             timedOutCaptures: screenshotTimeouts,
             shotFromPriorAttempt,
+            stateSkipped: probe.state === null,
           };
           if (
-            bounds !== null && state.sampleId === "basic-shapes"
-            && state.completedResults > beforeSampleResults && state.presentedAtMs !== null
+            bounds !== null && probe.state !== null && probe.state.sampleId === "basic-shapes"
+            && probe.state.completedResults > beforeSampleResults
+            && probe.state.presentedAtMs !== null
           ) {
             documentClip = currentDocumentClip;
             captureClip = currentCaptureClip;
@@ -1137,6 +1204,7 @@ async function openBasicShapes(page: Page): Promise<{
               captureAttempts: lastProbe.captureAttempts,
               timedOutCaptures: lastProbe.timedOutCaptures,
               shotFromPriorAttempt: lastProbe.shotFromPriorAttempt,
+              stateSkipped: lastProbe.stateSkipped,
               pageViewport,
               beforeSampleResults,
             },
