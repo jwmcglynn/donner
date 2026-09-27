@@ -41,6 +41,77 @@ def test_result_event(label):
 
 
 class ClassifyTest(unittest.TestCase):
+    def test_failure_summary_reports_only_safe_bounded_labels(self):
+        events = [
+            json.dumps({
+                "id": {"testSummary": {"label": "//donner/editor:failed_test"}},
+                "testSummary": {"overallStatus": "FAILED", "passed": [{"uri": "file:///private/path"}]},
+            }),
+            json.dumps({
+                "id": {"testResult": {"label": "//donner/svg:timed_out"}},
+                "testResult": {"status": "TIMEOUT"},
+            }),
+            completed_event("//tools:failed_build", success=False),
+            json.dumps({
+                "id": {"targetSummary": {"label": "@@lib+//pkg:compile_test"}},
+                "targetSummary": {"overallTestStatus": "FAILED_TO_BUILD"},
+            }),
+            json.dumps({
+                "id": {"configuredLabel": {"label": "//donner/editor:analysis_failed"}},
+                "aborted": {"reason": "ANALYSIS_FAILURE", "description": "/private/path"},
+            }),
+            json.dumps({
+                "id": {"testResult": {"label": "//donner/editor:halted"}},
+                "testResult": {"status": "TOOL_HALTED_BEFORE_TESTING"},
+            }),
+            json.dumps({
+                "id": {"testSummary": {"label": "//donner/editor:malformed"}},
+                "testSummary": {"overallStatus": []},
+            }),
+            json.dumps({
+                "id": {"testSummary": {"label": "//evil\nprivate:path"}},
+                "testSummary": {"overallStatus": "FAILED"},
+            }),
+        ]
+        result = status.failure_summary(events)
+        self.assertEqual(result["failedTests"], [
+            "//donner/editor:failed_test", "//donner/editor:halted",
+            "//donner/svg:timed_out", "@@lib+//pkg:compile_test",
+        ])
+        self.assertEqual(result["failedBuilds"], [
+            "//donner/editor:analysis_failed", "//tools:failed_build",
+        ])
+        self.assertNotIn("private", json.dumps(result))
+        self.assertEqual(result["omittedTests"], 0)
+
+    def test_failure_summary_caps_output(self):
+        events = [json.dumps({
+            "id": {"testSummary": {"label": f"//fixture:failed_{index:02}"}},
+            "testSummary": {"overallStatus": "FAILED"},
+        }) for index in range(23)]
+        result = status.failure_summary(events)
+        self.assertEqual(len(result["failedTests"]), 20)
+        self.assertEqual(result["omittedTests"], 3)
+
+    def test_final_pass_or_flaky_summary_supersedes_failed_attempt(self):
+        events = []
+        for label, final_status in (("//fixture:recovered", "PASSED"),
+                                    ("//fixture:flaky", "FLAKY")):
+            events.append(json.dumps({
+                "id": {"testResult": {"label": label}},
+                "testResult": {"status": "FAILED"},
+            }))
+            events.append(json.dumps({
+                "id": {"testSummary": {"label": label}},
+                "testSummary": {"overallStatus": final_status},
+            }))
+        events.append(json.dumps({
+            "id": {"testResult": {"label": "//fixture:incomplete"}},
+            "testResult": {"status": "TIMEOUT"},
+        }))
+        self.assertEqual(status.failure_summary(events)["failedTests"],
+                         ["//fixture:incomplete"])
+
     def test_single_incompatible_target_is_all_skipped(self):
         # The real shape this was written for: a pull request whose only
         # affected target is restricted to another platform.

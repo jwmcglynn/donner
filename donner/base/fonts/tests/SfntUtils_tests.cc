@@ -1148,4 +1148,80 @@ TEST(SfntUtils, Cff2FdSelectRejectsRangeStartsAboveTheGlyphCount) {
             CffOutlineValidationStatus::Invalid);
 }
 
+TEST(SfntUtils, CffRejectsEveryTruncatedPrefixWithoutPublishingPartialGlyphs) {
+  struct Case {
+    const char* name;
+    std::vector<uint8_t> table;
+    bool cff2;
+    uint32_t vertices;
+  };
+  const std::vector<Case> cases = {
+      {"CFF1", MakeCff1(), false, 3},
+      {"CFF1 local and global subroutines",
+       MakeCff1WithSubrs({139, 139, 21, 32, 10, 32, 29, 14}, {{149, 139, 5, 11}},
+                         {{139, 149, 5, 11}}),
+       false, 4},
+      {"CFF2", MakeCff2(), true, 3},
+  };
+  for (const Case& item : cases) {
+    SCOPED_TRACE(item.name);
+    const auto complete = ValidateCffOutlineComplexities(item.table, item.cff2, 1);
+    ASSERT_EQ(complete.status, CffOutlineValidationStatus::Complete);
+    ASSERT_THAT(complete.glyphs, testing::SizeIs(1));
+    EXPECT_EQ(complete.glyphs[0].maximumVertices, item.vertices);
+    for (size_t length = 0; length < item.table.size(); ++length) {
+      SCOPED_TRACE(length);
+      const auto truncated = ValidateCffOutlineComplexities(
+          std::span<const uint8_t>(item.table).first(length), item.cff2, 1);
+      EXPECT_EQ(truncated.status, CffOutlineValidationStatus::Invalid);
+      EXPECT_THAT(truncated.glyphs, testing::IsEmpty());
+    }
+  }
+}
+
+TEST(SfntUtils, CffRejectsMalformedIndexOffsetEncodings) {
+  struct Mutation {
+    const char* name;
+    size_t offset;
+    uint8_t byte;
+    bool cff2 = false;
+  };
+  const Mutation mutations[] = {
+      {"zero offset size", 6, 0},
+      {"oversized offset size", 6, 5},
+      {"zero first offset", 7, 0},
+      {"first offset must be one", 7, 2},
+      {"zero final offset", 8, 0},
+      {"offset beyond the table", 8, 255},
+      {"count exceeds available offsets", 4, 255},
+      {"CFF2 count exceeds the supported limit", 14, 1, true},
+  };
+  for (const Mutation& mutation : mutations) {
+    SCOPED_TRACE(mutation.name);
+    auto table = mutation.cff2 ? MakeCff2() : MakeCff1();
+    table[mutation.offset] = mutation.byte;
+    const auto result = ValidateCffOutlineComplexities(table, mutation.cff2, 1);
+    EXPECT_EQ(result.status, CffOutlineValidationStatus::Invalid);
+    EXPECT_THAT(result.glyphs, testing::IsEmpty());
+  }
+}
+
+TEST(SfntUtils, CffCharStringNumberEncodingsRequireAllOperandBytes) {
+  const std::vector<std::vector<uint8_t>> truncatedOperands = {
+      {28},        {28, 0},          {247}, {250}, {251}, {254}, {255}, {255, 0},
+      {255, 0, 1}, {255, 0, 1, 128}, {12},
+  };
+  for (const auto& operand : truncatedOperands) {
+    SCOPED_TRACE(testing::PrintToString(operand));
+    const auto result = ValidateCffOutlineComplexities(MakeCff1WithSubrs(operand, {}), false, 1);
+    EXPECT_EQ(result.status, CffOutlineValidationStatus::Invalid);
+    EXPECT_THAT(result.glyphs, testing::IsEmpty());
+  }
+  const std::vector<uint8_t> program = {28, 0, 100, 255, 0, 1, 128, 0, 21, 247, 0, 251, 0, 5, 14};
+  const auto complete = ValidateCffOutlineComplexities(MakeCff1WithSubrs(program, {}), false, 1);
+  ASSERT_EQ(complete.status, CffOutlineValidationStatus::Complete);
+  ASSERT_THAT(complete.glyphs, testing::SizeIs(1));
+  EXPECT_EQ(complete.glyphs[0].maximumVertices, 3u);
+}
+
 }  // namespace donner::fonts
