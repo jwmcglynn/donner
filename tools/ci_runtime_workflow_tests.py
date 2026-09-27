@@ -825,10 +825,26 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     def _stage_catalog_candidate(self, root):
         body = self._step_body(self.editor_wasm, "Stage immutable Geode deployment candidate")
         script = "#!/bin/bash\n" + textwrap.dedent(body.split("        run: |\n", 1)[1])
+        # The real staging job runs on macOS, where shasum is available. The
+        # workflow contract test also runs on Linux, so provide the same
+        # SHA-256 command from the fixture rather than relying on host tools.
+        (root / "shasum_fixture.py").write_text(
+            "import hashlib, sys\n"
+            "assert sys.argv[1:3] == ['-a', '256']\n"
+            "for name in sys.argv[3:]:\n"
+            "    with open(name, 'rb') as stream:\n"
+            "        digest = hashlib.sha256(stream.read()).hexdigest()\n"
+            "    print(f'{digest}  {name}')\n"
+        )
+        shasum = root / "shasum"
+        shasum.write_text('#!/bin/sh\nexec "$FIXTURE_PYTHON" "$FIXTURE_ROOT/shasum_fixture.py" "$@"\n')
+        shasum.chmod(0o755)
         return self._run_script(script, [], cwd=root, env={
             **os.environ, "RUNNER_TEMP": str(root), "GITHUB_SHA": "a" * 40,
             "GITHUB_RUN_ID": "12", "GITHUB_RUN_ATTEMPT": "2",
             "PACKAGE_TARGET": "//fixture:package", "GITHUB_OUTPUT": str(root / "output"),
+            "PATH": str(root) + os.pathsep + os.environ["PATH"],
+            "FIXTURE_PYTHON": sys.executable, "FIXTURE_ROOT": str(root),
         })
 
     def test_editor_wasm_candidate_preserves_deferred_catalog_assets(self):
