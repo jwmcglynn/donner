@@ -938,6 +938,25 @@ run_quiet_with_progress "fixture" "$1" bash -c 'exit 23'
             self.assertEqual(23, result.returncode, result.stderr)
             self.assertEqual([], list(Path(temp_dir).glob("*.progress-control.*")))
 
+    def test_quiet_coverage_progress_hides_raw_targets_and_runner_paths(self):
+        functions = self.coverage_script.split("\nTARGETS=()", 1)[0]
+        fixture = functions + """
+
+DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS=1
+export DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS
+run_quiet_with_progress "fixture" "$1" bash -c \
+  'printf "[1 / 2] Testing //private:target /runner/secret\\n"; sleep 2; exit 23'
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log = str(Path(temp_dir) / "coverage.log")
+            result = self._run_script(fixture, [log], timeout=8)
+            self.assertEqual(23, result.returncode, result.stderr)
+            self.assertIn("[1 / 2]", result.stdout)
+            self.assertIn("coverage.log", result.stdout)
+            self.assertNotIn(temp_dir, result.stdout)
+            self.assertNotIn("//private:target", result.stdout)
+            self.assertNotIn("/runner/secret", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

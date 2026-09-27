@@ -62,13 +62,14 @@ function kill_process_tree() {
 function run_quiet_with_progress() {
   local description="$1"
   local log_file="$2"
+  local log_name="${log_file##*/}"
   shift 2
 
   local progress_interval="${DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS:-60}"
   local start_time
   start_time=$(date +%s)
 
-  echo "$description started; detailed log: $log_file"
+  echo "$description started; detailed log: $log_name"
   "$@" > "$log_file" 2>&1 &
   local command_pid=$!
 
@@ -106,30 +107,27 @@ function run_quiet_with_progress() {
 
       local current
       current="$(tail -n 1 "$log_file" 2> /dev/null || true)"
-      # Surface bazel's own latest progress counter ("[8,521 / 8,522] 66 / 116
-      # tests; Testing //...") so the workflow log shows how far along the run
-      # is, not just that it is alive. Bounded read: progress lines live at the
-      # end of the log, and curses output separates updates with carriage
-      # returns, so normalize those to newlines before matching.
+      # Surface only Bazel's numeric action counter. The rest of a progress
+      # line, including target names and filesystem paths, stays in the local
+      # log. Carriage returns separate Bazel's in-place progress updates.
       local snapshot
       snapshot="$(tail -c 65536 "$log_file" 2> /dev/null | tr "\r" "\n" \
-        | grep -E "^\[[0-9,]+ */ *[0-9,]+\]" | tail -n 1 || true)"
+        | grep -Eo "^\[[0-9,]+ */ *[0-9,]+\]" | tail -n 1 || true)"
       if [[ "$current" != "$last_line" ]]; then
         last_line="$current"
         last_change=$now
-        echo "$description still running after ${elapsed}s${snapshot:+ - ${snapshot}}; detailed log: $log_file"
+        echo "$description still running after ${elapsed}s${snapshot:+ - ${snapshot}}; detailed log: $log_name"
         continue
       fi
 
       local stalled=$((now - last_change))
       if ((stalled < stall_limit)); then
-        echo "$description still running after ${elapsed}s (no new output for ${stalled}s)${snapshot:+ - last progress: ${snapshot}}; detailed log: $log_file"
+        echo "$description still running after ${elapsed}s (no new output for ${stalled}s)${snapshot:+ - last progress: ${snapshot}}; detailed log: $log_name"
         continue
       fi
 
       echo "ERROR: $description made no progress for ${stalled}s (limit ${stall_limit}s)."
-      echo "ERROR: last output line, which names what it was waiting on:"
-      echo "  ${last_line:-<no output>}"
+      echo "ERROR: last validated Bazel action progress: ${snapshot:-<unavailable>}"
       kill_process_tree TERM "$command_pid"
       sleep 15
       kill_process_tree KILL "$command_pid"
@@ -151,7 +149,7 @@ function run_quiet_with_progress() {
   if [[ "$status" -eq 0 ]]; then
     echo "$description completed in ${elapsed}s"
   else
-    echo "$description exited with status $status after ${elapsed}s; detailed log: $log_file"
+    echo "$description exited with status $status after ${elapsed}s; detailed log: $log_name"
   fi
   return "$status"
 }
@@ -357,6 +355,15 @@ fi
   # was skipped as incompatible with this platform" apart from a real failure,
   # and that distinction has to work wherever this script runs.
   DIAG_FLAGS+=(--build_event_json_file="$COVERAGE_BEP")
+  # Self-hosted CI retains only numeric timing artifacts. Report bounded,
+  # validated BEP labels on failure so a red coverage lane names its tests
+  # without publishing raw logs, runner paths, or test output.
+  report_coverage_failure_labels() {
+    if [[ -f "$COVERAGE_BEP" ]]; then
+      printf 'Bazel coverage failed labels (BEP): '
+      python3 tools/coverage_bep_status.py --failures "$COVERAGE_BEP" || true
+    fi
+  }
   phase_mark() {
     if [ -n "${DONNER_CI_DIAGNOSTICS_DIR:-}" ]; then
       echo "$1=$(date +%s)" >> "$DONNER_CI_DIAGNOSTICS_DIR/coverage/timing.txt"
@@ -426,6 +433,9 @@ fi
       echo "all_skipped" > "$COVERAGE_HTML_DIR/coverage_skipped"
       exit 0
     fi
+    if [[ "$coverage_status" -ne 0 ]]; then
+      report_coverage_failure_labels
+    fi
     echo "ERROR: Coverage report was not generated"
     exit 1
   fi
@@ -435,6 +445,7 @@ fi
   # complete baseline. The all-incompatible/no-report exception above remains
   # separate; every invocation that actually produced a report must succeed.
   if [[ "$coverage_status" -ne 0 ]]; then
+    report_coverage_failure_labels
     echo "ERROR: Bazel coverage failed with status $coverage_status; refusing to publish a partial report."
     exit "$coverage_status"
   fi
