@@ -884,6 +884,42 @@ async function attachMissingDragBlueCanvasEvidence(
   }
 }
 
+async function readBasicShapesDragFrame(
+  page: Page,
+  step: number,
+  probeRegion: CssRegion,
+  beforeScreenshot: SurfaceFrameSnapshot | null,
+): Promise<{
+  geometry: Awaited<ReturnType<typeof readEditorResizePixelBounds>>;
+  state: DocumentPresentationState;
+}> {
+  const geometry = await readEditorResizePixelBounds(page, probeRegion);
+  if (geometry.usableCapture && geometry.blue === null) {
+    await attachScoredMissingBluePng(step, probeRegion, geometry, beforeScreenshot);
+  }
+  const state = await readDocumentPresentationState(page);
+  if (!geometry.usableCapture) {
+    if (geometry.png.length > 0) {
+      await attachEvidenceFile(`drag-unusable-capture-step-${step}`, geometry.png, "image/png");
+    }
+    throw new Error(
+      `drag step ${step}: Firefox returned no editor page after `
+        + `${geometry.captureAttempts} full-page captures `
+        + `(${geometry.timedOutCaptures} timed out, `
+        + `stage=${JSON.stringify(geometry.timeoutStage)}); `
+        + `state=${JSON.stringify(state)}`,
+    );
+  }
+  if (geometry.blue === null) {
+    await attachMissingDragBlueState(step, state);
+    const canvasProbe = await readScoredCanvasProbe(page);
+    await attachMissingDragBlueCanvasEvidence(step, beforeScreenshot, canvasProbe);
+  }
+  expect(geometry?.blue, `drag frame ${state.renderedFrames} had no blue document pixels`).not
+    .toBeNull();
+  return { geometry, state };
+}
+
 test("scored Firefox frame evidence attributes only stable app frames", async () => {
   const frame: SurfaceFrameSnapshot = {
     renderedFrames: 60,
@@ -1920,30 +1956,12 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     // the same frame. Firefox may schedule another UI frame while taking that
     // screenshot; requiring the frame counter to stay fixed rejects a valid
     // image without adding any protection against mixed geometry.
-    const geometry = await readEditorResizePixelBounds(page, probeRegion);
-    if (geometry.usableCapture && geometry.blue === null) {
-      await attachScoredMissingBluePng(step, probeRegion, geometry, beforeScreenshot);
-    }
-    const state = await readDocumentPresentationState(page);
-    if (!geometry.usableCapture) {
-      if (geometry.png.length > 0) {
-        await attachEvidenceFile(`drag-unusable-capture-step-${step}`, geometry.png, "image/png");
-      }
-      throw new Error(
-        `drag step ${step}: Firefox returned no editor page after `
-          + `${geometry.captureAttempts} full-page captures `
-          + `(${geometry.timedOutCaptures} timed out, `
-          + `stage=${JSON.stringify(geometry.timeoutStage)}); `
-          + `state=${JSON.stringify(state)}`,
-      );
-    }
-    if (geometry.blue === null) {
-      await attachMissingDragBlueState(step, state);
-      const canvasProbe = await readScoredCanvasProbe(page);
-      await attachMissingDragBlueCanvasEvidence(step, beforeScreenshot, canvasProbe);
-    }
-    expect(geometry?.blue, `drag frame ${state.renderedFrames} had no blue document pixels`).not
-      .toBeNull();
+    const { geometry, state } = await readBasicShapesDragFrame(
+      page,
+      step,
+      probeRegion,
+      beforeScreenshot,
+    );
     // "No teal" has two very different causes and the pixels cannot tell them
     // apart: the chrome draw ran and its pixels missed this probe window, or no
     // chrome was drawn at all. The second means the render coordinator was not
