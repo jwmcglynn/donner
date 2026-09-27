@@ -1,4 +1,4 @@
-import { expect, type Page, test, type TestInfo } from "@playwright/test";
+import { expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import {
   type CanvasColorStats,
@@ -12,6 +12,12 @@ import {
   type ScreenshotTimeoutStage,
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
+import {
+  findCanvasOwnerWorker,
+  holdCanvasCompletionForTest,
+  installSurfaceFrameProbe,
+  waitForSubmittedCanvasGpuWork,
+} from "./surface-frame-probe";
 
 declare global {
   interface Window {
@@ -1491,9 +1497,120 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
   expect(fatalMessages).toEqual([]);
 });
 
+// The app already requests queue completion after each canvas-writing submit.
+// This test-only gate awaits that same promise; it neither submits GPU work nor
+// requests another frame. A missing observer is retried by the enclosing poll,
+// while a rejected or overdue completion fails rather than scoring pixels.
+async function awaitBeforeBlueDeadline<T>(
+  work: Promise<T>,
+  deadlineAtMs: number,
+): Promise<T> {
+  const remainingMs = deadlineAtMs - performance.now();
+  if (remainingMs <= 0) {
+    throw new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline");
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    work,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline")),
+        remainingMs,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+async function captureAfterCanvasGpuCompletion<T>(
+  owner: Worker,
+  deadlineAtMs: number,
+  capture: () => Promise<T>,
+): Promise<T> {
+  // Controlled red baseline: skip the GPU completion await.
+  return capture();
+}
+
+test("production Geode wasm presents visible editor pixels after held canvas GPU completion", async ({ browserName, page }) => {
+  test.skip(browserName !== "chromium" || kBackend !== "geode", "controlled browser GPU gate");
+  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+  const hold = await holdCanvasCompletionForTest(page);
+  try {
+    const canvas = page.locator("canvas#canvas");
+    const bounds = await canvas.boundingBox();
+    expect(bounds).not.toBeNull();
+    if (bounds === null) return;
+    const before = await page.evaluate(() => ({
+      results: window.__donnerWorkerStats?.completedResults ?? 0,
+      frames: window.__donnerMainLoopRenderedFrames ?? 0,
+    }));
+    await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
+    await expect.poll(() => page.evaluate((baseline) => ({
+      sample: window.__donnerActiveSampleStats?.sampleId ?? null,
+      resultReady: (window.__donnerWorkerStats?.completedResults ?? 0) > baseline.results,
+      presented: window.__donnerWorkerStats?.presentedAtMs !== undefined,
+      frameAdvanced: (window.__donnerMainLoopRenderedFrames ?? 0) > baseline.frames,
+    }), before), { timeout: scaledMs(5_000) }).toEqual({
+      sample: "basic-shapes",
+      resultReady: true,
+      presented: true,
+      frameAdvanced: true,
+    });
+    await expect.poll(hold.observedCalls).toBeGreaterThan(0);
+
+    const owner = await findCanvasOwnerWorker(page);
+    expect(owner).not.toBeNull();
+    if (owner === null) return;
+    let screenshots = 0;
+    let settled = false;
+    const gatedCapture = captureAfterCanvasGpuCompletion(
+      owner,
+      performance.now() + scaledMs(5_000),
+      () => {
+        ++screenshots;
+        return captureEditorPage(page);
+      },
+    ).finally(() => { settled = true; });
+    // Another worker round trip proves the evaluator is responsive while the
+    // app reports a completed and presented sample, yet capture is still held.
+    await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+    expect(screenshots).toBe(0);
+    expect(settled).toBe(false);
+    await hold.release();
+    const capture = await gatedCapture;
+    expect(capture.usable).toBe(true);
+    expect(screenshots).toBe(1);
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    if (viewport !== null) {
+      expect(readEditorPixelBoundsFromPng(capture.png, "basic-blue", viewport, {
+        minX: 0, minY: 0, maxX: viewport.width, maxY: viewport.height,
+      })?.pixels ?? 0).toBeGreaterThan(500);
+    }
+  } finally {
+    await hold.release();
+  }
+  let forbiddenCaptures = 0;
+  const noCapture = async () => { ++forbiddenCaptures; };
+  await expect(captureAfterCanvasGpuCompletion(
+    { evaluate: () => Promise.reject(new Error("rejected completion")) } as unknown as Worker,
+    performance.now() + 100,
+    noCapture,
+  )).rejects.toThrow("rejected completion");
+  await expect(captureAfterCanvasGpuCompletion(
+    { evaluate: () => new Promise<never>(() => {}) } as unknown as Worker,
+    performance.now() + 10,
+    noCapture,
+  )).rejects.toThrow("exceeded the blue-pixel deadline");
+  expect(forbiddenCaptures).toBe(0);
+  expect(fatalMessages).toEqual([]);
+});
+
 test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox" || kBackend !== "geode", "Firefox Geode regression");
   const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+  expect(await installSurfaceFrameProbe(page), "no worker could observe canvas submissions")
+    .toBeGreaterThan(0);
   const canvas = page.locator("canvas#canvas");
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
@@ -1531,6 +1648,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   let probeRegion: ProbeRegion | null = null;
   let blueCss: PixelBounds | null = null;
   let screenshotTimeouts = 0;
+  const blueDeadlineAtMs = performance.now() + scaledMs(5_000);
   let lastBlueProbe:
     | {
       shot: Buffer;
@@ -1566,7 +1684,18 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
           viewport.paneY + viewport.paneHeight,
         ) - Math.max(viewport.documentY, viewport.paneY),
       };
-      const capture = await captureEditorPage(page);
+      // A worker result and host frame stamp mean CPU work reached submission;
+      // neither proves the canvas-writing GPU commands have completed.
+      if (
+        state.sampleId !== "basic-shapes" || state.completedResults <= beforeSample
+        || state.presentedAtMs === null || region === null
+        || region.width <= 0 || region.height <= 0
+      ) return 0;
+      const owner = await awaitBeforeBlueDeadline(findCanvasOwnerWorker(page), blueDeadlineAtMs);
+      if (owner === null) return 0;
+      const capture = await captureAfterCanvasGpuCompletion(
+        owner, blueDeadlineAtMs, () => captureEditorPage(page),
+      );
       screenshotTimeouts += capture.timedOutCaptures;
       const blue = capture.usable && region !== null && region.width > 0 && region.height > 0
         ? readEditorPixelBoundsFromPng(capture.png, "basic-blue", captureViewport, {
@@ -1605,7 +1734,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
       return 0;
     }, {
       message: "the resize target must be visibly blue in the artboard capture",
-      timeout: scaledMs(5_000),
+      timeout: Math.max(1, blueDeadlineAtMs - performance.now()),
       intervals: [250, 400, 600],
     }).toBeGreaterThan(500);
   } catch (error) {

@@ -437,6 +437,45 @@ export async function selfCheckSurfaceFrameProbe(
   return evaluateInWorkers(probedWorkers.get(page) ?? [], selfCheckInWorker, 4 * kWorkerAnswerMs);
 }
 
+// Control only the completion signal already returned to the app. Used by a
+// browser regression to prove CPU-published sample state cannot bypass the
+// screenshot's GPU gate. No queue work is added or delayed on ordinary paths.
+export async function holdCanvasCompletionForTest(page: Page): Promise<{
+  observedCalls: () => Promise<number>;
+  release: () => Promise<void>;
+}> {
+  const workers = probedWorkers.get(page) ?? [];
+  const armed = await evaluateInWorkers(workers, () => {
+    const scope = globalThis as ProbeGlobal;
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => { release = resolve; });
+    scope.__donnerSurfaceFrameProbeCompletionHold = { promise, release, calls: 0 };
+    return true;
+  });
+  if (workers.length === 0 || armed.some((result) => result !== true)) {
+    throw new Error("could not arm the canvas completion hold");
+  }
+  return {
+    observedCalls: async () => {
+      const counts = await evaluateInWorkers(workers, () =>
+        (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletionHold?.calls ?? 0
+      );
+      return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0);
+    },
+    release: async () => {
+      const released = await evaluateInWorkers(workers, () => {
+        const scope = globalThis as ProbeGlobal;
+        scope.__donnerSurfaceFrameProbeCompletionHold?.release();
+        delete scope.__donnerSurfaceFrameProbeCompletionHold;
+        return true;
+      });
+      if (released.some((result) => result !== true)) {
+        throw new Error("could not release the canvas completion hold");
+      }
+    },
+  };
+}
+
 export async function readSurfaceFrameProbe(page: Page): Promise<SurfaceFrameProbeReport> {
   const states = (await evaluateInWorkers(probedWorkers.get(page) ?? [], readInWorker)).filter(
     (state): state is WorkerProbeState => state !== null && state.installed,
