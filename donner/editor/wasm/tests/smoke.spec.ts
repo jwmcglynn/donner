@@ -1537,6 +1537,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
       bluePixels: number;
       captureUsable: boolean;
       captureAttempts: number;
+      timedOutCaptures: number;
     }
     | null = null;
   try {
@@ -1577,6 +1578,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
         bluePixels: blue?.pixels ?? 0,
         captureUsable: capture.usable,
         captureAttempts: capture.attempts,
+        timedOutCaptures: capture.timedOutCaptures,
       };
       if (
         region !== null && blue !== null && state.sampleId === "basic-shapes"
@@ -1603,7 +1605,9 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     if (lastBlueProbe !== null) {
       const pngPath = test.info().outputPath("basic-shapes-blue-probe.png");
       const statePath = test.info().outputPath("basic-shapes-blue-probe.json");
-      await writeFile(pngPath, lastBlueProbe.shot);
+      if (lastBlueProbe.shot.length > 0) {
+        await writeFile(pngPath, lastBlueProbe.shot);
+      }
       await writeFile(
         statePath,
         JSON.stringify(
@@ -1614,16 +1618,19 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
             bluePixels: lastBlueProbe.bluePixels,
             captureUsable: lastBlueProbe.captureUsable,
             captureAttempts: lastBlueProbe.captureAttempts,
+            timedOutCaptures: lastBlueProbe.timedOutCaptures,
             captureViewport,
           },
           null,
           2,
         ),
       );
-      await test.info().attach("basic-shapes-blue-probe.png", {
-        path: pngPath,
-        contentType: "image/png",
-      });
+      if (lastBlueProbe.shot.length > 0) {
+        await test.info().attach("basic-shapes-blue-probe.png", {
+          path: pngPath,
+          contentType: "image/png",
+        });
+      }
       await test.info().attach("basic-shapes-blue-probe.json", {
         path: statePath,
         contentType: "application/json",
