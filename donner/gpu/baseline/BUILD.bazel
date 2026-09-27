@@ -156,7 +156,7 @@ donner_multi_transitioned_binary(
     visibility = donner_internal_visibility(),
 )
 
-# Remote-only wrapper for capturing on the same Linux adapter that runs the frozen-pixel gate.
+# Test wrapper for capturing on the same Linux adapter that runs the frozen-pixel gate.
 # The source revision is supplied as the single --test_arg; all output stays in the test artifact.
 sh_test(
     name = "capture_baselines_wgpu_reference_linux_test",
@@ -168,10 +168,7 @@ sh_test(
         "VK_ICD_FILENAMES": "/usr/share/vulkan/icd.d/lvp_icd.json",
         "XDG_RUNTIME_DIR": "/tmp",
     },
-    tags = [
-        "manual",
-        "no-local",
-    ],
+    tags = ["manual"],
     target_compatible_with = ["@platforms//os:linux"],
 )
 

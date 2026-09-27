@@ -126,9 +126,9 @@ and `hostArchitecture: aarch64`, then compare its PNGs with the native diagnosti
 frozen pixel check will use the ARM64 reference only after that reviewed capture is committed;
 it continues to fail closed until then.
 
-When the adapter is available only through a remote Linux execution lane, use the manual
-remote-only test wrapper. It writes the same capture beneath the test's undeclared-output artifact
-and takes the clean source revision as its only test argument:
+To preserve a capture as a Bazel test artifact, use the manual test wrapper on the ARM64 Linux
+lane. It writes the same capture beneath the test's undeclared-output artifact and takes the clean
+source revision as its only test argument:
 
 ```sh
 bazel test //donner/gpu/baseline:capture_baselines_wgpu_reference_linux_test \
