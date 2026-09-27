@@ -6,23 +6,132 @@ import { join, resolve } from "node:path";
 const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 const selectedBrowserBackend = "[Geode] GPU backend: browser, selected by the build setting";
 
+const browserDiagnosticStages = new Map([
+  ["[wasm] render_svg entry", "render_entry"],
+  ["[wasm] parsed OK", "svg_parsed"],
+  ["[wasm] RendererGeode constructed", "renderer_constructed"],
+  ["[wasm] draw() returned", "draw_returned"],
+  ["[wasm] takeSnapshot() returned", "snapshot_returned"],
+  ["[Geode] snapshot map reached the capture deadline", "snapshot_map_deadline"],
+]);
+
+function browserDiagnosticStage(line: string): string | null {
+  for (const [prefix, stage] of browserDiagnosticStages) {
+    if (line.startsWith(prefix)) {
+      return stage;
+    }
+  }
+  return null;
+}
+
+function pageErrorCategory(error: Error): string {
+  const message = error.message;
+  if (/device.{0,24}lost|lost.{0,24}device/i.test(message)) {
+    return "WebGPU device lost";
+  }
+  if (error.name === "GPUValidationError" || /GPUValidationError|validation error/i.test(message)) {
+    return "WebGPU validation error";
+  }
+  if (error.name === "GPUOutOfMemoryError" || /GPUOutOfMemoryError|out of memory/i.test(message)) {
+    return "WebGPU out of memory";
+  }
+  if (/Asyncify/i.test(message)) {
+    return "Wasm Asyncify error";
+  }
+  if (error.name === "RuntimeError") {
+    return "Wasm runtime error";
+  }
+  if (error.name === "TypeError") {
+    return "JavaScript type error";
+  }
+  if (error.name === "RangeError") {
+    return "JavaScript range error";
+  }
+  if (error.name === "ReferenceError") {
+    return "JavaScript reference error";
+  }
+  return "Unclassified browser page error";
+}
+
+test("browser diagnostics cannot disclose console content", () => {
+  const sensitive = "https://private.example.test/path /Users/operator/private/file";
+  expect(browserDiagnosticStage(sensitive)).toBeNull();
+  expect(browserDiagnosticStage(`[wasm] parsed OK ${sensitive}`)).toBe("svg_parsed");
+  expect(pageErrorCategory(new Error(`Asyncify failed at ${sensitive}`))).toBe(
+    "Wasm Asyncify error",
+  );
+  expect(pageErrorCategory(new Error(`device was lost at ${sensitive}`))).toBe(
+    "WebGPU device lost",
+  );
+  const validationError = new Error(sensitive);
+  validationError.name = "GPUValidationError";
+  expect(pageErrorCategory(validationError)).toBe("WebGPU validation error");
+  const memoryError = new Error(sensitive);
+  memoryError.name = "GPUOutOfMemoryError";
+  expect(pageErrorCategory(memoryError)).toBe("WebGPU out of memory");
+  expect(pageErrorCategory(new Error(sensitive))).toBe("Unclassified browser page error");
+});
+
 test("standalone Geode wasm selects the browser backend and paints SVG pixels", async ({ page }) => {
   test.setTimeout(90000);
-  const consoleLines: string[] = [];
-  const pageErrors: string[] = [];
-  page.on("console", (message) => consoleLines.push(message.text()));
-  page.on("pageerror", (error) => pageErrors.push(error.message));
+  const browserStages = new Set<string>();
+  let browserBackendSelected = false;
+  const pageErrorCategories: string[] = [];
+  let pageErrorCount = 0;
+  page.on("console", (message) => {
+    const line = message.text();
+    browserBackendSelected ||= line.includes(selectedBrowserBackend);
+    const stage = browserDiagnosticStage(line);
+    if (stage !== null) {
+      browserStages.add(stage);
+    }
+  });
+  page.on("pageerror", (error) => {
+    pageErrorCount += 1;
+    const category = pageErrorCategory(error);
+    if (pageErrorCategories.length < 8 && !pageErrorCategories.includes(category)) {
+      pageErrorCategories.push(category);
+    }
+  });
+
+  await page.addInitScript(() => {
+    const originalRequestDevice = GPUAdapter.prototype.requestDevice;
+    let deviceRequests = 0;
+    GPUAdapter.prototype.requestDevice = function(...args) {
+      deviceRequests += 1;
+      return originalRequestDevice.apply(this, args);
+    };
+    Object.defineProperty(window, "__donnerDeviceRequests", {
+      get: () => deviceRequests,
+    });
+  });
 
   await page.goto(`${baseUrl}/test-geode.html`, { waitUntil: "domcontentloaded" });
   const status = page.locator("#status");
   const render = page.locator("#render-btn");
   await expect(render).toBeEnabled({ timeout: 45000 });
   await render.click();
-  await expect(status).toContainText("Rendered 400x400 via Geode", { timeout: 45000 });
+  try {
+    await expect(status).toContainText("Rendered 400x400 via Geode", { timeout: 45000 });
+  } catch (error) {
+    // Emit fixed stage names and counts; browser messages may carry paths or URLs.
+    console.error(
+      `browser stages: ${
+        [...browserStages].join(",") || "none"
+      }; page errors: ${pageErrorCount}; categories: ${pageErrorCategories.join(",") || "none"}`,
+    );
+    throw error;
+  }
   expect(
-    consoleLines.some((line) => line.includes(selectedBrowserBackend)),
+    browserBackendSelected,
     "the rendered page never selected the browser backend",
   ).toBe(true);
+  expect(
+    await page.evaluate(() =>
+      (window as Window & { __donnerDeviceRequests: number }).__donnerDeviceRequests
+    ),
+    "the standalone browser module must create only one WebGPU device",
+  ).toBe(1);
 
   const png = await page.locator("#canvas").evaluate((element) =>
     (element as HTMLCanvasElement).toDataURL("image/png")
@@ -47,5 +156,5 @@ test("standalone Geode wasm selects the browser backend and paints SVG pixels", 
     timeout: 10000,
   });
 
-  expect(pageErrors).toEqual([]);
+  expect(pageErrorCount, `browser page error categories: ${pageErrorCategories.join(",")}`).toBe(0);
 });
