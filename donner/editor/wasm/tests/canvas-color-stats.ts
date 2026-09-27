@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import { errors, type Locator, type Page } from "@playwright/test";
 import { inflateSync } from "node:zlib";
 
 export interface CssRegion {
@@ -177,12 +177,16 @@ export interface EditorPageCapture {
   png: Buffer;
   usable: boolean;
   attempts: number;
+  timedOutCaptures: number;
 }
 
-/** Retake only whole-page captures that contain no editor, with a fixed limit. */
+/** Retake only timed-out or editor-free screenshots, within the caller's poll window. */
 export async function captureEditorPage(page: Page): Promise<EditorPageCapture> {
   const maxAttempts = 4;
+  // Four exhausted captures and their frame handoffs must fit the unscaled five-second poll.
+  const screenshotTimeoutMs = 1_000;
   let png = Buffer.alloc(0);
+  let timedOutCaptures = 0;
   for (let attempt = 1; attempt <= maxAttempts; ++attempt) {
     if (attempt > 1) {
       // The editor's demand-driven loop may be parked after its last present.
@@ -195,12 +199,20 @@ export async function captureEditorPage(page: Page): Promise<EditorPageCapture> 
         );
       });
     }
-    png = await page.screenshot();
+    try {
+      png = await page.screenshot({ timeout: screenshotTimeoutMs });
+    } catch (error) {
+      if (!(error instanceof errors.TimeoutError)) {
+        throw error;
+      }
+      ++timedOutCaptures;
+      continue;
+    }
     if (isEditorPageCaptureUsable(png)) {
-      return { png, usable: true, attempts: attempt };
+      return { png, usable: true, attempts: attempt, timedOutCaptures };
     }
   }
-  return { png, usable: false, attempts: maxAttempts };
+  return { png, usable: false, attempts: maxAttempts, timedOutCaptures };
 }
 
 /** One capture, scored for both presentation coverage and letter geometry. */
@@ -858,6 +870,7 @@ export async function readEditorResizePixelBounds(
   png: Buffer;
   usableCapture: boolean;
   captureAttempts: number;
+  timedOutCaptures: number;
 }> {
   const viewport = page.viewportSize();
   if (viewport === null) {
@@ -875,6 +888,7 @@ export async function readEditorResizePixelBounds(
       png: shot,
       usableCapture: false,
       captureAttempts: capture.attempts,
+      timedOutCaptures: capture.timedOutCaptures,
     };
   }
   const documentBounds = {
@@ -906,6 +920,7 @@ export async function readEditorResizePixelBounds(
     png: shot,
     usableCapture: true,
     captureAttempts: capture.attempts,
+    timedOutCaptures: capture.timedOutCaptures,
   };
 }
 

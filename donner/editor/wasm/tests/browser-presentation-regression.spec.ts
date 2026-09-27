@@ -1,10 +1,11 @@
-import { expect, type Page, test } from "@playwright/test";
+import { errors, expect, type Page, test } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import {
   captureEditorPage,
   captureSplashPresentationFrame,
   type CssRegion,
   type EditorBackgroundCoverageStats,
+  isEditorPageCaptureUsable,
   isSplashCaptureUsable,
   type PixelBounds,
   readCanvasColorStats,
@@ -509,6 +510,63 @@ async function captureSplashDragFrame(
   );
 }
 
+test("editor page capture retries only screenshot timeouts and returns bounded evidence", async ({ page }) => {
+  await page.setViewportSize({ width: 64, height: 64 });
+  await page.setContent(
+    `<body style="margin:0;background:rgb(44,47,56)"><div style="width:8px;height:8px;background:white"></div></body>`,
+  );
+  const visible = await page.screenshot();
+  expect(isEditorPageCaptureUsable(visible)).toBe(true);
+
+  let shots = 0;
+  let wakes = 0;
+  const recoveringPage = {
+    screenshot: async () => {
+      if (++shots === 1) {
+        throw new errors.TimeoutError("synthetic screenshot timeout");
+      }
+      return visible;
+    },
+    evaluate: async () => {
+      ++wakes;
+    },
+  } as unknown as Page;
+  const recovered = await captureEditorPage(recoveringPage);
+  expect([recovered.usable, recovered.attempts, recovered.timedOutCaptures, shots, wakes]).toEqual([
+    true,
+    2,
+    1,
+    2,
+    1,
+  ]);
+
+  shots = 0;
+  wakes = 0;
+  const timedOutPage = {
+    screenshot: async () => {
+      ++shots;
+      throw new errors.TimeoutError("synthetic screenshot timeout");
+    },
+    evaluate: async () => {
+      ++wakes;
+    },
+  } as unknown as Page;
+  const exhausted = await captureEditorPage(timedOutPage);
+  expect([exhausted.usable, exhausted.attempts, exhausted.timedOutCaptures, shots, wakes]).toEqual([
+    false,
+    4,
+    4,
+    4,
+    3,
+  ]);
+  expect(exhausted.png).toHaveLength(0);
+  await expect(captureEditorPage({
+    screenshot: async () => {
+      throw new Error("non-timeout screenshot failure");
+    },
+  } as unknown as Page)).rejects.toThrow("non-timeout screenshot failure");
+});
+
 test("Splash capture accepts stable pixels while frames keep advancing", async ({ page }) => {
   // A thumbnail-like wake can keep the frame counter moving even when the
   // presented picture is already stable. Waiting for a parked loop on every
@@ -903,6 +961,7 @@ async function openBasicShapes(page: Page): Promise<{
     bluePixels: number;
     captureUsable: boolean;
     captureAttempts: number;
+    timedOutCaptures: number;
   } | null = null;
   try {
     await expect
@@ -934,6 +993,7 @@ async function openBasicShapes(page: Page): Promise<{
                 : await page.screenshot({ clip: currentCaptureClip }),
               usable: true,
               attempts: 1,
+              timedOutCaptures: 0,
             };
           const shot = capture.png;
           const bounds = capture.usable && currentDocumentClip !== null
@@ -954,6 +1014,7 @@ async function openBasicShapes(page: Page): Promise<{
             bluePixels: lastBluePixels,
             captureUsable: capture.usable,
             captureAttempts: capture.attempts,
+            timedOutCaptures: capture.timedOutCaptures,
           };
           if (
             bounds !== null && state.sampleId === "basic-shapes"
@@ -998,7 +1059,9 @@ async function openBasicShapes(page: Page): Promise<{
     const canvasDiagnosis = baselinePng === null ? await diagnosePresentedCanvas(page) : null;
     if (baselinePng === null && lastProbe !== null) {
       try {
-        await attachEvidenceFile("open-basic-shapes-last-probe", lastProbe.shot, "image/png");
+        if (lastProbe.shot.length > 0) {
+          await attachEvidenceFile("open-basic-shapes-last-probe", lastProbe.shot, "image/png");
+        }
         await attachEvidenceFile(
           "open-basic-shapes-last-probe-state",
           JSON.stringify(
@@ -1009,6 +1072,7 @@ async function openBasicShapes(page: Page): Promise<{
               bluePixels: lastProbe.bluePixels,
               captureUsable: lastProbe.captureUsable,
               captureAttempts: lastProbe.captureAttempts,
+              timedOutCaptures: lastProbe.timedOutCaptures,
               pageViewport,
               beforeSampleResults,
             },
@@ -1532,10 +1596,13 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     const geometry = await readEditorResizePixelBounds(page, probeRegion);
     const state = await readDocumentPresentationState(page);
     if (!geometry.usableCapture) {
-      await attachEvidenceFile(`drag-unusable-capture-step-${step}`, geometry.png, "image/png");
+      if (geometry.png.length > 0) {
+        await attachEvidenceFile(`drag-unusable-capture-step-${step}`, geometry.png, "image/png");
+      }
       throw new Error(
         `drag step ${step}: Firefox returned no editor page after `
-          + `${geometry.captureAttempts} full-page captures; state=${JSON.stringify(state)}`,
+          + `${geometry.captureAttempts} full-page captures `
+          + `(${geometry.timedOutCaptures} timed out); state=${JSON.stringify(state)}`,
       );
     }
     expect(geometry?.blue, `drag frame ${state.renderedFrames} had no blue document pixels`).not
