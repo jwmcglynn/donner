@@ -763,6 +763,39 @@ async function boundFailureDiagnostic<T>(
   }
 }
 
+const kCaptureSentinelSize = 12;
+
+async function installCaptureSentinel(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const marker = document.createElement("div");
+    marker.id = "donner-capture-sentinel";
+    marker.setAttribute("aria-hidden", "true");
+    Object.assign(marker.style, {
+      position: "fixed",
+      left: "0px",
+      top: "0px",
+      width: "12px",
+      height: "12px",
+      background: "rgb(49, 198, 179)",
+      zIndex: "2147483647",
+      pointerEvents: "none",
+    });
+    document.body.append(marker);
+  });
+}
+
+function captureSentinelPixels(
+  png: Buffer,
+  viewport: Pick<CssRegion, "width" | "height">,
+): number {
+  return readEditorPixelBoundsFromPng(png, "selection-teal", viewport, {
+    minX: 0,
+    minY: 0,
+    maxX: kCaptureSentinelSize,
+    maxY: kCaptureSentinelSize,
+  })?.pixels ?? 0;
+}
+
 function readScoredCanvasProbe(page: Page): Promise<ScoredCanvasProbe | null> {
   return boundFailureDiagnostic(page.evaluate(() => {
     const snapshot = (): SurfaceFrameSnapshot => {
@@ -803,6 +836,7 @@ function readScoredCanvasProbe(page: Page): Promise<ScoredCanvasProbe | null> {
 }
 
 async function attachScoredMissingBluePng(
+  page: Page,
   step: number,
   probeRegion: CssRegion,
   geometry: Awaited<ReturnType<typeof readEditorResizePixelBounds>>,
@@ -810,6 +844,8 @@ async function attachScoredMissingBluePng(
 ): Promise<void> {
   try {
     await attachEvidenceFile(`drag-blue-missing-step-${step}`, geometry.png, "image/png");
+    const viewport = page.viewportSize();
+    const sentinelPixels = viewport === null ? null : captureSentinelPixels(geometry.png, viewport);
     await attachEvidenceFile(
       `drag-blue-missing-step-${step}-pre-state`,
       JSON.stringify({
@@ -818,6 +854,7 @@ async function attachScoredMissingBluePng(
         beforeScreenshot,
         blue: geometry.blue,
         teal: geometry.teal,
+        sentinelPixels,
       }),
       "application/json",
     );
@@ -895,7 +932,7 @@ async function readBasicShapesDragFrame(
 }> {
   const geometry = await readEditorResizePixelBounds(page, probeRegion);
   if (geometry.usableCapture && geometry.blue === null) {
-    await attachScoredMissingBluePng(step, probeRegion, geometry, beforeScreenshot);
+    await attachScoredMissingBluePng(page, step, probeRegion, geometry, beforeScreenshot);
   }
   const state = await readDocumentPresentationState(page);
   if (!geometry.usableCapture) {
@@ -1882,6 +1919,24 @@ test(
   },
 );
 
+test("Firefox capture sentinel survives an opaque canvas clear", async ({ browserName, page }) => {
+  test.skip(browserName !== "firefox", "Firefox capture diagnostic fixture");
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.setContent(
+    `<style>html,body{margin:0;background:#101317}canvas{position:fixed;inset:0}</style><canvas width="1600" height="900"></canvas>`,
+  );
+  await page.evaluate(() => {
+    const canvas = document.querySelector("canvas") as HTMLCanvasElement;
+    const context = canvas.getContext("2d");
+    if (context === null) throw new Error("synthetic canvas context unavailable");
+    context.fillStyle = "#101317";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+  });
+  expect(captureSentinelPixels(await page.screenshot(), { width: 1600, height: 900 })).toBe(0);
+  await installCaptureSentinel(page);
+  expect(captureSentinelPixels(await page.screenshot(), { width: 1600, height: 900 })).toBe(144);
+});
+
 test("Firefox keeps the dragged shape and its selection outline in every drag frame", async ({ browserName, page }) => {
   // The single-canvas replacement removed the two-surface epoch handoff that used to let a drag
   // frame show the shape at one position and its outline at another. What
@@ -1891,6 +1946,7 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const failures = await openEditor(page);
   const { documentClip: probeRegion, captureClip, blueRect: blueCss } = await openBasicShapes(page);
+  await installCaptureSentinel(page);
   const baselineBluePixels = blueCss.pixels;
   expect(baselineBluePixels, "expected the initial Basic Shapes render before starting the drag")
     .toBeGreaterThan(500);
