@@ -140,8 +140,29 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     def test_configured_closure_aggregate_skips_cancelled_runs(self):
         """A cancelled PR run has no receipts, but a failed producer still needs the aggregate."""
         header = self._job_body("no-rust-configured-closure").split("steps:", 1)[0]
-        self.assertIn("needs: [gatekeeper, configured-rust-closure-platform]", header)
+        self.assertIn("needs: [gatekeeper, linux, macos, macos-self-hosted]", header)
         self.assertIn("always() && !cancelled()", header)
+
+    def test_wasm_build_and_browser_checks_share_one_runner_and_package(self):
+        self.assertNotIn("\n  test:\n", self.editor_wasm)
+        self.assertNotIn("actions/download-artifact@", self.editor_wasm)
+        self.assertIn("PACKAGE_TARGET: ${{ steps.stage-package.outputs.package_target }}", self.editor_wasm)
+        self.assertIn('push:\n    branches: ["main"]', self.editor_wasm)
+        self.assertIn("uses: ./.github/actions/bazel-action-cache", self.editor_wasm)
+        self.assertIn("cache: npm", self.editor_wasm)
+
+    def test_platform_checks_reuse_native_build_jobs(self):
+        for redundant in ("configured-rust-closure-platform", "linux-local-xvfb", "linker-canary"):
+            self.assertNotIn("\n  %s:\n" % redundant, self.main)
+        for job, platform in (("linux", "linux"), ("macos", "macos"),
+                              ("macos-self-hosted", "macos")):
+            body = self._job_body(job)
+            self.assertIn("configured_rust_closure.py scan --platform " + platform, body)
+            self.assertIn("configured-rust-closure-" + platform, body)
+        self.assertIn("//tools/ci:linker_canary", self._job_body("linux"))
+        aggregate = self._job_body("no-rust-configured-closure")
+        self.assertIn("needs: [gatekeeper, linux, macos, macos-self-hosted]", aggregate)
+        self.assertIn("always()", aggregate)
 
     def test_native_window_gate_runs_on_hosted_linux_when_remote_routing_is_selected(self):
         hosted = self._job_body("linux")
