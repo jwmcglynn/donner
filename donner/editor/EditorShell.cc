@@ -495,6 +495,31 @@ void PublishViewportStats(double paneX, double paneY, double paneWidth, double p
   // clang-format on
 }
 
+void PublishPresentationDrawStats(int checkerboardDrawCount, int overviewTileDrawCount,
+                                  int activeTileDrawCount, double directTotalMs,
+                                  double hostUnderlayMs, int imguiVertexCount, double imguiDrawMs) {
+  // clang-format off
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const previous = window['__donnerPresentationDrawStats'];
+        const host = window['__donnerHostFrameTiming'];
+        window['__donnerPresentationDrawStats'] = ({
+          'frames' : Number(previous ? previous['frames'] : 0) + 1,
+          'hostFrames' : Number(host ? host['frames'] : 0),
+          'checkerboardDraws' : $0,
+          'overviewTileDraws' : $1,
+          'activeTileDraws' : $2,
+          'directTotalMs' : $3,
+          'hostUnderlayMs' : $4,
+          'imguiVertices' : $5,
+          'imguiDrawMs' : $6,
+        });
+      },
+      checkerboardDrawCount, overviewTileDrawCount, activeTileDrawCount, directTotalMs,
+      hostUnderlayMs, imguiVertexCount, imguiDrawMs);
+  // clang-format on
+}
+
 void PublishLayerThumbnailStats(double rowCount, double renderedCount, double reusedCount,
                                 double deferredCount, double skippedForCanvasInvalidationCount,
                                 double snapshotRebuildCount, double bitmapCount, double bitmapBytes,
@@ -8350,6 +8375,14 @@ void EditorShell::recordFrameTelemetry(
   if (sourcePaneVisible_) {
     frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
   }
+#ifdef __EMSCRIPTEN__
+  PublishPresentationDrawStats(
+      frameCost.directPresentation.checkerboardDrawCount,
+      frameCost.directPresentation.overviewTileDrawCount,
+      frameCost.directPresentation.activeTileDrawCount, frameCost.directPresentation.totalMs,
+      frameCost.hostFrame.previousUnderlayMs, frameCost.hostFrame.previousImguiVertexCount,
+      frameCost.hostFrame.previousImguiDrawMs);
+#endif
   latestFrameCostForReadback_ = frameCost;
   interactionController_.frameHistory().setLatestFrameCost(frameCost);
   const PresentationResourceStats presentationResources = textures_.presentationResourceStats();
