@@ -67,7 +67,8 @@ class ClassifyTest(unittest.TestCase):
         golden = "//donner/svg/renderer/tests:renderer_geode_golden_tests"
         baseline = "//donner/gpu/baseline:baseline_pixels_tests"
         xml = (
-            '<testsuites failures="2" errors="0"><testsuite name="RendererGeodeGoldenTests">'
+            '<testsuites failures="2" errors="0" secret="/private/root/secret">'
+            '<testsuite name="RendererGeodeGoldenTests">'
             '<testcase classname="RendererGeodeGoldenTests" name="Lion">'
             '<failure message="/private/runner/path">secret assertion text</failure></testcase>'
             '<testcase classname="RendererGeodeGoldenTests" name="PatternSolid">'
@@ -122,6 +123,10 @@ class ClassifyTest(unittest.TestCase):
                              ["reason"], "oversize_xml")
             path.write_text('<!DOCTYPE testsuites [<!ENTITY x "secret">]>'
                             '<testsuites failures="1">&x;</testsuites>', encoding="utf-8")
+            self.assertEqual(status.allowlisted_failure_cases(events, root)["targets"][0]
+                             ["reason"], "invalid_xml")
+            path.write_text('<testsuites><testcase classname="RendererGeodeGoldenTests" '
+                            'name="Lion"><failure /></testcase></testsuites>', encoding="utf-8")
             self.assertEqual(status.allowlisted_failure_cases(events, root)["targets"][0]
                              ["reason"], "invalid_xml")
             path.unlink()
