@@ -1701,6 +1701,30 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
           + `state=${JSON.stringify(state)}`,
       );
     }
+    if (geometry.blue === null) {
+      try {
+        await attachEvidenceFile(`drag-blue-missing-step-${step}`, geometry.png, "image/png");
+        await attachEvidenceFile(
+          `drag-blue-missing-step-${step}-state`,
+          JSON.stringify(
+            {
+              step,
+              probeRegion,
+              blue: geometry.blue,
+              teal: geometry.teal,
+              completedResults: state.completedResults,
+              renderedFrames: state.renderedFrames,
+              frameLoop: state.frameLoop,
+            },
+            null,
+            2,
+          ),
+          "application/json",
+        );
+      } catch {
+        console.warn("drag-blue-missing evidence unavailable");
+      }
+    }
     expect(geometry?.blue, `drag frame ${state.renderedFrames} had no blue document pixels`).not
       .toBeNull();
     // "No teal" has two very different causes and the pixels cannot tell them
