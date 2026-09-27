@@ -448,7 +448,9 @@ export async function holdCanvasCompletionForTest(page: Page): Promise<{
   const armed = await evaluateInWorkers(workers, () => {
     const scope = globalThis as ProbeGlobal;
     let release!: () => void;
-    const promise = new Promise<void>((resolve) => { release = resolve; });
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     scope.__donnerSurfaceFrameProbeCompletionHold = { promise, release, calls: 0 };
     return true;
   });
@@ -457,8 +459,9 @@ export async function holdCanvasCompletionForTest(page: Page): Promise<{
   }
   return {
     observedCalls: async () => {
-      const counts = await evaluateInWorkers(workers, () =>
-        (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletionHold?.calls ?? 0
+      const counts = await evaluateInWorkers(
+        workers,
+        () => (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletionHold?.calls ?? 0,
       );
       return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0);
     },

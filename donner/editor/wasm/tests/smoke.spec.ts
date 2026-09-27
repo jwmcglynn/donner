@@ -1514,7 +1514,8 @@ async function awaitBeforeBlueDeadline<T>(
     work,
     new Promise<never>((_, reject) => {
       timer = setTimeout(
-        () => reject(new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline")),
+        () =>
+          reject(new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline")),
         remainingMs,
       );
     }),
@@ -1526,7 +1527,7 @@ async function captureAfterCanvasGpuCompletion<T>(
   deadlineAtMs: number,
   capture: () => Promise<T>,
 ): Promise<T> {
-  // Controlled red baseline: skip the GPU completion await.
+  await awaitBeforeBlueDeadline(waitForSubmittedCanvasGpuWork(owner), deadlineAtMs);
   return capture();
 }
 
@@ -1545,17 +1546,18 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
       frames: window.__donnerMainLoopRenderedFrames ?? 0,
     }));
     await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
-    await expect.poll(() => page.evaluate((baseline) => ({
-      sample: window.__donnerActiveSampleStats?.sampleId ?? null,
-      resultReady: (window.__donnerWorkerStats?.completedResults ?? 0) > baseline.results,
-      presented: window.__donnerWorkerStats?.presentedAtMs !== undefined,
-      frameAdvanced: (window.__donnerMainLoopRenderedFrames ?? 0) > baseline.frames,
-    }), before), { timeout: scaledMs(5_000) }).toEqual({
-      sample: "basic-shapes",
-      resultReady: true,
-      presented: true,
-      frameAdvanced: true,
-    });
+    await expect.poll(() =>
+      page.evaluate((baseline) => ({
+        sample: window.__donnerActiveSampleStats?.sampleId ?? null,
+        resultReady: (window.__donnerWorkerStats?.completedResults ?? 0) > baseline.results,
+        presented: window.__donnerWorkerStats?.presentedAtMs !== undefined,
+        frameAdvanced: (window.__donnerMainLoopRenderedFrames ?? 0) > baseline.frames,
+      }), before), { timeout: scaledMs(5_000) }).toEqual({
+        sample: "basic-shapes",
+        resultReady: true,
+        presented: true,
+        frameAdvanced: true,
+      });
     await expect.poll(hold.observedCalls).toBeGreaterThan(0);
 
     const owner = await findCanvasOwnerWorker(page);
@@ -1570,7 +1572,9 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
         ++screenshots;
         return captureEditorPage(page);
       },
-    ).finally(() => { settled = true; });
+    ).finally(() => {
+      settled = true;
+    });
     // Another worker round trip proves the evaluator is responsive while the
     // app reports a completed and presented sample, yet capture is still held.
     await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
@@ -1583,15 +1587,22 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
     const viewport = page.viewportSize();
     expect(viewport).not.toBeNull();
     if (viewport !== null) {
-      expect(readEditorPixelBoundsFromPng(capture.png, "basic-blue", viewport, {
-        minX: 0, minY: 0, maxX: viewport.width, maxY: viewport.height,
-      })?.pixels ?? 0).toBeGreaterThan(500);
+      expect(
+        readEditorPixelBoundsFromPng(capture.png, "basic-blue", viewport, {
+          minX: 0,
+          minY: 0,
+          maxX: viewport.width,
+          maxY: viewport.height,
+        })?.pixels ?? 0,
+      ).toBeGreaterThan(500);
     }
   } finally {
     await hold.release();
   }
   let forbiddenCaptures = 0;
-  const noCapture = async () => { ++forbiddenCaptures; };
+  const noCapture = async () => {
+    ++forbiddenCaptures;
+  };
   await expect(captureAfterCanvasGpuCompletion(
     { evaluate: () => Promise.reject(new Error("rejected completion")) } as unknown as Worker,
     performance.now() + 100,
@@ -1694,7 +1705,9 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
       const owner = await awaitBeforeBlueDeadline(findCanvasOwnerWorker(page), blueDeadlineAtMs);
       if (owner === null) return 0;
       const capture = await captureAfterCanvasGpuCompletion(
-        owner, blueDeadlineAtMs, () => captureEditorPage(page),
+        owner,
+        blueDeadlineAtMs,
+        () => captureEditorPage(page),
       );
       screenshotTimeouts += capture.timedOutCaptures;
       const blue = capture.usable && region !== null && region.width > 0 && region.height > 0
