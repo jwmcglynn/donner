@@ -121,7 +121,27 @@ declare global {
       surfacePresentedFrames: number;
       lastSurfaceAcquired: boolean;
       lastSurfacePresented: boolean;
+      lastUnderlaySequence?: number;
+      lastUnderlayHostFrame?: number;
+      lastCheckerboardDraws?: number;
+      lastOverviewTileDraws?: number;
+      lastActiveTileDraws?: number;
+      lastUnderlayDirectMs?: number;
+      lastImguiVertices?: number;
+      lastImguiIndices?: number;
+      lastImguiCommandLists?: number;
     };
+    __donnerImGuiDrawStats?: {
+      vertices: number;
+      indices: number;
+      commandLists: number;
+      frames: number;
+    };
+    __donnerRequestWgpuReadback?: () => number;
+    __donnerWgpuReadbackStats?: Record<string, unknown>;
+    __donnerWgpuReadbackCaptureStarts?: number;
+    __donnerWgpuReadbackCaptureCompletions?: number;
+    __donnerWgpuReadbackCaptureFailures?: number;
     __donnerOverlayStats?: {
       compositorTileOverlay: boolean;
       geometryDebugOverlay: boolean;
@@ -1128,6 +1148,9 @@ async function openEditor(
   if (testControl) {
     editorUrl.searchParams.set("testControl", testControl);
   }
+  if (testControl === "overlay") {
+    editorUrl.searchParams.set("wgpuReadbackStats", "1");
+  }
   await page.goto(editorUrl.toString(), { waitUntil: "domcontentloaded" });
   await expect.poll(() => page.evaluate(() => window.__donnerCanStartWasm)).toBe(true);
   const hasWebGpu = await page.evaluate(() => "gpu" in navigator);
@@ -1187,6 +1210,48 @@ interface HostPresentationCounters {
   presentedFrames: number;
   lastAcquired: boolean;
   lastPresented: boolean;
+  underlaySequence: number;
+  underlayHostFrame: number;
+  checkerboardDraws: number;
+  overviewTileDraws: number;
+  activeTileDraws: number;
+  underlayDirectMs: number;
+  imguiVertices: number;
+  imguiIndices: number;
+  imguiCommandLists: number;
+}
+
+async function diagnosePostFailureGpuReadback(
+  page: Page,
+  baselineFailed: boolean,
+): Promise<object | null> {
+  if (!baselineFailed) return null;
+  const diagnosis = await boundFailureDiagnostic(
+    (async () => {
+      const request = await page.evaluate(() => window.__donnerRequestWgpuReadback?.() ?? 0);
+      if (request <= 0) {
+        return { unavailable: "WGPU readback request hook unavailable" };
+      }
+      await page.waitForFunction(
+        (requestId) => {
+          const completed = Number(window.__donnerWgpuReadbackStats?.request || 0);
+          const failures = window.__donnerWgpuReadbackCaptureFailures || 0;
+          return completed >= requestId || failures > 0;
+        },
+        request,
+        { timeout: scaledMs(4_000) },
+      );
+      return page.evaluate((requestId) => ({
+        request: requestId,
+        stats: window.__donnerWgpuReadbackStats ?? null,
+        starts: window.__donnerWgpuReadbackCaptureStarts || 0,
+        completions: window.__donnerWgpuReadbackCaptureCompletions || 0,
+        failures: window.__donnerWgpuReadbackCaptureFailures || 0,
+      }), request);
+    })(),
+    scaledMs(5_000),
+  );
+  return diagnosis ?? { unavailable: "post-failure WGPU readback unavailable" };
 }
 
 async function diagnosePresentedCanvas(
@@ -1213,6 +1278,15 @@ async function diagnosePresentedCanvas(
           presentedFrames: host.surfacePresentedFrames,
           lastAcquired: host.lastSurfaceAcquired,
           lastPresented: host.lastSurfacePresented,
+          underlaySequence: host.lastUnderlaySequence ?? 0,
+          underlayHostFrame: host.lastUnderlayHostFrame ?? 0,
+          checkerboardDraws: host.lastCheckerboardDraws ?? 0,
+          overviewTileDraws: host.lastOverviewTileDraws ?? 0,
+          activeTileDraws: host.lastActiveTileDraws ?? 0,
+          underlayDirectMs: host.lastUnderlayDirectMs ?? 0,
+          imguiVertices: host.lastImguiVertices ?? 0,
+          imguiIndices: host.lastImguiIndices ?? 0,
+          imguiCommandLists: host.lastImguiCommandLists ?? 0,
         };
       };
       // Count pixels that carry both coverage and hue, so the editor's own
@@ -1302,6 +1376,18 @@ test("canvas diagnosis does not queue after an unavailable state IPC", async () 
   expect(await diagnoseCanvasAfterState(page, true, false)).toEqual({
     unavailable: "canvas diagnosis skipped after state IPC unavailable",
   });
+  expect(pageReads).toBe(0);
+});
+
+test("post-failure WGPU readback stays idle after a successful baseline", async () => {
+  let pageReads = 0;
+  const page = {
+    evaluate: async () => {
+      ++pageReads;
+      return null;
+    },
+  } as unknown as Page;
+  expect(await diagnosePostFailureGpuReadback(page, false)).toBeNull();
   expect(pageReads).toBe(0);
 });
 
@@ -1619,18 +1705,33 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
         frames: window.__donnerMainLoopRenderedFrames || 0,
         workerBusy: window.__donnerInteractionStats?.workerBusy,
         activeSample: window.__donnerActiveSampleStats,
+        imguiDraw: window.__donnerImGuiDrawStats ?? null,
         host: window.__donnerHostFrameTiming === undefined ? null : {
           frames: window.__donnerHostFrameTiming.frames,
           acquiredFrames: window.__donnerHostFrameTiming.surfaceAcquiredFrames,
           presentedFrames: window.__donnerHostFrameTiming.surfacePresentedFrames,
           lastAcquired: window.__donnerHostFrameTiming.lastSurfaceAcquired,
           lastPresented: window.__donnerHostFrameTiming.lastSurfacePresented,
+          underlaySequence: window.__donnerHostFrameTiming.lastUnderlaySequence ?? 0,
+          underlayHostFrame: window.__donnerHostFrameTiming.lastUnderlayHostFrame ?? 0,
+          checkerboardDraws: window.__donnerHostFrameTiming.lastCheckerboardDraws ?? 0,
+          overviewTileDraws: window.__donnerHostFrameTiming.lastOverviewTileDraws ?? 0,
+          activeTileDraws: window.__donnerHostFrameTiming.lastActiveTileDraws ?? 0,
+          underlayDirectMs: window.__donnerHostFrameTiming.lastUnderlayDirectMs ?? 0,
+          imguiVertices: window.__donnerHostFrameTiming.lastImguiVertices ?? 0,
+          imguiIndices: window.__donnerHostFrameTiming.lastImguiIndices ?? 0,
+          imguiCommandLists: window.__donnerHostFrameTiming.lastImguiCommandLists ?? 0,
         },
       })),
       scaledMs(4_000),
     );
     const presentationState = presentationRead ?? { unavailable: "presentation state unavailable" };
-    // Only worth the extra page work when no capture met the presented-sample and pixel checks.
+    // These probes run only after the scored screenshot failed. The WGPU readback samples the
+    // next raw host frame before the canvas probe compares that frame with a later forced wake.
+    const gpuReadbackDiagnosis = await diagnosePostFailureGpuReadback(
+      page,
+      baselinePng === null,
+    );
     const canvasDiagnosis = await diagnoseCanvasAfterState(
       page,
       baselinePng === null,
@@ -1660,6 +1761,9 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
               pageViewport,
               beforeSampleResults,
               sentinelPixels,
+              presentationState,
+              gpuReadbackDiagnosis,
+              canvasDiagnosis,
             },
             null,
             2,
@@ -1672,6 +1776,7 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
     }
     console.log(
       `open-basic-shapes bluePixels=${lastBluePixels} state=${JSON.stringify(presentationState)}`
+        + ` gpu=${JSON.stringify(gpuReadbackDiagnosis)}`
         + ` canvas=${JSON.stringify(canvasDiagnosis)}`,
     );
   }

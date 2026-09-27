@@ -492,6 +492,7 @@ js_test(
         "//donner/editor:EditorShell.cc",
         "//donner/editor:RenderCoordinator.cc",
         "//donner/editor:RotateCursorSet.cc",
+        "//donner/editor:WholeAppWorkerBridge.cc",
         "//donner/editor/gui:EditorWindow.cc",
         "//donner/editor/wasm:BUILD.bazel",
         "//donner/editor/wasm:editor.css",

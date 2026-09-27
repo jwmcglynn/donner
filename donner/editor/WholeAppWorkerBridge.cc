@@ -1172,6 +1172,11 @@ void PublishImGuiDrawStats(int vertexCount, int indexCount, int commandListCount
           'peakIndices' : Math.max(previous ? previous['peakIndices'] : 0, $1),
           'frames' : (previous ? previous['frames'] : 0) + 1,
         });
+        window['__donnerPendingImGuiDrawStats'] = ({
+          'vertices' : $0,
+          'indices' : $1,
+          'commandLists' : $2,
+        });
       },
       vertexCount, indexCount, commandListCount);
   // clang-format on
@@ -1196,6 +1201,19 @@ void PublishHostFrameTiming(double endFrameMs, double imguiRenderMs, double surf
         stats['lastSurfacePresented'] = !!$9;
         stats['surfaceAcquiredFrames'] = (stats['surfaceAcquiredFrames'] | 0) + ($8 ? 1 : 0);
         stats['surfacePresentedFrames'] = (stats['surfacePresentedFrames'] | 0) + ($9 ? 1 : 0);
+        const underlay = window['__donnerPendingUnderlayDrawStats'];
+        const imgui = window['__donnerPendingImGuiDrawStats'];
+        stats['lastUnderlaySequence'] = Number(underlay ? underlay['sequence'] : 0);
+        stats['lastUnderlayHostFrame'] = underlay ? stats['frames'] : 0;
+        stats['lastCheckerboardDraws'] = Number(underlay ? underlay['checkerboardDraws'] : 0);
+        stats['lastOverviewTileDraws'] = Number(underlay ? underlay['overviewTileDraws'] : 0);
+        stats['lastActiveTileDraws'] = Number(underlay ? underlay['activeTileDraws'] : 0);
+        stats['lastUnderlayDirectMs'] = Number(underlay ? underlay['directTotalMs'] : 0);
+        stats['lastImguiVertices'] = Number(imgui ? imgui['vertices'] : 0);
+        stats['lastImguiIndices'] = Number(imgui ? imgui['indices'] : 0);
+        stats['lastImguiCommandLists'] = Number(imgui ? imgui['commandLists'] : 0);
+        delete window['__donnerPendingUnderlayDrawStats'];
+        delete window['__donnerPendingImGuiDrawStats'];
         for (let index = 0; index < names.length; ++index) {
           stats[names[index]] = values[index];
           stats['sums'][names[index]] = (stats['sums'][names[index]] || 0) + values[index];

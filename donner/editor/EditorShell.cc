@@ -495,6 +495,25 @@ void PublishViewportStats(double paneX, double paneY, double paneWidth, double p
   // clang-format on
 }
 
+void PublishPendingUnderlayDrawStats(int checkerboardDrawCount, int overviewTileDrawCount,
+                                     int activeTileDrawCount, double directTotalMs) {
+  // clang-format off
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const sequence = Number(window['__donnerUnderlayDrawSequence'] || 0) + 1;
+        window['__donnerUnderlayDrawSequence'] = sequence;
+        window['__donnerPendingUnderlayDrawStats'] = ({
+          'sequence' : sequence,
+          'checkerboardDraws' : $0,
+          'overviewTileDraws' : $1,
+          'activeTileDraws' : $2,
+          'directTotalMs' : $3,
+        });
+      },
+      checkerboardDrawCount, overviewTileDrawCount, activeTileDrawCount, directTotalMs);
+  // clang-format on
+}
+
 void PublishLayerThumbnailStats(double rowCount, double renderedCount, double reusedCount,
                                 double deferredCount, double skippedForCanvasInvalidationCount,
                                 double snapshotRebuildCount, double bitmapCount, double bitmapBytes,
@@ -5174,6 +5193,12 @@ void EditorShell::installFramebufferUnderlayPlan(
             *directCheckerboardRenderer_, *directDocumentRenderer_, target, plan.viewport,
             plan.documentClipRect, plan.overviewTiles, plan.tiles, plan.activeDragPreview,
             plan.displayedDragPreview, plan.suppressedLayerEntity, plan.suppressDragTargetTiles);
+#ifdef __EMSCRIPTEN__
+        PublishPendingUnderlayDrawStats(lastDirectPresentationCost_.checkerboardDrawCount,
+                                        lastDirectPresentationCost_.overviewTileDrawCount,
+                                        lastDirectPresentationCost_.activeTileDrawCount,
+                                        lastDirectPresentationCost_.totalMs);
+#endif
       });
 #else
   // Without a WebGPU window target there is no framebuffer underlay to install;
