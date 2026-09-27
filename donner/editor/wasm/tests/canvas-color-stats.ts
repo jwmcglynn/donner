@@ -178,27 +178,67 @@ export interface EditorPageCapture {
   usable: boolean;
   attempts: number;
   timedOutCaptures: number;
+  frameWaitFallbacks: number;
+}
+
+export interface EditorPageCaptureOptions {
+  /** Initial-load probes may retake after a timer; per-drag frame assertions must not. */
+  allowTimerFallback?: boolean;
 }
 
 /** Retake only timed-out or editor-free screenshots, within the caller's poll window. */
-export async function captureEditorPage(page: Page): Promise<EditorPageCapture> {
+export async function captureEditorPage(
+  page: Page,
+  options: EditorPageCaptureOptions = {},
+): Promise<EditorPageCapture> {
   const maxAttempts = 4;
   // Four exhausted captures and their frame handoffs must fit the unscaled five-second poll.
   const screenshotTimeoutMs = 1_000;
   let png = Buffer.alloc(0);
   let timedOutCaptures = 0;
+  let frameWaitFallbacks = 0;
   for (let attempt = 1; attempt <= maxAttempts; ++attempt) {
     if (attempt > 1) {
       // The editor's demand-driven loop may be parked after its last present.
-      // Request one app frame, then let Gecko composite before the next capture.
-      await page.evaluate(() => {
+      // Request one app frame, but a backgrounded Gecko page may never deliver
+      // two rAF callbacks. Bound that handoff inside the page before retrying.
+      console.log(`editor-page-capture retry ${attempt}: frame-wait-start`);
+      const frameWait = await page.evaluate(() => {
         (window as Window & { __donnerEditorFrameRequested?: boolean })
           .__donnerEditorFrameRequested = true;
-        return new Promise((resolve) =>
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve(null)))
-        );
+        return new Promise<"frame" | "timer">((resolve) => {
+          let settled = false;
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const finish = (outcome: "frame" | "timer") => {
+            if (settled) {
+              return;
+            }
+            settled = true;
+            if (timer !== undefined) {
+              clearTimeout(timer);
+            }
+            resolve(outcome);
+          };
+          timer = setTimeout(() => finish("timer"), 150);
+          requestAnimationFrame(() => requestAnimationFrame(() => finish("frame")));
+        });
       });
+      if (frameWait === "timer") {
+        ++frameWaitFallbacks;
+        if (!options.allowTimerFallback) {
+          console.log(`editor-page-capture retry ${attempt}: unconfirmed-frame`);
+          return {
+            png,
+            usable: false,
+            attempts: attempt - 1,
+            timedOutCaptures,
+            frameWaitFallbacks,
+          };
+        }
+      }
+      console.log(`editor-page-capture retry ${attempt}: frame-wait-${frameWait}`);
     }
+    console.log(`editor-page-capture attempt ${attempt}: screenshot-start`);
     try {
       png = await page.screenshot({ timeout: screenshotTimeoutMs });
     } catch (error) {
@@ -206,13 +246,18 @@ export async function captureEditorPage(page: Page): Promise<EditorPageCapture> 
         throw error;
       }
       ++timedOutCaptures;
+      console.log(`editor-page-capture attempt ${attempt}: screenshot-timeout`);
       continue;
     }
     if (isEditorPageCaptureUsable(png)) {
-      return { png, usable: true, attempts: attempt, timedOutCaptures };
+      if (attempt > 1) {
+        console.log(`editor-page-capture attempt ${attempt}: usable`);
+      }
+      return { png, usable: true, attempts: attempt, timedOutCaptures, frameWaitFallbacks };
     }
+    console.log(`editor-page-capture attempt ${attempt}: no-editor-tones`);
   }
-  return { png, usable: false, attempts: maxAttempts, timedOutCaptures };
+  return { png, usable: false, attempts: maxAttempts, timedOutCaptures, frameWaitFallbacks };
 }
 
 /** One capture, scored for both presentation coverage and letter geometry. */
@@ -871,6 +916,7 @@ export async function readEditorResizePixelBounds(
   usableCapture: boolean;
   captureAttempts: number;
   timedOutCaptures: number;
+  frameWaitFallbacks: number;
 }> {
   const viewport = page.viewportSize();
   if (viewport === null) {
@@ -889,6 +935,7 @@ export async function readEditorResizePixelBounds(
       usableCapture: false,
       captureAttempts: capture.attempts,
       timedOutCaptures: capture.timedOutCaptures,
+      frameWaitFallbacks: capture.frameWaitFallbacks,
     };
   }
   const documentBounds = {
@@ -921,6 +968,7 @@ export async function readEditorResizePixelBounds(
     usableCapture: true,
     captureAttempts: capture.attempts,
     timedOutCaptures: capture.timedOutCaptures,
+    frameWaitFallbacks: capture.frameWaitFallbacks,
   };
 }
 

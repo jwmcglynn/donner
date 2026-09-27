@@ -510,7 +510,7 @@ async function captureSplashDragFrame(
   );
 }
 
-test("editor page capture retries only screenshot timeouts and returns bounded evidence", async ({ page }) => {
+test("editor page capture bounds screenshot timeouts and a stalled frame wait", async ({ page }) => {
   await page.setViewportSize({ width: 64, height: 64 });
   await page.setContent(
     `<body style="margin:0;background:rgb(44,47,56)"><div style="width:8px;height:8px;background:white"></div></body>`,
@@ -529,13 +529,22 @@ test("editor page capture retries only screenshot timeouts and returns bounded e
     },
     evaluate: async () => {
       ++wakes;
+      return "frame";
     },
   } as unknown as Page;
   const recovered = await captureEditorPage(recoveringPage);
-  expect([recovered.usable, recovered.attempts, recovered.timedOutCaptures, shots, wakes]).toEqual([
+  expect([
+    recovered.usable,
+    recovered.attempts,
+    recovered.timedOutCaptures,
+    recovered.frameWaitFallbacks,
+    shots,
+    wakes,
+  ]).toEqual([
     true,
     2,
     1,
+    0,
     2,
     1,
   ]);
@@ -549,17 +558,66 @@ test("editor page capture retries only screenshot timeouts and returns bounded e
     },
     evaluate: async () => {
       ++wakes;
+      return "frame";
     },
   } as unknown as Page;
   const exhausted = await captureEditorPage(timedOutPage);
-  expect([exhausted.usable, exhausted.attempts, exhausted.timedOutCaptures, shots, wakes]).toEqual([
+  expect([
+    exhausted.usable,
+    exhausted.attempts,
+    exhausted.timedOutCaptures,
+    exhausted.frameWaitFallbacks,
+    shots,
+    wakes,
+  ]).toEqual([
     false,
     4,
     4,
+    0,
     4,
     3,
   ]);
   expect(exhausted.png).toHaveLength(0);
+
+  // Reproduce a backgrounded page that never delivers rAF. A per-drag capture
+  // must reject that unconfirmed frame; only an initial-load poll may retake.
+  await page.evaluate(() => {
+    window.requestAnimationFrame = () => 0;
+  });
+  shots = 0;
+  const stalledFramePage = {
+    screenshot: async () => {
+      if (++shots === 1) {
+        throw new errors.TimeoutError("synthetic screenshot timeout");
+      }
+      return visible;
+    },
+    evaluate: page.evaluate.bind(page),
+  } as unknown as Page;
+  const startedAt = performance.now();
+  const unconfirmedDragFrame = await captureEditorPage(stalledFramePage);
+  expect([
+    unconfirmedDragFrame.usable,
+    unconfirmedDragFrame.attempts,
+    unconfirmedDragFrame.timedOutCaptures,
+    unconfirmedDragFrame.frameWaitFallbacks,
+    shots,
+  ]).toEqual([false, 1, 1, 1, 1]);
+  expect(unconfirmedDragFrame.png).toHaveLength(0);
+
+  shots = 0;
+  const initialLoadRetake = await captureEditorPage(stalledFramePage, {
+    allowTimerFallback: true,
+  });
+  expect([
+    initialLoadRetake.usable,
+    initialLoadRetake.attempts,
+    initialLoadRetake.timedOutCaptures,
+    initialLoadRetake.frameWaitFallbacks,
+    shots,
+  ]).toEqual([true, 2, 1, 1, 2]);
+  expect(performance.now() - startedAt).toBeLessThan(1_000);
+
   await expect(captureEditorPage({
     screenshot: async () => {
       throw new Error("non-timeout screenshot failure");
@@ -962,17 +1020,24 @@ async function openBasicShapes(page: Page): Promise<{
     captureUsable: boolean;
     captureAttempts: number;
     timedOutCaptures: number;
+    frameWaitFallbacks: number;
   } | null = null;
   try {
     await expect
       .poll(
         async () => {
+          if (firefox) {
+            console.log("open-basic-shapes-probe: state-start");
+          }
           const state = await page.evaluate(() => ({
             sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
             completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
             presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
             viewport: window.__donnerViewportStats ?? null,
           }));
+          if (firefox) {
+            console.log("open-basic-shapes-probe: state-end");
+          }
           const observedDocumentClip = state.viewport === null
             ? null
             : presentedDocumentRegion(state.viewport);
@@ -985,8 +1050,11 @@ async function openBasicShapes(page: Page): Promise<{
             : firefox && pageViewport !== null
             ? { x: 0, y: 0, width: pageViewport.width, height: pageViewport.height }
             : currentDocumentClip;
+          if (firefox) {
+            console.log("open-basic-shapes-probe: capture-start");
+          }
           const capture = firefox
-            ? await captureEditorPage(page)
+            ? await captureEditorPage(page, { allowTimerFallback: true })
             : {
               png: currentCaptureClip === null
                 ? await page.screenshot()
@@ -994,7 +1062,15 @@ async function openBasicShapes(page: Page): Promise<{
               usable: true,
               attempts: 1,
               timedOutCaptures: 0,
+              frameWaitFallbacks: 0,
             };
+          if (firefox) {
+            console.log(
+              `open-basic-shapes-probe: capture-end attempts=${capture.attempts} `
+                + `screenshotTimeouts=${capture.timedOutCaptures} `
+                + `frameWaitFallbacks=${capture.frameWaitFallbacks}`,
+            );
+          }
           const shot = capture.png;
           const bounds = capture.usable && currentDocumentClip !== null
               && currentCaptureClip !== null
@@ -1015,6 +1091,7 @@ async function openBasicShapes(page: Page): Promise<{
             captureUsable: capture.usable,
             captureAttempts: capture.attempts,
             timedOutCaptures: capture.timedOutCaptures,
+            frameWaitFallbacks: capture.frameWaitFallbacks,
           };
           if (
             bounds !== null && state.sampleId === "basic-shapes"
@@ -1073,6 +1150,7 @@ async function openBasicShapes(page: Page): Promise<{
               captureUsable: lastProbe.captureUsable,
               captureAttempts: lastProbe.captureAttempts,
               timedOutCaptures: lastProbe.timedOutCaptures,
+              frameWaitFallbacks: lastProbe.frameWaitFallbacks,
               pageViewport,
               beforeSampleResults,
             },
@@ -1547,7 +1625,9 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
       throw new Error(
         `drag step ${step}: Firefox returned no editor page after `
           + `${geometry.captureAttempts} full-page captures `
-          + `(${geometry.timedOutCaptures} timed out); state=${JSON.stringify(state)}`,
+          + `(${geometry.timedOutCaptures} timed out, `
+          + `${geometry.frameWaitFallbacks} frame waits used the timer); `
+          + `state=${JSON.stringify(state)}`,
       );
     }
     expect(geometry?.blue, `drag frame ${state.renderedFrames} had no blue document pixels`).not
