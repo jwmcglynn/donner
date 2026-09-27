@@ -15,6 +15,32 @@ export interface OverlayBitmapComparison {
   detail: string;
 }
 
+function readComparisonFailureCount(reportPath: string): number {
+  // Exit zero is insufficient when an inherited GTest filter or shard silently runs no cases.
+  const report = JSON.parse(readFileSync(reportPath, "utf8"));
+  const suites = Array.isArray(report.testsuites) ? report.testsuites : [];
+  const cases = suites.flatMap((suite: { testsuite?: unknown[] }) => suite.testsuite ?? []);
+  const onlyCase = cases[0] as {
+    classname?: string;
+    name?: string;
+    status?: string;
+    result?: string;
+    failures?: unknown[];
+  } | undefined;
+  const caseFailures = onlyCase?.failures?.length ?? 0;
+  if (
+    report.tests !== 1 || report.disabled !== 0 || report.errors !== 0
+    || suites.length !== 1 || cases.length !== 1
+    || onlyCase?.classname !== "StandaloneGeodeBrowserPngCompare"
+    || onlyCase?.name !== "CanvasMatchesGolden"
+    || onlyCase?.status !== "RUN" || onlyCase?.result !== "COMPLETED"
+    || report.failures !== (caseFailures > 0 ? 1 : 0)
+  ) {
+    throw new Error("overlay bitmap comparator did not complete exactly one valid comparison");
+  }
+  return caseFailures;
+}
+
 /** Compare browser PNGs through Donner's native bitmap_golden_compare executable. */
 export function compareOverlayBitmap(
   captured: Buffer,
@@ -69,26 +95,9 @@ export function compareOverlayBitmap(
       + String(result.error ?? result.signal ?? result.status));
   }
 
-  // Exit zero is insufficient when an inherited GTest filter or shard silently runs no cases.
-  const report = JSON.parse(readFileSync(reportPath, "utf8"));
-  const suites = Array.isArray(report.testsuites) ? report.testsuites : [];
-  const cases = suites.flatMap((suite: { testsuite?: unknown[] }) => suite.testsuite ?? []);
-  const onlyCase = cases[0] as {
-    classname?: string;
-    name?: string;
-    status?: string;
-    result?: string;
-    failures?: unknown[];
-  } | undefined;
-  const caseFailures = onlyCase?.failures?.length ?? 0;
+  const caseFailures = readComparisonFailureCount(reportPath);
   if (
-    report.tests !== 1 || report.disabled !== 0 || report.errors !== 0
-    || suites.length !== 1 || cases.length !== 1
-    || onlyCase?.classname !== "StandaloneGeodeBrowserPngCompare"
-    || onlyCase?.name !== "CanvasMatchesGolden"
-    || onlyCase?.status !== "RUN" || onlyCase?.result !== "COMPLETED"
-    || report.failures !== (caseFailures > 0 ? 1 : 0)
-    || (result.status === 0 && caseFailures !== 0)
+    (result.status === 0 && caseFailures !== 0)
     || (result.status === 1 && (caseFailures < 1
       || ![failureActual, failureExpected, diff].every(existsSync)))
   ) {
