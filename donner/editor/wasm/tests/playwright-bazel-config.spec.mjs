@@ -174,6 +174,7 @@ test("Firefox compatibility Bazel config preserves the remote server and selecte
 
   assert.deepEqual(config.webServer, bazelConfig.webServer);
   assert.equal(config.globalTimeout, 840000);
+  assert.deepEqual(Object.keys(config.use), []);
   assert.equal(config.projects.length, 1);
   assert.equal(config.projects[0].name, "firefox-geode-resize");
   assert.equal(config.projects[0].use.browserName, "firefox");

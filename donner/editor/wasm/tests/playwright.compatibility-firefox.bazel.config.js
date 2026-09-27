@@ -11,6 +11,9 @@ if (!firefoxProject) {
 module.exports = {
   ...baseConfig,
   ...compatibilityConfig,
+  // The Bazel base is Chromium-specific. Each Firefox project supplies its
+  // own launch options and must not inherit the base's Chromium channel.
+  use: {},
   globalTimeout: 840000,
   projects: [
     {
