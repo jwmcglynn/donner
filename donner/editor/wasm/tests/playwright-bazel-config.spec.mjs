@@ -179,7 +179,7 @@ test("Firefox compatibility Bazel config preserves the remote server and selecte
   assert.equal(config.projects[0].name, "firefox-geode-resize");
   assert.equal(config.projects[0].use.browserName, "firefox");
   assert.equal(config.projects[0].use.headless, false);
-  assert.equal(config.projects[0].use.launchOptions.timeout, 15000);
+  assert.equal(config.projects[0].use.launchOptions.timeout, undefined);
   assert.equal(
     config.projects[0].use.launchOptions.firefoxUserPrefs["dom.webgpu.enabled"],
     true,

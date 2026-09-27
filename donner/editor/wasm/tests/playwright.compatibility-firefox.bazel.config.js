@@ -27,10 +27,6 @@ module.exports = {
           snapshots: false,
           sources: false,
         },
-        launchOptions: {
-          ...firefoxProject.use.launchOptions,
-          timeout: 15000,
-        },
       },
     },
   ],
