@@ -28,8 +28,10 @@ Reads a BEP JSON-lines file; writes one JSON document to stdout:
 """
 
 import json
+from pathlib import Path
 import re
 import sys
+import xml.etree.ElementTree as ET
 
 ALL_SKIPPED = "all_skipped"
 HAS_RESULTS = "has_results"
@@ -41,6 +43,18 @@ _FAILED_TEST_STATUSES = {
 }
 _FAILED_ABORT_REASONS = {"LOADING_FAILURE", "ANALYSIS_FAILURE"}
 _MAX_FAILURE_LABELS = 20
+_GTEST_XML_BY_LABEL = {
+    "//donner/gpu/baseline:baseline_pixels_tests":
+        Path("donner/gpu/baseline/baseline_pixels_tests/test.xml"),
+    "//donner/gpu/vulkan/tests:vulkan_color_matrix_tests":
+        Path("donner/gpu/vulkan/tests/vulkan_color_matrix_tests/test.xml"),
+    "//donner/svg/renderer/tests:renderer_geode_golden_tests":
+        Path("donner/svg/renderer/tests/renderer_geode_golden_tests/test.xml"),
+}
+_SAFE_GTEST_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z0-9_]+)*\Z")
+_MAX_GTEST_XML_BYTES = 1024 * 1024
+_MAX_GTEST_CASES_SCANNED = 1000
+_MAX_GTEST_CASES_EMITTED = 30
 
 
 def classify(lines):
@@ -174,19 +188,152 @@ def failure_summary(lines):
     }
 
 
+def _gtest_cases_for_target(label, testlogs_root, declared_xml, output_cap):
+    """Read only the fixed Bazel test.xml path for an allowlisted failed target."""
+    result = {
+        "target": label,
+        "status": "unavailable",
+        "reason": "missing_xml",
+        "failedCases": [],
+        "omittedCases": 0,
+    }
+    if not declared_xml:
+        result["reason"] = "undeclared_xml"
+        return result
+    try:
+        root_path = Path(testlogs_root).resolve(strict=True)
+        if not root_path.is_dir():
+            return result
+        xml_path = root_path
+        for component in _GTEST_XML_BY_LABEL[label].parts:
+            xml_path /= component
+            if xml_path.is_symlink():
+                result["reason"] = "symlink_xml"
+                return result
+        if not xml_path.resolve(strict=True).is_relative_to(root_path):
+            result["reason"] = "path_escape"
+            return result
+    except (OSError, RuntimeError):
+        return result
+    try:
+        with open(xml_path, "rb") as stream:
+            document = stream.read(_MAX_GTEST_XML_BYTES + 1)
+    except OSError:
+        return result
+    if len(document) > _MAX_GTEST_XML_BYTES:
+        result["reason"] = "oversize_xml"
+        return result
+    if b"<!DOCTYPE" in document.upper() or b"<!ENTITY" in document.upper():
+        result["reason"] = "invalid_xml"
+        return result
+    try:
+        root = ET.fromstring(document)
+        reported_failures = int(root.attrib["failures"]) + int(root.attrib.get("errors", "0"))
+    except (ET.ParseError, KeyError, ValueError):
+        result["reason"] = "invalid_xml"
+        return result
+    if (root.tag not in ("testsuites", "testsuite") or reported_failures < 1
+            or reported_failures > _MAX_GTEST_CASES_SCANNED):
+        result["reason"] = "invalid_xml"
+        return result
+
+    failed_cases = []
+    for index, case in enumerate(root.iter("testcase")):
+        if index >= _MAX_GTEST_CASES_SCANNED:
+            result["reason"] = "too_many_cases"
+            return result
+        if case.find("failure") is None and case.find("error") is None:
+            continue
+        suite = case.get("classname")
+        name = case.get("name")
+        if (not isinstance(suite, str) or not isinstance(name, str)
+                or len(suite) > 80 or len(name) > 80
+                or not _SAFE_GTEST_NAME.fullmatch(suite)
+                or not _SAFE_GTEST_NAME.fullmatch(name)):
+            result["reason"] = "unsafe_case_name"
+            return result
+        failed_cases.append(f"{suite}.{name}")
+    if not failed_cases or len(set(failed_cases)) != reported_failures:
+        result["reason"] = "incomplete_xml"
+        return result
+
+    failed_cases = sorted(set(failed_cases))
+    return {
+        "target": label,
+        "status": "cases_found",
+        "failedCases": failed_cases[:output_cap],
+        "failedCaseCount": len(failed_cases),
+        "omittedCases": max(0, len(failed_cases) - output_cap),
+    }
+
+
+def allowlisted_failure_cases(lines, testlogs_root):
+    """Emit bounded case names for three named GPU tests, never raw XML text."""
+    final_statuses = {}
+    failed_attempts = set()
+    declared_xml = set()
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        label = _label(event.get("id"))
+        if label not in _GTEST_XML_BY_LABEL:
+            continue
+        status = _final_test_status(event)
+        if status is not None:
+            final_statuses[label] = status
+        if _failed_test_attempt(event):
+            failed_attempts.add(label)
+        attempt = event.get("testResult")
+        if isinstance(attempt, dict):
+            outputs = attempt.get("testActionOutput")
+            if isinstance(outputs, list) and any(
+                isinstance(output, dict) and output.get("name") == "test.xml"
+                for output in outputs):
+                declared_xml.add(label)
+    failed_labels = sorted(
+        label for label in _GTEST_XML_BY_LABEL
+        if final_statuses.get(label) in _FAILED_TEST_STATUSES
+        or (label in failed_attempts and label not in final_statuses)
+    )
+    if not failed_labels:
+        return None
+    results = []
+    remaining = _MAX_GTEST_CASES_EMITTED
+    for label in failed_labels:
+        result = _gtest_cases_for_target(label, testlogs_root, label in declared_xml,
+                                         min(_MAX_FAILURE_LABELS, remaining))
+        results.append(result)
+        remaining -= len(result["failedCases"])
+    return {
+        "targets": results,
+        "case_names_unavailable": sum(result["status"] == "unavailable" for result in results),
+        "omittedCases": sum(result["omittedCases"] for result in results),
+    }
+
+
 def main(argv):
     failures = len(argv) == 3 and argv[1] == "--failures"
-    if not failures and len(argv) != 2:
-        sys.stderr.write("usage: coverage_bep_status.py [--failures] <bep.json>\n")
+    test_cases = len(argv) == 4 and argv[1] == "--test-cases"
+    if not failures and not test_cases and len(argv) != 2:
+        sys.stderr.write(
+            "usage: coverage_bep_status.py [--failures|--test-cases] "
+            "<bep.json> [bazel-testlogs]\n")
         return 2
     try:
-        with open(argv[-1], "r", encoding="utf-8", errors="replace") as stream:
-            result = failure_summary(stream) if failures else classify(stream)
+        bep_path = argv[2] if test_cases else argv[-1]
+        with open(bep_path, "r", encoding="utf-8", errors="replace") as stream:
+            result = (allowlisted_failure_cases(stream, argv[3]) if test_cases else
+                      failure_summary(stream) if failures else classify(stream))
     except OSError:
-        result = (failure_summary([]) if failures else
+        result = (None if test_cases else failure_summary([]) if failures else
                   {"status": UNKNOWN, "skipped": [], "produced": []})
-    json.dump(result, sys.stdout)
-    sys.stdout.write("\n")
+    if result is not None:
+        json.dump(result, sys.stdout)
+        sys.stdout.write("\n")
     return 0
 
 

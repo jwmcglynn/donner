@@ -9,6 +9,7 @@ build failure, a partial stream, and a run that mixed a skip with a result.
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -40,7 +41,126 @@ def test_result_event(label):
     )
 
 
+def failed_gpu_events(label, declare_xml=True):
+    output = [{"name": "test.xml", "uri": "file:///private/runner/path"}] if declare_xml else []
+    return [
+        json.dumps({
+            "id": {"testResult": {"label": label}},
+            "testResult": {"status": "FAILED", "testActionOutput": output},
+        }),
+        json.dumps({
+            "id": {"testSummary": {"label": label}},
+            "testSummary": {"overallStatus": "FAILED"},
+        }),
+    ]
+
+
+def write_gpu_xml(root, label, xml):
+    path = root / status._GTEST_XML_BY_LABEL[label]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(xml, encoding="utf-8")
+    return path
+
+
 class ClassifyTest(unittest.TestCase):
+    def test_allowlisted_cases_emit_only_validated_identifiers(self):
+        golden = "//donner/svg/renderer/tests:renderer_geode_golden_tests"
+        baseline = "//donner/gpu/baseline:baseline_pixels_tests"
+        xml = (
+            '<testsuites failures="2" errors="0"><testsuite name="RendererGeodeGoldenTests">'
+            '<testcase classname="RendererGeodeGoldenTests" name="Lion">'
+            '<failure message="/private/runner/path">secret assertion text</failure></testcase>'
+            '<testcase classname="RendererGeodeGoldenTests" name="PatternSolid">'
+            '<error message="/private/runner/path" /></testcase>'
+            '</testsuite></testsuites>'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "bazel-testlogs"
+            write_gpu_xml(root, golden, xml)
+            write_gpu_xml(root, baseline, (
+                '<testsuites failures="1"><testcase classname="BaselinePixelsTests" '
+                'name="PixelParity"><failure message="secret" /></testcase></testsuites>'
+            ))
+            result = status.allowlisted_failure_cases(
+                failed_gpu_events(golden) + failed_gpu_events(baseline), root)
+        self.assertEqual(result["case_names_unavailable"], 0)
+        self.assertEqual([item["target"] for item in result["targets"]], [baseline, golden])
+        self.assertEqual(result["targets"][1]["failedCases"], [
+            "RendererGeodeGoldenTests.Lion", "RendererGeodeGoldenTests.PatternSolid",
+        ])
+        self.assertEqual(result["targets"][1]["failedCaseCount"], 2)
+        self.assertNotIn("private", json.dumps(result))
+        self.assertNotIn("secret", json.dumps(result))
+
+    def test_allowlisted_cases_fail_closed_on_missing_or_unsafe_xml(self):
+        golden = "//donner/svg/renderer/tests:renderer_geode_golden_tests"
+        events = failed_gpu_events(golden)
+        documents = {
+            "invalid_xml": "<testsuites failures='1'><testcase",
+            "unsafe_case_name": (
+                '<testsuites failures="1"><testcase classname="RendererGeodeGoldenTests" '
+                'name="bad&#10;/private/path"><failure>secret</failure></testcase></testsuites>'
+            ),
+            "incomplete_xml": '<testsuites failures="1"><testcase name="Lion" /></testsuites>',
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "bazel-testlogs"
+            root.mkdir()
+            missing = status.allowlisted_failure_cases(events, root)
+            self.assertEqual(missing["targets"][0]["reason"], "missing_xml")
+            self.assertEqual(missing["case_names_unavailable"], 1)
+            for expected, document in documents.items():
+                with self.subTest(expected=expected):
+                    path = write_gpu_xml(root, golden, document)
+                    result = status.allowlisted_failure_cases(events, root)["targets"][0]
+                    self.assertEqual(result["status"], "unavailable")
+                    self.assertEqual(result["reason"], expected)
+                    self.assertNotIn("private", json.dumps(result))
+                    self.assertNotIn("secret", json.dumps(result))
+            path.write_bytes(b"x" * (status._MAX_GTEST_XML_BYTES + 1))
+            self.assertEqual(status.allowlisted_failure_cases(events, root)["targets"][0]
+                             ["reason"], "oversize_xml")
+            path.write_text('<!DOCTYPE testsuites [<!ENTITY x "secret">]>'
+                            '<testsuites failures="1">&x;</testsuites>', encoding="utf-8")
+            self.assertEqual(status.allowlisted_failure_cases(events, root)["targets"][0]
+                             ["reason"], "invalid_xml")
+            path.unlink()
+            external = Path(directory) / "external.xml"
+            external.write_text('<testsuites failures="1" />', encoding="utf-8")
+            path.symlink_to(external)
+            self.assertEqual(status.allowlisted_failure_cases(events, root)["targets"][0]
+                             ["reason"], "symlink_xml")
+            self.assertEqual(status.allowlisted_failure_cases(
+                failed_gpu_events(golden, declare_xml=False), root)["targets"][0]["reason"],
+                "undeclared_xml")
+
+    def test_allowlisted_cases_are_capped_and_final_pass_suppresses_attempt(self):
+        golden = "//donner/svg/renderer/tests:renderer_geode_golden_tests"
+        labels = list(status._GTEST_XML_BY_LABEL)
+        passed_summary = json.dumps({
+            "id": {"testSummary": {"label": golden}},
+            "testSummary": {"overallStatus": "PASSED"},
+        })
+        cases = "".join(
+            '<testcase classname="RendererGeodeGoldenTests" name="Case%02d">'
+            '<failure /></testcase>' % index for index in range(23)
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "bazel-testlogs"
+            for label in labels:
+                write_gpu_xml(root, label, '<testsuites failures="23">' + cases + '</testsuites>')
+            self.assertIsNone(status.allowlisted_failure_cases(
+                failed_gpu_events(golden) + [passed_summary], root))
+            events = sum((failed_gpu_events(label) for label in labels), [])
+            result = status.allowlisted_failure_cases(events, root)
+        self.assertEqual(len(result["targets"]), 3)
+        self.assertEqual([len(item["failedCases"]) for item in result["targets"]], [20, 10, 0])
+        self.assertEqual(sum(item["failedCaseCount"] for item in result["targets"]), 69)
+        self.assertEqual(result["omittedCases"], 39)
+        self.assertEqual(result["case_names_unavailable"], 0)
+        self.assertIsNone(status.allowlisted_failure_cases(
+            failed_gpu_events("//untrusted:target"), Path("/nonexistent")))
+
     def test_failure_summary_reports_only_safe_bounded_labels(self):
         events = [
             json.dumps({
