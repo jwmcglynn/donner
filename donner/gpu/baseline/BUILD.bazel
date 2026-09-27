@@ -168,7 +168,10 @@ sh_test(
         "XDG_RUNTIME_DIR": "/tmp",
     },
     tags = ["manual"],
-    target_compatible_with = ["@platforms//os:linux"],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:aarch64",
+    ],
 )
 
 donner_cc_test(

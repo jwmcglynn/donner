@@ -128,12 +128,19 @@ it continues to fail closed until then.
 
 To preserve a capture as a Bazel test artifact, use the manual test wrapper on the ARM64 Linux
 lane. It writes the same capture beneath the test's undeclared-output artifact and takes the clean
-source revision as its only test argument:
+source revision as its only test argument. Set `VK_ICD_FILENAMES` to an ICD file readable
+on the Linux execution worker before running the command:
 
 ```sh
-bazel test //donner/gpu/baseline:capture_baselines_wgpu_reference_linux_test \
-  --test_arg="$(git rev-parse HEAD)"
+test -z "$(git status --porcelain --untracked-files=all)" &&
+  bazel test //donner/gpu/baseline:capture_baselines_wgpu_reference_linux_test \
+    --test_env=VK_ICD_FILENAMES="$VK_ICD_FILENAMES" \
+    --test_arg="$(git rev-parse HEAD)"
 ```
+
+The clean-tree check is required because the wrapper records `sourceTreeClean: clean`;
+a dirty checkout would falsely identify the captured source. If the worker uses driver libraries
+outside default loader paths, pass its required loader environment through `--test_env` too.
 
 ## Regenerating
 
