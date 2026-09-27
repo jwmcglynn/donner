@@ -24,19 +24,74 @@ function browserDiagnosticStage(line: string): string | null {
   return null;
 }
 
+function pageErrorCategory(error: Error): string {
+  const message = error.message;
+  if (/device.{0,24}lost|lost.{0,24}device/i.test(message)) {
+    return "WebGPU device lost";
+  }
+  if (error.name === "GPUValidationError" || /GPUValidationError|validation error/i.test(message)) {
+    return "WebGPU validation error";
+  }
+  if (error.name === "GPUOutOfMemoryError" || /GPUOutOfMemoryError|out of memory/i.test(message)) {
+    return "WebGPU out of memory";
+  }
+  if (/Asyncify/i.test(message)) {
+    return "Wasm Asyncify error";
+  }
+  if (error.name === "RuntimeError") {
+    return "Wasm runtime error";
+  }
+  if (error.name === "TypeError") {
+    return "JavaScript type error";
+  }
+  if (error.name === "RangeError") {
+    return "JavaScript range error";
+  }
+  if (error.name === "ReferenceError") {
+    return "JavaScript reference error";
+  }
+  return "Unclassified browser page error";
+}
+
 test("browser diagnostics cannot disclose console content", () => {
   const sensitive = "https://private.example.test/path /Users/operator/private/file";
   expect(browserDiagnosticStage(sensitive)).toBeNull();
   expect(browserDiagnosticStage(`[wasm] parsed OK ${sensitive}`)).toBe("svg_parsed");
+  expect(pageErrorCategory(new Error(`Asyncify failed at ${sensitive}`))).toBe(
+    "Wasm Asyncify error",
+  );
+  expect(pageErrorCategory(new Error(`device was lost at ${sensitive}`))).toBe(
+    "WebGPU device lost",
+  );
+  const validationError = new Error(sensitive);
+  validationError.name = "GPUValidationError";
+  expect(pageErrorCategory(validationError)).toBe("WebGPU validation error");
+  const memoryError = new Error(sensitive);
+  memoryError.name = "GPUOutOfMemoryError";
+  expect(pageErrorCategory(memoryError)).toBe("WebGPU out of memory");
+  expect(pageErrorCategory(new Error(sensitive))).toBe("Unclassified browser page error");
 });
 
 test("standalone Geode wasm selects the browser backend and paints SVG pixels", async ({ page }) => {
   test.setTimeout(90000);
-  const consoleLines: string[] = [];
+  const browserStages = new Set<string>();
+  let browserBackendSelected = false;
+  const pageErrorCategories: string[] = [];
   let pageErrorCount = 0;
-  page.on("console", (message) => consoleLines.push(message.text()));
-  page.on("pageerror", () => {
+  page.on("console", (message) => {
+    const line = message.text();
+    browserBackendSelected ||= line.includes(selectedBrowserBackend);
+    const stage = browserDiagnosticStage(line);
+    if (stage !== null) {
+      browserStages.add(stage);
+    }
+  });
+  page.on("pageerror", (error) => {
     pageErrorCount += 1;
+    const category = pageErrorCategory(error);
+    if (pageErrorCategories.length < 8 && !pageErrorCategories.includes(category)) {
+      pageErrorCategories.push(category);
+    }
   });
 
   await page.addInitScript(() => {
@@ -60,16 +115,15 @@ test("standalone Geode wasm selects the browser backend and paints SVG pixels", 
     await expect(status).toContainText("Rendered 400x400 via Geode", { timeout: 45000 });
   } catch (error) {
     // Emit fixed stage names and counts; browser messages may carry paths or URLs.
-    const stages = [
-      ...new Set(consoleLines.map(browserDiagnosticStage).filter((stage) => stage !== null)),
-    ];
     console.error(
-      `browser stages: ${stages.join(",") || "none"}; page errors: ${pageErrorCount}`,
+      `browser stages: ${
+        [...browserStages].join(",") || "none"
+      }; page errors: ${pageErrorCount}; categories: ${pageErrorCategories.join(",") || "none"}`,
     );
     throw error;
   }
   expect(
-    consoleLines.some((line) => line.includes(selectedBrowserBackend)),
+    browserBackendSelected,
     "the rendered page never selected the browser backend",
   ).toBe(true);
   expect(
@@ -102,5 +156,5 @@ test("standalone Geode wasm selects the browser backend and paints SVG pixels", 
     timeout: 10000,
   });
 
-  expect(pageErrorCount).toBe(0);
+  expect(pageErrorCount, `browser page error categories: ${pageErrorCategories.join(",")}`).toBe(0);
 });
