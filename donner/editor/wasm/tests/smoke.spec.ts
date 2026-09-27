@@ -9,6 +9,7 @@ import {
   readEditorPixelBoundsFromPng,
   readElementColorStats,
   readTextStyleGlyphStats,
+  type ScreenshotTimeoutStage,
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
 
@@ -1540,6 +1541,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
       captureAttempts: number;
       timedOutCaptures: number;
       shotFromPriorAttempt: boolean;
+      timeoutStage: ScreenshotTimeoutStage | null;
     }
     | null = null;
   try {
@@ -1583,6 +1585,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
         captureAttempts: capture.attempts,
         timedOutCaptures: screenshotTimeouts,
         shotFromPriorAttempt: capture.png.length === 0 && (lastBlueProbe?.shot.length ?? 0) > 0,
+        timeoutStage: capture.timeoutStage,
       };
       if (
         region !== null && blue !== null && state.sampleId === "basic-shapes"
@@ -1624,6 +1627,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
             captureAttempts: lastBlueProbe.captureAttempts,
             timedOutCaptures: lastBlueProbe.timedOutCaptures,
             shotFromPriorAttempt: lastBlueProbe.shotFromPriorAttempt,
+            timeoutStage: lastBlueProbe.timeoutStage,
             captureViewport,
           },
           null,

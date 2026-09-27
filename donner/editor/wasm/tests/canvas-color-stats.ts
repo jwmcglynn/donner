@@ -142,35 +142,19 @@ export function isSplashCaptureUsable(census: SplashToneCensus): boolean {
   return knownTonePixels > 0 && census.distinctColors > 1;
 }
 
-/**
- * A full-page Firefox screenshot of the Basic Shapes editor must contain the
- * exposed render-pane backdrop around its 640x400 artboard. Gecko sometimes
- * returns a nearly uniform black PNG even though its next failure screenshot
- * shows the editor. Such a PNG cannot answer any blue/teal presentation check.
- * A real blank document still has the pane backdrop and remains scoreable.
- */
-export function isEditorPageCaptureUsable(png: Buffer): boolean {
-  const image = decodePng(png);
-  let backdropPixels = 0;
-  let otherPixels = 0;
-  for (let offset = 0; offset < image.data.length; offset += image.channels) {
-    if (image.channels === 4 && image.data[offset + 3] < 200) {
-      continue;
-    }
-    if (
-      image.data[offset] === kPaneBackdropColor.red
-      && image.data[offset + 1] === kPaneBackdropColor.green
-      && image.data[offset + 2] === kPaneBackdropColor.blue
-    ) {
-      ++backdropPixels;
-    } else {
-      ++otherPixels;
-    }
-    if (backdropPixels >= 64 && otherPixels > 0) {
-      return true;
-    }
-  }
-  return false;
+/** Fixed Playwright call-log stages; no raw timeout message or path is logged. */
+export interface ScreenshotTimeoutStage {
+  takingPageScreenshot: boolean;
+  waitingForFonts: boolean;
+  fontsLoaded: boolean;
+}
+
+function screenshotTimeoutStage(message: string): ScreenshotTimeoutStage {
+  return {
+    takingPageScreenshot: message.includes("taking page screenshot"),
+    waitingForFonts: message.includes("waiting for fonts to load"),
+    fontsLoaded: message.includes("fonts loaded"),
+  };
 }
 
 export interface EditorPageCapture {
@@ -178,22 +162,26 @@ export interface EditorPageCapture {
   usable: boolean;
   attempts: number;
   timedOutCaptures: number;
+  timeoutStage: ScreenshotTimeoutStage | null;
 }
 
-/** One capture only: baseline callers retry through their outer poll; drags fail closed. */
+/** One screenshot only; returned pixels go to the existing visual oracle. */
 export async function captureEditorPage(page: Page): Promise<EditorPageCapture> {
   console.log("editor-page-capture: screenshot-start");
   try {
-    const png = await page.screenshot({ timeout: 1_000 });
-    const usable = isEditorPageCaptureUsable(png);
-    console.log(`editor-page-capture: ${usable ? "usable" : "no-editor-tones"}`);
-    return { png, usable, attempts: 1, timedOutCaptures: 0 };
+    // A Playwright action timeout can return while Firefox still processes
+    // Page.screenshot. A second attempt then queues behind the first. The
+    // caller's poll or test deadline still bounds visual acceptance.
+    const png = await page.screenshot();
+    console.log("editor-page-capture: screenshot-returned");
+    return { png, usable: true, attempts: 1, timedOutCaptures: 0, timeoutStage: null };
   } catch (error) {
     if (!(error instanceof errors.TimeoutError)) {
       throw error;
     }
-    console.log("editor-page-capture: screenshot-timeout");
-    return { png: Buffer.alloc(0), usable: false, attempts: 1, timedOutCaptures: 1 };
+    const timeoutStage = screenshotTimeoutStage(error.message);
+    console.log(`editor-page-capture: screenshot-timeout ${JSON.stringify(timeoutStage)}`);
+    return { png: Buffer.alloc(0), usable: false, attempts: 1, timedOutCaptures: 1, timeoutStage };
   }
 }
 
@@ -853,6 +841,7 @@ export async function readEditorResizePixelBounds(
   usableCapture: boolean;
   captureAttempts: number;
   timedOutCaptures: number;
+  timeoutStage: ScreenshotTimeoutStage | null;
 }> {
   const viewport = page.viewportSize();
   if (viewport === null) {
@@ -871,6 +860,7 @@ export async function readEditorResizePixelBounds(
       usableCapture: false,
       captureAttempts: capture.attempts,
       timedOutCaptures: capture.timedOutCaptures,
+      timeoutStage: capture.timeoutStage,
     };
   }
   const documentBounds = {
@@ -903,6 +893,7 @@ export async function readEditorResizePixelBounds(
     usableCapture: true,
     captureAttempts: capture.attempts,
     timedOutCaptures: capture.timedOutCaptures,
+    timeoutStage: capture.timeoutStage,
   };
 }
 
