@@ -163,6 +163,10 @@ sh_test(
     srcs = ["CaptureBaselinesWgpuReference_test.sh"],
     args = ["$(rootpath :capture_baselines_wgpu_reference_linux)"],
     data = [":capture_baselines_wgpu_reference_linux"],
+    env = {
+        "VK_ICD_FILENAMES": "/usr/share/vulkan/icd.d/lvp_icd.json",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
     tags = [
         "manual",
         "no-local",
