@@ -1,5 +1,6 @@
 import { errors, expect, type Page, test, type Worker } from "@playwright/test";
-import { writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { readFile, writeFile } from "node:fs/promises";
 import {
   captureEditorPage,
   captureSplashPresentationFrame,
@@ -22,7 +23,8 @@ import {
   type SplashToneCensus,
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
-import { cropCapturedPng } from "./png-crop";
+import { compareOverlayBitmap, type OverlayBitmapComparison } from "./overlay-bitmap-compare";
+import { cropCapturedPng, normalizeOverlayGeneration, overlayGenerationMask } from "./png-crop";
 import {
   findCanvasOwnerWorker,
   installSurfaceFrameProbe,
@@ -1755,6 +1757,36 @@ async function waitForPressReadiness(page: Page, message: string): Promise<void>
 
 test.use({ viewport: { width: 1600, height: 900 } });
 
+test("overlay normalization preserves document pixels outside the generation suffix", () => {
+  const source = coordinatePng(640, 400);
+  const original = PNG.sync.read(source);
+  const normalized = PNG.sync.read(normalizeOverlayGeneration(source));
+  expect(overlayGenerationMask).toEqual({ x: 28, y: 1, width: 27, height: 19 });
+  for (const [x, y] of [[27, 10], [55, 10], [28, 0], [28, 20], [100, 80]]) {
+    expect(rgbaAt(normalized, x, y), "pixel outside the generation suffix changed")
+      .toEqual(rgbaAt(original, x, y));
+  }
+  expect(rgbaAt(normalized, 28, 1)).toEqual([247, 248, 250, 255]);
+  expect(rgbaAt(normalized, 54, 19)).toEqual([247, 248, 250, 255]);
+  expect(() => normalizeOverlayGeneration(coordinatePng(8, 6)))
+    .toThrow(/outside the 640x400 document capture/);
+});
+
+test("native overlay pixelmatch retains a one-pixel artwork regression", async () => {
+  const golden = test.info().snapshotPath("basic-shapes-compositor-tile-overlay.png");
+  const baseline = await readFile(golden);
+  const outputDir = test.info().outputPath("overlay-native-guard");
+  expect(compareOverlayBitmap(baseline, golden, outputDir).matched).toBe(true);
+
+  const changed = PNG.sync.read(baseline);
+  const offset = (80 * changed.width + 100) * 4;
+  changed.data.set([255, 0, 0, 255], offset);
+  const comparison = compareOverlayBitmap(PNG.sync.write(changed), golden, outputDir);
+  expect(comparison.matched, comparison.detail).toBe(false);
+  expect([comparison.failureActual, comparison.failureExpected, comparison.diff].every(existsSync))
+    .toBe(true);
+});
+
 test("browser overlay control stays disabled after a normal editor frame", async ({ page }) => {
   const failures = await openEditor(page);
   const before = await page.evaluate(() => ({
@@ -1859,36 +1891,29 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     },
   );
   await waitForBrowserComposite(page);
-  // Worker completion and a browser composite can precede the texture upload
-  // that makes tile labels visible. Compare the presented document, including
-  // its tile label, without binding the golden to unrelated editor chrome.
-  const overlaySnapshot = (documentPng: Buffer) =>
-    expect(documentPng).toMatchSnapshot(
-      "basic-shapes-compositor-tile-overlay.png",
-      {
-        maxDiffPixels: 0,
-        threshold: 0.02,
-      },
-    );
+  // Worker completion can precede texture upload. Poll the shared native
+  // bitmap comparator until the actual presented document reaches its golden.
+  const overlayGolden = test.info().snapshotPath("basic-shapes-compositor-tile-overlay.png");
+  const compareDir = test.info().outputPath("overlay-native-compare");
   let compositorOverlay: Buffer | null = null;
   let lastCompositorShot: Buffer | null = null;
+  let lastComparison: OverlayBitmapComparison | null = null;
   try {
     await expect
       .poll(
         async () => {
           const shot = await captureOverlay();
           lastCompositorShot = shot;
-          const documentPng = cropCapturedPng(shot, documentClip, presentedDocumentClip);
-          try {
-            overlaySnapshot(documentPng);
-            compositorOverlay = shot;
-            return true;
-          } catch {
-            return false;
-          }
+          lastComparison = compareOverlayBitmap(
+            cropCapturedPng(shot, documentClip, presentedDocumentClip),
+            overlayGolden,
+            compareDir,
+          );
+          if (lastComparison.matched) compositorOverlay = shot;
+          return lastComparison.matched;
         },
         {
-          message: "Compositor Tile Overlay was checked but contributed no visible document pixels",
+          message: "Compositor Tile Overlay must match its document pixels",
           timeout: scaledMs(5_000),
           intervals: page.context().browser()?.browserType().name() === "firefox"
             ? [250, 400, 600]
@@ -1897,21 +1922,22 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
       )
       .toBe(true);
   } catch (error) {
-    // Keep the actual scored frame. A later Playwright failure screenshot may
-    // show the overlay after the failed poll and cannot explain that frame.
     if (lastCompositorShot !== null) {
-      try {
-        await attachEvidenceFile(
-          "compositor-tile-overlay-last-probe",
-          lastCompositorShot,
-          "image/png",
-        );
-      } catch {
-        console.warn("Could not retain compositor overlay probe");
-      }
-      overlaySnapshot(cropCapturedPng(lastCompositorShot, documentClip, presentedDocumentClip));
+      await attachEvidenceFile("compositor-tile-overlay-last-probe", lastCompositorShot, "image/png");
     }
-    throw error;
+    if (lastComparison !== null) {
+      for (const [name, path] of [
+        ["compositor-overlay-actual", lastComparison.failureActual],
+        ["compositor-overlay-expected", lastComparison.failureExpected],
+        ["compositor-overlay-diff", lastComparison.diff],
+      ]) {
+        if (existsSync(path)) await attachEvidenceFile(name, await readFile(path), "image/png");
+      }
+    }
+    throw new Error(
+      "Compositor Tile Overlay failed native pixelmatch: "
+        + (lastComparison?.detail || String(error)),
+    );
   }
   if (compositorOverlay === null) {
     throw new Error("Compositor Tile Overlay passed without a verified document capture");

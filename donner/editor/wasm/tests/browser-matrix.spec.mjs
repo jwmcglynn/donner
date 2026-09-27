@@ -247,6 +247,11 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   for (const lane of lanes) {
     assertBrowserLane(lane);
   }
+  const overlayLane = lanes.find((body) =>
+    body.includes('name = "browser_presentation_regression_test"'));
+  assert.ok(overlayLane?.includes('"overlay-bitmap-compare.ts"'));
+  assert.ok(overlayLane?.includes('"//donner/editor/tests:standalone_geode_browser_png_compare"'));
+  assert.ok(overlayLane?.includes('"DONNER_BROWSER_GOLDEN_COMPARE":'));
   // Every editor lane serves the one production browser-selected package. The standalone
   // renderer has its own page and package, verified separately below.
   const editorPackage = "//donner/editor/wasm:_wasm_web_package_for_serve";
@@ -476,6 +481,7 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   // checked here: the workflow must still call the script, and the script must
   // still carry every lane, in CI order.
   assert.match(normalizedWorkflow, /run: bash tools\/run-browser-ci\.sh/);
+  assert.match(workflow, /Setup Bazel for native browser comparison/);
 
   const browserCi = readFileSync(
     path.join(repositoryRoot, "tools/run-browser-ci.sh"),
@@ -484,6 +490,8 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
   const normalizedBrowserCi = browserCi
     .replace(/\\\s*\n\s*/g, " ")
     .replace(/\s+/g, " ");
+  assert.match(normalizedBrowserCi, /standalone_geode_browser_png_compare/);
+  assert.match(normalizedBrowserCi, /export DONNER_BROWSER_GOLDEN_COMPARE/);
   const laneCommands = [
     "run_lane \"chromium-default\" bash donner/editor/wasm/tests/run_tests.sh --headed",
     "run_lane \"firefox-geode-resize\" npm --prefix donner/editor/wasm/tests"
