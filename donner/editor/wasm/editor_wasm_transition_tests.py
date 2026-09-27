@@ -33,10 +33,10 @@ text_full=True
           is the whole-app-in-worker architecture. Without them ``main()``
           runs on the browser main thread and the app draws through the page,
           which is the CSS-seam architecture this design deletes.
-        - ``memory_growth=0`` with ``initial_memory == maximum_memory`` is the
-          fixed linear-memory invariant. Growth is fatal on all three engines,
-          not slow, so a build that can grow is a build that can trap an
-          unrelated thread.
+        - ``memory_growth=0`` with a single ``initial_memory`` setting and no
+          ``maximum_memory`` override is the fixed linear-memory invariant.
+          Growth is fatal on all three engines, not slow, so a build that can
+          grow is a build that can trap an unrelated thread.
         - ``pthread_pool_size=2`` pre-warms the app pthread and
           ``AsyncRenderer``'s raster ``std::thread``.
         """
@@ -51,7 +51,7 @@ offscreencanvases_to_pthread=#canvas
 offscreencanvas_support=1
 memory_growth=0
 initial_memory=402653184
-maximum_memory=402653184
+maximum_memory_flags=0
 memory_is_fixed=True
 pthread_pool_size=2
 """
