@@ -175,6 +175,19 @@ class TestOnlyOracleTest(unittest.TestCase):
         self.assertEqual(categories(findings), ["rust-fixture-containment"])
         self.assertIn("tests/rust_ffi", findings[0].detail)
 
+    def test_configured_audit_metadata_may_name_forbidden_oracle_packages(self):
+        files = {
+            "tools/rust_boundary/dependency_audit.bzl": (
+                "configured_dependency_audit_test(\n"
+                "    forbidden_packages = [\n"
+                '        "@tiny-skia-cpp//tests/rust_ffi",\n'
+                '        "@wgpu_native_linux_aarch64//",\n'
+                "    ],\n"
+                ")\n"
+            )
+        }
+        self.assertEqual(verifier.check(files, SCOPES), [])
+
     def test_reference_to_the_derived_oracle_libraries_is_flagged(self):
         files = {
             "donner/svg/renderer/BUILD.bazel": (

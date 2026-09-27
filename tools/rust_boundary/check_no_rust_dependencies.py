@@ -150,6 +150,7 @@ COMPILE_ATTRIBUTES = frozenset(
     }
 )
 DATA_ATTRIBUTES = frozenset({"data", "testdata", "resources", "args", "tags"})
+AUDIT_METADATA_ATTRIBUTES = frozenset({"forbidden", "forbidden_packages", "required"})
 
 ATTRIBUTE_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 VISIBILITY_ASSIGN_RE = re.compile(r"(?:default_)?visibility\s*=\s*")
@@ -496,7 +497,12 @@ def fixture_containment_findings(path: str, text: str, scopes: RustScopes) -> li
     """
     if scopes.is_test_only(path) or scopes.is_test_only_consumer(path):
         return visibility_findings(path, text) + reexport_findings(path, text)
-    fixture_tokens = tokens_in(text, RUST_FIXTURE_TOKENS)
+    fixture_tokens = sorted({
+        token
+        for line, attribute in zip(text.splitlines(), attribute_of_each_line(text))
+        if attribute not in AUDIT_METADATA_ATTRIBUTES
+        for token in tokens_in(line, RUST_FIXTURE_TOKENS)
+    })
     if not fixture_tokens:
         return []
     return [
@@ -775,7 +781,7 @@ def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> lis
     attributes = attribute_of_each_line(text)
     for line, attribute in zip(active.splitlines(), attributes):
         if tokens_in(line, RUST_BUILT_ARCHIVE_TOKENS) and \
-           attribute not in {"forbidden", "required", "tags"}:
+           attribute not in AUDIT_METADATA_ATTRIBUTES | {"tags"}:
             return _archive_finding(path, "unexpected Rust-built archive or reference edge")
     return []
 
