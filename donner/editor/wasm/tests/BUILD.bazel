@@ -70,11 +70,13 @@ playwright_bin.playwright_test(
     args = [
         "test",
         "$(rootpath :browser-presentation-regression.spec.ts)",
+        "$(rootpath :browser-surface-recovery.spec.ts)",
         "--config=$(rootpath :playwright.bazel.config.js)",
     ],
     copy_data_to_bin = False,
     data = [
         "browser-presentation-regression.spec.ts",
+        "browser-surface-recovery.spec.ts",
         "canvas-color-stats.ts",
         "gesture-streams.ts",
         "package.json",

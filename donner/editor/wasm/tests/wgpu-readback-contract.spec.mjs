@@ -394,7 +394,7 @@ test("a GPU wait failure publishes worker stats even though no frame completed",
     "the separate failure publish must apply only when no frame completed",
   );
   const earlyReturn = poll[0].match(
-    /if \(!IsCurrentRenderResult\(resultOpt, app\)\) \{\s*rejectPixelCaptureResult\(resultOpt\);\s*return;\s*\}/,
+    /if \(!IsCurrentRenderResult\(resultOpt, app\)\) \{\s*rejectRenderResult\(resultOpt\);\s*return;\s*\}/,
   );
   assert.ok(earlyReturn, "the poll must return when no current frame completed");
   assert.ok(

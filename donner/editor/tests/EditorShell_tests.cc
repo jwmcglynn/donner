@@ -3707,7 +3707,9 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
   const auto settleFrame = [&](std::string_view stage, std::uint64_t minimumVersion) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     for (int frame = 0; frame < 20 && std::chrono::steady_clock::now() < deadline; ++frame) {
-      (void)captureFrame();
+      window.beginFrame();
+      shell.runFrame();
+      window.endFrame();
       if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
         break;
       }
@@ -3716,25 +3718,30 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
           EditorShellTestAccess::DisplayedDocVersion(shell) ==
               app.document().currentFrameVersion() &&
           !status.tiles.empty()) {
-        return;
+        return true;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     const LayerInspectorStatusReadback status = shell.layerInspectorStatusForReadback();
-    FAIL() << "The splash did not produce a stable cached frame at " << stage
-           << ": minimumVersion=" << minimumVersion
-           << " current=" << app.document().currentFrameVersion()
-           << " displayed=" << EditorShellTestAccess::DisplayedDocVersion(shell)
-           << " tiles=" << status.tiles.size()
-           << " rendererBusy=" << EditorShellTestAccess::RendererBusy(shell)
-           << " pendingMutations=" << app.document().hasPendingMutations();
+    ADD_FAILURE() << "The splash did not produce a stable cached frame at " << stage
+                  << ": minimumVersion=" << minimumVersion
+                  << " current=" << app.document().currentFrameVersion()
+                  << " displayed=" << EditorShellTestAccess::DisplayedDocVersion(shell)
+                  << " tiles=" << status.tiles.size()
+                  << " rendererBusy=" << EditorShellTestAccess::RendererBusy(shell)
+                  << " pendingMutations=" << app.document().hasPendingMutations()
+                  << " renderInFlight="
+                  << shell.asyncRendererForReplay().hasRenderInFlightForTesting()
+                  << " heldResultPolls="
+                  << shell.asyncRendererForReplay().replayResultHoldPollCountForTesting();
+    return false;
   };
-  settleFrame("initial", app.document().currentFrameVersion());
+  ASSERT_TRUE(settleFrame("initial", app.document().currentFrameVersion()));
   app.setSelection(*shine);
   // The selection-only cache request is committed after a brief viewport-settle delay. Let it
   // become eligible before starting the held-pointer frame.
   std::this_thread::sleep_for(std::chrono::milliseconds(150));
-  settleFrame("selected", app.document().currentFrameVersion());
+  ASSERT_TRUE(settleFrame("selected", app.document().currentFrameVersion()));
 
   const ViewportState viewport = shell.viewportForReadback();
   const EditorRasterViewport visibleRaster = viewport.rasterViewport();
@@ -3791,7 +3798,7 @@ TEST(EditorShellTest, PartlyOffscreenSplashShineEllipseFirstHeldMoveMatchesSettl
       .leftMouseReleased = true,
   });
   (void)captureFrame();
-  settleFrame("released", heldDragVersion);
+  ASSERT_TRUE(settleFrame("released", heldDragVersion));
   const std::optional<svg::SVGElement> movedShine =
       app.document().document().querySelector("#Background_shine ellipse");
   ASSERT_TRUE(movedShine.has_value());

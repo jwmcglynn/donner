@@ -361,6 +361,14 @@ export async function installSurfaceFrameProbe(page: Page): Promise<number> {
   return probed.length;
 }
 
+/** Return the one worker that acquired the editor's canvas while the probe watched. */
+export async function findCanvasOwnerWorker(page: Page): Promise<Worker | null> {
+  const workers = probedWorkers.get(page) ?? [];
+  const states = await evaluateInWorkers(workers, readInWorker);
+  const owners = workers.filter((_, index) => (states[index]?.frames ?? 0) > 0);
+  return owners.length === 1 ? owners[0] : null;
+}
+
 /**
  * Prove the probe reports the ordering it watches for, in the engine under
  * test: two writes inside the acquiring task (one from its microtask) count as
