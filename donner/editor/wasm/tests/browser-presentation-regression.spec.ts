@@ -1,5 +1,6 @@
 import { errors, expect, type Page, test, type Worker } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
+import { PNG } from "pngjs";
 import {
   captureEditorPage,
   captureSplashPresentationFrame,
@@ -1753,7 +1754,86 @@ async function waitForPressReadiness(page: Page, message: string): Promise<void>
   }
 }
 
+function coordinatePng(width: number, height: number): Buffer {
+  const image = new PNG({ width, height });
+  for (let y = 0; y < height; ++y) {
+    for (let x = 0; x < width; ++x) {
+      const offset = (y * width + x) * 4;
+      image.data[offset] = x;
+      image.data[offset + 1] = y;
+      image.data[offset + 2] = x + y;
+      image.data[offset + 3] = 255;
+    }
+  }
+  return PNG.sync.write(image);
+}
+
+function rgbaAt(image: PNG, x: number, y: number): number[] {
+  const offset = (y * image.width + x) * 4;
+  return Array.from(image.data.subarray(offset, offset + 4));
+}
+
 test.use({ viewport: { width: 1600, height: 900 } });
+
+test("PNG crop maps a nonzero CSS origin at device pixel ratio two", () => {
+  const cropped = PNG.sync.read(
+    cropCapturedPng(
+      coordinatePng(8, 6),
+      { x: 100, y: 50, width: 4, height: 3 },
+      { x: 101.5, y: 50.5, width: 2, height: 1.5 },
+    ),
+  );
+
+  expect({ width: cropped.width, height: cropped.height }).toEqual({
+    width: 4,
+    height: 3,
+  });
+  expect(rgbaAt(cropped, 0, 0)).toEqual([3, 1, 4, 255]);
+  expect(rgbaAt(cropped, 3, 2)).toEqual([6, 3, 9, 255]);
+});
+
+test("PNG crop rejects invalid and out-of-capture CSS bounds", () => {
+  const source = coordinatePng(8, 6);
+  const capture = { x: 100, y: 50, width: 4, height: 3 };
+  const cases: {
+    name: string;
+    capture: CssRegion;
+    crop: CssRegion;
+    error: RegExp;
+  }[] = [
+    {
+      name: "non-finite crop coordinate",
+      capture,
+      crop: { x: Number.NaN, y: 50, width: 1, height: 1 },
+      error: /invalid CSS bounds/,
+    },
+    {
+      name: "zero capture width",
+      capture: { ...capture, width: 0 },
+      crop: { x: 100, y: 50, width: 1, height: 1 },
+      error: /invalid CSS bounds/,
+    },
+    {
+      name: "crop begins before capture",
+      capture,
+      crop: { x: 99.5, y: 50, width: 1, height: 1 },
+      error: /outside the captured viewport/,
+    },
+    {
+      name: "crop extends beyond capture",
+      capture,
+      crop: { x: 103.5, y: 52.5, width: 1, height: 1 },
+      error: /outside the captured viewport/,
+    },
+  ];
+
+  for (const testCase of cases) {
+    expect(
+      () => cropCapturedPng(source, testCase.capture, testCase.crop),
+      testCase.name,
+    ).toThrow(testCase.error);
+  }
+});
 
 test("browser overlay control stays disabled after a normal editor frame", async ({ page }) => {
   const failures = await openEditor(page);

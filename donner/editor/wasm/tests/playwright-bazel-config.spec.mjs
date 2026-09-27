@@ -139,6 +139,53 @@ test("Boot config inherits the crash directory and budgets a slow cold launch", 
   assert.equal(bootConfig.timeout, 60000);
 });
 
+test("Firefox compatibility Bazel config preserves the remote server and selected project", (t) => {
+  const { temporary, environment, baseConfig } = fixture(t);
+  const bazelConfig = evaluateConfig(
+    "playwright.bazel.config.js",
+    baseConfig,
+    environment,
+    temporary,
+  );
+  const firefoxProject = {
+    name: "firefox-geode-resize",
+    grep: [/Firefox visual contract/],
+    use: {
+      browserName: "firefox",
+      launchOptions: { firefoxUserPrefs: { "dom.webgpu.enabled": true } },
+    },
+  };
+  const compatibilityConfig = {
+    timeout: 90000,
+    projects: [
+      firefoxProject,
+      { name: "webkit-geode-carousel", use: { browserName: "webkit" } },
+    ],
+  };
+  const config = evaluateConfig(
+    "playwright.compatibility-firefox.bazel.config.js",
+    {
+      "./playwright.bazel.config.js": bazelConfig,
+      "./playwright.compatibility.config.js": compatibilityConfig,
+    },
+    environment,
+    temporary,
+  );
+
+  assert.deepEqual(config.webServer, bazelConfig.webServer);
+  assert.equal(config.globalTimeout, 840000);
+  assert.equal(config.projects.length, 1);
+  assert.equal(config.projects[0].name, "firefox-geode-resize");
+  assert.equal(config.projects[0].use.browserName, "firefox");
+  assert.equal(config.projects[0].use.headless, false);
+  assert.equal(config.projects[0].use.launchOptions.timeout, 15000);
+  assert.equal(
+    config.projects[0].use.launchOptions.firefoxUserPrefs["dom.webgpu.enabled"],
+    true,
+  );
+  assert.equal(config.projects[0].grep[0].source, "Firefox visual contract");
+});
+
 test("Composited Chromium Bazel config keeps headed Metal and enables its specs", (t) => {
   const { temporary, environment, baseConfig } = fixture(t);
   baseConfig.testIgnore = [/composited/];

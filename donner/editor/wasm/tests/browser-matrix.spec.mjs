@@ -136,6 +136,24 @@ function assertCompositedLane({ lane, tags, specFiles }, browser) {
   );
 }
 
+function assertFirefoxPresentationLane({ lane, tags, specFiles }) {
+  assert.deepEqual(
+    tags,
+    ["no-local"],
+    "Firefox presentation regressions must remain remote-only",
+  );
+  assert.deepEqual(specFiles, [
+    "smoke.spec.ts",
+    "browser-presentation-regression.spec.ts",
+  ]);
+  assert.match(
+    lane,
+    /--config=\$\(rootpath :playwright\.compatibility-firefox\.bazel\.config\.js\)/,
+  );
+  assert.ok(lane.includes('"@playwright//:firefox"'));
+  assert.match(lane, /"DONNER_WASM_REQUIRE_WEBGPU": "1"/);
+}
+
 function assertFontReferenceLane({ lane, tags, specFiles }) {
   assert.deepEqual(
     tags.sort(),
@@ -174,6 +192,8 @@ function assertBrowserLane(lane) {
   const { laneName, performanceLane, tags } = contract;
   if (performanceLane) {
     assertPerformanceLane(contract);
+  } else if (laneName === "browser_presentation_regression_firefox_test") {
+    assertFirefoxPresentationLane(contract);
   } else if (laneName === "firefox_composited_invariants_test") {
     assertCompositedLane(contract, "firefox");
   } else if (laneName === "chromium_composited_invariants_test") {
@@ -222,6 +242,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   assert.match(buildFile, /playwright_bin\.playwright_test\(/);
   assert.match(buildFile, /name = "chromium_remote_smoke"/);
   assert.match(buildFile, /name = "browser_presentation_regression_test"/);
+  assert.match(buildFile, /name = "browser_presentation_regression_firefox_test"/);
   // Every Bazel-owned browser lane, checked one at a time rather than against
   // the file as a whole: a contract satisfied by some other lane in the same
   // file is not a contract. Each lane names a spec, and the spec's own local
@@ -233,6 +254,7 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
     lanes.map((lane) => /name = "([^"]+)"/.exec(lane)?.[1]).sort(),
     [
       "boot_presentation_test",
+      "browser_presentation_regression_firefox_test",
       "browser_presentation_regression_test",
       "browser_responsiveness_perf_test",
       "catalog_font_loading_test",
