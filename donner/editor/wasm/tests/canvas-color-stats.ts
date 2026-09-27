@@ -178,83 +178,23 @@ export interface EditorPageCapture {
   usable: boolean;
   attempts: number;
   timedOutCaptures: number;
-  frameWaitFallbacks: number;
 }
 
-export interface EditorPageCaptureOptions {
-  /** Initial-load probes may retake after a timer; per-drag frame assertions must not. */
-  allowTimerFallback?: boolean;
-}
-
-/** Retake only timed-out or editor-free screenshots, within the caller's poll window. */
-export async function captureEditorPage(
-  page: Page,
-  options: EditorPageCaptureOptions = {},
-): Promise<EditorPageCapture> {
-  const maxAttempts = 4;
-  // Four exhausted captures and their frame handoffs must fit the unscaled five-second poll.
-  const screenshotTimeoutMs = 1_000;
-  let png = Buffer.alloc(0);
-  let timedOutCaptures = 0;
-  let frameWaitFallbacks = 0;
-  for (let attempt = 1; attempt <= maxAttempts; ++attempt) {
-    if (attempt > 1) {
-      // The editor's demand-driven loop may be parked after its last present.
-      // Request one app frame, but a backgrounded Gecko page may never deliver
-      // two rAF callbacks. Bound that handoff inside the page before retrying.
-      console.log(`editor-page-capture retry ${attempt}: frame-wait-start`);
-      const frameWait = await page.evaluate(() => {
-        (window as Window & { __donnerEditorFrameRequested?: boolean })
-          .__donnerEditorFrameRequested = true;
-        return new Promise<"frame" | "timer">((resolve) => {
-          let settled = false;
-          const finish = (outcome: "frame" | "timer") => {
-            if (settled) {
-              return;
-            }
-            settled = true;
-            clearTimeout(timer);
-            resolve(outcome);
-          };
-          const timer = setTimeout(() => finish("timer"), 150);
-          requestAnimationFrame(() => requestAnimationFrame(() => finish("frame")));
-        });
-      });
-      if (frameWait === "timer") {
-        ++frameWaitFallbacks;
-        if (!options.allowTimerFallback) {
-          console.log(`editor-page-capture retry ${attempt}: unconfirmed-frame`);
-          return {
-            png,
-            usable: false,
-            attempts: attempt - 1,
-            timedOutCaptures,
-            frameWaitFallbacks,
-          };
-        }
-      }
-      console.log(`editor-page-capture retry ${attempt}: frame-wait-${frameWait}`);
+/** One capture only: baseline callers retry through their outer poll; drags fail closed. */
+export async function captureEditorPage(page: Page): Promise<EditorPageCapture> {
+  console.log("editor-page-capture: screenshot-start");
+  try {
+    const png = await page.screenshot({ timeout: 1_000 });
+    const usable = isEditorPageCaptureUsable(png);
+    console.log(`editor-page-capture: ${usable ? "usable" : "no-editor-tones"}`);
+    return { png, usable, attempts: 1, timedOutCaptures: 0 };
+  } catch (error) {
+    if (!(error instanceof errors.TimeoutError)) {
+      throw error;
     }
-    console.log(`editor-page-capture attempt ${attempt}: screenshot-start`);
-    try {
-      png = await page.screenshot({ timeout: screenshotTimeoutMs });
-    } catch (error) {
-      if (!(error instanceof errors.TimeoutError)) {
-        throw error;
-      }
-      ++timedOutCaptures;
-      console.log(`editor-page-capture attempt ${attempt}: screenshot-timeout`);
-      continue;
-    }
-    if (isEditorPageCaptureUsable(png)) {
-      if (attempt > 1) {
-        console.log(`editor-page-capture attempt ${attempt}: usable`);
-      }
-      return { png, usable: true, attempts: attempt, timedOutCaptures, frameWaitFallbacks };
-    }
-    console.log(`editor-page-capture attempt ${attempt}: no-editor-tones`);
+    console.log("editor-page-capture: screenshot-timeout");
+    return { png: Buffer.alloc(0), usable: false, attempts: 1, timedOutCaptures: 1 };
   }
-  return { png, usable: false, attempts: maxAttempts, timedOutCaptures, frameWaitFallbacks };
 }
 
 /** One capture, scored for both presentation coverage and letter geometry. */
@@ -913,7 +853,6 @@ export async function readEditorResizePixelBounds(
   usableCapture: boolean;
   captureAttempts: number;
   timedOutCaptures: number;
-  frameWaitFallbacks: number;
 }> {
   const viewport = page.viewportSize();
   if (viewport === null) {
@@ -932,7 +871,6 @@ export async function readEditorResizePixelBounds(
       usableCapture: false,
       captureAttempts: capture.attempts,
       timedOutCaptures: capture.timedOutCaptures,
-      frameWaitFallbacks: capture.frameWaitFallbacks,
     };
   }
   const documentBounds = {
@@ -965,7 +903,6 @@ export async function readEditorResizePixelBounds(
     usableCapture: true,
     captureAttempts: capture.attempts,
     timedOutCaptures: capture.timedOutCaptures,
-    frameWaitFallbacks: capture.frameWaitFallbacks,
   };
 }
 

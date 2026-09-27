@@ -1529,6 +1529,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   type ProbeRegion = { x: number; y: number; width: number; height: number };
   let probeRegion: ProbeRegion | null = null;
   let blueCss: PixelBounds | null = null;
+  let screenshotTimeouts = 0;
   let lastBlueProbe:
     | {
       shot: Buffer;
@@ -1538,7 +1539,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
       captureUsable: boolean;
       captureAttempts: number;
       timedOutCaptures: number;
-      frameWaitFallbacks: number;
+      shotFromPriorAttempt: boolean;
     }
     | null = null;
   try {
@@ -1563,7 +1564,8 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
           viewport.paneY + viewport.paneHeight,
         ) - Math.max(viewport.documentY, viewport.paneY),
       };
-      const capture = await captureEditorPage(page, { allowTimerFallback: true });
+      const capture = await captureEditorPage(page);
+      screenshotTimeouts += capture.timedOutCaptures;
       const blue = capture.usable && region !== null && region.width > 0 && region.height > 0
         ? readEditorPixelBoundsFromPng(capture.png, "basic-blue", captureViewport, {
           minX: region.x,
@@ -1573,14 +1575,14 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
         })
         : null;
       lastBlueProbe = {
-        shot: capture.png,
+        shot: capture.png.length > 0 ? capture.png : lastBlueProbe?.shot ?? Buffer.alloc(0),
         state,
         region,
         bluePixels: blue?.pixels ?? 0,
         captureUsable: capture.usable,
         captureAttempts: capture.attempts,
-        timedOutCaptures: capture.timedOutCaptures,
-        frameWaitFallbacks: capture.frameWaitFallbacks,
+        timedOutCaptures: screenshotTimeouts,
+        shotFromPriorAttempt: capture.png.length === 0 && (lastBlueProbe?.shot.length ?? 0) > 0,
       };
       if (
         region !== null && blue !== null && state.sampleId === "basic-shapes"
@@ -1621,7 +1623,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
             captureUsable: lastBlueProbe.captureUsable,
             captureAttempts: lastBlueProbe.captureAttempts,
             timedOutCaptures: lastBlueProbe.timedOutCaptures,
-            frameWaitFallbacks: lastBlueProbe.frameWaitFallbacks,
+            shotFromPriorAttempt: lastBlueProbe.shotFromPriorAttempt,
             captureViewport,
           },
           null,

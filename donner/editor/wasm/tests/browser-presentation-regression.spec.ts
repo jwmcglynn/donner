@@ -511,113 +511,64 @@ async function captureSplashDragFrame(
   );
 }
 
-test("editor page capture bounds screenshot timeouts and a stalled frame wait", async ({ page }) => {
+test("editor page capture leaves retries to the outer poll and keeps drags one-shot", async ({ page }) => {
   await page.setViewportSize({ width: 64, height: 64 });
   await page.setContent(
     `<body style="margin:0;background:rgb(44,47,56)"><div style="width:8px;height:8px;background:white"></div></body>`,
   );
   const visible = await page.screenshot();
   expect(isEditorPageCaptureUsable(visible)).toBe(true);
+  await page.setContent(`<body style="margin:0;background:rgb(12,15,20)"></body>`);
+  const black = await page.screenshot();
+  expect(isEditorPageCaptureUsable(black)).toBe(false);
 
+  // The baseline poll owns the retry schedule: black, timeout, then visible.
   let shots = 0;
-  let wakes = 0;
-  const recoveringPage = {
-    screenshot: async () => {
-      if (++shots === 1) {
-        throw new errors.TimeoutError("synthetic screenshot timeout");
-      }
-      return visible;
-    },
-    evaluate: async () => {
-      ++wakes;
-      return "frame";
-    },
-  } as unknown as Page;
-  const recovered = await captureEditorPage(recoveringPage);
-  expect([
-    recovered.usable,
-    recovered.attempts,
-    recovered.timedOutCaptures,
-    recovered.frameWaitFallbacks,
-    shots,
-    wakes,
-  ]).toEqual([
-    true,
-    2,
-    1,
-    0,
-    2,
-    1,
-  ]);
-
-  shots = 0;
-  wakes = 0;
-  const timedOutPage = {
+  const baselinePage = {
     screenshot: async () => {
       ++shots;
-      throw new errors.TimeoutError("synthetic screenshot timeout");
-    },
-    evaluate: async () => {
-      ++wakes;
-      return "frame";
-    },
-  } as unknown as Page;
-  const exhausted = await captureEditorPage(timedOutPage);
-  expect([
-    exhausted.usable,
-    exhausted.attempts,
-    exhausted.timedOutCaptures,
-    exhausted.frameWaitFallbacks,
-    shots,
-    wakes,
-  ]).toEqual([
-    false,
-    4,
-    4,
-    0,
-    4,
-    3,
-  ]);
-  expect(exhausted.png).toHaveLength(0);
-
-  // Reproduce a backgrounded page that never delivers rAF. A per-drag capture
-  // must reject that unconfirmed frame; only an initial-load poll may retake.
-  await page.evaluate(() => {
-    window.requestAnimationFrame = () => 0;
-  });
-  shots = 0;
-  const stalledFramePage = {
-    screenshot: async () => {
-      if (++shots === 1) {
+      if (shots === 1) {
+        return black;
+      }
+      if (shots === 2) {
         throw new errors.TimeoutError("synthetic screenshot timeout");
       }
       return visible;
     },
-    evaluate: page.evaluate.bind(page),
   } as unknown as Page;
-  const startedAt = performance.now();
-  const unconfirmedDragFrame = await captureEditorPage(stalledFramePage);
-  expect([
-    unconfirmedDragFrame.usable,
-    unconfirmedDragFrame.attempts,
-    unconfirmedDragFrame.timedOutCaptures,
-    unconfirmedDragFrame.frameWaitFallbacks,
-    shots,
-  ]).toEqual([false, 1, 1, 1, 1]);
-  expect(unconfirmedDragFrame.png).toHaveLength(0);
+  await expect.poll(async () => {
+    const capture = await captureEditorPage(baselinePage);
+    return capture.usable ? capture.png.length : 0;
+  }, { intervals: [10], timeout: 1_000 }).toBeGreaterThan(0);
+  expect(shots).toBe(3);
 
-  shots = 0;
-  const initialLoadRetake = await captureEditorPage(stalledFramePage, {
-    allowTimerFallback: true,
-  });
-  expect([
-    initialLoadRetake.usable,
-    initialLoadRetake.attempts,
-    initialLoadRetake.timedOutCaptures,
-    initialLoadRetake.frameWaitFallbacks,
-    shots,
-  ]).toEqual([true, 2, 1, 1, 2]);
-  expect(performance.now() - startedAt).toBeLessThan(1_000);
+  let dragShots = 0;
+  const oneShotDragPage = {
+    viewportSize: () => ({ width: 64, height: 64 }),
+    screenshot: async () => {
+      ++dragShots;
+      return black;
+    },
+  } as unknown as Page;
+  const dragCapture = await readEditorResizePixelBounds(
+    oneShotDragPage,
+    { x: 0, y: 0, width: 64, height: 64 },
+  );
+  expect([dragCapture.usableCapture, dragCapture.blue, dragCapture.teal, dragShots]).toEqual([
+    false,
+    null,
+    null,
+    1,
+  ]);
+  expect(dragCapture.png).toEqual(black);
+
+  const timedOut = await captureEditorPage({
+    screenshot: async () => {
+      throw new errors.TimeoutError("synthetic screenshot timeout");
+    },
+  } as unknown as Page);
+  expect([timedOut.usable, timedOut.attempts, timedOut.timedOutCaptures]).toEqual([false, 1, 1]);
+  expect(timedOut.png).toHaveLength(0);
 
   await expect(captureEditorPage({
     screenshot: async () => {
@@ -991,14 +942,13 @@ async function captureBasicShapesProbePage(
     const png = captureClip === null
       ? await page.screenshot()
       : await page.screenshot({ clip: captureClip });
-    return { png, usable: true, attempts: 1, timedOutCaptures: 0, frameWaitFallbacks: 0 };
+    return { png, usable: true, attempts: 1, timedOutCaptures: 0 };
   }
   console.log("open-basic-shapes-probe: capture-start");
-  const capture = await captureEditorPage(page, { allowTimerFallback: true });
+  const capture = await captureEditorPage(page);
   console.log(
     `open-basic-shapes-probe: capture-end attempts=${capture.attempts} `
-      + `screenshotTimeouts=${capture.timedOutCaptures} `
-      + `frameWaitFallbacks=${capture.frameWaitFallbacks}`,
+      + `screenshotTimeouts=${capture.timedOutCaptures}`,
   );
   return capture;
 }
@@ -1092,6 +1042,7 @@ async function openBasicShapes(page: Page): Promise<{
   let captureClip: CssRegion | null = null;
   let baselinePng: Buffer | null = null;
   let blueRect: PixelBounds | null = null;
+  let screenshotTimeouts = 0;
   let lastProbe: {
     shot: Buffer;
     state: object;
@@ -1101,7 +1052,7 @@ async function openBasicShapes(page: Page): Promise<{
     captureUsable: boolean;
     captureAttempts: number;
     timedOutCaptures: number;
-    frameWaitFallbacks: number;
+    shotFromPriorAttempt: boolean;
   } | null = null;
   try {
     await expect
@@ -1111,7 +1062,10 @@ async function openBasicShapes(page: Page): Promise<{
           const { documentClip: currentDocumentClip, captureClip: currentCaptureClip } =
             basicShapesProbeClips(state.viewport, firefox, pageViewport);
           const capture = await captureBasicShapesProbePage(page, firefox, currentCaptureClip);
-          const shot = capture.png;
+          screenshotTimeouts += capture.timedOutCaptures;
+          const shotFromPriorAttempt = capture.png.length === 0
+            && (lastProbe?.shot.length ?? 0) > 0;
+          const shot = capture.png.length > 0 ? capture.png : lastProbe?.shot ?? Buffer.alloc(0);
           const bounds = basicShapesBlueBounds(capture, currentDocumentClip, currentCaptureClip);
           lastBluePixels = bounds?.pixels ?? 0;
           lastProbe = {
@@ -1122,8 +1076,8 @@ async function openBasicShapes(page: Page): Promise<{
             bluePixels: lastBluePixels,
             captureUsable: capture.usable,
             captureAttempts: capture.attempts,
-            timedOutCaptures: capture.timedOutCaptures,
-            frameWaitFallbacks: capture.frameWaitFallbacks,
+            timedOutCaptures: screenshotTimeouts,
+            shotFromPriorAttempt,
           };
           if (
             bounds !== null && state.sampleId === "basic-shapes"
@@ -1182,7 +1136,7 @@ async function openBasicShapes(page: Page): Promise<{
               captureUsable: lastProbe.captureUsable,
               captureAttempts: lastProbe.captureAttempts,
               timedOutCaptures: lastProbe.timedOutCaptures,
-              frameWaitFallbacks: lastProbe.frameWaitFallbacks,
+              shotFromPriorAttempt: lastProbe.shotFromPriorAttempt,
               pageViewport,
               beforeSampleResults,
             },
@@ -1712,8 +1666,7 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
       throw new Error(
         `drag step ${step}: Firefox returned no editor page after `
           + `${geometry.captureAttempts} full-page captures `
-          + `(${geometry.timedOutCaptures} timed out, `
-          + `${geometry.frameWaitFallbacks} frame waits used the timer); `
+          + `(${geometry.timedOutCaptures} timed out); `
           + `state=${JSON.stringify(state)}`,
       );
     }
