@@ -9,23 +9,63 @@
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
-#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
-#if defined(__APPLE__)
+#if defined(DONNER_GEODE_WGPU_REFERENCE)
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#else
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
+#endif
+#if defined(__APPLE__) && !defined(DONNER_GEODE_WGPU_REFERENCE)
 #include "donner/gpu/metal/MetalDevice.h"
 #endif
-#if defined(__linux__)
+#if defined(__linux__) && !defined(DONNER_GEODE_WGPU_REFERENCE)
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #endif
 
 namespace donner::gpu::baseline {
 namespace {
 
+std::string HostArchitecture() {
+#if defined(__aarch64__) || defined(_M_ARM64)
+  return "aarch64";
+#elif defined(__x86_64__) || defined(_M_X64)
+  return "x86_64";
+#else
+  return "unknown";
+#endif
+}
+
 CaptureEnvironment DescribeAdapter(const geode::GeodeDevice& device) {
   CaptureEnvironment environment;
   environment.adapterType = "Unknown";
-#if defined(__APPLE__)
+  environment.hostArchitecture = HostArchitecture();
+#if defined(DONNER_GEODE_WGPU_REFERENCE)
+  const wgpu::Adapter& adapter = device.physicalDeviceOwner()->root().adapter();
+  WGPUAdapterInfo info = {};
+  if (!adapter || wgpuAdapterGetInfo(adapter, &info) != WGPUStatus_Success) {
+    return environment;
+  }
+  const auto copy = [](WGPUStringView text) {
+    return std::string(text.data == nullptr ? "" : text.data,
+                       text.data == nullptr ? 0 : text.length);
+  };
+  environment.adapterName = copy(info.vendor);
+  if (!environment.adapterName.empty()) {
+    environment.adapterName += ' ';
+  }
+  environment.adapterName += copy(info.device);
+  if (info.backendType == WGPUBackendType_Vulkan) {
+    environment.adapterBackend = "Vulkan";
+  }
+  switch (info.adapterType) {
+    case WGPUAdapterType_DiscreteGPU: environment.adapterType = "DiscreteGPU"; break;
+    case WGPUAdapterType_IntegratedGPU: environment.adapterType = "IntegratedGPU"; break;
+    case WGPUAdapterType_CPU: environment.adapterType = "CPU"; break;
+    default: break;
+  }
+  wgpuAdapterInfoFreeMembers(info);
+#elif defined(__APPLE__)
   environment.adapterBackend = "Metal";
   environment.adapterName =
       static_cast<const gpu::metal::MetalDevice&>(device.runtimeDevice()).adapterName();
@@ -34,6 +74,7 @@ CaptureEnvironment DescribeAdapter(const geode::GeodeDevice& device) {
   const auto& nativeRoot = device.physicalDeviceOwner()->root().vulkanRoot();
   if (nativeRoot != nullptr) {
     environment.adapterName = nativeRoot->adapterName();
+    environment.adapterType = nativeRoot->adapterType();
   }
 #endif
   return environment;
@@ -53,7 +94,14 @@ void RecordScene(geode::GeodeDevice& device, const gpu::Texture& target, const C
 
 /// Identifies the renderer the frozen bytes came from. The freeze is only an oracle for a
 /// replacement backend if it is unambiguous which implementation produced it.
+#if defined(DONNER_GEODE_WGPU_REFERENCE)
+constexpr const char* kRendererPath = "wgpu-native Geode production path (GeodeDevice+GeoEncoder)";
+constexpr const char* kCaptureTarget =
+    "//donner/gpu/baseline:capture_baselines_wgpu_reference_linux";
+#else
 constexpr const char* kRendererPath = "native Geode production path (GeodeDevice+GeoEncoder)";
+constexpr const char* kCaptureTarget = "//donner/gpu/baseline:capture_baselines";
+#endif
 constexpr const char* kRendererBackend = "geode";
 constexpr const char* kTargetFormat = "RGBA8Unorm premultiplied, transparent background";
 
@@ -64,9 +112,9 @@ bool WriteProvenance(const std::filesystem::path& outputDir, const CaptureEnviro
   if (!out.good()) {
     return false;
   }
-  out << "# Written by //donner/gpu/baseline:capture_baselines. Do not edit by hand.\n";
+  out << "# Written by " << kCaptureTarget << ". Do not edit by hand.\n";
   out << "# Frozen pixels are only comparable against the adapter recorded here.\n";
-  out << "schemaVersion: 1\n";
+  out << "schemaVersion: 2\n";
   out << "sourceRevision: " << sourceRevision << "\n";
   out << "sourceTreeClean: " << sourceTree << "\n";
   out << "rendererPath: " << kRendererPath << "\n";
@@ -74,6 +122,7 @@ bool WriteProvenance(const std::filesystem::path& outputDir, const CaptureEnviro
   out << "adapterName: " << environment.adapterName << "\n";
   out << "adapterBackend: " << environment.adapterBackend << "\n";
   out << "adapterType: " << environment.adapterType << "\n";
+  out << "hostArchitecture: " << environment.hostArchitecture << "\n";
   out << "targetFormat: " << kTargetFormat << "\n";
   out << "targetSize: " << kCorpusSize << "x" << kCorpusSize << "\n";
   out << "capturedScenes: " << capturedScenes << "\n";
@@ -99,7 +148,12 @@ std::string CaptureOneScene(WgpuBaselineCapturer& capturer, const CorpusScene& s
 }  // namespace
 
 std::string EnvironmentSlug(const CaptureEnvironment& environment) {
-  return AdapterSlug(environment.adapterName, environment.adapterBackend);
+  std::string slug = AdapterSlug(environment.adapterName, environment.adapterBackend);
+  if (environment.adapterBackend == "Vulkan" && environment.adapterType == "CPU" &&
+      environment.hostArchitecture != "x86_64") {
+    slug += '_' + AdapterSlug(environment.hostArchitecture, "");
+  }
+  return slug;
 }
 
 WgpuBaselineCapturer::WgpuBaselineCapturer(std::unique_ptr<geode::GeodeDevice> device)
@@ -110,7 +164,9 @@ WgpuBaselineCapturer::~WgpuBaselineCapturer() = default;
 std::unique_ptr<WgpuBaselineCapturer> WgpuBaselineCapturer::Create() {
   geode::GpuRootSelection selection;
   selection.label = "FrozenBaselineCapture";
-#if defined(__APPLE__)
+#if defined(DONNER_GEODE_WGPU_REFERENCE)
+  selection.backend = geode::GpuBackendKind::TransitionalWgpu;
+#elif defined(__APPLE__)
   selection.backend = geode::GpuBackendKind::NativeMetal;
 #elif defined(__linux__)
   selection.backend = geode::GpuBackendKind::NativeVulkan;
@@ -128,7 +184,10 @@ std::unique_ptr<WgpuBaselineCapturer> WgpuBaselineCapturer::Create() {
   }
   auto capturer =
       std::unique_ptr<WgpuBaselineCapturer>(new WgpuBaselineCapturer(std::move(device)));
-  return capturer->environment().adapterName.empty() ? nullptr : std::move(capturer);
+  return capturer->environment().adapterName.empty() ||
+                 capturer->environment().adapterBackend.empty()
+             ? nullptr
+             : std::move(capturer);
 }
 
 std::string WgpuBaselineCapturer::capture(const CorpusScene& scene,

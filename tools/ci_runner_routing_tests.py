@@ -147,6 +147,45 @@ class CiRunnerRoutingTest(unittest.TestCase):
         self.assertEqual(self._route("coverage", linux_enabled="false")[
             "use_self_hosted_linux"], "false")
 
+    def test_operator_hosted_macos_label_preserves_linux_routing(self):
+        event = {
+            "sender": {"login": "jwmcglynn"},
+            "pull_request": {
+                "user": {"login": "jwmcglynn"},
+                "head": {"repo": {"full_name": "jwmcglynn/donner"}},
+                "base": {"repo": {"full_name": "jwmcglynn/donner"}, "ref": "main"},
+                "labels": [{"name": "ci:hosted-macos"}],
+            },
+        }
+        route = self._route("main", event=event)
+        self.assertEqual(route["use_self_hosted_linux"], "true")
+        self.assertEqual(route["use_self_hosted_macos"], "false")
+        self.assertEqual(self._route("coverage", event=event)["use_self_hosted_linux"], "true")
+
+        event["pull_request"]["base"]["ref"] = "feature/dependency"
+        self.assertEqual(self._route("main", event=event)["use_self_hosted_macos"], "false")
+
+    def test_hosted_macos_label_requires_exact_name_and_trusted_operator(self):
+        event = {
+            "sender": {"login": "jwmcglynn"},
+            "pull_request": {
+                "user": {"login": "jwmcglynn"},
+                "head": {"repo": {"full_name": "jwmcglynn/donner"}},
+                "base": {"repo": {"full_name": "jwmcglynn/donner"}, "ref": "main"},
+                "labels": [{"name": "ci:hosted-macos-extra"}],
+            },
+        }
+        self.assertEqual(self._route("main", event=event)["use_self_hosted_macos"], "true")
+        event["pull_request"]["labels"] = [{"name": "ci:hosted-macos"}]
+        event["pull_request"]["head"]["repo"]["full_name"] = "jwmcglynn/fork"
+        fork = self._route("main", event=event)
+        self.assertEqual(fork["use_self_hosted_linux"], "false")
+        self.assertEqual(fork["use_self_hosted_macos"], "false")
+        event["pull_request"]["head"]["repo"]["full_name"] = "jwmcglynn/donner"
+        collaborator = self._route("main", event=event, triggering_actor="collaborator")
+        self.assertEqual(collaborator["use_self_hosted_linux"], "false")
+        self.assertEqual(collaborator["use_self_hosted_macos"], "false")
+
     def test_change_size_does_not_override_trusted_runner_routing(self):
         """A trusted run follows the runner gate regardless of changed-file count."""
         self.assertNotIn("SELF_HOSTED_MAX_CHANGED_FILES", self.text)

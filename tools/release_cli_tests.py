@@ -39,10 +39,20 @@ class ReleaseCliTest(unittest.TestCase):
         self.artifacts = Path(self.temporary.name) / "artifacts"
 
     def _package(self, platform: str = "linux-x86-64") -> dict[str, object]:
-        return release_cli.package(
-            root=self.root, binary=self.binary, output=self.artifacts,
-            platform=platform, commit=self.commit, run_id="123", attempt="2",
-        )
+        real_check_output = subprocess.check_output
+
+        def fixture_check_output(command, **kwargs):
+            if command == ["c++", "--version"]:
+                return "Test C++ compiler 1.0\n"
+            return real_check_output(command, **kwargs)
+
+        with mock.patch.object(
+            release_cli.subprocess, "check_output", side_effect=fixture_check_output
+        ):
+            return release_cli.package(
+                root=self.root, binary=self.binary, output=self.artifacts,
+                platform=platform, commit=self.commit, run_id="123", attempt="2",
+            )
 
     def _verify(self, platform: str = "linux-x86-64") -> dict[str, object]:
         return release_cli.verify(
@@ -55,6 +65,7 @@ class ReleaseCliTest(unittest.TestCase):
             with self.subTest(platform=platform):
                 self.artifacts.mkdir(exist_ok=True)
                 expected = self._package(platform)
+                self.assertEqual(expected["host_cxx_version"], "Test C++ compiler 1.0")
                 self.assertEqual(self._verify(platform), expected)
                 binary_name = release_cli.PLATFORMS[platform]
                 self.assertEqual((self.artifacts / binary_name).read_bytes(), self.binary.read_bytes())

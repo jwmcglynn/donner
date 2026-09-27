@@ -735,7 +735,8 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 'donner_cc_library(\n    name = "geode_device_wgpu_reference_linux",\n'
                 '    testonly = 1,\n'
                 '    target_compatible_with = ["@platforms//os:linux"],\n'
-                '    visibility = ["//donner/svg/renderer:__pkg__", '
+                '    visibility = ["//donner/gpu/baseline:__pkg__", '
+                '"//donner/svg/renderer:__pkg__", '
                 '"//donner/svg/renderer/tests:__pkg__"],\n'
                 '    deps = _GEODE_DEVICE_COMMON_DEPS + [":geode_wgpu_util", '
                 '"//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
@@ -906,6 +907,15 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
         files["third_party/webgpu-cpp/BUILD.bazel"] = files["third_party/webgpu-cpp/BUILD.bazel"].replace(
             'name = "webgpu_cpp",\n    testonly = True,',
             'name = "webgpu_cpp",',
+        )
+        self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
+
+    def test_geode_reference_visibility_cannot_expand_beyond_reviewed_packages(self):
+        files = self.allowed_files()
+        path = "donner/svg/renderer/geode/BUILD.bazel"
+        files[path] = files[path].replace(
+            '"//donner/gpu/baseline:__pkg__"',
+            '"//donner:__subpackages__"',
         )
         self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
 

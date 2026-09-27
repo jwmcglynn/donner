@@ -2,12 +2,14 @@ import { expect, type Page, test, type TestInfo } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import {
   type CanvasColorStats,
+  captureEditorPage,
   findElementColoredPixel,
   type PixelBounds,
   readCanvasColorStats,
   readEditorPixelBoundsFromPng,
   readElementColorStats,
   readTextStyleGlyphStats,
+  type ScreenshotTimeoutStage,
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
 
@@ -1528,8 +1530,19 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   type ProbeRegion = { x: number; y: number; width: number; height: number };
   let probeRegion: ProbeRegion | null = null;
   let blueCss: PixelBounds | null = null;
+  let screenshotTimeouts = 0;
   let lastBlueProbe:
-    | { shot: Buffer; state: object; region: ProbeRegion | null; bluePixels: number }
+    | {
+      shot: Buffer;
+      state: object;
+      region: ProbeRegion | null;
+      bluePixels: number;
+      captureUsable: boolean;
+      captureAttempts: number;
+      timedOutCaptures: number;
+      shotFromPriorAttempt: boolean;
+      timeoutStage: ScreenshotTimeoutStage | null;
+    }
     | null = null;
   try {
     await expect.poll(async () => {
@@ -1553,16 +1566,27 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
           viewport.paneY + viewport.paneHeight,
         ) - Math.max(viewport.documentY, viewport.paneY),
       };
-      const shot = await page.screenshot();
-      const blue = region !== null && region.width > 0 && region.height > 0
-        ? readEditorPixelBoundsFromPng(shot, "basic-blue", captureViewport, {
+      const capture = await captureEditorPage(page);
+      screenshotTimeouts += capture.timedOutCaptures;
+      const blue = capture.usable && region !== null && region.width > 0 && region.height > 0
+        ? readEditorPixelBoundsFromPng(capture.png, "basic-blue", captureViewport, {
           minX: region.x,
           minY: region.y,
           maxX: region.x + region.width,
           maxY: region.y + region.height,
         })
         : null;
-      lastBlueProbe = { shot, state, region, bluePixels: blue?.pixels ?? 0 };
+      lastBlueProbe = {
+        shot: capture.png.length > 0 ? capture.png : lastBlueProbe?.shot ?? Buffer.alloc(0),
+        state,
+        region,
+        bluePixels: blue?.pixels ?? 0,
+        captureUsable: capture.usable,
+        captureAttempts: capture.attempts,
+        timedOutCaptures: screenshotTimeouts,
+        shotFromPriorAttempt: capture.png.length === 0 && (lastBlueProbe?.shot.length ?? 0) > 0,
+        timeoutStage: capture.timeoutStage,
+      };
       if (
         region !== null && blue !== null && state.sampleId === "basic-shapes"
         && state.completedResults > beforeSample && state.presentedAtMs !== null
@@ -1588,7 +1612,9 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
     if (lastBlueProbe !== null) {
       const pngPath = test.info().outputPath("basic-shapes-blue-probe.png");
       const statePath = test.info().outputPath("basic-shapes-blue-probe.json");
-      await writeFile(pngPath, lastBlueProbe.shot);
+      if (lastBlueProbe.shot.length > 0) {
+        await writeFile(pngPath, lastBlueProbe.shot);
+      }
       await writeFile(
         statePath,
         JSON.stringify(
@@ -1597,16 +1623,23 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
             beforeSample,
             region: lastBlueProbe.region,
             bluePixels: lastBlueProbe.bluePixels,
+            captureUsable: lastBlueProbe.captureUsable,
+            captureAttempts: lastBlueProbe.captureAttempts,
+            timedOutCaptures: lastBlueProbe.timedOutCaptures,
+            shotFromPriorAttempt: lastBlueProbe.shotFromPriorAttempt,
+            timeoutStage: lastBlueProbe.timeoutStage,
             captureViewport,
           },
           null,
           2,
         ),
       );
-      await test.info().attach("basic-shapes-blue-probe.png", {
-        path: pngPath,
-        contentType: "image/png",
-      });
+      if (lastBlueProbe.shot.length > 0) {
+        await test.info().attach("basic-shapes-blue-probe.png", {
+          path: pngPath,
+          contentType: "image/png",
+        });
+      }
       await test.info().attach("basic-shapes-blue-probe.json", {
         path: statePath,
         contentType: "application/json",

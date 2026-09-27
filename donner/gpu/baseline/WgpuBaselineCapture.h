@@ -1,12 +1,10 @@
 #pragma once
 /// @file
-/// Renders corpus scenes through the current production renderer as a black box.
+/// Renders corpus scenes through the selected Geode runtime as a black box.
 ///
-/// This is the pre-cutover oracle: the wgpu-backed Geode path, driven exactly the way production
-/// rendering drives it, with only its public outputs read back. Both the capture binary that
-/// writes the committed PNGs and the check-mode test that re-renders and diffs against them go
-/// through here, so the frozen bytes and the bytes under test can never come from two different
-/// code paths.
+/// The scene encoder is compiled over two separate GPU runtimes: native Geode for the check and
+/// its diagnostic capture, and Linux test-only wgpu-native for an independent reference capture.
+/// Both paths use the same corpus and record which runtime produced their pixels.
 
 #include <cstdint>
 #include <filesystem>
@@ -27,14 +25,15 @@ namespace donner::gpu::baseline {
 /// produced them, so every capture records this and the check mode refuses to compare across a
 /// mismatch instead of reporting a difference it cannot attribute.
 struct CaptureEnvironment {
-  std::string adapterName;     //!< Vendor and device string reported by the adapter.
-  std::string adapterBackend;  //!< "Metal", "Vulkan", "D3D12", "OpenGL", ...
-  std::string adapterType;     //!< "DiscreteGPU", "IntegratedGPU", "CPU", or "Unknown".
+  std::string adapterName;       //!< Vendor and device string reported by the adapter.
+  std::string adapterBackend;    //!< "Metal", "Vulkan", "D3D12", "OpenGL", ...
+  std::string adapterType;       //!< "DiscreteGPU", "IntegratedGPU", "CPU", or "Unknown".
+  std::string hostArchitecture;  //!< Canonical CPU architecture of the capture process.
 };
 
 /// Directory name a capture from `environment` is filed under, for example
 /// `apple_m1_pro_metal`. Lowercase with every run of non-alphanumeric characters collapsed to one
-/// underscore, so one adapter always resolves to one directory on every platform.
+/// underscore. Software Vulkan on a non-x86 host also includes its host architecture.
 std::string EnvironmentSlug(const CaptureEnvironment& environment);
 
 /// Holds one production device for the whole corpus, because device creation compiles every
