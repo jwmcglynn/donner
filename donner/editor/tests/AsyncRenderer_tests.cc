@@ -6332,6 +6332,44 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
   }
 }
 
+TEST(RenderCoordinatorTest, PresentationRefreshResendsRejectedRetainedTilePixels) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g opacity="0.5"><rect x="20" y="20" width="60" height="60" fill="blue"/></g>
+    </svg>
+  )svg"));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.resetTo100Percent();
+  ASSERT_FALSE(viewport.rasterViewport().viewportBounded);
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Requires native texture presentation";
+  }
+  const auto drain = [&]() {
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); },
+                     std::chrono::steady_clock::now() + std::chrono::seconds(5));
+  };
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+  coordinator.requestPresentationRefresh();
+  ASSERT_TRUE(drain());
+  EXPECT_THAT(textures.tiles(), testing::IsEmpty());
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+  ASSERT_TRUE(drain());
+  EXPECT_EQ(textures.metadataOnlyMissCount(), 0u);
+  ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
+  for (const auto& tile : textures.tiles()) {
+    SCOPED_TRACE(tile.id);
+    EXPECT_NE(tile.textureSnapshot, nullptr);
+  }
+  EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
+}
+
 TEST(RenderCoordinatorTest, PresentationRefreshRejectsPriorOverviewAndDetailedResults) {
   for (std::string_view phase : {"staged", "pending_overview", "pending_detail"}) {
     SCOPED_TRACE(phase);
@@ -6452,6 +6490,12 @@ TEST(RenderCoordinatorTest, ZoomedPaintUsesCompletedOverviewWhenDetailedRenderFa
   ASSERT_TRUE(render());
   EXPECT_TRUE(textures.activeTilesViewportBounded())
       << "Publishing the overview must still permit a detailed render when the worker recovers";
+  EXPECT_EQ(textures.metadataOnlyMissCount(), 0u);
+  ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
+  for (const auto& tile : textures.tiles()) {
+    SCOPED_TRACE(tile.id);
+    EXPECT_NE(tile.textureSnapshot, nullptr);
+  }
   EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
 }
 
