@@ -13,7 +13,7 @@ from python.runfiles import runfiles
 
 
 class CoverageScriptTest(unittest.TestCase):
-    def run_fixture(self, root, quiet, status, report, failed_target=False):
+    def run_fixture(self, root, quiet, status, report, failed_target=False, failed_test=False):
         binaries = root / "bin"
         binaries.mkdir()
         (root / "output").mkdir()
@@ -41,6 +41,17 @@ class CoverageScriptTest(unittest.TestCase):
                     "completed": {"success": False},
                 }
             )
+        if failed_test:
+            events.extend([
+                {
+                    "id": {"testSummary": {"label": "//fixture:failed_test"}},
+                    "testSummary": {"overallStatus": "FAILED"},
+                },
+                {
+                    "id": {"testSummary": {"label": "//fixture\nsecret:invalid"}},
+                    "testSummary": {"overallStatus": "FAILED"},
+                },
+            ])
         (root / "fixture-bep.json").write_text(
             "\n".join(json.dumps(event) for event in events), encoding="utf-8"
         )
@@ -135,6 +146,15 @@ class CoverageScriptTest(unittest.TestCase):
                 self.assertTrue((root / "output/_coverage/_coverage_report.dat").is_file())
                 self.assertFalse((root / "coverage-report/filtered_report.dat").exists())
 
+    def test_quiet_failure_names_tests_without_exposing_raw_bep_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = self.run_fixture(root, True, status=3, report=True, failed_test=True)
+            self.assertEqual(3, result.returncode, result.stdout + result.stderr)
+            self.assertIn("//fixture:failed_test", result.stdout)
+            self.assertNotIn("secret", result.stdout)
+            self.assertFalse((root / "coverage-report/filtered_report.dat").exists())
+
     def test_all_incompatible_targets_accept_success_and_no_tests_found(self):
         for quiet in (False, True):
             for status in (0, 4):
@@ -153,6 +173,7 @@ class CoverageScriptTest(unittest.TestCase):
                 result = self.run_fixture(root, quiet, status=1, report=False, failed_target=True)
                 self.assertEqual(1, result.returncode, result.stdout + result.stderr)
                 self.assertIn("ERROR: Coverage report was not generated", result.stdout)
+                self.assertIn("//fixture:failed", result.stdout)
                 self.assertEqual(
                     (root / "fixture-bep.json").read_text(encoding="utf-8"),
                     (root / "coverage-report/bep.json").read_text(encoding="utf-8"),
