@@ -104,51 +104,6 @@ playwright_bin.playwright_test(
     ],
 )
 
-# The hosted Firefox compatibility project, reachable through the same
-# hermetic remote TestRunner path as the Chromium presentation regressions.
-playwright_bin.playwright_test(
-    name = "browser_presentation_regression_firefox_test",
-    size = "large",
-    args = [
-        "test",
-        "$(rootpath :smoke.spec.ts)",
-        "$(rootpath :browser-presentation-regression.spec.ts)",
-        "--config=$(rootpath :playwright.compatibility-firefox.bazel.config.js)",
-    ],
-    copy_data_to_bin = False,
-    data = [
-        "browser-presentation-regression.spec.ts",
-        "canvas-color-stats.ts",
-        "gesture-streams.ts",
-        "package.json",
-        "playwright.bazel.config.js",
-        "playwright.compatibility.config.js",
-        "playwright.compatibility-firefox.bazel.config.js",
-        "playwright.config.js",
-        "png-crop.ts",
-        "remote-webserver.mjs",
-        "smoke.spec.ts",
-        "surface-frame-probe.ts",
-        ":node_modules/@playwright/test",
-        ":node_modules/pngjs",
-        "//donner/editor/wasm:_wasm_web_package_for_serve",
-        "@playwright//:firefox",
-    ] + glob(["browser-presentation-regression.spec.ts-snapshots/*.png"]),
-    env = {
-        "CI": "1",
-        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
-        "DONNER_WASM_REQUIRE_WEBGPU": "1",
-        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-        "NODE_OPTIONS": "",
-        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:firefox)/../",
-    },
-    tags = ["no-local"],
-    target_compatible_with = [
-        "@platforms//cpu:aarch64",
-        "@platforms//os:macos",
-    ],
-)
-
 # This presentation gate shares the macOS WebGPU capability requirement of the smoke lane.
 playwright_bin.playwright_test(
     name = "catalog_font_loading_test",
@@ -428,8 +383,6 @@ js_test(
     data = [
         "playwright.bazel.config.js",
         "playwright.boot-presentation.bazel.config.js",
-        "playwright.compatibility.config.js",
-        "playwright.compatibility-firefox.bazel.config.js",
         "playwright.composited-chromium.bazel.config.js",
         "playwright.composited-chromium.config.js",
     ],
