@@ -28,11 +28,19 @@ Reads a BEP JSON-lines file; writes one JSON document to stdout:
 """
 
 import json
+import re
 import sys
 
 ALL_SKIPPED = "all_skipped"
 HAS_RESULTS = "has_results"
 UNKNOWN = "unknown"
+_SAFE_LABEL = re.compile(r"(?:@@?[A-Za-z0-9_.+~%-]+)?//[A-Za-z0-9_./:+*=-]+\Z")
+_FAILED_TEST_STATUSES = {
+    "FAILED", "TIMEOUT", "INCOMPLETE", "REMOTE_FAILURE",
+    "FAILED_TO_BUILD", "TOOL_HALTED_BEFORE_TESTING",
+}
+_FAILED_ABORT_REASONS = {"LOADING_FAILURE", "ANALYSIS_FAILURE"}
+_MAX_FAILURE_LABELS = 20
 
 
 def classify(lines):
@@ -89,22 +97,94 @@ def _label(event_id):
     """Pull a target label out of a BEP event id, whichever shape it uses."""
     if not isinstance(event_id, dict):
         return None
-    for key in ("targetCompleted", "targetConfigured", "testResult", "testSummary"):
+    for key in (
+        "targetCompleted", "targetConfigured", "testResult", "testSummary",
+        "targetSummary", "configuredLabel", "unconfiguredLabel",
+    ):
         holder = event_id.get(key)
         if isinstance(holder, dict) and holder.get("label"):
             return holder["label"]
     return None
 
 
+def _safe_label(label):
+    """Only expose bounded Bazel labels, never BEP paths or arbitrary text."""
+    return isinstance(label, str) and len(label) <= 512 and bool(_SAFE_LABEL.fullmatch(label))
+
+
+def _final_test_status(event):
+    for name, field in (("testSummary", "overallStatus"),
+                        ("targetSummary", "overallTestStatus")):
+        payload = event.get(name)
+        status = payload.get(field) if isinstance(payload, dict) else None
+        if isinstance(status, str):
+            return status
+    return None
+
+
+def _failed_test_attempt(event):
+    payload = event.get("testResult")
+    status = payload.get("status") if isinstance(payload, dict) else None
+    return isinstance(status, str) and status in _FAILED_TEST_STATUSES
+
+
+def _failed_build(event):
+    completed = event.get("completed")
+    aborted = event.get("aborted")
+    reason = aborted.get("reason") if isinstance(aborted, dict) else None
+    return (
+        isinstance(completed, dict) and completed.get("success") is False
+    ) or (
+        isinstance(reason, str) and reason in _FAILED_ABORT_REASONS
+    )
+
+
+def failure_summary(lines):
+    """Extract path-free failed test and build labels from a BEP stream."""
+    final_statuses = {}
+    failed_attempts = set()
+    builds = set()
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        label = _label(event.get("id"))
+        if not _safe_label(label):
+            continue
+        final_status = _final_test_status(event)
+        if final_status is not None:
+            final_statuses[label] = final_status
+        if _failed_test_attempt(event):
+            failed_attempts.add(label)
+        if _failed_build(event):
+            builds.add(label)
+    tests = {label for label, status in final_statuses.items()
+             if status in _FAILED_TEST_STATUSES}
+    tests.update(label for label in failed_attempts if label not in final_statuses)
+    sorted_tests = sorted(tests)
+    sorted_builds = sorted(builds)
+    return {
+        "failedTests": sorted_tests[:_MAX_FAILURE_LABELS],
+        "failedBuilds": sorted_builds[:_MAX_FAILURE_LABELS],
+        "omittedTests": max(0, len(sorted_tests) - _MAX_FAILURE_LABELS),
+        "omittedBuilds": max(0, len(sorted_builds) - _MAX_FAILURE_LABELS),
+    }
+
+
 def main(argv):
-    if len(argv) != 2:
-        sys.stderr.write("usage: coverage_bep_status.py <bep.json>\n")
+    failures = len(argv) == 3 and argv[1] == "--failures"
+    if not failures and len(argv) != 2:
+        sys.stderr.write("usage: coverage_bep_status.py [--failures] <bep.json>\n")
         return 2
     try:
-        with open(argv[1], "r", encoding="utf-8", errors="replace") as stream:
-            result = classify(stream)
+        with open(argv[-1], "r", encoding="utf-8", errors="replace") as stream:
+            result = failure_summary(stream) if failures else classify(stream)
     except OSError:
-        result = {"status": UNKNOWN, "skipped": [], "produced": []}
+        result = (failure_summary([]) if failures else
+                  {"status": UNKNOWN, "skipped": [], "produced": []})
     json.dump(result, sys.stdout)
     sys.stdout.write("\n")
     return 0
