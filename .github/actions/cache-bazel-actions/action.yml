@@ -9,7 +9,8 @@ runs:
   steps:
     - name: Enable disk action cache
       shell: bash
-      run: echo 'build --disk_cache=~/.cache/bazel-disk' >> "$HOME/.bazelrc"
+      run: |
+        printf '\n%s\n' 'build --disk_cache=~/.cache/bazel-disk' >> "$HOME/.bazelrc"
 
     # A new revision can extend an older snapshot even when BUILD files have not changed.
     # Each platform/family has one writer; PR code only restores default-branch snapshots.

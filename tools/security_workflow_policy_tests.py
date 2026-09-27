@@ -139,6 +139,21 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for identity in ("github.run_id", "github.run_attempt", "github.job"):
             self.assertIn(identity, artifacts)
 
+    def test_action_cache_preserves_setup_bazel_rc_without_a_final_newline(self):
+        action = self.supply_chain_files[".github/actions/cache-bazel-actions/action.yml"]
+        body = action.split("      run:", 1)[1].split("\n\n", 1)[0]
+        script = textwrap.dedent(body.split("\n", 1)[1]) if body.strip().startswith("|") else body.strip()
+        with tempfile.TemporaryDirectory() as directory:
+            rc = Path(directory) / ".bazelrc"
+            original = "common --repository_cache=/fixture/repository"
+            rc.write_text(original)
+            result = subprocess.run(["/bin/bash", "-c", script], env={"HOME": directory},
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lines = rc.read_text().splitlines()
+            self.assertEqual(lines[0], original)
+            self.assertEqual(lines[1], "build --disk_cache=~/.cache/bazel-disk")
+
     def test_compiled_action_cache_refreshes_only_from_main(self):
         action = self.supply_chain_files[".github/actions/cache-bazel-actions/action.yml"]
         writer = action.split("    - name: Restore and refresh main action cache\n", 1)[1]
