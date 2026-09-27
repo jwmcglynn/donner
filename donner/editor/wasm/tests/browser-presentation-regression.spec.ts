@@ -22,6 +22,7 @@ import {
   type SplashToneCensus,
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
+import { cropCapturedPng } from "./png-crop";
 import {
   installSurfaceFrameProbe,
   readSurfaceFrameProbe,
@@ -1360,10 +1361,15 @@ test("browser overlay control stays disabled after a normal editor frame", async
 
 test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ page }) => {
   const failures = await openEditor(page, "overlay");
-  const { canvasBounds, captureClip: documentClip, baselinePng: baseline, blueRect } =
-    await openBasicShapes(
-      page,
-    );
+  const {
+    canvasBounds,
+    documentClip: presentedDocumentClip,
+    captureClip: documentClip,
+    baselinePng: baseline,
+    blueRect,
+  } = await openBasicShapes(
+    page,
+  );
   const rejectedControlInputs = await page.evaluate(() => {
     const control = window.Module?._donner_set_overlay_state;
     return [
@@ -1418,37 +1424,32 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   );
   await waitForBrowserComposite(page);
   // Worker completion and a browser composite can precede the texture upload
-  // that makes tile labels visible. Assert on the presented pixels, as the
-  // disable path below already does for the restored document.
-  const minBluePixels = Math.max(500, Math.ceil(blueRect.pixels * 0.5));
+  // that makes tile labels visible. Compare the presented document, including
+  // its tile label, without binding the golden to unrelated editor chrome.
+  const overlaySnapshot = (documentPng: Buffer) =>
+    expect(documentPng).toMatchSnapshot(
+      "basic-shapes-compositor-tile-overlay.png",
+      {
+        maxDiffPixels: 0,
+        threshold: 0.02,
+      },
+    );
   let compositorOverlay: Buffer | null = null;
   let lastCompositorShot: Buffer | null = null;
-  let lastCompositorDifference = "";
   try {
     await expect
       .poll(
         async () => {
           const shot = await captureOverlay();
           lastCompositorShot = shot;
-          const difference = readCssPngPixelDifferenceStats(
-            baseline,
-            shot,
-            documentClip,
-            documentPixelsInClip,
-          );
-          const bluePixels = readEditorPixelBoundsFromPng(
-            shot,
-            "basic-blue",
-            documentClip,
-            blueRect,
-          )?.pixels ?? 0;
-          lastCompositorDifference = JSON.stringify({ ...difference, bluePixels, minBluePixels });
-          // A blank transferred-canvas capture also differs from the baseline.
-          // Require most of the baseline blue rectangle in the accepted frame.
-          if (difference.changedPixels > 0 && bluePixels >= minBluePixels) {
+          const documentPng = cropCapturedPng(shot, documentClip, presentedDocumentClip);
+          try {
+            overlaySnapshot(documentPng);
             compositorOverlay = shot;
+            return true;
+          } catch {
+            return false;
           }
-          return bluePixels >= minBluePixels ? difference.changedPixels : 0;
         },
         {
           message: "Compositor Tile Overlay was checked but contributed no visible document pixels",
@@ -1458,25 +1459,21 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
             : [50, 100, 250],
         },
       )
-      .toBeGreaterThan(0);
+      .toBe(true);
   } catch (error) {
     // Keep the actual scored frame. A later Playwright failure screenshot may
     // show the overlay after the failed poll and cannot explain that frame.
-    try {
-      if (lastCompositorShot !== null) {
+    if (lastCompositorShot !== null) {
+      try {
         await attachEvidenceFile(
           "compositor-tile-overlay-last-probe",
           lastCompositorShot,
           "image/png",
         );
+      } catch {
+        console.warn("Could not retain compositor overlay probe");
       }
-      await attachEvidenceFile(
-        "compositor-tile-overlay-last-difference",
-        lastCompositorDifference,
-        "application/json",
-      );
-    } catch {
-      console.warn("Could not retain compositor overlay probe");
+      overlaySnapshot(cropCapturedPng(lastCompositorShot, documentClip, presentedDocumentClip));
     }
     throw error;
   }
