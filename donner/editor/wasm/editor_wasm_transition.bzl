@@ -196,7 +196,7 @@ def _editor_wasm_runtime_options_probe_impl(ctx):
         "memory_is_fixed={}".format(
             memory_growth == "0" and
             len(_setting_values(values, "INITIAL_MEMORY")) == 1 and
-            maximum_memory_flags == 0
+            maximum_memory_flags == 0,
         ),
         # One slot for the app pthread, one for AsyncRenderer's raster thread.
         "pthread_pool_size={}".format(_single_setting(values, "PTHREAD_POOL_SIZE")),
