@@ -1454,6 +1454,7 @@ type BasicShapesProbeState = {
   completedResults: number;
   presentedAtMs: number | null;
   viewport: ViewportStats | null;
+  dom: object | null;
 };
 
 async function readBasicShapesProbeState(
@@ -1463,17 +1464,115 @@ async function readBasicShapesProbeState(
   if (firefox) {
     console.log("open-basic-shapes-probe: state-start");
   }
-  const state = await page.evaluate(() => ({
-    sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
-    completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
-    presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
-    viewport: window.__donnerViewportStats ?? null,
-  }));
+  const state = await page.evaluate((includeDom) => {
+    // Piggyback the existing post-capture IPC. Style/layout reads can change
+    // timing, so these fields diagnose a failure but never qualify a pass.
+    const dom = includeDom ? (() => {
+      const finite = (value: number) => Number.isFinite(value) ? value : null;
+      const layer = (element: HTMLElement | null) => {
+        if (element === null) {
+          return { hidden: null, display: "missing", visibility: "missing",
+            opacity: null, zIndex: null, coversViewport: null };
+        }
+        const style = getComputedStyle(element);
+        const bounds = element.getBoundingClientRect();
+        return {
+          hidden: element.hidden,
+          display: style.display === "none" ? "none" : "shown",
+          visibility: style.visibility === "visible" ? "visible" : "hidden",
+          opacity: finite(Number(style.opacity)),
+          zIndex: finite(Number(style.zIndex)),
+          coversViewport: bounds.left <= 0 && bounds.top <= 0
+            && bounds.right >= innerWidth && bounds.bottom >= innerHeight,
+        };
+      };
+      const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
+      const loading = document.getElementById("loading-screen");
+      const error = document.getElementById("capability-error");
+      const top = document.elementFromPoint(innerWidth * 0.5, innerHeight * 0.5);
+      const topKind = top === null ? "none" : top === canvas ? "canvas"
+        : loading?.contains(top) ? "loading"
+        : error?.contains(top) ? "error" : "other";
+      const rect = canvas?.getBoundingClientRect();
+      return {
+        atMs: finite(performance.now()),
+        documentVisibility: document.visibilityState === "visible" ? "visible" : "hidden",
+        documentHidden: document.hidden,
+        documentFocused: document.hasFocus(),
+        canvas: {
+          ...layer(canvas),
+          connected: canvas?.isConnected ?? false,
+          backingWidth: canvas ? finite(canvas.width) : null,
+          backingHeight: canvas ? finite(canvas.height) : null,
+          rect: rect ? {
+            x: finite(rect.x), y: finite(rect.y),
+            width: finite(rect.width), height: finite(rect.height),
+          } : null,
+        },
+        loading: { ...layer(loading), complete: loading?.classList.contains("is-complete") ?? null },
+        error: layer(error),
+        bodyOpacity: finite(Number(getComputedStyle(document.body).opacity)),
+        htmlOpacity: finite(Number(getComputedStyle(document.documentElement).opacity)),
+        topAtDocumentCenter: topKind,
+      };
+    })() : null;
+    return {
+      sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
+      completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+      presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+      viewport: window.__donnerViewportStats ?? null,
+      dom,
+    };
+  }, firefox);
   if (firefox) {
     console.log("open-basic-shapes-probe: state-end");
   }
   return state;
 }
+
+test("Basic Shapes DOM probe reports fixed visibility states without page content", async ({ page }) => {
+  await page.setContent(`
+    <style>
+      html,body{margin:0} [hidden]{display:none!important}
+      #canvas{position:fixed;inset:0;width:100vw;height:100vh;z-index:2}
+      #loading-screen,#capability-error{position:fixed;inset:0;z-index:10}
+      #loading-screen.is-complete{opacity:0;pointer-events:none}
+    </style>
+    <canvas id="canvas" width="100" height="80"></canvas>
+    <main id="loading-screen">fixture-content</main>
+    <div id="capability-error" hidden>fixture-content</div>
+  `);
+  const covered = await readBasicShapesProbeState(page, true);
+  expect(covered.dom).toMatchObject({
+    canvas: { hidden: false, display: "shown", visibility: "visible", opacity: 1 },
+    loading: { hidden: false, complete: false, display: "shown", coversViewport: true },
+    error: { hidden: true, display: "none" },
+    topAtDocumentCenter: "loading",
+  });
+  expect(JSON.stringify(covered.dom)).not.toContain("fixture-content");
+  await page.evaluate(() => document.getElementById("loading-screen")?.classList.add("is-complete"));
+  const revealed = await readBasicShapesProbeState(page, true);
+  expect(revealed.dom).toMatchObject({
+    loading: { complete: true, opacity: 0 },
+    topAtDocumentCenter: "canvas",
+  });
+  await page.evaluate(() => {
+    const canvas = document.getElementById("canvas");
+    const loading = document.getElementById("loading-screen");
+    const error = document.getElementById("capability-error");
+    if (canvas && loading && error) {
+      canvas.hidden = true;
+      loading.hidden = true;
+      error.hidden = false;
+    }
+  });
+  const failed = await readBasicShapesProbeState(page, true);
+  expect(failed.dom).toMatchObject({
+    canvas: { hidden: true, display: "none" },
+    error: { hidden: false, coversViewport: true },
+    topAtDocumentCenter: "error",
+  });
+});
 
 function basicShapesProbeClips(
   viewport: ViewportStats | null,
@@ -1656,6 +1755,8 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
     shotFromPriorAttempt: boolean;
     stateSkipped: boolean;
     timeoutStage: ScreenshotTimeoutStage | null;
+    previousProbePostCaptureDom: object | null;
+    currentProbePostCaptureDom: object | null;
   } | null = null;
   try {
     await expect
@@ -1683,6 +1784,10 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
             shotFromPriorAttempt,
             stateSkipped: probe.state === null,
             timeoutStage: capture.timeoutStage,
+            // Previous-probe evidence predates this capture; it is not an
+            // atomic state read immediately before the scored screenshot.
+            previousProbePostCaptureDom: lastProbe?.currentProbePostCaptureDom ?? null,
+            currentProbePostCaptureDom: probe.state?.dom ?? null,
           };
           if (
             bounds !== null && probe.state !== null && probe.state.sampleId === "basic-shapes"
@@ -1768,6 +1873,8 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
           JSON.stringify(
             {
               state: lastProbe.state,
+              previousProbePostCaptureDom: lastProbe.previousProbePostCaptureDom,
+              currentProbePostCaptureDom: lastProbe.currentProbePostCaptureDom,
               documentClip: lastProbe.documentClip,
               captureClip: lastProbe.captureClip,
               bluePixels: lastProbe.bluePixels,
