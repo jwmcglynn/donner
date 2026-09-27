@@ -107,8 +107,8 @@ test("host timing consumes each current-frame draw snapshot once", () => {
   );
   assert.ok(callback, "expected executable host timing callback");
   const bindings = Array.from({ length: 10 }, (_, index) =>
-    `const $${index} = values[${index}];`).join("\n");
-  const publish = new Function("window", "values", `${bindings}\n${callback[1]}`);
+    `const $${index} = args[${index}];`).join("\n");
+  const publish = new Function("window", "args", `${bindings}\n${callback[1]}`);
   const windowState = {
     __donnerPendingUnderlayDrawStats: {
       sequence: 7,
