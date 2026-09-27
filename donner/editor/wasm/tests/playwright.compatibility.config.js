@@ -17,6 +17,7 @@ module.exports = defineConfig({
         /Firefox keeps the dragged shape and its selection outline in every drag frame/,
         /Firefox never exposes the checkerboard while dragging a Splash letter/,
         /the surface frame probe reports canvas work submitted after its task ended/,
+        /Firefox capture sentinel survives an opaque canvas clear/,
         /Firefox host counters record a refused surface frame and later recovery/,
         /Firefox renders every visible Splash layer thumbnail/,
         /Firefox hands a blocked thumbnail renderer to a foreground sample load/,

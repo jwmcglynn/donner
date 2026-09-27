@@ -764,6 +764,62 @@ async function boundFailureDiagnostic<T>(
   }
 }
 
+const kCaptureSentinelSize = 12;
+
+async function installCaptureSentinel(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const marker = document.createElement("div");
+    marker.id = "donner-capture-sentinel";
+    marker.setAttribute("aria-hidden", "true");
+    Object.assign(marker.style, {
+      position: "fixed",
+      left: "0px",
+      top: "0px",
+      width: "12px",
+      height: "12px",
+      background: "rgb(49, 198, 179)",
+      zIndex: "2147483647",
+      pointerEvents: "none",
+    });
+    document.body.append(marker);
+  });
+}
+
+function captureSentinelPixels(
+  png: Buffer,
+  viewport: Pick<CssRegion, "width" | "height">,
+): number {
+  return readEditorPixelBoundsFromPng(png, "selection-teal", viewport, {
+    minX: 0,
+    minY: 0,
+    maxX: kCaptureSentinelSize,
+    maxY: kCaptureSentinelSize,
+  })?.pixels ?? 0;
+}
+
+async function attachLastBasicShapesPng(
+  baselinePng: Buffer | null,
+  lastProbe: { shot: Buffer } | null,
+): Promise<void> {
+  if (baselinePng !== null || lastProbe === null || lastProbe.shot.length === 0) return;
+  try {
+    await attachEvidenceFile("open-basic-shapes-last-probe", lastProbe.shot, "image/png");
+  } catch {
+    console.warn("open-basic-shapes scored PNG unavailable");
+  }
+}
+
+function basicShapesSentinelPixels(
+  expected: boolean,
+  viewport: Pick<CssRegion, "width" | "height"> | null,
+  lastProbe: { shot: Buffer } | null,
+): number | null {
+  if (!expected || viewport === null || lastProbe === null || lastProbe.shot.length === 0) {
+    return null;
+  }
+  return captureSentinelPixels(lastProbe.shot, viewport);
+}
+
 function readScoredCanvasProbe(page: Page): Promise<ScoredCanvasProbe | null> {
   return boundFailureDiagnostic(page.evaluate(() => {
     const snapshot = (): SurfaceFrameSnapshot => {
@@ -804,6 +860,7 @@ function readScoredCanvasProbe(page: Page): Promise<ScoredCanvasProbe | null> {
 }
 
 async function attachScoredMissingBluePng(
+  page: Page,
   step: number,
   probeRegion: CssRegion,
   geometry: Awaited<ReturnType<typeof readEditorResizePixelBounds>>,
@@ -811,6 +868,8 @@ async function attachScoredMissingBluePng(
 ): Promise<void> {
   try {
     await attachEvidenceFile(`drag-blue-missing-step-${step}`, geometry.png, "image/png");
+    const viewport = page.viewportSize();
+    const sentinelPixels = viewport === null ? null : captureSentinelPixels(geometry.png, viewport);
     await attachEvidenceFile(
       `drag-blue-missing-step-${step}-pre-state`,
       JSON.stringify({
@@ -819,6 +878,7 @@ async function attachScoredMissingBluePng(
         beforeScreenshot,
         blue: geometry.blue,
         teal: geometry.teal,
+        sentinelPixels,
       }),
       "application/json",
     );
@@ -896,7 +956,7 @@ async function readBasicShapesDragFrame(
 }> {
   const geometry = await readEditorResizePixelBounds(page, probeRegion);
   if (geometry.usableCapture && geometry.blue === null) {
-    await attachScoredMissingBluePng(step, probeRegion, geometry, beforeScreenshot);
+    await attachScoredMissingBluePng(page, step, probeRegion, geometry, beforeScreenshot);
   }
   const state = await readDocumentPresentationState(page);
   if (!geometry.usableCapture) {
@@ -1113,15 +1173,25 @@ interface PresentedCanvasDiagnosis {
   afterWake: number;
   framesBeforeWake: number;
   framesAfterWake: number;
+  hostBeforeWake: HostPresentationCounters | null;
+  hostAfterWake: HostPresentationCounters | null;
   canvasWidth: number;
   canvasHeight: number;
+}
+
+interface HostPresentationCounters {
+  frames: number;
+  acquiredFrames: number;
+  presentedFrames: number;
+  lastAcquired: boolean;
+  lastPresented: boolean;
 }
 
 async function diagnosePresentedCanvas(
   page: Page,
 ): Promise<PresentedCanvasDiagnosis | { unavailable: string }> {
-  return page
-    .evaluate(async () => {
+  const diagnosis = await boundFailureDiagnostic(
+    page.evaluate(async () => {
       const surface = document.getElementById("canvas") as HTMLCanvasElement | null;
       if (surface === null) {
         throw new Error("the editor canvas is missing");
@@ -1133,6 +1203,16 @@ async function diagnosePresentedCanvas(
       if (context === null) {
         throw new Error("no 2d context for the canvas probe");
       }
+      const hostCounters = (): HostPresentationCounters | null => {
+        const host = window.__donnerHostFrameTiming;
+        return host === undefined ? null : {
+          frames: host.frames,
+          acquiredFrames: host.surfaceAcquiredFrames,
+          presentedFrames: host.surfacePresentedFrames,
+          lastAcquired: host.lastSurfaceAcquired,
+          lastPresented: host.lastSurfacePresented,
+        };
+      };
       // Count pixels that carry both coverage and hue, so the editor's own
       // chrome registers while the flat page background does not.
       const readColoredPixels = (): number => {
@@ -1164,6 +1244,7 @@ async function diagnosePresentedCanvas(
       };
 
       const framesBeforeWake = window.__donnerMainLoopRenderedFrames || 0;
+      const hostBeforeWake = hostCounters();
       const beforeWake = readColoredPixels();
 
       // Ask the editor for one frame through the same flag the page uses, then
@@ -1185,12 +1266,81 @@ async function diagnosePresentedCanvas(
         afterWake: readColoredPixels(),
         framesBeforeWake,
         framesAfterWake: window.__donnerMainLoopRenderedFrames || 0,
+        hostBeforeWake,
+        hostAfterWake: hostCounters(),
         canvasWidth: surface.width,
         canvasHeight: surface.height,
       };
-    })
-    .catch((error: unknown) => ({ unavailable: String(error) }));
+    }),
+    scaledMs(4_000),
+  );
+  return diagnosis ?? { unavailable: "canvas diagnosis unavailable" };
 }
+
+async function diagnoseCanvasAfterState(
+  page: Page,
+  baselineFailed: boolean,
+  stateAvailable: boolean,
+): Promise<PresentedCanvasDiagnosis | { unavailable: string } | null> {
+  if (!baselineFailed) return null;
+  if (!stateAvailable) {
+    return { unavailable: "canvas diagnosis skipped after state IPC unavailable" };
+  }
+  return diagnosePresentedCanvas(page);
+}
+
+test("canvas diagnosis does not queue after an unavailable state IPC", async () => {
+  let pageReads = 0;
+  const page = {
+    evaluate: async () => {
+      ++pageReads;
+      return null;
+    },
+  } as unknown as Page;
+  expect(await diagnoseCanvasAfterState(page, true, false)).toEqual({
+    unavailable: "canvas diagnosis skipped after state IPC unavailable",
+  });
+  expect(pageReads).toBe(0);
+});
+
+test("canvas diagnosis brackets host presentation counters around a wake", async ({ page }) => {
+  await page.setContent(`<canvas id="canvas" width="80" height="45"></canvas>`);
+  await page.evaluate(() => {
+    const canvas = document.getElementById("canvas") as HTMLCanvasElement;
+    const context = canvas.getContext("2d");
+    if (context === null) throw new Error("synthetic canvas context unavailable");
+    context.fillStyle = "rgb(49, 198, 179)";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    window.__donnerMainLoopRenderedFrames = 7;
+    window.__donnerHostFrameTiming = {
+      frames: 7,
+      surfaceAcquiredFrames: 6,
+      surfacePresentedFrames: 6,
+      lastSurfaceAcquired: false,
+      lastSurfacePresented: false,
+    };
+    const completeWake = () => {
+      if (window.__donnerEditorFrameRequested) {
+        window.__donnerMainLoopRenderedFrames = 8;
+        window.__donnerHostFrameTiming = {
+          frames: 8,
+          surfaceAcquiredFrames: 7,
+          surfacePresentedFrames: 7,
+          lastSurfaceAcquired: true,
+          lastSurfacePresented: true,
+        };
+      } else requestAnimationFrame(completeWake);
+    };
+    requestAnimationFrame(completeWake);
+  });
+  const diagnosis = await diagnosePresentedCanvas(page);
+  expect(diagnosis).toMatchObject({
+    framesBeforeWake: 7,
+    framesAfterWake: 8,
+    hostBeforeWake: { frames: 7, acquiredFrames: 6, presentedFrames: 6 },
+    hostAfterWake: { frames: 8, acquiredFrames: 7, presentedFrames: 7 },
+  });
+});
 
 type BasicShapesProbeState = {
   sampleId: string | null;
@@ -1313,7 +1463,7 @@ async function takeBasicShapesProbe(
   };
 }
 
-async function openBasicShapes(page: Page): Promise<{
+async function openBasicShapes(page: Page, captureSentinelExpected = false): Promise<{
   canvasBounds: { x: number; y: number; width: number; height: number };
   documentClip: { x: number; y: number; width: number; height: number };
   captureClip: { x: number; y: number; width: number; height: number };
@@ -1452,6 +1602,8 @@ async function openBasicShapes(page: Page): Promise<{
       )
       .toBeGreaterThan(0);
   } finally {
+    // Retain the exact scored frame before any failure-only page IPC can stall.
+    await attachLastBasicShapesPng(baselinePng, lastProbe);
     // "No blue" covers three unrelated faults: the worker never produced a
     // result, a result arrived that no app frame carried, or a frame was
     // presented whose pixels this probe window missed. Publish the app's own
@@ -1459,21 +1611,36 @@ async function openBasicShapes(page: Page): Promise<{
     // reporting that blue was absent. The read is best-effort: when the whole
     // test times out the page is already being torn down, and a rejection
     // here must not replace the real failure.
-    const presentationState = await page
-      .evaluate(() => ({
+    const presentationRead = await boundFailureDiagnostic(
+      page.evaluate(() => ({
         worker: window.__donnerWorkerStats,
         frames: window.__donnerMainLoopRenderedFrames || 0,
         workerBusy: window.__donnerInteractionStats?.workerBusy,
         activeSample: window.__donnerActiveSampleStats,
-      }))
-      .catch((error: unknown) => ({ unavailable: String(error) }));
+        host: window.__donnerHostFrameTiming === undefined ? null : {
+          frames: window.__donnerHostFrameTiming.frames,
+          acquiredFrames: window.__donnerHostFrameTiming.surfaceAcquiredFrames,
+          presentedFrames: window.__donnerHostFrameTiming.surfacePresentedFrames,
+          lastAcquired: window.__donnerHostFrameTiming.lastSurfaceAcquired,
+          lastPresented: window.__donnerHostFrameTiming.lastSurfacePresented,
+        },
+      })),
+      scaledMs(4_000),
+    );
+    const presentationState = presentationRead ?? { unavailable: "presentation state unavailable" };
     // Only worth the extra page work when no capture met the presented-sample and pixel checks.
-    const canvasDiagnosis = baselinePng === null ? await diagnosePresentedCanvas(page) : null;
+    const canvasDiagnosis = await diagnoseCanvasAfterState(
+      page,
+      baselinePng === null,
+      presentationRead !== null,
+    );
     if (baselinePng === null && lastProbe !== null) {
       try {
-        if (lastProbe.shot.length > 0) {
-          await attachEvidenceFile("open-basic-shapes-last-probe", lastProbe.shot, "image/png");
-        }
+        const sentinelPixels = basicShapesSentinelPixels(
+          captureSentinelExpected,
+          pageViewport,
+          lastProbe,
+        );
         await attachEvidenceFile(
           "open-basic-shapes-last-probe-state",
           JSON.stringify(
@@ -1490,6 +1657,7 @@ async function openBasicShapes(page: Page): Promise<{
               timeoutStage: lastProbe.timeoutStage,
               pageViewport,
               beforeSampleResults,
+              sentinelPixels,
             },
             null,
             2,
@@ -1624,8 +1792,10 @@ test("browser overlay control stays disabled after a normal editor frame", async
   expect(failures).toEqual([]);
 });
 
-test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ page }) => {
+test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ browserName, page }) => {
   const failures = await openEditor(page, "overlay");
+  const captureSentinelExpected = browserName === "firefox";
+  if (captureSentinelExpected) await installCaptureSentinel(page);
   const {
     canvasBounds,
     documentClip: presentedDocumentClip,
@@ -1634,6 +1804,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     blueRect,
   } = await openBasicShapes(
     page,
+    captureSentinelExpected,
   );
   const rejectedControlInputs = await page.evaluate(() => {
     const control = window.Module?._donner_set_overlay_state;
@@ -1934,6 +2105,28 @@ test(
   },
 );
 
+test("Firefox capture sentinel survives an opaque canvas clear", async ({ browserName, page }) => {
+  test.skip(browserName !== "firefox", "Firefox capture diagnostic fixture");
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await page.setContent(
+    `<style>html,body{margin:0;background:#101317}canvas{position:fixed;inset:0}</style><canvas width="1600" height="900"></canvas>`,
+  );
+  await page.evaluate(() => {
+    const canvas = document.querySelector("canvas") as HTMLCanvasElement;
+    const context = canvas.getContext("2d");
+    if (context === null) throw new Error("synthetic canvas context unavailable");
+    context.fillStyle = "#101317";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+  });
+  expect(captureSentinelPixels(await page.screenshot(), { width: 1600, height: 900 })).toBe(0);
+  await installCaptureSentinel(page);
+  const withMarker = await page.screenshot();
+  const viewport = { width: 1600, height: 900 };
+  expect(captureSentinelPixels(withMarker, viewport)).toBe(144);
+  expect(basicShapesSentinelPixels(true, viewport, { shot: withMarker })).toBe(144);
+  expect(basicShapesSentinelPixels(false, viewport, { shot: withMarker })).toBeNull();
+});
+
 test("Firefox keeps the dragged shape and its selection outline in every drag frame", async ({ browserName, page }) => {
   // The single-canvas replacement removed the two-surface epoch handoff that used to let a drag
   // frame show the shape at one position and its outline at another. What
@@ -1942,7 +2135,11 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   // forward.
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const failures = await openEditor(page);
-  const { documentClip: probeRegion, captureClip, blueRect: blueCss } = await openBasicShapes(page);
+  await installCaptureSentinel(page);
+  const { documentClip: probeRegion, captureClip, blueRect: blueCss } = await openBasicShapes(
+    page,
+    true,
+  );
   const baselineBluePixels = blueCss.pixels;
   expect(baselineBluePixels, "expected the initial Basic Shapes render before starting the drag")
     .toBeGreaterThan(500);
