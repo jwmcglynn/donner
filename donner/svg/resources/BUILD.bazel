@@ -1,5 +1,4 @@
 load("//build_defs:embed_resources.bzl", "embed_resources")
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
@@ -392,5 +391,3 @@ donner_cc_fuzzer(
         ":resource_loader_interface",
     ],
 )
-
-donner_package()

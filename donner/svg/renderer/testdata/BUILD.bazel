@@ -1,4 +1,3 @@
-load("//build_defs:package.bzl", "donner_package")
 
 filegroup(
     name = "testdata",
@@ -19,5 +18,3 @@ filegroup(
         "//donner:__subpackages__",
     ],
 )
-
-donner_package()

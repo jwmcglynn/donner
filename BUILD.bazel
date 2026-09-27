@@ -3,8 +3,6 @@
 ##
 ## Named target platforms for local and remote Bazel builds.
 
-load("//build_defs:package.bzl", "donner_package")
-
 ##
 ## Main library
 ##
@@ -125,8 +123,3 @@ filegroup(
         "//donner:__subpackages__",
     ],
 )
-
-donner_package(gpu_inventory_globs = [
-    "MODULE.bazel",
-    ".bazelrc",
-])

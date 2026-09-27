@@ -1,6 +1,5 @@
 """Tests for the headless render session + REPL."""
 
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "renderer_backend_compatible_with")
 load(
     "//donner/editor:editor_product_config.bzl",
@@ -21,5 +20,3 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
-
-donner_package()

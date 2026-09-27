@@ -3,7 +3,6 @@ load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
-load("//build_defs:package.bzl", "donner_package")
 load("//tools/http:serve_http.bzl", "serve_http")
 load(
     ":editor_wasm_transition.bzl",
@@ -492,7 +491,6 @@ py_test(
     }),
 )
 
-donner_package()
 
 py_binary(
     name = "package_web_files",

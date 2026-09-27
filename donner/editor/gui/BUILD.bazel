@@ -1,7 +1,6 @@
 """Shared GLFW + ImGui + OpenGL host for the advanced Donner editor."""
 
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library")
 
 package(default_visibility = ["//visibility:public"])
@@ -137,5 +136,3 @@ donner_cc_library(
         "//conditions:default": [],
     }),
 )
-
-donner_package()

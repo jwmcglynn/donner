@@ -1,6 +1,5 @@
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 load(":pthreads_transition.bzl", "pthreads_transitioned_target")
@@ -176,5 +175,3 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
-
-donner_package()

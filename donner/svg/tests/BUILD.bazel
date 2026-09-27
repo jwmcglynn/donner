@@ -1,4 +1,3 @@
-load("//build_defs:package.bzl", "donner_package")
 load(
     "//build_defs:rules.bzl",
     "donner_cc_library",
@@ -142,5 +141,3 @@ donner_cc_library(
         "@com_google_gtest//:gtest",
     ],
 )
-
-donner_package()

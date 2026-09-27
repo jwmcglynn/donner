@@ -5,7 +5,6 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "fuzzer_compatible_with")
 
 exports_files(
@@ -38,16 +37,6 @@ py_test(
         "//:.bazelrc",
         "//:.github/workflows/coverage.yml",
         "//:.github/workflows/main.yml",
-    ],
-)
-
-py_test(
-    name = "package_glob_safety_tests",
-    size = "small",
-    srcs = ["package_glob_safety_tests.py"],
-    data = [
-        ":package.bzl",
-        "//:BUILD.bazel",
     ],
 )
 
@@ -216,11 +205,6 @@ config_setting(
         ":llvm_latest": "1",
     },
 )
-
-donner_package(gpu_inventory_globs = [
-    "**/*.bzl",
-    "BUILD.bazel",
-])
 
 donner_cc_fuzzer(
     name = "soak_probe_fuzzer",

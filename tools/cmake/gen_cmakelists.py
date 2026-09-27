@@ -49,7 +49,7 @@ from typing import (
 # The emitted CMakeLists.txt files are git-ignored, so the repository-wide
 # no-Rust scan never sees them. This generator is where they do exist, and
 # `--check` is the gate that reads them, using the same token list.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gpu_inventory"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "rust_boundary"))
 
 from rust_scopes import CMAKE_RUST_TOKENS  # noqa: E402  (path set just above)
 

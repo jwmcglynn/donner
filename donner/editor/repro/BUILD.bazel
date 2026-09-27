@@ -1,4 +1,3 @@
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library")
 load(
     "//donner/editor:editor_product_config.bzl",
@@ -90,5 +89,3 @@ donner_cc_test(
         "@imgui",
     ],
 )
-
-donner_package()

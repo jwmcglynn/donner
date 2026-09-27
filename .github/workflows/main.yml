@@ -43,7 +43,7 @@ jobs:
           merge-multiple: true
 
       - name: Verify complete source-bound platform receipts
-        run: python3 tools/gpu_inventory/configured_rust_closure.py aggregate closure-linux.json closure-macos.json
+        run: python3 tools/rust_boundary/configured_rust_closure.py aggregate closure-linux.json closure-macos.json
 
   gatekeeper:
     runs-on: ubuntu-24.04
@@ -687,7 +687,7 @@ jobs:
             //tools/ci:linker_canary
 
       - name: Check configured product, browser, and oracle closures
-        run: python3 tools/gpu_inventory/configured_rust_closure.py scan --platform linux --bazel-option=--config=ci --output closure-linux.json
+        run: python3 tools/rust_boundary/configured_rust_closure.py scan --platform linux --bazel-option=--config=ci --output closure-linux.json
 
       - name: Upload configured closure receipt
         uses: actions/upload-artifact@v7
@@ -1247,7 +1247,7 @@ jobs:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Check configured product, browser, and oracle closures
-        run: python3 tools/gpu_inventory/configured_rust_closure.py scan --platform macos --bazel-option=--config=ci --bazel-option=--macos_minimum_os=13.3 --output closure-macos.json
+        run: python3 tools/rust_boundary/configured_rust_closure.py scan --platform macos --bazel-option=--config=ci --bazel-option=--macos_minimum_os=13.3 --output closure-macos.json
 
       - name: Upload configured closure receipt
         uses: actions/upload-artifact@v7
@@ -1496,7 +1496,7 @@ jobs:
           for flag in "${build_flags[@]}"; do
             options+=("--bazel-option=${flag}")
           done
-          python3 tools/gpu_inventory/configured_rust_closure.py scan --platform macos \
+          python3 tools/rust_boundary/configured_rust_closure.py scan --platform macos \
             --bazel 'bazelisk --nohome_rc' "${options[@]}" --output closure-macos.json
 
       - name: Upload configured closure receipt

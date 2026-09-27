@@ -18,7 +18,7 @@ therefore allowed to sit in the tree, each behind its own boundary:
 Categories:
 
 - rust-source-outside-allowlist: Rust source or Cargo metadata outside both
-  boundaries (tools/gpu_inventory/rust_allowlist.json).
+  boundaries (tools/rust_boundary/rust_allowlist.json).
 - rust-build-edge: rules_rust / crate_universe / Rust toolchain references in a
   build-graph or CMake file outside the test-only prefixes.
 - rust-fixture-containment: the oracle escaping its boundary, either by taking
@@ -49,10 +49,10 @@ rule. Reporting that would be reporting the graph instead of the closure, and it
 is also invisible to a fresh CI checkout, which has no lockfile at all.
 
 Usage:
-  python3 tools/gpu_inventory/check_no_rust_dependencies.py                     # report
-  python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking default  # as CI
-  python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking          # all
-  python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking a,b      # some
+  python3 tools/rust_boundary/check_no_rust_dependencies.py                     # report
+  python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking default  # as CI
+  python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking          # all
+  python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking a,b      # some
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ from rust_scopes import (  # noqa: E402  (sibling module, path set just above)
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ALLOWLIST_RELPATH = "tools/gpu_inventory/rust_allowlist.json"
+ALLOWLIST_RELPATH = "tools/rust_boundary/rust_allowlist.json"
 
 CATEGORIES = (
     "rust-source-outside-allowlist",
@@ -166,6 +166,40 @@ class Finding:
     detail: str
 
 
+def _unquoted_step(line: str, index: int) -> tuple[int, str | None, str]:
+    if line[index] == "#":
+        return len(line), None, ""
+    opener = next((q for q in ('"' * 3, "'" * 3, '"', "'") if line.startswith(q, index)), None)
+    if opener is not None:
+        return index + len(opener), opener, ""
+    return index + 1, None, line[index]
+
+
+def _quoted_step(line: str, index: int, quote: str,
+                 keep_strings: bool) -> tuple[int, str | None, str]:
+    if line[index] == "\\":
+        return index + 2, quote, ""
+    if line.startswith(quote, index):
+        return index + len(quote), None, ""
+    return index + 1, quote, line[index] if keep_strings else ""
+
+
+def _scan_line(line: str, quote: str | None,
+               keep_strings: bool) -> tuple[str, str | None]:
+    kept: list[str] = []
+    index = 0
+    while index < len(line):
+        if quote is None:
+            index, quote, char = _unquoted_step(line, index)
+        else:
+            index, quote, char = _quoted_step(line, index, quote, keep_strings)
+        kept.append(char)
+    if quote in ('"', "'"):
+        # A single-quoted string cannot span lines; a triple-quoted one can.
+        quote = None
+    return "".join(kept), quote
+
+
 def _scan_lines(text: str, keep_strings: bool) -> list[str]:
     """Splits `text` into lines with comments, and optionally strings, removed.
 
@@ -178,34 +212,8 @@ def _scan_lines(text: str, keep_strings: bool) -> list[str]:
     out: list[str] = []
     quote: str | None = None
     for line in text.splitlines():
-        kept: list[str] = []
-        index = 0
-        while index < len(line):
-            if quote is None:
-                if line[index] == "#":
-                    break
-                opener = next(
-                    (q for q in ('"""', "'''", '"', "'") if line.startswith(q, index)), None
-                )
-                if opener is not None:
-                    quote = opener
-                    index += len(opener)
-                else:
-                    kept.append(line[index])
-                    index += 1
-            elif line[index] == "\\":
-                index += 2
-            elif line.startswith(quote, index):
-                index += len(quote)
-                quote = None
-            else:
-                if keep_strings:
-                    kept.append(line[index])
-                index += 1
-        out.append("".join(kept))
-        if quote in ('"', "'"):
-            # A single-quoted string cannot span lines; a triple-quoted one can.
-            quote = None
+        scanned, quote = _scan_line(line, quote, keep_strings)
+        out.append(scanned)
     return out
 
 
@@ -350,46 +358,48 @@ def visibility_entries(listed: str) -> list[str] | None:
     return entries
 
 
+def _visibility_list_entries(rest: str) -> list[str] | None:
+    closing = rest.find("]") if rest.startswith("[") else -1
+    if closing != -1:
+        after = rest[closing + 1 :].lstrip(" \t")
+        if after and not after.startswith(VISIBILITY_LIST_TERMINATORS):
+            # A concatenated list can widen visibility after the first `]`.
+            closing = -1
+    return visibility_entries(rest[1:closing]) if closing != -1 else None
+
+
+def _visibility_entry_finding(path: str, entry: str) -> Finding | None:
+    if entry == "//visibility:private" or is_test_tree_visibility(entry):
+        return None
+    return Finding(
+        category="rust-fixture-containment",
+        path=path,
+        detail=(
+            f"cross-validation oracle's package exposed to {entry}; visibility must "
+            "stay inside the vendored workspace's own //tests tree."
+        ),
+    )
+
+
 def visibility_findings(path: str, text: str) -> list[Finding]:
     """Flags visibility in the oracle's packages that leaves the test tree."""
-
-    def unreadable() -> Finding:
-        return Finding(
-            category="rust-fixture-containment",
-            path=path,
-            detail=(
-                "visibility is not a literal list, so its scope cannot be read here; "
-                "spell the packages out."
-            ),
-        )
-
     findings = []
     for match in VISIBILITY_ASSIGN_RE.finditer(text):
-        rest = text[match.end() :].lstrip()
-        closing = rest.find("]") if rest.startswith("[") else -1
-        if closing != -1:
-            after = rest[closing + 1 :].lstrip(" \t")
-            if after and not after.startswith(VISIBILITY_LIST_TERMINATORS):
-                # `["//tests:__subpackages__"] + ["//visibility:public"]` reads
-                # as contained if the scan stops at the first `]`.
-                closing = -1
-        entries = visibility_entries(rest[1:closing]) if closing != -1 else None
+        entries = _visibility_list_entries(text[match.end() :].lstrip())
         if entries is None:
-            findings.append(unreadable())
+            findings.append(Finding(
+                category="rust-fixture-containment",
+                path=path,
+                detail=(
+                    "visibility is not a literal list, so its scope cannot be read here; "
+                    "spell the packages out."
+                ),
+            ))
             continue
         for entry in entries:
-            if entry == "//visibility:private" or is_test_tree_visibility(entry):
-                continue
-            findings.append(
-                Finding(
-                    category="rust-fixture-containment",
-                    path=path,
-                    detail=(
-                        f"cross-validation oracle's package exposed to {entry}; visibility must "
-                        "stay inside the vendored workspace's own //tests tree."
-                    ),
-                )
-            )
+            finding = _visibility_entry_finding(path, entry)
+            if finding is not None:
+                findings.append(finding)
     return findings
 
 

@@ -860,7 +860,7 @@ Do not copy, translate or vendor implementation code or internal tests from `wgp
 `testonly` resvg GeodeGolden comparison backend as a black box. The final configured graph must
 have no edge from the runtime, shader tooling outside that test, macOS, Wasm, editor, other CI
 targets or shipped artifacts to that reference. A planned
-`//tools/gpu_inventory:check_no_rust_dependencies_tests` extension must check static visibility
+`//tools/rust_boundary:check_no_rust_dependencies_tests` extension must check static visibility
 and compatibility. The planned `CI / no-rust-configured-closure` aggregate job in
 `.github/workflows/main.yml` must be required by branch protection and consume Linux and macOS
 configured-query evidence for
@@ -879,7 +879,7 @@ cross-validation fixture stays in the vendored workspace's own tests, with no co
 re-exports outside it. No Donner target, including tests, may reach that fixture or its objects.
 A transitive module declaration alone is not evidence that a Rust toolchain executes.
 
-`tools/gpu_inventory/check_no_rust_dependencies.py` and its tests enforce the tracked-tree rules;
+`tools/rust_boundary/check_no_rust_dependencies.py` and its tests enforce the tracked-tree rules;
 `tools/cmake/gen_cmakelists.py --check` also validates generated CMake output. Final closure acceptance
 requires every unexpected Rust-built archive to block, with only the exact Linux archive exported
 through a `testonly` target allowlisted and inventoried. The planned verifier tests must check
@@ -922,10 +922,9 @@ and physical-hardware observations are evidence with their stated limits, not un
 Extend existing targets where they own the changed behavior. The native mapping, Metal/Vulkan surface and
 browser backend targets own their merged hooks. Linux window implementation passed local Xvfb and
 hosted PR execution; its final integrated gate, browser hosted/physical-browser gates, and wrapper
-removal remain active. The GPU operation and
-shader manifests must use the
-complete repository input set, with
-`//tools/gpu_inventory:manifest_freshness_tests` as the freshness gate.
+removal remain active. GPU operation, shader, and editor behavior is owned by the executable backend,
+shader, renderer, and browser tests below. The transitional semantic inventory
+manifests and their per-package source filegroups have been retired.
 
 | Contract / remaining work                                      | Owning verification                                                                                                                                                                                                                                                                                                                                                               |
 | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -939,7 +938,7 @@ complete repository input set, with
 | Mapping, loss, cancellation and native surfaces                | Shared `gpu_tests`, native mapping suites and owning Metal/Vulkan surface tests; `//donner/editor/tests:editor_window_vulkan_surface_tests` passes local and hosted CI; final integration pending. `//donner/gpu/browser:browser_tests` owns identifier, ownership, mapping and loss behavior; selected browser editor lanes exercise the runtime.                                |
 | Editor ordering and presentation                               | The explicit Geode editor lane below, the Linux Xvfb surface target above, and the browser rendering/interaction lanes for the selected bridge.                                                                                                                                                                                                                                   |
 | Structural counters, memory, timing and size                   | `//donner/gpu/baseline:baseline_counters_tests`, `//donner/svg/renderer/geode:geode_perf_tests`, and the paired measurements required by the cutover gates.                                                                                                                                                                                                                       |
-| Dependency closure                                             | `//tools/gpu_inventory:check_no_rust_dependencies_tests`, the blocking lexical verifier, planned required `CI / no-rust-configured-closure` job over configured product roots, generated CMake validation, and source-archive/artifact evidence.                                                                                                                                  |
+| Dependency closure                                             | `//tools/rust_boundary:check_no_rust_dependencies_tests`, the blocking lexical verifier, planned required `CI / no-rust-configured-closure` job over configured product roots, generated CMake validation, and source-archive/artifact evidence.                                                                                                                                  |
 
 ### Retired adapter test contracts
 
@@ -1060,7 +1059,7 @@ The exact integrated candidate must satisfy all applicable platform gates:
 - Production consumers, configured dependency/link queries and artifact scans satisfy the
   runtime and no-Rust boundaries. The concrete adapter and Rust-built GPU libraries have no
   production consumers; only the pinned Linux `testonly` resvg reference may reach wgpu-native.
-  Before cutover, `//tools/gpu_inventory:check_no_rust_dependencies_tests`, the blocking lexical
+  Before cutover, `//tools/rust_boundary:check_no_rust_dependencies_tests`, the blocking lexical
   verifier and required `CI / no-rust-configured-closure` job must reject every unexpected archive
   or production edge, with an injected-edge regression.
 - The Linux wgpu-native resvg reference, Linux native Vulkan and macOS native Metal run the same

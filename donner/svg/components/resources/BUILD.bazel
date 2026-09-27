@@ -1,4 +1,3 @@
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library")
 
 donner_cc_library(
@@ -41,5 +40,3 @@ donner_cc_library(
         "//donner/svg/resources:url_loader",
     ],
 )
-
-donner_package()

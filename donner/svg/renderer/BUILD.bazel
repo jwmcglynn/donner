@@ -1,7 +1,6 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@donner_config//:config.bzl", "DONNER_CONFIG")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test", "forbidden_transitive_dep_test")
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_test", "donner_perf_sensitive_cc_library")
 
 # Renderer backend used by //donner/svg/renderer:renderer.
@@ -595,5 +594,3 @@ forbidden_transitive_dep_test(
     ],
     target = "//donner/svg/renderer:renderer_geode",
 )
-
-donner_package()

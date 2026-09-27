@@ -1,5 +1,4 @@
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_binary")
 
 donner_cc_binary(
@@ -189,5 +188,3 @@ wasm_cc_binary(
     cc_target = ":render_test",
     tags = ["manual"],
 )
-
-donner_package()
