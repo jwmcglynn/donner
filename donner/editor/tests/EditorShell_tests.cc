@@ -4224,10 +4224,20 @@ void RunGeodeColdDirectRetinaDrag(std::string_view id, bool selectFromLayers,
       EditorShellTestAccess::SetRequestRenderAtEndOfFrame(shell);
       (void)frame(*hitPoint, false, false);
       ASSERT_TRUE(awaitSelectedPrewarm());
+
+      // The selection click and the held drag are independent pointer gestures.
+      window.beginFrameWithInput({
+          .deltaSeconds = ImGui::GetIO().MouseDoubleClickTime + 1.0 / 60.0,
+          .mousePosition = shell.viewportForReadback().documentToScreen(*hitPoint),
+      });
+      shell.runFrame();
+      window.endFrame();
     }
   }
   const std::uint64_t displayedBefore = EditorShellTestAccess::DisplayedDocVersion(shell);
   (void)frame(*hitPoint, true, false);
+  ASSERT_THAT(ImGui::GetIO().MouseClickedCount[0], ::testing::Eq(1))
+      << "The drag must start as a separate single-click gesture";
 
   tests::BitmapGoldenCompareParams signalParams = tests::PixelmatchIdentityParams();
   signalParams.maxMismatchedPixels = std::numeric_limits<int>::max();
