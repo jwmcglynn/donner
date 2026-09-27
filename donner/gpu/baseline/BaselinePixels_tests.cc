@@ -161,6 +161,14 @@ TEST(FrozenEnvironmentMatchTest, RequiresIdentityAndUniqueLegacySuffix) {
       testing::Optional(testing::Eq("exact")));
 }
 
+TEST(FrozenEnvironmentMatchTest, SoftwareVulkanWithoutArchitectureDoesNotUseTheLegacyCapture) {
+  EXPECT_THAT(MatchFrozenEnvironment({"llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan", "CPU"},
+                                     {{"legacy", "llvmpipe llvmpipe (LLVM 21.1.7, 128 bits)",
+                                       "Vulkan"}})
+                  .slug,
+              testing::Eq(std::nullopt));
+}
+
 bool ProvenanceListsScene(const std::string& capturedScenes, std::string_view sceneName) {
   std::istringstream stream(capturedScenes);
   std::string entry;
