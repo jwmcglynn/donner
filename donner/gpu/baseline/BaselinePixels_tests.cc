@@ -194,11 +194,11 @@ TEST(FrozenEnvironmentMatchTest, RequiresIdentityAndUniqueLegacySuffix) {
 }
 
 TEST(FrozenEnvironmentMatchTest, SoftwareVulkanWithoutArchitectureDoesNotUseTheLegacyCapture) {
-  EXPECT_THAT(MatchFrozenEnvironment({"llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan", "CPU"},
-                                     {{"legacy", "llvmpipe llvmpipe (LLVM 21.1.7, 128 bits)",
-                                       "Vulkan"}})
-                  .slug,
-              testing::Eq(std::nullopt));
+  EXPECT_THAT(
+      MatchFrozenEnvironment({"llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan", "CPU"},
+                             {{"legacy", "llvmpipe llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan"}})
+          .slug,
+      testing::Eq(std::nullopt));
 }
 
 TEST(FrozenEnvironmentMatchTest, SoftwareVulkanRequiresTheSameHostArchitecture) {
