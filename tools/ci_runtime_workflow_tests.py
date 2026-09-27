@@ -151,6 +151,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("uses: ./.github/actions/cache-bazel-actions", self.editor_wasm)
         self.assertIn("cache: npm", self.editor_wasm)
 
+    def test_linux_cmake_consumer_has_one_pr_and_main_owner(self):
+        linux = self.cmake.split("\n  linux:\n", 1)[1].split("\n  macos:\n", 1)[0]
+        admission = linux.split("    env:\n", 1)[0]
+        self.assertIn("github.event_name == 'push'", admission)
+        self.assertIn("github.ref != 'refs/heads/main'", admission)
+        self.assertIn("configured_rust_closure.py scan --platform linux", self._job_body("linux"))
+        self.assertIn("cmake --build build --target donner_cmake_consumer", linux)
+
     def test_platform_checks_reuse_native_build_jobs(self):
         for redundant in ("configured-rust-closure-platform", "linux-local-xvfb", "linker-canary"):
             self.assertNotIn("\n  %s:\n" % redundant, self.main)
