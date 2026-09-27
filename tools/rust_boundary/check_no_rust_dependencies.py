@@ -168,6 +168,25 @@ class Finding:
     detail: str
 
 
+@dataclass(frozen=True)
+class SourceSpan:
+    """UTF-8 source range for one literal accepted as audit metadata."""
+
+    start_line: int
+    start_column: int
+    end_line: int
+    end_column: int
+
+    def contains(self, line: int, start_column: int, end_column: int) -> bool:
+        if line < self.start_line or line > self.end_line:
+            return False
+        if line == self.start_line and start_column < self.start_column:
+            return False
+        if line == self.end_line and end_column > self.end_column:
+            return False
+        return True
+
+
 def _unquoted_step(line: str, index: int) -> tuple[int, str | None, str]:
     if line[index] == "#":
         return len(line), None, ""
@@ -259,41 +278,73 @@ def _audit_rule_name(node: ast.AST) -> str | None:
     return node.func.id
 
 
-def _audit_keyword_occurrences(keyword: ast.keyword,
-                               tokens: tuple[str, ...]) -> set[tuple[int, str]]:
+def _literal_span(node: ast.AST) -> SourceSpan | None:
+    if not isinstance(node, ast.Constant) or not isinstance(node.value, str) or \
+       node.end_lineno is None or node.end_col_offset is None:
+        return None
+    return SourceSpan(node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
+
+
+def _metadata_literal_spans(node: ast.AST) -> set[SourceSpan]:
+    literal = _literal_span(node)
+    if literal is not None:
+        return {literal}
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return set().union(*(_metadata_literal_spans(item) for item in node.elts))
+    if isinstance(node, ast.Dict):
+        return set().union(*(_metadata_literal_spans(item) for item in node.values))
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _metadata_literal_spans(node.left) | _metadata_literal_spans(node.right)
+    if isinstance(node, ast.Call) and _audit_rule_name(node) == "select":
+        return set().union(*(_metadata_literal_spans(item) for item in node.args))
+    return set()
+
+
+def _audit_keyword_spans(keyword: ast.keyword) -> set[SourceSpan]:
     if keyword.arg not in AUDIT_METADATA_ATTRIBUTES:
         return set()
-    values = (
-        value for value in ast.walk(keyword.value)
-        if isinstance(value, ast.Constant) and isinstance(value.value, str)
-    )
-    return {
-        (value.lineno, token)
-        for value in values
-        for token in tokens_in(value.value, tokens)
-    }
+    return _metadata_literal_spans(keyword.value)
 
 
-def _audit_call_occurrences(node: ast.AST,
-                            tokens: tuple[str, ...]) -> set[tuple[int, str]]:
+def _audit_call_spans(node: ast.AST) -> set[SourceSpan]:
     if _audit_rule_name(node) not in AUDIT_RULES:
         return set()
     return set().union(*(
-        _audit_keyword_occurrences(keyword, tokens)
+        _audit_keyword_spans(keyword)
         for keyword in node.keywords
     ))
 
 
-def audit_metadata_occurrences(text: str, tokens: tuple[str, ...]) -> set[tuple[int, str]]:
-    """String-token occurrences inside recognized dependency-audit metadata."""
+def audit_metadata_spans(text: str) -> set[SourceSpan]:
+    """Literal source spans inside recognized dependency-audit metadata."""
     try:
         tree = ast.parse(text)
     except SyntaxError:
         return set()
     return set().union(*(
-        _audit_call_occurrences(node, tokens)
+        _audit_call_spans(node)
         for node in ast.walk(tree)
     ))
+
+
+def _line_token_occurrences(line: str,
+                            tokens: tuple[str, ...]) -> list[tuple[str, int, int]]:
+    pattern = re.compile("|".join(re.escape(token) for token in sorted(tokens, key=len, reverse=True)))
+    return [
+        (match.group(), len(line[:match.start()].encode()), len(line[:match.end()].encode()))
+        for match in pattern.finditer(line)
+    ]
+
+
+def unapproved_tokens(text: str, tokens: tuple[str, ...]) -> list[str]:
+    """Tokens outside exact string literals owned by dependency-audit metadata."""
+    spans = audit_metadata_spans(text)
+    return sorted({
+        token
+        for line_number, line in enumerate(text.splitlines(), start=1)
+        for token, start_column, end_column in _line_token_occurrences(line, tokens)
+        if not any(span.contains(line_number, start_column, end_column) for span in spans)
+    })
 
 
 def compile_attributes_referencing(text: str, tokens: tuple[str, ...]) -> set[str]:
@@ -541,13 +592,7 @@ def fixture_containment_findings(path: str, text: str, scopes: RustScopes) -> li
     """
     if scopes.is_test_only(path) or scopes.is_test_only_consumer(path):
         return visibility_findings(path, text) + reexport_findings(path, text)
-    allowed = audit_metadata_occurrences(text, RUST_FIXTURE_TOKENS)
-    fixture_tokens = sorted({
-        token
-        for line_number, line in enumerate(text.splitlines(), start=1)
-        for token in tokens_in(line, RUST_FIXTURE_TOKENS)
-        if (line_number, token) not in allowed
-    })
+    fixture_tokens = unapproved_tokens(text, RUST_FIXTURE_TOKENS)
     if not fixture_tokens:
         return []
     return [
@@ -824,14 +869,8 @@ def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> lis
     active = text_without_comments(text)
     if not tokens_in(active, RUST_BUILT_ARCHIVE_TOKENS):
         return []
-    attributes = attribute_of_each_line(text)
-    allowed = audit_metadata_occurrences(text, RUST_BUILT_ARCHIVE_TOKENS)
-    for line_number, (line, attribute) in enumerate(zip(active.splitlines(), attributes), start=1):
-        found = tokens_in(line, RUST_BUILT_ARCHIVE_TOKENS)
-        if found and attribute != "tags" and \
-           any((line_number, token) not in allowed for token in found):
-            return _archive_finding(path, "unexpected Rust-built archive or reference edge")
-    return []
+    return _archive_finding(path, "unexpected Rust-built archive or reference edge") \
+        if unapproved_tokens(text, RUST_BUILT_ARCHIVE_TOKENS) else []
 
 
 def inert_reference_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:

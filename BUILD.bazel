@@ -47,7 +47,13 @@ donner_cc_library(
 no_rust_dependency_audit_test(
     name = "donner_no_rust_dependency_audit_test",
     size = "small",
-    required = ["//donner/svg/renderer:renderer_tiny_skia"],
+    required = select({
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer:renderer_geode",
+            "//donner/svg/renderer/geode:geode_device",
+        ],
+        "//conditions:default": ["//donner/svg/renderer:renderer_tiny_skia"],
+    }),
     target = ":donner",
 )
 

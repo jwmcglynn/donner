@@ -180,7 +180,8 @@ def _configured_dependency_audit_impl(ctx):
             str(label)
             for label in labels
             if label.workspace_name == package_label.workspace_name and
-               (label.package == package_label.package or
+               (not package_label.package or
+                label.package == package_label.package or
                 label.package.startswith(package_label.package + "/"))
         ])
 

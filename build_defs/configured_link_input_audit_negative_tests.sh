@@ -30,3 +30,9 @@ if "$5" > "$TEST_TMPDIR/data_audit.txt" 2>&1; then
   exit 1
 fi
 grep -F "Forbidden dependency:" "$TEST_TMPDIR/data_audit.txt"
+
+if "$6" > "$TEST_TMPDIR/external_subpackage_audit.txt" 2>&1; then
+  echo "An external repository subpackage escaped a root-package audit" >&2
+  exit 1
+fi
+grep -F "Forbidden dependency:" "$TEST_TMPDIR/external_subpackage_audit.txt"

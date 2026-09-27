@@ -197,6 +197,29 @@ class TestOnlyOracleTest(unittest.TestCase):
         }
         self.assertIn("rust-fixture-containment", categories(verifier.check(files, SCOPES)))
 
+    def test_audit_metadata_does_not_mask_a_real_edge_on_the_same_line(self):
+        token = "@tiny-skia-cpp//tests/rust_ffi:tiny_skia_ffi"
+        files = {
+            "donner/BUILD.bazel": (
+                f'configured_dependency_audit_test(name="audit", forbidden=["{token}"]); '
+                f'cc_library(name="consumer", deps=["{token}"])\n'
+            )
+        }
+        self.assertIn("rust-fixture-containment", categories(verifier.check(files, SCOPES)))
+
+    def test_nested_rule_call_inside_audit_metadata_is_not_exempt(self):
+        token = "@tiny-skia-cpp//tests/rust_ffi:tiny_skia_ffi"
+        files = {
+            "donner/BUILD.bazel": (
+                "configured_dependency_audit_test(\n"
+                '    name = "audit",\n'
+                '    forbidden = select({"//conditions:default": '
+                'cc_library(name="consumer", deps=["' + token + '"])}),\n'
+                ")\n"
+            )
+        }
+        self.assertIn("rust-fixture-containment", categories(verifier.check(files, SCOPES)))
+
     def test_reference_to_the_derived_oracle_libraries_is_flagged(self):
         files = {
             "donner/svg/renderer/BUILD.bazel": (
