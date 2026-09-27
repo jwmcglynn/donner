@@ -13,7 +13,8 @@ from python.runfiles import runfiles
 
 
 class CoverageScriptTest(unittest.TestCase):
-    def run_fixture(self, root, quiet, status, report, failed_target=False, failed_test=False):
+    def run_fixture(self, root, quiet, status, report, failed_target=False, failed_test=False,
+                    geode_failed=False, geode_xml=None):
         binaries = root / "bin"
         binaries.mkdir()
         (root / "output").mkdir()
@@ -52,6 +53,27 @@ class CoverageScriptTest(unittest.TestCase):
                     "testSummary": {"overallStatus": "FAILED"},
                 },
             ])
+        if geode_failed:
+            events.append({
+                "id": {"testResult": {
+                    "label": "//donner/svg/renderer/tests:renderer_geode_golden_tests",
+                }},
+                "testResult": {
+                    "status": "FAILED",
+                    "testActionOutput": [{"name": "test.xml", "uri": "file:///private/runner"}],
+                },
+            })
+            events.append({
+                "id": {"testSummary": {
+                    "label": "//donner/svg/renderer/tests:renderer_geode_golden_tests",
+                }},
+                "testSummary": {"overallStatus": "FAILED"},
+            })
+            if geode_xml is not None:
+                xml_path = (root / "bazel-testlogs/donner/svg/renderer/tests"
+                            / "renderer_geode_golden_tests/test.xml")
+                xml_path.parent.mkdir(parents=True)
+                xml_path.write_text(geode_xml, encoding="utf-8")
         (root / "fixture-bep.json").write_text(
             "\n".join(json.dumps(event) for event in events), encoding="utf-8"
         )
@@ -154,6 +176,29 @@ class CoverageScriptTest(unittest.TestCase):
             self.assertIn("//fixture:failed_test", result.stdout)
             self.assertNotIn("secret", result.stdout)
             self.assertFalse((root / "coverage-report/filtered_report.dat").exists())
+
+    def test_quiet_geode_failure_names_case_without_exposing_assertion(self):
+        xml = ('<testsuites failures="1"><testcase classname="RendererGeodeGoldenTests" '
+               'name="Lion"><failure message="/private/runner/path">secret pixels'
+               '</failure></testcase></testsuites>')
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_fixture(Path(directory), True, status=3, report=True,
+                                      geode_failed=True, geode_xml=xml)
+        self.assertEqual(result.returncode, 3)
+        self.assertIn('"status": "cases_found"', result.stdout)
+        self.assertIn("RendererGeodeGoldenTests.Lion", result.stdout)
+        self.assertIn('"case_names_unavailable": 0', result.stdout)
+        self.assertNotIn("private", result.stdout)
+        self.assertNotIn("secret", result.stdout)
+
+    def test_quiet_geode_failure_reports_missing_xml_as_unavailable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_fixture(Path(directory), True, status=3, report=True,
+                                      geode_failed=True)
+        self.assertEqual(result.returncode, 3)
+        self.assertIn('"status": "unavailable"', result.stdout)
+        self.assertIn('"reason": "missing_xml"', result.stdout)
+        self.assertIn('"case_names_unavailable": 1', result.stdout)
 
     def test_all_incompatible_targets_accept_success_and_no_tests_found(self):
         for quiet in (False, True):
