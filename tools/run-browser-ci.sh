@@ -105,19 +105,19 @@ if [[ $# -gt 0 ]]; then
   extra_bazel_flags+=("$@")
 fi
 
+bazel_bin="${DONNER_BAZEL:-}"
+if [[ -z "${bazel_bin}" ]]; then
+  if command -v bazelisk >/dev/null 2>&1; then
+    bazel_bin="bazelisk"
+  else
+    bazel_bin="bazel"
+  fi
+fi
+
 if [[ -n "${DONNER_WASM_PACKAGE_DIR:-}" ]]; then
   log "Using prebuilt package: ${DONNER_WASM_PACKAGE_DIR}"
   source_pkg_dir="$(cd "${DONNER_WASM_PACKAGE_DIR}" && pwd -P)"
 else
-  bazel_bin="${DONNER_BAZEL:-}"
-  if [[ -z "${bazel_bin}" ]]; then
-    if command -v bazelisk >/dev/null 2>&1; then
-      bazel_bin="bazelisk"
-    else
-      bazel_bin="bazel"
-    fi
-  fi
-
   log "Building ${kPackageTarget} (--config=${kBazelConfig})"
   "${bazel_bin}" build "--config=${kBazelConfig}" \
     ${extra_bazel_flags[@]+"${extra_bazel_flags[@]}"} "${kPackageTarget}"
@@ -150,7 +150,7 @@ chmod -R u+w "${pkg_dir}"
 # Build the native test-only pixel comparator after copying the served package.
 # This keeps the helper outside the immutable editor artifact and prevents a
 # Bazel output-link change from altering the package under browser test.
-compare_bazel="${DONNER_BAZEL:-bazelisk}"
+compare_bazel="${bazel_bin}"
 readonly kCompareTarget="//donner/editor/tests:standalone_geode_browser_png_compare"
 log "Building ${kCompareTarget}"
 "${compare_bazel}" build ${extra_bazel_flags[@]+"${extra_bazel_flags[@]}"} "${kCompareTarget}"

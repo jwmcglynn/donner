@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { normalizeOverlayGeneration } from "./png-crop";
@@ -20,8 +20,9 @@ export function compareOverlayBitmap(
   captured: Buffer,
   committedGolden: string,
   outputDir: string,
+  inheritedEnvironment: NodeJS.ProcessEnv = process.env,
 ): OverlayBitmapComparison {
-  const executable = process.env.DONNER_BROWSER_GOLDEN_COMPARE;
+  const executable = inheritedEnvironment.DONNER_BROWSER_GOLDEN_COMPARE;
   if (!executable) {
     throw new Error("DONNER_BROWSER_GOLDEN_COMPARE is required for overlay pixels");
   }
@@ -29,17 +30,30 @@ export function compareOverlayBitmap(
   const actual = join(outputDir, "actual-input.png");
   const expected = join(outputDir, "expected.png");
   const diff = join(outputDir, "diff_expected.png");
+  const failureActual = join(outputDir, "actual_expected.png");
+  const failureExpected = join(outputDir, "expected_expected.png");
+  const reportPath = join(outputDir, "gtest-result.json");
   writeFileSync(actual, normalizeOverlayGeneration(captured));
   writeFileSync(expected, normalizeOverlayGeneration(readFileSync(committedGolden)));
+  rmSync(reportPath, { force: true });
 
-  const env = {
-    ...process.env,
+  const env: NodeJS.ProcessEnv = {
+    ...inheritedEnvironment,
     DONNER_ACTUAL_PNG: "actual-input.png",
     DONNER_GOLDEN_PNG: "expected.png",
     TEST_UNDECLARED_OUTPUTS_DIR: outputDir,
   };
+  for (const name of Object.keys(env)) {
+    if (name.startsWith("GTEST_") || name.startsWith("TESTBRIDGE_")) delete env[name];
+  }
   delete env.UPDATE_GOLDEN_IMAGES_DIR;
-  const result = spawnSync(resolve(executable), [], {
+  const result = spawnSync(resolve(executable), [
+    "--gtest_filter=StandaloneGeodeBrowserPngCompare.CanvasMatchesGolden",
+    "--gtest_repeat=1",
+    "--gtest_list_tests=0",
+    "--gtest_shuffle=0",
+    "--gtest_output=json:gtest-result.json",
+  ], {
     cwd: outputDir,
     env,
     encoding: "utf8",
@@ -50,14 +64,40 @@ export function compareOverlayBitmap(
     throw new Error("overlay bitmap comparator could not run: "
       + String(result.error ?? result.signal ?? result.status));
   }
+
+  // Exit zero is insufficient when an inherited GTest filter or shard silently runs no cases.
+  const report = JSON.parse(readFileSync(reportPath, "utf8"));
+  const suites = Array.isArray(report.testsuites) ? report.testsuites : [];
+  const cases = suites.flatMap((suite: { testsuite?: unknown[] }) => suite.testsuite ?? []);
+  const onlyCase = cases[0] as {
+    classname?: string;
+    name?: string;
+    status?: string;
+    result?: string;
+    failures?: unknown[];
+  } | undefined;
+  const caseFailures = onlyCase?.failures?.length ?? 0;
+  if (
+    report.tests !== 1 || report.disabled !== 0 || report.errors !== 0
+    || suites.length !== 1 || cases.length !== 1
+    || onlyCase?.classname !== "StandaloneGeodeBrowserPngCompare"
+    || onlyCase?.name !== "CanvasMatchesGolden"
+    || onlyCase?.status !== "RUN" || onlyCase?.result !== "COMPLETED"
+    || report.failures !== caseFailures
+    || (result.status === 0 && caseFailures !== 0)
+    || (result.status === 1 && (caseFailures !== 1
+      || ![failureActual, failureExpected, diff].every(existsSync)))
+  ) {
+    throw new Error("overlay bitmap comparator did not complete exactly one valid comparison");
+  }
   return {
     matched: result.status === 0,
     outputDir,
     actual,
     expected,
     diff,
-    failureActual: join(outputDir, "actual_expected.png"),
-    failureExpected: join(outputDir, "expected_expected.png"),
+    failureActual,
+    failureExpected,
     detail: (result.stdout + result.stderr).trim(),
   };
 }

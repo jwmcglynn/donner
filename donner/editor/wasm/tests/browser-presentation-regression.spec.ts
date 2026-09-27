@@ -1,6 +1,7 @@
 import { errors, expect, type Page, test, type Worker } from "@playwright/test";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
+import { PNG } from "pngjs";
 import {
   captureEditorPage,
   captureSplashPresentationFrame,
@@ -1860,7 +1861,53 @@ async function waitForPressReadiness(page: Page, message: string): Promise<void>
   }
 }
 
+function coordinatePng(width: number, height: number): Buffer {
+  const image = new PNG({ width, height });
+  for (let y = 0; y < height; ++y) {
+    for (let x = 0; x < width; ++x) {
+      const offset = (y * width + x) * 4;
+      image.data[offset] = x;
+      image.data[offset + 1] = y;
+      image.data[offset + 2] = x + y;
+      image.data[offset + 3] = 255;
+    }
+  }
+  return PNG.sync.write(image);
+}
+
+function rgbaAt(image: PNG, x: number, y: number): number[] {
+  const offset = (y * image.width + x) * 4;
+  return Array.from(image.data.subarray(offset, offset + 4));
+}
+
 test.use({ viewport: { width: 1600, height: 900 } });
+
+test("PNG crop maps a nonzero CSS origin at device pixel ratio two", () => {
+  const cropped = PNG.sync.read(
+    cropCapturedPng(
+      coordinatePng(8, 6),
+      { x: 100, y: 50, width: 4, height: 3 },
+      { x: 101.5, y: 50.5, width: 2, height: 1.5 },
+    ),
+  );
+  expect({ width: cropped.width, height: cropped.height }).toEqual({ width: 4, height: 3 });
+  expect(rgbaAt(cropped, 0, 0)).toEqual([3, 1, 4, 255]);
+  expect(rgbaAt(cropped, 3, 2)).toEqual([6, 3, 9, 255]);
+});
+
+test("PNG crop rejects invalid and out-of-capture CSS bounds", () => {
+  const source = coordinatePng(8, 6);
+  const capture = { x: 100, y: 50, width: 4, height: 3 };
+  const cases = [
+    { crop: { x: Number.NaN, y: 50, width: 1, height: 1 }, error: /invalid CSS bounds/ },
+    { crop: { x: 100, y: 50, width: 0, height: 1 }, error: /invalid CSS bounds/ },
+    { crop: { x: 99.5, y: 50, width: 1, height: 1 }, error: /outside the captured viewport/ },
+    { crop: { x: 103.5, y: 52.5, width: 1, height: 1 }, error: /outside the captured viewport/ },
+  ];
+  for (const { crop, error } of cases) {
+    expect(() => cropCapturedPng(source, capture, crop)).toThrow(error);
+  }
+});
 
 test("overlay normalization preserves document pixels outside the generation suffix", () => {
   const source = coordinatePng(640, 400);
@@ -1881,12 +1928,25 @@ test("native overlay pixelmatch retains a one-pixel artwork regression", async (
   const golden = test.info().snapshotPath("basic-shapes-compositor-tile-overlay.png");
   const baseline = await readFile(golden);
   const outputDir = test.info().outputPath("overlay-native-guard");
-  expect(compareOverlayBitmap(baseline, golden, outputDir).matched).toBe(true);
+  const hostileEnvironment = {
+    ...process.env,
+    GTEST_FILTER: "NoSuchSuite.NoSuchCase",
+    GTEST_REPEAT: "0",
+    GTEST_TOTAL_SHARDS: "4",
+    GTEST_SHARD_INDEX: "3",
+    GTEST_LIST_TESTS: "1",
+    GTEST_OUTPUT: "json:stale.json",
+    TESTBRIDGE_TEST_ONLY: "NoSuchSuite.NoSuchCase",
+    UPDATE_GOLDEN_IMAGES_DIR: outputDir,
+  };
+  expect(compareOverlayBitmap(baseline, golden, outputDir, hostileEnvironment).matched).toBe(true);
 
   const changed = PNG.sync.read(baseline);
   const offset = (80 * changed.width + 100) * 4;
   changed.data.set([255, 0, 0, 255], offset);
-  const comparison = compareOverlayBitmap(PNG.sync.write(changed), golden, outputDir);
+  const comparison = compareOverlayBitmap(
+    PNG.sync.write(changed), golden, outputDir, hostileEnvironment,
+  );
   expect(comparison.matched, comparison.detail).toBe(false);
   expect([comparison.failureActual, comparison.failureExpected, comparison.diff].every(existsSync))
     .toBe(true);
