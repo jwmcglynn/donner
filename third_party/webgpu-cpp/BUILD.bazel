@@ -1,6 +1,5 @@
 """Pinned WebGPU-C++ wrapper for the Linux-only resvg pixel reference."""
 
-
 package(default_visibility = ["//visibility:private"])
 
 cc_library(

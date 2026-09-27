@@ -491,7 +491,6 @@ py_test(
     }),
 )
 
-
 py_binary(
     name = "package_web_files",
     srcs = ["package_web_files.py"],
