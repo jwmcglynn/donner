@@ -59,6 +59,22 @@ function kill_process_tree() {
   kill "-$signal" "$root" 2> /dev/null || true
 }
 
+function safe_bazel_progress() {
+  local line="$1"
+  local counter
+  counter="$(printf '%s\n' "$line" | grep -Eo '^\[[0-9,]+ */ *[0-9,]+\]' || true)"
+  [[ -n "$counter" && ${#counter} -le 64 ]] || return 0
+  # A stalled test may have no terminal BEP event. Retain its validated Bazel
+  # label only when Testing is the actual progress action, not later text in a
+  # linking/compiling line. Require a complete target label with a delimiter.
+  local test_pattern='^\[[0-9,]+ */ *[0-9,]+\] +([0-9]+ */ *[0-9]+ tests(, *[0-9]+ failed)?; +)?Testing +((@@?[A-Za-z0-9_.+~%-]+)?//[A-Za-z0-9_./+-]+:[A-Za-z0-9_./+*=-]+)([[:space:];]|$)'
+  if [[ "$line" =~ $test_pattern && ${#BASH_REMATCH[3]} -le 512 ]]; then
+    printf '%s test %s\n' "$counter" "${BASH_REMATCH[3]}"
+  else
+    printf '%s\n' "$counter"
+  fi
+}
+
 function run_quiet_with_progress() {
   local description="$1"
   local log_file="$2"
@@ -79,9 +95,9 @@ function run_quiet_with_progress() {
   # changed for DONNER_COVERAGE_STALL_LIMIT_SECONDS means the invocation has
   # stopped making observable progress - which is what a target queued on a
   # remote executor and never scheduled looks like, and what no per-test timeout
-  # can catch (those only start once a test RUNS). Report the last line, which
-  # names the target, and kill so the job fails fast instead of running out its
-  # backstop.
+  # can catch (those only start once a test RUNS). Report the validated progress
+  # counter and test label when present, then fail fast instead of running out
+  # the backstop.
   local stall_limit="${DONNER_COVERAGE_STALL_LIMIT_SECONDS:-900}"
   local progress_control="${log_file}.progress-control.$$"
   mkfifo "$progress_control"
@@ -107,12 +123,14 @@ function run_quiet_with_progress() {
 
       local current
       current="$(tail -n 1 "$log_file" 2> /dev/null || true)"
-      # Surface only Bazel's numeric action counter. The rest of a progress
-      # line, including target names and filesystem paths, stays in the local
-      # log. Carriage returns separate Bazel's in-place progress updates.
+      # Surface only the validated counter and test label. The rest of a
+      # progress line, including filesystem paths, stays in the local log.
+      # Carriage returns separate Bazel's in-place progress updates.
       local snapshot
-      snapshot="$(tail -c 65536 "$log_file" 2> /dev/null | tr "\r" "\n" \
-        | grep -Eo "^\[[0-9,]+ */ *[0-9,]+\]" | tail -n 1 || true)"
+      local progress_line
+      progress_line="$(tail -c 65536 "$log_file" 2> /dev/null | tr "\r" "\n" \
+        | grep -E "^\[[0-9,]+ */ *[0-9,]+\]" | tail -n 1 || true)"
+      snapshot="$(safe_bazel_progress "$progress_line")"
       if [[ "$current" != "$last_line" ]]; then
         last_line="$current"
         last_change=$now
