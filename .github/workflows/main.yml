@@ -27,52 +27,10 @@ permissions:
 # hosted lane available during a runner outage.
 
 jobs:
-  configured-rust-closure-platform:
-    name: Configured Rust closure / ${{ matrix.platform }}
-    runs-on: ${{ matrix.runner }}
-    needs: gatekeeper
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: linux
-            runner: ubuntu-24.04
-          - platform: macos
-            runner: macos-26
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - uses: bazel-contrib/setup-bazel@0.19.0
-        with:
-          bazelisk-cache: true
-          repository-cache: true
-          external-cache: true
-
-      - name: Install Linux build dependencies
-        if: matrix.platform == 'linux'
-        uses: ./.github/actions/apt-install
-        with:
-          packages: >-
-            ninja-build pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
-            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
-            libgl1-mesa-dev libosmesa6
-
-      - name: Check configured product, browser, and oracle closures
-        run: python3 tools/gpu_inventory/configured_rust_closure.py scan --platform "${{ matrix.platform }}" --output "closure-${{ matrix.platform }}.json"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: configured-rust-closure-${{ matrix.platform }}
-          path: closure-${{ matrix.platform }}.json
-          if-no-files-found: error
-
   no-rust-configured-closure:
     name: CI / no-rust-configured-closure
     runs-on: ubuntu-24.04
-    needs: [gatekeeper, configured-rust-closure-platform]
+    needs: [gatekeeper, linux, macos, macos-self-hosted]
     if: ${{ always() && !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     steps:
       - uses: actions/checkout@v7
@@ -614,11 +572,10 @@ jobs:
           echo "run=$run_reference" >> "$GITHUB_OUTPUT"
 
   linux:
-    # GitHub-hosted x86_64 baseline. Suppressed when the trusted self-hosted
-    # ARM64 lane is active (see gate comment above).
+    # One x86_64 workspace owns native, local-display, linker and closure checks.
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -629,7 +586,7 @@ jobs:
         uses: ./.github/actions/apt-install
         with:
           packages: >-
-            pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
+            ninja-build pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
             libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
             libgl1-mesa-dev libosmesa6 clang-tidy-19 xvfb xauth
 
@@ -637,12 +594,17 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ runner.os }}-default
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Restore Bazel action cache
+        uses: ./.github/actions/cache-bazel-actions
+        with:
+          namespace: native
+
       - name: Build
+        if: ${{ needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -654,6 +616,7 @@ jobs:
           bazelisk build --config=ci $TARGETS
 
       - name: Test
+        if: ${{ needs.gatekeeper.outputs.use_self_hosted_linux != 'true' }}
         id: test
         shell: bash
         run: |
@@ -684,7 +647,7 @@ jobs:
 
       - name: Test Linux WebGPU resvg reference
         id: wgpu_resvg_reference
-        if: ${{ !cancelled() && needs.determine-targets.outputs.wgpu_reference == 'true' }}
+        if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux != 'true' && needs.determine-targets.outputs.wgpu_reference == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -692,43 +655,9 @@ jobs:
             --test_tag_filters= --test_env=XDG_RUNTIME_DIR=/tmp \
             //tools/ci:linux_wgpu_resvg_reference
 
-      - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure')
-        uses: ./.github/actions/upload-bazel-test-artifacts
-        with:
-          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
-
-  # The remote Linux test runner excludes local display tests. Keep their Bazel tag filter on a
-  # hosted runner when self-hosted routing is active; the ordinary hosted Linux job runs them
-  # when self-hosted routing is off.
-  linux-local-xvfb:
-    runs-on: ubuntu-24.04
-    needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Install system dependencies
-        uses: ./.github/actions/apt-install
-        with:
-          packages: >-
-            pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
-            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
-            libgl1-mesa-dev libosmesa6 xvfb xauth
-
-      - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.19.0
-        with:
-          bazelisk-cache: true
-          repository-cache: true
-          external-cache: true
-          cache-save: false
-
       - name: Test local Xvfb targets
-        id: test
+        id: local_xvfb
+        if: ${{ !cancelled() && needs.gatekeeper.outputs.use_self_hosted_linux == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -746,57 +675,26 @@ jobs:
             --strategy=TestRunner=local $TARGETS
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && steps.test.outcome == 'failure'
+        if: failure() && (steps.test.outcome == 'failure' || steps.wgpu_resvg_reference.outcome == 'failure' || steps.local_xvfb.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
-  # Non-lld linker canary, split into its own always-on hosted job so it runs
-  # regardless of Linux runner routing. The hosted `linux` lane is suppressed
-  # when self-hosted routing is active, and the
-  # self-hosted lane's hermetic LLVM toolchain ships lld (not gold), so the gold
-  # canary has no home there. Keeping it on a dedicated ubuntu-24.04 job runs it
-  # on the runner that actually has gold and preserves coverage on every
-  # non-docs PR and main push. It shares the `linux` lane's Bazel disk-cache key
-  # so the compile actions are warm cache hits and only the final gold relink is
-  # new; this is a link-only check on a fixed minimal target set. See #665.
-  linker-canary:
-    runs-on: ubuntu-24.04
-    needs: [gatekeeper]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Install system dependencies
-        uses: ./.github/actions/apt-install
-        with:
-          packages: >-
-            pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
-            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
-            libgl1-mesa-dev libosmesa6
-
-      - name: Setup Bazel
-        uses: bazel-contrib/setup-bazel@0.19.0
-        with:
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ runner.os }}-default
-          repository-cache: true
-          external-cache: true
-          cache-save: ${{ github.ref == 'refs/heads/main' }}
-
-      # Forces a single-pass linker (gold) so a diamond-dependency archive that
-      # loses its alwayslink (or a new one that needs it) is caught immediately
-      # instead of only surfacing on a dev box whose default linker isn't lld.
-      # See #665. Targets are the minimal set proven to reach every
-      # link-order-sensitive library in that fix.
       - name: Linker canary (non-lld linker support)
         shell: bash
         run: |
           bazelisk build --config=ci --linkopt=-fuse-ld=gold \
             //tools/ci:linker_canary
+
+      - name: Check configured product, browser, and oracle closures
+        run: python3 tools/gpu_inventory/configured_rust_closure.py scan --platform linux --bazel-option=--config=ci --output closure-linux.json
+
+      - name: Upload configured closure receipt
+        uses: actions/upload-artifact@v7
+        with:
+          name: configured-rust-closure-linux
+          path: closure-linux.json
+          if-no-files-found: error
 
   # Admit the operator's ARM64 Linux job from a hosted runner. The FIFO wait
   # cannot run on the constrained self-hosted pool itself: newer runs could
@@ -1242,10 +1140,14 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ runner.os }}-default
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Restore Bazel action cache
+        uses: ./.github/actions/cache-bazel-actions
+        with:
+          namespace: native
 
       - name: Fetch Metal validation dependencies
         uses: nick-fields/retry@v4
@@ -1343,6 +1245,16 @@ jobs:
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Check configured product, browser, and oracle closures
+        run: python3 tools/gpu_inventory/configured_rust_closure.py scan --platform macos --bazel-option=--config=ci --bazel-option=--macos_minimum_os=13.3 --output closure-macos.json
+
+      - name: Upload configured closure receipt
+        uses: actions/upload-artifact@v7
+        with:
+          name: configured-rust-closure-macos
+          path: closure-macos.json
+          if-no-files-found: error
 
   # Operator's ARM64 macOS runs on the operator's self-hosted runner.
   # Replaces `macos` for trusted operator PRs. Main pushes, Renovate, and
@@ -1543,3 +1455,22 @@ jobs:
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Check configured product, browser, and oracle closures
+        shell: bash
+        run: |
+          set -euo pipefail
+          read -r -a build_flags <<< "$BAZEL_MACOS_BUILD_FLAGS"
+          options=(--bazel-option=--config=ci)
+          for flag in "${build_flags[@]}"; do
+            options+=("--bazel-option=${flag}")
+          done
+          python3 tools/gpu_inventory/configured_rust_closure.py scan --platform macos \
+            --bazel 'bazelisk --nohome_rc' "${options[@]}" --output closure-macos.json
+
+      - name: Upload configured closure receipt
+        uses: actions/upload-artifact@v7
+        with:
+          name: configured-rust-closure-macos
+          path: closure-macos.json
+          if-no-files-found: error

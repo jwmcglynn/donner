@@ -72,6 +72,18 @@ class ConfiguredRustClosureTests(unittest.TestCase):
             gate.query_closure(root, "nativeGeode", "bazel")
             self.assertIn("--config=geode", query.call_args.args)
 
+    def test_closure_build_and_output_query_keep_the_owning_lane_options(self) -> None:
+        root = "//donner/svg/tool:donner-svg"
+        options = ("--config=ci", "--macos_minimum_os=13.3")
+        with patch.object(gate, "run", return_value="bazel-out/donner-svg\n") as command, \
+             patch.object(gate, "_artifact_output_records", return_value=[{"path": "donner-svg"}]):
+            gate._build_one_artifact("native", root, "bazelisk --nohome_rc", options)
+        self.assertEqual([call.args[2] for call in command.call_args_list], ["build", "cquery"])
+        for call in command.call_args_list:
+            self.assertEqual(call.args[:2], ("bazelisk", "--nohome_rc"))
+            for option in options:
+                self.assertIn(option, call.args)
+
     def test_required_product_root_cannot_be_removed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             modified = json.loads(json.dumps(self.spec))

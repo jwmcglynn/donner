@@ -15,6 +15,7 @@ import hashlib
 import json
 import platform
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -202,8 +203,8 @@ def check_closure(root: str, profile: str, labels: set[str], spec: dict[str, Any
         raise GateError(f"{root}: production closure reaches test oracle, WebGPU-C++ wrapper, or Rust archive: {hits}")
 
 
-def query_closure(root: str, profile: str, bazel: str) -> set[str]:
-    args = [bazel, "cquery", f"deps({root})", "--output=label", "--noshow_progress"]
+def query_closure(root: str, profile: str, bazel: str, bazel_options: tuple[str, ...] = ()) -> set[str]:
+    args = [*shlex.split(bazel), "cquery", f"deps({root})", "--output=label", "--noshow_progress", *bazel_options]
     if profile == "browser":
         args.append("--config=editor-wasm")
     elif profile == "nativeGeode":
@@ -273,10 +274,10 @@ def _artifact_output_records(output: str, root: str) -> list[dict[str, Any]]:
     return scan_artifact_output(ROOT / rel, root)
 
 
-def _build_one_artifact(profile: str, root: str, bazel: str) -> dict[str, Any]:
-    flags = ["--config=editor-wasm"] if profile == "browser" else []
-    run(bazel, "build", root, "--noshow_progress", *flags)
-    output = run(bazel, "cquery", root, "--output=files", "--noshow_progress", *flags)
+def _build_one_artifact(profile: str, root: str, bazel: str, bazel_options: tuple[str, ...] = ()) -> dict[str, Any]:
+    flags = [*bazel_options, *(["--config=editor-wasm"] if profile == "browser" else [])]
+    run(*shlex.split(bazel), "build", root, "--noshow_progress", *flags)
+    output = run(*shlex.split(bazel), "cquery", root, "--output=files", "--noshow_progress", *flags)
     paths = [line.strip() for line in output.splitlines() if line.strip()]
     if not paths:
         raise GateError(f"{root}: Bazel produced no shipped artifact")
@@ -287,12 +288,13 @@ def _build_one_artifact(profile: str, root: str, bazel: str) -> dict[str, Any]:
     return {"profile": profile, "root": root, "files": files}
 
 
-def build_and_scan_artifacts(os_name: str, bazel: str, spec: dict[str, Any]) -> list[dict[str, Any]]:
-    return [_build_one_artifact(profile, root, bazel)
+def build_and_scan_artifacts(os_name: str, bazel: str, spec: dict[str, Any],
+                             bazel_options: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+    return [_build_one_artifact(profile, root, bazel, bazel_options)
             for profile, roots in spec["artifactRoots"][os_name].items() for root in roots]
 
 
-def platform_receipt(os_name: str, bazel: str) -> dict[str, Any]:
+def platform_receipt(os_name: str, bazel: str, bazel_options: tuple[str, ...] = ()) -> dict[str, Any]:
     actual = "macos" if sys.platform == "darwin" else "linux" if sys.platform.startswith("linux") else "other"
     if os_name != actual:
         raise GateError(f"requested {os_name} closure on {actual} host")
@@ -305,12 +307,12 @@ def platform_receipt(os_name: str, bazel: str) -> dict[str, Any]:
     closures = []
     for profile, roots in spec["platforms"][os_name].items():
         for root in roots:
-            labels = query_closure(root, profile, bazel)
+            labels = query_closure(root, profile, bazel, bazel_options)
             check_closure(root, profile, labels, spec)
             closures.append({"profile": profile, "root": root, "labelsSha256": digest(canonical(sorted(labels))),
                              "labelCount": len(labels)})
     cmake = check_cmake_consumer() if os_name == "linux" else None
-    artifacts = build_and_scan_artifacts(os_name, bazel, spec)
+    artifacts = build_and_scan_artifacts(os_name, bazel, spec, bazel_options)
     if os_name == "linux":
         lock_sha = verify_lock(pins)
     return {"schema": SCHEMA, **source_identity(), "platform": os_name,
@@ -416,14 +418,17 @@ def main() -> int:
     sub = parser.add_subparsers(dest="action", required=True)
     scan = sub.add_parser("scan")
     scan.add_argument("--platform", choices=("linux", "macos"), required=True)
-    scan.add_argument("--bazel", default="bazel")
+    scan.add_argument("--bazel", default="bazel",
+                      help="Bazel executable and optional startup arguments (no shell evaluation)")
+    scan.add_argument("--bazel-option", action="append", default=[],
+                      help="Build/cquery option matching the owning CI lane; repeat as needed")
     scan.add_argument("--output", type=Path, required=True)
     aggregate = sub.add_parser("aggregate")
     aggregate.add_argument("receipts", nargs="+", type=Path)
     args = parser.parse_args()
     try:
         if args.action == "scan":
-            result = platform_receipt(args.platform, args.bazel)
+            result = platform_receipt(args.platform, args.bazel, tuple(args.bazel_option))
             args.output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
             print(f"PASS: {args.platform} configured no-Rust closures ({len(result['closures'])} roots)")
         else:

@@ -139,6 +139,24 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for identity in ("github.run_id", "github.run_attempt", "github.job"):
             self.assertIn(identity, artifacts)
 
+    def test_compiled_action_cache_refreshes_only_from_main(self):
+        action = self.supply_chain_files[".github/actions/cache-bazel-actions/action.yml"]
+        writer = action.split("    - name: Restore and refresh main action cache\n", 1)[1]
+        writer, reader = writer.split("    - name: Restore action cache without saving\n", 1)
+        self.assertIn("github.event_name != 'pull_request' && github.ref == 'refs/heads/main'", writer)
+        self.assertIn("uses: actions/cache@v6", writer)
+        self.assertIn("github.event_name == 'pull_request' || github.ref != 'refs/heads/main'", reader)
+        self.assertIn("uses: actions/cache/restore@v6", reader)
+        for block in (writer, reader):
+            key = re.search(r"^        key: (.+)$", block, re.MULTILINE).group(1)
+            for dimension in ("runner.os", "runner.arch", "inputs.namespace", "github.sha"):
+                self.assertIn(dimension, key)
+            self.assertIn("hashFiles('.bazelversion')", key)
+            restore = block.split("restore-keys: |", 1)[1]
+            self.assertNotIn("github.sha", restore)
+            self.assertIn("inputs.namespace", restore)
+        self.assertNotIn("secrets.", action)
+
     def test_external_actions_use_released_version_tags(self):
         """External actions use Renovate-compatible release tags, never branches."""
         action_line = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<target>\S+)\s*$")
