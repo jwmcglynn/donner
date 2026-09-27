@@ -2735,6 +2735,9 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   if (const ImDrawData* drawData = ImGui::GetDrawData(); drawData != nullptr) {
     whole_app_worker::PublishImGuiDrawStats(drawData->TotalVtxCount, drawData->TotalIdxCount,
                                             drawData->CmdListsCount);
+  } else {
+    // Every host frame, including an early surface return, needs fresh draw counts.
+    whole_app_worker::PublishImGuiDrawStats(0, 0, 0);
   }
 #endif
   int displayW = 0;

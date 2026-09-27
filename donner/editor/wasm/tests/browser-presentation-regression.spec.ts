@@ -118,17 +118,15 @@ declare global {
       surfacePresentedFrames: number;
       lastSurfaceAcquired: boolean;
       lastSurfacePresented: boolean;
-    };
-    __donnerPresentationDrawStats?: {
-      frames: number;
-      hostFrames: number;
-      checkerboardDraws: number;
-      overviewTileDraws: number;
-      activeTileDraws: number;
-      directTotalMs: number;
-      hostUnderlayMs: number;
-      imguiVertices: number;
-      imguiDrawMs: number;
+      lastUnderlaySequence?: number;
+      lastUnderlayHostFrame?: number;
+      lastCheckerboardDraws?: number;
+      lastOverviewTileDraws?: number;
+      lastActiveTileDraws?: number;
+      lastUnderlayDirectMs?: number;
+      lastImguiVertices?: number;
+      lastImguiIndices?: number;
+      lastImguiCommandLists?: number;
     };
     __donnerImGuiDrawStats?: {
       vertices: number;
@@ -1209,6 +1207,15 @@ interface HostPresentationCounters {
   presentedFrames: number;
   lastAcquired: boolean;
   lastPresented: boolean;
+  underlaySequence: number;
+  underlayHostFrame: number;
+  checkerboardDraws: number;
+  overviewTileDraws: number;
+  activeTileDraws: number;
+  underlayDirectMs: number;
+  imguiVertices: number;
+  imguiIndices: number;
+  imguiCommandLists: number;
 }
 
 async function diagnosePostFailureGpuReadback(
@@ -1268,6 +1275,15 @@ async function diagnosePresentedCanvas(
           presentedFrames: host.surfacePresentedFrames,
           lastAcquired: host.lastSurfaceAcquired,
           lastPresented: host.lastSurfacePresented,
+          underlaySequence: host.lastUnderlaySequence ?? 0,
+          underlayHostFrame: host.lastUnderlayHostFrame ?? 0,
+          checkerboardDraws: host.lastCheckerboardDraws ?? 0,
+          overviewTileDraws: host.lastOverviewTileDraws ?? 0,
+          activeTileDraws: host.lastActiveTileDraws ?? 0,
+          underlayDirectMs: host.lastUnderlayDirectMs ?? 0,
+          imguiVertices: host.lastImguiVertices ?? 0,
+          imguiIndices: host.lastImguiIndices ?? 0,
+          imguiCommandLists: host.lastImguiCommandLists ?? 0,
         };
       };
       // Count pixels that carry both coverage and hue, so the editor's own
@@ -1686,7 +1702,6 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
         frames: window.__donnerMainLoopRenderedFrames || 0,
         workerBusy: window.__donnerInteractionStats?.workerBusy,
         activeSample: window.__donnerActiveSampleStats,
-        presentationDraw: window.__donnerPresentationDrawStats ?? null,
         imguiDraw: window.__donnerImGuiDrawStats ?? null,
         host: window.__donnerHostFrameTiming === undefined ? null : {
           frames: window.__donnerHostFrameTiming.frames,
@@ -1694,6 +1709,15 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
           presentedFrames: window.__donnerHostFrameTiming.surfacePresentedFrames,
           lastAcquired: window.__donnerHostFrameTiming.lastSurfaceAcquired,
           lastPresented: window.__donnerHostFrameTiming.lastSurfacePresented,
+          underlaySequence: window.__donnerHostFrameTiming.lastUnderlaySequence ?? 0,
+          underlayHostFrame: window.__donnerHostFrameTiming.lastUnderlayHostFrame ?? 0,
+          checkerboardDraws: window.__donnerHostFrameTiming.lastCheckerboardDraws ?? 0,
+          overviewTileDraws: window.__donnerHostFrameTiming.lastOverviewTileDraws ?? 0,
+          activeTileDraws: window.__donnerHostFrameTiming.lastActiveTileDraws ?? 0,
+          underlayDirectMs: window.__donnerHostFrameTiming.lastUnderlayDirectMs ?? 0,
+          imguiVertices: window.__donnerHostFrameTiming.lastImguiVertices ?? 0,
+          imguiIndices: window.__donnerHostFrameTiming.lastImguiIndices ?? 0,
+          imguiCommandLists: window.__donnerHostFrameTiming.lastImguiCommandLists ?? 0,
         },
       })),
       scaledMs(4_000),

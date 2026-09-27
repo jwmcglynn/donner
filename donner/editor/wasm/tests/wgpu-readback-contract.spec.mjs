@@ -19,6 +19,10 @@ const editorShellSource = await readFile(
   new URL("../../EditorShell.cc", import.meta.url),
   "utf8",
 );
+const workerBridgeSource = await readFile(
+  new URL("../../WholeAppWorkerBridge.cc", import.meta.url),
+  "utf8",
+);
 const rotateCursorSource = await readFile(
   new URL("../../RotateCursorSet.cc", import.meta.url),
   "utf8",
@@ -85,6 +89,66 @@ function extractBrowserLibraryFunction(name, nextName, bridge) {
     { READ: 1 },
   );
 }
+
+test("host timing consumes each current-frame draw snapshot once", () => {
+  const underlayCallback = editorShellSource.match(
+    /lastDirectPresentationCost_ = DrawDocumentPresentationToFramebuffer\([\s\S]*?PublishPendingUnderlayDrawStats\([\s\S]*?\);/,
+  );
+  assert.ok(underlayCallback, "expected direct presentation to publish its current draw counts");
+  assert.match(underlayCallback[0], /activeTileDrawCount/);
+  assert.match(source, /PublishImGuiDrawStats\(0, 0, 0\)/);
+
+  const hostTiming = workerBridgeSource.match(
+    /void PublishHostFrameTiming\([\s\S]*?\n}\n\nvoid PublishPinchZoomPolicy/,
+  );
+  assert.ok(hostTiming, "expected the browser host-frame timing publisher");
+  const callback = hostTiming[0].match(
+    /MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},\s*endFrameMs/,
+  );
+  assert.ok(callback, "expected executable host timing callback");
+  const bindings = Array.from({ length: 10 }, (_, index) =>
+    `const $${index} = values[${index}];`).join("\n");
+  const publish = new Function("window", "values", `${bindings}\n${callback[1]}`);
+  const windowState = {
+    __donnerPendingUnderlayDrawStats: {
+      sequence: 7,
+      checkerboardDraws: 1,
+      overviewTileDraws: 2,
+      activeTileDraws: 3,
+      directTotalMs: 4,
+    },
+    __donnerPendingImGuiDrawStats: { vertices: 12, indices: 18, commandLists: 2 },
+    __donnerImGuiDrawStats: { vertices: 99, indices: 99, commandLists: 99 },
+  };
+  publish(windowState, [0, 0, 0, 0, 0, 0, 0, 0, 1, 1]);
+  assert.deepEqual({
+    frame: windowState.__donnerHostFrameTiming.frames,
+    underlayFrame: windowState.__donnerHostFrameTiming.lastUnderlayHostFrame,
+    underlaySequence: windowState.__donnerHostFrameTiming.lastUnderlaySequence,
+    tileDraws: windowState.__donnerHostFrameTiming.lastActiveTileDraws,
+    imguiVertices: windowState.__donnerHostFrameTiming.lastImguiVertices,
+  }, { frame: 1, underlayFrame: 1, underlaySequence: 7, tileDraws: 3, imguiVertices: 12 });
+  assert.equal(windowState.__donnerPendingUnderlayDrawStats, undefined);
+  assert.equal(windowState.__donnerPendingImGuiDrawStats, undefined);
+  assert.equal(windowState.__donnerImGuiDrawStats.vertices, 99);
+
+  publish(windowState, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual({
+    underlayFrame: windowState.__donnerHostFrameTiming.lastUnderlayHostFrame,
+    tileDraws: windowState.__donnerHostFrameTiming.lastActiveTileDraws,
+    imguiVertices: windowState.__donnerHostFrameTiming.lastImguiVertices,
+  }, { underlayFrame: 0, tileDraws: 0, imguiVertices: 0 });
+
+  windowState.__donnerPendingImGuiDrawStats = { vertices: 8, indices: 9, commandLists: 1 };
+  publish(windowState, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.equal(windowState.__donnerHostFrameTiming.lastUnderlayHostFrame, 0);
+  assert.equal(windowState.__donnerHostFrameTiming.lastImguiVertices, 8);
+  assert.equal(windowState.__donnerHostFrameTiming.lastSurfaceAcquired, false);
+  assert.equal(windowState.__donnerHostFrameTiming.lastSurfacePresented, false);
+  assert.equal(windowState.__donnerPendingImGuiDrawStats, undefined);
+  assert.match(presentationRegressionSource, /underlayHostFrame/);
+  assert.match(presentationRegressionSource, /activeTileDraws/);
+});
 
 test("late browser map rejection cannot change a reused mapping ID", () => {
   const pending = [];
