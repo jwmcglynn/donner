@@ -1941,9 +1941,25 @@ test("native overlay pixelmatch retains a one-pixel artwork regression", async (
   };
   expect(compareOverlayBitmap(baseline, golden, outputDir, hostileEnvironment).matched).toBe(true);
 
+  const oneChannel = PNG.sync.read(baseline);
+  const roundedOffset = (274 * oneChannel.width + 279) * 4 + 1;
+  oneChannel.data[roundedOffset] += 1;
+  const accepted = compareOverlayBitmap(
+    PNG.sync.write(oneChannel), golden, outputDir, hostileEnvironment,
+  );
+  expect(accepted.matched, accepted.detail).toBe(true);
+
+  oneChannel.data[roundedOffset] += 1;
+  const rejected = compareOverlayBitmap(
+    PNG.sync.write(oneChannel), golden, outputDir, hostileEnvironment,
+  );
+  expect(rejected.matched, rejected.detail).toBe(false);
+  expect([rejected.failureActual, rejected.failureExpected, rejected.diff].every(existsSync))
+    .toBe(true);
+
   const changed = PNG.sync.read(baseline);
-  const offset = (80 * changed.width + 100) * 4;
-  changed.data.set([255, 0, 0, 255], offset);
+  const artworkOffset = (80 * changed.width + 100) * 4;
+  changed.data.set([255, 0, 0, 255], artworkOffset);
   const comparison = compareOverlayBitmap(
     PNG.sync.write(changed), golden, outputDir, hostileEnvironment,
   );

@@ -44,6 +44,7 @@ export function compareOverlayBitmap(
     ...inheritedEnvironment,
     DONNER_ACTUAL_PNG: "actual-input.png",
     DONNER_GOLDEN_PNG: "expected.png",
+    DONNER_BROWSER_COMPARE_MODE: "overlay",
     TEST_UNDECLARED_OUTPUTS_DIR: outputDir,
   };
   for (const name of Object.keys(env)) {
