@@ -156,6 +156,20 @@ donner_multi_transitioned_binary(
     visibility = donner_internal_visibility(),
 )
 
+# Remote-only wrapper for capturing on the same Linux adapter that runs the frozen-pixel gate.
+# The source revision is supplied as the single --test_arg; all output stays in the test artifact.
+sh_test(
+    name = "capture_baselines_wgpu_reference_linux_test",
+    srcs = ["CaptureBaselinesWgpuReference_test.sh"],
+    args = ["$(rootpath :capture_baselines_wgpu_reference_linux)"],
+    data = [":capture_baselines_wgpu_reference_linux"],
+    tags = [
+        "manual",
+        "no-local",
+    ],
+    target_compatible_with = ["@platforms//os:linux"],
+)
+
 donner_cc_test(
     name = "baseline_pixels_tests_impl",
     srcs = ["BaselinePixels_tests.cc"],
