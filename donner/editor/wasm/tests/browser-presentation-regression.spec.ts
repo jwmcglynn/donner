@@ -1461,6 +1461,13 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     // image without adding any protection against mixed geometry.
     const geometry = await readEditorResizePixelBounds(page, probeRegion);
     const state = await readDocumentPresentationState(page);
+    if (!geometry.usableCapture) {
+      await attachEvidenceFile(`drag-unusable-capture-step-${step}`, geometry.png, "image/png");
+      throw new Error(
+        `drag step ${step}: Firefox returned no editor page after `
+          + `${geometry.captureAttempts} full-page captures; state=${JSON.stringify(state)}`,
+      );
+    }
     expect(geometry?.blue, `drag frame ${state.renderedFrames} had no blue document pixels`).not
       .toBeNull();
     // "No teal" has two very different causes and the pixels cannot tell them

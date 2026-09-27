@@ -2,6 +2,7 @@ import { expect, type Page, test, type TestInfo } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import {
   type CanvasColorStats,
+  captureEditorPage,
   findElementColoredPixel,
   type PixelBounds,
   readCanvasColorStats,
@@ -1529,7 +1530,14 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   let probeRegion: ProbeRegion | null = null;
   let blueCss: PixelBounds | null = null;
   let lastBlueProbe:
-    | { shot: Buffer; state: object; region: ProbeRegion | null; bluePixels: number }
+    | {
+      shot: Buffer;
+      state: object;
+      region: ProbeRegion | null;
+      bluePixels: number;
+      captureUsable: boolean;
+      captureAttempts: number;
+    }
     | null = null;
   try {
     await expect.poll(async () => {
@@ -1553,16 +1561,23 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
           viewport.paneY + viewport.paneHeight,
         ) - Math.max(viewport.documentY, viewport.paneY),
       };
-      const shot = await page.screenshot();
-      const blue = region !== null && region.width > 0 && region.height > 0
-        ? readEditorPixelBoundsFromPng(shot, "basic-blue", captureViewport, {
+      const capture = await captureEditorPage(page);
+      const blue = capture.usable && region !== null && region.width > 0 && region.height > 0
+        ? readEditorPixelBoundsFromPng(capture.png, "basic-blue", captureViewport, {
           minX: region.x,
           minY: region.y,
           maxX: region.x + region.width,
           maxY: region.y + region.height,
         })
         : null;
-      lastBlueProbe = { shot, state, region, bluePixels: blue?.pixels ?? 0 };
+      lastBlueProbe = {
+        shot: capture.png,
+        state,
+        region,
+        bluePixels: blue?.pixels ?? 0,
+        captureUsable: capture.usable,
+        captureAttempts: capture.attempts,
+      };
       if (
         region !== null && blue !== null && state.sampleId === "basic-shapes"
         && state.completedResults > beforeSample && state.presentedAtMs !== null
@@ -1597,6 +1612,8 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
             beforeSample,
             region: lastBlueProbe.region,
             bluePixels: lastBlueProbe.bluePixels,
+            captureUsable: lastBlueProbe.captureUsable,
+            captureAttempts: lastBlueProbe.captureAttempts,
             captureViewport,
           },
           null,

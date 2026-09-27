@@ -142,6 +142,67 @@ export function isSplashCaptureUsable(census: SplashToneCensus): boolean {
   return knownTonePixels > 0 && census.distinctColors > 1;
 }
 
+/**
+ * A full-page Firefox screenshot of the Basic Shapes editor must contain the
+ * exposed render-pane backdrop around its 640x400 artboard. Gecko sometimes
+ * returns a nearly uniform black PNG even though its next failure screenshot
+ * shows the editor. Such a PNG cannot answer any blue/teal presentation check.
+ * A real blank document still has the pane backdrop and remains scoreable.
+ */
+export function isEditorPageCaptureUsable(png: Buffer): boolean {
+  const image = decodePng(png);
+  let backdropPixels = 0;
+  let otherPixels = 0;
+  for (let offset = 0; offset < image.data.length; offset += image.channels) {
+    if (image.channels === 4 && image.data[offset + 3] < 200) {
+      continue;
+    }
+    if (
+      image.data[offset] === kPaneBackdropColor.red
+      && image.data[offset + 1] === kPaneBackdropColor.green
+      && image.data[offset + 2] === kPaneBackdropColor.blue
+    ) {
+      ++backdropPixels;
+    } else {
+      ++otherPixels;
+    }
+    if (backdropPixels >= 64 && otherPixels > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export interface EditorPageCapture {
+  png: Buffer;
+  usable: boolean;
+  attempts: number;
+}
+
+/** Retake only whole-page captures that contain no editor, with a fixed limit. */
+export async function captureEditorPage(page: Page): Promise<EditorPageCapture> {
+  const maxAttempts = 4;
+  let png = Buffer.alloc(0);
+  for (let attempt = 1; attempt <= maxAttempts; ++attempt) {
+    if (attempt > 1) {
+      // The editor's demand-driven loop may be parked after its last present.
+      // Request one app frame, then let Gecko composite before the next capture.
+      await page.evaluate(() => {
+        (window as Window & { __donnerEditorFrameRequested?: boolean })
+          .__donnerEditorFrameRequested = true;
+        return new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(null)))
+        );
+      });
+    }
+    png = await page.screenshot();
+    if (isEditorPageCaptureUsable(png)) {
+      return { png, usable: true, attempts: attempt };
+    }
+  }
+  return { png, usable: false, attempts: maxAttempts };
+}
+
 /** One capture, scored for both presentation coverage and letter geometry. */
 export interface SplashPresentationFrame {
   census: SplashToneCensus;
@@ -791,15 +852,31 @@ export async function readEditorPixelBounds(
 export async function readEditorResizePixelBounds(
   page: Page,
   region: CssRegion,
-): Promise<{ blue: PixelBounds | null; teal: PixelBounds | null; png: Buffer }> {
+): Promise<{
+  blue: PixelBounds | null;
+  teal: PixelBounds | null;
+  png: Buffer;
+  usableCapture: boolean;
+  captureAttempts: number;
+}> {
   const viewport = page.viewportSize();
   if (viewport === null) {
     throw new Error("the browser viewport is unavailable for the resize pixel probe");
   }
-  // Firefox can return an empty clipped WebGPU canvas capture while the same
-  // frame is visible in a full-page screenshot. Take one un-clipped image and
-  // constrain both color searches to the published document rectangle.
-  const shot = await page.screenshot();
+  // A clipped Firefox WebGPU screenshot can omit the canvas, and even a full-
+  // page screenshot can be uniformly black. Score only a capture that contains
+  // the editor backdrop; the bounded helper retains the last PNG on failure.
+  const capture = await captureEditorPage(page);
+  const shot = capture.png;
+  if (!capture.usable) {
+    return {
+      blue: null,
+      teal: null,
+      png: shot,
+      usableCapture: false,
+      captureAttempts: capture.attempts,
+    };
+  }
   const documentBounds = {
     minX: region.x,
     minY: region.y,
@@ -823,7 +900,13 @@ export async function readEditorResizePixelBounds(
       maxY: bounds.maxY - region.y,
       pixels: bounds.pixels,
     };
-  return { blue: relativeToDocument(blue), teal: relativeToDocument(teal), png: shot };
+  return {
+    blue: relativeToDocument(blue),
+    teal: relativeToDocument(teal),
+    png: shot,
+    usableCapture: true,
+    captureAttempts: capture.attempts,
+  };
 }
 
 export interface EditorBackgroundCoverageStats {
