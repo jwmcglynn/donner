@@ -111,24 +111,13 @@
       gpuInfo.textContent = 'GPU: (adapter info unavailable)';
     }
 
-    let device;
-    try {
-      device = await adapter.requestDevice();
-    } catch (e) {
-      status.textContent = 'Failed to create WebGPU device: ' + e.message;
-      status.classList.add('error');
-      return;
-    }
-
     status.textContent = 'Loading WASM module (with ASYNCIFY)...';
 
-    // 2. Load the Emscripten ES6 module. The adapter variant reuses the
-    // pre-provisioned device; the selected browser runtime obtains its own.
+    // 2. Load the Emscripten ES6 module. The browser runtime acquires the
+    // device it uses when rendering; this page only probes adapter support.
     try {
       const { default: createModule } = await import('./donner_wasm_geode_bin.js');
-      Module = await createModule({
-        preinitializedWebGPUDevice: device,
-      });
+      Module = await createModule();
     } catch (err) {
       status.textContent = 'Failed to load WASM module: ' + err.message;
       status.classList.add('error');
