@@ -2,9 +2,9 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_python//python:defs.bzl", "py_test")
-load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//donner/editor/wasm:web_package.bzl", "web_package")
 load("//tools/http:serve_http.bzl", "serve_http")
+load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
 load(":geode_browser_test_transition.bzl", "geode_browser_test_package")
 
 package(default_visibility = ["//visibility:public"])
@@ -186,7 +186,7 @@ wasm_cc_binary(
 )
 
 # The standalone Geode module must select Donner's browser runtime in its normal Wasm config.
-configured_dependency_audit_test(
+no_rust_dependency_audit_test(
     name = "geode_browser_default_audit_test",
     size = "small",
     required = [
@@ -198,13 +198,10 @@ configured_dependency_audit_test(
 )
 
 # The standalone Browser module must have no transitional C API or WebGPU-C++ wrapper edge.
-configured_dependency_audit_test(
+no_rust_dependency_audit_test(
     name = "geode_browser_no_c_webgpu_audit_test",
     size = "small",
-    forbidden_packages = [
-        "//third_party/emdawnwebgpu",
-        "//third_party/webgpu-cpp",
-    ],
+    forbidden_packages = ["//third_party/emdawnwebgpu"],
     required = [
         "//donner/gpu/browser:browser_device",
         "//donner/gpu/browser:emscripten_browser_bridge",

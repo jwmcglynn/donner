@@ -1,27 +1,27 @@
 # No-Rust production boundary
 
-## Configured no-Rust closure gate
+## Configured no-Rust dependency audits
 
-`configured_rust_roots.json` declares native product, editor, embed, shipped
-browser package, and the sole Linux resvg comparison roots. The named
-`CI / no-rust-configured-closure` job requires Linux and macOS receipts from
-`configured_rust_closure.py`. Each receipt records Bazel's selected dependency
-closure for every declared root and binds it to the commit, Git tree, inventory,
-and platform. The Linux oracle receipt also binds the generated dependency lock.
-A production root that reaches the WebGPU-C++ wrapper, a wgpu-native archive,
-or the Rust FFI oracle fails. The
-Linux resvg test root must reach its checksum-pinned wrapper and archive;
-macOS has no oracle exception. Missing or stale platform receipts fail the
-aggregate job.
+Ordinary `configured_dependency_audit_test` targets follow selected Bazel
+dependencies, aliases, Wasm wrappers, additional linker inputs, and linker
+options through build transitions. The audits live beside the native library,
+CLI, editor, Geode embed, renderer, and browser package roots they protect.
+Production roots reject the complete WebGPU-C++/wgpu-native reference package
+and the vendored Rust FFI oracle. Required labels keep every audit non-vacuous.
 
-The Linux leg validates generated CMake, builds and runs the existing CMake
-consumer, and explicitly records that Donner currently has no CMake install
-surface. Any new generated `install()` rule fails until an actual install
-payload scanner is added. Linux also builds and hashes the shipped CLI and two
-browser package outputs; macOS builds and hashes the CLI. Empty or Rust-backed
-outputs fail. The checked-in unit tests include a synthetic product-to-oracle
-edge, stale receipts, missing roots, a newly added CMake install rule, and a
-contaminated artifact; they run under ordinary `bazel test //...`.
+The Linux resvg comparison has the inverse positive contract: its audit requires
+the complete test-only renderer, wrapper, alias, and architecture-selected
+archive chain. `//tools/ci:linux_wgpu_resvg_reference` runs that audit with the
+oracle. Editor Wasm CI runs the shipped browser audits in their owning
+configuration. Native and transitioned Geode audits run as normal Bazel tests,
+so the standard platform suites bind them to the source and selected graph they
+actually build.
+
+Generated CMake remains a separate build surface. `gen_cmakelists.py --check`
+rejects Rust toolchain commands and any install rule until an install-payload
+scanner exists; the CMake workflow also builds and runs the public consumer.
+CLI and browser artifact construction, integrity, and size stay in their
+existing BCR and Editor Wasm workflows rather than a second dependency receipt.
 
 ## No-Rust-dependency verifier
 

@@ -6,7 +6,8 @@
 ##
 ## Main library
 ##
-load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_multi_transitioned_test")
+load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
 
 platform(
     name = "linux_aarch64",
@@ -41,6 +42,29 @@ donner_cc_library(
     deps = [
         "//donner/svg/renderer",
     ],
+)
+
+no_rust_dependency_audit_test(
+    name = "donner_no_rust_dependency_audit_test",
+    size = "small",
+    required = ["//donner/svg/renderer:renderer_tiny_skia"],
+    target = ":donner",
+)
+
+no_rust_dependency_audit_test(
+    name = "donner_geode_no_rust_dependency_audit_impl",
+    required = [
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer/geode:geode_device",
+    ],
+    tags = ["manual"],
+    target = ":donner",
+)
+
+donner_multi_transitioned_test(
+    name = "donner_geode_no_rust_dependency_audit_test",
+    dep = ":donner_geode_no_rust_dependency_audit_impl",
+    renderer_backend = "geode",
 )
 
 ##

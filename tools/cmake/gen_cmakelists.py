@@ -1848,6 +1848,22 @@ def _rust_toolchain_errors(gen_root: Path, generated_files: Set[Path]) -> List[s
     return errors
 
 
+def _install_surface_errors(gen_root: Path, generated_files: Set[Path]) -> List[str]:
+    """Reject install rules until generated install artifacts have their own scanner."""
+    errors: List[str] = []
+    install_re = re.compile(r"^\s*install\s*\(", re.IGNORECASE | re.MULTILINE)
+    for rel in sorted(generated_files):
+        try:
+            text = (gen_root / rel).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if install_re.search(text):
+            errors.append(
+                f"{rel}: emitted CMake adds an install rule before install artifacts are scanned"
+            )
+    return errors
+
+
 def _validate_generated_output(gen_root: Path, workspace: Path, generated_files: Set[Path]) -> List[str]:
     """Statically validate the generated CMakeLists.txt files.
 
@@ -1858,10 +1874,12 @@ def _validate_generated_output(gen_root: Path, workspace: Path, generated_files:
     - Every source file referenced in add_library/add_executable/target_sources exists.
     - Every target referenced in target_link_libraries is either defined or known external.
     - No emitted file invokes a Rust toolchain.
+    - No install surface exists before generated install artifacts have a scanner.
 
     Returns a list of human-readable error messages. Empty = valid.
     """
     errors: List[str] = _rust_toolchain_errors(gen_root, generated_files)
+    errors.extend(_install_surface_errors(gen_root, generated_files))
     defined, linked, sources = _extract_cmake_targets_and_refs(gen_root, allowed_files=generated_files)
 
     # Combine defined targets with known external targets for linkage validation.

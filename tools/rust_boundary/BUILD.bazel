@@ -2,7 +2,7 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
 # The lexical verifier scans tracked files outside Bazel, including the vendored
 # subtree excluded by .bazelignore. CI runs it with --blocking default.
-# Configured product closures are checked separately in the main workflow.
+# Configured product closures are checked by ordinary Bazel dependency audits.
 py_library(
     name = "rust_scopes",
     srcs = ["rust_scopes.py"],
@@ -25,17 +25,4 @@ py_test(
         "check_no_rust_dependencies_tests.py",
     ],
     deps = [":rust_scopes"],
-)
-
-py_test(
-    name = "configured_rust_closure_tests",
-    size = "small",
-    srcs = [
-        "configured_rust_closure.py",
-        "configured_rust_closure_tests.py",
-    ],
-    data = [
-        "configured_rust_roots.json",
-        "//third_party:bazel/non_bcr_deps.bzl",
-    ],
 )

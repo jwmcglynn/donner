@@ -1,3 +1,4 @@
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load(
     "//build_defs:rules.bzl",
     "donner_cc_binary",
@@ -1103,6 +1104,28 @@ donner_multi_transitioned_test(
     target_compatible_with = ["@platforms//os:linux"],
     text = "true",
     text_full = "false",
+)
+
+configured_dependency_audit_test(
+    name = "resvg_wgpu_reference_dependency_audit_test",
+    size = "small",
+    required = [
+        "//donner/svg/renderer/tests:image_comparison_test_fixture_wgpu_reference_linux",
+        "//donner/svg/renderer/tests:renderer_test_backend_wgpu_reference_linux",
+        "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux_impl",
+        "//donner/svg/renderer:renderer_geode_wgpu_reference_linux",
+        "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
+        "//donner/svg/renderer/geode:geode_wgpu_util",
+        "//third_party/webgpu-cpp:webgpu_cpp",
+        "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
+    ] + select({
+        "@platforms//cpu:aarch64": ["@wgpu_native_linux_aarch64//:wgpu_native"],
+        "@platforms//cpu:x86_64": ["@wgpu_native_linux_x86_64//:wgpu_native"],
+        "//conditions:default": [],
+    }),
+    tags = ["manual"],
+    target = ":resvg_test_suite_wgpu_reference_linux",
+    target_compatible_with = ["@platforms//os:linux"],
 )
 
 donner_cc_fuzzer(

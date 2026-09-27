@@ -725,6 +725,11 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 'donner_cc_test(\n    name = "resvg_test_suite_wgpu_reference_linux_impl",\n'
                 '    target_compatible_with = ["@platforms//os:linux"],\n'
                 '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
+                'configured_dependency_audit_test(\n'
+                '    name = "resvg_wgpu_reference_dependency_audit_test",\n'
+                '    required = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n'
+                '    target = ":resvg_test_suite_wgpu_reference_linux",\n'
+                ')\n'
             ),
             "donner/svg/renderer/geode/BUILD.bazel": (
                 'donner_cc_library(\n    name = "geode_wgpu_util",\n'
@@ -779,6 +784,15 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 findings = verifier.check(files, SCOPES)
                 self.assertIn("rust-built-archive", categories(findings))
                 self.assertIn(path, [finding.path for finding in findings])
+
+    def test_linux_oracle_dependency_audit_is_required(self):
+        files = self.allowed_files()
+        build = files["donner/svg/renderer/tests/BUILD.bazel"]
+        files["donner/svg/renderer/tests/BUILD.bazel"] = build[:build.index(
+            "configured_dependency_audit_test("
+        )]
+        findings = verifier.check(files, SCOPES)
+        self.assertIn("rust-built-archive", categories(findings))
 
     def test_new_macos_archive_fails_default_blocking(self):
         files = self.allowed_files()

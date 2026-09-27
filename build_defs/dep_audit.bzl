@@ -97,8 +97,10 @@ def forbidden_transitive_dep_test(name, target, forbidden, **kwargs):
 
 _ConfiguredDepsInfo = provider(fields = ["labels", "linkopts"])
 
-# Follow binary/library dependencies and the wrappers used to package Wasm.
-_CONFIGURED_DEP_ATTRS = ["deps", "implementation_deps", "dep", "cc_target", "wasm_deps", "dir", "additional_linker_inputs"]
+# Follow binary/library dependencies, aliases, and the wrappers used to package Wasm.
+# Content-only attributes such as data, srcs, and asset_trees are intentionally
+# excluded: they stage files but do not put code in the selected product closure.
+_CONFIGURED_DEP_ATTRS = ["deps", "implementation_deps", "dep", "actual", "binary", "cc_target", "wasm_deps", "dir", "additional_linker_inputs"]
 
 def _configured_deps_impl(target, ctx):
     if ctx.rule == None:

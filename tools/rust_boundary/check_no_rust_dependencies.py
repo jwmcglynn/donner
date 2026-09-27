@@ -636,12 +636,21 @@ def _archive_runtime_findings(path: str, text: str, scopes: RustScopes) -> list[
 
 
 def _archive_consumer_findings(path: str, text: str) -> list[Finding]:
-    consumers = [(kind, name, body) for kind, name, body in _rule_blocks(text)
-                 if "wgpu_native_reference_runtime" in body]
-    if len(consumers) != 1 or consumers[0][0] != "donner_cc_test" or \
-       consumers[0][1] != "resvg_test_suite_wgpu_reference_linux_impl" or \
-       "@platforms//os:linux" not in consumers[0][2]:
+    rules = [(kind, name, body) for kind, name, body in _rule_blocks(text)
+             if "wgpu_native_reference_runtime" in body]
+    consumers = [rule for rule in rules if rule[0] == "donner_cc_test"]
+    audits = [rule for rule in rules if rule[0] == "configured_dependency_audit_test"]
+    if len(consumers) != 1 or consumers[0][1] != "resvg_test_suite_wgpu_reference_linux_impl" or \
+       "@platforms//os:linux" not in consumers[0][2] or \
+       not _rule_has_edge(consumers[0][2],
+                          "//third_party/webgpu-cpp:wgpu_native_reference_runtime", "deps"):
         return _archive_finding(path, "only the Linux resvg test may consume the reference runtime")
+    if len(audits) != 1 or audits[0][1] != "resvg_wgpu_reference_dependency_audit_test" or \
+       not _rule_has_edge(audits[0][2],
+                          "//third_party/webgpu-cpp:wgpu_native_reference_runtime", "required") or \
+       not _rule_has_edge(audits[0][2],
+                          ":resvg_test_suite_wgpu_reference_linux", "target"):
+        return _archive_finding(path, "Linux resvg dependency audit is missing or incomplete")
     return []
 
 

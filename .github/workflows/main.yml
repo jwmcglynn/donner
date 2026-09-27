@@ -27,24 +27,6 @@ permissions:
 # hosted lane available during a runner outage.
 
 jobs:
-  no-rust-configured-closure:
-    name: CI / no-rust-configured-closure
-    runs-on: ubuntu-24.04
-    needs: [gatekeeper, linux, macos, macos-self-hosted]
-    if: ${{ always() && !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: configured-rust-closure-*
-          merge-multiple: true
-
-      - name: Verify complete source-bound platform receipts
-        run: python3 tools/rust_boundary/configured_rust_closure.py aggregate closure-linux.json closure-macos.json
-
   gatekeeper:
     runs-on: ubuntu-24.04
     outputs:

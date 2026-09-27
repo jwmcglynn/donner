@@ -137,12 +137,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 cwd=cwd,
             )
 
-    def test_configured_closure_aggregate_skips_cancelled_runs(self):
-        """A cancelled PR run has no receipts, but a failed producer still needs the aggregate."""
-        header = self._job_body("no-rust-configured-closure").split("steps:", 1)[0]
-        self.assertIn("needs: [gatekeeper, linux, macos, macos-self-hosted]", header)
-        self.assertIn("always() && !cancelled()", header)
-
     def test_wasm_build_and_browser_checks_share_one_runner_and_package(self):
         self.assertNotIn("\n  test:\n", self.editor_wasm)
         self.assertNotIn("actions/download-artifact@", self.editor_wasm)
@@ -345,7 +339,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertEqual(1, job.count("--test_tag_filters=-manual,-perf"))
 
     def test_linux_wgpu_resvg_reference_is_selected_only_for_relevant_prs(self):
-        """The manual 16-shard comparison is explicit and never joins macOS/default suites."""
+        """The manual comparison and dependency audit stay in the explicit Linux suite."""
         determine = self._job_body("determine-targets")
         self.assertIn("wgpu_reference: ${{ steps.select_wgpu_resvg.outputs.run }}", determine)
         start = determine.index("          # The manual reference is removed")
@@ -357,7 +351,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         suite = suite.split("\n)", 1)[0]
         labels = re.findall(r'"(//[^\"]+)"', suite)
         self.assertEqual(
-            labels, ["//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"]
+            labels,
+            [
+                "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux",
+                "//donner/svg/renderer/tests:resvg_wgpu_reference_dependency_audit_test",
+            ],
         )
         reference = labels[0]
         with tempfile.TemporaryDirectory() as directory:

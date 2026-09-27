@@ -735,20 +735,14 @@ acceptance gate.
       the two pinned Linux archives and API wrapper needed by the resvg comparison target. The
       source graph now separates its `testonly`, Linux-compatible targets from native products and
       removes macOS archive fetches/aliases; the generated lock matches the reviewed Linux SHA-256
-      values. Complete configured Linux oracle execution, product/package closure receipts and
-      hosted acceptance before closing this item.
-- [ ] Make unexpected Rust-built archives blocking in `check_no_rust_dependencies.py`. Add the
-      `no-rust-configured-closure` aggregate job to `.github/workflows/main.yml` and make
-      `CI / no-rust-configured-closure` a required branch-protection check ([#1530](https://github.com/jwmcglynn/donner/issues/1530)).
-      The checked-in verifier must query declared Linux and macOS configured native/editor roots
-      on those platforms (or a proven equivalent cross-platform configuration), plus Wasm roots,
-      CMake install targets and packaged artifacts. Each platform receipt must bind the exact
-      source revision/tree, platform configuration and declared product-root inventory under
-      review. The aggregate must fail on an absent, stale or mismatched receipt, any production
-      edge to the Linux test oracle, or an injected-edge negative fixture that passes. It must
-      report on applicable PR and main candidates rather than satisfying branch protection
-      through a conditional skip. Qualify clean production source
-      archives without `rustc`, `cargo` or a Rust-built GPU library.
+      values. Complete Linux oracle execution and hosted acceptance before closing this item.
+- [x] Make unexpected Rust-built archives and production dependency edges blocking. The lexical
+      verifier enforces source, fetch, checksum, visibility and CMake-source boundaries. Bazel
+      configured dependency audits live beside native, editor, embed and browser product roots;
+      their required labels prevent vacuous passes, and an injected aliased dependency proves the
+      failure path. The Linux oracle has a positive selected-closure audit for its exact test-only
+      wrapper and architecture-specific archive. Generated CMake rejects both Rust toolchain
+      commands and install rules until install artifacts have their own scanner.
 
 ### Remaining GPU audit acceptance
 
@@ -859,14 +853,10 @@ Do not copy, translate or vendor implementation code or internal tests from `wgp
 `wgpu-native` release archives and their WebGPU-C++ API wrapper, linked only by a Linux-only
 `testonly` resvg GeodeGolden comparison backend as a black box. The final configured graph must
 have no edge from the runtime, shader tooling outside that test, macOS, Wasm, editor, other CI
-targets or shipped artifacts to that reference. A planned
-`//tools/rust_boundary:check_no_rust_dependencies_tests` extension must check static visibility
-and compatibility. The planned `CI / no-rust-configured-closure` aggregate job in
-`.github/workflows/main.yml` must be required by branch protection and consume Linux and macOS
-configured-query evidence for
-product roots, and fail when either platform's receipt is absent, stale or mismatched to the
-exact source tree, configuration and declared root inventory, or production reaches the archive
-or wrapper. A conditional skip cannot count as this gate. The exception does not permit
+targets or shipped artifacts to that reference. The lexical verifier checks static visibility,
+compatibility, fetch structure and checksums. Ordinary Bazel configured dependency audits reject
+the reference package from native, editor, embed and browser products, while the Linux oracle's
+positive audit requires its selected test-only wrapper and archive chain. The exception does not permit
 copying the implementation or its internal tests. Record requirements, specifications, algorithm
 choices, verification targets and SDK/tool inputs for each implementation change. Keep transition
 reference pixels/counters as test data; remove legacy production callers as they migrate.
@@ -882,15 +872,12 @@ A transitive module declaration alone is not evidence that a Rust toolchain exec
 `tools/rust_boundary/check_no_rust_dependencies.py` and its tests enforce the tracked-tree rules;
 `tools/cmake/gen_cmakelists.py --check` also validates generated CMake output. Final closure acceptance
 requires every unexpected Rust-built archive to block, with only the exact Linux archive exported
-through a `testonly` target allowlisted and inventoried. The planned verifier tests must check
-Linux compatibility, narrow visibility and the fetch rule's matching SHA-256. The required
-`CI / no-rust-configured-closure` aggregate must consume Linux and macOS configured Bazel
-query receipts for product roots, inspect CMake install targets and scan packaged artifacts. It
-must fail on a missing or mismatched platform receipt or any product, editor or Wasm reach to
-the archive or wrapper; a negative edge fixture must prove that failure. Branch protection
-must require the aggregate job, which must not pass through a conditional skip. Production source
-archives must build without `rustc` or `cargo`. A lexical scan alone is not proof of transitive
-closure or artifact contents.
+through a `testonly` target allowlisted by checksum and narrow visibility. Verifier tests check
+Linux compatibility, the wrapper/alias structure and matching SHA-256. Bazel audits fail when any
+selected product, editor or Wasm root reaches the archive or wrapper; a negative aliased-edge
+fixture proves that failure. Product artifacts remain covered by the existing Editor Wasm, CMake
+consumer and BCR packaging lanes. Production source archives must build without `rustc` or
+`cargo`. A lexical scan alone is not proof of transitive closure.
 
 ## Security and Reliability
 
@@ -937,7 +924,7 @@ shader, renderer, and browser tests below.
 | Mapping, loss, cancellation and native surfaces                | Shared `gpu_tests`, native mapping suites and owning Metal/Vulkan surface tests; `//donner/editor/tests:editor_window_vulkan_surface_tests` passes local and hosted CI; final integration pending. `//donner/gpu/browser:browser_tests` owns identifier, ownership, mapping and loss behavior; selected browser editor lanes exercise the runtime.                                |
 | Editor ordering and presentation                               | The explicit Geode editor lane below, the Linux Xvfb surface target above, and the browser rendering/interaction lanes for the selected bridge.                                                                                                                                                                                                                                   |
 | Structural counters, memory, timing and size                   | `//donner/gpu/baseline:baseline_counters_tests`, `//donner/svg/renderer/geode:geode_perf_tests`, and the paired measurements required by the cutover gates.                                                                                                                                                                                                                       |
-| Dependency closure                                             | `//tools/rust_boundary:check_no_rust_dependencies_tests`, the blocking lexical verifier, planned required `CI / no-rust-configured-closure` job over configured product roots, generated CMake validation, and source-archive/artifact evidence.                                                                                                                                  |
+| Dependency closure                                             | `//tools/rust_boundary:check_no_rust_dependencies_tests`, the blocking lexical verifier, package-local configured dependency audits for native/editor/embed/browser roots, the Linux oracle's positive audit, generated CMake validation, and existing source-archive/artifact lanes.                                                                                             |
 
 ### Retired adapter test contracts
 
@@ -1058,9 +1045,9 @@ The exact integrated candidate must satisfy all applicable platform gates:
 - Production consumers, configured dependency/link queries and artifact scans satisfy the
   runtime and no-Rust boundaries. The concrete adapter and Rust-built GPU libraries have no
   production consumers; only the pinned Linux `testonly` resvg reference may reach wgpu-native.
-  Before cutover, `//tools/rust_boundary:check_no_rust_dependencies_tests`, the blocking lexical
-  verifier and required `CI / no-rust-configured-closure` job must reject every unexpected archive
-  or production edge, with an injected-edge regression.
+  `//tools/rust_boundary:check_no_rust_dependencies_tests`, the blocking lexical verifier and
+  configured Bazel dependency audits reject every unexpected archive or production edge, with an
+  injected-edge regression.
 - The Linux wgpu-native resvg reference, Linux native Vulkan and macOS native Metal run the same
   GeodeGolden case set and reviewed pixelmatch contract without repeating TinyGolden or retaining
   a macOS wgpu reference lane after cutover. Browser bridge pixels and presentation qualify separately in real browser lanes.

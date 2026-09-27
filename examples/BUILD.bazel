@@ -1,5 +1,6 @@
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
-load("//build_defs:rules.bzl", "donner_cc_binary")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_multi_transitioned_test")
+load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
 
 donner_cc_binary(
     name = "custom_css_parser",
@@ -170,6 +171,22 @@ donner_cc_binary(
         "//donner/svg/renderer/geode:geode_device",
         "@glfw",
     ],
+)
+
+no_rust_dependency_audit_test(
+    name = "geode_embed_no_rust_dependency_audit_impl",
+    required = [
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer/geode:geode_device",
+    ],
+    tags = ["manual"],
+    target = ":geode_embed",
+)
+
+donner_multi_transitioned_test(
+    name = "geode_embed_no_rust_dependency_audit_test",
+    dep = ":geode_embed_no_rust_dependency_audit_impl",
+    renderer_backend = "geode",
 )
 
 # --- Render test ---

@@ -6,6 +6,7 @@ load(
     "donner_cc_library",
     "donner_cc_test",
 )
+load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
 
 alias(
     name = "tool",
@@ -36,6 +37,13 @@ donner_cc_binary(
         ":donner_svg_tool_lib",
         "//donner/base:failure_signal_handler",
     ],
+)
+
+no_rust_dependency_audit_test(
+    name = "donner_svg_no_rust_dependency_audit_test",
+    size = "small",
+    required = ["//donner/svg/renderer:renderer_tiny_skia"],
+    target = ":donner-svg",
 )
 
 donner_cc_library(
