@@ -923,8 +923,7 @@ Extend existing targets where they own the changed behavior. The native mapping,
 browser backend targets own their merged hooks. Linux window implementation passed local Xvfb and
 hosted PR execution; its final integrated gate, browser hosted/physical-browser gates, and wrapper
 removal remain active. GPU operation, shader, and editor behavior is owned by the executable backend,
-shader, renderer, and browser tests below. The transitional semantic inventory
-manifests and their per-package source filegroups have been retired.
+shader, renderer, and browser tests below.
 
 | Contract / remaining work                                      | Owning verification                                                                                                                                                                                                                                                                                                                                                               |
 | -------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

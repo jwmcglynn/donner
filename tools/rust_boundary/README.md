@@ -104,6 +104,4 @@ repo rule instead of as a module. A Donner target that reaches the oracle fails
 at load time rather than silently linking Rust, and adding `rules_rust` to the
 root module graph to make it load is itself a `rust-build-edge` finding.
 
-The transitional semantic GPU inventory manifests and their per-package
-filegroups have been retired. GPU, shader, renderer, editor and browser behavior
-is checked by executable tests.
+GPU, shader, renderer, editor and browser behavior is checked by executable tests.
