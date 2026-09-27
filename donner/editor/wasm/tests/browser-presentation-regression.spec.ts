@@ -31,6 +31,7 @@ import {
   installSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,
+  waitForSubmittedCanvasGpuWork,
   type SurfaceFrameProbeReport,
 } from "./surface-frame-probe";
 
@@ -2482,6 +2483,65 @@ test("failure-only WebGPU readback makes no request on a visible Basic Shapes lo
   expect(failures).toEqual([]);
 });
 
+test("canvas GPU completion gate waits after the CPU host frame advances", async ({ page }) => {
+  const failures = await openEditor(page);
+  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+  await page.evaluate(() => { window.__donnerEditorFrameRequested = true; });
+  await expect.poll(async () => (await readSurfaceFrameProbe(page)).frames).toBeGreaterThan(0);
+  const owner = await findCanvasOwnerWorker(page);
+  expect(owner).not.toBeNull();
+  if (owner === null) return;
+
+  await owner.evaluate(() => {
+    const scope = globalThis as typeof globalThis & {
+      __donnerSurfaceFrameProbeCompletionHold?: {
+        promise: Promise<void>; release: () => void; calls: number;
+      };
+    };
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => { release = resolve; });
+    scope.__donnerSurfaceFrameProbeCompletionHold = { promise, release, calls: 0 };
+  });
+  try {
+    const before = await readSurfaceFrameSnapshot(page);
+    await page.evaluate(() => { window.__donnerEditorFrameRequested = true; });
+    await expect.poll(async () => (await readSurfaceFrameSnapshot(page)).renderedFrames)
+      .toBeGreaterThan(before.renderedFrames);
+    await expect.poll(() => owner.evaluate(() =>
+      (globalThis as typeof globalThis & {
+        __donnerSurfaceFrameProbeCompletionHold?: { calls: number };
+      }).__donnerSurfaceFrameProbeCompletionHold?.calls ?? 0
+    )).toBeGreaterThan(0);
+
+    let completed = false;
+    const completion = waitForSubmittedCanvasGpuWork(owner).then((submissions) => {
+      completed = true;
+      return submissions;
+    });
+    // The worker can answer another command while the observed completion is
+    // held, and the host count has advanced. A CPU-only gate would capture now.
+    await owner.evaluate(() => 1);
+    expect(completed).toBe(false);
+    await owner.evaluate(() => {
+      const scope = globalThis as typeof globalThis & {
+        __donnerSurfaceFrameProbeCompletionHold?: { release: () => void };
+      };
+      scope.__donnerSurfaceFrameProbeCompletionHold?.release();
+      delete scope.__donnerSurfaceFrameProbeCompletionHold;
+    });
+    expect(await completion).toBeGreaterThan(0);
+  } finally {
+    await owner.evaluate(() => {
+      const scope = globalThis as typeof globalThis & {
+        __donnerSurfaceFrameProbeCompletionHold?: { release: () => void };
+      };
+      scope.__donnerSurfaceFrameProbeCompletionHold?.release();
+      delete scope.__donnerSurfaceFrameProbeCompletionHold;
+    });
+  }
+  expect(failures).toEqual([]);
+});
+
 test("Firefox keeps the dragged shape and its selection outline in every drag frame", async ({ browserName, page }) => {
   // The single-canvas replacement removed the two-surface epoch handoff that used to let a drag
   // frame show the shape at one position and its outline at another. What
@@ -2495,6 +2555,7 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     page,
     true,
   );
+  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
   const baselineBluePixels = blueCss.pixels;
   expect(baselineBluePixels, "expected the initial Basic Shapes render before starting the drag")
     .toBeGreaterThan(500);
@@ -2541,6 +2602,10 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
       intervals: [16, 25, 50, 100],
     })
     .toEqual({ completedResults: resultsDuringDrag, selectedCount: 1 });
+  await expect.poll(async () => (await readSurfaceFrameProbe(page)).frames).toBeGreaterThan(0);
+  const canvasOwner = await findCanvasOwnerWorker(page);
+  expect(canvasOwner, "the probe did not find the editor canvas queue").not.toBeNull();
+  if (canvasOwner === null) return;
   let previousFrames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
   for (let step = 1; step <= 16; ++step) {
     await page.mouse.move(dragStart.x + step * 6, dragStart.y + step * 3);
@@ -2555,6 +2620,10 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
         intervals: [16, 25, 50, 100],
       })
       .toBeGreaterThan(previousFrames);
+    // The host counter follows queue submission, while the app's existing
+    // completion promise may still be pending. Await that exact promise before
+    // the one screenshot; it does not request another frame or GPU operation.
+    await waitForSubmittedCanvasGpuWork(canvasOwner);
     // The editor draws the document and selection into one canvas. A Playwright
     // screenshot captures one composited image, so both pixel bounds come from
     // the same frame. Firefox may schedule another UI frame while taking that

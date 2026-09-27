@@ -48,6 +48,7 @@ interface WorkerProbeState {
   installed: boolean;
   frames: number;
   inTaskSubmits: number;
+  canvasSubmits: number;
   lateSubmits: LateCanvasSubmit[];
 }
 
@@ -55,6 +56,9 @@ type ProbeGlobal = typeof globalThis & {
   __donnerSurfaceFrameProbe?: WorkerProbeState;
   /** Resolves in a task that runs after every task boundary the probe has marked so far. */
   __donnerSurfaceFrameProbeNextTask?: () => Promise<void>;
+  __donnerSurfaceFrameProbeQueue?: GPUQueue;
+  __donnerSurfaceFrameProbeCompletion?: { submissions: number; promise: Promise<void> };
+  __donnerSurfaceFrameProbeCompletionHold?: { promise: Promise<void>; release: () => void; calls: number };
 };
 
 // Runs inside each worker. Everything it needs is defined in the body because
@@ -68,6 +72,7 @@ function installInWorker(): boolean {
     installed: false,
     frames: 0,
     inTaskSubmits: 0,
+    canvasSubmits: 0,
     lateSubmits: [],
   };
   scope.__donnerSurfaceFrameProbe = state;
@@ -230,12 +235,37 @@ function installInWorker(): boolean {
     return buffer;
   };
 
+  let pendingCanvasSubmit = 0;
+  const onSubmittedWorkDone = GPUQueue.prototype.onSubmittedWorkDone;
+  GPUQueue.prototype.onSubmittedWorkDone = function(this: GPUQueue) {
+    const gpuPromise = onSubmittedWorkDone.call(this);
+    const hold = scope.__donnerSurfaceFrameProbeCompletionHold;
+    const isCanvasCompletion =
+      this === scope.__donnerSurfaceFrameProbeQueue && pendingCanvasSubmit > 0;
+    // A controlled test can delay the app's completion signal after real GPU
+    // completion. Ordinary observation returns the original promise unchanged.
+    const promise = isCanvasCompletion && hold !== undefined
+      ? gpuPromise.then(() => hold.promise)
+      : gpuPromise;
+    if (isCanvasCompletion) {
+      if (hold !== undefined) ++hold.calls;
+      scope.__donnerSurfaceFrameProbeCompletion = {
+        submissions: pendingCanvasSubmit,
+        promise,
+      };
+      pendingCanvasSubmit = 0;
+    }
+    return promise;
+  };
+
   const submit = GPUQueue.prototype.submit;
   GPUQueue.prototype.submit = function(this: GPUQueue, buffers: Iterable<GPUCommandBuffer>) {
     const list = [...buffers];
     const submittedAtMs = performance.now();
+    let writesCanvas = false;
     for (const buffer of list) {
       for (const texture of bufferFrames.get(buffer) ?? []) {
+        writesCanvas = true;
         const record = frames.get(texture)!;
         if (!record.taskEnded) {
           ++record.submitsBeforeTaskEnd;
@@ -252,7 +282,12 @@ function installInWorker(): boolean {
         });
       }
     }
-    return submit.call(this, list);
+    const result = submit.call(this, list);
+    if (writesCanvas) {
+      scope.__donnerSurfaceFrameProbeQueue = this;
+      pendingCanvasSubmit = ++state.canvasSubmits;
+    }
+    return result;
   };
 
   state.installed = true;
@@ -317,6 +352,20 @@ async function selfCheckInWorker(): Promise<{ late: number; inTask: number } | s
 function readInWorker(): WorkerProbeState | null {
   const state = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbe;
   return state === undefined ? null : { ...state, lateSubmits: [...state.lateSubmits] };
+}
+
+// Await the existing completion promise for the last canvas-writing submission.
+// This proves submitted GPU work finished; it does not acknowledge compositing.
+function waitForCanvasGpuWorkInWorker(): Promise<number> {
+  const completion = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletion;
+  if (completion === undefined) {
+    throw new Error("the probe has not observed a canvas completion promise");
+  }
+  return completion.promise.then(() => completion.submissions);
+}
+
+export function waitForSubmittedCanvasGpuWork(owner: Worker): Promise<number> {
+  return owner.evaluate(waitForCanvasGpuWorkInWorker);
 }
 
 // A pthread parked in a blocking wait never returns to its event loop, so an
