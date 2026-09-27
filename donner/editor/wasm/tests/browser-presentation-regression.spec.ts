@@ -5,6 +5,7 @@ import {
   captureSplashPresentationFrame,
   type CssRegion,
   type EditorBackgroundCoverageStats,
+  type EditorPageCapture,
   isEditorPageCaptureUsable,
   isSplashCaptureUsable,
   type PixelBounds,
@@ -938,6 +939,86 @@ async function diagnosePresentedCanvas(
     .catch((error: unknown) => ({ unavailable: String(error) }));
 }
 
+type BasicShapesProbeState = {
+  sampleId: string | null;
+  completedResults: number;
+  presentedAtMs: number | null;
+  viewport: ViewportStats | null;
+};
+
+async function readBasicShapesProbeState(
+  page: Page,
+  firefox: boolean,
+): Promise<BasicShapesProbeState> {
+  if (firefox) {
+    console.log("open-basic-shapes-probe: state-start");
+  }
+  const state = await page.evaluate(() => ({
+    sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
+    completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+    presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+    viewport: window.__donnerViewportStats ?? null,
+  }));
+  if (firefox) {
+    console.log("open-basic-shapes-probe: state-end");
+  }
+  return state;
+}
+
+function basicShapesProbeClips(
+  viewport: ViewportStats | null,
+  firefox: boolean,
+  pageViewport: Pick<CssRegion, "width" | "height"> | null,
+): { documentClip: CssRegion | null; captureClip: CssRegion | null } {
+  const observed = viewport === null ? null : presentedDocumentRegion(viewport);
+  const documentClip = observed !== null && observed.width > 0 && observed.height > 0
+    ? observed
+    : null;
+  const captureClip = documentClip === null
+    ? null
+    : firefox && pageViewport !== null
+    ? { x: 0, y: 0, width: pageViewport.width, height: pageViewport.height }
+    : documentClip;
+  return { documentClip, captureClip };
+}
+
+async function captureBasicShapesProbePage(
+  page: Page,
+  firefox: boolean,
+  captureClip: CssRegion | null,
+): Promise<EditorPageCapture> {
+  if (!firefox) {
+    const png = captureClip === null
+      ? await page.screenshot()
+      : await page.screenshot({ clip: captureClip });
+    return { png, usable: true, attempts: 1, timedOutCaptures: 0, frameWaitFallbacks: 0 };
+  }
+  console.log("open-basic-shapes-probe: capture-start");
+  const capture = await captureEditorPage(page, { allowTimerFallback: true });
+  console.log(
+    `open-basic-shapes-probe: capture-end attempts=${capture.attempts} `
+      + `screenshotTimeouts=${capture.timedOutCaptures} `
+      + `frameWaitFallbacks=${capture.frameWaitFallbacks}`,
+  );
+  return capture;
+}
+
+function basicShapesBlueBounds(
+  capture: EditorPageCapture,
+  documentClip: CssRegion | null,
+  captureClip: CssRegion | null,
+): PixelBounds | null {
+  if (!capture.usable || documentClip === null || captureClip === null) {
+    return null;
+  }
+  return readEditorPixelBoundsFromPng(capture.png, "basic-blue", captureClip, {
+    minX: documentClip.x - captureClip.x,
+    minY: documentClip.y - captureClip.y,
+    maxX: documentClip.x + documentClip.width - captureClip.x,
+    maxY: documentClip.y + documentClip.height - captureClip.y,
+  });
+}
+
 async function openBasicShapes(page: Page): Promise<{
   canvasBounds: { x: number; y: number; width: number; height: number };
   documentClip: { x: number; y: number; width: number; height: number };
@@ -1026,61 +1107,12 @@ async function openBasicShapes(page: Page): Promise<{
     await expect
       .poll(
         async () => {
-          if (firefox) {
-            console.log("open-basic-shapes-probe: state-start");
-          }
-          const state = await page.evaluate(() => ({
-            sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
-            completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
-            presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
-            viewport: window.__donnerViewportStats ?? null,
-          }));
-          if (firefox) {
-            console.log("open-basic-shapes-probe: state-end");
-          }
-          const observedDocumentClip = state.viewport === null
-            ? null
-            : presentedDocumentRegion(state.viewport);
-          const currentDocumentClip = observedDocumentClip !== null
-              && observedDocumentClip.width > 0 && observedDocumentClip.height > 0
-            ? observedDocumentClip
-            : null;
-          const currentCaptureClip = currentDocumentClip === null
-            ? null
-            : firefox && pageViewport !== null
-            ? { x: 0, y: 0, width: pageViewport.width, height: pageViewport.height }
-            : currentDocumentClip;
-          if (firefox) {
-            console.log("open-basic-shapes-probe: capture-start");
-          }
-          const capture = firefox
-            ? await captureEditorPage(page, { allowTimerFallback: true })
-            : {
-              png: currentCaptureClip === null
-                ? await page.screenshot()
-                : await page.screenshot({ clip: currentCaptureClip }),
-              usable: true,
-              attempts: 1,
-              timedOutCaptures: 0,
-              frameWaitFallbacks: 0,
-            };
-          if (firefox) {
-            console.log(
-              `open-basic-shapes-probe: capture-end attempts=${capture.attempts} `
-                + `screenshotTimeouts=${capture.timedOutCaptures} `
-                + `frameWaitFallbacks=${capture.frameWaitFallbacks}`,
-            );
-          }
+          const state = await readBasicShapesProbeState(page, firefox);
+          const { documentClip: currentDocumentClip, captureClip: currentCaptureClip } =
+            basicShapesProbeClips(state.viewport, firefox, pageViewport);
+          const capture = await captureBasicShapesProbePage(page, firefox, currentCaptureClip);
           const shot = capture.png;
-          const bounds = capture.usable && currentDocumentClip !== null
-              && currentCaptureClip !== null
-            ? readEditorPixelBoundsFromPng(shot, "basic-blue", currentCaptureClip, {
-              minX: currentDocumentClip.x - currentCaptureClip.x,
-              minY: currentDocumentClip.y - currentCaptureClip.y,
-              maxX: currentDocumentClip.x + currentDocumentClip.width - currentCaptureClip.x,
-              maxY: currentDocumentClip.y + currentDocumentClip.height - currentCaptureClip.y,
-            })
-            : null;
+          const bounds = basicShapesBlueBounds(capture, currentDocumentClip, currentCaptureClip);
           lastBluePixels = bounds?.pixels ?? 0;
           lastProbe = {
             shot,

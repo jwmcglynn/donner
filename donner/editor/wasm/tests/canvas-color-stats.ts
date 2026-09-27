@@ -208,18 +208,15 @@ export async function captureEditorPage(
           .__donnerEditorFrameRequested = true;
         return new Promise<"frame" | "timer">((resolve) => {
           let settled = false;
-          let timer: ReturnType<typeof setTimeout> | undefined;
           const finish = (outcome: "frame" | "timer") => {
             if (settled) {
               return;
             }
             settled = true;
-            if (timer !== undefined) {
-              clearTimeout(timer);
-            }
+            clearTimeout(timer);
             resolve(outcome);
           };
-          timer = setTimeout(() => finish("timer"), 150);
+          const timer = setTimeout(() => finish("timer"), 150);
           requestAnimationFrame(() => requestAnimationFrame(() => finish("frame")));
         });
       });
