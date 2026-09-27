@@ -151,6 +151,7 @@ COMPILE_ATTRIBUTES = frozenset(
 )
 DATA_ATTRIBUTES = frozenset({"data", "testdata", "resources", "args", "tags"})
 AUDIT_METADATA_ATTRIBUTES = frozenset({"forbidden", "forbidden_packages", "required"})
+AUDIT_RULES = frozenset({"configured_dependency_audit_test", "no_rust_dependency_audit_test"})
 
 ATTRIBUTE_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 VISIBILITY_ASSIGN_RE = re.compile(r"(?:default_)?visibility\s*=\s*")
@@ -250,6 +251,49 @@ def attribute_of_each_line(text: str) -> list[str | None]:
             if not match:
                 current = None
     return attributes
+
+
+def _audit_rule_name(node: ast.AST) -> str | None:
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+        return None
+    return node.func.id
+
+
+def _audit_keyword_occurrences(keyword: ast.keyword,
+                               tokens: tuple[str, ...]) -> set[tuple[int, str]]:
+    if keyword.arg not in AUDIT_METADATA_ATTRIBUTES:
+        return set()
+    values = (
+        value for value in ast.walk(keyword.value)
+        if isinstance(value, ast.Constant) and isinstance(value.value, str)
+    )
+    return {
+        (value.lineno, token)
+        for value in values
+        for token in tokens_in(value.value, tokens)
+    }
+
+
+def _audit_call_occurrences(node: ast.AST,
+                            tokens: tuple[str, ...]) -> set[tuple[int, str]]:
+    if _audit_rule_name(node) not in AUDIT_RULES:
+        return set()
+    return set().union(*(
+        _audit_keyword_occurrences(keyword, tokens)
+        for keyword in node.keywords
+    ))
+
+
+def audit_metadata_occurrences(text: str, tokens: tuple[str, ...]) -> set[tuple[int, str]]:
+    """String-token occurrences inside recognized dependency-audit metadata."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return set()
+    return set().union(*(
+        _audit_call_occurrences(node, tokens)
+        for node in ast.walk(tree)
+    ))
 
 
 def compile_attributes_referencing(text: str, tokens: tuple[str, ...]) -> set[str]:
@@ -497,11 +541,12 @@ def fixture_containment_findings(path: str, text: str, scopes: RustScopes) -> li
     """
     if scopes.is_test_only(path) or scopes.is_test_only_consumer(path):
         return visibility_findings(path, text) + reexport_findings(path, text)
+    allowed = audit_metadata_occurrences(text, RUST_FIXTURE_TOKENS)
     fixture_tokens = sorted({
         token
-        for line, attribute in zip(text.splitlines(), attribute_of_each_line(text))
-        if attribute not in AUDIT_METADATA_ATTRIBUTES
+        for line_number, line in enumerate(text.splitlines(), start=1)
         for token in tokens_in(line, RUST_FIXTURE_TOKENS)
+        if (line_number, token) not in allowed
     })
     if not fixture_tokens:
         return []
@@ -646,7 +691,8 @@ def _archive_consumer_findings(path: str, text: str) -> list[Finding]:
              if "wgpu_native_reference_runtime" in body]
     consumers = [rule for rule in rules if rule[0] == "donner_cc_test"]
     audits = [rule for rule in rules if rule[0] == "configured_dependency_audit_test"]
-    if len(consumers) != 1 or consumers[0][1] != "resvg_test_suite_wgpu_reference_linux_impl" or \
+    if len(rules) != 2 or len(consumers) != 1 or \
+       consumers[0][1] != "resvg_test_suite_wgpu_reference_linux_impl" or \
        "@platforms//os:linux" not in consumers[0][2] or \
        not _rule_has_edge(consumers[0][2],
                           "//third_party/webgpu-cpp:wgpu_native_reference_runtime", "deps"):
@@ -779,9 +825,11 @@ def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> lis
     if not tokens_in(active, RUST_BUILT_ARCHIVE_TOKENS):
         return []
     attributes = attribute_of_each_line(text)
-    for line, attribute in zip(active.splitlines(), attributes):
-        if tokens_in(line, RUST_BUILT_ARCHIVE_TOKENS) and \
-           attribute not in AUDIT_METADATA_ATTRIBUTES | {"tags"}:
+    allowed = audit_metadata_occurrences(text, RUST_BUILT_ARCHIVE_TOKENS)
+    for line_number, (line, attribute) in enumerate(zip(active.splitlines(), attributes), start=1):
+        found = tokens_in(line, RUST_BUILT_ARCHIVE_TOKENS)
+        if found and attribute != "tags" and \
+           any((line_number, token) not in allowed for token in found):
             return _archive_finding(path, "unexpected Rust-built archive or reference edge")
     return []
 

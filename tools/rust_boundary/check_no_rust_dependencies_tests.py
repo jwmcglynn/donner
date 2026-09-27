@@ -188,6 +188,15 @@ class TestOnlyOracleTest(unittest.TestCase):
         }
         self.assertEqual(verifier.check(files, SCOPES), [])
 
+    def test_non_audit_forbidden_variable_cannot_hide_an_oracle_edge(self):
+        files = {
+            "donner/BUILD.bazel": (
+                'forbidden = ["@tiny-skia-cpp//tests/rust_ffi:tiny_skia_ffi"]\n'
+                'cc_library(name = "consumer", deps = forbidden)\n'
+            )
+        }
+        self.assertIn("rust-fixture-containment", categories(verifier.check(files, SCOPES)))
+
     def test_reference_to_the_derived_oracle_libraries_is_flagged(self):
         files = {
             "donner/svg/renderer/BUILD.bazel": (
@@ -765,6 +774,14 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
 
     def test_exact_linux_oracle_is_allowed(self):
         self.assertEqual(categories(verifier.check_tracked_tree(self.allowed_files(), SCOPES)), [])
+
+    def test_additional_oracle_consumer_is_rejected(self):
+        files = self.allowed_files()
+        files["donner/svg/renderer/tests/BUILD.bazel"] += (
+            'cc_library(\n    name = "extra_consumer",\n    testonly = True,\n'
+            '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
+        )
+        self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
 
     def test_deleting_each_required_boundary_file_fails_the_tracked_tree(self):
         for path in verifier.REQUIRED_ARCHIVE_SITES:

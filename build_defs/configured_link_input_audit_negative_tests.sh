@@ -24,3 +24,9 @@ if "$4" > "$TEST_TMPDIR/dependency_audit.txt" 2>&1; then
   exit 1
 fi
 grep -F "Forbidden dependency:" "$TEST_TMPDIR/dependency_audit.txt"
+
+if "$5" > "$TEST_TMPDIR/data_audit.txt" 2>&1; then
+  echo "A staged data dependency escaped the configured dependency audit" >&2
+  exit 1
+fi
+grep -F "Forbidden dependency:" "$TEST_TMPDIR/data_audit.txt"
