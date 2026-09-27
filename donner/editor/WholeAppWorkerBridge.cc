@@ -1179,7 +1179,8 @@ void PublishImGuiDrawStats(int vertexCount, int indexCount, int commandListCount
 
 void PublishHostFrameTiming(double endFrameMs, double imguiRenderMs, double surfaceAcquireMs,
                             double underlayMs, double imguiDrawMs, double directMs,
-                            double readbackMs, double presentMs) {
+                            double readbackMs, double presentMs, bool surfaceAcquired,
+                            bool surfacePresented) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -1191,13 +1192,17 @@ void PublishHostFrameTiming(double endFrameMs, double imguiRenderMs, double surf
         ]);
         const values = ([ $0, $1, $2, $3, $4, $5, $6, $7 ]);
         stats['frames'] = (stats['frames'] | 0) + 1;
+        stats['lastSurfaceAcquired'] = !!$8;
+        stats['lastSurfacePresented'] = !!$9;
+        stats['surfaceAcquiredFrames'] = (stats['surfaceAcquiredFrames'] | 0) + ($8 ? 1 : 0);
+        stats['surfacePresentedFrames'] = (stats['surfacePresentedFrames'] | 0) + ($9 ? 1 : 0);
         for (let index = 0; index < names.length; ++index) {
           stats[names[index]] = values[index];
           stats['sums'][names[index]] = (stats['sums'][names[index]] || 0) + values[index];
         }
       },
       endFrameMs, imguiRenderMs, surfaceAcquireMs, underlayMs, imguiDrawMs, directMs, readbackMs,
-      presentMs);
+      presentMs, surfaceAcquired ? 1 : 0, surfacePresented ? 1 : 0);
   // clang-format on
 }
 

@@ -2643,10 +2643,16 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   ZoneScopedN("EditorWindow::endFrame");
   EditorWindowFrameTiming timing;
   const auto endFrameStart = std::chrono::steady_clock::now();
+  bool surfaceAcquired = false;
+  // Only the complete-draw path sets this. SurfacePresentGuard may hand back a partial frame
+  // during an early return, which is deliberately not counted as a completed presentation.
+  bool surfacePresented = false;
   struct TimingCommit {
     EditorWindowFrameTiming* destination;
     EditorWindowFrameTiming* timing;
     std::chrono::steady_clock::time_point start;
+    bool* surfaceAcquired;
+    bool* surfacePresented;
 
     ~TimingCommit() {
       timing->endFrameMs = ElapsedMs(start);
@@ -2654,7 +2660,8 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WHOLE_APP_WORKER)
       whole_app_worker::PublishHostFrameTiming(
           timing->endFrameMs, timing->imguiRenderMs, timing->surfaceAcquireMs, timing->underlayMs,
-          timing->imguiDrawMs, timing->directMs, timing->readbackMs, timing->presentMs);
+          timing->imguiDrawMs, timing->directMs, timing->readbackMs, timing->presentMs,
+          *surfaceAcquired, *surfacePresented);
 #endif
     }
   };
@@ -2662,6 +2669,8 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       .destination = &lastEndFrameTiming_,
       .timing = &timing,
       .start = endFrameStart,
+      .surfaceAcquired = &surfaceAcquired,
+      .surfacePresented = &surfacePresented,
   };
   {
     ZoneScopedN("ImGui::Render");
@@ -2780,6 +2789,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
 #endif
       return;
     }
+    surfaceAcquired = true;
   }
   // Whichever of the two holds this frame's target keeps it alive for exactly as long as the
   // frame below draws into it, so everything downstream names it rather than owning it.
@@ -2831,6 +2841,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   {
     const auto presentStart = std::chrono::steady_clock::now();
     presentGuard.present();
+    surfacePresented = surfaceAcquired;
     timing.presentMs = ElapsedMs(presentStart);
   }
 #else
