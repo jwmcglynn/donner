@@ -373,10 +373,10 @@ fi
   # was skipped as incompatible with this platform" apart from a real failure,
   # and that distinction has to work wherever this script runs.
   DIAG_FLAGS+=(--build_event_json_file="$COVERAGE_BEP")
-  # Self-hosted CI retains only numeric timing artifacts. Report bounded,
-  # validated BEP labels on failure so a red coverage lane names its tests
-  # without publishing raw logs, runner paths, or test output.
+  # Self-hosted CI retains only numeric timing and allowlisted BEP fields.
+  # Report failures without publishing raw logs, runner paths, or test output.
   report_coverage_failure_labels() {
+    local bazel_status="$1"
     if [[ -f "$COVERAGE_BEP" ]]; then
       printf 'Bazel coverage failed labels (BEP): '
       python3 tools/coverage_bep_status.py --failures "$COVERAGE_BEP" || true
@@ -391,6 +391,27 @@ fi
       fi
       if [[ -n "$test_cases" ]]; then
         printf 'GPU test failed cases: %s\n' "$test_cases"
+      fi
+    fi
+    local context
+    if ! context="$(python3 tools/coverage_bep_status.py --failure-context \
+        "$COVERAGE_BEP" "$bazel_status" 2>/dev/null)"; then
+      context='{"bepStatus":"unavailable"}'
+    fi
+    if [[ ${#context} -gt 1024 || "$context" == *$'\n'* ]]; then
+      context='{"bepStatus":"unavailable"}'
+    fi
+    printf 'Bazel coverage failure context (BEP): %s\n' "$context"
+    if [[ -n "${DONNER_CI_DIAGNOSTICS_DIR:-}" ]]; then
+      local summary="$DONNER_CI_DIAGNOSTICS_DIR/coverage/failure-summary.json"
+      local temporary
+      if temporary="$(mktemp "${summary}.XXXXXX" 2>/dev/null)"; then
+        if { printf '%s\n' "$context" > "$temporary"; } 2>/dev/null &&
+            mv -f "$temporary" "$summary" >/dev/null 2>&1; then
+          :
+        else
+          rm -f "$temporary" >/dev/null 2>&1 || true
+        fi
       fi
     fi
   }
@@ -464,7 +485,7 @@ fi
       exit 0
     fi
     if [[ "$coverage_status" -ne 0 ]]; then
-      report_coverage_failure_labels
+      report_coverage_failure_labels "$coverage_status"
     fi
     echo "ERROR: Coverage report was not generated"
     exit 1
@@ -475,7 +496,7 @@ fi
   # complete baseline. The all-incompatible/no-report exception above remains
   # separate; every invocation that actually produced a report must succeed.
   if [[ "$coverage_status" -ne 0 ]]; then
-    report_coverage_failure_labels
+    report_coverage_failure_labels "$coverage_status"
     echo "ERROR: Bazel coverage failed with status $coverage_status; refusing to publish a partial report."
     exit "$coverage_status"
   fi

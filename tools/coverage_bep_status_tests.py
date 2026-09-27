@@ -6,6 +6,8 @@ build failure, a partial stream, and a run that mixed a skip with a result.
 """
 
 #!/usr/bin/env python3
+import contextlib
+import io
 import json
 from pathlib import Path
 import sys
@@ -135,6 +137,29 @@ class ClassifyTest(unittest.TestCase):
         duplicate = status.failure_context([finished, finished], 34)
         self.assertEqual(duplicate["bepStatus"], "malformed")
         self.assertEqual(duplicate["failureCode"], "unavailable")
+
+    def test_failure_context_bad_schema_and_missing_private_file_do_not_leak(self):
+        malformed_reason = json.dumps({
+            "id": {"targetCompleted": {"label": "//private:target"}},
+            "aborted": {"reason": {"secret": "/private/runner/path"}},
+        })
+        result = status.failure_context([malformed_reason], 34)
+        self.assertEqual(result["abortReasons"], [])
+        self.assertNotIn("private", json.dumps(result))
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            exit_code = status.main([
+                "coverage_bep_status.py", "--failure-context",
+                "/private/runner/token=secret/missing.bep.json", "34",
+            ])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        missing = json.loads(stdout.getvalue())
+        self.assertEqual(missing["bepStatus"], "missing")
+        self.assertEqual(missing["processExitCode"], 34)
+        self.assertNotIn("private", stdout.getvalue())
+        self.assertNotIn("secret", stdout.getvalue())
 
     def test_allowlisted_cases_emit_only_validated_identifiers(self):
         golden = "//donner/svg/renderer/tests:renderer_geode_golden_tests"

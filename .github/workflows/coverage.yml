@@ -1147,8 +1147,10 @@ jobs:
         with:
           name: ci-diagnostics-${{ github.job }}-${{ github.run_attempt }}
           # Raw BEP, profiles, and coverage logs can carry runner filesystem
-          # paths. Retain only numeric phase timing and the validated proof.
-          path: ${{ runner.temp }}/donner-ci-diagnostics/coverage/timing.txt
+          # paths. Retain only numeric timing and allowlisted failure fields.
+          path: |
+            ${{ runner.temp }}/donner-ci-diagnostics/coverage/timing.txt
+            ${{ runner.temp }}/donner-ci-diagnostics/coverage/failure-summary.json
           retention-days: 3
           if-no-files-found: ignore
 
