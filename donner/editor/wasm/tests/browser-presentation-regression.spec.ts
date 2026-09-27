@@ -796,6 +796,29 @@ function captureSentinelPixels(
   })?.pixels ?? 0;
 }
 
+async function attachLastBasicShapesPng(
+  baselinePng: Buffer | null,
+  lastProbe: { shot: Buffer } | null,
+): Promise<void> {
+  if (baselinePng !== null || lastProbe === null || lastProbe.shot.length === 0) return;
+  try {
+    await attachEvidenceFile("open-basic-shapes-last-probe", lastProbe.shot, "image/png");
+  } catch {
+    console.warn("open-basic-shapes scored PNG unavailable");
+  }
+}
+
+function basicShapesSentinelPixels(
+  expected: boolean,
+  viewport: Pick<CssRegion, "width" | "height"> | null,
+  lastProbe: { shot: Buffer } | null,
+): number | null {
+  if (!expected || viewport === null || lastProbe === null || lastProbe.shot.length === 0) {
+    return null;
+  }
+  return captureSentinelPixels(lastProbe.shot, viewport);
+}
+
 function readScoredCanvasProbe(page: Page): Promise<ScoredCanvasProbe | null> {
   return boundFailureDiagnostic(page.evaluate(() => {
     const snapshot = (): SurfaceFrameSnapshot => {
@@ -1349,7 +1372,7 @@ async function takeBasicShapesProbe(
   };
 }
 
-async function openBasicShapes(page: Page): Promise<{
+async function openBasicShapes(page: Page, captureSentinelExpected = false): Promise<{
   canvasBounds: { x: number; y: number; width: number; height: number };
   documentClip: { x: number; y: number; width: number; height: number };
   captureClip: { x: number; y: number; width: number; height: number };
@@ -1488,6 +1511,8 @@ async function openBasicShapes(page: Page): Promise<{
       )
       .toBeGreaterThan(0);
   } finally {
+    // Retain the exact scored frame before any failure-only page IPC can stall.
+    await attachLastBasicShapesPng(baselinePng, lastProbe);
     // "No blue" covers three unrelated faults: the worker never produced a
     // result, a result arrived that no app frame carried, or a frame was
     // presented whose pixels this probe window missed. Publish the app's own
@@ -1507,9 +1532,11 @@ async function openBasicShapes(page: Page): Promise<{
     const canvasDiagnosis = baselinePng === null ? await diagnosePresentedCanvas(page) : null;
     if (baselinePng === null && lastProbe !== null) {
       try {
-        if (lastProbe.shot.length > 0) {
-          await attachEvidenceFile("open-basic-shapes-last-probe", lastProbe.shot, "image/png");
-        }
+        const sentinelPixels = basicShapesSentinelPixels(
+          captureSentinelExpected,
+          pageViewport,
+          lastProbe,
+        );
         await attachEvidenceFile(
           "open-basic-shapes-last-probe-state",
           JSON.stringify(
@@ -1526,6 +1553,7 @@ async function openBasicShapes(page: Page): Promise<{
               timeoutStage: lastProbe.timeoutStage,
               pageViewport,
               beforeSampleResults,
+              sentinelPixels,
             },
             null,
             2,
@@ -1660,11 +1688,14 @@ test("browser overlay control stays disabled after a normal editor frame", async
   expect(failures).toEqual([]);
 });
 
-test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ page }) => {
+test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ browserName, page }) => {
   const failures = await openEditor(page, "overlay");
+  const captureSentinelExpected = browserName === "firefox";
+  if (captureSentinelExpected) await installCaptureSentinel(page);
   const { canvasBounds, captureClip: documentClip, baselinePng: baseline, blueRect } =
     await openBasicShapes(
       page,
+      captureSentinelExpected,
     );
   const rejectedControlInputs = await page.evaluate(() => {
     const control = window.Module?._donner_set_overlay_state;
@@ -1934,7 +1965,11 @@ test("Firefox capture sentinel survives an opaque canvas clear", async ({ browse
   });
   expect(captureSentinelPixels(await page.screenshot(), { width: 1600, height: 900 })).toBe(0);
   await installCaptureSentinel(page);
-  expect(captureSentinelPixels(await page.screenshot(), { width: 1600, height: 900 })).toBe(144);
+  const withMarker = await page.screenshot();
+  const viewport = { width: 1600, height: 900 };
+  expect(captureSentinelPixels(withMarker, viewport)).toBe(144);
+  expect(basicShapesSentinelPixels(true, viewport, { shot: withMarker })).toBe(144);
+  expect(basicShapesSentinelPixels(false, viewport, { shot: withMarker })).toBeNull();
 });
 
 test("Firefox keeps the dragged shape and its selection outline in every drag frame", async ({ browserName, page }) => {
@@ -1945,8 +1980,11 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   // forward.
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const failures = await openEditor(page);
-  const { documentClip: probeRegion, captureClip, blueRect: blueCss } = await openBasicShapes(page);
   await installCaptureSentinel(page);
+  const { documentClip: probeRegion, captureClip, blueRect: blueCss } = await openBasicShapes(
+    page,
+    true,
+  );
   const baselineBluePixels = blueCss.pixels;
   expect(baselineBluePixels, "expected the initial Basic Shapes render before starting the drag")
     .toBeGreaterThan(500);
