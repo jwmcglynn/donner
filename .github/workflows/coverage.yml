@@ -705,6 +705,42 @@ jobs:
               echo run
               return
             fi
+            # A transitioned test can wrap C++ or a generated dependency audit.
+            # Exempt only a shell test whose sole source is the configured-audit
+            # checker and which has no data or deps to execute. Unknown shell
+            # wrappers still keep C++ coverage enabled.
+            local wrapped_audits_file="$scratch_dir/wrapped-dependency-audits.txt"
+            : > "$wrapped_audits_file"
+            local wrapper dep_kind_line dep_label src_kind_line data_kind_line deps_kind_line
+            while IFS= read -r wrapper; do
+              if ! dep_kind_line="$(
+                cd "$repo_dir" && bazelisk query "labels(dep, $wrapper)" \
+                  --output=label_kind 2>> "$diag_dir/wrapper-dep-kind-query.log"
+              )"; then
+                continue
+              fi
+              if [[ "$dep_kind_line" != "sh_test rule //"* ||
+                    "$dep_kind_line" == *$'\n'* ]]; then
+                continue
+              fi
+              dep_label="${dep_kind_line#sh_test rule }"
+              if src_kind_line="$(
+                  cd "$repo_dir" && bazelisk query "labels(srcs, $dep_label)" \
+                    --output=label_kind 2>> "$diag_dir/wrapper-dep-kind-query.log"
+                )" && data_kind_line="$(
+                  cd "$repo_dir" && bazelisk query "labels(data, $dep_label)" \
+                    --output=label_kind 2>> "$diag_dir/wrapper-dep-kind-query.log"
+                )" && deps_kind_line="$(
+                  cd "$repo_dir" && bazelisk query "labels(deps, $dep_label)" \
+                    --output=label_kind 2>> "$diag_dir/wrapper-dep-kind-query.log"
+                )" && [[ "$src_kind_line" == "_configured_dependency_audit rule //"* &&
+                       "$src_kind_line" != *$'\n'* &&
+                       -z "$data_kind_line" && -z "$deps_kind_line" ]]; then
+                printf '%s\n' "$wrapper" >> "$wrapped_audits_file"
+              fi
+            done < <(awk '$1 == "_donner_multi_transitioned_test" && $2 == "rule" {print $3}' \
+              "$final_kinds_file")
+            cp "$wrapped_audits_file" "$diag_dir/wrapped-dependency-audits.txt" || true
             if ( cd "$repo_dir" && bazelisk cquery "set($labels)" \
                 --output=starlark \
                 --starlark:expr='"{} {}".format(target.label, "HOST_INCOMPATIBLE" if "IncompatiblePlatformProvider" in providers(target) else "HOST_COMPATIBLE")' \
@@ -725,6 +761,7 @@ jobs:
                 --label-kind-file "$final_kinds_file" \
                 --restrict-to-file "$final_file" \
                 --host-incompatible-file "$incompatible_file" \
+                --wrapped-dependency-audits-file "$wrapped_audits_file" \
                 2>> "$diag_dir/instrumentability.log")"; then
               echo "Final-list instrumentability decision errored; running coverage (guard intact)." >&2
               tail -n 5 "$diag_dir/instrumentability.log" >&2 || true
