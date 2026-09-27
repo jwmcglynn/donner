@@ -31,8 +31,8 @@ import {
   installSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,
-  waitForSubmittedCanvasGpuWork,
   type SurfaceFrameProbeReport,
+  waitForSubmittedCanvasGpuWork,
 } from "./surface-frame-probe";
 
 declare global {
@@ -1468,55 +1468,74 @@ async function readBasicShapesProbeState(
   const state = await page.evaluate((includeDom) => {
     // Piggyback the existing post-capture IPC. Style/layout reads can change
     // timing, so these fields diagnose a failure but never qualify a pass.
-    const dom = includeDom ? (() => {
-      const finite = (value: number) => Number.isFinite(value) ? value : null;
-      const layer = (element: HTMLElement | null) => {
-        if (element === null) {
-          return { hidden: null, display: "missing", visibility: "missing",
-            opacity: null, zIndex: null, coversViewport: null };
-        }
-        const style = getComputedStyle(element);
-        const bounds = element.getBoundingClientRect();
-        return {
-          hidden: element.hidden,
-          display: style.display === "none" ? "none" : "shown",
-          visibility: style.visibility === "visible" ? "visible" : "hidden",
-          opacity: finite(Number(style.opacity)),
-          zIndex: finite(Number(style.zIndex)),
-          coversViewport: bounds.left <= 0 && bounds.top <= 0
-            && bounds.right >= innerWidth && bounds.bottom >= innerHeight,
+    const dom = includeDom
+      ? (() => {
+        const finite = (value: number) => Number.isFinite(value) ? value : null;
+        const layer = (element: HTMLElement | null) => {
+          if (element === null) {
+            return {
+              hidden: null,
+              display: "missing",
+              visibility: "missing",
+              opacity: null,
+              zIndex: null,
+              coversViewport: null,
+            };
+          }
+          const style = getComputedStyle(element);
+          const bounds = element.getBoundingClientRect();
+          return {
+            hidden: element.hidden,
+            display: style.display === "none" ? "none" : "shown",
+            visibility: style.visibility === "visible" ? "visible" : "hidden",
+            opacity: finite(Number(style.opacity)),
+            zIndex: finite(Number(style.zIndex)),
+            coversViewport: bounds.left <= 0 && bounds.top <= 0
+              && bounds.right >= innerWidth && bounds.bottom >= innerHeight,
+          };
         };
-      };
-      const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
-      const loading = document.getElementById("loading-screen");
-      const error = document.getElementById("capability-error");
-      const top = document.elementFromPoint(innerWidth * 0.5, innerHeight * 0.5);
-      const topKind = top === null ? "none" : top === canvas ? "canvas"
-        : loading?.contains(top) ? "loading"
-        : error?.contains(top) ? "error" : "other";
-      const rect = canvas?.getBoundingClientRect();
-      return {
-        atMs: finite(performance.now()),
-        documentVisibility: document.visibilityState === "visible" ? "visible" : "hidden",
-        documentHidden: document.hidden,
-        documentFocused: document.hasFocus(),
-        canvas: {
-          ...layer(canvas),
-          connected: canvas?.isConnected ?? false,
-          backingWidth: canvas ? finite(canvas.width) : null,
-          backingHeight: canvas ? finite(canvas.height) : null,
-          rect: rect ? {
-            x: finite(rect.x), y: finite(rect.y),
-            width: finite(rect.width), height: finite(rect.height),
-          } : null,
-        },
-        loading: { ...layer(loading), complete: loading?.classList.contains("is-complete") ?? null },
-        error: layer(error),
-        bodyOpacity: finite(Number(getComputedStyle(document.body).opacity)),
-        htmlOpacity: finite(Number(getComputedStyle(document.documentElement).opacity)),
-        topAtDocumentCenter: topKind,
-      };
-    })() : null;
+        const canvas = document.getElementById("canvas") as HTMLCanvasElement | null;
+        const loading = document.getElementById("loading-screen");
+        const error = document.getElementById("capability-error");
+        const top = document.elementFromPoint(innerWidth * 0.5, innerHeight * 0.5);
+        const topKind = top === null ? "none" : top === canvas
+          ? "canvas"
+          : loading?.contains(top)
+          ? "loading"
+          : error?.contains(top)
+          ? "error"
+          : "other";
+        const rect = canvas?.getBoundingClientRect();
+        return {
+          atMs: finite(performance.now()),
+          documentVisibility: document.visibilityState === "visible" ? "visible" : "hidden",
+          documentHidden: document.hidden,
+          documentFocused: document.hasFocus(),
+          canvas: {
+            ...layer(canvas),
+            connected: canvas?.isConnected ?? false,
+            backingWidth: canvas ? finite(canvas.width) : null,
+            backingHeight: canvas ? finite(canvas.height) : null,
+            rect: rect
+              ? {
+                x: finite(rect.x),
+                y: finite(rect.y),
+                width: finite(rect.width),
+                height: finite(rect.height),
+              }
+              : null,
+          },
+          loading: {
+            ...layer(loading),
+            complete: loading?.classList.contains("is-complete") ?? null,
+          },
+          error: layer(error),
+          bodyOpacity: finite(Number(getComputedStyle(document.body).opacity)),
+          htmlOpacity: finite(Number(getComputedStyle(document.documentElement).opacity)),
+          topAtDocumentCenter: topKind,
+        };
+      })()
+      : null;
     return {
       sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
       completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
@@ -1551,7 +1570,9 @@ test("Basic Shapes DOM probe reports fixed visibility states without page conten
     topAtDocumentCenter: "loading",
   });
   expect(JSON.stringify(covered.dom)).not.toContain("fixture-content");
-  await page.evaluate(() => document.getElementById("loading-screen")?.classList.add("is-complete"));
+  await page.evaluate(() =>
+    document.getElementById("loading-screen")?.classList.add("is-complete")
+  );
   const revealed = await readBasicShapesProbeState(page, true);
   expect(revealed.dom).toMatchObject({
     loading: { complete: true, opacity: 0 },
@@ -2071,13 +2092,19 @@ test("native overlay pixelmatch retains a one-pixel artwork regression", async (
   const roundedOffset = (274 * oneChannel.width + 279) * 4 + 1;
   oneChannel.data[roundedOffset] += 1;
   const accepted = compareOverlayBitmap(
-    PNG.sync.write(oneChannel), golden, outputDir, hostileEnvironment,
+    PNG.sync.write(oneChannel),
+    golden,
+    outputDir,
+    hostileEnvironment,
   );
   expect(accepted.matched, accepted.detail).toBe(true);
 
   oneChannel.data[roundedOffset] += 1;
   const rejected = compareOverlayBitmap(
-    PNG.sync.write(oneChannel), golden, outputDir, hostileEnvironment,
+    PNG.sync.write(oneChannel),
+    golden,
+    outputDir,
+    hostileEnvironment,
   );
   expect(rejected.matched, rejected.detail).toBe(false);
   expect([rejected.failureActual, rejected.failureExpected, rejected.diff].every(existsSync))
@@ -2087,7 +2114,10 @@ test("native overlay pixelmatch retains a one-pixel artwork regression", async (
   const artworkOffset = (80 * changed.width + 100) * 4;
   changed.data.set([255, 0, 0, 255], artworkOffset);
   const comparison = compareOverlayBitmap(
-    PNG.sync.write(changed), golden, outputDir, hostileEnvironment,
+    PNG.sync.write(changed),
+    golden,
+    outputDir,
+    hostileEnvironment,
   );
   expect(comparison.matched, comparison.detail).toBe(false);
   expect([comparison.failureActual, comparison.failureExpected, comparison.diff].every(existsSync))
@@ -2231,14 +2261,20 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
       .toBe(true);
   } catch (error) {
     if (lastCompositorShot !== null) {
-      await attachEvidenceFile("compositor-tile-overlay-last-probe", lastCompositorShot, "image/png");
+      await attachEvidenceFile(
+        "compositor-tile-overlay-last-probe",
+        lastCompositorShot,
+        "image/png",
+      );
     }
     if (lastComparison !== null) {
-      for (const [name, path] of [
-        ["compositor-overlay-actual", lastComparison.failureActual],
-        ["compositor-overlay-expected", lastComparison.failureExpected],
-        ["compositor-overlay-diff", lastComparison.diff],
-      ]) {
+      for (
+        const [name, path] of [
+          ["compositor-overlay-actual", lastComparison.failureActual],
+          ["compositor-overlay-expected", lastComparison.failureExpected],
+          ["compositor-overlay-diff", lastComparison.diff],
+        ]
+      ) {
         if (existsSync(path)) await attachEvidenceFile(name, await readFile(path), "image/png");
       }
     }
@@ -2486,7 +2522,9 @@ test("failure-only WebGPU readback makes no request on a visible Basic Shapes lo
 test("canvas GPU completion gate waits after the CPU host frame advances", async ({ page }) => {
   const failures = await openEditor(page);
   expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
-  await page.evaluate(() => { window.__donnerEditorFrameRequested = true; });
+  await page.evaluate(() => {
+    window.__donnerEditorFrameRequested = true;
+  });
   await expect.poll(async () => (await readSurfaceFrameProbe(page)).frames).toBeGreaterThan(0);
   const owner = await findCanvasOwnerWorker(page);
   expect(owner).not.toBeNull();
@@ -2495,23 +2533,31 @@ test("canvas GPU completion gate waits after the CPU host frame advances", async
   await owner.evaluate(() => {
     const scope = globalThis as typeof globalThis & {
       __donnerSurfaceFrameProbeCompletionHold?: {
-        promise: Promise<void>; release: () => void; calls: number;
+        promise: Promise<void>;
+        release: () => void;
+        calls: number;
       };
     };
     let release!: () => void;
-    const promise = new Promise<void>((resolve) => { release = resolve; });
+    const promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     scope.__donnerSurfaceFrameProbeCompletionHold = { promise, release, calls: 0 };
   });
   try {
     const before = await readSurfaceFrameSnapshot(page);
-    await page.evaluate(() => { window.__donnerEditorFrameRequested = true; });
+    await page.evaluate(() => {
+      window.__donnerEditorFrameRequested = true;
+    });
     await expect.poll(async () => (await readSurfaceFrameSnapshot(page)).renderedFrames)
       .toBeGreaterThan(before.renderedFrames);
-    await expect.poll(() => owner.evaluate(() =>
-      (globalThis as typeof globalThis & {
-        __donnerSurfaceFrameProbeCompletionHold?: { calls: number };
-      }).__donnerSurfaceFrameProbeCompletionHold?.calls ?? 0
-    )).toBeGreaterThan(0);
+    await expect.poll(() =>
+      owner.evaluate(() =>
+        (globalThis as typeof globalThis & {
+          __donnerSurfaceFrameProbeCompletionHold?: { calls: number };
+        }).__donnerSurfaceFrameProbeCompletionHold?.calls ?? 0
+      )
+    ).toBeGreaterThan(0);
 
     let completed = false;
     const completion = waitForSubmittedCanvasGpuWork(owner).then((submissions) => {
@@ -2749,7 +2795,10 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     failures: window.__donnerWgpuReadbackCaptureFailures ?? -1,
   }));
   expect(readback, "a passing drag must not request diagnostic GPU readback").toEqual({
-    requested: 0, starts: 0, completions: 0, failures: 0,
+    requested: 0,
+    starts: 0,
+    completions: 0,
+    failures: 0,
   });
   expect(failures).toEqual([]);
 });

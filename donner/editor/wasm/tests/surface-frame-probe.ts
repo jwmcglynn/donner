@@ -58,7 +58,11 @@ type ProbeGlobal = typeof globalThis & {
   __donnerSurfaceFrameProbeNextTask?: () => Promise<void>;
   __donnerSurfaceFrameProbeQueue?: GPUQueue;
   __donnerSurfaceFrameProbeCompletion?: { submissions: number; promise: Promise<void> };
-  __donnerSurfaceFrameProbeCompletionHold?: { promise: Promise<void>; release: () => void; calls: number };
+  __donnerSurfaceFrameProbeCompletionHold?: {
+    promise: Promise<void>;
+    release: () => void;
+    calls: number;
+  };
 };
 
 // Runs inside each worker. Everything it needs is defined in the body because
@@ -240,8 +244,8 @@ function installInWorker(): boolean {
   GPUQueue.prototype.onSubmittedWorkDone = function(this: GPUQueue) {
     const gpuPromise = onSubmittedWorkDone.call(this);
     const hold = scope.__donnerSurfaceFrameProbeCompletionHold;
-    const isCanvasCompletion =
-      this === scope.__donnerSurfaceFrameProbeQueue && pendingCanvasSubmit > 0;
+    const isCanvasCompletion = this === scope.__donnerSurfaceFrameProbeQueue
+      && pendingCanvasSubmit > 0;
     // A controlled test can delay the app's completion signal after real GPU
     // completion. Ordinary observation returns the original promise unchanged.
     const promise = isCanvasCompletion && hold !== undefined

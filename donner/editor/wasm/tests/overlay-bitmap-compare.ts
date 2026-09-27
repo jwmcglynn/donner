@@ -91,8 +91,10 @@ export function compareOverlayBitmap(
     maxBuffer: 1024 * 1024,
   });
   if (result.error || result.signal || (result.status !== 0 && result.status !== 1)) {
-    throw new Error("overlay bitmap comparator could not run: "
-      + String(result.error ?? result.signal ?? result.status));
+    throw new Error(
+      "overlay bitmap comparator could not run: "
+        + String(result.error ?? result.signal ?? result.status),
+    );
   }
 
   const caseFailures = readComparisonFailureCount(reportPath);
