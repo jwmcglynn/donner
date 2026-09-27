@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -53,6 +53,28 @@ function formatGpuCounters(value: unknown): string {
   }).join(",");
 }
 
+async function readGpuDiagnosticsBounded(
+  page: Page,
+): Promise<Pick<GpuDiagnostics, "current" | "atDeadline"> | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      page.evaluate(() => {
+        const { current, atDeadline } =
+          (window as Window & { __donnerGpuDiagnostics: GpuDiagnostics }).__donnerGpuDiagnostics;
+        return { current, atDeadline };
+      }).catch(() => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), 500);
+      }),
+    ]);
+  } catch {
+    return null;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 function installGpuDiagnostics(): void {
   const counters = {
     deviceRequests: 0,
@@ -86,10 +108,14 @@ function installGpuDiagnostics(): void {
 
   const attachDevice = (device: GPUDevice): void => {
     device.addEventListener("uncapturederror", (event) => {
-      const name = (event as Event & { error?: { name?: string } }).error?.name;
-      if (name === "GPUValidationError") counters.gpuValidationErrors += 1;
-      else if (name === "GPUOutOfMemoryError") counters.gpuOutOfMemoryErrors += 1;
-      else if (name === "GPUInternalError") counters.gpuInternalErrors += 1;
+      const error = (event as Event & { error?: unknown }).error;
+      const isGpuError = (constructorName: string): boolean => {
+        const constructor = (globalThis as unknown as Record<string, unknown>)[constructorName];
+        return typeof constructor === "function" && error instanceof constructor;
+      };
+      if (isGpuError("GPUValidationError")) counters.gpuValidationErrors += 1;
+      else if (isGpuError("GPUOutOfMemoryError")) counters.gpuOutOfMemoryErrors += 1;
+      else if (isGpuError("GPUInternalError")) counters.gpuInternalErrors += 1;
       else counters.gpuOtherErrors += 1;
     });
     void device.lost.then(
@@ -245,7 +271,7 @@ function pageErrorCategory(error: Error): string {
   return "Unclassified browser page error";
 }
 
-test("browser diagnostics cannot disclose console content", () => {
+test("browser diagnostics cannot disclose console content", async () => {
   const sensitive = "https://private.example.test/path /Users/operator/private/file";
   expect(browserDiagnosticStage(sensitive)).toBeNull();
   expect(browserDiagnosticStage(`[wasm] parsed OK ${sensitive}`)).toBe("svg_parsed");
@@ -263,39 +289,33 @@ test("browser diagnostics cannot disclose console content", () => {
   expect(pageErrorCategory(memoryError)).toBe("WebGPU out of memory");
   expect(pageErrorCategory(new Error(sensitive))).toBe("Unclassified browser page error");
   expect(formatGpuCounters({ mapRequests: sensitive, extra: sensitive })).not.toContain(sensitive);
+  const stalledPage = { evaluate: () => new Promise<never>(() => {}) } as unknown as Page;
+  expect(await readGpuDiagnosticsBounded(stalledPage)).toBeNull();
 });
 
 test("browser GPU diagnostics whitelist errors and snapshot the map deadline", async ({ page }) => {
-  await page.goto("about:blank");
+  const fixtureUrl = `${baseUrl}/__gpu_diagnostic_blank`;
+  await page.route(fixtureUrl, (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/html",
+      body: "<!doctype html><title>GPU diagnostic fixture</title>",
+    }));
+  await page.goto(fixtureUrl);
   await page.evaluate(() => {
     let rejectMap: () => void = () => {};
     const pending = new Promise<undefined>((_, reject) => {
       rejectMap = () => reject(new Error("https://private.example.test/path"));
     });
-    class FakeAdapter {
-      requestDevice() {
-        return Promise.reject(new Error("unused"));
-      }
-    }
-    class FakeQueue {
-      submit() {}
-      onSubmittedWorkDone() {
-        return Promise.resolve(undefined);
-      }
-    }
-    class FakeBuffer {
-      mapAsync() {
-        return pending;
-      }
-    }
-    Object.defineProperty(window, "GPUAdapter", { value: FakeAdapter });
-    Object.defineProperty(window, "GPUQueue", { value: FakeQueue });
-    Object.defineProperty(window, "GPUBuffer", { value: FakeBuffer });
+    GPUBuffer.prototype.mapAsync = function() {
+      return pending;
+    };
     Object.defineProperty(window, "__rejectSyntheticMap", { value: rejectMap });
   });
   await page.evaluate(installGpuDiagnostics);
   const diagnostics = await page.evaluate(async () => {
     const browserWindow = window as Window & { __donnerGpuDiagnostics: GpuDiagnostics };
+    const sensitive = "https://private.example.test/path";
     const pendingMap = GPUBuffer.prototype.mapAsync.call({} as GPUBuffer, 1);
     void pendingMap.catch(() => {});
     const fakeDevice = new EventTarget() as unknown as GPUDevice;
@@ -304,10 +324,20 @@ test("browser GPU diagnostics whitelist errors and snapshot the map deadline", a
     const unknownLoss = new EventTarget() as unknown as GPUDevice;
     Object.defineProperty(unknownLoss, "lost", { value: Promise.resolve({ reason: "unknown" }) });
     browserWindow.__donnerGpuDiagnostics.attachDeviceForTesting(unknownLoss);
-    for (const name of ["GPUValidationError", "GPUOutOfMemoryError", "GPUInternalError", "other"]) {
+    const errorObjects: unknown[] = [
+      new GPUValidationError(sensitive),
+      new GPUOutOfMemoryError(sensitive),
+    ];
+    const internalConstructor = (globalThis as unknown as Record<string, unknown>).GPUInternalError;
+    const hasInternal = typeof internalConstructor === "function";
+    if (hasInternal) {
+      errorObjects.push(new (internalConstructor as new(message: string) => object)(sensitive));
+    }
+    errorObjects.push({ name: "GPUValidationError", message: sensitive });
+    for (const errorObject of errorObjects) {
       const event = new Event("uncapturederror");
       Object.defineProperty(event, "error", {
-        value: { name, message: "https://private.example.test/path" },
+        value: errorObject,
       });
       fakeDevice.dispatchEvent(event);
     }
@@ -317,11 +347,11 @@ test("browser GPU diagnostics whitelist errors and snapshot the map deadline", a
     await Promise.resolve();
     await Promise.resolve();
     const { current, atDeadline } = browserWindow.__donnerGpuDiagnostics;
-    return { current, atDeadline };
+    return { current, atDeadline, hasInternal };
   });
   expect(diagnostics.current.gpuValidationErrors).toBe(1);
   expect(diagnostics.current.gpuOutOfMemoryErrors).toBe(1);
-  expect(diagnostics.current.gpuInternalErrors).toBe(1);
+  expect(diagnostics.current.gpuInternalErrors).toBe(diagnostics.hasInternal ? 1 : 0);
   expect(diagnostics.current.gpuOtherErrors).toBe(1);
   expect(diagnostics.current.deviceLostDestroyed).toBe(1);
   expect(diagnostics.current.deviceLostOther).toBe(1);
@@ -374,19 +404,20 @@ test("standalone Geode wasm selects the browser backend and paints SVG pixels", 
     await expect(status).toContainText("Rendered 400x400 via Geode", { timeout: 45000 });
   } catch (error) {
     // Emit fixed stage names and counts; browser messages may carry paths or URLs.
-    const gpuDiagnostics = await page.evaluate(() => {
-      const { current, atDeadline } =
-        (window as Window & { __donnerGpuDiagnostics: GpuDiagnostics })
-          .__donnerGpuDiagnostics;
-      return { current, atDeadline };
-    }).catch(() => null);
     console.error(
       `browser stages: ${
         [...browserStages].join(",") || "none"
-      }; page errors: ${pageErrorCount}; categories: ${pageErrorCategories.join(",") || "none"}`
-        + `; gpu at map deadline: ${formatGpuCounters(gpuDiagnostics?.atDeadline)}`
-        + `; gpu at failure: ${formatGpuCounters(gpuDiagnostics?.current)}`,
+      }; page errors: ${pageErrorCount}; categories: ${pageErrorCategories.join(",") || "none"}`,
     );
+    try {
+      const gpuDiagnostics = await readGpuDiagnosticsBounded(page);
+      console.error(
+        `gpu at map deadline: ${formatGpuCounters(gpuDiagnostics?.atDeadline)}`
+          + `; gpu at failure: ${formatGpuCounters(gpuDiagnostics?.current)}`,
+      );
+    } catch {
+      console.error("gpu diagnostics unavailable");
+    }
     throw error;
   }
   expect(
