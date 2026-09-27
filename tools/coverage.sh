@@ -380,6 +380,18 @@ fi
     if [[ -f "$COVERAGE_BEP" ]]; then
       printf 'Bazel coverage failed labels (BEP): '
       python3 tools/coverage_bep_status.py --failures "$COVERAGE_BEP" || true
+      # A target label alone cannot identify a failed GPU comparison. Emit
+      # only validated GTest identifiers for the three allowlisted suites;
+      # test.xml may contain runner paths and arbitrary assertion text.
+      local test_cases
+      if ! test_cases=$(python3 tools/coverage_bep_status.py --test-cases \
+          "$COVERAGE_BEP" "bazel-testlogs" \
+          2>/dev/null); then
+        test_cases='{"case_names_unavailable":1,"reason":"parser_error"}'
+      fi
+      if [[ -n "$test_cases" ]]; then
+        printf 'GPU test failed cases: %s\n' "$test_cases"
+      fi
     fi
   }
   phase_mark() {
