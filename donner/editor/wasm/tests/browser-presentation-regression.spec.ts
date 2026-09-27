@@ -2069,6 +2069,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
         async () => {
           const shot = await captureOverlay();
           lastCompositorShot = shot;
+          lastComparison = null;
           lastComparison = compareOverlayBitmap(
             cropCapturedPng(shot, documentClip, presentedDocumentClip),
             overlayGolden,

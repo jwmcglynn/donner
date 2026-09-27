@@ -33,9 +33,12 @@ export function compareOverlayBitmap(
   const failureActual = join(outputDir, "actual_expected.png");
   const failureExpected = join(outputDir, "expected_expected.png");
   const reportPath = join(outputDir, "gtest-result.json");
+  const sideBySide = join(outputDir, "side_by_side_expected.png");
   writeFileSync(actual, normalizeOverlayGeneration(captured));
   writeFileSync(expected, normalizeOverlayGeneration(readFileSync(committedGolden)));
-  rmSync(reportPath, { force: true });
+  for (const path of [reportPath, failureActual, failureExpected, diff, sideBySide]) {
+    rmSync(path, { force: true });
+  }
 
   const env: NodeJS.ProcessEnv = {
     ...inheritedEnvironment,
@@ -83,9 +86,9 @@ export function compareOverlayBitmap(
     || onlyCase?.classname !== "StandaloneGeodeBrowserPngCompare"
     || onlyCase?.name !== "CanvasMatchesGolden"
     || onlyCase?.status !== "RUN" || onlyCase?.result !== "COMPLETED"
-    || report.failures !== caseFailures
+    || report.failures !== (caseFailures > 0 ? 1 : 0)
     || (result.status === 0 && caseFailures !== 0)
-    || (result.status === 1 && (caseFailures !== 1
+    || (result.status === 1 && (caseFailures < 1
       || ![failureActual, failureExpected, diff].every(existsSync)))
   ) {
     throw new Error("overlay bitmap comparator did not complete exactly one valid comparison");
