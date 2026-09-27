@@ -361,7 +361,7 @@ export async function installSurfaceFrameProbe(page: Page): Promise<number> {
   return probed.length;
 }
 
-/** Return the worker that owns the editor canvas while the probe watches it. */
+/** Return the one worker that acquired the editor's canvas while the probe watched. */
 export async function findCanvasOwnerWorker(page: Page): Promise<Worker | null> {
   const workers = probedWorkers.get(page) ?? [];
   const states = await evaluateInWorkers(workers, readInWorker);

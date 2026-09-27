@@ -6332,6 +6332,255 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
   }
 }
 
+TEST(RenderCoordinatorTest, PresentationRefreshResendsRejectedRetainedTilePixels) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g opacity="0.5"><rect x="20" y="20" width="60" height="60" fill="blue"/></g>
+    </svg>
+  )svg"));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.resetTo100Percent();
+  ASSERT_FALSE(viewport.rasterViewport().viewportBounded);
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Requires native texture presentation";
+  }
+  const auto drain = [&]() {
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); },
+                     std::chrono::steady_clock::now() + std::chrono::seconds(5));
+  };
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+  coordinator.requestPresentationRefresh();
+  ASSERT_TRUE(drain());
+  EXPECT_THAT(textures.tiles(), testing::IsEmpty());
+  ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+  ASSERT_TRUE(drain());
+  EXPECT_EQ(textures.metadataOnlyMissCount(), 0u);
+  ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
+  for (const auto& tile : textures.tiles()) {
+    SCOPED_TRACE(tile.id);
+    EXPECT_NE(tile.textureSnapshot, nullptr);
+  }
+  EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
+}
+
+TEST(RenderCoordinatorTest, PresentationRefreshRejectsPriorOverviewAndDetailedResults) {
+  for (std::string_view phase : {"staged", "pending_overview", "pending_detail"}) {
+    SCOPED_TRACE(phase);
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+        <rect id="target" x="20" y="20" width="60" height="60" fill="white"/>
+      </svg>
+    )svg"));
+    const auto target = app.document().document().querySelector("#target");
+    ASSERT_THAT(target, testing::Optional(testing::_));
+    app.setSelection(*target);
+    ViewportState viewport;
+    viewport.paneSize = Vector2d(200.0, 120.0);
+    viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+    viewport.devicePixelRatio = 2.0;
+    viewport.resetTo100Percent();
+    viewport.zoomAround(32.0, viewport.paneCenter());
+    SelectTool selectTool;
+    GlTextureCache textures;
+    RenderCoordinator coordinator;
+    if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+      GTEST_SKIP() << "Requires native texture presentation";
+    }
+    const auto drain = [&]() {
+      return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                       [&] { return !coordinator.asyncRenderer().isBusy(); },
+                       std::chrono::steady_clock::now() + std::chrono::seconds(5));
+    };
+    const auto render = [&]() {
+      return coordinator.maybeRequestRender(app, selectTool, viewport, &textures) && drain();
+    };
+    ASSERT_TRUE(render());
+    RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+    ASSERT_TRUE(render());
+    const auto oldVersion = coordinator.displayedDocVersion();
+    ASSERT_THAT(textures.overviewTiles(), testing::Not(testing::IsEmpty()));
+    const auto oldOverviewGeneration = textures.overviewTiles().front().generation;
+    ASSERT_TRUE(app.setStylePropertyOnSelection("fill", "gold"));
+    ASSERT_TRUE(app.flushFrame());
+    coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
+    if (phase != "pending_overview") {
+      ASSERT_TRUE(render());
+    }
+    if (phase != "staged") {
+      ASSERT_TRUE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+    }
+    coordinator.requestPresentationRefresh();
+    ASSERT_TRUE(drain());
+    EXPECT_EQ(coordinator.displayedDocVersion(), oldVersion);
+    EXPECT_EQ(textures.overviewTiles().front().generation, oldOverviewGeneration);
+    ASSERT_TRUE(render());
+    EXPECT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly)
+        << "The refreshed renderer must regenerate the overview, including after an old result "
+           "lands";
+    ASSERT_TRUE(render());
+    EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
+  }
+}
+
+TEST(RenderCoordinatorTest, ZoomedPaintUsesCompletedOverviewWhenDetailedRenderFails) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="target" d="M 20 20 L 80 20 L 50 80 Z" fill="white" stroke="black" transform="translate(3 5) rotate(15 50 50)"/>
+    </svg>
+  )svg"));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.resetTo100Percent();
+  viewport.zoomAround(32.0, viewport.paneCenter());
+  ASSERT_TRUE(viewport.rasterViewport().viewportBounded);
+
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Requires native texture presentation";
+  }
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  const auto render = [&]() {
+    if (!coordinator.maybeRequestRender(app, selectTool, viewport, &textures)) {
+      return false;
+    }
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); },
+                     std::chrono::steady_clock::now() + std::chrono::seconds(5));
+  };
+  ASSERT_TRUE(render());
+  ASSERT_THAT(textures.overviewTiles(), testing::Not(testing::IsEmpty()));
+
+  RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+  ASSERT_TRUE(render());
+  ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
+  const auto oldVersion = coordinator.displayedDocVersion();
+  ASSERT_TRUE(app.setStylePropertyOnSelection("fill", "#36c317"));
+  ASSERT_TRUE(app.flushFrame());
+  coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
+  ASSERT_TRUE(render());
+  ASSERT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly);
+  EXPECT_EQ(coordinator.displayedDocVersion(), oldVersion);
+
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(true);
+  ASSERT_TRUE(render());
+  EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion())
+      << "A completed overview must remain usable when detailed rendering produces no pixels";
+  EXPECT_FALSE(textures.activeTilesViewportBounded());
+  EXPECT_GT(coordinator.nothingToPresentResultTotalForDiagnostics(), 0u);
+
+  coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(false);
+  RenderCoordinatorTestAccess::advanceFakeRetryClock(NothingToPresentRetry::kRetryDelays.front());
+  ASSERT_TRUE(render());
+  EXPECT_TRUE(textures.activeTilesViewportBounded())
+      << "Publishing the overview must still permit a detailed render when the worker recovers";
+  EXPECT_EQ(textures.metadataOnlyMissCount(), 0u);
+  ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
+  for (const auto& tile : textures.tiles()) {
+    SCOPED_TRACE(tile.id);
+    EXPECT_NE(tile.textureSnapshot, nullptr);
+  }
+  EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
+}
+
+TEST(RenderCoordinatorTest, ZoomedPaintChangesRefreshOverviewAndSettle) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="target" d="M 20 20 L 80 20 L 50 80 Z" fill="white" stroke="black" transform="translate(3 5) rotate(15 50 50)"/>
+    </svg>
+  )svg"));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.resetTo100Percent();
+  viewport.zoomAround(32.0, viewport.paneCenter());
+  ASSERT_TRUE(viewport.rasterViewport().viewportBounded);
+
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Requires native texture presentation";
+  }
+  const auto render = [&]() {
+    if (!coordinator.maybeRequestRender(app, selectTool, viewport, &textures)) {
+      return false;
+    }
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); },
+                     std::chrono::steady_clock::now() + std::chrono::seconds(5));
+  };
+  ASSERT_TRUE(render());
+  ASSERT_THAT(textures.overviewTiles(), testing::Not(testing::IsEmpty()));
+
+  RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+  ASSERT_TRUE(render());
+  ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
+  const auto generations = [](const auto& tiles) {
+    std::vector<std::uint64_t> result;
+    for (const auto& tile : tiles) {
+      result.push_back(tile.generation);
+    }
+    return result;
+  };
+
+  for (std::string_view property : {"fill", "stroke"}) {
+    SCOPED_TRACE(property);
+    const auto oldOverview = generations(textures.overviewTiles());
+    const auto oldActive = generations(textures.tiles());
+    const auto oldDisplayedVersion = coordinator.displayedDocVersion();
+    ASSERT_TRUE(app.setStylePropertyOnSelection(property, "#f0b429"));
+    ASSERT_TRUE(app.flushFrame());
+    coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
+    ASSERT_TRUE(render());
+    const auto posted = RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
+    ASSERT_THAT(posted, testing::Optional(testing::_));
+    EXPECT_TRUE(posted->overviewInfillOnly)
+        << "A paint edit must replace the overview retained beneath zoomed tiles";
+    EXPECT_THAT(generations(textures.overviewTiles()), testing::ContainerEq(oldOverview));
+    EXPECT_THAT(generations(textures.tiles()), testing::ContainerEq(oldActive));
+    EXPECT_EQ(coordinator.displayedDocVersion(), oldDisplayedVersion);
+    if (property == "stroke") {
+      ASSERT_TRUE(app.setStylePropertyOnSelection("stroke", "#0044ff"));
+      ASSERT_TRUE(app.flushFrame());
+      coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
+      ASSERT_TRUE(render());
+      ASSERT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly);
+      EXPECT_THAT(generations(textures.overviewTiles()), testing::ContainerEq(oldOverview));
+      EXPECT_EQ(coordinator.displayedDocVersion(), oldDisplayedVersion);
+    }
+    ASSERT_TRUE(render());
+    EXPECT_FALSE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly);
+    EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
+    EXPECT_THAT(generations(textures.overviewTiles()),
+                testing::Not(testing::ContainerEq(oldOverview)));
+    EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
+        << "The refreshed overview and selected layer must settle without repeated rendering";
+  }
+}
+
 TEST(RenderCoordinatorTest, UnsupportedTextSelectionDoesNotRepeatIdlePrewarm) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
@@ -6512,7 +6761,7 @@ TEST(RenderCoordinatorTest, DeletedSelectionSuppressesStaleCachedLayer) {
          "cached texture metadata.";
 }
 
-TEST(RenderCoordinatorTest, StyleMutationOnSelectedElementDropsPromotedLayerCache) {
+TEST(RenderCoordinatorTest, StyleMutationOnSelectedElementRetainsPresentationUntilFreshRaster) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
@@ -6535,9 +6784,9 @@ TEST(RenderCoordinatorTest, StyleMutationOnSelectedElementDropsPromotedLayerCach
   EXPECT_THAT(app.document().lastFlushResult().cacheInvalidatedElements, Contains(targetEntity));
 
   coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
-  EXPECT_FALSE(coordinator.compositedPresentation().hasCachedTextures())
-      << "A selected style edit changes the promoted layer pixels even when the entity stays the "
-         "same; keeping the old cache lets the canvas display a stale no-fill texture.";
+  EXPECT_TRUE(coordinator.compositedPresentation().hasCachedTextures())
+      << "Keep the presented transform until the replacement pixels land";
+  EXPECT_EQ(coordinator.pendingSelectedLayerRasterizationEntityForDiagnostics(), targetEntity);
 }
 
 TEST(RenderCoordinatorTest, DeletedBackgroundKeepsPresentationUntilReplacementRender) {
@@ -6579,7 +6828,7 @@ TEST(RenderCoordinatorTest, DeletedBackgroundKeepsPresentationUntilReplacementRe
   const std::uint64_t deletedVersion = app.document().currentFrameVersion();
   ASSERT_NE(deletedVersion, cachedVersion);
 
-  coordinator.invalidatePresentationAfterDocumentFlush(app.document().lastFlushResult());
+  coordinator.invalidatePresentationAfterDocumentFlush(app, app.document().lastFlushResult());
   EXPECT_TRUE(coordinator.compositedPresentation().hasCachedTextures())
       << "A delete must not blank the whole canvas while the replacement render is pending; that "
          "creates a one-frame checkerboard flicker.";

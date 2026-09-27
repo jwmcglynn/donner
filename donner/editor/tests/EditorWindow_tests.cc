@@ -907,6 +907,31 @@ TEST(EditorWindowTest, ALostSurfaceThatCannotBeRebuiltIsGivenUp) {
   EXPECT_EQ(calls.shutdowns, 1);
 }
 
+TEST(EditorWindowTest, ALostCanvasSurfaceCanRecoverOnTheNextFrame) {
+  SurfaceCalls lostCalls;
+  SurfaceCalls recoveredCalls;
+  std::unique_ptr<internal::PresentationSurface> surface =
+      ScriptedSurfaceReporting({gpu::SurfaceStatus::Lost}, &lostCalls);
+  Vector2i configuredPx = kFrameSizePx;
+
+  const internal::PresentationFrameOutcome first = internal::AcquirePresentationFrame(
+      surface, kFrameSizePx, configuredPx,
+      []() -> std::unique_ptr<internal::PresentationSurface> { return nullptr; });
+  ASSERT_TRUE(first.released);
+  ASSERT_EQ(surface, nullptr);
+
+  const internal::PresentationFrameOutcome next = internal::AcquirePresentationFrame(
+      surface, kFrameSizePx, configuredPx,
+      [&] { return ScriptedSurfaceReporting({gpu::SurfaceStatus::Success}, &recoveredCalls); });
+
+  EXPECT_TRUE(next.texture.isValid()) << "a transient rebuild failure must not strand the canvas";
+  EXPECT_EQ(next.status, gpu::SurfaceStatus::Success);
+  EXPECT_FALSE(next.released);
+  EXPECT_NE(surface, nullptr);
+  EXPECT_EQ(configuredPx, kFrameSizePx);
+  EXPECT_EQ(recoveredCalls.acquires, 1);
+}
+
 TEST(EditorWindowTest, ASecondLostAfterRebuildingGivesTheSurfaceUp) {
   SurfaceCalls lostCalls;
   SurfaceCalls rebuiltCalls;
@@ -1595,6 +1620,48 @@ TEST(EditorWindowTest, NativeVulkanWindowsRetainGlfwUntilTheLastWindowCloses) {
   EXPECT_EQ(internal::GlfwTerminationCountForTesting(), terminations + 1);
 }
 
+TEST(EditorWindowTest, LostNativeVulkanSurfaceStopsLaterFrameRetries) {
+  if (std::getenv("DISPLAY") == nullptr && std::getenv("WAYLAND_DISPLAY") == nullptr) {
+    GTEST_SKIP() << "A display is required for native Vulkan window presentation";
+  }
+  const gpu::Result<geode::GpuBackendKind> selected = geode::ProcessDefaultGpuBackendKind();
+  ASSERT_THAT(selected, gpu::HasResult());
+  if (selected.result() != geode::GpuBackendKind::NativeVulkan) {
+    GTEST_SKIP() << "This run did not select native Vulkan";
+  }
+  EditorWindow window(EditorWindowOptions{
+      .title = "Lost Vulkan Editor Surface",
+      .initialWidth = 64,
+      .initialHeight = 48,
+      .visible = false,
+  });
+  ASSERT_TRUE(window.valid());
+  int drawnFrames = 0;
+  window.setWgpuUnderlayRenderCallback([&](const EditorWindowWgpuRenderTarget&) { ++drawnFrames; });
+  window.beginFrame();
+  window.endFrame();
+  ASSERT_EQ(drawnFrames, 1) << "the native surface must first draw a real frame";
+
+  testing::internal::CaptureStderr();
+  window.forcePresentationSurfaceLossForTesting();
+  for (int frame = 0; frame < 3; ++frame) {
+    window.beginFrame();
+    window.endFrame();
+  }
+  const std::string errors = testing::internal::GetCapturedStderr();
+  constexpr std::string_view kFailedRebuild = "could not be rebuilt from the window";
+  std::size_t rebuildReports = 0;
+  for (std::size_t pos = errors.find(kFailedRebuild); pos != std::string::npos;
+       pos = errors.find(kFailedRebuild, pos + kFailedRebuild.size())) {
+    ++rebuildReports;
+  }
+  EXPECT_EQ(rebuildReports, 1u) << errors;
+  EXPECT_EQ(drawnFrames, 1) << "the lost native surface cannot draw another frame";
+  EXPECT_FALSE(window.geodeFramebufferDevice()->isDeviceLost())
+      << "only the platform surface was lost; the shared device remains healthy";
+  EXPECT_FALSE(window.framebufferReadbackAvailable());
+}
+
 TEST(EditorWindowTest, NativeVulkanDefaultWindowPresentsAndResizes) {
   const char* requested = std::getenv("DONNER_GPU_BACKEND");
   if (requested != nullptr && requested[0] != '\0') {
@@ -1951,12 +2018,9 @@ TEST_P(EditorWindowLifecycleTest, AResizedWindowDrawsAtItsNewExtent) {
       << "a texel outside the old extent was not drawn at the new one";
 }
 
-/// A device declared lost stops the window reading its frames back, and no frame after it spends
-/// the readback bound. The loss reaches the window through the condition its framebuffer context
-/// shares with the runtime device it draws on, whichever backend that is. The frame itself is
-/// still drawn; its readback asks nothing of a device already lost, and a map started on one would
-/// end at its first wait slice too, so this checks that the frames end within the bound with
-/// nothing read, not which of those two stops them.
+/// A device declared lost stops the window before another surface acquisition or draw, and no
+/// frame after it spends the readback bound. The loss reaches the window through the condition
+/// its framebuffer context shares with the runtime device on either backend.
 TEST_P(EditorWindowLifecycleTest, FramesAfterADeclaredLossReadBackNothingWithinTheBound) {
   EditorWindow window(options());
   ASSERT_THAT(window.valid(), testing::IsTrue());
@@ -1984,6 +2048,9 @@ TEST_P(EditorWindowLifecycleTest, FramesAfterADeclaredLossReadBackNothingWithinT
     const svg::RendererBitmap lost = window.endFrameAndReadPixels();
     const auto frameTime = std::chrono::steady_clock::now() - frameStart;
     EXPECT_THAT(lost.empty(), testing::IsTrue()) << "a lost device's frame was read back";
+    EXPECT_THAT(drawnFrames, testing::ElementsAre(DrawnAt(window.framebufferSize())))
+        << "a known-lost device must not attempt another frame";
+    EXPECT_THAT(window.framebufferReadbackAvailable(), testing::IsFalse());
     EXPECT_THAT(std::chrono::duration_cast<std::chrono::milliseconds>(frameTime),
                 testing::Lt(geode::kDefaultGpuWaitTimeout))
         << "the frame waited out the readback bound on a lost device";

@@ -2,7 +2,11 @@ const { defineConfig, devices } = require("@playwright/test");
 
 module.exports = defineConfig({
   testDir: ".",
-  testMatch: ["smoke.spec.ts", "browser-presentation-regression.spec.ts"],
+  testMatch: [
+    "smoke.spec.ts",
+    "browser-presentation-regression.spec.ts",
+    "browser-surface-recovery.spec.ts",
+  ],
   timeout: 30000,
   workers: 1,
   projects: [
@@ -19,6 +23,7 @@ module.exports = defineConfig({
         /the surface frame probe reports canvas work submitted after its task ended/,
         /Firefox capture sentinel survives an opaque canvas clear/,
         /Firefox host counters record a refused surface frame and later recovery/,
+        /Firefox restores the Splash canvas after transient surface loss/,
         /Firefox renders every visible Splash layer thumbnail/,
         /Firefox hands a blocked thumbnail renderer to a foreground sample load/,
       ],

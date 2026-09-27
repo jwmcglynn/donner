@@ -295,6 +295,8 @@ public:
   void requestPresentationRefresh() {
     pendingPresentationRefresh_ = true;
     ++presentationEpoch_;
+    pendingOverviewResult_.reset();
+    overviewDocVersion_ = 0;
   }
   /// Arm or disarm the worker-owned document pixel capture.
   void setDocumentPixelCaptureEnabled(bool enabled);
@@ -426,10 +428,6 @@ public:
       EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
       GlTextureCache* textures = nullptr, bool supersedeInFlight = false,
       SelectionChromeDetail directSurfaceSelectionDetail = SelectionChromeDetail::Full);
-  /// Record that a document mutation requires a current-version presentation handoff.
-  ///
-  /// @param flushResult Metadata from the just-flushed editor command batch.
-  void invalidatePresentationAfterDocumentFlush(const AsyncSVGDocument::FlushResult& flushResult);
   /// Record document-flush invalidation that depends on the live selected element.
   ///
   /// @param app Editor application state containing the live selection.
@@ -503,6 +501,7 @@ private:
       const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
       const Transform2d& representedDocumentFromLiveDocument, SelectionChromeSnapshot* snapshot);
   void noteMissingPixelCaptureResult(const std::optional<RenderResult>& result);
+  void rejectRenderResult(const std::optional<RenderResult>& result);
   void rejectPixelCaptureResult(const std::optional<RenderResult>& result);
   void noteResultWithNothingToPresent(const std::optional<RenderResult>& result);
   void noteSelectedPrewarmResultPresented(const RenderResult& result);
@@ -637,6 +636,21 @@ private:
   std::vector<std::array<Vector2d, 4>> lastOverlayTextEditingSelectionQuadsDoc_;
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> lastOverlayTextBoxDragPreviewDoc_;
 
+  /// Publish a validated tile set and advance its matching presentation and selection state.
+  void presentCompositedResult(RenderResult& result, EditorApp& app, const ViewportState& viewport,
+                               GlTextureCache& textures);
+  /// Hold a refreshed overview until detailed tiles can publish the same document version.
+  void acceptOverviewResult(RenderResult result, EditorApp& app, GlTextureCache& textures);
+  /// Whether the staged overview and detailed result describe the current document.
+  bool hasMatchingPendingOverview(const RenderResult& result, EditorApp& app) const;
+  /// Whether a detailed result has coherent full-document coverage behind it.
+  bool canPresentWithOverview(const RenderResult& result,
+                              const EditorRasterViewport& rasterViewport, EditorApp& app,
+                              const GlTextureCache& textures) const;
+  /// Consume stale staging and determine whether full-document coverage needs refreshing.
+  bool needsOverviewInfillForViewport(EditorApp& app, const EditorRasterViewport& rasterViewport,
+                                      bool activeDrag, const GlTextureCache* textures);
+
   PresentationRenderScheduler renderScheduler_;
   /// Live selected display:none entity whose stale promoted layer is currently hidden.
   Entity displayNoneSuppressedSelectionEntity_ = entt::null;
@@ -656,9 +670,10 @@ private:
   /// transforms already-cached composited textures during live zoom/pan.
   std::optional<EditorRasterViewport> pendingRasterViewport_;
   std::chrono::steady_clock::time_point pendingRasterViewportSince_{};
-  /// True after a structural mutation whose existing overview/full-document cache may contain
-  /// deleted pixels. The old presentation remains visible until the replacement render lands.
-  bool pendingDocumentMutationOverviewRefresh_ = false;
+  /// Document version represented by the published full-document overview.
+  std::uint64_t overviewDocVersion_ = 0;
+  /// A refreshed overview waiting for matching detailed tiles before either becomes visible.
+  std::optional<RenderResult> pendingOverviewResult_;
   /// Renderer-only state changed and must be represented by the next accepted worker frame.
   bool pendingPresentationRefresh_ = false;
   /// Count of presentation refreshes requested, carried by each posted request's identity.

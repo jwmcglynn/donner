@@ -649,6 +649,23 @@ public:
   std::optional<RenderResult> pollResult();
 
   /**
+   * Forget payload identities from a polled result that the presenter discarded.
+   * Call immediately after polling, before posting another render. Retained GPU tiles are
+   * unchanged.
+   *
+   * @param result The most recently polled, unpresented result.
+   */
+  void discardUnpresentedResult(const RenderResult& result);
+
+  /**
+   * Record an overview replacing the active split tile set as a full-canvas fallback.
+   * Call after presentation and before posting another render.
+   *
+   * @param result A previously polled overview with a valid full-canvas preview.
+   */
+  void noteOverviewPresentedAsActive(const RenderResult& result);
+
+  /**
    * Queue one low-priority SVG thumbnail on this renderer's existing worker.
    *
    * The lane has exactly one slot spanning pending, active, and completed-but-unpolled work. Main

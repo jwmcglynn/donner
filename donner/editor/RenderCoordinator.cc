@@ -833,7 +833,8 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   pendingCanvasSizeSince_ = std::chrono::steady_clock::time_point{};
   pendingRasterViewport_.reset();
   pendingRasterViewportSince_ = std::chrono::steady_clock::time_point{};
-  pendingDocumentMutationOverviewRefresh_ = false;
+  overviewDocVersion_ = 0;
+  pendingOverviewResult_.reset();
   pendingPresentationRefresh_ = false;
   lastPostedAttempt_.reset();
   selectedPrewarmFallback_.reset();
@@ -985,6 +986,13 @@ void RenderCoordinator::noteMissingPixelCaptureResult(const std::optional<Render
     requestedPixelCapture_.reset();
     requestPresentationRefresh();
   }
+}
+
+void RenderCoordinator::rejectRenderResult(const std::optional<RenderResult>& result) {
+  if (result.has_value()) {
+    renderWorker_.asyncRenderer.discardUnpresentedResult(*result);
+  }
+  rejectPixelCaptureResult(result);
 }
 
 void RenderCoordinator::rejectPixelCaptureResult(const std::optional<RenderResult>& result) {
@@ -1466,6 +1474,63 @@ bool RenderCoordinator::rasterizeOverlayForPresentation(
                                              selectionDetail, capturedDocumentDragPreview);
 }
 
+void RenderCoordinator::acceptOverviewResult(RenderResult result, EditorApp& app,
+                                             GlTextureCache& textures) {
+  if (result.version != app.document().currentFrameVersion()) {
+    return;
+  }
+  if (!textures.tiles().empty()) {
+    pendingOverviewResult_ = std::move(result);
+    return;
+  }
+  textures.uploadCompositedOverview(*result.compositedPreview, result.rasterViewport);
+  lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
+  overviewDocVersion_ = result.version;
+  displayedDocVersion_ = result.version;
+#ifdef __EMSCRIPTEN__
+  PublishAcceptedWorkerResult(result);
+#endif
+}
+
+bool RenderCoordinator::hasMatchingPendingOverview(const RenderResult& result,
+                                                   EditorApp& app) const {
+  return IsCurrentRenderResult(pendingOverviewResult_, app) &&
+         pendingOverviewResult_->version == result.version &&
+         result.version == app.document().currentFrameVersion();
+}
+
+bool RenderCoordinator::canPresentWithOverview(const RenderResult& result,
+                                               const EditorRasterViewport& rasterViewport,
+                                               EditorApp& app,
+                                               const GlTextureCache& textures) const {
+  if (!result.rasterViewport.viewportBounded || !rasterViewport.viewportBounded ||
+      hasMatchingPendingOverview(result, app)) {
+    return true;
+  }
+  if (!textures.coverageDiagnostics().overviewInfillAvailable) {
+    return false;
+  }
+  const auto& drag = result.compositedPreview->representedDragPreview;
+  const bool activeDrag =
+      drag.has_value() && drag->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
+  return activeDrag || overviewDocVersion_ == result.version;
+}
+
+bool RenderCoordinator::needsOverviewInfillForViewport(EditorApp& app,
+                                                       const EditorRasterViewport& rasterViewport,
+                                                       bool activeDrag,
+                                                       const GlTextureCache* textures) {
+  const auto currentVersion = app.document().currentFrameVersion();
+  if (pendingOverviewResult_.has_value() && (!IsCurrentRenderResult(pendingOverviewResult_, app) ||
+                                             pendingOverviewResult_->version != currentVersion)) {
+    pendingOverviewResult_.reset();
+  }
+  return rasterViewport.viewportBounded && !activeDrag && textures != nullptr &&
+         !pendingOverviewResult_.has_value() &&
+         (!textures->coverageDiagnostics().overviewInfillAvailable ||
+          overviewDocVersion_ != currentVersion);
+}
+
 void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& viewport,
                                          GlTextureCache& textures, FrameHistory* frameHistory) {
   ZoneScopedN("RenderCoordinator::pollRenderResult");
@@ -1490,7 +1555,14 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   }
 #endif
   if (!IsCurrentRenderResult(resultOpt, app)) {
-    rejectPixelCaptureResult(resultOpt);
+    rejectRenderResult(resultOpt);
+    return;
+  }
+
+  // The worker only publishes its latest request, so the posted epoch identifies this result.
+  if (lastPostedAttempt_.has_value() &&
+      lastPostedAttempt_->presentationEpoch != presentationEpoch_) {
+    rejectRenderResult(resultOpt);
     return;
   }
 
@@ -1509,9 +1581,12 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
   }
   if (!result.compositedPreview.has_value() || !result.compositedPreview->valid()) {
-    // Nothing to present: the previous frame, and the overlays gated to its version, stay on
-    // screen. Every result past this point carries a valid preview.
     noteResultWithNothingToPresent(resultOpt);
+    if (hasMatchingPendingOverview(result, app)) {
+      RenderResult overview = std::move(*pendingOverviewResult_);
+      pendingOverviewResult_.reset();
+      presentCompositedResult(overview, app, viewport, textures);
+    }
     return;
   }
   nothingToPresentRetry_.reset();
@@ -1519,39 +1594,49 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   const bool overviewInfillResult =
       result.overviewInfillOnly && !result.rasterViewport.viewportBounded;
   if (overviewInfillResult && rasterViewport.viewportBounded) {
-    textures.uploadCompositedOverview(*result.compositedPreview, result.rasterViewport);
-    lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
-    pendingDocumentMutationOverviewRefresh_ = false;
-    displayedDocVersion_ = result.version;
-#ifdef __EMSCRIPTEN__
-    PublishAcceptedWorkerResult(result);
-#endif
+    acceptOverviewResult(std::move(*resultOpt), app, textures);
     return;
   }
   if (!RasterViewportCanPresentCurrentViewport(result.rasterViewport, rasterViewport)) {
-    rejectPixelCaptureResult(resultOpt);
+    rejectRenderResult(resultOpt);
     return;
   }
-  if (result.rasterViewport.viewportBounded && rasterViewport.viewportBounded &&
-      !textures.coverageDiagnostics().overviewInfillAvailable) {
+  if (!canPresentWithOverview(result, rasterViewport, app, textures)) {
     // A viewport-bounded result covers only the currently rasterized window. Never make it the
     // sole presented content: zooming out would expose checkerboard for missing tile coverage
     // instead of document transparency. Keep the previous presentation until an overview infill
     // exists underneath the crisp bounded tiles.
-    rejectPixelCaptureResult(resultOpt);
+    rejectRenderResult(resultOpt);
     return;
   }
   const Vector2i resultCanvasSize = result.rasterViewport.outputSizePx;
   if (!ShouldPresentCompositedPreviewForViewport(*result.compositedPreview, resultCanvasSize)) {
-    rejectPixelCaptureResult(resultOpt);
+    rejectRenderResult(resultOpt);
     return;
   }
 
+  presentCompositedResult(*resultOpt, app, viewport, textures);
+}
+
+void RenderCoordinator::presentCompositedResult(RenderResult& result, EditorApp& app,
+                                                const ViewportState& viewport,
+                                                GlTextureCache& textures) {
+  const Vector2i resultCanvasSize = result.rasterViewport.outputSizePx;
+  if (hasMatchingPendingOverview(result, app)) {
+    textures.uploadCompositedOverview(*pendingOverviewResult_->compositedPreview,
+                                      pendingOverviewResult_->rasterViewport);
+    overviewDocVersion_ = pendingOverviewResult_->version;
+    pendingOverviewResult_.reset();
+  }
   textures.uploadComposited(*result.compositedPreview, result.rasterViewport);
+  if (result.overviewInfillOnly) {
+    renderWorker_.asyncRenderer.noteOverviewPresentedAsActive(result);
+  }
   lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
   noteSelectedPrewarmResultPresented(result);
   if (!result.rasterViewport.viewportBounded) {
-    pendingDocumentMutationOverviewRefresh_ = false;
+    overviewDocVersion_ = result.version;
+    pendingOverviewResult_.reset();
   }
   if (displayNoneSuppressedLayerEntity_ != entt::null) {
     const bool stillCarriesSuppressedLayer = std::ranges::any_of(
@@ -1591,7 +1676,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     compositedPresentation_.noteChromeRefreshCompleted(displayedDocVersion_);
   }
   promoteSelectionBoundsIfReady();
-  acceptPixelCaptureResult(*resultOpt, app, viewport);
+  acceptPixelCaptureResult(result, app, viewport);
 }
 
 bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
@@ -1602,8 +1687,6 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
     return false;
   }
-
-  invalidatePresentationAfterDocumentFlush(app.document().lastFlushResult());
 
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
   const Vector2i desiredCanvasSize = rasterViewport.semanticCanvasSizePx;
@@ -1641,11 +1724,8 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const Entity prewarmEntity = selectedCompositedEntity(app);
   const bool useVisibleSelectedRaster = selectedPrewarmFallbackApplies(
       app.document().documentGeneration(), prewarmEntity, rasterViewport);
-  const PresentationCoverageDiagnostics coverageDiagnostics =
-      textures != nullptr ? textures->coverageDiagnostics() : PresentationCoverageDiagnostics{};
   const bool needsOverviewInfill =
-      rasterViewport.viewportBounded && !dragPreview.has_value() && textures != nullptr &&
-      (!coverageDiagnostics.overviewInfillAvailable || pendingDocumentMutationOverviewRefresh_);
+      needsOverviewInfillForViewport(app, rasterViewport, dragPreview.has_value(), textures);
   const bool pendingSelectedLayerRasterization =
       prewarmEntity != entt::null && prewarmEntity == pendingSelectedLayerRasterizationEntity_;
   const bool deferSelectedViewportRefresh = ShouldDeferSelectedViewportRefresh(
@@ -1784,18 +1864,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
 }
 
 void RenderCoordinator::invalidatePresentationAfterDocumentFlush(
-    const AsyncSVGDocument::FlushResult& flushResult) {
-  if (!flushResult.removedElements) {
-    return;
-  }
-
-  pendingDocumentMutationOverviewRefresh_ = true;
-}
-
-void RenderCoordinator::invalidatePresentationAfterDocumentFlush(
     EditorApp& app, const AsyncSVGDocument::FlushResult& flushResult) {
-  invalidatePresentationAfterDocumentFlush(flushResult);
-
   const Entity selectedEntity = selectedCompositedEntity(app);
   if (selectedEntity == entt::null) {
     return;
@@ -1806,7 +1875,6 @@ void RenderCoordinator::invalidatePresentationAfterDocumentFlush(
                 selectedEntity) != flushResult.cacheInvalidatedElements.end()) {
     pendingSelectedLayerRasterizationEntity_ = selectedEntity;
     pendingSelectedLayerRasterizationVersion_ = app.document().currentFrameVersion();
-    compositedPresentation_.discardCachedTexturesForEntity(selectedEntity);
   }
 }
 

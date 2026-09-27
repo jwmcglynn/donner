@@ -46,6 +46,7 @@ fi
 export DONNER_GPU_BACKEND=vulkan
 filter='*EditorWindowBackendTest.OpensOnTheBackendTheProcessSelected/WindowSurface'
 filter+=':EditorWindowTest.NativeVulkanWindowsRetainGlfwUntilTheLastWindowCloses'
+filter+=':EditorWindowTest.LostNativeVulkanSurfaceStopsLaterFrameRetries'
 filter+=':EditorWindowDeathTest.UnprovenNativeRetirementQuarantinesTheWindowAndGlfwClaim'
 filter+=':*EditorWindowLifecycleTest.AResizedWindowDrawsAtItsNewExtent/WindowSurface'
 filter+=':EditorWindowTest.AMinimizedWindowSkipsTheFrameWithoutHoldingOneOpen'
