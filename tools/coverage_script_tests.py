@@ -14,7 +14,8 @@ from python.runfiles import runfiles
 
 class CoverageScriptTest(unittest.TestCase):
     def run_fixture(self, root, quiet, status, report, failed_target=False, failed_test=False,
-                    geode_failed=False, geode_xml=None):
+                    geode_failed=False, geode_xml=None, remote_failure=False,
+                    ci_diagnostics=False):
         binaries = root / "bin"
         binaries.mkdir()
         (root / "output").mkdir()
@@ -74,6 +75,17 @@ class CoverageScriptTest(unittest.TestCase):
                             / "renderer_geode_golden_tests/test.xml")
                 xml_path.parent.mkdir(parents=True)
                 xml_path.write_text(geode_xml, encoding="utf-8")
+        if remote_failure:
+            events.append({
+                "id": {"finished": {}},
+                "finished": {
+                    "exitCode": {"code": 34, "name": "REMOTE_ERROR"},
+                    "failureDetail": {
+                        "message": "grpc://private.example/secret /runner/path token=secret",
+                        "remoteExecution": {"code": "TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE"},
+                    },
+                },
+            })
         (root / "fixture-bep.json").write_text(
             "\n".join(json.dumps(event) for event in events), encoding="utf-8"
         )
@@ -96,6 +108,9 @@ class CoverageScriptTest(unittest.TestCase):
             '   mkdir -p "$FIXTURE_ROOT/output/_coverage"\n'
             '   printf "SF:donner/example.cc\\nDA:1,1\\nLF:1\\nLH:1\\nend_of_record\\n" '
             '> "$FIXTURE_ROOT/output/_coverage/_coverage_report.dat"\n'
+            '  fi\n'
+            '  if [[ -n "$FIXTURE_PRIVATE_ERROR" ]]; then\n'
+            '   printf "%s\\n" "$FIXTURE_PRIVATE_ERROR"\n'
             '  fi\n'
             '  exit "$FIXTURE_STATUS";;\n'
             'esac\n',
@@ -128,8 +143,14 @@ class CoverageScriptTest(unittest.TestCase):
                 "FIXTURE_PYTHON": sys.executable,
                 "FIXTURE_STATUS": str(status),
                 "FIXTURE_REPORT": str(int(report)),
+                "FIXTURE_PRIVATE_ERROR": (
+                    "grpc://private.example/secret /runner/path token=secret"
+                    if remote_failure else ""
+                ),
                 "DONNER_BAZEL": str(fake_bazel),
-                "DONNER_CI_DIAGNOSTICS_DIR": "",
+                "DONNER_CI_DIAGNOSTICS_DIR": (
+                    str(root / "private-diagnostics") if ci_diagnostics else ""
+                ),
             },
             capture_output=True,
             text=True,
@@ -175,6 +196,26 @@ class CoverageScriptTest(unittest.TestCase):
             self.assertEqual(3, result.returncode, result.stdout + result.stderr)
             self.assertIn("//fixture:failed_test", result.stdout)
             self.assertNotIn("secret", result.stdout)
+            self.assertFalse((root / "coverage-report/filtered_report.dat").exists())
+
+    def test_exit34_with_no_failed_labels_writes_only_safe_structured_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = self.run_fixture(root, True, status=34, report=True,
+                                      remote_failure=True, ci_diagnostics=True)
+            self.assertEqual(result.returncode, 34)
+            self.assertIn("Bazel coverage failure context (BEP):", result.stdout)
+            self.assertIn("TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE", result.stdout)
+            self.assertNotIn("private.example", result.stdout + result.stderr)
+            self.assertNotIn("/runner/path", result.stdout + result.stderr)
+            self.assertNotIn("token=secret", result.stdout + result.stderr)
+            summary_path = root / "private-diagnostics/coverage/failure-summary.json"
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["processExitCode"], 34)
+            self.assertEqual(summary["failureCode"], "TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE")
+            self.assertNotIn("secret", json.dumps(summary))
+            self.assertEqual(list(summary_path.parent.glob(".failure-summary.*")), [])
+            self.assertIn("token=secret", (root / "coverage-report/bazel_coverage.log").read_text())
             self.assertFalse((root / "coverage-report/filtered_report.dat").exists())
 
     def test_quiet_geode_failure_names_case_without_exposing_assertion(self):

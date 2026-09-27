@@ -63,6 +63,79 @@ def write_gpu_xml(root, label, xml):
 
 
 class ClassifyTest(unittest.TestCase):
+    def test_exit34_without_failed_labels_keeps_structured_remote_detail(self):
+        events = [
+            json.dumps({
+                "id": {"finished": {}},
+                "finished": {
+                    "exitCode": {"code": 34, "name": "REMOTE_ERROR"},
+                    "failureDetail": {
+                        "message": "grpc://private.example/secret /runner/path token=secret",
+                        "remoteExecution": {"code": "TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE"},
+                    },
+                },
+            }),
+            json.dumps({
+                "id": {"targetCompleted": {"label": "//fixture:unfinished"}},
+                "aborted": {
+                    "reason": "REMOTE_ENVIRONMENT_FAILURE",
+                    "description": "grpc://private.example/secret /runner/path",
+                },
+            }),
+        ]
+        self.assertEqual(status.failure_summary(events)["failedTests"], [])
+        result = status.failure_context(events, 34)
+        self.assertEqual(result, {
+            "schemaVersion": 1,
+            "processExitCode": 34,
+            "processExitName": "REMOTE_ERROR",
+            "bepStatus": "finished",
+            "bepExitCode": "REMOTE_ERROR",
+            "failureCategory": "remoteExecution",
+            "failureCode": "TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE",
+            "abortReasons": ["REMOTE_ENVIRONMENT_FAILURE"],
+        })
+        self.assertNotIn("private", json.dumps(result))
+        self.assertNotIn("secret", json.dumps(result))
+
+    def test_failure_context_accepts_only_pinned_spawn_code_and_never_raw_fields(self):
+        event = json.dumps({
+            "id": {"finished": {}},
+            "finished": {
+                "exitCode": {"code": 34, "name": "REMOTE_ERROR"},
+                "failureDetail": {
+                    "message": "token=secret /runner/path",
+                    "spawn": {"code": "REMOTE_CACHE_FAILED", "commandLine": "secret"},
+                },
+            },
+        })
+        result = status.failure_context([event], 34)
+        self.assertEqual((result["failureCategory"], result["failureCode"]),
+                         ("spawn", "REMOTE_CACHE_FAILED"))
+        self.assertNotIn("secret", json.dumps(result))
+        self.assertNotIn("runner", json.dumps(result))
+
+        unsafe = event.replace("REMOTE_CACHE_FAILED", "REMOTE_CACHE_FAILED /runner/secret")
+        result = status.failure_context([unsafe], 34)
+        self.assertEqual((result["failureCategory"], result["failureCode"]),
+                         ("unavailable", "unavailable"))
+        self.assertNotIn("secret", json.dumps(result))
+
+    def test_failure_context_partial_malformed_and_conflicting_bep_fail_closed(self):
+        self.assertEqual(status.failure_context([], 34)["bepStatus"], "missing")
+        self.assertEqual(status.failure_context(["{private invalid json"], 34)["bepStatus"],
+                         "malformed")
+        finished = json.dumps({
+            "id": {"finished": {}},
+            "finished": {"exitCode": {"code": 34, "name": "REMOTE_ERROR"}},
+        })
+        mismatch = status.failure_context([finished], 3)
+        self.assertEqual(mismatch["bepStatus"], "mismatch")
+        self.assertEqual(mismatch["bepExitCode"], "unavailable")
+        duplicate = status.failure_context([finished, finished], 34)
+        self.assertEqual(duplicate["bepStatus"], "malformed")
+        self.assertEqual(duplicate["failureCode"], "unavailable")
+
     def test_allowlisted_cases_emit_only_validated_identifiers(self):
         golden = "//donner/svg/renderer/tests:renderer_geode_golden_tests"
         baseline = "//donner/gpu/baseline:baseline_pixels_tests"
