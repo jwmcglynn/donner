@@ -387,12 +387,15 @@ private:
     const std::optional<std::size_t> outlineBytes = outline.retainedBytes();
     const std::optional<uint64_t> encodedBytes = EncodedBytes(encoded);
     if (!outlineBytes.has_value() || !encodedBytes.has_value() ||
-        *outlineBytes > std::numeric_limits<uint64_t>::max() - kEntryOverheadBytes ||
-        *encodedBytes >
-            std::numeric_limits<uint64_t>::max() - kEntryOverheadBytes - *outlineBytes) {
+        !std::in_range<uint64_t>(*outlineBytes)) {
       return std::nullopt;
     }
-    return kEntryOverheadBytes + static_cast<uint64_t>(*outlineBytes) + *encodedBytes;
+    const uint64_t outlineSize = static_cast<uint64_t>(*outlineBytes);
+    if (outlineSize > std::numeric_limits<uint64_t>::max() - kEntryOverheadBytes ||
+        *encodedBytes > std::numeric_limits<uint64_t>::max() - kEntryOverheadBytes - outlineSize) {
+      return std::nullopt;
+    }
+    return kEntryOverheadBytes + outlineSize + *encodedBytes;
   }
 
   uint64_t owningDeviceId_ = 0;

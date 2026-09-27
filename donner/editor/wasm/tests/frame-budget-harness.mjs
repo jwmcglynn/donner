@@ -18,14 +18,14 @@
 //     their high waters (see `donner/base/MemoryAttribution.h`).
 //
 // Memory is a correctness bound here, not a tuning number: the build links with
-// `-sMAXIMUM_MEMORY=512MB`, and a heap that reaches it aborts the module
+// a fixed 384 MiB initial heap, and a heap that reaches it aborts the module
 // mid-gesture. Stock Firefox does exactly that on an uninstrumented build, so
 // the harness watches for the abort explicitly and reports how far the storm
 // got instead of hanging on a dead page.
 //
 // Exit criteria (the single-canvas presenter work): UI frame p99 < 8.33 ms, no frame over
 // 16.7 ms, suspend overhead < 1 ms/frame p99, heap bounded well under the
-// 512 MiB ceiling and flat across the soak.
+// 384 MiB ceiling and flat across the soak.
 //
 // DEVICE PIXEL RATIO IS PART OF THE WORKLOAD, NOT PART OF THE HARNESS.
 // Every canvas-scale allocation in this app is proportional to DPR squared, so

@@ -54,8 +54,7 @@ _EMDAWNWEBGPU_LINKOPTS = [
 ]
 
 # Fixed size of the editor's Wasm linear memory. See the `INITIAL_MEMORY` /
-# `MAXIMUM_MEMORY` / `ALLOW_MEMORY_GROWTH=0` comment below for why this is a
-# fixed contract rather than a starting point.
+# `ALLOW_MEMORY_GROWTH=0` comment below for why this is a fixed contract.
 #
 # THIS NUMBER IS NOT YET CORRECT, and this package is not shippable until it
 # is. Measured with the the single-canvas architecture memory harness
@@ -143,12 +142,12 @@ _EDITOR_LINKOPTS = [
     # Browser runtime device requests and mapped-buffer readback can suspend from the full
     # EditorShell frame stack. The 4 KiB default overflows; 16 KiB retains measured headroom.
     "-sASYNCIFY_STACK_SIZE=16384",
-    # Linear memory is FIXED: `INITIAL_MEMORY == MAXIMUM_MEMORY` with
-    # `ALLOW_MEMORY_GROWTH=0`. Growth is not a slow path here, it is the crash.
+    # Linear memory is FIXED: `INITIAL_MEMORY` with `ALLOW_MEMORY_GROWTH=0`.
+    # Growth is not a slow path here, it is the crash.
     #
     # Shared Wasm linear memory must never grow at runtime on any engine.
     # Chromium traps an unrelated thread mid-grow with an out-of-bounds abort;
-    # Firefox grows to `MAXIMUM_MEMORY` and aborts; Safari traps the pooled
+    # Firefox grows to its cap and aborts; Safari traps the pooled
     # pthread on its first Wasm access after a main-thread grow. There is no
     # engine on which growth is merely slow.
     #
@@ -160,7 +159,6 @@ _EDITOR_LINKOPTS = [
     # the peak and either bring it down or raise both numbers together.
     "-sALLOW_MEMORY_GROWTH=0",
     "-sINITIAL_MEMORY={}".format(_EDITOR_FIXED_MEMORY_BYTES),
-    "-sMAXIMUM_MEMORY={}".format(_EDITOR_FIXED_MEMORY_BYTES),
     "-sOFFSCREENCANVAS_SUPPORT=1",
 ]
 

@@ -196,12 +196,14 @@ private:
   void destroy();
 
   GLFWwindow* window_ = nullptr;
+#ifndef __EMSCRIPTEN__
   std::array<GLFWcursor*, 4> rotateCursors_ = {};
   std::array<GLFWcursor*, 4> scaleCursors_ = {};
   std::array<GLFWcursor*, 2> panCursors_ = {};
   std::array<GLFWcursor*, 4> penCursors_ = {};  // Base/Add/Remove/Close.
   GLFWcursor* selectCursor_ = nullptr;
   GLFWcursor* pathModifyCursor_ = nullptr;
+#endif
   bool customCursorActive_ = false;
   bool valid_ = false;
 };
