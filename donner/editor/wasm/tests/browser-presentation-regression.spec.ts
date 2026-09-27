@@ -6,7 +6,6 @@ import {
   type CssRegion,
   type EditorBackgroundCoverageStats,
   type EditorPageCapture,
-  isEditorPageCaptureUsable,
   isSplashCaptureUsable,
   type PixelBounds,
   readCanvasColorStats,
@@ -18,6 +17,7 @@ import {
   readElementColorStats,
   readPngPixelDifferenceStats,
   readSplashCompositeFrameStats,
+  type ScreenshotTimeoutStage,
   type SplashPresentationFrame,
   type SplashToneCensus,
 } from "./canvas-color-stats";
@@ -514,25 +514,26 @@ async function captureSplashDragFrame(
 test("editor page capture leaves retries to the outer poll and keeps drags one-shot", async ({ page }) => {
   await page.setViewportSize({ width: 64, height: 64 });
   await page.setContent(
-    `<body style="margin:0;background:rgb(44,47,56)"><div style="width:8px;height:8px;background:white"></div></body>`,
+    `<body style="margin:0;background:rgb(44,47,56)"><div style="width:8px;height:8px;background:rgb(45,110,230)"></div></body>`,
   );
   const visible = await page.screenshot();
-  expect(isEditorPageCaptureUsable(visible)).toBe(true);
   await page.setContent(`<body style="margin:0;background:rgb(12,15,20)"></body>`);
   const black = await page.screenshot();
-  expect(isEditorPageCaptureUsable(black)).toBe(false);
 
   // The baseline poll owns the retry schedule: black, timeout, then visible.
   let shots = 0;
   let stateReads = 0;
   const baselinePage = {
-    screenshot: async () => {
+    screenshot: async (options?: unknown) => {
+      expect(options).toBeUndefined();
       ++shots;
       if (shots === 1) {
         return black;
       }
       if (shots === 2) {
-        throw new errors.TimeoutError("synthetic screenshot timeout");
+        throw new errors.TimeoutError(
+          "Timeout 1000ms exceeded\nCall log:\n - taking page screenshot\n - waiting for fonts to load...",
+        );
       }
       return visible;
     },
@@ -556,18 +557,24 @@ test("editor page capture leaves retries to the outer poll and keeps drags one-s
       };
     },
   } as unknown as Page;
+  const observations: Array<[number, number, boolean, boolean]> = [];
   await expect.poll(async () => {
     const probe = await takeBasicShapesProbe(baselinePage, true, { width: 64, height: 64 });
-    expect(stateReads).toBe(shots === 3 ? 1 : 0);
-    return probe.capture.usable ? probe.capture.png.length : 0;
+    observations.push([shots, stateReads, probe.capture.usable, (probe.bounds?.pixels ?? 0) > 0]);
+    return probe.bounds?.pixels ?? 0;
   }, { intervals: [10], timeout: 1_000 }).toBeGreaterThan(0);
   expect(shots).toBe(3);
-  expect(stateReads).toBe(1);
+  expect(observations).toEqual([
+    [1, 1, true, false],
+    [2, 1, false, false],
+    [3, 2, true, true],
+  ]);
 
   let dragShots = 0;
   const oneShotDragPage = {
     viewportSize: () => ({ width: 64, height: 64 }),
-    screenshot: async () => {
+    screenshot: async (options?: unknown) => {
+      expect(options).toBeUndefined();
       ++dragShots;
       return black;
     },
@@ -577,7 +584,7 @@ test("editor page capture leaves retries to the outer poll and keeps drags one-s
     { x: 0, y: 0, width: 64, height: 64 },
   );
   expect([dragCapture.usableCapture, dragCapture.blue, dragCapture.teal, dragShots]).toEqual([
-    false,
+    true,
     null,
     null,
     1,
@@ -586,11 +593,18 @@ test("editor page capture leaves retries to the outer poll and keeps drags one-s
 
   const timedOut = await captureEditorPage({
     screenshot: async () => {
-      throw new errors.TimeoutError("synthetic screenshot timeout");
+      throw new errors.TimeoutError(
+        "Timeout 1000ms exceeded\nCall log:\n - taking page screenshot\n - waiting for fonts to load...\n - fonts loaded",
+      );
     },
   } as unknown as Page);
   expect([timedOut.usable, timedOut.attempts, timedOut.timedOutCaptures]).toEqual([false, 1, 1]);
   expect(timedOut.png).toHaveLength(0);
+  expect(timedOut.timeoutStage).toEqual({
+    takingPageScreenshot: true,
+    waitingForFonts: true,
+    fontsLoaded: true,
+  });
 
   await expect(captureEditorPage({
     screenshot: async () => {
@@ -964,7 +978,7 @@ async function captureBasicShapesProbePage(
     const png = captureClip === null
       ? await page.screenshot()
       : await page.screenshot({ clip: captureClip });
-    return { png, usable: true, attempts: 1, timedOutCaptures: 0 };
+    return { png, usable: true, attempts: 1, timedOutCaptures: 0, timeoutStage: null };
   }
   console.log("open-basic-shapes-probe: capture-start");
   const capture = await captureEditorPage(page);
@@ -1118,6 +1132,7 @@ async function openBasicShapes(page: Page): Promise<{
     timedOutCaptures: number;
     shotFromPriorAttempt: boolean;
     stateSkipped: boolean;
+    timeoutStage: ScreenshotTimeoutStage | null;
   } | null = null;
   try {
     await expect
@@ -1144,6 +1159,7 @@ async function openBasicShapes(page: Page): Promise<{
             timedOutCaptures: screenshotTimeouts,
             shotFromPriorAttempt,
             stateSkipped: probe.state === null,
+            timeoutStage: capture.timeoutStage,
           };
           if (
             bounds !== null && probe.state !== null && probe.state.sampleId === "basic-shapes"
@@ -1205,6 +1221,7 @@ async function openBasicShapes(page: Page): Promise<{
               timedOutCaptures: lastProbe.timedOutCaptures,
               shotFromPriorAttempt: lastProbe.shotFromPriorAttempt,
               stateSkipped: lastProbe.stateSkipped,
+              timeoutStage: lastProbe.timeoutStage,
               pageViewport,
               beforeSampleResults,
             },
@@ -1734,7 +1751,8 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
       throw new Error(
         `drag step ${step}: Firefox returned no editor page after `
           + `${geometry.captureAttempts} full-page captures `
-          + `(${geometry.timedOutCaptures} timed out); `
+          + `(${geometry.timedOutCaptures} timed out, `
+          + `stage=${JSON.stringify(geometry.timeoutStage)}); `
           + `state=${JSON.stringify(state)}`,
       );
     }
