@@ -1189,18 +1189,73 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     },
   );
   await waitForBrowserComposite(page);
-  const compositorOverlay = await captureOverlay();
+  // Worker completion and a browser composite can precede the texture upload
+  // that makes tile labels visible. Assert on the presented pixels, as the
+  // disable path below already does for the restored document.
+  const minBluePixels = Math.max(500, Math.ceil(blueRect.pixels * 0.5));
+  let compositorOverlay: Buffer | null = null;
+  let lastCompositorShot: Buffer | null = null;
+  let lastCompositorDifference = "";
+  try {
+    await expect
+      .poll(
+        async () => {
+          const shot = await captureOverlay();
+          lastCompositorShot = shot;
+          const difference = readCssPngPixelDifferenceStats(
+            baseline,
+            shot,
+            documentClip,
+            documentPixelsInClip,
+          );
+          const bluePixels = readEditorPixelBoundsFromPng(
+            shot,
+            "basic-blue",
+            documentClip,
+            blueRect,
+          )?.pixels ?? 0;
+          lastCompositorDifference = JSON.stringify({ ...difference, bluePixels, minBluePixels });
+          // A blank transferred-canvas capture also differs from the baseline.
+          // Require most of the baseline blue rectangle in the accepted frame.
+          if (difference.changedPixels > 0 && bluePixels >= minBluePixels) {
+            compositorOverlay = shot;
+          }
+          return bluePixels >= minBluePixels ? difference.changedPixels : 0;
+        },
+        {
+          message: "Compositor Tile Overlay was checked but contributed no visible document pixels",
+          timeout: scaledMs(5_000),
+          intervals: page.context().browser()?.browserType().name() === "firefox"
+            ? [250, 400, 600]
+            : [50, 100, 250],
+        },
+      )
+      .toBeGreaterThan(0);
+  } catch (error) {
+    // Keep the actual scored frame. A later Playwright failure screenshot may
+    // show the overlay after the failed poll and cannot explain that frame.
+    try {
+      if (lastCompositorShot !== null) {
+        await attachEvidenceFile(
+          "compositor-tile-overlay-last-probe",
+          lastCompositorShot,
+          "image/png",
+        );
+      }
+      await attachEvidenceFile(
+        "compositor-tile-overlay-last-difference",
+        lastCompositorDifference,
+        "application/json",
+      );
+    } catch {
+      console.warn("Could not retain compositor overlay probe");
+    }
+    throw error;
+  }
+  if (compositorOverlay === null) {
+    throw new Error("Compositor Tile Overlay passed without a verified document capture");
+  }
   await attachEvidenceFile("compositor-tile-overlay", compositorOverlay, "image/png");
-  const compositorDifference = readCssPngPixelDifferenceStats(
-    baseline,
-    compositorOverlay,
-    documentClip,
-    documentPixelsInClip,
-  );
-  expect(
-    compositorDifference.changedPixels,
-    "Compositor Tile Overlay was checked but contributed no visible document pixels",
-  ).toBeGreaterThan(0);
 
   // Disable the independent compositor overlay before checking renderer
   // geometry pixels, so tile labels cannot masquerade as Slug edges.
