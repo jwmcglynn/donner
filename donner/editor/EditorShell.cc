@@ -7680,7 +7680,8 @@ bool EditorShell::flushInteractiveDragMutationAndRequestRender() {
 
   // Transform-only drag flushes remain represented by the promoted tile/direct-surface request.
   // Preserve the cached presentation just as the start-of-frame drag flush path does.
-  renderCoordinator_.invalidatePresentationAfterDocumentFlush(app_.document().lastFlushResult());
+  renderCoordinator_.invalidatePresentationAfterDocumentFlush(app_,
+                                                              app_.document().lastFlushResult());
   // A direct worker surface and the ImGui chrome are separate browser layers.
   // Let the normal presentation pass bind chrome to the last completed worker
   // epoch instead of capturing live resize geometry ahead of its pixels here.
@@ -8555,20 +8556,8 @@ void EditorShell::runFrame() {
 
   if (!renderCoordinator_.asyncRenderer().isBusy()) {
     if (app_.flushFrame()) {
-      const bool preserveActiveDragCache =
-          selectTool_.isDragging() ||
-          renderCoordinator_.compositedPresentation().isWaitingForFullRender() ||
-          renderCoordinator_.compositedPresentation().isWaitingForChromeRefresh();
-      if (preserveActiveDragCache) {
-        // Transform-only drag flushes are intentionally represented by the
-        // promoted tile's compose transform. Discarding that cache here makes
-        // a queued group drag fall back to stale full-document pixels.
-        renderCoordinator_.invalidatePresentationAfterDocumentFlush(
-            app_.document().lastFlushResult());
-      } else {
-        renderCoordinator_.invalidatePresentationAfterDocumentFlush(
-            app_, app_.document().lastFlushResult());
-      }
+      renderCoordinator_.invalidatePresentationAfterDocumentFlush(
+          app_, app_.document().lastFlushResult());
       if (!selectTool_.isDragging()) {
         renderCoordinator_.refreshSelectionBoundsCache(app_);
       }
