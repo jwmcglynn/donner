@@ -501,6 +501,7 @@ private:
       const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
       const Transform2d& representedDocumentFromLiveDocument, SelectionChromeSnapshot* snapshot);
   void noteMissingPixelCaptureResult(const std::optional<RenderResult>& result);
+  void rejectRenderResult(const std::optional<RenderResult>& result);
   void rejectPixelCaptureResult(const std::optional<RenderResult>& result);
   void noteResultWithNothingToPresent(const std::optional<RenderResult>& result);
   void noteSelectedPrewarmResultPresented(const RenderResult& result);

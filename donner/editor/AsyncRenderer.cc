@@ -739,6 +739,29 @@ std::optional<RenderResult> AsyncRenderer::pollResult() {
   return std::nullopt;
 }
 
+void AsyncRenderer::discardUnpresentedResult(const RenderResult& result) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  UTILS_RELEASE_ASSERT(!workerStateRenderInFlight(workerState_));
+  if (result.overviewInfillOnly || !result.compositedPreview.has_value()) {
+    return;
+  }
+  for (const RenderResult::CompositedTile& tile : result.compositedPreview->tiles) {
+    if (!tile.bitmap.empty() || tile.textureSnapshot != nullptr) {
+      publishedCompositedTiles_.erase(tile.id);
+    }
+  }
+}
+
+void AsyncRenderer::noteOverviewPresentedAsActive(const RenderResult& result) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  UTILS_RELEASE_ASSERT(!workerStateRenderInFlight(workerState_));
+  UTILS_RELEASE_ASSERT(result.overviewInfillOnly && result.compositedPreview.has_value() &&
+                       result.compositedPreview->valid() &&
+                       result.compositedPreview->tiles.size() == 1u &&
+                       result.compositedPreview->tiles.front().id == "full-canvas");
+  notePublishedCompositedPreview(result.compositedPreview);
+}
+
 bool AsyncRenderer::requestSampleThumbnail(SampleThumbnailRenderRequest request) {
   {
     std::lock_guard<std::mutex> lock(mutex_);

@@ -988,6 +988,13 @@ void RenderCoordinator::noteMissingPixelCaptureResult(const std::optional<Render
   }
 }
 
+void RenderCoordinator::rejectRenderResult(const std::optional<RenderResult>& result) {
+  if (result.has_value()) {
+    renderWorker_.asyncRenderer.discardUnpresentedResult(*result);
+  }
+  rejectPixelCaptureResult(result);
+}
+
 void RenderCoordinator::rejectPixelCaptureResult(const std::optional<RenderResult>& result) {
   if (result.has_value() && documentPixelCaptureEnabled_ &&
       result->cpuSnapshotRequestId == documentPixelCaptureSessionId_) {
@@ -1548,14 +1555,14 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   }
 #endif
   if (!IsCurrentRenderResult(resultOpt, app)) {
-    rejectPixelCaptureResult(resultOpt);
+    rejectRenderResult(resultOpt);
     return;
   }
 
   // The worker only publishes its latest request, so the posted epoch identifies this result.
   if (lastPostedAttempt_.has_value() &&
       lastPostedAttempt_->presentationEpoch != presentationEpoch_) {
-    rejectPixelCaptureResult(resultOpt);
+    rejectRenderResult(resultOpt);
     return;
   }
 
@@ -1591,7 +1598,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     return;
   }
   if (!RasterViewportCanPresentCurrentViewport(result.rasterViewport, rasterViewport)) {
-    rejectPixelCaptureResult(resultOpt);
+    rejectRenderResult(resultOpt);
     return;
   }
   if (!canPresentWithOverview(result, rasterViewport, app, textures)) {
@@ -1599,12 +1606,12 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     // sole presented content: zooming out would expose checkerboard for missing tile coverage
     // instead of document transparency. Keep the previous presentation until an overview infill
     // exists underneath the crisp bounded tiles.
-    rejectPixelCaptureResult(resultOpt);
+    rejectRenderResult(resultOpt);
     return;
   }
   const Vector2i resultCanvasSize = result.rasterViewport.outputSizePx;
   if (!ShouldPresentCompositedPreviewForViewport(*result.compositedPreview, resultCanvasSize)) {
-    rejectPixelCaptureResult(resultOpt);
+    rejectRenderResult(resultOpt);
     return;
   }
 
@@ -1622,6 +1629,9 @@ void RenderCoordinator::presentCompositedResult(RenderResult& result, EditorApp&
     pendingOverviewResult_.reset();
   }
   textures.uploadComposited(*result.compositedPreview, result.rasterViewport);
+  if (result.overviewInfillOnly) {
+    renderWorker_.asyncRenderer.noteOverviewPresentedAsActive(result);
+  }
   lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
   noteSelectedPrewarmResultPresented(result);
   if (!result.rasterViewport.viewportBounded) {
