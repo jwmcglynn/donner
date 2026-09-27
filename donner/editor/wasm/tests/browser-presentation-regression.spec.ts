@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import {
+  captureEditorPage,
   captureSplashPresentationFrame,
   type CssRegion,
   type EditorBackgroundCoverageStats,
@@ -900,6 +901,8 @@ async function openBasicShapes(page: Page): Promise<{
     documentClip: CssRegion | null;
     captureClip: CssRegion | null;
     bluePixels: number;
+    captureUsable: boolean;
+    captureAttempts: number;
   } | null = null;
   try {
     await expect
@@ -923,10 +926,18 @@ async function openBasicShapes(page: Page): Promise<{
             : firefox && pageViewport !== null
             ? { x: 0, y: 0, width: pageViewport.width, height: pageViewport.height }
             : currentDocumentClip;
-          const shot = firefox || currentCaptureClip === null
-            ? await page.screenshot()
-            : await page.screenshot({ clip: currentCaptureClip });
-          const bounds = currentDocumentClip !== null && currentCaptureClip !== null
+          const capture = firefox
+            ? await captureEditorPage(page)
+            : {
+              png: currentCaptureClip === null
+                ? await page.screenshot()
+                : await page.screenshot({ clip: currentCaptureClip }),
+              usable: true,
+              attempts: 1,
+            };
+          const shot = capture.png;
+          const bounds = capture.usable && currentDocumentClip !== null
+              && currentCaptureClip !== null
             ? readEditorPixelBoundsFromPng(shot, "basic-blue", currentCaptureClip, {
               minX: currentDocumentClip.x - currentCaptureClip.x,
               minY: currentDocumentClip.y - currentCaptureClip.y,
@@ -941,6 +952,8 @@ async function openBasicShapes(page: Page): Promise<{
             documentClip: currentDocumentClip,
             captureClip: currentCaptureClip,
             bluePixels: lastBluePixels,
+            captureUsable: capture.usable,
+            captureAttempts: capture.attempts,
           };
           if (
             bounds !== null && state.sampleId === "basic-shapes"
@@ -994,6 +1007,8 @@ async function openBasicShapes(page: Page): Promise<{
               documentClip: lastProbe.documentClip,
               captureClip: lastProbe.captureClip,
               bluePixels: lastProbe.bluePixels,
+              captureUsable: lastProbe.captureUsable,
+              captureAttempts: lastProbe.captureAttempts,
               pageViewport,
               beforeSampleResults,
             },
