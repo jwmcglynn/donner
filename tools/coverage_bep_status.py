@@ -101,6 +101,10 @@ _GRPC_STATUS_OBSERVATIONS = {
     b"RESOURCE_EXHAUSTED": "GRPC_RESOURCE_EXHAUSTED",
     b"RESOURCEEXHAUSTED": "GRPC_RESOURCE_EXHAUSTED",
 }
+# Bazel may print the gRPC code alone after an ERROR prefix or a nested exception.
+_GRPC_BARE_PATTERN = re.compile(
+    rb"(?<![A-Za-z0-9_])(UNAVAILABLE|DEADLINE_EXCEEDED|NOT_FOUND|"
+    rb"UNAUTHENTICATED|PERMISSION_DENIED|RESOURCE_EXHAUSTED):(?:\s|$)", re.IGNORECASE)
 _GRPC_NUMERIC_PATTERN = re.compile(rb"\bgrpc-status:\s*(4|5|7|8|14|16)\b", re.IGNORECASE)
 _GRPC_NUMERIC_OBSERVATIONS = {
     b"4": "GRPC_DEADLINE_EXCEEDED", b"5": "GRPC_NOT_FOUND",
@@ -117,10 +121,13 @@ _REMOTE_LOG_PATTERNS = {
     "DIGEST_MISMATCH": re.compile(
         rb"digest mismatch|checksum mismatch|DigestMismatchException", re.IGNORECASE),
     "UPLOAD_FAILURE": re.compile(
-        rb"failed to upload|upload failed|uploading failed", re.IGNORECASE),
+        rb"failed to upload|upload failed|uploading failed|"
+        rb"Error while uploading artifact with digest", re.IGNORECASE),
     "DOWNLOAD_FAILURE": re.compile(
-        rb"failed to download|download failed|downloading failed", re.IGNORECASE),
-    "BULK_TRANSFER_FAILURE": re.compile(rb"BulkTransferException", re.IGNORECASE),
+        rb"failed to download|download failed|downloading failed|"
+        rb"Error while downloading\b", re.IGNORECASE),
+    "BULK_TRANSFER_FAILURE": re.compile(
+        rb"BulkTransferException|[1-9][0-9]{0,5} errors during bulk transfer:", re.IGNORECASE),
 }
 _REMOTE_LOG_OBSERVATIONS = frozenset(_GRPC_STATUS_OBSERVATIONS.values()) | frozenset(
     _REMOTE_LOG_PATTERNS)
@@ -156,6 +163,9 @@ def remote_log_observations(path):
         grpc_status = _GRPC_STATUS_PATTERN.search(line)
         if grpc_status is not None:
             observed.add(_GRPC_STATUS_OBSERVATIONS[grpc_status.group(1).upper()])
+        grpc_bare = _GRPC_BARE_PATTERN.search(line)
+        if grpc_bare is not None:
+            observed.add(_GRPC_STATUS_OBSERVATIONS[grpc_bare.group(1).upper()])
         grpc_numeric = _GRPC_NUMERIC_PATTERN.search(line)
         if grpc_numeric is not None:
             observed.add(_GRPC_NUMERIC_OBSERVATIONS[grpc_numeric.group(1)])
