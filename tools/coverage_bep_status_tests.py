@@ -206,6 +206,20 @@ class ClassifyTest(unittest.TestCase):
                     invalid = {**valid, "processExitCode": code, "processExitName": name}
                     summary.write_text(json.dumps(invalid))
                     self.assertFalse(status.validate_diagnostics(root))
+            invalid_signal = {**valid, "remoteLogObservations": ["token=secret"]}
+            summary.write_text(json.dumps(invalid_signal))
+            self.assertFalse(status.validate_diagnostics(root))
+            wrong_status = {**valid, "processExitCode": 3,
+                            "processExitName": "TESTS_FAILED",
+                            "remoteLogObservations": ["GRPC_UNAVAILABLE"]}
+            summary.write_text(json.dumps(wrong_status))
+            self.assertFalse(status.validate_diagnostics(root))
+            all_signals = {**valid,
+                           "remoteLogObservations": sorted(status._REMOTE_LOG_OBSERVATIONS)}
+            encoded = json.dumps(all_signals)
+            self.assertLessEqual(len(encoded), 1024)
+            summary.write_text(encoded)
+            self.assertTrue(status.validate_diagnostics(root))
             summary.write_text('{"privatePath":"/runner/token=secret"}')
             self.assertFalse(status.validate_diagnostics(root))
             summary.unlink()
@@ -243,8 +257,43 @@ class ClassifyTest(unittest.TestCase):
             raw.write_text("ERROR: grpc://private.example/secret token=secret /runner/path\n")
             self.assertEqual(status.remote_log_observations(raw), [])
             raw.unlink()
-            raw.symlink_to(root / "secret")
+            secret = root / "secret"
+            secret.write_text("ERROR: io.grpc.StatusRuntimeException: UNAVAILABLE\n")
+            raw.symlink_to(secret)
             self.assertEqual(status.remote_log_observations(raw), [])
+
+    def test_remote_log_patterns_are_fixed_and_skip_oversize_lines(self):
+        examples = (
+            (b"ERROR: rpc error: code = NotFound desc = ", "GRPC_NOT_FOUND"),
+            (b"ERROR: io.grpc.StatusRuntimeException: PERMISSION_DENIED: ",
+             "GRPC_PERMISSION_DENIED"),
+            (b"ERROR: io.grpc.StatusRuntimeException: UNAUTHENTICATED: ",
+             "GRPC_UNAUTHENTICATED"),
+            (b"ERROR: io.grpc.StatusRuntimeException: RESOURCE_EXHAUSTED: ",
+             "GRPC_RESOURCE_EXHAUSTED"),
+            (b"ERROR: grpc-status: 14 ", "GRPC_UNAVAILABLE"),
+            (b"ERROR: SSLHandshakeException ", "TLS_FAILURE"),
+            (b"ERROR: Connection refused ", "CONNECTION_FAILURE"),
+            (b"ERROR: checksum mismatch ", "DIGEST_MISMATCH"),
+            (b"ERROR: failed to upload ", "UPLOAD_FAILURE"),
+            (b"ERROR: failed to download ", "DOWNLOAD_FAILURE"),
+            (b"ERROR: BulkTransferException ", "BULK_TRANSFER_FAILURE"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory) / "bazel_coverage.log"
+            for prefix, expected in examples:
+                with self.subTest(expected=expected):
+                    raw.write_bytes(prefix + b"grpc://private.example/path token=secret\n")
+                    self.assertEqual(status.remote_log_observations(raw), [expected])
+            raw.write_bytes(
+                b"ERROR: io.grpc.StatusRuntimeException: UNAVAILABLE: "
+                + b"x" * 9000 + b"\n")
+            self.assertEqual(status.remote_log_observations(raw), [])
+            raw.write_bytes(
+                b"ERROR: io.grpc.StatusRuntimeException: UNAVAILABLE\n"
+                + b"x" * 70000 + b"\nERROR: unrelated completion\n")
+            self.assertEqual(status.remote_log_observations(raw), [])
+            self.assertEqual(status.remote_log_observations(raw.parent / "missing"), [])
 
     def test_remote_log_cli_is_guarded_by_remote_error_status(self):
         with tempfile.TemporaryDirectory() as directory:

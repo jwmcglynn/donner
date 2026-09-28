@@ -79,6 +79,91 @@ _DIAGNOSTIC_ABORT_REASONS = frozenset({
 _MAX_DIAGNOSTIC_EVENTS = 250000
 _MAX_DIAGNOSTIC_LINE_BYTES = 8 * 1024 * 1024
 
+_MAX_REMOTE_LOG_TAIL_BYTES = 64 * 1024
+_MAX_REMOTE_LOG_LINES = 128
+_MAX_REMOTE_LOG_LINE_BYTES = 8 * 1024
+# These are observations in a private Bazel log, not asserted failure causes.
+_GRPC_STATUS_PATTERN = re.compile(
+    rb"(?:\bio\.grpc\.Status(?:Runtime)?Exception:\s*|"
+    rb"\brpc error:\s*code\s*=\s*|\bStatus\{\s*code\s*=\s*)"
+    rb"(UNAVAILABLE|DEADLINE_EXCEEDED|DeadlineExceeded|NOT_FOUND|NotFound|"
+    rb"UNAUTHENTICATED|PERMISSION_DENIED|PermissionDenied|"
+    rb"RESOURCE_EXHAUSTED|ResourceExhausted)\b", re.IGNORECASE)
+_GRPC_STATUS_OBSERVATIONS = {
+    b"UNAVAILABLE": "GRPC_UNAVAILABLE",
+    b"DEADLINE_EXCEEDED": "GRPC_DEADLINE_EXCEEDED",
+    b"DEADLINEEXCEEDED": "GRPC_DEADLINE_EXCEEDED",
+    b"NOT_FOUND": "GRPC_NOT_FOUND",
+    b"NOTFOUND": "GRPC_NOT_FOUND",
+    b"UNAUTHENTICATED": "GRPC_UNAUTHENTICATED",
+    b"PERMISSION_DENIED": "GRPC_PERMISSION_DENIED",
+    b"PERMISSIONDENIED": "GRPC_PERMISSION_DENIED",
+    b"RESOURCE_EXHAUSTED": "GRPC_RESOURCE_EXHAUSTED",
+    b"RESOURCEEXHAUSTED": "GRPC_RESOURCE_EXHAUSTED",
+}
+_GRPC_NUMERIC_PATTERN = re.compile(rb"\bgrpc-status:\s*(4|5|7|8|14|16)\b", re.IGNORECASE)
+_GRPC_NUMERIC_OBSERVATIONS = {
+    b"4": "GRPC_DEADLINE_EXCEEDED", b"5": "GRPC_NOT_FOUND",
+    b"7": "GRPC_PERMISSION_DENIED", b"8": "GRPC_RESOURCE_EXHAUSTED",
+    b"14": "GRPC_UNAVAILABLE", b"16": "GRPC_UNAUTHENTICATED",
+}
+_REMOTE_LOG_PATTERNS = {
+    "TLS_FAILURE": re.compile(
+        rb"SSLHandshakeException|certificate verify failed|CERTIFICATE_VERIFY_FAILED|"
+        rb"TLS handshake (?:failed|failure)|unable to find valid certification path", re.IGNORECASE),
+    "CONNECTION_FAILURE": re.compile(
+        rb"Connection (?:refused|reset|timed out|closed)|Failed to connect|"
+        rb"UnknownHostException|No route to host|Network is unreachable", re.IGNORECASE),
+    "DIGEST_MISMATCH": re.compile(
+        rb"digest mismatch|checksum mismatch|DigestMismatchException", re.IGNORECASE),
+    "UPLOAD_FAILURE": re.compile(
+        rb"failed to upload|upload failed|uploading failed", re.IGNORECASE),
+    "DOWNLOAD_FAILURE": re.compile(
+        rb"failed to download|download failed|downloading failed", re.IGNORECASE),
+    "BULK_TRANSFER_FAILURE": re.compile(rb"BulkTransferException", re.IGNORECASE),
+}
+_REMOTE_LOG_OBSERVATIONS = frozenset(_GRPC_STATUS_OBSERVATIONS.values()) | frozenset(
+    _REMOTE_LOG_PATTERNS)
+
+
+def _bounded_remote_log_tail(path):
+    """Read only the final bounded private bytes; never return a partial first line."""
+    path = Path(path)
+    try:
+        if path.is_symlink() or not path.is_file():
+            return []
+        with path.open("rb") as stream:
+            stream.seek(0, 2)
+            start = max(0, stream.tell() - _MAX_REMOTE_LOG_TAIL_BYTES)
+            stream.seek(start)
+            tail = stream.read(_MAX_REMOTE_LOG_TAIL_BYTES)
+    except (OSError, ValueError):
+        return []
+    if start:
+        first_break = tail.find(b"\n")
+        if first_break < 0:
+            return []
+        tail = tail[first_break + 1:]
+    return tail.splitlines()[-_MAX_REMOTE_LOG_LINES:]
+
+
+def remote_log_observations(path):
+    """Return fixed tokens only; log text, endpoint data, and digests stay private."""
+    observed = set()
+    for line in _bounded_remote_log_tail(path):
+        if len(line) > _MAX_REMOTE_LOG_LINE_BYTES:
+            continue
+        grpc_status = _GRPC_STATUS_PATTERN.search(line)
+        if grpc_status is not None:
+            observed.add(_GRPC_STATUS_OBSERVATIONS[grpc_status.group(1).upper()])
+        grpc_numeric = _GRPC_NUMERIC_PATTERN.search(line)
+        if grpc_numeric is not None:
+            observed.add(_GRPC_NUMERIC_OBSERVATIONS[grpc_numeric.group(1)])
+        for signal, pattern in _REMOTE_LOG_PATTERNS.items():
+            if pattern.search(line):
+                observed.add(signal)
+    return sorted(observed)
+
 
 def _empty_failure_context(process_status):
     name = _EXIT_NAMES.get(process_status) if type(process_status) is int else None
@@ -91,6 +176,7 @@ def _empty_failure_context(process_status):
         "failureCategory": "unavailable",
         "failureCode": "unavailable",
         "abortReasons": [],
+        "remoteLogObservations": [],
     }
 
 
@@ -197,6 +283,7 @@ def failure_context(lines, process_status):
 _FAILURE_CONTEXT_KEYS = frozenset({
     "schemaVersion", "processExitCode", "processExitName", "bepStatus",
     "bepExitCode", "failureCategory", "failureCode", "abortReasons",
+    "remoteLogObservations",
 })
 _TIMING_PHASES = ("start", "bazel_coverage_done", "filter_done", "end")
 
@@ -225,6 +312,15 @@ def _valid_abort_reasons(reasons):
                     for reason in reasons) and reasons == sorted(set(reasons)))
 
 
+def _valid_remote_log_observations(observations, process_status):
+    return (isinstance(observations, list)
+            and len(observations) <= len(_REMOTE_LOG_OBSERVATIONS)
+            and all(isinstance(item, str) and item in _REMOTE_LOG_OBSERVATIONS
+                    for item in observations)
+            and observations == sorted(set(observations))
+            and (process_status == 34 or not observations))
+
+
 def _valid_failure_context(value):
     if not isinstance(value, dict) or set(value) != _FAILURE_CONTEXT_KEYS:
         return False
@@ -239,7 +335,9 @@ def _valid_failure_context(value):
             set(_EXIT_NAMES.values()) | {"unavailable"}):
         return False
     return (_valid_context_codes(value)
-            and _valid_abort_reasons(value["abortReasons"]))
+            and _valid_abort_reasons(value["abortReasons"])
+            and _valid_remote_log_observations(
+                value["remoteLogObservations"], value["processExitCode"]))
 
 
 def _bounded_regular_text(path, limit):
@@ -611,7 +709,7 @@ def _cli_mode(argv):
         return "validate_diagnostics"
     if len(argv) == 4 and argv[1] == "--test-cases":
         return "test_cases"
-    if len(argv) == 4 and argv[1] == "--failure-context":
+    if len(argv) in (4, 5) and argv[1] == "--failure-context":
         return "context"
     return None
 
@@ -650,7 +748,7 @@ def main(argv):
     if mode is None:
         sys.stderr.write(
             "usage: coverage_bep_status.py [--failures|--test-cases|--failure-context] "
-            "<bep.json> [bazel-testlogs|process-status]\n")
+            "<bep.json> [bazel-testlogs|process-status] [private-log]\n")
         return 2
     if mode == "validate_diagnostics":
         return 0 if validate_diagnostics(Path(argv[2])) else 1
@@ -661,6 +759,8 @@ def main(argv):
             result = _cli_result(mode, stream, extra)
     except OSError:
         result = _cli_missing_result(mode, extra)
+    if mode == "context" and len(argv) == 5 and extra == 34:
+        result["remoteLogObservations"] = remote_log_observations(argv[4])
     if result is not None:
         json.dump(result, sys.stdout)
         sys.stdout.write("\n")

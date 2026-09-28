@@ -405,7 +405,7 @@ fi
     fi
     local context
     if ! context="$(python3 tools/coverage_bep_status.py --failure-context \
-        "$COVERAGE_BEP" "$bazel_status" 2>/dev/null)"; then
+        "$COVERAGE_BEP" "$bazel_status" "$BAZEL_COVERAGE_LOG" 2>/dev/null)"; then
       context='{"bepStatus":"unavailable"}'
     fi
     if [[ ${#context} -gt 1024 || "$context" == *$'\n'* ]]; then
