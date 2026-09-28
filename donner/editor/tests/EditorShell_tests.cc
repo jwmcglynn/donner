@@ -4401,6 +4401,40 @@ TEST(EditorShellTest, GeodeSilhouetteSettledLayersSelectionStillDragsSelectedSha
                                /*waitForSelectedPrewarm=*/true);
 }
 
+TEST(EditorShellTest, DragMutationWaitsForQueuedRenderToConsumeItsDocument) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_THAT(shell.valid(), testing::IsTrue());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  svg::SVGDocument& document = app.document().document();
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  app.setSelection(*target);
+  ASSERT_THAT(EditorShellTestAccess::BeginSelectedShapeDrag(
+                  shell, Vector2d(20.0, 20.0), Box2d::FromXYWH(10.0, 12.0, 40.0, 24.0)),
+              testing::IsTrue());
+  document.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  const std::uint64_t submittedVersion = app.document().currentFrameVersion();
+  {
+    // Hold the worker before document acquisition while same-thread UI guards remain available.
+    const auto holdWorkerAccess = document.writeAccess();
+    AsyncRenderer& renderer =
+        EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(0));
+    ASSERT_THAT(renderer.isBusy(), testing::IsTrue());
+    EXPECT_THAT(EditorShellTestAccess::MoveSelectedShapeDrag(shell, Vector2d(60.0, 40.0)),
+                testing::IsFalse());
+    EXPECT_EQ(app.document().currentFrameVersion(), submittedVersion);
+    EXPECT_THAT(app.document().hasPendingMutations(), testing::IsTrue());
+  }
+  AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  ASSERT_THAT(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                           std::chrono::seconds(5)),
+              testing::IsTrue());
+  std::ignore = renderer.pollResult();
+}
+
 TEST(EditorShellTest, SelectDragKeepsFullPathChrome) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {

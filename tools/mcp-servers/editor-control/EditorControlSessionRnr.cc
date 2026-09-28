@@ -266,6 +266,8 @@ struct GlReplayRequest {
   int captureLeftMouseDown = 0;
   int maxFrame = -1;
   int timeoutMs = 120000;
+  int workerDocumentHoldStartFrame = -1;
+  int workerDocumentHoldEndFrame = -1;
   EditorControlSession::CaptureOptions capture;
 };
 
@@ -312,6 +314,8 @@ ToolCallResult ReplayGlRnr(const GlReplayRequest& request) {
   replayOptions.visible = request.visible;
   replayOptions.driveDocumentSpaceInput = request.driveDocumentInput;
   replayOptions.sourcePaneVisible = request.sourcePaneVisible;
+  replayOptions.workerDocumentAccessHoldStartFrame = request.workerDocumentHoldStartFrame;
+  replayOptions.workerDocumentAccessHoldEndFrame = request.workerDocumentHoldEndFrame;
 
   std::string error;
   GlReadbackRunner glReadbackRunner = GlReadbackRunner::InProcess;
@@ -653,6 +657,8 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
   int glCaptureLeftMouseDown = 0;
   int glMaxFrame = -1;
   int glTimeoutMs = 120000;
+  int glWorkerDocumentHoldStartFrame = -1;
+  int glWorkerDocumentHoldEndFrame = -1;
   std::string glCrop = "full";
   std::string glOutputDir;
   bool includeFrameResults = true;
@@ -679,6 +685,10 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
                        &error) ||
       !ReadOptionalInt(arguments, "gl_max_frame", -1, &glMaxFrame, &error) ||
       !ReadOptionalInt(arguments, "gl_timeout_ms", 120000, &glTimeoutMs, &error) ||
+      !ReadOptionalInt(arguments, "gl_worker_document_hold_start_frame", -1,
+                       &glWorkerDocumentHoldStartFrame, &error) ||
+      !ReadOptionalInt(arguments, "gl_worker_document_hold_end_frame", -1,
+                       &glWorkerDocumentHoldEndFrame, &error) ||
       !ReadOptionalString(arguments, "gl_crop", "full", &glCrop, &error) ||
       !ReadOptionalString(arguments, "gl_output_dir", "", &glOutputDir, &error) ||
       !ReadOptionalBool(arguments, "include_frame_results", true, &includeFrameResults, &error) ||
@@ -712,6 +722,8 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
         .captureLeftMouseDown = glCaptureLeftMouseDown,
         .maxFrame = glMaxFrame,
         .timeoutMs = glTimeoutMs,
+        .workerDocumentHoldStartFrame = glWorkerDocumentHoldStartFrame,
+        .workerDocumentHoldEndFrame = glWorkerDocumentHoldEndFrame,
         .capture = capture,
     });
   }
