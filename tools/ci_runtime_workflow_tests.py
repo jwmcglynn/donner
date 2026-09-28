@@ -114,6 +114,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         detection = self._step_body(hosted, "Detect browser GPU acquisition failure")
         self.assertIn("stage=selection outcome=deadline_pending", detection)
         self.assertIn("run_probe=$should_probe", detection)
+        self.assertIn("ci:browser-gpu-diagnostics", detection)
+        self.assertIn("REQUESTED:", detection)
+        self.assertIn('should_probe="$REQUESTED"', detection)
         targets = (
             "chromium_remote_smoke", "catalog_font_loading_test",
             "browser_presentation_regression_test", "standalone_geode_browser_renderer_test",
@@ -128,7 +131,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             name = "Compare browser GPU tests (%s)" % mode
             body = self._step_body(hosted, name)
             self.assertGreater(hosted.index("      - name: " + name), original_artifacts)
-            self.assertIn("if: failure() && steps.test.outcome == 'failure'", body)
+            self.assertIn("if: !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true'", body)
             self.assertIn("continue-on-error: true", body)
             self.assertIn("--nocache_test_results", body)
             self.assertIn("--local_test_jobs=%d" % jobs, body)
