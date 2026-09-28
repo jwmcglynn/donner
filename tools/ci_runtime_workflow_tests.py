@@ -111,6 +111,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         original = self._step_body(hosted, "Test")
         self.assertNotIn("continue-on-error", original)
         original_artifacts = hosted.index("      - name: Upload Bazel test failure artifacts")
+        detection = self._step_body(hosted, "Detect browser GPU acquisition failure")
+        self.assertIn("stage=selection outcome=deadline_pending", detection)
+        self.assertIn("run_probe=$should_probe", detection)
         targets = (
             "chromium_remote_smoke", "catalog_font_loading_test",
             "browser_presentation_regression_test", "standalone_geode_browser_renderer_test",
@@ -129,6 +132,20 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             artifact = self._step_body(hosted, "Upload browser GPU comparison (%s)" % mode)
             self.assertIn("./.github/actions/upload-bazel-test-artifacts", artifact)
             self.assertIn("browser-gpu-%s-" % mode, artifact)
+
+    def test_hosted_browser_comparisons_keep_failure_reports_with_errexit(self):
+        hosted = self._job_body("macos")
+        environment = os.environ.copy()
+        environment.update(RUNNER_TEMP=".", BAZEL_MACOS_BUILD_FLAGS="",
+                           BAZEL_MACOS_TEST_FLAGS="")
+        prefix = "bazelisk() { return 3; }; python3() { echo summary-ran; return 0; };\n"
+        for mode in ("serial", "parallel"):
+            body = self._step_body(hosted, "Compare browser GPU tests (%s)" % mode)
+            script = textwrap.dedent(body.split("run: |\n", 1)[1])
+            result = subprocess.run(["/bin/bash", "-e", "-c", prefix + script],
+                                    env=environment, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertIn("summary-ran", result.stdout)
 
     def _heartbeat_script(self):
         match = re.search(
