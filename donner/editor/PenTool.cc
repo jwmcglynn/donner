@@ -514,6 +514,7 @@ void PenTool::startNewPath(EditorApp& editor, const Vector2d& documentPoint) {
   // Capture the source baseline BEFORE queueing the first insert so the whole
   // pen session can later collapse into one undoable command.
   beginPenSession(editor);
+  editor.rememberSelectionPaint();
 
   svg::SVGDocument& document = editor.document().document();
   svg::SVGPathElement path = svg::SVGPathElement::Create(document);
@@ -527,9 +528,9 @@ void PenTool::startNewPath(EditorApp& editor, const Vector2d& documentPoint) {
   // stroke-width: ...") rather than individual presentation attributes, so new
   // geometry round-trips through the source pane as CSS style like the rest of
   // the showcase content.
-  path.setAttribute(
-      "style", "fill: " + paintStyle.fill + "; stroke: " + paintStyle.stroke +
-                   "; stroke-width: " + donner::detail::FormatNumberForSVG(paintStyle.strokeWidth));
+  path.setAttribute("style",
+                    "fill: " + paintStyle.fill + "; stroke: " + paintStyle.stroke +
+                        "; stroke-width: " + std::string(paintStyle.strokeWidth.toRcString()));
 
   startPoint_ = documentPoint;
   currentPoint_ = documentPoint;

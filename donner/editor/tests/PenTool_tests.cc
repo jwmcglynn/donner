@@ -19,6 +19,7 @@
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "gmock/gmock.h"
@@ -108,6 +109,67 @@ TEST_F(PenToolTest, FirstClickUsesActivePaintStyle) {
   EXPECT_FALSE(inserted.getAttribute("fill").has_value());
   EXPECT_FALSE(inserted.getAttribute("stroke").has_value());
   EXPECT_FALSE(inserted.getAttribute("stroke-width").has_value());
+}
+
+TEST_F(PenToolTest, NewPathReusesSelectedShapeComputedPaint) {
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <style>.paint { fill: none; stroke: #f0b429; stroke-width: 5; }</style>
+      <rect id="reference" class="paint" width="20" height="20"/>
+    </svg>
+  )svg"));
+  const auto selected = app.document().document().querySelector("#reference");
+  ASSERT_THAT(selected, testing::Optional(testing::_));
+  app.setSelection(*selected);
+
+  tool.onMouseDown(app, Vector2d(50.0, 50.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  const auto paint = path().getAttribute("style");
+  ASSERT_THAT(paint, testing::Optional(testing::_));
+  EXPECT_EQ(std::string(*paint), "fill: none; stroke: #f0b429; stroke-width: 5");
+}
+
+TEST_F(PenToolTest, NewPathKeepsSelectedPaintAfterDeselecting) {
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <g color="#123456" fill="currentColor" stroke="none">
+        <rect id="reference" width="20" height="20"/>
+      </g>
+    </svg>
+  )svg"));
+  const auto selected = app.document().document().querySelector("#reference");
+  ASSERT_THAT(selected, testing::Optional(testing::_));
+  app.setSelection(*selected);
+  app.clearSelection();
+
+  tool.onMouseDown(app, Vector2d(50.0, 50.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  const auto paint = path().getAttribute("style");
+  ASSERT_THAT(paint, testing::Optional(testing::_));
+  EXPECT_EQ(std::string(*paint), "fill: #123456; stroke: none; stroke-width: 1");
+}
+
+TEST_F(PenToolTest, NewPathPreservesSelectedPaintReferenceAndStrokeWidthUnits) {
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <defs><linearGradient id="gold paint"><stop stop-color="gold"/></linearGradient></defs>
+      <rect id="reference" width="20" height="20"
+            style='fill: url(#gold\20 paint); stroke: #12345680; stroke-width: 2mm'/>
+    </svg>
+  )svg"));
+  const auto selected = app.document().document().querySelector("#reference");
+  ASSERT_THAT(selected, testing::Optional(testing::_));
+  app.setSelection(*selected);
+  tool.onMouseDown(app, Vector2d(50.0, 50.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  const auto paint = path().getAttribute("style");
+  ASSERT_THAT(paint, testing::Optional(testing::_));
+  EXPECT_EQ(std::string(*paint),
+            R"(fill: url(#gold\20 paint); stroke: #12345680; stroke-width: 2mm)");
+  EXPECT_THAT(path().getComputedStyle().fill.get(),
+              testing::Eq(selected->getComputedStyle().fill.get()));
+  EXPECT_THAT(path().getComputedStyle().strokeWidth.get(),
+              testing::Optional(testing::Eq(Lengthd(2.0, Lengthd::Unit::Mm))));
 }
 
 TEST_F(PenToolTest, FirstClickExpandsSelfClosingSvgRoot) {
