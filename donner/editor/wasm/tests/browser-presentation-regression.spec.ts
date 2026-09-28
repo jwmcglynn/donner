@@ -1941,13 +1941,13 @@ async function openBasicShapes(
             && probe.state.completedResults > beforeSampleResults
             && probe.state.presentedAtMs !== null
           ) {
+            if (performance.now() >= blueDeadlineAtMs) {
+              throw new Error("Basic Shapes blue-pixel acceptance exceeded the deadline");
+            }
             documentClip = currentDocumentClip;
             captureClip = currentCaptureClip;
             baselinePng = shot;
             blueRect = bounds;
-            if (performance.now() >= blueDeadlineAtMs) {
-              throw new Error("Basic Shapes blue-pixel acceptance exceeded the deadline");
-            }
             return lastBluePixels;
           }
           return 0;
