@@ -1604,8 +1604,10 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
     const capture = await gatedCapture;
     expect(capture).not.toBeNull();
     if (capture === null) throw new Error("the held canvas capture is unavailable");
+    const scoredFramePath = testInfo.outputPath("held-canvas-scored-frame.png");
+    await writeFile(scoredFramePath, capture.png);
     await testInfo.attach("held-canvas-scored-frame", {
-      body: capture.png,
+      path: scoredFramePath,
       contentType: "image/png",
     });
     expect(capture.usable).toBe(true);
