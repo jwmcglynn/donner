@@ -143,9 +143,9 @@ def _scan_context_events(lines):
         if reason is not None:
             reasons.add(reason)
         event_id = event.get("id")
-        if not isinstance(event_id, dict) or "finished" not in event_id:
+        if not isinstance(event_id, dict) or "buildFinished" not in event_id:
             continue
-        if finished is not None:
+        if not isinstance(event_id["buildFinished"], dict) or finished is not None:
             return None, [], True
         finished = event.get("finished")
         if not isinstance(finished, dict):
@@ -157,7 +157,8 @@ def _validated_finished_name(finished, process_status):
     exit_code = finished.get("exitCode")
     if not isinstance(exit_code, dict):
         return None
-    code = exit_code.get("code")
+    # Proto3 JSON omits the scalar zero for a successful build.
+    code = exit_code.get("code", 0)
     name = exit_code.get("name")
     if type(code) is int and code == process_status and _EXIT_NAMES.get(code) == name:
         return name
