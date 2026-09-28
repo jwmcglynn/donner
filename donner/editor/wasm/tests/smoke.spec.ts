@@ -95,6 +95,10 @@ declare global {
     __donnerWgpuReadbackCaptureCompletions?: number;
     __donnerWgpuReadbackCaptureFailures?: number;
     __donnerMainLoopRenderedFrames?: number;
+    __donnerHostFrameTiming?: {
+      frames: number;
+      lastSurfacePresented: boolean;
+    };
     __donnerFrameLoopStats?: {
       lastFrameAtMs?: number;
     };
@@ -1531,6 +1535,44 @@ async function captureAfterCanvasGpuCompletion<T>(
   return capture();
 }
 
+interface InitialBlueFrameState {
+  sampleId: string | null;
+  completedResults: number;
+  presentedAtMs: number | null;
+  renderedFrames: number;
+  hostFrames: number | null;
+  hostPresented: boolean;
+}
+
+function hasPresentedBasicShapesHostFrame(
+  state: InitialBlueFrameState,
+  beforeSample: number,
+): boolean {
+  // RunEditorFrame calls endFrame once, and its timing callback is queued
+  // before RecordFrameSample. Both counters advance once per active frame,
+  // including early surface returns; only the completed draw/present path
+  // sets the same frame's lastSurfacePresented flag.
+  return state.sampleId === "basic-shapes"
+    && state.completedResults > beforeSample
+    && state.presentedAtMs !== null
+    && state.hostFrames !== null
+    && state.hostFrames === state.renderedFrames
+    && state.hostPresented;
+}
+
+async function captureReadyBasicShapesFrame<T>(
+  page: Page,
+  state: InitialBlueFrameState,
+  beforeSample: number,
+  deadlineAtMs: number,
+  capture: () => Promise<T>,
+): Promise<T | null> {
+  if (!hasPresentedBasicShapesHostFrame(state, beforeSample)) return null;
+  const owner = await awaitBeforeBlueDeadline(findCanvasOwnerWorker(page), deadlineAtMs);
+  if (owner === null) return null;
+  return captureAfterCanvasGpuCompletion(owner, deadlineAtMs, capture);
+}
+
 test("production Geode wasm presents visible editor pixels after held canvas GPU completion", async ({ browserName, page }) => {
   test.skip(browserName !== "chromium" || kBackend !== "geode", "controlled browser GPU gate");
   const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
@@ -1546,27 +1588,29 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
       frames: window.__donnerMainLoopRenderedFrames ?? 0,
     }));
     await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
-    await expect.poll(() =>
-      page.evaluate((baseline) => ({
-        sample: window.__donnerActiveSampleStats?.sampleId ?? null,
-        resultReady: (window.__donnerWorkerStats?.completedResults ?? 0) > baseline.results,
-        presented: window.__donnerWorkerStats?.presentedAtMs !== undefined,
-        frameAdvanced: (window.__donnerMainLoopRenderedFrames ?? 0) > baseline.frames,
-      }), before), { timeout: scaledMs(5_000) }).toEqual({
-        sample: "basic-shapes",
-        resultReady: true,
-        presented: true,
-        frameAdvanced: true,
-      });
+    const readState = () =>
+      page.evaluate(() => ({
+        sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
+        completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+        presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+        renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
+        hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
+        hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
+      }));
+    await expect.poll(
+      async () => hasPresentedBasicShapesHostFrame(await readState(), before.results),
+      { timeout: scaledMs(5_000) },
+    ).toBe(true);
+    const readyState = await readState();
+    expect(readyState.renderedFrames).toBeGreaterThan(before.frames);
     await expect.poll(hold.observedCalls).toBeGreaterThan(0);
 
-    const owner = await findCanvasOwnerWorker(page);
-    expect(owner).not.toBeNull();
-    if (owner === null) return;
     let screenshots = 0;
     let settled = false;
-    const gatedCapture = captureAfterCanvasGpuCompletion(
-      owner,
+    const gatedCapture = captureReadyBasicShapesFrame(
+      page,
+      readyState,
+      before.results,
       performance.now() + scaledMs(5_000),
       () => {
         ++screenshots;
@@ -1582,6 +1626,8 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
     expect(settled).toBe(false);
     await hold.release();
     const capture = await gatedCapture;
+    expect(capture).not.toBeNull();
+    if (capture === null) return;
     expect(capture.usable).toBe(true);
     expect(screenshots).toBe(1);
     const viewport = page.viewportSize();
@@ -1596,6 +1642,29 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
         })?.pixels ?? 0,
       ).toBeGreaterThan(500);
     }
+    let staleCaptures = 0;
+    const staleCapture = async () => {
+      ++staleCaptures;
+    };
+    expect(
+      await captureReadyBasicShapesFrame(
+        page,
+        { ...readyState, hostPresented: false },
+        before.results,
+        performance.now() + 100,
+        staleCapture,
+      ),
+    ).toBeNull();
+    expect(
+      await captureReadyBasicShapesFrame(
+        page,
+        { ...readyState, hostFrames: readyState.renderedFrames - 1 },
+        before.results,
+        performance.now() + 100,
+        staleCapture,
+      ),
+    ).toBeNull();
+    expect(staleCaptures).toBe(0);
   } finally {
     await hold.release();
   }
@@ -1680,6 +1749,8 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
         completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
         presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
         renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
+        hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
+        hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
         viewport: window.__donnerViewportStats ?? null,
       }));
       const viewport = state.viewport;
@@ -1695,20 +1766,15 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
           viewport.paneY + viewport.paneHeight,
         ) - Math.max(viewport.documentY, viewport.paneY),
       };
-      // A worker result and host frame stamp mean CPU work reached submission;
-      // neither proves the canvas-writing GPU commands have completed.
-      if (
-        state.sampleId !== "basic-shapes" || state.completedResults <= beforeSample
-        || state.presentedAtMs === null || region === null
-        || region.width <= 0 || region.height <= 0
-      ) return 0;
-      const owner = await awaitBeforeBlueDeadline(findCanvasOwnerWorker(page), blueDeadlineAtMs);
-      if (owner === null) return 0;
-      const capture = await captureAfterCanvasGpuCompletion(
-        owner,
+      if (region === null || region.width <= 0 || region.height <= 0) return 0;
+      const capture = await captureReadyBasicShapesFrame(
+        page,
+        state,
+        beforeSample,
         blueDeadlineAtMs,
         () => captureEditorPage(page),
       );
+      if (capture === null) return 0;
       screenshotTimeouts += capture.timedOutCaptures;
       const blue = capture.usable && region !== null && region.width > 0 && region.height > 0
         ? readEditorPixelBoundsFromPng(capture.png, "basic-blue", captureViewport, {
