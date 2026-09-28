@@ -572,6 +572,10 @@ public:
    */
   void setReplayRenderDelayForTesting(std::chrono::milliseconds delay);
 
+  /// Pause queued renders before they acquire the document, for deterministic handoff replays.
+  /// Shutdown always releases this pause.
+  void setReplayDocumentAccessBlockedForTesting(bool blocked);
+
   /**
    * Hold each staged result for a fixed number of poll attempts in replay tests.
    *
@@ -1152,6 +1156,8 @@ private:
 
   /// Replay/test-only fixed delay injected into each worker render attempt.
   std::atomic<std::chrono::milliseconds::rep> replayRenderDelayMsForTesting_{0};
+  /// Test-only pause before a worker consumes its submitted document.
+  std::atomic<bool> replayDocumentAccessBlockedForTesting_{false};
 
   /// Replay/test-only number of poll attempts to hold each newly staged result.
   int replayResultHoldFramesForTesting_ = 0;

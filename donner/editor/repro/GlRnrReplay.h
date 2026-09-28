@@ -56,6 +56,10 @@ struct GlRnrReplayOptions {
   int holdFramesBehind = 0;
   /// Replay-only fixed render delay injected into the async worker.
   int workerRenderDelayMsForTesting = 0;
+  /// First frame to hold queued workers before document acquisition, or -1 to disable.
+  int workerDocumentAccessHoldStartFrame = -1;
+  /// Frame to release the document-acquisition hold and drain the submitted render.
+  int workerDocumentAccessHoldEndFrame = -1;
   /// Drive canvas tool input from recorded document coordinates instead of GUI screen hit-testing.
   bool driveDocumentSpaceInput = false;
   /// Set the source pane's animation target visible before the first frame.

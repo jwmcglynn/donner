@@ -468,6 +468,15 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
   if (options.captureFrames.empty() && !options.captureLeftMouseDownOrdinal.has_value()) {
     return SetError(error, "at least one GL capture selector is required");
   }
+  if (options.workerDocumentAccessHoldStartFrame != -1 ||
+      options.workerDocumentAccessHoldEndFrame != -1) {
+    if (options.workerDocumentAccessHoldStartFrame < 0 ||
+        options.workerDocumentAccessHoldEndFrame <= options.workerDocumentAccessHoldStartFrame ||
+        options.workerScheduling != GlRnrReplayWorkerScheduling::Realtime) {
+      return SetError(
+          error, "document-access hold requires an increasing frame range and realtime scheduling");
+    }
+  }
   if (options.holdFramesBehind < 0) {
     return SetError(error, "holdFramesBehind must be non-negative");
   }
@@ -594,6 +603,18 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
       }
     }
 
+    if (options.workerDocumentAccessHoldStartFrame >= 0 &&
+        frame.index == static_cast<std::uint64_t>(options.workerDocumentAccessHoldStartFrame)) {
+      replayRenderer.setReplayDocumentAccessBlockedForTesting(true);
+    }
+    if (options.workerDocumentAccessHoldEndFrame >= 0 &&
+        frame.index == static_cast<std::uint64_t>(options.workerDocumentAccessHoldEndFrame)) {
+      replayRenderer.setReplayDocumentAccessBlockedForTesting(false);
+      if (!replayRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                              std::chrono::seconds(30))) {
+        return SetError(error, "worker did not finish after releasing document-access hold");
+      }
+    }
     if (!WaitForReplayWorkerBeforeFrame(options, shell, frame, error)) {
       return false;
     }

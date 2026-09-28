@@ -597,6 +597,14 @@ void AsyncRenderer::setReplayRenderDelayForTesting(std::chrono::milliseconds del
   replayRenderDelayMsForTesting_.store(clampedDelay.count(), std::memory_order_release);
 }
 
+void AsyncRenderer::setReplayDocumentAccessBlockedForTesting(bool blocked) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    replayDocumentAccessBlockedForTesting_.store(blocked, std::memory_order_release);
+  }
+  cv_.notify_all();
+}
+
 void AsyncRenderer::setReplayResultHoldFramesForTesting(int frameCount) {
   std::lock_guard<std::mutex> lock(mutex_);
   replayResultHoldFramesForTesting_ = std::max(frameCount, 0);
@@ -1204,6 +1212,16 @@ void AsyncRenderer::workerLoop() {
     // acquire a SingleThreaded guard while the worker concurrently changes the mode. The worker
     // holds a write guard across document-reading work and releases it via releaseDocumentAccess()
     // before every mutex_ section below to avoid a lock-order inversion.
+    if (replayDocumentAccessBlockedForTesting_.load(std::memory_order_acquire)) {
+      std::unique_lock<std::mutex> lock(mutex_);
+      cv_.wait(lock, [this] {
+        return !replayDocumentAccessBlockedForTesting_.load(std::memory_order_acquire) ||
+               std::holds_alternative<ShutdownState>(workerState_);
+      });
+      if (std::holds_alternative<ShutdownState>(workerState_)) {
+        return;
+      }
+    }
     std::optional<svg::DocumentWriteAccess> documentAccess;
     documentAccess.emplace(requestDocument.writeAccess());
     const auto releaseDocumentAccess = [&]() { documentAccess.reset(); };
