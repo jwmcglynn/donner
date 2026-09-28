@@ -17,6 +17,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "basic-shapes-capture-gate.ts",
         "canvas-color-stats.ts",
         "gesture-streams.ts",
         "package.json",
@@ -76,6 +77,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "basic-shapes-capture-gate.ts",
         "browser-presentation-regression.spec.ts",
         "browser-surface-recovery.spec.ts",
         "canvas-color-stats.ts",
@@ -122,6 +124,7 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "basic-shapes-capture-gate.ts",
         "canvas-color-stats.ts",
         "gesture-streams.ts",
         "package.json",

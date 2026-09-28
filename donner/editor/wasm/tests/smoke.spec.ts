@@ -1,6 +1,11 @@
 import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import {
+  captureAfterCanvasGpuCompletion,
+  captureReadyBasicShapesFrame,
+  hasPresentedBasicShapesHostFrame,
+} from "./basic-shapes-capture-gate";
+import {
   type CanvasColorStats,
   captureEditorPage,
   findElementColoredPixel,
@@ -12,12 +17,7 @@ import {
   type ScreenshotTimeoutStage,
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
-import {
-  findCanvasOwnerWorker,
-  holdCanvasCompletionForTest,
-  installSurfaceFrameProbe,
-  waitForSubmittedCanvasGpuWork,
-} from "./surface-frame-probe";
+import { holdCanvasCompletionForTest, installSurfaceFrameProbe } from "./surface-frame-probe";
 
 declare global {
   interface Window {
@@ -1537,88 +1537,6 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
   await page.mouse.up();
   expect(fatalMessages).toEqual([]);
 });
-
-// The app already requests queue completion after each canvas-writing submit.
-// This test-only gate awaits that same promise; it neither submits GPU work nor
-// requests another frame. A missing observer is retried by the enclosing poll,
-// while a rejected or overdue completion fails rather than scoring pixels.
-async function awaitBeforeBlueDeadline<T>(
-  work: Promise<T>,
-  deadlineAtMs: number,
-): Promise<T> {
-  const remainingMs = deadlineAtMs - performance.now();
-  if (remainingMs <= 0) {
-    throw new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline");
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  return Promise.race([
-    work,
-    new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () =>
-          reject(new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline")),
-        remainingMs,
-      );
-    }),
-  ]).finally(() => clearTimeout(timer));
-}
-
-async function captureAfterCanvasGpuCompletion<T>(
-  owner: Worker,
-  deadlineAtMs: number,
-  capture: (remainingMs: number) => Promise<T>,
-): Promise<T> {
-  await awaitBeforeBlueDeadline(waitForSubmittedCanvasGpuWork(owner), deadlineAtMs);
-  const remainingMs = deadlineAtMs - performance.now();
-  if (remainingMs < 1) {
-    throw new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline");
-  }
-  const result = await capture(remainingMs);
-  if (performance.now() >= deadlineAtMs) {
-    throw new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline");
-  }
-  return result;
-}
-
-interface InitialBlueFrameState {
-  sampleId: string | null;
-  completedResults: number;
-  presentedAtMs: number | null;
-  renderedFrames: number;
-  hostFrames: number | null;
-  hostPresented: boolean;
-}
-
-function hasPresentedBasicShapesHostFrame(
-  state: InitialBlueFrameState,
-  beforeSample: number,
-): boolean {
-  // RunEditorFrame calls endFrame once, and its timing callback is queued
-  // before RecordFrameSample. Both counters advance once per active frame,
-  // including early surface returns; only the completed draw/present path
-  // sets the same frame's lastSurfacePresented flag.
-  return state.sampleId === "basic-shapes"
-    && state.completedResults > beforeSample
-    && state.presentedAtMs !== null
-    && state.hostFrames !== null
-    && state.hostFrames === state.renderedFrames
-    && state.hostPresented;
-}
-
-async function captureReadyBasicShapesFrame<T>(
-  page: Page,
-  state: InitialBlueFrameState,
-  beforeSample: number,
-  deadlineAtMs: number,
-  capture: (remainingMs: number) => Promise<T>,
-  onOwner?: (owner: Worker) => void,
-): Promise<T | null> {
-  if (!hasPresentedBasicShapesHostFrame(state, beforeSample)) return null;
-  const owner = await awaitBeforeBlueDeadline(findCanvasOwnerWorker(page), deadlineAtMs);
-  if (owner === null) return null;
-  onOwner?.(owner);
-  return captureAfterCanvasGpuCompletion(owner, deadlineAtMs, capture);
-}
 
 test("production Geode wasm presents visible editor pixels after held canvas GPU completion", async ({ browserName, page }) => {
   test.skip(browserName !== "chromium" || kBackend !== "geode", "controlled browser GPU gate");

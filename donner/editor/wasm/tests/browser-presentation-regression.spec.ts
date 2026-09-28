@@ -3,6 +3,11 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { PNG } from "pngjs";
 import {
+  awaitBeforeBlueDeadline,
+  captureReadyBasicShapesFrame,
+  type InitialBlueFrameState,
+} from "./basic-shapes-capture-gate";
+import {
   captureEditorPage,
   captureSplashPresentationFrame,
   type CssRegion,
@@ -557,7 +562,6 @@ test("editor page capture leaves retries to the outer poll and keeps drags one-s
 
   // The baseline poll owns the retry schedule: black, timeout, then visible.
   let shots = 0;
-  let stateReads = 0;
   const baselinePage = {
     screenshot: async (options?: unknown) => {
       expect(options).toBeUndefined();
@@ -572,37 +576,26 @@ test("editor page capture leaves retries to the outer poll and keeps drags one-s
       }
       return visible;
     },
-    evaluate: async () => {
-      ++stateReads;
-      return {
-        sampleId: "basic-shapes",
-        completedResults: 1,
-        presentedAtMs: 1,
-        viewport: {
-          paneX: 0,
-          paneY: 0,
-          paneWidth: 64,
-          paneHeight: 64,
-          documentX: 0,
-          documentY: 0,
-          documentWidth: 64,
-          documentHeight: 64,
-          zoom: 1,
-        },
-      };
-    },
   } as unknown as Page;
-  const observations: Array<[number, number, boolean, boolean]> = [];
+  const observations: Array<[number, boolean, boolean]> = [];
   await expect.poll(async () => {
-    const probe = await takeBasicShapesProbe(baselinePage, true, { width: 64, height: 64 });
-    observations.push([shots, stateReads, probe.capture.usable, (probe.bounds?.pixels ?? 0) > 0]);
-    return probe.bounds?.pixels ?? 0;
+    const capture = await captureEditorPage(baselinePage);
+    const blue = capture.usable
+      ? readEditorPixelBoundsFromPng(capture.png, "basic-blue", { width: 64, height: 64 }, {
+        minX: 0,
+        minY: 0,
+        maxX: 64,
+        maxY: 64,
+      })
+      : null;
+    observations.push([shots, capture.usable, blue !== null]);
+    return blue?.pixels ?? 0;
   }, { intervals: [10], timeout: 1_000 }).toBeGreaterThan(0);
   expect(shots).toBe(3);
   expect(observations).toEqual([
-    [1, 1, true, false],
-    [2, 1, false, false],
-    [3, 2, true, true],
+    [1, true, false],
+    [2, false, false],
+    [3, true, true],
   ]);
 
   let dragShots = 0;
@@ -826,12 +819,14 @@ function captureSentinelPixels(
 async function attachLastBasicShapesPng(
   baselinePng: Buffer | null,
   lastProbe: { shot: Buffer } | null,
-): Promise<void> {
-  if (baselinePng !== null || lastProbe === null || lastProbe.shot.length === 0) return;
+): Promise<boolean> {
+  if (baselinePng !== null || lastProbe === null || lastProbe.shot.length === 0) return false;
   try {
     await attachEvidenceFile("open-basic-shapes-last-probe", lastProbe.shot, "image/png");
+    return true;
   } catch {
     console.warn("open-basic-shapes scored PNG unavailable");
+    return false;
   }
 }
 
@@ -1450,6 +1445,19 @@ test("canvas diagnosis brackets host presentation counters around a wake", async
   });
 });
 
+// This pre-capture read is scalar app publication only. No DOM/style/layout
+// observation can flush a browser paint before the scored screenshot.
+async function readBasicShapesGateState(page: Page): Promise<InitialBlueFrameState> {
+  return page.evaluate(() => ({
+    sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
+    completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+    presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+    renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
+    hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
+    hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
+  }));
+}
+
 type BasicShapesProbeState = {
   sampleId: string | null;
   completedResults: number;
@@ -1466,8 +1474,8 @@ async function readBasicShapesProbeState(
     console.log("open-basic-shapes-probe: state-start");
   }
   const state = await page.evaluate((includeDom) => {
-    // Piggyback the existing post-capture IPC. Style/layout reads can change
-    // timing, so these fields diagnose a failure but never qualify a pass.
+    // This runs after the scored screenshot on the Firefox gate. Style/layout
+    // reads can change later timing, so these fields diagnose a failure only.
     const dom = includeDom
       ? (() => {
         const finite = (value: number) => Number.isFinite(value) ? value : null;
@@ -1550,6 +1558,43 @@ async function readBasicShapesProbeState(
   return state;
 }
 
+test("Basic Shapes pre-capture gate reads app scalars without layout observation", async ({ page }) => {
+  await page.setContent("<canvas id='canvas'></canvas>");
+  await page.evaluate(() => {
+    Object.assign(window, {
+      __donnerActiveSampleStats: { sampleId: "basic-shapes", activatedAtMs: 1 },
+      __donnerWorkerStats: { completedResults: 2, presentedAtMs: 3 },
+      __donnerMainLoopRenderedFrames: 7,
+      __donnerHostFrameTiming: { frames: 7, lastSurfacePresented: true },
+    });
+    window.getComputedStyle = () => {
+      throw new Error("style read before capture");
+    };
+    Element.prototype.getBoundingClientRect = () => {
+      throw new Error("layout read before capture");
+    };
+    document.elementFromPoint = () => {
+      throw new Error("occlusion read before capture");
+    };
+  });
+  expect(await readBasicShapesGateState(page)).toEqual({
+    sampleId: "basic-shapes",
+    completedResults: 2,
+    presentedAtMs: 3,
+    renderedFrames: 7,
+    hostFrames: 7,
+    hostPresented: true,
+  });
+});
+
+test("Basic Shapes gated setup reaches visible pixels in the browser journey", async ({ browserName, page }) => {
+  test.skip(browserName !== "chromium", "remote Chromium controlled setup journey");
+  const failures = await openEditor(page);
+  const { blueRect } = await openBasicShapes(page, false, true);
+  expect(blueRect.pixels).toBeGreaterThan(500);
+  expect(failures).toEqual([]);
+});
+
 test("Basic Shapes DOM probe reports fixed visibility states without page content", async ({ page }) => {
   await page.setContent(`
     <style>
@@ -1617,6 +1662,7 @@ async function captureBasicShapesProbePage(
   page: Page,
   firefox: boolean,
   captureClip: CssRegion | null,
+  timeoutMs?: number,
 ): Promise<EditorPageCapture> {
   if (!firefox) {
     const png = captureClip === null
@@ -1625,7 +1671,7 @@ async function captureBasicShapesProbePage(
     return { png, usable: true, attempts: 1, timedOutCaptures: 0, timeoutStage: null };
   }
   console.log("open-basic-shapes-probe: capture-start");
-  const capture = await captureEditorPage(page);
+  const capture = await captureEditorPage(page, timeoutMs);
   console.log(
     `open-basic-shapes-probe: capture-end attempts=${capture.attempts} `
       + `screenshotTimeouts=${capture.timedOutCaptures}`,
@@ -1651,39 +1697,98 @@ function basicShapesBlueBounds(
 
 type BasicShapesProbe = {
   capture: EditorPageCapture;
+  preGateState: InitialBlueFrameState | null;
   state: BasicShapesProbeState | null;
   documentClip: CssRegion | null;
   captureClip: CssRegion | null;
   bounds: PixelBounds | null;
 };
 
+const kNoBasicShapesCapture: EditorPageCapture = {
+  png: Buffer.alloc(0),
+  usable: false,
+  attempts: 0,
+  timedOutCaptures: 0,
+  timeoutStage: null,
+};
+
 async function takeBasicShapesProbe(
   page: Page,
-  firefox: boolean,
+  fullPage: boolean,
+  gateCanvasGpu: boolean,
   pageViewport: Pick<CssRegion, "width" | "height"> | null,
+  beforeSampleResults: number,
+  deadlineAtMs: number,
 ): Promise<BasicShapesProbe> {
-  // Firefox can stall a page-state IPC for several seconds on the hosted
-  // runner. A black or timed-out screenshot needs no state at all, so let the
-  // outer poll schedule the next capture without paying that IPC cost.
-  const earlyCapture = firefox ? await captureBasicShapesProbePage(page, true, null) : null;
-  if (earlyCapture !== null && !earlyCapture.usable) {
+  if (!gateCanvasGpu) {
+    const state = await readBasicShapesProbeState(page, false);
+    const { documentClip, captureClip } = basicShapesProbeClips(
+      state.viewport,
+      false,
+      pageViewport,
+    );
+    const capture = await captureBasicShapesProbePage(page, false, captureClip);
     return {
-      capture: earlyCapture,
+      capture,
+      preGateState: null,
+      state,
+      documentClip,
+      captureClip,
+      bounds: basicShapesBlueBounds(capture, documentClip, captureClip),
+    };
+  }
+
+  const preGateState = await awaitBeforeBlueDeadline(
+    readBasicShapesGateState(page),
+    deadlineAtMs,
+  );
+  const capture = await captureReadyBasicShapesFrame(
+    page,
+    preGateState,
+    beforeSampleResults,
+    deadlineAtMs,
+    (remainingMs) => captureBasicShapesProbePage(page, fullPage, null, remainingMs),
+  );
+  if (capture === null) {
+    return {
+      capture: kNoBasicShapesCapture,
+      preGateState,
       state: null,
       documentClip: null,
       captureClip: null,
       bounds: null,
     };
   }
-  const state = await readBasicShapesProbeState(page, firefox);
+  // Retain the screenshot even if the post-capture diagnostic state misses
+  // the same deadline. A late state read cannot turn that image into a pass.
+  let state: BasicShapesProbeState;
+  try {
+    state = await awaitBeforeBlueDeadline(
+      readBasicShapesProbeState(page, fullPage),
+      deadlineAtMs,
+    );
+  } catch (error) {
+    if (
+      !(error instanceof Error)
+      || !error.message.includes("exceeded the blue-pixel deadline")
+    ) throw error;
+    return {
+      capture,
+      preGateState,
+      state: null,
+      documentClip: null,
+      captureClip: null,
+      bounds: null,
+    };
+  }
   const { documentClip, captureClip } = basicShapesProbeClips(
     state.viewport,
-    firefox,
+    fullPage,
     pageViewport,
   );
-  const capture = earlyCapture ?? await captureBasicShapesProbePage(page, false, captureClip);
   return {
     capture,
+    preGateState,
     state,
     documentClip,
     captureClip,
@@ -1691,7 +1796,11 @@ async function takeBasicShapesProbe(
   };
 }
 
-async function openBasicShapes(page: Page, captureSentinelExpected = false): Promise<{
+async function openBasicShapes(
+  page: Page,
+  captureSentinelExpected = false,
+  forceGpuGateForTest = false,
+): Promise<{
   canvasBounds: { x: number; y: number; width: number; height: number };
   documentClip: { x: number; y: number; width: number; height: number };
   captureClip: { x: number; y: number; width: number; height: number };
@@ -1725,6 +1834,13 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
       },
     )
     .toBe(true);
+  const firefox = page.context().browser()?.browserType().name() === "firefox";
+  const fullPage = firefox || forceGpuGateForTest;
+  const gateCanvasGpu = fullPage;
+  if (gateCanvasGpu) {
+    expect(await installSurfaceFrameProbe(page), "no worker could observe canvas submissions")
+      .toBeGreaterThan(0);
+  }
   const beforeSampleResults = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
@@ -1745,9 +1861,8 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
   // Use the browser's un-clipped page capture there, then search only the current document
   // rectangle. A worker result can arrive before the editor publishes its new viewport, so do
   // not freeze that search rectangle until the same capture verifies Basic Shapes pixels.
-  const firefox = page.context().browser()?.browserType().name() === "firefox";
   const pageViewport = page.viewportSize();
-  if (firefox && pageViewport === null) {
+  if (fullPage && pageViewport === null) {
     throw new Error("the Firefox viewport is unavailable for the document pixel probe");
   }
   // A completed worker result is not yet a presented document. The counter
@@ -1765,8 +1880,10 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
   let baselinePng: Buffer | null = null;
   let blueRect: PixelBounds | null = null;
   let screenshotTimeouts = 0;
+  const blueDeadlineAtMs = performance.now() + scaledMs(5_000);
   let lastProbe: {
     shot: Buffer;
+    preGateState: InitialBlueFrameState | null;
     state: object;
     documentClip: CssRegion | null;
     captureClip: CssRegion | null;
@@ -1784,10 +1901,17 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
     await expect
       .poll(
         async () => {
-          const probe = await takeBasicShapesProbe(page, firefox, pageViewport);
+          const probe = await takeBasicShapesProbe(
+            page,
+            fullPage,
+            gateCanvasGpu,
+            pageViewport,
+            beforeSampleResults,
+            blueDeadlineAtMs,
+          );
           const { capture, documentClip: currentDocumentClip, captureClip: currentCaptureClip } =
             probe;
-          const state = probe.state ?? { unavailable: "capture unusable before state read" };
+          const state = probe.state ?? { unavailable: "post-capture state unavailable" };
           screenshotTimeouts += capture.timedOutCaptures;
           const shotFromPriorAttempt = capture.png.length === 0
             && (lastProbe?.shot.length ?? 0) > 0;
@@ -1796,6 +1920,7 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
           lastBluePixels = bounds?.pixels ?? 0;
           lastProbe = {
             shot,
+            preGateState: probe.preGateState,
             state,
             documentClip: currentDocumentClip,
             captureClip: currentCaptureClip,
@@ -1820,13 +1945,16 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
             captureClip = currentCaptureClip;
             baselinePng = shot;
             blueRect = bounds;
+            if (performance.now() >= blueDeadlineAtMs) {
+              throw new Error("Basic Shapes blue-pixel acceptance exceeded the deadline");
+            }
             return lastBluePixels;
           }
           return 0;
         },
         {
           message: "expected the presented render pane to show the Basic Shapes blue rectangle",
-          timeout: scaledMs(5_000),
+          timeout: Math.max(1, blueDeadlineAtMs - performance.now()),
           // Gecko's first WebGPU screenshot can be empty even after the worker publishes.
           // Closely repeated readbacks starve the next browser composite; leave a frame window.
           intervals: page.context().browser()?.browserType().name() === "firefox"
@@ -1837,7 +1965,7 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
       .toBeGreaterThan(0);
   } finally {
     // Retain the exact scored frame before any failure-only page IPC can stall.
-    await attachLastBasicShapesPng(baselinePng, lastProbe);
+    const scoredImageRetained = await attachLastBasicShapesPng(baselinePng, lastProbe);
     // "No blue" covers three unrelated faults: the worker never produced a
     // result, a result arrived that no app frame carried, or a frame was
     // presented whose pixels this probe window missed. Publish the app's own
@@ -1874,13 +2002,14 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
     const presentationState = presentationRead ?? { unavailable: "presentation state unavailable" };
     // These probes run only after the scored screenshot failed. The WGPU readback samples the
     // next raw host frame before the canvas probe compares that frame with a later forced wake.
+    const failedScoredImageRetained = baselinePng === null && scoredImageRetained;
     const gpuReadbackDiagnosis = await diagnosePostFailureGpuReadback(
       page,
-      baselinePng === null,
+      failedScoredImageRetained,
     );
     const canvasDiagnosis = await diagnoseCanvasAfterState(
       page,
-      baselinePng === null,
+      failedScoredImageRetained,
       presentationRead !== null,
     );
     if (baselinePng === null && lastProbe !== null) {
@@ -1894,7 +2023,8 @@ async function openBasicShapes(page: Page, captureSentinelExpected = false): Pro
           "open-basic-shapes-last-probe-state",
           JSON.stringify(
             {
-              state: lastProbe.state,
+              preGateState: lastProbe.preGateState,
+              postCaptureState: lastProbe.state,
               previousProbePostCaptureDom: lastProbe.previousProbePostCaptureDom,
               currentProbePostCaptureDom: lastProbe.currentProbePostCaptureDom,
               documentClip: lastProbe.documentClip,
