@@ -476,19 +476,19 @@ def verify_receipts(receipts: list[dict[str, Any]]) -> None:
 
 
 def main() -> int:
-    parser = SafeArgumentParser(prog="configured_rust_closure.py", description=__doc__)
-    sub = parser.add_subparsers(dest="action", required=True)
-    scan = sub.add_parser("scan")
-    scan.add_argument("--platform", choices=("linux", "macos"), required=True)
-    scan.add_argument("--bazel", default="bazel",
-                      help="Bazel executable and optional startup arguments (no shell evaluation)")
-    scan.add_argument("--bazel-option", action="append", default=[],
-                      help="Build/cquery option matching the owning CI lane; repeat as needed")
-    scan.add_argument("--output", type=Path, required=True)
-    aggregate = sub.add_parser("aggregate")
-    aggregate.add_argument("receipts", nargs="+", type=Path)
-    args = parser.parse_args()
     try:
+        parser = SafeArgumentParser(prog="configured_rust_closure.py", description=__doc__)
+        sub = parser.add_subparsers(dest="action", required=True)
+        scan = sub.add_parser("scan")
+        scan.add_argument("--platform", choices=("linux", "macos"), required=True)
+        scan.add_argument("--bazel", default="bazel",
+                          help="Bazel executable and optional startup arguments (no shell evaluation)")
+        scan.add_argument("--bazel-option", action="append", default=[],
+                          help="Build/cquery option matching the owning CI lane; repeat as needed")
+        scan.add_argument("--output", type=Path, required=True)
+        aggregate = sub.add_parser("aggregate")
+        aggregate.add_argument("receipts", nargs="+", type=Path)
+        args = parser.parse_args()
         if args.action == "scan":
             result = platform_receipt(args.platform, args.bazel, tuple(args.bazel_option))
             args.output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
