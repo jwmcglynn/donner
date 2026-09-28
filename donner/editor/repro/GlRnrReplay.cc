@@ -493,6 +493,21 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
     return SetError(error, "failed to read .rnr file: " + options.rnrPath.string());
   }
 
+  if (options.workerDocumentAccessHoldStartFrame >= 0) {
+    const auto containsFrame = [&](int index) {
+      return std::ranges::any_of(repro->frames, [index](const ReproFrame& frame) {
+        return frame.index == static_cast<std::uint64_t>(index);
+      });
+    };
+    if (!containsFrame(options.workerDocumentAccessHoldStartFrame) ||
+        !containsFrame(options.workerDocumentAccessHoldEndFrame) ||
+        (options.maxFrame.has_value() &&
+         static_cast<std::uint64_t>(options.workerDocumentAccessHoldEndFrame) >
+             *options.maxFrame)) {
+      return SetError(error, "document-access hold must start and end within the replayed frames");
+    }
+  }
+
   const std::optional<ReproSvgInput> svgInput = LoadReproSvgInput(options, repro->metadata, error);
   if (!svgInput.has_value()) {
     return false;
@@ -614,6 +629,12 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
                                                               std::chrono::seconds(30))) {
         return SetError(error, "worker did not finish after releasing document-access hold");
       }
+    }
+    if (options.workerDocumentAccessHoldStartFrame >= 0 &&
+        frame.index < static_cast<std::uint64_t>(options.workerDocumentAccessHoldStartFrame) &&
+        !replayRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                            std::chrono::seconds(30))) {
+      return SetError(error, "worker did not settle before document-access hold");
     }
     if (!WaitForReplayWorkerBeforeFrame(options, shell, frame, error)) {
       return false;

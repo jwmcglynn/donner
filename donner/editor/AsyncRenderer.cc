@@ -975,6 +975,13 @@ bool AsyncRenderer::finishCancelledBeforeRender(std::unique_lock<std::mutex>& lo
   return true;
 }
 
+void AsyncRenderer::waitForReplayDocumentAccess(std::unique_lock<std::mutex>& lock) {
+  cv_.wait(lock, [this] {
+    return !replayDocumentAccessBlockedForTesting_.load(std::memory_order_acquire) ||
+           !std::holds_alternative<RenderingState>(workerState_);
+  });
+}
+
 void AsyncRenderer::workerLoop() {
 #if defined(__EMSCRIPTEN__)
   // Emscripten's WebGPU object table is per-worker. Construct and use the
@@ -994,6 +1001,7 @@ void AsyncRenderer::workerLoop() {
       if (!waitForRenderOrIdleMaintenance(lock)) {
         continue;  // A mailbox wake or completion timer needs maintenance, not a render.
       }
+      waitForReplayDocumentAccess(lock);
       if (std::holds_alternative<ShutdownState>(workerState_)) {
 #ifdef __EMSCRIPTEN__
         // `workerRenderer` is destroyed here in Emscripten builds, i.e. on
@@ -1212,16 +1220,6 @@ void AsyncRenderer::workerLoop() {
     // acquire a SingleThreaded guard while the worker concurrently changes the mode. The worker
     // holds a write guard across document-reading work and releases it via releaseDocumentAccess()
     // before every mutex_ section below to avoid a lock-order inversion.
-    if (replayDocumentAccessBlockedForTesting_.load(std::memory_order_acquire)) {
-      std::unique_lock<std::mutex> lock(mutex_);
-      cv_.wait(lock, [this] {
-        return !replayDocumentAccessBlockedForTesting_.load(std::memory_order_acquire) ||
-               std::holds_alternative<ShutdownState>(workerState_);
-      });
-      if (std::holds_alternative<ShutdownState>(workerState_)) {
-        return;
-      }
-    }
     std::optional<svg::DocumentWriteAccess> documentAccess;
     documentAccess.emplace(requestDocument.writeAccess());
     const auto releaseDocumentAccess = [&]() { documentAccess.reset(); };

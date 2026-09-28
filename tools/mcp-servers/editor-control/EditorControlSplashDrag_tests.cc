@@ -10,6 +10,7 @@
 #include <string>
 #include <utility>
 
+#include "donner/base/tests/ScopedEnvironmentVariable.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/repro/GlRnrReplay.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -73,6 +74,39 @@ std::filesystem::path WriteSplashDragReplay(const std::filesystem::path& outputD
   }
   const std::filesystem::path rnrPath = outputDir / "splash_first_drag.rnr";
   return repro::WriteReproFile(rnrPath, replay) ? rnrPath : std::filesystem::path();
+}
+
+TEST(EditorControlSessionTest, RejectsIncompleteWorkerDocumentHoldRange) {
+  for (const auto& range : {std::pair{16, -1}, std::pair{-1, 23}, std::pair{23, 16},
+                            std::pair{16, 16}, std::pair{-2, -2}}) {
+    for (const char* runner : {"in_process", "bazel_run"}) {
+      ScopedEnvironmentVariable mode("DONNER_EDITOR_CONTROL_GL_READBACK_RUNNER", runner);
+      EditorControlSession session;
+      const ToolCallResult result = session.handleToolCall(
+          "replay_rnr", nlohmann::json{{"rnr_path", "missing.rnr"},
+                                       {"gl_readback", true},
+                                       {"gl_capture_frame", 30},
+                                       {"gl_worker_document_hold_start_frame", range.first},
+                                       {"gl_worker_document_hold_end_frame", range.second}});
+      EXPECT_THAT(result.isError, testing::IsTrue());
+      EXPECT_THAT(result.body.value("error", ""), testing::HasSubstr("increasing frame range"));
+    }
+  }
+}
+
+TEST(EditorControlSessionTest, RejectsWorkerDocumentHoldOutsideReplayedFrames) {
+  const std::filesystem::path outputDir = TestTempDir();
+  const std::filesystem::path rnrPath = WriteSplashDragReplay(outputDir);
+  ASSERT_THAT(rnrPath.empty(), testing::IsFalse());
+  EditorControlSession session;
+  const ToolCallResult result = session.handleToolCall(
+      "replay_rnr", nlohmann::json{{"rnr_path", rnrPath.string()},
+                                   {"gl_readback", true},
+                                   {"gl_capture_frame", 20},
+                                   {"gl_worker_document_hold_start_frame", 16},
+                                   {"gl_worker_document_hold_end_frame", 23}});
+  EXPECT_THAT(result.isError, testing::IsTrue());
+  EXPECT_THAT(result.body.value("error", ""), testing::HasSubstr("within the replayed frames"));
 }
 
 TEST(EditorControlSessionTest, SplashFirstDragCapture) {
@@ -154,6 +188,13 @@ TEST(EditorControlSessionTest, SplashFirstDragFrameTransforms) {
   }
   std::ofstream(outputDir / "splash_frame_diagnostics.json") << frames.dump(2);
   EXPECT_GT(checkedFrames, 0);
+  ASSERT_THAT(result.frameDiagnostics, testing::Not(testing::IsEmpty()));
+  const auto& finalFrame = result.frameDiagnostics.back();
+  ASSERT_THAT(finalFrame.activeDragPreview, testing::Ne(std::nullopt));
+  EXPECT_THAT(finalFrame.activeDragPreview->translation, testing::Eq(Vector2d(-80.0, -65.0)));
+  EXPECT_THAT(finalFrame.frameCost.overlay.representedDragTranslationDoc,
+              testing::Eq(Vector2d(-80.0, -65.0)));
+  EXPECT_GT(finalFrame.documentFrameVersion, result.frameDiagnostics.front().documentFrameVersion);
 }
 
 }  // namespace
