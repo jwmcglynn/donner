@@ -173,9 +173,8 @@ class CoverageScriptTest(unittest.TestCase):
                 "FIXTURE_STATUS": str(status),
                 "FIXTURE_REPORT": str(int(report)),
                 "FIXTURE_PRIVATE_ERROR": (
-                    "ERROR: io.grpc.StatusRuntimeException: UNAVAILABLE: "
-                    "grpc://private.example/secret /runner/path token=secret "
-                    "Failed to download remote output"
+                    "ERROR: NOT_FOUND: Error while downloading artifact with digest "
+                    "'abc/72' grpc://private.example/secret /runner/path token=secret"
                     if remote_failure else ""
                 ),
                 "DONNER_BAZEL": str(fake_bazel),
@@ -245,7 +244,7 @@ class CoverageScriptTest(unittest.TestCase):
             self.assertEqual(summary["processExitCode"], 34)
             self.assertEqual(summary["failureCode"], "TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE")
             self.assertEqual(summary["remoteLogObservations"],
-                             ["DOWNLOAD_FAILURE", "GRPC_UNAVAILABLE"])
+                             ["DOWNLOAD_FAILURE", "GRPC_NOT_FOUND"])
             self.assertNotIn("secret", json.dumps(summary))
             self.assertEqual(list(summary_path.parent.glob(".failure-summary.*")), [])
             self.assertIn("token=secret", (root / "coverage-report/bazel_coverage.log").read_text())

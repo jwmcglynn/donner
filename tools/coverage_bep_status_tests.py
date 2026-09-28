@@ -278,6 +278,14 @@ class ClassifyTest(unittest.TestCase):
             (b"ERROR: failed to upload ", "UPLOAD_FAILURE"),
             (b"ERROR: failed to download ", "DOWNLOAD_FAILURE"),
             (b"ERROR: BulkTransferException ", "BULK_TRANSFER_FAILURE"),
+            # Bazel 8.8 ByteStreamUploader and BulkTransferException formatter shapes.
+            (b"ERROR: Error while uploading artifact with digest 'abc/72' ",
+             "UPLOAD_FAILURE"),
+            (b"ERROR: 181 errors during bulk transfer: ", "BULK_TRANSFER_FAILURE"),
+            (b"ERROR: Error while downloading artifact with digest 'abc/72' ",
+             "DOWNLOAD_FAILURE"),
+            (b"ERROR: NOT_FOUND: Missing digest: abc/72 ", "GRPC_NOT_FOUND"),
+            (b"ERROR: UNAVAILABLE: remote request failed ", "GRPC_UNAVAILABLE"),
         )
         with tempfile.TemporaryDirectory() as directory:
             raw = Path(directory) / "bazel_coverage.log"
