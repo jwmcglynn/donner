@@ -740,6 +740,25 @@ TEST(Path, DistantCurvesDoNotHideLaterFillAndStrokeHits) {
   EXPECT_THAT(path.isOnPath({2001.0, 2000.0}, 0.001), testing::Eq(true));
 }
 
+TEST(Path, CubicBoundsPreserveEndpointTolerance) {
+  const Path path =
+      PathBuilder().moveTo({0.0, 0.0}).curveTo({1.0, 0.0}, {1.0, 1.0}, {0.0, 1.0}).build();
+  EXPECT_THAT(path.isOnPath({-0.1, 0.0}, 0.1), testing::Eq(true));
+  EXPECT_THAT(path.isOnPath({-0.1001, 0.0}, 0.1), testing::Eq(false));
+}
+
+TEST(Path, CubicHullRightOfQueryStillContributesWinding) {
+  const Path path = PathBuilder()
+                        .moveTo({0.0, 0.0})
+                        .curveTo({1.0, 0.0}, {1.0, 1.0}, {0.0, 1.0})
+                        .lineTo({-1.0, 1.0})
+                        .lineTo({-1.0, 0.0})
+                        .closePath()
+                        .build();
+  EXPECT_THAT(path.isInside({-0.5, 0.5}, FillRule::NonZero), testing::Eq(true));
+  EXPECT_THAT(path.isInside({-0.5, 0.5}, FillRule::EvenOdd), testing::Eq(true));
+}
+
 TEST(Path, CallerBoundedMeasurementPreservesResultsAndFailsAtOneUnitUnder) {
   const Path path =
       PathBuilder().moveTo({0.0, 0.0}).curveTo({0.0, 1.0}, {1.0, 0.0}, {1.0, 1.0}).build();
