@@ -453,6 +453,33 @@ TEST(ViewportStateTest, FractionalZoomSelectedPrewarmPreservesFullyCoveredAxis) 
   }
 }
 
+TEST(ViewportStateTest, SelectedPrewarmContainsVisibleRasterAcrossDocumentEdges) {
+  for (const double zoom : {1.5, 1.8, 2.6}) {
+    for (const bool transpose : {false, true}) {
+      SCOPED_TRACE(zoom);
+      SCOPED_TRACE(transpose ? "portrait" : "landscape");
+      const auto orient = [transpose](Vector2d value) {
+        return transpose ? Vector2d(value.y, value.x) : value;
+      };
+      ViewportState viewport = MakeFreshState(
+          orient(Vector2d(40.0, 8.0)), orient(Vector2d(1025.0, 884.0)),
+          Box2d(orient(Vector2d(100.0, 200.0)), orient(Vector2d(992.0, 712.0))), 2.0);
+      viewport.zoom = zoom;
+      viewport.panDocPoint = orient(Vector2d(402.0, 590.0));
+      viewport.panScreenPoint = orient(Vector2d(550.0, 440.0));
+      const EditorRasterViewport base = viewport.rasterViewport();
+      const EditorRasterViewport padded = viewport.selectedPrewarmRasterViewport();
+      constexpr double kArithmeticTolerance = 1e-9;
+      EXPECT_LE(padded.documentRect.topLeft.x, base.documentRect.topLeft.x + kArithmeticTolerance);
+      EXPECT_LE(padded.documentRect.topLeft.y, base.documentRect.topLeft.y + kArithmeticTolerance);
+      EXPECT_GE(padded.documentRect.bottomRight.x,
+                base.documentRect.bottomRight.x - kArithmeticTolerance);
+      EXPECT_GE(padded.documentRect.bottomRight.y,
+                base.documentRect.bottomRight.y - kArithmeticTolerance);
+    }
+  }
+}
+
 TEST(ViewportStateTest, SelectedPrewarmAtRasterLimitKeepsPannedCoverage) {
   ViewportState viewport = MakeFreshState(Vector2d::Zero(), Vector2d(3000.0, 600.0),
                                           Box2d::FromXYWH(0.0, 0.0, 5000.0, 1000.0), 2.0);
