@@ -1072,8 +1072,10 @@ jobs:
           COVERAGE_SELECTION_PATTERNS: ${{ needs.determine-targets.outputs.targets }}
         run: |
           set -euo pipefail
-          export DONNER_CI_DIAGNOSTICS_DIR="$RUNNER_TEMP/donner-ci-diagnostics"
+          export DONNER_CI_DIAGNOSTICS_DIR
+          DONNER_CI_DIAGNOSTICS_DIR="$(mktemp -d "$RUNNER_TEMP/donner-ci-diagnostics.XXXXXX")"
           echo "DONNER_CI_DIAGNOSTICS_DIR=$DONNER_CI_DIAGNOSTICS_DIR" >> "$GITHUB_ENV"
+          echo "diagnostics_dir=$DONNER_CI_DIAGNOSTICS_DIR" >> "$GITHUB_OUTPUT"
           read -r -a TARGETS <<< "$COVERAGE_SELECTION_PATTERNS"
           if ! mapped_targets="$(python3 tools/ci_remote_gpu_targets.py "${TARGETS[@]}")"; then
             echo "::error::Failed to select remote GPU coverage targets."
@@ -1141,16 +1143,26 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - id: check_coverage_diagnostics
+        name: Check coverage diagnostics
+        if: always() && steps.coverage.outputs.diagnostics_dir != ''
+        shell: bash
+        run: |
+          if python3 tools/coverage_bep_status.py --validate-diagnostics \
+              "${{ steps.coverage.outputs.diagnostics_dir }}/coverage"; then
+            echo "safe=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload coverage diagnostics
-        if: always()
+        if: always() && steps.check_coverage_diagnostics.outputs.safe == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: ci-diagnostics-${{ github.job }}-${{ github.run_attempt }}
           # Raw BEP, profiles, and coverage logs can carry runner filesystem
           # paths. Retain only numeric timing and allowlisted failure fields.
           path: |
-            ${{ runner.temp }}/donner-ci-diagnostics/coverage/timing.txt
-            ${{ runner.temp }}/donner-ci-diagnostics/coverage/failure-summary.json
+            ${{ steps.coverage.outputs.diagnostics_dir }}/coverage/timing.txt
+            ${{ steps.coverage.outputs.diagnostics_dir }}/coverage/failure-summary.json
           retention-days: 3
           if-no-files-found: ignore
 

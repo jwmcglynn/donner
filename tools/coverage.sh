@@ -359,8 +359,18 @@ fi
   # capture the inner `bazel coverage` profile + BEP there and record phase
   # wall times, so slow coverage runs are attributable from artifacts alone.
   DIAG_FLAGS=()
+  COVERAGE_TIMING_FILE=""
   if [ -n "${DONNER_CI_DIAGNOSTICS_DIR:-}" ]; then
     mkdir -p "$DONNER_CI_DIAGNOSTICS_DIR/coverage"
+    local_timing="$DONNER_CI_DIAGNOSTICS_DIR/coverage/timing.txt"
+    if [[ -e "$local_timing" || -L "$local_timing" ]]; then
+      rm -f -- "$local_timing" >/dev/null 2>&1 || true
+    fi
+    if [[ ! -e "$local_timing" && ! -L "$local_timing" ]]; then
+      if { : > "$local_timing"; } 2>/dev/null; then
+        COVERAGE_TIMING_FILE="$local_timing"
+      fi
+    fi
     DIAG_FLAGS=(
       --profile="$DONNER_CI_DIAGNOSTICS_DIR/coverage/profile.gz"
     )
@@ -405,19 +415,31 @@ fi
     if [[ -n "${DONNER_CI_DIAGNOSTICS_DIR:-}" ]]; then
       local summary="$DONNER_CI_DIAGNOSTICS_DIR/coverage/failure-summary.json"
       local temporary
+      # Never let mv treat an existing directory as a destination. A fresh CI
+      # diagnostics directory also keeps both uploaded files isolated per run.
+      if [[ -d "$summary" ]]; then
+        return 0
+      fi
+      if [[ -e "$summary" || -L "$summary" ]]; then
+        rm -f -- "$summary" >/dev/null 2>&1 || return 0
+      fi
       if temporary="$(mktemp "${summary}.XXXXXX" 2>/dev/null)"; then
         if { printf '%s\n' "$context" > "$temporary"; } 2>/dev/null &&
-            mv -f "$temporary" "$summary" >/dev/null 2>&1; then
+            python3 -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' \
+              "$temporary" "$summary" >/dev/null 2>&1; then
           :
         else
-          rm -f "$temporary" >/dev/null 2>&1 || true
+          rm -f -- "$temporary" >/dev/null 2>&1 || true
         fi
       fi
     fi
   }
   phase_mark() {
-    if [ -n "${DONNER_CI_DIAGNOSTICS_DIR:-}" ]; then
-      echo "$1=$(date +%s)" >> "$DONNER_CI_DIAGNOSTICS_DIR/coverage/timing.txt"
+    if [[ -n "$COVERAGE_TIMING_FILE" ]]; then
+      if ! { printf '%s=%s\n' "$1" "$(date +%s)" >> "$COVERAGE_TIMING_FILE"; } \
+          2>/dev/null; then
+        COVERAGE_TIMING_FILE=""
+      fi
     fi
   }
   phase_mark start

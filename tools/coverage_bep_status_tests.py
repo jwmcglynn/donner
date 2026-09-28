@@ -127,6 +127,8 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(status.failure_context([], 34)["bepStatus"], "missing")
         self.assertEqual(status.failure_context(["{private invalid json"], 34)["bepStatus"],
                          "malformed")
+        deep_json = "[" * 2000 + "0" + "]" * 2000
+        self.assertEqual(status.failure_context([deep_json], 34)["bepStatus"], "malformed")
         finished = json.dumps({
             "id": {"finished": {}},
             "finished": {"exitCode": {"code": 34, "name": "REMOTE_ERROR"}},
@@ -160,6 +162,29 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(missing["processExitCode"], 34)
         self.assertNotIn("private", stdout.getvalue())
         self.assertNotIn("secret", stdout.getvalue())
+
+    def test_diagnostic_upload_gate_rejects_stale_types_and_unsafe_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            timing = root / "timing.txt"
+            summary = root / "failure-summary.json"
+            timing.write_text("start=100\nbazel_coverage_done=200\n")
+            self.assertTrue(status.validate_diagnostics(root))
+            summary.write_text(json.dumps(status.failure_context([], 34)))
+            self.assertTrue(status.validate_diagnostics(root))
+            summary.write_text('{"privatePath":"/runner/token=secret"}')
+            self.assertFalse(status.validate_diagnostics(root))
+            summary.unlink()
+            summary.mkdir()
+            (summary / "raw.log").write_text("token=secret")
+            self.assertFalse(status.validate_diagnostics(root))
+            summary.rename(root / "retained")
+            timing.write_text("token=secret\n")
+            self.assertFalse(status.validate_diagnostics(root))
+            timing.unlink()
+            timing.mkdir()
+            (timing / "raw.log").write_text("token=secret")
+            self.assertFalse(status.validate_diagnostics(root))
 
     def test_allowlisted_cases_emit_only_validated_identifiers(self):
         golden = "//donner/svg/renderer/tests:renderer_geode_golden_tests"
