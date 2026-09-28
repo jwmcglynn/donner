@@ -7709,10 +7709,12 @@ bool EditorShell::flushInteractiveDragMutationAndRequestRender() {
     return false;
   }
 
-  // A worker can remain busy after SVG traversal while it packages or presents the completed
-  // frame. Never block the browser UI thread on that phase. Let the worker finish: repeatedly
-  // cancelling a >pointer-interval render can starve an unpromotable drag of every held frame.
-  // The latest queued transform flushes on the completion wake.
+  // A queued render already owns this DOM version, even before it acquires the document lock.
+  if (renderCoordinator_.asyncRenderer().isBusy()) {
+    window_.wakeEventLoop();
+    return false;
+  }
+
   std::optional<svg::DocumentWriteAccess> documentAccess =
       app_.document().document().tryWriteAccess();
   if (!documentAccess.has_value()) {
