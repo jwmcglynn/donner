@@ -103,7 +103,7 @@ class CoverageScriptTest(unittest.TestCase):
                 xml_path.write_text(geode_xml, encoding="utf-8")
         if remote_failure:
             events.append({
-                "id": {"finished": {}},
+                "id": {"buildFinished": {}},
                 "finished": {
                     "exitCode": {"code": 34, "name": "REMOTE_ERROR"},
                     "failureDetail": {

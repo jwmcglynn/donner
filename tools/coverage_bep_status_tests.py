@@ -68,7 +68,7 @@ class ClassifyTest(unittest.TestCase):
     def test_exit34_without_failed_labels_keeps_structured_remote_detail(self):
         events = [
             json.dumps({
-                "id": {"finished": {}},
+                "id": {"buildFinished": {}},
                 "finished": {
                     "exitCode": {"code": 34, "name": "REMOTE_ERROR"},
                     "failureDetail": {
@@ -102,7 +102,7 @@ class ClassifyTest(unittest.TestCase):
 
     def test_failure_context_accepts_only_pinned_spawn_code_and_never_raw_fields(self):
         event = json.dumps({
-            "id": {"finished": {}},
+            "id": {"buildFinished": {}},
             "finished": {
                 "exitCode": {"code": 34, "name": "REMOTE_ERROR"},
                 "failureDetail": {
@@ -130,7 +130,7 @@ class ClassifyTest(unittest.TestCase):
         deep_json = "[" * 2000 + "0" + "]" * 2000
         self.assertEqual(status.failure_context([deep_json], 34)["bepStatus"], "malformed")
         finished = json.dumps({
-            "id": {"finished": {}},
+            "id": {"buildFinished": {}},
             "finished": {"exitCode": {"code": 34, "name": "REMOTE_ERROR"}},
         })
         mismatch = status.failure_context([finished], 3)
@@ -139,6 +139,31 @@ class ClassifyTest(unittest.TestCase):
         duplicate = status.failure_context([finished, finished], 34)
         self.assertEqual(duplicate["bepStatus"], "malformed")
         self.assertEqual(duplicate["failureCode"], "unavailable")
+
+    def test_real_build_finished_success_omits_proto_default_zero(self):
+        # Bazel 8.8 BEP JSON writes id.buildFinished + payload.finished.
+        # The protobuf JSON encoder omits ExitCode.code for SUCCESS (zero).
+        event = json.dumps({
+            "id": {"buildFinished": {}},
+            "finished": {
+                "overallSuccess": True,
+                "exitCode": {"name": "SUCCESS"},
+            },
+        })
+        result = status.failure_context([event], 0)
+        self.assertEqual(result["bepStatus"], "finished")
+        self.assertEqual(result["bepExitCode"], "SUCCESS")
+        self.assertEqual(result["failureCode"], "unavailable")
+        self.assertEqual(status.failure_context([event], 34)["bepStatus"], "mismatch")
+
+    def test_terminal_payload_with_wrong_id_does_not_claim_bep_completion(self):
+        wrong_id = json.dumps({
+            "id": {"finished": {}},
+            "finished": {"exitCode": {"code": 34, "name": "REMOTE_ERROR"}},
+        })
+        result = status.failure_context([wrong_id], 34)
+        self.assertEqual(result["bepStatus"], "missing")
+        self.assertEqual(result["bepExitCode"], "unavailable")
 
     def test_failure_context_bad_schema_and_missing_private_file_do_not_leak(self):
         malformed_reason = json.dumps({
