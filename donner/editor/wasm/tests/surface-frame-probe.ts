@@ -443,12 +443,15 @@ export async function selfCheckSurfaceFrameProbe(
 // Control only the completion signal already returned to the app. Used by a
 // browser regression to prove CPU-published sample state cannot bypass the
 // screenshot's GPU gate. No queue work is added or delayed on ordinary paths.
-export async function holdCanvasCompletionForTest(page: Page): Promise<{
+export async function holdCanvasCompletionForTest(
+  page: Page,
+  workersForTest?: Worker[],
+): Promise<{
   observedCalls: () => Promise<number>;
   enteredWaits: () => Promise<number>;
-  release: () => Promise<void>;
+  release: (owner: Worker) => Promise<void>;
 }> {
-  const workers = probedWorkers.get(page) ?? [];
+  const workers = workersForTest ?? probedWorkers.get(page) ?? [];
   const armed = await evaluateInWorkers(workers, () => {
     const scope = globalThis as ProbeGlobal;
     let release!: () => void;
@@ -476,15 +479,21 @@ export async function holdCanvasCompletionForTest(page: Page): Promise<{
       );
       return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0);
     },
-    release: async () => {
-      const released = await evaluateInWorkers(workers, () => {
+    release: async (owner) => {
+      if (!workers.includes(owner)) {
+        throw new Error("canvas completion owner was not armed");
+      }
+      // Only the worker that actually submitted the editor canvas can hold
+      // the promise the screenshot awaits. Other probed workers may park and
+      // stop answering evaluations; their response is not a release proof.
+      const [released] = await evaluateInWorkers([owner], () => {
         const scope = globalThis as ProbeGlobal;
         scope.__donnerSurfaceFrameProbeCompletionHold?.release();
         delete scope.__donnerSurfaceFrameProbeCompletionHold;
         return true;
       });
-      if (released.some((result) => result !== true)) {
-        throw new Error("could not release the canvas completion hold");
+      if (released !== true) {
+        throw new Error("could not release the required canvas completion owner");
       }
     },
   };

@@ -1574,10 +1574,12 @@ async function captureReadyBasicShapesFrame<T>(
   beforeSample: number,
   deadlineAtMs: number,
   capture: (remainingMs: number) => Promise<T>,
+  onOwner?: (owner: Worker) => void,
 ): Promise<T | null> {
   if (!hasPresentedBasicShapesHostFrame(state, beforeSample)) return null;
   const owner = await awaitBeforeBlueDeadline(findCanvasOwnerWorker(page), deadlineAtMs);
   if (owner === null) return null;
+  onOwner?.(owner);
   return captureAfterCanvasGpuCompletion(owner, deadlineAtMs, capture);
 }
 
@@ -1586,6 +1588,9 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
   const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
   expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
   const hold = await holdCanvasCompletionForTest(page);
+  let requiredOwner: Worker | null = null;
+  let releaseSucceeded = false;
+  let primaryError: unknown = null;
   try {
     const canvas = page.locator("canvas#canvas");
     const bounds = await canvas.boundingBox();
@@ -1624,6 +1629,9 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
         ++screenshots;
         return captureEditorPage(page, remainingMs);
       },
+      (owner) => {
+        requiredOwner = owner;
+      },
     ).finally(() => {
       settled = true;
     });
@@ -1634,7 +1642,10 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
     }).toBe(true);
     expect(screenshots).toBe(0);
     expect(settled).toBe(false);
-    await hold.release();
+    expect(requiredOwner).not.toBeNull();
+    if (requiredOwner === null) throw new Error("the held canvas owner was not identified");
+    await hold.release(requiredOwner);
+    releaseSucceeded = true;
     const capture = await gatedCapture;
     expect(capture).not.toBeNull();
     if (capture === null) return;
@@ -1675,9 +1686,56 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
       ),
     ).toBeNull();
     expect(staleCaptures).toBe(0);
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    await hold.release();
+    if (!releaseSucceeded && requiredOwner !== null) {
+      try {
+        await hold.release(requiredOwner);
+      } catch (cleanupError) {
+        if (primaryError !== null) {
+          throw new AggregateError([primaryError, cleanupError], "capture and hold cleanup failed");
+        }
+        throw cleanupError;
+      }
+    }
   }
+  // A parked secondary worker must not turn a successful owner release into
+  // a failure, while an unresponsive required owner must still fail closed.
+  let ownerEvaluations = 0;
+  let parkedEvaluations = 0;
+  const syntheticOwner = {
+    evaluate: async () => {
+      ++ownerEvaluations;
+      return true;
+    },
+  } as unknown as Worker;
+  const parkedSecondary = {
+    evaluate: async () => {
+      ++parkedEvaluations;
+      return parkedEvaluations === 1 ? true : new Promise<never>(() => {});
+    },
+  } as unknown as Worker;
+  const syntheticHold = await holdCanvasCompletionForTest(page, [
+    syntheticOwner,
+    parkedSecondary,
+  ]);
+  await syntheticHold.release(syntheticOwner);
+  await syntheticHold.release(syntheticOwner);
+  expect(ownerEvaluations).toBe(3);
+  expect(parkedEvaluations).toBe(1);
+  let requiredEvaluations = 0;
+  const unavailableOwner = {
+    evaluate: async () => {
+      ++requiredEvaluations;
+      if (requiredEvaluations === 1) return true;
+      throw new Error("required owner unavailable");
+    },
+  } as unknown as Worker;
+  const requiredHold = await holdCanvasCompletionForTest(page, [unavailableOwner]);
+  await expect(requiredHold.release(unavailableOwner))
+    .rejects.toThrow("could not release the required canvas completion owner");
   let forbiddenCaptures = 0;
   const noCapture = async () => {
     ++forbiddenCaptures;
