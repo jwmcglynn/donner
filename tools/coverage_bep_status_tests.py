@@ -96,6 +96,7 @@ class ClassifyTest(unittest.TestCase):
             "failureCategory": "remoteExecution",
             "failureCode": "TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE",
             "abortReasons": ["REMOTE_ENVIRONMENT_FAILURE"],
+            "remoteLogObservations": [],
         })
         self.assertNotIn("private", json.dumps(result))
         self.assertNotIn("secret", json.dumps(result))
@@ -218,6 +219,61 @@ class ClassifyTest(unittest.TestCase):
             timing.mkdir()
             (timing / "raw.log").write_text("token=secret")
             self.assertFalse(status.validate_diagnostics(root))
+
+    def test_remote_error_log_tail_emits_only_fixed_observations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "bazel_coverage.log"
+            raw.write_bytes(
+                b"x" * 70000 + b"\n"
+                b"ERROR: io.grpc.StatusRuntimeException: UNAVAILABLE: "
+                b"grpc://private.example/secret /runner/path token=secret "
+                b"Failed to download remote output\n"
+                b"ERROR: BulkTransferException: digest mismatch "
+                b"host=private.example token=secret\n"
+            )
+            observations = status.remote_log_observations(raw)
+            self.assertEqual(observations, [
+                "BULK_TRANSFER_FAILURE", "DIGEST_MISMATCH", "DOWNLOAD_FAILURE",
+                "GRPC_UNAVAILABLE",
+            ])
+            encoded = json.dumps(observations)
+            for private in ("private.example", "/runner/path", "token=secret"):
+                self.assertNotIn(private, encoded)
+            raw.write_text("ERROR: grpc://private.example/secret token=secret /runner/path\n")
+            self.assertEqual(status.remote_log_observations(raw), [])
+            raw.unlink()
+            raw.symlink_to(root / "secret")
+            self.assertEqual(status.remote_log_observations(raw), [])
+
+    def test_remote_log_cli_is_guarded_by_remote_error_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bep = root / "bep.json"
+            bep.write_text(json.dumps({
+                "id": {"buildFinished": {}},
+                "finished": {"exitCode": {"code": 34, "name": "REMOTE_ERROR"}},
+            }))
+            raw = root / "bazel_coverage.log"
+            raw.write_text("ERROR: rpc error: code = DeadlineExceeded "
+                           "desc = grpc://private.example token=secret\n")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                exit_code = status.main([
+                    "coverage_bep_status.py", "--failure-context", str(bep), "34", str(raw),
+                ])
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertEqual(json.loads(stdout.getvalue())["remoteLogObservations"],
+                             ["GRPC_DEADLINE_EXCEEDED"])
+            self.assertNotIn("private.example", stdout.getvalue())
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(status.main([
+                    "coverage_bep_status.py", "--failure-context", str(bep), "3", str(raw),
+                ]), 0)
+            self.assertEqual(json.loads(stdout.getvalue())["remoteLogObservations"], [])
 
     def test_allowlisted_cases_emit_only_validated_identifiers(self):
         golden = "//donner/svg/renderer/tests:renderer_geode_golden_tests"
