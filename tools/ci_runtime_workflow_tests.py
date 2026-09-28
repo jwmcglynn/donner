@@ -118,6 +118,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             "chromium_remote_smoke", "catalog_font_loading_test",
             "browser_presentation_regression_test", "standalone_geode_browser_renderer_test",
         )
+        metadata = _repository_text("tools/ci/BUILD.bazel")
+        suite = re.search(r'test_suite\(\s+name = "browser_gpu_comparison",.*?\n\)',
+                          metadata, re.DOTALL)
+        self.assertIsNotNone(suite, "browser comparison suite must be declared")
+        for target in targets:
+            self.assertIn("//donner/editor/wasm/tests:" + target, suite.group())
         for mode, jobs in (("serial", 1), ("parallel", 4)):
             name = "Compare browser GPU tests (%s)" % mode
             body = self._step_body(hosted, name)
@@ -127,8 +133,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertIn("--nocache_test_results", body)
             self.assertIn("--local_test_jobs=%d" % jobs, body)
             self.assertIn("$BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS", body)
-            for target in targets:
-                self.assertIn("//donner/editor/wasm/tests:" + target, body)
+            self.assertIn("//tools/ci:browser_gpu_comparison", body)
             artifact = self._step_body(hosted, "Upload browser GPU comparison (%s)" % mode)
             self.assertIn("./.github/actions/upload-bazel-test-artifacts", artifact)
             self.assertIn("browser-gpu-%s-" % mode, artifact)
