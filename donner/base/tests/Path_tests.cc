@@ -723,6 +723,42 @@ TEST(Path, RecursiveGeometryQueriesFailClosedAtAggregateWorkLimit) {
   EXPECT_FALSE(path.isOnPath({2000.0, 2000.0}, 0.001));
 }
 
+TEST(Path, DistantCurvesDoNotHideLaterFillAndStrokeHits) {
+  PathBuilder builder;
+  for (std::size_t i = 0; i < 512; ++i) {
+    builder.moveTo({1000.0, 0.0})
+        .curveTo({1000.0, 552.2847498}, {552.2847498, 1000.0}, {0.0, 1000.0});
+  }
+  builder.moveTo({1999.0, 1999.0})
+      .lineTo({2001.0, 1999.0})
+      .lineTo({2001.0, 2001.0})
+      .lineTo({1999.0, 2001.0})
+      .closePath();
+  const Path path = builder.build();
+
+  EXPECT_THAT(path.isInside({2000.0, 2000.0}), testing::Eq(true));
+  EXPECT_THAT(path.isOnPath({2001.0, 2000.0}, 0.001), testing::Eq(true));
+}
+
+TEST(Path, CubicBoundsPreserveEndpointTolerance) {
+  const Path path =
+      PathBuilder().moveTo({0.0, 0.0}).curveTo({1.0, 0.0}, {1.0, 1.0}, {0.0, 1.0}).build();
+  EXPECT_THAT(path.isOnPath({-0.1, 0.0}, 0.1), testing::Eq(true));
+  EXPECT_THAT(path.isOnPath({-0.1001, 0.0}, 0.1), testing::Eq(false));
+}
+
+TEST(Path, CubicHullRightOfQueryStillContributesWinding) {
+  const Path path = PathBuilder()
+                        .moveTo({0.0, 0.0})
+                        .curveTo({1.0, 0.0}, {1.0, 1.0}, {0.0, 1.0})
+                        .lineTo({-1.0, 1.0})
+                        .lineTo({-1.0, 0.0})
+                        .closePath()
+                        .build();
+  EXPECT_THAT(path.isInside({-0.5, 0.5}, FillRule::NonZero), testing::Eq(true));
+  EXPECT_THAT(path.isInside({-0.5, 0.5}, FillRule::EvenOdd), testing::Eq(true));
+}
+
 TEST(Path, CallerBoundedMeasurementPreservesResultsAndFailsAtOneUnitUnder) {
   const Path path =
       PathBuilder().moveTo({0.0, 0.0}).curveTo({0.0, 1.0}, {1.0, 0.0}, {1.0, 1.0}).build();

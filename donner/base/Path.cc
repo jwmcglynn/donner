@@ -138,6 +138,10 @@ Box2d Path::transformedBounds(const Transform2d& transform) const {
 
 namespace {
 
+bool IsFiniteVector(const Vector2d& value) {
+  return std::isfinite(value.x) && std::isfinite(value.y);
+}
+
 constexpr int kMaximumRoundStrokeSubdivisionSteps = 4096;
 constexpr std::size_t kMaximumStrokeOutputPoints = 1024 * 1024;
 
@@ -836,6 +840,30 @@ int WindingNumberContribution(const Vector2d& p0, const Vector2d& p1, const Vect
   return 0;
 }
 
+/// Conservative control-hull bounds for rejecting a query before subdividing a cubic.
+std::optional<Box2d> CubicQueryBounds(const Vector2d& point,
+                                      const std::array<Vector2d, 4>& controls,
+                                      double padding = 0.0) {
+  if (!IsFiniteVector(point) || !std::isfinite(padding) || padding < 0.0) {
+    return std::nullopt;
+  }
+  Box2d bounds = Box2d::CreateEmpty(controls[0]);
+  for (const Vector2d& control : controls) {
+    if (!IsFiniteVector(control)) {
+      return std::nullopt;
+    }
+    bounds.addPoint(control);
+  }
+  bounds = bounds.inflatedBy(padding);
+  // Round outwards so inflation cannot discard a point at the tolerance boundary.
+  constexpr double kInfinity = std::numeric_limits<double>::infinity();
+  bounds.topLeft.x = std::nextafter(bounds.topLeft.x, -kInfinity);
+  bounds.topLeft.y = std::nextafter(bounds.topLeft.y, -kInfinity);
+  bounds.bottomRight.x = std::nextafter(bounds.bottomRight.x, kInfinity);
+  bounds.bottomRight.y = std::nextafter(bounds.bottomRight.y, kInfinity);
+  return bounds;
+}
+
 /// Recursive winding-number contribution for a cubic Bezier curve.
 std::optional<int> WindingNumberContributionCurve(const Vector2d& p0, const Vector2d& p1,
                                                   const Vector2d& p2, const Vector2d& p3,
@@ -844,6 +872,14 @@ std::optional<int> WindingNumberContributionCurve(const Vector2d& p0, const Vect
                                                   int depth = 0) {
   if (!workBudget.consume()) {
     return std::nullopt;
+  }
+
+  // The positive-x winding ray cannot meet a curve outside its control hull's y-range,
+  // or a curve wholly to its left. Curves to the right can still contribute winding.
+  if (const auto bounds = CubicQueryBounds(point, {p0, p1, p2, p3});
+      bounds && (point.y < bounds->topLeft.y || point.y > bounds->bottomRight.y ||
+                 point.x > bounds->bottomRight.x)) {
+    return 0;
   }
 
   if (IsCurveFlatEnough(p0, p1, p2, p3, tolerance)) {
@@ -880,6 +916,11 @@ std::optional<bool> IsPointOnCubicBezier(const Vector2d& point, const Vector2d& 
                                          int depth = 0) {
   if (!workBudget.consume()) {
     return std::nullopt;
+  }
+
+  if (const auto bounds = CubicQueryBounds(point, {p0, p1, p2, p3}, tolerance);
+      bounds && !bounds->contains(point)) {
+    return false;
   }
 
   if (IsCurveFlatEnough(p0, p1, p2, p3, tolerance)) {
@@ -2938,10 +2979,6 @@ Path BuildStrokeOutline(const Path& originalPath, std::vector<FlatSubpath>& subp
     }
   }
   return builder.build();
-}
-
-bool IsFiniteVector(const Vector2d& value) {
-  return std::isfinite(value.x) && std::isfinite(value.y);
 }
 
 enum class ArcDisposition : uint8_t { NoOp, Line, Cubic };
