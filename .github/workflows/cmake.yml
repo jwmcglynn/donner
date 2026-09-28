@@ -139,7 +139,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     needs: [gatekeeper, validate-generator]
-    # PRs and main already build and test this consumer in the CI Linux closure check.
+    # PRs and main build and test this consumer in the consolidated CI Linux job.
     # Keep standalone branch-push coverage before a PR exists.
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.event_name == 'push' && github.ref != 'refs/heads/main' }}
     env:
