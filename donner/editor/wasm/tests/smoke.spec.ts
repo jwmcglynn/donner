@@ -1590,12 +1590,12 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
   const hold = await holdCanvasCompletionForTest(page);
   let requiredOwner: Worker | null = null;
   let releaseSucceeded = false;
-  let primaryError: unknown = null;
+  const captureErrors: unknown[] = [];
   try {
     const canvas = page.locator("canvas#canvas");
     const bounds = await canvas.boundingBox();
     expect(bounds).not.toBeNull();
-    if (bounds === null) return;
+    if (bounds === null) throw new Error("the canvas bounds are unavailable");
     const before = await page.evaluate(() => ({
       results: window.__donnerWorkerStats?.completedResults ?? 0,
       frames: window.__donnerMainLoopRenderedFrames ?? 0,
@@ -1648,7 +1648,7 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
     releaseSucceeded = true;
     const capture = await gatedCapture;
     expect(capture).not.toBeNull();
-    if (capture === null) return;
+    if (capture === null) throw new Error("the held canvas capture is unavailable");
     expect(capture.usable).toBe(true);
     expect(screenshots).toBe(1);
     const viewport = page.viewportSize();
@@ -1687,19 +1687,19 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
     ).toBeNull();
     expect(staleCaptures).toBe(0);
   } catch (error) {
-    primaryError = error;
-    throw error;
+    captureErrors.push(error);
   } finally {
     if (!releaseSucceeded && requiredOwner !== null) {
       try {
         await hold.release(requiredOwner);
       } catch (cleanupError) {
-        if (primaryError !== null) {
-          throw new AggregateError([primaryError, cleanupError], "capture and hold cleanup failed");
-        }
-        throw cleanupError;
+        captureErrors.push(cleanupError);
       }
     }
+  }
+  if (captureErrors.length === 1) throw captureErrors[0];
+  if (captureErrors.length > 1) {
+    throw new AggregateError(captureErrors, "capture and hold cleanup failed");
   }
   // A parked secondary worker must not turn a successful owner release into
   // a failure, while an unresponsive required owner must still fail closed.
