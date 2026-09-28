@@ -1230,6 +1230,88 @@ jobs:
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
+      - name: Detect browser GPU acquisition failure
+        id: browser_gpu_failure
+        if: ${{ !cancelled() && (steps.test.outcome == 'failure' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:browser-gpu-diagnostics'))) }}
+        shell: bash
+        env:
+          BROWSER_GPU_DIAGNOSTICS_REQUESTED: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:browser-gpu-diagnostics') }}
+        run: |
+          set -euo pipefail
+          should_probe="$BROWSER_GPU_DIAGNOSTICS_REQUESTED"
+          for target in chromium_remote_smoke catalog_font_loading_test browser_presentation_regression_test standalone_geode_browser_renderer_test; do
+            log="bazel-testlogs/donner/editor/wasm/tests/${target}/test.log"
+            if [[ -f "$log" ]] && grep -qF 'stage=selection outcome=deadline_pending' "$log"; then
+              should_probe=true
+            fi
+          done
+          echo "run_probe=$should_probe" >> "$GITHUB_OUTPUT"
+
+      - name: Compare browser GPU tests (serial)
+        id: browser_gpu_serial
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazel_status=0
+          bazelisk test --config=ci --test_output=errors --nocache_test_results \
+            --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=1 --keep_going \
+            --build_event_json_file="${RUNNER_TEMP}/browser-gpu-serial.bep.json" \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            //tools/ci:browser_gpu_comparison || bazel_status=$?
+          report_status=0
+          python3 tools/browser_gpu_test_summary.py \
+            "${RUNNER_TEMP}/browser-gpu-serial.bep.json" \
+            "${RUNNER_TEMP}/browser-gpu-serial-summary.json" || report_status=$?
+          if [[ "$bazel_status" -ne 0 ]]; then exit "$bazel_status"; fi
+          exit "$report_status"
+
+      - name: Upload browser GPU comparison (serial)
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: browser-gpu-serial-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Compare browser GPU tests (parallel)
+        id: browser_gpu_parallel
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazel_status=0
+          bazelisk test --config=ci --test_output=errors --nocache_test_results \
+            --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=4 --keep_going \
+            --build_event_json_file="${RUNNER_TEMP}/browser-gpu-parallel.bep.json" \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            //tools/ci:browser_gpu_comparison || bazel_status=$?
+          report_status=0
+          python3 tools/browser_gpu_test_summary.py \
+            "${RUNNER_TEMP}/browser-gpu-parallel.bep.json" \
+            "${RUNNER_TEMP}/browser-gpu-parallel-summary.json" || report_status=$?
+          if [[ "$bazel_status" -ne 0 ]]; then exit "$bazel_status"; fi
+          exit "$report_status"
+
+      - name: Upload browser GPU comparison (parallel)
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: browser-gpu-parallel-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Upload bounded browser GPU timing summaries
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-gpu-timings-${{ github.job }}
+          path: |
+            ${{ runner.temp }}/browser-gpu-serial-summary.json
+            ${{ runner.temp }}/browser-gpu-parallel-summary.json
+          if-no-files-found: warn
+          retention-days: 14
+
   # Operator's ARM64 macOS runs on the operator's self-hosted runner.
   # Replaces `macos` for trusted operator PRs. Main pushes, Renovate, and
   # non-operator runs stay hosted. The host pre-provisions Bazelisk, Homebrew

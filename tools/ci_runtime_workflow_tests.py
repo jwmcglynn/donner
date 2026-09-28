@@ -106,6 +106,55 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         end = re.search(r"^      - name: ", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
 
+    def test_hosted_browser_comparisons_preserve_the_failed_gate(self):
+        hosted = self._job_body("macos")
+        original = self._step_body(hosted, "Test")
+        self.assertNotIn("continue-on-error", original)
+        original_artifacts = hosted.index("      - name: Upload Bazel test failure artifacts")
+        detection = self._step_body(hosted, "Detect browser GPU acquisition failure")
+        self.assertIn("stage=selection outcome=deadline_pending", detection)
+        self.assertIn("run_probe=$should_probe", detection)
+        self.assertIn("ci:browser-gpu-diagnostics", detection)
+        self.assertIn("BROWSER_GPU_DIAGNOSTICS_REQUESTED:", detection)
+        self.assertIn('should_probe="$BROWSER_GPU_DIAGNOSTICS_REQUESTED"', detection)
+        targets = (
+            "chromium_remote_smoke", "catalog_font_loading_test",
+            "browser_presentation_regression_test", "standalone_geode_browser_renderer_test",
+        )
+        metadata = _repository_text("tools/ci/BUILD.bazel")
+        suite = re.search(r'test_suite\(\s+name = "browser_gpu_comparison",.*?\n\)',
+                          metadata, re.DOTALL)
+        self.assertIsNotNone(suite, "browser comparison suite must be declared")
+        for target in targets:
+            self.assertIn("//donner/editor/wasm/tests:" + target, suite.group())
+        for mode, jobs in (("serial", 1), ("parallel", 4)):
+            name = "Compare browser GPU tests (%s)" % mode
+            body = self._step_body(hosted, name)
+            self.assertGreater(hosted.index("      - name: " + name), original_artifacts)
+            self.assertIn("!cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true'", body)
+            self.assertIn("continue-on-error: true", body)
+            self.assertIn("--nocache_test_results", body)
+            self.assertIn("--local_test_jobs=%d" % jobs, body)
+            self.assertIn("$BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS", body)
+            self.assertIn("//tools/ci:browser_gpu_comparison", body)
+            artifact = self._step_body(hosted, "Upload browser GPU comparison (%s)" % mode)
+            self.assertIn("./.github/actions/upload-bazel-test-artifacts", artifact)
+            self.assertIn("browser-gpu-%s-" % mode, artifact)
+
+    def test_hosted_browser_comparisons_keep_failure_reports_with_errexit(self):
+        hosted = self._job_body("macos")
+        environment = os.environ.copy()
+        environment.update(RUNNER_TEMP=".", BAZEL_MACOS_BUILD_FLAGS="",
+                           BAZEL_MACOS_TEST_FLAGS="")
+        prefix = "bazelisk() { return 3; }; python3() { echo summary-ran; return 0; };\n"
+        for mode in ("serial", "parallel"):
+            body = self._step_body(hosted, "Compare browser GPU tests (%s)" % mode)
+            script = textwrap.dedent(body.split("run: |\n", 1)[1])
+            result = subprocess.run(["/bin/bash", "-e", "-c", prefix + script],
+                                    env=environment, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertIn("summary-ran", result.stdout)
+
     def _heartbeat_script(self):
         match = re.search(
             r"cat > \"\$DIAG_DIR/run_bazel_with_heartbeat\.sh\" <<'EOF'\n"

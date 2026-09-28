@@ -482,3 +482,13 @@ py_test(
     data = ["//:github_action_definitions"],
     deps = ["@rules_python//python/runfiles"],
 )
+
+py_test(
+    name = "browser_gpu_test_summary_tests",
+    size = "small",
+    srcs = [
+        "browser_gpu_test_summary.py",
+        "browser_gpu_test_summary_tests.py",
+    ],
+    main = "browser_gpu_test_summary_tests.py",
+)
