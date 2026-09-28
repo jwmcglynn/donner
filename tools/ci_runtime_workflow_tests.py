@@ -150,6 +150,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn('push:\n    branches: ["main"]', self.editor_wasm)
         self.assertIn("uses: ./.github/actions/cache-bazel-actions", self.editor_wasm)
         self.assertIn("cache: npm", self.editor_wasm)
+        self.assertEqual(1, self.editor_wasm.count("uses: bazel-contrib/setup-bazel@"))
+        self.assertLess(
+            self.editor_wasm.index("uses: bazel-contrib/setup-bazel@"),
+            self.editor_wasm.index("- name: Serve Geode package and run browser suites"),
+        )
 
     def test_linux_cmake_consumer_has_one_pr_and_main_owner(self):
         linux = self.cmake.split("\n  linux:\n", 1)[1].split("\n  macos:\n", 1)[0]
