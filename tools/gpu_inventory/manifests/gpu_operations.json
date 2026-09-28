@@ -39,6 +39,7 @@
     },
     "donner/editor/WholeAppWorkerBridge.cc": {
       "wgpuCFunctions": [
+        "wgpuReadbackOnFailure",
         "wgpuReadbackStats"
       ]
     },
@@ -95,6 +96,28 @@
       "wgpuCFunctions": [
         "wgpuLifetimeBufferCreates",
         "wgpuLifetimeTextureCreates"
+      ]
+    },
+    "donner/gpu/baseline/WgpuBaselineCapture.cc": {
+      "operations": [
+        "createTexture",
+        "finish"
+      ],
+      "wgpuCFunctions": [
+        "wgpuAdapterGetInfo",
+        "wgpuAdapterInfoFreeMembers"
+      ],
+      "wgpuCTypes": [
+        "WGPUAdapterInfo",
+        "WGPUAdapterType_CPU",
+        "WGPUAdapterType_DiscreteGPU",
+        "WGPUAdapterType_IntegratedGPU",
+        "WGPUBackendType_Vulkan",
+        "WGPUStatus_Success",
+        "WGPUStringView"
+      ],
+      "wgpuCppTokens": [
+        "Adapter"
       ]
     },
     "donner/svg/renderer/RendererGeode.cc": {

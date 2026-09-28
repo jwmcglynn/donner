@@ -53,6 +53,22 @@ def parse_provenance(text: str) -> dict[str, str]:
     return values
 
 
+def validate_architecture_provenance(values: dict[str, str]) -> None:
+    """Require a canonical architecture for new captures and identify the old x86 oracle."""
+    schema = values["schemaVersion"]
+    if schema not in ("1", "2"):
+        raise ValueError(f"unsupported capture schema {schema!r}")
+    if values["adapterBackend"] == "Vulkan" and values["adapterType"] == "CPU":
+        if (
+            values["rendererPath"]
+            != "wgpu-native Geode production path (GeodeDevice+GeoEncoder)"
+        ):
+            raise ValueError("software Vulkan pixels need the wgpu-native reference renderer")
+    if schema == "2":
+        if values.get("hostArchitecture") not in ("x86_64", "aarch64"):
+            raise ValueError("schema 2 capture needs a known canonical hostArchitecture")
+
+
 class StructuralCountersTest(unittest.TestCase):
     dump_binary: Path
     committed: Path
@@ -115,6 +131,26 @@ class StructuralCountersTest(unittest.TestCase):
                 self.assertNotEqual(
                     values[key], "", f"{record.parent.name} provenance {key!r} is empty"
                 )
+            validate_architecture_provenance(values)
+
+    def test_new_capture_provenance_requires_a_known_architecture(self) -> None:
+        values = {
+            "schemaVersion": "2",
+            "adapterBackend": "Vulkan",
+            "adapterType": "CPU",
+            "rendererPath": "wgpu-native Geode production path (GeodeDevice+GeoEncoder)",
+        }
+        with self.assertRaisesRegex(ValueError, "hostArchitecture"):
+            validate_architecture_provenance(values)
+        values["hostArchitecture"] = "aarch64"
+        validate_architecture_provenance(values)
+        values["hostArchitecture"] = "unknown"
+        with self.assertRaisesRegex(ValueError, "hostArchitecture"):
+            validate_architecture_provenance(values)
+        values["hostArchitecture"] = "aarch64"
+        values["rendererPath"] = "native Geode production path (GeodeDevice+GeoEncoder)"
+        with self.assertRaisesRegex(ValueError, "reference renderer"):
+            validate_architecture_provenance(values)
 
     def test_every_environment_names_the_revision_it_was_captured_at(self) -> None:
         # A baseline nobody can trace to a revision cannot be re-derived, so it is not an oracle.

@@ -1,15 +1,23 @@
-import { expect, type Page, test, type TestInfo } from "@playwright/test";
+import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import {
+  captureAfterCanvasGpuCompletion,
+  captureReadyBasicShapesFrame,
+  hasPresentedBasicShapesHostFrame,
+} from "./basic-shapes-capture-gate";
+import {
   type CanvasColorStats,
+  captureEditorPage,
   findElementColoredPixel,
   type PixelBounds,
   readCanvasColorStats,
   readEditorPixelBoundsFromPng,
   readElementColorStats,
   readTextStyleGlyphStats,
+  type ScreenshotTimeoutStage,
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
+import { holdCanvasCompletionForTest, installSurfaceFrameProbe } from "./surface-frame-probe";
 
 declare global {
   interface Window {
@@ -87,6 +95,10 @@ declare global {
     __donnerWgpuReadbackCaptureCompletions?: number;
     __donnerWgpuReadbackCaptureFailures?: number;
     __donnerMainLoopRenderedFrames?: number;
+    __donnerHostFrameTiming?: {
+      frames: number;
+      lastSurfacePresented: boolean;
+    };
     __donnerFrameLoopStats?: {
       lastFrameAtMs?: number;
     };
@@ -192,6 +204,15 @@ interface OpenEditorOptions {
 
 const kFatalRuntimePattern =
   /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|getJsObject|No available adapters|WebGPU on Linux requires|WebGPU adapter (?:request )?(?:failed|unavailable)|Wasm renderer pthread wake rejected/i;
+const kGpuAcquisitionPrefix = "[Geode/browser/acquire]";
+const kGpuAcquisitionPattern =
+  /^\[Geode\/browser\/acquire\] stage=(selection|runtime|root) outcome=(api_unavailable|adapter_null|adapter_rejected|device_rejected|device_install_failed|deadline_pending|request_failed|context_failed|construction_failed)$/;
+const gpuAcquisitionEvents = new WeakMap<Page, string[]>();
+
+function fixedGpuAcquisitionEvent(text: string): string | null {
+  const match = kGpuAcquisitionPattern.exec(text);
+  return match ? `stage=${match[1]} outcome=${match[2]}` : null;
+}
 const kSourcePaneWidth = 560;
 const kRightPaneWidth = 420;
 const kWelcomeContentMaxWidth = 920;
@@ -339,6 +360,14 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
 
   page.on("console", (message) => {
     const text = message.text();
+    if (text.startsWith(kGpuAcquisitionPrefix)) {
+      const event = `[gpu-acquisition] ${fixedGpuAcquisitionEvent(text) ?? "invalid_marker"}`;
+      const events = gpuAcquisitionEvents.get(page) ?? [];
+      if (events.length < 8) events.push(event);
+      gpuAcquisitionEvents.set(page, events);
+      recordFatalMessage(event);
+      return;
+    }
     if (kFatalRuntimePattern.test(text)) {
       recordFatalMessage(`[console:${message.type()}] ${text}`);
     }
@@ -560,7 +589,18 @@ async function captureCatalogFontDiagnostics(
     };
   });
   const diagnosticPath = testInfo.outputPath("catalog-font-final.json");
-  await writeFile(diagnosticPath, JSON.stringify({ diagnostic, networkRequests }, null, 2));
+  await writeFile(
+    diagnosticPath,
+    JSON.stringify(
+      {
+        diagnostic,
+        networkRequests,
+        gpuAcquisitionEvents: gpuAcquisitionEvents.get(page) ?? [],
+      },
+      null,
+      2,
+    ),
+  );
   await testInfo.attach("catalog-font-final", {
     path: diagnosticPath,
     contentType: "application/json",
@@ -600,6 +640,15 @@ test.afterEach(async ({ page }, testInfo) => {
   } catch (error) {
     console.error(`catalog font diagnostic capture failed: ${String(error)}`);
   }
+});
+
+test("catalog font loading records only fixed GPU acquisition markers", () => {
+  const marker = "[Geode/browser/acquire] stage=selection outcome=adapter_rejected";
+  const secret = " token=secret https://example.invalid/private/path";
+  expect(fixedGpuAcquisitionEvent(marker)).toBe("stage=selection outcome=adapter_rejected");
+  expect(fixedGpuAcquisitionEvent(marker + secret)).toBeNull();
+  expect(fixedGpuAcquisitionEvent("[Geode/browser/acquire] stage=selection outcome=secret"))
+    .toBeNull();
 });
 
 test("welcome picker does not render a hidden document", async ({ page }) => {
@@ -1489,9 +1538,206 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
   expect(fatalMessages).toEqual([]);
 });
 
+test("production Geode wasm presents visible editor pixels after held canvas GPU completion", async ({ browserName, page }) => {
+  test.skip(browserName !== "chromium" || kBackend !== "geode", "controlled browser GPU gate");
+  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+  const hold = await holdCanvasCompletionForTest(page);
+  let requiredOwner: Worker | null = null;
+  let releaseSucceeded = false;
+  const captureErrors: unknown[] = [];
+  try {
+    const canvas = page.locator("canvas#canvas");
+    const bounds = await canvas.boundingBox();
+    expect(bounds).not.toBeNull();
+    if (bounds === null) throw new Error("the canvas bounds are unavailable");
+    const before = await page.evaluate(() => ({
+      results: window.__donnerWorkerStats?.completedResults ?? 0,
+      frames: window.__donnerMainLoopRenderedFrames ?? 0,
+    }));
+    await page.mouse.click(bounds.x + bounds.width * 0.76, bounds.y + 282);
+    const readState = () =>
+      page.evaluate(() => ({
+        sampleId: window.__donnerActiveSampleStats?.sampleId ?? null,
+        completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+        presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+        renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
+        hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
+        hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
+      }));
+    await expect.poll(
+      async () => hasPresentedBasicShapesHostFrame(await readState(), before.results),
+      { timeout: scaledMs(5_000) },
+    ).toBe(true);
+    const readyState = await readState();
+    expect(readyState.renderedFrames).toBeGreaterThan(before.frames);
+    await expect.poll(hold.observedCalls).toBeGreaterThan(0);
+
+    let screenshots = 0;
+    let settled = false;
+    const gatedCapture = captureReadyBasicShapesFrame(
+      page,
+      readyState,
+      before.results,
+      performance.now() + scaledMs(5_000),
+      (remainingMs) => {
+        ++screenshots;
+        return captureEditorPage(page, remainingMs);
+      },
+      (owner) => {
+        requiredOwner = owner;
+      },
+    ).finally(() => {
+      settled = true;
+    });
+    // Wait until this exact gate is entered, or a bypass starts the capture.
+    // A page round trip alone can finish before worker-owner discovery.
+    await expect.poll(async () => screenshots > 0 || (await hold.enteredWaits()) > 0, {
+      timeout: scaledMs(5_000),
+    }).toBe(true);
+    expect(screenshots).toBe(0);
+    expect(settled).toBe(false);
+    expect(requiredOwner).not.toBeNull();
+    if (requiredOwner === null) throw new Error("the held canvas owner was not identified");
+    await hold.release(requiredOwner);
+    releaseSucceeded = true;
+    const capture = await gatedCapture;
+    expect(capture).not.toBeNull();
+    if (capture === null) throw new Error("the held canvas capture is unavailable");
+    expect(capture.usable).toBe(true);
+    expect(screenshots).toBe(1);
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    if (viewport !== null) {
+      expect(
+        readEditorPixelBoundsFromPng(capture.png, "basic-blue", viewport, {
+          minX: 0,
+          minY: 0,
+          maxX: viewport.width,
+          maxY: viewport.height,
+        })?.pixels ?? 0,
+      ).toBeGreaterThan(500);
+    }
+    let staleCaptures = 0;
+    const staleCapture = async () => {
+      ++staleCaptures;
+    };
+    expect(
+      await captureReadyBasicShapesFrame(
+        page,
+        { ...readyState, hostPresented: false },
+        before.results,
+        performance.now() + 100,
+        staleCapture,
+      ),
+    ).toBeNull();
+    expect(
+      await captureReadyBasicShapesFrame(
+        page,
+        { ...readyState, hostFrames: readyState.renderedFrames - 1 },
+        before.results,
+        performance.now() + 100,
+        staleCapture,
+      ),
+    ).toBeNull();
+    expect(staleCaptures).toBe(0);
+  } catch (error) {
+    captureErrors.push(error);
+  } finally {
+    if (!releaseSucceeded && requiredOwner !== null) {
+      try {
+        await hold.release(requiredOwner);
+      } catch (cleanupError) {
+        captureErrors.push(cleanupError);
+      }
+    }
+  }
+  if (captureErrors.length === 1) throw captureErrors[0];
+  if (captureErrors.length > 1) {
+    throw new AggregateError(captureErrors, "capture and hold cleanup failed");
+  }
+  // A parked secondary worker must not turn a successful owner release into
+  // a failure, while an unresponsive required owner must still fail closed.
+  let ownerEvaluations = 0;
+  let parkedEvaluations = 0;
+  const syntheticOwner = {
+    evaluate: async () => {
+      ++ownerEvaluations;
+      return true;
+    },
+  } as unknown as Worker;
+  const parkedSecondary = {
+    evaluate: async () => {
+      ++parkedEvaluations;
+      return parkedEvaluations === 1 ? true : new Promise<never>(() => {});
+    },
+  } as unknown as Worker;
+  const syntheticHold = await holdCanvasCompletionForTest(page, [
+    syntheticOwner,
+    parkedSecondary,
+  ]);
+  await syntheticHold.release(syntheticOwner);
+  await syntheticHold.release(syntheticOwner);
+  expect(ownerEvaluations).toBe(3);
+  expect(parkedEvaluations).toBe(1);
+  let requiredEvaluations = 0;
+  const unavailableOwner = {
+    evaluate: async () => {
+      ++requiredEvaluations;
+      if (requiredEvaluations === 1) return true;
+      throw new Error("required owner unavailable");
+    },
+  } as unknown as Worker;
+  const requiredHold = await holdCanvasCompletionForTest(page, [unavailableOwner]);
+  await expect(requiredHold.release(unavailableOwner))
+    .rejects.toThrow("could not release the required canvas completion owner");
+  let forbiddenCaptures = 0;
+  const noCapture = async () => {
+    ++forbiddenCaptures;
+  };
+  await expect(captureAfterCanvasGpuCompletion(
+    { evaluate: () => Promise.reject(new Error("rejected completion")) } as unknown as Worker,
+    performance.now() + 100,
+    noCapture,
+  )).rejects.toThrow("rejected completion");
+  await expect(captureAfterCanvasGpuCompletion(
+    { evaluate: () => new Promise<never>(() => {}) } as unknown as Worker,
+    performance.now() + 10,
+    noCapture,
+  )).rejects.toThrow("exceeded the blue-pixel deadline");
+  expect(forbiddenCaptures).toBe(0);
+  let boundedShots = 0;
+  let forwardedTimeout: number | undefined;
+  const timedOutPage = {
+    screenshot: async (options?: { timeout?: number }) => {
+      ++boundedShots;
+      forwardedTimeout = options?.timeout;
+      throw new errors.TimeoutError("Timeout exceeded while taking page screenshot");
+    },
+  } as unknown as Page;
+  const boundedCapture = await captureEditorPage(timedOutPage, 7);
+  expect(boundedCapture.usable).toBe(false);
+  expect(boundedShots).toBe(1);
+  expect(forwardedTimeout).toBe(7);
+  let lateCaptures = 0;
+  await expect(captureAfterCanvasGpuCompletion(
+    { evaluate: () => Promise.resolve(1) } as unknown as Worker,
+    performance.now() + 200,
+    async () => {
+      ++lateCaptures;
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      return "late";
+    },
+  )).rejects.toThrow("exceeded the blue-pixel deadline");
+  expect(lateCaptures).toBe(1);
+  expect(fatalMessages).toEqual([]);
+});
+
 test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox" || kBackend !== "geode", "Firefox Geode regression");
   const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+  expect(await installSurfaceFrameProbe(page), "no worker could observe canvas submissions")
+    .toBeGreaterThan(0);
   const canvas = page.locator("canvas#canvas");
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
@@ -1528,8 +1774,20 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   type ProbeRegion = { x: number; y: number; width: number; height: number };
   let probeRegion: ProbeRegion | null = null;
   let blueCss: PixelBounds | null = null;
+  let screenshotTimeouts = 0;
+  const blueDeadlineAtMs = performance.now() + scaledMs(5_000);
   let lastBlueProbe:
-    | { shot: Buffer; state: object; region: ProbeRegion | null; bluePixels: number }
+    | {
+      shot: Buffer;
+      state: object;
+      region: ProbeRegion | null;
+      bluePixels: number;
+      captureUsable: boolean;
+      captureAttempts: number;
+      timedOutCaptures: number;
+      shotFromPriorAttempt: boolean;
+      timeoutStage: ScreenshotTimeoutStage | null;
+    }
     | null = null;
   try {
     await expect.poll(async () => {
@@ -1538,6 +1796,8 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
         completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
         presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
         renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
+        hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
+        hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
         viewport: window.__donnerViewportStats ?? null,
       }));
       const viewport = state.viewport;
@@ -1553,16 +1813,35 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
           viewport.paneY + viewport.paneHeight,
         ) - Math.max(viewport.documentY, viewport.paneY),
       };
-      const shot = await page.screenshot();
-      const blue = region !== null && region.width > 0 && region.height > 0
-        ? readEditorPixelBoundsFromPng(shot, "basic-blue", captureViewport, {
+      if (region === null || region.width <= 0 || region.height <= 0) return 0;
+      const capture = await captureReadyBasicShapesFrame(
+        page,
+        state,
+        beforeSample,
+        blueDeadlineAtMs,
+        (remainingMs) => captureEditorPage(page, remainingMs),
+      );
+      if (capture === null) return 0;
+      screenshotTimeouts += capture.timedOutCaptures;
+      const blue = capture.usable && region !== null && region.width > 0 && region.height > 0
+        ? readEditorPixelBoundsFromPng(capture.png, "basic-blue", captureViewport, {
           minX: region.x,
           minY: region.y,
           maxX: region.x + region.width,
           maxY: region.y + region.height,
         })
         : null;
-      lastBlueProbe = { shot, state, region, bluePixels: blue?.pixels ?? 0 };
+      lastBlueProbe = {
+        shot: capture.png.length > 0 ? capture.png : lastBlueProbe?.shot ?? Buffer.alloc(0),
+        state,
+        region,
+        bluePixels: blue?.pixels ?? 0,
+        captureUsable: capture.usable,
+        captureAttempts: capture.attempts,
+        timedOutCaptures: screenshotTimeouts,
+        shotFromPriorAttempt: capture.png.length === 0 && (lastBlueProbe?.shot.length ?? 0) > 0,
+        timeoutStage: capture.timeoutStage,
+      };
       if (
         region !== null && blue !== null && state.sampleId === "basic-shapes"
         && state.completedResults > beforeSample && state.presentedAtMs !== null
@@ -1576,19 +1855,24 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
           maxY: blue.maxY - region.y,
           pixels: blue.pixels,
         };
+        if (performance.now() >= blueDeadlineAtMs) {
+          throw new Error("Basic Shapes blue-pixel acceptance exceeded the deadline");
+        }
         return blue.pixels;
       }
       return 0;
     }, {
       message: "the resize target must be visibly blue in the artboard capture",
-      timeout: scaledMs(5_000),
+      timeout: Math.max(1, blueDeadlineAtMs - performance.now()),
       intervals: [250, 400, 600],
     }).toBeGreaterThan(500);
   } catch (error) {
     if (lastBlueProbe !== null) {
       const pngPath = test.info().outputPath("basic-shapes-blue-probe.png");
       const statePath = test.info().outputPath("basic-shapes-blue-probe.json");
-      await writeFile(pngPath, lastBlueProbe.shot);
+      if (lastBlueProbe.shot.length > 0) {
+        await writeFile(pngPath, lastBlueProbe.shot);
+      }
       await writeFile(
         statePath,
         JSON.stringify(
@@ -1597,16 +1881,23 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
             beforeSample,
             region: lastBlueProbe.region,
             bluePixels: lastBlueProbe.bluePixels,
+            captureUsable: lastBlueProbe.captureUsable,
+            captureAttempts: lastBlueProbe.captureAttempts,
+            timedOutCaptures: lastBlueProbe.timedOutCaptures,
+            shotFromPriorAttempt: lastBlueProbe.shotFromPriorAttempt,
+            timeoutStage: lastBlueProbe.timeoutStage,
             captureViewport,
           },
           null,
           2,
         ),
       );
-      await test.info().attach("basic-shapes-blue-probe.png", {
-        path: pngPath,
-        contentType: "image/png",
-      });
+      if (lastBlueProbe.shot.length > 0) {
+        await test.info().attach("basic-shapes-blue-probe.png", {
+          path: pngPath,
+          contentType: "image/png",
+        });
+      }
       await test.info().attach("basic-shapes-blue-probe.json", {
         path: statePath,
         contentType: "application/json",

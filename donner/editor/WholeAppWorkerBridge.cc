@@ -346,22 +346,22 @@ void Install() {
                                 },
                                 {capture : true, passive : true});
 
-        // WebGPU readback diagnostic handshake, same page contract as the
-        // pre-worker build: enabled by the wgpuReadbackStats URL parameter,
-        // one seeded capture proves the path, further captures are explicit.
-        // The request id rides the shared-memory mirror so the app thread can
-        // poll it without a main-thread round trip; the window counters stay
-        // authoritative for the suites that read them.
+        // The ordinary diagnostic flag seeds one capture. The failure-only
+        // test flag configures readback support but requests no GPU work until
+        // the already-scored screenshot has been retained.
+        const readbackParams = new URLSearchParams(window.location.search);
+        const seededReadback = readbackParams.has('wgpuReadbackStats');
         const readbackEnabled =
-            new URLSearchParams(window.location.search).has('wgpuReadbackStats');
+            seededReadback || readbackParams.has('wgpuReadbackOnFailure');
+        const initialReadbackRequest = seededReadback ? 1 : 0;
         HEAP32[i32 + 11] = readbackEnabled ? 1 : 0;
         if (readbackEnabled) {
-          window['__donnerWgpuReadbackRequested'] = 1;
+          window['__donnerWgpuReadbackRequested'] = initialReadbackRequest;
           window['__donnerWgpuReadbackCompleted'] = 0;
           window['__donnerWgpuReadbackCaptureStarts'] = 0;
           window['__donnerWgpuReadbackCaptureCompletions'] = 0;
           window['__donnerWgpuReadbackCaptureFailures'] = 0;
-          HEAP32[i32 + 9] = 1;
+          HEAP32[i32 + 9] = initialReadbackRequest;
           window['__donnerRequestWgpuReadback'] = function() {
             const request = Number(window['__donnerWgpuReadbackRequested'] || 0) + 1;
             window['__donnerWgpuReadbackRequested'] = request;
@@ -1172,6 +1172,11 @@ void PublishImGuiDrawStats(int vertexCount, int indexCount, int commandListCount
           'peakIndices' : Math.max(previous ? previous['peakIndices'] : 0, $1),
           'frames' : (previous ? previous['frames'] : 0) + 1,
         });
+        window['__donnerPendingImGuiDrawStats'] = ({
+          'vertices' : $0,
+          'indices' : $1,
+          'commandLists' : $2,
+        });
       },
       vertexCount, indexCount, commandListCount);
   // clang-format on
@@ -1179,7 +1184,8 @@ void PublishImGuiDrawStats(int vertexCount, int indexCount, int commandListCount
 
 void PublishHostFrameTiming(double endFrameMs, double imguiRenderMs, double surfaceAcquireMs,
                             double underlayMs, double imguiDrawMs, double directMs,
-                            double readbackMs, double presentMs) {
+                            double readbackMs, double presentMs, bool surfaceAcquired,
+                            bool surfacePresented) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -1191,13 +1197,30 @@ void PublishHostFrameTiming(double endFrameMs, double imguiRenderMs, double surf
         ]);
         const values = ([ $0, $1, $2, $3, $4, $5, $6, $7 ]);
         stats['frames'] = (stats['frames'] | 0) + 1;
+        stats['lastSurfaceAcquired'] = !!$8;
+        stats['lastSurfacePresented'] = !!$9;
+        stats['surfaceAcquiredFrames'] = (stats['surfaceAcquiredFrames'] | 0) + ($8 ? 1 : 0);
+        stats['surfacePresentedFrames'] = (stats['surfacePresentedFrames'] | 0) + ($9 ? 1 : 0);
+        const underlay = window['__donnerPendingUnderlayDrawStats'];
+        const imgui = window['__donnerPendingImGuiDrawStats'];
+        stats['lastUnderlaySequence'] = Number(underlay ? underlay['sequence'] : 0);
+        stats['lastUnderlayHostFrame'] = underlay ? stats['frames'] : 0;
+        stats['lastCheckerboardDraws'] = Number(underlay ? underlay['checkerboardDraws'] : 0);
+        stats['lastOverviewTileDraws'] = Number(underlay ? underlay['overviewTileDraws'] : 0);
+        stats['lastActiveTileDraws'] = Number(underlay ? underlay['activeTileDraws'] : 0);
+        stats['lastUnderlayDirectMs'] = Number(underlay ? underlay['directTotalMs'] : 0);
+        stats['lastImguiVertices'] = Number(imgui ? imgui['vertices'] : 0);
+        stats['lastImguiIndices'] = Number(imgui ? imgui['indices'] : 0);
+        stats['lastImguiCommandLists'] = Number(imgui ? imgui['commandLists'] : 0);
+        delete window['__donnerPendingUnderlayDrawStats'];
+        delete window['__donnerPendingImGuiDrawStats'];
         for (let index = 0; index < names.length; ++index) {
           stats[names[index]] = values[index];
           stats['sums'][names[index]] = (stats['sums'][names[index]] || 0) + values[index];
         }
       },
       endFrameMs, imguiRenderMs, surfaceAcquireMs, underlayMs, imguiDrawMs, directMs, readbackMs,
-      presentMs);
+      presentMs, surfaceAcquired ? 1 : 0, surfacePresented ? 1 : 0);
   // clang-format on
 }
 

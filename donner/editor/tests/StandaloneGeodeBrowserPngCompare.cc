@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <utility>
 
 #include "donner/editor/tests/BitmapGoldenCompare.h"
@@ -26,8 +27,16 @@ TEST(StandaloneGeodeBrowserPngCompare, CanvasMatchesGolden) {
   bitmap.rowBytes = actual->strideInPixels * 4u;
   bitmap.pixels = std::move(actual->data);
   bitmap.alphaType = svg::AlphaType::Unpremultiplied;
-  CompareBitmapToGolden(bitmap, goldenPath, "standalone_geode_browser_renderer",
-                        PixelmatchIdentityParams());
+  BitmapGoldenCompareParams params = PixelmatchIdentityParams();
+  if (const char* mode = std::getenv("DONNER_BROWSER_COMPARE_MODE"); mode != nullptr) {
+    if (std::strcmp(mode, "overlay") != 0) {
+      FAIL() << "unknown browser bitmap comparison mode";
+    }
+    // One channel differs by one in a retained browser overlay capture across runners.
+    // Keep zero mismatched pixels and include every edge pixel.
+    params = ApprovedPixelToleranceParams(0.004f, 0, true);
+  }
+  CompareBitmapToGolden(bitmap, goldenPath, "browser_pixel_golden", params);
 }
 
 }  // namespace

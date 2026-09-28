@@ -200,9 +200,13 @@ void PublishImGuiDrawStats(int vertexCount, int indexCount, int commandListCount
 /// addressee, and the question the whole-app worker has to answer - is a frame
 /// with unchanged tiles pure blits, or is it re-uploading and re-snapshotting -
 /// cannot be asked from the page.
+/// Acquired counts a valid visible frame target. Presented counts reaching the explicit
+/// complete-draw present call; an early-return cleanup guard may still hand a partial frame to
+/// the browser, and neither count proves the browser compositor displayed its pixels.
 void PublishHostFrameTiming(double endFrameMs, double imguiRenderMs, double surfaceAcquireMs,
                             double underlayMs, double imguiDrawMs, double directMs,
-                            double readbackMs, double presentMs);
+                            double readbackMs, double presentMs, bool surfaceAcquired,
+                            bool surfacePresented);
 
 /// Tell the page the first frame reached the canvas, so the loader can hide.
 void NotifyFirstFramePresented(int headlessDeviceCreations);

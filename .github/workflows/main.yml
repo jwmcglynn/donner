@@ -73,7 +73,7 @@ jobs:
     name: CI / no-rust-configured-closure
     runs-on: ubuntu-24.04
     needs: [gatekeeper, configured-rust-closure-platform]
-    if: ${{ always() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ always() && !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -249,15 +249,21 @@ jobs:
 
           event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
           pr = event.get("pull_request") or {}
+          labels = pr.get("labels") or []
+          hosted_macos_label = "true" if isinstance(labels, list) and any(
+              isinstance(label, dict) and label.get("name") == "ci:hosted-macos"
+              for label in labels
+          ) else "false"
           fields = (
               (pr.get("user") or {}).get("login", ""),
               ((pr.get("head") or {}).get("repo") or {}).get("full_name", ""),
               ((pr.get("base") or {}).get("repo") or {}).get("full_name", ""),
+              hosted_macos_label,
           )
           print("\x1f".join(fields))
           PY
           )"
-          IFS=$'\x1f' read -r pr_author pr_head_repo pr_base_repo <<< "$pr_fields"
+          IFS=$'\x1f' read -r pr_author pr_head_repo pr_base_repo hosted_macos_label <<< "$pr_fields"
 
           trusted_operator=false
           if [[ "$EVENT_NAME" == "pull_request" && "$REPOSITORY" == "jwmcglynn/donner" &&
@@ -273,7 +279,9 @@ jobs:
           if [[ "$trusted_operator" == "true" && "$SELFHOSTED_LINUX_RUNNER" == "true" ]]; then
             use_linux=true
           fi
-          if [[ "$trusted_operator" == "true" && "$SELFHOSTED_MACOS_RUNNER" == "true" ]]; then
+          # An operator PR can select hosted macOS for this run without changing Linux routing.
+          if [[ "$trusted_operator" == "true" && "$SELFHOSTED_MACOS_RUNNER" == "true" &&
+                "$hosted_macos_label" != "true" ]]; then
             use_macos=true
           fi
 

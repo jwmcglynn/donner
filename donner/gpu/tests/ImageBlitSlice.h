@@ -95,7 +95,7 @@ inline shader::programs::ImageBlitParams Parameters(const Scenario& scenario) {
   result.hasClipMask = scenario.kind == Case::PathClip;
   result.blendMode = scenario.blendMode;
   if (scenario.kind == Case::Cropped) {
-    const std::array<float, 4> dest{1, 1, 7, 3}, src{0.25f, 0.25f, 0.75f, 0.75f};
+    const std::array<float, 4> dest{2, 1, 6, 3}, src{0.25f, 0.25f, 0.75f, 0.75f};
     std::copy(dest.begin(), dest.end(), result.destRect);
     std::copy(src.begin(), src.end(), result.srcRect);
   }

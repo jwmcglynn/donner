@@ -137,6 +137,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 cwd=cwd,
             )
 
+    def test_configured_closure_aggregate_skips_cancelled_runs(self):
+        """A cancelled PR run has no receipts, but a failed producer still needs the aggregate."""
+        header = self._job_body("no-rust-configured-closure").split("steps:", 1)[0]
+        self.assertIn("needs: [gatekeeper, configured-rust-closure-platform]", header)
+        self.assertIn("always() && !cancelled()", header)
+
     def test_native_window_gate_runs_on_hosted_linux_when_remote_routing_is_selected(self):
         hosted = self._job_body("linux")
         local = self._job_body("linux-local-xvfb")

@@ -56,6 +56,343 @@ _MAX_GTEST_XML_BYTES = 1024 * 1024
 _MAX_GTEST_CASES_SCANNED = 1000
 _MAX_GTEST_CASES_EMITTED = 30
 
+# Pinned to .bazelversion (8.8.0): ExitCode.java and failure_details.proto.
+# Never copy the free-form FailureDetail.message, action output, or BEP URIs.
+_EXIT_NAMES = {
+    0: "SUCCESS", 1: "BUILD_FAILURE", 2: "COMMAND_LINE_ERROR", 3: "TESTS_FAILED",
+    4: "NO_TESTS_FOUND", 6: "RUN_FAILURE", 7: "ANALYSIS_FAILURE", 8: "INTERRUPTED",
+    9: "LOCK_HELD_NOBLOCK_FOR_LOCK", 32: "REMOTE_ENVIRONMENTAL_ERROR",
+    33: "OOM_ERROR", 34: "REMOTE_ERROR", 36: "LOCAL_ENVIRONMENTAL_ERROR",
+    37: "BLAZE_INTERNAL_ERROR", 38: "PUBLISH_ERROR", 39: "REMOTE_CACHE_EVICTED",
+    45: "PERSISTENT_BUILD_EVENT_SERVICE_UPLOAD_ERROR", 48: "EXTERNAL_DEPS_ERROR",
+}
+_REMOTE_FAILURE_CODES = {
+    "remoteExecution": frozenset({
+        "CAPABILITIES_QUERY_FAILURE", "CLIENT_SERVER_INCOMPATIBLE",
+        "DOWNLOADED_INPUTS_DELETION_FAILURE", "TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE",
+    }),
+    "spawn": frozenset({"EXECUTION_FAILED", "REMOTE_CACHE_FAILED"}),
+}
+_DIAGNOSTIC_ABORT_REASONS = frozenset({
+    "REMOTE_ENVIRONMENT_FAILURE", "TIME_OUT", "INCOMPLETE",
+})
+_MAX_DIAGNOSTIC_EVENTS = 250000
+_MAX_DIAGNOSTIC_LINE_BYTES = 8 * 1024 * 1024
+
+_MAX_REMOTE_LOG_TAIL_BYTES = 64 * 1024
+_MAX_REMOTE_LOG_LINES = 128
+_MAX_REMOTE_LOG_LINE_BYTES = 8 * 1024
+# These are observations in a private Bazel log, not asserted failure causes.
+_GRPC_STATUS_PATTERN = re.compile(
+    rb"(?:\bio\.grpc\.Status(?:Runtime)?Exception:\s*|"
+    rb"\brpc error:\s*code\s*=\s*|\bStatus\{\s*code\s*=\s*)"
+    rb"(UNAVAILABLE|DEADLINE_EXCEEDED|DeadlineExceeded|NOT_FOUND|NotFound|"
+    rb"UNAUTHENTICATED|PERMISSION_DENIED|PermissionDenied|"
+    rb"RESOURCE_EXHAUSTED|ResourceExhausted)\b", re.IGNORECASE)
+_GRPC_STATUS_OBSERVATIONS = {
+    b"UNAVAILABLE": "GRPC_UNAVAILABLE",
+    b"DEADLINE_EXCEEDED": "GRPC_DEADLINE_EXCEEDED",
+    b"DEADLINEEXCEEDED": "GRPC_DEADLINE_EXCEEDED",
+    b"NOT_FOUND": "GRPC_NOT_FOUND",
+    b"NOTFOUND": "GRPC_NOT_FOUND",
+    b"UNAUTHENTICATED": "GRPC_UNAUTHENTICATED",
+    b"PERMISSION_DENIED": "GRPC_PERMISSION_DENIED",
+    b"PERMISSIONDENIED": "GRPC_PERMISSION_DENIED",
+    b"RESOURCE_EXHAUSTED": "GRPC_RESOURCE_EXHAUSTED",
+    b"RESOURCEEXHAUSTED": "GRPC_RESOURCE_EXHAUSTED",
+}
+# Bazel may print the gRPC code alone after an ERROR prefix or a nested exception.
+_GRPC_BARE_PATTERN = re.compile(
+    rb"(?<![A-Za-z0-9_])(UNAVAILABLE|DEADLINE_EXCEEDED|NOT_FOUND|"
+    rb"UNAUTHENTICATED|PERMISSION_DENIED|RESOURCE_EXHAUSTED):(?:\s|$)", re.IGNORECASE)
+_GRPC_NUMERIC_PATTERN = re.compile(rb"\bgrpc-status:\s*(4|5|7|8|14|16)\b", re.IGNORECASE)
+_GRPC_NUMERIC_OBSERVATIONS = {
+    b"4": "GRPC_DEADLINE_EXCEEDED", b"5": "GRPC_NOT_FOUND",
+    b"7": "GRPC_PERMISSION_DENIED", b"8": "GRPC_RESOURCE_EXHAUSTED",
+    b"14": "GRPC_UNAVAILABLE", b"16": "GRPC_UNAUTHENTICATED",
+}
+_REMOTE_LOG_PATTERNS = {
+    "TLS_FAILURE": re.compile(
+        rb"SSLHandshakeException|certificate verify failed|CERTIFICATE_VERIFY_FAILED|"
+        rb"TLS handshake (?:failed|failure)|unable to find valid certification path", re.IGNORECASE),
+    "CONNECTION_FAILURE": re.compile(
+        rb"Connection (?:refused|reset|timed out|closed)|Failed to connect|"
+        rb"UnknownHostException|No route to host|Network is unreachable", re.IGNORECASE),
+    "DIGEST_MISMATCH": re.compile(
+        rb"digest mismatch|checksum mismatch|DigestMismatchException", re.IGNORECASE),
+    "UPLOAD_FAILURE": re.compile(
+        rb"failed to upload|upload failed|uploading failed|"
+        rb"Error while uploading artifact with digest", re.IGNORECASE),
+    "DOWNLOAD_FAILURE": re.compile(
+        rb"failed to download|download failed|downloading failed|"
+        rb"Error while downloading\b", re.IGNORECASE),
+    "BULK_TRANSFER_FAILURE": re.compile(
+        rb"BulkTransferException|[1-9][0-9]{0,5} errors during bulk transfer:", re.IGNORECASE),
+}
+_REMOTE_LOG_OBSERVATIONS = frozenset(_GRPC_STATUS_OBSERVATIONS.values()) | frozenset(
+    _REMOTE_LOG_PATTERNS)
+
+
+def _bounded_remote_log_tail(path):
+    """Read only the final bounded private bytes; never return a partial first line."""
+    path = Path(path)
+    try:
+        if path.is_symlink() or not path.is_file():
+            return []
+        with path.open("rb") as stream:
+            stream.seek(0, 2)
+            start = max(0, stream.tell() - _MAX_REMOTE_LOG_TAIL_BYTES)
+            stream.seek(start)
+            tail = stream.read(_MAX_REMOTE_LOG_TAIL_BYTES)
+    except (OSError, ValueError):
+        return []
+    if start:
+        first_break = tail.find(b"\n")
+        if first_break < 0:
+            return []
+        tail = tail[first_break + 1:]
+    return tail.splitlines()[-_MAX_REMOTE_LOG_LINES:]
+
+
+def remote_log_observations(path):
+    """Return fixed tokens only; log text, endpoint data, and digests stay private."""
+    observed = set()
+    for line in _bounded_remote_log_tail(path):
+        if len(line) > _MAX_REMOTE_LOG_LINE_BYTES:
+            continue
+        grpc_status = _GRPC_STATUS_PATTERN.search(line)
+        if grpc_status is not None:
+            observed.add(_GRPC_STATUS_OBSERVATIONS[grpc_status.group(1).upper()])
+        grpc_bare = _GRPC_BARE_PATTERN.search(line)
+        if grpc_bare is not None:
+            observed.add(_GRPC_STATUS_OBSERVATIONS[grpc_bare.group(1).upper()])
+        grpc_numeric = _GRPC_NUMERIC_PATTERN.search(line)
+        if grpc_numeric is not None:
+            observed.add(_GRPC_NUMERIC_OBSERVATIONS[grpc_numeric.group(1)])
+        for signal, pattern in _REMOTE_LOG_PATTERNS.items():
+            if pattern.search(line):
+                observed.add(signal)
+    return sorted(observed)
+
+
+def _empty_failure_context(process_status):
+    name = _EXIT_NAMES.get(process_status) if type(process_status) is int else None
+    return {
+        "schemaVersion": 1,
+        "processExitCode": process_status if name else "unavailable",
+        "processExitName": name or "unavailable",
+        "bepStatus": "missing",
+        "bepExitCode": "unavailable",
+        "failureCategory": "unavailable",
+        "failureCode": "unavailable",
+        "abortReasons": [],
+        "remoteLogObservations": [],
+    }
+
+
+def _pinned_remote_detail(finished):
+    """Return only an exit-34 FailureDetail category/code pair from Bazel 8.8."""
+    detail = finished.get("failureDetail")
+    if not isinstance(detail, dict):
+        return None
+    categories = set(detail) - {"message"}
+    if len(categories) != 1:
+        return None
+    category = categories.pop()
+    allowed = _REMOTE_FAILURE_CODES.get(category)
+    payload = detail.get(category)
+    code = payload.get("code") if isinstance(payload, dict) else None
+    if allowed is None or not isinstance(code, str) or code not in allowed:
+        return None
+    return category, code
+
+
+def _context_event(line):
+    if len(line) > _MAX_DIAGNOSTIC_LINE_BYTES:
+        return None
+    try:
+        event = json.loads(line)
+    except (ValueError, RecursionError):
+        return None
+    return event if isinstance(event, dict) else None
+
+
+def _known_abort_reason(event):
+    aborted = event.get("aborted")
+    if not isinstance(aborted, dict):
+        return None
+    reason = aborted.get("reason")
+    return reason if isinstance(reason, str) and reason in _DIAGNOSTIC_ABORT_REASONS else None
+
+
+def _scan_context_events(lines):
+    """Collect only a final event and pinned abort reasons; fail closed on damage."""
+    finished = None
+    reasons = set()
+    for index, line in enumerate(lines):
+        if index >= _MAX_DIAGNOSTIC_EVENTS:
+            return None, [], True
+        event = _context_event(line)
+        if event is None:
+            return None, [], True
+        reason = _known_abort_reason(event)
+        if reason is not None:
+            reasons.add(reason)
+        event_id = event.get("id")
+        if not isinstance(event_id, dict) or "buildFinished" not in event_id:
+            continue
+        if not isinstance(event_id["buildFinished"], dict) or finished is not None:
+            return None, [], True
+        finished = event.get("finished")
+        if not isinstance(finished, dict):
+            return None, [], True
+    return finished, sorted(reasons), False
+
+
+def _validated_finished_name(finished, process_status):
+    exit_code = finished.get("exitCode")
+    if not isinstance(exit_code, dict):
+        return None
+    # Proto3 JSON omits the scalar zero for a successful build.
+    code = exit_code.get("code", 0)
+    name = exit_code.get("name")
+    if type(code) is int and code == process_status and _EXIT_NAMES.get(code) == name:
+        return name
+    return None
+
+
+def failure_context(lines, process_status):
+    """Summarize a failed Bazel invocation using only pinned structured enums.
+
+    Malformed, partial, duplicate, and mismatched streams never publish raw
+    BEP text or an inferred root cause. The process status is recorded only
+    when it belongs to Bazel 8.8's fixed ExitCode table.
+    """
+    result = _empty_failure_context(process_status)
+    finished, reasons, malformed = _scan_context_events(lines)
+    if malformed:
+        result["bepStatus"] = "malformed"
+        return result
+    result["abortReasons"] = reasons
+    if finished is None:
+        return result
+    name = _validated_finished_name(finished, process_status)
+    if name is None:
+        result["bepStatus"] = "mismatch"
+        return result
+    result["bepStatus"] = "finished"
+    result["bepExitCode"] = name
+    if process_status == 34:
+        detail = _pinned_remote_detail(finished)
+        if detail is not None:
+            result["failureCategory"], result["failureCode"] = detail
+    return result
+
+
+
+_FAILURE_CONTEXT_KEYS = frozenset({
+    "schemaVersion", "processExitCode", "processExitName", "bepStatus",
+    "bepExitCode", "failureCategory", "failureCode", "abortReasons",
+    "remoteLogObservations",
+})
+_TIMING_PHASES = ("start", "bazel_coverage_done", "filter_done", "end")
+
+
+def _valid_exit_pair(code, name):
+    if code == "unavailable" and name == "unavailable":
+        return True
+    return (type(code) is int and code in _EXIT_NAMES
+            and isinstance(name, str) and _EXIT_NAMES[code] == name)
+
+
+def _valid_context_codes(value):
+    category = value["failureCategory"]
+    code = value["failureCode"]
+    if not isinstance(category, str) or not isinstance(code, str):
+        return False
+    if category == "unavailable":
+        return code == "unavailable"
+    return (value["processExitCode"] == 34
+            and code in _REMOTE_FAILURE_CODES.get(category, ()))
+
+
+def _valid_abort_reasons(reasons):
+    return (isinstance(reasons, list) and len(reasons) <= len(_DIAGNOSTIC_ABORT_REASONS)
+            and all(isinstance(reason, str) and reason in _DIAGNOSTIC_ABORT_REASONS
+                    for reason in reasons) and reasons == sorted(set(reasons)))
+
+
+def _valid_remote_log_observations(observations, process_status):
+    return (isinstance(observations, list)
+            and len(observations) <= len(_REMOTE_LOG_OBSERVATIONS)
+            and all(isinstance(item, str) and item in _REMOTE_LOG_OBSERVATIONS
+                    for item in observations)
+            and observations == sorted(set(observations))
+            and (process_status == 34 or not observations))
+
+
+def _valid_failure_context(value):
+    if not isinstance(value, dict) or set(value) != _FAILURE_CONTEXT_KEYS:
+        return False
+    if type(value["schemaVersion"]) is not int or value["schemaVersion"] != 1:
+        return False
+    if not _valid_exit_pair(value["processExitCode"], value["processExitName"]):
+        return False
+    if not isinstance(value["bepStatus"], str) or value["bepStatus"] not in {
+            "missing", "malformed", "mismatch", "finished"}:
+        return False
+    if not isinstance(value["bepExitCode"], str) or value["bepExitCode"] not in (
+            set(_EXIT_NAMES.values()) | {"unavailable"}):
+        return False
+    return (_valid_context_codes(value)
+            and _valid_abort_reasons(value["abortReasons"])
+            and _valid_remote_log_observations(
+                value["remoteLogObservations"], value["processExitCode"]))
+
+
+def _bounded_regular_text(path, limit):
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        with path.open("r", encoding="utf-8") as stream:
+            value = stream.read(limit + 1)
+        return value if len(value) <= limit else None
+    except (OSError, UnicodeError):
+        return None
+
+
+def _valid_timing(value):
+    if value is None:
+        return False
+    lines = value.splitlines(keepends=True)
+    if not lines or len(lines) > len(_TIMING_PHASES):
+        return False
+    for phase, line in zip(_TIMING_PHASES, lines):
+        prefix = phase + "="
+        if not line.startswith(prefix) or not line.endswith("\n"):
+            return False
+        digits = line[len(prefix):-1]
+        if not digits.isascii() or not digits.isdigit() or not 1 <= len(digits) <= 12:
+            return False
+    return True
+
+
+def validate_diagnostics(directory):
+    """Allow the workflow to upload only fresh, fixed-schema regular files."""
+    timing = _bounded_regular_text(directory / "timing.txt", 128)
+    if not _valid_timing(timing):
+        return False
+    summary_path = directory / "failure-summary.json"
+    if not summary_path.exists() and not summary_path.is_symlink():
+        return True
+    summary = _bounded_regular_text(summary_path, 1024)
+    if summary is None:
+        return False
+    try:
+        return _valid_failure_context(json.loads(summary))
+    except (ValueError, RecursionError):
+        return False
+
 
 def classify(lines):
     """Classify an iterable of BEP JSON-lines strings.
@@ -373,22 +710,67 @@ def allowlisted_failure_cases(lines, testlogs_root):
     }
 
 
-def main(argv):
-    failures = len(argv) == 3 and argv[1] == "--failures"
-    test_cases = len(argv) == 4 and argv[1] == "--test-cases"
-    if not failures and not test_cases and len(argv) != 2:
-        sys.stderr.write(
-            "usage: coverage_bep_status.py [--failures|--test-cases] "
-            "<bep.json> [bazel-testlogs]\n")
-        return 2
+def _cli_mode(argv):
+    if len(argv) == 2:
+        return "classify"
+    if len(argv) == 3 and argv[1] == "--failures":
+        return "failures"
+    if len(argv) == 3 and argv[1] == "--validate-diagnostics":
+        return "validate_diagnostics"
+    if len(argv) == 4 and argv[1] == "--test-cases":
+        return "test_cases"
+    if len(argv) in (4, 5) and argv[1] == "--failure-context":
+        return "context"
+    return None
+
+
+def _cli_process_status(argv, mode):
+    if mode != "context":
+        return None
     try:
-        bep_path = argv[2] if test_cases else argv[-1]
+        return int(argv[3])
+    except ValueError:
+        return None
+
+
+def _cli_result(mode, stream, extra):
+    if mode == "test_cases":
+        return allowlisted_failure_cases(stream, extra)
+    if mode == "context":
+        return failure_context(stream, extra)
+    if mode == "failures":
+        return failure_summary(stream)
+    return classify(stream)
+
+
+def _cli_missing_result(mode, extra):
+    if mode == "test_cases":
+        return None
+    if mode == "context":
+        return failure_context([], extra)
+    if mode == "failures":
+        return failure_summary([])
+    return {"status": UNKNOWN, "skipped": [], "produced": []}
+
+
+def main(argv):
+    mode = _cli_mode(argv)
+    if mode is None:
+        sys.stderr.write(
+            "usage: coverage_bep_status.py [--failures|--test-cases|--failure-context] "
+            "<bep.json> [bazel-testlogs|process-status] [private-log]\n")
+        return 2
+    if mode == "validate_diagnostics":
+        return 0 if validate_diagnostics(Path(argv[2])) else 1
+    extra = argv[3] if mode == "test_cases" else _cli_process_status(argv, mode)
+    bep_path = argv[2] if mode in {"test_cases", "context"} else argv[-1]
+    try:
         with open(bep_path, "r", encoding="utf-8", errors="replace") as stream:
-            result = (allowlisted_failure_cases(stream, argv[3]) if test_cases else
-                      failure_summary(stream) if failures else classify(stream))
+            result = _cli_result(mode, stream, extra)
     except OSError:
-        result = (None if test_cases else failure_summary([]) if failures else
-                  {"status": UNKNOWN, "skipped": [], "produced": []})
+        result = _cli_missing_result(mode, extra)
+    if mode == "context" and len(argv) == 5 and extra == 34:
+        result["remoteLogObservations"] = remote_log_observations(argv[4])
     if result is not None:
         json.dump(result, sys.stdout)
         sys.stdout.write("\n")

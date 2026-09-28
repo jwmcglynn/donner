@@ -10,6 +10,12 @@ importers:
       "@playwright/test":
         specifier: 1.62.1
         version: 1.62.1
+      "@types/pngjs":
+        specifier: 6.0.5
+        version: 6.0.5
+      pngjs:
+        specifier: 7.0.0
+        version: 7.0.0
 
 packages:
   "@playwright/test@1.62.1":
@@ -19,6 +25,18 @@ packages:
       }
     engines: { node: ">=20" }
     hasBin: true
+
+  "@types/node@26.6.3":
+    resolution:
+      {
+        integrity: sha512-dsqMQQoeTLqu9wynDD00q573mNzso3IdQOAfHRJqLCcmCFPoGo9A1bDpUcv/9tnKpErQWv9uKeGfl37EIS02Yg==,
+      }
+
+  "@types/pngjs@6.0.5":
+    resolution:
+      {
+        integrity: sha512-0k5eKfrA83JOZPppLtS2C7OUtyNAl2wKNxfyYl9Q5g9lPkgBl/9hNyAu6HuEH2J4XmIv2znEpkDd0SaZVxW6iQ==,
+      }
 
   fsevents@2.3.2:
     resolution:
@@ -44,10 +62,31 @@ packages:
     engines: { node: ">=20" }
     hasBin: true
 
+  pngjs@7.0.0:
+    resolution:
+      {
+        integrity: sha512-LKWqWJRhstyYo9pGvgor/ivk2w94eSjE3RGVuzLGlr3NmD8bf7RcYGze1mNdEHRP6TRP6rMuDHk5t44hnTRyow==,
+      }
+    engines: { node: ">=14.19.0" }
+
+  undici-types@8.9.0:
+    resolution:
+      {
+        integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==,
+      }
+
 snapshots:
   "@playwright/test@1.62.1":
     dependencies:
       playwright: 1.62.1
+
+  "@types/node@26.6.3":
+    dependencies:
+      undici-types: 8.9.0
+
+  "@types/pngjs@6.0.5":
+    dependencies:
+      "@types/node": 26.6.3
 
   fsevents@2.3.2:
     optional: true
@@ -59,3 +98,7 @@ snapshots:
       playwright-core: 1.62.1
     optionalDependencies:
       fsevents: 2.3.2
+
+  pngjs@7.0.0: {}
+
+  undici-types@8.9.0: {}

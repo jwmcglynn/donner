@@ -66,6 +66,7 @@
     },
     "donner/editor/WholeAppWorkerBridge.cc": {
       "wgpuCFunctions": [
+        "wgpuReadbackOnFailure",
         "wgpuReadbackStats"
       ]
     },

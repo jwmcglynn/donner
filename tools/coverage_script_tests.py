@@ -12,9 +12,36 @@ import unittest
 from python.runfiles import runfiles
 
 
+def prepare_stale_diagnostics(root, enabled, summary_state, timing_state):
+    if not enabled or not (summary_state or timing_state):
+        return
+    diagnostics = root / "private-diagnostics/coverage"
+    diagnostics.mkdir(parents=True)
+    if summary_state == "file":
+        (diagnostics / "failure-summary.json").write_text("token=secret")
+    elif summary_state == "directory":
+        stale = diagnostics / "failure-summary.json"
+        stale.mkdir()
+        (stale / "raw.log").write_text("token=secret")
+    if timing_state == "file":
+        (diagnostics / "timing.txt").write_text("token=secret\n")
+    elif timing_state == "directory":
+        stale = diagnostics / "timing.txt"
+        stale.mkdir()
+        (stale / "raw.log").write_text("token=secret")
+
+
+def prepare_failed_mktemp(binaries):
+    mktemp = binaries / "mktemp"
+    mktemp.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    mktemp.chmod(0o755)
+
+
 class CoverageScriptTest(unittest.TestCase):
     def run_fixture(self, root, quiet, status, report, failed_target=False, failed_test=False,
-                    geode_failed=False, geode_xml=None):
+                    geode_failed=False, geode_xml=None, remote_failure=False,
+                    ci_diagnostics=False, summary_state=None, timing_state=None,
+                    fail_summary_write=False):
         binaries = root / "bin"
         binaries.mkdir()
         (root / "output").mkdir()
@@ -74,6 +101,17 @@ class CoverageScriptTest(unittest.TestCase):
                             / "renderer_geode_golden_tests/test.xml")
                 xml_path.parent.mkdir(parents=True)
                 xml_path.write_text(geode_xml, encoding="utf-8")
+        if remote_failure:
+            events.append({
+                "id": {"buildFinished": {}},
+                "finished": {
+                    "exitCode": {"code": 34, "name": "REMOTE_ERROR"},
+                    "failureDetail": {
+                        "message": "grpc://private.example/secret /runner/path token=secret",
+                        "remoteExecution": {"code": "TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE"},
+                    },
+                },
+            })
         (root / "fixture-bep.json").write_text(
             "\n".join(json.dumps(event) for event in events), encoding="utf-8"
         )
@@ -97,6 +135,9 @@ class CoverageScriptTest(unittest.TestCase):
             '   printf "SF:donner/example.cc\\nDA:1,1\\nLF:1\\nLH:1\\nend_of_record\\n" '
             '> "$FIXTURE_ROOT/output/_coverage/_coverage_report.dat"\n'
             '  fi\n'
+            '  if [[ -n "$FIXTURE_PRIVATE_ERROR" ]]; then\n'
+            '   printf "%s\\n" "$FIXTURE_PRIVATE_ERROR"\n'
+            '  fi\n'
             '  exit "$FIXTURE_STATUS";;\n'
             'esac\n',
             encoding="utf-8",
@@ -115,6 +156,9 @@ class CoverageScriptTest(unittest.TestCase):
             path = binaries / name
             path.write_text(body, encoding="utf-8")
             path.chmod(0o755)
+        prepare_stale_diagnostics(root, ci_diagnostics, summary_state, timing_state)
+        if fail_summary_write:
+            prepare_failed_mktemp(binaries)
         command = ["bash", resolver.Rlocation("donner/tools/coverage.sh"), "--no-html"]
         if quiet:
             command.append("--quiet")
@@ -128,8 +172,15 @@ class CoverageScriptTest(unittest.TestCase):
                 "FIXTURE_PYTHON": sys.executable,
                 "FIXTURE_STATUS": str(status),
                 "FIXTURE_REPORT": str(int(report)),
+                "FIXTURE_PRIVATE_ERROR": (
+                    "ERROR: NOT_FOUND: Error while downloading artifact with digest "
+                    "'abc/72' grpc://private.example/secret /runner/path token=secret"
+                    if remote_failure else ""
+                ),
                 "DONNER_BAZEL": str(fake_bazel),
-                "DONNER_CI_DIAGNOSTICS_DIR": "",
+                "DONNER_CI_DIAGNOSTICS_DIR": (
+                    str(root / "private-diagnostics") if ci_diagnostics else ""
+                ),
             },
             capture_output=True,
             text=True,
@@ -176,6 +227,61 @@ class CoverageScriptTest(unittest.TestCase):
             self.assertIn("//fixture:failed_test", result.stdout)
             self.assertNotIn("secret", result.stdout)
             self.assertFalse((root / "coverage-report/filtered_report.dat").exists())
+
+    def test_exit34_with_no_failed_labels_writes_only_safe_structured_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = self.run_fixture(root, True, status=34, report=True,
+                                      remote_failure=True, ci_diagnostics=True)
+            self.assertEqual(result.returncode, 34)
+            self.assertIn("Bazel coverage failure context (BEP):", result.stdout)
+            self.assertIn("TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE", result.stdout)
+            self.assertNotIn("private.example", result.stdout + result.stderr)
+            self.assertNotIn("/runner/path", result.stdout + result.stderr)
+            self.assertNotIn("token=secret", result.stdout + result.stderr)
+            summary_path = root / "private-diagnostics/coverage/failure-summary.json"
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertEqual(summary["processExitCode"], 34)
+            self.assertEqual(summary["failureCode"], "TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE")
+            self.assertEqual(summary["remoteLogObservations"],
+                             ["DOWNLOAD_FAILURE", "GRPC_NOT_FOUND"])
+            self.assertNotIn("secret", json.dumps(summary))
+            self.assertEqual(list(summary_path.parent.glob(".failure-summary.*")), [])
+            self.assertIn("token=secret", (root / "coverage-report/bazel_coverage.log").read_text())
+            self.assertFalse((root / "coverage-report/filtered_report.dat").exists())
+
+    def test_stale_regular_diagnostics_are_replaced_with_safe_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result = self.run_fixture(root, True, status=34, report=True,
+                                      remote_failure=True, ci_diagnostics=True,
+                                      summary_state="file", timing_state="file")
+            self.assertEqual(result.returncode, 34)
+            diagnostics = root / "private-diagnostics/coverage"
+            self.assertNotIn("secret", (diagnostics / "timing.txt").read_text())
+            self.assertNotIn("secret", (diagnostics / "failure-summary.json").read_text())
+            self.assertEqual(list(diagnostics.glob("failure-summary.json.*")), [])
+
+    def test_stale_directory_and_summary_write_error_keep_original_status(self):
+        for summary_state, timing_state, fail_write in (
+                ("directory", None, False), (None, "directory", False),
+                (None, None, True)):
+            with self.subTest(summary=summary_state, timing=timing_state,
+                              fail_write=fail_write), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                result = self.run_fixture(root, True, status=34, report=True,
+                                          remote_failure=True, ci_diagnostics=True,
+                                          summary_state=summary_state,
+                                          timing_state=timing_state,
+                                          fail_summary_write=fail_write)
+                self.assertEqual(result.returncode, 34)
+                self.assertNotIn("secret", result.stdout + result.stderr)
+                diagnostics = root / "private-diagnostics/coverage"
+                self.assertEqual(list(diagnostics.glob("failure-summary.json.*")), [])
+                if summary_state == "directory":
+                    self.assertTrue((diagnostics / "failure-summary.json").is_dir())
+                if fail_write:
+                    self.assertFalse((diagnostics / "failure-summary.json").exists())
 
     def test_quiet_geode_failure_names_case_without_exposing_assertion(self):
         xml = ('<testsuites failures="1"><testcase classname="RendererGeodeGoldenTests" '

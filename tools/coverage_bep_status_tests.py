@@ -6,6 +6,8 @@ build failure, a partial stream, and a run that mixed a skip with a result.
 """
 
 #!/usr/bin/env python3
+import contextlib
+import io
 import json
 from pathlib import Path
 import sys
@@ -63,6 +65,273 @@ def write_gpu_xml(root, label, xml):
 
 
 class ClassifyTest(unittest.TestCase):
+    def test_exit34_without_failed_labels_keeps_structured_remote_detail(self):
+        events = [
+            json.dumps({
+                "id": {"buildFinished": {}},
+                "finished": {
+                    "exitCode": {"code": 34, "name": "REMOTE_ERROR"},
+                    "failureDetail": {
+                        "message": "grpc://private.example/secret /runner/path token=secret",
+                        "remoteExecution": {"code": "TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE"},
+                    },
+                },
+            }),
+            json.dumps({
+                "id": {"targetCompleted": {"label": "//fixture:unfinished"}},
+                "aborted": {
+                    "reason": "REMOTE_ENVIRONMENT_FAILURE",
+                    "description": "grpc://private.example/secret /runner/path",
+                },
+            }),
+        ]
+        self.assertEqual(status.failure_summary(events)["failedTests"], [])
+        result = status.failure_context(events, 34)
+        self.assertEqual(result, {
+            "schemaVersion": 1,
+            "processExitCode": 34,
+            "processExitName": "REMOTE_ERROR",
+            "bepStatus": "finished",
+            "bepExitCode": "REMOTE_ERROR",
+            "failureCategory": "remoteExecution",
+            "failureCode": "TOPLEVEL_OUTPUTS_DOWNLOAD_FAILURE",
+            "abortReasons": ["REMOTE_ENVIRONMENT_FAILURE"],
+            "remoteLogObservations": [],
+        })
+        self.assertNotIn("private", json.dumps(result))
+        self.assertNotIn("secret", json.dumps(result))
+
+    def test_failure_context_accepts_only_pinned_spawn_code_and_never_raw_fields(self):
+        event = json.dumps({
+            "id": {"buildFinished": {}},
+            "finished": {
+                "exitCode": {"code": 34, "name": "REMOTE_ERROR"},
+                "failureDetail": {
+                    "message": "token=secret /runner/path",
+                    "spawn": {"code": "REMOTE_CACHE_FAILED", "commandLine": "secret"},
+                },
+            },
+        })
+        result = status.failure_context([event], 34)
+        self.assertEqual((result["failureCategory"], result["failureCode"]),
+                         ("spawn", "REMOTE_CACHE_FAILED"))
+        self.assertNotIn("secret", json.dumps(result))
+        self.assertNotIn("runner", json.dumps(result))
+
+        unsafe = event.replace("REMOTE_CACHE_FAILED", "REMOTE_CACHE_FAILED /runner/secret")
+        result = status.failure_context([unsafe], 34)
+        self.assertEqual((result["failureCategory"], result["failureCode"]),
+                         ("unavailable", "unavailable"))
+        self.assertNotIn("secret", json.dumps(result))
+
+    def test_failure_context_partial_malformed_and_conflicting_bep_fail_closed(self):
+        self.assertEqual(status.failure_context([], 34)["bepStatus"], "missing")
+        self.assertEqual(status.failure_context(["{private invalid json"], 34)["bepStatus"],
+                         "malformed")
+        deep_json = "[" * 2000 + "0" + "]" * 2000
+        self.assertEqual(status.failure_context([deep_json], 34)["bepStatus"], "malformed")
+        finished = json.dumps({
+            "id": {"buildFinished": {}},
+            "finished": {"exitCode": {"code": 34, "name": "REMOTE_ERROR"}},
+        })
+        mismatch = status.failure_context([finished], 3)
+        self.assertEqual(mismatch["bepStatus"], "mismatch")
+        self.assertEqual(mismatch["bepExitCode"], "unavailable")
+        duplicate = status.failure_context([finished, finished], 34)
+        self.assertEqual(duplicate["bepStatus"], "malformed")
+        self.assertEqual(duplicate["failureCode"], "unavailable")
+
+    def test_real_build_finished_success_omits_proto_default_zero(self):
+        # Bazel 8.8 BEP JSON writes id.buildFinished + payload.finished.
+        # The protobuf JSON encoder omits ExitCode.code for SUCCESS (zero).
+        event = json.dumps({
+            "id": {"buildFinished": {}},
+            "finished": {
+                "overallSuccess": True,
+                "exitCode": {"name": "SUCCESS"},
+            },
+        })
+        result = status.failure_context([event], 0)
+        self.assertEqual(result["bepStatus"], "finished")
+        self.assertEqual(result["bepExitCode"], "SUCCESS")
+        self.assertEqual(result["failureCode"], "unavailable")
+        self.assertEqual(status.failure_context([event], 34)["bepStatus"], "mismatch")
+
+    def test_terminal_payload_with_wrong_id_does_not_claim_bep_completion(self):
+        wrong_id = json.dumps({
+            "id": {"finished": {}},
+            "finished": {"exitCode": {"code": 34, "name": "REMOTE_ERROR"}},
+        })
+        result = status.failure_context([wrong_id], 34)
+        self.assertEqual(result["bepStatus"], "missing")
+        self.assertEqual(result["bepExitCode"], "unavailable")
+
+    def test_failure_context_bad_schema_and_missing_private_file_do_not_leak(self):
+        malformed_reason = json.dumps({
+            "id": {"targetCompleted": {"label": "//private:target"}},
+            "aborted": {"reason": {"secret": "/private/runner/path"}},
+        })
+        result = status.failure_context([malformed_reason], 34)
+        self.assertEqual(result["abortReasons"], [])
+        self.assertNotIn("private", json.dumps(result))
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            exit_code = status.main([
+                "coverage_bep_status.py", "--failure-context",
+                "/private/runner/token=secret/missing.bep.json", "34",
+            ])
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        missing = json.loads(stdout.getvalue())
+        self.assertEqual(missing["bepStatus"], "missing")
+        self.assertEqual(missing["processExitCode"], 34)
+        self.assertNotIn("private", stdout.getvalue())
+        self.assertNotIn("secret", stdout.getvalue())
+
+    def test_diagnostic_upload_gate_rejects_stale_types_and_unsafe_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            timing = root / "timing.txt"
+            summary = root / "failure-summary.json"
+            timing.write_text("start=100\nbazel_coverage_done=200\n")
+            self.assertTrue(status.validate_diagnostics(root))
+            valid = status.failure_context([], 34)
+            summary.write_text(json.dumps(valid))
+            self.assertTrue(status.validate_diagnostics(root))
+            for code, name in (
+                    (999, None), (999, "REMOTE_ERROR"), (34, None),
+                    (34, {"secret": "/runner/path"}), (34, ["REMOTE_ERROR"])):
+                with self.subTest(code=code, name=name):
+                    invalid = {**valid, "processExitCode": code, "processExitName": name}
+                    summary.write_text(json.dumps(invalid))
+                    self.assertFalse(status.validate_diagnostics(root))
+            invalid_signal = {**valid, "remoteLogObservations": ["token=secret"]}
+            summary.write_text(json.dumps(invalid_signal))
+            self.assertFalse(status.validate_diagnostics(root))
+            wrong_status = {**valid, "processExitCode": 3,
+                            "processExitName": "TESTS_FAILED",
+                            "remoteLogObservations": ["GRPC_UNAVAILABLE"]}
+            summary.write_text(json.dumps(wrong_status))
+            self.assertFalse(status.validate_diagnostics(root))
+            all_signals = {**valid,
+                           "remoteLogObservations": sorted(status._REMOTE_LOG_OBSERVATIONS)}
+            encoded = json.dumps(all_signals)
+            self.assertLessEqual(len(encoded), 1024)
+            summary.write_text(encoded)
+            self.assertTrue(status.validate_diagnostics(root))
+            summary.write_text('{"privatePath":"/runner/token=secret"}')
+            self.assertFalse(status.validate_diagnostics(root))
+            summary.unlink()
+            summary.mkdir()
+            (summary / "raw.log").write_text("token=secret")
+            self.assertFalse(status.validate_diagnostics(root))
+            summary.rename(root / "retained")
+            timing.write_text("token=secret\n")
+            self.assertFalse(status.validate_diagnostics(root))
+            timing.unlink()
+            timing.mkdir()
+            (timing / "raw.log").write_text("token=secret")
+            self.assertFalse(status.validate_diagnostics(root))
+
+    def test_remote_error_log_tail_emits_only_fixed_observations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = root / "bazel_coverage.log"
+            raw.write_bytes(
+                b"x" * 70000 + b"\n"
+                b"ERROR: io.grpc.StatusRuntimeException: UNAVAILABLE: "
+                b"grpc://private.example/secret /runner/path token=secret "
+                b"Failed to download remote output\n"
+                b"ERROR: BulkTransferException: digest mismatch "
+                b"host=private.example token=secret\n"
+            )
+            observations = status.remote_log_observations(raw)
+            self.assertEqual(observations, [
+                "BULK_TRANSFER_FAILURE", "DIGEST_MISMATCH", "DOWNLOAD_FAILURE",
+                "GRPC_UNAVAILABLE",
+            ])
+            encoded = json.dumps(observations)
+            for private in ("private.example", "/runner/path", "token=secret"):
+                self.assertNotIn(private, encoded)
+            raw.write_text("ERROR: grpc://private.example/secret token=secret /runner/path\n")
+            self.assertEqual(status.remote_log_observations(raw), [])
+            raw.unlink()
+            secret = root / "secret"
+            secret.write_text("ERROR: io.grpc.StatusRuntimeException: UNAVAILABLE\n")
+            raw.symlink_to(secret)
+            self.assertEqual(status.remote_log_observations(raw), [])
+
+    def test_remote_log_patterns_are_fixed_and_skip_oversize_lines(self):
+        examples = (
+            (b"ERROR: rpc error: code = NotFound desc = ", "GRPC_NOT_FOUND"),
+            (b"ERROR: io.grpc.StatusRuntimeException: PERMISSION_DENIED: ",
+             "GRPC_PERMISSION_DENIED"),
+            (b"ERROR: io.grpc.StatusRuntimeException: UNAUTHENTICATED: ",
+             "GRPC_UNAUTHENTICATED"),
+            (b"ERROR: io.grpc.StatusRuntimeException: RESOURCE_EXHAUSTED: ",
+             "GRPC_RESOURCE_EXHAUSTED"),
+            (b"ERROR: grpc-status: 14 ", "GRPC_UNAVAILABLE"),
+            (b"ERROR: SSLHandshakeException ", "TLS_FAILURE"),
+            (b"ERROR: Connection refused ", "CONNECTION_FAILURE"),
+            (b"ERROR: checksum mismatch ", "DIGEST_MISMATCH"),
+            (b"ERROR: failed to upload ", "UPLOAD_FAILURE"),
+            (b"ERROR: failed to download ", "DOWNLOAD_FAILURE"),
+            (b"ERROR: BulkTransferException ", "BULK_TRANSFER_FAILURE"),
+            # Bazel 8.8 ByteStreamUploader and BulkTransferException formatter shapes.
+            (b"ERROR: Error while uploading artifact with digest 'abc/72' ",
+             "UPLOAD_FAILURE"),
+            (b"ERROR: 181 errors during bulk transfer: ", "BULK_TRANSFER_FAILURE"),
+            (b"ERROR: Error while downloading artifact with digest 'abc/72' ",
+             "DOWNLOAD_FAILURE"),
+            (b"ERROR: NOT_FOUND: Missing digest: abc/72 ", "GRPC_NOT_FOUND"),
+            (b"ERROR: UNAVAILABLE: remote request failed ", "GRPC_UNAVAILABLE"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            raw = Path(directory) / "bazel_coverage.log"
+            for prefix, expected in examples:
+                with self.subTest(expected=expected):
+                    raw.write_bytes(prefix + b"grpc://private.example/path token=secret\n")
+                    self.assertEqual(status.remote_log_observations(raw), [expected])
+            raw.write_bytes(
+                b"ERROR: io.grpc.StatusRuntimeException: UNAVAILABLE: "
+                + b"x" * 9000 + b"\n")
+            self.assertEqual(status.remote_log_observations(raw), [])
+            raw.write_bytes(
+                b"ERROR: io.grpc.StatusRuntimeException: UNAVAILABLE\n"
+                + b"x" * 70000 + b"\nERROR: unrelated completion\n")
+            self.assertEqual(status.remote_log_observations(raw), [])
+            self.assertEqual(status.remote_log_observations(raw.parent / "missing"), [])
+
+    def test_remote_log_cli_is_guarded_by_remote_error_status(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bep = root / "bep.json"
+            bep.write_text(json.dumps({
+                "id": {"buildFinished": {}},
+                "finished": {"exitCode": {"code": 34, "name": "REMOTE_ERROR"}},
+            }))
+            raw = root / "bazel_coverage.log"
+            raw.write_text("ERROR: rpc error: code = DeadlineExceeded "
+                           "desc = grpc://private.example token=secret\n")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                exit_code = status.main([
+                    "coverage_bep_status.py", "--failure-context", str(bep), "34", str(raw),
+                ])
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+            self.assertEqual(json.loads(stdout.getvalue())["remoteLogObservations"],
+                             ["GRPC_DEADLINE_EXCEEDED"])
+            self.assertNotIn("private.example", stdout.getvalue())
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                self.assertEqual(status.main([
+                    "coverage_bep_status.py", "--failure-context", str(bep), "3", str(raw),
+                ]), 0)
+            self.assertEqual(json.loads(stdout.getvalue())["remoteLogObservations"], [])
+
     def test_allowlisted_cases_emit_only_validated_identifiers(self):
         golden = "//donner/svg/renderer/tests:renderer_geode_golden_tests"
         baseline = "//donner/gpu/baseline:baseline_pixels_tests"

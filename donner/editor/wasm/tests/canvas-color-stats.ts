@@ -1,4 +1,4 @@
-import type { Locator, Page } from "@playwright/test";
+import { errors, type Locator, type Page } from "@playwright/test";
 import { inflateSync } from "node:zlib";
 
 export interface CssRegion {
@@ -140,6 +140,52 @@ export function isSplashCaptureUsable(census: SplashToneCensus): boolean {
   const knownTonePixels = census.darkBackgroundPixels + census.checkerboardPixels
     + census.paneBackdropPixels;
   return knownTonePixels > 0 && census.distinctColors > 1;
+}
+
+/** Fixed Playwright call-log stages; no raw timeout message or path is logged. */
+export interface ScreenshotTimeoutStage {
+  takingPageScreenshot: boolean;
+  waitingForFonts: boolean;
+  fontsLoaded: boolean;
+}
+
+function screenshotTimeoutStage(message: string): ScreenshotTimeoutStage {
+  return {
+    takingPageScreenshot: message.includes("taking page screenshot"),
+    waitingForFonts: message.includes("waiting for fonts to load"),
+    fontsLoaded: message.includes("fonts loaded"),
+  };
+}
+
+export interface EditorPageCapture {
+  png: Buffer;
+  usable: boolean;
+  attempts: number;
+  timedOutCaptures: number;
+  timeoutStage: ScreenshotTimeoutStage | null;
+}
+
+/** One screenshot only; returned pixels go to the existing visual oracle. */
+export async function captureEditorPage(
+  page: Page,
+  timeoutMs?: number,
+): Promise<EditorPageCapture> {
+  console.log("editor-page-capture: screenshot-start");
+  try {
+    // A Playwright action timeout can return while Firefox still processes
+    // Page.screenshot. A second attempt then queues behind the first. Callers
+    // with an absolute visual deadline pass its remaining budget here.
+    const png = await page.screenshot(timeoutMs === undefined ? undefined : { timeout: timeoutMs });
+    console.log("editor-page-capture: screenshot-returned");
+    return { png, usable: true, attempts: 1, timedOutCaptures: 0, timeoutStage: null };
+  } catch (error) {
+    if (!(error instanceof errors.TimeoutError)) {
+      throw error;
+    }
+    const timeoutStage = screenshotTimeoutStage(error.message);
+    console.log(`editor-page-capture: screenshot-timeout ${JSON.stringify(timeoutStage)}`);
+    return { png: Buffer.alloc(0), usable: false, attempts: 1, timedOutCaptures: 1, timeoutStage };
+  }
 }
 
 /** One capture, scored for both presentation coverage and letter geometry. */
@@ -791,15 +837,35 @@ export async function readEditorPixelBounds(
 export async function readEditorResizePixelBounds(
   page: Page,
   region: CssRegion,
-): Promise<{ blue: PixelBounds | null; teal: PixelBounds | null; png: Buffer }> {
+): Promise<{
+  blue: PixelBounds | null;
+  teal: PixelBounds | null;
+  png: Buffer;
+  usableCapture: boolean;
+  captureAttempts: number;
+  timedOutCaptures: number;
+  timeoutStage: ScreenshotTimeoutStage | null;
+}> {
   const viewport = page.viewportSize();
   if (viewport === null) {
     throw new Error("the browser viewport is unavailable for the resize pixel probe");
   }
-  // Firefox can return an empty clipped WebGPU canvas capture while the same
-  // frame is visible in a full-page screenshot. Take one un-clipped image and
-  // constrain both color searches to the published document rectangle.
-  const shot = await page.screenshot();
+  // A clipped Firefox WebGPU screenshot can omit the canvas, and even a full-
+  // page screenshot can be uniformly black. Score only a capture that contains
+  // the editor backdrop; the bounded helper retains the last PNG on failure.
+  const capture = await captureEditorPage(page);
+  const shot = capture.png;
+  if (!capture.usable) {
+    return {
+      blue: null,
+      teal: null,
+      png: shot,
+      usableCapture: false,
+      captureAttempts: capture.attempts,
+      timedOutCaptures: capture.timedOutCaptures,
+      timeoutStage: capture.timeoutStage,
+    };
+  }
   const documentBounds = {
     minX: region.x,
     minY: region.y,
@@ -823,7 +889,15 @@ export async function readEditorResizePixelBounds(
       maxY: bounds.maxY - region.y,
       pixels: bounds.pixels,
     };
-  return { blue: relativeToDocument(blue), teal: relativeToDocument(teal), png: shot };
+  return {
+    blue: relativeToDocument(blue),
+    teal: relativeToDocument(teal),
+    png: shot,
+    usableCapture: true,
+    captureAttempts: capture.attempts,
+    timedOutCaptures: capture.timedOutCaptures,
+    timeoutStage: capture.timeoutStage,
+  };
 }
 
 export interface EditorBackgroundCoverageStats {

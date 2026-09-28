@@ -69,12 +69,37 @@ struct FrozenEnvironment {
   std::string slug;
   std::string adapterName;
   std::string adapterBackend;
+  std::string adapterType;
+  std::string hostArchitecture;
+  std::string schemaVersion;
+  std::string rendererPath;
 };
 
 struct FrozenMatch {
   std::optional<std::string> slug;
   bool ambiguous = false;
 };
+
+bool SameSoftwareVulkanEnvironment(const CaptureEnvironment& live,
+                                   const FrozenEnvironment& candidate) {
+  if (live.adapterBackend != "Vulkan" ||
+      (live.adapterType != "CPU" && candidate.adapterType != "CPU")) {
+    return true;
+  }
+  if (live.adapterType != "CPU" || candidate.adapterType != "CPU") {
+    return false;
+  }
+  if (candidate.rendererPath != "wgpu-native Geode production path (GeodeDevice+GeoEncoder)") {
+    return false;
+  }
+  if (!candidate.hostArchitecture.empty()) {
+    return candidate.hostArchitecture == live.hostArchitecture;
+  }
+  // Schema 1 predates the architecture field. Only the original wgpu-native x86 capture may
+  // match without it; an ARM software rasterizer must never inherit those frozen pixels.
+  return live.hostArchitecture == "x86_64" && candidate.schemaVersion == "1" &&
+         candidate.rendererPath == "wgpu-native Geode production path (GeodeDevice+GeoEncoder)";
+}
 
 /// The old Vulkan capture records WebGPU's vendor prefix before the Vulkan physical-device name.
 /// An exact name wins; a suffix is accepted only when one frozen adapter matches it.
@@ -87,7 +112,8 @@ FrozenMatch MatchFrozenEnvironment(const CaptureEnvironment& live,
   std::optional<std::string> legacy;
   bool multipleLegacy = false;
   for (const FrozenEnvironment& candidate : frozen) {
-    if (candidate.adapterBackend != live.adapterBackend) {
+    if (candidate.adapterBackend != live.adapterBackend ||
+        !SameSoftwareVulkanEnvironment(live, candidate)) {
       continue;
     }
     if (candidate.adapterName == live.adapterName) {
@@ -132,7 +158,13 @@ FrozenMatch FrozenSlugFor(const CaptureEnvironment& live) {
     const auto name = values.find("adapterName");
     const auto backend = values.find("adapterBackend");
     if (name != values.end() && backend != values.end()) {
-      frozen.push_back({it->path().filename().string(), name->second, backend->second});
+      const auto valueOrEmpty = [&values](std::string_view key) {
+        const auto value = values.find(std::string(key));
+        return value == values.end() ? std::string() : value->second;
+      };
+      frozen.push_back({it->path().filename().string(), name->second, backend->second,
+                        valueOrEmpty("adapterType"), valueOrEmpty("hostArchitecture"),
+                        valueOrEmpty("schemaVersion"), valueOrEmpty("rendererPath")});
     }
   }
   return error ? FrozenMatch{.ambiguous = true} : MatchFrozenEnvironment(live, frozen);
@@ -159,6 +191,71 @@ TEST(FrozenEnvironmentMatchTest, RequiresIdentityAndUniqueLegacySuffix) {
                                                           {"legacy", "vendor llvmpipe", "Vulkan"}})
           .slug,
       testing::Optional(testing::Eq("exact")));
+}
+
+TEST(FrozenEnvironmentMatchTest, SoftwareVulkanWithoutArchitectureDoesNotUseTheLegacyCapture) {
+  EXPECT_THAT(
+      MatchFrozenEnvironment({"llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan", "CPU"},
+                             {{"legacy", "llvmpipe llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan"}})
+          .slug,
+      testing::Eq(std::nullopt));
+}
+
+TEST(FrozenEnvironmentMatchTest, SoftwareVulkanRequiresTheSameHostArchitecture) {
+  const FrozenEnvironment legacy = {"legacy_x86",
+                                    "llvmpipe llvmpipe (LLVM 21.1.7, 128 bits)",
+                                    "Vulkan",
+                                    "CPU",
+                                    "",
+                                    "1",
+                                    "wgpu-native Geode production path (GeodeDevice+GeoEncoder)"};
+  const FrozenEnvironment arm = {"arm64",
+                                 "llvmpipe llvmpipe (LLVM 21.1.7, 128 bits)",
+                                 "Vulkan",
+                                 "CPU",
+                                 "aarch64",
+                                 "2",
+                                 "wgpu-native Geode production path (GeodeDevice+GeoEncoder)"};
+  const CaptureEnvironment x86Live = {"llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan", "CPU",
+                                      "x86_64"};
+  const CaptureEnvironment armLive = {"llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan", "CPU",
+                                      "aarch64"};
+  EXPECT_THAT(MatchFrozenEnvironment(x86Live, {legacy}).slug,
+              testing::Optional(testing::Eq("legacy_x86")));
+  EXPECT_THAT(MatchFrozenEnvironment(armLive, {legacy}).slug, testing::Eq(std::nullopt));
+  EXPECT_THAT(MatchFrozenEnvironment(armLive, {legacy, arm}).slug,
+              testing::Optional(testing::Eq("arm64")));
+  EXPECT_THAT(MatchFrozenEnvironment(x86Live, {legacy, arm}).slug,
+              testing::Optional(testing::Eq("legacy_x86")));
+  EXPECT_THAT(
+      MatchFrozenEnvironment({armLive.adapterName, "Vulkan", "Unknown", "aarch64"}, {legacy, arm})
+          .slug,
+      testing::Eq(std::nullopt));
+  EXPECT_THAT(MatchFrozenEnvironment(x86Live, {{"untraceable", legacy.adapterName, "Vulkan", "CPU",
+                                                "", "2", "native Geode"}})
+                  .slug,
+              testing::Eq(std::nullopt));
+  EXPECT_THAT(MatchFrozenEnvironment(armLive, {{"native", arm.adapterName, "Vulkan", "CPU",
+                                                "aarch64", "2", "native Geode"}})
+                  .slug,
+              testing::Eq(std::nullopt));
+}
+
+TEST(FrozenEnvironmentMatchTest, MetalKeepsItsExistingAdapterNameKey) {
+  EXPECT_THAT(MatchFrozenEnvironment({"Apple M1 Pro", "Metal", "Unknown", "aarch64"},
+                                     {{"metal", "Apple M1 Pro", "Metal", "IntegratedGPU", "", "1",
+                                       "wgpu-native Geode"}})
+                  .slug,
+              testing::Optional(testing::Eq("metal")));
+}
+
+TEST(FrozenEnvironmentMatchTest, SoftwareVulkanSlugSeparatesArm64FromLegacyX86) {
+  EXPECT_THAT(EnvironmentSlug({"llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan", "CPU", "x86_64"}),
+              testing::Eq("llvmpipe_llvm_21_1_7_128_bits_vulkan"));
+  EXPECT_THAT(EnvironmentSlug({"llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan", "CPU", "aarch64"}),
+              testing::Eq("llvmpipe_llvm_21_1_7_128_bits_vulkan_aarch64"));
+  EXPECT_THAT(EnvironmentSlug({"Apple M1 Pro", "Metal", "IntegratedGPU", "aarch64"}),
+              testing::Eq("apple_m1_pro_metal"));
 }
 
 bool ProvenanceListsScene(const std::string& capturedScenes, std::string_view sceneName) {

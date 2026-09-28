@@ -639,6 +639,7 @@ GEODE_ORACLE_RUNTIME = "//third_party/webgpu-cpp:wgpu_native_reference_runtime"
 GEODE_ORACLE_VISIBILITY = {
     "geode_wgpu_util": ("//visibility:private",),
     "geode_device_wgpu_reference_linux": (
+        "//donner/gpu/baseline:__pkg__",
         "//donner/svg/renderer:__pkg__", "//donner/svg/renderer/tests:__pkg__",
     ),
 }

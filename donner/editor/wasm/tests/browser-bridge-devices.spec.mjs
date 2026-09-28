@@ -40,6 +40,70 @@ async function beginReady(bridge, handle) {
   );
 }
 
+test("browser acquisition failures expose fixed stages without rejected message text", async () => {
+  const secret = "secret-token https://example.invalid/private/path";
+  const cases = [
+    {
+      name: "adapter-null",
+      requestAdapterForTesting: async () => null,
+      expected: "adapter_null",
+    },
+    {
+      name: "adapter-rejected",
+      requestAdapterForTesting: async () => {
+        throw new Error(secret);
+      },
+      expected: "adapter_rejected",
+    },
+    {
+      name: "adapter-threw",
+      requestAdapterForTesting: () => {
+        throw new Error(secret);
+      },
+      expected: "adapter_rejected",
+    },
+    {
+      name: "device-rejected",
+      requestAdapterForTesting: async () => ({
+        requestDevice: async () => {
+          throw new Error(secret);
+        },
+      }),
+      expected: "device_rejected",
+    },
+  ];
+  for (const fixture of cases) {
+    const bridge = loadLibrary({ requestAdapterForTesting: fixture.requestAdapterForTesting });
+    const { entryPoints, state } = bridge;
+    assert.equal(entryPoints.donner_gpu_begin_device_request(kFirst), state.kSuccess);
+    await until(
+      () => entryPoints.donner_gpu_device_request_state(kFirst) !== state.kRequestPending,
+      fixture.name,
+    );
+    assert.equal(entryPoints.donner_gpu_device_request_state(kFirst), state.kRequestFailed);
+    const destination = bridge.reserve(256);
+    const length = entryPoints.donner_gpu_read_request_error(kFirst, destination, 256);
+    const reason = bridge.text(destination, length);
+    assert.equal(reason, fixture.expected);
+    assert.equal(reason.includes(secret), false);
+  }
+});
+
+test("absent browser GPU API has an unavailable state without an error message", () => {
+  const bridge = loadLibrary({ navigatorGpuAvailable: false });
+  const { entryPoints, state } = bridge;
+  assert.equal(entryPoints.donner_gpu_begin_device_request(kFirst), state.kSuccess);
+  assert.equal(entryPoints.donner_gpu_device_request_state(kFirst), state.kRequestUnavailable);
+  const destination = bridge.reserve(256);
+  assert.equal(entryPoints.donner_gpu_read_request_error(kFirst, destination, 256), 0);
+});
+
+test("browser adapter acquisition begins in the requesting call", () => {
+  const bridge = loadLibrary();
+  assert.equal(bridge.entryPoints.donner_gpu_begin_device_request(kFirst), bridge.state.kSuccess);
+  assert.equal(bridge.adapterRequests, 1);
+});
+
 test("tearing down a second logical device leaves the first one's device and objects in place", async () => {
   const bridge = loadLibrary();
   const { entryPoints, state } = bridge;
