@@ -62,6 +62,7 @@ type ProbeGlobal = typeof globalThis & {
     promise: Promise<void>;
     release: () => void;
     calls: number;
+    waits: number;
   };
 };
 
@@ -365,6 +366,8 @@ function waitForCanvasGpuWorkInWorker(): Promise<number> {
   if (completion === undefined) {
     throw new Error("the probe has not observed a canvas completion promise");
   }
+  const hold = (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletionHold;
+  if (hold !== undefined) ++hold.waits;
   return completion.promise.then(() => completion.submissions);
 }
 
@@ -442,6 +445,7 @@ export async function selfCheckSurfaceFrameProbe(
 // screenshot's GPU gate. No queue work is added or delayed on ordinary paths.
 export async function holdCanvasCompletionForTest(page: Page): Promise<{
   observedCalls: () => Promise<number>;
+  enteredWaits: () => Promise<number>;
   release: () => Promise<void>;
 }> {
   const workers = probedWorkers.get(page) ?? [];
@@ -451,7 +455,7 @@ export async function holdCanvasCompletionForTest(page: Page): Promise<{
     const promise = new Promise<void>((resolve) => {
       release = resolve;
     });
-    scope.__donnerSurfaceFrameProbeCompletionHold = { promise, release, calls: 0 };
+    scope.__donnerSurfaceFrameProbeCompletionHold = { promise, release, calls: 0, waits: 0 };
     return true;
   });
   if (workers.length === 0 || armed.some((result) => result !== true)) {
@@ -462,6 +466,13 @@ export async function holdCanvasCompletionForTest(page: Page): Promise<{
       const counts = await evaluateInWorkers(
         workers,
         () => (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletionHold?.calls ?? 0,
+      );
+      return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0);
+    },
+    enteredWaits: async () => {
+      const counts = await evaluateInWorkers(
+        workers,
+        () => (globalThis as ProbeGlobal).__donnerSurfaceFrameProbeCompletionHold?.waits ?? 0,
       );
       return counts.reduce<number>((sum, count) => sum + (count ?? 0), 0);
     },

@@ -1,4 +1,4 @@
-import { expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
+import { errors, expect, type Page, test, type TestInfo, type Worker } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import {
   type CanvasColorStats,
@@ -1529,10 +1529,14 @@ async function awaitBeforeBlueDeadline<T>(
 async function captureAfterCanvasGpuCompletion<T>(
   owner: Worker,
   deadlineAtMs: number,
-  capture: () => Promise<T>,
+  capture: (remainingMs: number) => Promise<T>,
 ): Promise<T> {
   await awaitBeforeBlueDeadline(waitForSubmittedCanvasGpuWork(owner), deadlineAtMs);
-  return capture();
+  const remainingMs = deadlineAtMs - performance.now();
+  if (remainingMs < 1) {
+    throw new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline");
+  }
+  return capture(remainingMs);
 }
 
 interface InitialBlueFrameState {
@@ -1565,7 +1569,7 @@ async function captureReadyBasicShapesFrame<T>(
   state: InitialBlueFrameState,
   beforeSample: number,
   deadlineAtMs: number,
-  capture: () => Promise<T>,
+  capture: (remainingMs: number) => Promise<T>,
 ): Promise<T | null> {
   if (!hasPresentedBasicShapesHostFrame(state, beforeSample)) return null;
   const owner = await awaitBeforeBlueDeadline(findCanvasOwnerWorker(page), deadlineAtMs);
@@ -1612,16 +1616,18 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
       readyState,
       before.results,
       performance.now() + scaledMs(5_000),
-      () => {
+      (remainingMs) => {
         ++screenshots;
-        return captureEditorPage(page);
+        return captureEditorPage(page, remainingMs);
       },
     ).finally(() => {
       settled = true;
     });
-    // Another worker round trip proves the evaluator is responsive while the
-    // app reports a completed and presented sample, yet capture is still held.
-    await page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0);
+    // Wait until this exact gate is entered, or a bypass starts the capture.
+    // A page round trip alone can finish before worker-owner discovery.
+    await expect.poll(async () => screenshots > 0 || (await hold.enteredWaits()) > 0, {
+      timeout: scaledMs(5_000),
+    }).toBe(true);
     expect(screenshots).toBe(0);
     expect(settled).toBe(false);
     await hold.release();
@@ -1683,6 +1689,19 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
     noCapture,
   )).rejects.toThrow("exceeded the blue-pixel deadline");
   expect(forbiddenCaptures).toBe(0);
+  let boundedShots = 0;
+  let forwardedTimeout: number | undefined;
+  const timedOutPage = {
+    screenshot: async (options?: { timeout?: number }) => {
+      ++boundedShots;
+      forwardedTimeout = options?.timeout;
+      throw new errors.TimeoutError("Timeout exceeded while taking page screenshot");
+    },
+  } as unknown as Page;
+  const boundedCapture = await captureEditorPage(timedOutPage, 7);
+  expect(boundedCapture.usable).toBe(false);
+  expect(boundedShots).toBe(1);
+  expect(forwardedTimeout).toBe(7);
   expect(fatalMessages).toEqual([]);
 });
 
@@ -1772,7 +1791,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
         state,
         beforeSample,
         blueDeadlineAtMs,
-        () => captureEditorPage(page),
+        (remainingMs) => captureEditorPage(page, remainingMs),
       );
       if (capture === null) return 0;
       screenshotTimeouts += capture.timedOutCaptures;

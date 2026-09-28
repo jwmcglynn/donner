@@ -166,13 +166,16 @@ export interface EditorPageCapture {
 }
 
 /** One screenshot only; returned pixels go to the existing visual oracle. */
-export async function captureEditorPage(page: Page): Promise<EditorPageCapture> {
+export async function captureEditorPage(
+  page: Page,
+  timeoutMs?: number,
+): Promise<EditorPageCapture> {
   console.log("editor-page-capture: screenshot-start");
   try {
     // A Playwright action timeout can return while Firefox still processes
-    // Page.screenshot. A second attempt then queues behind the first. The
-    // caller's poll or test deadline still bounds visual acceptance.
-    const png = await page.screenshot();
+    // Page.screenshot. A second attempt then queues behind the first. Callers
+    // with an absolute visual deadline pass its remaining budget here.
+    const png = await page.screenshot(timeoutMs === undefined ? undefined : { timeout: timeoutMs });
     console.log("editor-page-capture: screenshot-returned");
     return { png, usable: true, attempts: 1, timedOutCaptures: 0, timeoutStage: null };
   } catch (error) {
