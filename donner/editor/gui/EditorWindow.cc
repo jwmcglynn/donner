@@ -1908,6 +1908,30 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     return;
   }
 
+#ifndef __EMSCRIPTEN__
+  if (options_.offscreen && !useNullPlatform && offscreenScale != 1.0) {
+    int nativeLogicalWidth = 0;
+    int nativeLogicalHeight = 0;
+    glfwGetWindowSize(window_, &nativeLogicalWidth, &nativeLogicalHeight);
+    int nativeFramebufferWidth = 0;
+    int nativeFramebufferHeight = 0;
+    glfwGetFramebufferSize(window_, &nativeFramebufferWidth, &nativeFramebufferHeight);
+    const double nativeScaleX =
+        nativeLogicalWidth > 0 && nativeFramebufferWidth > 0
+            ? static_cast<double>(nativeFramebufferWidth) / static_cast<double>(nativeLogicalWidth)
+            : 1.0;
+    const double nativeScaleY = nativeLogicalHeight > 0 && nativeFramebufferHeight > 0
+                                    ? static_cast<double>(nativeFramebufferHeight) /
+                                          static_cast<double>(nativeLogicalHeight)
+                                    : nativeScaleX;
+    const int emulatedLogicalWidth = static_cast<int>(std::lround(
+        static_cast<double>(initialWidth) * offscreenScale / std::max(nativeScaleX, 0.001)));
+    const int emulatedLogicalHeight = static_cast<int>(std::lround(
+        static_cast<double>(initialHeight) * offscreenScale / std::max(nativeScaleY, 0.001)));
+    glfwSetWindowSize(window_, emulatedLogicalWidth, emulatedLogicalHeight);
+  }
+#endif
+
 #ifdef __EMSCRIPTEN__
   emscripten_glfw_make_canvas_resizable(window_, "window", nullptr);
 #endif
@@ -2027,27 +2051,6 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     return;
   }
 
-  if (options_.offscreen && !useNullPlatform && offscreenScale != 1.0) {
-    int nativeLogicalWidth = 0;
-    int nativeLogicalHeight = 0;
-    glfwGetWindowSize(window_, &nativeLogicalWidth, &nativeLogicalHeight);
-    int nativeFramebufferWidth = 0;
-    int nativeFramebufferHeight = 0;
-    glfwGetFramebufferSize(window_, &nativeFramebufferWidth, &nativeFramebufferHeight);
-    const double nativeScaleX =
-        nativeLogicalWidth > 0 && nativeFramebufferWidth > 0
-            ? static_cast<double>(nativeFramebufferWidth) / static_cast<double>(nativeLogicalWidth)
-            : 1.0;
-    const double nativeScaleY = nativeLogicalHeight > 0 && nativeFramebufferHeight > 0
-                                    ? static_cast<double>(nativeFramebufferHeight) /
-                                          static_cast<double>(nativeLogicalHeight)
-                                    : nativeScaleX;
-    const int emulatedLogicalWidth = static_cast<int>(std::lround(
-        static_cast<double>(initialWidth) * offscreenScale / std::max(nativeScaleX, 0.001)));
-    const int emulatedLogicalHeight = static_cast<int>(std::lround(
-        static_cast<double>(initialHeight) * offscreenScale / std::max(nativeScaleY, 0.001)));
-    glfwSetWindowSize(window_, emulatedLogicalWidth, emulatedLogicalHeight);
-  }
 #endif
 #endif
 
