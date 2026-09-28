@@ -425,6 +425,47 @@ TEST(ViewportStateTest, SelectedPrewarmDoesNotExpandFullyCoveredAxisBeyondDocume
          "document.";
 }
 
+TEST(ViewportStateTest, FractionalZoomSelectedPrewarmPreservesFullyCoveredAxis) {
+  for (const bool transpose : {false, true}) {
+    SCOPED_TRACE(transpose ? "fully covered width" : "fully covered height");
+    const auto orient = [transpose](Vector2d value) {
+      return transpose ? Vector2d(value.y, value.x) : value;
+    };
+    ViewportState viewport =
+        MakeFreshState(orient(Vector2d(40.0, 8.0)), orient(Vector2d(1025.0, 884.0)),
+                       Box2d(Vector2d::Zero(), orient(Vector2d(892.0, 512.0))), 2.0);
+    viewport.zoom = 1.8;
+    viewport.panDocPoint = orient(Vector2d(302.0, 390.0));
+    viewport.panScreenPoint = orient(Vector2d(550.0, 440.0));
+    const EditorRasterViewport base = viewport.rasterViewport();
+    const EditorRasterViewport padded = viewport.selectedPrewarmRasterViewport();
+    ASSERT_THAT(base.viewportBounded, ::testing::IsTrue());
+    ASSERT_THAT(padded.viewportBounded, ::testing::IsTrue());
+    EXPECT_THAT(padded.semanticCanvasSizePx, ::testing::Eq(base.semanticCanvasSizePx));
+    const Vector2d baseOrigin = orient(base.documentRect.topLeft);
+    const Vector2d paddedOrigin = orient(padded.documentRect.topLeft);
+    const Vector2d baseEnd = orient(base.documentRect.bottomRight);
+    const Vector2d paddedEnd = orient(padded.documentRect.bottomRight);
+    EXPECT_THAT(paddedOrigin.y, ::testing::Eq(baseOrigin.y));
+    EXPECT_THAT(paddedEnd.y, ::testing::Eq(baseEnd.y));
+    EXPECT_THAT(paddedOrigin.x, ::testing::Le(baseOrigin.x));
+    EXPECT_THAT(paddedEnd.x, ::testing::Ge(baseEnd.x));
+  }
+}
+
+TEST(ViewportStateTest, SelectedPrewarmAtRasterLimitKeepsPannedCoverage) {
+  ViewportState viewport = MakeFreshState(Vector2d::Zero(), Vector2d(3000.0, 600.0),
+                                          Box2d::FromXYWH(0.0, 0.0, 5000.0, 1000.0), 2.0);
+  viewport.panDocPoint = Vector2d(4250.0, 500.0);
+  viewport.panScreenPoint = Vector2d(1500.0, 300.0);
+  const EditorRasterViewport base = viewport.rasterViewport();
+  const EditorRasterViewport padded = viewport.selectedPrewarmRasterViewport();
+  ASSERT_THAT(padded.outputSizePx.x, ::testing::Eq(ViewportState::kMaxCanvasDim));
+  EXPECT_THAT(padded.documentRect.topLeft.x, ::testing::Gt(viewport.documentViewBox.topLeft.x));
+  EXPECT_THAT(padded.documentRect.topLeft.x, ::testing::Le(base.documentRect.topLeft.x));
+  EXPECT_THAT(padded.documentRect.bottomRight.x, ::testing::Ge(base.documentRect.bottomRight.x));
+}
+
 TEST(ViewportStateTest, SelectedPrewarmRasterViewportAddsBoundedOverdraw) {
   ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 600.0),
                                    Box2d::FromXYWH(100.0, 200.0, 1000.0, 1000.0),

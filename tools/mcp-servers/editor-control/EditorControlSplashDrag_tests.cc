@@ -109,6 +109,48 @@ TEST(EditorControlSessionTest, RejectsWorkerDocumentHoldOutsideReplayedFrames) {
   EXPECT_THAT(result.body.value("error", ""), testing::HasSubstr("within the replayed frames"));
 }
 
+TEST(EditorControlSessionTest, FractionalZoomFirstDragCapture) {
+  const char* srcdir = std::getenv("TEST_SRCDIR");
+  const char* workspace = std::getenv("TEST_WORKSPACE");
+  ASSERT_NE(srcdir, nullptr);
+  ASSERT_NE(workspace, nullptr);
+  const std::filesystem::path root = std::filesystem::path(srcdir) / workspace;
+  const std::filesystem::path rnrPath =
+      root / "tools/mcp-servers/editor-control/testdata/first-drag-fractional-zoom.rnr";
+  const char* outputs = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  const std::filesystem::path outputDir =
+      (outputs != nullptr ? std::filesystem::path(outputs) : TestTempDir()) /
+      "fractional-first-drag";
+  EditorControlSession session;
+  const ToolCallResult capture = session.handleToolCall(
+      "replay_rnr", nlohmann::json{{"rnr_path", rnrPath.string()},
+                                   {"svg_path", (root / "donner_splash.svg").string()},
+                                   {"gl_readback", true},
+                                   {"gl_capture_frame", 9},
+                                   {"gl_crop", "document-canvas"},
+                                   {"gl_output_dir", outputDir.string()},
+                                   {"include_gl_images", false}});
+  ASSERT_THAT(capture.isError, testing::IsFalse()) << capture.body.dump(2);
+  EXPECT_THAT(capture.body.value("capture_count", 0), testing::Eq(1));
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = rnrPath;
+  options.svgPathOverride = root / "donner_splash.svg";
+  options.outputDir = outputDir / "drained";
+  options.captureFrames = {9};
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_THAT(repro::RunGlRnrReplay(options, &result, &error), testing::IsTrue()) << error;
+  ASSERT_THAT(result.finalSelectedElementLabel, testing::Optional(testing::HasSubstr("Donner_D")));
+  ASSERT_THAT(result.frameDiagnostics.size(), testing::Eq(10u));
+  const auto& released = result.frameDiagnostics.back();
+  EXPECT_GT(released.documentFrameVersion, result.frameDiagnostics.front().documentFrameVersion);
+  EXPECT_EQ(released.displayedDocVersion, released.documentFrameVersion)
+      << "Completed drag renders must cover and replace the visible pre-drag artwork";
+}
+
 TEST(EditorControlSessionTest, SplashFirstDragCapture) {
   const char* outputs = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
   const std::filesystem::path outputDir = outputs != nullptr ? outputs : TestTempDir();

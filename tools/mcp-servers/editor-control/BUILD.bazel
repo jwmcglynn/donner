@@ -93,7 +93,10 @@ donner_cc_test(
         "EditorControlReplay_tests.cc",
         "EditorControlSplashDrag_tests.cc",
     ],
-    data = ["//:donner_splash.svg"],
+    data = [
+        "testdata/first-drag-fractional-zoom.rnr",
+        "//:donner_splash.svg",
+    ],
     opens_gpu_device = True,
     renderer_backend = EDITOR_RENDERER_BACKEND,
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
