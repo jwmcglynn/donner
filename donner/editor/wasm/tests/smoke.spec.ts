@@ -1536,7 +1536,11 @@ async function captureAfterCanvasGpuCompletion<T>(
   if (remainingMs < 1) {
     throw new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline");
   }
-  return capture(remainingMs);
+  const result = await capture(remainingMs);
+  if (performance.now() >= deadlineAtMs) {
+    throw new Error("Basic Shapes canvas GPU completion exceeded the blue-pixel deadline");
+  }
+  return result;
 }
 
 interface InitialBlueFrameState {
@@ -1702,6 +1706,17 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
   expect(boundedCapture.usable).toBe(false);
   expect(boundedShots).toBe(1);
   expect(forwardedTimeout).toBe(7);
+  let lateCaptures = 0;
+  await expect(captureAfterCanvasGpuCompletion(
+    { evaluate: () => Promise.resolve(1) } as unknown as Worker,
+    performance.now() + 200,
+    async () => {
+      ++lateCaptures;
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      return "late";
+    },
+  )).rejects.toThrow("exceeded the blue-pixel deadline");
+  expect(lateCaptures).toBe(1);
   expect(fatalMessages).toEqual([]);
 });
 
@@ -1827,6 +1842,9 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
           maxY: blue.maxY - region.y,
           pixels: blue.pixels,
         };
+        if (performance.now() >= blueDeadlineAtMs) {
+          throw new Error("Basic Shapes blue-pixel acceptance exceeded the deadline");
+        }
         return blue.pixels;
       }
       return 0;
