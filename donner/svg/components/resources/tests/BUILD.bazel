@@ -1,4 +1,3 @@
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_test")
 
 donner_cc_test(
@@ -33,5 +32,3 @@ donner_cc_fuzzer(
         "//donner/svg/components/resources:resource_manager_context",
     ],
 )
-
-donner_package()

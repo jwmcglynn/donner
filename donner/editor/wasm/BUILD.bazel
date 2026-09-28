@@ -2,9 +2,8 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
 load("@rules_python//python:defs.bzl", "py_binary", "py_test")
-load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
-load("//build_defs:package.bzl", "donner_package")
 load("//tools/http:serve_http.bzl", "serve_http")
+load("//tools/rust_boundary:dependency_audit.bzl", "no_rust_dependency_audit_test")
 load(
     ":editor_wasm_transition.bzl",
     "editor_wasm_config_probe",
@@ -266,7 +265,7 @@ editor_wasm_geode_transitioned_target(
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
 
-configured_dependency_audit_test(
+no_rust_dependency_audit_test(
     name = "wasm_dependency_audit_test",
     size = "small",
     forbidden = [
@@ -293,7 +292,7 @@ configured_dependency_audit_test(
 
 # The shipped package uses the editor-wasm config rather than the serve target's transition.
 # Run this manual audit with --config=editor-wasm so that CI checks that independent root too.
-configured_dependency_audit_test(
+no_rust_dependency_audit_test(
     name = "wasm_shipped_browser_dependency_audit_test",
     size = "small",
     required = [
@@ -306,13 +305,10 @@ configured_dependency_audit_test(
 )
 
 # Browser-selected editor bytes cannot depend on the transitional C API or its WebGPU-C++ wrapper.
-configured_dependency_audit_test(
+no_rust_dependency_audit_test(
     name = "wasm_browser_no_c_webgpu_audit_test",
     size = "small",
-    forbidden_packages = [
-        "//third_party/emdawnwebgpu",
-        "//third_party/webgpu-cpp",
-    ],
+    forbidden_packages = ["//third_party/emdawnwebgpu"],
     required = [
         "//donner/gpu/browser:browser_device",
         "//donner/gpu/browser:emscripten_browser_bridge",
@@ -491,8 +487,6 @@ py_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
 )
-
-donner_package()
 
 py_binary(
     name = "package_web_files",

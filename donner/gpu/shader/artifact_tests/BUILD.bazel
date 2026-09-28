@@ -1,5 +1,4 @@
 load("@rules_python//python:defs.bzl", "py_test")
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_binary")
 load(
     "//donner/gpu/shader:shader_families.bzl",
@@ -1883,5 +1882,3 @@ py_test(
     main = "inspect_projection_binary.py",
     target_compatible_with = _NATIVE,
 )
-
-donner_package()

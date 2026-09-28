@@ -1,7 +1,6 @@
 """Renderer benchmarks: backend-independent document-preparation timing, plus per-phase
 timing for the Geode WebGPU/Slug backend."""
 
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -86,5 +85,3 @@ donner_cc_binary(
         "//donner/svg/renderer/geode:geode_device",
     ],
 )
-
-donner_package()

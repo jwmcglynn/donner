@@ -1,4 +1,3 @@
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library")
 
 donner_cc_library(
@@ -45,5 +44,3 @@ donner_cc_library(
     # iterative archive resolution; gold does not. Force the object in via whole-archive.
     alwayslink = True,
 )
-
-donner_package()

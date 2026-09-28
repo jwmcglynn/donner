@@ -1,11 +1,4 @@
-"""Shared Rust path scopes and build-graph tokens for the GPU inventory tooling.
-
-`generate_gpu_manifests.py` and `check_no_rust_dependencies.py` have to agree
-exactly on which files are build graph, which tokens name a Rust build rule, and
-which path prefixes carry which permission. They used to hold two copies of that
-knowledge with a "keep in sync" comment; a divergence would have shown up as a
-verifier finding the manifest never recorded, or the reverse.
-"""
+"""Path scopes and build-graph tokens for the no-Rust boundary checks."""
 
 from __future__ import annotations
 
@@ -124,7 +117,7 @@ class RustScopes:
 
 
 def load_rust_scopes(allowlist_path: Path) -> RustScopes:
-    """Loads the Rust path scopes from tools/gpu_inventory/rust_allowlist.json."""
+    """Loads the Rust path scopes from tools/rust_boundary/rust_allowlist.json."""
     data = json.loads(Path(allowlist_path).read_text(encoding="utf-8"))
     return RustScopes(
         inert_reference_prefixes=tuple(data["inertReferencePrefixes"]),

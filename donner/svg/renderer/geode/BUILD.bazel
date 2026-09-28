@@ -15,7 +15,6 @@ load("@bazel_skylib//lib:selects.bzl", "selects")
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load(
     "//donner/gpu/shader:shader_families.bzl",
@@ -1131,5 +1130,3 @@ donner_multi_transitioned_test(
     opens_gpu_device = True,
     renderer_backend = "geode",
 )
-
-donner_package()

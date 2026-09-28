@@ -1,4 +1,3 @@
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
@@ -339,5 +338,3 @@ donner_cc_fuzzer(
         ":base",
     ],
 )
-
-donner_package()

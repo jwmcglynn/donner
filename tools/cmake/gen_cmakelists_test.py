@@ -649,5 +649,30 @@ class RustToolchainInEmittedCMakeTest(unittest.TestCase):
         )
 
 
+class InstallSurfaceInEmittedCMakeTest(unittest.TestCase):
+    def test_install_rule_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "CMakeLists.txt").write_text(
+                "install(TARGETS donner DESTINATION lib)\n",
+                encoding="utf-8",
+            )
+            errors = g._validate_generated_output(root, root, {Path("CMakeLists.txt")})
+        self.assertTrue(
+            any("before install artifacts are scanned" in error for error in errors),
+            errors,
+        )
+
+    def test_ordinary_generated_tree_has_no_install_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "CMakeLists.txt").write_text(
+                "add_library(donner INTERFACE)\n",
+                encoding="utf-8",
+            )
+            errors = g._install_surface_errors(root, {Path("CMakeLists.txt")})
+        self.assertEqual(errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()

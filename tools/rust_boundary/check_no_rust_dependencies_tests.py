@@ -175,6 +175,51 @@ class TestOnlyOracleTest(unittest.TestCase):
         self.assertEqual(categories(findings), ["rust-fixture-containment"])
         self.assertIn("tests/rust_ffi", findings[0].detail)
 
+    def test_configured_audit_metadata_may_name_forbidden_oracle_packages(self):
+        files = {
+            "tools/rust_boundary/dependency_audit.bzl": (
+                "configured_dependency_audit_test(\n"
+                "    forbidden_packages = [\n"
+                '        "@tiny-skia-cpp//tests/rust_ffi",\n'
+                '        "@wgpu_native_linux_aarch64//",\n'
+                "    ],\n"
+                ")\n"
+            )
+        }
+        self.assertEqual(verifier.check(files, SCOPES), [])
+
+    def test_non_audit_forbidden_variable_cannot_hide_an_oracle_edge(self):
+        files = {
+            "donner/BUILD.bazel": (
+                'forbidden = ["@tiny-skia-cpp//tests/rust_ffi:tiny_skia_ffi"]\n'
+                'cc_library(name = "consumer", deps = forbidden)\n'
+            )
+        }
+        self.assertIn("rust-fixture-containment", categories(verifier.check(files, SCOPES)))
+
+    def test_audit_metadata_does_not_mask_a_real_edge_on_the_same_line(self):
+        token = "@tiny-skia-cpp//tests/rust_ffi:tiny_skia_ffi"
+        files = {
+            "donner/BUILD.bazel": (
+                f'configured_dependency_audit_test(name="audit", forbidden=["{token}"]); '
+                f'cc_library(name="consumer", deps=["{token}"])\n'
+            )
+        }
+        self.assertIn("rust-fixture-containment", categories(verifier.check(files, SCOPES)))
+
+    def test_nested_rule_call_inside_audit_metadata_is_not_exempt(self):
+        token = "@tiny-skia-cpp//tests/rust_ffi:tiny_skia_ffi"
+        files = {
+            "donner/BUILD.bazel": (
+                "configured_dependency_audit_test(\n"
+                '    name = "audit",\n'
+                '    forbidden = select({"//conditions:default": '
+                'cc_library(name="consumer", deps=["' + token + '"])}),\n'
+                ")\n"
+            )
+        }
+        self.assertIn("rust-fixture-containment", categories(verifier.check(files, SCOPES)))
+
     def test_reference_to_the_derived_oracle_libraries_is_flagged(self):
         files = {
             "donner/svg/renderer/BUILD.bazel": (
@@ -725,6 +770,11 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 'donner_cc_test(\n    name = "resvg_test_suite_wgpu_reference_linux_impl",\n'
                 '    target_compatible_with = ["@platforms//os:linux"],\n'
                 '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
+                'configured_dependency_audit_test(\n'
+                '    name = "resvg_wgpu_reference_dependency_audit_test",\n'
+                '    required = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n'
+                '    target = ":resvg_test_suite_wgpu_reference_linux",\n'
+                ')\n'
             ),
             "donner/svg/renderer/geode/BUILD.bazel": (
                 'donner_cc_library(\n    name = "geode_wgpu_util",\n'
@@ -747,6 +797,14 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
 
     def test_exact_linux_oracle_is_allowed(self):
         self.assertEqual(categories(verifier.check_tracked_tree(self.allowed_files(), SCOPES)), [])
+
+    def test_additional_oracle_consumer_is_rejected(self):
+        files = self.allowed_files()
+        files["donner/svg/renderer/tests/BUILD.bazel"] += (
+            'cc_library(\n    name = "extra_consumer",\n    testonly = True,\n'
+            '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
+        )
+        self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
 
     def test_deleting_each_required_boundary_file_fails_the_tracked_tree(self):
         for path in verifier.REQUIRED_ARCHIVE_SITES:
@@ -779,6 +837,15 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 findings = verifier.check(files, SCOPES)
                 self.assertIn("rust-built-archive", categories(findings))
                 self.assertIn(path, [finding.path for finding in findings])
+
+    def test_linux_oracle_dependency_audit_is_required(self):
+        files = self.allowed_files()
+        build = files["donner/svg/renderer/tests/BUILD.bazel"]
+        files["donner/svg/renderer/tests/BUILD.bazel"] = build[:build.index(
+            "configured_dependency_audit_test("
+        )]
+        findings = verifier.check(files, SCOPES)
+        self.assertIn("rust-built-archive", categories(findings))
 
     def test_new_macos_archive_fails_default_blocking(self):
         files = self.allowed_files()

@@ -17,8 +17,10 @@ kind outside the non-instrumentable allowlist (every cc_* kind, the donner C++
 wrapper rules, and any kind this tool does not recognize) counts as
 instrumentable, so an unknown or newly-added C++ rule keeps the coverage guard at
 full strength rather than silently skipping it. The allowlist is a set of exact
-kinds plus one naming convention for build-configuration guard tests, described
-below; both are matched in the same place.
+kinds plus one naming convention for build-configuration guard tests. A
+transitioned wrapper is exempt only when Bazel proves it wraps a configured
+dependency audit shell test with no other data or dependencies; an unresolved
+wrapper keeps the coverage run.
 
 Host-instrumentability refinement: "instrumentable" means HOST-instrumentable.
 Wasm-platform targets never produce host profile data: the emsdk wasm_cc_binary
@@ -43,6 +45,7 @@ import argparse
 from dataclasses import dataclass, field
 from pathlib import Path
 import sys
+from typing import Optional
 
 # Rule kinds that never contribute C/C++ line coverage. Skipping coverage is
 # only allowed when the affected set consists ENTIRELY of these. Keep this list
@@ -189,6 +192,16 @@ def _is_non_instrumentable_rule_kind(rule_kind: str) -> bool:
     )
 
 
+def _is_non_instrumentable_target_kind(
+    rule_kind: str, label: str, wrapped_dependency_audits: frozenset[str]
+) -> bool:
+    """Accept only ordinary non-C++ kinds or Bazel-proven audit wrappers."""
+    return _is_non_instrumentable_rule_kind(rule_kind) or (
+        rule_kind == "_donner_multi_transitioned_test"
+        and normalize_label(label) in wrapped_dependency_audits
+    )
+
+
 def normalize_label(label: str) -> str:
     """Normalize a bazel label for comparison across query/cquery output.
 
@@ -246,7 +259,9 @@ def restrict_lines(
 
 
 def classify(
-    lines: list[str], host_incompatible: frozenset[str] = frozenset()
+    lines: list[str],
+    host_incompatible: frozenset[str] = frozenset(),
+    wrapped_dependency_audits: frozenset[str] = frozenset(),
 ) -> Classification:
     """Classify label_kind output lines into instrumentable vs. not.
 
@@ -257,6 +272,10 @@ def classify(
             shims). These can never contribute host coverage, so they classify
             as non-instrumentable regardless of kind. Labels NOT in this set
             keep their kind-based classification (fail closed).
+        wrapped_dependency_audits: Normalized transitioned-test labels whose
+            direct dep is a shell test sourced only from a configured dependency
+            audit checker, with no data or deps. An unverified wrapper stays
+            instrumentable.
 
     Returns:
         The bucketed classification.
@@ -285,10 +304,12 @@ def classify(
             continue
         if kind_phrase.endswith(" rule"):
             rule_kind = kind_phrase[: -len(" rule")]
-            if _is_non_instrumentable_rule_kind(rule_kind):
+            if _is_non_instrumentable_target_kind(
+                rule_kind, label, wrapped_dependency_audits
+            ):
                 result.non_instrumentable.append(label)
             else:
-                # Every cc_* kind, the donner C++ wrapper rules, and any
+                # Every cc_* kind, an unverified donner C++ wrapper, and any
                 # unrecognized rule kind land here: run coverage (fail closed).
                 result.instrumentable.append(label)
             continue
@@ -312,6 +333,25 @@ def _print_summary(classification: Classification, preview: int = 25) -> None:
         if len(classification.instrumentable) > preview:
             remaining = len(classification.instrumentable) - preview
             print(f"  ... and {remaining} more", file=sys.stderr)
+
+
+def _read_wrapped_dependency_audits(path: Optional[Path]) -> frozenset[str]:
+    """Read verified audit labels; unreadable evidence retains coverage."""
+    if path is None:
+        return frozenset()
+    try:
+        return frozenset(
+            normalize_label(line.strip())
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
+            if line.strip()
+        )
+    except OSError as error:
+        print(
+            f"WARNING: could not read {path}: {error}; "
+            "keeping transitioned wrappers instrumentable.",
+            file=sys.stderr,
+        )
+        return frozenset()
 
 
 def main() -> int:
@@ -341,6 +381,16 @@ def main() -> int:
             "Optional file of labels (one per line) that a host-configuration "
             "cquery reported as incompatible (IncompatiblePlatformProvider). "
             "These classify as non-instrumentable regardless of kind."
+        ),
+    )
+    parser.add_argument(
+        "--wrapped-dependency-audits-file",
+        type=Path,
+        default=None,
+        help=(
+            "Optional file of transitioned-test labels whose direct dep was "
+            "verified as a data-free configured dependency audit shell test. "
+            "All other custom test wrappers keep the coverage run."
         ),
     )
     args = parser.parse_args()
@@ -373,6 +423,10 @@ def main() -> int:
                 file=sys.stderr,
             )
 
+    wrapped_dependency_audits = _read_wrapped_dependency_audits(
+        args.wrapped_dependency_audits_file
+    )
+
     lines = text.splitlines()
     if args.restrict_to_file is not None:
         try:
@@ -398,7 +452,7 @@ def main() -> int:
             )
             return 1
 
-    classification = classify(lines, host_incompatible)
+    classification = classify(lines, host_incompatible, wrapped_dependency_audits)
     _print_summary(classification)
 
     value = "true" if classification.instrumentable_present else "false"

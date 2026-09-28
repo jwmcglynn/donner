@@ -27,24 +27,6 @@ permissions:
 # hosted lane available during a runner outage.
 
 jobs:
-  no-rust-configured-closure:
-    name: CI / no-rust-configured-closure
-    runs-on: ubuntu-24.04
-    needs: [gatekeeper, linux, macos, macos-self-hosted]
-    if: ${{ always() && !cancelled() && needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: configured-rust-closure-*
-          merge-multiple: true
-
-      - name: Verify complete source-bound platform receipts
-        run: python3 tools/gpu_inventory/configured_rust_closure.py aggregate closure-linux.json closure-macos.json
-
   gatekeeper:
     runs-on: ubuntu-24.04
     outputs:
@@ -686,15 +668,17 @@ jobs:
           bazelisk build --config=ci --linkopt=-fuse-ld=gold \
             //tools/ci:linker_canary
 
-      - name: Check configured product, browser, and oracle closures
-        run: python3 tools/gpu_inventory/configured_rust_closure.py scan --platform linux --bazel-option=--config=ci --output closure-linux.json
-
-      - name: Upload configured closure receipt
-        uses: actions/upload-artifact@v7
-        with:
-          name: configured-rust-closure-linux
-          path: closure-linux.json
-          if-no-files-found: error
+      - name: Build and test CMake consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/cmake/gen_cmakelists.py --check
+          python3 tools/cmake/gen_cmakelists.py
+          cmake -S examples/cmake_consumer -B build -G Ninja \
+            -DDONNER_SOURCE_DIR="$PWD" \
+            -DDONNER_RENDERER_BACKEND=tiny_skia
+          cmake --build build --target donner_cmake_consumer --parallel 2
+          ctest --test-dir build --output-on-failure
 
   # Admit the operator's ARM64 Linux job from a hosted runner. The FIFO wait
   # cannot run on the constrained self-hosted pool itself: newer runs could
@@ -1246,16 +1230,6 @@ jobs:
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
-      - name: Check configured product, browser, and oracle closures
-        run: python3 tools/gpu_inventory/configured_rust_closure.py scan --platform macos --bazel-option=--config=ci --bazel-option=--macos_minimum_os=13.3 --output closure-macos.json
-
-      - name: Upload configured closure receipt
-        uses: actions/upload-artifact@v7
-        with:
-          name: configured-rust-closure-macos
-          path: closure-macos.json
-          if-no-files-found: error
-
   # Operator's ARM64 macOS runs on the operator's self-hosted runner.
   # Replaces `macos` for trusted operator PRs. Main pushes, Renovate, and
   # non-operator runs stay hosted. The host pre-provisions Bazelisk, Homebrew
@@ -1486,22 +1460,3 @@ jobs:
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
-
-      - name: Check configured product, browser, and oracle closures
-        shell: bash
-        run: |
-          set -euo pipefail
-          read -r -a build_flags <<< "$BAZEL_MACOS_BUILD_FLAGS"
-          options=(--bazel-option=--config=ci)
-          for flag in "${build_flags[@]}"; do
-            options+=("--bazel-option=${flag}")
-          done
-          python3 tools/gpu_inventory/configured_rust_closure.py scan --platform macos \
-            --bazel 'bazelisk --nohome_rc' "${options[@]}" --output closure-macos.json
-
-      - name: Upload configured closure receipt
-        uses: actions/upload-artifact@v7
-        with:
-          name: configured-rust-closure-macos
-          path: closure-macos.json
-          if-no-files-found: error

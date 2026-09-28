@@ -105,6 +105,32 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(len(result.instrumentable), 2)
         self.assertEqual(result.non_instrumentable, [])
 
+    def test_transitioned_shell_audit_does_not_force_empty_coverage(self):
+        wrapper = "//:donner_geode_no_rust_dependency_audit_test"
+        result = mod.classify(
+            [f"_donner_multi_transitioned_test rule {wrapper}"],
+            wrapped_dependency_audits=frozenset([wrapper]),
+        )
+        self.assertEqual([], result.instrumentable)
+        self.assertFalse(result.instrumentable_present)
+
+    def test_transitioned_cpp_or_unverified_wrapper_keeps_coverage(self):
+        wrapper = "//donner/editor/tests:editor_shell_tests"
+        line = f"_donner_multi_transitioned_test rule {wrapper}"
+        self.assertTrue(mod.classify([line]).instrumentable_present)
+        self.assertTrue(
+            mod.classify(
+                [line], wrapped_dependency_audits=frozenset(["//other:dependency_audit"])
+            )
+            .instrumentable_present
+        )
+        self.assertTrue(
+            mod.classify(
+                ["cc_test rule //donner/base:base_tests", line],
+                wrapped_dependency_audits=frozenset([wrapper]),
+            ).instrumentable_present
+        )
+
     def test_wasm_wrapper_rule_is_not_host_instrumentable(self):
         # Regression (#810 shape): the emsdk wasm_cc_binary wrapper transitions
         # to the wasm platform and emits .js/.wasm only. It can never produce

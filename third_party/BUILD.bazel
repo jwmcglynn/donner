@@ -1,4 +1,3 @@
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_perf_sensitive_cc_library")
 
 exports_files(
@@ -32,9 +31,3 @@ donner_perf_sensitive_cc_library(
     visibility = ["//visibility:public"],
     deps = ["@freetype"],
 )
-
-donner_package(gpu_inventory_globs = [
-    "BUILD.*",
-    "bazel/*.bzl",
-    "**/*.bzl",
-])

@@ -5,7 +5,6 @@ load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
 load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "fuzzer_compatible_with")
 
 exports_files(
@@ -42,16 +41,6 @@ py_test(
 )
 
 py_test(
-    name = "package_glob_safety_tests",
-    size = "small",
-    srcs = ["package_glob_safety_tests.py"],
-    data = [
-        ":package.bzl",
-        "//:BUILD.bazel",
-    ],
-)
-
-py_test(
     name = "sanitizer_runtime_provenance_tests",
     size = "small",
     srcs = ["sanitizer_runtime_provenance_tests.py"],
@@ -78,6 +67,34 @@ cc_library(
     linkopts = ["--js-library=//donner/gpu/browser:library_donner_gpu.js\nAUDIT\nexit 0"],
 )
 
+cc_library(
+    name = "dep_audit_forbidden_dependency_fixture",
+    testonly = True,
+)
+
+alias(
+    name = "dep_audit_forbidden_dependency_alias",
+    actual = ":dep_audit_forbidden_dependency_fixture",
+)
+
+cc_library(
+    name = "dep_audit_dependency_fixture",
+    testonly = True,
+    deps = [":dep_audit_forbidden_dependency_alias"],
+)
+
+cc_library(
+    name = "dep_audit_data_fixture",
+    testonly = True,
+    data = [":dep_audit_forbidden_dependency_alias"],
+)
+
+cc_library(
+    name = "dep_audit_external_subpackage_fixture",
+    testonly = True,
+    deps = ["@tiny-skia-cpp//src:tiny_skia_lib"],
+)
+
 configured_dependency_audit_test(
     name = "dep_audit_link_input_expected_failure",
     forbidden_packages = ["//donner/gpu/browser"],
@@ -99,6 +116,27 @@ configured_dependency_audit_test(
     target = ":dep_audit_link_option_heredoc_fixture",
 )
 
+configured_dependency_audit_test(
+    name = "dep_audit_dependency_expected_failure",
+    forbidden = [":dep_audit_forbidden_dependency_fixture"],
+    tags = ["manual"],
+    target = ":dep_audit_dependency_fixture",
+)
+
+configured_dependency_audit_test(
+    name = "dep_audit_data_expected_failure",
+    forbidden = [":dep_audit_forbidden_dependency_fixture"],
+    tags = ["manual"],
+    target = ":dep_audit_data_fixture",
+)
+
+configured_dependency_audit_test(
+    name = "dep_audit_external_subpackage_expected_failure",
+    forbidden_packages = ["@tiny-skia-cpp//"],
+    tags = ["manual"],
+    target = ":dep_audit_external_subpackage_fixture",
+)
+
 sh_test(
     name = "configured_link_input_audit_negative_tests",
     size = "small",
@@ -107,8 +145,14 @@ sh_test(
         "$(location :dep_audit_link_input_expected_failure)",
         "$(location :dep_audit_link_option_expected_failure)",
         "$(location :dep_audit_link_option_heredoc_expected_failure)",
+        "$(location :dep_audit_dependency_expected_failure)",
+        "$(location :dep_audit_data_expected_failure)",
+        "$(location :dep_audit_external_subpackage_expected_failure)",
     ],
     data = [
+        ":dep_audit_data_expected_failure",
+        ":dep_audit_dependency_expected_failure",
+        ":dep_audit_external_subpackage_expected_failure",
         ":dep_audit_link_input_expected_failure",
         ":dep_audit_link_option_expected_failure",
         ":dep_audit_link_option_heredoc_expected_failure",
@@ -216,11 +260,6 @@ config_setting(
         ":llvm_latest": "1",
     },
 )
-
-donner_package(gpu_inventory_globs = [
-    "**/*.bzl",
-    "BUILD.bazel",
-])
 
 donner_cc_fuzzer(
     name = "soak_probe_fuzzer",

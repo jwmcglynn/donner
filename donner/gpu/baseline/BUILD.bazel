@@ -1,5 +1,4 @@
 load("@rules_python//python:defs.bzl", "py_test")
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_binary", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
@@ -234,5 +233,3 @@ py_test(
         ":dump_baseline_counters",
     ],
 )
-
-donner_package()

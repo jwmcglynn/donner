@@ -1,5 +1,4 @@
 load("@rules_cc//cc:defs.bzl", "cc_library")
-load("//build_defs:package.bzl", "donner_package")
 
 cc_library(
     name = "core",
@@ -56,5 +55,3 @@ cc_library(
         "//donner/css:core",
     ],
 )
-
-donner_package()

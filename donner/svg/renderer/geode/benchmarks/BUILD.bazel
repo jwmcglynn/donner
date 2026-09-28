@@ -1,6 +1,5 @@
 """CPU draw-path benchmark using the shipped Geode fill pipeline."""
 
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_test", "donner_multi_transitioned_test")
 
 _GEODE_ONLY = select({
@@ -60,5 +59,3 @@ donner_multi_transitioned_test(
         "perf_linux",
     ],
 )
-
-donner_package()

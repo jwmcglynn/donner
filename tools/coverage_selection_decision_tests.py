@@ -32,7 +32,8 @@ These tests exercise the CONSOLIDATED decision as it exists in coverage.yml --
 the shell function is extracted from the workflow and run against the real
 classifier, with `bazelisk query` and `cquery` stubbed to return each incident's
 final rule kinds and host compatibility. They pin one classifier call and one
-query of each kind, all after every narrowing step.
+final query/cquery after every narrowing step, plus a direct-dep query for any
+transitioned test wrapper.
 """
 
 import os
@@ -52,11 +53,31 @@ _BEGIN = "# BEGIN coverage final-list decision"
 _END = "# END coverage final-list decision"
 
 _STUB_BAZELISK = """#!/bin/bash
-# Minimal `bazelisk` stand-in: the decision block runs one query and one cquery.
+# Minimal `bazelisk` stand-in for final kinds, wrapper deps, and compatibility.
 if [[ "${1:-}" == "query" ]]; then
   if [[ "${STUB_QUERY_FAIL:-}" == "1" ]]; then
     echo "stub: query failed" >&2
     exit 1
+  fi
+  if [[ "${2:-}" == "labels(dep, "* ]]; then
+    if [[ "${STUB_WRAPPER_QUERY_FAIL:-}" == "1" ]]; then
+      echo "stub: wrapper dep query failed" >&2
+      exit 1
+    fi
+    cat "$STUB_WRAPPER_DEP_KIND_OUTPUT"
+    exit 0
+  fi
+  if [[ "${2:-}" == "labels(srcs, "* ]]; then
+    cat "$STUB_WRAPPER_SRC_KIND_OUTPUT"
+    exit 0
+  fi
+  if [[ "${2:-}" == "labels(data, "* ]]; then
+    cat "$STUB_WRAPPER_DATA_KIND_OUTPUT"
+    exit 0
+  fi
+  if [[ "${2:-}" == "labels(deps, "* ]]; then
+    cat "$STUB_WRAPPER_DEPS_KIND_OUTPUT"
+    exit 0
   fi
   cat "$STUB_QUERY_OUTPUT"
   exit 0
@@ -116,7 +137,9 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
 
     def _decide(
         self, label_kinds, final_targets, host_compat, cquery_fails=False,
-        final_label_kinds=None, query_fails=False,
+        final_label_kinds=None, query_fails=False, wrapped_dep_kind="",
+        wrapped_src_kind="", wrapped_data_kind="", wrapped_deps_kind="",
+        wrapper_query_fails=False,
     ):
         """Run the extracted decision block and return its verdict.
 
@@ -129,6 +152,12 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             final_label_kinds: Override the final-list query answer to model
                 test-suite expansion beyond the earlier affected set.
             query_fails: Make the final rule-kind query fail.
+            wrapped_dep_kind: Direct-dep kind query answer for a transitioned
+                wrapper, if one is present.
+            wrapped_src_kind: Kind query answer for the dep's srcs.
+            wrapped_data_kind: Kind query answer for the dep's data.
+            wrapped_deps_kind: Kind query answer for the dep's deps.
+            wrapper_query_fails: Make that direct-dep query fail.
 
         Returns:
             The verdict word ("skip" or "run").
@@ -157,6 +186,14 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             compat_file.write_text(
                 "".join(f"{line}\n" for line in host_compat), encoding="utf-8"
             )
+            wrapper_dep_file = root / "wrapper-dep-kind.txt"
+            wrapper_dep_file.write_text(wrapped_dep_kind, encoding="utf-8")
+            wrapper_src_file = root / "wrapper-src-kind.txt"
+            wrapper_src_file.write_text(wrapped_src_kind, encoding="utf-8")
+            wrapper_data_file = root / "wrapper-data-kind.txt"
+            wrapper_data_file.write_text(wrapped_data_kind, encoding="utf-8")
+            wrapper_deps_file = root / "wrapper-deps-kind.txt"
+            wrapper_deps_file.write_text(wrapped_deps_kind, encoding="utf-8")
 
             fixture = root / "decide.sh"
             fixture.write_text(
@@ -171,11 +208,17 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             env["PATH"] = "%s:%s" % (self.bin_dir, env["PATH"])
             env["STUB_CQUERY_OUTPUT"] = str(compat_file)
             env["STUB_QUERY_OUTPUT"] = str(kinds_file)
+            env["STUB_WRAPPER_DEP_KIND_OUTPUT"] = str(wrapper_dep_file)
+            env["STUB_WRAPPER_SRC_KIND_OUTPUT"] = str(wrapper_src_file)
+            env["STUB_WRAPPER_DATA_KIND_OUTPUT"] = str(wrapper_data_file)
+            env["STUB_WRAPPER_DEPS_KIND_OUTPUT"] = str(wrapper_deps_file)
             env["FIXTURE_PYTHON"] = sys.executable
             if cquery_fails:
                 env["STUB_CQUERY_FAIL"] = "1"
             if query_fails:
                 env["STUB_QUERY_FAIL"] = "1"
+            if wrapper_query_fails:
+                env["STUB_WRAPPER_QUERY_FAIL"] = "1"
 
             result = subprocess.run(
                 [
@@ -296,6 +339,84 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             host_compat=[f"@@{guard} HOST_COMPATIBLE", f"@@{native} HOST_COMPATIBLE"],
         )
         self.assertEqual("run", verdict)
+
+    def test_transitioned_shell_audit_skips_empty_cpp_coverage(self):
+        wrapper = "//:donner_geode_no_rust_dependency_audit_test"
+        shell_audit = "//:donner_no_rust_dependency_audit_test"
+        verdict = self._decide(
+            label_kinds=[
+                f"_donner_multi_transitioned_test rule {wrapper}",
+                f"sh_test rule {shell_audit}",
+            ],
+            final_targets=[wrapper, shell_audit],
+            host_compat=[
+                f"@@{wrapper} HOST_COMPATIBLE",
+                f"@@{shell_audit} HOST_COMPATIBLE",
+            ],
+            wrapped_dep_kind="sh_test rule //:donner_geode_no_rust_dependency_audit_impl\n",
+            wrapped_src_kind=(
+                "_configured_dependency_audit rule "
+                "//:donner_geode_no_rust_dependency_audit_impl_checker\n"
+            ),
+        )
+        self.assertEqual("skip", verdict)
+
+    def test_transitioned_shell_with_cpp_data_keeps_coverage(self):
+        wrapper = "//donner/editor/tests:gpu_runtime_test"
+        kwargs = dict(
+            label_kinds=[f"_donner_multi_transitioned_test rule {wrapper}"],
+            final_targets=[wrapper],
+            host_compat=[f"@@{wrapper} HOST_COMPATIBLE"],
+            wrapped_dep_kind="sh_test rule //donner/editor/tests:gpu_runtime_impl\n",
+            wrapped_src_kind=(
+                "_configured_dependency_audit rule "
+                "//donner/editor/tests:gpu_runtime_impl_checker\n"
+            ),
+        )
+        self.assertEqual(
+            "run",
+            self._decide(
+                **kwargs,
+                wrapped_data_kind="cc_binary rule //donner/gpu:runtime_helper\n",
+            ),
+        )
+        self.assertEqual(
+            "run",
+            self._decide(
+                **kwargs,
+                wrapped_deps_kind="cc_library rule //donner/gpu:runtime_helper\n",
+            ),
+        )
+
+    def test_unknown_shell_wrapper_keeps_coverage(self):
+        wrapper = "//donner/editor/tests:gpu_runtime_test"
+        verdict = self._decide(
+            label_kinds=[f"_donner_multi_transitioned_test rule {wrapper}"],
+            final_targets=[wrapper],
+            host_compat=[f"@@{wrapper} HOST_COMPATIBLE"],
+            wrapped_dep_kind="sh_test rule //donner/editor/tests:gpu_runtime_impl\n",
+            wrapped_src_kind="source file //donner/editor/tests:gpu_runtime.sh\n",
+        )
+        self.assertEqual("run", verdict)
+
+    def test_transitioned_cpp_and_ambiguous_dep_keep_coverage(self):
+        wrapper = "//donner/editor/tests:editor_shell_tests"
+        kwargs = dict(
+            label_kinds=[f"_donner_multi_transitioned_test rule {wrapper}"],
+            final_targets=[wrapper],
+            host_compat=[f"@@{wrapper} HOST_COMPATIBLE"],
+        )
+        self.assertEqual(
+            "run", self._decide(**kwargs, wrapped_dep_kind="cc_test rule //:cpp_impl\n")
+        )
+        self.assertEqual(
+            "run",
+            self._decide(
+                **kwargs,
+                wrapped_dep_kind="sh_test rule //:one\nsh_test rule //:two\n",
+            ),
+        )
+        self.assertEqual("run", self._decide(**kwargs, wrapper_query_fails=True))
 
     def test_incident_one_py_test_only_survivor_skips(self):
         """The manual-tagged cc_test is not in the final list, so it cannot vote."""
@@ -507,12 +628,17 @@ class CoverageSelectionDecisionTest(unittest.TestCase):
             self.workflow.count("bazelisk cquery"),
             "coverage.yml runs more than one host-compatibility cquery",
         )
-        self.assertEqual(1, self.decision.count("bazelisk query"))
+        self.assertEqual(5, self.decision.count("bazelisk query"))
+        self.assertIn('bazelisk query "labels(dep, $wrapper)"', self.decision)
+        self.assertIn('bazelisk query "labels(srcs, $dep_label)"', self.decision)
+        self.assertIn('bazelisk query "labels(data, $dep_label)"', self.decision)
+        self.assertIn('bazelisk query "labels(deps, $dep_label)"', self.decision)
 
     def test_the_decision_names_the_final_list_and_the_cquery_answer(self):
         """Both criteria, one call, on the narrowed list."""
         self.assertIn('--restrict-to-file "$final_file"', self.decision)
         self.assertIn('--host-incompatible-file "$incompatible_file"', self.decision)
+        self.assertIn('--wrapped-dependency-audits-file "$wrapped_audits_file"', self.decision)
         # The retired two-phase handshake must not come back.
         self.assertNotIn("--instrumentable-out", self.workflow)
 

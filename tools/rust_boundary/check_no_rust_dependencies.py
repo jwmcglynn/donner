@@ -18,7 +18,7 @@ therefore allowed to sit in the tree, each behind its own boundary:
 Categories:
 
 - rust-source-outside-allowlist: Rust source or Cargo metadata outside both
-  boundaries (tools/gpu_inventory/rust_allowlist.json).
+  boundaries (tools/rust_boundary/rust_allowlist.json).
 - rust-build-edge: rules_rust / crate_universe / Rust toolchain references in a
   build-graph or CMake file outside the test-only prefixes.
 - rust-fixture-containment: the oracle escaping its boundary, either by taking
@@ -49,10 +49,10 @@ rule. Reporting that would be reporting the graph instead of the closure, and it
 is also invisible to a fresh CI checkout, which has no lockfile at all.
 
 Usage:
-  python3 tools/gpu_inventory/check_no_rust_dependencies.py                     # report
-  python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking default  # as CI
-  python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking          # all
-  python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking a,b      # some
+  python3 tools/rust_boundary/check_no_rust_dependencies.py                     # report
+  python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking default  # as CI
+  python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking          # all
+  python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking a,b      # some
 """
 
 from __future__ import annotations
@@ -79,7 +79,7 @@ from rust_scopes import (  # noqa: E402  (sibling module, path set just above)
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ALLOWLIST_RELPATH = "tools/gpu_inventory/rust_allowlist.json"
+ALLOWLIST_RELPATH = "tools/rust_boundary/rust_allowlist.json"
 
 CATEGORIES = (
     "rust-source-outside-allowlist",
@@ -150,6 +150,8 @@ COMPILE_ATTRIBUTES = frozenset(
     }
 )
 DATA_ATTRIBUTES = frozenset({"data", "testdata", "resources", "args", "tags"})
+AUDIT_METADATA_ATTRIBUTES = frozenset({"forbidden", "forbidden_packages", "required"})
+AUDIT_RULES = frozenset({"configured_dependency_audit_test", "no_rust_dependency_audit_test"})
 
 ATTRIBUTE_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 VISIBILITY_ASSIGN_RE = re.compile(r"(?:default_)?visibility\s*=\s*")
@@ -166,6 +168,59 @@ class Finding:
     detail: str
 
 
+@dataclass(frozen=True)
+class SourceSpan:
+    """UTF-8 source range for one literal accepted as audit metadata."""
+
+    start_line: int
+    start_column: int
+    end_line: int
+    end_column: int
+
+    def contains(self, line: int, start_column: int, end_column: int) -> bool:
+        if line < self.start_line or line > self.end_line:
+            return False
+        if line == self.start_line and start_column < self.start_column:
+            return False
+        if line == self.end_line and end_column > self.end_column:
+            return False
+        return True
+
+
+def _unquoted_step(line: str, index: int) -> tuple[int, str | None, str]:
+    if line[index] == "#":
+        return len(line), None, ""
+    opener = next((q for q in ('"' * 3, "'" * 3, '"', "'") if line.startswith(q, index)), None)
+    if opener is not None:
+        return index + len(opener), opener, ""
+    return index + 1, None, line[index]
+
+
+def _quoted_step(line: str, index: int, quote: str,
+                 keep_strings: bool) -> tuple[int, str | None, str]:
+    if line[index] == "\\":
+        return index + 2, quote, ""
+    if line.startswith(quote, index):
+        return index + len(quote), None, ""
+    return index + 1, quote, line[index] if keep_strings else ""
+
+
+def _scan_line(line: str, quote: str | None,
+               keep_strings: bool) -> tuple[str, str | None]:
+    kept: list[str] = []
+    index = 0
+    while index < len(line):
+        if quote is None:
+            index, quote, char = _unquoted_step(line, index)
+        else:
+            index, quote, char = _quoted_step(line, index, quote, keep_strings)
+        kept.append(char)
+    if quote in ('"', "'"):
+        # A single-quoted string cannot span lines; a triple-quoted one can.
+        quote = None
+    return "".join(kept), quote
+
+
 def _scan_lines(text: str, keep_strings: bool) -> list[str]:
     """Splits `text` into lines with comments, and optionally strings, removed.
 
@@ -178,34 +233,8 @@ def _scan_lines(text: str, keep_strings: bool) -> list[str]:
     out: list[str] = []
     quote: str | None = None
     for line in text.splitlines():
-        kept: list[str] = []
-        index = 0
-        while index < len(line):
-            if quote is None:
-                if line[index] == "#":
-                    break
-                opener = next(
-                    (q for q in ('"""', "'''", '"', "'") if line.startswith(q, index)), None
-                )
-                if opener is not None:
-                    quote = opener
-                    index += len(opener)
-                else:
-                    kept.append(line[index])
-                    index += 1
-            elif line[index] == "\\":
-                index += 2
-            elif line.startswith(quote, index):
-                index += len(quote)
-                quote = None
-            else:
-                if keep_strings:
-                    kept.append(line[index])
-                index += 1
-        out.append("".join(kept))
-        if quote in ('"', "'"):
-            # A single-quoted string cannot span lines; a triple-quoted one can.
-            quote = None
+        scanned, quote = _scan_line(line, quote, keep_strings)
+        out.append(scanned)
     return out
 
 
@@ -241,6 +270,81 @@ def attribute_of_each_line(text: str) -> list[str | None]:
             if not match:
                 current = None
     return attributes
+
+
+def _audit_rule_name(node: ast.AST) -> str | None:
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+        return None
+    return node.func.id
+
+
+def _literal_span(node: ast.AST) -> SourceSpan | None:
+    if not isinstance(node, ast.Constant) or not isinstance(node.value, str) or \
+       node.end_lineno is None or node.end_col_offset is None:
+        return None
+    return SourceSpan(node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
+
+
+def _metadata_literal_spans(node: ast.AST) -> set[SourceSpan]:
+    literal = _literal_span(node)
+    if literal is not None:
+        return {literal}
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return set().union(*(_metadata_literal_spans(item) for item in node.elts))
+    if isinstance(node, ast.Dict):
+        return set().union(*(_metadata_literal_spans(item) for item in node.values))
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _metadata_literal_spans(node.left) | _metadata_literal_spans(node.right)
+    if isinstance(node, ast.Call) and _audit_rule_name(node) == "select":
+        return set().union(*(_metadata_literal_spans(item) for item in node.args))
+    return set()
+
+
+def _audit_keyword_spans(keyword: ast.keyword) -> set[SourceSpan]:
+    if keyword.arg not in AUDIT_METADATA_ATTRIBUTES:
+        return set()
+    return _metadata_literal_spans(keyword.value)
+
+
+def _audit_call_spans(node: ast.AST) -> set[SourceSpan]:
+    if _audit_rule_name(node) not in AUDIT_RULES:
+        return set()
+    return set().union(*(
+        _audit_keyword_spans(keyword)
+        for keyword in node.keywords
+    ))
+
+
+def audit_metadata_spans(text: str) -> set[SourceSpan]:
+    """Literal source spans inside recognized dependency-audit metadata."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return set()
+    return set().union(*(
+        _audit_call_spans(node)
+        for node in ast.walk(tree)
+    ))
+
+
+def _line_token_occurrences(line: str,
+                            tokens: tuple[str, ...]) -> list[tuple[str, int, int]]:
+    pattern = re.compile("|".join(re.escape(token) for token in sorted(tokens, key=len, reverse=True)))
+    return [
+        (match.group(), len(line[:match.start()].encode()), len(line[:match.end()].encode()))
+        for match in pattern.finditer(line)
+    ]
+
+
+def unapproved_tokens(text: str, tokens: tuple[str, ...]) -> list[str]:
+    """Tokens outside exact string literals owned by dependency-audit metadata."""
+    spans = audit_metadata_spans(text)
+    return sorted({
+        token
+        for line_number, line in enumerate(text.splitlines(), start=1)
+        for token, start_column, end_column in _line_token_occurrences(line, tokens)
+        if not any(span.contains(line_number, start_column, end_column) for span in spans)
+    })
 
 
 def compile_attributes_referencing(text: str, tokens: tuple[str, ...]) -> set[str]:
@@ -350,46 +454,48 @@ def visibility_entries(listed: str) -> list[str] | None:
     return entries
 
 
+def _visibility_list_entries(rest: str) -> list[str] | None:
+    closing = rest.find("]") if rest.startswith("[") else -1
+    if closing != -1:
+        after = rest[closing + 1 :].lstrip(" \t")
+        if after and not after.startswith(VISIBILITY_LIST_TERMINATORS):
+            # A concatenated list can widen visibility after the first `]`.
+            closing = -1
+    return visibility_entries(rest[1:closing]) if closing != -1 else None
+
+
+def _visibility_entry_finding(path: str, entry: str) -> Finding | None:
+    if entry == "//visibility:private" or is_test_tree_visibility(entry):
+        return None
+    return Finding(
+        category="rust-fixture-containment",
+        path=path,
+        detail=(
+            f"cross-validation oracle's package exposed to {entry}; visibility must "
+            "stay inside the vendored workspace's own //tests tree."
+        ),
+    )
+
+
 def visibility_findings(path: str, text: str) -> list[Finding]:
     """Flags visibility in the oracle's packages that leaves the test tree."""
-
-    def unreadable() -> Finding:
-        return Finding(
-            category="rust-fixture-containment",
-            path=path,
-            detail=(
-                "visibility is not a literal list, so its scope cannot be read here; "
-                "spell the packages out."
-            ),
-        )
-
     findings = []
     for match in VISIBILITY_ASSIGN_RE.finditer(text):
-        rest = text[match.end() :].lstrip()
-        closing = rest.find("]") if rest.startswith("[") else -1
-        if closing != -1:
-            after = rest[closing + 1 :].lstrip(" \t")
-            if after and not after.startswith(VISIBILITY_LIST_TERMINATORS):
-                # `["//tests:__subpackages__"] + ["//visibility:public"]` reads
-                # as contained if the scan stops at the first `]`.
-                closing = -1
-        entries = visibility_entries(rest[1:closing]) if closing != -1 else None
+        entries = _visibility_list_entries(text[match.end() :].lstrip())
         if entries is None:
-            findings.append(unreadable())
+            findings.append(Finding(
+                category="rust-fixture-containment",
+                path=path,
+                detail=(
+                    "visibility is not a literal list, so its scope cannot be read here; "
+                    "spell the packages out."
+                ),
+            ))
             continue
         for entry in entries:
-            if entry == "//visibility:private" or is_test_tree_visibility(entry):
-                continue
-            findings.append(
-                Finding(
-                    category="rust-fixture-containment",
-                    path=path,
-                    detail=(
-                        f"cross-validation oracle's package exposed to {entry}; visibility must "
-                        "stay inside the vendored workspace's own //tests tree."
-                    ),
-                )
-            )
+            finding = _visibility_entry_finding(path, entry)
+            if finding is not None:
+                findings.append(finding)
     return findings
 
 
@@ -486,7 +592,7 @@ def fixture_containment_findings(path: str, text: str, scopes: RustScopes) -> li
     """
     if scopes.is_test_only(path) or scopes.is_test_only_consumer(path):
         return visibility_findings(path, text) + reexport_findings(path, text)
-    fixture_tokens = tokens_in(text, RUST_FIXTURE_TOKENS)
+    fixture_tokens = unapproved_tokens(text, RUST_FIXTURE_TOKENS)
     if not fixture_tokens:
         return []
     return [
@@ -626,12 +732,22 @@ def _archive_runtime_findings(path: str, text: str, scopes: RustScopes) -> list[
 
 
 def _archive_consumer_findings(path: str, text: str) -> list[Finding]:
-    consumers = [(kind, name, body) for kind, name, body in _rule_blocks(text)
-                 if "wgpu_native_reference_runtime" in body]
-    if len(consumers) != 1 or consumers[0][0] != "donner_cc_test" or \
+    rules = [(kind, name, body) for kind, name, body in _rule_blocks(text)
+             if "wgpu_native_reference_runtime" in body]
+    consumers = [rule for rule in rules if rule[0] == "donner_cc_test"]
+    audits = [rule for rule in rules if rule[0] == "configured_dependency_audit_test"]
+    if len(rules) != 2 or len(consumers) != 1 or \
        consumers[0][1] != "resvg_test_suite_wgpu_reference_linux_impl" or \
-       "@platforms//os:linux" not in consumers[0][2]:
+       "@platforms//os:linux" not in consumers[0][2] or \
+       not _rule_has_edge(consumers[0][2],
+                          "//third_party/webgpu-cpp:wgpu_native_reference_runtime", "deps"):
         return _archive_finding(path, "only the Linux resvg test may consume the reference runtime")
+    if len(audits) != 1 or audits[0][1] != "resvg_wgpu_reference_dependency_audit_test" or \
+       not _rule_has_edge(audits[0][2],
+                          "//third_party/webgpu-cpp:wgpu_native_reference_runtime", "required") or \
+       not _rule_has_edge(audits[0][2],
+                          ":resvg_test_suite_wgpu_reference_linux", "target"):
+        return _archive_finding(path, "Linux resvg dependency audit is missing or incomplete")
     return []
 
 
@@ -753,12 +869,8 @@ def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> lis
     active = text_without_comments(text)
     if not tokens_in(active, RUST_BUILT_ARCHIVE_TOKENS):
         return []
-    attributes = attribute_of_each_line(text)
-    for line, attribute in zip(active.splitlines(), attributes):
-        if tokens_in(line, RUST_BUILT_ARCHIVE_TOKENS) and \
-           attribute not in {"forbidden", "required", "tags"}:
-            return _archive_finding(path, "unexpected Rust-built archive or reference edge")
-    return []
+    return _archive_finding(path, "unexpected Rust-built archive or reference edge") \
+        if unapproved_tokens(text, RUST_BUILT_ARCHIVE_TOKENS) else []
 
 
 def inert_reference_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:

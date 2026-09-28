@@ -1,7 +1,6 @@
 """Donner-level benchmarks comparing performance across backends."""
 
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
 
 package(default_visibility = ["//visibility:public"])
@@ -140,5 +139,3 @@ sh_test(
         "perf_benchmark",
     ],
 )
-
-donner_package()

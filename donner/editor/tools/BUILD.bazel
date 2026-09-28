@@ -1,5 +1,4 @@
 load("@rules_python//python:defs.bzl", "py_test")
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_library")
 load(
     "//donner/editor:editor_product_config.bzl",
@@ -49,5 +48,3 @@ py_test(
         "//:donner_splash.svg",
     ],
 )
-
-donner_package()

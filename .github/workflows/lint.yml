@@ -21,12 +21,8 @@ concurrency:
 # - check_design_doc_provenance.py (ratchets exact model metadata on design docs)
 # - gen_cmakelists.py unit tests + full --check validator (reentrant bazel
 #   prevents running --check from inside bazel test)
-# - the no-Rust-dependency verifier. It blocks on every
-#   category the tree already satisfies and reports the wgpu-native archives,
-#   which are still real until the Metal and Linux cutovers delete them. GPU
-#   inventory manifest FRESHNESS is not here: it is
-#   //tools/gpu_inventory:manifest_freshness_tests, an ordinary bazel test with
-#   its scan inputs declared as runfiles.
+# - the no-Rust-dependency verifier, with only the pinned Linux test oracle allowed.
+
 jobs:
   gatekeeper:
     runs-on: ubuntu-24.04
@@ -104,7 +100,7 @@ jobs:
         run: python3 tools/check_design_doc_provenance.py
 
       - name: No-Rust-dependency verifier (blocking except wgpu-native archives)
-        run: python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking default
+        run: python3 tools/rust_boundary/check_no_rust_dependencies.py --blocking default
 
   cmake-validate:
     runs-on: ubuntu-24.04

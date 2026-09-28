@@ -97,8 +97,9 @@ def forbidden_transitive_dep_test(name, target, forbidden, **kwargs):
 
 _ConfiguredDepsInfo = provider(fields = ["labels", "linkopts"])
 
-# Follow binary/library dependencies and the wrappers used to package Wasm.
-_CONFIGURED_DEP_ATTRS = ["deps", "implementation_deps", "dep", "cc_target", "wasm_deps", "dir", "additional_linker_inputs"]
+# Follow binary/library dependencies, aliases, and every label-bearing input a
+# product package can ship. Build-only tools stay outside the product closure.
+_CONFIGURED_DEP_ATTRS = ["deps", "implementation_deps", "dep", "actual", "binary", "cc_target", "wasm_deps", "dir", "data", "srcs", "asset_trees", "additional_linker_inputs"]
 
 def _configured_deps_impl(target, ctx):
     if ctx.rule == None:
@@ -179,7 +180,8 @@ def _configured_dependency_audit_impl(ctx):
             str(label)
             for label in labels
             if label.workspace_name == package_label.workspace_name and
-               (label.package == package_label.package or
+               (not package_label.package or
+                label.package == package_label.package or
                 label.package.startswith(package_label.package + "/"))
         ])
 

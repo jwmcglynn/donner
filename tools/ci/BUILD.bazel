@@ -9,7 +9,10 @@ exports_files([
 test_suite(
     name = "linux_wgpu_resvg_reference",
     tags = ["manual"],
-    tests = ["//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"],
+    tests = [
+        "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux",
+        "//donner/svg/renderer/tests:resvg_wgpu_reference_dependency_audit_test",
+    ],
 )
 
 test_suite(
