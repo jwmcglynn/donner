@@ -4433,6 +4433,12 @@ TEST(EditorShellTest, DragMutationWaitsForQueuedRenderToConsumeItsDocument) {
                                                            std::chrono::seconds(5)),
               testing::IsTrue());
   std::ignore = renderer.pollResult();
+  EXPECT_THAT(EditorShellTestAccess::MoveSelectedShapeDrag(shell, Vector2d(60.0, 40.0)),
+              testing::IsTrue());
+  EXPECT_EQ(app.document().currentFrameVersion(), submittedVersion + 1);
+  EXPECT_THAT(app.document().hasPendingMutations(), testing::IsFalse());
+  EXPECT_THAT(target->cast<svg::SVGGraphicsElement>().transform(),
+              testing::Eq(Transform2d::Translate(Vector2d(40.0, 20.0))));
 }
 
 TEST(EditorShellTest, SelectDragKeepsFullPathChrome) {

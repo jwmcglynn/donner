@@ -981,6 +981,48 @@ TEST(AsyncRendererTest, ShutdownBeforeDeferredStartCannotRestartWorker) {
   EXPECT_FALSE(asyncRenderer.isBusy());
 }
 
+TEST(AsyncRendererTest, ReplayDocumentHoldAllowsCancellationBeforeDequeue) {
+  svg::SVGDocument document =
+      svg::instantiateSubtree(R"svg(<rect width="8" height="8" fill="blue"/>)svg");
+  document.setCanvasSize(8, 8);
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
+  asyncRenderer.setReplayDocumentAccessBlockedForTesting(true);
+  asyncRenderer.requestRender(RenderRequest(renderer, document));
+  asyncRenderer.cancelInFlight();
+  asyncRenderer.start();
+  EXPECT_THAT(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                                std::chrono::seconds(5)),
+              testing::IsTrue());
+  EXPECT_THAT(asyncRenderer.isBusy(), testing::IsFalse());
+  EXPECT_THAT(asyncRenderer.pollResult(), testing::Eq(std::nullopt));
+}
+
+TEST(AsyncRendererTest, ReplayDocumentHoldDoesNotBlockAuxiliaryWarmup) {
+  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
+  asyncRenderer.setReplayDocumentAccessBlockedForTesting(true);
+  asyncRenderer.stageCompositorWarmupForTesting(true, false);
+  asyncRenderer.start();
+  EXPECT_THAT(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                                std::chrono::seconds(5)),
+              testing::IsTrue());
+  EXPECT_THAT(asyncRenderer.isBusy(), testing::IsFalse());
+}
+
+TEST(AsyncRendererTest, ReplayDocumentHoldAllowsShutdown) {
+  svg::SVGDocument document =
+      svg::instantiateSubtree(R"svg(<rect width="8" height="8" fill="blue"/>)svg");
+  document.setCanvasSize(8, 8);
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
+  asyncRenderer.setReplayDocumentAccessBlockedForTesting(true);
+  asyncRenderer.requestRender(RenderRequest(renderer, document));
+  asyncRenderer.start();
+  asyncRenderer.shutdown();
+  EXPECT_THAT(asyncRenderer.workerStartedForTesting(), testing::IsFalse());
+  EXPECT_THAT(asyncRenderer.isBusy(), testing::IsFalse());
+}
+
 TEST(AsyncRendererTest, DeferredCompositorWarmupParticipatesInDocumentAccessGate) {
   AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
 

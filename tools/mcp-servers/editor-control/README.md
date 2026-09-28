@@ -110,3 +110,11 @@ diff for the same comparison.
 The headless recorder writes v2 `.rnr` frames with document-space coordinates
 and viewport snapshots. It records MCP-synthesized gestures, not OS-level mouse
 input; live GUI recording remains owned by the editor's `--save-repro` path.
+
+To reproduce a render-submission race, `replay_rnr` accepts
+`gl_worker_document_hold_start_frame` and `gl_worker_document_hold_end_frame`.
+The first frame pauses queued workers before document acquisition; the second
+releases the pause and waits for the submitted render before replay continues.
+Both frames must exist within the replay range. The control is replay-only and
+shutdown always releases it. The replay CLI exposes the equivalent
+`--worker-document-hold-start-frame` and `--worker-document-hold-end-frame` options.

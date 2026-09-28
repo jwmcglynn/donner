@@ -58,19 +58,38 @@ using donner::editor::repro::RunGlRnrReplay;
   return true;
 }
 
+/// Return the selected worker-control field for immediate argument parsing, or null.
+int* WorkerIntegerOption(std::string_view arg, GlRnrReplayOptions* options) {
+  if (arg == "--worker-delay-ms") {
+    return &options->workerRenderDelayMsForTesting;
+  }
+  if (arg == "--hold-frames-behind") {
+    return &options->holdFramesBehind;
+  }
+  if (arg == "--worker-document-hold-start-frame") {
+    return &options->workerDocumentAccessHoldStartFrame;
+  }
+  if (arg == "--worker-document-hold-end-frame") {
+    return &options->workerDocumentAccessHoldEndFrame;
+  }
+  return nullptr;
+}
+
 void PrintUsage(std::string_view argv0) {
-  std::cerr << "Usage: " << argv0
-            << " --rnr <path> [--out-dir <path>] [--capture-frame <n>]...\n"
-               "       [--capture-left-mousedown <ordinal>] [--max-frame <n>]\n"
-               "       [--crop full|render-pane|document-canvas]\n"
-               "       [--worker-delay-ms <n>]\n"
-               "       [--worker-scheduling realtime|drain-each-frame|hold-frames-behind]\n"
-               "       [--hold-frames-behind <n>]\n"
-               "       [--drive-document-input] [--source-pane-visible]\n"
-               "       [--content-only-capture]\n"
-               "       [--visible] [--no-pace] [--show-welcome] [--composited-off]\n"
-               "       [--print-diagnostics]\n"
-               "       [--diagnostics-frame <n>]...\n";
+  std::cerr
+      << "Usage: " << argv0
+      << " --rnr <path> [--out-dir <path>] [--capture-frame <n>]...\n"
+         "       [--capture-left-mousedown <ordinal>] [--max-frame <n>]\n"
+         "       [--crop full|render-pane|document-canvas]\n"
+         "       [--worker-delay-ms <n>]\n"
+         "       [--worker-scheduling realtime|drain-each-frame|hold-frames-behind]\n"
+         "       [--hold-frames-behind <n>]\n"
+         "       [--worker-document-hold-start-frame <n> --worker-document-hold-end-frame <n>]\n"
+         "       [--drive-document-input] [--source-pane-visible]\n"
+         "       [--content-only-capture]\n"
+         "       [--visible] [--no-pace] [--show-welcome] [--composited-off]\n"
+         "       [--print-diagnostics]\n"
+         "       [--diagnostics-frame <n>]...\n";
 }
 
 [[nodiscard]] bool ParseArgs(int argc, char** argv, GlRnrReplayOptions* options,
@@ -206,14 +225,12 @@ void PrintUsage(std::string_view argv0) {
       continue;
     }
 
-    if (arg == "--worker-delay-ms") {
+    if (int* destination = WorkerIntegerOption(arg, options)) {
       const std::optional<std::string_view> value = requireValue(arg);
-      int delayMs = 0;
-      if (!value.has_value() || !ParseInt(*value, &delayMs)) {
-        std::cerr << "--worker-delay-ms expects a non-negative integer\n";
+      if (!value.has_value() || !ParseInt(*value, destination)) {
+        std::cerr << arg << " expects a non-negative integer\n";
         return false;
       }
-      options->workerRenderDelayMsForTesting = delayMs;
       continue;
     }
 
@@ -236,17 +253,6 @@ void PrintUsage(std::string_view argv0) {
                      "hold-frames-behind\n";
         return false;
       }
-      continue;
-    }
-
-    if (arg == "--hold-frames-behind") {
-      const std::optional<std::string_view> value = requireValue(arg);
-      int frameCount = 0;
-      if (!value.has_value() || !ParseInt(*value, &frameCount)) {
-        std::cerr << "--hold-frames-behind expects a non-negative integer\n";
-        return false;
-      }
-      options->holdFramesBehind = frameCount;
       continue;
     }
 

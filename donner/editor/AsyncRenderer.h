@@ -921,6 +921,8 @@ public:
 
 private:
   void workerLoop();
+  /// Wait for the replay-only input pause; returns with the worker mutex held, including shutdown.
+  void waitForReplayDocumentAccess(std::unique_lock<std::mutex>& lock);
   /// Poll an idle GPU context, then wait for work with a short completion timer only while needed.
   /// Returns with \p lock held so the worker can consume its state without a race.
   bool waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock);

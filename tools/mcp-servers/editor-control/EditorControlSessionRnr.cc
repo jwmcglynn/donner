@@ -252,6 +252,14 @@ int AttachPngFile(ToolCallResult* out, const std::string& label, const std::file
   return AttachPngBytes(out, label, *bytes, embedBase64, metadata);
 }
 
+bool ReadGlReplayTimingOptions(const json& arguments, int* timeoutMs, int* holdStartFrame,
+                               int* holdEndFrame, std::string* error) {
+  return ReadOptionalInt(arguments, "gl_timeout_ms", 120000, timeoutMs, error) &&
+         ReadOptionalInt(arguments, "gl_worker_document_hold_start_frame", -1, holdStartFrame,
+                         error) &&
+         ReadOptionalInt(arguments, "gl_worker_document_hold_end_frame", -1, holdEndFrame, error);
+}
+
 struct GlReplayRequest {
   std::string rnrPath;
   std::string svgPathOverride;
@@ -288,6 +296,12 @@ ToolCallResult ReplayGlRnr(const GlReplayRequest& request) {
   }
   if (request.timeoutMs <= 0 || request.timeoutMs > kMaximumGlReplayTimeoutMs) {
     return MakeErrorResult("gl_timeout_ms exceeds the GL replay timeout limit");
+  }
+
+  if ((request.workerDocumentHoldStartFrame != -1 || request.workerDocumentHoldEndFrame != -1) &&
+      (request.workerDocumentHoldStartFrame < 0 ||
+       request.workerDocumentHoldEndFrame <= request.workerDocumentHoldStartFrame)) {
+    return MakeErrorResult("document-access hold requires an increasing frame range");
   }
 
   repro::GlRnrReplayOptions replayOptions;
@@ -684,11 +698,8 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       !ReadOptionalInt(arguments, "gl_capture_left_mousedown", 0, &glCaptureLeftMouseDown,
                        &error) ||
       !ReadOptionalInt(arguments, "gl_max_frame", -1, &glMaxFrame, &error) ||
-      !ReadOptionalInt(arguments, "gl_timeout_ms", 120000, &glTimeoutMs, &error) ||
-      !ReadOptionalInt(arguments, "gl_worker_document_hold_start_frame", -1,
-                       &glWorkerDocumentHoldStartFrame, &error) ||
-      !ReadOptionalInt(arguments, "gl_worker_document_hold_end_frame", -1,
-                       &glWorkerDocumentHoldEndFrame, &error) ||
+      !ReadGlReplayTimingOptions(arguments, &glTimeoutMs, &glWorkerDocumentHoldStartFrame,
+                                 &glWorkerDocumentHoldEndFrame, &error) ||
       !ReadOptionalString(arguments, "gl_crop", "full", &glCrop, &error) ||
       !ReadOptionalString(arguments, "gl_output_dir", "", &glOutputDir, &error) ||
       !ReadOptionalBool(arguments, "include_frame_results", true, &includeFrameResults, &error) ||
