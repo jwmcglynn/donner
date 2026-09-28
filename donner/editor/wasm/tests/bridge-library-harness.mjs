@@ -158,7 +158,10 @@ export async function drain() {
  * handed out and how many times one was asked for, and a heap to pass strings and out-parameters
  * through.
  */
-export function loadLibrary() {
+export function loadLibrary({
+  requestAdapterForTesting,
+  navigatorGpuAvailable = true,
+} = {}) {
   const heap = new ArrayBuffer(64 * 1024);
   const bytes = new Uint8Array(heap);
   const words = new Uint32Array(heap);
@@ -214,6 +217,9 @@ export function loadLibrary() {
         getPreferredCanvasFormat: () => "bgra8unorm",
         requestAdapter: async () => {
           adapterRequests += 1;
+          if (requestAdapterForTesting) {
+            return requestAdapterForTesting();
+          }
           return {
             requestDevice: async () => {
               const created = createDevice();
@@ -233,6 +239,9 @@ export function loadLibrary() {
     },
   };
 
+  if (!navigatorGpuAvailable) {
+    delete sandbox.navigator.gpu;
+  }
   vm.createContext(sandbox);
   vm.runInContext(librarySource, sandbox);
   const entryPoints = sandbox.LibraryManager.library;
