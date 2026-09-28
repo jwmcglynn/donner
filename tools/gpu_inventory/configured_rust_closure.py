@@ -68,11 +68,33 @@ def canonical(data: Any) -> bytes:
     return json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
 
 
+def safe_failure_summary(args: tuple[str, ...], code: int, stderr: str) -> str:
+    """Keep command failures actionable without echoing configuration or tool diagnostics."""
+    operations = {"build", "cquery", "query", "fetch", "test", "status", "rev-parse", "ls-files"}
+    operation = next((arg for arg in args[1:] if arg in operations), "command")
+    sample = (stderr[:4096] + stderr[-4096:]).lower()
+    categories = (
+        ("storage", r"disk quota exceeded|no space left on device"),
+        ("dependency-fetch", r"error downloading|failed to download|download_and_extract"),
+        ("remote-service", r"remote_error|statusruntimeexception|remote execution|remote cache"),
+        ("missing-executable", r"filenotfounderror|command not found"),
+    )
+    category = next((name for name, pattern in categories if re.search(pattern, sample)),
+                    "command-error")
+    status = re.search(r"http(?: response)?(?: status)?(?: code)?\s*:?\s*([1-5][0-9]{2})\b", sample)
+    http = f"; HTTP {status[1]}" if status else ""
+    return f"{operation} failed (exit {code}; {category}{http})"
+
+
 def run(*args: str, cwd: Path = ROOT) -> str:
-    proc = subprocess.run(args, cwd=cwd, text=True, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, check=False)
+    try:
+        proc = subprocess.run(args, cwd=cwd, text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, check=False)
+    except OSError as error:
+        error_number = error.errno if isinstance(error.errno, int) else 0
+        raise GateError(f"command could not start (errno {error_number})") from None
     if proc.returncode:
-        raise GateError(f"{' '.join(args)} failed ({proc.returncode}):\n{proc.stderr[-6000:]}")
+        raise GateError(safe_failure_summary(args, proc.returncode, proc.stderr))
     return proc.stdout
 
 

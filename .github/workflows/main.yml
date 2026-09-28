@@ -1278,11 +1278,8 @@ jobs:
       # outages now FAST-FAIL (no local fallback) rather than degrading to a
       # multi-hour local build on the capped host. The wedge-watch + rerun
       # handle recovery.
-      # Cache endpoint comes from the BAZEL_REMOTE_CACHE repository variable so
-      # the workflow stays portable across runner deployments. When the variable
-      # is unset (e.g. forks), --remote_cache= is empty and bazel builds without
-      # a remote cache.
-      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 --remote_cache=${{ vars.BAZEL_REMOTE_CACHE }} --remote_upload_local_results=true --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
+      # The first step injects the masked cache setting after registering its diagnostic forms.
+      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 --remote_upload_local_results=true --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=5s"
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"
       # Keep in sync with the `macos` job: exactly one of the two runs per
       # event, so both need the Geode editor lane. See that job for why these
@@ -1296,7 +1293,39 @@ jobs:
       # intended to cover such a run with margin.
       MIN_FREE_DISK_GIB: "30"
     steps:
-      # First, so a full disk fails in seconds with a clear error instead of
+      - name: Configure masked remote cache
+        shell: bash
+        env:
+          REMOTE_CACHE_URL: ${{ secrets.BAZEL_REMOTE_CACHE }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PYTHON'
+          import os
+          from urllib.parse import unquote, urlsplit
+
+          value = os.environ.get("REMOTE_CACHE_URL", "")
+          if not value:
+              raise SystemExit("BAZEL_REMOTE_CACHE secret is required for the self-hosted lane")
+          try:
+              parsed = urlsplit(value)
+              valid = parsed.scheme in ("http", "https", "grpc", "grpcs") and parsed.hostname
+          except ValueError:
+              raise SystemExit("Invalid remote cache URL") from None
+          if not valid or any(char.isspace() for char in value):
+              raise SystemExit("Invalid remote cache URL")
+          components = (value, parsed.netloc, parsed.hostname, parsed.username, parsed.password,
+                        parsed.path if parsed.path != "/" else "", parsed.query, parsed.fragment)
+          for component in components:
+              if component:
+                  for form in dict.fromkeys((component, unquote(component))):
+                      escaped = form.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                      print("::add-mask::" + escaped, flush=True)
+          flags = os.environ["BAZEL_MACOS_BUILD_FLAGS"]
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
+              output.write("\nBAZEL_MACOS_BUILD_FLAGS=" + flags + " --remote_cache=" + value + "\n")
+          PYTHON
+
+      # Before Bazel, so a full disk fails in seconds with a clear error instead of
       # minutes to an hour in as a Bazel ENOSPC, a job timeout or a lost
       # runner connection, which read like failures of the change under test.
       - name: Check runner disk space
