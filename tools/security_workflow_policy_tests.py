@@ -189,7 +189,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         body = _step_body(workflow, "Configure masked remote cache")
         scripts = _run_bodies(body)
         self.assertEqual(len(scripts), 1)
-        endpoint = "https://fixture-user:fixture-token@cache.example.invalid:9443/fixture"
+        endpoint = "https://cache.example.invalid:9443/fixture"
         with tempfile.TemporaryDirectory() as directory:
             environment = Path(directory) / "environment"
             environment.write_text("EXISTING=preserved")
@@ -202,13 +202,16 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             commands = result.stdout.splitlines()
             self.assertTrue(commands)
             self.assertTrue(all(line.startswith("::add-mask::") for line in commands))
-            for value in (endpoint, "cache.example.invalid", "fixture-user", "fixture-token"):
+            for value in (endpoint, "cache.example.invalid", "cache.example.invalid:9443", "/fixture"):
                 self.assertIn("::add-mask::" + value, commands)
             self.assertEqual(environment.read_text().splitlines(), [
                 "EXISTING=preserved",
                 "BAZEL_MACOS_BUILD_FLAGS=--macos_minimum_os=13.3 --remote_cache=" + endpoint,
             ])
-            for invalid in ("", "invalid-cache-value", "https://cache.example.invalid/\ninjected"):
+            for invalid in ("", "invalid-cache-value", "https://cache.example.invalid/\ninjected",
+                            "https://fixture-user:fixture-token@cache.example.invalid",
+                            "https://cache.example.invalid?token=fixture-token",
+                            "https://cache.example.invalid#fixture-token"):
                 environment.write_text("EXISTING=preserved")
                 result = subprocess.run(["/bin/bash", "-c", textwrap.dedent(scripts[0])],
                                         env={**os.environ, "REMOTE_CACHE_URL": invalid,

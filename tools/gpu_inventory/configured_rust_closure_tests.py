@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+from contextlib import redirect_stderr
 import sys
 import tempfile
 import unittest
@@ -35,6 +37,62 @@ class ConfiguredRustClosureTests(unittest.TestCase):
             with self.assertRaises(gate.GateError) as failure:
                 gate.run("/fixture/private/tool", "cquery", "//product:binary")
         self.assertEqual(str(failure.exception), "command could not start (errno 2)")
+
+    def _main_error(self, output: Path, action) -> str:
+        arguments = ["configured_rust_closure.py", "scan", "--platform", "linux",
+                     "--output", str(output)]
+        captured = io.StringIO()
+        with patch.object(sys, "argv", arguments), \
+             patch.object(gate, "platform_receipt", side_effect=action), \
+             redirect_stderr(captured):
+            self.assertEqual(gate.main(), 1)
+        return captured.getvalue()
+
+    def test_top_level_artifact_errors_hide_paths_and_untrusted_outputs(self) -> None:
+        label = "//donner/svg/tool:donner-svg"
+        sentinel = "fixture-sensitive-path"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real = root / "payload"
+            real.write_text("fixture")
+            link = root / sentinel
+            link.symlink_to(real)
+            actions = (
+                lambda *_: gate.scan_artifact_output(root / (sentinel + "-missing"), label),
+                lambda *_: gate.scan_artifact_output(link, label),
+                lambda *_: gate._artifact_output_records("../../" + sentinel, label),
+            )
+            for index, action in enumerate(actions):
+                with self.subTest(case=index):
+                    diagnostic = self._main_error(root / "receipt.json", action)
+                    self.assertFalse(sentinel in diagnostic, "artifact error leaked a path")
+                    self.assertIn("root=" + label, diagnostic)
+
+    def test_top_level_read_write_and_parser_errors_hide_input_values(self) -> None:
+        sentinel = "fixture-sensitive-input"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            read_error = self._main_error(
+                root / "receipt.json", lambda *_: (root / sentinel).read_text())
+            write_error = self._main_error(root / sentinel / "receipt.json", lambda *_: {})
+            for diagnostic in (read_error, write_error):
+                self.assertFalse(sentinel in diagnostic, "I/O error leaked an input path")
+                self.assertTrue(diagnostic.startswith("FAIL: filesystem operation failed"))
+            captured = io.StringIO()
+            with patch.object(sys, "argv", ["configured_rust_closure.py", sentinel]), \
+                 redirect_stderr(captured), self.assertRaises(SystemExit) as failure:
+                gate.main()
+            self.assertEqual(failure.exception.code, 2)
+            self.assertFalse(sentinel in captured.getvalue(), "argument error leaked an input")
+
+    def test_top_level_unknown_root_and_exception_text_are_not_public(self) -> None:
+        sentinel = "fixture-sensitive-exception"
+        with tempfile.TemporaryDirectory() as directory:
+            for error in (gate.GateError("//" + sentinel + ":target: " + sentinel),
+                          ValueError(sentinel), KeyError(sentinel), RuntimeError(sentinel)):
+                with self.subTest(kind=type(error).__name__):
+                    diagnostic = self._main_error(Path(directory) / "receipt.json", error)
+                    self.assertFalse(sentinel in diagnostic, "exception text was disclosed")
 
     def test_product_to_oracle_edge_is_rejected(self) -> None:
         root = "//donner/editor:editor"
