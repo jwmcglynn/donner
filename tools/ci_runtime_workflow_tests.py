@@ -140,15 +140,51 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     def test_configured_closure_aggregate_skips_cancelled_runs(self):
         """A cancelled PR run has no receipts, but a failed producer still needs the aggregate."""
         header = self._job_body("no-rust-configured-closure").split("steps:", 1)[0]
-        self.assertIn("needs: [gatekeeper, configured-rust-closure-platform]", header)
+        self.assertIn("needs: [gatekeeper, linux, macos, macos-self-hosted]", header)
         self.assertIn("always() && !cancelled()", header)
+
+    def test_wasm_build_and_browser_checks_share_one_runner_and_package(self):
+        self.assertNotIn("\n  test:\n", self.editor_wasm)
+        self.assertNotIn("actions/download-artifact@", self.editor_wasm)
+        self.assertIn("PACKAGE_TARGET: ${{ steps.stage-package.outputs.package_target }}", self.editor_wasm)
+        self.assertIn('push:\n    branches: ["main"]', self.editor_wasm)
+        self.assertIn("uses: ./.github/actions/cache-bazel-actions", self.editor_wasm)
+        self.assertIn("cache: npm", self.editor_wasm)
+        self.assertEqual(1, self.editor_wasm.count("uses: bazel-contrib/setup-bazel@"))
+        setup_header = self.editor_wasm.split("uses: bazel-contrib/setup-bazel@", 1)[0]
+        self.assertIn("Setup Bazel for native browser comparison", setup_header)
+        self.assertLess(
+            self.editor_wasm.index("uses: bazel-contrib/setup-bazel@"),
+            self.editor_wasm.index("- name: Serve Geode package and run browser suites"),
+        )
+
+    def test_linux_cmake_consumer_has_one_pr_and_main_owner(self):
+        linux = self.cmake.split("\n  linux:\n", 1)[1].split("\n  macos:\n", 1)[0]
+        admission = linux.split("    env:\n", 1)[0]
+        self.assertIn("github.event_name == 'push'", admission)
+        self.assertIn("github.ref != 'refs/heads/main'", admission)
+        self.assertIn("configured_rust_closure.py scan --platform linux", self._job_body("linux"))
+        self.assertIn("cmake --build build --target donner_cmake_consumer", linux)
+
+    def test_platform_checks_reuse_native_build_jobs(self):
+        for redundant in ("configured-rust-closure-platform", "linux-local-xvfb", "linker-canary"):
+            self.assertNotIn("\n  %s:\n" % redundant, self.main)
+        for job, platform in (("linux", "linux"), ("macos", "macos"),
+                              ("macos-self-hosted", "macos")):
+            body = self._job_body(job)
+            self.assertIn("configured_rust_closure.py scan --platform " + platform, body)
+            self.assertIn("configured-rust-closure-" + platform, body)
+        self.assertIn("//tools/ci:linker_canary", self._job_body("linux"))
+        aggregate = self._job_body("no-rust-configured-closure")
+        self.assertIn("needs: [gatekeeper, linux, macos, macos-self-hosted]", aggregate)
+        self.assertIn("always()", aggregate)
 
     def test_native_window_gate_runs_on_hosted_linux_when_remote_routing_is_selected(self):
         hosted = self._job_body("linux")
-        local = self._job_body("linux-local-xvfb")
+        local = hosted
         remote = self._job_body("linux-self-hosted")
-        self.assertIn("use_self_hosted_linux != 'true'", hosted.split("steps:", 1)[0])
-        self.assertIn("use_self_hosted_linux == 'true'", local.split("steps:", 1)[0])
+        self.assertNotIn("use_self_hosted_linux", hosted.split("steps:", 1)[0])
+        self.assertIn("use_self_hosted_linux == 'true'", self._step_body(local, "Test local Xvfb targets"))
         self.assertIn("xvfb xauth", hosted)
         self.assertIn("xvfb xauth", local)
         self.assertIn("-local-gpu-isolated", remote)
@@ -419,7 +455,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 job = self._job_body(job_name)
                 step = self._step_body(job, "Test Linux WebGPU resvg reference")
                 self.assertIn(
-                    "!cancelled() && needs.determine-targets.outputs.wgpu_reference == 'true'",
+                    "needs.determine-targets.outputs.wgpu_reference == 'true'",
                     step,
                 )
                 self.assertIn("--test_tag_filters=", step)
@@ -585,14 +621,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         inside the shell means nothing external has to signal a sudo-owned
         process, which is the failure this contract exists to prevent.
         """
-        job = self._job_body("linker-canary")
+        job = self._job_body("linux")
         install = job.split("- name: Install system dependencies", 1)[1].split(
             "- name: Setup Bazel", 1
         )[0]
 
         self.assertNotIn("nick-fields/retry", install)
         self.assertIn("uses: ./.github/actions/apt-install", install)
-        self.assertNotIn("clang-tidy", install)
 
     def test_shared_apt_action_bounds_and_retries_without_external_kill(self):
         """Every apt install inherits the bound, so no lane can regress alone."""
@@ -794,7 +829,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             environment["PACKAGE_PATH"] = str(package) + "\n" + str(package)
             result = self._run_script("#!/bin/bash\n" + script, [], env=environment)
             self.assertNotEqual(result.returncode, 0, "ambiguous artifact outputs must fail")
-        self.assertIn("PACKAGE_TARGET: ${{ needs.build.outputs.package_target }}", self.editor_wasm)
+        self.assertIn("PACKAGE_TARGET: ${{ steps.stage-package.outputs.package_target }}", self.editor_wasm)
         self.assertIn('\\"targets\\":[\\"${PACKAGE_TARGET}\\"]', self.editor_wasm)
 
     def _catalog_candidate_fixture(self, root):

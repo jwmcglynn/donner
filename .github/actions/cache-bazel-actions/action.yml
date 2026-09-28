@@ -1,0 +1,33 @@
+name: Cache Bazel action outputs
+description: Restore compatible action outputs and refresh successful main builds per revision.
+inputs:
+  namespace:
+    description: Build family sharing compatible action outputs on this runner platform.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Enable disk action cache
+      shell: bash
+      run: |
+        printf '\n%s\n' 'build --disk_cache=~/.cache/bazel-disk' >> "$HOME/.bazelrc"
+
+    # A new revision can extend an older snapshot even when BUILD files have not changed.
+    # Each platform/family has one writer; PR code only restores default-branch snapshots.
+    - name: Restore and refresh main action cache
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      uses: actions/cache@v6
+      with:
+        path: ~/.cache/bazel-disk
+        key: bazel-actions-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-${{ github.sha }}
+        restore-keys: |
+          bazel-actions-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-
+
+    - name: Restore action cache without saving
+      if: github.event_name == 'pull_request' || github.ref != 'refs/heads/main'
+      uses: actions/cache/restore@v6
+      with:
+        path: ~/.cache/bazel-disk
+        key: bazel-actions-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-${{ github.sha }}
+        restore-keys: |
+          bazel-actions-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.namespace }}-${{ hashFiles('.bazelversion') }}-

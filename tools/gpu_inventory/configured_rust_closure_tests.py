@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import io
 import json
+from contextlib import redirect_stderr
 import sys
 import tempfile
 import unittest
@@ -17,6 +19,98 @@ import configured_rust_closure as gate
 class ConfiguredRustClosureTests(unittest.TestCase):
     def setUp(self) -> None:
         self.spec = gate.inventory()
+
+    def test_command_failure_omits_arguments_and_raw_diagnostics(self) -> None:
+        endpoint = "grpcs://cache.example.invalid:9443/fixture"
+        diagnostic = f"Error downloading {endpoint}: HTTP response code: 500; fixture-token"
+        result = gate.subprocess.CompletedProcess([], 1, stdout="", stderr=diagnostic)
+        with patch.object(gate.subprocess, "run", return_value=result):
+            with self.assertRaises(gate.GateError) as failure:
+                gate.run("bazel", "cquery", "//product:binary",
+                         "--remote_cache=" + endpoint, "--remote_header=fixture-token")
+        self.assertEqual(str(failure.exception),
+                         "cquery failed (exit 1; dependency-fetch; HTTP 500)")
+
+    def test_command_start_failure_omits_executable_and_os_error(self) -> None:
+        error = FileNotFoundError(2, "fixture-sensitive-diagnostic", "/fixture/private/tool")
+        with patch.object(gate.subprocess, "run", side_effect=error):
+            with self.assertRaises(gate.GateError) as failure:
+                gate.run("/fixture/private/tool", "cquery", "//product:binary")
+        self.assertEqual(str(failure.exception), "command could not start (errno 2)")
+
+    def _main_error(self, output: Path, action) -> str:
+        arguments = ["configured_rust_closure.py", "scan", "--platform", "linux",
+                     "--output", str(output)]
+        captured = io.StringIO()
+        with patch.object(sys, "argv", arguments), \
+             patch.object(gate, "platform_receipt", side_effect=action), \
+             redirect_stderr(captured):
+            self.assertEqual(gate.main(), 1)
+        return captured.getvalue()
+
+    def test_top_level_artifact_errors_hide_paths_and_untrusted_outputs(self) -> None:
+        label = "//donner/svg/tool:donner-svg"
+        sentinel = "fixture-sensitive-path"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real = root / "payload"
+            real.write_text("fixture")
+            link = root / sentinel
+            link.symlink_to(real)
+            actions = (
+                lambda *_: gate.scan_artifact_output(root / (sentinel + "-missing"), label),
+                lambda *_: gate.scan_artifact_output(link, label),
+                lambda *_: gate._artifact_output_records("../../" + sentinel, label),
+            )
+            for index, action in enumerate(actions):
+                with self.subTest(case=index):
+                    diagnostic = self._main_error(root / "receipt.json", action)
+                    self.assertFalse(sentinel in diagnostic, "artifact error leaked a path")
+                    self.assertIn("root=" + label, diagnostic)
+
+    def test_top_level_read_write_and_parser_errors_hide_input_values(self) -> None:
+        sentinel = "fixture-sensitive-input"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            read_error = self._main_error(
+                root / "receipt.json", lambda *_: (root / sentinel).read_text())
+            write_error = self._main_error(root / sentinel / "receipt.json", lambda *_: {})
+            for diagnostic in (read_error, write_error):
+                self.assertFalse(sentinel in diagnostic, "I/O error leaked an input path")
+                self.assertTrue(diagnostic.startswith("FAIL: filesystem operation failed"))
+            captured = io.StringIO()
+            with patch.object(sys, "argv", ["configured_rust_closure.py", sentinel]), \
+                 redirect_stderr(captured), self.assertRaises(SystemExit) as failure:
+                gate.main()
+            self.assertEqual(failure.exception.code, 2)
+            self.assertFalse(sentinel in captured.getvalue(), "argument error leaked an input")
+
+    def test_top_level_unknown_root_and_exception_text_are_not_public(self) -> None:
+        sentinel = "fixture-sensitive-exception"
+        with tempfile.TemporaryDirectory() as directory:
+            for error in (gate.GateError("//" + sentinel + ":target: " + sentinel),
+                          ValueError(sentinel), KeyError(sentinel), RuntimeError(sentinel)):
+                with self.subTest(kind=type(error).__name__):
+                    diagnostic = self._main_error(Path(directory) / "receipt.json", error)
+                    self.assertFalse(sentinel in diagnostic, "exception text was disclosed")
+
+    def test_parser_exceptions_and_interrupts_stay_inside_public_boundary(self) -> None:
+        cases = (("__init__", RuntimeError("fixture-sensitive-parser"), 1),
+                 ("parse_args", RuntimeError("fixture-sensitive-parser"), 1),
+                 ("parse_args", KeyboardInterrupt(), 130))
+        for method, error, expected in cases:
+            with self.subTest(method=method, kind=type(error).__name__):
+                captured = io.StringIO()
+                escaped = False
+                with patch.object(gate.SafeArgumentParser, method, side_effect=error), \
+                     redirect_stderr(captured):
+                    try:
+                        code = gate.main()
+                    except BaseException:
+                        escaped = True
+                self.assertFalse(escaped, "parser exception escaped the public diagnostic boundary")
+                self.assertEqual(code, expected)
+                self.assertFalse("fixture-sensitive-parser" in captured.getvalue())
 
     def test_product_to_oracle_edge_is_rejected(self) -> None:
         root = "//donner/editor:editor"
@@ -71,6 +165,18 @@ class ConfiguredRustClosureTests(unittest.TestCase):
         with patch.object(gate, "run", return_value=f"{root} (cfg)\n//donner/gpu:gpu (cfg)\n") as query:
             gate.query_closure(root, "nativeGeode", "bazel")
             self.assertIn("--config=geode", query.call_args.args)
+
+    def test_closure_build_and_output_query_keep_the_owning_lane_options(self) -> None:
+        root = "//donner/svg/tool:donner-svg"
+        options = ("--config=ci", "--macos_minimum_os=13.3")
+        with patch.object(gate, "run", return_value="bazel-out/donner-svg\n") as command, \
+             patch.object(gate, "_artifact_output_records", return_value=[{"path": "donner-svg"}]):
+            gate._build_one_artifact("native", root, "bazelisk --nohome_rc", options)
+        self.assertEqual([call.args[2] for call in command.call_args_list], ["build", "cquery"])
+        for call in command.call_args_list:
+            self.assertEqual(call.args[:2], ("bazelisk", "--nohome_rc"))
+            for option in options:
+                self.assertIn(option, call.args)
 
     def test_required_product_root_cannot_be_removed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

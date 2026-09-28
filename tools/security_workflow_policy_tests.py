@@ -139,6 +139,91 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for identity in ("github.run_id", "github.run_attempt", "github.job"):
             self.assertIn(identity, artifacts)
 
+    def test_action_cache_preserves_setup_bazel_rc_without_a_final_newline(self):
+        action = self.supply_chain_files[".github/actions/cache-bazel-actions/action.yml"]
+        body = action.split("      run:", 1)[1].split("\n\n", 1)[0]
+        script = textwrap.dedent(body.split("\n", 1)[1]) if body.strip().startswith("|") else body.strip()
+        with tempfile.TemporaryDirectory() as directory:
+            rc = Path(directory) / ".bazelrc"
+            original = "common --repository_cache=/fixture/repository"
+            rc.write_text(original)
+            result = subprocess.run(["/bin/bash", "-c", script], env={"HOME": directory},
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            lines = rc.read_text().splitlines()
+            self.assertEqual(lines[0], original)
+            self.assertEqual(lines[1], "build --disk_cache=~/.cache/bazel-disk")
+
+    def test_compiled_action_cache_refreshes_only_from_main(self):
+        action = self.supply_chain_files[".github/actions/cache-bazel-actions/action.yml"]
+        writer = action.split("    - name: Restore and refresh main action cache\n", 1)[1]
+        writer, reader = writer.split("    - name: Restore action cache without saving\n", 1)
+        self.assertIn("github.event_name != 'pull_request' && github.ref == 'refs/heads/main'", writer)
+        self.assertIn("uses: actions/cache@v6", writer)
+        self.assertIn("github.event_name == 'pull_request' || github.ref != 'refs/heads/main'", reader)
+        self.assertIn("uses: actions/cache/restore@v6", reader)
+        for block in (writer, reader):
+            key = re.search(r"^        key: (.+)$", block, re.MULTILINE).group(1)
+            for dimension in ("runner.os", "runner.arch", "inputs.namespace", "github.sha"):
+                self.assertIn(dimension, key)
+            self.assertIn("hashFiles('.bazelversion')", key)
+            restore = block.split("restore-keys: |", 1)[1]
+            self.assertNotIn("github.sha", restore)
+            self.assertIn("inputs.namespace", restore)
+        self.assertNotIn("secrets.", action)
+
+    def test_self_hosted_cache_endpoint_is_absent_from_job_environment(self):
+        workflow = self.supply_chain_files[".github/workflows/main.yml"]
+        hosted, self_hosted = workflow.split("\n  macos-self-hosted:\n", 1)
+        header = self_hosted.split("    steps:\n", 1)[0]
+        self.assertNotIn("--remote_cache=", header)
+        self.assertNotIn("vars.BAZEL_REMOTE_CACHE", workflow)
+        self.assertNotIn("secrets.BAZEL_REMOTE_CACHE", hosted)
+        mask = _step_body(self_hosted, "Configure masked remote cache")
+        self.assertIn("REMOTE_CACHE_URL: ${{ secrets.BAZEL_REMOTE_CACHE }}", mask)
+        self.assertLess(self_hosted.index("- name: Configure masked remote cache"),
+                        self_hosted.index("- name: Check runner disk space"))
+
+    def test_remote_cache_setup_masks_values_before_export_and_fails_closed(self):
+        workflow = self.supply_chain_files[".github/workflows/main.yml"]
+        body = _step_body(workflow, "Configure masked remote cache")
+        scripts = _run_bodies(body)
+        self.assertEqual(len(scripts), 1)
+        endpoint = "https://cache.example.invalid:9443/fixture"
+        with tempfile.TemporaryDirectory() as directory:
+            environment = Path(directory) / "environment"
+            environment.write_text("EXISTING=preserved")
+            result = subprocess.run(["/bin/bash", "-c", textwrap.dedent(scripts[0])],
+                                    env={**os.environ, "REMOTE_CACHE_URL": endpoint,
+                                         "GITHUB_ENV": str(environment),
+                                         "BAZEL_MACOS_BUILD_FLAGS": "--macos_minimum_os=13.3"},
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            commands = result.stdout.splitlines()
+            self.assertTrue(commands)
+            self.assertTrue(all(line.startswith("::add-mask::") for line in commands))
+            for value in (endpoint, "cache.example.invalid", "cache.example.invalid:9443", "/fixture"):
+                self.assertIn("::add-mask::" + value, commands)
+            self.assertEqual(environment.read_text().splitlines(), [
+                "EXISTING=preserved",
+                "BAZEL_MACOS_BUILD_FLAGS=--macos_minimum_os=13.3 --remote_cache=" + endpoint,
+            ])
+            for invalid in ("", "invalid-cache-value", "https://cache.example.invalid/\ninjected",
+                            "https://fixture-user:fixture-token@cache.example.invalid",
+                            "https://cache.example.invalid?token=fixture-token",
+                            "https://cache.example.invalid#fixture-token"):
+                environment.write_text("EXISTING=preserved")
+                result = subprocess.run(["/bin/bash", "-c", textwrap.dedent(scripts[0])],
+                                        env={**os.environ, "REMOTE_CACHE_URL": invalid,
+                                             "GITHUB_ENV": str(environment),
+                                             "BAZEL_MACOS_BUILD_FLAGS": "--macos_minimum_os=13.3"},
+                                        text=True, capture_output=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(environment.read_text(), "EXISTING=preserved")
+                self.assertEqual(result.stdout, "")
+                if invalid:
+                    self.assertNotIn(invalid, result.stderr)
+
     def test_external_actions_use_released_version_tags(self):
         """External actions use Renovate-compatible release tags, never branches."""
         action_line = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<target>\S+)\s*$")

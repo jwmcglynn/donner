@@ -15,6 +15,7 @@ import hashlib
 import json
 import platform
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -59,6 +60,46 @@ class GateError(RuntimeError):
     pass
 
 
+class SafeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        self.exit(2, "FAIL: invalid command-line input\n")
+
+
+PUBLIC_ROOTS = REQUIRED_NATIVE_ROOTS | REQUIRED_BROWSER_ROOTS | REQUIRED_GEODE_ROOTS | {
+    "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux",
+}
+SAFE_COMMAND_ERROR = re.compile(
+    r"(build|cquery|query|fetch|test|status|rev-parse|ls-files|command) failed "
+    r"\(exit (-?[0-9]{1,3}); (dependency-fetch|storage|remote-service|missing-executable|command-error)"
+    r"(?:; HTTP ([1-5][0-9]{2}))?\)"
+)
+
+
+def public_failure(error: Exception) -> str:
+    """Render only fixed failure categories and allowlisted public labels."""
+    if isinstance(error, OSError):
+        number = error.errno if type(error.errno) is int and 0 <= error.errno <= 4095 else 0
+        return f"filesystem operation failed (errno {number})"
+    if isinstance(error, GateError):
+        return _public_gate_failure(error)
+    return "invalid input" if isinstance(error, (ValueError, KeyError)) else "internal verification failure"
+
+
+def _public_gate_failure(error: GateError) -> str:
+    message = error.args[0][:8192] if error.args and type(error.args[0]) is str else ""
+    command = SAFE_COMMAND_ERROR.fullmatch(message)
+    if command:
+        operation, code, category, status = command.groups()
+        http = f"; HTTP {int(status)}" if status else ""
+        return f"{operation} failed (exit {int(code)}; {category}{http})"
+    start = re.fullmatch(r"command could not start \(errno ([0-9]{1,4})\)", message)
+    if start:
+        return f"command could not start (errno {int(start[1])})"
+    root = next((label for label in sorted(PUBLIC_ROOTS) if message.startswith(label + ": ")), None)
+    category = "artifact" if "artifact" in message.lower() or "bazel output" in message.lower() else "verification"
+    return f"{category} failed" + (f" root={root}" if root else "")
+
+
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -67,11 +108,33 @@ def canonical(data: Any) -> bytes:
     return json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
 
 
+def safe_failure_summary(args: tuple[str, ...], code: int, stderr: str) -> str:
+    """Keep command failures actionable without echoing configuration or tool diagnostics."""
+    operations = {"build", "cquery", "query", "fetch", "test", "status", "rev-parse", "ls-files"}
+    operation = next((arg for arg in args[1:] if arg in operations), "command")
+    sample = (stderr[:4096] + stderr[-4096:]).lower()
+    categories = (
+        ("storage", r"disk quota exceeded|no space left on device"),
+        ("dependency-fetch", r"error downloading|failed to download|download_and_extract"),
+        ("remote-service", r"remote_error|statusruntimeexception|remote execution|remote cache"),
+        ("missing-executable", r"filenotfounderror|command not found"),
+    )
+    category = next((name for name, pattern in categories if re.search(pattern, sample)),
+                    "command-error")
+    status = re.search(r"http(?: response)?(?: status)?(?: code)?\s*:?\s*([1-5][0-9]{2})\b", sample)
+    http = f"; HTTP {status[1]}" if status else ""
+    return f"{operation} failed (exit {code}; {category}{http})"
+
+
 def run(*args: str, cwd: Path = ROOT) -> str:
-    proc = subprocess.run(args, cwd=cwd, text=True, stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE, check=False)
+    try:
+        proc = subprocess.run(args, cwd=cwd, text=True, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, check=False)
+    except OSError as error:
+        error_number = error.errno if type(error.errno) is int and 0 <= error.errno <= 4095 else 0
+        raise GateError(f"command could not start (errno {error_number})") from None
     if proc.returncode:
-        raise GateError(f"{' '.join(args)} failed ({proc.returncode}):\n{proc.stderr[-6000:]}")
+        raise GateError(safe_failure_summary(args, proc.returncode, proc.stderr))
     return proc.stdout
 
 
@@ -202,8 +265,8 @@ def check_closure(root: str, profile: str, labels: set[str], spec: dict[str, Any
         raise GateError(f"{root}: production closure reaches test oracle, WebGPU-C++ wrapper, or Rust archive: {hits}")
 
 
-def query_closure(root: str, profile: str, bazel: str) -> set[str]:
-    args = [bazel, "cquery", f"deps({root})", "--output=label", "--noshow_progress"]
+def query_closure(root: str, profile: str, bazel: str, bazel_options: tuple[str, ...] = ()) -> set[str]:
+    args = [*shlex.split(bazel), "cquery", f"deps({root})", "--output=label", "--noshow_progress", *bazel_options]
     if profile == "browser":
         args.append("--config=editor-wasm")
     elif profile == "nativeGeode":
@@ -273,10 +336,10 @@ def _artifact_output_records(output: str, root: str) -> list[dict[str, Any]]:
     return scan_artifact_output(ROOT / rel, root)
 
 
-def _build_one_artifact(profile: str, root: str, bazel: str) -> dict[str, Any]:
-    flags = ["--config=editor-wasm"] if profile == "browser" else []
-    run(bazel, "build", root, "--noshow_progress", *flags)
-    output = run(bazel, "cquery", root, "--output=files", "--noshow_progress", *flags)
+def _build_one_artifact(profile: str, root: str, bazel: str, bazel_options: tuple[str, ...] = ()) -> dict[str, Any]:
+    flags = [*bazel_options, *(["--config=editor-wasm"] if profile == "browser" else [])]
+    run(*shlex.split(bazel), "build", root, "--noshow_progress", *flags)
+    output = run(*shlex.split(bazel), "cquery", root, "--output=files", "--noshow_progress", *flags)
     paths = [line.strip() for line in output.splitlines() if line.strip()]
     if not paths:
         raise GateError(f"{root}: Bazel produced no shipped artifact")
@@ -287,12 +350,13 @@ def _build_one_artifact(profile: str, root: str, bazel: str) -> dict[str, Any]:
     return {"profile": profile, "root": root, "files": files}
 
 
-def build_and_scan_artifacts(os_name: str, bazel: str, spec: dict[str, Any]) -> list[dict[str, Any]]:
-    return [_build_one_artifact(profile, root, bazel)
+def build_and_scan_artifacts(os_name: str, bazel: str, spec: dict[str, Any],
+                             bazel_options: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+    return [_build_one_artifact(profile, root, bazel, bazel_options)
             for profile, roots in spec["artifactRoots"][os_name].items() for root in roots]
 
 
-def platform_receipt(os_name: str, bazel: str) -> dict[str, Any]:
+def platform_receipt(os_name: str, bazel: str, bazel_options: tuple[str, ...] = ()) -> dict[str, Any]:
     actual = "macos" if sys.platform == "darwin" else "linux" if sys.platform.startswith("linux") else "other"
     if os_name != actual:
         raise GateError(f"requested {os_name} closure on {actual} host")
@@ -305,12 +369,12 @@ def platform_receipt(os_name: str, bazel: str) -> dict[str, Any]:
     closures = []
     for profile, roots in spec["platforms"][os_name].items():
         for root in roots:
-            labels = query_closure(root, profile, bazel)
+            labels = query_closure(root, profile, bazel, bazel_options)
             check_closure(root, profile, labels, spec)
             closures.append({"profile": profile, "root": root, "labelsSha256": digest(canonical(sorted(labels))),
                              "labelCount": len(labels)})
     cmake = check_cmake_consumer() if os_name == "linux" else None
-    artifacts = build_and_scan_artifacts(os_name, bazel, spec)
+    artifacts = build_and_scan_artifacts(os_name, bazel, spec, bazel_options)
     if os_name == "linux":
         lock_sha = verify_lock(pins)
     return {"schema": SCHEMA, **source_identity(), "platform": os_name,
@@ -412,25 +476,31 @@ def verify_receipts(receipts: list[dict[str, Any]]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    sub = parser.add_subparsers(dest="action", required=True)
-    scan = sub.add_parser("scan")
-    scan.add_argument("--platform", choices=("linux", "macos"), required=True)
-    scan.add_argument("--bazel", default="bazel")
-    scan.add_argument("--output", type=Path, required=True)
-    aggregate = sub.add_parser("aggregate")
-    aggregate.add_argument("receipts", nargs="+", type=Path)
-    args = parser.parse_args()
     try:
+        parser = SafeArgumentParser(prog="configured_rust_closure.py", description=__doc__)
+        sub = parser.add_subparsers(dest="action", required=True)
+        scan = sub.add_parser("scan")
+        scan.add_argument("--platform", choices=("linux", "macos"), required=True)
+        scan.add_argument("--bazel", default="bazel",
+                          help="Bazel executable and optional startup arguments (no shell evaluation)")
+        scan.add_argument("--bazel-option", action="append", default=[],
+                          help="Build/cquery option matching the owning CI lane; repeat as needed")
+        scan.add_argument("--output", type=Path, required=True)
+        aggregate = sub.add_parser("aggregate")
+        aggregate.add_argument("receipts", nargs="+", type=Path)
+        args = parser.parse_args()
         if args.action == "scan":
-            result = platform_receipt(args.platform, args.bazel)
+            result = platform_receipt(args.platform, args.bazel, tuple(args.bazel_option))
             args.output.write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
             print(f"PASS: {args.platform} configured no-Rust closures ({len(result['closures'])} roots)")
         else:
             verify_receipts([json.loads(path.read_text()) for path in args.receipts])
             print("PASS: Linux and macOS configured no-Rust closure receipts match this source and lock")
-    except (GateError, OSError, ValueError, KeyError) as exc:
-        print(f"FAIL: {exc}", file=sys.stderr)
+    except KeyboardInterrupt:
+        print("FAIL: interrupted", file=sys.stderr)
+        return 130
+    except Exception as exc:
+        print("FAIL: " + public_failure(exc), file=sys.stderr)
         return 1
     return 0
 

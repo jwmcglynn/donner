@@ -1,6 +1,24 @@
 name: Editor WASM
 
 on:
+  push:
+    branches: ["main"]
+    paths:
+      - "tools/ci/**"
+      - ".bazelignore"
+      - ".bazelrc"
+      - ".bazelversion"
+      - ".github/workflows/editor_wasm.yml"
+      - ".github/actions/cache-bazel-actions/**"
+      - "BUILD.bazel"
+      - "MODULE.bazel"
+      - "MODULE.bazel.lock"
+      - "build_defs/**"
+      - "donner/**"
+      - "donner_icon.svg"
+      - "third_party/**"
+      - "tools/http/**"
+      - "tools/run-browser-ci.sh"
   pull_request:
     paths:
       - "tools/ci/**"
@@ -8,6 +26,7 @@ on:
       - ".bazelrc"
       - ".bazelversion"
       - ".github/workflows/editor_wasm.yml"
+      - ".github/actions/cache-bazel-actions/**"
       - "BUILD.bazel"
       - "MODULE.bazel"
       - "MODULE.bazel.lock"
@@ -31,21 +50,23 @@ permissions:
 jobs:
   build:
     runs-on: macos-26
-    outputs:
-      package_target: ${{ steps.stage-package.outputs.package_target }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Setup Bazel
+      - name: Setup Bazel for native browser comparison and Wasm build
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          disk-cache: editor-wasm-${{ runner.os }}-geode
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.event_name != 'pull_request' }}
+
+      - name: Restore Bazel action cache
+        uses: ./.github/actions/cache-bazel-actions
+        with:
+          namespace: editor-wasm
 
       # Repository downloads are the only retried part of this lane. Keeping
       # them separate prevents a compile or test failure from passing on retry.
@@ -123,31 +144,12 @@ jobs:
           bazelisk test --config=wasm-geode --test_output=errors \
             //tools/ci:geode_wasm_browser_default_audit
 
-  test:
-    runs-on: macos-26
-    needs: build
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Setup Bazel for native browser comparison
-        uses: bazel-contrib/setup-bazel@0.19.0
-        with:
-          bazelisk-cache: true
-          repository-cache: true
-          cache-save: false
-
-      - name: Download Geode package
-        uses: actions/download-artifact@v8
-        with:
-          name: editor-wasm-package-geode-${{ github.sha }}
-          path: ${{ runner.temp }}/editor-wasm-package-geode
-
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
           node-version: 24
+          cache: npm
+          cache-dependency-path: donner/editor/wasm/tests/package-lock.json
 
       - name: Install Playwright
         working-directory: donner/editor/wasm/tests
@@ -186,7 +188,7 @@ jobs:
       - name: Stage immutable Geode deployment candidate
         id: stage-candidate
         env:
-          PACKAGE_TARGET: ${{ needs.build.outputs.package_target }}
+          PACKAGE_TARGET: ${{ steps.stage-package.outputs.package_target }}
         run: |
           set -euo pipefail
           pkg_dir="${RUNNER_TEMP}/editor-wasm-package-geode"
