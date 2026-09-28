@@ -224,21 +224,36 @@ var LibraryDonnerGpu = {
     requestBrowserDevice: function() {
       DonnerGpu.requestState = DonnerGpu.kRequestPending;
       var generation = DonnerGpu.requestGeneration;
-      navigator.gpu.requestAdapter()
+      var failure = 'adapter_rejected';
+      var adapterRequest;
+      try {
+        adapterRequest = navigator.gpu.requestAdapter();
+      } catch (ignored) {
+        DonnerGpu.requestError = failure;
+        DonnerGpu.requestState = DonnerGpu.kRequestFailed;
+        return;
+      }
+      Promise.resolve(adapterRequest)
         .then(function(adapter) {
           if (!adapter) {
-            throw new Error('no GPU adapter is available');
+            failure = 'adapter_null';
+            throw new Error();
           }
+          failure = 'device_rejected';
           return adapter.requestDevice();
         })
         .then(function(device) {
+          if (!device) {
+            throw new Error();
+          }
+          failure = 'device_install_failed';
           if (generation === DonnerGpu.requestGeneration) {
             DonnerGpu.installDevice(device);
           }
         })
-        .catch(function(e) {
+        .catch(function() {
           if (generation === DonnerGpu.requestGeneration) {
-            DonnerGpu.requestError = String(e && e.message ? e.message : e);
+            DonnerGpu.requestError = failure;
             DonnerGpu.requestState = DonnerGpu.kRequestFailed;
           }
         });

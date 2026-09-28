@@ -204,6 +204,15 @@ interface OpenEditorOptions {
 
 const kFatalRuntimePattern =
   /Aborted|Assertion failed|RuntimeError|Pthread .* sent an error|getJsObject|No available adapters|WebGPU on Linux requires|WebGPU adapter (?:request )?(?:failed|unavailable)|Wasm renderer pthread wake rejected/i;
+const kGpuAcquisitionPrefix = "[Geode/browser/acquire]";
+const kGpuAcquisitionPattern =
+  /^\[Geode\/browser\/acquire\] stage=(selection|runtime|root) outcome=(api_unavailable|adapter_null|adapter_rejected|device_rejected|device_install_failed|deadline_pending|request_failed|context_failed|construction_failed)$/;
+const gpuAcquisitionEvents = new WeakMap<Page, string[]>();
+
+function fixedGpuAcquisitionEvent(text: string): string | null {
+  const match = kGpuAcquisitionPattern.exec(text);
+  return match ? `stage=${match[1]} outcome=${match[2]}` : null;
+}
 const kSourcePaneWidth = 560;
 const kRightPaneWidth = 420;
 const kWelcomeContentMaxWidth = 920;
@@ -351,6 +360,14 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
 
   page.on("console", (message) => {
     const text = message.text();
+    if (text.startsWith(kGpuAcquisitionPrefix)) {
+      const event = `[gpu-acquisition] ${fixedGpuAcquisitionEvent(text) ?? "invalid_marker"}`;
+      const events = gpuAcquisitionEvents.get(page) ?? [];
+      if (events.length < 8) events.push(event);
+      gpuAcquisitionEvents.set(page, events);
+      recordFatalMessage(event);
+      return;
+    }
     if (kFatalRuntimePattern.test(text)) {
       recordFatalMessage(`[console:${message.type()}] ${text}`);
     }
@@ -572,7 +589,18 @@ async function captureCatalogFontDiagnostics(
     };
   });
   const diagnosticPath = testInfo.outputPath("catalog-font-final.json");
-  await writeFile(diagnosticPath, JSON.stringify({ diagnostic, networkRequests }, null, 2));
+  await writeFile(
+    diagnosticPath,
+    JSON.stringify(
+      {
+        diagnostic,
+        networkRequests,
+        gpuAcquisitionEvents: gpuAcquisitionEvents.get(page) ?? [],
+      },
+      null,
+      2,
+    ),
+  );
   await testInfo.attach("catalog-font-final", {
     path: diagnosticPath,
     contentType: "application/json",
@@ -612,6 +640,15 @@ test.afterEach(async ({ page }, testInfo) => {
   } catch (error) {
     console.error(`catalog font diagnostic capture failed: ${String(error)}`);
   }
+});
+
+test("catalog font loading records only fixed GPU acquisition markers", () => {
+  const marker = "[Geode/browser/acquire] stage=selection outcome=adapter_rejected";
+  const secret = " token=secret https://example.invalid/private/path";
+  expect(fixedGpuAcquisitionEvent(marker)).toBe("stage=selection outcome=adapter_rejected");
+  expect(fixedGpuAcquisitionEvent(marker + secret)).toBeNull();
+  expect(fixedGpuAcquisitionEvent("[Geode/browser/acquire] stage=selection outcome=secret"))
+    .toBeNull();
 });
 
 test("welcome picker does not render a hidden document", async ({ page }) => {

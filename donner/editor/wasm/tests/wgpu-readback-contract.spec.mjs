@@ -706,8 +706,8 @@ test("browser GPU startup owns one bounded request and shared logical roots", ()
   );
   assert.match(
     browserRootSource,
-    /OpenBrowserDevice\(root->lostState\(\)\)/,
-    "each logical context must reopen over the same loss condition",
+    /OpenBrowserDevice\(root->lostState\(\), "runtime"\)/,
+    "each logical context must reopen over the same loss condition with a fixed stage",
   );
   assert.doesNotMatch(
     browserRootSource,

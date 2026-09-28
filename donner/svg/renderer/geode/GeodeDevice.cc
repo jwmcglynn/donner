@@ -635,7 +635,13 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(gpu::TextureFormat text
   if (root == nullptr) {
     return nullptr;
   }
-  return CreateOverSelectedRoot(std::move(root), textureFormat);
+  std::unique_ptr<GeodeDevice> device = CreateOverSelectedRoot(std::move(root), textureFormat);
+#ifdef DONNER_GEODE_BROWSER_BACKEND
+  if (device == nullptr) {
+    std::fprintf(stderr, "[Geode/browser/acquire] stage=root outcome=construction_failed\n");
+  }
+#endif
+  return device;
 }
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateOverSelectedRoot(std::shared_ptr<GeodeGpuRoot> root,

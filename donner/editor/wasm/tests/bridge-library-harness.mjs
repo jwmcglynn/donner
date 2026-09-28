@@ -215,18 +215,18 @@ export function loadLibrary({
     navigator: {
       gpu: {
         getPreferredCanvasFormat: () => "bgra8unorm",
-        requestAdapter: async () => {
+        requestAdapter: () => {
           adapterRequests += 1;
           if (requestAdapterForTesting) {
             return requestAdapterForTesting();
           }
-          return {
+          return Promise.resolve({
             requestDevice: async () => {
               const created = createDevice();
               handedOut.push(created);
               return created.device;
             },
-          };
+          });
         },
       },
     },

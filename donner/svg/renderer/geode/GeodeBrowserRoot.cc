@@ -7,6 +7,7 @@
 #include <format>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "donner/base/StringUtils.h"
@@ -19,18 +20,52 @@ namespace {
 
 constexpr double kBrowserDeviceSettleSeconds = 10.0;
 
+void ReportAcquisitionFailure(const char* stage, const char* outcome) {
+  std::fprintf(stderr, "[Geode/browser/acquire] stage=%s outcome=%s\n", stage, outcome);
+}
+
+const char* RequestFailureOutcome(const gpu::browser::BrowserDeviceRequest& request,
+                                  gpu::browser::BrowserDeviceRequestState state) {
+  if (state == gpu::browser::BrowserDeviceRequestState::Unavailable) {
+    return "api_unavailable";
+  }
+  const std::string reason = request.error().str();
+  if (reason == "adapter_null") {
+    return "adapter_null";
+  }
+  if (reason == "adapter_rejected") {
+    return "adapter_rejected";
+  }
+  if (reason == "device_rejected") {
+    return "device_rejected";
+  }
+  if (reason == "device_install_failed") {
+    return "device_install_failed";
+  }
+  return "request_failed";
+}
+
 gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> OpenBrowserDevice(
-    std::shared_ptr<gpu::DeviceLostState> lostState) {
+    std::shared_ptr<gpu::DeviceLostState> lostState, const char* stage) {
   gpu::browser::BrowserDeviceRequest request = gpu::browser::BrowserDeviceRequest::Begin(
       std::make_unique<gpu::browser::EmscriptenBrowserBridge>());
-  if (request.settle(kBrowserDeviceSettleSeconds) ==
-      gpu::browser::BrowserDeviceRequestState::Pending) {
+  const gpu::browser::BrowserDeviceRequestState state = request.settle(kBrowserDeviceSettleSeconds);
+  if (state == gpu::browser::BrowserDeviceRequestState::Pending) {
+    ReportAcquisitionFailure(stage, "deadline_pending");
     return gpu::GpuError{
         gpu::GpuErrorType::InvalidState,
         std::format("the browser did not settle its GPU device request within {} seconds",
                     kBrowserDeviceSettleSeconds)};
   }
-  return std::move(request).take(std::move(lostState));
+  if (state != gpu::browser::BrowserDeviceRequestState::Ready) {
+    ReportAcquisitionFailure(stage, RequestFailureOutcome(request, state));
+  }
+  gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> result =
+      std::move(request).take(std::move(lostState));
+  if (result.hasError() && state == gpu::browser::BrowserDeviceRequestState::Ready) {
+    ReportAcquisitionFailure(stage, "context_failed");
+  }
+  return result;
 }
 
 std::string_view ProcessBackendRequest() {
@@ -115,10 +150,9 @@ std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
     return nullptr;
   }
   auto lostState = std::make_shared<gpu::DeviceLostState>();
-  gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> hold = OpenBrowserDevice(lostState);
+  gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> hold =
+      OpenBrowserDevice(lostState, "selection");
   if (hold.hasError()) {
-    std::fprintf(stderr, "[Geode/browser] No browser GPU device: %s\n",
-                 hold.error().message.c_str());
     return nullptr;
   }
   GeodeGpuRootCapabilities capabilities;
@@ -142,10 +176,8 @@ std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
 GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
   UTILS_RELEASE_ASSERT(root != nullptr);
   gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> device =
-      OpenBrowserDevice(root->lostState());
+      OpenBrowserDevice(root->lostState(), "runtime");
   if (device.hasError()) {
-    std::fprintf(stderr, "[Geode/browser] No runtime device over the browser GPU device: %s\n",
-                 device.error().message.c_str());
     return {};
   }
   return GeodeRuntimeDevice{.device = std::move(device).result()};
