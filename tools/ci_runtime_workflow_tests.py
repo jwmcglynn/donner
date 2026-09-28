@@ -106,6 +106,30 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         end = re.search(r"^      - name: ", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
 
+    def test_hosted_browser_comparisons_preserve_the_failed_gate(self):
+        hosted = self._job_body("macos")
+        original = self._step_body(hosted, "Test")
+        self.assertNotIn("continue-on-error", original)
+        original_artifacts = hosted.index("      - name: Upload Bazel test failure artifacts")
+        targets = (
+            "chromium_remote_smoke", "catalog_font_loading_test",
+            "browser_presentation_regression_test", "standalone_geode_browser_renderer_test",
+        )
+        for mode, jobs in (("serial", 1), ("parallel", 4)):
+            name = "Compare browser GPU tests (%s)" % mode
+            body = self._step_body(hosted, name)
+            self.assertGreater(hosted.index("      - name: " + name), original_artifacts)
+            self.assertIn("if: failure() && steps.test.outcome == 'failure'", body)
+            self.assertIn("continue-on-error: true", body)
+            self.assertIn("--nocache_test_results", body)
+            self.assertIn("--local_test_jobs=%d" % jobs, body)
+            self.assertIn("$BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS", body)
+            for target in targets:
+                self.assertIn("//donner/editor/wasm/tests:" + target, body)
+            artifact = self._step_body(hosted, "Upload browser GPU comparison (%s)" % mode)
+            self.assertIn("./.github/actions/upload-bazel-test-artifacts", artifact)
+            self.assertIn("browser-gpu-%s-" % mode, artifact)
+
     def _heartbeat_script(self):
         match = re.search(
             r"cat > \"\$DIAG_DIR/run_bazel_with_heartbeat\.sh\" <<'EOF'\n"
