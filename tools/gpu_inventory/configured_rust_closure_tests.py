@@ -94,6 +94,24 @@ class ConfiguredRustClosureTests(unittest.TestCase):
                     diagnostic = self._main_error(Path(directory) / "receipt.json", error)
                     self.assertFalse(sentinel in diagnostic, "exception text was disclosed")
 
+    def test_parser_exceptions_and_interrupts_stay_inside_public_boundary(self) -> None:
+        cases = (("__init__", RuntimeError("fixture-sensitive-parser"), 1),
+                 ("parse_args", RuntimeError("fixture-sensitive-parser"), 1),
+                 ("parse_args", KeyboardInterrupt(), 130))
+        for method, error, expected in cases:
+            with self.subTest(method=method, kind=type(error).__name__):
+                captured = io.StringIO()
+                escaped = False
+                with patch.object(gate.SafeArgumentParser, method, side_effect=error), \
+                     redirect_stderr(captured):
+                    try:
+                        code = gate.main()
+                    except BaseException:
+                        escaped = True
+                self.assertFalse(escaped, "parser exception escaped the public diagnostic boundary")
+                self.assertEqual(code, expected)
+                self.assertFalse("fixture-sensitive-parser" in captured.getvalue())
+
     def test_product_to_oracle_edge_is_rejected(self) -> None:
         root = "//donner/editor:editor"
         labels = {root, self.spec["oracleLabel"], "//third_party/webgpu-cpp:webgpu_cpp"}
