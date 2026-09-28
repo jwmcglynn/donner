@@ -150,19 +150,19 @@ EM_JS(void, InstallWorkerGlobalShimImpl, (), {
     return {
       setProperty : function(name, value, priority) {
         properties[name] = value;
-        priorities[name] = priority || '';
+        priorities[name] = priority || "";
       },
       removeProperty : function(name) {
-        const previous = properties[name] || '';
+        const previous = properties[name] || "";
         delete properties[name];
         delete priorities[name];
         return previous;
       },
-      getPropertyValue : function(name) { return properties[name] || ''; },
-      getPropertyPriority : function(name) { return priorities[name] || ''; },
-      item : function(index) { return Object.keys(properties)[index] || ''; },
+      getPropertyValue : function(name) { return properties[name] || ""; },
+      getPropertyPriority : function(name) { return priorities[name] || ""; },
+      item : function(index) { return Object.keys(properties)[index] || ""; },
       get length() { return Object.keys(properties).length; },
-      cssText : '',
+      cssText : "",
     };
   };
   const elements = {};
@@ -195,7 +195,7 @@ EM_JS(void, InstallWorkerGlobalShimImpl, (), {
     activeElement : null,
     body : null,
     documentElement : makeElement('html'),
-    title : '',
+    title : "",
     fullscreenElement : null,
     pointerLockElement : null,
     hidden : false,
@@ -210,7 +210,7 @@ EM_JS(void, InstallWorkerGlobalShimImpl, (), {
   globalThis.window = {
     // Diagnostics land here rather than on the page; see the header.
     document : globalThis.document,
-    location : {search : '', href : '', hash : ''},
+    location : {search : "", href : "", hash : ""},
     devicePixelRatio : 1,
     innerWidth : 1,
     innerHeight : 1,

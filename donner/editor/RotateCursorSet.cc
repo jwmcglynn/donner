@@ -38,10 +38,12 @@ namespace {
 constexpr int kCursorSizePx = 32;
 constexpr int kCursorRasterScale = 4;
 constexpr int kCursorRasterSizePx = kCursorSizePx * kCursorRasterScale;
+#ifndef __EMSCRIPTEN__
 constexpr int kCursorHotspotPx = 16;
 constexpr int kPanCursorHotspotPx = 15;
 constexpr int kPenCursorHotspotXPx = 4;
 constexpr int kPenCursorHotspotYPx = 4;
+#endif
 constexpr std::string_view kRotationPlaceholder = "rotate(0,16,16)";
 
 #if defined(__EMSCRIPTEN__)
@@ -248,6 +250,7 @@ std::size_t CornerIndex(SelectionTransformCorner corner) {
   return 0;
 }
 
+#ifndef __EMSCRIPTEN__
 std::size_t PanCursorIndex(PanCursorKind kind) {
   switch (kind) {
     case PanCursorKind::OpenHand: return 0;
@@ -265,6 +268,7 @@ std::size_t PenCursorIndex(PenCursorHint hint) {
   }
   return 0;
 }
+#endif
 
 std::span<const unsigned char> PenCursorSvgBytes(PenCursorHint hint) {
   switch (hint) {

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -43,7 +44,8 @@ bool AnimationElementTargets(const SVGElement& animationElement, const SVGElemen
   }
 
   if (href.has_value()) {
-    std::string_view id = href->str();
+    const std::string hrefText = href->str();
+    std::string_view id = hrefText;
     if (!id.empty() && id.front() == '#') {
       id.remove_prefix(1);
     }

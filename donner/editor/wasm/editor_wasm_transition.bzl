@@ -174,7 +174,8 @@ def _editor_wasm_runtime_options_probe_impl(ctx):
     output = ctx.actions.declare_file(ctx.label.name + ".txt")
     values = ctx.attr.linkopts
     initial_memory = _single_setting(values, "INITIAL_MEMORY")
-    maximum_memory = _single_setting(values, "MAXIMUM_MEMORY")
+    memory_growth = _single_setting(values, "ALLOW_MEMORY_GROWTH")
+    maximum_memory_flags = len(_setting_values(values, "MAXIMUM_MEMORY"))
     lines = [
         "asyncify={}".format("-sASYNCIFY" in values),
         "closure={}".format("--closure=1" in values),
@@ -188,11 +189,15 @@ def _editor_wasm_runtime_options_probe_impl(ctx):
             _single_setting(values, "OFFSCREENCANVASES_TO_PTHREAD"),
         ),
         "offscreencanvas_support={}".format(_single_setting(values, "OFFSCREENCANVAS_SUPPORT")),
-        # Fixed linear memory: growth off, and initial == maximum.
-        "memory_growth={}".format(_single_setting(values, "ALLOW_MEMORY_GROWTH")),
+        # Fixed linear memory: growth off, a single initial size, and no redundant maximum.
+        "memory_growth={}".format(memory_growth),
         "initial_memory={}".format(initial_memory),
-        "maximum_memory={}".format(maximum_memory),
-        "memory_is_fixed={}".format(initial_memory == maximum_memory),
+        "maximum_memory_flags={}".format(maximum_memory_flags),
+        "memory_is_fixed={}".format(
+            memory_growth == "0" and
+            len(_setting_values(values, "INITIAL_MEMORY")) == 1 and
+            maximum_memory_flags == 0,
+        ),
         # One slot for the app pthread, one for AsyncRenderer's raster thread.
         "pthread_pool_size={}".format(_single_setting(values, "PTHREAD_POOL_SIZE")),
     ]
