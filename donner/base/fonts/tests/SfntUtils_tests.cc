@@ -288,46 +288,135 @@ std::vector<uint8_t> MakeCff2WithCharString(std::vector<uint8_t> charString,
   return result;
 }
 
-std::vector<uint8_t> MakeCff2WithFdSelect(size_t glyphCount, size_t fdCount,
-                                          std::vector<uint8_t> fdSelect) {
+std::vector<std::vector<uint8_t>> MakeCffLocalSubrBlocks(bool cff2, size_t fdCount) {
+  std::vector<std::vector<uint8_t>> blocks;
+  for (size_t fd = 0; fd < fdCount; ++fd) {
+    std::vector<uint8_t> subroutine{139, 139, 21};
+    for (size_t line = 0; line <= fd; ++line) {
+      if (line % 2 == 0) {
+        subroutine.insert(subroutine.end(), {149, 139, 5});
+      } else {
+        subroutine.insert(subroutine.end(), {139, 149, 5});
+      }
+    }
+    subroutine.push_back(11);
+    const auto subrIndex = MakeCffIndex({subroutine}, cff2);
+    std::vector<uint8_t> block{141, 19};  // Local Subrs INDEX follows this two-byte Private DICT.
+    block.insert(block.end(), subrIndex.begin(), subrIndex.end());
+    blocks.push_back(std::move(block));
+  }
+  return blocks;
+}
+
+std::vector<uint8_t> MakeCffFontDictIndex(const std::vector<std::vector<uint8_t>>& privateBlocks,
+                                          bool cff2, size_t privateOffset) {
+  std::vector<std::vector<uint8_t>> dictionaries;
+  for (const auto& block : privateBlocks) {
+    std::vector<uint8_t> dictionary = EncodeDictInteger(2);
+    const auto offset = EncodeDictInteger(privateOffset);
+    dictionary.insert(dictionary.end(), offset.begin(), offset.end());
+    dictionary.push_back(18);
+    dictionaries.push_back(std::move(dictionary));
+    privateOffset += block.size();
+  }
+  return MakeCffIndex(dictionaries, cff2);
+}
+
+std::vector<uint8_t> MakeCffWithFdSelect(bool cff2, size_t glyphCount, size_t fdCount,
+                                         const std::vector<uint8_t>& fdSelect) {
   EXPECT_GT(glyphCount, 0u);
   EXPECT_GT(fdCount, 1u);
-  const std::vector<uint8_t> globalIndex = MakeCffIndex({}, true);
-  const std::vector<uint8_t> charStrings = MakeCffIndex(
-      std::vector<std::vector<uint8_t>>(glyphCount, {139, 139, 21, 149, 139, 5}), true);
-  const std::vector<uint8_t> fdArray =
-      MakeCffIndex(std::vector<std::vector<uint8_t>>(fdCount, {139, 139, 18}), true);
+  const std::vector<uint8_t> nameIndex = MakeCffIndex({{'A'}}, false);
+  const std::vector<uint8_t> stringIndex =
+      MakeCffIndex({{'A', 'd', 'o', 'b', 'e'}, {'I', 'd', 'e', 'n', 't', 'i', 't', 'y'}}, false);
+  const std::vector<uint8_t> globalIndex = MakeCffIndex({}, cff2);
+  std::vector<uint8_t> program{32, 10};
+  if (!cff2) {
+    program.push_back(14);
+  }
+  const std::vector<uint8_t> charStrings =
+      MakeCffIndex(std::vector<std::vector<uint8_t>>(glyphCount, program), cff2);
+  const auto privateBlocks = MakeCffLocalSubrBlocks(cff2, fdCount);
+  size_t privateBytes = 0;
+  for (const auto& block : privateBlocks) {
+    privateBytes += block.size();
+  }
+  std::vector<uint8_t> fdArray = MakeCffFontDictIndex(privateBlocks, cff2, 0);
+  std::vector<uint8_t> charset{0};
+  for (size_t glyph = 1; glyph < glyphCount; ++glyph) {
+    charset.push_back(static_cast<uint8_t>(glyph >> 8));
+    charset.push_back(static_cast<uint8_t>(glyph));
+  }
 
   std::vector<uint8_t> topDict;
+  bool converged = false;
   for (int iteration = 0; iteration < 8; ++iteration) {
-    const size_t charStringsOffset = 5 + topDict.size() + globalIndex.size();
+    const size_t prefixSize =
+        cff2 ? 5 + topDict.size()
+             : 4 + nameIndex.size() + MakeCffIndex({topDict}, false).size() + stringIndex.size();
+    const size_t charStringsOffset = prefixSize + globalIndex.size();
     const size_t fdArrayOffset = charStringsOffset + charStrings.size();
-    const size_t fdSelectOffset = fdArrayOffset + fdArray.size();
-    std::vector<uint8_t> nextTop = EncodeDictInteger(charStringsOffset);
+    const size_t privateOffset = fdArrayOffset + fdArray.size();
+    const size_t charsetOffset = privateOffset + privateBytes;
+    const size_t fdSelectOffset = charsetOffset + (cff2 ? 0 : charset.size());
+    const auto nextFdArray = MakeCffFontDictIndex(privateBlocks, cff2, privateOffset);
+    std::vector<uint8_t> nextTop;
+    if (!cff2) {
+      nextTop = EncodeDictInteger(391);
+      const auto ordering = EncodeDictInteger(392);
+      nextTop.insert(nextTop.end(), ordering.begin(), ordering.end());
+      nextTop.insert(nextTop.end(), {139, 12, 30});  // Adobe-Identity-0 ROS.
+      const auto encodedCharsetOffset = EncodeDictInteger(charsetOffset);
+      nextTop.insert(nextTop.end(), encodedCharsetOffset.begin(), encodedCharsetOffset.end());
+      nextTop.push_back(15);
+    }
+    const auto encodedCharStringsOffset = EncodeDictInteger(charStringsOffset);
+    nextTop.insert(nextTop.end(), encodedCharStringsOffset.begin(), encodedCharStringsOffset.end());
     nextTop.push_back(17);
-    const std::vector<uint8_t> encodedFdArrayOffset = EncodeDictInteger(fdArrayOffset);
+    const auto encodedFdArrayOffset = EncodeDictInteger(fdArrayOffset);
     nextTop.insert(nextTop.end(), encodedFdArrayOffset.begin(), encodedFdArrayOffset.end());
-    nextTop.push_back(12);
-    nextTop.push_back(36);
-    const std::vector<uint8_t> encodedFdSelectOffset = EncodeDictInteger(fdSelectOffset);
+    nextTop.insert(nextTop.end(), {12, 36});
+    const auto encodedFdSelectOffset = EncodeDictInteger(fdSelectOffset);
     nextTop.insert(nextTop.end(), encodedFdSelectOffset.begin(), encodedFdSelectOffset.end());
-    nextTop.push_back(12);
-    nextTop.push_back(37);
-    if (nextTop == topDict) {
+    nextTop.insert(nextTop.end(), {12, 37});
+    if (nextTop == topDict && nextFdArray == fdArray) {
+      converged = true;
       break;
     }
     topDict = std::move(nextTop);
+    fdArray = nextFdArray;
   }
-  // The CFF2 header below writes the top DICT length as a single low byte.
+  EXPECT_TRUE(converged);
   EXPECT_LE(topDict.size(), 255u);
 
-  std::vector<uint8_t> result{2, 0, 5, 0, static_cast<uint8_t>(topDict.size())};
-  result.insert(result.end(), topDict.begin(), topDict.end());
+  std::vector<uint8_t> result;
+  if (cff2) {
+    result = {2, 0, 5, 0, static_cast<uint8_t>(topDict.size())};
+    result.insert(result.end(), topDict.begin(), topDict.end());
+  } else {
+    result = {1, 0, 4, 4};
+    result.insert(result.end(), nameIndex.begin(), nameIndex.end());
+    const auto topIndex = MakeCffIndex({topDict}, false);
+    result.insert(result.end(), topIndex.begin(), topIndex.end());
+    result.insert(result.end(), stringIndex.begin(), stringIndex.end());
+  }
   result.insert(result.end(), globalIndex.begin(), globalIndex.end());
   result.insert(result.end(), charStrings.begin(), charStrings.end());
   result.insert(result.end(), fdArray.begin(), fdArray.end());
+  for (const auto& block : privateBlocks) {
+    result.insert(result.end(), block.begin(), block.end());
+  }
+  if (!cff2) {
+    result.insert(result.end(), charset.begin(), charset.end());
+  }
+  // Keep FDSelect last so truncated cases cannot consume bytes from a following structure.
   result.insert(result.end(), fdSelect.begin(), fdSelect.end());
   return result;
+}
+
+std::vector<uint8_t> MakeCff2WithFdSelect(size_t glyphCount, size_t fdCount,
+                                          const std::vector<uint8_t>& fdSelect) {
+  return MakeCffWithFdSelect(true, glyphCount, fdCount, fdSelect);
 }
 
 std::vector<uint8_t> MakeCff1() {
@@ -1113,18 +1202,125 @@ TEST(SfntUtils, Cff2DoesNotAcceptCff1ArithmeticExtensions) {
   }
 }
 
-TEST(SfntUtils, Cff2AcceptsWellFormedFdSelectFormats3And4) {
-  const std::vector<uint8_t> format3 =
-      MakeCff2WithFdSelect(3, 2, {3, 0, 2, 0, 0, 0, 0, 1, 1, 0, 3});
-  const CffOutlineValidationResult format3Result = ValidateCffOutlineComplexities(format3, true, 3);
-  ASSERT_EQ(format3Result.status, CffOutlineValidationStatus::Complete);
-  EXPECT_EQ(format3Result.glyphs.size(), 3u);
+TEST(SfntUtils, CffAcceptsSupportedFontDictSelectionFormats) {
+  struct Case {
+    const char* name;
+    bool cff2;
+    std::vector<uint8_t> selection;
+    std::array<uint32_t, 3> expectedVertices;
+  };
+  const std::vector<Case> cases{
+      {"CFF1 format 0", false, {0, 0, 1, 0}, {3, 4, 3}},
+      {"CFF1 format 3", false, {3, 0, 2, 0, 0, 0, 0, 1, 1, 0, 3}, {3, 4, 4}},
+      {"CFF2 format 0", true, {0, 0, 1, 0}, {3, 4, 3}},
+      {"CFF2 format 3", true, {3, 0, 2, 0, 0, 0, 0, 1, 1, 0, 3}, {3, 4, 4}},
+      {"CFF2 format 4",
+       true,
+       {4, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 3},
+       {3, 4, 4}},
+  };
+  for (const Case& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    const auto result = ValidateCffOutlineComplexities(
+        MakeCffWithFdSelect(testCase.cff2, 3, 2, testCase.selection), testCase.cff2, 3);
+    ASSERT_THAT(result.status, testing::Eq(CffOutlineValidationStatus::Complete));
+    EXPECT_THAT(result.glyphs,
+                testing::ElementsAre(testing::Field(&CffGlyphOutlineComplexity::maximumVertices,
+                                                    testCase.expectedVertices[0]),
+                                     testing::Field(&CffGlyphOutlineComplexity::maximumVertices,
+                                                    testCase.expectedVertices[1]),
+                                     testing::Field(&CffGlyphOutlineComplexity::maximumVertices,
+                                                    testCase.expectedVertices[2])));
+  }
+}
 
-  const std::vector<uint8_t> format4 =
-      MakeCff2WithFdSelect(3, 2, {4, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 3});
-  const CffOutlineValidationResult format4Result = ValidateCffOutlineComplexities(format4, true, 3);
-  ASSERT_EQ(format4Result.status, CffOutlineValidationStatus::Complete);
-  EXPECT_EQ(format4Result.glyphs.size(), 3u);
+TEST(SfntUtils, Cff2FontDictSelectionRejectsMalformedTablesWithoutPartialGlyphs) {
+  struct Case {
+    const char* name;
+    std::vector<uint8_t> selection;
+  };
+  const std::vector<Case> cases{
+      {"missing format", {}},
+      {"unsupported format", {1}},
+      {"short format 0 array", {0, 0, 1}},
+      {"format 0 dictionary out of range", {0, 0, 2, 0}},
+      {"short format 3 count", {3, 0}},
+      {"no format 3 ranges", {3, 0, 0}},
+      {"too many format 3 ranges", {3, 0, 4}},
+      {"missing format 3 sentinel", {3, 0, 2, 0, 0, 0, 0, 1, 1}},
+      {"first glyph is not zero", {3, 0, 1, 0, 1, 0, 0, 3}},
+      {"duplicate range start", {3, 0, 2, 0, 0, 0, 0, 0, 1, 0, 3}},
+      {"descending range starts", {3, 0, 3, 0, 0, 0, 0, 2, 1, 0, 1, 0, 0, 3}},
+      {"format 3 dictionary out of range", {3, 0, 1, 0, 0, 2, 0, 3}},
+      {"sentinel below glyph count", {3, 0, 1, 0, 0, 0, 0, 2}},
+      {"sentinel above glyph count", {3, 0, 1, 0, 0, 0, 0, 4}},
+      {"short format 4 count", {4, 0, 0, 0}},
+      {"no format 4 ranges", {4, 0, 0, 0, 0}},
+      {"too many format 4 ranges", {4, 0, 0, 0, 4}},
+      {"short format 4 range", {4, 0, 0, 0, 1, 0, 0, 0, 0}},
+      {"format 4 dictionary out of range", {4, 0, 0, 0, 1, 0, 0, 0, 0, 0, 2, 0, 0, 0, 3}},
+      {"format 4 sentinel mismatch", {4, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2}},
+  };
+  for (const Case& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    const auto result =
+        ValidateCffOutlineComplexities(MakeCff2WithFdSelect(3, 2, testCase.selection), true, 3);
+    EXPECT_THAT(result.status, testing::Eq(CffOutlineValidationStatus::Invalid));
+    EXPECT_THAT(result.glyphs, testing::IsEmpty());
+  }
+}
+
+TEST(SfntUtils, Cff1CidDoesNotAcceptCff2FontDictSelectionFormat4) {
+  const std::vector<uint8_t> format4{4, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 3};
+  const auto result =
+      ValidateCffOutlineComplexities(MakeCffWithFdSelect(false, 3, 2, format4), false, 3);
+  EXPECT_THAT(result.status, testing::Eq(CffOutlineValidationStatus::Invalid));
+  EXPECT_THAT(result.glyphs, testing::IsEmpty());
+}
+
+TEST(SfntUtils, CffInsufficientWorkBudgetsNeverReturnPartialGlyphs) {
+  struct Case {
+    const char* name;
+    bool cff2;
+    std::vector<uint32_t> expectedVertices;
+    std::vector<uint8_t> bytes;
+  };
+  const std::vector<Case> cases{
+      {"CFF1 local subroutine",
+       false,
+       {3},
+       MakeCff1WithSubrs({32, 10, 14}, {{139, 139, 21, 149, 139, 5, 11}})},
+      {"CFF1 CID format 0", false, {3, 4, 3}, MakeCffWithFdSelect(false, 3, 2, {0, 0, 1, 0})},
+      {"CFF2 format 3",
+       true,
+       {3, 4, 4},
+       MakeCff2WithFdSelect(3, 2, {3, 0, 2, 0, 0, 0, 0, 1, 1, 0, 3})},
+  };
+  for (const Case& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    const auto complete = ValidateCffOutlineComplexities(testCase.bytes, testCase.cff2,
+                                                         testCase.expectedVertices.size());
+    ASSERT_THAT(complete.status, testing::Eq(CffOutlineValidationStatus::Complete));
+    ASSERT_THAT(complete.work, testing::AllOf(testing::Gt(0u), testing::Lt(1024u)));
+    for (size_t budget = 0; budget < complete.work; ++budget) {
+      SCOPED_TRACE(budget);
+      const auto limited = ValidateCffOutlineComplexities(testCase.bytes, testCase.cff2,
+                                                          testCase.expectedVertices.size(), budget);
+      EXPECT_THAT(limited.status, testing::Eq(CffOutlineValidationStatus::WorkLimitExceeded));
+      EXPECT_THAT(limited.work, testing::Le(budget));
+      EXPECT_THAT(limited.glyphs, testing::IsEmpty());
+    }
+    const auto exact = ValidateCffOutlineComplexities(
+        testCase.bytes, testCase.cff2, testCase.expectedVertices.size(), complete.work);
+    ASSERT_THAT(exact.status, testing::Eq(CffOutlineValidationStatus::Complete));
+    EXPECT_THAT(exact.work, testing::Eq(complete.work));
+    ASSERT_THAT(exact.glyphs, testing::SizeIs(testCase.expectedVertices.size()));
+    for (size_t glyph = 0; glyph < testCase.expectedVertices.size(); ++glyph) {
+      SCOPED_TRACE(glyph);
+      EXPECT_THAT(exact.glyphs[glyph].maximumVertices,
+                  testing::Eq(testCase.expectedVertices[glyph]));
+    }
+  }
 }
 
 TEST(SfntUtils, Cff2FdSelectRejectsRangeStartsAboveTheGlyphCount) {
