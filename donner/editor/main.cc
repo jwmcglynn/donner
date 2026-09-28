@@ -224,13 +224,20 @@ void RunEditorFrame(donner::editor::gui::EditorWindow& window, donner::editor::E
   // exactly the tick's trigger bits.
   {
     ZoneScopedN("waitEvents");
-    if (const std::optional<float> wakeSeconds = shell.nextIdleWakeSeconds()) {
+    std::optional<float> wakeSeconds = shell.nextIdleWakeSeconds();
+    if (window.hasIdleGpuWork()) {
+      constexpr float kGpuIdlePollSeconds = 0.1f;
+      wakeSeconds = wakeSeconds.has_value() ? std::min(*wakeSeconds, kGpuIdlePollSeconds)
+                                            : kGpuIdlePollSeconds;
+    }
+    if (wakeSeconds.has_value()) {
       window.waitEventsTimeout(*wakeSeconds);
     } else {
       window.waitEvents();
     }
   }
 #endif
+  window.pollIdleGpu();
   {
     ZoneScopedN("shell.prepareFrame");
     shell.prepareFrame();
@@ -301,9 +308,7 @@ void RunWasmEditorFrame(void* userdata) {
       ConsumeBrowserEditorFrameRequest() || state->window->hasQueuedInputEvents();
   const bool timerDue = state->nextIdleWakeAtMs.has_value() && nowMs >= *state->nextIdleWakeAtMs;
   if (!editorRequested && !browserRequested && !timerDue) {
-    if (const std::shared_ptr<donner::geode::GeodeDevice> device = state->window->geodeDevice()) {
-      device->runtimeDevice().poll();
-    }
+    state->window->pollIdleGpu();
     return;
   }
   const int triggerBits =

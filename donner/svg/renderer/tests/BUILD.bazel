@@ -840,7 +840,10 @@ donner_cc_test(
         "//donner/svg/resources:image_resource",
         "@tiny-skia-cpp//src:tiny_skia_lib",
         "@tiny-skia-cpp//src/tiny_skia/filter",
-    ],
+    ] + select({
+        "@platforms//os:macos": ["//donner/gpu/metal:metal_device"],
+        "//conditions:default": [],
+    }),
 )
 
 # Transition wrapper: flips renderer_backend=geode + enable_geode=true so this
@@ -1063,7 +1066,10 @@ donner_variant_cc_test(
 donner_cc_test(
     name = "resvg_test_suite_wgpu_reference_linux_impl",
     size = "large",
-    srcs = ["resvg_test_suite.cc"],
+    srcs = [
+        "resvg_test_suite.cc",
+        "//donner/svg/renderer/geode:tests/GeodeIdleRetirement_tests.cc",
+    ],
     data = [
         "//donner/svg/renderer/testdata",
         "//third_party/resvg-test-suite:fonts",
@@ -1086,6 +1092,9 @@ donner_cc_test(
         ":image_comparison_test_fixture_wgpu_reference_linux",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
         "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
     ],
 )

@@ -417,14 +417,12 @@ public:
   ~GeodeWgpuAdapterDevice() override;
 
   /// Serial of the most recent submission whose queue work-done callback has fired (0 if none).
-  /// wgpu delivers the callbacks during \ref gpu::Device::waitForSerial's polling (and
-  /// opportunistically on submit), so call it to guarantee progress.
+  /// wgpu delivers callbacks during \ref gpu::Device::poll or a bounded serial wait (and
+  /// opportunistically on submit).
   ///
-  /// \warning The base class's `Device::poll()` does NOT drive wgpu polling - it only processes
-  /// deferred destructions against the serial this method reports. Per-frame destroy+poll churn
-  /// therefore defers unboundedly until something waits: a frame loop must call
-  /// \ref gpu::Device::waitForSerial on its frame cadence (or extend the adapter with a
-  /// non-blocking wgpu poll) so completions are observed and deferred destroys drain.
+  /// \ref gpu::Device::poll drives one nonblocking wgpu poll when destruction is pending, then
+  /// reclaims resources whose completion callback has arrived. An idle owner can call it without
+  /// another submission or a serial wait.
   /// Capped by \ref holdSubmittedWorkForTesting while a test holds submitted work incomplete.
   uint64_t completedSerial() const override;
 
@@ -515,6 +513,7 @@ public:
   wgpu::TextureView wgpuTextureViewOf(const gpu::TextureView& textureView) const;
 
 protected:
+  void onPollBackend() override;
   gpu::Status onCreateSurface(uint32_t slotIndex,
                               const gpu::SurfaceDescriptor& descriptor) override;
   gpu::Result<gpu::SurfaceCapabilities> onSurfaceCapabilities(uint32_t slotIndex) const override;
@@ -534,8 +533,8 @@ protected:
   /**
    * Drives `wgpu::Device::poll` until \ref completedSerial reaches \p serial, the device is
    * lost, or the budget elapses. On Emscripten the poll shim yields through Asyncify, mirroring
-   * \ref GeodeDevice's wait machinery. This is the only entry point that drives wgpu polling for
-   * this adapter - see the warning on \ref completedSerial.
+   * \ref GeodeDevice's wait machinery. Idle retirement instead uses a single nonblocking
+   * \ref gpu::Device::poll iteration.
    *
    * @param serial Submission serial to wait for.
    * @param timeoutSeconds Longest to wait, in seconds.
