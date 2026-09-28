@@ -3,6 +3,7 @@
 /// Authoritative WGSL for UI draw-data rendering.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for UI draw-data rendering.
 inline constexpr wgsl::SourceText kUiDrawSource{R"wgsl(struct UiDrawParams {
   clip_from_logical: mat4x4<f32>,
 }

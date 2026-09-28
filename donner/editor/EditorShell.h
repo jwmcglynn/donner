@@ -93,17 +93,21 @@ enum class FillStrokeWidgetRegion;
 class FramebufferCheckerboardRenderer;
 #endif
 
+/// Initial document and host-capability settings for the editor shell.
 struct EditorShellOptions {
-  std::string svgPath;
-  std::optional<std::string> initialSource;
-  std::optional<std::string> initialPath;
+  std::string svgPath;  //!< SVG file path requested at startup.
+  std::optional<std::string>
+      initialSource;  //!< Optional initial XML source supplied directly by the host.
+  std::optional<std::string> initialPath;  //!< Optional path associated with the initial source.
+
   /// Permit open, save, save-as, and export actions to access the host filesystem.
   bool allowFileSystemActions = true;
   /// Permit source and shape clipboard actions to access the host clipboard.
   bool allowHostClipboardAccess = true;
   /// Show the in-workspace welcome and sample picker on the first frame.
   bool showWelcome = false;
-  std::string editorNoticeText;
+  std::string editorNoticeText;  //!< Host-provided notice displayed in the editor.
+
   /// Embedded "<version>\n<commit>\n" build metadata displayed in the About
   /// dialog. May be empty when the build did not embed it.
   std::string editorBuildInfo;
@@ -256,7 +260,9 @@ struct LayerInspectorStatusReadback {
   /// window-scroll (that would move the overlay chrome instead of the
   /// document), so a non-zero max is a layout bug.
   float renderPaneScrollY = 0.0f;
-  float renderPaneScrollMaxY = 0.0f;
+  float renderPaneScrollMaxY =
+      0.0f;  //!< Maximum render-pane vertical scroll offset in logical pixels.
+
   /// Latest editor rendering cost counters.
   FrameCostBreakdown frameCost;
   /// Active drag transform driving the presenter, if any.
@@ -276,12 +282,18 @@ class EditorShell {
   friend class EditorShellTestAccess;
 
 public:
+  /// Create the editor UI and application state over an existing host window.
+  /// @param window Host window, which must outlive the shell.
+  /// @param options Initial document and host-capability settings.
   EditorShell(gui::EditorWindow& window, EditorShellOptions options);
   ~EditorShell();
 
+  /// Return whether editor-shell initialization succeeded.
   [[nodiscard]] bool valid() const { return valid_; }
   /// Perform bounded work that may yield and must run before ImGui::NewFrame().
   void prepareFrame();
+
+  /// Process one editor UI frame using the host's active ImGui frame.
   void runFrame();
 
   /// Font catalog (embedded Google Fonts + macOS system fonts) backing document font resolution

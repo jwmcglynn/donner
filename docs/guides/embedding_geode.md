@@ -4,7 +4,6 @@ This guide is for Donner developers integrating Geode with a macOS or Linux
 window. The in-tree [GLFW example](../../examples/geode_embed.cc) shows the
 current native runtime boundary. The host owns the window and its platform
 surface; Geode owns a rendering context over the selected Metal or Vulkan root.
-The example does not create a WebGPU-C++ device or import a `wgpu::Texture`.
 
 Build the example with Geode enabled:
 
@@ -25,6 +24,25 @@ interactive mode has no attempt limit.
 ```sh
 bazel run --config=geode //examples:geode_embed -- --one-frame path/to/drawing.svg
 ```
+
+## Native backend configuration {#EmbeddingGeodeBackendSelection}
+
+Native Geode uses Metal on macOS and Vulkan on Linux. For code that calls
+`SelectGpuRoot`, a supplied `GpuRootSelection::backend` takes precedence over
+`DONNER_GPU_BACKEND`. Without a caller selection, an empty environment setting
+selects the platform backend; `metal` and `vulkan` are case-insensitive requests.
+There is no fallback to another backend when a request cannot be served.
+
+`SelectGpuRoot` terminates the process for invalid selection options. When the environment controls
+selection, an invalid or unavailable request also terminates the process. With
+valid caller-selected or platform-selected options, device-creation failure
+returns a null root. `ResolveGpuBackendKind` returns an error for invalid request syntax or option
+combinations without creating a device; it does not probe backend availability.
+Treat environment settings as trusted process configuration.
+
+The macOS example helper uses `SelectGpuRoot`. The Linux helper instead creates
+and adopts a Vulkan root for its actual GLFW surface, so its backend is fixed by
+that presentation path.
 
 ## Select for the actual window {#EmbeddingGeodeSelection}
 
@@ -128,6 +146,19 @@ example. A host that discards an acquired frame calls
 `device.abandonCurrentTexture(surface)` before retrying. The example handles
 these statuses in its frame loop.
 
+## Device loss {#EmbeddingGeodeDeviceLoss}
+
+Logical contexts over one root share its `DeviceLostState`. Runtime backends
+declare that state lost when their driver reports loss. If the host receives a
+separate loss notification, retain the root's shared loss state for the callback
+and call `donner::gpu::DeclareDeviceLost(*lossState)`. Setting the flag directly
+would skip registered release callbacks.
+
+Stop submitting work after loss and retire the surface and contexts in the
+order below. A loss notification is not proof that GPU work has completed.
+Recovery needs a new root and context; unproven Vulkan teardown disables further
+Vulkan initialization until process restart.
+
 ## Retire in ownership order {#EmbeddingGeodeRetirement}
 
 Destroy the renderer, release the runtime surface with
@@ -141,6 +172,3 @@ If Vulkan cannot prove retirement, the example retains the native surface,
 root, and GLFW window until process exit and reports the failure. Destroying
 the window in that state could invalidate a surface the driver still uses.
 The Metal layer remains owned by its Cocoa view until the GLFW window closes.
-
-The native example is an in-tree integration pattern. Browser canvas presentation uses the
-separate browser runtime.

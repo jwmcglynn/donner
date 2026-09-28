@@ -902,7 +902,7 @@ WARN_IF_UNDOC_ENUM_VAL = NO
 # Possible values are: NO, YES, FAIL_ON_WARNINGS and FAIL_ON_WARNINGS_PRINT.
 # The default value is: NO.
 
-WARN_AS_ERROR          = NO
+WARN_AS_ERROR          = FAIL_ON_WARNINGS
 
 # The WARN_FORMAT tag determines the format of the warning messages that doxygen
 # can produce. The string should contain the $file, $line, and $text tags, which
@@ -1063,6 +1063,15 @@ EXCLUDE               += donner/gpu/shader/wgsl/Number.h \
                          donner/gpu/shader/wgsl/Compiler.h \
                          donner/gpu/shader/wgsl/SpirvEmitter.h \
                          donner/gpu/shader/wgsl/TextEmitter.h
+
+# BaselineCorpus is test-only capture input; AllocationTracker is opt-in benchmark
+# instrumentation that replaces allocation operators. SlugFillArtifactValidation
+# is a package-private compile-time assertion helper used by shader compilation.
+# None exposes a production library interface; retain the public shader, editor,
+# and GPU declarations that these exact implementation files exercise.
+EXCLUDE               += donner/gpu/baseline/BaselineCorpus.h \
+                         donner/svg/renderer/benchmarks/AllocationTracker.h \
+                         donner/gpu/shader/programs/SlugFillArtifactValidation.h
 
 # The EXCLUDE_SYMLINKS tag can be used to select whether or not files or
 # directories that are symbolic links (a Unix file system feature) are excluded
@@ -2832,15 +2841,6 @@ DOT_GRAPH_MAX_NODES    = 60
 # This tag requires that the tag HAVE_DOT is set to YES.
 
 MAX_DOT_GRAPH_DEPTH    = 0
-
-# Set the DOT_MULTI_TARGETS tag to YES to allow dot to generate multiple output
-# files in one run (i.e. multiple -o and -T options on the command line). This
-# makes dot run faster, but since only newer versions of dot (>1.8.10) support
-# this, this feature is disabled by default.
-# The default value is: NO.
-# This tag requires that the tag HAVE_DOT is set to YES.
-
-DOT_MULTI_TARGETS      = NO
 
 # If the GENERATE_LEGEND tag is set to YES doxygen will generate a legend page
 # explaining the meaning of the various boxes and arrows in the dot generated

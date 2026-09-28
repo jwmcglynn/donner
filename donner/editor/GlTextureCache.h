@@ -204,7 +204,9 @@ public:
   /// The bitmap is keyed by row id and content fingerprint; ImGui only blits its pixels.
   /// @param key Stable id of the Layers row.
   /// @param bitmap Donner-rendered RGBA thumbnail bitmap.
-  /// @return Handle and valid UV range; a failed replacement keeps the prior view when one exists.
+  /// @return Handle and valid UV range, or an empty view for an empty bitmap. A failed Geode
+  /// bitmap upload keeps the prior view when one exists; a subsequent UI texture-registration
+  /// failure returns a zero texture handle.
   ThumbnailTextureView uploadThumbnail(std::uint64_t key, const svg::RendererBitmap& bitmap);
 
   /// Retain a renderer-owned GPU snapshot as a Layers thumbnail on Geode builds.

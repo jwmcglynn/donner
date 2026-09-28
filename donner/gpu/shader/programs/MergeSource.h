@@ -3,6 +3,7 @@
 /// Authoritative WGSL for one feMerge source-over pass.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for one feMerge source-over pass.
 inline constexpr wgsl::SourceText kMergeSource{
     R"wgsl(@group(0) @binding(0) var sourceTexture: texture_2d<f32>;
 @group(0) @binding(1) var destinationTexture: texture_2d<f32>;

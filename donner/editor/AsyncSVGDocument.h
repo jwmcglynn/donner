@@ -33,6 +33,7 @@ namespace donner::editor {
 /// operation is `currentFrameVersion()` which the render thread can poll.
 class AsyncSVGDocument {
 public:
+  /// Outcome of applying queued document mutations.
   struct FlushResult {
     bool appliedCommands = false;
     /// True only when every applied command changed an element transform. An overlay guide captured
@@ -98,6 +99,8 @@ public:
   /// Direct access to the inner document. UI thread only. The render thread
   /// should hold the snapshot returned by `acquireRenderSnapshot()` instead.
   [[nodiscard]] svg::SVGDocument& document() { return *document_; }
+
+  /// Return the current parsed SVG document under the caller's document-access policy.
   [[nodiscard]] const svg::SVGDocument& document() const { return *document_; }
 
   /// Push a command onto the per-frame queue. UI thread only.
@@ -169,6 +172,9 @@ public:
   // Returns true on success. On failure, the existing document is left
   // intact and `lastParseError()` returns the diagnostic from the parser
   // (so the caller can surface a line + reason in a text editor).
+
+  /// Replace the document from SVG source and retain parsing diagnostics.
+  /// @param svgBytes SVG source bytes to parse.
   [[nodiscard]] bool loadFromString(std::string_view svgBytes);
 
   /// The diagnostic from the most recent failed `loadFromString` /

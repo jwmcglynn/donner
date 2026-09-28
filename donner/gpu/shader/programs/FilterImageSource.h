@@ -3,6 +3,7 @@
 /// Authoritative WGSL for feImage placement.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for feImage placement.
 inline constexpr wgsl::SourceText kFilterImageSource{R"wgsl(struct ImageParams {
   m00: f32,
   m01: f32,

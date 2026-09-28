@@ -26,7 +26,10 @@ struct ActiveFlash {
 /// Per-view transient source-change highlights.
 class FlashDecorations {
 public:
+  /// Monotonic clock used for transient decoration lifetimes.
   using Clock = std::chrono::steady_clock;
+
+  /// Timestamp measured by the decoration clock.
   using TimePoint = Clock::time_point;
 
   /// Maximum number of simultaneous flashes retained by the view.

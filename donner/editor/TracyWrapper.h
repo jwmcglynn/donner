@@ -17,9 +17,17 @@
 // `avoid-do-while-macros` (hence no `do { } while(0)` idiom). Each
 // expands to a single void-cast expression; `(name)` references
 // suppress unused-argument warnings without doing any work.
+/// No-op scoped profiling zone when Tracy is disabled.
 #define ZoneScoped static_cast<void>(0)
+/// No-op named profiling zone when Tracy is disabled.
+/// @param name Profiling label.
 #define ZoneScopedN(name) static_cast<void>(name)
+/// No-op frame boundary when Tracy is disabled.
 #define FrameMark static_cast<void>(0)
+/// No-op named frame start when Tracy is disabled.
+/// @param name Profiling label.
 #define FrameMarkStart(name) static_cast<void>(name)
+/// No-op named frame end when Tracy is disabled.
+/// @param name Profiling label.
 #define FrameMarkEnd(name) static_cast<void>(name)
 #endif

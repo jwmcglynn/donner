@@ -48,6 +48,8 @@ struct RenderPaneGestureAction {
   /// Focal screen point for `ViewportState::zoomAround`.
   Vector2d focalScreen = Vector2d::Zero();
 
+  /// Compare all members for value equality.
+  /// @param other Value to compare.
   bool operator==(const RenderPaneGestureAction& other) const = default;
 };
 

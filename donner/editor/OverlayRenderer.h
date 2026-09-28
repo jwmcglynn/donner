@@ -113,6 +113,7 @@ struct SelectionChromeSnapshot {
     /// as an editable placeholder, but uses a dimmer stroke than visible selections.
     bool displayNone = false;
   };
+  /// Selected path geometry included in the chrome snapshot.
   std::vector<PathItem> paths;
   /// One supported effective clip boundary, kept separately from selection/export chrome.
   /// `basePathDoc` is captured at the last safe idle state. A direct selected-owner clip follows
@@ -122,6 +123,7 @@ struct SelectionChromeSnapshot {
     Path pathDoc;
     bool followsSelection = false;
   };
+  /// Clip boundaries to display in document coordinates.
   std::vector<ClipGuide> clipGuidesDoc;
   /// Transient source-hover path outlines. Drawn as soft hover chrome before selection chrome.
   std::vector<PathItem> hoverPaths;
@@ -207,10 +209,14 @@ struct SelectionChromeSnapshot {
   /// Text-editing caret for the in-canvas text session: document-space
   /// endpoints of the caret bar (top, bottom).
   struct TextCaret {
+    /// Top endpoint of the caret in document coordinates.
     Vector2d topDoc;
+    /// Bottom endpoint of the caret in document coordinates.
     Vector2d bottomDoc;
 
-    bool operator==(const TextCaret&) const = default;
+    /// Compare all members for value equality.
+    /// @param other Value to compare.
+    bool operator==(const TextCaret& other) const = default;
   };
   /// The active text-editing caret, or nullopt when no text session is open.
   std::optional<TextCaret> textCaretDoc;
@@ -236,12 +242,16 @@ struct SelectionChromeSnapshot {
     Box2d boxDoc;
     /// First-baseline segment endpoints.
     Vector2d baselineStartDoc;
+    /// End of the text-box baseline guide in document coordinates.
     Vector2d baselineEndDoc;
     /// I-beam bar endpoints at the future caret position (top, bottom).
     Vector2d ibeamTopDoc;
+    /// Bottom endpoint of the placement I-beam in document coordinates.
     Vector2d ibeamBottomDoc;
 
-    bool operator==(const TextBoxDragPreview&) const = default;
+    /// Compare all members for value equality.
+    /// @param other Value to compare.
+    bool operator==(const TextBoxDragPreview& other) const = default;
   };
   /// The active drag-to-create preview, or nullopt when the text tool is not
   /// dragging out a box.
@@ -254,7 +264,9 @@ struct SelectionChromeSnapshot {
     /// Baseline end (advance end of the line's last glyph).
     Vector2d endDoc;
 
-    bool operator==(const TextBaseline&) const = default;
+    /// Compare all members for value equality.
+    /// @param other Value to compare.
+    bool operator==(const TextBaseline& other) const = default;
   };
   /// Baseline underlay for selected text: one document-space segment per
   /// laid-out text line, drawn beneath the selection chrome so the span of
@@ -296,6 +308,7 @@ struct SelectionChromeSnapshot {
   double devicePixelRatio = 1.0;
 };
 
+/// Draws selection and tool chrome from captured document geometry.
 class OverlayRenderer {
 public:
   /// Draw all editor chrome layers for the current state of `editor` into
@@ -342,6 +355,11 @@ public:
   /// @param cullRectDoc Optional document-space cull rect. Chrome fully outside this rect is
   ///   skipped before draw.
   /// @param selectionDetail Detail level for selected-element chrome.
+  /// @param renderer Renderer whose active frame receives the chrome.
+  /// @param activeBoundsPreview Optional live gesture bounds replacing idle selection bounds.
+  /// @param sourceHover Elements highlighted by source-pane hover.
+  /// @param representedDocumentFromLiveDocument Maps live geometry into the document coordinates
+  /// currently presented.
   static void drawChromeWithTransform(
       svg::RendererInterface& renderer, std::span<const svg::SVGElement> selection,
       const std::optional<Box2d>& marqueeRectDoc, const Transform2d& canvasFromDoc,
@@ -381,6 +399,16 @@ public:
   ///   the draw phase can present the edited path from the same DOM capture as
   ///   the chrome. Skipped (nullopt in the snapshot) when the element's paint
   ///   cannot be represented as a solid preview.
+  /// @param selection Selected elements to capture while the document is available.
+  /// @param marqueeRectDoc Optional marquee rectangle in document coordinates.
+  /// @param canvasFromDoc Maps document coordinates to canvas pixels.
+  /// @param activeBoundsPreview Optional live gesture bounds replacing idle selection bounds.
+  /// @param sourceHover Elements highlighted by source-pane hover.
+  /// @param cullRectDoc Optional document-space rectangle restricting captured chrome.
+  /// @param selectionDetail Detail level for selected-element outlines and handles.
+  /// @param representedDocumentFromLiveDocument Maps live geometry into the document coordinates
+  /// currently presented.
+  /// @param lockedFlash Optional locked-element rejection highlight to capture.
   [[nodiscard]] static SelectionChromeSnapshot captureChromeSnapshot(
       std::span<const svg::SVGElement> selection, const std::optional<Box2d>& marqueeRectDoc,
       const Transform2d& canvasFromDoc,

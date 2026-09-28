@@ -23,7 +23,8 @@ namespace donner::gpu::shader {
  * - Entry point IO: parameters are emitted inline with `@location`/`@builtin` annotations; each
  *   entry point returns a generated `<name>_Output` struct with annotated members.
  *
- * Fails closed with a \ref ShaderError (never emits invalid WGSL silently) when:
+ * Fails closed with a \ref donner::gpu::shader::ShaderError "ShaderError" (never emits invalid WGSL
+ * silently) when:
  * - an identifier collides with a WGSL reserved word;
  * - a uniform binding contains an array whose natural stride required 16-byte padding
  *   (`ArrayStrideInfo::paddedFromNatural`); materializing padded element wrappers is a

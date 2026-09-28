@@ -1,6 +1,7 @@
 name: Build and manually deploy documentation
 
 on:
+  pull_request:
   push:
     branches: ["main"]
   workflow_dispatch:
@@ -35,7 +36,8 @@ permissions:
 
 jobs:
   build:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    timeout-minutes: 15
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -63,13 +65,16 @@ jobs:
           tools/build_docs.sh
 
       - name: Bind the docs site to this source run
+        if: github.event_name == 'push'
         run: |
           python3 -B -m tools.pages_artifact marker \
             --output generated-doxygen/html/docs-build.json
 
       - name: Setup Pages
+        if: github.event_name == 'push'
         uses: actions/configure-pages@v6
       - name: Upload retained Pages artifact
+        if: github.event_name == 'push'
         id: pages
         uses: actions/upload-pages-artifact@v5
         with:
@@ -77,6 +82,7 @@ jobs:
           retention-days: 90
 
       - name: Record the immutable docs selection
+        if: github.event_name == 'push'
         env:
           ARTIFACT_ID: ${{ steps.pages.outputs.artifact_id }}
         run: |

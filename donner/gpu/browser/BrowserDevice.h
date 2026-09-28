@@ -126,14 +126,14 @@ private:
  * backend and a frame ends by abandoning its acquired texture. Acquiring, configuring and
  * reconfiguring behave as the runtime documents.
  *
- * What a \ref NativeSurfaceKind::CanvasSelector names is narrower here than the descriptor
- * suggests, and narrower in a worker than on the main thread. On the main thread it is a CSS
- * selector, resolved against the document. A worker has no document, and a canvas reaches one by
- * being transferred, so there it names the canvas by its element id and a selector that is not a
- * plain id will not resolve. The editor renders from a worker, so that is the case to write
- * against; passing `"#canvas"` satisfies both readings, which is why it is the form used
- * throughout. Widening this back out is a change to the descriptor's own documentation and belongs
- * with the unit that owns it.
+ * What a \ref donner::gpu::NativeSurfaceKind::CanvasSelector "NativeSurfaceKind::CanvasSelector"
+ * names is narrower here than the descriptor suggests, and narrower in a worker than on the main
+ * thread. On the main thread it is a CSS selector, resolved against the document. A worker has no
+ * document, and a canvas reaches one by being transferred, so there it names the canvas by its
+ * element id and a selector that is not a plain id will not resolve. The editor renders from a
+ * worker, so that is the case to write against; passing `"#canvas"` satisfies both readings, which
+ * is why it is the form used throughout. Widening this back out is a change to the descriptor's own
+ * documentation and belongs with the unit that owns it.
  *
  * Several devices can run over one browser device in one worker, each through a bridge of its own
  * with its own identifiers, mappings and submission serials; that is how a snapshot capture

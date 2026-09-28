@@ -81,7 +81,8 @@ enum class SourceOrdering : uint8_t {
   /// ordered after. The submission is accepted without a host wait for that work. The wait ends
   /// however the producer's work ends, failed or released by a loss of the producer's root, so
   /// the runtime orders on the device only a consumer that shares the producer's loss condition,
-  /// and treats any other consumer as \ref WaitForSource. The host can still wait: once a
+  /// and treats any other consumer as \ref donner::gpu::SourceOrdering::WaitForSource
+  /// "WaitForSource". The host can still wait: once a
   /// consumer's queue holds as many uncompleted command buffers behind such a wait as it allows,
   /// asking it for another blocks until the producer's work ends, the root is declared lost, or
   /// the system ends the stalled work.
@@ -89,7 +90,8 @@ enum class SourceOrdering : uint8_t {
 };
 
 /**
- * Ostream output operator for \ref SourceOrdering, e.g. `SharedQueue`.
+ * Ostream output operator for \ref donner::gpu::SourceOrdering "SourceOrdering", e.g.
+ * `SharedQueue`.
  *
  * @param os Output stream.
  * @param value Value to output.

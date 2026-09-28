@@ -33,6 +33,7 @@ namespace donner::geode {
  *   triangulates and dilates it from `vertex_index`, so no resident vertex buffer is required.
  */
 struct EncodedPath {
+  /// Whether encoding produced drawable geometry, no geometry, or a rejected path.
   enum class Outcome { Empty, Ready, Rejected };
 
   /// A quadratic Bézier curve segment (3 control points) stored as floats for GPU consumption.
@@ -76,7 +77,8 @@ struct EncodedPath {
     float y;
   };
 
-  static constexpr uint32_t kMaxBoundingVertices = 8u;
+  static constexpr uint32_t kMaxBoundingVertices =
+      8u;  //!< Maximum number of vertices stored for a bounding polygon.
 
   std::vector<Curve> curves;           ///< Canonical horizontal (Y-monotonic) curves.
   std::vector<uint32_t> curveIndices;  ///< Per-band references into `curves`.
@@ -88,7 +90,7 @@ struct EncodedPath {
   /// `vertex_index`. The selected enclosure is either a support-bounds polygon or its AABB
   /// fallback, so it always has 3 to `kMaxBoundingVertices` vertices for a nonempty path.
   std::array<BoundingPoint, kMaxBoundingVertices> boundingVertices{};
-  uint32_t boundingVertexCount = 0;
+  uint32_t boundingVertexCount = 0;  //!< Number of vertices in the encoded bounding polygon.
 
   /// Vertical (X-monotonic) curve + band data, for the Slug **vertical ray** used by the
   /// dual-ray analytic coverage. These mirror `curves`/`bands`, but are split at X-extrema and
@@ -116,9 +118,10 @@ struct EncodedPath {
   float vStride = 0.0f;             ///< Width of each vertical band cell (path space).
   uint32_t vBandCount = 0;          ///< Number of vertical band cells.
 
-  EncodingStats stats;  ///< Encode diagnostics; does not affect rendering.
-  Outcome outcome = Outcome::Empty;
+  EncodingStats stats;               ///< Encode diagnostics; does not affect rendering.
+  Outcome outcome = Outcome::Empty;  //!< Result of encoding and resource admission.
 
+  /// Sum encoded curve, index, band, and grid item counts, saturating on overflow.
   [[nodiscard]] std::size_t geometryItemCount() const {
     std::size_t total = 0;
     for (const std::size_t count :
@@ -132,6 +135,7 @@ struct EncodedPath {
     return total;
   }
 
+  /// Return bytes reserved by encoded vector capacities, saturating on overflow.
   [[nodiscard]] std::size_t retainedBytes() const {
     std::size_t total = 0;
     const auto add = [&](std::size_t capacity, std::size_t itemSize) {
@@ -166,6 +170,8 @@ struct EncodedPath {
 
   /// Returns true if the encoded path has no bands (empty or degenerate path).
   bool empty() const { return bands.empty(); }
+
+  /// Return whether geometry encoding was rejected by validation or resource limits.
   bool rejected() const { return outcome == Outcome::Rejected; }
 };
 
@@ -183,6 +189,7 @@ struct EncodedPath {
  */
 class GeodePathEncoder {
 public:
+  /// Resource admission limits for path encoding.
   struct Limits {
     std::size_t maximumConvertedCommands = 1u << 20;
     std::size_t maximumEncodedGeometryItems = 1u << 20;

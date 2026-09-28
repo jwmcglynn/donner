@@ -3,6 +3,7 @@
 /// Authoritative WGSL for feFlood.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for feFlood.
 inline constexpr wgsl::SourceText kFloodSource{R"wgsl(struct FloodParams {
   color: vec4<f32>,
 }

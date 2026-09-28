@@ -179,6 +179,14 @@ public:
    *
    * @param resourceArena Scoped owner for GPU handles created by the draw.
    * @param scratch Optional pooled uniform scratch (see `UniformScratch`).
+   * @param context GPU context used to allocate draw resources.
+   * @param pipeline Image pipeline compatible with the active target.
+   * @param pass Open render pass receiving the draw.
+   * @param texture Source texture sampled by the quad.
+   * @param mvp Column-major 4x4 transform from quad coordinates to clip space.
+   * @param targetWidth Render-target width in physical pixels.
+   * @param targetHeight Render-target height in physical pixels.
+   * @param params Quad placement, sampling, clipping, and compositing settings.
    */
   static void drawTexturedQuad(const GeodeGpuContext& context, const GeodeImagePipeline& pipeline,
                                gpu::RenderPassEncoder& pass, const gpu::Texture& texture,

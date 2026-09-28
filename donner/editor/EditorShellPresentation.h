@@ -79,7 +79,7 @@ std::optional<PresentedDragBaseline> PresentedBaselineFromDragPreviews(
 struct ImmediateChromePlan {
   /// Viewport this frame's document pixels were placed with. The chrome is
   /// drawn with the transform derived from this, which is the same transform
-  /// \ref DrawDocumentPresentationToFramebuffer placed the tiles with.
+  /// `DrawDocumentPresentationToFramebuffer` placed the tiles with.
   ViewportState viewport;
   /// Render-pane rect in screen pixels; chrome is clipped to it.
   Box2d paneClipRect;
@@ -133,7 +133,7 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
 /// tiles and below ImGui.
 ///
 /// The snapshot is re-pointed at @p viewport before drawing, so the chrome uses
-/// the exact transform \ref DrawDocumentPresentationToFramebuffer placed this
+/// the exact transform `DrawDocumentPresentationToFramebuffer` placed this
 /// frame's tiles with. Chrome sizes resolve from that same transform, which is
 /// why handles keep a constant screen size across zoom.
 ///

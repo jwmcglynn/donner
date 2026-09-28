@@ -5,6 +5,7 @@
 #include "donner/gpu/shader/wgsl/Compiler.h"
 
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for integer-pixel SVG offset filtering.
 inline constexpr wgsl::SourceText kOffsetSource{R"wgsl(struct OffsetParams {
   dx: f32,
   dy: f32,

@@ -3,6 +3,7 @@
 /// Authoritative WGSL for ordinary and batched Slug fills.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for ordinary and batched Slug fills.
 inline constexpr wgsl::SourceText kSlugFillSource{
     R"wgsl(// Slug fill pipeline: analytic dual-ray coverage at 1 sample/pixel.
 //
@@ -1250,4 +1251,4 @@ fn fs_main_batched(in: VertexOutput) -> FragOutput {
   return out;
 }
 )wgsl"};
-}
+}  // namespace donner::gpu::shader::programs

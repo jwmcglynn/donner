@@ -32,6 +32,7 @@
 
 namespace donner::editor {
 
+/// Canvas tool for selection, marquee gestures, and selection transforms.
 class SelectTool final : public Tool {
 public:
   /// Preview state for an in-progress drag, consumed by the async renderer.

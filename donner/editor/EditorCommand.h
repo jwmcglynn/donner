@@ -30,6 +30,7 @@ namespace donner::editor {
 /// tree traversal, `querySelector`) and every applied mutation goes
 /// through public `SVGElement` / `SVGGraphicsElement` methods.
 struct EditorCommand {
+  /// Operation represented by an editor command.
   enum class Kind : std::uint8_t {
     /// Set the element's transform attribute. Used by SelectTool drag and
     /// undo/redo replay. Coalesces by element identity at flush time -
@@ -99,7 +100,7 @@ struct EditorCommand {
     SetTextContent,
   };
 
-  Kind kind = Kind::SetTransform;
+  Kind kind = Kind::SetTransform;  //!< Operation used to interpret the command payload.
 
   /// Target element for SetTransform and DeleteElement. `std::nullopt`
   /// for ReplaceDocument.
