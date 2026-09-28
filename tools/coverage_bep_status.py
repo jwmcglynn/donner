@@ -203,7 +203,8 @@ _TIMING_PHASES = ("start", "bazel_coverage_done", "filter_done", "end")
 def _valid_exit_pair(code, name):
     if code == "unavailable" and name == "unavailable":
         return True
-    return type(code) is int and _EXIT_NAMES.get(code) == name
+    return (type(code) is int and code in _EXIT_NAMES
+            and isinstance(name, str) and _EXIT_NAMES[code] == name)
 
 
 def _valid_context_codes(value):

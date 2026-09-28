@@ -170,8 +170,16 @@ class ClassifyTest(unittest.TestCase):
             summary = root / "failure-summary.json"
             timing.write_text("start=100\nbazel_coverage_done=200\n")
             self.assertTrue(status.validate_diagnostics(root))
-            summary.write_text(json.dumps(status.failure_context([], 34)))
+            valid = status.failure_context([], 34)
+            summary.write_text(json.dumps(valid))
             self.assertTrue(status.validate_diagnostics(root))
+            for code, name in (
+                    (999, None), (999, "REMOTE_ERROR"), (34, None),
+                    (34, {"secret": "/runner/path"}), (34, ["REMOTE_ERROR"])):
+                with self.subTest(code=code, name=name):
+                    invalid = {**valid, "processExitCode": code, "processExitName": name}
+                    summary.write_text(json.dumps(invalid))
+                    self.assertFalse(status.validate_diagnostics(root))
             summary.write_text('{"privatePath":"/runner/token=secret"}')
             self.assertFalse(status.validate_diagnostics(root))
             summary.unlink()
