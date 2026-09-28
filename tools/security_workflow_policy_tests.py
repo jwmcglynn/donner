@@ -172,6 +172,55 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             self.assertIn("inputs.namespace", restore)
         self.assertNotIn("secrets.", action)
 
+    def test_self_hosted_cache_endpoint_is_absent_from_job_environment(self):
+        workflow = self.supply_chain_files[".github/workflows/main.yml"]
+        hosted, self_hosted = workflow.split("\n  macos-self-hosted:\n", 1)
+        header = self_hosted.split("    steps:\n", 1)[0]
+        self.assertNotIn("--remote_cache=", header)
+        self.assertNotIn("vars.BAZEL_REMOTE_CACHE", workflow)
+        self.assertNotIn("secrets.BAZEL_REMOTE_CACHE", hosted)
+        mask = _step_body(self_hosted, "Configure masked remote cache")
+        self.assertIn("REMOTE_CACHE_URL: ${{ secrets.BAZEL_REMOTE_CACHE }}", mask)
+        self.assertLess(self_hosted.index("- name: Configure masked remote cache"),
+                        self_hosted.index("- name: Check runner disk space"))
+
+    def test_remote_cache_setup_masks_values_before_export_and_fails_closed(self):
+        workflow = self.supply_chain_files[".github/workflows/main.yml"]
+        body = _step_body(workflow, "Configure masked remote cache")
+        scripts = _run_bodies(body)
+        self.assertEqual(len(scripts), 1)
+        endpoint = "https://fixture-user:fixture-token@cache.example.invalid:9443/fixture"
+        with tempfile.TemporaryDirectory() as directory:
+            environment = Path(directory) / "environment"
+            environment.write_text("EXISTING=preserved")
+            result = subprocess.run(["/bin/bash", "-c", textwrap.dedent(scripts[0])],
+                                    env={**os.environ, "REMOTE_CACHE_URL": endpoint,
+                                         "GITHUB_ENV": str(environment),
+                                         "BAZEL_MACOS_BUILD_FLAGS": "--macos_minimum_os=13.3"},
+                                    text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            commands = result.stdout.splitlines()
+            self.assertTrue(commands)
+            self.assertTrue(all(line.startswith("::add-mask::") for line in commands))
+            for value in (endpoint, "cache.example.invalid", "fixture-user", "fixture-token"):
+                self.assertIn("::add-mask::" + value, commands)
+            self.assertEqual(environment.read_text().splitlines(), [
+                "EXISTING=preserved",
+                "BAZEL_MACOS_BUILD_FLAGS=--macos_minimum_os=13.3 --remote_cache=" + endpoint,
+            ])
+            for invalid in ("", "invalid-cache-value", "https://cache.example.invalid/\ninjected"):
+                environment.write_text("EXISTING=preserved")
+                result = subprocess.run(["/bin/bash", "-c", textwrap.dedent(scripts[0])],
+                                        env={**os.environ, "REMOTE_CACHE_URL": invalid,
+                                             "GITHUB_ENV": str(environment),
+                                             "BAZEL_MACOS_BUILD_FLAGS": "--macos_minimum_os=13.3"},
+                                        text=True, capture_output=True, timeout=10)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(environment.read_text(), "EXISTING=preserved")
+                self.assertEqual(result.stdout, "")
+                if invalid:
+                    self.assertNotIn(invalid, result.stderr)
+
     def test_external_actions_use_released_version_tags(self):
         """External actions use Renovate-compatible release tags, never branches."""
         action_line = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<target>\S+)\s*$")

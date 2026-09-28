@@ -18,6 +18,24 @@ class ConfiguredRustClosureTests(unittest.TestCase):
     def setUp(self) -> None:
         self.spec = gate.inventory()
 
+    def test_command_failure_omits_arguments_and_raw_diagnostics(self) -> None:
+        endpoint = "grpcs://cache.example.invalid:9443/fixture"
+        diagnostic = f"Error downloading {endpoint}: HTTP response code: 500; fixture-token"
+        result = gate.subprocess.CompletedProcess([], 1, stdout="", stderr=diagnostic)
+        with patch.object(gate.subprocess, "run", return_value=result):
+            with self.assertRaises(gate.GateError) as failure:
+                gate.run("bazel", "cquery", "//product:binary",
+                         "--remote_cache=" + endpoint, "--remote_header=fixture-token")
+        self.assertEqual(str(failure.exception),
+                         "cquery failed (exit 1; dependency-fetch; HTTP 500)")
+
+    def test_command_start_failure_omits_executable_and_os_error(self) -> None:
+        error = FileNotFoundError(2, "fixture-sensitive-diagnostic", "/fixture/private/tool")
+        with patch.object(gate.subprocess, "run", side_effect=error):
+            with self.assertRaises(gate.GateError) as failure:
+                gate.run("/fixture/private/tool", "cquery", "//product:binary")
+        self.assertEqual(str(failure.exception), "command could not start (errno 2)")
+
     def test_product_to_oracle_edge_is_rejected(self) -> None:
         root = "//donner/editor:editor"
         labels = {root, self.spec["oracleLabel"], "//third_party/webgpu-cpp:webgpu_cpp"}

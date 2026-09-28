@@ -151,6 +151,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("uses: ./.github/actions/cache-bazel-actions", self.editor_wasm)
         self.assertIn("cache: npm", self.editor_wasm)
         self.assertEqual(1, self.editor_wasm.count("uses: bazel-contrib/setup-bazel@"))
+        setup_header = self.editor_wasm.split("uses: bazel-contrib/setup-bazel@", 1)[0]
+        self.assertIn("Setup Bazel for native browser comparison", setup_header)
         self.assertLess(
             self.editor_wasm.index("uses: bazel-contrib/setup-bazel@"),
             self.editor_wasm.index("- name: Serve Geode package and run browser suites"),
