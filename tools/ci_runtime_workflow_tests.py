@@ -157,21 +157,22 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         admission = linux.split("    env:\n", 1)[0]
         self.assertIn("github.event_name == 'push'", admission)
         self.assertIn("github.ref != 'refs/heads/main'", admission)
-        self.assertIn("configured_rust_closure.py scan --platform linux", self._job_body("linux"))
-        self.assertIn("cmake --build build --target donner_cmake_consumer", linux)
+        consumer = self._step_body(self._job_body("linux"), "Build and test CMake consumer")
+        self.assertIn("python3 tools/cmake/gen_cmakelists.py --check", consumer)
+        self.assertIn("cmake -S examples/cmake_consumer -B build -G Ninja", consumer)
+        for body in (linux, consumer):
+            self.assertIn("cmake --build build --target donner_cmake_consumer", body)
+            self.assertIn("ctest --test-dir build --output-on-failure", body)
+
+    def test_retired_closure_scanner_is_not_invoked(self):
+        self.assertNotIn("configured_rust_closure.py", self.main)
+        self.assertNotIn("configured-rust-closure-", self.main)
 
     def test_platform_checks_reuse_native_build_jobs(self):
-        for redundant in ("configured-rust-closure-platform", "linux-local-xvfb", "linker-canary"):
+        for redundant in ("configured-rust-closure-platform", "no-rust-configured-closure",
+                          "linux-local-xvfb", "linker-canary"):
             self.assertNotIn("\n  %s:\n" % redundant, self.main)
-        for job, platform in (("linux", "linux"), ("macos", "macos"),
-                              ("macos-self-hosted", "macos")):
-            body = self._job_body(job)
-            self.assertIn("configured_rust_closure.py scan --platform " + platform, body)
-            self.assertIn("configured-rust-closure-" + platform, body)
         self.assertIn("//tools/ci:linker_canary", self._job_body("linux"))
-        aggregate = self._job_body("no-rust-configured-closure")
-        self.assertIn("needs: [gatekeeper, linux, macos, macos-self-hosted]", aggregate)
-        self.assertIn("always()", aggregate)
 
     def test_native_window_gate_runs_on_hosted_linux_when_remote_routing_is_selected(self):
         hosted = self._job_body("linux")
