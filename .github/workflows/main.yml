@@ -1308,13 +1308,15 @@ jobs:
               raise SystemExit("BAZEL_REMOTE_CACHE secret is required for the self-hosted lane")
           try:
               parsed = urlsplit(value)
+              _ = parsed.port
               valid = parsed.scheme in ("http", "https", "grpc", "grpcs") and parsed.hostname
           except ValueError:
               raise SystemExit("Invalid remote cache URL") from None
-          if not valid or any(char.isspace() for char in value):
+          if (not valid or any(char.isspace() for char in value) or parsed.username is not None
+                  or parsed.password is not None or parsed.query or parsed.fragment):
               raise SystemExit("Invalid remote cache URL")
-          components = (value, parsed.netloc, parsed.hostname, parsed.username, parsed.password,
-                        parsed.path if parsed.path != "/" else "", parsed.query, parsed.fragment)
+          components = (value, parsed.netloc, parsed.hostname,
+                        parsed.path if parsed.path != "/" else "")
           for component in components:
               if component:
                   for form in dict.fromkeys((component, unquote(component))):

@@ -60,6 +60,46 @@ class GateError(RuntimeError):
     pass
 
 
+class SafeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        self.exit(2, "FAIL: invalid command-line input\n")
+
+
+PUBLIC_ROOTS = REQUIRED_NATIVE_ROOTS | REQUIRED_BROWSER_ROOTS | REQUIRED_GEODE_ROOTS | {
+    "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux",
+}
+SAFE_COMMAND_ERROR = re.compile(
+    r"(build|cquery|query|fetch|test|status|rev-parse|ls-files|command) failed "
+    r"\(exit (-?[0-9]{1,3}); (dependency-fetch|storage|remote-service|missing-executable|command-error)"
+    r"(?:; HTTP ([1-5][0-9]{2}))?\)"
+)
+
+
+def public_failure(error: Exception) -> str:
+    """Render only fixed failure categories and allowlisted public labels."""
+    if isinstance(error, OSError):
+        number = error.errno if type(error.errno) is int and 0 <= error.errno <= 4095 else 0
+        return f"filesystem operation failed (errno {number})"
+    if isinstance(error, GateError):
+        return _public_gate_failure(error)
+    return "invalid input" if isinstance(error, (ValueError, KeyError)) else "internal verification failure"
+
+
+def _public_gate_failure(error: GateError) -> str:
+    message = error.args[0][:8192] if error.args and type(error.args[0]) is str else ""
+    command = SAFE_COMMAND_ERROR.fullmatch(message)
+    if command:
+        operation, code, category, status = command.groups()
+        http = f"; HTTP {int(status)}" if status else ""
+        return f"{operation} failed (exit {int(code)}; {category}{http})"
+    start = re.fullmatch(r"command could not start \(errno ([0-9]{1,4})\)", message)
+    if start:
+        return f"command could not start (errno {int(start[1])})"
+    root = next((label for label in sorted(PUBLIC_ROOTS) if message.startswith(label + ": ")), None)
+    category = "artifact" if "artifact" in message.lower() or "bazel output" in message.lower() else "verification"
+    return f"{category} failed" + (f" root={root}" if root else "")
+
+
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -91,7 +131,7 @@ def run(*args: str, cwd: Path = ROOT) -> str:
         proc = subprocess.run(args, cwd=cwd, text=True, stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE, check=False)
     except OSError as error:
-        error_number = error.errno if isinstance(error.errno, int) else 0
+        error_number = error.errno if type(error.errno) is int and 0 <= error.errno <= 4095 else 0
         raise GateError(f"command could not start (errno {error_number})") from None
     if proc.returncode:
         raise GateError(safe_failure_summary(args, proc.returncode, proc.stderr))
@@ -436,7 +476,7 @@ def verify_receipts(receipts: list[dict[str, Any]]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = SafeArgumentParser(prog="configured_rust_closure.py", description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
     scan = sub.add_parser("scan")
     scan.add_argument("--platform", choices=("linux", "macos"), required=True)
@@ -456,8 +496,11 @@ def main() -> int:
         else:
             verify_receipts([json.loads(path.read_text()) for path in args.receipts])
             print("PASS: Linux and macOS configured no-Rust closure receipts match this source and lock")
-    except (GateError, OSError, ValueError, KeyError) as exc:
-        print(f"FAIL: {exc}", file=sys.stderr)
+    except KeyboardInterrupt:
+        print("FAIL: interrupted", file=sys.stderr)
+        return 130
+    except Exception as exc:
+        print("FAIL: " + public_failure(exc), file=sys.stderr)
         return 1
     return 0
 
