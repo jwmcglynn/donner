@@ -115,6 +115,23 @@ protected:
   std::optional<svg::SVGElement> c;
 };
 
+TEST_F(CommandQueueTest, PendingStyleIsScopedToElementAndCurrentDocumentBatch) {
+  CommandQueue queue;
+  EXPECT_THAT(queue.pendingStyleAttribute(*a), testing::Eq(std::nullopt));
+  queue.push(EditorCommand::SetAttributeCommand(*a, "style", "fill: red"));
+  queue.push(EditorCommand::SetAttributeCommand(*b, "style", "fill: blue"));
+  EXPECT_THAT(queue.pendingStyleAttribute(*a), testing::Optional(testing::Eq("fill: red")));
+  EXPECT_THAT(queue.pendingStyleAttribute(*b), testing::Optional(testing::Eq("fill: blue")));
+  queue.push(EditorCommand::RemoveAttributeCommand(*a, "style"));
+  EXPECT_THAT(queue.pendingStyleAttribute(*a), testing::Optional(testing::Eq("")));
+  queue.push(EditorCommand::ReplaceDocumentCommand(std::string(kThreeRectsSvg)));
+  EXPECT_THAT(queue.pendingStyleAttribute(*b), testing::Eq(std::nullopt));
+  queue.push(EditorCommand::SetAttributeCommand(*b, "style", "stroke: gold"));
+  EXPECT_THAT(queue.pendingStyleAttribute(*b), testing::Optional(testing::Eq("stroke: gold")));
+  queue.clear();
+  EXPECT_THAT(queue.pendingStyleAttribute(*b), testing::Eq(std::nullopt));
+}
+
 TEST_F(CommandQueueTest, EmptyFlushReturnsNothing) {
   CommandQueue queue;
   EXPECT_TRUE(queue.empty());

@@ -8,6 +8,43 @@
 
 namespace donner::editor {
 
+namespace {
+
+bool IsStructuralReplace(EditorCommand::Kind kind) {
+  return kind == EditorCommand::Kind::ReplaceDocument || kind == EditorCommand::Kind::CutShapes ||
+         kind == EditorCommand::Kind::PasteShapes;
+}
+
+void StopAttributeCoalescingAtRemoval(
+    const EditorCommand& command,
+    std::map<std::pair<Entity, std::string>, std::size_t>& attributeSlots) {
+  if (command.kind == EditorCommand::Kind::RemoveAttribute && command.element.has_value()) {
+    attributeSlots.erase(
+        std::make_pair(command.element->unsafeEntityHandle().entity(), command.attributeName));
+  }
+}
+
+}  // namespace
+
+std::optional<std::string> CommandQueue::pendingStyleAttribute(
+    const svg::SVGElement& element) const {
+  for (auto it = pending_.rbegin(); it != pending_.rend(); ++it) {
+    if (IsStructuralReplace(it->kind)) {
+      break;
+    }
+    if (!it->element.has_value() || *it->element != element || it->attributeName != "style") {
+      continue;
+    }
+    if (it->kind == EditorCommand::Kind::SetAttribute) {
+      return it->attributeValue;
+    }
+    if (it->kind == EditorCommand::Kind::RemoveAttribute) {
+      return std::string();
+    }
+  }
+  return std::nullopt;
+}
+
 CommandQueue::FlushResult CommandQueue::flush() {
   if (pending_.empty()) {
     return {};
@@ -19,16 +56,11 @@ CommandQueue::FlushResult CommandQueue::flush() {
   // ReplaceDocument, CutShapes, and PasteShapes are all "swap the whole
   // document" commands - they invalidate any element handles that earlier
   // commands hold, so prior commands must be discarded.
-  auto isStructuralReplace = [](EditorCommand::Kind kind) {
-    return kind == EditorCommand::Kind::ReplaceDocument || kind == EditorCommand::Kind::CutShapes ||
-           kind == EditorCommand::Kind::PasteShapes;
-  };
-
   std::size_t startIndex = 0;
   bool hadReplaceDocument = false;
   bool allReplaceDocumentPreserveUndo = true;
   for (std::size_t i = 0; i < pending_.size(); ++i) {
-    if (isStructuralReplace(pending_[i].kind)) {
+    if (IsStructuralReplace(pending_[i].kind)) {
       hadReplaceDocument = true;
       allReplaceDocumentPreserveUndo =
           allReplaceDocumentPreserveUndo && pending_[i].preserveUndoOnReparse;
@@ -57,6 +89,7 @@ CommandQueue::FlushResult CommandQueue::flush() {
 
   for (std::size_t i = startIndex; i < pending_.size(); ++i) {
     EditorCommand& cmd = pending_[i];
+    StopAttributeCoalescingAtRemoval(cmd, setAttributeSlot);
 
     if (cmd.kind == EditorCommand::Kind::SetTransform && cmd.element.has_value()) {
       const Entity key = cmd.element->unsafeEntityHandle().entity();

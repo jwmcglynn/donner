@@ -27,6 +27,8 @@
 /// document under ConcurrentDom access guards, never through this queue.
 
 #include <deque>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "donner/editor/EditorCommand.h"
@@ -49,6 +51,13 @@ public:
 
   /// Push a command onto the queue. UI thread only.
   void push(EditorCommand command) { pending_.push_back(std::move(command)); }
+
+  /// Return the latest queued style declaration list for an element, if one exists.
+  /// A queued style removal returns an empty list. Commands before document replacement are
+  /// ignored.
+  /// @param element Element whose pending style is needed for another property edit.
+  [[nodiscard]] std::optional<std::string> pendingStyleAttribute(
+      const svg::SVGElement& element) const;
 
   /// Drain and coalesce the pending commands. Returns the effective set of
   /// commands to apply, in the order the application should issue them.
