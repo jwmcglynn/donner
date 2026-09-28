@@ -1232,11 +1232,13 @@ jobs:
 
       - name: Detect browser GPU acquisition failure
         id: browser_gpu_failure
-        if: failure() && steps.test.outcome == 'failure'
+        if: ${{ !cancelled() && (steps.test.outcome == 'failure' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:browser-gpu-diagnostics'))) }}
         shell: bash
+        env:
+          BROWSER_GPU_DIAGNOSTICS_REQUESTED: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:browser-gpu-diagnostics') }}
         run: |
           set -euo pipefail
-          should_probe=false
+          should_probe="$BROWSER_GPU_DIAGNOSTICS_REQUESTED"
           for target in chromium_remote_smoke catalog_font_loading_test browser_presentation_regression_test standalone_geode_browser_renderer_test; do
             log="bazel-testlogs/donner/editor/wasm/tests/${target}/test.log"
             if [[ -f "$log" ]] && grep -qF 'stage=selection outcome=deadline_pending' "$log"; then
@@ -1247,7 +1249,7 @@ jobs:
 
       - name: Compare browser GPU tests (serial)
         id: browser_gpu_serial
-        if: failure() && steps.test.outcome == 'failure' && steps.browser_gpu_failure.outputs.run_probe == 'true'
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
         continue-on-error: true
         timeout-minutes: 10
         shell: bash
@@ -1267,14 +1269,14 @@ jobs:
           exit "$report_status"
 
       - name: Upload browser GPU comparison (serial)
-        if: failure() && steps.test.outcome == 'failure' && steps.browser_gpu_failure.outputs.run_probe == 'true'
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: browser-gpu-serial-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Compare browser GPU tests (parallel)
         id: browser_gpu_parallel
-        if: failure() && steps.test.outcome == 'failure' && steps.browser_gpu_failure.outputs.run_probe == 'true'
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
         continue-on-error: true
         timeout-minutes: 10
         shell: bash
@@ -1294,13 +1296,13 @@ jobs:
           exit "$report_status"
 
       - name: Upload browser GPU comparison (parallel)
-        if: failure() && steps.test.outcome == 'failure' && steps.browser_gpu_failure.outputs.run_probe == 'true'
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: browser-gpu-parallel-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Upload bounded browser GPU timing summaries
-        if: failure() && steps.test.outcome == 'failure' && steps.browser_gpu_failure.outputs.run_probe == 'true'
+        if: ${{ !cancelled() && steps.browser_gpu_failure.outputs.run_probe == 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: browser-gpu-timings-${{ github.job }}

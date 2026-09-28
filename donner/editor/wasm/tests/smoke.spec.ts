@@ -1538,7 +1538,7 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
   expect(fatalMessages).toEqual([]);
 });
 
-test("production Geode wasm presents visible editor pixels after held canvas GPU completion", async ({ browserName, page }) => {
+test("production Geode wasm presents visible editor pixels after held canvas GPU completion", async ({ browserName, page }, testInfo) => {
   test.skip(browserName !== "chromium" || kBackend !== "geode", "controlled browser GPU gate");
   const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
   expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
@@ -1604,6 +1604,10 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
     const capture = await gatedCapture;
     expect(capture).not.toBeNull();
     if (capture === null) throw new Error("the held canvas capture is unavailable");
+    await testInfo.attach("held-canvas-scored-frame", {
+      body: capture.png,
+      contentType: "image/png",
+    });
     expect(capture.usable).toBe(true);
     expect(screenshots).toBe(1);
     const viewport = page.viewportSize();
