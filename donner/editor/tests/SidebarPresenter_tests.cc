@@ -1567,6 +1567,46 @@ TEST_F(SidebarPresenterImGuiTest, NumericInputRetainsDigitsAndCommitWhileDocumen
   EXPECT_FALSE(presenter.hasTransformEditForTesting());
   EXPECT_TRUE(app.canUndo());
 }
+TEST_F(SidebarPresenterImGuiTest, PendingNumericInputCannotCrossDocumentReplacement) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindow[] = "##numeric_input_replaced_document";
+  (void)RenderInspectorFrame(presenter, &app, kWindow);
+  const auto bounds =
+      presenter.transformFieldRectForTesting(SidebarPresenter::TransformField::PositionX);
+  ASSERT_TRUE(bounds.has_value());
+  const auto center = RectCenter(*bounds);
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, true);
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  ASSERT_NE(ImGui::GetCurrentContext()->TempInputId, 0u);
+
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddInputCharactersUTF8("6");
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  (void)app.flushFrame();
+  io.AddInputCharactersUTF8("4");
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindow, center, false));
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  const auto replacement = app.document().document().querySelector("#target");
+  ASSERT_TRUE(replacement.has_value());
+  app.setSelection(*replacement);
+  presenter.refreshSnapshot(app);
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  (void)app.flushFrame();
+  EXPECT_FALSE(presenter.hasTransformEditForTesting());
+  EXPECT_FALSE(app.canUndo()) << "A replaced document must not receive the old edit's history";
+  const auto oldBounds = target->cast<svg::SVGGeometryElement>().worldBounds();
+  ASSERT_TRUE(oldBounds.has_value());
+  EXPECT_DOUBLE_EQ(oldBounds->topLeft.x, 6.0)
+      << "The pending digit belongs to the replaced document and must be discarded";
+}
 
 TEST_F(SidebarPresenterImGuiTest, InspectorRendersSkewedTransformDisabledFields) {
   constexpr std::string_view kSkewedSvg =
