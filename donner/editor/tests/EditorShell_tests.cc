@@ -1570,6 +1570,8 @@ public:
 
   static bool TextToolIsEditing(const EditorShell& shell) { return shell.textTool_.isEditing(); }
 
+  static bool FormatBarShouldShow(const EditorShell& shell) { return shell.formatBarShouldShow(); }
+
   static FormatBarState ComputeFormatBarState(EditorShell& shell) {
     return shell.computeFormatBarState();
   }
@@ -5010,6 +5012,49 @@ TEST(EditorShellTest, OutputFontDemandDeduplicatesAssetsAndCancelsAfterSourceMut
   const auto fill = app.document().document().querySelector("#target")->getAttribute("fill");
   ASSERT_TRUE(fill);
   EXPECT_EQ(std::string_view(*fill), "red");
+}
+
+TEST(EditorShellTest, FormatBarSnapshotDoesNotWaitForDocumentWriter) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(
+      window, OptionsWithSource(
+                  R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label" font-family="serif"
+      font-size="24" font-weight="bold">Hello</text></svg>)"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  auto text = app.document().document().querySelector("#label");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+  const FormatBarState before = EditorShellTestAccess::ComputeFormatBarState(shell);
+  ASSERT_TRUE(before.visible);
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto release = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = app.document().document().writeAccess();
+    writerReady.set_value();
+    release.wait();
+  });
+  writerReady.get_future().wait();
+  auto format = std::async(std::launch::async, [&] {
+    const bool visible = EditorShellTestAccess::FormatBarShouldShow(shell);
+    return std::make_pair(visible, EditorShellTestAccess::ComputeFormatBarState(shell));
+  });
+  const auto status = format.wait_for(std::chrono::milliseconds(100));
+  releaseWriter.set_value();
+  writer.get();
+  const auto [visible, state] = format.get();
+  EXPECT_EQ(status, std::future_status::ready);
+  EXPECT_TRUE(visible);
+  EXPECT_TRUE(state.visible);
+  EXPECT_EQ(state.fontFamily, before.fontFamily);
+  EXPECT_EQ(state.fontSize, before.fontSize);
+  EXPECT_EQ(state.bold, before.bold);
 }
 
 TEST(EditorShellTest, TextFormatBarPrewarmsCatalogFamilyInItsOwnFace) {
