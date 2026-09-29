@@ -1077,6 +1077,43 @@ TEST(RenderCoordinatorTest, BusyReleasedDragKeepsBoundsAlignedAfterIdleRecapture
   }
 }
 
+TEST(RenderCoordinatorTest, BusyNewDragSeedsFromCommittedIdleTransform) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  const ViewportState viewport = MakeViewport(app);
+  app.setSelection(QuerySelector(app, "#r1"));
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(25.0, 25.0), true);
+  ASSERT_TRUE(app.document().hasPendingMutations());
+  const auto documentPreview = tool.documentDragPreview(app);
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto release = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = app.document().document().writeAccess();
+    writerReady.set_value();
+    release.wait();
+  });
+  writerReady.get_future().wait();
+  (void)coordinator.rasterizeOverlayForCurrentSelection(
+      app, viewport, std::nullopt, tool.activeDragPreview(), tool.activeTransformBoundsPreview(),
+      SelectionChromeDetail::Full, documentPreview);
+  releaseWriter.set_value();
+  writer.get();
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  const auto& snapshot = *coordinator.immediateOverlaySnapshot();
+  ASSERT_THAT(snapshot.paths, ::testing::SizeIs(1));
+  EXPECT_EQ(snapshot.paths.front().pathDoc.bounds(), Box2d::FromXYWH(20.0, 20.0, 20.0, 20.0));
+  EXPECT_THAT(snapshot.handleAnchorsDoc,
+              ::testing::ElementsAre(Vector2d(20.0, 20.0), Vector2d(40.0, 20.0),
+                                     Vector2d(40.0, 40.0), Vector2d(20.0, 40.0)));
+}
+
 TEST(RenderCoordinatorTest, RasterizeOverlaySkipsUnchangedImmediateSnapshot) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));

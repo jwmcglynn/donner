@@ -558,7 +558,8 @@ private:
 
   bool reuseOverlayWithoutDocumentAccess(
       EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
-      const std::optional<SelectTool::ActiveDragPreview>& representedDragPreview);
+      const std::optional<SelectTool::ActiveDragPreview>& representedDragPreview,
+      const std::optional<SelectTool::ActiveDragPreview>& documentDragPreview);
   void stampTransientOverlayState(SelectionChromeSnapshot& snapshot) const;
   std::optional<Path> capturePenLiveSpline() const;
   void retainDragOverlayBaseline(
@@ -566,7 +567,8 @@ private:
       const std::optional<SelectTool::ActiveDragPreview>& representedPreview,
       const std::optional<SelectTool::ActiveTransformBoundsPreview>& boundsPreview);
   bool projectBusyDragOverlay(const EditorApp& app,
-                              const SelectTool::ActiveDragPreview& representedPreview);
+                              const SelectTool::ActiveDragPreview& representedPreview,
+                              const SelectTool::ActiveDragPreview& documentDragPreview);
   void updateCachedOverlayTransients(const ViewportState& viewport,
                                      const std::optional<Box2d>& marqueeRectDoc);
   Entity suppressedLayerWithoutSelection(EditorApp& app);

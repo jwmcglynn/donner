@@ -1250,7 +1250,9 @@ void RenderCoordinator::retainDragOverlayBaseline(
     } else if (dragOverlayBaselineMatches(*representedDragPreview,
                                           app.document().documentGeneration())) {
       startBounds = dragOverlayBaseline_->startBoundsDoc;
-    } else if (!chromeSnapshot.aabbsDoc.empty()) {
+    } else if (!chromeSnapshot.aabbsDoc.empty() &&
+               SameTransform(representedDragPreview->documentFromCachedDocument, Transform2d())) {
+      // A released capture is already transformed; only an identity preview contains start bounds.
       startBounds = CombinedSelectionBounds(chromeSnapshot.aabbsDoc);
     }
     dragOverlayBaseline_ = DragOverlayBaseline{chromeSnapshot, *representedDragPreview, startBounds,
@@ -1262,7 +1264,8 @@ void RenderCoordinator::retainDragOverlayBaseline(
 
 bool RenderCoordinator::reuseOverlayWithoutDocumentAccess(
     EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
-    const std::optional<SelectTool::ActiveDragPreview>& representedDragPreview) {
+    const std::optional<SelectTool::ActiveDragPreview>& representedDragPreview,
+    const std::optional<SelectTool::ActiveDragPreview>& documentDragPreview) {
   lastFrameCostBreakdown_.overlay = {};
   if (app.selectedElements() != lastOverlaySelectionVec_) {
     immediateOverlaySnapshot_.reset();
@@ -1283,7 +1286,8 @@ bool RenderCoordinator::reuseOverlayWithoutDocumentAccess(
     return false;
   }
   if (representedDragPreview.has_value()) {
-    if (!projectBusyDragOverlay(app, *representedDragPreview)) {
+    if (!projectBusyDragOverlay(app, *representedDragPreview,
+                                documentDragPreview.value_or(*representedDragPreview))) {
       return true;
     }
   } else if (unculledOverlaySnapshot_.has_value()) {
@@ -1296,20 +1300,15 @@ bool RenderCoordinator::reuseOverlayWithoutDocumentAccess(
 }
 
 bool RenderCoordinator::projectBusyDragOverlay(
-    const EditorApp& app, const SelectTool::ActiveDragPreview& representedPreview) {
+    const EditorApp& app, const SelectTool::ActiveDragPreview& representedPreview,
+    const SelectTool::ActiveDragPreview& documentDragPreview) {
   const std::uint64_t generation = app.document().documentGeneration();
   if (!dragOverlayBaselineMatches(representedPreview, generation) &&
       !lastOverlayInteractionActive_ && unculledOverlaySnapshot_.has_value() &&
       lastOverlayVersion_ == app.document().currentFrameVersion()) {
-    auto baselinePreview = representedPreview;
-    baselinePreview.translation = Vector2d::Zero();
-    baselinePreview.documentFromCachedDocument = Transform2d();
-    std::optional<Box2d> startBounds;
-    if (!unculledOverlaySnapshot_->aabbsDoc.empty()) {
-      startBounds = CombinedSelectionBounds(unculledOverlaySnapshot_->aabbsDoc);
-    }
-    dragOverlayBaseline_ =
-        DragOverlayBaseline{*unculledOverlaySnapshot_, baselinePreview, startBounds, generation};
+    // The version-matched idle snapshot represents the committed transform, including after
+    // release.
+    retainDragOverlayBaseline(*unculledOverlaySnapshot_, app, documentDragPreview, std::nullopt);
   }
   if (!dragOverlayBaselineMatches(representedPreview, generation)) {
     immediateOverlaySnapshot_.reset();
@@ -1380,7 +1379,8 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
 
   const auto documentAccess = app.document().document().tryWriteAccess();
   if (!documentAccess.has_value()) {
-    return reuseOverlayWithoutDocumentAccess(app, viewport, marqueeRectDoc, representedDragPreview);
+    return reuseOverlayWithoutDocumentAccess(app, viewport, marqueeRectDoc, representedDragPreview,
+                                             documentDragPreview);
   }
 
   const Vector2i currentOverlayRasterSize = OverlayRasterSizeForViewport(viewport);

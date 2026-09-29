@@ -178,6 +178,36 @@ TEST(EditorControlSessionTest, SplashFirstDragCapture) {
   EXPECT_THAT(result.body.value("capture_count", 0), testing::Eq(1)) << result.body.dump(2);
 }
 
+TEST(EditorControlSessionTest, SplashMouseUpCapture) {
+  const char* outputs = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
+  const std::filesystem::path outputDir = outputs != nullptr ? outputs : TestTempDir();
+  const std::filesystem::path rnrPath = WriteSplashDragReplay(outputDir);
+  auto replay = repro::ReadReproFile(rnrPath);
+  ASSERT_THAT(replay, testing::Ne(std::nullopt));
+  for (auto& frame : replay->frames) {
+    if (frame.index >= 23) {
+      frame.mouseButtonMask = 0;
+    }
+    if (frame.index == 23) {
+      frame.events.push_back({.kind = repro::ReproEvent::Kind::MouseUp, .mouseButton = 0});
+    }
+  }
+  ASSERT_THAT(repro::WriteReproFile(rnrPath, *replay), testing::IsTrue());
+  EditorControlSession session;
+  const ToolCallResult result =
+      session.handleToolCall("replay_rnr", nlohmann::json{{"rnr_path", rnrPath.string()},
+                                                          {"gl_readback", true},
+                                                          {"gl_capture_frame", 24},
+                                                          {"gl_crop", "document-canvas"},
+                                                          {"gl_output_dir", outputDir.string()},
+                                                          {"gl_drive_document_input", false},
+                                                          {"gl_pace", true},
+                                                          {"include_gl_images", false}});
+  std::ofstream(outputDir / "mouseup_mcp_result.json") << result.body.dump(2);
+  ASSERT_THAT(result.isError, testing::IsFalse()) << result.body.dump(2);
+  EXPECT_THAT(result.body.value("capture_count", 0), testing::Eq(1));
+}
+
 TEST(EditorControlSessionTest, SplashFirstDragFrameTransforms) {
   const char* outputs = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
   const std::filesystem::path outputDir = outputs != nullptr ? outputs : TestTempDir();
