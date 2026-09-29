@@ -74,6 +74,19 @@ TEST(GlTextureCacheTest, MetadataOnlyReuseRequiresFullTextureIdentity) {
   EXPECT_FALSE(TextureIdentityMatchesCompositedTile(cachedIdentity, changedRasterCanvas));
 }
 
+TEST(GlTextureCacheTest, MissingMetadataPayloadDoesNotPublishPartialPresentation) {
+  GlTextureCache cache;
+  RenderResult::CompositedPreview preview;
+  auto tile = MetadataTile(RenderResult::CompositedTile::Kind::Layer, 12, Vector2i(20, 20),
+                           Vector2i(100, 100));
+  tile.id = "missing";
+  tile.canvasOffsetDoc = Vector2d(10.0, 10.0);
+  tile.bitmapDimsDoc = Vector2d(20.0, 20.0);
+  preview.tiles.push_back(tile);
+  cache.uploadComposited(preview);
+  EXPECT_THAT(cache.tiles(), ::testing::IsEmpty());
+}
+
 TEST(GlTextureCacheTest, BitmapPayloadBytesUsesRowStride) {
   svg::RendererBitmap bitmap;
   bitmap.dimensions = Vector2i(8, 9);
