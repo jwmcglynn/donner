@@ -891,7 +891,6 @@ TEST(RenderCoordinatorTest, RasterizeOverlayPublishesImmediateSnapshot) {
 TEST(RenderCoordinatorTest, BusyDragProjectsCapturedChromeWithoutDocumentAccess) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
   RenderCoordinator coordinator;
   SelectTool tool;
   const ViewportState viewport = MakeViewport(app);
@@ -902,6 +901,7 @@ TEST(RenderCoordinatorTest, BusyDragProjectsCapturedChromeWithoutDocumentAccess)
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
   ASSERT_FALSE(coordinator.immediateOverlaySnapshot()->paths.empty());
   const Box2d before = coordinator.immediateOverlaySnapshot()->paths.front().pathDoc.bounds();
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
 
   std::promise<void> writerReady;
   std::promise<void> releaseWriter;
