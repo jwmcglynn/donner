@@ -984,6 +984,46 @@ TEST(RenderCoordinatorTest, BusyDragRetainsChromeEnteringViewportFromNonzeroBase
   }
 }
 
+TEST(RenderCoordinatorTest, BusyPenPreviewRetainsChromeEnteringViewportAfterPan) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+    <path id="path" d="M10 10 L330 10 L330 30 Z" fill="red"/></svg>)"));
+  RenderCoordinator coordinator;
+  ViewportState viewport = MakeViewport(app);
+  const auto selected = QuerySelector(app, "#path");
+  app.setSelection(selected);
+  coordinator.setPenLivePreviewElement(selected);
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
+      app, viewport, std::nullopt, std::nullopt, std::nullopt,
+      SelectionChromeDetail::PathOutlinesOnly));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot()->livePathPreview.has_value());
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto release = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = app.document().document().writeAccess();
+    writerReady.set_value();
+    release.wait();
+  });
+  writerReady.get_future().wait();
+  viewport.panDocPoint += Vector2d(280.0, 0.0);
+  (void)coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt, std::nullopt,
+                                                        std::nullopt,
+                                                        SelectionChromeDetail::PathOutlinesOnly);
+  releaseWriter.set_value();
+  writer.get();
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  EXPECT_THAT(coordinator.immediateOverlaySnapshot()->pathAnchorPointsDoc,
+              ::testing::Contains(Vector2d(330.0, 10.0)));
+  EXPECT_THAT(coordinator.immediateOverlaySnapshot()->pathAnchorPointsDoc,
+              ::testing::Contains(Vector2d(330.0, 30.0)));
+  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->livePathPreview->pathDoc.bounds(),
+            Box2d::FromXYWH(10.0, 10.0, 320.0, 20.0));
+}
+
 TEST(RenderCoordinatorTest, RasterizeOverlaySkipsUnchangedImmediateSnapshot) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
