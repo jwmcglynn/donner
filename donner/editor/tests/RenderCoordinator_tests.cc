@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <limits>
 #include <thread>
 #include <vector>
@@ -648,6 +649,33 @@ TEST(RenderCoordinatorTest, SuppressedLayerEntityNullWithoutSelection) {
   ASSERT_TRUE(app.loadFromString(kHiddenRectSvg));
   RenderCoordinator coordinator;
   EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), kNullEntity);
+}
+
+TEST(RenderCoordinatorTest, SuppressionSnapshotDoesNotWaitForDocumentWriter) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kHiddenRectSvg));
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  RenderCoordinator coordinator;
+  app.setSelection(QuerySelector(app, "#hidden"));
+  const Entity expected = coordinator.suppressedCompositedLayerEntity(app);
+  ASSERT_NE(expected, kNullEntity);
+
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto release = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = app.document().document().writeAccess();
+    writerReady.set_value();
+    release.wait();
+  });
+  writerReady.get_future().wait();
+  auto suppressed = std::async(std::launch::async,
+                               [&] { return coordinator.suppressedCompositedLayerEntity(app); });
+  const auto status = suppressed.wait_for(std::chrono::milliseconds(100));
+  releaseWriter.set_value();
+  writer.get();
+  EXPECT_EQ(status, std::future_status::ready);
+  EXPECT_EQ(suppressed.get(), expected);
 }
 
 TEST(RenderCoordinatorTest, SuppressedLayerEntityNullForVisibleSelection) {
