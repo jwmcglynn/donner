@@ -929,6 +929,61 @@ TEST(RenderCoordinatorTest, BusyDragProjectsCapturedChromeWithoutDocumentAccess)
             Transform2d::Translate({10.0, 0.0}).transformBox(before));
 }
 
+TEST(RenderCoordinatorTest, BusyDragRetainsChromeEnteringViewportFromNonzeroBaseline) {
+  for (const auto detail :
+       {SelectionChromeDetail::Full, SelectionChromeDetail::CombinedBoundsOnly}) {
+    SCOPED_TRACE(static_cast<int>(detail));
+    EditorApp app;
+    ASSERT_TRUE(
+        app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <g id="group"><rect x="10" y="10" width="20" height="20"/>
+      <rect x="330" y="10" width="20" height="20"/></g></svg>)"));
+    RenderCoordinator coordinator;
+    const ViewportState viewport = MakeViewport(app);
+    const auto selected = QuerySelector(app, "#group");
+    app.setSelection(selected);
+    const Entity entity = selected.unsafeEntityHandle().entity();
+    const auto livePreview = DragPreview(entity, 1);
+    const auto capturedPreview =
+        DragPreview(entity, 1, {25.0, 0.0}, Transform2d::Translate(25.0, 0.0));
+    const SelectTool::ActiveTransformBoundsPreview bounds{
+        .startBoundsDoc = Box2d::FromXYWH(10.0, 10.0, 340.0, 20.0),
+        .documentFromStartDocument = Transform2d()};
+    ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
+        app, viewport, std::nullopt, capturedPreview, bounds, detail, livePreview));
+    app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+    std::promise<void> writerReady;
+    std::promise<void> releaseWriter;
+    auto release = releaseWriter.get_future();
+    auto writer = std::async(std::launch::async, [&] {
+      auto access = app.document().document().writeAccess();
+      writerReady.set_value();
+      release.wait();
+    });
+    writerReady.get_future().wait();
+    auto overlay = std::async(std::launch::async, [&] {
+      const auto represented =
+          DragPreview(entity, 1, {-280.0, 0.0}, Transform2d::Translate(-280.0, 0.0));
+      return coordinator.rasterizeOverlayForCurrentSelection(
+          app, viewport, std::nullopt, represented, bounds, detail, livePreview);
+    });
+    const auto status = overlay.wait_for(std::chrono::milliseconds(100));
+    releaseWriter.set_value();
+    writer.get();
+    EXPECT_EQ(status, std::future_status::ready);
+    EXPECT_TRUE(overlay.get());
+    ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+    const auto& snapshot = *coordinator.immediateOverlaySnapshot();
+    EXPECT_THAT(snapshot.handleAnchorsDoc,
+                ::testing::UnorderedElementsAre(Vector2d(70.0, 10.0), Vector2d(70.0, 30.0)));
+    if (detail == SelectionChromeDetail::Full) {
+      ASSERT_THAT(snapshot.paths, ::testing::SizeIs(1));
+      EXPECT_EQ(snapshot.paths.front().pathDoc.bounds(), Box2d::FromXYWH(50.0, 10.0, 20.0, 20.0));
+    }
+  }
+}
+
 TEST(RenderCoordinatorTest, RasterizeOverlaySkipsUnchangedImmediateSnapshot) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
