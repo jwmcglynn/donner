@@ -1025,49 +1025,55 @@ TEST(RenderCoordinatorTest, BusyPenPreviewRetainsChromeEnteringViewportAfterPan)
 }
 
 TEST(RenderCoordinatorTest, BusyReleasedDragKeepsBoundsAlignedAfterIdleRecapture) {
-  EditorApp app;
-  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  RenderCoordinator coordinator;
-  SelectTool tool;
-  const ViewportState viewport = MakeViewport(app);
-  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
-  tool.onMouseMove(app, Vector2d(25.0, 25.0), true);
-  ASSERT_TRUE(app.flushFrame());
-  const auto releasedPreview = tool.activeDragPreview();
-  tool.onMouseUp(app, Vector2d(25.0, 25.0));
-  ASSERT_FALSE(tool.activeTransformBoundsPreview().has_value());
-  // Release refreshes the committed DOM, then the presenter still carries the released gesture.
-  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
-  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt,
-                                                              releasedPreview));
-  const auto releasedSnapshot = *coordinator.immediateOverlaySnapshot();
-  ASSERT_THAT(releasedSnapshot.paths, ::testing::SizeIs(1));
-  const Box2d releasedBounds = releasedSnapshot.paths.front().pathDoc.bounds();
-  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  for (const bool recaptureReleasedPreview : {true, false}) {
+    SCOPED_TRACE(recaptureReleasedPreview);
 
-  std::promise<void> writerReady;
-  std::promise<void> releaseWriter;
-  auto release = releaseWriter.get_future();
-  auto writer = std::async(std::launch::async, [&] {
-    auto access = app.document().document().writeAccess();
-    writerReady.set_value();
-    release.wait();
-  });
-  writerReady.get_future().wait();
-  (void)coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt,
-                                                        releasedPreview);
-  releaseWriter.set_value();
-  writer.get();
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  const auto& snapshot = *coordinator.immediateOverlaySnapshot();
-  ASSERT_THAT(snapshot.paths, ::testing::SizeIs(1));
-  EXPECT_EQ(snapshot.paths.front().pathDoc.bounds(), releasedBounds);
-  EXPECT_THAT(snapshot.handleAnchorsDoc,
-              ::testing::ElementsAreArray(releasedSnapshot.handleAnchorsDoc));
-  if (snapshot.orientedBoundsDoc.has_value()) {
-    EXPECT_THAT(snapshot.orientedBoundsDoc->cornersDoc,
-                ::testing::ElementsAre(Vector2d(20.0, 20.0), Vector2d(40.0, 20.0),
-                                       Vector2d(40.0, 40.0), Vector2d(20.0, 40.0)));
+    EditorApp app;
+    ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+    RenderCoordinator coordinator;
+    SelectTool tool;
+    const ViewportState viewport = MakeViewport(app);
+    tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+    tool.onMouseMove(app, Vector2d(25.0, 25.0), true);
+    ASSERT_TRUE(app.flushFrame());
+    const auto releasedPreview = tool.activeDragPreview();
+    tool.onMouseUp(app, Vector2d(25.0, 25.0));
+    ASSERT_FALSE(tool.activeTransformBoundsPreview().has_value());
+    // Release refreshes the committed DOM, then the presenter still carries the released gesture.
+    ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
+    if (recaptureReleasedPreview) {
+      ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt,
+                                                                  releasedPreview));
+    }
+    const auto releasedSnapshot = *coordinator.immediateOverlaySnapshot();
+    ASSERT_THAT(releasedSnapshot.paths, ::testing::SizeIs(1));
+    const Box2d releasedBounds = releasedSnapshot.paths.front().pathDoc.bounds();
+    app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+    std::promise<void> writerReady;
+    std::promise<void> releaseWriter;
+    auto release = releaseWriter.get_future();
+    auto writer = std::async(std::launch::async, [&] {
+      auto access = app.document().document().writeAccess();
+      writerReady.set_value();
+      release.wait();
+    });
+    writerReady.get_future().wait();
+    (void)coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt,
+                                                          releasedPreview);
+    releaseWriter.set_value();
+    writer.get();
+    ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+    const auto& snapshot = *coordinator.immediateOverlaySnapshot();
+    ASSERT_THAT(snapshot.paths, ::testing::SizeIs(1));
+    EXPECT_EQ(snapshot.paths.front().pathDoc.bounds(), releasedBounds);
+    EXPECT_THAT(snapshot.handleAnchorsDoc,
+                ::testing::ElementsAreArray(releasedSnapshot.handleAnchorsDoc));
+    if (snapshot.orientedBoundsDoc.has_value()) {
+      EXPECT_THAT(snapshot.orientedBoundsDoc->cornersDoc,
+                  ::testing::ElementsAre(Vector2d(20.0, 20.0), Vector2d(40.0, 20.0),
+                                         Vector2d(40.0, 40.0), Vector2d(20.0, 40.0)));
+    }
   }
 }
 
