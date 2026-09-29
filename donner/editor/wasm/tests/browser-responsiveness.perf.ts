@@ -24,6 +24,9 @@ interface Diagnostics extends Window {
     pointerY: number;
     pendingClick: boolean;
     workerBusy: boolean;
+    selectedCount: number;
+    dragging: boolean;
+    moved: boolean;
   };
   __donnerViewportStats?: {
     paneX: number;
@@ -31,6 +34,10 @@ interface Diagnostics extends Window {
     paneWidth: number;
     paneHeight: number;
     zoom: number;
+    documentX: number;
+    documentY: number;
+    documentWidth: number;
+    documentHeight: number;
   };
   __donnerWorkerStats?: {
     completedResults: number;
@@ -159,6 +166,160 @@ async function waitForIdle(page: Page) {
     message: "the editor must consume pending input and finish its foreground render",
     timeout: 15000,
   }).toEqual(expect.objectContaining({ pendingClick: false, workerBusy: false }));
+}
+
+async function aimAtSplashD(page: Page) {
+  const viewport = (await snapshot(page)).viewport!;
+  const point = {
+    x: Math.round(viewport.documentX + viewport.documentWidth * 282 / 892),
+    y: Math.round(viewport.documentY + viewport.documentHeight * 390 / 512),
+  };
+  expect(point.x).toBeGreaterThan(viewport.paneX);
+  expect(point.x).toBeLessThan(viewport.paneX + viewport.paneWidth);
+  expect(point.y).toBeGreaterThan(viewport.paneY);
+  expect(point.y).toBeLessThan(viewport.paneY + viewport.paneHeight);
+  await dispatchPointer(page, point);
+  await expect.poll(async () => (await snapshot(page)).interaction, {
+    timeout: 10000,
+    message: "the D aiming move must be applied before a press or zoom",
+  }).toEqual(expect.objectContaining({ pointerX: point.x, pointerY: point.y }));
+  return point;
+}
+
+async function zoomSplashForDrag(page: Page) {
+  for (let step = 0; step < 12; ++step) {
+    const viewport = (await snapshot(page)).viewport!;
+    if (Math.abs(viewport.zoom - 1.93) < 0.001) break;
+    const point = await aimAtSplashD(page);
+    const deltaY = -100 * Math.max(-0.25, Math.min(0.25, Math.log(1.93 / viewport.zoom)));
+    await page.evaluate(({ x, y, deltaY }) => {
+      document.querySelector("canvas#canvas")!.dispatchEvent(
+        new WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          clientX: x,
+          clientY: y,
+          ctrlKey: true,
+          deltaMode: 0,
+          deltaY,
+        }),
+      );
+    }, { ...point, deltaY });
+    await expect.poll(async () => (await snapshot(page)).viewport?.zoom, {
+      timeout: 10000,
+      message: "the normal pinch input must update the viewport",
+    }).not.toBe(viewport.zoom);
+  }
+  expect((await snapshot(page)).viewport!.zoom).toBeCloseTo(1.93, 2);
+  await waitForIdle(page);
+  return aimAtSplashD(page);
+}
+
+async function continuousDrag(page: Page, start: { x: number; y: number }, direction: number) {
+  const before = await snapshot(page);
+  const stream = await page.evaluate(async ({ start, direction }) => {
+    const state = window as Diagnostics;
+    const canvas = document.querySelector("canvas#canvas")!;
+    const dispatch = (type: string, x: number, y: number, buttons: number) => {
+      canvas.dispatchEvent(
+        new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          view: window,
+          clientX: x,
+          clientY: y,
+          button: 0,
+          buttons,
+        }),
+      );
+    };
+    const frames: {
+      frame: number;
+      atMs: number;
+      pointerX?: number;
+      pointerY?: number;
+      selectedCount?: number;
+      dragging?: boolean;
+      workerMs?: number;
+      completedResults?: number;
+      readbackCount?: unknown;
+      readbackPollIterations?: unknown;
+    }[] = [];
+    const dispatchTimes: number[] = [];
+    let previousFrame = state.__donnerFrameLoopStats?.renderedFrames ?? 0;
+    let observing = true;
+    let sampleId = 0;
+    const observe = () => {
+      const loop = state.__donnerFrameLoopStats;
+      if (loop && loop.renderedFrames !== previousFrame) {
+        previousFrame = loop.renderedFrames;
+        frames.push({
+          frame: loop.renderedFrames,
+          atMs: loop.lastFrameAtMs,
+          pointerX: state.__donnerInteractionStats?.pointerX,
+          pointerY: state.__donnerInteractionStats?.pointerY,
+          selectedCount: state.__donnerInteractionStats?.selectedCount,
+          dragging: state.__donnerInteractionStats?.dragging,
+          workerMs: state.__donnerWorkerStats?.workerMs,
+          completedResults: state.__donnerWorkerStats?.completedResults,
+          readbackCount: state.__donnerWorkerStats?.readbackCount,
+          readbackPollIterations: state.__donnerWorkerStats?.readbackPollIterations,
+        });
+      }
+      if (observing) sampleId = requestAnimationFrame(observe);
+    };
+    const startedAtMs = performance.now();
+    observe();
+    dispatch("mousedown", start.x, start.y, 1);
+    let end = start;
+    try {
+      await new Promise<void>((resolve) => {
+        let step = 0;
+        const move = () => {
+          ++step;
+          const fraction = step / 60;
+          end = {
+            x: Math.round(start.x + direction * 120 * fraction),
+            y: Math.round(start.y + direction * 72 * fraction),
+          };
+          dispatchTimes.push(performance.now());
+          dispatch("mousemove", end.x, end.y, 1);
+          if (step < 60) setTimeout(move, 16);
+          else resolve();
+        };
+        setTimeout(move, 16);
+      });
+    } finally {
+      dispatch("mouseup", end.x, end.y, 0);
+      observing = false;
+      cancelAnimationFrame(sampleId);
+    }
+    return { startedAtMs, finishedAtMs: performance.now(), dispatchTimes, frames, end };
+  }, { start, direction });
+  await expect.poll(async () => (await snapshot(page)).interaction, {
+    timeout: 15000,
+    message: "the final pointer move and mouse release must reach the editor",
+  }).toEqual(expect.objectContaining({
+    pointerX: stream.end.x,
+    pointerY: stream.end.y,
+    dragging: false,
+    pendingClick: false,
+  }));
+  await waitForIdle(page);
+  const after = await snapshot(page);
+  expect(after.interaction?.selectedCount, "the D drag must leave one shape selected").toBe(1);
+  expect(stream.frames.some((frame) => frame.dragging), "the stream must enter drag mode").toBe(
+    true,
+  );
+  const gaps = (times: number[]) => times.slice(1).map((time, index) => time - times[index]);
+  return {
+    ...phaseReport(before, after, []),
+    // These are observed frame gaps, not a latched input-to-presentation latency measurement.
+    observedFrameGapsMs: distribution(gaps(stream.frames.map((frame) => frame.atMs))),
+    inputDispatchGapsMs: distribution(gaps(stream.dispatchTimes)),
+    observedFrames: stream.frames.length,
+    stream,
+  };
 }
 
 // This manual lane measures production frame telemetry. Pixel reads, screenshots and traces
@@ -345,6 +506,29 @@ test(
         );
         await waitForIdle(page);
       }
+      const dragStart = await zoomSplashForDrag(page);
+      const firstDrag = await continuousDrag(page, dragStart, -1);
+      report["first-drag-193"] = firstDrag;
+      console.log(
+        `responsiveness first-drag-193 ${info.project.name} ${JSON.stringify(firstDrag)}`,
+      );
+      const firstCapture = info.outputPath("first-drag-193.png");
+      await page.screenshot({ path: firstCapture });
+      await info.attach("first-drag-193.png", {
+        path: firstCapture,
+        contentType: "image/png",
+      });
+      const secondDrag = await continuousDrag(page, firstDrag.stream.end, 1);
+      report["second-drag-193"] = secondDrag;
+      console.log(
+        `responsiveness second-drag-193 ${info.project.name} ${JSON.stringify(secondDrag)}`,
+      );
+      const secondCapture = info.outputPath("second-drag-193.png");
+      await page.screenshot({ path: secondCapture });
+      await info.attach("second-drag-193.png", {
+        path: secondCapture,
+        contentType: "image/png",
+      });
       expect(failures).toEqual([]);
     } finally {
       let deadline: ReturnType<typeof setTimeout> | undefined;

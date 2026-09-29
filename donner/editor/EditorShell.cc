@@ -3477,28 +3477,42 @@ bool EditorShell::selectionIsAllText() const {
 
 bool EditorShell::formatBarShouldShow() const {
   const std::vector<svg::SVGElement>& selection = app_.selectedElements();
-  const bool hasSingleTextSelection =
-      selection.size() == 1u && selection.front().type() == svg::ElementType::Text;
+  bool hasSingleTextSelection = false;
+  if (selection.size() == 1u && app_.hasDocument()) {
+    if (auto access = app_.document().document().tryReadAccess(); access.has_value()) {
+      hasSingleTextSelection = selection.front().type() == svg::ElementType::Text;
+    } else {
+      hasSingleTextSelection =
+          formatBarSnapshotSelection_ == selection.front() && formatBarSelectionSnapshot_.visible;
+    }
+  }
   const bool textEditingActive = activeTool_ == ActiveTool::Text && textTool_.isEditing();
   return FormatBarShouldShow(hasSingleTextSelection, textEditingActive);
 }
 
 FormatBarState EditorShell::computeFormatBarState() {
-  FormatBarState state;
-
   const std::vector<svg::SVGElement>& selection = app_.selectedElements();
-  const bool hasSingleTextSelection =
-      selection.size() == 1u && selection.front().type() == svg::ElementType::Text;
-  state.visible = formatBarShouldShow();
-  if (!state.visible) {
-    return state;
+  const std::optional<svg::SVGElement> singleSelection =
+      selection.size() == 1u ? std::optional<svg::SVGElement>(selection.front()) : std::nullopt;
+  if (!singleSelection.has_value() || !app_.hasDocument()) {
+    formatBarSnapshotSelection_ = singleSelection;
+    formatBarSelectionSnapshot_ = {};
+  } else if (auto access = app_.document().document().tryReadAccess(); access.has_value()) {
+    formatBarSnapshotSelection_ = singleSelection;
+    formatBarSelectionSnapshot_ = {};
+    formatBarSelectionSnapshot_.visible = singleSelection->type() == svg::ElementType::Text;
+    if (formatBarSelectionSnapshot_.visible) {
+      ReadTextFormatState(*singleSelection, &formatBarSelectionSnapshot_);
+    }
   }
 
-  // Read the current family/size/B/I/U from the styled element. During an
-  // editing session the TextTool keeps that element as the single selection, so
-  // the same read path serves both the selection and editing cases.
-  if (hasSingleTextSelection) {
-    ReadTextFormatState(selection.front(), &state);
+  FormatBarState state = singleSelection == formatBarSnapshotSelection_
+                             ? formatBarSelectionSnapshot_
+                             : FormatBarState{};
+  const bool textEditingActive = activeTool_ == ActiveTool::Text && textTool_.isEditing();
+  state.visible = FormatBarShouldShow(state.visible, textEditingActive);
+  if (!state.visible) {
+    return state;
   }
   if (textTool_.isEditing()) {
     const TextTool::ActiveStyle activeStyle = textTool_.activeStyle();
@@ -3513,6 +3527,11 @@ FormatBarState EditorShell::computeFormatBarState() {
   state.families = BuildFormatBarFamilies(
       fontCatalog().families(),
       [&](const svg::FontFamilyInfo& info) { return fontPreviewForFamily(info.family); });
+  updateFormatBarFamilyAvailability(state);
+  return state;
+}
+
+void EditorShell::updateFormatBarFamilyAvailability(FormatBarState& state) {
   for (auto& family : state.families) {
     family.availability = fontCatalog_.availability(family.name, {}).state;
     if (const auto cached = fontPreviewBitmaps_.find(family.name);
@@ -3528,7 +3547,6 @@ FormatBarState EditorShell::computeFormatBarState() {
       family.previewFailed = true;
     }
   }
-  return state;
 }
 
 namespace {
@@ -4672,6 +4690,10 @@ void EditorShell::dispatchBufferedRenderPaneClick(bool selectToolActive, bool pe
         lastPostedScreenPoint_.reset();
         interactionController_.clearPendingClick();
         pendingClickFollowupAfterIdle_ = true;
+        renderCoordinator_.rasterizeOverlayForCurrentSelection(
+            app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+            selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
+            selectionChromeDetailForActiveTool(), selectTool_.documentDragPreview(app_));
         break;
 
       case PendingClickBusyAction::RunIdleClickPath: {

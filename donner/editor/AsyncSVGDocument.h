@@ -195,6 +195,9 @@ private:
   // re-parses the bytes into a fresh SVGDocument and replaces `document_`.
   void applyOne(const EditorCommand& command);
 
+  /// Accumulate flush metadata only after deferred admission accepts the command.
+  void recordAppliedCommand(const EditorCommand& command);
+
   /// Remap any element handles in `command` through a structural writeback replacement.
   void remapCommandTargets(EditorCommand* command, const std::unordered_map<Entity, Entity>& remap);
 

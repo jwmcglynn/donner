@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <utility>
-#include <vector>
 
 #include "donner/gpu/GpuLimits.h"
 #include "donner/svg/renderer/RendererGeode.h"
@@ -87,9 +87,13 @@ bool WriteRuntimeBitmapUpload(gpu::Device& device, const gpu::Texture& texture,
   const uint32_t width = static_cast<uint32_t>(dimensions.x);
   const uint32_t height = static_cast<uint32_t>(dimensions.y);
   const uint32_t maxChunkRows = std::max<uint32_t>(1u, kMaxStagingBytes / layout.bytesPerRow);
+  const std::size_t stagingCapacity = static_cast<std::size_t>(layout.bytesPerRow) *
+                                      std::min(maxChunkRows, layout.allocationHeight);
+  const auto staging = std::make_unique_for_overwrite<uint8_t[]>(stagingCapacity);
   for (uint32_t firstRow = 0; firstRow < layout.allocationHeight;) {
     const uint32_t rowCount = std::min(maxChunkRows, layout.allocationHeight - firstRow);
-    std::vector<uint8_t> staging(static_cast<std::size_t>(layout.bytesPerRow) * rowCount, 0u);
+    const std::size_t chunkBytes = static_cast<std::size_t>(layout.bytesPerRow) * rowCount;
+    std::memset(staging.get(), 0, chunkBytes);
     for (uint32_t chunkRow = 0; chunkRow < rowCount; ++chunkRow) {
       const uint32_t destinationY = firstRow + chunkRow;
       if (destinationY > height) {
@@ -98,7 +102,7 @@ bool WriteRuntimeBitmapUpload(gpu::Device& device, const gpu::Texture& texture,
       const uint32_t sourceY = std::min(destinationY, height - 1u);
       const uint8_t* sourceRow = pixels.data() + static_cast<std::size_t>(sourceY) * rowBytes;
       uint8_t* destinationRow =
-          staging.data() + static_cast<std::size_t>(chunkRow) * layout.bytesPerRow;
+          staging.get() + static_cast<std::size_t>(chunkRow) * layout.bytesPerRow;
       std::memcpy(destinationRow, sourceRow, layout.payloadBytesPerRow);
       if (layout.allocationWidth > width) {
         std::memcpy(destinationRow + layout.payloadBytesPerRow,
@@ -109,9 +113,10 @@ bool WriteRuntimeBitmapUpload(gpu::Device& device, const gpu::Texture& texture,
     // Device::writeTexture consumes the byte span during the call, so the next chunk can reuse
     // this bounded staging allocation without extending its lifetime through submission.
     if (device
-            .writeTexture(
-                texture, staging, gpu::TexelCopyBufferLayout{0u, layout.bytesPerRow, rowCount},
-                gpu::Extent2d{layout.allocationWidth, rowCount}, gpu::Origin2d{0u, firstRow})
+            .writeTexture(texture, std::span<const uint8_t>(staging.get(), chunkBytes),
+                          gpu::TexelCopyBufferLayout{0u, layout.bytesPerRow, rowCount},
+                          gpu::Extent2d{layout.allocationWidth, rowCount},
+                          gpu::Origin2d{0u, firstRow})
             .hasError()) {
       return false;
     }

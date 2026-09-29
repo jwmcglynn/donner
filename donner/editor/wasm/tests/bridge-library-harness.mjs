@@ -203,6 +203,7 @@ export function loadLibrary({
       COPY_DST: 0x02,
       STORAGE_BINDING: 0x08,
     },
+    GPUMapMode: { READ: 1 },
     GPUBufferUsage: {
       MAP_READ: 0x0001,
       COPY_SRC: 0x0004,

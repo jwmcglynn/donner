@@ -797,6 +797,8 @@ void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration)
   lockedRejectionFlash_.reset();
   lastOverlaySourceHoverVec_.clear();
   immediateOverlaySnapshot_.reset();
+  unculledOverlaySnapshot_.reset();
+  dragOverlayBaseline_.reset();
   clipGuideCache_.reset();
   lastOverlayRasterSize_ = Vector2i::Zero();
   lastOverlayScreenRect_.reset();
@@ -1216,6 +1218,152 @@ void RenderCoordinator::updateClipGuidesForOverlay(
   };
 }
 
+bool RenderCoordinator::dragOverlayBaselineMatches(const SelectTool::ActiveDragPreview& preview,
+                                                   std::uint64_t documentGeneration) const {
+  return dragOverlayBaseline_.has_value() &&
+         dragOverlayBaseline_->documentGeneration == documentGeneration &&
+         dragOverlayBaseline_->representedPreview.entity == preview.entity &&
+         dragOverlayBaseline_->representedPreview.extraEntities == preview.extraEntities &&
+         dragOverlayBaseline_->representedPreview.dragGeneration == preview.dragGeneration;
+}
+
+void RenderCoordinator::stampTransientOverlayState(SelectionChromeSnapshot& snapshot) const {
+  snapshot.penPreviewSegmentDoc = penHoverPreviewSegmentDoc_;
+  snapshot.penCloseAffordanceDoc = penHoverCloseAffordanceDoc_;
+  snapshot.textCaretDoc = textEditingCaretDoc_;
+  snapshot.textSelectionQuadsDoc = textEditingSelectionQuadsDoc_;
+  snapshot.textFrameCornersDoc = textEditingFrameCornersDoc_;
+  snapshot.textFrameOpacity = textEditingFrameOpacity_;
+  snapshot.textBoxDragPreviewDoc = textBoxDragPreviewDoc_;
+}
+
+void RenderCoordinator::retainDragOverlayBaseline(
+    const SelectionChromeSnapshot& chromeSnapshot, const EditorApp& app,
+    const std::optional<SelectTool::ActiveDragPreview>& representedDragPreview,
+    const std::optional<SelectTool::ActiveTransformBoundsPreview>& activeBoundsPreview) {
+  if (representedDragPreview.has_value() &&
+      std::abs(representedDragPreview->documentFromCachedDocument.determinant()) >= 1e-12 &&
+      !chromeSnapshot.livePathPreview.has_value()) {
+    std::optional<Box2d> startBounds;
+    if (activeBoundsPreview.has_value()) {
+      startBounds = activeBoundsPreview->startBoundsDoc;
+    } else if (dragOverlayBaselineMatches(*representedDragPreview,
+                                          app.document().documentGeneration())) {
+      startBounds = dragOverlayBaseline_->startBoundsDoc;
+    } else if (!chromeSnapshot.aabbsDoc.empty()) {
+      startBounds = CombinedSelectionBounds(chromeSnapshot.aabbsDoc);
+    }
+    dragOverlayBaseline_ = DragOverlayBaseline{chromeSnapshot, *representedDragPreview, startBounds,
+                                               app.document().documentGeneration()};
+  } else if (!representedDragPreview.has_value()) {
+    dragOverlayBaseline_.reset();
+  }
+}
+
+bool RenderCoordinator::reuseOverlayWithoutDocumentAccess(
+    EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
+    const std::optional<SelectTool::ActiveDragPreview>& representedDragPreview) {
+  lastFrameCostBreakdown_.overlay = {};
+  if (app.selectedElements() != lastOverlaySelectionVec_) {
+    immediateOverlaySnapshot_.reset();
+    unculledOverlaySnapshot_.reset();
+    dragOverlayBaseline_.reset();
+    return true;
+  }
+  if (!immediateOverlaySnapshot_.has_value()) {
+    return false;
+  }
+  if (immediateOverlaySnapshot_->livePathPreview.has_value()) {
+    if (unculledOverlaySnapshot_.has_value()) {
+      immediateOverlaySnapshot_ = unculledOverlaySnapshot_;
+    }
+    updateCachedOverlayTransients(viewport, marqueeRectDoc);
+    OverlayRenderer::cullSnapshot(*immediateOverlaySnapshot_,
+                                  OverlayCullRectDocForViewport(viewport));
+    return false;
+  }
+  if (representedDragPreview.has_value()) {
+    if (!projectBusyDragOverlay(app, *representedDragPreview)) {
+      return true;
+    }
+  } else if (unculledOverlaySnapshot_.has_value()) {
+    immediateOverlaySnapshot_ = unculledOverlaySnapshot_;
+  }
+  updateCachedOverlayTransients(viewport, marqueeRectDoc);
+  OverlayRenderer::cullSnapshot(*immediateOverlaySnapshot_,
+                                OverlayCullRectDocForViewport(viewport));
+  return true;
+}
+
+bool RenderCoordinator::projectBusyDragOverlay(
+    const EditorApp& app, const SelectTool::ActiveDragPreview& representedPreview) {
+  const std::uint64_t generation = app.document().documentGeneration();
+  if (!dragOverlayBaselineMatches(representedPreview, generation) &&
+      !lastOverlayInteractionActive_ && unculledOverlaySnapshot_.has_value() &&
+      lastOverlayVersion_ == app.document().currentFrameVersion()) {
+    auto baselinePreview = representedPreview;
+    baselinePreview.translation = Vector2d::Zero();
+    baselinePreview.documentFromCachedDocument = Transform2d();
+    std::optional<Box2d> startBounds;
+    if (!unculledOverlaySnapshot_->aabbsDoc.empty()) {
+      startBounds = CombinedSelectionBounds(unculledOverlaySnapshot_->aabbsDoc);
+    }
+    dragOverlayBaseline_ =
+        DragOverlayBaseline{*unculledOverlaySnapshot_, baselinePreview, startBounds, generation};
+  }
+  if (!dragOverlayBaselineMatches(representedPreview, generation)) {
+    immediateOverlaySnapshot_.reset();
+    unculledOverlaySnapshot_.reset();
+    dragOverlayBaseline_.reset();
+    return false;
+  }
+  std::optional<SelectionChromeBoundsPreview> bounds;
+  if (dragOverlayBaseline_->startBoundsDoc.has_value()) {
+    bounds = SelectionChromeBoundsPreview{*dragOverlayBaseline_->startBoundsDoc,
+                                          representedPreview.documentFromCachedDocument};
+  }
+  immediateOverlaySnapshot_ = OverlayRenderer::projectSelectionSnapshot(
+      dragOverlayBaseline_->snapshot,
+      OverlayDocumentFromSourceDragPreview(dragOverlayBaseline_->representedPreview,
+                                           representedPreview),
+      bounds);
+  return true;
+}
+
+void RenderCoordinator::updateCachedOverlayTransients(const ViewportState& viewport,
+                                                      const std::optional<Box2d>& marqueeRectDoc) {
+  auto& snapshot = *immediateOverlaySnapshot_;
+  snapshot.canvasFromDoc = OverlayCanvasFromDocumentTransform(viewport);
+  snapshot.devicePixelRatio = viewport.devicePixelRatio;
+  snapshot.marqueeDoc = marqueeRectDoc;
+  if (sourceHoverElements_ != lastOverlaySourceHoverVec_) {
+    snapshot.hoverPaths.clear();
+    snapshot.hoverAabbsDoc.clear();
+  }
+  if (snapshot.lockedFlash.has_value()) {
+    if (lockedRejectionFlash_.has_value()) {
+      snapshot.lockedFlash->intensity = lockedRejectionFlash_->intensity;
+    } else {
+      snapshot.lockedFlash.reset();
+    }
+  }
+  stampTransientOverlayState(snapshot);
+}
+
+std::optional<Path> RenderCoordinator::capturePenLiveSpline() const {
+  if (!penLivePreviewElement_.has_value()) {
+    return std::nullopt;
+  }
+  // The pen mutates a stable element handle, so compare its spline as well as its identity.
+  return penLivePreviewElement_->withWriteAccess(
+      [this](svg::DocumentWriteAccess&, EntityHandle) -> std::optional<Path> {
+        if (!penLivePreviewElement_->isa<svg::SVGGeometryElement>()) {
+          return std::nullopt;
+        }
+        return penLivePreviewElement_->cast<svg::SVGGeometryElement>().computedSpline();
+      });
+}
+
 bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
     EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
     std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
@@ -1225,12 +1373,18 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   ZoneScopedN("RenderCoordinator::rasterizeOverlay");
   if (!app.hasDocument()) {
     immediateOverlaySnapshot_.reset();
+    unculledOverlaySnapshot_.reset();
+    dragOverlayBaseline_.reset();
     return false;
+  }
+
+  const auto documentAccess = app.document().document().tryWriteAccess();
+  if (!documentAccess.has_value()) {
+    return reuseOverlayWithoutDocumentAccess(app, viewport, marqueeRectDoc, representedDragPreview);
   }
 
   const Vector2i currentOverlayRasterSize = OverlayRasterSizeForViewport(viewport);
   const Box2d currentOverlayScreenRect = OverlayScreenRectForViewport(viewport);
-  const Box2d currentOverlayCullRectDoc = OverlayCullRectDocForViewport(viewport);
   const Transform2d currentOverlayCanvasFromDocument = OverlayCanvasFromDocumentTransform(viewport);
   const auto currentVersion = app.document().currentFrameVersion();
   const auto now = std::chrono::steady_clock::now();
@@ -1244,21 +1398,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   const bool overlayInteractionActive =
       effectiveDocumentDragPreview.has_value() || representedDragPreview.has_value() ||
       marqueeRectDoc.has_value() || activeBoundsPreview.has_value() || lockedFlashActive;
-  // The pen tool mutates the previewed path in place on one element, so identity comparison
-  // against `lastOverlayPenLivePreviewElement_` below cannot see an anchor/handle drag growing
-  // the geometry. Sample the element's current spline (element space; transforms are covered by
-  // the canvas-from-document and version terms) and compare it against the spline the current
-  // snapshot captured. Only computed while the pen preview is active.
-  std::optional<Path> currentPenLiveSpline;
-  if (penLivePreviewElement_.has_value()) {
-    currentPenLiveSpline = penLivePreviewElement_->withWriteAccess(
-        [this](svg::DocumentWriteAccess&, EntityHandle) -> std::optional<Path> {
-          if (!penLivePreviewElement_->isa<svg::SVGGeometryElement>()) {
-            return std::nullopt;
-          }
-          return penLivePreviewElement_->cast<svg::SVGGeometryElement>().computedSpline();
-        });
-  }
+  const std::optional<Path> currentPenLiveSpline = capturePenLiveSpline();
   const bool overlayGeometryDiffers =
       chromeSubjectDiffersFromSnapshot(app) || currentPenLiveSpline != lastOverlayPenLiveSpline_ ||
       marqueeRectDoc != lastOverlayMarqueeRectDoc_ ||
@@ -1340,7 +1480,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   SelectionChromeSnapshot chromeSnapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(overlaySelection), marqueeRectDoc,
       currentOverlayCanvasFromDocument, chromeBoundsPreview,
-      std::span<const svg::SVGElement>(sourceHoverElements_), currentOverlayCullRectDoc,
+      std::span<const svg::SVGElement>(sourceHoverElements_), /*cullRectDoc=*/std::nullopt,
       resolvedSelectionDetail, representedDocumentFromLiveDocument, lockedFlashInput,
       viewport.devicePixelRatio, penLivePreviewElement_);
   updateClipGuidesForOverlay(app, std::span<const svg::SVGElement>(overlaySelection),
@@ -1348,13 +1488,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
                              representedDocumentFromLiveDocument, &chromeSnapshot);
   // Pen hover chrome is pushed state (no registry reads), stamped onto the
   // snapshot after capture.
-  chromeSnapshot.penPreviewSegmentDoc = penHoverPreviewSegmentDoc_;
-  chromeSnapshot.penCloseAffordanceDoc = penHoverCloseAffordanceDoc_;
-  chromeSnapshot.textCaretDoc = textEditingCaretDoc_;
-  chromeSnapshot.textSelectionQuadsDoc = textEditingSelectionQuadsDoc_;
-  chromeSnapshot.textFrameCornersDoc = textEditingFrameCornersDoc_;
-  chromeSnapshot.textFrameOpacity = textEditingFrameOpacity_;
-  chromeSnapshot.textBoxDragPreviewDoc = textBoxDragPreviewDoc_;
+  stampTransientOverlayState(chromeSnapshot);
   overlayCost.captureMs = MillisecondsSince(captureStart);
   overlayCost.pathCount = static_cast<int>(chromeSnapshot.paths.size());
   overlayCost.hoverPathCount = static_cast<int>(chromeSnapshot.hoverPaths.size());
@@ -1386,7 +1520,10 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
           ? static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.x)) *
                 static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.y)) * 4u
           : 0u;
-  immediateOverlaySnapshot_ = chromeSnapshot;
+  retainDragOverlayBaseline(chromeSnapshot, app, representedDragPreview, activeBoundsPreview);
+  unculledOverlaySnapshot_ = chromeSnapshot;
+  OverlayRenderer::cullSnapshot(chromeSnapshot, OverlayCullRectDocForViewport(viewport));
+  immediateOverlaySnapshot_ = std::move(chromeSnapshot);
 
   lastOverlaySelectionVec_ = overlaySelection;
   lastOverlaySourceHoverVec_ = sourceHoverElements_;
@@ -1942,22 +2079,14 @@ std::vector<Entity> RenderCoordinator::selectedCompositedExtraEntities(EditorApp
 }
 
 Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {
+  std::optional<svg::DocumentReadAccess> documentAccess =
+      app.hasDocument() ? app.document().document().tryReadAccess() : std::nullopt;
+  if (app.hasDocument() && !documentAccess.has_value()) {
+    return displayNoneSuppressedLayerEntity_;
+  }
   const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
   if (!selected.has_value()) {
-    if (displayNoneSuppressedLayerEntity_ != entt::null) {
-      return displayNoneSuppressedLayerEntity_;
-    }
-
-    const CompositedPresentation::DiagnosticsSnapshot diagnostics =
-        compositedPresentation_.diagnostics();
-    if (diagnostics.hasCachedTextures && diagnostics.cachedEntity != entt::null &&
-        !DocumentContainsEntity(app.document().document(), diagnostics.cachedEntity)) {
-      displayNoneSuppressedSelectionEntity_ = entt::null;
-      displayNoneSuppressedLayerEntity_ = diagnostics.cachedEntity;
-      return diagnostics.cachedEntity;
-    }
-
-    return entt::null;
+    return suppressedLayerWithoutSelection(app);
   }
 
   if (!IsDisplayNone(*selected)) {
@@ -1972,7 +2101,28 @@ Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {
     return displayNoneSuppressedLayerEntity_;
   }
 
-  const Entity selectedEntity = selected->unsafeEntityHandle().entity();
+  return suppressedLayerForHiddenSelection(*selected);
+}
+
+Entity RenderCoordinator::suppressedLayerWithoutSelection(EditorApp& app) {
+  if (displayNoneSuppressedLayerEntity_ != entt::null) {
+    return displayNoneSuppressedLayerEntity_;
+  }
+
+  const CompositedPresentation::DiagnosticsSnapshot diagnostics =
+      compositedPresentation_.diagnostics();
+  if (diagnostics.hasCachedTextures && diagnostics.cachedEntity != entt::null &&
+      !DocumentContainsEntity(app.document().document(), diagnostics.cachedEntity)) {
+    displayNoneSuppressedSelectionEntity_ = entt::null;
+    displayNoneSuppressedLayerEntity_ = diagnostics.cachedEntity;
+    return diagnostics.cachedEntity;
+  }
+
+  return entt::null;
+}
+
+Entity RenderCoordinator::suppressedLayerForHiddenSelection(const svg::SVGElement& selected) {
+  const Entity selectedEntity = selected.unsafeEntityHandle().entity();
   const CompositedPresentation::DiagnosticsSnapshot diagnostics =
       compositedPresentation_.diagnostics();
   if (diagnostics.hasCachedTextures && diagnostics.cachedEntity != entt::null) {
@@ -1992,6 +2142,15 @@ Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {
 }
 
 bool RenderCoordinator::selectedElementIsDisplayNone(EditorApp& app) const {
+  if (!app.hasDocument() || !app.selectedElement().has_value()) {
+    return false;
+  }
+  const auto documentAccess = app.document().document().tryReadAccess();
+  if (!documentAccess.has_value()) {
+    return displayNoneSuppressedSelectionEntity_ != entt::null &&
+           app.selectedElement()->unsafeEntityHandle().entity() ==
+               displayNoneSuppressedSelectionEntity_;
+  }
   const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
   return selected.has_value() && IsDisplayNone(*selected);
 }

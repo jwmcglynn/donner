@@ -556,6 +556,24 @@ private:
    */
   [[nodiscard]] bool chromeSubjectDiffersFromSnapshot(const EditorApp& app) const;
 
+  bool reuseOverlayWithoutDocumentAccess(
+      EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
+      const std::optional<SelectTool::ActiveDragPreview>& representedDragPreview);
+  void stampTransientOverlayState(SelectionChromeSnapshot& snapshot) const;
+  std::optional<Path> capturePenLiveSpline() const;
+  void retainDragOverlayBaseline(
+      const SelectionChromeSnapshot& snapshot, const EditorApp& app,
+      const std::optional<SelectTool::ActiveDragPreview>& representedPreview,
+      const std::optional<SelectTool::ActiveTransformBoundsPreview>& boundsPreview);
+  bool projectBusyDragOverlay(const EditorApp& app,
+                              const SelectTool::ActiveDragPreview& representedPreview);
+  void updateCachedOverlayTransients(const ViewportState& viewport,
+                                     const std::optional<Box2d>& marqueeRectDoc);
+  Entity suppressedLayerWithoutSelection(EditorApp& app);
+  Entity suppressedLayerForHiddenSelection(const svg::SVGElement& selected);
+  bool dragOverlayBaselineMatches(const SelectTool::ActiveDragPreview& preview,
+                                  std::uint64_t documentGeneration) const;
+
   struct RenderWorkerBundle {
     explicit RenderWorkerBundle(
         std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr);
@@ -570,6 +588,15 @@ private:
   CompositedPresentation compositedPresentation_;
   SelectionBoundsCache selectionBoundsCache_;
   std::optional<SelectionChromeSnapshot> immediateOverlaySnapshot_;
+  /// Complete geometry for camera changes or a drag starting while the document is busy.
+  std::optional<SelectionChromeSnapshot> unculledOverlaySnapshot_;
+  struct DragOverlayBaseline {
+    SelectionChromeSnapshot snapshot;
+    SelectTool::ActiveDragPreview representedPreview;
+    std::optional<Box2d> startBoundsDoc;
+    std::uint64_t documentGeneration = 0;
+  };
+  std::optional<DragOverlayBaseline> dragOverlayBaseline_;
   struct ClipGuideCache {
     SelectionChromeSnapshot baseline;
     Entity selectedEntity = entt::null;
