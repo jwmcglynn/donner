@@ -1,5 +1,7 @@
 #include "donner/editor/EditorApp.h"
 
+#include <chrono>
+#include <future>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -554,6 +556,69 @@ TEST(EditorAppTest, DeleteSelectionWithUndoRefusesAllLockedSelection) {
   EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
   ASSERT_EQ(app.selectedElements().size(), 1u);
   EXPECT_EQ(app.selectedElements().front().id(), "r1");
+}
+
+TEST(EditorAppTest, GeometryMutationQueuesWithoutWaitingForDocumentWriter) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="target" width="10" height="10"/></svg>)"));
+  auto element = app.document().document().querySelector("#target");
+  ASSERT_TRUE(element.has_value());
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  const Transform2d transform = Transform2d::Translate({20.0, 30.0});
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto release = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = app.document().document().writeAccess();
+    writerReady.set_value();
+    release.wait();
+  });
+  writerReady.get_future().wait();
+  auto queued = std::async(std::launch::async, [&] {
+    app.applyMutation(EditorCommand::SetTransformCommand(*element, transform));
+  });
+  const auto status = queued.wait_for(std::chrono::milliseconds(100));
+  releaseWriter.set_value();
+  writer.get();
+  queued.get();
+  EXPECT_EQ(status, std::future_status::ready);
+  EXPECT_TRUE(app.flushFrame());
+  EXPECT_THAT(element->cast<svg::SVGGraphicsElement>().transform(), testing::Eq(transform));
+  EXPECT_TRUE(app.isDirty());
+}
+
+TEST(EditorAppTest, DeferredLayerLockCheckStillRejectsLockedGeometryAndDeletion) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g data-donner-locked="true"><rect id="target" width="10" height="10"/></g></svg>)"));
+  auto element = app.document().document().querySelector("#target");
+  ASSERT_TRUE(element.has_value());
+  ASSERT_FALSE(app.isDirty());
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto release = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = app.document().document().writeAccess();
+    writerReady.set_value();
+    release.wait();
+  });
+  writerReady.get_future().wait();
+  auto queued = std::async(std::launch::async, [&] {
+    app.applyMutation(
+        EditorCommand::SetTransformCommand(*element, Transform2d::Translate({20.0, 30.0})));
+    app.applyMutation(EditorCommand::DeleteElementCommand(*element));
+  });
+  const auto status = queued.wait_for(std::chrono::milliseconds(100));
+  releaseWriter.set_value();
+  writer.get();
+  queued.get();
+  EXPECT_EQ(status, std::future_status::ready);
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_TRUE(app.document().document().querySelector("#target").has_value());
+  EXPECT_THAT(element->cast<svg::SVGGraphicsElement>().transform(), testing::Eq(Transform2d()));
+  EXPECT_FALSE(app.isDirty());
 }
 
 TEST(EditorAppTest, VisibilityAndLockTogglesBypassLockGate) {
