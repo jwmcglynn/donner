@@ -12,6 +12,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/GlTextureCache.h"
+#include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
@@ -1022,6 +1023,59 @@ TEST(RenderCoordinatorTest, BusyPenPreviewRetainsChromeEnteringViewportAfterPan)
               ::testing::Contains(Vector2d(330.0, 30.0)));
   EXPECT_EQ(coordinator.immediateOverlaySnapshot()->livePathPreview->pathDoc.bounds(),
             Box2d::FromXYWH(10.0, 10.0, 320.0, 20.0));
+}
+
+TEST(RenderCoordinatorTest, SecondDragKeepsStaleRasterAndChromeAtTheSamePose) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kTwoRectSvg), ::testing::IsTrue());
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  const ViewportState viewport = MakeViewport(app);
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(35.0, 15.0), true);
+  ASSERT_THAT(app.flushFrame(), ::testing::IsTrue());
+  const auto rasterizedPreview = tool.activeDragPreview();
+  ASSERT_THAT(rasterizedPreview, ::testing::Ne(std::nullopt));
+  coordinator.compositedPresentation().noteCachedTextures(rasterizedPreview->entity,
+                                                          app.document().currentFrameVersion(),
+                                                          Vector2i(100, 100), rasterizedPreview);
+  tool.onMouseMove(app, Vector2d(65.0, 15.0), true);
+  ASSERT_THAT(app.flushFrame(), ::testing::IsTrue());
+  coordinator.compositedPresentation().beginSettling(tool.activeDragPreview(),
+                                                     app.document().currentFrameVersion());
+  tool.onMouseUp(app, Vector2d(65.0, 15.0));
+
+  // Begin another gesture before the first gesture's final raster arrives.
+  tool.onMouseDown(app, Vector2d(65.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 15.0), true);
+  const auto active = tool.activeDragPreview();
+  ASSERT_THAT(active, ::testing::Ne(std::nullopt));
+  const auto represented = coordinator.compositedPresentation().presentationPreview(active);
+  ASSERT_THAT(represented, ::testing::Ne(std::nullopt));
+  (void)coordinator.rasterizeOverlayForCurrentSelection(
+      app, viewport, std::nullopt, active, tool.activeTransformBoundsPreview(),
+      SelectionChromeDetail::Full, tool.documentDragPreview(app));
+  ASSERT_THAT(coordinator.immediateOverlaySnapshot()->paths, ::testing::SizeIs(1));
+  const Box2d outline = coordinator.immediateOverlaySnapshot()->paths.front().pathDoc.bounds();
+  const PresentedFrameTileGeometry raster{
+      .canvasOffsetDoc = Vector2d(10.0, 10.0),
+      .bitmapDimsDoc = Vector2d(20.0, 20.0),
+      .dragTranslationDoc = rasterizedPreview->translation,
+      .documentFromCachedDocument = rasterizedPreview->documentFromCachedDocument,
+      .isDragTarget = true,
+  };
+  const PresentedDragBaseline baseline{
+      .entity = active->entity,
+      .representedTranslationDoc = represented->translation,
+      .activeTranslationDoc = active->translation,
+      .representedDocumentFromCachedDocument = represented->documentFromCachedDocument,
+      .activeDocumentFromCachedDocument = active->documentFromCachedDocument,
+  };
+  const auto pixels = ComputePresentedTileRect(raster, Transform2d(), baseline);
+  ASSERT_THAT(pixels, ::testing::Ne(std::nullopt));
+  EXPECT_EQ(outline.topLeft, Vector2d(65.0, 10.0));
+  EXPECT_EQ(pixels->topLeft, outline.topLeft);
+  EXPECT_EQ(pixels->bottomRight, outline.bottomRight);
 }
 
 TEST(RenderCoordinatorTest, BusyReleasedDragKeepsBoundsAlignedAfterIdleRecapture) {
