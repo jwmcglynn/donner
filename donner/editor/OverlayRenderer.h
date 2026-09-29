@@ -393,6 +393,20 @@ public:
       double devicePixelRatio = 1.0,
       const std::optional<svg::SVGElement>& livePathPreviewElement = std::nullopt);
 
+  /// Project captured selection geometry without accessing the document. Hover chrome and
+  /// inherited clip guides remain fixed; selection paths, handles and owned clips follow.
+  /// @param snapshot Captured geometry, copied or moved by the caller.
+  /// @param documentFromCapturedDocument Transform from captured to represented document space.
+  /// @param boundsPreview Gesture bounds already expressed in represented document space.
+  [[nodiscard]] static SelectionChromeSnapshot projectSelectionSnapshot(
+      SelectionChromeSnapshot snapshot, const Transform2d& documentFromCapturedDocument,
+      const std::optional<SelectionChromeBoundsPreview>& boundsPreview = std::nullopt);
+
+  /// Cull a presentation copy after projecting it, retaining the complete capture for later moves.
+  /// @param snapshot Presentation copy whose offscreen geometry is removed.
+  /// @param cullRectDoc Visible document rectangle including the chrome margin.
+  static void cullSnapshot(SelectionChromeSnapshot& snapshot, const Box2d& cullRectDoc);
+
   /// Reuse an idle-captured clip guide without touching the SVG registry during a drag. Direct
   /// selected-owner clips follow the gesture; inherited clips keep their document placement.
   static void projectCachedClipGuides(

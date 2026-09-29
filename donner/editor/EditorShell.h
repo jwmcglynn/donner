@@ -439,6 +439,9 @@ private:
   /// current family/size/B/I/U values read from that element, and the embedded
   /// font faces offered in the family picker.
   [[nodiscard]] FormatBarState computeFormatBarState();
+
+  /// Refresh per-frame font resource state without retaining GPU handles in the DOM snapshot.
+  void updateFormatBarFamilyAvailability(FormatBarState& state);
   /// Route the format bar's actions to the existing styling commands: B/I/U
   /// through the `TextTool` toggles while an editing session is active,
   /// otherwise (and always for family/size) through the selection attribute
@@ -833,6 +836,9 @@ private:
   SamplePickerController samplePickerController_;
   SamplePickerPresenter samplePickerPresenter_;
   TextFormatBarPresenter textFormatBarPresenter_;
+  std::optional<svg::SVGElement> formatBarSnapshotSelection_;
+  /// Document-derived fields only; font previews and live UI handles are rebuilt per frame.
+  FormatBarState formatBarSelectionSnapshot_;
   SidebarPresenter sidebarPresenter_;
   /// A loaded sample has replaced the welcome document, but Layers and Inspector have not yet
   /// captured an idle snapshot of it. Kept until refresh succeeds so a busy renderer or a

@@ -791,6 +791,17 @@ public:
     return it->second.state;
   }
 
+  BridgeStatus requestMappingProgress(BrowserObjectId mappingId) override {
+    if (const BridgeStatus status = require(BrowserObjectKind::BufferMapping, mappingId);
+        status != BridgeStatus::Success) {
+      return status;
+    }
+    if (mappingState(mappingId) != MapSliceState::Pending) {
+      return BridgeStatus::Failed;
+    }
+    return operate(std::format("requestMappingProgress mapping={}", mappingId));
+  }
+
   BridgeStatus mappedBytes(BrowserObjectId mappingId,
                            std::span<const uint8_t>& bytes) const override {
     const auto registered = objects->find(mappingId);

@@ -128,6 +128,9 @@ struct EditorCommand {
   /// document baseline.
   bool preserveUndoOnReparse = false;
 
+  /// Recheck layer locks at flush because the app could not read them while queueing geometry.
+  bool deferLayerLockCheck = false;
+
   /// SetAttribute payload: the attribute name (e.g. "transform", "fill").
   std::string attributeName;
 

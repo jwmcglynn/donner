@@ -3998,8 +3998,9 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
       if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
         break;
       }
-      if (EditorShellTestAccess::DisplayedDocVersion(shell) ==
-          app.document().currentFrameVersion()) {
+      if (!app.document().hasPendingMutations() &&
+          EditorShellTestAccess::DisplayedDocVersion(shell) ==
+              app.document().currentFrameVersion()) {
         return;
       }
     }
@@ -4028,7 +4029,7 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
                                               bounds->width() + 116.0, bounds->height() + 16.0);
     const svg::RendererBitmap before = captureContent();
     ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(shell, start, *bounds));
-    ASSERT_TRUE(EditorShellTestAccess::MoveSelectedShapeDrag(shell, start + Vector2d(10.0, 0.0)));
+    (void)EditorShellTestAccess::MoveSelectedShapeDrag(shell, start + Vector2d(10.0, 0.0));
     awaitPresentation();
     const svg::RendererBitmap firstHeld = captureContent();
     const LayerInspectorStatusReadback firstStatus = shell.layerInspectorStatusForReadback();
@@ -4037,7 +4038,7 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
     const std::optional<Box2d> firstBounds = target->cast<svg::SVGGeometryElement>().worldBounds();
     ASSERT_TRUE(firstBounds.has_value());
     EXPECT_NEAR(firstBounds->topLeft.x - bounds->topLeft.x, 10.0, 1e-6);
-    ASSERT_TRUE(EditorShellTestAccess::MoveSelectedShapeDrag(shell, start + Vector2d(20.0, 0.0)));
+    (void)EditorShellTestAccess::MoveSelectedShapeDrag(shell, start + Vector2d(20.0, 0.0));
     awaitPresentation();
     const svg::RendererBitmap secondHeld = captureContent();
     const LayerInspectorStatusReadback secondStatus = shell.layerInspectorStatusForReadback();

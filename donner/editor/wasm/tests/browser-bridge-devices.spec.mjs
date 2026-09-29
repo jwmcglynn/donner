@@ -521,3 +521,79 @@ test("a handle this worker never opened owns nothing here", async () => {
   );
   assert.equal(entryPoints.donner_gpu_device_identity(kFirst), kFirst);
 });
+
+/** Opens a real bridge mapping over a buffer whose promise the test can settle. */
+async function pendingMapping() {
+  const bridge = loadLibrary();
+  await beginReady(bridge, kFirst);
+  const { entryPoints, state } = bridge;
+  let complete;
+  let reject;
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+  bridge.device.createBuffer = () => ({
+    mapAsync: () =>
+      new Promise((resolve, fail) => {
+        complete = resolve;
+        reject = fail;
+      }),
+    getMappedRange: () => bytes.buffer,
+    unmap: () => reject(new Error("unmapped")),
+    destroy() {},
+  });
+  assert.equal(entryPoints.donner_gpu_create_buffer(kFirst, 1, 4, 32 | 64), state.kSuccess);
+  assert.equal(entryPoints.donner_gpu_map_buffer_async(kFirst, 2, 1, 0, 4), state.kSuccess);
+  assert.equal(entryPoints.donner_gpu_mapping_state(kFirst, 2), state.kMapPending);
+  return { bridge, complete: () => complete() };
+}
+
+test("pending-map progress submits only an empty list without consuming recorded work", async () => {
+  const { bridge, complete } = await pendingMapping();
+  const { entryPoints, state } = bridge;
+  assert.equal(entryPoints.donner_gpu_begin_command_buffer(kFirst, 42, 0), state.kSuccess);
+  assert.equal(entryPoints.donner_gpu_end_command_buffer(kFirst, 42), state.kSuccess);
+  const record = state.logicalFor(kFirst);
+  const recorded = [...record.recordedBuffers];
+  const submitted = [];
+  bridge.device.queue.submit = (buffers) => {
+    submitted.push([...buffers]);
+    complete();
+  };
+  assert.equal(entryPoints.donner_gpu_request_mapping_progress(kFirst, 2), state.kSuccess);
+  assert.deepEqual(submitted, [[]]);
+  assert.equal(record.completedSerial, 0);
+  assert.equal(record.recordingSerial, 42);
+  assert.deepEqual([...record.recordedBuffers], recorded);
+  await drain();
+  assert.equal(entryPoints.donner_gpu_mapping_state(kFirst, 2), state.kMapReady);
+  assert.equal(entryPoints.donner_gpu_request_mapping_progress(kFirst, 2), state.kFailed);
+  assert.deepEqual(submitted, [[]]);
+  assert.equal(record.completedSerial, 0);
+  assert.equal(entryPoints.donner_gpu_submit_command_buffers(kFirst, 42), state.kSuccess);
+  await drain();
+  assert.equal(record.completedSerial, 42);
+  assert.deepEqual(submitted, [[], recorded]);
+});
+
+test("released or foreign mappings cannot request queue progress", async () => {
+  const { bridge } = await pendingMapping();
+  const { entryPoints, state } = bridge;
+  await beginReady(bridge, kSecond);
+  assert.equal(entryPoints.donner_gpu_request_mapping_progress(kSecond, 2), state.kFailed);
+  assert.equal(entryPoints.donner_gpu_request_mapping_progress(kFirst, 999), state.kFailed);
+  assert.equal(entryPoints.donner_gpu_unmap_buffer(kFirst, 2), state.kSuccess);
+  await drain();
+  assert.equal(entryPoints.donner_gpu_request_mapping_progress(kFirst, 2), state.kFailed);
+  assert.equal(bridge.device.queue.submissions, 0);
+});
+
+test("device loss and queue refusal cannot report successful mapping progress", async () => {
+  const { bridge } = await pendingMapping();
+  const { entryPoints, state } = bridge;
+  bridge.device.queue.submit = () => {
+    throw new Error("refused queue submission");
+  };
+  assert.equal(entryPoints.donner_gpu_request_mapping_progress(kFirst, 2), state.kFailed);
+  bridge.lose({ reason: "unknown", message: "test loss" });
+  await drain();
+  assert.equal(entryPoints.donner_gpu_request_mapping_progress(kFirst, 2), state.kDeviceLost);
+});

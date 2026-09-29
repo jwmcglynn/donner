@@ -974,6 +974,104 @@ TEST(BrowserDevice, PendingMapProgressDoesNotAdvanceSubmissionSerials) {
   EXPECT_EQ(fixture.device->completedSerial(), 0u);
 }
 
+TEST(BrowserDevice, MappingCompletionDuringYieldNeedsNoProgressSubmission) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  tests::RecordingDeviceObserver observer;
+  tests::ScopedObserverInstallation observation(*fixture.device, observer);
+  ASSERT_THAT(observation.status(), IsOk());
+  Result<Buffer> buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+  Result<BufferMapping> mapping =
+      fixture.device->mapBufferAsync(buffer.result(), MapMode::Read, 0, 4);
+  ASSERT_THAT(mapping, HasResult());
+  fixture.bridge->onYield = [&] { fixture.bridge->completeMapping(2, {1, 2, 3, 4}); };
+
+  Result<MapWaitReport> outcome =
+      fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.01}, {});
+  ASSERT_THAT(outcome, HasResult());
+  EXPECT_THAT(outcome.result().outcome, MapWaitOutcome::Ready);
+  EXPECT_THAT(observer.events.submissions, testing::IsEmpty());
+}
+
+TEST(BrowserDevice, LossDuringMappingYieldDoesNotSubmit) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  tests::RecordingDeviceObserver observer;
+  tests::ScopedObserverInstallation observation(*fixture.device, observer);
+  ASSERT_THAT(observation.status(), IsOk());
+  Result<Buffer> buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+  Result<BufferMapping> mapping =
+      fixture.device->mapBufferAsync(buffer.result(), MapMode::Read, 0, 4);
+  ASSERT_THAT(mapping, HasResult());
+  fixture.bridge->onYield = [&] { fixture.bridge->lost = true; };
+
+  Result<MapWaitReport> outcome =
+      fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.01}, {});
+  ASSERT_THAT(outcome, HasResult());
+  EXPECT_THAT(outcome.result().outcome, MapWaitOutcome::DeviceLost);
+  EXPECT_THAT(observer.events.submissions, testing::IsEmpty());
+}
+
+TEST(BrowserDevice, ReplacedMappingDuringYieldCannotReceiveOldWaitProgress) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  tests::RecordingDeviceObserver observer;
+  tests::ScopedObserverInstallation observation(*fixture.device, observer);
+  ASSERT_THAT(observation.status(), IsOk());
+  Result<Buffer> buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+  Result<BufferMapping> mapping =
+      fixture.device->mapBufferAsync(buffer.result(), MapMode::Read, 0, 4);
+  ASSERT_THAT(mapping, HasResult());
+  BufferMapping replacement;
+  fixture.bridge->onYield = [&] {
+    ASSERT_THAT(fixture.device->unmapBuffer(std::move(mapping).result()), IsOk());
+    Result<BufferMapping> next =
+        fixture.device->mapBufferAsync(buffer.result(), MapMode::Read, 0, 4);
+    ASSERT_THAT(next, HasResult());
+    replacement = std::move(next).result();
+  };
+
+  Result<MapWaitReport> outcome =
+      fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.01}, {});
+  ASSERT_THAT(outcome, HasResult());
+  EXPECT_THAT(outcome.result().outcome, MapWaitOutcome::Failed);
+  EXPECT_THAT(fixture.bridge->mappingState(3), MapSliceState::Pending);
+  EXPECT_THAT(observer.events.submissions, testing::IsEmpty());
+}
+
+TEST(BrowserDevice, RefusedMappingProgressIsNotReportedAsASubmission) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  tests::RecordingDeviceObserver observer;
+  tests::ScopedObserverInstallation observation(*fixture.device, observer);
+  ASSERT_THAT(observation.status(), IsOk());
+  Result<Buffer> buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+  Result<BufferMapping> mapping =
+      fixture.device->mapBufferAsync(buffer.result(), MapMode::Read, 0, 4);
+  ASSERT_THAT(mapping, HasResult());
+  fixture.bridge->failOperation = "requestMappingProgress";
+  fixture.bridge->onYield = [&] {
+    if (fixture.bridge->yieldCount == 2) {
+      fixture.bridge->completeMapping(2, {1, 2, 3, 4});
+    }
+  };
+
+  Result<MapWaitReport> outcome =
+      fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.01}, {});
+  ASSERT_THAT(outcome, HasResult());
+  EXPECT_THAT(outcome.result().outcome, MapWaitOutcome::Ready);
+  EXPECT_THAT(observer.events.submissions, testing::IsEmpty());
+  EXPECT_EQ(fixture.device->lastSubmittedSerial(), 0u);
+}
+
 TEST(BrowserDevice, BoundsTheSliceItHandsToTheBrowser) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());

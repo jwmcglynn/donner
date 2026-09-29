@@ -6,6 +6,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/EditorParseOptions.h"
+#include "donner/editor/LockState.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/SVGTextContentElement.h"
@@ -22,6 +23,10 @@ std::vector<ParseDiagnostic> CopyWarnings(const ParseWarningSink& sink) {
   const auto& warnings = sink.warnings();
   const std::size_t count = std::min(warnings.size(), kMaxPublishedParseDiagnostics);
   return std::vector<ParseDiagnostic>(warnings.begin(), warnings.begin() + count);
+}
+
+bool DeferredCommandIsLocked(const EditorCommand& command) {
+  return command.deferLayerLockCheck && command.element.has_value() && IsLocked(*command.element);
 }
 
 bool InvalidatesExistingCompositedPixels(const EditorCommand& command) {
@@ -130,32 +135,21 @@ bool AsyncSVGDocument::flushFrame() {
   }
 
   lastFlushResult_ = FlushResult{
-      .appliedCommands = true,
-      .onlyTransformCommands = std::ranges::all_of(queueFlush.effectiveCommands,
-                                                   [](const EditorCommand& command) {
-                                                     return command.kind ==
-                                                            EditorCommand::Kind::SetTransform;
-                                                   }),
+      .appliedCommands = false,
+      .onlyTransformCommands = true,
       .replacedDocument = queueFlush.hadReplaceDocument,
       .preserveUndoOnReparse = queueFlush.preserveUndoOnReparse,
   };
-  if (!lastFlushResult_.onlyTransformCommands) {
-    ++nonTransformRevision_;
-  }
-
   std::unordered_map<Entity, Entity> activeStructuralRemap;
   for (EditorCommand& cmd : queueFlush.effectiveCommands) {
     if (!activeStructuralRemap.empty()) {
       remapCommandTargets(&cmd, activeStructuralRemap);
     }
 
-    if (cmd.kind == EditorCommand::Kind::DeleteElement) {
-      lastFlushResult_.removedElements = true;
+    if (DeferredCommandIsLocked(cmd)) {
+      continue;
     }
-    if (InvalidatesExistingCompositedPixels(cmd)) {
-      lastFlushResult_.cacheInvalidatedElements.push_back(
-          cmd.element->unsafeEntityHandle().entity());
-    }
+    recordAppliedCommand(cmd);
 
     applyOne(cmd);
     if (cmd.kind == EditorCommand::Kind::ReplaceDocument ||
@@ -165,8 +159,26 @@ bool AsyncSVGDocument::flushFrame() {
     }
   }
 
+  if (!lastFlushResult_.appliedCommands) {
+    lastFlushResult_ = {};
+    return false;
+  }
+  if (!lastFlushResult_.onlyTransformCommands) {
+    ++nonTransformRevision_;
+  }
   frameVersion_.fetch_add(1, std::memory_order_release);
   return true;
+}
+
+void AsyncSVGDocument::recordAppliedCommand(const EditorCommand& cmd) {
+  lastFlushResult_.appliedCommands = true;
+  lastFlushResult_.onlyTransformCommands &= cmd.kind == EditorCommand::Kind::SetTransform;
+  if (cmd.kind == EditorCommand::Kind::DeleteElement) {
+    lastFlushResult_.removedElements = true;
+  }
+  if (InvalidatesExistingCompositedPixels(cmd)) {
+    lastFlushResult_.cacheInvalidatedElements.push_back(cmd.element->unsafeEntityHandle().entity());
+  }
 }
 
 bool AsyncSVGDocument::refreshFontResources() {

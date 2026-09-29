@@ -177,7 +177,19 @@ public:
     // an ancestor) are protected from geometry-changing edits and deletion.
     // Visibility/lock metadata toggles and selection are NOT gated, so a locked
     // layer can still be shown/hidden and unlocked. See `IsLockGatedCommand`.
-    if (IsLockGatedCommand(command)) {
+    const bool requiresLockCheck = command.kind == EditorCommand::Kind::SetTransform ||
+                                   command.kind == EditorCommand::Kind::DeleteElement;
+    if (requiresLockCheck && document_.hasDocument()) {
+      const auto access = document_.document().tryReadAccess();
+      if (!access.has_value()) {
+        command.deferLayerLockCheck = true;
+        document_.applyMutation(std::move(command));
+        return;
+      }
+      if (IsLockGatedCommand(command)) {
+        return;
+      }
+    } else if (IsLockGatedCommand(command)) {
       return;
     }
     document_.applyMutation(std::move(command));

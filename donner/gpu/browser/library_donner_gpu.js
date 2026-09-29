@@ -1706,6 +1706,22 @@ var LibraryDonnerGpu = {
     return mapping === undefined ? DonnerGpu.kMapFailed : mapping.state;
   },
 
+  donner_gpu_request_mapping_progress__deps: ['$DonnerGpu'],
+  donner_gpu_request_mapping_progress: function(handle, mappingId) {
+    var record = DonnerGpu.logicalFor(handle);
+    var status = DonnerGpu.guard(record);
+    if (status !== DonnerGpu.kSuccess) {
+      return status;
+    }
+    var mapping = record.mappings.get(mappingId);
+    if (mapping === undefined || mapping.state !== DonnerGpu.kMapPending) {
+      return DonnerGpu.kFailed;
+    }
+    return DonnerGpu.perform(record, function() {
+      DonnerGpu.queue.submit([]);
+    });
+  },
+
   donner_gpu_copy_mapped_bytes__deps: ['$DonnerGpu'],
   donner_gpu_copy_mapped_bytes: function(handle, mappingId, destination, byteCount) {
     var record = DonnerGpu.logicalFor(handle);
