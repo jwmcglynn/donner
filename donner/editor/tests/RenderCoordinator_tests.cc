@@ -888,6 +888,47 @@ TEST(RenderCoordinatorTest, RasterizeOverlayPublishesImmediateSnapshot) {
   EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
 }
 
+TEST(RenderCoordinatorTest, BusyDragProjectsCapturedChromeWithoutDocumentAccess) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  const ViewportState viewport = MakeViewport(app);
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
+      app, viewport, std::nullopt, tool.activeDragPreview(), tool.activeTransformBoundsPreview()));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  ASSERT_FALSE(coordinator.immediateOverlaySnapshot()->paths.empty());
+  const Box2d before = coordinator.immediateOverlaySnapshot()->paths.front().pathDoc.bounds();
+
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto release = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = app.document().document().writeAccess();
+    writerReady.set_value();
+    release.wait();
+  });
+  writerReady.get_future().wait();
+  auto overlay = std::async(std::launch::async, [&] {
+    tool.onMouseMove(app, Vector2d(25.0, 15.0), true);
+    return coordinator.rasterizeOverlayForCurrentSelection(
+        app, viewport, std::nullopt, tool.activeDragPreview(), tool.activeTransformBoundsPreview(),
+        std::nullopt, tool.documentDragPreview(app));
+  });
+  const auto status = overlay.wait_for(std::chrono::milliseconds(100));
+  releaseWriter.set_value();
+  writer.get();
+  EXPECT_EQ(status, std::future_status::ready);
+  EXPECT_TRUE(overlay.get());
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  ASSERT_FALSE(coordinator.immediateOverlaySnapshot()->paths.empty());
+  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.front().pathDoc.bounds(),
+            Transform2d::Translate({10.0, 0.0}).transformBox(before));
+}
+
 TEST(RenderCoordinatorTest, RasterizeOverlaySkipsUnchangedImmediateSnapshot) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
