@@ -20,6 +20,7 @@
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/svg/DocumentState.h"
+#include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
@@ -1526,6 +1527,45 @@ TEST_F(SidebarPresenterImGuiTest, TransformFieldSimpleClickEntersTextInput) {
       << "A click-release without dragging should enter numeric text input";
   EXPECT_TRUE(presenter.hasTransformEditForTesting());
   EXPECT_FALSE(app.canUndo()) << "Entering text mode alone must not mutate the document";
+}
+
+TEST_F(SidebarPresenterImGuiTest, NumericInputRetainsDigitsAndCommitWhileDocumentIsBusy) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+  constexpr char kWindow[] = "##numeric_input_busy_document";
+  (void)RenderInspectorFrame(presenter, &app, kWindow);
+  const auto bounds =
+      presenter.transformFieldRectForTesting(SidebarPresenter::TransformField::PositionX);
+  ASSERT_TRUE(bounds.has_value());
+  const auto center = RectCenter(*bounds);
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, true);
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  ASSERT_NE(ImGui::GetCurrentContext()->TempInputId, 0u);
+
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddInputCharactersUTF8("6");
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  (void)app.flushFrame();
+  io.AddInputCharactersUTF8("4");
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindow, center, false));
+  io.AddKeyEvent(ImGuiKey_Enter, true);
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindow, center, false));
+  io.AddKeyEvent(ImGuiKey_Enter, false);
+  EXPECT_FALSE(RenderInspectorFrame(presenter, nullptr, kWindow, center, false));
+  (void)RenderInspectorFrame(presenter, &app, kWindow, center, false);
+  (void)app.flushFrame();
+  const auto geometry = target->cast<svg::SVGGeometryElement>().worldBounds();
+  ASSERT_TRUE(geometry.has_value());
+  EXPECT_DOUBLE_EQ(geometry->topLeft.x, 64.0);
+  EXPECT_FALSE(presenter.hasTransformEditForTesting());
+  EXPECT_TRUE(app.canUndo());
 }
 
 TEST_F(SidebarPresenterImGuiTest, InspectorRendersSkewedTransformDisabledFields) {
