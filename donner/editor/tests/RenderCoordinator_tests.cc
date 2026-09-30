@@ -1727,4 +1727,30 @@ TEST(RenderCoordinatorTest, CompatibleOverviewPreservesNewerActiveDragIntent) {
   EXPECT_EQ(frame->chrome().paths.front().pathDoc.bounds(), Box2d::FromXYWH(30, 10, 20, 20));
 }
 
+TEST(RenderCoordinatorTest, SameVersionOverviewRepairRequestsMissingSceneCoverage) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto overview = AcceptCapturedScene(coordinator, app);
+  const auto oldResources = coordinator.compositedPresentation().resources();
+  app.document().document().setCanvasSize(200, 200);
+  const auto active = AcceptCapturedScene(coordinator, app);
+  ASSERT_EQ(active->identity().version, overview->identity().version);
+  ASSERT_NE(active->identity().documentRevision, overview->identity().documentRevision);
+  coordinator.compositedPresentation().notePreparedResources(
+      FramePresentationTestAccess::resources(
+          active, oldResources->tiles(),
+          {.activeTilesViewportBounded = true,
+           .overviewInfillAvailable = true,
+           .activeRasterDocumentRect = Box2d::FromXYWH(0, 0, 1, 1)},
+          overview, oldResources->tiles()),
+      active->selection().front(), std::nullopt);
+  EXPECT_EQ(BuildFrame(coordinator, app, tool, MakeViewport(app), textures), nullptr);
+  EXPECT_TRUE(RenderCoordinatorTestAccess::requiresFreshOverview(
+      coordinator, true, app.document().currentFrameVersion()));
+}
+
 }  // namespace donner::editor

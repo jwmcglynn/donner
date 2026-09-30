@@ -1523,6 +1523,10 @@ bool RenderCoordinator::canPresentWithOverview(const RenderResult& result,
   return activeDrag || overviewDocVersion_ == result.version;
 }
 
+bool RenderCoordinator::requiresFreshOverview(bool available, std::uint64_t currentVersion) const {
+  return !available || overviewDocVersion_ != currentVersion;
+}
+
 bool RenderCoordinator::needsOverviewInfillForViewport(EditorApp& app,
                                                        const EditorRasterViewport& rasterViewport,
                                                        bool activeDrag,
@@ -1534,8 +1538,8 @@ bool RenderCoordinator::needsOverviewInfillForViewport(EditorApp& app,
   }
   return rasterViewport.viewportBounded && (!activeDrag || presentationNeedsCoverage_) &&
          textures != nullptr && !pendingOverviewResult_.has_value() &&
-         (!textures->coverageDiagnostics().overviewInfillAvailable ||
-          overviewDocVersion_ != currentVersion);
+         requiresFreshOverview(textures->coverageDiagnostics().overviewInfillAvailable,
+                               currentVersion);
 }
 
 void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& viewport,

@@ -614,6 +614,7 @@ private:
                               const EditorRasterViewport& rasterViewport, EditorApp& app,
                               const GlTextureCache& textures) const;
   /// Consume stale staging and determine whether full-document coverage needs refreshing.
+  bool requiresFreshOverview(bool available, std::uint64_t currentVersion) const;
   bool needsOverviewInfillForViewport(EditorApp& app, const EditorRasterViewport& rasterViewport,
                                       bool activeDrag, const GlTextureCache* textures);
 
