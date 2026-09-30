@@ -62,6 +62,11 @@ struct RenderCoordinatorTestAccess {
     return coordinator.prepareResultResources(result, app, textures);
   }
 
+  static bool canReplaceWithOverview(const RenderCoordinator& coordinator,
+                                     const RenderResult& result, const EditorApp& app) {
+    return coordinator.canReplaceWithOverview(result, app);
+  }
+
   static inline std::chrono::steady_clock::time_point fakeRetryNow{};
 
   static std::optional<std::uint64_t> requestedCommitGeneration(

@@ -604,6 +604,7 @@ private:
   void presentCompositedResult(RenderResult& result, EditorApp& app, const ViewportState& viewport,
                                GlTextureCache& textures);
   /// Hold a refreshed overview until detailed tiles can publish the same document version.
+  bool canReplaceWithOverview(const RenderResult& result, const EditorApp& app) const;
   void acceptOverviewResult(RenderResult result, EditorApp& app, GlTextureCache& textures);
   /// Whether the staged overview and detailed result describe the current document.
   bool hasMatchingPendingOverview(const RenderResult& result, EditorApp& app) const;
