@@ -1400,18 +1400,28 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
 
 bool RenderCoordinator::canReplaceWithOverview(const RenderResult& result,
                                                const EditorApp& app) const {
-  return pendingRepair_ && pendingRepair_->failure == FramePresentationFailure::MissingOverview &&
-         result.capturedPresentation != nullptr &&
-         result.capturedPresentation->identity().sameScene(currentPresentationIdentity(app)) &&
-         !app.document().hasPendingMutations();
+  if (!pendingRepair_ || pendingRepair_->failure != FramePresentationFailure::MissingOverview ||
+      result.capturedPresentation == nullptr ||
+      !result.capturedPresentation->identity().sameContent(currentPresentationIdentity(app))) {
+    return false;
+  }
+  const std::span<const RenderResult::CompositedTile> tiles =
+      result.compositedPreview
+          ? std::span<const RenderResult::CompositedTile>(result.compositedPreview->tiles)
+          : std::span<const RenderResult::CompositedTile>();
+  return FramePresentation::CanAdopt(
+      *result.capturedPresentation, tiles, framePresentation_.get(),
+      result.capturedPresentation->identity().sameScene(currentPresentationIdentity(app)) &&
+          !app.document().hasPendingMutations());
 }
 
 void RenderCoordinator::acceptOverviewResult(RenderResult result, EditorApp& app,
                                              GlTextureCache& textures) {
-  if (result.version != app.document().currentFrameVersion()) {
+  const bool replacement = canReplaceWithOverview(result, app);
+  if (result.version != app.document().currentFrameVersion() && !replacement) {
     return;
   }
-  if (!textures.tiles().empty() && canReplaceWithOverview(result, app)) {
+  if (!textures.tiles().empty() && replacement) {
     presentCompositedResult(result, app, result.viewport, textures);
     return;
   }
