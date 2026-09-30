@@ -437,6 +437,7 @@ void PrintFrameCost(const FrameCostBreakdown& cost) {
             << ",\"cached_tiles\":" << cost.compositedRender.cachedTileCount
             << ",\"presentation_coverage_repair\":"
             << (cost.compositedRender.presentationCoverageRepair ? "true" : "false")
+            << ",\"presentation_repair_reason\":" << cost.compositedRender.presentationRepairReason
             << "},\"source_ropes\":{\"layout_ms\":" << cost.sourceRopes.layoutMs
             << ",\"update_ms\":" << cost.sourceRopes.updateMs
             << ",\"draw_ms\":" << cost.sourceRopes.drawMs

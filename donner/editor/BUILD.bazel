@@ -667,6 +667,7 @@ donner_cc_library(
     }),
     deps = [
         ":async_renderer",
+        ":captured_presentation",
         ":frame_cost_breakdown",
         ":imgui_headers",
         ":tracy_wrapper",
@@ -675,12 +676,14 @@ donner_cc_library(
     ] + select({
         ":wasm_geode_enabled": [
             ":runtime_bitmap_upload",
+            "//donner/editor/gui:imgui_runtime_renderer",
             "//donner/editor/gui:ui_texture_registration",
             "//donner/svg/renderer:renderer_geode",
             "//third_party/emscripten-glfw",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
             ":runtime_bitmap_upload",
+            "//donner/editor/gui:imgui_runtime_renderer",
             "//donner/editor/gui:ui_texture_registration",
             "//donner/svg/renderer:renderer_geode",
         ],

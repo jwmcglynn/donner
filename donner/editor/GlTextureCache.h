@@ -235,6 +235,8 @@ public:
 
   /// One cached tile's ImGui texture handle and paint-order geometry.
   struct TileView {
+    std::shared_ptr<const void> uiTextureLifetime;  //!< Registration owned by all published users.
+
     ImTextureID texture =
         0;           //!< ImGui handle for this tile, or zero when no cached payload can be reused.
     std::string id;  //!< Stable composited tile identifier.
@@ -261,6 +263,13 @@ public:
     bool isDragTarget = false;  //!< Whether this tile is the active drag target.
   };
 
+  /// Owner-indexed coverage and paint bounds in one immutable raster coordinate system.
+  struct RasterCoverageGroup {
+    Transform2d documentFromRaster;
+    std::vector<Box2d> tileBounds;
+    std::vector<Box2d> paintBounds;
+  };
+
   /// Immutable resource manifest published only after complete preparation succeeds.
   class PresentationResources {
   public:
@@ -276,6 +285,11 @@ public:
     [[nodiscard]] const std::vector<TileView>& overviewTiles() const UTILS_LIFETIME_BOUND {
       return overviewTiles_;
     }
+    /// Coverage cached for one object, aliasing this manifest's immutable storage.
+    /// @param entity Object owning the raster tiles. @param overview Select overview coverage.
+    [[nodiscard]] const std::vector<RasterCoverageGroup>& objectCoverage(
+        Entity entity, bool overview) const UTILS_LIFETIME_BOUND;
+
     /// Coverage recorded by the same successful publication.
     [[nodiscard]] const PresentationCoverageDiagnostics& coverage() const UTILS_LIFETIME_BOUND {
       return coverage_;
@@ -285,6 +299,13 @@ public:
     friend class GlTextureCache;
     friend struct FramePresentationTestAccess;
     PresentationResources() = default;
+    void indexCoverage();
+    using CoverageIndex = std::unordered_map<Entity, std::vector<RasterCoverageGroup>>;
+    static CoverageIndex IndexCoverage(const CapturedPresentation& capture,
+                                       const std::vector<TileView>& tiles);
+    CoverageIndex activeCoverage_;
+    CoverageIndex overviewCoverage_;
+
     std::shared_ptr<const CapturedPresentation> capture_;
     std::shared_ptr<const CapturedPresentation> overviewCapture_;
     std::vector<TileView> tiles_;
@@ -333,7 +354,8 @@ private:
   /// Registers \p snapshot as a UI texture and retains the handles backing it until the
   /// registration is retired. Returns zero when it cannot be registered.
   /// @param snapshot Snapshot to register.
-  NativeTextureHandle registerSnapshotTexture(const svg::RendererTextureSnapshot& snapshot);
+  NativeTextureHandle registerSnapshotTexture(const svg::RendererTextureSnapshot& snapshot,
+                                              std::shared_ptr<const void>* lifetime);
 
   /// Upload a CPU bitmap into a runtime texture owned by the returned snapshot, or null when the
   /// payload is invalid or the runtime refuses the upload.
@@ -355,6 +377,8 @@ private:
 #endif
 
   struct CachedTextureEntry {
+    std::shared_ptr<const void> uiTextureLifetime;  //!< Registration owned by all published users.
+
     NativeTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
 #ifndef DONNER_EDITOR_WGPU
@@ -400,6 +424,7 @@ private:
 
 #ifdef DONNER_EDITOR_WGPU
   struct RetiredSnapshot {
+    std::shared_ptr<const void> uiTextureLifetime;
     NativeTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> snapshot;
     /// Backing allocation the retired texture still holds, which can exceed the snapshot's
@@ -417,7 +442,7 @@ private:
 
   std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice_;
   /// Handles backing each live registration, dropped when that registration is retired.
-  std::unordered_map<ImTextureID, UiTextureBacking> registeredBackings_;
+  std::unordered_map<ImTextureID, std::weak_ptr<const void>> registeredBackings_;
 #endif
 
   /// Tile payload cache keyed on `CompositedTile::id`; unchanged identities reuse their

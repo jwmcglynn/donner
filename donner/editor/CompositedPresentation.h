@@ -200,7 +200,8 @@ public:
   /// Adopt a fully prepared resource/geometry pair in one transition.
   void notePreparedResources(std::shared_ptr<const GlTextureCache::PresentationResources> resources,
                              Entity entity,
-                             std::optional<SelectTool::ActiveDragPreview> representedPreview) {
+                             std::optional<SelectTool::ActiveDragPreview> representedPreview,
+                             bool currentCommittedScene = false) {
     if (resources == nullptr || resources->capture() == nullptr) {
       return;
     }
@@ -210,7 +211,8 @@ public:
                           .canvasSize = resources->coverage().activeOutputSizePx,
                           .representedPreview = std::move(representedPreview),
                           .capture = capture,
-                          .resources = std::move(resources)});
+                          .resources = std::move(resources)},
+           currentCommittedScene);
   }
 
   /// Record a complete non-window raster cache, which does not own GPU registrations.
@@ -285,6 +287,9 @@ private:
     if (cache.version < settling.targetVersion) {
       return false;
     }
+    if (cache.version > settling.targetVersion) {
+      return true;
+    }
     if (cache.capture == nullptr || settling.preview.poses.empty()) {
       return true;
     }
@@ -300,9 +305,9 @@ private:
            SamePresentationTransform(*requestedDocumentFromCapturedDocument, Transform2d());
   }
 
-  void accept(CachedTextures cache) {
+  void accept(CachedTextures cache, bool currentCommittedScene = false) {
     if (const auto* settling = std::get_if<SettlingForRender>(&state_);
-        settling != nullptr && !settledCaptureMatches(cache, *settling)) {
+        settling != nullptr && !currentCommittedScene && !settledCaptureMatches(cache, *settling)) {
       state_ = SettlingForRender{std::move(cache), settling->preview, settling->targetVersion};
     } else {
       state_ = Cached{std::move(cache)};

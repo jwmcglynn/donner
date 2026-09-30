@@ -26,7 +26,7 @@ std::shared_ptr<const FramePresentation> Frame(std::uint64_t id, double zoom = 1
   input.viewport.paneSize = Vector2d(200.0, 100.0);
   input.viewport.zoom = zoom;
   input.paneClipRect = Box2d::FromXYWH(0.0, 0.0, 200.0, 100.0);
-  return FramePresentation::Build(FramePresentationTestAccess::resources(capture, {}), input);
+  return FramePresentation::Build(FramePresentationTestAccess::resources(capture, {}), input).frame;
 }
 
 TEST(DocumentPresenterTest, InstallsOneOwnedPlanForEveryPass) {

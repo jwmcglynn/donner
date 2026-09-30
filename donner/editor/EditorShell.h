@@ -521,6 +521,7 @@ private:
                                     bool rotateCursorLocked, bool penToolActive,
                                     bool textToolActive);
   /// Install the same immutable plan for artwork and editor chrome callbacks.
+  void recordPresentationIdentity(const FramePresentation* frame);
   void installFramePresentation(std::shared_ptr<const FramePresentation> frame);
   [[nodiscard]] Box2d toolPaletteScreenRect(const ImVec2& paneOrigin,
                                             const ImVec2& contentRegion) const;

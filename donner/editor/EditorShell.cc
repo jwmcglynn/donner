@@ -5212,9 +5212,19 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   ImGui::End();
 }
 
+void EditorShell::recordPresentationIdentity(const FramePresentation* frame) {
+#ifdef DONNER_EDITOR_WGPU
+  window_.setPresentationFrameIdentity(frame != nullptr ? frame->frameId() : 0,
+                                       frame != nullptr ? frame->identity().captureId : 0,
+                                       renderCoordinator_.frameRepresentsCurrentIntent(),
+                                       frame != nullptr ? frame->viewport().zoom : 0.0);
+#endif
+}
+
 void EditorShell::installFramePresentation(std::shared_ptr<const FramePresentation> frame) {
   immediateChromePlanProduced_ = frame != nullptr && frame->chromeEnabled();
 #ifdef DONNER_EDITOR_WGPU
+  recordPresentationIdentity(frame.get());
   if (frame == nullptr || directCheckerboardRenderer_ == nullptr ||
       directDocumentRenderer_ == nullptr || directOverlayRenderer_ == nullptr) {
     window_.setWgpuUnderlayRenderCallback({});
@@ -8159,7 +8169,8 @@ void EditorShell::queueIdleRenderRefreshIfNeeded() {
   }
   if (app_.hasDocument() && viewportInitialized_ &&
       (renderCoordinator_.presentationRefreshPending() ||
-       renderCoordinator_.frameRepairPending()) &&
+       ((!showSamplePicker_ || samplePresentationPending_) &&
+        renderCoordinator_.frameRepairPending())) &&
       !renderCoordinator_.asyncRenderer().isBusy()) {
     requestRenderAtEndOfFrame_ = true;
   }

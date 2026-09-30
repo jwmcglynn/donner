@@ -160,6 +160,7 @@ struct FrameCostBreakdown {
   struct CompositedRender {
     /// This completed request repaired raster/pose coverage rejected by the frame builder.
     bool presentationCoverageRepair = false;
+    int presentationRepairReason = 0;  //!< The explicit missing geometry/pose/coverage proof.
     /// Milliseconds spent rendering transient immediate-mode spans.
     double immediateMs = 0.0;
     /// Milliseconds spent rendering retained cached segment/layer tiles.

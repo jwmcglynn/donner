@@ -51,6 +51,14 @@ struct DocumentPixelCapture {
 
 /// What a posted render request asked the worker for, as far as deciding whether a later request
 /// would repeat it.
+/// Stable repair inputs, excluding allocation counters that cannot make a retry productive.
+struct PresentationRepairIdentity {
+  PresentationIdentity scene;
+  std::vector<Entity> selection;
+  std::vector<PresentationPose> poses;
+  FramePresentationFailure failure = FramePresentationFailure::None;
+};
+
 struct RenderAttemptIdentity {
   std::uint64_t documentGeneration = 0;  //!< Document the request rendered.
   std::uint64_t version = 0;             //!< Document frame version the request rendered.
@@ -59,6 +67,7 @@ struct RenderAttemptIdentity {
   Entity selectedEntity = entt::null;    //!< Selected entity the request kept promoted.
   std::optional<RenderRequest::DragPreview> dragPreview;  //!< Drag state the request carried.
   std::uint64_t presentationEpoch = 0;  //!< Presentation-refresh epoch for renderer settings.
+  std::optional<PresentationRepairIdentity> repair;
 };
 
 /**
@@ -316,6 +325,9 @@ public:
   [[nodiscard]] bool presentationRefreshPending() const { return pendingPresentationRefresh_; }
   /// Request a missing coherent frame without invalidating already-running work.
   [[nodiscard]] bool frameRepairPending() const { return presentationNeedsRender_; }
+  /// Whether the sealed frame represents the input considered by the latest UI frame.
+  [[nodiscard]] bool frameRepresentsCurrentIntent() const { return frameRepresentsCurrentIntent_; }
+
   /// Clear the per-frame cost accumulator before a new UI frame starts.
   void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
   /// Replace transient source-hover chrome elements.
@@ -553,7 +565,30 @@ private:
   std::shared_ptr<const CapturedPresentation> livePathCapture_;
   std::uint64_t nextPresentationFrameId_ = 1;
   bool presentationNeedsRender_ = false;
+  bool frameRepresentsCurrentIntent_ = false;
   bool presentationNeedsCoverage_ = false;
+  FramePresentationFailure adoptionFailure_ = FramePresentationFailure::None;
+  std::optional<PresentationRepairIdentity> pendingRepair_;
+  std::optional<FramePresentationInput> reusableFrameInput_;
+  std::shared_ptr<const GlTextureCache::PresentationResources> reusableFrameResources_;
+  std::shared_ptr<const CapturedPresentation> reusableSelectionCapture_;
+  void updateFrameRepairStatus(
+      const FramePresentationInput& input,
+      const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
+      const FramePresentationBuildResult& outcome);
+  void installFrameDecision(
+      const FramePresentationInput& input,
+      const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
+      std::shared_ptr<const FramePresentation> frame);
+  void configurePresentationRepair(RenderRequest& request) const;
+  bool canReuseFrame(
+      const FramePresentationInput& input,
+      const std::shared_ptr<const GlTextureCache::PresentationResources>& resources) const;
+  std::optional<RenderAttemptIdentity> acceptedRepairAttempt_;
+  std::uint64_t lastRejectedRepairCapture_ = 0;
+  PresentationIdentity currentPresentationIdentity(const EditorApp& app) const;
+  void rejectPreparedPresentation(FramePresentationFailure failure);
+
   bool selectionGeometryRefreshRequested_ = true;
 
   std::uint64_t displayedDocVersion_ = 0;

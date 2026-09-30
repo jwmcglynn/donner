@@ -98,7 +98,7 @@ TEST(FramePresentationTest, SecondDragAndLateRasterShareOnePose) {
   tool.onMouseUp(app, Vector2d(65.0, 15.0));
   tool.onMouseDown(app, Vector2d(65.0, 15.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(70.0, 15.0), true);
-  auto frame = FramePresentation::Build(stale, Input(app, tool, 1));
+  auto frame = FramePresentation::Build(stale, Input(app, tool, 1)).frame;
   ASSERT_THAT(frame, Ne(nullptr));
   EXPECT_THAT(frame->followsPointer(), IsTrue());
   ExpectRectAt(*frame, 65.0);
@@ -108,8 +108,8 @@ TEST(FramePresentationTest, SecondDragAndLateRasterShareOnePose) {
   const auto rerasterized =
       FramePresentationTestAccess::resources(second, {RectTile(entity, 65.0, 0.0)});
   tool.onMouseMove(app, Vector2d(75.0, 15.0), true);
-  const auto beforeArrival = FramePresentation::Build(stale, Input(app, tool, 2));
-  const auto afterArrival = FramePresentation::Build(rerasterized, Input(app, tool, 3));
+  const auto beforeArrival = FramePresentation::Build(stale, Input(app, tool, 2)).frame;
+  const auto afterArrival = FramePresentation::Build(rerasterized, Input(app, tool, 3)).frame;
   ASSERT_THAT(beforeArrival, Ne(nullptr));
   ASSERT_THAT(afterArrival, Ne(nullptr));
   ExpectRectAt(*beforeArrival, 70.0);
@@ -128,7 +128,7 @@ TEST(FramePresentationTest, FlattenedSelectionKeepsPixelsAndChromeAtCapturedPose
   flattened.kind = RenderResult::CompositedTile::Kind::Segment;
   const auto resources = FramePresentationTestAccess::resources(captured, {flattened});
   tool.onMouseMove(app, Vector2d(45.0, 15.0), true);
-  const auto frame = FramePresentation::Build(resources, Input(app, tool, 1));
+  const auto frame = FramePresentation::Build(resources, Input(app, tool, 1)).frame;
   ASSERT_THAT(frame, Ne(nullptr));
   EXPECT_THAT(frame->followsPointer(), IsFalse());
   ExpectRectAt(*frame, 10.0);
@@ -144,7 +144,7 @@ TEST(FramePresentationTest, DifferentCapturedSelectionCannotAnnotateTheRaster) {
       captured, {RectTile(captured->selection().front(), 10.0, 0.0)});
   auto input = Input(app, tool, 1);
   input.selection.clear();
-  const auto frame = FramePresentation::Build(resources, input);
+  const auto frame = FramePresentation::Build(resources, input).frame;
   ASSERT_THAT(frame, Ne(nullptr));
   EXPECT_THAT(frame->hasSelectionGeometry(), IsFalse());
   EXPECT_THAT(frame->chrome().paths, testing::IsEmpty());
@@ -163,7 +163,7 @@ TEST(FramePresentationTest, PartialRasterCannotMoveAnUncapturedRegionIntoView) {
   partial.bitmapDimsPx.x = 10;
   const auto resources = FramePresentationTestAccess::resources(capture, {partial});
   tool.onMouseMove(app, Vector2d(25.0, 15.0), true);
-  const auto frame = FramePresentation::Build(resources, Input(app, tool, 1));
+  const auto frame = FramePresentation::Build(resources, Input(app, tool, 1)).frame;
   ASSERT_NE(frame, nullptr);
   EXPECT_FALSE(frame->followsPointer());
   EXPECT_EQ(frame->chrome().paths.front().pathDoc.bounds(),
@@ -182,13 +182,13 @@ TEST(FramePresentationTest,
   const Entity entity = capture->selection().front();
   const auto resources = FramePresentationTestAccess::resources(capture, {RectTile(entity, 10, 0)});
   tool.onMouseMove(app, Vector2d(35.0, 15.0), true);
-  const auto moved = FramePresentation::Build(resources, Input(app, tool, 1));
+  const auto moved = FramePresentation::Build(resources, Input(app, tool, 1)).frame;
   ASSERT_NE(moved, nullptr);
   ExpectRectAt(*moved, 30);
   auto deselected = Input(app, tool, 2);
   deselected.selection.clear();
   deselected.desired.reset();
-  const auto retained = FramePresentation::Build(resources, deselected, nullptr, moved);
+  const auto retained = FramePresentation::Build(resources, deselected, nullptr, moved).frame;
   ASSERT_NE(retained, nullptr);
   EXPECT_TRUE(retained->chrome().paths.empty());
   EXPECT_EQ(retained->tiles().front().documentFromCachedDocument.translation(), Vector2d(20, 0));
@@ -197,7 +197,7 @@ TEST(FramePresentationTest,
   incomplete.bitmapDimsDoc.x = 5;
   const auto cropped = FramePresentationTestAccess::resources(capture, {incomplete});
   deselected.frameId++;
-  EXPECT_EQ(FramePresentation::Build(cropped, deselected, nullptr, retained), nullptr);
+  EXPECT_EQ(FramePresentation::Build(cropped, deselected, nullptr, retained).frame, nullptr);
 }
 
 TEST(FramePresentationTest, ZoomOutRequiresCompatibleCompleteOverview) {
@@ -212,10 +212,10 @@ TEST(FramePresentationTest, ZoomOutRequiresCompatibleCompleteOverview) {
       .activeRasterDocumentRect = Box2d::FromXYWH(0, 0, 50, 50)};
   const auto cropped = FramePresentationTestAccess::resources(capture, {tile}, coverage);
   const auto input = Input(app, tool, 1);
-  EXPECT_EQ(FramePresentation::Build(cropped, input), nullptr);
+  EXPECT_EQ(FramePresentation::Build(cropped, input).frame, nullptr);
   const auto paired =
       FramePresentationTestAccess::resources(capture, {tile}, coverage, capture, {tile});
-  const auto frame = FramePresentation::Build(paired, input);
+  const auto frame = FramePresentation::Build(paired, input).frame;
   ASSERT_NE(frame, nullptr);
   ExpectRectAt(*frame, 10);
   app.document().document().querySelector("#rect")->setAttribute("x", "60");
@@ -224,7 +224,7 @@ TEST(FramePresentationTest, ZoomOutRequiresCompatibleCompleteOverview) {
   ASSERT_NE(changed->identity().documentRevision, capture->identity().documentRevision);
   const auto torn =
       FramePresentationTestAccess::resources(changed, {tile}, coverage, capture, {tile});
-  EXPECT_EQ(FramePresentation::Build(torn, input), nullptr);
+  EXPECT_EQ(FramePresentation::Build(torn, input).frame, nullptr);
 }
 
 TEST(FramePresentationTest, QueuedResizeSharesPathBoundsAndTileTransform) {
@@ -240,7 +240,7 @@ TEST(FramePresentationTest, QueuedResizeSharesPathBoundsAndTileTransform) {
   ASSERT_TRUE(app.document().hasPendingMutations());
   auto input = Input(app, tool, 1);
   ASSERT_TRUE(input.desired.has_value());
-  const auto frame = FramePresentation::Build(resources, input);
+  const auto frame = FramePresentation::Build(resources, input).frame;
   ASSERT_NE(frame, nullptr);
   ASSERT_TRUE(frame->followsPointer());
   const auto expected =
@@ -266,7 +266,7 @@ TEST(FramePresentationTest, ProjectionRequiresRendererOwnershipCertificate) {
   const auto resources = FramePresentationTestAccess::resources(
       capture, {RectTile(capture->selection().front(), 10, 0)});
   tool.onMouseMove(app, Vector2d(35, 15), true);
-  const auto frame = FramePresentation::Build(resources, Input(app, tool, 1));
+  const auto frame = FramePresentation::Build(resources, Input(app, tool, 1)).frame;
   ASSERT_NE(frame, nullptr);
   EXPECT_FALSE(frame->followsPointer());
   ExpectRectAt(*frame, 10);
@@ -294,7 +294,7 @@ TEST(FramePresentationTest, SolidPenReplacementCarriesMatchingPaintAndChrome) {
   input.detail = SelectionChromeDetail::PathOutlinesOnly;
   input.livePathReplacement = replacement;
   input.decorations.sourceHover = {entity};
-  const auto frame = FramePresentation::Build(resources, input);
+  const auto frame = FramePresentation::Build(resources, input).frame;
   ASSERT_NE(frame, nullptr);
   ASSERT_TRUE(frame->replacementPaint().has_value());
   ASSERT_TRUE(frame->replacementPaint()->livePathPreview.has_value());
@@ -308,7 +308,7 @@ TEST(FramePresentationTest, SolidPenReplacementCarriesMatchingPaintAndChrome) {
             frame->replacementPaint()->livePathPreview->pathDoc);
   input.includeChrome = false;
   input.frameId++;
-  const auto artworkOnly = FramePresentation::Build(resources, input);
+  const auto artworkOnly = FramePresentation::Build(resources, input).frame;
   ASSERT_NE(artworkOnly, nullptr);
   EXPECT_TRUE(artworkOnly->replacementPaint().has_value());
   EXPECT_FALSE(artworkOnly->chromeEnabled());
@@ -324,7 +324,7 @@ TEST(FramePresentationTest, FrameCameraAndGeometryIgnoreLaterUiChanges) {
   const auto resources = FramePresentationTestAccess::resources(
       capture, {RectTile(capture->selection().front(), 10, 0)});
   auto input = Input(app, tool, 1);
-  const auto frame = FramePresentation::Build(resources, input);
+  const auto frame = FramePresentation::Build(resources, input).frame;
   ASSERT_NE(frame, nullptr);
   input.viewport.zoom = 7;
   input.viewport.panScreenPoint = Vector2d(400, 300);
@@ -377,7 +377,7 @@ TEST(FramePresentationTest, NonzeroViewBoxAndTransformedParentUseOneDocumentSpac
                                                 .startPoses = captured->poses()};
   input.desired->poses.front().documentFromElement =
       captured->poses().front().documentFromElement * Transform2d::Translate(7, 11);
-  const auto frame = FramePresentation::Build(resources, input);
+  const auto frame = FramePresentation::Build(resources, input).frame;
   ASSERT_NE(frame, nullptr);
   EXPECT_TRUE(frame->followsPointer());
   EXPECT_EQ(frame->chrome().paths.front().pathDoc.bounds(), Box2d::FromXYWH(122, 228, 20, 20));
@@ -414,7 +414,7 @@ TEST(FramePresentationTest, MultipleObjectsKeepDistinctCapturedPoses) {
   for (auto& pose : input.desired->poses) {
     pose.documentFromElement = pose.documentFromElement * Transform2d::Translate(10, 5);
   }
-  const auto frame = FramePresentation::Build(resources, input);
+  const auto frame = FramePresentation::Build(resources, input).frame;
   ASSERT_NE(frame, nullptr);
   EXPECT_TRUE(frame->followsPointer());
   ASSERT_THAT(frame->chrome().paths, SizeIs(2));
@@ -439,14 +439,14 @@ TEST(FramePresentationTest, HeldScaleCanCrossZeroUsingItsNonsingularCapture) {
                                                 .startPoses = capture->poses()};
   input.desired->poses.front().documentFromElement =
       Transform2d::Translate(-20, -20) * Transform2d::Scale(0.0) * Transform2d::Translate(20, 20);
-  const auto collapsed = FramePresentation::Build(resources, input);
+  const auto collapsed = FramePresentation::Build(resources, input).frame;
   ASSERT_NE(collapsed, nullptr);
   EXPECT_TRUE(collapsed->followsPointer());
   input.frameId++;
   input.desired->poses.front().documentFromElement = Transform2d::Translate(-20, -20) *
                                                      Transform2d::Scale(Vector2d(-1, 1)) *
                                                      Transform2d::Translate(20, 20);
-  const auto mirrored = FramePresentation::Build(resources, input, nullptr, collapsed);
+  const auto mirrored = FramePresentation::Build(resources, input, nullptr, collapsed).frame;
   ASSERT_NE(mirrored, nullptr);
   EXPECT_TRUE(mirrored->followsPointer());
   EXPECT_EQ(mirrored->chrome().paths.front().pathDoc.bounds(), Box2d::FromXYWH(10, 10, 20, 20));
@@ -491,7 +491,7 @@ TEST(FramePresentationTest, CurrentCommittedCaptureReplacesAnOlderDisplayedOverr
   const auto resources =
       FramePresentationTestAccess::resources(original, {RectTile(entity, 10, 0)});
   tool.onMouseMove(app, Vector2d(35, 15), true);
-  const auto held = FramePresentation::Build(resources, Input(app, tool, 1));
+  const auto held = FramePresentation::Build(resources, Input(app, tool, 1)).frame;
   ASSERT_NE(held, nullptr);
   ASSERT_TRUE(app.flushFrame());
   tool.onMouseUp(app, Vector2d(35, 15));
@@ -503,7 +503,7 @@ TEST(FramePresentationTest, CurrentCommittedCaptureReplacesAnOlderDisplayedOverr
   auto input = Input(app, tool, 2);
   input.documentIdentity = current->identity();
   input.desired.reset();
-  const auto adopted = FramePresentation::Build(replacement, input, nullptr, held);
+  const auto adopted = FramePresentation::Build(replacement, input, nullptr, held).frame;
   ASSERT_NE(adopted, nullptr);
   ExpectRectAt(*adopted, 60);
   EXPECT_THAT(adopted->overrides(), testing::IsEmpty());

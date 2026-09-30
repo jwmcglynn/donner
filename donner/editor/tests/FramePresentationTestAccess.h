@@ -19,6 +19,7 @@ struct FramePresentationTestAccess {
     result->coverage_ = coverage;
     result->overviewCapture_ = std::move(overview);
     result->overviewTiles_ = std::move(overviewTiles);
+    result->indexCoverage();
     return result;
   }
 };
