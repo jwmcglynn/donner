@@ -73,6 +73,12 @@ struct RenderCoordinatorTestAccess {
     return coordinator.requiresFreshOverview(available, currentVersion);
   }
 
+  static bool canPresentWithOverview(const RenderCoordinator& coordinator,
+                                     const RenderResult& result, const EditorRasterViewport& raster,
+                                     EditorApp& app, const GlTextureCache& cache) {
+    return coordinator.canPresentWithOverview(result, raster, app, cache);
+  }
+
   static inline std::chrono::steady_clock::time_point fakeRetryNow{};
 
   static std::optional<std::uint64_t> requestedCommitGeneration(
