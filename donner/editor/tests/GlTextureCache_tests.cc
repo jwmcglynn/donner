@@ -892,4 +892,40 @@ TEST(GlTextureCacheTest, OverviewUploadDoesNotReplaceActiveBoundedTiles) {
 #endif
 
 }  // namespace
+#ifdef DONNER_EDITOR_WGPU
+TEST(GlTextureCacheTest, OverviewMetadataCanBorrowExactActivePayload) {
+  auto device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  int destroyed = 0;
+  auto preview = SingleSnapshotTilePreview("shared", 1,
+                                           CreateCountingGeodeTextureSnapshot(device, &destroyed));
+  auto raster = RasterViewportForTest(true);
+  GlTextureCache cache(device);
+  ASSERT_TRUE(cache.uploadComposited(preview, raster));
+  const auto snapshot = cache.tiles().front().textureSnapshot;
+  preview.tiles.front().textureSnapshot.reset();
+  ASSERT_TRUE(cache.uploadCompositedOverview(preview, RasterViewportForTest(false)));
+  EXPECT_EQ(cache.overviewTiles().front().textureSnapshot, snapshot);
+  EXPECT_EQ(cache.metadataOnlyMissCount(), 0);
+}
+
+TEST(GlTextureCacheTest, PromotedOverviewMetadataReusesItsRetainedPayloadAtomically) {
+  auto device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  int destroyed = 0;
+  auto preview = SingleSnapshotTilePreview("shared", 1,
+                                           CreateCountingGeodeTextureSnapshot(device, &destroyed));
+  GlTextureCache cache(device);
+  ASSERT_TRUE(cache.uploadCompositedOverview(preview, RasterViewportForTest(false)));
+  const auto snapshot = cache.overviewTiles().front().textureSnapshot;
+  preview.tiles.front().textureSnapshot.reset();
+  ASSERT_TRUE(cache.uploadComposited(preview, RasterViewportForTest(false)));
+  EXPECT_EQ(cache.tiles().front().textureSnapshot, snapshot);
+  ++preview.tiles.front().generation;
+  EXPECT_FALSE(cache.uploadComposited(preview, RasterViewportForTest(false)));
+  EXPECT_EQ(cache.tiles().front().textureSnapshot, snapshot);
+  EXPECT_EQ(cache.overviewTiles().front().textureSnapshot, snapshot);
+}
+#endif
+
 }  // namespace donner::editor
