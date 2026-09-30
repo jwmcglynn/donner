@@ -3659,6 +3659,21 @@ TEST(EditorWindowTest, WgpuPresentsZoomedDonnerSplashFilteredLayerWithoutDarkeni
 #endif
 
 }  // namespace
+TEST(EditorWindowPolicyTest, SubmissionCompletionHasAFiniteDeadlineAndReleasesCompletedFrames) {
+  internal::PresentationSubmissionQueue queue;
+  const auto now = internal::PresentationSubmissionQueue::Clock::time_point{};
+  for (std::uint64_t serial = 1; serial <= 3; ++serial) {
+    queue.submitted({.serial = serial, .submittedAt = now});
+  }
+  EXPECT_EQ(queue.observe(0, now), internal::PresentationSubmissionQueue::Admission::Busy);
+  EXPECT_EQ(queue.observe(0, now + std::chrono::seconds(5)),
+            internal::PresentationSubmissionQueue::Admission::TimedOut);
+  EXPECT_EQ(queue.observe(2, now + std::chrono::seconds(1)),
+            internal::PresentationSubmissionQueue::Admission::Ready);
+  EXPECT_EQ(queue.pendingCount(), 1u);
+  EXPECT_EQ(queue.completed().serial, 2u);
+}
+
 #ifdef DONNER_EDITOR_WGPU
 TEST(EditorWindowTest, PendingGpuCompletionCoalescesUiFramesAtThree) {
   EditorWindow window(EditorWindowOptions{.title = "Pending GPU frame test",

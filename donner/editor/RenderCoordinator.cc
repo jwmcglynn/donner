@@ -63,7 +63,7 @@ void PublishWorkerTimingStats(
     const RenderResult& result, const EditorApp& app,
     const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
   const auto& timing = result.workerTiming;
-  constexpr std::size_t kValueCount = 33;
+  constexpr std::size_t kValueCount = 35;
   static double buffer[kValueCount];
   const double values[kValueCount] = {
       result.workerMs,
@@ -98,7 +98,9 @@ void PublishWorkerTimingStats(
       static_cast<double>(app.document().document().sourceVersion()),
       static_cast<double>(app.undoTimeline().entryCount()),
       static_cast<double>(timing.fullCanvasTextureAllocationFailureCount),
-      timing.nothingToPresent ? 1.0 : 0.0};
+      timing.nothingToPresent ? 1.0 : 0.0,
+      timing.documentWriteLockMs,
+      static_cast<double>(result.presentationRepairReason)};
   std::copy(std::begin(values), std::end(values), std::begin(buffer));
   // clang-format off: EM_JS and EM_ASM bodies are JavaScript, which clang-format rewrites
   // as C++ - it has already split a `===` into `== =` elsewhere in the editor, a SyntaxError
@@ -152,6 +154,8 @@ void PublishWorkerTimingStats(
         stats['undoEntryCount'] = heap[b + 30];
         stats['fullCanvasTextureAllocationFailureCount'] = heap[b + 31];
         stats['nothingToPresent'] = heap[b + 32] > 0;
+        stats['documentWriteLockMs'] = heap[b + 33];
+        stats['presentationRepairReason'] = heap[b + 34];
         stats['nothingToPresentTotal'] = (previous ? previous['nothingToPresentTotal'] || 0 : 0) +
                                          (stats['nothingToPresent'] ? 1 : 0);
         stats['publishReason'] = 'render-result';
@@ -321,8 +325,28 @@ bool SameRequestedDragPreview(const std::optional<RenderRequest::DragPreview>& l
          SameTransform(lhs->documentFromCachedDocument, rhs->documentFromCachedDocument);
 }
 
+bool SamePresentationRepair(const std::optional<PresentationRepairIdentity>& lhs,
+                            const std::optional<PresentationRepairIdentity>& rhs) {
+  if (!lhs.has_value() || !rhs.has_value()) {
+    return lhs.has_value() == rhs.has_value();
+  }
+  if (!lhs->scene.sameScene(rhs->scene) || lhs->selection != rhs->selection ||
+      lhs->poses.size() != rhs->poses.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < lhs->poses.size(); ++i) {
+    if (lhs->poses[i].entity != rhs->poses[i].entity ||
+        !SamePresentationTransform(lhs->poses[i].documentFromElement,
+                                   rhs->poses[i].documentFromElement)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool SameRenderAttempt(const RenderAttemptIdentity& lhs, const RenderAttemptIdentity& rhs) {
-  return lhs.documentGeneration == rhs.documentGeneration && lhs.version == rhs.version &&
+  return SamePresentationRepair(lhs.repair, rhs.repair) &&
+         lhs.documentGeneration == rhs.documentGeneration && lhs.version == rhs.version &&
          lhs.overviewInfillOnly == rhs.overviewInfillOnly &&
          lhs.selectedEntity == rhs.selectedEntity &&
          lhs.presentationEpoch == rhs.presentationEpoch &&
@@ -729,8 +753,15 @@ void NothingToPresentRetry::reset() {
 
 void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration) {
   framePresentation_.reset();
+  reusableFrameInput_.reset();
+  reusableFrameResources_.reset();
+  reusableSelectionCapture_.reset();
   presentationNeedsRender_ = false;
   presentationNeedsCoverage_ = false;
+  adoptionFailure_ = FramePresentationFailure::None;
+  pendingRepair_.reset();
+  acceptedRepairAttempt_.reset();
+  lastRejectedRepairCapture_ = 0;
   selectedSceneCapture_.reset();
   livePathCapture_.reset();
   (void)documentGeneration;
@@ -1129,6 +1160,15 @@ void RenderCoordinator::refreshFrameSelectionCapture(
   }
 }
 
+PresentationIdentity RenderCoordinator::currentPresentationIdentity(const EditorApp& app) const {
+  return {.documentGeneration = app.document().documentGeneration(),
+          .documentRevision = app.document().document().handle()->revision(),
+          .version = app.document().currentFrameVersion(),
+          .geometryRevision = app.document().nonTransformRevision(),
+          .fontResourceRevision = app.document().fontResourceRevision(),
+          .presentationEpoch = presentationEpoch_};
+}
+
 FramePresentationInput RenderCoordinator::makeFrameInput(EditorApp& app, SelectTool& tool,
                                                          const ViewportState& viewport,
                                                          const Box2d& paneClipRect,
@@ -1143,13 +1183,8 @@ FramePresentationInput RenderCoordinator::makeFrameInput(EditorApp& app, SelectT
       .viewport = viewport,
       .paneClipRect = paneClipRect,
       .selection = selectedPresentationEntities(app),
-      .documentIdentity =
-          PresentationIdentity{.documentGeneration = app.document().documentGeneration(),
-                               .documentRevision = app.document().document().handle()->revision(),
-                               .version = app.document().currentFrameVersion(),
-                               .geometryRevision = app.document().nonTransformRevision(),
-                               .fontResourceRevision = app.document().fontResourceRevision(),
-                               .presentationEpoch = presentationEpoch_},
+      .documentIdentity = currentPresentationIdentity(app),
+      .pendingDocumentMutations = app.document().hasPendingMutations(),
       .desired = std::move(desired),
       .detail = detail,
       .decorations = PresentationDecorations{.marqueeDoc = tool.marqueeRect(),
@@ -1220,6 +1255,100 @@ void RenderCoordinator::recordFramePresentationCost(const FramePresentationInput
   }
 }
 
+namespace {
+bool HasOnlyStaticFrameIntent(const FramePresentationInput& input) {
+  const auto& decorations = input.decorations;
+  return !input.desired && !input.pendingDocumentMutations && !input.livePathReplacement &&
+         decorations.sourceHover.empty() && decorations.lockedFlashEntity == entt::null &&
+         !decorations.marqueeDoc && !decorations.penPreviewSegmentDoc &&
+         !decorations.penCloseAffordanceDoc && !decorations.textEditing &&
+         !decorations.textBoxDragPreviewDoc;
+}
+}  // namespace
+
+namespace {
+bool SameStaticFrameIntent(const FramePresentationInput& input, const FramePresentationInput& old) {
+  return input.documentIdentity.sameScene(old.documentIdentity) &&
+         input.selection == old.selection && SameViewport(input.viewport, old.viewport) &&
+         input.paneClipRect == old.paneClipRect && input.detail == old.detail &&
+         input.includeChrome == old.includeChrome &&
+         input.suppressedLayerEntity == old.suppressedLayerEntity &&
+         input.suppressSelectionPixels == old.suppressSelectionPixels;
+}
+
+bool FrameCarriesInput(const FramePresentation& frame, const FramePresentationInput& input) {
+  if (!frame.identity().sameContent(input.documentIdentity)) {
+    return false;
+  }
+  if (!input.desired) {
+    return frame.identity().sameScene(input.documentIdentity);
+  }
+  return std::ranges::all_of(input.desired->poses, [&](const auto& requested) {
+    return std::ranges::any_of(frame.poses(), [&](const auto& actual) {
+      return requested.entity == actual.entity &&
+             SamePresentationTransform(requested.documentFromElement, actual.documentFromElement);
+    });
+  });
+}
+}  // namespace
+
+bool RenderCoordinator::canReuseFrame(
+    const FramePresentationInput& input,
+    const std::shared_ptr<const GlTextureCache::PresentationResources>& resources) const {
+  if (presentationNeedsRender_ || framePresentation_ == nullptr || !reusableFrameInput_ ||
+      resources != reusableFrameResources_ || selectedSceneCapture_ != reusableSelectionCapture_ ||
+      !HasOnlyStaticFrameIntent(input)) {
+    return false;
+  }
+  return SameStaticFrameIntent(input, *reusableFrameInput_);
+}
+
+void RenderCoordinator::updateFrameRepairStatus(
+    const FramePresentationInput& input,
+    const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
+    const FramePresentationBuildResult& outcome) {
+  const auto failure =
+      outcome.failure != FramePresentationFailure::None ? outcome.failure : adoptionFailure_;
+  presentationNeedsRender_ = failure != FramePresentationFailure::None;
+  presentationNeedsCoverage_ = outcome.failure == FramePresentationFailure::InsufficientCoverage ||
+                               outcome.failure == FramePresentationFailure::MissingOverview;
+  if (presentationNeedsRender_) {
+    pendingRepair_ = PresentationRepairIdentity{
+        .scene = input.documentIdentity,
+        .selection = input.selection,
+        .poses = input.desired.has_value() ? input.desired->poses : std::vector<PresentationPose>{},
+        .failure = failure};
+    if (acceptedRepairAttempt_.has_value() && outcome.failure != FramePresentationFailure::None &&
+        resources->capture()->identity().captureId != lastRejectedRepairCapture_) {
+      lastRejectedRepairCapture_ = resources->capture()->identity().captureId;
+      nothingToPresentRetry_.noteFailure(*acceptedRepairAttempt_, nothingToPresentRetryNow());
+    }
+  } else {
+    pendingRepair_.reset();
+    acceptedRepairAttempt_.reset();
+    nothingToPresentRetry_.reset();
+  }
+}
+
+void RenderCoordinator::installFrameDecision(
+    const FramePresentationInput& input,
+    const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
+    std::shared_ptr<const FramePresentation> next) {
+  frameRepresentsCurrentIntent_ = !presentationNeedsRender_ && FrameCarriesInput(*next, input);
+  framePresentation_ = std::move(next);
+  immediateOverlaySnapshot_ = framePresentation_->chrome();
+  selectionBoundsCache_.displayedBoundsDoc = framePresentation_->selectionBounds();
+  if (!presentationNeedsRender_ && HasOnlyStaticFrameIntent(input)) {
+    reusableFrameInput_ = input;
+    reusableFrameResources_ = resources;
+    reusableSelectionCapture_ = selectedSceneCapture_;
+  } else {
+    reusableFrameInput_.reset();
+    reusableFrameResources_.reset();
+    reusableSelectionCapture_.reset();
+  }
+}
+
 std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentation(
     EditorApp& app, SelectTool& tool, const ViewportState& viewport, const Box2d& paneClipRect,
     SelectionChromeDetail detail, bool includeChrome) {
@@ -1228,9 +1357,18 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
   cost.hasLiveDragPreview = live.has_value();
   cost.liveDragTranslationDoc = live.has_value() ? live->translation : Vector2d::Zero();
   const auto resources = compositedPresentation_.resources();
-  if (!app.hasDocument() || resources == nullptr || resources->capture() == nullptr) {
+  frameRepresentsCurrentIntent_ = false;
+  if (!app.hasDocument()) {
     framePresentation_.reset();
     return nullptr;
+  }
+  if (resources == nullptr || resources->capture() == nullptr) {
+    presentationNeedsRender_ = true;
+    pendingRepair_ =
+        PresentationRepairIdentity{.scene = currentPresentationIdentity(app),
+                                   .selection = selectedPresentationEntities(app),
+                                   .failure = FramePresentationFailure::MissingResources};
+    return framePresentation_;
   }
   const auto buildStart = std::chrono::steady_clock::now();
   auto input = makeFrameInput(app, tool, viewport, paneClipRect, detail, includeChrome);
@@ -1238,18 +1376,20 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
     refreshFrameSelectionCapture(app, selectedSource, input.selection);
   }
   refreshLivePathCapture(app, input);
-  auto next = FramePresentation::Build(resources, input, selectedSceneCapture_, framePresentation_);
-  presentationNeedsRender_ =
-      next == nullptr || (!input.selection.empty() && !next->hasSelectionGeometry());
-  presentationNeedsCoverage_ = next == nullptr;
+  if (canReuseFrame(input, resources)) {
+    frameRepresentsCurrentIntent_ = true;
+    recordFramePresentationCost(input, tool, MillisecondsSince(buildStart));
+    return framePresentation_;
+  }
+  auto outcome =
+      FramePresentation::Build(resources, input, selectedSceneCapture_, framePresentation_);
+  auto next = outcome.frame;
+  updateFrameRepairStatus(input, resources, outcome);
   if (next != nullptr) {
-    framePresentation_ = std::move(next);
-    immediateOverlaySnapshot_ = framePresentation_->chrome();
-    selectionBoundsCache_.displayedBoundsDoc = framePresentation_->selectionBounds();
+    installFrameDecision(input, resources, std::move(next));
   }
   if (framePresentation_ != nullptr) {
-    recordFramePresentationCost(input, tool,
-                                presentationNeedsRender_ ? 0.0 : MillisecondsSince(buildStart));
+    recordFramePresentationCost(input, tool, MillisecondsSince(buildStart));
   }
   return framePresentation_;
 }
@@ -1266,13 +1406,18 @@ void RenderCoordinator::acceptOverviewResult(RenderResult result, EditorApp& app
   if (!textures.uploadCompositedOverview(*result.compositedPreview, result.rasterViewport,
                                          result.capturedPresentation)) {
     renderWorker_.asyncRenderer.discardUnpresentedResult(result);
-    pendingPresentationRefresh_ = true;
+    rejectPreparedPresentation(FramePresentationFailure::UploadRefused);
     return;
   }
+  adoptionFailure_ = FramePresentationFailure::None;
+  acceptedRepairAttempt_ = lastPostedAttempt_;
   lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
   compositedPresentation_.notePreparedResources(
       textures.presentationResources(), result.compositedPreview->entity,
-      DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview));
+      DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview),
+      result.capturedPresentation != nullptr &&
+          result.capturedPresentation->identity().sameScene(currentPresentationIdentity(app)) &&
+          !app.document().hasPendingMutations());
   overviewDocVersion_ = result.version;
   displayedDocVersion_ = result.version;
 #ifdef __EMSCRIPTEN__
@@ -1362,6 +1507,8 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   lastFrameCostBreakdown_.compositedRender = CompositedRenderCostFromStats(compositorStats);
   lastFrameCostBreakdown_.compositedRender.presentationCoverageRepair =
       result.presentationCoverageRepair;
+  lastFrameCostBreakdown_.compositedRender.presentationRepairReason =
+      result.presentationRepairReason;
   // Forward the worker-measured presentation latency to the frame history so
   // `RenderFrameGraph` can overlay async worker time on the UI frame graph.
   // The frame history's latest slot corresponds to the current UI frame
@@ -1379,7 +1526,6 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     }
     return;
   }
-  nothingToPresentRetry_.reset();
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
   const bool overviewInfillResult =
       result.overviewInfillOnly && !result.rasterViewport.viewportBounded;
@@ -1408,13 +1554,23 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   presentCompositedResult(*resultOpt, app, viewport, textures);
 }
 
+void RenderCoordinator::rejectPreparedPresentation(FramePresentationFailure failure) {
+  adoptionFailure_ = failure;
+  presentationNeedsRender_ = true;
+  if (lastPostedAttempt_.has_value()) {
+    nothingToPresentRetry_.noteFailure(*lastPostedAttempt_, nothingToPresentRetryNow());
+  }
+}
+
 bool RenderCoordinator::prepareResultResources(RenderResult& result, EditorApp& app,
                                                GlTextureCache& textures) {
   if (result.capturedPresentation == nullptr ||
-      !FramePresentation::CanAdopt(*result.capturedPresentation, result.compositedPreview->tiles,
-                                   framePresentation_.get())) {
+      !FramePresentation::CanAdopt(
+          *result.capturedPresentation, result.compositedPreview->tiles, framePresentation_.get(),
+          result.capturedPresentation->identity().sameScene(currentPresentationIdentity(app)) &&
+              !app.document().hasPendingMutations())) {
     renderWorker_.asyncRenderer.discardUnpresentedResult(result);
-    pendingPresentationRefresh_ = true;
+    rejectPreparedPresentation(FramePresentationFailure::IncompatiblePose);
     return false;
   }
   const RenderResult* overview =
@@ -1422,12 +1578,11 @@ bool RenderCoordinator::prepareResultResources(RenderResult& result, EditorApp& 
   if (!textures.uploadComposited(*result.compositedPreview, result.rasterViewport, overview,
                                  result.capturedPresentation)) {
     renderWorker_.asyncRenderer.discardUnpresentedResult(result);
-    pendingPresentationRefresh_ = true;
-    if (lastPostedAttempt_.has_value()) {
-      nothingToPresentRetry_.noteFailure(*lastPostedAttempt_, nothingToPresentRetryNow());
-    }
+    rejectPreparedPresentation(FramePresentationFailure::UploadRefused);
     return false;
   }
+  adoptionFailure_ = FramePresentationFailure::None;
+  acceptedRepairAttempt_ = lastPostedAttempt_;
   if (overview != nullptr) {
     overviewDocVersion_ = overview->version;
     pendingOverviewResult_.reset();
@@ -1464,7 +1619,10 @@ void RenderCoordinator::presentCompositedResult(RenderResult& result, EditorApp&
   }
   compositedPresentation_.notePreparedResources(
       textures.presentationResources(), result.compositedPreview->entity,
-      DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview));
+      DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview),
+      result.capturedPresentation != nullptr &&
+          result.capturedPresentation->identity().sameScene(currentPresentationIdentity(app)) &&
+          !app.document().hasPendingMutations());
   noteSelectedPromotionAvailability(result);
   if (CompositedPreviewClearsPendingSelectedLayerRasterization(
           *result.compositedPreview, pendingSelectedLayerRasterizationEntity_, result.version,
@@ -1514,6 +1672,13 @@ void RenderCoordinator::capturePresentationRequest(RenderRequest& request,
 bool RenderCoordinator::hasForcedRenderReason(bool captureNeeded) const {
   return pendingPresentationRefresh_ || presentationNeedsRender_ || captureNeeded ||
          selectedPrewarmRecoveryPending_;
+}
+
+void RenderCoordinator::configurePresentationRepair(RenderRequest& request) const {
+  request.presentationRepairReason = pendingRepair_ ? static_cast<int>(pendingRepair_->failure) : 0;
+  request.presentationCoverageRepair =
+      presentationNeedsCoverage_ ||
+      (pendingRepair_ && pendingRepair_->failure == FramePresentationFailure::IncompatiblePose);
 }
 
 bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
@@ -1657,9 +1822,10 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   if (!schedule.shouldRequestRender()) {
     return false;
   }
-  const RenderAttemptIdentity attempt = MakeRenderAttempt(
+  RenderAttemptIdentity attempt = MakeRenderAttempt(
       app.document().documentGeneration(), currentVersion, requestRasterViewport,
       requestOverviewInfill, prewarmEntity, schedule.dragPreview, presentationEpoch_);
+  attempt.repair = pendingRepair_;
   if (!nothingToPresentRetry_.mayPost(attempt, nothingToPresentRetryNow())) {
     return false;
   }
@@ -1671,7 +1837,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // the exact viewport `requestRasterViewport` was derived from.
   req.viewport = viewport;
   req.overviewInfillOnly = requestOverviewInfill;
-  req.presentationCoverageRepair = presentationNeedsCoverage_;
+  configurePresentationRepair(req);
   configurePixelCaptureRequest(&req, requestOverviewInfill, dragPreview.has_value(),
                                requestRasterViewport);
   // Drain any pending structural remap from a recent `setDocumentMaybe

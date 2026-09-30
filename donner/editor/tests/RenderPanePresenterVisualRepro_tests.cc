@@ -178,14 +178,15 @@ std::shared_ptr<const FramePresentation> FrameForTiles(
   const auto resources = FramePresentationTestAccess::resources(
       capture, std::move(tiles), textures.coverageDiagnostics(), capture, textures.overviewTiles());
   return FramePresentation::Build(
-      resources,
-      FramePresentationInput{
-          .frameId = 1,
-          .viewport = viewport,
-          .paneClipRect = Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize),
-          .documentIdentity = capture->identity(),
-          .suppressedLayerEntity = suppressed,
-          .includeChrome = false});
+             resources,
+             FramePresentationInput{.frameId = 1,
+                                    .viewport = viewport,
+                                    .paneClipRect = Box2d(viewport.paneOrigin,
+                                                          viewport.paneOrigin + viewport.paneSize),
+                                    .documentIdentity = capture->identity(),
+                                    .suppressedLayerEntity = suppressed,
+                                    .includeChrome = false})
+      .frame;
 }
 
 svg::RendererBitmap CapturePresenterFrame(

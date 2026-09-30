@@ -228,9 +228,7 @@ RenderedPresentationCapture CapturePresentationForRequest(const RenderRequest& r
   RenderedPresentationCapture captured;
   std::vector<Entity> trackedObjects = request.trackedPresentationObjects;
   trackedObjects.insert(trackedObjects.end(), promoted.begin(), promoted.end());
-  const std::vector<Entity> independentlyMovable = independent && request.dragPreview.has_value()
-                                                       ? DragPreviewEntities(*request.dragPreview)
-                                                       : std::vector<Entity>();
+  const std::vector<Entity> independentlyMovable = independent ? promoted : std::vector<Entity>();
   captured.geometry = CapturedPresentation::Capture(
       requestDocument,
       PresentationIdentity{.captureId = request.captureId,
@@ -1259,7 +1257,11 @@ void AsyncRenderer::workerLoop() {
     // before every mutex_ section below to avoid a lock-order inversion.
     std::optional<svg::DocumentWriteAccess> documentAccess;
     documentAccess.emplace(requestDocument.writeAccess());
-    const auto releaseDocumentAccess = [&]() { documentAccess.reset(); };
+    const auto documentLockAcquiredAt = std::chrono::steady_clock::now();
+    const auto releaseDocumentAccess = [&]() {
+      workerTiming.documentWriteLockMs = elapsedSince(documentLockAcquiredAt);
+      documentAccess.reset();
+    };
     const EditorRasterViewport rasterViewport =
         EffectiveRasterViewportForRequest(requestDocument, request.rasterViewport);
 
@@ -1999,6 +2001,7 @@ void AsyncRenderer::workerLoop() {
           done.result.viewport = request.viewport;
           done.result.overviewInfillOnly = request.overviewInfillOnly;
           done.result.presentationCoverageRepair = request.presentationCoverageRepair;
+          done.result.presentationRepairReason = request.presentationRepairReason;
           done.result.version = request.version;
           done.result.cpuSnapshotRequestId = request.cpuSnapshotRequestId;
           done.result.documentGeneration = request.documentGeneration;

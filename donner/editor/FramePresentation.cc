@@ -104,25 +104,10 @@ std::optional<Box2d> IntersectFrameBoxes(const Box2d& a, const Box2d& b) {
   return box.width() > 0.0 && box.height() > 0.0 ? std::optional<Box2d>(box) : std::nullopt;
 }
 
-std::vector<Box2d> CapturedPaintBounds(const CapturedPresentation::Object& object,
-                                       const Transform2d& rasterFromCapturedDocument) {
-  std::vector<Box2d> bounds;
-  if (object.pathBoundsCoverFrame) {
-    for (const auto& path : object.chrome.paths) {
-      bounds.push_back(path.pathDoc.transformed(rasterFromCapturedDocument).bounds());
-    }
-  } else {
-    for (const auto& box : object.paintBoundsDoc) {
-      bounds.push_back(rasterFromCapturedDocument.transformBox(box));
-    }
-  }
-  return bounds;
-}
-
 bool RasterCoversProjection(const CapturedPresentation& capture,
                             const CapturedPresentation::Object& object,
                             const PresentationPose& target,
-                            std::span<const GlTextureCache::TileView> tiles,
+                            const std::vector<GlTextureCache::RasterCoverageGroup>& groups,
                             const FramePresentationInput& input) {
   const auto source = capture.pose(object.entity);
   const auto presentedDocumentFromCapturedDocument =
@@ -140,24 +125,12 @@ bool RasterCoversProjection(const CapturedPresentation& capture,
     return true;
   }
   const Box2d visible = input.viewport.screenToDocument(*visibleClip);
-  for (const auto& tile : tiles) {
-    if (tile.layerEntity != object.entity ||
-        std::abs(tile.documentFromCachedDocument.determinant()) < 1e-12) {
-      continue;
-    }
-    const auto bounds = CapturedPaintBounds(object, tile.documentFromCachedDocument.inverse());
+  for (const auto& group : groups) {
     const Transform2d presentedFromRaster =
-        tile.documentFromCachedDocument * *presentedDocumentFromCapturedDocument;
+        group.documentFromRaster * *presentedDocumentFromCapturedDocument;
     const Box2d visibleInRaster = presentedFromRaster.inverse().transformBox(visible);
-    std::vector<Box2d> coverage;
-    for (const auto& part : tiles) {
-      if (part.layerEntity == object.entity &&
-          SamePresentationTransform(part.documentFromCachedDocument,
-                                    tile.documentFromCachedDocument)) {
-        const Vector2d origin = part.canvasOffsetDoc + capture.documentOrigin();
-        coverage.emplace_back(origin, origin + part.bitmapDimsDoc);
-      }
-    }
+    const auto& bounds = group.paintBounds;
+    const auto& coverage = group.tileBounds;
     const bool complete =
         !bounds.empty() && std::ranges::all_of(bounds, [&](const Box2d& paintBounds) {
           const auto required = IntersectFrameBoxes(visibleInRaster, paintBounds);
@@ -296,29 +269,41 @@ std::optional<Box2d> PresentedImageClipRect(const Box2d& paneRect, const Box2d& 
   return clipRect;
 }
 
+namespace {
+bool CandidatePreservesPose(const CapturedPresentation& capture,
+                            std::span<const RenderResult::CompositedTile> tiles,
+                            const PresentationPose& held) {
+  const auto source = capture.pose(held.entity);
+  if (!source.has_value()) {
+    return false;
+  }
+  if (SamePresentationTransform(source->documentFromElement, held.documentFromElement)) {
+    return true;
+  }
+  const bool ownsPixels = std::ranges::any_of(tiles, [&](const auto& tile) {
+    return tile.kind == RenderResult::CompositedTile::Kind::Layer &&
+           tile.layerEntity == held.entity;
+  });
+  if (!ownsPixels || !capture.canProject(held.entity) ||
+      !PresentedDocumentFromCapturedDocument(*source, held).has_value()) {
+    return false;
+  }
+  return true;
+}
+}  // namespace
+
 bool FramePresentation::CanAdopt(const CapturedPresentation& capture,
                                  std::span<const RenderResult::CompositedTile> tiles,
-                                 const FramePresentation* previous) {
-  if (previous == nullptr || !capture.identity().sameContent(previous->identity())) {
+                                 const FramePresentation* previous, bool latestCommittedScene) {
+  if (latestCommittedScene || previous == nullptr ||
+      !capture.identity().sameContent(previous->identity())) {
     return true;
   }
   for (const auto& held : previous->overrides()) {
     if (capture.absent(held.entity)) {
       continue;
     }
-    const auto source = capture.pose(held.entity);
-    if (!source.has_value()) {
-      return false;
-    }
-    if (SamePresentationTransform(source->documentFromElement, held.documentFromElement)) {
-      continue;
-    }
-    const bool ownsPixels = std::ranges::any_of(tiles, [&](const auto& tile) {
-      return tile.kind == RenderResult::CompositedTile::Kind::Layer &&
-             tile.layerEntity == held.entity;
-    });
-    if (!ownsPixels || !capture.canProject(held.entity) ||
-        !PresentedDocumentFromCapturedDocument(*source, held).has_value()) {
+    if (!CandidatePreservesPose(capture, tiles, held)) {
       return false;
     }
   }
@@ -365,40 +350,73 @@ std::shared_ptr<const CapturedPresentation> FramePresentation::CaptureForFrame(
   return *useOverview ? resources->overviewCapture() : resources->capture();
 }
 
-std::shared_ptr<const FramePresentation> FramePresentation::Build(
+namespace {
+FramePresentationFailure ValidateFrameResources(
+    const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
+    const FramePresentationInput& input) {
+  if (resources == nullptr || resources->capture() == nullptr) {
+    return FramePresentationFailure::MissingResources;
+  }
+  if (!ValidFrameInput(input)) {
+    return FramePresentationFailure::InvalidInput;
+  }
+  return FramePresentationFailure::None;
+}
+std::shared_ptr<const CapturedPresentation> SelectionCaptureForRaster(
+    std::shared_ptr<const CapturedPresentation> selection,
+    const std::shared_ptr<const CapturedPresentation>& raster) {
+  return selection != nullptr && selection->identity() == raster->identity() &&
+                 selection->canvasSize() == raster->canvasSize()
+             ? std::move(selection)
+             : raster;
+}
+bool IsCurrentCommittedFrame(const CapturedPresentation& capture,
+                             const FramePresentationInput& input) {
+  return capture.identity().sameScene(input.documentIdentity) && !input.pendingDocumentMutations &&
+         !input.desired;
+}
+FramePresentationBuildResult FinishFrameResult(std::shared_ptr<const FramePresentation> frame,
+                                               const FramePresentationInput& input) {
+  const auto failure = !input.selection.empty() && !frame->hasSelectionGeometry()
+                           ? FramePresentationFailure::MissingSelectionGeometry
+                           : FramePresentationFailure::None;
+  return {.frame = std::move(frame), .failure = failure};
+}
+}  // namespace
+
+FramePresentationBuildResult FramePresentation::Build(
     std::shared_ptr<const GlTextureCache::PresentationResources> resources,
     const FramePresentationInput& input,
     std::shared_ptr<const CapturedPresentation> selectionCapture,
     std::shared_ptr<const FramePresentation> previous) {
-  if (resources == nullptr || resources->capture() == nullptr || !ValidFrameInput(input)) {
-    return nullptr;
+  const auto validation = ValidateFrameResources(resources, input);
+  if (validation != FramePresentationFailure::None) {
+    return {.failure = validation};
   }
   const auto useOverview = ChooseOverview(resources, input);
   if (!useOverview.has_value()) {
-    return nullptr;
+    return {.failure = FramePresentationFailure::MissingOverview};
   }
   const auto rasterCapture = *useOverview ? resources->overviewCapture() : resources->capture();
-  if (selectionCapture == nullptr || selectionCapture->identity() != rasterCapture->identity() ||
-      selectionCapture->canvasSize() != rasterCapture->canvasSize()) {
-    selectionCapture = rasterCapture;
-  }
+  selectionCapture = SelectionCaptureForRaster(std::move(selectionCapture), rasterCapture);
   auto frame = std::shared_ptr<FramePresentation>(new FramePresentation());
   frame->resources_ = std::move(resources);
   frame->rasterCapture_ = rasterCapture;
   frame->selectionCapture_ = std::move(selectionCapture);
   frame->initialize(input, *useOverview);
-  if (!frame->retainDisplayedPoses(previous.get())) {
-    return nullptr;
+  const bool currentCommitted = IsCurrentCommittedFrame(*rasterCapture, input);
+  if (!frame->retainDisplayedPoses(currentCommitted ? nullptr : previous.get())) {
+    return {.failure = FramePresentationFailure::IncompatiblePose};
   }
   frame->applyPointerIntent(input);
   if (!frame->chosenPosesHaveCoverage(input)) {
-    return nullptr;
+    return {.failure = FramePresentationFailure::InsufficientCoverage};
   }
   frame->projectSelectionGeometry();
   frame->resolveSelectionBounds(input);
   frame->resolveTiles(input);
   frame->finishChrome(input, previous.get());
-  return frame;
+  return FinishFrameResult(std::move(frame), input);
 }
 
 void FramePresentation::initialize(const FramePresentationInput& input, bool useOverview) {
@@ -409,6 +427,7 @@ void FramePresentation::initialize(const FramePresentationInput& input, bool use
   documentClipRect_ = PresentedImageClipRect(input.paneClipRect, input.viewport.imageScreenRect());
   screenFromDocument_ = PresentedFramebufferFromDocumentTransform(input.viewport, Vector2d(1, 1));
   chromeEnabled_ = input.includeChrome;
+  useOverview_ = useOverview;
   tiles_ = useOverview ? resources_->overviewTiles() : resources_->tiles();
 }
 
@@ -428,7 +447,8 @@ bool FramePresentation::chosenPosesHaveCoverage(const FramePresentationInput& in
     const CapturedPresentation::Object fallback{
         .entity = held.entity, .paintBoundsDoc = rasterCapture_->paintBounds(held.entity)};
     const auto& paint = object != selectionCapture_->objects().end() ? *object : fallback;
-    if (!RasterCoversProjection(*rasterCapture_, paint, held, tiles_, input)) {
+    if (!RasterCoversProjection(*rasterCapture_, paint, held,
+                                resources_->objectCoverage(held.entity, useOverview_), input)) {
       return false;
     }
   }
@@ -446,7 +466,8 @@ void FramePresentation::applyPointerIntent(const FramePresentationInput& input) 
     followsPointer_ = std::ranges::all_of(selectionCapture_->objects(), [&](const auto& object) {
       const auto target = FindPose(input.desired->poses, object.entity);
       return target.has_value() && MovablePose(*selectionCapture_, tiles_, *target) &&
-             RasterCoversProjection(*selectionCapture_, object, *target, tiles_, input);
+             RasterCoversProjection(*selectionCapture_, object, *target,
+                                    resources_->objectCoverage(object.entity, useOverview_), input);
     });
     if (followsPointer_) {
       for (const auto& pose : input.desired->poses) {

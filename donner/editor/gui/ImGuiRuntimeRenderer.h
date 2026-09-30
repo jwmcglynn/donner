@@ -56,6 +56,9 @@ public:
                                                                    UiTextureRegistry& registry,
                                                                    gpu::TextureFormat targetFormat);
 
+  /// Owner token for deferred registration release; expires before renderer fields are destroyed.
+  [[nodiscard]] std::weak_ptr<const void> retirementLifetime() const { return retirementLifetime_; }
+
   /// Destructor.
   ~ImGuiRuntimeRenderer();
 
@@ -268,6 +271,7 @@ private:
   std::vector<RetiredTextureBacking> retiredTextureBackings_;
   std::vector<uint8_t> vertexStaging_;
   std::vector<uint8_t> indexStaging_;
+  std::shared_ptr<const void> retirementLifetime_ = std::make_shared<int>(0);
 };
 
 /**

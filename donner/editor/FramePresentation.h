@@ -36,6 +36,26 @@ struct PresentationDecorations {
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> textBoxDragPreviewDoc;
 };
 
+class FramePresentation;
+
+/// The missing proof that prevented an otherwise coherent frame from being installed.
+enum class FramePresentationFailure {
+  None,
+  MissingResources,
+  InvalidInput,
+  MissingOverview,
+  IncompatiblePose,
+  InsufficientCoverage,
+  MissingSelectionGeometry,
+  UploadRefused
+};
+
+/// A sealed frame, when available, and the exact work needed to complete its presentation.
+struct FramePresentationBuildResult {
+  std::shared_ptr<const FramePresentation> frame;
+  FramePresentationFailure failure = FramePresentationFailure::None;
+};
+
 /// Input intent consumed once while sealing a frame; draw callbacks cannot consult it later.
 struct FramePresentationInput {
   std::uint64_t frameId = 0;
@@ -43,6 +63,7 @@ struct FramePresentationInput {
   Box2d paneClipRect;
   std::vector<Entity> selection;
   PresentationIdentity documentIdentity;
+  bool pendingDocumentMutations = false;  //!< Input not yet incorporated into a guarded capture.
   std::optional<SelectTool::ActiveDragPreview> desired;
   SelectionChromeDetail detail = SelectionChromeDetail::Full;
   PresentationDecorations decorations;
@@ -64,7 +85,7 @@ public:
    * @param previous Prior frame, used to retain text adornments while newer text is rendering.
    * @return A sealed frame, or null when the resource/geometry binding is invalid.
    */
-  [[nodiscard]] static std::shared_ptr<const FramePresentation> Build(
+  [[nodiscard]] static FramePresentationBuildResult Build(
       std::shared_ptr<const GlTextureCache::PresentationResources> resources,
       const FramePresentationInput& input,
       std::shared_ptr<const CapturedPresentation> selectionCapture = nullptr,
@@ -84,7 +105,8 @@ public:
   /// @param previous Last installed frame, or null before first presentation.
   [[nodiscard]] static bool CanAdopt(const CapturedPresentation& capture,
                                      std::span<const RenderResult::CompositedTile> tiles,
-                                     const FramePresentation* previous);
+                                     const FramePresentation* previous,
+                                     bool latestCommittedScene = false);
   /// Objects still shown at a pose that has not been incorporated into their raster capture.
   [[nodiscard]] const std::vector<PresentationPose>& overrides() const UTILS_LIFETIME_BOUND {
     return overrides_;
@@ -176,6 +198,7 @@ private:
   std::optional<Box2d> documentClipRect_;
   Transform2d screenFromDocument_;
   bool chromeEnabled_ = true;
+  bool useOverview_ = false;
   std::vector<GlTextureCache::TileView> tiles_;
   std::vector<GlTextureCache::TileView> overviewTiles_;
   std::vector<PresentationPose> poses_;

@@ -6,9 +6,11 @@
 #include <iterator>
 #include <utility>
 
+#include "donner/editor/CapturedPresentation.h"
 #include "donner/editor/TracyWrapper.h"
 #ifdef DONNER_EDITOR_WGPU
 #include "donner/editor/RuntimeBitmapUpload.h"
+#include "donner/editor/gui/ImGuiRuntimeRenderer.h"
 #include "donner/editor/gui/UiTextureRegistration.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -226,6 +228,7 @@ void GlTextureCache::initialize() {}
 GlTextureCache::TileView GlTextureCache::makeTileView(const RenderResult::CompositedTile& tile,
                                                       const CachedTextureEntry& entry) {
   return TileView{
+      .uiTextureLifetime = entry.uiTextureLifetime,
       .texture = ToImTextureId(entry.texture),
       .id = tile.id,
       .kind = tile.kind,
@@ -268,7 +271,7 @@ std::optional<GlTextureCache::CachedTextureEntry> GlTextureCache::uploadTilePayl
   if (entry.textureSnapshot == nullptr) {
     return std::nullopt;
   }
-  entry.texture = registerSnapshotTexture(*entry.textureSnapshot);
+  entry.texture = registerSnapshotTexture(*entry.textureSnapshot, &entry.uiTextureLifetime);
   if (entry.texture == 0 && HasUiTextureRegistry()) {
     return std::nullopt;
   }
@@ -399,6 +402,7 @@ void GlTextureCache::commitTileSet(PreparedTileSet prepared, TextureEntries& ent
     }
 #ifdef DONNER_EDITOR_WGPU
     retired.push_back(RetiredSnapshot{
+        .uiTextureLifetime = old.uiTextureLifetime,
         .texture = old.texture,
         .snapshot = old.textureSnapshot,
         .allocationDimensions = Vector2i(old.allocatedWidth, old.allocatedHeight),
@@ -500,6 +504,59 @@ bool GlTextureCache::uploadCompositedOverview(const RenderResult::CompositedPrev
   return true;
 }
 
+GlTextureCache::PresentationResources::CoverageIndex
+GlTextureCache::PresentationResources::IndexCoverage(const CapturedPresentation& capture,
+                                                     const std::vector<TileView>& tiles) {
+  CoverageIndex index;
+  for (const auto& tile : tiles) {
+    if (tile.layerEntity == entt::null ||
+        std::abs(tile.documentFromCachedDocument.determinant()) < 1e-12) {
+      continue;
+    }
+    auto& groups = index[tile.layerEntity];
+    auto group = std::ranges::find_if(groups, [&](const auto& value) {
+      return SamePresentationTransform(value.documentFromRaster, tile.documentFromCachedDocument);
+    });
+    if (group == groups.end()) {
+      RasterCoverageGroup added{.documentFromRaster = tile.documentFromCachedDocument};
+      const auto rasterFromDocument = tile.documentFromCachedDocument.inverse();
+      const auto object = std::ranges::find_if(
+          capture.objects(), [&](const auto& value) { return value.entity == tile.layerEntity; });
+      if (object != capture.objects().end() && object->pathBoundsCoverFrame) {
+        for (const auto& path : object->chrome.paths) {
+          added.paintBounds.push_back(path.pathDoc.transformed(rasterFromDocument).bounds());
+        }
+      } else {
+        for (const auto& bounds : capture.paintBounds(tile.layerEntity)) {
+          added.paintBounds.push_back(rasterFromDocument.transformBox(bounds));
+        }
+      }
+      groups.push_back(std::move(added));
+      group = std::prev(groups.end());
+    }
+    const auto origin = tile.canvasOffsetDoc + capture.documentOrigin();
+    group->tileBounds.emplace_back(origin, origin + tile.bitmapDimsDoc);
+  }
+  return index;
+}
+
+void GlTextureCache::PresentationResources::indexCoverage() {
+  if (capture_) {
+    activeCoverage_ = IndexCoverage(*capture_, tiles_);
+  }
+  if (overviewCapture_) {
+    overviewCoverage_ = IndexCoverage(*overviewCapture_, overviewTiles_);
+  }
+}
+
+const std::vector<GlTextureCache::RasterCoverageGroup>&
+GlTextureCache::PresentationResources::objectCoverage(Entity entity, bool overview) const {
+  const auto& index = overview ? overviewCoverage_ : activeCoverage_;
+  const auto found = index.find(entity);
+  static const std::vector<RasterCoverageGroup> empty;
+  return found == index.end() ? empty : found->second;
+}
+
 void GlTextureCache::publishResources(std::shared_ptr<const CapturedPresentation> capture,
                                       std::shared_ptr<const CapturedPresentation> overviewCapture) {
   auto resources = std::shared_ptr<PresentationResources>(new PresentationResources());
@@ -508,6 +565,7 @@ void GlTextureCache::publishResources(std::shared_ptr<const CapturedPresentation
   resources->tiles_ = tiles_;
   resources->overviewTiles_ = overviewTiles_;
   resources->coverage_ = coverageDiagnostics();
+  resources->indexCoverage();
   presentationResources_ = std::move(resources);
 }
 
@@ -537,6 +595,7 @@ void GlTextureCache::resetComposited() {
   const auto retireEntry = [&](CachedTextureEntry& entry) {
     if (entry.texture != 0) {
       retiredSnapshots.push_back(RetiredSnapshot{
+          .uiTextureLifetime = entry.uiTextureLifetime,
           .texture = entry.texture,
           .snapshot = std::move(entry.textureSnapshot),
           .allocationDimensions = Vector2i(entry.allocatedWidth, entry.allocatedHeight),
@@ -607,10 +666,12 @@ GlTextureCache::ThumbnailTextureView GlTextureCache::uploadThumbnail(
         .uvBottomRight = entry.uvBottomRight,
     };
   }
-  const NativeTextureHandle textureId = registerSnapshotTexture(*uploadedSnapshot);
+  std::shared_ptr<const void> lifetime;
+  const NativeTextureHandle textureId = registerSnapshotTexture(*uploadedSnapshot, &lifetime);
   if (entry.texture != 0) {
     RetiredSnapshotBatch retiredSnapshots;
     retiredSnapshots.push_back(RetiredSnapshot{
+        .uiTextureLifetime = entry.uiTextureLifetime,
         .texture = entry.texture,
         .snapshot = std::move(entry.textureSnapshot),
         .allocationDimensions = Vector2i(entry.allocatedWidth, entry.allocatedHeight),
@@ -619,6 +680,7 @@ GlTextureCache::ThumbnailTextureView GlTextureCache::uploadThumbnail(
   }
   const Vector2i allocationDimensions = uploadedSnapshot->allocationDimensions();
   entry.textureSnapshot = std::move(uploadedSnapshot);
+  entry.uiTextureLifetime = std::move(lifetime);
   entry.texture = textureId;
   entry.width = bitmap.dimensions.x;
   entry.height = bitmap.dimensions.y;
@@ -652,8 +714,9 @@ GlTextureCache::ThumbnailTextureView GlTextureCache::retainThumbnailTextureSnaps
     };
   }
 
+  std::shared_ptr<const void> lifetime;
   const NativeTextureHandle textureId =
-      textureSnapshot != nullptr ? registerSnapshotTexture(*textureSnapshot) : 0;
+      textureSnapshot != nullptr ? registerSnapshotTexture(*textureSnapshot, &lifetime) : 0;
   if (textureId == 0) {
     return {};
   }
@@ -661,6 +724,7 @@ GlTextureCache::ThumbnailTextureView GlTextureCache::retainThumbnailTextureSnaps
   if (entry.texture != 0) {
     RetiredSnapshotBatch retiredSnapshots;
     retiredSnapshots.push_back(RetiredSnapshot{
+        .uiTextureLifetime = entry.uiTextureLifetime,
         .texture = entry.texture,
         .snapshot = std::move(entry.textureSnapshot),
         .allocationDimensions = Vector2i(entry.allocatedWidth, entry.allocatedHeight),
@@ -668,6 +732,7 @@ GlTextureCache::ThumbnailTextureView GlTextureCache::retainThumbnailTextureSnaps
     retireSnapshots(std::move(retiredSnapshots));
   }
 
+  entry.uiTextureLifetime = std::move(lifetime);
   entry.texture = textureId;
   entry.textureSnapshot = std::move(textureSnapshot);
   entry.identity = CompositedTileTextureIdentity{};
@@ -705,6 +770,7 @@ void GlTextureCache::retainThumbnailsOnly(const std::vector<std::uint64_t>& live
 #else
       if (it->second.texture != 0) {
         retiredSnapshots.push_back(RetiredSnapshot{
+            .uiTextureLifetime = it->second.uiTextureLifetime,
             .texture = it->second.texture,
             .snapshot = std::move(it->second.textureSnapshot),
             .allocationDimensions = Vector2i(it->second.allocatedWidth, it->second.allocatedHeight),
@@ -823,20 +889,32 @@ ImTextureID GlTextureCache::ToImTextureId(NativeTextureHandle texture) {
 
 #ifdef DONNER_EDITOR_WGPU
 void GlTextureCache::releaseImGuiTexture(NativeTextureHandle texture) {
-  const auto backing = registeredBackings_.find(texture);
-  if (backing == registeredBackings_.end() || !RetireUiTexture(texture, &backing->second)) {
-    return;
-  }
-  registeredBackings_.erase(backing);
+  registeredBackings_.erase(texture);
 }
 
 GlTextureCache::NativeTextureHandle GlTextureCache::registerSnapshotTexture(
-    const svg::RendererTextureSnapshot& snapshot) {
+    const svg::RendererTextureSnapshot& snapshot, std::shared_ptr<const void>* lifetime) {
   UiTextureBacking backing;
   const NativeTextureHandle handle = RegisterUiSnapshotTexture(snapshot, &backing);
-  if (handle != 0) {
-    registeredBackings_[handle] = std::move(backing);
+  auto* renderer = CurrentImGuiRuntimeRenderer();
+  if (handle == 0 || renderer == nullptr) {
+    return 0;
   }
+  const auto owner = renderer->retirementLifetime();
+  auto lease = std::shared_ptr<UiTextureBacking>(
+      new UiTextureBacking(std::move(backing)), [handle, renderer, owner](UiTextureBacking* value) {
+        if (!owner.expired()) {
+          const auto id = UiTextureId::FromImTextureId(handle);
+          if (renderer->registry().retire(id).hasResult() &&
+              CurrentImGuiRuntimeRenderer() == renderer) {
+            renderer->retainTextureBackingUntilReleased(id, std::move(value->texture),
+                                                        std::move(value->view));
+          }
+        }
+        delete value;
+      });
+  *lifetime = lease;
+  registeredBackings_[handle] = lease;
   return handle;
 }
 

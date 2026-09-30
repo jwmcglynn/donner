@@ -201,6 +201,7 @@ struct RenderRequest {
   /// replacing active viewport-bounded tiles.
   /// Request repairs a frame rejected for incompatible raster/pose coverage.
   bool presentationCoverageRepair = false;
+  int presentationRepairReason = 0;  //!< Missing presentation proof carried by the request.
   bool overviewInfillOnly = false;
   /// Capture a CPU-readable copy of the fully composed frame.
   ///
@@ -299,6 +300,8 @@ struct RenderResult {
     double setupMs = 0.0;
     /// Time spent in `CompositorController::renderFrame`.
     double renderFrameMs = 0.0;
+    double documentWriteLockMs =
+        0.0;  //!< Time the captured document remained unavailable for UI edits.
     /// Time spent building composited-preview tile metadata/payloads.
     double buildPreviewMs = 0.0;
     /// Time spent taking the final fallback canvas snapshot, when needed.
@@ -410,6 +413,7 @@ struct RenderResult {
   ViewportState viewport;               //!< Editor viewport copied from the request.
   /// Request repairs a frame rejected for incompatible raster/pose coverage.
   bool presentationCoverageRepair = false;
+  int presentationRepairReason = 0;        //!< Missing presentation proof carried by the request.
   bool overviewInfillOnly = false;         //!< Update retained overview infill only.
   std::uint64_t version = 0;               //!< Document frame version represented by the result.
   std::uint64_t cpuSnapshotRequestId = 0;  //!< Nonzero explicit pixel-capture identity.
