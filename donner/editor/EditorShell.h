@@ -140,6 +140,8 @@ struct EditorShellDocumentReplayInput {
 struct LayerInspectorStatusReadback {
   /// One paint-order composited tile exposed to replay diagnostics.
   struct Tile {
+    /// Object owning this independently rasterized layer.
+    Entity layerEntity = entt::null;
     /// Stable texture-cache tile id.
     std::string id;
     /// Segment/layer tile kind.
@@ -218,6 +220,14 @@ struct LayerInspectorStatusReadback {
   std::uint64_t displayedDocVersion = 0;
   /// Document version represented by the current immediate overlay snapshot, if any.
   std::optional<std::uint64_t> immediateOverlayDocumentVersion;
+  /// Identity of the sealed frame installed in both drawing passes.
+  std::uint64_t presentationFrameId = 0;
+  /// Immutable raster/geometry source used by the installed frame.
+  PresentationIdentity presentationIdentity;
+  /// Whether independently owned pixels and geometry followed this frame's pointer intent.
+  bool presentationFollowsPointer = false;
+  /// Absolute selected-object poses chosen by the installed frame.
+  std::vector<PresentationPose> presentedPoses;
   /// Selected entity eligible for composited presentation, or entt::null.
   Entity selectedCompositedEntity = entt::null;
   /// Whether the last document flush applied commands.
@@ -493,6 +503,7 @@ private:
   [[nodiscard]] [[gnu::noinline]] SelectionTransformHandleIntent updateRenderPaneToolCursor(
       bool rotateCursorLocked, bool toolEligible, bool showPanCursor, bool selectToolActive,
       bool penToolActive, bool textToolActive, double pointerHitTestPixelsPerDocUnit);
+  void refreshPendingClickSelectionBounds(bool documentWriteAvailable);
   [[gnu::noinline]] void dispatchBufferedRenderPaneClick(bool selectToolActive, bool penToolActive,
                                                          bool textToolActive,
                                                          double pointerHitTestPixelsPerDocUnit);
@@ -509,14 +520,8 @@ private:
                                     const SelectionTransformHandleIntent& hoverTransformIntent,
                                     bool rotateCursorLocked, bool penToolActive,
                                     bool textToolActive);
-  /// Sink behind `documentPresenter_`'s framebuffer underlay: installs one
-  /// frame's tile plan on the window, or clears the underlay on `nullopt`.
-  /// The window-side WebGPU wiring is confined here.
-  void installFramebufferUnderlayPlan(std::optional<FramebufferUnderlayPlan> plan);
-  /// Install one frame's immediate chrome pass, or clear it on `nullopt`. The
-  /// pass runs after the document underlay and before ImGui, so chrome lands on
-  /// the same pixels, in the same frame, with the same transform as the tiles.
-  void installImmediateChromePlan(std::optional<ImmediateChromePlan> plan);
+  /// Install the same immutable plan for artwork and editor chrome callbacks.
+  void installFramePresentation(std::shared_ptr<const FramePresentation> frame);
   [[nodiscard]] Box2d toolPaletteScreenRect(const ImVec2& paneOrigin,
                                             const ImVec2& contentRegion) const;
   [[nodiscard]] Box2d canvasZoomControlScreenRect() const;

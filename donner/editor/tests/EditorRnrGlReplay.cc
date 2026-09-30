@@ -435,6 +435,8 @@ void PrintFrameCost(const FrameCostBreakdown& cost) {
             << ",\"cached_ms\":" << cost.compositedRender.cachedMs
             << ",\"immediate_tiles\":" << cost.compositedRender.immediateTileCount
             << ",\"cached_tiles\":" << cost.compositedRender.cachedTileCount
+            << ",\"presentation_coverage_repair\":"
+            << (cost.compositedRender.presentationCoverageRepair ? "true" : "false")
             << "},\"source_ropes\":{\"layout_ms\":" << cost.sourceRopes.layoutMs
             << ",\"update_ms\":" << cost.sourceRopes.updateMs
             << ",\"draw_ms\":" << cost.sourceRopes.drawMs
@@ -520,6 +522,11 @@ void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics,
                 << ",\"displayed_doc_version\":" << frame.displayedDocVersion
                 << ",\"selected_composited_entity\":";
       PrintEntity(frame.selectedCompositedEntity);
+      std::cout << ",\"presentation_frame_id\":" << frame.presentationFrameId
+                << ",\"capture_id\":" << frame.presentationIdentity.captureId
+                << ",\"captured_document_revision\":" << frame.presentationIdentity.documentRevision
+                << ",\"presentation_follows_pointer\":"
+                << (frame.presentationFollowsPointer ? "true" : "false");
       if (frame.immediateOverlayDocumentVersion.has_value()) {
         std::cout << ",\"immediate_overlay_document_version\":"
                   << *frame.immediateOverlayDocumentVersion;

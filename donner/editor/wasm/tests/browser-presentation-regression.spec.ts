@@ -157,7 +157,10 @@ declare global {
       selectionChromeSnapshotPresent: boolean;
       currentDocVersion: number;
       displayedDocVersion: number;
-      overlayVersionGateSuppressions: number;
+      frameId: number;
+      captureId: number;
+      documentRevision: number;
+      followsPointer: boolean;
     };
     Module?: {
       _donner_set_overlay_state?: (key: number, enabled: number) => number;

@@ -51,6 +51,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/CapturedPresentation.h"
 #include "donner/editor/CompositedRenderingMode.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/ViewportState.h"
@@ -138,6 +139,8 @@ struct RenderRequest {
 
   /// Non-null renderer/document lease for the worker handoff.
   RenderLease lease;
+  /// Test barrier after paired scene capture and DOM release, before exporting renderer pixels.
+  std::function<void()> afterDocumentCaptureForTesting;
   /// Internal timestamp captured by `requestRender()` for queue-latency diagnostics.
   std::chrono::steady_clock::time_point queuedAt;
   /// Document frame version snapshotted at request time so the UI can
@@ -150,6 +153,19 @@ struct RenderRequest {
   std::uint64_t documentGeneration = 0;
   /// Font adoption identity captured before the worker's dirty-region snapshot.
   std::uint64_t fontResourceRevision = 0;
+  /// Non-transform content and renderer settings consumed by this render.
+  std::uint64_t geometryRevision = 0;
+  std::uint64_t presentationEpoch = 0;
+  /// Immutable per-render identity assigned when the request is admitted.
+  std::uint64_t captureId = 0;
+  /// Selection whose geometry must accompany the raster, in selection order.
+  std::vector<svg::SVGElement> selectedElements;
+  /// Objects whose affine presentation has not yet been incorporated into a raster.
+  std::vector<Entity> trackedPresentationObjects;
+  /// Source and rejection annotations captured from the same guarded state as the pixels.
+  std::vector<svg::SVGElement> sourceHoverElements;
+  std::optional<LockedRejectionFlashInput> lockedFlash;
+  std::optional<CapturedPresentation::TextEditing> textEditing;
   /// Entity remap for structurally equivalent document replacement. When
   /// present, the worker remaps compositor state instead of fully resetting
   /// layer bitmaps and static segments.
@@ -183,6 +199,8 @@ struct RenderRequest {
   /// The worker still keeps the selected entity promoted, but skips the composited split preview
   /// and publishes a full-canvas tile. The UI uploads it into the retained overview cache without
   /// replacing active viewport-bounded tiles.
+  /// Request repairs a frame rejected for incompatible raster/pose coverage.
+  bool presentationCoverageRepair = false;
   bool overviewInfillOnly = false;
   /// Capture a CPU-readable copy of the fully composed frame.
   ///
@@ -383,11 +401,15 @@ struct RenderResult {
     [[nodiscard]] bool valid() const { return !tiles.empty(); }
   };
 
+  /// Geometry captured under the same document guard as the raster payload.
+  std::shared_ptr<const CapturedPresentation> capturedPresentation;
   svg::RendererBitmap bitmap;  //!< Optional CPU-readable full-canvas frame.
   std::optional<CompositedPreview>
-      compositedPreview;                   //!< Paint-ordered compositor tiles, when produced.
-  EditorRasterViewport rasterViewport;     //!< Raster viewport used to produce this result.
-  ViewportState viewport;                  //!< Editor viewport copied from the request.
+      compositedPreview;                //!< Paint-ordered compositor tiles, when produced.
+  EditorRasterViewport rasterViewport;  //!< Raster viewport used to produce this result.
+  ViewportState viewport;               //!< Editor viewport copied from the request.
+  /// Request repairs a frame rejected for incompatible raster/pose coverage.
+  bool presentationCoverageRepair = false;
   bool overviewInfillOnly = false;         //!< Update retained overview infill only.
   std::uint64_t version = 0;               //!< Document frame version represented by the result.
   std::uint64_t cpuSnapshotRequestId = 0;  //!< Nonzero explicit pixel-capture identity.
@@ -937,6 +959,7 @@ private:
 
   std::thread thread_;
   mutable std::mutex mutex_;
+  std::uint64_t nextCaptureId_ = 1;
   std::condition_variable cv_;
   std::function<void()> idlePoll_;
   std::function<bool()> idleHasWork_;

@@ -196,13 +196,9 @@ TEST(GlTextureCacheTest, MetadataOnlyCompositedUploadTracksMissesAndViewportDiag
   GlTextureCache cache;
   cache.uploadComposited(preview, RasterViewportForTest(/*viewportBounded=*/true));
 
-  ASSERT_EQ(cache.tiles().size(), 1u);
-  EXPECT_EQ(cache.tiles().front().id, "seg:0");
-  EXPECT_EQ(cache.tiles().front().texture, 0u);
-  EXPECT_TRUE(cache.tiles().front().metadataOnly);
-  EXPECT_EQ(cache.tiles().front().bitmapDimsPx, Vector2i(8, 9));
+  EXPECT_THAT(cache.tiles(), ::testing::IsEmpty());
   EXPECT_TRUE(cache.overviewTiles().empty());
-  EXPECT_TRUE(cache.activeTilesViewportBounded());
+  EXPECT_FALSE(cache.activeTilesViewportBounded());
   EXPECT_EQ(cache.metadataOnlyMissCount(), 1);
   EXPECT_EQ(cache.duplicateLiveTextureCount(), 0);
   EXPECT_EQ(cache.lastCompositedUploadCost().tileCount, 1);
@@ -211,11 +207,11 @@ TEST(GlTextureCacheTest, MetadataOnlyCompositedUploadTracksMissesAndViewportDiag
   EXPECT_EQ(cache.lastCompositedUploadCost().payloadBytes, 0u);
 
   const PresentationCoverageDiagnostics coverage = cache.coverageDiagnostics();
-  EXPECT_TRUE(coverage.activeTilesViewportBounded);
+  EXPECT_FALSE(coverage.activeTilesViewportBounded);
   EXPECT_FALSE(coverage.overviewInfillAvailable);
-  EXPECT_EQ(coverage.activeRasterDocumentRect, Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
+  EXPECT_EQ(coverage.activeRasterDocumentRect, Box2d());
   EXPECT_EQ(coverage.overviewRasterDocumentRect, Box2d());
-  EXPECT_EQ(coverage.activeOutputSizePx, Vector2i(20, 20));
+  EXPECT_EQ(coverage.activeOutputSizePx, Vector2i::Zero());
   EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i::Zero());
 }
 
@@ -241,9 +237,9 @@ TEST(GlTextureCacheTest, MetadataOnlyOverviewUploadTracksMissAndRetainsViewport)
   EXPECT_FALSE(coverage.activeTilesViewportBounded);
   EXPECT_FALSE(coverage.overviewInfillAvailable);
   EXPECT_EQ(coverage.activeRasterDocumentRect, Box2d());
-  EXPECT_EQ(coverage.overviewRasterDocumentRect, Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
+  EXPECT_EQ(coverage.overviewRasterDocumentRect, Box2d());
   EXPECT_EQ(coverage.activeOutputSizePx, Vector2i::Zero());
-  EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i(100, 100));
+  EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i::Zero());
 }
 
 TEST(GlTextureCacheTest, ResetCompositedClearsMetadataBookkeepingAndCost) {
@@ -255,7 +251,7 @@ TEST(GlTextureCacheTest, ResetCompositedClearsMetadataBookkeepingAndCost) {
 
   GlTextureCache cache;
   cache.uploadComposited(preview, RasterViewportForTest(/*viewportBounded=*/true));
-  ASSERT_TRUE(cache.activeTilesViewportBounded());
+  ASSERT_FALSE(cache.activeTilesViewportBounded());
   ASSERT_EQ(cache.metadataOnlyMissCount(), 1);
   ASSERT_EQ(cache.lastCompositedUploadCost().tileCount, 1);
 
@@ -430,6 +426,36 @@ TEST(GlTextureCacheTest, ReplacedTilePayloadLeavesTheSupersededAllocationIntact)
   EXPECT_THAT(PixelAt(retained, 0, 0), testing::ElementsAre(40u, 40u, 40u, 255u));
   EXPECT_THAT(PixelAt(retained, 4, 4), testing::ElementsAre(44u, 44u, 48u, 255u));
   EXPECT_THAT(PixelAt(retained, 4, 0), testing::ElementsAre(44u, 40u, 44u, 255u));
+}
+
+TEST(GlTextureCacheTest, FailedMultiTileCandidatePreservesCompletePublishedManifest) {
+  const auto device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  GlTextureCache cache(device);
+  const auto original = SingleBitmapTilePreview(1, MakeBitmap(Vector2i(5, 5), 24u, 40u));
+  ASSERT_TRUE(cache.uploadComposited(original, RasterViewportForTest(false)));
+  const auto published = cache.presentationResources();
+  ASSERT_NE(published, nullptr);
+  const auto snapshot = published->tiles().front().textureSnapshot;
+  ASSERT_NE(snapshot, nullptr);
+  const auto coverage = cache.coverageDiagnostics();
+  auto candidate = SingleBitmapTilePreview(2, MakeBitmap(Vector2i(5, 5), 24u, 90u));
+  auto missing = MetadataTile(RenderResult::CompositedTile::Kind::Layer, 1, Vector2i(5, 5),
+                              Vector2i(100, 100));
+  missing.id = "missing-second-tile";
+  candidate.tiles.push_back(missing);
+  EXPECT_FALSE(cache.uploadComposited(candidate, RasterViewportForTest(true)));
+  EXPECT_EQ(cache.presentationResources(), published);
+  ASSERT_EQ(cache.tiles().size(), 1u);
+  EXPECT_EQ(cache.tiles().front().generation, 1u);
+  EXPECT_EQ(cache.tiles().front().textureSnapshot, snapshot);
+  EXPECT_EQ(cache.coverageDiagnostics().activeRasterDocumentRect,
+            coverage.activeRasterDocumentRect);
+  EXPECT_EQ(cache.coverageDiagnostics().activeTilesViewportBounded,
+            coverage.activeTilesViewportBounded);
+  EXPECT_EQ(cache.metadataOnlyMissCount(), 1);
+  const auto retained = snapshot->takeSnapshot();
+  EXPECT_THAT(PixelAt(retained, 0, 0), testing::ElementsAre(40u, 40u, 40u, 255u));
 }
 
 TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesBordersAcrossStagingChunkBoundary) {
@@ -616,6 +642,30 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
   device->drainDeferredTextureBackings();
   EXPECT_EQ(device->lifetimeTextureReleases(), backingReleasesBefore + 2u)
       << "Cache teardown must give up the remaining active snapshot allocation";
+}
+
+TEST(GlTextureCacheTest, RetainedManifestOwnsSnapshotBeyondCacheRetirementAndReset) {
+  const auto device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  int destructions = 0;
+  GlTextureCache cache(device);
+  auto initial = SingleSnapshotTilePreview(
+      "layer", 1, CreateCountingGeodeTextureSnapshot(device, &destructions));
+  ASSERT_TRUE(cache.uploadComposited(initial));
+  initial.tiles.clear();
+  auto held = cache.presentationResources();
+  ASSERT_NE(held, nullptr);
+  ASSERT_TRUE(
+      cache.uploadComposited(SingleBitmapTilePreview(2, MakeBitmap(Vector2i(5, 5), 24u, 90u))));
+  for (int frame = 0; frame < 5; ++frame) {
+    cache.advancePresentationFrame();
+  }
+  cache.resetComposited();
+  EXPECT_EQ(destructions, 0);
+  ASSERT_NE(held->tiles().front().textureSnapshot, nullptr);
+  EXPECT_FALSE(held->tiles().front().textureSnapshot->takeSnapshot().empty());
+  held.reset();
+  EXPECT_EQ(destructions, 1);
 }
 
 TEST(GlTextureCacheTest, RegisteredBackingSurvivesUntilItsExactRetirementIsReleased) {

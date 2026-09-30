@@ -287,6 +287,7 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
               .startTransform = primaryStartTransform,
               .currentTransform = primaryStartTransform,
               .documentFromParent = DocumentFromParentTransform(element),
+              .startDocumentFromElement = graphicsElement.elementFromWorld(),
               .writebackTarget = primaryWritebackTarget,
               .sourceTransformAttributeValue = sourceTransformAttributeValue,
           },
@@ -294,6 +295,11 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
       .startDocumentPoint = documentPoint,
       .startBoundsDoc = CombinedSelectionBounds(selectionBoundsDoc),
       .generation = nextDragGeneration_++,
+      .contentIdentity =
+          PresentationIdentity{.documentGeneration = editor.document().documentGeneration(),
+                               .version = editor.document().currentFrameVersion(),
+                               .geometryRevision = editor.document().nonTransformRevision(),
+                               .fontResourceRevision = editor.document().fontResourceRevision()},
   };
   return true;
 }
@@ -364,6 +370,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
         .startTransform = startTransform,
         .currentTransform = startTransform,
         .documentFromParent = DocumentFromParentTransform(element),
+        .startDocumentFromElement = graphicsElement.elementFromWorld(),
         .writebackTarget = captureAttributeWritebackTarget(element),
         .sourceTransformAttributeValue = sourceTransformAttributeValue,
     };
@@ -399,6 +406,12 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
             .centerDocumentPoint = center,
             .startAngleRadians = AngleFromCenter(center, documentPoint),
             .generation = nextDragGeneration_++,
+            .contentIdentity =
+                PresentationIdentity{
+                    .documentGeneration = editor.document().documentGeneration(),
+                    .version = editor.document().currentFrameVersion(),
+                    .geometryRevision = editor.document().nonTransformRevision(),
+                    .fontResourceRevision = editor.document().fontResourceRevision()},
         };
         return;
       }
@@ -549,6 +562,11 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       .startDocumentPoint = documentPoint,
       .startBoundsDoc = CombinedSelectionBounds(dragStartBoundsDoc),
       .generation = nextDragGeneration_++,
+      .contentIdentity =
+          PresentationIdentity{.documentGeneration = editor.document().documentGeneration(),
+                               .version = editor.document().currentFrameVersion(),
+                               .geometryRevision = editor.document().nonTransformRevision(),
+                               .fontResourceRevision = editor.document().fontResourceRevision()},
   };
 }
 
@@ -868,12 +886,28 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() con
     extraEntities.push_back(extra.entity);
   }
 
-  return ActiveDragPreview{
+  ActiveDragPreview result{
       .entity = dragState_->primary.entity,
       .extraEntities = std::move(extraEntities),
       .translation = dragState_->currentDocumentDelta,
       .documentFromCachedDocument = dragState_->currentDocumentFromStartDocument,
-      .dragGeneration = dragState_->generation};
+      .dragGeneration = dragState_->generation,
+      .contentIdentity = dragState_->contentIdentity,
+      .poses = {},
+      .startPoses = {}};
+  const auto appendPose = [&](const PerElementDrag& participant) {
+    result.startPoses.push_back(PresentationPose{
+        .entity = participant.entity, .documentFromElement = participant.startDocumentFromElement});
+    result.poses.push_back(PresentationPose{
+        .entity = participant.entity,
+        .documentFromElement =
+            participant.startDocumentFromElement * dragState_->currentDocumentFromStartDocument});
+  };
+  appendPose(dragState_->primary);
+  for (const auto& extra : dragState_->extras) {
+    appendPose(extra);
+  }
+  return result;
 }
 
 std::optional<SelectTool::ActiveDragPreview> SelectTool::documentDragPreview(
@@ -886,6 +920,17 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::documentDragPreview(
 
   preview->translation = dragState_->committedDocumentDelta;
   preview->documentFromCachedDocument = dragState_->committedDocumentFromStartDocument;
+  preview->poses.clear();
+  preview->poses.push_back(
+      PresentationPose{.entity = dragState_->primary.entity,
+                       .documentFromElement = dragState_->primary.startDocumentFromElement *
+                                              dragState_->committedDocumentFromStartDocument});
+  for (const auto& extra : dragState_->extras) {
+    preview->poses.push_back(PresentationPose{
+        .entity = extra.entity,
+        .documentFromElement =
+            extra.startDocumentFromElement * dragState_->committedDocumentFromStartDocument});
+  }
   return preview;
 }
 

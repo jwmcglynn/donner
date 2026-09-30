@@ -10,6 +10,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/DocumentCompositeTexture.h"
+#include "donner/editor/FramePresentation.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
@@ -34,23 +35,10 @@ public:
   /**
    * Compose the current document presentation into one pane-sized texture.
    *
-   * @param viewport Presented document-to-screen mapping.
-   * @param imageClipRect Visible document region clipped to the render pane.
-   * @param overviewTiles Low-resolution infill tiles drawn below active coverage.
-   * @param tiles Active paint-order tile views.
-   * @param activeDragPreview Live drag transform to advance eligible tiles.
-   * @param displayedDragPreview Drag transform already represented by cached tiles.
-   * @param suppressedLayerEntity Layer omitted from this presentation frame.
-   * @param suppressDragTargetTiles Whether active drag-target tiles are omitted.
+   * @param frame Validated camera, clip and resolved tile geometry shared with chrome.
    * @return Cached or newly composed texture view, or an empty view when composition is invalid.
    */
-  [[nodiscard]] DocumentCompositeTextureView compose(
-      const ViewportState& viewport, const Box2d& imageClipRect,
-      std::span<const GlTextureCache::TileView> overviewTiles,
-      std::span<const GlTextureCache::TileView> tiles,
-      const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
-      const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview,
-      Entity suppressedLayerEntity, bool suppressDragTargetTiles);
+  [[nodiscard]] DocumentCompositeTextureView compose(const FramePresentation& frame);
 
   /// Invalidate the cached request and clear its presented view while retaining allocations.
   void reset();

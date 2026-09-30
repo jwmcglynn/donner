@@ -216,6 +216,41 @@ std::vector<Entity> DragPreviewEntities(const RenderRequest::DragPreview& previe
   return entities;
 }
 
+struct RenderedPresentationCapture {
+  std::shared_ptr<const CapturedPresentation> geometry;
+  std::vector<svg::FontFaceDependency> fonts;
+};
+
+RenderedPresentationCapture CapturePresentationForRequest(const RenderRequest& request,
+                                                          svg::SVGDocument& requestDocument,
+                                                          const std::vector<Entity>& promoted,
+                                                          bool independent) {
+  RenderedPresentationCapture captured;
+  std::vector<Entity> trackedObjects = request.trackedPresentationObjects;
+  trackedObjects.insert(trackedObjects.end(), promoted.begin(), promoted.end());
+  const std::vector<Entity> independentlyMovable = independent && request.dragPreview.has_value()
+                                                       ? DragPreviewEntities(*request.dragPreview)
+                                                       : std::vector<Entity>();
+  captured.geometry = CapturedPresentation::Capture(
+      requestDocument,
+      PresentationIdentity{.captureId = request.captureId,
+                           .documentGeneration = request.documentGeneration,
+                           .version = request.version,
+                           .geometryRevision = request.geometryRevision,
+                           .fontResourceRevision = request.fontResourceRevision,
+                           .presentationEpoch = request.presentationEpoch},
+      request.selectedElements, trackedObjects, independentlyMovable, request.sourceHoverElements,
+      request.lockedFlash, std::nullopt, request.textEditing);
+  captured.fonts = UnresolvedFontDependencies(requestDocument);
+  return captured;
+}
+
+void NotifyDocumentCapturedForTesting(const RenderRequest& request) {
+  if (request.afterDocumentCaptureForTesting) {
+    request.afterDocumentCaptureForTesting();
+  }
+}
+
 std::vector<Entity> DesiredCompositorEntities(const RenderRequest& request) {
   if (request.dragPreview.has_value()) {
     return DragPreviewEntities(*request.dragPreview);
@@ -619,6 +654,8 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
     }
     RenderRequest stagedRequest = request;
     stagedRequest.queuedAt = std::chrono::steady_clock::now();
+    UTILS_RELEASE_ASSERT(nextCaptureId_ != std::numeric_limits<std::uint64_t>::max());
+    stagedRequest.captureId = nextCaptureId_++;
     svg::SVGDocument& stagedDocument = stagedRequest.lease.document();
     if (stagedDocument.threadingMode() != svg::ThreadingMode::ConcurrentDom) {
       stagedDocument.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
@@ -1781,12 +1818,17 @@ void AsyncRenderer::workerLoop() {
       renderCompleted = false;
     }
 
+    std::shared_ptr<const CapturedPresentation> capturedPresentation;
+    std::vector<svg::FontFaceDependency> fontDependencies;
     if (renderCompleted) {
-      // SVG traversal is complete. Snapshot/readback, browser presentation, and diagnostic
-      // packaging below use renderer/compositor-owned state only, so release the live DOM before
-      // those potentially slow operations. UI input can then acquire the document without waiting
-      // for a browser surface handoff to finish.
+      const auto captured =
+          CapturePresentationForRequest(request, requestDocument, compositorEntities_,
+                                        desiredPromotionCoverageCompleteAfterRender);
+      capturedPresentation = captured.geometry;
+      fontDependencies = captured.fonts;
+      // Pixels and geometry are sealed before releasing the DOM for slow GPU export/readback.
       releaseDocumentAccess();
+      NotifyDocumentCapturedForTesting(request);
     }
 
     // A cancelled render leaves compositor dirty flags ready for the next
@@ -1940,11 +1982,6 @@ void AsyncRenderer::workerLoop() {
       AddTransientBytes(MemoryCategory::WorkerFrameSnapshot, snapshotBytes);
     }
 
-    auto fontDependencies = UnresolvedFontDependencies(requestDocument);
-    // All document reads for this iteration are done; release write access before taking `mutex_`
-    // to avoid a lock-order inversion against UI-thread DOM reads.
-    releaseDocumentAccess();
-
     std::function<void()> wake;
     bool notifyStateChange = false;
     {
@@ -1955,11 +1992,13 @@ void AsyncRenderer::workerLoop() {
         if (rendering->pendingRequest.has_value()) {
         } else {
           DoneState done;
+          done.result.capturedPresentation = capturedPresentation;
           done.result.bitmap = std::move(bitmap);
           done.result.compositedPreview = std::move(compositedPreview);
           done.result.rasterViewport = rasterViewport;
           done.result.viewport = request.viewport;
           done.result.overviewInfillOnly = request.overviewInfillOnly;
+          done.result.presentationCoverageRepair = request.presentationCoverageRepair;
           done.result.version = request.version;
           done.result.cpuSnapshotRequestId = request.cpuSnapshotRequestId;
           done.result.documentGeneration = request.documentGeneration;

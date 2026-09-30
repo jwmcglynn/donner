@@ -708,6 +708,10 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
         .documentFrameVersion = layerStatus.documentFrameVersion,
         .displayedDocVersion = layerStatus.displayedDocVersion,
         .immediateOverlayDocumentVersion = layerStatus.immediateOverlayDocumentVersion,
+        .presentationFrameId = layerStatus.presentationFrameId,
+        .presentationIdentity = layerStatus.presentationIdentity,
+        .presentationFollowsPointer = layerStatus.presentationFollowsPointer,
+        .presentedPoses = layerStatus.presentedPoses,
         .selectedCompositedEntity = layerStatus.selectedCompositedEntity,
         .lastFlushAppliedCommands = layerStatus.lastFlushAppliedCommands,
         .lastFlushReplacedDocument = layerStatus.lastFlushReplacedDocument,
@@ -753,6 +757,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
         }
       }
       frameDiagnostics.tiles.push_back(GlRnrReplayTileDiagnostics{
+          .layerEntity = tile.layerEntity,
           .id = tile.id,
           .kind = tile.kind,
           .generation = tile.generation,

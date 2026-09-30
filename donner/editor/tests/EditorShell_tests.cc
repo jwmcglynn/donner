@@ -275,67 +275,6 @@ TEST(EditorShellInternalTest, MapsPresentationResourcesToTelemetrySamples) {
   EXPECT_EQ(telemetry.wgpuLifetimeBufferCreates, memory.wgpuLifetimeBufferCreates);
 }
 
-TEST(EditorShellPresentationTest, ChromeTransformEqualsTileTransformInTheSameFrame) {
-  // The desync impossibility, pinned at the seam: chrome and tiles are placed
-  // from ONE viewport through ONE transform function in the same frame, so a
-  // document point cannot land in two places.
-  ViewportState viewport;
-  viewport.paneOrigin = Vector2d(40.0, 24.0);
-  viewport.paneSize = Vector2d(800.0, 600.0);
-  viewport.devicePixelRatio = 2.0;
-  viewport.panScreenPoint = Vector2d(140.0, 96.0);
-  viewport.panDocPoint = Vector2d(12.0, 7.0);
-  viewport.zoom = 3.25;
-
-  // Capture-time transform is deliberately a different (stale) placement, the
-  // shape a gesture produces when the UI thread runs ahead of the pixels.
-  SelectionChromeSnapshot snapshot;
-  snapshot.canvasFromDoc = Transform2d::Scale(11.0) * Transform2d::Translate(Vector2d(3.0, 5.0));
-
-  const Vector2d framebufferFromLogicalScale(2.0, 2.0);
-  const SelectionChromeSnapshot placed =
-      ChromePlacedOnPresentedDocument(viewport, framebufferFromLogicalScale, snapshot);
-  const Transform2d presentedFromDocument =
-      PresentedFramebufferFromDocumentTransform(viewport, framebufferFromLogicalScale);
-  EXPECT_THAT(placed.canvasFromDoc.data, ::testing::ElementsAreArray(presentedFromDocument.data));
-
-  // The same transform is what the tile compose places quads with: a tile
-  // covering document rect (20,30)-(52,66) lands exactly where the chrome maps
-  // that rect.
-  const PresentedFrameTileGeometry tile{
-      .canvasOffsetDoc = Vector2d(20.0, 30.0),
-      .bitmapDimsDoc = Vector2d(32.0, 36.0),
-  };
-  const std::optional<PresentedTileQuad> tileQuad =
-      ComputePresentedTileQuad(tile, presentedFromDocument, std::nullopt);
-  ASSERT_TRUE(tileQuad.has_value());
-  EXPECT_EQ(tileQuad->topLeft, placed.canvasFromDoc.transformPosition(Vector2d(20.0, 30.0)));
-  EXPECT_EQ(tileQuad->bottomRight, placed.canvasFromDoc.transformPosition(Vector2d(52.0, 66.0)));
-}
-
-TEST(EditorShellPresentationTest, ChromePlacementIgnoresTheCaptureTimeTransform) {
-  // Two snapshots captured at wildly different zooms, presented into the same
-  // frame, must place identically: placement comes from the frame, not the
-  // capture.
-  ViewportState viewport;
-  viewport.paneSize = Vector2d(400.0, 300.0);
-  viewport.devicePixelRatio = 1.0;
-  viewport.zoom = 2.0;
-
-  SelectionChromeSnapshot capturedAtOneX;
-  capturedAtOneX.canvasFromDoc = Transform2d::Scale(1.0);
-  SelectionChromeSnapshot capturedAtFourX;
-  capturedAtFourX.canvasFromDoc = Transform2d::Scale(4.0);
-
-  const Vector2d framebufferFromLogicalScale(1.0, 1.0);
-  EXPECT_THAT(
-      ChromePlacedOnPresentedDocument(viewport, framebufferFromLogicalScale, capturedAtOneX)
-          .canvasFromDoc.data,
-      ::testing::ElementsAreArray(
-          ChromePlacedOnPresentedDocument(viewport, framebufferFromLogicalScale, capturedAtFourX)
-              .canvasFromDoc.data));
-}
-
 TEST(EditorShellPresentationTest, PresentationUsesFramebufferScaleInsteadOfRasterDpr) {
   ViewportState viewport;
   viewport.devicePixelRatio = 1.0;
@@ -1293,10 +1232,6 @@ public:
     return shell.renderCoordinator_.immediateOverlayDocumentVersionForDiagnostics();
   }
 
-  static std::uint64_t OverlayVersionGateSuppressions(const EditorShell& shell) {
-    return shell.renderCoordinator_.overlayVersionGateSuppressionTotalForDiagnostics();
-  }
-
   static RenderCoordinator& Coordinator(EditorShell& shell) { return shell.renderCoordinator_; }
 
   static void HoldRenderResultsForPolls(EditorShell& shell, int polls) {
@@ -1834,21 +1769,11 @@ void RunFramesUntilDisplayedSelectionBounds(gui::EditorWindow& window, EditorShe
   }
 }
 
-/// Drive the frames that leave the editor holding selection chrome captured against a document
-/// version the presented pixels have not caught up to.
-///
-/// That state is what the overlay version gate is written for, and reaching it takes two things
-/// the editor only does together: a live-geometry tool (the Pen tool here) captures chrome from
-/// the post-flush DOM instead of waiting for the raster, and the worker has not published that
-/// version yet. Results are withheld from every later poll so the presented version stays pinned
-/// where the initial settle left it, making the gate's engagement a property of the sequence
-/// rather than of how fast the worker happens to be.
-///
-/// @param window Hidden window driving the frames.
-/// @param shell Editor shell under test, with its target already selected.
-/// @return Document version the presented pixels are pinned at.
-std::uint64_t RunFramesUntilChromeLeadsPresentedDocument(gui::EditorWindow& window,
-                                                         EditorShell& shell) {
+/// Hold raster results while a live style edit advances the document.
+/// @param window Hidden window driving frames.
+/// @param shell Shell whose target is already selected.
+/// @return Version of the retained raster/geometry pair.
+std::uint64_t HoldRasterWhileLiveDocumentAdvances(gui::EditorWindow& window, EditorShell& shell) {
   RunFramesUntilDisplayedSelectionBounds(window, shell);
   EditorShellTestAccess::HoldRenderResultsForPolls(shell, 64);
 
@@ -2446,7 +2371,7 @@ TEST(EditorShellTest, ReplayActionsSwitchToolsAndIgnoreUnknownToolNames) {
   EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
 }
 
-TEST(EditorShellTest, SelectionChromePresentsOnFramesTheOverlayVersionGateSuppresses) {
+TEST(EditorShellTest, ChromeRetainsRasterRevisionWhileLiveDocumentAdvances) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
@@ -2459,13 +2384,12 @@ TEST(EditorShellTest, SelectionChromePresentsOnFramesTheOverlayVersionGateSuppre
   ASSERT_TRUE(target.has_value());
   app.setSelection(*target);
 
-  const std::uint64_t presentedVersion = RunFramesUntilChromeLeadsPresentedDocument(window, shell);
+  const std::uint64_t presentedVersion = HoldRasterWhileLiveDocumentAdvances(window, shell);
   ASSERT_GT(presentedVersion, 0u) << "The gate only engages once a render has been presented.";
   ASSERT_TRUE(EditorShellTestAccess::ImmediateChromePlanProduced(shell));
   ASSERT_EQ(EditorShellTestAccess::ImmediateOverlayDocumentVersion(shell),
-            std::optional<std::uint64_t>(app.document().currentFrameVersion()));
-  ASSERT_GT(app.document().currentFrameVersion(), presentedVersion)
-      << "The Pen frame must leave the chrome captured ahead of the presented pixels.";
+            std::optional<std::uint64_t>(presentedVersion));
+  ASSERT_GT(app.document().currentFrameVersion(), presentedVersion);
 
   // Leaving the Pen tool takes away the live-geometry allowance, and there is no drag projection
   // to reconcile chrome with older pixels, so the next frame is one the gate suppresses.
@@ -2474,14 +2398,11 @@ TEST(EditorShellTest, SelectionChromePresentsOnFramesTheOverlayVersionGateSuppre
                                                .kind = repro::ReproAction::Kind::SetActiveTool,
                                                .tool = "select",
                                            });
-  const std::uint64_t suppressionsBeforeFrame =
-      EditorShellTestAccess::OverlayVersionGateSuppressions(shell);
   RunShellFrame(window, shell);
 
   ASSERT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell), presentedVersion)
       << "Withheld results should have kept the presented version pinned across the frame.";
-  ASSERT_GT(EditorShellTestAccess::OverlayVersionGateSuppressions(shell), suppressionsBeforeFrame)
-      << "This frame must actually be one the version gate suppressed, or it proves nothing.";
+  EXPECT_EQ(EditorShellTestAccess::ImmediateOverlayDocumentVersion(shell), presentedVersion);
   EXPECT_TRUE(EditorShellTestAccess::ImmediateChromePlanProduced(shell))
       << "A suppressed overlay refresh must not take the chrome pass with it: without a plan the "
          "frame presents document pixels with no chrome drawn over them, and the selection "
@@ -2490,7 +2411,7 @@ TEST(EditorShellTest, SelectionChromePresentsOnFramesTheOverlayVersionGateSuppre
       << "The retained chrome should still outline the selected element.";
 }
 
-TEST(EditorShellTest, DeselectingDropsChromeOnFramesTheOverlayVersionGateSuppresses) {
+TEST(EditorShellTest, DeselectionDropsChromeWhileRetainingRaster) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
@@ -2503,7 +2424,7 @@ TEST(EditorShellTest, DeselectingDropsChromeOnFramesTheOverlayVersionGateSuppres
   ASSERT_TRUE(target.has_value());
   app.setSelection(*target);
 
-  const std::uint64_t presentedVersion = RunFramesUntilChromeLeadsPresentedDocument(window, shell);
+  const std::uint64_t presentedVersion = HoldRasterWhileLiveDocumentAdvances(window, shell);
   ASSERT_GT(presentedVersion, 0u);
   ASSERT_EQ(EditorShellTestAccess::SelectionChromePathCount(shell), 1u);
 
@@ -2517,14 +2438,9 @@ TEST(EditorShellTest, DeselectingDropsChromeOnFramesTheOverlayVersionGateSuppres
   app.clearSelection();
   ASSERT_GT(app.document().currentFrameVersion(), presentedVersion)
       << "The Pen frame must leave the chrome captured ahead of the presented pixels.";
-  const std::uint64_t suppressionsBeforeFrame =
-      EditorShellTestAccess::OverlayVersionGateSuppressions(shell);
   RunShellFrame(window, shell);
 
   ASSERT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell), presentedVersion);
-  EXPECT_EQ(EditorShellTestAccess::OverlayVersionGateSuppressions(shell), suppressionsBeforeFrame)
-      << "A changed chrome subject must recapture instead of suppressing, because no later frame "
-         "will recapture for it while the presented document stays behind.";
   EXPECT_EQ(EditorShellTestAccess::SelectionChromePathCount(shell), 0u)
       << "Chrome captured for the old selection must not survive the deselect just because the "
          "overlay refresh is otherwise suppressed.";
@@ -3644,15 +3560,13 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
   constexpr Vector2d kTargetProbePoint(10.0, 12.0);
   const Vector2d expectedLiveProbe =
       status.activeDragPreview->documentFromCachedDocument.transformPosition(kTargetProbePoint);
-  const Vector2d representedProbe =
-      status.displayedDragPreview->documentFromCachedDocument.transformPosition(kTargetProbePoint);
   const bool hasLiveDragTile =
       std::ranges::any_of(status.tiles, [&](const LayerInspectorStatusReadback::Tile& tile) {
         if (!tile.isDragTarget) {
           return false;
         }
         const Vector2d presentedProbe =
-            tile.presentedDocumentFromCachedDocument.transformPosition(representedProbe);
+            tile.presentedDocumentFromCachedDocument.transformPosition(kTargetProbePoint);
         return std::abs(presentedProbe.x - expectedLiveProbe.x) < 1e-6 &&
                std::abs(presentedProbe.y - expectedLiveProbe.y) < 1e-6;
       });
@@ -4454,6 +4368,10 @@ TEST(EditorShellTest, SelectDragKeepsFullPathChrome) {
   ASSERT_TRUE(shell.valid());
   EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
 
+  EditorShellTestAccess::App(shell).setSelection(
+      *EditorShellTestAccess::App(shell).document().document().querySelector("#target"));
+  RunFramesUntilDisplayedSelectionBounds(window, shell);
+
   shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
       .documentPoint = Vector2d(20.0, 20.0),
       .leftMouseDown = true,
@@ -4472,6 +4390,7 @@ TEST(EditorShellTest, SelectDragKeepsFullPathChrome) {
   EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
   EXPECT_EQ(EditorShellTestAccess::SelectionChromeDetailForActiveTool(shell),
             SelectionChromeDetail::Full);
+  RunShellFrame(window, shell);
   EXPECT_THAT(EditorShellTestAccess::SelectionChromePathCount(shell), ::testing::Gt(0u));
 }
 
