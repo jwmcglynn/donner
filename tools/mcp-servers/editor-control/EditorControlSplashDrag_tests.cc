@@ -147,10 +147,18 @@ TEST(EditorControlSessionTest, FractionalZoomFirstDragCapture) {
   ASSERT_THAT(result.frameDiagnostics.size(), testing::Eq(10u));
   const auto& released = result.frameDiagnostics.back();
   EXPECT_GT(released.documentFrameVersion, result.frameDiagnostics.front().documentFrameVersion);
-  // A presented cached tile can follow the pointer without advancing the document version.
-  EXPECT_THAT(released.displayedDragPreview,
+  EXPECT_EQ(released.presentationIdentity.version, released.documentFrameVersion);
+  ASSERT_THAT(released.activeDragPreview,
               testing::Optional(testing::Field(&SelectTool::ActiveDragPreview::entity,
                                                released.selectedCompositedEntity)));
+  EXPECT_THAT(released.displayedDragPreview, testing::Eq(std::nullopt));
+  for (const auto& requested : released.activeDragPreview->poses) {
+    const auto presented = std::ranges::find_if(
+        released.presentedPoses, [&](const auto& pose) { return pose.entity == requested.entity; });
+    ASSERT_NE(presented, released.presentedPoses.end());
+    EXPECT_TRUE(
+        SamePresentationTransform(presented->documentFromElement, requested.documentFromElement));
+  }
   EXPECT_GT(released.presentationFrameId, 0u);
   EXPECT_THAT(released.presentedPoses,
               testing::Contains(
