@@ -464,6 +464,7 @@ private:
   /// Rebuilt every upload (cheap - N tiles, plain values).
   void publishResources(std::shared_ptr<const CapturedPresentation> capture,
                         std::shared_ptr<const CapturedPresentation> overviewCapture);
+  friend struct FramePresentationTestAccess;
   std::shared_ptr<const PresentationResources> presentationResources_;
   std::vector<TileView> tiles_;
   /// Paint-order view of `overviewTileTextures_`.

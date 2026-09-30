@@ -1753,4 +1753,32 @@ TEST(RenderCoordinatorTest, SameVersionOverviewRepairRequestsMissingSceneCoverag
       coordinator, true, app.document().currentFrameVersion()));
 }
 
+TEST(RenderCoordinatorTest, UnpairedBoundedResultCannotReplaceCompleteCommittedScene) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  const auto old = AcceptCapturedScene(coordinator, app);
+  const auto oldTiles = coordinator.compositedPresentation().resources()->tiles();
+  const auto second = QuerySelector(app, "#r2");
+  app.document().applyMutation(
+      EditorCommand::SetTransformCommand(second, Transform2d::Translate(20, 0)));
+  ASSERT_TRUE(app.flushFrame());
+  const auto current = AcceptCapturedScene(coordinator, app);
+  ASSERT_TRUE(old->identity().sameContent(current->identity()));
+  GlTextureCache textures;
+  FramePresentationTestAccess::installResources(
+      textures, FramePresentationTestAccess::resources(current, oldTiles, {}, old, oldTiles));
+  RenderResult result;
+  result.version = app.document().currentFrameVersion();
+  result.capturedPresentation = current;
+  result.rasterViewport.viewportBounded = true;
+  result.compositedPreview.emplace();
+  result.compositedPreview->representedDragPreview =
+      RenderRequest::DragPreview{.entity = QuerySelector(app, "#r1").unsafeEntityHandle().entity(),
+                                 .interactionKind = svg::compositor::InteractionHint::ActiveDrag};
+  EXPECT_FALSE(RenderCoordinatorTestAccess::canPresentWithOverview(
+      coordinator, result, result.rasterViewport, app, textures));
+}
+
 }  // namespace donner::editor

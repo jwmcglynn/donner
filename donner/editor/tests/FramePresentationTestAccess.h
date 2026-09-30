@@ -7,6 +7,13 @@
 namespace donner::editor {
 
 struct FramePresentationTestAccess {
+  static void installResources(
+      GlTextureCache& cache,
+      std::shared_ptr<const GlTextureCache::PresentationResources> resources) {
+    cache.overviewTiles_ = resources->overviewTiles();
+    cache.presentationResources_ = std::move(resources);
+  }
+
   static std::shared_ptr<const GlTextureCache::PresentationResources> resources(
       std::shared_ptr<const CapturedPresentation> capture,
       std::vector<GlTextureCache::TileView> tiles, PresentationCoverageDiagnostics coverage = {},
