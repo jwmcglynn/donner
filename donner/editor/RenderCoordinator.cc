@@ -1258,6 +1258,49 @@ void RenderCoordinator::recordFramePresentationCost(const FramePresentationInput
 }
 
 namespace {
+#ifdef __EMSCRIPTEN__
+void PublishFrameRepairDetails(const FramePresentationInput& input,
+                               const GlTextureCache::PresentationResources& resources,
+                               FramePresentationFailure failure) {
+  const auto current = input.documentIdentity;
+  const auto active = resources.capture()->identity();
+  const auto overview = resources.overviewCapture() ? resources.overviewCapture()->identity()
+                                                    : PresentationIdentity{};
+  // clang-format off
+  MAIN_THREAD_ASYNC_EM_ASM({
+    window['__donnerPresentationRepairStats'] = ({
+      'failure': $0, 'current': [$1, $2, $3, $4],
+      'active': [$5, $6, $7, $8, $9], 'overview': [$10, $11, $12, $13, $14],
+      'bounded': Boolean($15),
+    });
+  }, static_cast<int>(failure), static_cast<double>(current.documentRevision),
+      static_cast<double>(current.version), static_cast<double>(current.geometryRevision),
+      static_cast<double>(current.presentationEpoch), static_cast<double>(active.captureId),
+      static_cast<double>(active.documentRevision), static_cast<double>(active.version),
+      static_cast<double>(active.geometryRevision), static_cast<double>(active.presentationEpoch),
+      static_cast<double>(overview.captureId), static_cast<double>(overview.documentRevision),
+      static_cast<double>(overview.version), static_cast<double>(overview.geometryRevision),
+      static_cast<double>(overview.presentationEpoch), resources.coverage().activeTilesViewportBounded);
+  MAIN_THREAD_ASYNC_EM_ASM({
+    const stats = window['__donnerPresentationRepairStats'];
+    if (stats && Object.is(stats['active'][0], $0)) {
+      stats['pendingMutations'] = Boolean($1);
+      stats['activeCoverage'] = ([$2, $3, $4, $5]);
+      stats['overviewCoverage'] = ([$6, $7, $8, $9]);
+    }
+  }, static_cast<double>(active.captureId), input.pendingDocumentMutations,
+      resources.coverage().activeRasterDocumentRect.topLeft.x,
+      resources.coverage().activeRasterDocumentRect.topLeft.y,
+      resources.coverage().activeRasterDocumentRect.bottomRight.x,
+      resources.coverage().activeRasterDocumentRect.bottomRight.y,
+      resources.coverage().overviewRasterDocumentRect.topLeft.x,
+      resources.coverage().overviewRasterDocumentRect.topLeft.y,
+      resources.coverage().overviewRasterDocumentRect.bottomRight.x,
+      resources.coverage().overviewRasterDocumentRect.bottomRight.y);
+  // clang-format on
+}
+#endif
+
 bool HasOnlyStaticFrameIntent(const FramePresentationInput& input) {
   const auto& decorations = input.decorations;
   return !input.desired && !input.pendingDocumentMutations && !input.livePathReplacement &&
@@ -1314,6 +1357,9 @@ void RenderCoordinator::updateFrameRepairStatus(
   presentationNeedsRender_ = failure != FramePresentationFailure::None;
   presentationNeedsCoverage_ = outcome.failure == FramePresentationFailure::InsufficientCoverage ||
                                outcome.failure == FramePresentationFailure::MissingOverview;
+#ifdef __EMSCRIPTEN__
+  PublishFrameRepairDetails(input, *resources, failure);
+#endif
   if (presentationNeedsRender_) {
     pendingRepair_ = PresentationRepairIdentity{
         .scene = input.documentIdentity,
@@ -1394,6 +1440,8 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
   }
   if (framePresentation_ != nullptr) {
     recordFramePresentationCost(input, tool, MillisecondsSince(buildStart));
+  } else {
+    cost.captureMs = MillisecondsSince(buildStart);
   }
   return framePresentation_;
 }
