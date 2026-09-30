@@ -509,4 +509,43 @@ TEST(FramePresentationTest, CurrentCommittedCaptureReplacesAnOlderDisplayedOverr
   EXPECT_THAT(adopted->overrides(), testing::IsEmpty());
 }
 
+TEST(FramePresentationTest, FractionalCoverageUsesOwnedOverviewThroughNewerDragPoses) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kRect));
+  SelectTool tool;
+  tool.onMouseDown(app, Vector2d(15, 15), MouseModifiers{});
+  const auto overview = Capture(app, 1);
+  const Entity entity = overview->selection().front();
+  tool.onMouseMove(app, Vector2d(35, 15), true);
+  ASSERT_TRUE(app.flushFrame());
+  const auto active = Capture(app, 2);
+  const auto resources = FramePresentationTestAccess::resources(
+      active, {RectTile(entity, 10, 20)},
+      {.activeTilesViewportBounded = true,
+       .overviewInfillAvailable = true,
+       .activeRasterDocumentRect = Box2d::FromXYWH(0, 0, 100, 99.98)},
+      overview, {RectTile(entity, 10, 0)});
+  auto first = FramePresentation::Build(resources, Input(app, tool, 1)).frame;
+  ASSERT_NE(first, nullptr);
+  EXPECT_EQ(first->identity().captureId, overview->identity().captureId);
+  EXPECT_TRUE(first->followsPointer());
+  ExpectRectAt(*first, 30);
+  tool.onMouseMove(app, Vector2d(45, 15), true);
+  auto second = FramePresentation::Build(resources, Input(app, tool, 2), nullptr, first).frame;
+  ASSERT_NE(second, nullptr);
+  EXPECT_TRUE(second->followsPointer());
+  ExpectRectAt(*second, 40);
+  auto idle = Input(app, tool, 3);
+  idle.desired.reset();
+  EXPECT_EQ(FramePresentation::Build(resources, idle).failure,
+            FramePresentationFailure::MissingOverview);
+  app.document().document().setCanvasSize(200, 200);
+  const auto changedLayout = Capture(app, 3);
+  const auto changed = FramePresentationTestAccess::resources(
+      changedLayout, {RectTile(entity, 10, 20)}, resources->coverage(), overview,
+      resources->overviewTiles());
+  EXPECT_EQ(FramePresentation::Build(changed, Input(app, tool, 4)).failure,
+            FramePresentationFailure::MissingOverview);
+}
+
 }  // namespace donner::editor
