@@ -789,6 +789,12 @@ public:
   /// The callback renders above the document underlay and below ImGui UI.
   void setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback);
 
+  /// Substitute completion observation while driving the real framebuffer test path.
+  /// @param probe Completed submission serial reported to the presentation scheduler.
+  void setPresentationCompletionProbeForTesting(std::function<std::uint64_t()> probe) {
+    presentationCompletionProbeForTesting_ = std::move(probe);
+  }
+
   /**
    * Test seam: bounds how long \ref endFrameAndReadPixels waits for its readback map, in place of
    * the editor's readback bound, so a case can reach the bound without spending it. A map that
@@ -930,6 +936,9 @@ private:
 #ifdef __EMSCRIPTEN__
   /// Cross-thread wake gate for the event-driven Wasm main loop.
   std::atomic_bool wasmFrameRequested_{true};
+#endif
+#ifdef DONNER_EDITOR_WGPU
+  std::function<std::uint64_t()> presentationCompletionProbeForTesting_;
 #endif
 };
 
