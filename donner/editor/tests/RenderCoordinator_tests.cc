@@ -1673,4 +1673,24 @@ TEST(RenderCoordinatorTest, CurrentOverviewCanReplaceUnusableBoundedCoverage) {
       << "a current coherent overview must unblock a frame whose bounded raster lacks coverage";
 }
 
+TEST(RenderCoordinatorTest, RepairBudgetSurvivesOverviewAndBoundedRasterStages) {
+  NothingToPresentRetry retry;
+  const auto now = NothingToPresentRetry::Clock::now();
+  RenderAttemptIdentity overview;
+  overview.overviewInfillOnly = true;
+  overview.repair = PresentationRepairIdentity{
+      .scene = {.documentGeneration = 1, .documentRevision = 2, .version = 3},
+      .failure = FramePresentationFailure::MissingOverview};
+  retry.noteFailure(overview, now);
+  auto bounded = overview;
+  bounded.overviewInfillOnly = false;
+  bounded.rasterViewport.outputSizePx = Vector2i(1024, 1024);
+  bounded.repair->failure = FramePresentationFailure::InsufficientCoverage;
+  EXPECT_FALSE(retry.mayPost(bounded, now + std::chrono::milliseconds(50)));
+  EXPECT_TRUE(retry.mayPost(bounded, now + std::chrono::milliseconds(100)));
+  bounded.repair->coverage.outputSizePx = Vector2i(2048, 2048);
+  EXPECT_TRUE(retry.mayPost(bounded, now + std::chrono::milliseconds(50)))
+      << "a changed coverage requirement is new repair intent";
+}
+
 }  // namespace donner::editor

@@ -56,6 +56,7 @@ struct PresentationRepairIdentity {
   PresentationIdentity scene;
   std::vector<Entity> selection;
   std::vector<PresentationPose> poses;
+  EditorRasterViewport coverage;
   FramePresentationFailure failure = FramePresentationFailure::None;
 };
 
