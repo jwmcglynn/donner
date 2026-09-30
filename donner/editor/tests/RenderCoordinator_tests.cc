@@ -1622,4 +1622,30 @@ TEST(RenderCoordinatorTest, PixelCaptureWithNothingToPresentIsNotRepostedEveryFr
 }
 
 }  // namespace
+TEST(RenderCoordinatorTest, RejectedCaptureHasBoundedRetriesWithoutConfigurationInvalidation) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderResult result;
+  result.documentGeneration = app.document().documentGeneration();
+  result.version = app.document().currentFrameVersion();
+  result.rasterViewport = MakeViewport(app).rasterViewport();
+  result.compositedPreview.emplace();
+  for (const auto delay : NothingToPresentRetry::kRetryDelays) {
+    EXPECT_FALSE(
+        RenderCoordinatorTestAccess::rejectPreparedResult(coordinator, result, app, textures));
+    EXPECT_THAT(
+        coordinator.nextNothingToPresentRetryWakeSeconds(),
+        testing::Optional(testing::FloatNear(std::chrono::duration<float>(delay).count(), 1e-4f)));
+    EXPECT_FALSE(coordinator.presentationRefreshPending())
+        << "a rejected capture is repair work, not a renderer-setting invalidation";
+    RenderCoordinatorTestAccess::advanceFakeRetryClock(delay);
+  }
+  EXPECT_FALSE(
+      RenderCoordinatorTestAccess::rejectPreparedResult(coordinator, result, app, textures));
+  EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt);
+}
+
 }  // namespace donner::editor

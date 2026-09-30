@@ -481,4 +481,32 @@ TEST(FramePresentationTest, TextGeometryRequiresMatchingDocumentFontAndLayoutIde
 }
 
 }  // namespace
+TEST(FramePresentationTest, CurrentCommittedCaptureReplacesAnOlderDisplayedOverride) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kRect));
+  SelectTool tool;
+  tool.onMouseDown(app, Vector2d(15, 15), MouseModifiers{});
+  const auto original = Capture(app, 1);
+  const Entity entity = original->selection().front();
+  const auto resources =
+      FramePresentationTestAccess::resources(original, {RectTile(entity, 10, 0)});
+  tool.onMouseMove(app, Vector2d(35, 15), true);
+  const auto held = FramePresentation::Build(resources, Input(app, tool, 1));
+  ASSERT_NE(held, nullptr);
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseUp(app, Vector2d(35, 15));
+  auto element = app.selectedElements().front().cast<svg::SVGGraphicsElement>();
+  element.setTransform(Transform2d::Translate(50, 0));
+  const auto current = Capture(app, 2);
+  const auto replacement =
+      FramePresentationTestAccess::resources(current, {RectTile(entity, 60, 0)});
+  auto input = Input(app, tool, 2);
+  input.documentIdentity = current->identity();
+  input.desired.reset();
+  const auto adopted = FramePresentation::Build(replacement, input, nullptr, held);
+  ASSERT_NE(adopted, nullptr);
+  ExpectRectAt(*adopted, 60);
+  EXPECT_THAT(adopted->overrides(), testing::IsEmpty());
+}
+
 }  // namespace donner::editor

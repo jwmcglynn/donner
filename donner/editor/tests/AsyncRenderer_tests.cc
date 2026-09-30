@@ -7189,4 +7189,30 @@ TEST(AsyncRendererTest, FullCanvasTextureCaptureSuccessReportsNoFallback) {
 }
 
 }  // namespace
+TEST(AsyncRendererTest, PersistentSelectionCaptureCertifiesTheActualPromotedLayer) {
+  auto document = svg::instantiateSubtree(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="r" x="10" y="10" width="20" height="20" fill="red"/></svg>)");
+  document.setCanvasSize(100, 100);
+  const auto selected = document.querySelector("#r");
+  ASSERT_THAT(selected, testing::Ne(std::nullopt));
+  const Entity entity = selected->unsafeEntityHandle().entity();
+  svg::Renderer renderer;
+  AsyncRenderer worker;
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  request.documentGeneration = 1;
+  request.selectedEntity = entity;
+  request.selectedElements = {*selected};
+  worker.requestRender(request);
+  const auto result = WaitForRenderResult(worker);
+  ASSERT_THAT(result, testing::Ne(std::nullopt));
+  ASSERT_THAT(result->capturedPresentation, testing::Ne(nullptr));
+  ASSERT_THAT(result->compositedPreview, testing::Ne(std::nullopt));
+  ASSERT_THAT(
+      result->compositedPreview->tiles,
+      testing::Contains(testing::Field(&RenderResult::CompositedTile::layerEntity, entity)));
+  EXPECT_TRUE(result->capturedPresentation->canProject(entity))
+      << "certification follows rendered layer ownership, not the presence of a drag request";
+}
+
 }  // namespace donner::editor

@@ -52,6 +52,16 @@ struct RenderCoordinatorTestAccess {
 
   static std::chrono::steady_clock::time_point FakeRetryNow() { return fakeRetryNow; }
 
+  static bool rejectPreparedResult(RenderCoordinator& coordinator, RenderResult& result,
+                                   EditorApp& app, GlTextureCache& textures) {
+    coordinator.lastPostedAttempt_ = RenderAttemptIdentity{
+        .documentGeneration = result.documentGeneration,
+        .version = result.version,
+        .rasterViewport = result.rasterViewport,
+    };
+    return coordinator.prepareResultResources(result, app, textures);
+  }
+
   static inline std::chrono::steady_clock::time_point fakeRetryNow{};
 
   static std::optional<std::uint64_t> requestedCommitGeneration(
