@@ -1396,7 +1396,10 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
 
 bool RenderCoordinator::canReplaceWithOverview(const RenderResult& result,
                                                const EditorApp& app) const {
-  return false;
+  return pendingRepair_ && pendingRepair_->failure == FramePresentationFailure::MissingOverview &&
+         result.capturedPresentation != nullptr &&
+         result.capturedPresentation->identity().sameScene(currentPresentationIdentity(app)) &&
+         !app.document().hasPendingMutations();
 }
 
 void RenderCoordinator::acceptOverviewResult(RenderResult result, EditorApp& app,
@@ -1404,7 +1407,11 @@ void RenderCoordinator::acceptOverviewResult(RenderResult result, EditorApp& app
   if (result.version != app.document().currentFrameVersion()) {
     return;
   }
-  if (!textures.tiles().empty() && !canReplaceWithOverview(result, app)) {
+  if (!textures.tiles().empty() && canReplaceWithOverview(result, app)) {
+    presentCompositedResult(result, app, result.viewport, textures);
+    return;
+  }
+  if (!textures.tiles().empty()) {
     pendingOverviewResult_ = std::move(result);
     return;
   }
