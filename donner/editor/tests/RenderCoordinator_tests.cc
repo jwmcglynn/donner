@@ -1693,4 +1693,37 @@ TEST(RenderCoordinatorTest, RepairBudgetSurvivesOverviewAndBoundedRasterStages) 
       << "a changed coverage requirement is new repair intent";
 }
 
+TEST(RenderCoordinatorTest, CompatibleOverviewPreservesNewerActiveDragIntent) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  const auto capture = AcceptCapturedScene(coordinator, app);
+  const auto resources = coordinator.compositedPresentation().resources();
+  tool.onMouseMove(app, Vector2d(35.0, 15.0), true);
+  ASSERT_TRUE(app.flushFrame());
+  coordinator.compositedPresentation().notePreparedResources(
+      FramePresentationTestAccess::resources(
+          capture, resources->tiles(),
+          {.activeTilesViewportBounded = true,
+           .activeRasterDocumentRect = Box2d::FromXYWH(0, 0, 1, 1)}),
+      capture->selection().front(), std::nullopt);
+  EXPECT_EQ(BuildFrame(coordinator, app, tool, MakeViewport(app), textures), nullptr);
+  RenderResult overview;
+  overview.capturedPresentation = capture;
+  overview.version = capture->identity().version;
+  overview.documentGeneration = app.document().documentGeneration();
+  overview.overviewInfillOnly = true;
+  EXPECT_TRUE(RenderCoordinatorTestAccess::canReplaceWithOverview(coordinator, overview, app));
+  coordinator.compositedPresentation().notePreparedResources(
+      resources, capture->selection().front(), std::nullopt);
+  const auto frame = BuildFrame(coordinator, app, tool, MakeViewport(app), textures);
+  ASSERT_NE(frame, nullptr);
+  EXPECT_TRUE(frame->followsPointer());
+  EXPECT_EQ(frame->chrome().paths.front().pathDoc.bounds(), Box2d::FromXYWH(30, 10, 20, 20));
+}
+
 }  // namespace donner::editor
