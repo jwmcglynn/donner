@@ -3725,6 +3725,28 @@ TEST(EditorWindowTest, APublishedManifestRetainsItsUiRegistrationUntilItsLastOwn
   age();
   EXPECT_TRUE(registry->lookup(oldId).hasError()) << "dropping the final lease must release it";
 }
+TEST(EditorWindowTest, PartialUiFailureStillCountsSubmittedDocumentWork) {
+  EditorWindow window(EditorWindowOptions{.title = "Partial UI submission test",
+                                          .initialWidth = 64,
+                                          .initialHeight = 64,
+                                          .visible = false});
+  ASSERT_TRUE(window.valid());
+  ASSERT_NE(window.geodeFramebufferDevice(), nullptr);
+  window.setPresentationCompletionProbeForTesting([] { return std::uint64_t(0); });
+  window.forceUiPassFailureForTesting(true);
+  int documentDraws = 0;
+  window.setWgpuUnderlayRenderCallback(
+      [&](const EditorWindowWgpuRenderTarget&) { ++documentDraws; });
+  for (int frame = 0; frame < 10; ++frame) {
+    window.beginFrame();
+
+    window.endFrame();
+  }
+  EXPECT_EQ(documentDraws, 3)
+      << "failure of the later UI pass must not erase the underlay's pending GPU submission";
+  EXPECT_TRUE(window.hasIdleGpuWork()) << "pending partial frames retain their completion wake";
+}
+
 #endif
 
 }  // namespace donner::editor::gui

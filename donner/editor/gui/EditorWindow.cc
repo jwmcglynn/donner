@@ -2612,6 +2612,7 @@ bool EditorWindow::drawFrameBelowUi(const gpu::Texture& frameTarget, Vector2i fr
 bool EditorWindow::recordFrameUi(const gpu::Texture& frameTarget, Vector2i framebufferSizePx,
                                  bool loadExisting, EditorWindowFrameTiming& timing) {
   const auto imguiDrawStart = std::chrono::steady_clock::now();
+  if (forceUiPassFailureForTesting_) return false;
   if (wgpuState_->uiRenderer == nullptr) {
     return false;
   }

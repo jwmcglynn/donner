@@ -791,6 +791,10 @@ public:
 
   /// Substitute completion observation while driving the real framebuffer test path.
   /// @param probe Completed submission serial reported to the presentation scheduler.
+  /// Refuse UI recording after the document pass has submitted, simulating an allocation failure.
+  /// @param enabled Whether to refuse the UI pass.
+  void forceUiPassFailureForTesting(bool enabled) { forceUiPassFailureForTesting_ = enabled; }
+
   void setPresentationCompletionProbeForTesting(std::function<std::uint64_t()> probe) {
     presentationCompletionProbeForTesting_ = std::move(probe);
   }
@@ -938,6 +942,7 @@ private:
   std::atomic_bool wasmFrameRequested_{true};
 #endif
 #ifdef DONNER_EDITOR_WGPU
+  bool forceUiPassFailureForTesting_ = false;
   std::function<std::uint64_t()> presentationCompletionProbeForTesting_;
 #endif
 };
