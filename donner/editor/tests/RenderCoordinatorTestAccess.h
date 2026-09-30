@@ -67,6 +67,12 @@ struct RenderCoordinatorTestAccess {
     return coordinator.canReplaceWithOverview(result, app);
   }
 
+  static bool requiresFreshOverview(RenderCoordinator& coordinator, bool available,
+                                    std::uint64_t currentVersion) {
+    coordinator.overviewDocVersion_ = currentVersion;
+    return coordinator.requiresFreshOverview(available, currentVersion);
+  }
+
   static inline std::chrono::steady_clock::time_point fakeRetryNow{};
 
   static std::optional<std::uint64_t> requestedCommitGeneration(
