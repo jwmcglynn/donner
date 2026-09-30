@@ -330,8 +330,8 @@ bool SamePresentationRepair(const std::optional<PresentationRepairIdentity>& lhs
   if (!lhs.has_value() || !rhs.has_value()) {
     return lhs.has_value() == rhs.has_value();
   }
-  if (!lhs->scene.sameScene(rhs->scene) || lhs->selection != rhs->selection ||
-      lhs->poses.size() != rhs->poses.size()) {
+  if (!lhs->scene.sameScene(rhs->scene) || !SameRasterViewport(lhs->coverage, rhs->coverage) ||
+      lhs->selection != rhs->selection || lhs->poses.size() != rhs->poses.size()) {
     return false;
   }
   for (std::size_t i = 0; i < lhs->poses.size(); ++i) {
@@ -345,8 +345,10 @@ bool SamePresentationRepair(const std::optional<PresentationRepairIdentity>& lhs
 }
 
 bool SameRenderAttempt(const RenderAttemptIdentity& lhs, const RenderAttemptIdentity& rhs) {
-  return SamePresentationRepair(lhs.repair, rhs.repair) &&
-         lhs.documentGeneration == rhs.documentGeneration && lhs.version == rhs.version &&
+  if (lhs.repair.has_value() || rhs.repair.has_value()) {
+    return SamePresentationRepair(lhs.repair, rhs.repair);
+  }
+  return lhs.documentGeneration == rhs.documentGeneration && lhs.version == rhs.version &&
          lhs.overviewInfillOnly == rhs.overviewInfillOnly &&
          lhs.selectedEntity == rhs.selectedEntity &&
          lhs.presentationEpoch == rhs.presentationEpoch &&
@@ -1317,6 +1319,7 @@ void RenderCoordinator::updateFrameRepairStatus(
         .scene = input.documentIdentity,
         .selection = input.selection,
         .poses = input.desired.has_value() ? input.desired->poses : std::vector<PresentationPose>{},
+        .coverage = input.viewport.rasterViewport(),
         .failure = failure};
     if (acceptedRepairAttempt_.has_value() && outcome.failure != FramePresentationFailure::None &&
         resources->capture()->identity().captureId != lastRejectedRepairCapture_) {
@@ -1367,6 +1370,7 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
     pendingRepair_ =
         PresentationRepairIdentity{.scene = currentPresentationIdentity(app),
                                    .selection = selectedPresentationEntities(app),
+                                   .coverage = viewport.rasterViewport(),
                                    .failure = FramePresentationFailure::MissingResources};
     return framePresentation_;
   }
