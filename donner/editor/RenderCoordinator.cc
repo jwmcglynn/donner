@@ -1524,7 +1524,8 @@ bool RenderCoordinator::canPresentWithOverview(const RenderResult& result,
 }
 
 bool RenderCoordinator::requiresFreshOverview(bool available, std::uint64_t currentVersion) const {
-  return !available || overviewDocVersion_ != currentVersion;
+  return !available || overviewDocVersion_ != currentVersion ||
+         (pendingRepair_ && pendingRepair_->failure == FramePresentationFailure::MissingOverview);
 }
 
 bool RenderCoordinator::needsOverviewInfillForViewport(EditorApp& app,
