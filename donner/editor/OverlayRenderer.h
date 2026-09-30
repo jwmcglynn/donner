@@ -63,6 +63,8 @@ struct LockedRejectionFlashInput {
 
 /// Detail level used when capturing selection chrome.
 enum class SelectionChromeDetail {
+  /// Capture all geometry for later presentation, including path editing points.
+  Complete,
   /// Capture visible path outlines plus selection bounds.
   Full,
   /// Capture visible path outlines only, skipping selection bounds and transform handles.

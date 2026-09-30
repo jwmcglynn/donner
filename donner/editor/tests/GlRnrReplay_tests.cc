@@ -3540,6 +3540,7 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
     EXPECT_GT(capture->dimensions.y, 0);
   }
 
+  int cachedDragFrames = 0;
   for (std::uint64_t frame = 8; frame <= kLastCaptureFrame; ++frame) {
     const repro::GlRnrReplayFrameDiagnostics* diagnostics = FindFrameDiagnostics(result, frame);
     ASSERT_NE(diagnostics, nullptr) << "missing diagnostics for replay frame " << frame;
@@ -3550,6 +3551,13 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
         << "Zoom-driven canvas commits during active drag force full cached-span rerasterization "
            "on replay frame "
         << frame;
+    // A zoom-out can expose a flattened overview that cannot preserve the moved object. The
+    // worker request must explicitly originate from that rejected frame; ordinary affine drag
+    // frames still require zero cached-span raster work.
+    if (diagnostics->frameCost.compositedRender.presentationCoverageRepair) {
+      continue;
+    }
+    ++cachedDragFrames;
     EXPECT_EQ(diagnostics->frameCost.compositedRender.cachedTileCount, 0)
         << "Active zoom+drag should keep using presenter-transformed cache instead of "
            "rerasterizing cached compositor tiles on replay frame "
@@ -3557,6 +3565,8 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
     EXPECT_DOUBLE_EQ(diagnostics->frameCost.compositedRender.cachedMs, 0.0)
         << "Unexpected cached compositor raster cost on active zoom+drag replay frame " << frame;
   }
+
+  EXPECT_GE(cachedDragFrames, 6) << "The covered drag must retain its cached presentation path";
 
   RemoveDiagnosticOutputOnSuccess(outputDir);
 }

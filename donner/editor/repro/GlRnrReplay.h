@@ -91,6 +91,8 @@ struct GlRnrReplayCapture {
 
 /// Per-frame texture tile diagnostics captured during GL replay.
 struct GlRnrReplayTileDiagnostics {
+  /// Object owning this independently rasterized layer.
+  Entity layerEntity = entt::null;
   /// Stable texture-cache tile id.
   std::string id;
   /// Segment/layer tile kind.
@@ -181,6 +183,11 @@ struct GlRnrReplayFrameDiagnostics {
   std::uint64_t displayedDocVersion = 0;
   /// Document version represented by the current immediate overlay snapshot, if any.
   std::optional<std::uint64_t> immediateOverlayDocumentVersion;
+  /// Identity and poses of the immutable frame shared by artwork and chrome.
+  std::uint64_t presentationFrameId = 0;
+  PresentationIdentity presentationIdentity;
+  bool presentationFollowsPointer = false;
+  std::vector<PresentationPose> presentedPoses;
   /// Selected entity eligible for composited presentation, or entt::null.
   Entity selectedCompositedEntity = entt::null;
   /// Whether the last document flush applied commands.

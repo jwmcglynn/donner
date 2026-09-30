@@ -250,11 +250,14 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheDoesNotUploadAg
       scheduler.evaluate(presentation, Input(Entity(7), /*version=*/1));
   scheduler.noteRenderCompleted(warm.currentVersion, warm.currentCanvasSize,
                                 warm.currentRasterViewport);
-  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize);
+  presentation.noteCachedTextures(
+      Entity(7), /*version=*/1, kCanvasSize,
+      SelectTool::ActiveDragPreview{.entity = Entity(7), .dragGeneration = 14});
 
   const SelectTool::ActiveDragPreview activeDrag{
       .entity = Entity(7),
       .translation = Vector2d(9.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(9.0, 0.0),
       .dragGeneration = 14,
   };
   const PresentationRenderScheduleDecision decision =
@@ -275,11 +278,14 @@ TEST(PresentationRenderSchedulerTest, DirectSurfaceRequestsChangedCachedDragTran
       scheduler.evaluate(presentation, Input(Entity(7), /*version=*/1));
   scheduler.noteRenderCompleted(warm.currentVersion, warm.currentCanvasSize,
                                 warm.currentRasterViewport);
-  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize);
+  presentation.noteCachedTextures(
+      Entity(7), /*version=*/1, kCanvasSize,
+      SelectTool::ActiveDragPreview{.entity = Entity(7), .dragGeneration = 14});
 
   const SelectTool::ActiveDragPreview activeDrag{
       .entity = Entity(7),
       .translation = Vector2d(9.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(9.0, 0.0),
       .dragGeneration = 14,
   };
   PresentationRenderScheduleInput input = Input(Entity(7), /*version=*/8, activeDrag);
@@ -494,7 +500,7 @@ TEST(PresentationRenderSchedulerTest, ChangedAffineDragRequestsNextLayerCapture)
   EXPECT_TRUE(decision.dragPreview->forceLayerRasterization);
 }
 
-TEST(PresentationRenderSchedulerTest, PureTranslationAfterAffineCaptureRequestsCrispLayerCapture) {
+TEST(PresentationRenderSchedulerTest, ScaleAtRecaptureBoundaryContinuesUsingCapturedLayer) {
   PresentationRenderScheduler scheduler;
   CompositedPresentation presentation;
 
@@ -517,11 +523,11 @@ TEST(PresentationRenderSchedulerTest, PureTranslationAfterAffineCaptureRequestsC
   const PresentationRenderScheduleDecision decision =
       scheduler.evaluate(presentation, Input(Entity(7), /*version=*/9, activeDrag));
 
-  EXPECT_TRUE(decision.shouldRequestRender());
-  EXPECT_TRUE(decision.needsCompositedLayerCapture);
+  EXPECT_FALSE(decision.shouldRequestRender());
+  EXPECT_FALSE(decision.needsCompositedLayerCapture);
   EXPECT_FALSE(decision.needsRegularRender);
   ASSERT_TRUE(decision.dragPreview.has_value());
-  EXPECT_TRUE(decision.dragPreview->forceLayerRasterization);
+  EXPECT_FALSE(decision.dragPreview->forceLayerRasterization);
 }
 
 TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheSuppressesMovedRasterViewport) {
@@ -532,11 +538,14 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheSuppressesMoved
       scheduler.evaluate(presentation, Input(Entity(7), /*version=*/1));
   scheduler.noteRenderCompleted(warm.currentVersion, warm.currentCanvasSize,
                                 warm.currentRasterViewport);
-  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize);
+  presentation.noteCachedTextures(
+      Entity(7), /*version=*/1, kCanvasSize,
+      SelectTool::ActiveDragPreview{.entity = Entity(7), .dragGeneration = 14});
 
   const SelectTool::ActiveDragPreview activeDrag{
       .entity = Entity(7),
       .translation = Vector2d(9.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(9.0, 0.0),
       .dragGeneration = 14,
   };
   const PresentationRenderScheduleDecision decision = scheduler.evaluate(
@@ -558,11 +567,14 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheSuppressesCanva
       scheduler.evaluate(presentation, Input(Entity(7), /*version=*/1));
   scheduler.noteRenderCompleted(warm.currentVersion, warm.currentCanvasSize,
                                 warm.currentRasterViewport);
-  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize);
+  presentation.noteCachedTextures(
+      Entity(7), /*version=*/1, kCanvasSize,
+      SelectTool::ActiveDragPreview{.entity = Entity(7), .dragGeneration = 14});
 
   const SelectTool::ActiveDragPreview activeDrag{
       .entity = Entity(7),
       .translation = Vector2d(9.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(9.0, 0.0),
       .dragGeneration = 14,
   };
   const PresentationRenderScheduleDecision decision =

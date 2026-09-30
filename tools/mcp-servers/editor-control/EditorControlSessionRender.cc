@@ -207,6 +207,7 @@ void EditorControlSession::HeadlessTextureCache::uploadComposited(
 
     DisplayTileView view;
     view.kind = tile.kind;
+    view.layerEntity = tile.layerEntity;
     view.id = tile.id;
     view.generation = tile.generation;
     view.bitmapDimsPx = payload->dimensions;
@@ -247,8 +248,6 @@ std::optional<svg::RendererBitmap> EditorControlSession::HeadlessTextureCache::c
   const Transform2d canvasPixelsFromCanvasTransform =
       Transform2d::Translate(-viewBox.topLeft) *
       Transform2d::Scale(Vector2d(pixelsPerDocX, pixelsPerDocY));
-  const std::optional<PresentedDragBaseline> dragBaseline =
-      PresentedBaselineFromSelectPreviews(display.activeDragPreview, display.displayedDragPreview);
   for (const DisplayTileView& tile : display.tiles) {
     const auto tileIt = tileTextures_.find(tile.id);
     if (tileIt == tileTextures_.end() || tileIt->second.bitmap.empty()) {
@@ -256,7 +255,7 @@ std::optional<svg::RendererBitmap> EditorControlSession::HeadlessTextureCache::c
     }
 
     const std::optional<PresentedTileQuad> tileQuad = ComputePresentedTileQuad(
-        PresentedGeometryFromDisplayTile(tile), canvasPixelsFromCanvasTransform, dragBaseline);
+        PresentedGeometryFromDisplayTile(tile), canvasPixelsFromCanvasTransform, std::nullopt);
     if (!tileQuad.has_value()) {
       continue;
     }
@@ -467,6 +466,9 @@ bool EditorControlSession::renderCurrentFrame(std::vector<CapturedRenderResult>*
   request.captureCpuSnapshot = true;
   request.version = nextRenderVersion_++;
   request.documentGeneration = app_.document().documentGeneration();
+  request.selectedElements = app_.selectedElements();
+  request.geometryRevision = app_.document().nonTransformRevision();
+  request.fontResourceRevision = app_.document().fontResourceRevision();
   request.structuralRemap = app_.document().consumePendingStructuralRemap();
 
   if (app_.selectedElement().has_value()) {
@@ -540,7 +542,8 @@ EditorControlSession::DisplayFrameSnapshot EditorControlSession::recordDisplayFr
     displayTextures_.uploadComposited(*result.compositedPreview);
     displayPresentation_.noteCachedTextures(
         result.compositedPreview->entity, result.version, app_.document().document().canvasSize(),
-        DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview));
+        DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview),
+        result.capturedPresentation);
   }
 
   return currentDisplayFrame();
@@ -568,6 +571,27 @@ EditorControlSession::DisplayFrameSnapshot EditorControlSession::currentDisplayF
     frame.path = "empty";
   }
 
+  const auto capture = displayPresentation_.capturedPresentation();
+  if (capture != nullptr && activePreview.has_value() &&
+      capture->identity().sameContent(activePreview->contentIdentity)) {
+    const auto presentedDocumentFromCapturedDocument =
+        ResolvePresentationTransform(capture->poses(), activePreview->poses);
+    const bool allMovable = std::ranges::all_of(capture->selection(), [&](Entity entity) {
+      return capture->canProject(entity) && std::ranges::any_of(frame.tiles, [&](const auto& tile) {
+               return tile.layerEntity == entity;
+             });
+    });
+    if (presentedDocumentFromCapturedDocument.has_value() && allMovable) {
+      for (auto& tile : frame.tiles) {
+        if (std::ranges::find(capture->selection(), tile.layerEntity) !=
+            capture->selection().end()) {
+          tile.documentFromCachedDocument =
+              tile.documentFromCachedDocument * *presentedDocumentFromCapturedDocument;
+          tile.dragTranslationDoc = tile.documentFromCachedDocument.translation();
+        }
+      }
+    }
+  }
   return frame;
 }
 

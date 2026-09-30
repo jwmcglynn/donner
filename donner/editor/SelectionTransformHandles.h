@@ -39,6 +39,12 @@ struct SelectionTransformHandleBoxes {
   std::array<Box2d, 4> boxes;
 };
 
+/// Map the four ordered selection corners into their represented document space.
+/// @param box Bounds in the source document space.
+/// @param documentFromBoxDocument Mapping from that source to the presented document space.
+[[nodiscard]] std::array<Vector2d, 4> TransformedBoxCorners(
+    const Box2d& box, const Transform2d& documentFromBoxDocument);
+
 /// Return a combined AABB for a selection-bounds span.
 [[nodiscard]] Box2d CombinedSelectionBounds(std::span<const Box2d> selectionBoundsDoc);
 

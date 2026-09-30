@@ -563,10 +563,46 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "presentation_pose",
+    srcs = ["PresentationPose.cc"],
+    hdrs = ["PresentationPose.h"],
+    deps = ["//donner/base"],
+)
+
+donner_cc_library(
+    name = "captured_presentation",
+    srcs = ["CapturedPresentation.cc"],
+    hdrs = ["CapturedPresentation.h"],
+    deps = [
+        ":overlay_renderer",
+        ":presentation_pose",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "frame_presentation",
+    srcs = ["FramePresentation.cc"],
+    hdrs = ["FramePresentation.h"],
+    deps = [
+        ":captured_presentation",
+        ":gl_texture_cache",
+        ":overlay_renderer",
+        ":presentation_pose",
+        ":presented_frame_composer",
+        ":select_tool",
+        ":selection_transform_handles",
+        ":viewport_state",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "async_renderer",
     srcs = ["AsyncRenderer.cc"],
     hdrs = ["AsyncRenderer.h"],
     deps = [
+        ":captured_presentation",
         ":composited_rendering_mode",
         ":overlay_renderer",
         ":tracy_wrapper",
@@ -1006,6 +1042,7 @@ donner_cc_library(
     hdrs = ["RenderPanePresenter.h"],
     deps = [
         ":document_composite_texture",
+        ":frame_presentation",
         ":gl_texture_cache",
         ":imgui_headers",
         ":menu_bar_presenter",
@@ -1033,6 +1070,7 @@ donner_cc_library(
     }),
     deps = [
         ":async_renderer",
+        ":frame_presentation",
         ":gl_texture_cache",
         ":render_pane_presenter",
         ":select_tool",
@@ -1053,6 +1091,7 @@ donner_cc_library(
     }),
     deps = [
         ":frame_cost_breakdown",
+        ":frame_presentation",
         ":gl_texture_cache",
         ":overlay_renderer",
         ":presented_frame_composer",
@@ -1086,6 +1125,7 @@ donner_cc_library(
     deps = [
         ":document_composite_texture",
         ":editor_shell_presentation",
+        ":frame_presentation",
         ":gl_texture_cache",
         ":presented_frame_composer",
         ":render_pane_presenter",
@@ -1123,6 +1163,7 @@ donner_cc_library(
         ":composited_presentation",
         ":document_pixel_sampler",
         ":frame_cost_breakdown",
+        ":frame_presentation",
         ":gl_texture_cache",
         ":overlay_renderer",
         ":presentation_render_scheduler",
@@ -1325,6 +1366,7 @@ donner_cc_library(
     name = "composited_presentation",
     hdrs = ["CompositedPresentation.h"],
     deps = [
+        ":gl_texture_cache",
         ":select_tool",
         "//donner/base",
     ],
@@ -1340,6 +1382,7 @@ donner_cc_library(
         ":editor_app",
         ":imgui_headers",
         ":lock_state",
+        ":presentation_pose",
         ":selection_aabb",
         ":selection_transform_handles",
         ":tool",
@@ -1371,6 +1414,7 @@ donner_cc_library(
         ":command_queue",
         ":editor_app",
         ":lock_state",
+        ":presentation_pose",
         ":selection_transform_handles",
         ":tool",
         "//donner/base",

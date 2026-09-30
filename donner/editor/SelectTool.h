@@ -26,6 +26,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/PresentationPose.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/Tool.h"
 #include "donner/svg/SVGElement.h"
@@ -47,6 +48,12 @@ public:
     Transform2d documentFromCachedDocument = Transform2d();
     /// Monotonic id for one mouse-down/move/up drag gesture.
     std::uint64_t dragGeneration = 0;
+    /// Content identity captured when this input transaction began.
+    PresentationIdentity contentIdentity;
+    /// Absolute object poses; these do not reset their reference space between gestures.
+    std::vector<PresentationPose> poses;
+    /// Absolute starting poses used to orient bounds derived from the raster's actual geometry.
+    std::vector<PresentationPose> startPoses;
   };
 
   /// Active transform chrome state for selection bounds presentation.
@@ -244,6 +251,7 @@ private:
     Transform2d currentTransform;
     /// Document-space transform of the element's parent captured at gesture start.
     Transform2d documentFromParent;
+    Transform2d startDocumentFromElement;
     std::optional<AttributeWritebackTarget> writebackTarget;
     /// Original `transform` attribute value captured at drag start. Used
     /// for `UndoSnapshot::sourceTransformAttributeValue` on release.
@@ -282,6 +290,7 @@ private:
     double startAngleRadians = 0.0;
     /// Generation copied into \ref ActiveDragPreview for this gesture.
     std::uint64_t generation = 0;
+    PresentationIdentity contentIdentity;
     /// Current drag delta in document coordinates, used for compositor preview.
     Vector2d currentDocumentDelta = Vector2d::Zero();
     /// Current affine transform from the gesture-start document geometry

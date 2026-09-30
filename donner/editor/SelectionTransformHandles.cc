@@ -33,6 +33,22 @@ bool ResizeBoxContains(const Vector2d& cornerDoc, const Vector2d& pointDoc, doub
 
 }  // namespace
 
+std::array<Vector2d, 4> TransformedBoxCorners(const Box2d& box,
+                                              const Transform2d& documentFromBoxDocument) {
+  const std::array<Vector2d, 4> corners{
+      box.topLeft,
+      Vector2d(box.bottomRight.x, box.topLeft.y),
+      box.bottomRight,
+      Vector2d(box.topLeft.x, box.bottomRight.y),
+  };
+
+  std::array<Vector2d, 4> transformed;
+  for (std::size_t i = 0; i < corners.size(); ++i) {
+    transformed[i] = documentFromBoxDocument.transformPosition(corners[i]);
+  }
+  return transformed;
+}
+
 Box2d CombinedSelectionBounds(std::span<const Box2d> selectionBoundsDoc) {
   if (selectionBoundsDoc.empty()) {
     return Box2d();

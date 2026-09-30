@@ -1,34 +1,28 @@
 #pragma once
 /// @file
+/// Owns accepted presentation resources and the intent retained across drag release.
 
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <variant>
 #include <vector>
 
-#include "donner/base/EcsRegistry.h"
 #include "donner/base/MathUtils.h"
-#include "donner/base/Vector2.h"
+#include "donner/editor/GlTextureCache.h"
 #include "donner/editor/SelectTool.h"
 
 namespace donner::editor {
 
-/// Tracks composited presentation state across selection, drag, and release.
 class CompositedPresentation {
 public:
-  /// Closed presentation phase exposed through diagnostics.
-  enum class Phase {
-    NoCache,
-    Cached,
-    SettlingForRender,
-    WaitingForChromeRefresh,
-  };
+  /// Closed presentation phases. A ready resource set already includes its chrome geometry.
+  enum class Phase { NoCache, Cached, SettlingForRender };
 
-  /// Immutable-by-copy presentation diagnostics for tests and MCP reporting.
+  /// Detached metadata for scheduler, replay and inspector diagnostics.
   struct DiagnosticsSnapshot {
     Phase phase = Phase::NoCache;
     bool hasCachedTextures = false;
@@ -38,8 +32,6 @@ public:
     std::optional<SelectTool::ActiveDragPreview> settlingPreview;
     bool waitingForFullRender = false;
     std::uint64_t settlingTargetVersion = 0;
-    bool waitingForChromeRefresh = false;
-    std::uint64_t chromeRefreshTargetVersion = 0;
   };
 
 private:
@@ -48,376 +40,273 @@ private:
     std::uint64_t version = 0;
     Vector2i canvasSize = Vector2i::Zero();
     std::optional<SelectTool::ActiveDragPreview> representedPreview;
+    std::shared_ptr<const CapturedPresentation> capture;
+    std::shared_ptr<const GlTextureCache::PresentationResources> resources;
   };
-
   struct NoCache {};
-
   struct Cached {
     CachedTextures cache;
   };
-
   struct SettlingForRender {
     std::optional<CachedTextures> cache;
     SelectTool::ActiveDragPreview preview;
     std::uint64_t targetVersion = 0;
   };
-
-  struct WaitingForChromeRefresh {
-    CachedTextures cache;
-    SelectTool::ActiveDragPreview preview;
-    std::uint64_t targetVersion = 0;
-  };
-
-  using State = std::variant<NoCache, Cached, SettlingForRender, WaitingForChromeRefresh>;
+  using State = std::variant<NoCache, Cached, SettlingForRender>;
 
 public:
-  /// Return a copied diagnostic snapshot of the current presentation state.
+  /// Inspect the accepted state without borrowing mutable state.
   [[nodiscard]] DiagnosticsSnapshot diagnostics() const {
-    DiagnosticsSnapshot snapshot;
-
-    if (const auto* cached = std::get_if<Cached>(&state_)) {
-      snapshot.phase = Phase::Cached;
-      FillCacheDiagnostics(cached->cache, &snapshot);
-      return snapshot;
+    DiagnosticsSnapshot result;
+    const auto cache = currentCache();
+    if (cache.has_value()) {
+      result.hasCachedTextures = true;
+      result.cachedEntity = cache->entity;
+      result.cachedVersion = cache->version;
+      result.cachedCanvasSize = cache->canvasSize;
+      result.phase = Phase::Cached;
     }
-
     if (const auto* settling = std::get_if<SettlingForRender>(&state_)) {
-      snapshot.phase = Phase::SettlingForRender;
-      if (settling->cache.has_value()) {
-        FillCacheDiagnostics(*settling->cache, &snapshot);
-      }
-      snapshot.settlingPreview = settling->preview;
-      snapshot.waitingForFullRender = true;
-      snapshot.settlingTargetVersion = settling->targetVersion;
-      return snapshot;
+      result.phase = Phase::SettlingForRender;
+      result.waitingForFullRender = true;
+      result.settlingPreview = settling->preview;
+      result.settlingTargetVersion = settling->targetVersion;
     }
-
-    if (const auto* waiting = std::get_if<WaitingForChromeRefresh>(&state_)) {
-      snapshot.phase = Phase::WaitingForChromeRefresh;
-      FillCacheDiagnostics(waiting->cache, &snapshot);
-      snapshot.settlingPreview = waiting->preview;
-      snapshot.waitingForChromeRefresh = true;
-      snapshot.chromeRefreshTargetVersion = waiting->targetVersion;
-      return snapshot;
-    }
-
-    return snapshot;
+    return result;
   }
 
-  /// Returns true when cached composited textures are available for presentation.
-  [[nodiscard]] bool hasCachedTextures() const { return currentCache().has_value(); }
+  /// Complete paired resources accepted for drawing.
+  [[nodiscard]] std::shared_ptr<const GlTextureCache::PresentationResources> resources() const {
+    const auto cache = currentCache();
+    return cache.has_value() ? cache->resources : nullptr;
+  }
 
-  /// Returns true when cached composited textures are available for @p entity.
+  /// Captured geometry used by non-window bitmap inspection as well as the UI.
+  [[nodiscard]] std::shared_ptr<const CapturedPresentation> capturedPresentation() const {
+    const auto cache = currentCache();
+    return cache.has_value() ? cache->capture : nullptr;
+  }
+
+  [[nodiscard]] bool hasCachedTextures() const { return currentCache().has_value(); }
   [[nodiscard]] bool hasCachedTexturesForEntity(Entity entity) const {
-    const std::optional<CachedTextures> cache = currentCache();
+    const auto cache = currentCache();
     return cache.has_value() && cache->entity == entity;
   }
-
-  /// Returns true while a released drag waits for a fresh full render.
   [[nodiscard]] bool isWaitingForFullRender() const {
     return std::holds_alternative<SettlingForRender>(state_);
   }
 
-  /// Returns true while a composited settle waits for refreshed overlay chrome.
-  [[nodiscard]] bool isWaitingForChromeRefresh() const {
-    return std::holds_alternative<WaitingForChromeRefresh>(state_);
-  }
-
-  /// Returns the active preview that should drive presenter-side tile transforms.
-  ///
-  /// During a live drag this is the tool's active preview. After mouse-up,
-  /// \ref SelectTool::activeDragPreview is empty, but the render pane must keep presenting the
-  /// released transform until a settled render replaces the cached tiles.
+  /// Retain the released absolute poses until a matching completed render is adopted.
   [[nodiscard]] std::optional<SelectTool::ActiveDragPreview> activePreviewForPresentation(
       const std::optional<SelectTool::ActiveDragPreview>& activePreview) const {
     if (activePreview.has_value()) {
       return activePreview;
     }
-
-    const auto* settling = std::get_if<SettlingForRender>(&state_);
-    if (settling != nullptr && settling->cache.has_value() &&
-        settling->cache->entity == settling->preview.entity) {
+    if (const auto* settling = std::get_if<SettlingForRender>(&state_)) {
       return settling->preview;
     }
-
     return std::nullopt;
   }
 
-  /// Returns true when an active drag needs a fresh composited capture.
+  /// Return captured request metadata for diagnostics; never reinterpret its gesture basis.
+  [[nodiscard]] std::optional<SelectTool::ActiveDragPreview> presentationPreview(
+      const std::optional<SelectTool::ActiveDragPreview>& /*activePreview*/) const {
+    const auto cache = currentCache();
+    return cache.has_value() ? cache->representedPreview : std::nullopt;
+  }
+
+  /// Whether a raster already represents all absolute poses requested by the pointer.
+  [[nodiscard]] bool represents(const SelectTool::ActiveDragPreview& active) const {
+    const auto cache = currentCache();
+    if (!cache.has_value()) {
+      return false;
+    }
+    if (cache->capture != nullptr) {
+      const auto requestedDocumentFromCapturedDocument =
+          ResolvePresentationTransform(cache->capture->poses(), active.poses);
+      return cache->capture->identity().sameContent(active.contentIdentity) &&
+             requestedDocumentFromCapturedDocument.has_value() &&
+             SamePresentationTransform(*requestedDocumentFromCapturedDocument, Transform2d());
+    }
+    return cache->representedPreview.has_value() &&
+           cache->representedPreview->entity == active.entity &&
+           cache->representedPreview->dragGeneration == active.dragGeneration &&
+           cache->representedPreview->translation == active.translation &&
+           SamePresentationTransform(cache->representedPreview->documentFromCachedDocument,
+                                     active.documentFromCachedDocument);
+  }
+
+  /// Determine whether a new raster is required for coverage or affine sampling quality.
   [[nodiscard]] bool needsCompositedLayerCapture(
-      const std::optional<SelectTool::ActiveDragPreview>& activePreview,
-      std::uint64_t /*currentVersion*/, const Vector2i& /*currentCanvasSize*/,
+      const std::optional<SelectTool::ActiveDragPreview>& active, std::uint64_t /*version*/,
+      const Vector2i& /*canvasSize*/,
       double translationRecaptureDistanceDoc = std::numeric_limits<double>::infinity()) const {
-    if (!activePreview.has_value()) {
+    if (!active.has_value()) {
       return false;
     }
-
-    const std::optional<CachedTextures> cache = currentCache();
-    // Drag transform writes bump the document version every mouse move. Pure
-    // translation stays crisp through presenter-side texture placement, but
-    // affine resize/rotate previews can blur a cached bitmap. Refresh those
-    // opportunistically only when the cached bitmap represents an older affine
-    // transform. Zoom-driven canvas-size changes still settle after the drag so
-    // we do not block pointer frames on a full cached-span reraster.
-    if (!cache.has_value() || cache->entity != activePreview->entity) {
+    const auto cache = currentCache();
+    if (!cache.has_value() || cache->entity != active->entity) {
       return true;
     }
-
-    const SelectTool::ActiveDragPreview representedPreview =
-        representedPreviewForActiveCache(*cache, *activePreview);
-    if (activePreview->documentFromCachedDocument.isTranslation()) {
-      // A pure translation tracks via the cached bitmap's translation offset.
-      // Re-capture when the cached bitmap is still affine (we just returned
-      // from resize/rotate to translation), or after a bounded translation
-      // distance so the tile's offscreen overdraw is replenished.
-      if (!representedPreview.documentFromCachedDocument.isTranslation()) {
-        return true;
-      }
-      if (std::isfinite(translationRecaptureDistanceDoc) && translationRecaptureDistanceDoc > 0.0) {
-        const Vector2d drift = activePreview->translation - representedPreview.translation;
-        if (std::max(std::abs(drift.x), std::abs(drift.y)) > translationRecaptureDistanceDoc) {
-          return true;
-        }
-      }
+    const auto requestedDocumentFromCapturedDocument =
+        resolveRequestedDocumentFromCapturedDocument(*cache, *active);
+    if (!requestedDocumentFromCapturedDocument.has_value()) {
+      return true;
+    }
+    if (std::abs(requestedDocumentFromCapturedDocument->determinant()) < 1e-12) {
       return false;
     }
-
-    // Affine (rotate/scale) drag: re-capture a crisp bitmap when the cached
-    // bitmap's SCALE has drifted past a threshold (it would otherwise look
-    // blurry). The re-capture is intentional (anti-blur); the presentation
-    // compensates for the swapped-in image via `represented` (the transform the
-    // re-captured bitmap was baked at) so the shape stays continuous across the
-    // swap - `effective = represented^-1 * active` re-bases tracking onto the
-    // fresh bitmap with no pop. Pure rotation is area-preserving so it never
-    // trips this (a rotated bitmap keeps resolution); scaling down downsamples
-    // and stays sharp; only upscaling past the threshold re-captures, and a
-    // continuous scale-up re-captures in ~threshold steps.
-    constexpr double kAffineRecaptureScaleThreshold = 1.5;
-    const double activeScale =
-        std::sqrt(std::abs(activePreview->documentFromCachedDocument.determinant()));
-    const double representedScale =
-        std::sqrt(std::abs(representedPreview.documentFromCachedDocument.determinant()));
-    if (representedScale < 1e-9) {
-      return true;
+    if (requestedDocumentFromCapturedDocument->isTranslation()) {
+      const auto translation = requestedDocumentFromCapturedDocument->translation();
+      return std::isfinite(translationRecaptureDistanceDoc) &&
+             translationRecaptureDistanceDoc > 0.0 &&
+             std::max(std::abs(translation.x), std::abs(translation.y)) >
+                 translationRecaptureDistanceDoc;
     }
-    const double scaleDrift = activeScale / representedScale;
-    return scaleDrift > kAffineRecaptureScaleThreshold ||
-           scaleDrift < 1.0 / kAffineRecaptureScaleThreshold;
+    const double scaleX = std::hypot(requestedDocumentFromCapturedDocument->data[0],
+                                     requestedDocumentFromCapturedDocument->data[1]);
+    const double scaleY = std::hypot(requestedDocumentFromCapturedDocument->data[2],
+                                     requestedDocumentFromCapturedDocument->data[3]);
+    return std::max(scaleX, scaleY) > 1.5 || std::min(scaleX, scaleY) < 1.0 / 1.5;
   }
 
-  /// Returns true when a released drag should request a settled composited refresh.
-  [[nodiscard]] bool needsSettledSelectionRefresh(Entity selectedEntity,
-                                                  std::uint64_t currentVersion) const {
+  [[nodiscard]] bool needsSettledSelectionRefresh(Entity entity, std::uint64_t version) const {
     const auto* settling = std::get_if<SettlingForRender>(&state_);
-    return selectedEntity != entt::null && settling != nullptr &&
-           settling->preview.entity == selectedEntity && currentVersion >= settling->targetVersion;
+    return entity != entt::null && settling != nullptr && settling->preview.entity == entity &&
+           version >= settling->targetVersion;
   }
-
-  /// Returns true when the settled refresh must bake the released layer transform.
-  [[nodiscard]] bool needsSettledLayerRasterization(Entity selectedEntity,
-                                                    std::uint64_t currentVersion) const {
+  [[nodiscard]] bool needsSettledLayerRasterization(Entity entity, std::uint64_t version) const {
     const auto* settling = std::get_if<SettlingForRender>(&state_);
-    return selectedEntity != entt::null && settling != nullptr &&
-           settling->preview.entity == selectedEntity &&
-           currentVersion >= settling->targetVersion &&
+    return needsSettledSelectionRefresh(entity, version) && settling != nullptr &&
            !settling->preview.documentFromCachedDocument.isTranslation();
   }
 
-  /// Returns true when selection should trigger an async prewarm capture.
-  [[nodiscard]] bool shouldPrewarm(Entity selectedEntity,
-                                   const std::vector<Entity>& selectedExtraEntities,
-                                   std::uint64_t currentVersion, const Vector2i& currentCanvasSize,
+  [[nodiscard]] bool shouldPrewarm(Entity entity, const std::vector<Entity>& extraEntities,
+                                   std::uint64_t version, const Vector2i& canvasSize,
                                    bool dragActive) const {
-    if (selectedEntity == entt::null || dragActive || isWaitingForFullRender() ||
-        isWaitingForChromeRefresh()) {
+    if (entity == entt::null || dragActive || isWaitingForFullRender()) {
       return false;
     }
-
-    const std::optional<CachedTextures> cache = currentCache();
-    if (!cache.has_value() || cache->entity != selectedEntity || cache->version != currentVersion ||
-        cache->canvasSize != currentCanvasSize) {
+    const auto cache = currentCache();
+    if (!cache.has_value() || cache->entity != entity || cache->version != version ||
+        cache->canvasSize != canvasSize) {
       return true;
     }
-
-    return representedPreviewForCache(*cache).extraEntities != selectedExtraEntities;
+    return cache->representedPreview.has_value()
+               ? cache->representedPreview->extraEntities != extraEntities
+               : !extraEntities.empty();
   }
 
-  /// Mark cached composited textures as available for the given entity/version/canvas size.
+  /// Adopt a fully prepared resource/geometry pair in one transition.
+  void notePreparedResources(std::shared_ptr<const GlTextureCache::PresentationResources> resources,
+                             Entity entity,
+                             std::optional<SelectTool::ActiveDragPreview> representedPreview) {
+    if (resources == nullptr || resources->capture() == nullptr) {
+      return;
+    }
+    const auto capture = resources->capture();
+    accept(CachedTextures{.entity = entity,
+                          .version = capture->identity().version,
+                          .canvasSize = resources->coverage().activeOutputSizePx,
+                          .representedPreview = std::move(representedPreview),
+                          .capture = capture,
+                          .resources = std::move(resources)});
+  }
+
+  /// Record a complete non-window raster cache, which does not own GPU registrations.
   void noteCachedTextures(
       Entity entity, std::uint64_t version, const Vector2i& canvasSize,
-      std::optional<SelectTool::ActiveDragPreview> representedPreview = std::nullopt) {
-    const CachedTextures cache{
-        .entity = entity,
-        .version = version,
-        .canvasSize = canvasSize,
-        .representedPreview = std::move(representedPreview),
-    };
-
-    if (const auto* settling = std::get_if<SettlingForRender>(&state_)) {
-      if (settling->preview.entity == entity) {
-        if (version >= settling->targetVersion) {
-          state_ = WaitingForChromeRefresh{
-              .cache = cache,
-              .preview = settling->preview,
-              .targetVersion = version,
-          };
-        } else {
-          state_ = SettlingForRender{
-              .cache = cache,
-              .preview = settling->preview,
-              .targetVersion = settling->targetVersion,
-          };
-        }
-        return;
-      }
-    } else if (const auto* waiting = std::get_if<WaitingForChromeRefresh>(&state_)) {
-      if (waiting->preview.entity == entity) {
-        state_ = WaitingForChromeRefresh{
-            .cache = cache,
-            .preview = waiting->preview,
-            .targetVersion = waiting->targetVersion,
-        };
-        return;
-      }
-    }
-
-    state_ = Cached{.cache = cache};
+      std::optional<SelectTool::ActiveDragPreview> representedPreview = std::nullopt,
+      std::shared_ptr<const CapturedPresentation> capture = nullptr) {
+    accept(CachedTextures{.entity = entity,
+                          .version = version,
+                          .canvasSize = canvasSize,
+                          .representedPreview = std::move(representedPreview),
+                          .capture = std::move(capture)});
   }
 
-  /// Drop cached presentation state for @p entity.
-  ///
-  /// This is intentionally explicit instead of tied to selection changes. Normal deselection keeps
-  /// the cached document image alive until the next render replaces it; a selected element becoming
-  /// `display:none` is different because the cached promoted tile would keep rendering content that
-  /// the live DOM has already hidden.
-  ///
-  /// @param entity Entity whose cached presentation should be discarded.
-  /// @return true if cached state matched @p entity and was cleared.
+  /// Invalidate the selected-layer cache key while retaining any complete scene for replacement.
+  /// @param entity Selected-layer owner being invalidated.
   bool discardCachedTexturesForEntity(Entity entity) {
-    if (entity == entt::null) {
+    const auto cache = currentCache();
+    if (entity == entt::null || !cache.has_value() || cache->entity != entity) {
       return false;
     }
-
-    const std::optional<CachedTextures> cache = currentCache();
-    if (!cache.has_value() || cache->entity != entity) {
-      return false;
+    if (cache->resources != nullptr) {
+      auto retained = *cache;
+      retained.entity = entt::null;
+      retained.representedPreview.reset();
+      state_ = Cached{std::move(retained)};
+    } else {
+      state_ = NoCache{};
     }
-
-    state_ = NoCache{};
     return true;
   }
 
-  /// Finish the settle handoff once overlay chrome and cached AABBs have refreshed to match the
-  /// settled document version. Only then is it safe to drop the old drag offset.
-  void noteChromeRefreshCompleted(std::uint64_t refreshedVersion) {
-    const auto* waiting = std::get_if<WaitingForChromeRefresh>(&state_);
-    if (waiting == nullptr || refreshedVersion < waiting->targetVersion) {
-      return;
-    }
-
-    state_ = Cached{.cache = waiting->cache};
-  }
-
-  /// Begin the post-release settling phase, keeping the last composited presentation alive.
   void beginSettling(const std::optional<SelectTool::ActiveDragPreview>& preview,
                      std::uint64_t targetVersion) {
-    const std::optional<CachedTextures> cache = currentCache();
+    const auto cache = currentCache();
     if (!preview.has_value()) {
-      state_ = cache.has_value() ? State(Cached{.cache = *cache}) : State(NoCache{});
+      state_ = cache.has_value() ? State(Cached{*cache}) : State(NoCache{});
       return;
     }
-
-    state_ = SettlingForRender{
-        .cache = cache,
-        .preview = *preview,
-        .targetVersion = targetVersion,
-    };
+    state_ = SettlingForRender{cache, *preview, targetVersion};
   }
 
-  /// End the settling phase once a fresh full render has landed.
-  ///
-  /// This function only handles settling-state bookkeeping; cached tiles remain live until a fresh
-  /// upload replaces them or the document is reset.
-  void noteFullRenderLanded(std::uint64_t landedVersion) {
-    if (const auto* settling = std::get_if<SettlingForRender>(&state_)) {
-      if (landedVersion < settling->targetVersion) {
-        return;
-      }
-
-      state_ =
-          settling->cache.has_value() ? State(Cached{.cache = *settling->cache}) : State(NoCache{});
-      return;
+  /// Stop retaining a released intent after a different actual selection replaces it.
+  void clearSettlingIfSelectionChanged(Entity entity, bool dragActive) {
+    const auto* settling = std::get_if<SettlingForRender>(&state_);
+    if (settling != nullptr && !dragActive && entity != settling->preview.entity) {
+      const auto cache = settling->cache;
+      state_ = cache.has_value() ? State(Cached{*cache}) : State(NoCache{});
     }
-
-    if (const auto* waiting = std::get_if<WaitingForChromeRefresh>(&state_)) {
-      state_ = Cached{.cache = waiting->cache};
-    }
-  }
-
-  /// Returns the drag preview that should currently be displayed, if any.
-  [[nodiscard]] std::optional<SelectTool::ActiveDragPreview> presentationPreview(
-      const std::optional<SelectTool::ActiveDragPreview>& activePreview) const {
-    const std::optional<CachedTextures> cache = currentCache();
-    if (activePreview.has_value() && cache.has_value()) {
-      if (const auto represented = previewForActiveDrag(*cache, *activePreview);
-          represented.has_value()) {
-        return represented;
-      }
-    }
-    return previewWithoutActiveDrag(cache);
-  }
-
-  /// Preserve in-flight settling across temporary selection remaps.
-  ///
-  /// After ReplaceDocument, entity handles are invalidated and the selection is remapped to new
-  /// entities. Cached composited textures stay live as the visible document image until the next
-  /// render atomically replaces them via noteCachedTextures().
-  void clearSettlingIfSelectionChanged(Entity selectedEntity, bool dragActive) {
-    if (isWaitingForFullRender() || isWaitingForChromeRefresh()) {
-      return;
-    }
-
-    (void)selectedEntity;
-    (void)dragActive;
   }
 
 private:
-  [[nodiscard]] static std::optional<SelectTool::ActiveDragPreview> previewForActiveDrag(
-      const CachedTextures& cache, const SelectTool::ActiveDragPreview& activePreview) {
-    // An unpromotable selected child is painted into its owning tiles. The accepted result has
-    // no independent drag-target entity, but it still records the gesture transform those pixels
-    // represent. Keep chrome aligned with that accepted frame while this exact gesture is active.
-    if (cache.entity == entt::null && cache.representedPreview.has_value() &&
-        cache.representedPreview->entity == activePreview.entity &&
-        cache.representedPreview->dragGeneration == activePreview.dragGeneration) {
-      return cache.representedPreview;
+  static std::optional<Transform2d> resolveRequestedDocumentFromCapturedDocument(
+      const CachedTextures& cache, const SelectTool::ActiveDragPreview& active) {
+    if (cache.capture != nullptr) {
+      if (!cache.capture->identity().sameContent(active.contentIdentity)) {
+        return std::nullopt;
+      }
+      return ResolvePresentationTransform(cache.capture->poses(), active.poses);
     }
-
-    // A different active entity cannot apply its live offset to stale cached drag-target tiles.
-    if (activePreview.entity == cache.entity) {
-      return representedPreviewForActiveCache(cache, activePreview);
+    if (!cache.representedPreview.has_value() ||
+        cache.representedPreview->dragGeneration != active.dragGeneration ||
+        std::abs(cache.representedPreview->documentFromCachedDocument.determinant()) < 1e-12) {
+      return std::nullopt;
     }
-    return std::nullopt;
+    return cache.representedPreview->documentFromCachedDocument.inverse() *
+           active.documentFromCachedDocument;
   }
 
-  [[nodiscard]] std::optional<SelectTool::ActiveDragPreview> previewWithoutActiveDrag(
-      const std::optional<CachedTextures>& cache) const {
+  static bool settledCaptureMatches(const CachedTextures& cache,
+                                    const SettlingForRender& settling) {
+    if (cache.version < settling.targetVersion) {
+      return false;
+    }
+    if (cache.capture == nullptr || settling.preview.poses.empty()) {
+      return true;
+    }
+    if (cache.capture->identity().documentGeneration !=
+            settling.preview.contentIdentity.documentGeneration ||
+        cache.capture->identity().geometryRevision !=
+            settling.preview.contentIdentity.geometryRevision) {
+      return true;
+    }
+    const auto requestedDocumentFromCapturedDocument =
+        ResolvePresentationTransform(cache.capture->poses(), settling.preview.poses);
+    return requestedDocumentFromCapturedDocument.has_value() &&
+           SamePresentationTransform(*requestedDocumentFromCapturedDocument, Transform2d());
+  }
+
+  void accept(CachedTextures cache) {
     if (const auto* settling = std::get_if<SettlingForRender>(&state_);
-        settling != nullptr && cache.has_value() && settling->preview.entity == cache->entity) {
-      return settling->preview;
+        settling != nullptr && !settledCaptureMatches(cache, *settling)) {
+      state_ = SettlingForRender{std::move(cache), settling->preview, settling->targetVersion};
+    } else {
+      state_ = Cached{std::move(cache)};
     }
-    if (const auto* waiting = std::get_if<WaitingForChromeRefresh>(&state_);
-        waiting != nullptr && cache.has_value() && waiting->preview.entity == cache->entity) {
-      return waiting->preview;
-    }
-    if (cache.has_value() && cache->entity != entt::null) {
-      return SelectTool::ActiveDragPreview{
-          .entity = cache->entity,
-          .translation = Vector2d::Zero(),
-          .documentFromCachedDocument = Transform2d(),
-      };
-    }
-    return std::nullopt;
   }
 
   [[nodiscard]] std::optional<CachedTextures> currentCache() const {
@@ -427,80 +316,16 @@ private:
     if (const auto* settling = std::get_if<SettlingForRender>(&state_)) {
       return settling->cache;
     }
-    if (const auto* waiting = std::get_if<WaitingForChromeRefresh>(&state_)) {
-      return waiting->cache;
-    }
     return std::nullopt;
   }
-
-  static void FillCacheDiagnostics(const CachedTextures& cache, DiagnosticsSnapshot* snapshot) {
-    snapshot->hasCachedTextures = true;
-    snapshot->cachedEntity = cache.entity;
-    snapshot->cachedVersion = cache.version;
-    snapshot->cachedCanvasSize = cache.canvasSize;
-  }
-
-  static SelectTool::ActiveDragPreview representedPreviewForCache(const CachedTextures& cache) {
-    if (cache.representedPreview.has_value() && cache.representedPreview->entity == cache.entity) {
-      return *cache.representedPreview;
-    }
-
-    return SelectTool::ActiveDragPreview{
-        .entity = cache.entity,
-        .translation = Vector2d::Zero(),
-        .documentFromCachedDocument = Transform2d(),
-    };
-  }
-
-  static SelectTool::ActiveDragPreview representedPreviewForActiveCache(
-      const CachedTextures& cache, const SelectTool::ActiveDragPreview& activePreview) {
-    if (cache.representedPreview.has_value() && cache.representedPreview->entity == cache.entity &&
-        cache.representedPreview->dragGeneration == activePreview.dragGeneration) {
-      return *cache.representedPreview;
-    }
-
-    return SelectTool::ActiveDragPreview{
-        .entity = cache.entity,
-        .extraEntities = activePreview.extraEntities,
-        .translation = Vector2d::Zero(),
-        .documentFromCachedDocument = Transform2d(),
-        .dragGeneration = activePreview.dragGeneration,
-    };
-  }
-
-  static bool SameVector(const Vector2d& lhs, const Vector2d& rhs) {
-    constexpr double kTolerance = 1e-6;
-    return NearEquals(lhs.x, rhs.x, kTolerance) && NearEquals(lhs.y, rhs.y, kTolerance);
-  }
-
-  static bool SameTransform(const Transform2d& lhs, const Transform2d& rhs) {
-    constexpr double kTolerance = 1e-6;
-    for (int i = 0; i < 6; ++i) {
-      if (!NearEquals(lhs.data[i], rhs.data[i], kTolerance)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  static bool SameDragPreviewTransform(const SelectTool::ActiveDragPreview& lhs,
-                                       const SelectTool::ActiveDragPreview& rhs) {
-    return lhs.entity == rhs.entity && lhs.dragGeneration == rhs.dragGeneration &&
-           lhs.extraEntities == rhs.extraEntities && SameVector(lhs.translation, rhs.translation) &&
-           SameTransform(lhs.documentFromCachedDocument, rhs.documentFromCachedDocument);
-  }
-
   State state_ = NoCache{};
 };
 
-/// Print a composited presentation phase for test diagnostics.
 inline std::ostream& operator<<(std::ostream& os, CompositedPresentation::Phase phase) {
   switch (phase) {
     case CompositedPresentation::Phase::NoCache: return os << "NoCache";
     case CompositedPresentation::Phase::Cached: return os << "Cached";
     case CompositedPresentation::Phase::SettlingForRender: return os << "SettlingForRender";
-    case CompositedPresentation::Phase::WaitingForChromeRefresh:
-      return os << "WaitingForChromeRefresh";
   }
   return os << "Unknown";
 }

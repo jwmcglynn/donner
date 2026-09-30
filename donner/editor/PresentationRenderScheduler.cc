@@ -25,16 +25,6 @@ bool SameRasterViewport(const EditorRasterViewport& lhs, const EditorRasterViewp
          SameTransform(lhs.outputFromDocument, rhs.outputFromDocument);
 }
 
-bool SameDragPreviewTransform(const SelectTool::ActiveDragPreview& lhs,
-                              const SelectTool::ActiveDragPreview& rhs) {
-  constexpr double kTolerance = 1e-6;
-  return lhs.entity == rhs.entity && lhs.extraEntities == rhs.extraEntities &&
-         lhs.dragGeneration == rhs.dragGeneration &&
-         NearEquals(lhs.translation.x, rhs.translation.x, kTolerance) &&
-         NearEquals(lhs.translation.y, rhs.translation.y, kTolerance) &&
-         SameTransform(lhs.documentFromCachedDocument, rhs.documentFromCachedDocument);
-}
-
 }  // namespace
 
 void PresentationRenderScheduler::reset() {
@@ -64,11 +54,8 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
   }
   if (!deferIdentityActiveDragCapture && input.requiresRenderedActiveDragPresentation &&
       input.activeDragPreview.has_value()) {
-    const std::optional<SelectTool::ActiveDragPreview> representedPreview =
-        presentation.presentationPreview(input.activeDragPreview);
     decision.needsRenderedActiveDragPresentation =
-        !representedPreview.has_value() ||
-        !SameDragPreviewTransform(*input.activeDragPreview, *representedPreview);
+        !presentation.represents(*input.activeDragPreview);
   }
   const bool versionChanged = input.currentVersion != lastRenderedVersion_;
   const bool canvasSizeChanged = input.currentCanvasSize != lastRenderedCanvasSize_;

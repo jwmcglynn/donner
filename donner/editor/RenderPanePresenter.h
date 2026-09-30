@@ -10,6 +10,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/DocumentCompositeTexture.h"
+#include "donner/editor/FramePresentation.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/MenuBarPresenter.h"
 #include "donner/editor/OverlayRenderer.h"
@@ -29,23 +30,9 @@ struct RenderPanePresenterState {
   /// content region, and everything anchored to the window rather than to the
   /// document.
   const ViewportState& viewport;
-  /// Viewport the document pixels presented this frame are actually placed
-  /// with, or null when that is the live viewport.
-  ///
-  /// A worker-owned surface is positioned with the viewport its accepted epoch
-  /// was rasterized against, which can be one or more worker frames behind the
-  /// live one. Everything drawn in document space - the presented image clip
-  /// rect, tile quads, and the compositor tile overlay - must use that same
-  /// transform, or it annotates pixels that are no longer underneath it.
-  const ViewportState* presentedDocumentViewport = nullptr;
   const FrameHistory& frameHistory;
-  const GlTextureCache& textures;
-  const std::optional<SelectionChromeSnapshot>& immediateOverlaySnapshot;
-  const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview;
-  const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview;
+  std::shared_ptr<const FramePresentation> presentation;
   Vector2d contentRegion = Vector2d::Zero();
-  Entity suppressedLayerEntity = entt::null;
-  bool suppressDragTargetTiles = false;
   bool documentPresentedDirectly = false;
   DocumentCompositeTextureView documentComposite;
   bool compositorTileOverlay = false;

@@ -249,22 +249,6 @@ ChromeDrawScale ChromeDrawScaleFor(const Transform2d& canvasFromDoc, double devi
   };
 }
 
-std::array<Vector2d, 4> TransformedBoxCorners(const Box2d& box,
-                                              const Transform2d& documentFromBoxDocument) {
-  const std::array<Vector2d, 4> corners{
-      box.topLeft,
-      Vector2d(box.bottomRight.x, box.topLeft.y),
-      box.bottomRight,
-      Vector2d(box.topLeft.x, box.bottomRight.y),
-  };
-
-  std::array<Vector2d, 4> transformed;
-  for (std::size_t i = 0; i < corners.size(); ++i) {
-    transformed[i] = documentFromBoxDocument.transformPosition(corners[i]);
-  }
-  return transformed;
-}
-
 Box2d HandleBoxForCorner(const Vector2d& cornerDoc, double scale) {
   const SelectionTransformHandleBoxes handleBoxes =
       SelectionTransformHandleBoxesForBounds(Box2d(cornerDoc, cornerDoc), scale);
@@ -877,6 +861,13 @@ void OverlayRenderer::drawChromeWithTransform(svg::RendererInterface& renderer,
   drawChromeWithTransform(renderer, selection, /*marqueeRectDoc=*/std::nullopt, canvasFromDoc);
 }
 
+namespace {
+bool CapturePathEditingPoints(SelectionChromeDetail detail) {
+  return detail == SelectionChromeDetail::PathOutlinesOnly ||
+         detail == SelectionChromeDetail::Complete;
+}
+}  // namespace
+
 SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     std::span<const svg::SVGElement> selection, const std::optional<Box2d>& marqueeRectDoc,
     const Transform2d& canvasFromDoc,
@@ -959,7 +950,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   // returning, so the post-return snapshot is fully self-contained.
   const bool combinedBoundsOnly = selectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
   const bool pathOutlinesOnly = selectionDetail == SelectionChromeDetail::PathOutlinesOnly;
-  const bool includePathPointChrome = pathOutlinesOnly;
+  const bool includePathPointChrome = CapturePathEditingPoints(selectionDetail);
 
   // A live select gesture carries immutable start bounds and the exact current
   // document transform. Build its lightweight bounds chrome directly from

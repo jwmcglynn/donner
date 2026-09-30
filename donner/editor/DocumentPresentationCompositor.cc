@@ -64,49 +64,11 @@ bool EqualTileKey(const TileKey& lhs, const TileKey& rhs) {
          lhs.metadataOnly == rhs.metadataOnly && lhs.isDragTarget == rhs.isDragTarget;
 }
 
-struct DragKey {
-  Entity entity = entt::null;
-  std::vector<Entity> extraEntities;
-  Vector2d translation = Vector2d::Zero();
-  Transform2d documentFromCachedDocument = Transform2d();
-  std::uint64_t dragGeneration = 0;
-};
-
-std::optional<DragKey> MakeDragKey(const std::optional<SelectTool::ActiveDragPreview>& preview) {
-  if (!preview.has_value()) {
-    return std::nullopt;
-  }
-  return DragKey{
-      .entity = preview->entity,
-      .extraEntities = preview->extraEntities,
-      .translation = preview->translation,
-      .documentFromCachedDocument = preview->documentFromCachedDocument,
-      .dragGeneration = preview->dragGeneration,
-  };
-}
-
-bool EqualDragKey(const std::optional<DragKey>& lhs, const std::optional<DragKey>& rhs) {
-  if (lhs.has_value() != rhs.has_value()) {
-    return false;
-  }
-  if (!lhs.has_value()) {
-    return true;
-  }
-  return lhs->entity == rhs->entity && lhs->extraEntities == rhs->extraEntities &&
-         lhs->translation == rhs->translation &&
-         EqualTransform(lhs->documentFromCachedDocument, rhs->documentFromCachedDocument) &&
-         lhs->dragGeneration == rhs->dragGeneration;
-}
-
 struct RequestKey {
   ViewportState viewport;
   Box2d imageClipRect;
   std::vector<TileKey> overviewTiles;
   std::vector<TileKey> tiles;
-  std::optional<DragKey> activeDrag;
-  std::optional<DragKey> displayedDrag;
-  Entity suppressedLayerEntity = entt::null;
-  bool suppressDragTargetTiles = false;
 };
 
 bool EqualViewport(const ViewportState& lhs, const ViewportState& rhs) {
@@ -123,26 +85,15 @@ bool EqualTileKeys(const std::vector<TileKey>& lhs, const std::vector<TileKey>& 
 
 bool EqualRequest(const RequestKey& lhs, const RequestKey& rhs) {
   return EqualViewport(lhs.viewport, rhs.viewport) && lhs.imageClipRect == rhs.imageClipRect &&
-         EqualTileKeys(lhs.overviewTiles, rhs.overviewTiles) &&
-         EqualTileKeys(lhs.tiles, rhs.tiles) && EqualDragKey(lhs.activeDrag, rhs.activeDrag) &&
-         EqualDragKey(lhs.displayedDrag, rhs.displayedDrag) &&
-         lhs.suppressedLayerEntity == rhs.suppressedLayerEntity &&
-         lhs.suppressDragTargetTiles == rhs.suppressDragTargetTiles;
+         EqualTileKeys(lhs.overviewTiles, rhs.overviewTiles) && EqualTileKeys(lhs.tiles, rhs.tiles);
 }
 
 RequestKey MakeRequestKey(const ViewportState& viewport, const Box2d& imageClipRect,
                           std::span<const GlTextureCache::TileView> overviewTiles,
-                          std::span<const GlTextureCache::TileView> tiles,
-                          const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
-                          const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview,
-                          Entity suppressedLayerEntity, bool suppressDragTargetTiles) {
+                          std::span<const GlTextureCache::TileView> tiles) {
   RequestKey key{
       .viewport = viewport,
       .imageClipRect = imageClipRect,
-      .activeDrag = MakeDragKey(activeDragPreview),
-      .displayedDrag = MakeDragKey(displayedDragPreview),
-      .suppressedLayerEntity = suppressedLayerEntity,
-      .suppressDragTargetTiles = suppressDragTargetTiles,
   };
   key.overviewTiles.reserve(overviewTiles.size());
   for (const GlTextureCache::TileView& tile : overviewTiles) {
@@ -476,6 +427,68 @@ void main() {
     glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(sizeof(vertices)), vertices.data());
     glDrawArrays(GL_TRIANGLES, 0, 6);
   }
+  void drawFrameTiles(const FramePresentation& frame, const Vector2i& outputSize) {
+    const auto& viewport = frame.viewport();
+    const auto& imageClipRect = *frame.documentClipRect();
+    const auto& tiles = frame.tiles();
+    const auto& overviewTiles = frame.overviewTiles();
+    const double dpr = viewport.devicePixelRatio;
+    glViewport(0, 0, outputSize.x, outputSize.y);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_BLEND);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+    const Vector2d paneOriginPx = viewport.paneOrigin * dpr;
+    const Transform2d outputFromDocument =
+        frame.framebufferFromDocument(Vector2d(dpr, dpr)) * Transform2d::Translate(-paneOriginPx);
+    const Box2d outputClipRect(imageClipRect.topLeft * dpr - paneOriginPx,
+                               imageClipRect.bottomRight * dpr - paneOriginPx);
+
+    const auto computeTileQuad = [&](const GlTextureCache::TileView& tile) {
+      if (tile.texture == 0) {
+        return std::optional<PresentedTileQuad>();
+      }
+      return ComputePresentedTileQuad(PresentedGeometryFromTileView(tile), outputFromDocument,
+                                      std::nullopt);
+    };
+    const auto drawTile = [&](const GlTextureCache::TileView& tile) {
+      const std::optional<PresentedTileQuad> quad = computeTileQuad(tile);
+      if (!quad.has_value()) {
+        return;
+      }
+      drawQuad(static_cast<GLuint>(tile.texture), *quad, tile.uvBottomRight, tileProgram,
+               outputSize);
+    };
+
+    glEnable(GL_SCISSOR_TEST);
+    if (!overviewTiles.empty()) {
+      std::vector<Box2d> activeTileBounds;
+      activeTileBounds.reserve(tiles.size() * 2u);
+      for (const GlTextureCache::TileView& tile : tiles) {
+        if (const std::optional<PresentedTileQuad> quad = computeTileQuad(tile)) {
+          activeTileBounds.push_back(QuadBounds(*quad));
+        }
+      }
+      for (const Box2d& overviewClipRect :
+           SubtractPresentedTileBoundsFromClip(outputClipRect, activeTileBounds)) {
+        setClip(overviewClipRect, outputSize);
+        for (const GlTextureCache::TileView& tile : overviewTiles) {
+          drawTile(tile);
+        }
+      }
+    }
+    setClip(outputClipRect, outputSize);
+    for (const GlTextureCache::TileView& tile : tiles) {
+      drawTile(tile);
+    }
+  }
+
 #endif
 };
 
@@ -485,33 +498,22 @@ DocumentPresentationCompositor::DocumentPresentationCompositor()
 DocumentPresentationCompositor::~DocumentPresentationCompositor() = default;
 
 DocumentCompositeTextureView DocumentPresentationCompositor::compose(
-    const ViewportState& viewport, const Box2d& imageClipRect,
-    std::span<const GlTextureCache::TileView> overviewTiles,
-    std::span<const GlTextureCache::TileView> tiles,
-    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
-    const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview,
-    Entity suppressedLayerEntity, bool suppressDragTargetTiles) {
+    const FramePresentation& frame) {
 #ifdef DONNER_EDITOR_WGPU
-  (void)viewport;
-  (void)imageClipRect;
-  (void)overviewTiles;
-  (void)tiles;
-  (void)activeDragPreview;
-  (void)displayedDragPreview;
-  (void)suppressedLayerEntity;
-  (void)suppressDragTargetTiles;
+  (void)frame;
   return {};
 #else
-  const double dpr = viewport.devicePixelRatio;
-  if (!std::isfinite(dpr) || dpr <= 0.0) {
-    reset();
+  if (!frame.documentClipRect().has_value()) {
     return {};
   }
+  const auto& viewport = frame.viewport();
+  const auto& imageClipRect = *frame.documentClipRect();
+  const auto& tiles = frame.tiles();
+  const auto& overviewTiles = frame.overviewTiles();
+  const double dpr = viewport.devicePixelRatio;
   const Vector2i outputSize(std::max(1, static_cast<int>(std::ceil(viewport.paneSize.x * dpr))),
                             std::max(1, static_cast<int>(std::ceil(viewport.paneSize.y * dpr))));
-  RequestKey request =
-      MakeRequestKey(viewport, imageClipRect, overviewTiles, tiles, activeDragPreview,
-                     displayedDragPreview, suppressedLayerEntity, suppressDragTargetTiles);
+  RequestKey request = MakeRequestKey(viewport, imageClipRect, overviewTiles, tiles);
   if (impl_->lastRequest.has_value() && EqualRequest(*impl_->lastRequest, request) &&
       impl_->view.texture != 0) {
     return impl_->view;
@@ -525,78 +527,7 @@ DocumentCompositeTextureView DocumentPresentationCompositor::compose(
     return {};
   }
 
-  glViewport(0, 0, outputSize.x, outputSize.y);
-  glDisable(GL_DEPTH_TEST);
-  glDisable(GL_CULL_FACE);
-  glDisable(GL_STENCIL_TEST);
-  glDisable(GL_SCISSOR_TEST);
-  glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-  glClear(GL_COLOR_BUFFER_BIT);
-  glEnable(GL_BLEND);
-  glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-  glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-
-  const Vector2d paneOriginPx = viewport.paneOrigin * dpr;
-  Transform2d outputFromCanvas(Transform2d::uninitialized);
-  const double devicePixelsPerDocUnit = viewport.devicePixelsPerDocUnit();
-  outputFromCanvas.data[0] = devicePixelsPerDocUnit;
-  outputFromCanvas.data[1] = 0.0;
-  outputFromCanvas.data[2] = 0.0;
-  outputFromCanvas.data[3] = devicePixelsPerDocUnit;
-  outputFromCanvas.data[4] = viewport.panScreenPoint.x * dpr -
-                             viewport.panDocPoint.x * devicePixelsPerDocUnit - paneOriginPx.x;
-  outputFromCanvas.data[5] = viewport.panScreenPoint.y * dpr -
-                             viewport.panDocPoint.y * devicePixelsPerDocUnit - paneOriginPx.y;
-  const Box2d outputClipRect(imageClipRect.topLeft * dpr - paneOriginPx,
-                             imageClipRect.bottomRight * dpr - paneOriginPx);
-  const std::optional<PresentedDragBaseline> dragBaseline =
-      PresentedBaselineFromDragPreviews(activeDragPreview, displayedDragPreview);
-
-  const auto computeTileQuad = [&](const GlTextureCache::TileView& tile) {
-    if (!ShouldPresentCompositedTile(tile, suppressedLayerEntity, suppressDragTargetTiles) ||
-        (suppressDragTargetTiles && TileMatchesActiveDragPreview(tile, activeDragPreview))) {
-      return std::optional<PresentedTileQuad>();
-    }
-    return ComputePresentedTileQuad(PresentedGeometryFromTileView(tile, activeDragPreview),
-                                    outputFromCanvas, dragBaseline);
-  };
-  const auto drawTile = [&](const GlTextureCache::TileView& tile) {
-    const std::optional<PresentedTileQuad> quad = computeTileQuad(tile);
-    if (!quad.has_value()) {
-      return;
-    }
-    impl_->drawQuad(static_cast<GLuint>(tile.texture), *quad, tile.uvBottomRight,
-                    impl_->tileProgram, outputSize);
-  };
-
-  glEnable(GL_SCISSOR_TEST);
-  if (!overviewTiles.empty()) {
-    std::vector<Box2d> activeTileBounds;
-    activeTileBounds.reserve(tiles.size() * 2u);
-    for (const GlTextureCache::TileView& tile : tiles) {
-      if (const std::optional<PresentedTileQuad> quad = computeTileQuad(tile)) {
-        activeTileBounds.push_back(QuadBounds(*quad));
-      }
-      if (TileMatchesActiveDragPreview(tile, activeDragPreview)) {
-        const std::optional<PresentedTileQuad> cachedQuad = ComputePresentedTileQuad(
-            PresentedGeometryFromTileView(tile, std::nullopt), outputFromCanvas, std::nullopt);
-        if (cachedQuad.has_value()) {
-          activeTileBounds.push_back(QuadBounds(*cachedQuad));
-        }
-      }
-    }
-    for (const Box2d& overviewClipRect :
-         SubtractPresentedTileBoundsFromClip(outputClipRect, activeTileBounds)) {
-      impl_->setClip(overviewClipRect, outputSize);
-      for (const GlTextureCache::TileView& tile : overviewTiles) {
-        drawTile(tile);
-      }
-    }
-  }
-  impl_->setClip(outputClipRect, outputSize);
-  for (const GlTextureCache::TileView& tile : tiles) {
-    drawTile(tile);
-  }
+  impl_->drawFrameTiles(frame, outputSize);
 
   if (!impl_->attach(impl_->resolvedTexture)) {
     std::fprintf(stderr, "DocumentPresentationCompositor resolve framebuffer is incomplete\n");

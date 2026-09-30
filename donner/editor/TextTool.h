@@ -28,6 +28,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/PresentationPose.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/Tool.h"
 #include "donner/svg/SVGTextElement.h"
@@ -76,6 +77,10 @@ public:
 
   /// Caret + frame chrome for the active editing session, in document space.
   struct EditingChrome {
+    /// Source revision and text subject held while measuring this geometry.
+    PresentationIdentity sourceIdentity;
+    Vector2i canvasSize = Vector2i::Zero();
+    Entity subject = entt::null;
     /// Caret line endpoints (top, bottom).
     Vector2d caretTopDoc;
     Vector2d caretBottomDoc;
@@ -253,6 +258,7 @@ public:
   [[nodiscard]] std::optional<SelectionRange> selectionRange() const;
 
 private:
+  std::optional<svg::DocumentWriteAccess> tryEditingAccess(EditorApp& editor) const;
   enum class State {
     Idle,         //!< No session.
     DraggingBox,  //!< Mouse held, dragging out a text box.

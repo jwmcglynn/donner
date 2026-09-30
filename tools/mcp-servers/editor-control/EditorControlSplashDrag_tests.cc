@@ -151,9 +151,11 @@ TEST(EditorControlSessionTest, FractionalZoomFirstDragCapture) {
   EXPECT_THAT(released.displayedDragPreview,
               testing::Optional(testing::Field(&SelectTool::ActiveDragPreview::entity,
                                                released.selectedCompositedEntity)));
-  const auto dragTargetCount =
-      std::ranges::count_if(released.tiles, [](const auto& tile) { return tile.isDragTarget; });
-  EXPECT_GT(dragTargetCount, 0);
+  EXPECT_GT(released.presentationFrameId, 0u);
+  EXPECT_THAT(released.presentedPoses,
+              testing::Contains(
+                  testing::Field(&PresentationPose::entity, released.selectedCompositedEntity)));
+  EXPECT_EQ(released.presentationIdentity.version, released.immediateOverlayDocumentVersion);
 }
 
 TEST(EditorControlSessionTest, SplashFirstDragCapture) {

@@ -29,6 +29,7 @@ class ParseResult;
 namespace donner::editor {
 
 class AsyncSVGDocument;
+class CapturedPresentation;
 
 }  // namespace donner::editor
 
@@ -251,6 +252,7 @@ private:
  */
 class SVGElement {
   friend class donner::editor::AsyncSVGDocument;
+  friend class donner::editor::CapturedPresentation;
   friend class parser::AttributeParser;
   friend class DonnerController;
   friend class SVGDocument;

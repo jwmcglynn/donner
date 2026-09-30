@@ -361,13 +361,16 @@ private:
   /// activation while the document is in sync; committed as one undo entry
   /// when the item deactivates after an edit.
   struct TransformEditState {
-    svg::SVGElement element;           ///< Element being edited.
-    TransformField field;              ///< Active field.
-    int matrixIndex = 0;               ///< Matrix component index for `TransformField::Matrix`.
-    const char* undoLabel = "";        ///< Undo timeline label for the completed edit.
-    Transform2d startTransform;        ///< Local transform at activation.
-    Transform2d currentTransform;      ///< Last transform queued via SetTransformCommand.
-    std::optional<Box2d> startBounds;  ///< Document-space bounds at activation, if any.
+    svg::SVGElement element;               ///< Element being edited.
+    svg::SVGDocumentHandle document;       ///< Document owning the edit baseline.
+    std::uint64_t documentGeneration = 0;  ///< Generation owning the edit baseline.
+    ImGuiID itemId = 0;                    ///< Active widget whose stale input may be cancelled.
+    TransformField field;                  ///< Active field.
+    int matrixIndex = 0;                   ///< Matrix component index for `TransformField::Matrix`.
+    const char* undoLabel = "";            ///< Undo timeline label for the completed edit.
+    Transform2d startTransform;            ///< Local transform at activation.
+    Transform2d currentTransform;          ///< Last transform queued via SetTransformCommand.
+    std::optional<Box2d> startBounds;      ///< Document-space bounds at activation, if any.
     std::optional<DecomposedTransform> startDecomposed;  ///< Decomposition of `startTransform`.
     /// Stable locator so undo / source writeback survive document identity changes.
     std::optional<AttributeWritebackTarget> writebackTarget;
@@ -380,7 +383,13 @@ private:
     /// Set when the edit deactivated on a frame without live app access;
     /// the commit is finalized on the next frame that has it.
     bool pendingCommit = false;
+    /// Latest widget value has not yet reached the document mutation queue.
+    bool pendingValue = false;
   };
+
+  void discardForeignTransformEdit(const EditorApp& app);
+  bool flushPendingTransformValue(EditorApp* liveApp);
+  bool updateTransformFieldValue(EditorApp* liveApp, double value, bool changed, bool deactivated);
 
   void captureTreeNode(const svg::SVGElement& element, std::span<const svg::SVGElement> selection,
                        TreeNodeSnapshot& out);
@@ -468,6 +477,10 @@ private:
   /// Capture the edit baseline for @p field from the live element.
   void beginTransformEdit(EditorApp& liveApp, TransformField field, int matrixIndex,
                           const char* undoLabel);
+
+  /// Read the initial numeric value from the captured edit baseline.
+  /// @param state Baseline and field being edited.
+  static double InitialTransformFieldValue(const TransformEditState& state);
 
   /// Compose the new local transform for the in-progress edit at @p value.
   [[nodiscard]] Transform2d composeFieldTransform(const TransformEditState& state,
