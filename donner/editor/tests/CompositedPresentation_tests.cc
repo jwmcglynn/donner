@@ -367,4 +367,34 @@ TEST(CompositedPresentationTest, DiagnosticsAreDetachedAndPhasesHaveStableNames)
 }
 
 }  // namespace
+TEST(CompositedPresentationTest, NewerCommittedTransformSupersedesReleasedDragIntent) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="r" x="10" y="10" width="20" height="20"/></svg>)"));
+  SelectTool tool;
+  tool.onMouseDown(app, Vector2d(15, 15), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(35, 15), true);
+  ASSERT_TRUE(app.flushFrame());
+  const auto released = tool.activeDragPreview();
+  ASSERT_TRUE(released.has_value());
+  CompositedPresentation state;
+  state.beginSettling(released, app.document().currentFrameVersion());
+  tool.onMouseUp(app, Vector2d(35, 15));
+  app.applyMutation(EditorCommand::SetTransformCommand(app.selectedElements().front(),
+                                                       Transform2d::Translate(50, 0)));
+  ASSERT_TRUE(app.flushFrame());
+  const auto capture = CapturedPresentation::Capture(
+      app.document().document(),
+      PresentationIdentity{.captureId = 2,
+                           .documentGeneration = app.document().documentGeneration(),
+                           .version = app.document().currentFrameVersion(),
+                           .geometryRevision = app.document().nonTransformRevision()},
+      app.selectedElements());
+  ASSERT_NE(capture, nullptr);
+  state.notePreparedResources(FramePresentationTestAccess::resources(capture, {}), released->entity,
+                              std::nullopt);
+  EXPECT_EQ(state.diagnostics().phase, Phase::Cached);
+  EXPECT_FALSE(state.activePreviewForPresentation(std::nullopt).has_value());
+}
+
 }  // namespace donner::editor
