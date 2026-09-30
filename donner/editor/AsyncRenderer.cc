@@ -815,9 +815,7 @@ void AsyncRenderer::noteOverviewPresentedAsActive(const RenderResult& result) {
   std::lock_guard<std::mutex> lock(mutex_);
   UTILS_RELEASE_ASSERT(!workerStateRenderInFlight(workerState_));
   UTILS_RELEASE_ASSERT(result.overviewInfillOnly && result.compositedPreview.has_value() &&
-                       result.compositedPreview->valid() &&
-                       result.compositedPreview->tiles.size() == 1u &&
-                       result.compositedPreview->tiles.front().id == "full-canvas");
+                       result.compositedPreview->valid());
   notePublishedCompositedPreview(result.compositedPreview);
 }
 
@@ -1561,9 +1559,6 @@ void AsyncRenderer::workerLoop() {
     // updated presentation geometry.
     bool desiredPromotionCoverageCompleteAfterRender = false;
     const auto buildCompositedPreview = [&]() -> std::optional<RenderResult::CompositedPreview> {
-      if (request.overviewInfillOnly) {
-        return std::nullopt;
-      }
       if (!CanPublishCompositorTiles(compositor_.get())) {
         return std::nullopt;
       }
@@ -1884,8 +1879,7 @@ void AsyncRenderer::workerLoop() {
     (void)request.selection;
     svg::RendererBitmap bitmap;
     std::shared_ptr<const svg::RendererTextureSnapshot> fullCanvasTexture;
-    // Only the explicit Off mode, overview infill, and the geometry-debug diagnostic use a flat
-    // payload. Normal On and FilterOnly presentation is the compositor's tile set or nothing.
+    // A flat overview remains a fallback when a complete paint-order tile set is unavailable.
     const bool fullCanvasPresentationAllowed = CanUseFullCanvasPresentation(
         compositor_ != nullptr, request.overviewInfillOnly, geometryDebugOverlay);
     const PresentationSnapshotPlan snapshotPlan = ChoosePresentationSnapshotPlan(

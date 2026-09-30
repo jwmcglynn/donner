@@ -455,16 +455,18 @@ bool GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
   const auto uploadStart = std::chrono::steady_clock::now();
   lastCompositedUploadCost_ = CostForCompositedPreviewUpload(preview);
   metadataOnlyMissCount_ = 0;
-  auto active = prepareTileSet(preview, tileTextures_);
+  const bool retainAsOverview = rasterViewport.has_value() && !rasterViewport->viewportBounded;
+  auto active =
+      prepareTileSet(preview, tileTextures_, retainAsOverview ? &overviewTileTextures_ : nullptr);
   if (!active.has_value()) {
     return false;
   }
-  const bool retainAsOverview = rasterViewport.has_value() && !rasterViewport->viewportBounded;
   std::optional<PreparedTileSet> nextOverview;
   if (retainAsOverview) {
     nextOverview = prepareTileSet(preview, overviewTileTextures_, &active->entries);
   } else if (overview != nullptr && overview->compositedPreview.has_value()) {
-    nextOverview = prepareTileSet(*overview->compositedPreview, overviewTileTextures_);
+    nextOverview =
+        prepareTileSet(*overview->compositedPreview, overviewTileTextures_, &tileTextures_);
   }
   if ((retainAsOverview || overview != nullptr) && !nextOverview.has_value()) {
     discardPreparedTiles(*active);
@@ -491,7 +493,7 @@ bool GlTextureCache::uploadCompositedOverview(const RenderResult::CompositedPrev
   const auto uploadStart = std::chrono::steady_clock::now();
   lastCompositedUploadCost_ = CostForCompositedPreviewUpload(preview);
   metadataOnlyMissCount_ = 0;
-  auto prepared = prepareTileSet(preview, overviewTileTextures_);
+  auto prepared = prepareTileSet(preview, overviewTileTextures_, &tileTextures_);
   if (!prepared.has_value()) {
     return false;
   }
