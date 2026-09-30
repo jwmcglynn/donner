@@ -79,6 +79,17 @@ struct RenderCoordinatorTestAccess {
     return coordinator.canPresentWithOverview(result, raster, app, cache);
   }
 
+  static bool matchingPendingOverview(RenderCoordinator& coordinator,
+                                      const std::shared_ptr<const CapturedPresentation>& overview,
+                                      RenderResult& result, EditorApp& app) {
+    coordinator.pendingOverviewResult_.emplace();
+    coordinator.pendingOverviewResult_->version = result.version;
+    coordinator.pendingOverviewResult_->documentGeneration = result.documentGeneration;
+    coordinator.pendingOverviewResult_->fontResourceRevision = result.fontResourceRevision;
+    coordinator.pendingOverviewResult_->capturedPresentation = overview;
+    return coordinator.hasMatchingPendingOverview(result, app);
+  }
+
   static inline std::chrono::steady_clock::time_point fakeRetryNow{};
 
   static std::optional<std::uint64_t> requestedCommitGeneration(

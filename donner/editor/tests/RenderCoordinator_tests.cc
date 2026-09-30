@@ -1781,4 +1781,23 @@ TEST(RenderCoordinatorTest, UnpairedBoundedResultCannotReplaceCompleteCommittedS
       coordinator, result, result.rasterViewport, app, textures));
 }
 
+TEST(RenderCoordinatorTest, PendingOverviewRequiresExactSceneBeyondFrameVersion) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  const auto old = AcceptCapturedScene(coordinator, app);
+  app.document().document().setCanvasSize(200, 200);
+  const auto current = AcceptCapturedScene(coordinator, app);
+  ASSERT_EQ(old->identity().version, current->identity().version);
+  ASSERT_NE(old->identity().documentRevision, current->identity().documentRevision);
+  RenderResult result;
+  result.documentGeneration = app.document().documentGeneration();
+  result.version = app.document().currentFrameVersion();
+  result.capturedPresentation = current;
+  EXPECT_FALSE(RenderCoordinatorTestAccess::matchingPendingOverview(coordinator, old, result, app));
+  EXPECT_TRUE(
+      RenderCoordinatorTestAccess::matchingPendingOverview(coordinator, current, result, app));
+}
+
 }  // namespace donner::editor
