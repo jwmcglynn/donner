@@ -1664,6 +1664,7 @@ TEST(RenderCoordinatorTest, CurrentOverviewCanReplaceUnusableBoundedCoverage) {
            .activeRasterDocumentRect = Box2d::FromXYWH(0, 0, 1, 1)}),
       capture->selection().front(), std::nullopt);
   EXPECT_EQ(BuildFrame(coordinator, app, tool, MakeViewport(app), textures), nullptr);
+  EXPECT_GT(coordinator.lastFrameCostBreakdown().overlay.captureMs, 0.0);
   RenderResult overview;
   overview.capturedPresentation = capture;
   overview.version = app.document().currentFrameVersion();
