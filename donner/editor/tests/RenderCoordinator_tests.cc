@@ -1648,4 +1648,29 @@ TEST(RenderCoordinatorTest, RejectedCaptureHasBoundedRetriesWithoutConfiguration
   EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt);
 }
 
+TEST(RenderCoordinatorTest, CurrentOverviewCanReplaceUnusableBoundedCoverage) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto capture = AcceptCapturedScene(coordinator, app);
+  const auto resources = coordinator.compositedPresentation().resources();
+  coordinator.compositedPresentation().notePreparedResources(
+      FramePresentationTestAccess::resources(
+          capture, resources->tiles(),
+          {.activeTilesViewportBounded = true,
+           .activeRasterDocumentRect = Box2d::FromXYWH(0, 0, 1, 1)}),
+      capture->selection().front(), std::nullopt);
+  EXPECT_EQ(BuildFrame(coordinator, app, tool, MakeViewport(app), textures), nullptr);
+  RenderResult overview;
+  overview.capturedPresentation = capture;
+  overview.version = app.document().currentFrameVersion();
+  overview.documentGeneration = app.document().documentGeneration();
+  overview.overviewInfillOnly = true;
+  EXPECT_TRUE(RenderCoordinatorTestAccess::canReplaceWithOverview(coordinator, overview, app))
+      << "a current coherent overview must unblock a frame whose bounded raster lacks coverage";
+}
+
 }  // namespace donner::editor

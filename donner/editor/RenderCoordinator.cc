@@ -1394,12 +1394,17 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
   return framePresentation_;
 }
 
+bool RenderCoordinator::canReplaceWithOverview(const RenderResult& result,
+                                               const EditorApp& app) const {
+  return false;
+}
+
 void RenderCoordinator::acceptOverviewResult(RenderResult result, EditorApp& app,
                                              GlTextureCache& textures) {
   if (result.version != app.document().currentFrameVersion()) {
     return;
   }
-  if (!textures.tiles().empty()) {
+  if (!textures.tiles().empty() && !canReplaceWithOverview(result, app)) {
     pendingOverviewResult_ = std::move(result);
     return;
   }
