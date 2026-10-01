@@ -1331,6 +1331,12 @@ public:
     return nullptr;
   }
 
+  /// Returns true when offscreen payloads can stay on the GPU for composition on this renderer's
+  /// device. This does not imply that a texture can be handed to another thread or device.
+  [[nodiscard]] virtual bool supportsTextureSnapshotCompositing() const {
+    return requiresTextureSnapshotPresentation();
+  }
+
   /// Returns true when presentation callers must use \ref takeTextureSnapshot and must not fall
   /// back to CPU bitmap readback for normal frame handoff.
   [[nodiscard]] virtual bool requiresTextureSnapshotPresentation() const { return false; }

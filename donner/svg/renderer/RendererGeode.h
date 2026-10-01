@@ -561,6 +561,9 @@ public:
   [[nodiscard]] const RendererTextureSnapshot* borrowTextureSnapshot()
       UTILS_LIFETIME_BOUND override;
 
+  /// Geode composes offscreen snapshots on the same device without reading pixels back.
+  [[nodiscard]] bool supportsTextureSnapshotCompositing() const override { return true; }
+
   /// Geode presentation is GPU-native when callers can sample WebGPU textures directly.
   ///
   /// Not on the browser build. WebGPU has no cross-thread device, surface, or texture sharing in
