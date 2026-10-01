@@ -161,6 +161,7 @@ export async function drain() {
 export function loadLibrary({
   requestAdapterForTesting,
   navigatorGpuAvailable = true,
+  nowForTesting = () => performance.now(),
 } = {}) {
   const heap = new ArrayBuffer(64 * 1024);
   const bytes = new Uint8Array(heap);
@@ -179,6 +180,7 @@ export function loadLibrary({
   let adapterRequests = 0;
   const consoleErrors = [];
   const sandbox = {
+    performance: { now: nowForTesting },
     console: {
       error: (...parts) => consoleErrors.push(parts.map(String).join(" ")),
     },
