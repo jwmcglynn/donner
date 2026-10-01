@@ -67,6 +67,11 @@ struct RenderCoordinatorTestAccess {
     return coordinator.canReplaceWithOverview(result, app);
   }
 
+  static void changePendingRepairFailure(RenderCoordinator& coordinator,
+                                         FramePresentationFailure failure) {
+    coordinator.pendingRepair_->failure = failure;
+  }
+
   static bool requiresFreshOverview(RenderCoordinator& coordinator, bool available,
                                     std::uint64_t currentVersion) {
     coordinator.overviewDocVersion_ = currentVersion;

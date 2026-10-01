@@ -509,7 +509,7 @@ TEST(FramePresentationTest, CurrentCommittedCaptureReplacesAnOlderDisplayedOverr
   EXPECT_THAT(adopted->overrides(), testing::IsEmpty());
 }
 
-TEST(FramePresentationTest, FractionalCoverageUsesOwnedOverviewThroughNewerDragPoses) {
+TEST(FramePresentationTest, FractionalCoverageKeepsCompleteOwnedFamilyUntilPairedReplacement) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kRect));
   SelectTool tool;
@@ -525,13 +525,22 @@ TEST(FramePresentationTest, FractionalCoverageUsesOwnedOverviewThroughNewerDragP
        .overviewInfillAvailable = true,
        .activeRasterDocumentRect = Box2d::FromXYWH(0, 0, 100, 99.98)},
       overview, {RectTile(entity, 10, 0)});
-  auto first = FramePresentation::Build(resources, Input(app, tool, 1)).frame;
+  auto flatTile = RectTile(entt::null, 10, 0);
+  flatTile.kind = RenderResult::CompositedTile::Kind::Segment;
+  const auto flat = FramePresentationTestAccess::resources(
+      active, resources->tiles(), resources->coverage(), overview, {flatTile});
+  EXPECT_EQ(FramePresentation::Build(flat, Input(app, tool, 1)).failure,
+            FramePresentationFailure::MissingOverview);
+  EXPECT_EQ(FramePresentation::Build(resources, Input(app, tool, 1)).failure,
+            FramePresentationFailure::MissingOverview);
+  const auto complete = FramePresentationTestAccess::resources(overview, {RectTile(entity, 10, 0)});
+  auto first = FramePresentation::Build(complete, Input(app, tool, 1)).frame;
   ASSERT_NE(first, nullptr);
   EXPECT_EQ(first->identity().captureId, overview->identity().captureId);
   EXPECT_TRUE(first->followsPointer());
   ExpectRectAt(*first, 30);
   tool.onMouseMove(app, Vector2d(45, 15), true);
-  auto second = FramePresentation::Build(resources, Input(app, tool, 2), nullptr, first).frame;
+  auto second = FramePresentation::Build(complete, Input(app, tool, 2), nullptr, first).frame;
   ASSERT_NE(second, nullptr);
   EXPECT_TRUE(second->followsPointer());
   ExpectRectAt(*second, 40);
@@ -546,6 +555,35 @@ TEST(FramePresentationTest, FractionalCoverageUsesOwnedOverviewThroughNewerDragP
       resources->overviewTiles());
   EXPECT_EQ(FramePresentation::Build(changed, Input(app, tool, 4)).failure,
             FramePresentationFailure::MissingOverview);
+}
+
+TEST(FramePresentationTest, OlderWholeFamilyCannotRewindNewerCommittedFrame) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+    <rect id="rect" x="10" y="10" width="20" height="20"/>
+    <rect id="peer" x="60" y="10" width="20" height="20"/>
+  </svg>)"));
+  app.setSelection(*app.document().document().querySelector("#rect"));
+  const auto old = Capture(app, 1);
+  auto peer = app.document().document().querySelector("#peer")->cast<svg::SVGGraphicsElement>();
+  peer.setTransform(Transform2d::Translate(0, 20));
+  const auto current = Capture(app, 2);
+  ASSERT_TRUE(old->identity().sameContent(current->identity()));
+  ASSERT_LT(old->identity().documentRevision, current->identity().documentRevision);
+  SelectTool tool;
+  auto input = Input(app, tool, 1);
+  input.documentIdentity = current->identity();
+  const auto frame =
+      FramePresentation::Build(FramePresentationTestAccess::resources(
+                                   current, {RectTile(current->selection().front(), 10, 0)}),
+                               input)
+          .frame;
+  ASSERT_NE(frame, nullptr);
+  EXPECT_TRUE(frame->overrides().empty());
+  EXPECT_FALSE(FramePresentation::CanAdopt(*old, {}, frame.get(), false))
+      << "An older complete family can rewind a committed unselected object even without "
+         "overrides.";
 }
 
 }  // namespace donner::editor
