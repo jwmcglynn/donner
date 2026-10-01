@@ -153,7 +153,7 @@ playwright_bin.playwright_test(
 )
 
 playwright_bin.playwright_test(
-    name = "browser_responsiveness_perf_test",
+    name = "_browser_responsiveness_perf_driver",
     size = "large",
     timeout = "long",
     args = [
@@ -163,7 +163,10 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-application-heartbeat.mjs",
+        "browser-heartbeat.cjs",
         "browser-responsiveness.perf.ts",
+        "browser-watchdog-setup.js",
         "package.json",
         "playwright.bazel.config.js",
         "playwright.config.js",
@@ -179,7 +182,6 @@ playwright_bin.playwright_test(
         "CI": "1",
         "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
         "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-        "NODE_OPTIONS": "",
         "DONNER_CHROMIUM_ARCHIVE": "$(rootpath @playwright_chromium_mac_arm64//file)",
         "DONNER_FIREFOX_ARCHIVE": "$(rootpath @playwright-firefox-mac14-arm64//file)",
     },
@@ -193,6 +195,52 @@ playwright_bin.playwright_test(
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
     ],
+)
+
+js_test(
+    name = "browser_responsiveness_perf_test",
+    size = "large",
+    timeout = "long",
+    copy_data_to_bin = False,
+    data = [
+        "browser-responsiveness.perf.ts",
+        "browser-watchdog-anchor.mjs",
+        "browser-watchdog-child.cjs",
+        "playwright.responsiveness.bazel.config.js",
+        ":_browser_responsiveness_perf_driver",
+    ],
+    entry_point = "browser-watchdog.mjs",
+    env = {
+        "DONNER_WATCHDOG_DRIVER": "$(rootpath :_browser_responsiveness_perf_driver)",
+        "DONNER_WATCHDOG_HEARTBEAT": "browser-watchdog-heartbeat",
+        "DONNER_WATCHDOG_SPEC": "$(rootpath :browser-responsiveness.perf.ts)",
+        "DONNER_WATCHDOG_CONFIG": "$(rootpath :playwright.responsiveness.bazel.config.js)",
+    },
+    tags = [
+        "manual",
+        "no-sandbox",
+        "perf",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)
+
+js_test(
+    name = "browser_watchdog_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "browser-application-heartbeat.mjs",
+        "browser-heartbeat.cjs",
+        "browser-watchdog.mjs",
+        "browser-watchdog-anchor.mjs",
+        "browser-watchdog-child.cjs",
+        ":node_modules/@playwright/test",
+    ],
+    entry_point = "browser-watchdog.spec.mjs",
+    node_options = ["--test"],
 )
 
 playwright_bin.playwright_test(
