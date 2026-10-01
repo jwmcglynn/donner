@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { startApplicationHeartbeat } from "./browser-application-heartbeat.mjs";
 import { resourceQueuesAreQuiescent } from "./browser-resource-quiescence.mjs";
+import { inspectGpuImageTransfer } from "./gpu-image-transfer-canary";
 
 interface Diagnostics extends Window {
   __donnerBackend?: string;
@@ -1021,3 +1022,23 @@ test(
     }
   },
 );
+
+test("GPU image transfer preserves pixels between workers", async ({ page, browser }, info) => {
+  await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
+  await expect.poll(
+    () => page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented),
+    { timeout: 30000 },
+  ).toBe(true);
+  const stopHeartbeat = await startApplicationHeartbeat(page);
+  try {
+    const samples = await inspectGpuImageTransfer(page, info.outputPath("gpu-image-transfer"));
+    await attachJson(info, "gpu-image-transfer.json", {
+      browser: info.project.name,
+      version: browser.version(),
+      ...packageHashes(),
+      samples,
+    });
+  } finally {
+    stopHeartbeat();
+  }
+});
