@@ -3778,7 +3778,10 @@ TEST(GlRnrReplayTest, GeodeZoomThenDragKeepsDonnerDOverlayLockedToPresentedConte
     }
     ++checkedDragFrames;
     ASSERT_TRUE(diagnostics->frameCost.overlay.hasRepresentedDragPreview)
-        << "Overlay presentation must record the drag transform it actually used.";
+        << "Overlay presentation must record the drag transform it actually used. Frame=" << frame
+        << " paths=" << diagnostics->frameCost.overlay.pathCount
+        << " follows=" << diagnostics->presentationFollowsPointer << "\n"
+        << CanonicalReplayDiagnostics(result, 35u, 42u);
 
     const Vector2d presentedContentTranslation = PresentedDragTargetTranslationOrZero(*diagnostics);
     EXPECT_NEAR(diagnostics->frameCost.overlay.representedDragTranslationDoc.x,

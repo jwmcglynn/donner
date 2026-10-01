@@ -148,11 +148,13 @@ TEST(EditorControlSessionTest, FractionalZoomFirstDragCapture) {
   const auto& released = result.frameDiagnostics.back();
   EXPECT_GT(released.documentFrameVersion, result.frameDiagnostics.front().documentFrameVersion);
   EXPECT_EQ(released.presentationIdentity.version, released.documentFrameVersion);
-  ASSERT_THAT(released.activeDragPreview,
+  const auto& held = result.frameDiagnostics.at(8);
+  ASSERT_THAT(held.activeDragPreview,
               testing::Optional(testing::Field(&SelectTool::ActiveDragPreview::entity,
-                                               released.selectedCompositedEntity)));
+                                               held.selectedCompositedEntity)));
+  EXPECT_THAT(released.activeDragPreview, testing::Eq(std::nullopt));
   EXPECT_THAT(released.displayedDragPreview, testing::Eq(std::nullopt));
-  for (const auto& requested : released.activeDragPreview->poses) {
+  for (const auto& requested : held.activeDragPreview->poses) {
     const auto presented = std::ranges::find_if(
         released.presentedPoses, [&](const auto& pose) { return pose.entity == requested.entity; });
     ASSERT_NE(presented, released.presentedPoses.end());

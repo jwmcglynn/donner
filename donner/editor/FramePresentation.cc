@@ -295,6 +295,12 @@ bool CandidatePreservesPose(const CapturedPresentation& capture,
 bool FramePresentation::CanAdopt(const CapturedPresentation& capture,
                                  std::span<const RenderResult::CompositedTile> tiles,
                                  const FramePresentation* previous, bool latestCommittedScene) {
+  if (previous != nullptr &&
+      capture.identity().documentGeneration == previous->identity().documentGeneration &&
+      (capture.identity().documentRevision < previous->identity().documentRevision ||
+       capture.identity().version < previous->identity().version)) {
+    return false;
+  }
   if (latestCommittedScene || previous == nullptr ||
       !capture.identity().sameContent(previous->identity())) {
     return true;
@@ -318,17 +324,23 @@ bool ValidFrameInput(const FramePresentationInput& input) {
              PresentedFramebufferFromDocumentTransform(input.viewport, Vector2d(1.0, 1.0)));
 }
 
+bool CompatibleOverview(const GlTextureCache::PresentationResources& resources) {
+  const auto overview = resources.overviewCapture();
+  const auto active = resources.capture();
+  if (overview == nullptr || !active->identity().sameContent(overview->identity()) ||
+      active->canvasSize() != overview->canvasSize() ||
+      active->documentOrigin() != overview->documentOrigin()) {
+    return false;
+  }
+  return active->identity().sameScene(overview->identity());
+}
+
 std::optional<bool> ChooseOverview(
     const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
     const FramePresentationInput& input) {
   const bool needsOverview =
       resources->tiles().empty() || !CoversPane(resources->coverage(), input);
-  const auto overview = resources->overviewCapture();
-  const auto active = resources->capture();
-  const bool compatibleOverview =
-      overview != nullptr && active->identity().sameContent(overview->identity()) &&
-      active->identity().version == overview->identity().version &&
-      active->identity().documentRevision == overview->identity().documentRevision;
+  const bool compatibleOverview = CompatibleOverview(*resources);
   if (needsOverview && !compatibleOverview && !resources->tiles().empty()) {
     return std::nullopt;
   }

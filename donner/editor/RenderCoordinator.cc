@@ -30,7 +30,7 @@ namespace donner::editor {
 
 namespace {
 
-bool IsCurrentRenderResult(const std::optional<RenderResult>& result, EditorApp& app) {
+bool IsCurrentRenderResult(const std::optional<RenderResult>& result, const EditorApp& app) {
   if (!result || !app.hasDocument()) {
     return false;
   }
@@ -255,6 +255,19 @@ svg::Renderer CreateRenderer(std::shared_ptr<::donner::geode::GeodeDevice> geode
 
 constexpr AsyncRendererStartMode EditorRenderWorkerStartMode() {
   return AsyncRendererStartMode::Immediate;
+}
+
+bool ShouldCommitCanvas(const Vector2i& pending, bool wouldChange, bool deferForActiveDrag,
+                        bool firstCommit, bool throttleElapsed) {
+  return pending != Vector2i::Zero() && wouldChange && !deferForActiveDrag &&
+         (firstCommit || throttleElapsed);
+}
+
+bool CompleteOverviewCanRepair(FramePresentationFailure failure) {
+  return failure == FramePresentationFailure::MissingOverview ||
+         failure == FramePresentationFailure::MissingSelectionGeometry ||
+         failure == FramePresentationFailure::InsufficientCoverage ||
+         failure == FramePresentationFailure::IncompatiblePose;
 }
 
 bool CanvasSizeCloseEnough(const Vector2i& lhs, const Vector2i& rhs) {
@@ -1261,7 +1274,8 @@ namespace {
 #ifdef __EMSCRIPTEN__
 void PublishFrameRepairDetails(const FramePresentationInput& input,
                                const GlTextureCache::PresentationResources& resources,
-                               FramePresentationFailure failure) {
+                               FramePresentationFailure failure,
+                               FramePresentationFailure adoptionFailure) {
   const auto current = input.documentIdentity;
   const auto active = resources.capture()->identity();
   const auto overview = resources.overviewCapture() ? resources.overviewCapture()->identity()
@@ -1285,6 +1299,7 @@ void PublishFrameRepairDetails(const FramePresentationInput& input,
     const stats = window['__donnerPresentationRepairStats'];
     if (stats && Object.is(stats['active'][0], $0)) {
       stats['pendingMutations'] = Boolean($1);
+      stats['adoptionFailure'] = $10;
       stats['activeCoverage'] = ([$2, $3, $4, $5]);
       stats['overviewCoverage'] = ([$6, $7, $8, $9]);
     }
@@ -1296,7 +1311,7 @@ void PublishFrameRepairDetails(const FramePresentationInput& input,
       resources.coverage().overviewRasterDocumentRect.topLeft.x,
       resources.coverage().overviewRasterDocumentRect.topLeft.y,
       resources.coverage().overviewRasterDocumentRect.bottomRight.x,
-      resources.coverage().overviewRasterDocumentRect.bottomRight.y);
+      resources.coverage().overviewRasterDocumentRect.bottomRight.y, static_cast<int>(adoptionFailure));
   // clang-format on
 }
 #endif
@@ -1355,10 +1370,10 @@ void RenderCoordinator::updateFrameRepairStatus(
   const auto failure =
       outcome.failure != FramePresentationFailure::None ? outcome.failure : adoptionFailure_;
   presentationNeedsRender_ = failure != FramePresentationFailure::None;
-  presentationNeedsCoverage_ = outcome.failure == FramePresentationFailure::InsufficientCoverage ||
-                               outcome.failure == FramePresentationFailure::MissingOverview;
+  presentationNeedsCoverage_ = failure == FramePresentationFailure::InsufficientCoverage ||
+                               failure == FramePresentationFailure::MissingOverview;
 #ifdef __EMSCRIPTEN__
-  PublishFrameRepairDetails(input, *resources, failure);
+  PublishFrameRepairDetails(input, *resources, failure, adoptionFailure_);
 #endif
   if (presentationNeedsRender_) {
     pendingRepair_ = PresentationRepairIdentity{
@@ -1383,7 +1398,8 @@ void RenderCoordinator::installFrameDecision(
     const FramePresentationInput& input,
     const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
     std::shared_ptr<const FramePresentation> next) {
-  frameRepresentsCurrentIntent_ = !presentationNeedsRender_ && FrameCarriesInput(*next, input);
+  frameRepresentsCurrentIntent_ =
+      (input.selection.empty() || next->hasSelectionGeometry()) && FrameCarriesInput(*next, input);
   framePresentation_ = std::move(next);
   immediateOverlaySnapshot_ = framePresentation_->chrome();
   selectionBoundsCache_.displayedBoundsDoc = framePresentation_->selectionBounds();
@@ -1448,7 +1464,7 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
 
 bool RenderCoordinator::canReplaceWithOverview(const RenderResult& result,
                                                const EditorApp& app) const {
-  if (!pendingRepair_ || pendingRepair_->failure != FramePresentationFailure::MissingOverview ||
+  if (!pendingRepair_ || !CompleteOverviewCanRepair(pendingRepair_->failure) ||
       result.capturedPresentation == nullptr ||
       !result.capturedPresentation->identity().sameContent(currentPresentationIdentity(app))) {
     return false;
@@ -1503,24 +1519,30 @@ bool RenderCoordinator::hasMatchingPendingOverview(const RenderResult& result,
                                                    EditorApp& app) const {
   return IsCurrentRenderResult(pendingOverviewResult_, app) &&
          pendingOverviewResult_->version == result.version &&
-         result.version == app.document().currentFrameVersion();
+         result.version == app.document().currentFrameVersion() &&
+         pendingOverviewResult_->capturedPresentation != nullptr &&
+         result.capturedPresentation != nullptr &&
+         pendingOverviewResult_->capturedPresentation->identity().sameScene(
+             result.capturedPresentation->identity());
 }
 
 bool RenderCoordinator::canPresentWithOverview(const RenderResult& result,
                                                const EditorRasterViewport& rasterViewport,
                                                EditorApp& app,
                                                const GlTextureCache& textures) const {
-  if (!result.rasterViewport.viewportBounded || !rasterViewport.viewportBounded ||
-      hasMatchingPendingOverview(result, app)) {
+  if (!result.rasterViewport.viewportBounded || !rasterViewport.viewportBounded) {
     return true;
   }
-  if (!textures.coverageDiagnostics().overviewInfillAvailable) {
-    return false;
-  }
-  const auto& drag = result.compositedPreview->representedDragPreview;
-  const bool activeDrag =
-      drag.has_value() && drag->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
-  return activeDrag || overviewDocVersion_ == result.version;
+  const auto overview =
+      hasMatchingPendingOverview(result, app)
+          ? pendingOverviewResult_->capturedPresentation
+          : (textures.presentationResources() ? textures.presentationResources()->overviewCapture()
+                                              : nullptr);
+  const auto active = result.capturedPresentation;
+  return active != nullptr && overview != nullptr &&
+         active->identity().sameScene(overview->identity()) &&
+         active->canvasSize() == overview->canvasSize() &&
+         active->documentOrigin() == overview->documentOrigin();
 }
 
 bool RenderCoordinator::requiresFreshOverview(bool available, std::uint64_t currentVersion) const {
@@ -1528,19 +1550,31 @@ bool RenderCoordinator::requiresFreshOverview(bool available, std::uint64_t curr
          (pendingRepair_ && pendingRepair_->failure == FramePresentationFailure::MissingOverview);
 }
 
+void RenderCoordinator::discardStalePendingOverview(const EditorApp& app) {
+  const auto currentVersion = app.document().currentFrameVersion();
+  if (pendingOverviewResult_.has_value() &&
+      (!IsCurrentRenderResult(pendingOverviewResult_, app) ||
+       pendingOverviewResult_->version != currentVersion ||
+       pendingOverviewResult_->capturedPresentation == nullptr ||
+       !pendingOverviewResult_->capturedPresentation->identity().sameScene(
+           currentPresentationIdentity(app)))) {
+    pendingOverviewResult_.reset();
+  }
+}
+
 bool RenderCoordinator::needsOverviewInfillForViewport(EditorApp& app,
                                                        const EditorRasterViewport& rasterViewport,
                                                        bool activeDrag,
                                                        const GlTextureCache* textures) {
   const auto currentVersion = app.document().currentFrameVersion();
-  if (pendingOverviewResult_.has_value() && (!IsCurrentRenderResult(pendingOverviewResult_, app) ||
-                                             pendingOverviewResult_->version != currentVersion)) {
-    pendingOverviewResult_.reset();
-  }
+  discardStalePendingOverview(app);
+  const auto resources = textures != nullptr ? textures->presentationResources() : nullptr;
+  const auto overview = resources ? resources->overviewCapture() : nullptr;
+  const bool currentOverview =
+      overview != nullptr && overview->identity().sameScene(currentPresentationIdentity(app));
   return rasterViewport.viewportBounded && (!activeDrag || presentationNeedsCoverage_) &&
          textures != nullptr && !pendingOverviewResult_.has_value() &&
-         requiresFreshOverview(textures->coverageDiagnostics().overviewInfillAvailable,
-                               currentVersion);
+         requiresFreshOverview(currentOverview, currentVersion);
 }
 
 void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& viewport,
@@ -1621,7 +1655,8 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     // sole presented content: zooming out would expose checkerboard for missing tile coverage
     // instead of document transparency. Keep the previous presentation until an overview infill
     // exists underneath the crisp bounded tiles.
-    rejectRenderResult(resultOpt);
+    renderWorker_.asyncRenderer.discardUnpresentedResult(result);
+    rejectPreparedPresentation(FramePresentationFailure::MissingOverview);
     return;
   }
   const Vector2i resultCanvasSize = result.rasterViewport.outputSizePx;
@@ -1805,8 +1840,12 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const Entity prewarmEntity = selectedCompositedEntity(app);
   const bool useVisibleSelectedRaster = selectedPrewarmFallbackApplies(
       app.document().documentGeneration(), prewarmEntity, rasterViewport);
+  const bool willCommitCanvas =
+      ShouldCommitCanvas(pendingCanvasSize_, wouldChange, deferCanvasCommitForActiveDrag,
+                         firstCommit, throttleElapsed);
   const bool needsOverviewInfill =
-      needsOverviewInfillForViewport(app, rasterViewport, dragPreview.has_value(), textures);
+      needsOverviewInfillForViewport(app, rasterViewport, dragPreview.has_value(), textures) ||
+      (textures != nullptr && rasterViewport.viewportBounded && willCommitCanvas);
   const bool pendingSelectedLayerRasterization =
       prewarmEntity != entt::null && prewarmEntity == pendingSelectedLayerRasterizationEntity_;
   const bool deferSelectedViewportRefresh = ShouldDeferSelectedViewportRefresh(
@@ -1848,8 +1887,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
           : (useSelectedPrewarmRasterViewport ? selectedPrewarmRaster : rasterViewport);
   const Vector2i currentCanvasSize = requestRasterViewport.outputSizePx;
 
-  if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && !deferCanvasCommitForActiveDrag &&
-      (firstCommit || throttleElapsed)) {
+  if (willCommitCanvas) {
     app.document().document().setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
     pendingCanvasSizeSince_ = now;
     ++lastFrameCostBreakdown_.documentCanvasCommitCount;
@@ -1886,8 +1924,8 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
           .activeDragPreview = dragPreview,
           // A scheduled retry owes a render even when the failed request's only reason for one,
           // such as a presentation refresh, was consumed when it was posted.
-          .forcePresentationRefresh =
-              forcePresentationRefresh || nothingToPresentRetry_.retryScheduled(),
+          .forcePresentationRefresh = forcePresentationRefresh || requestOverviewInfill ||
+                                      nothingToPresentRetry_.retryScheduled(),
           .forceSelectedLayerRasterization = forceSelectedLayerRasterization,
           .currentVersion = currentVersion,
           .currentCanvasSize = currentCanvasSize,
