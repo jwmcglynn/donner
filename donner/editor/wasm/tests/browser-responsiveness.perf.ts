@@ -87,6 +87,33 @@ interface Diagnostics extends Window {
   __donnerLastDragStream?: unknown;
 }
 
+function packageHashes() {
+  return Object.fromEntries(["wasm", "js"].map((extension) => [
+    `${extension}Sha256`,
+    crypto.createHash("sha256").update(
+      fs.readFileSync(path.join(process.env.DONNER_WASM_PACKAGE_DIR!, `editor.${extension}`)),
+    ).digest("hex"),
+  ]));
+}
+async function attachJson(info: import("@playwright/test").TestInfo, name: string, data: unknown) {
+  const output = info.outputPath(name);
+  fs.writeFileSync(output, JSON.stringify(data));
+  await info.attach(name, { path: output, contentType: "application/json" });
+}
+
+async function rasterIdentity(page: Page) {
+  return page.evaluate(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>("canvas#canvas")!;
+    return {
+      dpr: devicePixelRatio,
+      backingWidth: canvas.width,
+      backingHeight: canvas.height,
+      cssWidth: canvas.clientWidth,
+      cssHeight: canvas.clientHeight,
+    };
+  });
+}
+
 async function snapshot(page: Page, detailed = false) {
   return page.evaluate((detailed) => {
     const state = window as Diagnostics;
@@ -524,12 +551,7 @@ test(
     const report: Record<string, unknown> = {
       browser: info.project.name,
       version: browser.version(),
-      wasmSha256: crypto.createHash("sha256").update(
-        fs.readFileSync(path.join(process.env.DONNER_WASM_PACKAGE_DIR!, "editor.wasm")),
-      ).digest("hex"),
-      jsSha256: crypto.createHash("sha256").update(
-        fs.readFileSync(path.join(process.env.DONNER_WASM_PACKAGE_DIR!, "editor.js")),
-      ).digest("hex"),
+      ...packageHashes(),
       headless: info.project.use.headless,
     };
     try {
@@ -749,10 +771,7 @@ test(
       clearTimeout(deadline);
       report.failures = failures;
       console.log(`responsiveness ${JSON.stringify(report)}`);
-      await info.attach("responsiveness.json", {
-        body: JSON.stringify(report, null, 2),
-        contentType: "application/json",
-      });
+      await attachJson(info, "responsiveness.json", report);
     }
   },
 );
@@ -828,88 +847,127 @@ function expectGpuPlateau(current: GpuCounts, baseline: GpuCounts) {
   expect(current.pendingSubmissions).toBe(0);
 }
 
-test("browser resources stay bounded after repeated drag zoom drag", async ({ page }, info) => {
-  test.skip(
-    process.env.DONNER_BROWSER_SOAK !== "1",
-    "five-minute qualification is an explicit manual workload",
-  );
-  test.setTimeout(420000);
-  await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
-  await expect.poll(
-    () => page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented),
-    { timeout: 30000 },
-  ).toBe(true);
-  const stopHeartbeat = await startApplicationHeartbeat(page);
-  const samples: unknown[] = [];
-  try {
-    await dispatchPointer(page, { x: 1280 * 0.24, y: 282 }, true);
-    await expect(page.locator("canvas#canvas")).toHaveAttribute(
-      "data-active-sample-id",
-      "donner-splash",
+test(
+  "browser resources stay bounded after repeated drag zoom drag",
+  async ({ page, browser }, info) => {
+    test.skip(
+      process.env.DONNER_BROWSER_SOAK !== "1",
+      "five-minute qualification is an explicit manual workload",
     );
-    await waitForIdle(page);
-    let point = await zoomSplashForDrag(page);
-    for (let cycle = 0; cycle < 10; ++cycle) {
-      const first = await continuousDrag(page, point, -1);
-      await zoomAtDraggedShape(page, first.stream.end, 2.17);
-      const second = await continuousDrag(page, first.stream.end, 1);
-      point = second.stream.end;
-      await zoomAtDraggedShape(page, point, 1.93);
-      await waitForIdle(page);
-      const completion = (await snapshot(page)).presentation;
-      if (completion) expect(completion.framesInFlight).toBeLessThanOrEqual(3);
-    }
-    await waitForResourceIdle(page);
-    const baseline = monitoredMemory();
-    expect(baseline.gpu).not.toBeNull();
-    const idleFrames = (await snapshot(page)).frameLoop!.renderedFrames;
-    for (let second = 5; second <= 300; second += 5) {
-      await page.waitForTimeout(5000);
-      const memory = monitoredMemory();
-      samples.push({ second, ...memory });
-      expect(memory.rssBytes - baseline.rssBytes, "post-warm-up process RSS must plateau")
-        .toBeLessThan(64 * 1024 * 1024);
-      expect(
-        memory.gpu.textureBytes + memory.gpu.sharedTextureTailBytes,
-        "texture allocations and exported tails must remain bounded",
-      ).toBeLessThanOrEqual(
-        baseline.gpu.textureBytes + baseline.gpu.sharedTextureTailBytes,
+    test.setTimeout(420000);
+    await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
+    await expect.poll(
+      () => page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented),
+      { timeout: 30000 },
+    ).toBe(true);
+    const stopHeartbeat = await startApplicationHeartbeat(page);
+    const identity = {
+      browser: info.project.name,
+      version: browser.version(),
+      headless: info.project.use.headless,
+      ...packageHashes(),
+      raster: await rasterIdentity(page),
+      backend: (await snapshot(page)).backend,
+    };
+    const samples: unknown[] = [];
+    try {
+      await dispatchPointer(page, { x: 1280 * 0.24, y: 282 }, true);
+      await expect(page.locator("canvas#canvas")).toHaveAttribute(
+        "data-active-sample-id",
+        "donner-splash",
       );
-      expectGpuPlateau(memory.gpu, baseline.gpu);
-      expect(memory.workers.length, "worker ownership samples are required").toBeGreaterThan(0);
-      for (const known of baseline.workers.filter((owner) => owner.gpu)) {
-        const current = memory.workers.find((owner) => owner.index === known.index);
-        expect(current?.gpu, "a known GPU owner must retain diagnostic visibility").toBeTruthy();
+      await waitForIdle(page);
+      let point = await zoomSplashForDrag(page);
+      const beforeSelection = await snapshot(page);
+      await dispatchPointer(page, point, true);
+      await expect.poll(async () => {
+        const state = await snapshot(page);
+        return state.interaction?.selectedCount === 1 && state.presentation?.inputRepresented
+          && state.presentation.frameId > (beforeSelection.presentation?.frameId ?? 0)
+          && state.presentation.pointerX === point.x && state.presentation.pointerY === point.y;
+      }, { timeout: 5000, message: "select D before the warmed drag-zoom-drag sequence" }).toBe(
+        true,
+      );
+      await waitForIdle(page);
+      // Keep the selection click separate from the drag press, outside measured intervals.
+      await page.waitForTimeout(400);
+      for (let cycle = 0; cycle < 10; ++cycle) {
+        const first = await continuousDrag(page, point, -1);
+        await zoomAtDraggedShape(page, first.stream.end, 2.17);
+        const second = await continuousDrag(page, first.stream.end, 1);
+        point = second.stream.end;
+        await zoomAtDraggedShape(page, point, 1.93);
+        await waitForIdle(page);
+        const completion = (await snapshot(page)).presentation;
+        if (completion) expect(completion.framesInFlight).toBeLessThanOrEqual(3);
       }
-      for (const owner of memory.workers) {
-        expect(owner.unavailable, "an unavailable owner cannot establish a GPU plateau").not.toBe(
-          true,
+      await waitForResourceIdle(page);
+      const baseline = monitoredMemory();
+      expect(baseline.gpu).not.toBeNull();
+      const idleFrames = (await snapshot(page)).frameLoop!.renderedFrames;
+      for (let second = 5; second <= 300; second += 5) {
+        await page.waitForTimeout(5000);
+        const memory = monitoredMemory();
+        samples.push({ second, ...memory });
+        expect(memory.rssBytes - baseline.rssBytes, "post-warm-up process RSS must plateau")
+          .toBeLessThan(64 * 1024 * 1024);
+        expect(
+          memory.gpu.textureBytes + memory.gpu.sharedTextureTailBytes,
+          "texture allocations and exported tails must remain bounded",
+        ).toBeLessThanOrEqual(
+          baseline.gpu.textureBytes + baseline.gpu.sharedTextureTailBytes,
         );
-        expect(owner.ageMs, "owner statistics must remain fresh").toBeLessThan(5000);
-        if (!owner.gpu) continue;
-        const prior = baseline.workers.find((worker) => worker.index === owner.index)?.gpu;
-        expect(prior, "the baseline must identify every GPU owner").toBeTruthy();
-        expect(owner.gpu.textureBytes + owner.gpu.sharedTextureTailBytes)
-          .toBeLessThanOrEqual(prior!.textureBytes + prior!.sharedTextureTailBytes);
-        expectGpuPlateau(owner.gpu, prior!);
+        expectGpuPlateau(memory.gpu, baseline.gpu);
+        expect(memory.workers.length, "worker ownership samples are required").toBeGreaterThan(0);
+        for (const known of baseline.workers.filter((owner) => owner.gpu)) {
+          const current = memory.workers.find((owner) => owner.index === known.index);
+          expect(current?.gpu, "a known GPU owner must retain diagnostic visibility").toBeTruthy();
+        }
+        for (const owner of memory.workers) {
+          expect(owner.unavailable, "an unavailable owner cannot establish a GPU plateau").not.toBe(
+            true,
+          );
+          expect(owner.ageMs, "owner statistics must remain fresh").toBeLessThan(5000);
+          if (!owner.gpu) continue;
+          const prior = baseline.workers.find((worker) => worker.index === owner.index)?.gpu;
+          expect(prior, "the baseline must identify every GPU owner").toBeTruthy();
+          expect(owner.gpu.textureBytes + owner.gpu.sharedTextureTailBytes)
+            .toBeLessThanOrEqual(prior!.textureBytes + prior!.sharedTextureTailBytes);
+          expectGpuPlateau(owner.gpu, prior!);
+        }
       }
+      expect(
+        (await snapshot(page)).frameLoop!.renderedFrames - idleFrames,
+        "the idle editor must park",
+      ).toBeLessThanOrEqual(2);
+    } finally {
+      stopHeartbeat();
+      await attachJson(info, "memory-soak.json", { identity, samples });
+      let diagnosticTimer: ReturnType<typeof setTimeout> | undefined;
+      let last: unknown;
+      try {
+        last = await Promise.race([
+          snapshot(page, true),
+          new Promise((resolve) => {
+            diagnosticTimer = setTimeout(
+              () => resolve({ unavailable: true, reason: "snapshot deadline" }),
+              1000,
+            );
+          }),
+        ]);
+      } catch {
+        last = { unavailable: true, reason: "page closed or snapshot failed" };
+      } finally {
+        clearTimeout(diagnosticTimer);
+      }
+      await attachJson(info, "memory-soak-final-state.json", last);
     }
-    expect(
-      (await snapshot(page)).frameLoop!.renderedFrames - idleFrames,
-      "the idle editor must park",
-    ).toBeLessThanOrEqual(2);
-  } finally {
-    stopHeartbeat();
-    await info.attach("memory-soak.json", {
-      body: JSON.stringify(samples),
-      contentType: "application/json",
-    });
-  }
-});
+  },
+);
 
 test(
   "parked renderer keeps resource completion and ownership observable",
-  async ({ page }, info) => {
+  async ({ page, browser }, info) => {
     test.setTimeout(60000);
     await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
     await expect.poll(
@@ -917,6 +975,14 @@ test(
       { timeout: 30000 },
     ).toBe(true);
     const stopHeartbeat = await startApplicationHeartbeat(page);
+    const identity = {
+      browser: info.project.name,
+      version: browser.version(),
+      headless: info.project.use.headless,
+      ...packageHashes(),
+      raster: await rasterIdentity(page),
+      backend: (await snapshot(page)).backend,
+    };
     const samples = [];
     try {
       await dispatchPointer(page, { x: 1280 * 0.24, y: 282 }, true);
@@ -949,10 +1015,7 @@ test(
       ).toBeLessThanOrEqual(2);
     } finally {
       stopHeartbeat();
-      await info.attach("parked-resource-owners.json", {
-        body: JSON.stringify(samples),
-        contentType: "application/json",
-      });
+      await attachJson(info, "parked-resource-owners.json", { identity, samples });
     }
   },
 );
