@@ -1,7 +1,7 @@
 export function resourceQueuesAreQuiescent(workers, framesInFlight) {
-  const known = workers.filter((owner) => owner.gpu);
-  return known.length > 0
-    && known.every((owner) =>
-      !owner.unavailable && (owner.ageMs ?? Infinity) < 5000 && owner.gpu.pendingSubmissions === 0
-    ) && (framesInFlight ?? 0) === 0;
+  return workers.length > 0 && framesInFlight === 0
+    && workers.every((owner) =>
+      !owner.unavailable && Number.isFinite(owner.ageMs) && owner.ageMs >= 0 && owner.ageMs < 5000
+    ) && workers.some((owner) => owner.gpu)
+    && workers.every((owner) => !owner.gpu || owner.gpu.pendingSubmissions === 0);
 }
