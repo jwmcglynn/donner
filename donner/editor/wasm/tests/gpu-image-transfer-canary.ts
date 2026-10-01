@@ -114,10 +114,12 @@ export async function inspectGpuImageTransfer(page: Page, outputDirectory: strin
             if (!canvas) {
               canvas = new OffscreenCanvas(data.width, data.height);
               context = canvas.getContext('webgpu');
-              context.configure({device, format: 'rgba8unorm', alphaMode: 'premultiplied'});
             }
+            current.stage = 'source configure';
             canvas.width = data.width;
             canvas.height = data.height;
+            context.configure({device, format: 'rgba8unorm', alphaMode: 'premultiplied'});
+            current.stage = 'source render';
             const start = clock();
             draw(context.getCurrentTexture(), data.color, data.pattern);
             await timed(device.queue.onSubmittedWorkDone(), 'source completion');
@@ -211,7 +213,11 @@ export async function inspectGpuImageTransfer(page: Page, outputDirectory: strin
         heldBitmap = source.bitmap;
         if (source.sequence !== sequence) throw new Error("source sequence mismatch");
         const { bitmap, ...sourceTiming } = source;
-        current = { ...current, ...sourceTiming, stage: "receiver request" };
+        current = {
+          ...current,
+          ...sourceTiming,
+          stage: source.error ? source.stage : "receiver request",
+        };
         if (source.error) throw new Error(source.error);
         if (!bitmap) throw new Error("source produced no image");
         const receiving = ask(workers[1], {
