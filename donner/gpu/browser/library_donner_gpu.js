@@ -118,6 +118,8 @@ var LibraryDonnerGpu = {
     // unique across workers and never reused, so this names the device across workers as well.
     deviceIdentity: 0,
 
+    lastCompletionProgressAtMs: -Infinity,
+
     logical: null,  // Map from logical-device handle to its own state; see openLogical.
     // Map from share identifier to the texture it holds; see donner_gpu_share_texture.
     shares: null,
@@ -194,6 +196,21 @@ var LibraryDonnerGpu = {
       DonnerGpu.ensureTables();
       var record = DonnerGpu.logical.get(handle);
       return record === undefined ? null : record;
+    },
+
+    // A pending completion can need another queue operation before the browser delivers it.
+    // Coalesce progress across logical devices, without recording another frame or callback.
+    requestCompletionProgress: function(record) {
+      if (!record || !(record.pendingSubmissions > 0) ||
+          DonnerGpu.guard(record) !== DonnerGpu.kSuccess) {
+        return;
+      }
+      var now = performance.now();
+      if (now - DonnerGpu.lastCompletionProgressAtMs < 8) {
+        return;
+      }
+      DonnerGpu.lastCompletionProgressAtMs = now;
+      DonnerGpu.perform(record, function() { DonnerGpu.queue.submit([]); });
     },
 
     // Opens the logical device `handle` if it is not open yet, and returns its state. Handle zero
@@ -326,6 +343,7 @@ var LibraryDonnerGpu = {
       DonnerGpu.lost = false;
       DonnerGpu.lostReason = '';
       DonnerGpu.deviceIdentity = 0;
+      DonnerGpu.lastCompletionProgressAtMs = -Infinity;
     },
 
     // Marks the share holding `entry`'s texture, if any, as the only holder left: the producer has
@@ -774,6 +792,7 @@ var LibraryDonnerGpu = {
   donner_gpu_completed_serial__deps: ['$DonnerGpu'],
   donner_gpu_completed_serial: function(handle) {
     var record = DonnerGpu.logicalFor(handle);
+    DonnerGpu.requestCompletionProgress(record);
     return record === null ? 0 : record.completedSerial;
   },
 
