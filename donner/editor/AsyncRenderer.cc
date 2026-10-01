@@ -8,6 +8,7 @@
 #include <utility>
 
 #ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
 #include <emscripten/threading.h>
 #endif
 
@@ -967,6 +968,14 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
     idleHasWork = idleHasWork_;
     idleWakeRequested_.store(false, std::memory_order_release);
   }
+#ifdef __EMSCRIPTEN__
+  // A blocking pthread wait cannot run the browser's GPU completion or share-release callbacks.
+  // Yield without either document or renderer locks, including when no render is requested.
+  emscripten_sleep(0);
+  constexpr bool kNeedsBrowserEventLoopProgress = true;
+#else
+  constexpr bool kNeedsBrowserEventLoopProgress = false;
+#endif
   if (idlePoll) {
     idlePoll();
   }
@@ -984,9 +993,9 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
   };
   if (pollWhileIdle) {
     cv_.wait_for(lock, std::chrono::milliseconds(100), wakeRequested);
-  } else if (idlePoll) {
-    // The mailbox callback intentionally avoids the renderer mutex. A sparse timer bounds a
-    // notification that races with cv_.wait's lock handoff without rendering a frame.
+  } else if (idlePoll || kNeedsBrowserEventLoopProgress) {
+    // A sparse wake services owner callbacks and a mailbox notification racing the lock handoff
+    // without requesting another document or UI frame.
     cv_.wait_for(lock, std::chrono::seconds(1), wakeRequested);
   } else {
     cv_.wait(lock, wakeRequested);
