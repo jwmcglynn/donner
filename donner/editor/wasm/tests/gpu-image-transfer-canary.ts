@@ -20,7 +20,11 @@ interface TransferSample {
 }
 
 /** Exercise the platform transport separately from production renderer timing. */
-export async function inspectGpuImageTransfer(page: Page, outputDirectory: string) {
+export async function inspectGpuImageTransfer(
+  page: Page,
+  outputDirectory: string,
+  completionProgress: boolean = false,
+) {
   fs.mkdirSync(outputDirectory, { recursive: true });
   const saved = new Map<number, Record<string, unknown>>();
   await page.exposeFunction("__donnerSaveGpuTransferCanarySample", (sample: TransferSample) => {
@@ -46,7 +50,7 @@ export async function inspectGpuImageTransfer(page: Page, outputDirectory: strin
       JSON.stringify(Array.from(saved.values()), null, 2),
     );
   });
-  const failure = await page.evaluate(async () => {
+  const failure = await page.evaluate(async (completionProgress) => {
     const script = `
       let device, canvas, context, pipeline, readbacks = 0;
       let current = {};
@@ -58,6 +62,16 @@ export async function inspectGpuImageTransfer(page: Page, outputDirectory: strin
           promise,
           new Promise((_, reject) => timer = setTimeout(() => reject(new Error(stage + ' timed out')), 5000))
         ]).finally(() => clearTimeout(timer));
+      };
+      const waitForCompletion = (stage, progress) => {
+        const done = device.queue.onSubmittedWorkDone();
+        let interval;
+        if (progress) interval = setInterval(() => {
+          device.queue.submit([]);
+          const key = stage === 'source completion' ? 'sourceProgressRequests' : 'receiverProgressRequests';
+          current[key] = (current[key] || 0) + 1;
+        }, 8);
+        return timed(done, stage).finally(() => clearInterval(interval));
       };
       const initialize = async () => {
         if (device) return;
@@ -122,7 +136,7 @@ export async function inspectGpuImageTransfer(page: Page, outputDirectory: strin
             current.stage = 'source render';
             const start = clock();
             draw(context.getCurrentTexture(), data.color, data.pattern);
-            await timed(device.queue.onSubmittedWorkDone(), 'source completion');
+            await waitForCompletion('source completion', data.completionProgress);
             const bitmapStart = clock();
             bitmap = canvas.transferToImageBitmap();
             current.transferToImageBitmapMs = clock() - bitmapStart;
@@ -141,7 +155,7 @@ export async function inspectGpuImageTransfer(page: Page, outputDirectory: strin
               {width: data.width, height: data.height});
             bitmap.close();
             bitmap = undefined;
-            await timed(device.queue.onSubmittedWorkDone(), 'receiver completion');
+            await waitForCompletion('receiver completion', data.completionProgress);
             current.importMs = clock() - arrived;
             if (data.width === 32) {
               expected = device.createTexture(descriptor);
@@ -204,6 +218,7 @@ export async function inspectGpuImageTransfer(page: Page, outputDirectory: strin
         await save(current);
         const source = await ask(workers[0], {
           role: "source",
+          completionProgress,
           sequence,
           width,
           height,
@@ -222,6 +237,7 @@ export async function inspectGpuImageTransfer(page: Page, outputDirectory: strin
         if (!bitmap) throw new Error("source produced no image");
         const receiving = ask(workers[1], {
           role: "receiver",
+          completionProgress,
           sequence,
           width,
           height,
@@ -247,7 +263,7 @@ export async function inspectGpuImageTransfer(page: Page, outputDirectory: strin
       for (const worker of workers) worker.terminate();
       URL.revokeObjectURL(url);
     }
-  });
+  }, completionProgress);
   expect(failure, "GPU transfer must complete every bounded stage").toBeNull();
   const comparator = process.env.DONNER_BROWSER_GOLDEN_COMPARE;
   expect(comparator, "Bazel must provide the shared pixelmatch comparator").toBeTruthy();

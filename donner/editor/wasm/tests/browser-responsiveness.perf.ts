@@ -1031,11 +1031,17 @@ test("GPU image transfer preserves pixels between workers", async ({ page, brows
   ).toBe(true);
   const stopHeartbeat = await startApplicationHeartbeat(page);
   try {
-    const samples = await inspectGpuImageTransfer(page, info.outputPath("gpu-image-transfer"));
+    const completionProgress = process.env.DONNER_GPU_COMPLETION_PROGRESS === "1";
+    const samples = await inspectGpuImageTransfer(
+      page,
+      info.outputPath("gpu-image-transfer"),
+      completionProgress,
+    );
     await attachJson(info, "gpu-image-transfer.json", {
       browser: info.project.name,
       version: browser.version(),
       ...packageHashes(),
+      completionProgress,
       samples,
     });
   } finally {
