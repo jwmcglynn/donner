@@ -425,7 +425,7 @@ use_repo(
 # default on Linux, disabled by default on macOS.
 # register_toolchains("@llvm_toolchain//:all", dev_dependency = True)
 
-bazel_dep(name = "zstd", version = "1.5.7.bcr.1", dev_dependency = True)
+bazel_dep(name = "zstd", version = "1.5.7.bcr.2", dev_dependency = True)
 
 #
 # Devtools
