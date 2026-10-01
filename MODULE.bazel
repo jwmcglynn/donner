@@ -101,7 +101,7 @@ bazel_dep(name = "rules_license", version = "1.0.0")
 # executes) only on Linux test/tool targets.
 bazel_dep(name = "vulkan_headers", version = "1.4.349")
 bazel_dep(name = "freetype", version = "2.13.3.bcr.1")
-bazel_dep(name = "libpng", version = "1.6.58")
+bazel_dep(name = "libpng", version = "1.6.58.bcr.1")
 
 # Enable FreeType's PNG support for CBDT color emoji bitmaps.
 single_version_override(
