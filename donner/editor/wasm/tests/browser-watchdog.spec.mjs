@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import vm from "node:vm";
 import { startApplicationHeartbeat } from "./browser-application-heartbeat.mjs";
 import { descendants, ownedGroup, processRows, supervise } from "./browser-watchdog.mjs";
 
@@ -300,4 +301,39 @@ test("final receipt failure cannot report success", async () => {
   });
   assert.notEqual(result.reason, null);
   assert.match(result.reportingError, /final receipt failure/);
+});
+
+test("unknown and expired negative targets never forward a process-group signal", () => {
+  const forwarded = [];
+  let onExit;
+  const child = {
+    pid: 27,
+    once: (event, callback) => {
+      if (event === "exit") onExit = callback;
+    },
+  };
+  const childProcess = {
+    spawn: () => child,
+    fork: () => child,
+    execFileSync: () => "27 26 20 Mon Sep 28 00:00:00 2026\n",
+  };
+  const simulatedProcess = {
+    env: { DONNER_WATCHDOG_GROUP: "20" },
+    kill: (...args) => {
+      forwarded.push(args);
+      return true;
+    },
+  };
+  vm.runInNewContext(
+    fs.readFileSync(new URL("./browser-watchdog-child.cjs", import.meta.url), "utf8"),
+    {
+      require: () => childProcess,
+      process: simulatedProcess,
+    },
+  );
+  assert.throws(() => simulatedProcess.kill(-91, "SIGKILL"), { code: "ESRCH" });
+  childProcess.spawn("test", []);
+  onExit();
+  assert.throws(() => simulatedProcess.kill(-27, "SIGKILL"), { code: "ESRCH" });
+  assert.deepEqual(forwarded, []);
 });
