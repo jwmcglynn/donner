@@ -959,6 +959,17 @@ void AsyncRenderer::finishSampleThumbnailRendererCreation() {
   }
 }
 
+namespace {
+bool NeedsTimedIdleWake(bool hasOwnerPoll) {
+#ifdef __EMSCRIPTEN__
+  (void)hasOwnerPoll;
+  return true;
+#else
+  return hasOwnerPoll;
+#endif
+}
+}  // namespace
+
 bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock) {
   std::function<void()> idlePoll;
   std::function<bool()> idleHasWork;
@@ -972,9 +983,6 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
   // A blocking pthread wait cannot run the browser's GPU completion or share-release callbacks.
   // Yield without either document or renderer locks, including when no render is requested.
   emscripten_sleep(0);
-  constexpr bool kNeedsBrowserEventLoopProgress = true;
-#else
-  constexpr bool kNeedsBrowserEventLoopProgress = false;
 #endif
   if (idlePoll) {
     idlePoll();
@@ -993,7 +1001,7 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
   };
   if (pollWhileIdle) {
     cv_.wait_for(lock, std::chrono::milliseconds(100), wakeRequested);
-  } else if (idlePoll || kNeedsBrowserEventLoopProgress) {
+  } else if (NeedsTimedIdleWake(static_cast<bool>(idlePoll))) {
     // A sparse wake services owner callbacks and a mailbox notification racing the lock handoff
     // without requesting another document or UI frame.
     cv_.wait_for(lock, std::chrono::seconds(1), wakeRequested);
