@@ -1672,6 +1672,13 @@ TEST(RenderCoordinatorTest, CurrentOverviewCanReplaceUnusableBoundedCoverage) {
   overview.overviewInfillOnly = true;
   EXPECT_TRUE(RenderCoordinatorTestAccess::canReplaceWithOverview(coordinator, overview, app))
       << "a current coherent overview must unblock a frame whose bounded raster lacks coverage";
+  for (const auto failure : {FramePresentationFailure::MissingSelectionGeometry,
+                             FramePresentationFailure::InsufficientCoverage,
+                             FramePresentationFailure::IncompatiblePose}) {
+    RenderCoordinatorTestAccess::changePendingRepairFailure(coordinator, failure);
+    EXPECT_TRUE(RenderCoordinatorTestAccess::canReplaceWithOverview(coordinator, overview, app))
+        << "A complete current family must also repair missing selection or projected coverage.";
+  }
 }
 
 TEST(RenderCoordinatorTest, RepairBudgetSurvivesOverviewAndBoundedRasterStages) {
