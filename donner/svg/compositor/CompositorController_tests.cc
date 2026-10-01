@@ -2771,6 +2771,7 @@ TEST_F(CompositorGpuCompositionCpuHandoffTest, FailedGpuCaptureDoesNotFallBackTo
 
 TEST_F(CompositorGpuCompositionCpuHandoffTest, UnchangedImmediateSpanKeepsGpuPayload) {
   SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="5" y="25" width="10" height="10" fill="green" />
     <rect x="5" y="5" width="10" height="10" fill="red" />
     <rect x="25" y="5" width="10" height="10" fill="blue" />
   )svg");
@@ -2779,6 +2780,8 @@ TEST_F(CompositorGpuCompositionCpuHandoffTest, UnchangedImmediateSpanKeepsGpuPay
   config.immediateStaticSpans = true;
   config.dynamicImmediateStaticSpans = false;
   CompositorController compositor(document, mainRenderer_, config);
+  ASSERT_TRUE(
+      compositor.promoteEntity(document.querySelector("#target")->unsafeEntityHandle().entity()));
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
   ASSERT_THAT(compositor.snapshotStaticSpanPlansForTesting(),
               Contains(Field(&StaticSpanPlan::mode, StaticSpanMode::Immediate)));

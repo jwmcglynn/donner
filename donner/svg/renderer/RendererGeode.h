@@ -117,7 +117,7 @@ public:
    * @return CPU-readable bitmap, or an empty bitmap when the capture failed or was cancelled.
    */
   [[nodiscard]] RendererBitmap takeSnapshotInterruptibly(
-      const std::function<bool()>& shouldCancel) const;
+      const std::function<bool()>& shouldCancel) const override;
 
   /**
    * Re-point the snapshot at a different content extent inside the same backing texture.

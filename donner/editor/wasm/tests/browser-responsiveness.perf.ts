@@ -482,6 +482,8 @@ async function continuousDrag(page: Page, start: { x: number; y: number }, direc
       "every dispatched input, including the final one, must complete in the measured stream",
     )
       .toBe(stream.dispatchPoints.length);
+    expect(after.worker?.compositorReadbackCount, "composition must not read GPU tiles back")
+      .toBe(0);
     expect.soft(distribution(latencies).p95, "input-to-completed-frame p95 must meet 50 ms gate")
       .toBeLessThanOrEqual(50);
     expect.soft(distribution(latencies).max, "no input can stall above 250 ms")

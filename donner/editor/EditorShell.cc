@@ -1971,6 +1971,7 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
     });
   }
   readback.activeDragPreview = activeDragPreview;
+  readback.selectionDragging = selectTool_.isDragging();
   readback.displayedDragPreview = displayedDragPreview;
   const std::vector<GlTextureCache::TileView> noTiles;
   const auto& tiles = frame != nullptr ? frame->tiles() : noTiles;

@@ -252,6 +252,24 @@ struct PresentationSnapshotPlan {
     svg::RendererInterface& renderer, const PresentationSnapshotPlan& plan,
     svg::RendererBitmap& bitmap, std::shared_ptr<const svg::RendererTextureSnapshot>& texture);
 
+/**
+ * Prepare one changed tile payload for the receiving presentation device.
+ *
+ * GPU composition retains textures independently of cross-thread frame transport. A receiver
+ * requiring textures keeps the lease; a CPU receiver captures it only after the document lock has
+ * been released. Metadata-only tiles and existing bitmaps need no work.
+ *
+ * @param requiresTexturePresentation True when the receiver can sample the worker's texture.
+ * @param bitmap Receives CPU pixels when the receiver cannot sample the texture.
+ * @param texture Texture lease; cleared only after a successful CPU capture.
+ * @param shouldCancel Cancellation predicate for the bounded capture.
+ * @return False when the required capture failed or was cancelled.
+ */
+[[nodiscard]] bool PrepareTilePayloadForPresentation(
+    bool requiresTexturePresentation, svg::RendererBitmap& bitmap,
+    std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
+    const std::function<bool()>& shouldCancel);
+
 /// Attribution of one worker-to-UI handoff, in milliseconds.
 struct HandoffTimings {
   /// Total time from worker render completion until the UI thread accepted the result.
@@ -315,6 +333,11 @@ struct RenderResult {
     double wakeToPollMs = 0.0;
     /// GPU-to-CPU readbacks performed by the worker renderer and its offscreen instances.
     int readbackCount = 0;
+    /// GPU-to-CPU readbacks performed inside compositor rendering, before document unlock.
+    int compositorReadbackCount = 0;
+    /// Changed GPU tiles captured for a CPU receiver after document unlock.
+    int tileHandoffReadbackCount = 0;
+
     /// Legacy device-poll iterations used while waiting for those readbacks.
     int readbackPollIterations = 0;
     /// True when browser readbacks used the event-driven timed WaitAny path.

@@ -735,6 +735,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
         .renderPaneScrollMaxY = layerStatus.renderPaneScrollMaxY,
         .frameCost = layerStatus.frameCost,
         .activeDragPreview = layerStatus.activeDragPreview,
+        .selectionDragging = layerStatus.selectionDragging,
         .displayedDragPreview = layerStatus.displayedDragPreview,
         .replayWorkerScheduling = options.workerScheduling,
         .replayWorkerRenderDelayMsForTesting = options.workerRenderDelayMsForTesting,

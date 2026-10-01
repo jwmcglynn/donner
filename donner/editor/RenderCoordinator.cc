@@ -63,7 +63,7 @@ void PublishWorkerTimingStats(
     const RenderResult& result, const EditorApp& app,
     const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
   const auto& timing = result.workerTiming;
-  constexpr std::size_t kValueCount = 35;
+  constexpr std::size_t kValueCount = 37;
   static double buffer[kValueCount];
   const double values[kValueCount] = {
       result.workerMs,
@@ -100,7 +100,9 @@ void PublishWorkerTimingStats(
       static_cast<double>(timing.fullCanvasTextureAllocationFailureCount),
       timing.nothingToPresent ? 1.0 : 0.0,
       timing.documentWriteLockMs,
-      static_cast<double>(result.presentationRepairReason)};
+      static_cast<double>(result.presentationRepairReason),
+      static_cast<double>(timing.compositorReadbackCount),
+      static_cast<double>(timing.tileHandoffReadbackCount)};
   std::copy(std::begin(values), std::end(values), std::begin(buffer));
   // clang-format off: EM_JS and EM_ASM bodies are JavaScript, which clang-format rewrites
   // as C++ - it has already split a `===` into `== =` elsewhere in the editor, a SyntaxError
@@ -156,6 +158,8 @@ void PublishWorkerTimingStats(
         stats['nothingToPresent'] = heap[b + 32] > 0;
         stats['documentWriteLockMs'] = heap[b + 33];
         stats['presentationRepairReason'] = heap[b + 34];
+        stats['compositorReadbackCount'] = heap[b + 35];
+        stats['tileHandoffReadbackCount'] = heap[b + 36];
         stats['nothingToPresentTotal'] = (previous ? previous['nothingToPresentTotal'] || 0 : 0) +
                                          (stats['nothingToPresent'] ? 1 : 0);
         stats['publishReason'] = 'render-result';
