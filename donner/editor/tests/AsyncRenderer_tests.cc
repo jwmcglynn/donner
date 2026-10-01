@@ -3618,6 +3618,66 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
       << testing::PrintToString(changedTiles);
 }
 
+TEST(AsyncRendererTest, SelectionResendsOnlyChangedTilePayloads) {
+  svg::Renderer renderer;
+  if (!renderer.supportsTextureSnapshotCompositing()) {
+    GTEST_SKIP() << "Requires retained GPU tiles";
+  }
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="before" x="0" y="0" width="12" height="12" fill="blue"/>
+    <rect id="target" x="20" y="0" width="20" height="20" fill="red"/>
+    <rect id="after" x="50" y="0" width="12" height="12" fill="green"/>
+  )svg");
+  document.setCanvasSize(80, 40);
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, ::testing::Optional(::testing::_));
+  const Entity entity = target->unsafeEntityHandle().entity();
+  AsyncRenderer asyncRenderer;
+  const auto renderSelection = [&](std::uint64_t version) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = svg::compositor::InteractionHint::Selection,
+    };
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+  const auto first = renderSelection(1);
+  ASSERT_THAT(first, ::testing::Optional(::testing::_));
+  ASSERT_THAT(first->compositedPreview, ::testing::Optional(::testing::_));
+  const auto& firstTiles = first->compositedPreview->tiles;
+  ASSERT_THAT(firstTiles, Contains(Field(&RenderResult::CompositedTile::kind,
+                                         RenderResult::CompositedTile::Kind::Immediate)));
+
+  const auto unchanged = renderSelection(2);
+  ASSERT_THAT(unchanged, ::testing::Optional(::testing::_));
+  ASSERT_THAT(unchanged->compositedPreview, ::testing::Optional(::testing::_));
+  ASSERT_THAT(unchanged->compositedPreview->tiles, ::testing::SizeIs(firstTiles.size()));
+  for (size_t index = 0; index < firstTiles.size(); ++index) {
+    const auto& tile = unchanged->compositedPreview->tiles[index];
+    EXPECT_THAT(tile.id, ::testing::Eq(firstTiles[index].id));
+    EXPECT_THAT(tile.generation, ::testing::Eq(firstTiles[index].generation));
+    EXPECT_FALSE(HasPresentationPayload(tile)) << "unchanged tile " << tile.id;
+  }
+
+  document.querySelector("#before")->setAttribute("fill", "orange");
+  const auto changed = renderSelection(3);
+  ASSERT_THAT(changed, ::testing::Optional(::testing::_));
+  ASSERT_THAT(changed->compositedPreview, ::testing::Optional(::testing::_));
+  bool sawChangedTile = false;
+  for (const auto& tile : changed->compositedPreview->tiles) {
+    const auto previous = std::ranges::find(firstTiles, tile.id, &RenderResult::CompositedTile::id);
+    ASSERT_NE(previous, firstTiles.end()) << tile.id;
+    const bool generationChanged = tile.generation != previous->generation;
+    EXPECT_THAT(HasPresentationPayload(tile), ::testing::Eq(generationChanged)) << tile.id;
+    sawChangedTile |= generationChanged;
+  }
+  EXPECT_TRUE(sawChangedTile);
+}
+
 TEST(AsyncRendererTest, SteadyActiveDragTargetReusesPublishedTextureMetadataOnly) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <rect id="before" x="0" y="0" width="12" height="12" fill="blue"/>
