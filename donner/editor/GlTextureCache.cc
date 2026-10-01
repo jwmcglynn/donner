@@ -447,6 +447,18 @@ std::shared_ptr<const CapturedPresentation> GlTextureCache::retainedOverviewCapt
   return presentationResources_ ? presentationResources_->overviewCapture() : nullptr;
 }
 
+std::optional<GlTextureCache::PreparedTileSet> GlTextureCache::prepareOverviewTiles(
+    bool retainAsOverview, const RenderResult::CompositedPreview& preview,
+    const RenderResult* overview, const PreparedTileSet& active) {
+  if (retainAsOverview) {
+    return prepareTileSet(preview, overviewTileTextures_, &active.entries);
+  }
+  if (overview != nullptr && overview->compositedPreview.has_value()) {
+    return prepareTileSet(*overview->compositedPreview, overviewTileTextures_, &tileTextures_);
+  }
+  return std::nullopt;
+}
+
 bool GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& preview,
                                       std::optional<EditorRasterViewport> rasterViewport,
                                       const RenderResult* overview,
@@ -461,13 +473,7 @@ bool GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
   if (!active.has_value()) {
     return false;
   }
-  std::optional<PreparedTileSet> nextOverview;
-  if (retainAsOverview) {
-    nextOverview = prepareTileSet(preview, overviewTileTextures_, &active->entries);
-  } else if (overview != nullptr && overview->compositedPreview.has_value()) {
-    nextOverview =
-        prepareTileSet(*overview->compositedPreview, overviewTileTextures_, &tileTextures_);
-  }
+  auto nextOverview = prepareOverviewTiles(retainAsOverview, preview, overview, *active);
   if ((retainAsOverview || overview != nullptr) && !nextOverview.has_value()) {
     discardPreparedTiles(*active);
     return false;

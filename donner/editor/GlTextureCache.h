@@ -407,6 +407,9 @@ private:
     std::vector<CachedTextureEntry> newEntries;
   };
 
+  std::optional<PreparedTileSet> prepareOverviewTiles(
+      bool retainAsOverview, const RenderResult::CompositedPreview& preview,
+      const RenderResult* overview, const PreparedTileSet& active);
   static TileView makeTileView(const RenderResult::CompositedTile& tile,
                                const CachedTextureEntry& entry);
   std::optional<CachedTextureEntry> uploadTilePayload(const RenderResult::CompositedTile& tile);

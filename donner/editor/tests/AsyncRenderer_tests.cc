@@ -6201,14 +6201,14 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
                      [&] { return !coordinator.asyncRenderer().isBusy(); }, deadline);
   };
 
-  coordinator.maybeRequestRender(app, selectTool, viewport);
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   ASSERT_TRUE(waitForCoordinator());
   ASSERT_TRUE(coordinator.compositedPresentation().hasCachedTextures());
   const Vector2i warmCanvasSize = app.document().document().canvasSize();
   ASSERT_NE(warmCanvasSize, Vector2i::Zero());
 
   viewport.zoomAround(6.0, viewport.paneCenter());
-  coordinator.maybeRequestRender(app, selectTool, viewport);
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
 
   EXPECT_FALSE(coordinator.asyncRenderer().isBusy())
       << "A selected zoom step should keep presenting cached textures and defer the crisp prewarm.";
@@ -6217,7 +6217,7 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
          "render tree immediately.";
 
   std::this_thread::sleep_for(std::chrono::milliseconds(140));
-  coordinator.maybeRequestRender(app, selectTool, viewport);
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   EXPECT_TRUE(coordinator.asyncRenderer().isBusy())
       << "Once the viewport has settled, the coordinator should request one crisp selected "
          "prewarm.";
