@@ -17,7 +17,11 @@ process.once("message", ({ executable, args, preload }) => {
   const child = spawn(executable, args, {
     detached: false,
     stdio: "inherit",
-    env: { ...process.env, NODE_OPTIONS: `--require=${preload}` },
+    env: {
+      ...process.env,
+      DONNER_WATCHDOG_GROUP: String(process.pid),
+      NODE_OPTIONS: `--require=${preload}`,
+    },
   });
   child.once(
     "error",

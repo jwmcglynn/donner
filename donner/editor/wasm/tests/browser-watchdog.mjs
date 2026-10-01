@@ -129,11 +129,13 @@ export async function supervise(executable, args, options = {}) {
   const driverExited = new Promise((resolve, reject) => {
     anchor.once("error", reject);
     anchor.on("message", (message) => {
-      if (message.kind === "anchor-ready") {
+      if (message.kind === "anchor-ready" && !stopping) {
         anchor.send({
           executable,
           args,
           preload: fileURLToPath(new URL("./browser-watchdog-child.cjs", import.meta.url)),
+        }, (error) => {
+          if (error && !stopping) stop(`watchdog launch failed: ${error.message}`);
         });
       }
       if (message.kind === "driver-exit") {
@@ -229,19 +231,23 @@ export async function supervise(executable, args, options = {}) {
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    let survivors = [];
+    let survivors = null;
     try {
-      survivors = processRows().filter((row) => owned.get(row.pid) === row.start).map((row) =>
-        row.pid
-      );
+      survivors = (options.cleanupProcesses ?? processRows)().filter((row) =>
+        owned.get(row.pid) === row.start
+      ).map((row) => row.pid);
     } catch (error) {
       reportingError ??= `survivor enumeration failed: ${error.message}`;
+      reason ??= "test process cleanup verification unavailable";
     }
     cleanup = { groupGone, survivors };
-    if (!groupGone || survivors.length) reason ??= "test process cleanup incomplete";
+    if (!groupGone || survivors === null || survivors.length) {
+      reason ??= "test process cleanup incomplete";
+    }
     process.removeListener("SIGTERM", onSigterm);
     process.removeListener("SIGINT", onSigint);
     reportBestEffort();
+    if (reportingError) reason ??= "watchdog final reporting failed";
   }
   return { ...receipt(), exit, reportFile };
 }
