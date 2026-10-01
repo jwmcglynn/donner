@@ -6,6 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import vm from "node:vm";
 import { startApplicationHeartbeat } from "./browser-application-heartbeat.mjs";
+import { resourceQueuesAreQuiescent } from "./browser-resource-quiescence.mjs";
 import { descendants, ownedGroup, processRows, supervise } from "./browser-watchdog.mjs";
 
 const directory = () =>
@@ -336,4 +337,17 @@ test("unknown and expired negative targets never forward a process-group signal"
   onExit();
   assert.throws(() => simulatedProcess.kill(-27, "SIGKILL"), { code: "ESRCH" });
   assert.deepEqual(forwarded, []);
+});
+
+test("resource quiescence cannot omit an owner whose first sample failed", () => {
+  const surface = { gpu: { pendingSubmissions: 0 }, ageMs: 0 };
+  const missingRenderer = { gpu: null, unavailable: true, ageMs: 0 };
+  assert.equal(resourceQueuesAreQuiescent([surface, missingRenderer], 0), false);
+  assert.equal(resourceQueuesAreQuiescent([surface, { gpu: null, ageMs: 0 }], 0), true);
+});
+test("resource quiescence requires explicit completed presentation telemetry", () => {
+  const surface = { gpu: { pendingSubmissions: 0 }, ageMs: 0 };
+  assert.equal(resourceQueuesAreQuiescent([surface], undefined), false);
+  assert.equal(resourceQueuesAreQuiescent([surface], 1), false);
+  assert.equal(resourceQueuesAreQuiescent([surface], 0), true);
 });

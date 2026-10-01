@@ -176,6 +176,7 @@ playwright_bin.playwright_test(
     data = [
         "browser-application-heartbeat.mjs",
         "browser-heartbeat.cjs",
+        "browser-resource-quiescence.mjs",
         "browser-responsiveness.perf.ts",
         "browser-watchdog-setup.js",
         "package.json",
@@ -245,6 +246,7 @@ js_test(
     data = [
         "browser-application-heartbeat.mjs",
         "browser-heartbeat.cjs",
+        "browser-resource-quiescence.mjs",
         "browser-watchdog.mjs",
         "browser-watchdog-anchor.mjs",
         "browser-watchdog-child.cjs",

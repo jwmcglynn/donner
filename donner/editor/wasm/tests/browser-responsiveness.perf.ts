@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { startApplicationHeartbeat } from "./browser-application-heartbeat.mjs";
+import { resourceQueuesAreQuiescent } from "./browser-resource-quiescence.mjs";
 
 interface Diagnostics extends Window {
   __donnerBackend?: string;
@@ -784,6 +785,49 @@ function monitoredMemory() {
   };
 }
 
+async function waitForResourceIdle(page: Page) {
+  let previousSignature = "";
+  let unchangedSince = Date.now();
+  await expect.poll(async () => {
+    const state = await snapshot(page);
+    const memory = monitoredMemory();
+    const known = memory.workers.filter((owner) => owner.gpu);
+    const quiescent = !state.interaction?.workerBusy
+      && resourceQueuesAreQuiescent(memory.workers, state.presentation?.framesInFlight);
+    const signature = JSON.stringify({
+      renderedFrames: state.frameLoop!.renderedFrames,
+      workers: known.map(({ index, gpu }) => ({ index, gpu })),
+    });
+    if (!quiescent || signature !== previousSignature) {
+      previousSignature = signature;
+      unchangedSince = Date.now();
+      return false;
+    }
+    return Date.now() - unchangedSince >= 2000;
+  }, {
+    timeout: 15000,
+    intervals: [1000],
+    message: "all owned resource queues and idle frames must settle before the dwell",
+  }).toBe(true);
+}
+function expectGpuPlateau(current: GpuCounts, baseline: GpuCounts) {
+  for (
+    const field of [
+      "objects",
+      "textures",
+      "textureBytes",
+      "bufferBytes",
+      "shares",
+      "sharedTextureTailBytes",
+    ] as const
+  ) {
+    expect(current[field], `${field} must remain bounded after warm-up`).toBeLessThanOrEqual(
+      baseline[field],
+    );
+  }
+  expect(current.pendingSubmissions).toBe(0);
+}
+
 test("browser resources stay bounded after repeated drag zoom drag", async ({ page }, info) => {
   test.skip(
     process.env.DONNER_BROWSER_SOAK !== "1",
@@ -815,7 +859,7 @@ test("browser resources stay bounded after repeated drag zoom drag", async ({ pa
       const completion = (await snapshot(page)).presentation;
       if (completion) expect(completion.framesInFlight).toBeLessThanOrEqual(3);
     }
-    await page.waitForTimeout(2000);
+    await waitForResourceIdle(page);
     const baseline = monitoredMemory();
     expect(baseline.gpu).not.toBeNull();
     const idleFrames = (await snapshot(page)).frameLoop!.renderedFrames;
@@ -831,7 +875,7 @@ test("browser resources stay bounded after repeated drag zoom drag", async ({ pa
       ).toBeLessThanOrEqual(
         baseline.gpu.textureBytes + baseline.gpu.sharedTextureTailBytes,
       );
-      expect(memory.gpu.pendingSubmissions).toBe(0);
+      expectGpuPlateau(memory.gpu, baseline.gpu);
       expect(memory.workers.length, "worker ownership samples are required").toBeGreaterThan(0);
       for (const known of baseline.workers.filter((owner) => owner.gpu)) {
         const current = memory.workers.find((owner) => owner.index === known.index);
@@ -847,7 +891,7 @@ test("browser resources stay bounded after repeated drag zoom drag", async ({ pa
         expect(prior, "the baseline must identify every GPU owner").toBeTruthy();
         expect(owner.gpu.textureBytes + owner.gpu.sharedTextureTailBytes)
           .toBeLessThanOrEqual(prior!.textureBytes + prior!.sharedTextureTailBytes);
-        expect(owner.gpu.pendingSubmissions).toBe(0);
+        expectGpuPlateau(owner.gpu, prior!);
       }
     }
     expect(
@@ -881,7 +925,7 @@ test(
         "donner-splash",
       );
       await waitForIdle(page);
-      await page.waitForTimeout(2000);
+      await waitForResourceIdle(page);
       const baseline = monitoredMemory();
       const idleFrames = (await snapshot(page)).frameLoop!.renderedFrames;
       expect(baseline.workers.some((owner) => owner.gpu)).toBe(true);
