@@ -862,3 +862,53 @@ test("browser resources stay bounded after repeated drag zoom drag", async ({ pa
     });
   }
 });
+
+test(
+  "parked renderer keeps resource completion and ownership observable",
+  async ({ page }, info) => {
+    test.setTimeout(60000);
+    await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
+    await expect.poll(
+      () => page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented),
+      { timeout: 30000 },
+    ).toBe(true);
+    const stopHeartbeat = await startApplicationHeartbeat(page);
+    const samples = [];
+    try {
+      await dispatchPointer(page, { x: 1280 * 0.24, y: 282 }, true);
+      await expect(page.locator("canvas#canvas")).toHaveAttribute(
+        "data-active-sample-id",
+        "donner-splash",
+      );
+      await waitForIdle(page);
+      await page.waitForTimeout(2000);
+      const baseline = monitoredMemory();
+      const idleFrames = (await snapshot(page)).frameLoop!.renderedFrames;
+      expect(baseline.workers.some((owner) => owner.gpu)).toBe(true);
+      for (let second = 2; second <= 12; second += 2) {
+        await page.waitForTimeout(2000);
+        const memory = monitoredMemory();
+        samples.push({ second, ...memory });
+        for (const known of baseline.workers.filter((owner) => owner.gpu)) {
+          const owner = memory.workers.find((worker) => worker.index === known.index);
+          expect.soft(owner?.unavailable, "an idle GPU owner must remain observable").not.toBe(
+            true,
+          );
+          expect.soft(owner?.ageMs, "resource completion must run while the renderer is parked")
+            .toBeLessThan(5000);
+          expect.soft(owner?.gpu?.pendingSubmissions, "idle submissions must complete").toBe(0);
+        }
+      }
+      expect(
+        (await snapshot(page)).frameLoop!.renderedFrames - idleFrames,
+        "idle maintenance must not render frames",
+      ).toBeLessThanOrEqual(2);
+    } finally {
+      stopHeartbeat();
+      await info.attach("parked-resource-owners.json", {
+        body: JSON.stringify(samples),
+        contentType: "application/json",
+      });
+    }
+  },
+);
