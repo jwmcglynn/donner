@@ -1769,7 +1769,6 @@ void AsyncRenderer::workerLoop() {
         const OutKind kind = outputTileKind(ct);
         const bool hasPayload = !ct.bitmap.empty() || ct.textureSnapshot != nullptr;
         const bool metadataOnly =
-            !hasPayload &&
             publishedTextureMatches(tileId, kind, ct.generation, ct.bitmapDims, outputCanvasSize);
         if (!metadataOnly && !hasPayload) {
           continue;
