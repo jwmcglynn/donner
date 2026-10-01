@@ -6222,6 +6222,12 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
       << "Once the viewport has settled, the coordinator should request one crisp selected "
          "prewarm.";
   EXPECT_TRUE(waitForCoordinator());
+  ASSERT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly)
+      << "The canvas commit changes layout provenance, so refresh its complete overview first.";
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+  ASSERT_TRUE(waitForCoordinator());
+  ASSERT_TRUE(textures.presentationResources()->capture()->identity().sameScene(
+      textures.presentationResources()->overviewCapture()->identity()));
   const Vector2i visibleCanvas = viewport.rasterViewport().outputSizePx;
   const Vector2i paddedCanvas = viewport.selectedPrewarmRasterViewport().outputSizePx;
   ASSERT_NE(visibleCanvas, paddedCanvas)
@@ -6340,6 +6346,12 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
   ASSERT_TRUE(waitForCoordinator());
+  ASSERT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly)
+      << "A new semantic canvas needs its own paired overview before bounded tiles.";
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+  ASSERT_TRUE(waitForCoordinator());
+  ASSERT_TRUE(textures.presentationResources()->capture()->identity().sameScene(
+      textures.presentationResources()->overviewCapture()->identity()));
   const auto posted = RenderCoordinatorTestAccess::lastPostedAttempt(coordinator);
   ASSERT_TRUE(posted.has_value());
   const auto cached = coordinator.compositedPresentation().diagnostics();
