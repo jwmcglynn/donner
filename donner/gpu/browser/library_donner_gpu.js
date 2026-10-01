@@ -160,10 +160,31 @@ var LibraryDonnerGpu = {
       1, 2, 3, 4, 5,
     ],
 
+    debugStatistics: function() {
+      var statistics = { 'objects': 0, 'textures': 0, 'textureBytes': 0, 'bufferBytes': 0,
+        'pendingSubmissions': 0, 'shares': DonnerGpu.shares.size, 'sharedTextureTailBytes': 0 };
+      DonnerGpu.logical.forEach(function(record) {
+        statistics['objects'] += record.objects.size;
+        statistics['pendingSubmissions'] += record.pendingSubmissions || 0;
+        record.objects.forEach(function(entry) {
+          if (entry.alias) return;
+          if (entry.kind === DonnerGpu.kTexture) {
+            statistics['textures'] += 1;
+            statistics['textureBytes'] += entry.allocationBytes || 0;
+          } else if (entry.kind === DonnerGpu.kBuffer) statistics['bufferBytes'] += entry.allocationBytes || 0;
+        });
+      });
+      DonnerGpu.shares.forEach(function(share) {
+        if (share.producerReleased) statistics['sharedTextureTailBytes'] += share.allocationBytes || 0;
+      });
+      return statistics;
+    },
+
     ensureTables: function() {
       if (DonnerGpu.logical === null) {
         DonnerGpu.logical = new Map();
         DonnerGpu.shares = new Map();
+        globalThis['__donnerReadGpuObjectStats'] = DonnerGpu.debugStatistics;
       }
     },
 
@@ -780,12 +801,15 @@ var LibraryDonnerGpu = {
 
   donner_gpu_create_buffer__deps: ['$DonnerGpu'],
   donner_gpu_create_buffer: function(handle, id, byteSize, usageBits) {
-    return DonnerGpu.create(DonnerGpu.logicalFor(handle), DonnerGpu.kBuffer, id, function() {
+    var record = DonnerGpu.logicalFor(handle);
+    var status = DonnerGpu.create(record, DonnerGpu.kBuffer, id, function() {
       return DonnerGpu.device.createBuffer({
         size: byteSize,
         usage: DonnerGpu.bufferUsage(usageBits),
       });
     });
+    if (status === DonnerGpu.kSuccess) record.objects.get(id).allocationBytes = byteSize;
+    return status;
   },
 
   donner_gpu_create_texture__deps: ['$DonnerGpu'],
@@ -794,13 +818,19 @@ var LibraryDonnerGpu = {
     if (format === null) {
       return DonnerGpu.kFailed;
     }
-    return DonnerGpu.create(DonnerGpu.logicalFor(handle), DonnerGpu.kTexture, id, function() {
+    var record = DonnerGpu.logicalFor(handle);
+    var status = DonnerGpu.create(record, DonnerGpu.kTexture, id, function() {
       return DonnerGpu.device.createTexture({
         size: { width: width, height: height, depthOrArrayLayers: 1 },
         format: format,
         usage: DonnerGpu.textureUsage(usageBits),
       });
     });
+    if (status === DonnerGpu.kSuccess) {
+      var texelBytes = formatCode === 3 ? 1 : formatCode === 4 ? 16 : 4;
+      record.objects.get(id).allocationBytes = width * height * texelBytes;
+    }
+    return status;
   },
 
   donner_gpu_create_texture_view__deps: ['$DonnerGpu'],
@@ -912,6 +942,7 @@ var LibraryDonnerGpu = {
       producer: handle,
       producerId: textureId,
       producerReleased: false,
+      allocationBytes: entry.allocationBytes || 0,
     });
     entry.share = share;
     HEAPU32[shareOut >> 2] = share;
@@ -1640,7 +1671,9 @@ var LibraryDonnerGpu = {
       record.recordedBuffers = [];
       record.recordingSerial = 0;
       DonnerGpu.queue.submit(commandBuffers);
+      record.pendingSubmissions = (record.pendingSubmissions || 0) + 1;
       DonnerGpu.queue.onSubmittedWorkDone().then(function() {
+        record.pendingSubmissions -= 1;
         // Submissions complete in order, but the serial is recorded defensively as a maximum so a
         // completion observed out of order can never move the reported serial backwards. It is
         // this logical device's serial: each numbers its submissions on its own.
@@ -1783,6 +1816,7 @@ var LibraryDonnerGpu = {
       if (!context) {
         return null;
       }
+      globalThis['__donnerApplicationGpuSurfaceWorker'] = true;
       return { canvas: canvas, context: context, frame: null };
     });
   },
