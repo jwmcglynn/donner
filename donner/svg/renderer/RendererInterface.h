@@ -767,6 +767,18 @@ public:
    * @return CPU-readable bitmap, or an empty bitmap when readback is unsupported.
    */
   [[nodiscard]] virtual RendererBitmap takeSnapshot() const { return RendererBitmap{}; }
+
+  /// Capture CPU pixels while honoring cancellation before and after readback. GPU backends
+  /// override this to poll cancellation throughout their bounded wait.
+  /// @param shouldCancel Predicate returning true when the capture must be abandoned.
+  [[nodiscard]] virtual RendererBitmap takeSnapshotInterruptibly(
+      const std::function<bool()>& shouldCancel) const {
+    if (shouldCancel && shouldCancel()) {
+      return {};
+    }
+    RendererBitmap result = takeSnapshot();
+    return shouldCancel && shouldCancel() ? RendererBitmap{} : std::move(result);
+  }
 };
 
 /**

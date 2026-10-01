@@ -271,6 +271,9 @@ struct LayerInspectorStatusReadback {
   FrameCostBreakdown frameCost;
   /// Active drag transform driving the presenter, if any.
   std::optional<SelectTool::ActiveDragPreview> activeDragPreview;
+  /// Whether the Select tool still has a live pointer drag, independent of retained release poses.
+  bool selectionDragging = false;
+
   /// Drag transform represented by the displayed cached content, if any.
   std::optional<SelectTool::ActiveDragPreview> displayedDragPreview;
   /// Paint-order texture state currently visible to the presenter.

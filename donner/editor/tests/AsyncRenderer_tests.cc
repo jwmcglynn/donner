@@ -212,6 +212,79 @@ TEST(AsyncRendererPresentationPolicyTest, TexturePresentationCapturesFallbackWhe
   EXPECT_TRUE(plan.captureTextureSnapshot);
 }
 
+namespace {
+
+class TileTransportTexture final : public svg::RendererTextureSnapshot {
+public:
+  svg::RendererTextureSnapshotBackend backend() const override {
+    return svg::RendererTextureSnapshotBackend::Geode;
+  }
+  Vector2i dimensions() const override { return Vector2i(1, 1); }
+  svg::AlphaType alphaType() const override { return svg::AlphaType::Premultiplied; }
+  svg::RendererBitmap takeSnapshot() const override {
+    ++captures;
+    return failCapture ? svg::RendererBitmap{}
+                       : svg::tests::MockRendererInterface::makeDummyBitmap();
+  }
+
+  mutable int captures = 0;
+  bool failCapture = false;
+};
+
+}  // namespace
+
+TEST(AsyncRendererTileTransportTest, GpuReceiverKeepsTextureWithoutReadback) {
+  auto original = std::make_shared<TileTransportTexture>();
+  std::shared_ptr<const svg::RendererTextureSnapshot> texture = original;
+  svg::RendererBitmap bitmap;
+  EXPECT_TRUE(PrepareTilePayloadForPresentation(true, bitmap, texture, {}));
+  EXPECT_THAT(texture, ::testing::Eq(original));
+  EXPECT_THAT(original->captures, ::testing::Eq(0));
+  EXPECT_TRUE(bitmap.empty());
+}
+
+TEST(AsyncRendererTileTransportTest, CpuReceiverReadsOneChangedTile) {
+  auto original = std::make_shared<TileTransportTexture>();
+  std::shared_ptr<const svg::RendererTextureSnapshot> texture = original;
+  svg::RendererBitmap bitmap;
+  EXPECT_TRUE(PrepareTilePayloadForPresentation(false, bitmap, texture, {}));
+  EXPECT_THAT(texture, ::testing::Eq(nullptr));
+  EXPECT_THAT(original->captures, ::testing::Eq(1));
+  EXPECT_THAT(bitmap.dimensions, ::testing::Eq(Vector2i(1, 1)));
+  EXPECT_FALSE(bitmap.empty());
+  EXPECT_TRUE(PrepareTilePayloadForPresentation(false, bitmap, texture, {}));
+  EXPECT_THAT(original->captures, ::testing::Eq(1));
+}
+
+TEST(AsyncRendererTileTransportTest, FailedCaptureKeepsLeaseAndRefusesPayload) {
+  auto original = std::make_shared<TileTransportTexture>();
+  original->failCapture = true;
+  std::shared_ptr<const svg::RendererTextureSnapshot> texture = original;
+  svg::RendererBitmap bitmap;
+  EXPECT_FALSE(PrepareTilePayloadForPresentation(false, bitmap, texture, {}));
+  EXPECT_THAT(texture, ::testing::Eq(original));
+  EXPECT_THAT(original->captures, ::testing::Eq(1));
+  EXPECT_TRUE(bitmap.empty());
+}
+
+TEST(AsyncRendererTileTransportTest, CancelledCaptureDoesNotReadback) {
+  auto original = std::make_shared<TileTransportTexture>();
+  std::shared_ptr<const svg::RendererTextureSnapshot> texture = original;
+  svg::RendererBitmap bitmap;
+  EXPECT_FALSE(PrepareTilePayloadForPresentation(false, bitmap, texture, []() { return true; }));
+  EXPECT_THAT(texture, ::testing::Eq(original));
+  EXPECT_THAT(original->captures, ::testing::Eq(0));
+  EXPECT_TRUE(bitmap.empty());
+}
+
+TEST(AsyncRendererTileTransportTest, MetadataOnlyNeedsNoPayloadWork) {
+  std::shared_ptr<const svg::RendererTextureSnapshot> texture;
+  svg::RendererBitmap bitmap;
+  EXPECT_TRUE(PrepareTilePayloadForPresentation(false, bitmap, texture, {}));
+  EXPECT_THAT(texture, ::testing::Eq(nullptr));
+  EXPECT_TRUE(bitmap.empty());
+}
+
 TEST(AsyncRendererPresentationPolicyTest, CpuPresentationSkipsRedundantSnapshotWhenTilesExist) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
       /*hasCompositedPreview=*/true, /*fullCanvasPresentationAllowed=*/false,

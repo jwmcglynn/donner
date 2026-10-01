@@ -152,7 +152,8 @@ TEST(EditorControlSessionTest, FractionalZoomFirstDragCapture) {
   ASSERT_THAT(held.activeDragPreview,
               testing::Optional(testing::Field(&SelectTool::ActiveDragPreview::entity,
                                                held.selectedCompositedEntity)));
-  EXPECT_THAT(released.activeDragPreview, testing::Eq(std::nullopt));
+  EXPECT_THAT(held.selectionDragging, testing::IsTrue());
+  EXPECT_THAT(released.selectionDragging, testing::IsFalse());
   EXPECT_THAT(released.displayedDragPreview, testing::Eq(std::nullopt));
   for (const auto& requested : held.activeDragPreview->poses) {
     const auto presented = std::ranges::find_if(

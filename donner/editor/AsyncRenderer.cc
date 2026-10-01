@@ -414,12 +414,74 @@ void CaptureFullCanvasTextureForResult(svg::RendererInterface& renderer,
   }
 }
 
+void CaptureFrameSnapshotsForResult(svg::RendererInterface& renderer,
+                                    const PresentationSnapshotPlan& plan,
+                                    svg::RendererBitmap& bitmap,
+                                    std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
+                                    RenderResult::WorkerTimingBreakdown& timing,
+                                    const std::function<bool()>& shouldCancel) {
+  if (shouldCancel && shouldCancel()) {
+    return;
+  }
+  // Texture export detaches the target, so explicit CPU capture goes first.
+  if (plan.captureCpuSnapshot) {
+    ZoneScopedN("Renderer::takeSnapshot");
+    bitmap = renderer.takeSnapshotInterruptibly(shouldCancel);
+  }
+  if (plan.captureTextureSnapshot && !(shouldCancel && shouldCancel())) {
+    CaptureFullCanvasTextureForResult(renderer, plan, bitmap, texture,
+                                      timing.fullCanvasTextureAllocationFailureCount);
+  }
+}
+
+bool PrepareCompositedTilePayload(bool requiresTexturePresentation,
+                                  RenderResult::CompositedTile& tile,
+                                  RenderResult::WorkerTimingBreakdown& timing,
+                                  const std::function<bool()>& shouldCancel) {
+  const bool capturesCpuPixels = tile.textureSnapshot != nullptr && !requiresTexturePresentation;
+  if (!PrepareTilePayloadForPresentation(requiresTexturePresentation, tile.bitmap,
+                                         tile.textureSnapshot, shouldCancel)) {
+    return false;
+  }
+  timing.tileHandoffReadbackCount += capturesCpuPixels ? 1 : 0;
+  return true;
+}
+
+void ApplyReadbackTimingStats(RenderResult::WorkerTimingBreakdown& timing,
+                              const svg::RendererReadbackStats& compositor,
+                              const svg::RendererReadbackStats& presentation) {
+  timing.readbackCount = compositor.count + presentation.count;
+  timing.readbackPollIterations = compositor.pollIterations + presentation.pollIterations;
+  timing.usedTimedWaitAny = compositor.usedTimedWaitAny || presentation.usedTimedWaitAny;
+  timing.deviceLost = compositor.deviceLost || presentation.deviceLost;
+  const svg::RendererReadbackStats& timeout =
+      presentation.timedOutWaitSite != svg::GpuWaitTimeoutSite::None ? presentation : compositor;
+  timing.timedOutWaitSite = timeout.timedOutWaitSite;
+  timing.timedOutWaitMs = timeout.timedOutWaitMs;
+}
+
 bool CanUseFullCanvasPresentation(bool hasCompositor, bool overviewInfillOnly,
                                   bool geometryDebugOverlay) {
   return !hasCompositor || overviewInfillOnly || geometryDebugOverlay;
 }
 
 }  // namespace
+
+bool PrepareTilePayloadForPresentation(bool requiresTexturePresentation,
+                                       svg::RendererBitmap& bitmap,
+                                       std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
+                                       const std::function<bool()>& shouldCancel) {
+  if (requiresTexturePresentation || texture == nullptr) {
+    return true;
+  }
+  svg::RendererBitmap captured = texture->takeSnapshotInterruptibly(shouldCancel);
+  if (captured.empty()) {
+    return false;
+  }
+  bitmap = std::move(captured);
+  texture.reset();
+  return true;
+}
 
 bool CaptureFullCanvasTextureSnapshot(
     svg::RendererInterface& renderer, const PresentationSnapshotPlan& plan,
@@ -1732,6 +1794,11 @@ void AsyncRenderer::workerLoop() {
         if (!metadataOnly) {
           tile.bitmap = std::move(ct.bitmap);
           tile.textureSnapshot = std::move(ct.textureSnapshot);
+          if (!PrepareCompositedTilePayload(requestRenderer.requiresTextureSnapshotPresentation(),
+                                            tile, workerTiming,
+                                            [this]() { return cancelRender_.isCancelled(); })) {
+            return std::nullopt;
+          }
         }
         previewTiles.push_back(std::move(tile));
       }
@@ -1877,6 +1944,11 @@ void AsyncRenderer::workerLoop() {
       continue;
     }
 
+    const svg::RendererReadbackStats compositorReadbackStats =
+        requestRenderer.consumeReadbackStats();
+    workerTiming.compositorReadbackCount = compositorReadbackStats.count;
+    noteGpuWaitOutcome(compositorReadbackStats);
+
     // Every non-Off editor frame publishes the compositor's paint-order tile set. Promotion
     // refusal only disables the drag skip-compose optimization; the remaining mandatory layers
     // and static segments are still the correct presentation topology.
@@ -1905,24 +1977,13 @@ void AsyncRenderer::workerLoop() {
     {
       const auto finalSnapshotStart = std::chrono::steady_clock::now();
       const ScopedHeapDelta finalSnapshotHeapDelta(MemoryStage::WorkerFinalSnapshot);
-      // Read before exporting the texture because texture export detaches the renderer target.
-      if (snapshotPlan.captureCpuSnapshot) {
-        ZoneScopedN("Renderer::takeSnapshot");
-        bitmap = requestRenderer.takeSnapshot();
-      }
-      if (snapshotPlan.captureTextureSnapshot) {
-        CaptureFullCanvasTextureForResult(requestRenderer, snapshotPlan, bitmap, fullCanvasTexture,
-                                          workerTiming.fullCanvasTextureAllocationFailureCount);
-      }
+      CaptureFrameSnapshotsForResult(requestRenderer, snapshotPlan, bitmap, fullCanvasTexture,
+                                     workerTiming,
+                                     [this]() { return cancelRender_.isCancelled(); });
       workerTiming.finalSnapshotMs = elapsedSince(finalSnapshotStart);
     }
     const svg::RendererReadbackStats readbackStats = requestRenderer.consumeReadbackStats();
-    workerTiming.readbackCount = readbackStats.count;
-    workerTiming.readbackPollIterations = readbackStats.pollIterations;
-    workerTiming.usedTimedWaitAny = readbackStats.usedTimedWaitAny;
-    workerTiming.deviceLost = readbackStats.deviceLost;
-    workerTiming.timedOutWaitSite = readbackStats.timedOutWaitSite;
-    workerTiming.timedOutWaitMs = readbackStats.timedOutWaitMs;
+    ApplyReadbackTimingStats(workerTiming, compositorReadbackStats, readbackStats);
     noteGpuWaitOutcome(readbackStats);
     if (!compositedPreview.has_value() && (!bitmap.empty() || fullCanvasTexture != nullptr)) {
       UTILS_RELEASE_ASSERT_MSG(
