@@ -35,7 +35,7 @@ bazel_dep(name = "platforms", version = "1.1.0")
 # now consumes prebuilt `wgpu-native` tarballs via `http_archive`, so the
 # rule is no longer load-bearing — it is kept only because other vendored
 # third-party projects still import it. Revisit if it goes completely unused.
-bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
+bazel_dep(name = "rules_foreign_cc", version = "0.16.0")
 
 ##
 ## Non-BCR dependencies (dev-only extension)
