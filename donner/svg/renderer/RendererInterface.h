@@ -1349,8 +1349,9 @@ public:
     return requiresTextureSnapshotPresentation();
   }
 
-  /// Returns true when presentation callers must use \ref takeTextureSnapshot and must not fall
-  /// back to CPU bitmap readback for normal frame handoff.
+  /// Returns true when existing presentation callers require direct \ref takeTextureSnapshot
+  /// handoff. This legacy transport policy does not describe GPU composition capability. A false
+  /// result does not authorize CPU readback during composition or qualify a GPU presentation path.
   [[nodiscard]] virtual bool requiresTextureSnapshotPresentation() const { return false; }
 
   /**

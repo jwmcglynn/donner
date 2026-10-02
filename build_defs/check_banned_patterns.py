@@ -43,11 +43,24 @@ class _Rule(NamedTuple):
     description: str
     remediation: str
     # Path prefixes (forward-slash) where this rule does NOT apply.
-    # Empty tuple means the rule applies everywhere.
+    # Empty tuple means no exemptions.
     exempt_path_prefixes: Tuple[str, ...] = ()
+    # Empty tuple means no path restriction; otherwise match a listed source subtree.
+    applicable_path_prefixes: Tuple[str, ...] = ()
 
 
 _RULES: List[_Rule] = [
+    _Rule(
+        pattern=re.compile(r"\brequiresTextureSnapshotPresentation\s*\("),
+        description="compositor depends on presentation handoff policy",
+        remediation=(
+            "Use supportsTextureSnapshotCompositing() for GPU payload capture and composition. "
+            "Worker-to-UI transport policy does not describe same-worker GPU capability; "
+            "do not select CPU readback/upload because presentation uses a different worker."
+        ),
+        exempt_path_prefixes=("_tests.cc",),
+        applicable_path_prefixes=("donner/svg/compositor/",),
+    ),
     _Rule(
         pattern=re.compile(r"\blong\s+long\b"),
         description="`long long` type",
@@ -553,6 +566,14 @@ def _check_ref_return_types(
     return errors
 
 
+def _rule_applies_to_path(rule: _Rule, posix_path: str) -> bool:
+    applies = not rule.applicable_path_prefixes or any(
+        prefix in posix_path for prefix in rule.applicable_path_prefixes
+    )
+    exempt = any(prefix in posix_path for prefix in rule.exempt_path_prefixes)
+    return applies and not exempt
+
+
 def check_file(
     path: Path,
     *,
@@ -578,7 +599,7 @@ def check_file(
     posix_path = path.as_posix()
 
     for rule in _RULES:
-        if any(prefix in posix_path for prefix in rule.exempt_path_prefixes):
+        if not _rule_applies_to_path(rule, posix_path):
             continue
         for m in rule.pattern.finditer(stripped):
             line = stripped.count("\n", 0, m.start()) + 1
