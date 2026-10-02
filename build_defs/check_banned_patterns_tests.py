@@ -42,6 +42,47 @@ class CheckBannedPatternsTests(unittest.TestCase):
             )
         ]
 
+    def _descriptions_at_path(self, source: str, relative_path: str) -> list[str]:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source_path = Path(temp_dir) / relative_path
+            source_path.parent.mkdir(parents=True)
+            source_path.write_text(source, encoding="utf-8")
+            return [error[1] for error in check_banned_patterns.check_file(source_path)]
+
+    def test_blocks_compositor_using_handoff_policy_as_gpu_capability(self):
+        for call in (
+            "renderer.requiresTextureSnapshotPresentation()",
+            "offscreen->requiresTextureSnapshotPresentation\n ()",
+        ):
+            with self.subTest(call=call):
+                descriptions = self._descriptions_at_path(
+                    f"bool canCompose() {{ return {call}; }}\n",
+                    "donner/svg/compositor/CompositorControllerRasterize.cc",
+                )
+                self.assertIn("compositor depends on presentation handoff policy", descriptions)
+
+    def test_allows_compositor_gpu_capability_and_policy_test_fixtures(self):
+        cases = (
+            ("donner/svg/compositor/CompositorControllerRasterize.cc",
+             "bool canCompose() { return renderer.supportsTextureSnapshotCompositing(); }"),
+            ("donner/svg/compositor/CompositorController_tests.cc",
+             "void test() { ON_CALL(renderer, requiresTextureSnapshotPresentation()); }"),
+            ("donner/editor/AsyncRenderer.cc",
+             "bool handoff() { return renderer.requiresTextureSnapshotPresentation(); }"),
+            ("donner/svg/renderer/RendererGeode.h",
+             "bool requiresTextureSnapshotPresentation() const { return false; }"),
+        )
+        for path, source in cases:
+            with self.subTest(path=path):
+                self.assertEqual([], self._descriptions_at_path(source, path))
+
+    def test_compositor_policy_guard_ignores_comments_and_strings(self):
+        self.assertEqual([], self._descriptions_at_path(
+            '// renderer.requiresTextureSnapshotPresentation();\n'
+            'const char* name = "requiresTextureSnapshotPresentation()";\n',
+            "donner/svg/compositor/CompositorControllerRasterize.cc",
+        ))
+
     def test_blocks_typographic_hyphens_and_dashes_in_comments_and_strings(self):
         descriptions = self._descriptions_for(
             '// A comment with a non-breaking hyphen: \u2011\n'
