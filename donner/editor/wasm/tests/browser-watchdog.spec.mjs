@@ -162,6 +162,42 @@ test("a pending application RPC cannot overwrite teardown after stop", async () 
   await new Promise((resolve) => setTimeout(resolve, 30));
   assert.deepEqual(JSON.parse(fs.readFileSync(heartbeat, "utf8")), before);
 });
+test("application heartbeat preserves presentation diagnostics without refreshing a stalled app", async () => {
+  const heartbeat = path.join(directory(), "heartbeat");
+  let calls = 0;
+  const worker = {
+    evaluate: () => Promise.resolve(++calls === 1 ? true : { pendingSubmissions: 3 }),
+  };
+  const presentation = { queue: { admission: 1, framesInFlight: 3 }, interaction: { dragging: true } };
+  const page = { workers: () => [worker], evaluate: () => Promise.resolve(presentation) };
+  const stop = await startApplicationHeartbeat(page, heartbeat);
+  try {
+    const before = JSON.parse(fs.readFileSync(heartbeat, "utf8"));
+    assert.deepEqual(before.presentation, presentation);
+    worker.evaluate = () => new Promise(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    assert.deepEqual(JSON.parse(fs.readFileSync(heartbeat, "utf8")), before);
+  } finally {
+    stop();
+  }
+});
+
+test("unavailable page diagnostics cannot stop a live application heartbeat", async () => {
+  const heartbeat = path.join(directory(), "heartbeat");
+  let calls = 0;
+  const worker = { evaluate: () => Promise.resolve(++calls === 1 ? true : { textures: 1 }) };
+  const page = { workers: () => [worker], evaluate: () => Promise.reject(new Error("page unavailable")) };
+  const stop = await startApplicationHeartbeat(page, heartbeat);
+  try {
+    const before = JSON.parse(fs.readFileSync(heartbeat, "utf8"));
+    assert.deepEqual(before.presentation, { unavailable: true });
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    assert.ok(JSON.parse(fs.readFileSync(heartbeat, "utf8")).atMs > before.atMs);
+  } finally {
+    stop();
+  }
+});
+
 test("fresh late samples cannot erase a latched teardown deadline", async () => {
   const outputDir = directory();
   const heartbeatFile = path.join(outputDir, "heartbeat");
