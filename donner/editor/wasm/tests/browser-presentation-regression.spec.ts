@@ -33,6 +33,7 @@ import { compareOverlayBitmap, type OverlayBitmapComparison } from "./overlay-bi
 import { cropCapturedPng, normalizeOverlayGeneration, overlayGenerationMask } from "./png-crop";
 import {
   findCanvasOwnerWorker,
+  holdCanvasCompletionForTest,
   installSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,
