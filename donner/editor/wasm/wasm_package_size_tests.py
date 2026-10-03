@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+
 def _compressed_size(path: Path) -> int:
     return len(gzip.compress(path.read_bytes(), compresslevel=9, mtime=0))
 

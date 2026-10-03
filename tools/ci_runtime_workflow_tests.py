@@ -22,6 +22,8 @@ ENFORCED_PAYLOAD_CEILINGS = {
     "--max-js-gzip-bytes": 51000,
     "--max-js-raw-bytes": 185000,
     "--max-total-raw-bytes": 12100000,
+    "--max-wasm-data-segments": 64,
+    "--max-wasm-function-body-bytes": 46000,
     "--max-wasm-gzip-bytes": 3300000,
     "--max-wasm-raw-bytes": 10000000,
 }
@@ -757,7 +759,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         widened = self.wasm_size_test_arguments.replace(
             declared, '"%s", "%d"' % (flag, ENFORCED_PAYLOAD_CEILINGS[flag] + 1)
         )
-        self.assertNotEqual(_declared_payload_ceilings(widened), ENFORCED_PAYLOAD_CEILINGS)
+        self.assertEqual(
+            ENFORCED_PAYLOAD_CEILINGS[flag] + 1, _declared_payload_ceilings(widened)[flag]
+        )
         repeated = self.wasm_size_test_arguments.replace(declared, declared + ", " + declared)
         self.assertNotIn(flag, _declared_payload_ceilings(repeated))
 

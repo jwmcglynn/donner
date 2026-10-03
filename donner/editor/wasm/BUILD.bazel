@@ -414,10 +414,10 @@ py_test(
         # Enforced ceilings, raised on 2026-10-03 by explicit maintainer decision. The GPU runtime's
         # browser backend and later editor features grew the package past the ceilings set before
         # them (9,200,000 Wasm raw / 3,060,000 gzip / 11,270,000 total bytes). Each ceiling is
-        # about 2 to 3 percent above the larger of two measurements that day, main and main with a
-        # pending editor presentation change: Wasm 9,769,340 raw / 3,226,953 gzip, JS 179,921 raw /
-        # 49,472 gzip, 11,829,116 total raw bytes. Lower them as the package shrinks; raise them
-        # only by the same kind of explicit decision.
+        # about 2 to 3 percent above the larger of two measurements that day, main and main with
+        # PR #1626: Wasm 9,769,340 raw / 3,226,953 gzip, JS 179,921 raw / 49,472 gzip, 11,829,116
+        # total raw bytes. Lower them as the package shrinks; raise them only by the same kind of
+        # explicit decision.
         "--max-wasm-raw-bytes",
         "10000000",
         "--max-wasm-gzip-bytes",

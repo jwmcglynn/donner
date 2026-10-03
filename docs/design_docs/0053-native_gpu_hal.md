@@ -111,18 +111,17 @@ paths use their reviewed runtime resource boundaries. Linux editor presentation 
 the browser editor canvas and diagnostic readback use the selected runtime. Native adapter
 consumers remain.
 
-The browser-selected WebAssembly packages exclude emdawnwebgpu's C++ WebGPU C API implementation,
-its JavaScript glue, and the transitional adapter from their configured dependencies and link
-actions. The Rust-built libraries are native-only, so removing them does not change the WebAssembly
-payload. The browser backend brings code and a JavaScript bridge of its own, and the package did
-not return to the strict ceilings set before the migration (9,200,000 Wasm raw, 3,060,000 Wasm
-gzip and 11,270,000 total bytes). On 2026-10-03 those ceilings were raised by explicit maintainer
-decision to about 2 to 3 percent above the larger of main and main with a pending editor
-presentation change: 10,000,000 Wasm raw over 9,769,340 measured, 3,300,000 Wasm gzip over
-3,226,953, 185,000 JavaScript raw over 179,921, 51,000 JavaScript gzip over 49,472 and
-12,100,000 total over 11,829,116 bytes. CI enforces them in
-`//donner/editor/wasm:wasm_geode_package_size_tests`. Raising a ceiling does not relax
-functional, lifetime, synchronization, memory-residency, security or privacy requirements.
+The browser-selected WebAssembly packages link neither the transitional adapter nor emdawnwebgpu's
+C++ WebGPU C API implementation or JavaScript glue. The Rust-built libraries are native-only, so
+removing them does not change the WebAssembly payload. The browser backend brings code and a
+JavaScript bridge of its own, and the package did not return to the strict ceilings set before the
+migration (9,200,000 Wasm raw, 3,060,000 Wasm gzip and 11,270,000 total bytes). On 2026-10-03 those
+ceilings were raised by explicit maintainer decision to about 2 to 3 percent above the larger of
+main and main with [#1626](https://github.com/jwmcglynn/donner/pull/1626): 10,000,000 Wasm raw over
+9,769,340 measured, 3,300,000 Wasm gzip over 3,226,953, 185,000 JavaScript raw over 179,921, 51,000
+JavaScript gzip over 49,472 and 12,100,000 total over 11,829,116 bytes. CI enforces them in
+`//donner/editor/wasm:wasm_geode_package_size_tests`. Raising a ceiling does not relax functional,
+lifetime, synchronization, memory-residency, security or privacy requirements.
 
 ## Goals
 
