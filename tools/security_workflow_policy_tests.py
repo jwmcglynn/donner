@@ -345,6 +345,22 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("donner-bcr-qualified-${{ github.run_attempt }}", preflight)
         self.assertIn("tools.bcr_source qualify", preflight)
 
+    def test_bcr_consumers_audit_the_configured_closure_for_rust(self):
+        preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        consumer = preflight.split("\n  consumer:\n", 1)[1].split("\n  cli-linux:\n", 1)[0]
+        run = _step_body(consumer, "Exercise the archive through registry resolution")
+        audit = "tools/bcr_dependency_closure.py"
+        self.assertEqual(preflight.count(audit), 1)
+        self.assertEqual(run.count(audit), 1)
+        query = run.split("bazelisk cquery", 1)[1].split(audit, 1)[0]
+        for library in ("base:base", "css:css", "svg:svg", "svg/renderer:renderer"):
+            self.assertIn("@donner//donner/%s" % library, query)
+        self.assertIn("--output=label_kind", query)
+        self.assertLess(run.index("bazelisk build"), run.index("bazelisk cquery"))
+        self.assertIn("matrix:", consumer)
+        self.assertIn("os: [ubuntu-24.04, macos-26]", consumer)
+        self.assertIn("bazel: ['7.x', '8.x']", consumer)
+
     def test_bcr_fork_preparation_requires_manual_approval_and_never_files_a_pr(self):
         workflow = self.supply_chain_files[".github/workflows/publish_bcr.yml"]
         self.assertIn("workflow_dispatch:", workflow)

@@ -36,14 +36,14 @@ an upstream PR. Only after the maintainer reviews and approves the exact fork di
 PR content does a person open the upstream PR. A completed Release, tag push or main-branch merge
 alone does not submit to BCR. Prereleases do not open BCR PRs.
 
-| Stage                    | Evidence                                                                                                                        | Credentials                                          |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| BCR Preflight            | Committed source archive, both lockfile-bound CLI binaries, upstream admission report, Ubuntu/macOS × Bazel 7/8 consumer matrix | Read-only build jobs; scoped OIDC/attestation signer |
-| Release                  | Exact preflight run/attempt, verified retained source and binary bytes, uploaded asset digests                                  | Release assets and attestations                      |
-| Prepare BCR fork branch  | Manual dispatch, successful Release run, approved source commit/digest, released bytes and matching remote tag                  | Fork-scoped token behind a protected environment     |
-| File upstream BCR PR     | Reviewed exact fork diff and PR title/body, separate approval of that filing                                                    | Maintainer's GitHub session                          |
-| BCR admission and builds | Upstream checks, maintainer review where required, platform matrix                                                              | BCR-owned infrastructure                             |
-| Registry availability    | Merged entry visible at `https://registry.bazel.build/modules/donner`                                                           | BCR-owned infrastructure                             |
+| Stage                    | Evidence                                                                                                                                                             | Credentials                                          |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| BCR Preflight            | Committed source archive, both lockfile-bound CLI binaries, upstream admission report, Ubuntu/macOS × Bazel 7/8 consumer matrix with its configured dependency audit | Read-only build jobs; scoped OIDC/attestation signer |
+| Release                  | Exact preflight run/attempt, verified retained source and binary bytes, uploaded asset digests                                                                       | Release assets and attestations                      |
+| Prepare BCR fork branch  | Manual dispatch, successful Release run, approved source commit/digest, released bytes and matching remote tag                                                       | Fork-scoped token behind a protected environment     |
+| File upstream BCR PR     | Reviewed exact fork diff and PR title/body, separate approval of that filing                                                                                         | Maintainer's GitHub session                          |
+| BCR admission and builds | Upstream checks, maintainer review where required, platform matrix                                                                                                   | BCR-owned infrastructure                             |
+| Registry availability    | Merged entry visible at `https://registry.bazel.build/modules/donner`                                                                                                | BCR-owned infrastructure                             |
 
 ### Before approval
 
@@ -69,7 +69,13 @@ alone does not submit to BCR. Prereleases do not open BCR PRs.
 excludes the checkout-only `external` symlink through `.gitattributes`. Verification compares every
 file, executable mode, source tree and digest with the committed Git archive. A checksum and JSON
 provenance accompany the archive. The consumer matrix resolves this archive through a disposable
-registry from a separate module; no Donner checkout override participates.
+registry from a separate module; no Donner checkout override participates. Each consumer job then
+audits the configured closure of the Donner libraries it built with
+`tools/bcr_dependency_closure.py`: the default tiny-skia renderer and basic text are present, and
+no development-only, Geode, WebGPU or test target, Rust rule, or Rust rule set, toolchain or crate
+repository is. The audit also proves that it rejects Rust edges injected into that closure. This
+shows the archive's production libraries have no Rust dependency; it does not remove the runner's
+own Rust toolchain.
 
 Source archives require root `LICENSE` and `NOTICE`. The committed `NOTICE` matches
 `//third_party/licenses:notice_default` byte-for-byte and describes the default tiny-skia
@@ -89,8 +95,9 @@ intentionally ignores `MODULE.bazel.lock`, so each platform resolves its lockfil
 `--lockfile_mode=update`, then repeats the build under `--lockfile_mode=error`. It retains each
 binary, generated lockfile, SHA-256, and provenance. A separate preflight job verifies and signs
 the source archive, both CLI binaries, and both generated lockfiles on main push or manual runs.
-Qualification waits for both CLI builds and the consumer matrix, re-verifies both CLI artifacts
-from its own attempt, and records that run ID and attempt without changing the archive bytes.
+Qualification waits for both CLI builds and the audited consumer matrix, re-verifies both CLI
+artifacts from its own attempt, and records that run ID and attempt without changing the archive
+bytes.
 After a failed preflight, rerun **all jobs** so source, binaries, matrix and qualification share
 one attempt; a failed-jobs-only rerun cannot qualify with older CLI artifacts. `//tools:bcr_source_tests`,
 `//tools:default_notice_freshness_tests`,

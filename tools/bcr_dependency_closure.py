@@ -1,4 +1,11 @@
-"""Check the configured downstream BCR renderer dependency closure."""
+"""Check the configured downstream BCR dependency closure of Donner's consumer libraries.
+
+The input is `bazel cquery --output=label_kind` over the libraries a downstream consumer builds.
+The closure must contain the default tiny-skia renderer and basic text, and no development-only,
+Geode, WebGPU or test target. It must contain no Rust rule, and no repository of a Rust rule set,
+toolchain or crate. After the real closure passes, the check also proves that it rejects Rust edges
+injected into that same closure, so a vacuous pass fails.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +18,16 @@ import re
 MAX_MODULE_BYTES = 1024 * 1024
 MAX_LABEL_BYTES = 10 * 1024 * 1024
 LABEL = re.compile(r"(?:@{1,2}[^/]+)?//[^\s]+\Z")
+# One `cquery --output=label_kind` line: the target kind, the label, then its configuration.
+KINDED_TARGET = re.compile(
+    r"(?P<kind>[A-Za-z_][\w]*(?: [a-z]+)?) (?P<label>(?:@{1,2}[^/\s]+)?//\S+)(?: \([^)]*\))?\Z"
+)
 RUST_NAME = re.compile(r"(?:^|[+~_./:-])(?:rust|cargo|crate)")
+RUST_RULE = re.compile(r"(?:^|_)(?:rust|cargo|crate)")
 REQUIRED_TARGETS = frozenset({
+    "//donner/base:base",
+    "//donner/css:css",
+    "//donner/svg:svg",
     "//donner/svg/renderer:renderer",
     "//donner/svg/renderer:renderer_tiny_skia",
     "//donner/svg/renderer:RendererTinySkiaBackend.cc",
@@ -30,6 +45,17 @@ FORBIDDEN_PACKAGES = (
     "//donner/gpu",
     "//donner/svg/renderer/geode",
     "//third_party/webgpu-cpp",
+)
+# Rust edges the check must reject once injected into a passing closure: an in-tree Rust rule, and
+# the rule set, toolchain and crate repositories under Bazel 8 (`+`) and Bazel 7 (`~`) names.
+INJECTED_RUST_EDGES = (
+    ("rust_library rule", "@@donner+//donner/svg:injected_edge"),
+    ("toolchain rule", "@@rules_rust+//rust/private:injected_edge"),
+    ("toolchain rule", "@@rules_rust~//rust/private:injected_edge"),
+    ("alias rule", "@@rules_rust++rust+rust_toolchains//:injected_edge"),
+    ("alias rule", "@@rules_rust~~rust~rust_toolchains//:injected_edge"),
+    ("filegroup rule", "@@rules_rust++crate+crates__injected-1.0.0//:injected_edge"),
+    ("filegroup rule", "@@rules_rust~~crate~crates__injected-1.0.0//:injected_edge"),
 )
 
 
@@ -111,18 +137,19 @@ def dev_repository_names(module_text: str) -> set[str]:
     return names
 
 
-def configured_labels(contents: str) -> set[str]:
-    labels: set[str] = set()
+def configured_targets(contents: str) -> dict[str, str]:
+    """Map each label of a `cquery --output=label_kind` result to its kind."""
+    targets: dict[str, str] = {}
     for raw in contents.splitlines():
         if not raw:
             continue
-        label = raw.split(" (", 1)[0]
-        if not LABEL.fullmatch(label):
-            raise ValueError("configured dependency query contains a non-label line")
-        labels.add(label)
-    if not labels:
+        match = KINDED_TARGET.fullmatch(raw)
+        if not match or not LABEL.fullmatch(match.group("label")):
+            raise ValueError("configured dependency query contains a line without a kind and label")
+        targets[match.group("label")] = match.group("kind")
+    if not targets:
         raise ValueError("configured dependency query returned no labels")
-    return labels
+    return targets
 
 
 def repository_parts(label: str) -> set[str]:
@@ -163,19 +190,40 @@ def check_backend(labels: set[str]) -> None:
         raise ValueError("default renderer includes an in-tree Rust target")
 
 
+def check_rules(targets: dict[str, str]) -> None:
+    for kind in targets.values():
+        if kind.endswith(" rule") and RUST_RULE.search(kind.removesuffix(" rule")):
+            raise ValueError("closure includes a Rust rule")
+
+
 def check_external_repositories(labels: set[str], dev_repositories: set[str]) -> None:
-    if any(repository_parts(label) & dev_repositories for label in labels):
-        raise ValueError("renderer closure includes development-only repositories")
+    # Rust is reported first, so a Rust repository that is also development-only names Rust.
     if any(
         RUST_NAME.search(part) or "webgpu" in part or "wgpu" in part
         for label in labels for part in repository_parts(label)
     ):
-        raise ValueError("renderer closure includes Rust or WebGPU repositories")
+        raise ValueError("closure includes Rust or WebGPU repositories")
+    if any(repository_parts(label) & dev_repositories for label in labels):
+        raise ValueError("closure includes development-only repositories")
 
 
-def check_closure(labels: set[str], dev_repositories: set[str]) -> None:
+def check_closure(targets: dict[str, str], dev_repositories: set[str]) -> None:
+    labels = set(targets)
     check_backend(labels)
+    check_rules(targets)
     check_external_repositories(labels, dev_repositories)
+
+
+def check_injected_rust_edges(targets: dict[str, str], dev_repositories: set[str]) -> None:
+    """Prove that the check rejects each Rust edge added to this passing closure."""
+    for kind, label in INJECTED_RUST_EDGES:
+        try:
+            check_closure({**targets, label: kind}, dev_repositories)
+        except ValueError as error:
+            if "Rust" not in str(error):
+                raise ValueError(f"injected {kind} {label} failed for another reason: {error}")
+            continue
+        raise ValueError(f"the check accepted an injected Rust edge: {kind} {label}")
 
 
 def main() -> None:
@@ -186,13 +234,16 @@ def main() -> None:
     if args.module.stat().st_size > MAX_MODULE_BYTES or args.labels.stat().st_size > MAX_LABEL_BYTES:
         raise ValueError("module or configured closure exceeds its size limit")
     names = dev_repository_names(args.module.read_text(encoding="utf-8"))
-    labels = configured_labels(args.labels.read_text(encoding="utf-8"))
-    check_closure(labels, names)
-    print(f"BCR renderer closure: {len(labels)} labels; tiny-skia and base text; no dev, Geode, WebGPU, or Rust dependencies")
+    targets = configured_targets(args.labels.read_text(encoding="utf-8"))
+    check_closure(targets, names)
+    check_injected_rust_edges(targets, names)
+    print(f"BCR consumer closure: {len(targets)} labels; tiny-skia and base text; no dev, Geode, "
+          "WebGPU or test targets; no Rust rule, toolchain or crate; "
+          f"{len(INJECTED_RUST_EDGES)} injected Rust edges rejected")
 
 
 if __name__ == "__main__":
     try:
         main()
     except (OSError, SyntaxError, ValueError) as error:
-        raise SystemExit(f"BCR renderer dependency check failed: {error}") from None
+        raise SystemExit(f"BCR consumer dependency check failed: {error}") from None
