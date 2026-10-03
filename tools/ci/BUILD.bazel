@@ -96,6 +96,15 @@ test_suite(
     tests = ["//donner/editor/wasm:wasm_geode_package_size_tests"],
 )
 
+# The standalone Geode module is incompatible unless the browser backend is selected. The editor
+# Wasm lane requests it explicitly so that such a configuration fails the build instead of quietly
+# skipping the audits that pin its browser selection.
+filegroup(
+    name = "geode_wasm_browser_module",
+    srcs = ["//donner/svg/renderer/wasm:donner_wasm_geode"],
+    tags = ["manual"],
+)
+
 # The editor Wasm PR lane links both browser bridge variants before browser tests run.
 filegroup(
     name = "browser_bridge_link_probes",

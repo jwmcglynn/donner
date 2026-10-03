@@ -36,9 +36,8 @@ enum class SuspendKind : std::uint8_t {
   TileYield = 0,
   /// Waiting for a GPU readback (`mapAsync` completion) to land.
   GpuReadback = 1,
-  /// `device.poll` / `instance.waitAny`: emdawnwebgpu yields the Asyncify
-  /// worker for roughly one browser task per call regardless of the `wait`
-  /// argument.
+  /// Waiting on the GPU device as a whole, such as a device poll or a queue
+  /// drain, rather than on one readback.
   DeviceWait = 2,
   /// Device and adapter acquisition, and anything else that suspends outside
   /// the steady-state frame path.
