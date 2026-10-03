@@ -4394,11 +4394,16 @@ TEST(EditorShellTest, CoalescedFinalPointerAndReleaseCommitTheFinalPoseAndUndo) 
   window.endFrame();
   io.ConfigInputTrickleEventQueue = oldTrickle;
   const Transform2d expected = Transform2d::Translate(Vector2d(32, 20));
-  EXPECT_EQ(target->cast<svg::SVGGraphicsElement>().transform(), expected);
   const auto presentation =
       EditorShellTestAccess::Coordinator(shell).compositedPresentation().diagnostics();
   ASSERT_TRUE(presentation.settlingPreview.has_value());
   EXPECT_EQ(presentation.settlingPreview->translation, Vector2d(32, 20));
+  ASSERT_EQ(presentation.settlingPreview->poses.size(), 1u);
+  EXPECT_EQ(presentation.settlingPreview->poses.front().documentFromElement, expected);
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  std::ignore = app.flushFrame();
+  EXPECT_EQ(target->cast<svg::SVGGraphicsElement>().transform(), expected);
   EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
   app.undo();
   ASSERT_TRUE(app.flushFrame());

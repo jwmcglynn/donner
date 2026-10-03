@@ -2394,7 +2394,11 @@ void EditorWindow::setPresentationFrameIdentity(std::uint64_t frameId, std::uint
                              .viewportZoom = viewportZoom};
 }
 
-bool EditorWindow::prepareFrameSubmission(int width, int height, bool requestedReadback) {
+bool EditorWindow::hasUsableFrameTarget(int width, int height) const {
+  return wgpuState_ != nullptr && wgpuState_->canPresentFrames() && width > 0 && height > 0;
+}
+
+bool EditorWindow::admitFrameSubmission(bool requestedReadback) {
   bool ready = observePresentationCompletion();
   if (!ready && requestedReadback && !presentationCompletionProbeForTesting_ &&
       !wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
@@ -2409,7 +2413,7 @@ bool EditorWindow::prepareFrameSubmission(int width, int height, bool requestedR
     return false;
   }
   presentationWasDeferred_ = false;
-  return configureFrameTarget(width, height);
+  return true;
 }
 
 bool EditorWindow::observePresentationCompletion() {
@@ -2914,7 +2918,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   if (targetReadback != nullptr) {
     *targetReadback = svg::RendererBitmap{};
   }
-  if (wgpuState_ == nullptr || !wgpuState_->canPresentFrames() || displayW <= 0 || displayH <= 0) {
+  if (!hasUsableFrameTarget(displayW, displayH)) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
     // No usable WGPU frame target remains, including after a terminal device loss. Complete this
     // diagnostic request as a terminal failure rather than rearming an impossible capture.
@@ -2923,6 +2927,10 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       WakeWasmEditorForPendingWgpuReadback();
     }
 #endif
+    return;
+  }
+  // A coalesced UI frame has not attempted surface setup or diagnostic capture.
+  if (!admitFrameSubmission(targetReadback != nullptr)) {
     return;
   }
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
@@ -2972,7 +2980,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       .consecutiveFailures = wgpuState_->smokeReadbackConsecutiveFailures,
   };
 #endif
-  if (!prepareFrameSubmission(displayW, displayH, targetReadback != nullptr)) {
+  if (!configureFrameTarget(displayW, displayH)) {
     return;
   }
   auto& submissionDevice = wgpuState_->framebufferGeodeDevice->runtimeDevice();

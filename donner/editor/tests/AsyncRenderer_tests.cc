@@ -164,7 +164,15 @@ EditorRasterViewport SplashDonnerHighZoomRasterViewport(Vector2d panDocPoint = V
   viewport.zoom = 8.0;
   viewport.panDocPoint = panDocPoint;
   viewport.panScreenPoint = Vector2d(446.0, 256.0);
-  return viewport.rasterViewport();
+  const Vector2i semanticCanvasSize = viewport.rasterViewport().semanticCanvasSizePx;
+  viewport.devicePixelRatio = 2.0;
+  EditorRasterViewport result = viewport.rasterViewport();
+  const double outputScale = devicePixelRatio / viewport.devicePixelRatio;
+  result.outputSizePx = Vector2i(static_cast<int>(std::round(result.outputSizePx.x * outputScale)),
+                                 static_cast<int>(std::round(result.outputSizePx.y * outputScale)));
+  result.outputFromDocument = result.outputFromDocument * Transform2d::Scale(outputScale);
+  result.semanticCanvasSizePx = semanticCanvasSize;
+  return result;
 }
 
 TEST(AsyncRendererPresentationPolicyTest, LayerPanelFixtureDownsamplesTheSameHighZoomCrop) {
