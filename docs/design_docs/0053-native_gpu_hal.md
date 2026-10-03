@@ -111,15 +111,14 @@ paths use their reviewed runtime resource boundaries. Linux editor presentation 
 the browser editor canvas and diagnostic readback use the selected runtime. Native adapter
 consumers remain.
 
-Strict Wasm-size qualification is deferred until production Rust removal. The browser-selected
-WebAssembly packages now exclude emdawnwebgpu's C++ WebGPU C API implementation, its JavaScript
-glue, and the transitional adapter from their configured dependencies and link actions.
-The Rust-built libraries are native-only, so removing them does not change the WebAssembly
-payload. The browser backend brings code and a
-JavaScript bridge of its own, so the cutover alone is not expected to return the package to its
-strict ceilings. Intermediate package growth does not block these migration units. Keep the
-measurements and existing budgets for final acceptance; this deferral does not relax functional,
-lifetime, synchronization, memory-residency, security or privacy requirements.
+The browser-selected WebAssembly packages link neither the transitional adapter nor emdawnwebgpu's
+C++ WebGPU C API implementation or JavaScript glue. The Rust-built libraries are native-only and
+never reach the WebAssembly payload. CI enforces the editor package's payload ceilings in
+`//donner/editor/wasm:wasm_geode_package_size_tests`: 10,000,000 bytes of raw Wasm, 3,300,000
+bytes of gzip Wasm, 185,000 raw and 51,000 gzip bytes of JavaScript, and 12,100,000 total bytes,
+each a small margin above the measured package. Lower them as the package shrinks. Raising one is
+an explicit maintainer decision and does not relax functional, lifetime, synchronization,
+memory-residency, security or privacy requirements.
 
 ## Goals
 
@@ -460,8 +459,7 @@ gates remain open.
       It preserves host-frame batching below the 64-pass boundary, exact owner/generation leases,
       source-render/filter/composite order, positive-completion retirement, terminal loss behavior,
       and sibling unsubmitted host ranges. Abandoned frames allocate and record nothing; uncertain
-      accepted backing remains retained, and a browser task yield is not completion proof. Wasm-size
-      qualification remains deferred until production Rust removal.
+      accepted backing remains retained, and a browser task yield is not completion proof.
 - [x] Shared fill, gradient, mask, image and snapshot pipeline resources and `GeoEncoder` use runtime
       handles and command recording.
 - [x] Move the checkerboard pass's raw target import to `EditorShellPresentation`; accept a
