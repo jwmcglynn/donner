@@ -111,9 +111,9 @@ paths use their reviewed runtime resource boundaries. Linux editor presentation 
 the browser editor canvas and diagnostic readback use the selected runtime. Native adapter
 consumers remain.
 
-Strict Wasm-size qualification is deferred until production Rust removal. The WebAssembly
-packages link neither the transitional adapter nor emdawnwebgpu, whose C++ WebGPU C API
-implementation and JavaScript glue are removed from the tree.
+Strict Wasm-size qualification is deferred until production Rust removal. The browser-selected
+WebAssembly packages now exclude emdawnwebgpu's C++ WebGPU C API implementation, its JavaScript
+glue, and the transitional adapter from their configured dependencies and link actions.
 The Rust-built libraries are native-only, so removing them does not change the WebAssembly
 payload. The browser backend brings code and a
 JavaScript bridge of its own, so the cutover alone is not expected to return the package to its
