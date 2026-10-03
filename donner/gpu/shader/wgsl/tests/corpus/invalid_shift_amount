@@ -1,0 +1,5 @@
+fn wide(x: u32) -> u32 { return x << 32u; }
+fn mixed(a: u32, b: u32, c: u32) -> u32 { return a << b + c; }
+fn signed_amount(x: u32, n: i32) -> u32 { return x >> n; }
+fn vector_scalar(v: vec2<u32>) -> vec2<u32> { return v << 1u; }
+const kOverflow = 1 << 63;
