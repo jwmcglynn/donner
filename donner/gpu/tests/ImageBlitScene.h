@@ -21,7 +21,7 @@
 #include "tiny_skia/filter/Blend.h"
 
 namespace donner::gpu::tests {
-namespace image_blit_slice {
+namespace image_blit_scene {
 
 using Pixel = std::array<uint8_t, 4>;
 using FloatPixel = std::array<float, 4>;
@@ -221,15 +221,15 @@ inline std::vector<uint8_t> Expected(const Scenario& scenario) {
   return {pixels.data().begin(), pixels.data().end()};
 }
 
-}  // namespace image_blit_slice
+}  // namespace image_blit_scene
 
 /// Renders a textured quad and compares every pixel with independent CPU references.
 /// @param device Native backend under test. @param shader Frozen selected or test projections.
 /// @param readbackBuffer Backend's bounded buffer readback. @param scenario Reference scenario.
 template <typename DeviceType, typename Readback>
 void CheckImageBlit(DeviceType& device, const shader::CompiledShaderView& shader,
-                    Readback readbackBuffer, image_blit_slice::Scenario scenario) {
-  using namespace image_blit_slice;
+                    Readback readbackBuffer, image_blit_scene::Scenario scenario) {
+  using namespace image_blit_scene;
   ASSERT_THAT(shader.entryPoints, testing::SizeIs(2));
   auto module = device.createShaderModule(
       shader::MakeShaderDescriptor(shader, device.shaderSourceKind(), "image blit"));

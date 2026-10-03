@@ -1,5 +1,5 @@
 /// @file
-/// The Vulkan texture-to-texture copy slice: copies a sub-rectangle between two textures through
+/// The Vulkan texture-to-texture copy test: copies a sub-rectangle between two textures through
 /// donner::gpu::vulkan::VulkanDevice and compares the destination texels byte-for-byte against
 /// the shared expected image.
 
@@ -43,7 +43,7 @@ protected:
       const char* requireVulkan = std::getenv("DONNER_REQUIRE_VULKAN");
       if (requireVulkan != nullptr && std::string_view(requireVulkan) == "1") {
         FAIL() << "DONNER_REQUIRE_VULKAN=1 is set but no Vulkan 1.1 device is available; the "
-                  "vertical-slice gate must not be skipped on this runner";
+                  "native Vulkan gate must not be skipped on this runner";
       }
       GTEST_SKIP() << "No Vulkan 1.1 device available";
     }

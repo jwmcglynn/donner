@@ -25,7 +25,7 @@
 #include "tiny_skia/filter/FloatPixmap.h"
 
 namespace donner::gpu::tests {
-namespace convolve_matrix_slice {
+namespace convolve_matrix_scene {
 
 inline constexpr uint32_t kWidth = 5;
 inline constexpr uint32_t kHeight = 4;
@@ -121,7 +121,7 @@ inline std::array<float, 4> ExpectedTexel(const std::array<float, kWidth * kHeig
   return {rgb[0], rgb[1], rgb[2], alpha};
 }
 
-}  // namespace convolve_matrix_slice
+}  // namespace convolve_matrix_scene
 
 /**
  * Runs a nonuniform 2x3 convolution at a non-workgroup-aligned extent and compares it to an
@@ -137,10 +137,10 @@ inline std::array<float, 4> ExpectedTexel(const std::array<float, kWidth * kHeig
 template <typename DeviceType, typename Readback>
 void CheckConvolveMatrixStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
                                 Readback readbackBuffer, uint32_t edgeMode, bool preserveAlpha,
-                                convolve_matrix_slice::ArrayIndexMode indexMode =
-                                    convolve_matrix_slice::ArrayIndexMode::Authored,
+                                convolve_matrix_scene::ArrayIndexMode indexMode =
+                                    convolve_matrix_scene::ArrayIndexMode::Authored,
                                 const shader::CompiledShaderView* shaderMetadata = nullptr) {
-  using namespace convolve_matrix_slice;
+  using namespace convolve_matrix_scene;
   uint32_t inputBinding = 0;
   uint32_t outputBinding = 1;
   uint32_t paramsBinding = 2;

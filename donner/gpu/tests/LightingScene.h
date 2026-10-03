@@ -19,7 +19,7 @@
 #include "donner/gpu/shader/CompiledShader.h"
 #include "donner/gpu/shader/programs/LightingParams.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
-#include "donner/gpu/tests/ReflectedComputeSlice.h"
+#include "donner/gpu/tests/ReflectedComputePipeline.h"
 #include "tiny_skia/filter/FloatPixmap.h"
 
 namespace donner::gpu::tests {

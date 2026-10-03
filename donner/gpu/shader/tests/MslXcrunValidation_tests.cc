@@ -110,7 +110,7 @@ std::string FindMetalCompilerUnavailableReason() {
       &probeOutput);
   if (probeStatus != 0 || probeOutput.find("missing Metal Toolchain") != std::string::npos) {
     return "Offline Metal compiler unavailable (the runtime Metal framework compiler used by the "
-           "vertical slice tests is unaffected): " +
+           "Metal device tests is unaffected): " +
            probeOutput;
   }
   return "";

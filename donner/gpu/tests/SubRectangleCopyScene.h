@@ -1,8 +1,8 @@
 #pragma once
 /// @file
-/// Shared scene for the texture-to-texture sub-rectangle copy slices.
+/// Shared scene for the texture-to-texture sub-rectangle copy tests.
 ///
-/// Every backend slice copies the same rectangle out of the same source into the same
+/// Every backend test copies the same rectangle out of the same source into the same
 /// pre-filled destination and checks the same expected bytes, so a backend that ignores an
 /// origin, swaps the two origins, or clamps one of them shows up as a byte difference rather
 /// than as a test that agrees with itself.

@@ -18,7 +18,7 @@
 #include "donner/gpu/tests/GpuTestUtils.h"
 
 namespace donner::gpu::tests {
-namespace filter_blend_slice {
+namespace filter_blend_scene {
 inline constexpr uint32_t kWidth = 7, kHeight = 5, kRowBytes = 256;
 using Pixel = std::array<uint8_t, 4>;
 enum class Case { Opaque, Premultiplied, Transparent, Bounds };
@@ -90,15 +90,15 @@ inline std::vector<uint8_t> InputBytes(Scenario scenario, bool source) {
   }
   return result;
 }
-}  // namespace filter_blend_slice
+}  // namespace filter_blend_scene
 
 /// Dispatches feBlend using reflected roles and a strict independent pixel reference.
 /// @param device Native device. @param shader Selected or mutation artifact.
 /// @param readbackBuffer Bounded backend readback. @param scenario Blend mode and input case.
 template <class DeviceType, class Readback>
 void CheckFilterBlend(DeviceType& device, const shader::CompiledShaderView& shader,
-                      Readback readbackBuffer, filter_blend_slice::Scenario scenario) {
-  using namespace filter_blend_slice;
+                      Readback readbackBuffer, filter_blend_scene::Scenario scenario) {
+  using namespace filter_blend_scene;
   ASSERT_THAT(shader.entryPoints, testing::SizeIs(1));
   const auto shape = shader.entryPoints[0].workgroupSize;
   auto module = device.createShaderModule(

@@ -74,8 +74,8 @@ TEST_F(TextureRegistrationTest, ExportRefusesARegistrationAndALostProducer) {
   EXPECT_THAT(producer_->exportTexture(owned), IsGpuError(GpuErrorType::DeviceLost));
 }
 
-/// A backend whose runtime devices never share a native device refuses both halves by name, which
-/// is what the recording backend, like the Vulkan and browser backends, inherits.
+/// A backend whose runtime devices never share a native device refuses both halves by name. The
+/// recording backend inherits that default.
 TEST_F(TextureRegistrationTest, ABackendThatCannotShareRefusesByName) {
   RecordingDevice recording;
   const Texture texture = MakeSharedTexture(recording);

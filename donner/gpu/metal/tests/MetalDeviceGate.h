@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 /// Gates a Metal test fixture's SetUp() on having created a device: skip on a developer machine,
-/// fail on an automated lane. Every Metal vertical slice in this package needs this, so it is a
+/// fail on an automated lane. Every Metal device test in this package needs this, so it is a
 /// shared macro rather than a third hand copy of the frozen pixel gate's fixture preamble.
 
 #include <gtest/gtest.h>

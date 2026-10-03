@@ -138,7 +138,7 @@ donner_cc_library(
     name = "geode_path_encoder",
     srcs = ["GeodePathEncoder.cc"],
     hdrs = ["GeodePathEncoder.h"],
-    # //donner/gpu: the GPU vertical slice tests (Metal, Vulkan) encode the
+    # //donner/gpu: the Metal and Vulkan solid-fill tests encode the
     # frozen-baseline paths with the same banding the production path uses.
     # GeodePathEncoder is pure CPU path math with no GPU dependency.
     visibility = [
@@ -660,7 +660,7 @@ donner_cc_test(
                ":geode_shader_selection",
                ":geode_shaders",
                "//donner/base:gtest_timeout_main",
-               "//donner/gpu:slug_fill_slice",
+               "//donner/gpu:slug_fill_scene",
            ] + shader_apis(SLUG_SHADER_FAMILIES) +
            shader_artifacts(SLUG_SHADER_FAMILIES) +
            native_shader_artifacts(SLUG_SHADER_FAMILIES),

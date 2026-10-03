@@ -247,11 +247,12 @@ public:
   /**
    * Copies the full contents of \p buffer back to the host and returns the bytes.
    *
-   * Test/readback convenience, pending a buffer mapping API: it validates device identity, slot
-   * liveness, and the handle generation, then reads
-   * the shared-storage Metal buffer contents directly. Callers must ensure relevant GPU work has
-   * completed first (see \ref Device::waitForSerial). Queued writes become visible after a
-   * subsequent ordinary submission completes; this accessor does not submit them.
+   * Synchronous test and diagnostic readback, outside the asynchronous mapping API
+   * (\ref donner::gpu::Device::mapBufferAsync): it validates device identity, slot liveness, and
+   * the handle generation, then reads the shared-storage Metal buffer contents directly. Callers
+   * must ensure relevant GPU work has completed first (see \ref Device::waitForSerial). Queued
+   * writes become visible after a subsequent ordinary submission completes; this accessor does
+   * not submit them.
    *
    * @param buffer Buffer to read back; must be a live buffer of this device.
    */

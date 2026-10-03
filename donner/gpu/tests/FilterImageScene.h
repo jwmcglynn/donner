@@ -17,7 +17,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
-#include "donner/gpu/tests/ReflectedComputeSlice.h"
+#include "donner/gpu/tests/ReflectedComputePipeline.h"
 
 namespace donner::gpu::tests {
 

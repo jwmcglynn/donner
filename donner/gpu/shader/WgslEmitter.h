@@ -10,7 +10,7 @@
 namespace donner::gpu::shader {
 
 /**
- * Emits deterministic WGSL text for \p module (design 0053 "Original emitters").
+ * Emits deterministic WGSL text for \p module.
  *
  * Output properties:
  * - Declarations follow module declaration order; struct definitions are emitted first, in
@@ -26,10 +26,9 @@ namespace donner::gpu::shader {
  * Fails closed with a \ref ShaderError (never emits invalid WGSL silently) when:
  * - an identifier collides with a WGSL reserved word;
  * - a uniform binding contains an array whose natural stride required 16-byte padding
- *   (`ArrayStrideInfo::paddedFromNatural`); materializing padded element wrappers is a
- *   documented emitter obligation this packet does not need (the solid-fill
- *   `clipPolygonPlanes: array<vec4<f32>, 4>` has a natural stride of 16), so the case is
- *   rejected instead of silently emitting a layout mismatch;
+ *   (`ArrayStrideInfo::paddedFromNatural`); materializing padded element wrappers is not
+ *   implemented (the solid-fill `clipPolygonPlanes: array<vec4<f32>, 4>` has a natural stride of
+ *   16), so the case is rejected instead of silently emitting a layout mismatch;
  * - a float literal is non-finite;
  * - two distinct struct types share a name.
  *
