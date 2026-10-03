@@ -1138,10 +1138,7 @@ GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
   if (root->capabilities().backend == GpuBackendKind::Browser) {
     return GeodeRuntimeDevice{.device = CreateBrowserDeviceOver(*root)};
   }
-  auto adapter = std::make_unique<GeodeWgpuAdapterDevice>(std::move(root));
-  GeodeWgpuAdapterDevice* const transitionalAdapter = adapter.get();
-  return GeodeRuntimeDevice{.device = std::move(adapter),
-                            .transitionalAdapter = transitionalAdapter};
+  return GeodeRuntimeDevice{.device = std::make_unique<GeodeWgpuAdapterDevice>(std::move(root))};
 }
 
 namespace {

@@ -1,17 +1,19 @@
 ---
 name: donner-geode-backend
 description: >
-  Working on Geode, Donner's GPU (WebGPU / wgpu-native) rendering backend: build configs, the
-  pipeline-ownership rule, headless/llvmpipe environments, WGSL shaders, and Geode-lane test
-  failures. Use when changing anything under donner/svg/renderer/geode/, when a *_geode variant or
-  Geode golden test fails, when editing .wgsl shaders, when you see "[Geode/wgpu-native]" errors or
-  WebGPU device/adapter problems, or when running Geode tests on headless/CI machines.
+  Working on Geode, Donner's GPU rendering backend (native Metal and Vulkan, browser WebGPU):
+  build configs, the pipeline-ownership rule, headless/llvmpipe environments, WGSL shaders, and
+  Geode-lane test failures. Use when changing anything under donner/svg/renderer/geode/, when a
+  *_geode variant or Geode golden test fails, when editing .wgsl shaders, when you see GPU
+  device/backend selection problems, or when running Geode tests on headless/CI machines.
 ---
 
 # Donner Geode Backend
 
-Geode is Donner's GPU rendering backend: WebGPU (via wgpu-native, wrapped by the vendored
-`webgpu.hpp` in `third_party/webgpu-cpp`) plus Slug-style analytic path coverage. It lives in
+Geode is Donner's GPU rendering backend: Donner's own GPU runtime (`donner/gpu`, native Metal on
+macOS, native Vulkan on Linux, the browser device in WebAssembly) plus Slug-style analytic path
+coverage. A pinned Linux test-only wgpu-native build remains only as a resvg comparison oracle. It
+lives in
 `donner/svg/renderer/geode/`; the `RendererInterface` implementation is
 `donner/svg/renderer/RendererGeode.h` / `.cc` (class `RendererGeode`).
 
@@ -25,7 +27,7 @@ common:geode --//donner/svg/renderer/geode:enable_geode=true
 ```
 
 - `renderer_backend` selects which backend `//donner/svg/renderer` links (`tiny_skia` | `geode`).
-- `enable_geode` gates _compiling_ wgpu-native at all; Geode targets carry
+- `enable_geode` gates _compiling_ the Geode GPU targets at all; Geode targets carry
   `target_compatible_with` selects on `//donner/svg/renderer/geode:geode_enabled`, so without the
   flag they resolve to `@platforms//:incompatible` and are skipped, not broken.
 
@@ -89,7 +91,7 @@ Consequences:
 - **New pipeline sources go into the existing `geode_device` `donner_cc_library`** (`srcs`/`hdrs`
   in `donner/svg/renderer/geode/BUILD.bazel`), NOT a new standalone library. All four pipeline
   classes are folded into that one target on purpose: `GeodeDevice` needs their constructors,
-  and they need `GeodeDevice::device()`/`queue()` — a separate library reintroduces the circular
+  and they need `GeodeDevice::runtimeDevice()`; a separate library reintroduces the circular
   dep (see the comment on the `geode_device` target).
 
 Full rationale lives in `docs/coding_style.md` (§ "No new `wgpu::Device::createRenderPipeline`
@@ -112,7 +114,8 @@ static std::shared_ptr<GeodeDevice> sharedDevice() {
 
 `RendererGeode` has three construction modes (documented in `RendererGeode.h`): headless
 (`RendererGeode(verbose)`, creates + owns a device), shared
-(`RendererGeode(shared_ptr<GeodeDevice>)`), and embedded (host-owned device, section 7).
+(`RendererGeode(shared_ptr<GeodeDevice>)`), and embedded (a context over a root the host
+selected for its window, section 8).
 Tests should use the shared mode with the suite-wide device.
 
 ## 4. Headless / CI environment
@@ -127,13 +130,13 @@ Tests should use the shared mode with the suite-wide device.
   --test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json --test_env=XDG_RUNTIME_DIR=/tmp
   ```
 
-- The `WGPU_BACKEND` environment variable (read by `RequestedHeadlessBackend()` in
-  `donner/svg/renderer/geode/GeodeDevice.cc`) overrides backend selection for headless devices.
-  Accepted values (case-insensitive): `vulkan`, `metal`, `opengl`, `gl`, `opengles`, `gles`.
-  Unrecognized values print `[Geode/wgpu-native] Ignoring unsupported WGPU_BACKEND=...` and fall
-  through. Default: Vulkan on Linux, platform default elsewhere.
-- Geode device errors print to stderr with the `[Geode/wgpu-native]` prefix (uncaptured error
-  callback in `GeodeDevice.cc`). Grep test logs for that prefix first when a Geode test fails.
+- The `DONNER_GPU_BACKEND` environment variable (read by `SelectGpuRoot()` in
+  `donner/svg/renderer/geode/GeodeNativeRoot.cc`) names the backend for unconstrained roots.
+  Accepted values (case-insensitive): `metal`, `vulkan`. Unset or empty selects native Metal on
+  macOS and native Vulkan on Linux. A value that names no backend, or a backend the process
+  cannot select, halts the process instead of falling back.
+- Root selection and device errors print to stderr with a `[Geode]`, `[Geode/metal]` or
+  `[Geode/vulkan]` prefix. Grep test logs for those prefixes first when a Geode test fails.
 - **Timeouts are capped deliberately.** The heavy wrappers (`renderer_geode_tests`,
   `renderer_geode_golden_tests`) set `size = "large", timeout = "long"` (900 s) so a driver hang
   dies in 15 minutes instead of Bazel's 3600 s default. llvmpipe is slow, but a timeout still
@@ -146,16 +149,16 @@ All paths under `donner/svg/renderer/geode/` unless noted:
 
 | File                                                                                    | Role                                                                                                                                                            |
 | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GeodeDevice.{h,cc}`                                                                    | Device/queue factory (headless, shared, embedded) + owner of ALL pipelines (section 2) + `setCounters()` hook                                                   |
+| `GeodeDevice.{h,cc}`                                                                    | Logical context over a selected runtime device (headless or over a selected root) + owner of ALL pipelines (section 2) + `setCounters()` hook                   |
 | `GeoEncoder.{h,cc}`                                                                     | Draw encoding: render passes, band-quad draws, masks, readback                                                                                                  |
 | `GeodePathEncoder.{h,cc}`                                                               | CPU-side Slug band decomposition — converts a `Path` into GPU band/curve/vertex buffers (layout matches the WGSL `Band` struct in `shaders/slug_fill.wgsl`)     |
 | `GeodePathCacheComponent.h`                                                             | Per-entity ECS cache of encoded paths; fill slot invalidated by entt signal when the source `ComputedPathComponent` changes, stroke slot keyed by `StrokeStyle` |
 | `GeodeTextureEncoder.{h,cc}`                                                            | Buffer→texture uploads; normalizes `bytesPerRow` to WebGPU's required 256-byte alignment                                                                        |
 | `GeodePipeline.{h,cc}`, `GeodeImagePipeline.{h,cc}`, `GeodeCheckerboardPipeline.{h,cc}` | Pipeline classes (allowlisted create-callers)                                                                                                                   |
-| `GeodeFilterEngine.{h,cc}` + `//donner/gpu/shader/programs/*Source.h` filter artifacts    | SVG filter effects on the GPU; every program is compiled at build time by the C++20 WGSL compiler                                                                |
-| `//donner/gpu/shader/programs/Slug{Fill,Gradient,Mask}Source.h`, `ImageBlitSource.h`     | Core draw shaders, authored as inline WGSL and frozen into reflected artifacts (see `docs/wgsl_compiler.md`)                                                    |
+| `GeodeFilterEngine.{h,cc}` + `//donner/gpu/shader/programs/*Source.h` filter artifacts  | SVG filter effects on the GPU; every program is compiled at build time by the C++20 WGSL compiler                                                               |
+| `//donner/gpu/shader/programs/Slug{Fill,Gradient,Mask}Source.h`, `ImageBlitSource.h`    | Core draw shaders, authored as inline WGSL and frozen into reflected artifacts (see `docs/wgsl_compiler.md`)                                                    |
 | `GeodeCounters.h`                                                                       | Perf instrumentation counters; ceilings asserted by `tests/GeodePerf_tests.cc` (design doc 0030)                                                                |
-| `GeodeWgpuUtil.h`                                                                       | `wgpuLabel()` string-view shim + `ScopedWgpuHandle` RAII for raw WebGPU handles                                                                                 |
+| `GeodeWgpuUtil.h`                                                                       | Linux test-only wgpu reference: `wgpuLabel()` shim + `ScopedWgpuHandle` RAII for raw WebGPU handles                                                             |
 | `../RendererGeode.{h,cc}`, `../RendererGeodeBackend.cc`                                 | `RendererInterface` implementation on top of the above                                                                                                          |
 
 **Adding a NEW shader**: author the WGSL as an inline `wgsl::SourceText` in a
@@ -171,9 +174,7 @@ around. `docs/wgsl_compiler.md` is the reference.
 
 - Geode computes **analytic dual-ray Slug coverage at 1 sample per pixel** — see the header
   comment of `donner/gpu/shader/programs/SlugFillSource.h` and design doc
-  `docs/design_docs/0041-geode_analytical_aa.md`. `GeodeDevice::sampleCount()` returns `1`.
-  Some `sampleCount = 4` defaults and MSAA plumbing remain in `GeodePipeline.h` / `GeoEncoder.cc`
-  signatures; they are inactive at runtime because everything reads `device.sampleCount()`.
+  `docs/design_docs/0041-geode_analytical_aa.md`. Render targets are single-sampled.
 - The comparison harness (`donner/svg/renderer/tests/ImageComparisonTestFixture.cc`,
   `ActiveComparisonModes()`) runs two modes in Geode builds: `TinyGolden` and `GeodeGolden`. The
   old `GeodeTinyParity` (geode-pixels-vs-tiny-pixels) mode is **retired**: analytic coverage
@@ -202,7 +203,7 @@ around. `docs/wgsl_compiler.md` is the reference.
 
 | Signature                                                                            | Meaning / next step                                                                                                                                      |
 | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `[Geode/wgpu-native] Uncaptured error (type=N): ...` in test log                     | A WebGPU validation or device error; the message names the bad resource/op. Fix the descriptor, don't retry.                                             |
+| `[Geode/wgpu-native] Uncaptured error (type=N): ...` in the Linux wgpu reference log | A WebGPU validation or device error in the test-only oracle; the message names the bad resource/op. Fix the descriptor, don't retry.                     |
 | Test hangs, killed at 900 s under llvmpipe                                           | Driver hang: per-frame pipeline creation (section 2), fresh device per test (section 3), or Intel Arc hardware path (section 4). Not "llvmpipe is slow". |
 | Banned-pattern `*_lint` test fails: "wgpu pipeline construction outside GeodeDevice" | You called `createRenderPipeline`/`createComputePipeline` outside the allowlist. Move ownership into `GeodeDevice::Impl` (section 2).                    |
 | Geode target reports `@platforms//:incompatible` / is silently skipped               | Built without `enable_geode=true`. Use `--config=geode`, or run via the `donner_multi_transitioned_test` wrapper which sets it for you.                  |
@@ -222,12 +223,9 @@ around. `docs/wgsl_compiler.md` is the reference.
 
 ## 8. Embedding Geode in a host app
 
-For host-owned device/queue/target-texture integration (`GeodeEmbedConfig`,
-`GeodeDevice::CreateFromExternal`), follow `docs/guides/embedding_geode.md` — do not duplicate it.
-Working reference code: `examples/geode_embed.cc` (+ `examples/geode_embed_surface_*.{cc,mm}`) and
-`donner/svg/renderer/geode/tests/GeodeEmbed_tests.cc`. Note the guide's claim that
-`--config=geode` sets `enable_dawn` is stale — the flag is
-`--//donner/svg/renderer/geode:enable_geode=true` (verify in `.bazelrc`).
+For a native host window (a root selected for the window, `GeodeDevice::CreateOverSelectedRoot`,
+and a runtime surface), follow `docs/guides/embedding_geode.md`; do not duplicate it. Working
+reference code: `examples/geode_embed.cc` (+ `examples/geode_embed_surface_*.{cc,mm}`).
 
 ## 9. Where to go deeper
 

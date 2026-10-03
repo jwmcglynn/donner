@@ -102,13 +102,13 @@ void DestroyPooledReadbackBuffer(gpu::Device* device, gpu::Buffer& buffer) {
   (void)destroyed;  // A pooled buffer is always live; a stale handle is already gone.
 }
 
-struct NativeQueueIdleWait {
+struct QueueIdleWait {
   GpuWaitResult result;
   std::chrono::milliseconds elapsed;
 };
 
-/// Waits for this context's last native submission, retaining the measured wait on timeout.
-NativeQueueIdleWait WaitForNativeQueueIdle(gpu::Device& device, std::chrono::milliseconds timeout) {
+/// Waits for this context's last submission, retaining the measured wait on timeout.
+QueueIdleWait WaitForLastSubmittedSerial(gpu::Device& device, std::chrono::milliseconds timeout) {
   const auto start = std::chrono::steady_clock::now();
   if (device.waitForSerial(device.lastSubmittedSerial(),
                            std::chrono::duration<double>(timeout).count())) {
@@ -133,9 +133,6 @@ struct GeodeDevice::Impl {
       DestroyPooledReadbackBuffer(runtimeDevice, entry.resources.readback);
     }
   }
-
-  // Borrowed wgpu aliases of the shared bind-slot resources below, for the call sites that
-  // still build wgpu bind groups. Non-owning: the runtime handles own the backing.
 
   // Declared ABOVE the pipelines: the pipeline classes hold donner::gpu RAII handles whose
   // destructors release through the runtime device, so it must destruct after them
@@ -168,8 +165,8 @@ struct GeodeDevice::Impl {
   // Shared render / compute pipelines. Constructed once per GeodeDevice
   // in `initSharedPipelines` - see the public `pipeline()` / ... / `filterEngine()`
   // accessors on GeodeDevice for the "why" behind sharing. These fields
-  // are at the bottom of Impl so they destruct before the wgpu::Device
-  // at the top of GeodeDevice (reverse-declaration order).
+  // are at the bottom of Impl so they destruct before the runtime device
+  // they release their handles through (reverse-declaration order).
   std::unique_ptr<GeodePipeline> pipeline;
   /// Built lazily on first `checkerboardPipeline()` access - see the header.
   std::unique_ptr<GeodeCheckerboardPipeline> checkerboardPipeline;
@@ -245,22 +242,12 @@ private:
 };
 
 GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevice,
-                         gpu::Device& runtimeDevice, GeodeWgpuAdapterDevice* transitionalAdapter,
+                         gpu::Device& runtimeDevice,
                          std::unique_ptr<gpu::Device> ownedRuntimeDevice)
     : physicalDevice_(std::move(physicalDevice)),
       impl_(std::make_unique<Impl>()),
       deviceId_(g_nextDeviceId.fetch_add(1, std::memory_order_relaxed) + 1) {
   UTILS_RELEASE_ASSERT(physicalDevice_ != nullptr);
-  // The adapter view is recorded where the device is built, so it names this very device and
-  // exists exactly when the root selected the transitional adapter.
-  UTILS_RELEASE_ASSERT(
-      (transitionalAdapter != nullptr) ==
-      (physicalDevice_->root().capabilities().backend == GpuBackendKind::TransitionalWgpu));
-#ifdef DONNER_GEODE_WGPU_REFERENCE
-  UTILS_RELEASE_ASSERT(transitionalAdapter == nullptr ||
-                       (static_cast<gpu::Device*>(transitionalAdapter) == &runtimeDevice &&
-                        &transitionalAdapter->root() == &physicalDevice_->root()));
-#endif
   // A context rendering through the owner's root device retires into the owner's retirement,
   // which lives as long as that device does; one with a device of its own has its own.
   handleRetirement_ = ownedRuntimeDevice != nullptr
@@ -268,7 +255,6 @@ GeodeDevice::GeodeDevice(std::shared_ptr<GeodePhysicalDeviceOwner> physicalDevic
                           : physicalDevice_->rootDeviceHandleRetirement();
   ownedRuntimeDevice_ = std::move(ownedRuntimeDevice);
   runtimeDevice_ = &runtimeDevice;
-  transitionalAdapter_ = transitionalAdapter;
   impl_->runtimeDevice = &runtimeDevice;
   impl_->runtimeDeviceId = runtimeDevice.deviceId();
   // Allocations and submissions this context makes through the runtime are counted against it,
@@ -288,14 +274,8 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateLogicalContext(
     return nullptr;
   }
   gpu::Device& borrowed = *runtimeDevice.device;
-  GeodeWgpuAdapterDevice* const transitionalAdapter =
-#if defined(DONNER_GEODE_WGPU_REFERENCE) || defined(DONNER_GEODE_BROWSER_BACKEND)
-      runtimeDevice.transitionalAdapter;
-#else
-      nullptr;
-#endif
-  return std::unique_ptr<GeodeDevice>(new GeodeDevice(
-      std::move(physicalDevice), borrowed, transitionalAdapter, std::move(runtimeDevice.device)));
+  return std::unique_ptr<GeodeDevice>(
+      new GeodeDevice(std::move(physicalDevice), borrowed, std::move(runtimeDevice.device)));
 }
 
 GeodeDevice::SnapshotCaptureLease::~SnapshotCaptureLease() {
@@ -323,9 +303,8 @@ GeodeDevice::~GeodeDevice() {
   // between; anything retired later stays in the retirement until it is destroyed, which is after
   // the device (see handleRetirement_).
   handleRetirement_->close();
-  // Release all resources that were created from the device before releasing the
-  // root queue/device/adapter/instance handles. `webgpu.hpp` handles are raw
-  // wrappers: their destructors do not release native references.
+  // Release every resource created through the runtime device before that device and the
+  // selected root it drives.
   //
   // Every teardown wait is bounded. Once the device is lost (driver-reported
   // or a wait deadline expired), all further GPU waits are skipped: waiting
@@ -386,47 +365,14 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
   if (!physicalDevice_->root().hasBackendDevice()) {
     return GpuWaitResult::Complete;
   }
-  if (transitionalAdapter_ == nullptr) {
-    // A native backend reports completion from its own submissions rather than through a poll of
-    // the backend device, so the queue is idle exactly when the last submission has retired.
-    const NativeQueueIdleWait wait = WaitForNativeQueueIdle(*runtimeDevice_, timeout);
-    if (wait.result == GpuWaitResult::TimedOut) {
-      markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle, wait.elapsed,
-                                     "GPU queue did not go idle within the bounded wait deadline");
-    }
-    return wait.result;
-  }
-#if defined(DONNER_GEODE_WGPU_REFERENCE) || defined(__EMSCRIPTEN__)
-#if defined(__EMSCRIPTEN__) && !defined(DONNER_GEODE_BROWSER_BACKEND)
-  // emdawnwebgpu's poll yields the Asyncify thread for one browser task and
-  // its return value does not report queue-idle, so a drain loop keyed on it
-  // could spin for the full timeout every call. Keep the single poll-yield
-  // this path always performed; browser device hangs surface through the
-  // readback map deadline instead.
-  (void)timeout;
-  transitionalAdapter_->pollSuspending(true);
-  return GpuWaitResult::Complete;
-#elif !defined(__EMSCRIPTEN__)
-  const auto queueWaitStart = std::chrono::steady_clock::now();
-  const GpuWaitResult result =
-      BoundedGpuWait([this] { return transitionalAdapter_->pollSuspending(false); }, timeout);
-  if (result == GpuWaitResult::TimedOut) {
-    // Report the wait that actually ran, not the budget it was given: the
-    // budget is a constant the reader already knows, while the measurement
-    // says whether the deadline was reached on schedule or the loop itself
-    // overran under load.
-    markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle,
-                                   std::chrono::duration_cast<std::chrono::milliseconds>(
-                                       std::chrono::steady_clock::now() - queueWaitStart),
+  // Every runtime device reports completion from its own submissions, so the queue is idle for
+  // this context exactly when its last submission has retired.
+  const QueueIdleWait wait = WaitForLastSubmittedSerial(*runtimeDevice_, timeout);
+  if (wait.result == GpuWaitResult::TimedOut) {
+    markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle, wait.elapsed,
                                    "GPU queue did not go idle within the bounded wait deadline");
   }
-  return result;
-#else
-  UTILS_UNREACHABLE();
-#endif
-#else
-  UTILS_UNREACHABLE();
-#endif
+  return wait.result;
 }
 
 void GeodeDevice::recordReadback(bool usedTimedWaitAny, int pollIterations) {
@@ -654,10 +600,6 @@ int GeodeDevice::headlessCreationCountForTesting() {
   return gHeadlessCreationCount.load(std::memory_order_relaxed);
 }
 
-std::size_t GeodeDevice::outstandingDeviceLostCallbacksForTesting() {
-  return OutstandingDeviceLostCallbacks();
-}
-
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(gpu::TextureFormat textureFormat) {
   gHeadlessCreationCount.fetch_add(1, std::memory_order_relaxed);
 
@@ -683,12 +625,6 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateOverSelectedRoot(std::shared_ptr
     return nullptr;
   }
   gpu::Device& borrowed = *rootDevice.device;
-  GeodeWgpuAdapterDevice* const transitionalAdapter =
-#if defined(DONNER_GEODE_WGPU_REFERENCE) || defined(DONNER_GEODE_BROWSER_BACKEND)
-      rootDevice.transitionalAdapter;
-#else
-      nullptr;
-#endif
   std::shared_ptr<GeodePhysicalDeviceOwner> owner =
       GeodePhysicalDeviceOwner::Create(std::move(root), std::move(rootDevice));
   if (owner == nullptr) {
@@ -697,8 +633,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateOverSelectedRoot(std::shared_ptr
 
   // The context created together with its owner renders through the owner's root device rather
   // than standing up a second one; later contexts over the same root get their own.
-  auto result = std::unique_ptr<GeodeDevice>(
-      new GeodeDevice(std::move(owner), borrowed, transitionalAdapter, nullptr));
+  auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice(std::move(owner), borrowed, nullptr));
   result->textureFormat_ = textureFormat;
   result->initSharedPipelines();
   return result;
@@ -742,18 +677,6 @@ gpu::Device& GeodeDevice::runtimeDevice() const {
   return *runtimeDevice_;
 }
 
-#ifdef DONNER_GEODE_WGPU_REFERENCE
-bool GeodeDevice::hasTransitionalAdapter() const {
-  return transitionalAdapter_ != nullptr;
-}
-
-GeodeWgpuAdapterDevice& GeodeDevice::adapterDevice() const {
-  UTILS_RELEASE_ASSERT_MSG(transitionalAdapter_ != nullptr,
-                           "GeodeDevice::adapterDevice: context renders through a native backend");
-  return *transitionalAdapter_;
-}
-#endif
-
 GeodeFilterEngine& GeodeDevice::filterEngine() const {
   return *impl_->filterEngine;
 }
@@ -781,7 +704,7 @@ SnapshotReadbackResources GeodeDevice::acquireSnapshotReadbackResources(uint32_t
 
   // First use at this size: allocate the staging texture, its view, and the
   // map-readable readback buffer. Bytes-per-row must be 256-aligned per the
-  // WebGPU texture-to-buffer copy rules.
+  // runtime's texture-to-buffer copy rules.
   SnapshotReadbackResources resources;
   resources.width = width;
   resources.height = height;

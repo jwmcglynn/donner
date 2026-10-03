@@ -31,14 +31,23 @@ std::string_view ProcessBackendRequest() {
   return value != nullptr ? std::string_view(value) : std::string_view();
 }
 
-GpuBackendKind PlatformDefaultGpuBackendKind() {
+/// The native backend this platform's unconstrained roots select, or none on a platform without a
+/// native backend.
+std::optional<GpuBackendKind> PlatformDefaultGpuBackendKind() {
 #if defined(__APPLE__)
   return GpuBackendKind::NativeMetal;
 #elif defined(__linux__)
   return GpuBackendKind::NativeVulkan;
 #else
-  return GpuBackendKind::TransitionalWgpu;
+  return std::nullopt;
 #endif
+}
+
+/// Why a selection that names no backend has none on this platform. Typed as unsupported so
+/// \ref SelectGpuRoot can refuse it without halting: nothing asked for a backend it failed to
+/// serve.
+gpu::GpuError NoPlatformDefaultBackend() {
+  return gpu::GpuError{gpu::GpuErrorType::Unsupported, "this platform has no native GPU backend"};
 }
 
 enum class BackendRequestSource : uint8_t { Caller, Environment, BuildSetting, Default };
@@ -50,12 +59,12 @@ struct ResolvedBackend {
 
 gpu::Result<GpuBackendKind> ParseBackendRequest(std::string_view request) {
   if (request.empty()) {
-    return PlatformDefaultGpuBackendKind();
+    if (const std::optional<GpuBackendKind> platformDefault = PlatformDefaultGpuBackendKind()) {
+      return *platformDefault;
+    }
+    return NoPlatformDefaultBackend();
   }
   using namespace std::string_view_literals;
-  if (StringUtils::EqualsLowercase(request, "wgpu"sv)) {
-    return GpuBackendKind::TransitionalWgpu;
-  }
   if (StringUtils::EqualsLowercase(request, "metal"sv)) {
     return GpuBackendKind::NativeMetal;
   }
@@ -64,25 +73,32 @@ gpu::Result<GpuBackendKind> ParseBackendRequest(std::string_view request) {
   }
   return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor,
                        std::format("DONNER_GPU_BACKEND={} names no GPU backend; accepted values: "
-                                   "wgpu, metal, vulkan",
+                                   "metal, vulkan",
                                    request)};
 }
 
 gpu::Result<ResolvedBackend> ResolveBackend(const GpuRootSelection& options,
                                             std::string_view request,
                                             std::optional<GpuBackendKind> buildDefault) {
-  ResolvedBackend resolved{PlatformDefaultGpuBackendKind(), BackendRequestSource::Default};
+  std::optional<ResolvedBackend> named;
   if (options.backend.has_value()) {
-    resolved = {*options.backend, BackendRequestSource::Caller};
+    named = ResolvedBackend{*options.backend, BackendRequestSource::Caller};
   } else if (!request.empty()) {
     gpu::Result<GpuBackendKind> requested = ParseBackendRequest(request);
     if (requested.hasError()) {
       return std::move(requested).error();
     }
-    resolved = {requested.result(), BackendRequestSource::Environment};
+    named = ResolvedBackend{requested.result(), BackendRequestSource::Environment};
   } else if (buildDefault.has_value()) {
-    resolved = {*buildDefault, BackendRequestSource::BuildSetting};
+    named = ResolvedBackend{*buildDefault, BackendRequestSource::BuildSetting};
+  } else if (const std::optional<GpuBackendKind> platformDefault =
+                 PlatformDefaultGpuBackendKind()) {
+    named = ResolvedBackend{*platformDefault, BackendRequestSource::Default};
   }
+  if (!named.has_value()) {
+    return NoPlatformDefaultBackend();
+  }
+  const ResolvedBackend resolved = *named;
   if (options.requireVulkanPresentation && resolved.kind != GpuBackendKind::NativeVulkan) {
     return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor,
                          std::format("Vulkan presentation requested, but the {} backend resolved",
@@ -197,7 +213,6 @@ bool GeodeGpuRoot::hasBackendDevice() const {
 
 std::string_view GpuBackendKindName(GpuBackendKind kind) {
   switch (kind) {
-    case GpuBackendKind::TransitionalWgpu: return "transitional wgpu adapter";
     case GpuBackendKind::NativeMetal: return "native Metal";
     case GpuBackendKind::NativeVulkan: return "native Vulkan";
     case GpuBackendKind::Browser: return "browser";
@@ -232,11 +247,15 @@ std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
   gpu::Result<ResolvedBackend> resolved =
       ResolveBackend(options, request, BuildDefaultGpuBackendKind());
   if (resolved.hasError()) {
+    if (resolved.error().type == gpu::GpuErrorType::Unsupported) {
+      std::fprintf(stderr, "[Geode] %s.\n", resolved.error().message.c_str());
+      return nullptr;
+    }
     HaltOnUnservableBackendRequest(resolved.error().message);
   }
   const GpuBackendKind kind = resolved.result().kind;
   const BackendRequestSource source = resolved.result().source;
-  if (kind == GpuBackendKind::TransitionalWgpu || kind == GpuBackendKind::Browser) {
+  if (kind == GpuBackendKind::Browser) {
     if (source == BackendRequestSource::Environment) {
       HaltOnUnservableBackendRequest(
           std::format("DONNER_GPU_BACKEND={} is unavailable in this native build", request));
@@ -295,13 +314,6 @@ GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
 #endif
   }
   return {};
-}
-
-std::size_t OutstandingSelectionInstances() {
-  return 0;
-}
-std::size_t OutstandingDeviceLostCallbacks() {
-  return 0;
 }
 
 }  // namespace donner::geode

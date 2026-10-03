@@ -27,16 +27,16 @@ namespace donner::geode {
  * wrap around; they are `uint64_t` and monotonic within a frame.
  */
 struct GeodeCounters {
-  /// `wgpu::Device::createBuffer` calls. Steady-state target with the
+  /// `gpu::Device::createBuffer` calls. Steady-state target with the
   /// cross-frame buffer pool: `== 0` on an unchanged-geometry frame.
   uint64_t bufferCreates = 0;
 
-  /// `wgpu::Device::createBindGroup` calls. Steady-state target:
+  /// `gpu::Device::createBindGroup` calls. Steady-state target:
   /// `<= number_of_pipelines` per frame (one bind group per pipeline
   /// layout, dynamic offsets for per-draw uniforms).
   uint64_t bindgroupCreates = 0;
 
-  /// `wgpu::Device::createTexture` calls (render targets, layer /
+  /// `gpu::Device::createTexture` calls (render targets, layer /
   /// filter / mask scratch, blend snapshots). Steady-state target with
   /// render-target reuse and the transient texture pool: `== 0` on
   /// repeat-render at the same size.
@@ -53,7 +53,7 @@ struct GeodeCounters {
   /// Masks retired without a matching pop at a frame boundary.
   uint64_t unclosedMaskScopes = 0;
 
-  /// `wgpu::Queue::submit` calls. Steady-state target with the frame's command
+  /// `gpu::Device::submit` calls. Steady-state target with the frame's command
   /// buffers submitted together: `== 1` per frame regardless of layer / filter /
   /// mask push depth. A frame that reaches the most command buffers one
   /// submission carries, or that a memory-limited filter budget forces to submit
@@ -73,14 +73,14 @@ struct GeodeCounters {
   /// geometry frame (the `GeodePathCacheComponent` serves all paths).
   uint64_t pathEncodes = 0;
 
-  /// `wgpu::RenderPassEncoder::draw` / `drawIndexed` calls. One per
+  /// `gpu::RenderPassEncoder::draw` / `drawIndexed` calls. One per
   /// submitted draw call, regardless of instance count. Used to gate
   /// `<use>` instancing: same-source-entity `<use>` draws collapse to a
   /// single instanced call, so heavy `<use>` fixtures should drop
   /// proportionally.
   uint64_t drawCalls = 0;
 
-  /// `wgpu::RenderPassEncoder::setPipeline` calls that actually
+  /// `gpu::RenderPassEncoder::setPipeline` calls that actually
   /// switched the bound pipeline (the GeoEncoder state tracker
   /// deduplicates no-op binds). Gates the "sort / collapse contiguous
   /// same-pipeline draws" work: on a pure-solid fixture
@@ -101,7 +101,7 @@ struct GeodeCounters {
   /// will collapse into one GPU draw call per group.
   uint64_t sameSourceDrawPairs = 0;
 
-  /// `wgpu::Queue::writeBuffer` calls. Together with `bufferWriteBytes`
+  /// `gpu::Device::writeBuffer` calls. Together with `bufferWriteBytes`
   /// this measures the CPU -> GPU buffer-upload traffic of a frame.
   /// Steady-state today: one write per arena region per draw (vertex,
   /// bands, curves, vBands, vCurves, hGrid, vGrid, uniforms), because
@@ -109,13 +109,13 @@ struct GeodeCounters {
   /// re-uploaded every frame.
   uint64_t bufferWrites = 0;
 
-  /// Total payload bytes passed to `wgpu::Queue::writeBuffer`. The
+  /// Total payload bytes passed to `gpu::Device::writeBuffer`. The
   /// per-frame GPU transfer volume for buffer data. An unchanged-
   /// geometry frame should converge toward 0 once encoded path data
   /// gains persistent GPU residence.
   uint64_t bufferWriteBytes = 0;
 
-  /// Total payload bytes passed to `wgpu::Queue::writeTexture` (image
+  /// Total payload bytes passed to `gpu::Device::writeTexture` (image
   /// decode uploads, gradient ramps, filter LUTs, dummy textures).
   /// Steady-state target: 0 on an unchanged frame (texture uploads are
   /// already cached; this counter verifies that claim).

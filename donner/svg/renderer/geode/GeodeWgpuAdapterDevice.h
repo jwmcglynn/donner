@@ -282,10 +282,6 @@ std::shared_ptr<GeodeGpuRoot> AdoptNativeVulkanRoot(
 struct GeodeRuntimeDevice {
   /// The device, or null when none could be opened.
   std::unique_ptr<gpu::Device> device;
-  /// \ref device named as the transitional adapter when the root selected that backend, and null
-  /// on a native backend. Recorded where the device is built, so no caller converts a runtime
-  /// device back to a concrete type it cannot check.
-  GeodeWgpuAdapterDevice* transitionalAdapter = nullptr;
 };
 
 /**
