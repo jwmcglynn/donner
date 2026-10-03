@@ -506,7 +506,8 @@ bool GlTextureCache::uploadCompositedOverview(const RenderResult::CompositedPrev
   commitTileSet(std::move(*prepared), overviewTileTextures_, overviewTiles_);
   overviewRasterDocumentRect_ = rasterViewport.documentRect;
   overviewOutputSizePx_ = rasterViewport.outputSizePx;
-  const auto activeCapture = presentationResources_ ? presentationResources_->capture() : capture;
+  const auto activeCapture =
+      presentationResources_ && !tiles_.empty() ? presentationResources_->capture() : capture;
   publishResources(activeCapture, std::move(capture));
   lastCompositedUploadCost_.uploadMs = MillisecondsSince(uploadStart);
   return true;

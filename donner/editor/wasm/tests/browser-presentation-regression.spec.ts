@@ -2784,6 +2784,16 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
       )
       .toBe(true);
   } catch (error) {
+    const state = await boundFailureDiagnostic(page.evaluate(() => ({
+      overlay: window.__donnerOverlayStats,
+      queue: window.__donnerPresentationQueueStats,
+      host: window.__donnerHostFrameTiming,
+      interaction: window.__donnerInteractionStats,
+      worker: window.__donnerWorkerStats,
+      repair: (window as unknown as { __donnerPresentationRepairStats?: unknown }).__donnerPresentationRepairStats,
+    })), scaledMs(1000));
+    await attachEvidenceFile("compositor-overlay-presentation-state", Buffer.from(JSON.stringify(state)),
+                             "application/json");
     if (lastCompositorShot !== null) {
       await attachEvidenceFile(
         "compositor-tile-overlay-last-probe",

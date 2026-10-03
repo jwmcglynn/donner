@@ -1668,7 +1668,7 @@ TEST(RenderCoordinatorTest, RejectedCaptureHasBoundedRetriesWithoutConfiguration
   result.documentGeneration = app.document().documentGeneration();
   result.version = app.document().currentFrameVersion();
   result.rasterViewport = MakeViewport(app).rasterViewport();
-  result.compositedPreview.emplace();
+  result.compositedPreview = RenderResult::CompositedPreview{};
   for (const auto delay : NothingToPresentRetry::kRetryDelays) {
     EXPECT_FALSE(
         RenderCoordinatorTestAccess::rejectPreparedResult(coordinator, result, app, textures));
@@ -1816,7 +1816,7 @@ TEST(RenderCoordinatorTest, UnpairedBoundedResultCannotReplaceCompleteCommittedS
   result.version = app.document().currentFrameVersion();
   result.capturedPresentation = current;
   result.rasterViewport.viewportBounded = true;
-  result.compositedPreview.emplace();
+  result.compositedPreview = RenderResult::CompositedPreview{};
   result.compositedPreview->representedDragPreview =
       RenderRequest::DragPreview{.entity = QuerySelector(app, "#r1").unsafeEntityHandle().entity(),
                                  .interactionKind = svg::compositor::InteractionHint::ActiveDrag};
