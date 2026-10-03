@@ -179,6 +179,16 @@ declare global {
     };
     __donnerViewportStats?: ViewportStats;
     __donnerEditorFrameRequested?: boolean;
+    __donnerPresentationQueueStats?: {
+      completedSerial: number;
+      submittedSerial: number;
+      framesInFlight: number;
+      coalescedFrames: number;
+      frameId: number;
+      captureId: number;
+    };
+    __donnerWgpuReadbackLastStartedRequest?: number;
+    __donnerWgpuReadbackLastFailedRequest?: number;
   }
 }
 
@@ -3001,6 +3011,56 @@ test("failure-only WebGPU readback makes no request on a visible Basic Shapes lo
     failures: 0,
   });
   expect(failures).toEqual([]);
+});
+
+test("coalesced UI frames do not consume diagnostic capture retries", async ({ page }) => {
+  const failures = await openEditor(page, false, true);
+  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+  await page.evaluate(() => { window.__donnerEditorFrameRequested = true; });
+  await expect.poll(async () => (await readSurfaceFrameProbe(page)).frames).toBeGreaterThan(0);
+  const owner = await findCanvasOwnerWorker(page);
+  expect(owner).not.toBeNull();
+  if (owner === null) return;
+  const hold = await holdCanvasCompletionForTest(page, [owner]);
+  const wakeFrame = async () => {
+    const before = await page.evaluate(() => {
+      window.__donnerEditorFrameRequested = true;
+      return window.__donnerMainLoopRenderedFrames ?? 0;
+    });
+    await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
+      timeout: scaledMs(1000), intervals: [16, 25, 50],
+    }).toBeGreaterThan(before);
+  };
+  try {
+    for (let i = 0; i < 3; ++i) await wakeFrame();
+    await expect.poll(() => page.evaluate(() => window.__donnerPresentationQueueStats?.framesInFlight), {
+      timeout: scaledMs(1000), intervals: [16, 25, 50],
+    }).toBe(3);
+    const beforeFailures = await page.evaluate(() => window.__donnerWgpuReadbackCaptureFailures ?? 0);
+    const request = await page.evaluate(() => window.__donnerRequestWgpuReadback?.() ?? 0);
+    expect(request).toBeGreaterThan(0);
+    for (let i = 0; i < 4; ++i) await wakeFrame();
+    const deferred = await page.evaluate(() => ({
+      completed: window.__donnerWgpuReadbackCompleted ?? 0,
+      failed: window.__donnerWgpuReadbackCaptureFailures ?? 0,
+      started: window.__donnerWgpuReadbackCaptureStarts ?? 0,
+      queue: window.__donnerPresentationQueueStats,
+    }));
+    await attachEvidenceFile("coalesced-capture-state", Buffer.from(JSON.stringify(deferred, null, 2)),
+                             "application/json");
+    expect(deferred.queue?.framesInFlight).toBe(3);
+    expect(deferred.queue?.coalescedFrames ?? 0).toBeGreaterThan(0);
+    expect(deferred.failed, JSON.stringify(deferred)).toBe(beforeFailures);
+    expect(deferred.completed).toBeLessThan(request);
+    await hold.release(owner);
+    await expect.poll(() => page.evaluate(() => window.__donnerWgpuReadbackStats?.request ?? 0), {
+      timeout: scaledMs(5000), intervals: [16, 25, 50, 100],
+    }).toBeGreaterThanOrEqual(request);
+    expect(await page.evaluate(() => window.__donnerWgpuReadbackCaptureFailures ?? 0)).toBe(beforeFailures);
+    expect(failures).toEqual([]);
+  } finally {
+    await hold.release(owner);
+  }
 });
 
 test("canvas GPU completion gate waits after the CPU host frame advances", async ({ page }) => {
