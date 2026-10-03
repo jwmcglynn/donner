@@ -663,12 +663,14 @@ acceptance gate.
 - [x] Select the browser runtime for the served and shipped editor package. The editor transition
       and `--config=editor-wasm` select Browser; configured audits check both roots. Production
       Chromium boot, pixels, presentation and catalog lanes pass.
-- [x] Remove the C WebGPU wrapper from the browser-selected WebAssembly production path. The editor
-      and default Geode renderer module select Browser; their configured dependency and linker-input
-      audits pass without `emdawnwebgpu` or `webgpu-cpp`. The actual Wasm link actions name only
-      `library_donner_gpu.js` among GPU JavaScript libraries. Negative fixtures in
-      `//build_defs:configured_link_input_audit_negative_tests` prove that a forbidden linker input
-      or option fails the audit. The compiled WGSL projections remain trusted build input.
+- [x] Remove the C WebGPU wrapper from WebAssembly. The vendored emdawnwebgpu package, its
+      JavaScript glue and the Emscripten wrapper stub are deleted. The editor and standalone Geode
+      modules link only `library_donner_gpu.js` among GPU JavaScript libraries, and a WebAssembly
+      configuration that does not select Browser makes them incompatible instead of linking another
+      GPU library. Their configured dependency and linker-input audits still reject `webgpu-cpp`;
+      negative fixtures in `//build_defs:configured_link_input_audit_negative_tests` prove that a
+      forbidden linker input or option fails the audit. The compiled WGSL projections remain
+      trusted build input.
 - [ ] Qualify the complete browser editor path on Chromium, WebKit and the agreed physical iOS
       matrix. The Linux resvg test reference retains its separately isolated, test-only
       WebGPU-C++ API wrapper; native production dependency removal remains a separate gate.
