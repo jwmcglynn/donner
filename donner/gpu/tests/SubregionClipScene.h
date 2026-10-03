@@ -14,10 +14,10 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
-#include "donner/gpu/tests/ReflectedComputeSlice.h"
+#include "donner/gpu/tests/ReflectedComputePipeline.h"
 
 namespace donner::gpu::tests {
-namespace subregion_clip_slice {
+namespace subregion_clip_scene {
 inline constexpr uint32_t kWidth = 9, kHeight = 7, kRowBytes = 256;
 using Texel = std::array<float, 4>;
 
@@ -93,15 +93,15 @@ inline std::vector<uint8_t> Upload() {
   }
   return bytes;
 }
-}  // namespace subregion_clip_slice
+}  // namespace subregion_clip_scene
 
 /// Dispatches one clip through reflected bindings; kept texels copy exactly, others become zero.
 /// @param device Native device. @param shader Selected or mutation artifact.
 /// @param readbackBuffer Bounded backend readback. @param testCase Transform under test.
 template <class DeviceType, class Readback>
 void CheckSubregionClip(DeviceType& device, const shader::CompiledShaderView& shader,
-                        Readback readbackBuffer, subregion_clip_slice::Case testCase) {
-  using namespace subregion_clip_slice;
+                        Readback readbackBuffer, subregion_clip_scene::Case testCase) {
+  using namespace subregion_clip_scene;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "subregion clip", compute);
   if (testing::Test::HasFatalFailure()) {

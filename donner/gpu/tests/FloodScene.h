@@ -12,13 +12,13 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
-#include "donner/gpu/tests/ReflectedComputeSlice.h"
+#include "donner/gpu/tests/ReflectedComputePipeline.h"
 
 namespace donner::gpu::tests {
-namespace flood_slice {
+namespace flood_scene {
 inline constexpr uint32_t kWidth = 13, kHeight = 5, kRowBytes = 256;
 inline constexpr std::array<float, 4> kColor{0.125f, 0.25f, 0.375f, 0.5f};
-}  // namespace flood_slice
+}  // namespace flood_scene
 
 /// Floods a 13x5 float texture and checks every texel bit-exactly. The extent is not a multiple of
 /// either workgroup shape, so the edge invocations must return without writing out of bounds while
@@ -28,7 +28,7 @@ inline constexpr std::array<float, 4> kColor{0.125f, 0.25f, 0.375f, 0.5f};
 template <class DeviceType, class Readback>
 void CheckFlood(DeviceType& device, const shader::CompiledShaderView& shader,
                 Readback readbackBuffer) {
-  using namespace flood_slice;
+  using namespace flood_scene;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "flood", compute);
   if (testing::Test::HasFatalFailure()) {

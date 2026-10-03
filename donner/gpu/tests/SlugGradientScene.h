@@ -4,11 +4,11 @@
 #include <optional>
 
 #include "donner/gpu/shader/programs/SlugGradient.h"
-#include "donner/gpu/tests/SlugMaskSlice.h"
+#include "donner/gpu/tests/SlugMaskScene.h"
 #include "tiny_skia/filter/FloatPixmap.h"
 
 namespace donner::gpu::tests {
-namespace slug_gradient_slice {
+namespace slug_gradient_scene {
 inline constexpr uint32_t kWidth = 8, kHeight = 8, kRowBytes = 256;
 enum class Case {
   Linear,
@@ -50,14 +50,14 @@ inline std::vector<Stop> Stops(Case testCase) {
   }
   return result;
 }
-inline slug_mask_slice::Case GeometryCase(Case testCase) {
+inline slug_mask_scene::Case GeometryCase(Case testCase) {
   if (testCase == Case::EvenOdd) {
-    return slug_mask_slice::Case::DoubleEvenOdd;
+    return slug_mask_scene::Case::DoubleEvenOdd;
   }
   if (testCase == Case::DeclaredRange) {
-    return slug_mask_slice::Case::DeclaredRange;
+    return slug_mask_scene::Case::DeclaredRange;
   }
-  return testCase == Case::Binary ? slug_mask_slice::Case::Binary : slug_mask_slice::Case::Analytic;
+  return testCase == Case::Binary ? slug_mask_scene::Case::Binary : slug_mask_scene::Case::Analytic;
 }
 inline void ConfigureRadial(shader::programs::SlugGradientParams& p, Case testCase) {
   p.gradientKind = testCase >= Case::Radial && testCase <= Case::ZeroRadius;
@@ -98,7 +98,7 @@ inline void ConfigurePaint(shader::programs::SlugGradientParams& p, Case testCas
   ConfigureRadial(p, testCase);
 }
 inline shader::programs::SlugGradientParams Parameters(Case testCase) {
-  const auto geometry = slug_mask_slice::Parameters(GeometryCase(testCase));
+  const auto geometry = slug_mask_scene::Parameters(GeometryCase(testCase));
   shader::programs::SlugGradientParams p{};
   std::copy_n(geometry.mvp, 16, p.mvp);
   std::copy_n(geometry.pathFromPixel, 4, p.pathFromPixel);
@@ -236,7 +236,7 @@ inline std::vector<uint8_t> Expected(Case testCase) {
   const auto pixels = image.toPixmap();
   return {pixels.data().begin(), pixels.data().end()};
 }
-}  // namespace slug_gradient_slice
+}  // namespace slug_gradient_scene
 
 /// Renders the dedicated gradient program and checks every channel using the repository bitmap
 /// comparator.
@@ -244,8 +244,8 @@ inline std::vector<uint8_t> Expected(Case testCase) {
 /// @param readbackBuffer Backend's bounded buffer readback. @param testCase Reference case.
 template <typename DeviceType, typename Readback>
 void CheckSlugGradient(DeviceType& device, const shader::CompiledShaderView& shader,
-                       Readback readbackBuffer, slug_gradient_slice::Case testCase) {
-  using namespace slug_gradient_slice;
+                       Readback readbackBuffer, slug_gradient_scene::Case testCase) {
+  using namespace slug_gradient_scene;
   ASSERT_THAT(shader.entryPoints, testing::SizeIs(2));
   auto module = device.createShaderModule(
       shader::MakeShaderDescriptor(shader, device.shaderSourceKind(), "Slug gradient"));
@@ -293,12 +293,12 @@ void CheckSlugGradient(DeviceType& device, const shader::CompiledShaderView& sha
   std::vector<BindGroupEntry> entries;
   const auto params = Parameters(testCase);
   ASSERT_EQ(
-      slug_mask_slice::UploadBinding(device, shader, "uniforms",
+      slug_mask_scene::UploadBinding(device, shader, "uniforms",
                                      {reinterpret_cast<const uint8_t*>(&params), sizeof(params)},
                                      sizeof(params), buffers, entries),
       true);
   ASSERT_EQ(
-      slug_mask_slice::UploadGeometry(device, shader, GeometryCase(testCase), buffers, entries),
+      slug_mask_scene::UploadGeometry(device, shader, GeometryCase(testCase), buffers, entries),
       true);
   ASSERT_NE(shader.resource("clipMaskTexture"), nullptr);
   entries.push_back(

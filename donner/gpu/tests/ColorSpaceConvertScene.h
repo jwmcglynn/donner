@@ -14,10 +14,10 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
-#include "donner/gpu/tests/ReflectedComputeSlice.h"
+#include "donner/gpu/tests/ReflectedComputePipeline.h"
 
 namespace donner::gpu::tests {
-namespace color_space_convert_slice {
+namespace color_space_convert_scene {
 inline constexpr uint32_t kWidth = 7, kHeight = 5, kRowBytes = 256;
 using Texel = std::array<float, 4>;
 
@@ -65,7 +65,7 @@ inline std::vector<uint8_t> Upload() {
   }
   return bytes;
 }
-}  // namespace color_space_convert_slice
+}  // namespace color_space_convert_scene
 
 /// Dispatches one direction through reflected bindings and the shared table; compares exactly.
 /// @param device Native device. @param shader Selected or mutation artifact.
@@ -73,7 +73,7 @@ inline std::vector<uint8_t> Upload() {
 template <class DeviceType, class Readback>
 void CheckColorSpaceConvert(DeviceType& device, const shader::CompiledShaderView& shader,
                             Readback readbackBuffer, bool srgbToLinear) {
-  using namespace color_space_convert_slice;
+  using namespace color_space_convert_scene;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "color space convert", compute);
   if (testing::Test::HasFatalFailure()) {

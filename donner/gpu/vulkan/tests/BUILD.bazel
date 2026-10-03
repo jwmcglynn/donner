@@ -1,7 +1,7 @@
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
-# The Vulkan solid-fill vertical slice renders the shared baseline scene
+# The Vulkan solid-fill test renders the shared baseline scene
 # through donner::gpu + the emitted SPIR-V and compares it against an
 # independent in-process Geode render of the identical scene through native Vulkan
 # (the frozen-baseline pattern executed per-device, valid on software Vulkan
@@ -90,7 +90,7 @@ donner_cc_test(
         "//donner/gpu:baseline_scene",
         "//donner/gpu:checkerboard_pixel_tests",
         "//donner/gpu:submission_order_scene",
-        "//donner/gpu:vertex_input_slice",
+        "//donner/gpu:vertex_input_scene",
         "//donner/gpu/shader",
         "//donner/gpu/shader:checkerboard_test_artifact",
         "//donner/gpu/shader:module_interface",
@@ -128,15 +128,15 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
-# The Vulkan compute vertical slice: dispatches the color-matrix kernel
+# The Vulkan compute test: dispatches the color-matrix kernel
 # emitted from the shader IR and compares the destination texels against the
-# host result. Unlike the solid-fill slice this half needs no wgpu comparison,
+# host result. Unlike the solid-fill test this half needs no wgpu comparison,
 # so it is a plain Linux-gated test with no geode transition. A missing driver
 # is a red test wherever DONNER_REQUIRE_VULKAN=1 is set.
 #
-# No driver is pinned here, deliberately. The solid-fill slice pins the
+# No driver is pinned here, deliberately. The solid-fill test pins the
 # software implementation because it compares two GPU pipelines against each
-# other and needs both halves on one rasterizer. This slice compares against a
+# other and needs both halves on one rasterizer. This test compares against a
 # result computed on the host, and its scene is chosen so every value is exact
 # in 8-bit unorm, so there is no cross-driver quantization freedom to control
 # for - running on whatever driver the host exposes covers the real hardware
@@ -158,34 +158,34 @@ donner_cc_test(
     target_compatible_with = ["@platforms//os:linux"],
     deps = [
         "//donner/gpu",
-        "//donner/gpu:blur_slice",
-        "//donner/gpu:color_matrix_slice",
-        "//donner/gpu:color_space_convert_slice",
-        "//donner/gpu:component_transfer_slice",
-        "//donner/gpu:composite_slice",
-        "//donner/gpu:convolve_matrix_slice",
-        "//donner/gpu:displacement_map_slice",
-        "//donner/gpu:drop_shadow_slice",
-        "//donner/gpu:filter_blend_slice",
-        "//donner/gpu:filter_color_matrix_slice",
-        "//donner/gpu:filter_image_slice",
-        "//donner/gpu:filter_resolve_slice",
-        "//donner/gpu:flat_interface_slice",
-        "//donner/gpu:float_texture_slice",
-        "//donner/gpu:flood_slice",
-        "//donner/gpu:image_blit_slice",
-        "//donner/gpu:lighting_slice",
-        "//donner/gpu:merge_slice",
-        "//donner/gpu:morphology_slice",
-        "//donner/gpu:offset_slice",
-        "//donner/gpu:reflected_compute_slice",
-        "//donner/gpu:slug_fill_slice",
-        "//donner/gpu:slug_gradient_slice",
-        "//donner/gpu:slug_mask_slice",
-        "//donner/gpu:snapshot_unpremultiply_slice",
-        "//donner/gpu:subregion_clip_slice",
-        "//donner/gpu:tile_slice",
-        "//donner/gpu:turbulence_slice",
+        "//donner/gpu:blur_scene",
+        "//donner/gpu:color_matrix_scene",
+        "//donner/gpu:color_space_convert_scene",
+        "//donner/gpu:component_transfer_scene",
+        "//donner/gpu:composite_scene",
+        "//donner/gpu:convolve_matrix_scene",
+        "//donner/gpu:displacement_map_scene",
+        "//donner/gpu:drop_shadow_scene",
+        "//donner/gpu:filter_blend_scene",
+        "//donner/gpu:filter_color_matrix_scene",
+        "//donner/gpu:filter_image_scene",
+        "//donner/gpu:filter_resolve_scene",
+        "//donner/gpu:flat_interface_scene",
+        "//donner/gpu:float_texture_scene",
+        "//donner/gpu:flood_scene",
+        "//donner/gpu:image_blit_scene",
+        "//donner/gpu:lighting_scene",
+        "//donner/gpu:merge_scene",
+        "//donner/gpu:morphology_scene",
+        "//donner/gpu:offset_scene",
+        "//donner/gpu:reflected_compute_pipeline",
+        "//donner/gpu:slug_fill_scene",
+        "//donner/gpu:slug_gradient_scene",
+        "//donner/gpu:slug_mask_scene",
+        "//donner/gpu:snapshot_unpremultiply_scene",
+        "//donner/gpu:subregion_clip_scene",
+        "//donner/gpu:tile_scene",
+        "//donner/gpu:turbulence_scene",
         "//donner/gpu/shader",
         "//donner/gpu/shader:color_space_convert_api",
         "//donner/gpu/shader:color_space_convert_native_artifact",
@@ -266,9 +266,9 @@ donner_cc_test(
     ],
 )
 
-# The Vulkan texture-to-texture copy slice: a sub-rectangle copy between two
+# The Vulkan texture-to-texture copy test: a sub-rectangle copy between two
 # origins, executed and compared against the shared expected image. Like the
-# compute slice this is a plain Linux-gated test with no geode transition and no
+# compute test this is a plain Linux-gated test with no geode transition and no
 # pinned driver: the expected bytes are an exact copy of bytes the test itself
 # uploaded, so there is no cross-driver quantization freedom to control for, and
 # running on whatever driver the host exposes covers the real hardware path.
@@ -352,7 +352,7 @@ donner_cc_test(
 # nonzero binding offsets and first indices, a negative base vertex, instancing
 # and a mid-pass scissor) compared byte-for-byte against the expected image, plus
 # an index range the encoder refuses before any command buffer exists. Like the
-# compute slice this compares against a host-computed image whose edges are all
+# compute test this compares against a host-computed image whose edges are all
 # pixel-aligned, so no driver is pinned.
 donner_cc_test(
     name = "vulkan_indexed_draw_tests",
@@ -366,7 +366,7 @@ donner_cc_test(
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
-        "//donner/gpu:vertex_input_slice",
+        "//donner/gpu:vertex_input_scene",
         "//donner/gpu/shader",
         "//donner/gpu/shader:spirv_emitter",
         "//donner/gpu/vulkan:vulkan_device",
@@ -479,7 +479,7 @@ donner_cc_test(
     ],
 )
 
-# The Vulkan presentation slice: a headless surface and its swapchain driven through the runtime's
+# The Vulkan presentation test: a headless surface and its swapchain driven through the runtime's
 # surface hooks. Headless because presentation is the part of the runtime a machine with no display
 # cannot otherwise exercise, and the part whose synchronization is easiest to get wrong; a loader
 # without VK_EXT_headless_surface skips, naming it.

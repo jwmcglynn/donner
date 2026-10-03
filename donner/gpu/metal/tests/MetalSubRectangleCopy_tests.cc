@@ -1,5 +1,5 @@
 /// @file
-/// The Metal texture-to-texture copy slice: copies a sub-rectangle between two textures through
+/// The Metal texture-to-texture copy test: copies a sub-rectangle between two textures through
 /// donner::gpu::metal::MetalDevice and compares the destination texels byte-for-byte against the
 /// shared expected image.
 
@@ -36,7 +36,7 @@ class MetalSubRectangleCopyTest : public testing::Test {
 protected:
   void SetUp() override {
     device_ = MetalDevice::Create();
-    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal sub-rectangle-copy slice");
+    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal sub-rectangle-copy tests");
   }
 
   /// Unwraps an RHI result, failing the test on error.

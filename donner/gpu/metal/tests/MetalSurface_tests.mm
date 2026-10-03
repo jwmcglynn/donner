@@ -1,5 +1,5 @@
 /// @file
-/// The Metal presentation slice: a Core Animation layer configured through the runtime's surface
+/// The Metal presentation tests: a Core Animation layer configured through the runtime's surface
 /// hooks, drawables acquired and drawn into, and frames presented, abandoned, and released.
 ///
 /// The layer is offscreen. Core Animation hands out drawables from a layer that was never added
@@ -51,7 +51,7 @@ class MetalSurfaceTest : public testing::Test {
 protected:
   void SetUp() override {
     device_ = MetalDevice::Create();
-    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal presentation slice");
+    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal presentation tests");
 
     layer_ = [CAMetalLayer layer];
     layer_.contentsScale = 1.0;

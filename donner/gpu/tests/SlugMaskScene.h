@@ -20,7 +20,7 @@
 #include "donner/gpu/tests/GpuTestUtils.h"
 
 namespace donner::gpu::tests {
-namespace slug_mask_slice {
+namespace slug_mask_scene {
 
 inline constexpr uint32_t kWidth = 8, kHeight = 8, kRowBytes = 256;
 inline constexpr float kLeft = 1.25f, kTop = 1.0f, kRight = 6.75f, kBottom = 6.0f;
@@ -140,15 +140,15 @@ inline bool UploadGeometry(Device& device, const shader::CompiledShaderView& sha
          upload("vCurveIndices", refs, band.curveCount * sizeof(uint32_t));
 }
 
-}  // namespace slug_mask_slice
+}  // namespace slug_mask_scene
 
 /// Renders the real mask program and checks every channel using the repository bitmap comparator.
 /// @param device Native backend under test. @param shader Frozen selected or test projections.
 /// @param readbackBuffer Backend's bounded buffer readback. @param testCase Reference case.
 template <typename DeviceType, typename Readback>
 void CheckSlugMask(DeviceType& device, const shader::CompiledShaderView& shader,
-                   Readback readbackBuffer, slug_mask_slice::Case testCase) {
-  using namespace slug_mask_slice;
+                   Readback readbackBuffer, slug_mask_scene::Case testCase) {
+  using namespace slug_mask_scene;
   ASSERT_THAT(shader.entryPoints, testing::SizeIs(2));
   auto module = device.createShaderModule(
       shader::MakeShaderDescriptor(shader, device.shaderSourceKind(), "Slug mask"));

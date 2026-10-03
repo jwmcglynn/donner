@@ -1,5 +1,5 @@
 /// @file
-/// The Vulkan presentation slice: a surface and its swapchain driven through the runtime's
+/// The Vulkan presentation tests: a surface and its swapchain driven through the runtime's
 /// surface hooks.
 ///
 /// The surface is headless, which is the point. Presentation is the one part of this runtime a

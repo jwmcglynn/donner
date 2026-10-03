@@ -1,12 +1,12 @@
 #pragma once
 /// @file
-/// The frozen-baseline scene shared by the baseline capture tool and the per-backend vertical
-/// slice tests.
+/// The frozen-baseline scene shared by the baseline capture tool and the per-backend solid-fill
+/// tests.
 ///
 /// All consumers must render IDENTICAL inputs: the capture tool renders this scene through the
-/// current production renderer as a black box and commits the PNG; the Metal slice renders the
+/// current production renderer as a black box and commits the PNG; the Metal test renders the
 /// same scene through donner::gpu + the MSL emitter and compares pixels against that PNG; the
-/// Vulkan slice renders it through donner::gpu + the SPIR-V emitter and compares against an
+/// Vulkan test renders it through donner::gpu + the SPIR-V emitter and compares against an
 /// in-process production render of the same scene. Only Donner-owned, deterministic content
 /// appears here.
 
@@ -124,10 +124,10 @@ inline std::vector<BaselinePathSpec> BaselineScenePaths() {
 }
 
 // ----- Shader IR interop -----
-// The generic solid-fill shader IR both vertical slices compile takes contiguous per-band
+// The generic solid-fill shader IR both backend tests compile takes contiguous per-band
 // curves and an explicit vertex buffer, while the production encoder emits compact curve
 // references and expands its bounding fan in the vertex shader. These adapt one to the
-// other, and live here so both slices consume identical geometry.
+// other, and live here so both tests consume identical geometry.
 
 using donner::geode::EncodedPath;
 
@@ -175,9 +175,9 @@ inline bool ExpandLegacyAxis(std::span<const EncodedPath::Band> bands,
   return true;
 }
 
-/// Uniform block the generic solid-fill shader IR declares. Both vertical slices fill this one
-/// definition, so a change to the IR's block cannot reach one slice and miss the other - which
-/// is how the Metal slice came to rasterize geometry the production renderer had retired.
+/// Uniform block the generic solid-fill shader IR declares. Both backend tests fill this one
+/// definition, so a change to the IR's block cannot reach one test and miss the other - which
+/// is how the Metal test came to rasterize geometry the production renderer had retired.
 struct alignas(16) SolidFillUniforms {
   float mvp[16];                 //!< Column-major clip-from-scene matrix.
   float patternFromPath[16];     //!< Pattern transform (identity for solid fills).

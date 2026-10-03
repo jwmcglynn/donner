@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 /// Native proof of vertex/instance bases and first-vertex flat interpolation.
-#include "donner/gpu/tests/SlugMaskSlice.h"
+#include "donner/gpu/tests/SlugMaskScene.h"
 
 namespace donner::gpu::tests {
 /// Renders one pixel with distinct per-vertex values and a nonzero instance base.

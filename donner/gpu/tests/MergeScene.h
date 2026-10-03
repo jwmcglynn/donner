@@ -13,10 +13,10 @@
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
-#include "donner/gpu/tests/ReflectedComputeSlice.h"
+#include "donner/gpu/tests/ReflectedComputePipeline.h"
 
 namespace donner::gpu::tests {
-namespace merge_slice {
+namespace merge_scene {
 inline constexpr uint32_t kWidth = 7, kHeight = 5, kRowBytes = 256;
 using Texel = std::array<float, 4>;
 
@@ -62,7 +62,7 @@ inline std::vector<uint8_t> Upload(bool source) {
   }
   return bytes;
 }
-}  // namespace merge_slice
+}  // namespace merge_scene
 
 /// Runs one merge pass through reflected bindings and compares every texel exactly.
 /// @param device Native device. @param shader Selected or mutation artifact.
@@ -70,7 +70,7 @@ inline std::vector<uint8_t> Upload(bool source) {
 template <class DeviceType, class Readback>
 void CheckMerge(DeviceType& device, const shader::CompiledShaderView& shader,
                 Readback readbackBuffer) {
-  using namespace merge_slice;
+  using namespace merge_scene;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "merge", compute);
   if (testing::Test::HasFatalFailure()) {

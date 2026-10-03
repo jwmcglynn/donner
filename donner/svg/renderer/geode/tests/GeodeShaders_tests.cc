@@ -7,7 +7,7 @@
 #include <memory>
 #include <vector>
 
-#include "donner/gpu/tests/SlugFillSlice.h"
+#include "donner/gpu/tests/SlugFillScene.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeShaderSelection.h"
 
@@ -44,7 +44,7 @@ TEST(GeodeShaders, SlugFillReferenceEvenOdd) {
   gpu::tests::CheckSlugFill(
       runtime, SelectShaderProjection(runtime, DONNER_GEODE_SHADER_ARTIFACTS(SlugFill)),
       [&](const gpu::Buffer& b) { return ReadSlugBuffer(runtime, b); },
-      gpu::tests::slug_fill_slice::Case::EvenOdd);
+      gpu::tests::slug_fill_scene::Case::EvenOdd);
 }
 TEST(GeodeShaders, SlugFillReferenceLinearGradient) {
   auto device = GeodeDevice::CreateHeadless();
@@ -53,7 +53,7 @@ TEST(GeodeShaders, SlugFillReferenceLinearGradient) {
   gpu::tests::CheckSlugFill(
       runtime, SelectShaderProjection(runtime, DONNER_GEODE_SHADER_ARTIFACTS(SlugFill)),
       [&](const gpu::Buffer& b) { return ReadSlugBuffer(runtime, b); },
-      gpu::tests::slug_fill_slice::Case::LinearGradient);
+      gpu::tests::slug_fill_scene::Case::LinearGradient);
 }
 
 /// Smoke test: the native backend creates the Slug fill module from its frozen projection.

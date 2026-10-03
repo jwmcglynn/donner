@@ -13,10 +13,10 @@
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
-#include "donner/gpu/tests/ReflectedComputeSlice.h"
+#include "donner/gpu/tests/ReflectedComputePipeline.h"
 
 namespace donner::gpu::tests {
-namespace snapshot_unpremultiply_slice {
+namespace snapshot_unpremultiply_scene {
 inline constexpr uint32_t kWidth = 7, kHeight = 5, kRowBytes = 256;
 using Pixel = std::array<uint8_t, 4>;
 
@@ -55,7 +55,7 @@ inline std::vector<uint8_t> Upload() {
   }
   return bytes;
 }
-}  // namespace snapshot_unpremultiply_slice
+}  // namespace snapshot_unpremultiply_scene
 
 /// Dispatches the unpremultiply pass through reflected bindings and compares every byte.
 /// @param device Native device. @param shader Selected or mutation artifact.
@@ -63,7 +63,7 @@ inline std::vector<uint8_t> Upload() {
 template <class DeviceType, class Readback>
 void CheckSnapshotUnpremultiply(DeviceType& device, const shader::CompiledShaderView& shader,
                                 Readback readbackBuffer) {
-  using namespace snapshot_unpremultiply_slice;
+  using namespace snapshot_unpremultiply_scene;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "snapshot unpremultiply", compute);
   if (testing::Test::HasFatalFailure()) {
