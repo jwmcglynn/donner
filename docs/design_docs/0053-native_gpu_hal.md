@@ -877,12 +877,14 @@ Linux compatibility, the wrapper/alias structure and matching SHA-256. Bazel aud
 selected product, editor or Wasm root reaches the archive or wrapper; a negative aliased-edge
 fixture proves that failure. Product artifacts remain covered by the existing Editor Wasm, CMake
 consumer and BCR packaging lanes. Production source archives must build without `rustc` or
-`cargo`. BCR Preflight's Ubuntu/macOS Bazel 7/8 consumers audit the configured closure of the
-Donner libraries they build from the exact candidate archive: it must contain no Rust rule and no
-Rust rule set, toolchain or crate repository, and the audit proves it rejects Rust edges injected
-into that closure. Generated CMake is covered by `gen_cmakelists.py --check`. This is dependency
-evidence, not a build on a runner without Rust. A lexical scan alone is not proof of transitive
-closure.
+`cargo`. BCR Preflight's Ubuntu/macOS Bazel 7/8 consumers audit the configured closure of the four
+Donner libraries they build from the exact candidate archive: it must contain no Rust rule or source
+and no Rust rule set, toolchain or crate repository, and it must resolve the C++ toolchain in both
+the libraries' and the tool configuration. The audit then appends Rust edges to that query output
+and requires each to be rejected. Generated CMake is covered by `gen_cmakelists.py --check`. This is
+dependency evidence, not a build on a runner without Rust: a host `rustc` or `cargo` run by a
+genrule or repository rule is invisible to a configured closure and is left to the lexical verifier.
+A lexical scan alone is not proof of transitive closure.
 
 ## Security and Reliability
 

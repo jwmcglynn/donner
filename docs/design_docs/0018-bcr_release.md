@@ -70,12 +70,16 @@ excludes the checkout-only `external` symlink through `.gitattributes`. Verifica
 file, executable mode, source tree and digest with the committed Git archive. A checksum and JSON
 provenance accompany the archive. The consumer matrix resolves this archive through a disposable
 registry from a separate module; no Donner checkout override participates. Each consumer job then
-audits the configured closure of the Donner libraries it built with
-`tools/bcr_dependency_closure.py`: the default tiny-skia renderer and basic text are present, and
-no development-only, Geode, WebGPU or test target, Rust rule, or Rust rule set, toolchain or crate
-repository is. The audit also proves that it rejects Rust edges injected into that closure. This
-shows the archive's production libraries have no Rust dependency; it does not remove the runner's
-own Rust toolchain.
+audits the configured closure of the four Donner libraries it built with
+`tools/bcr_dependency_closure.py`: the default tiny-skia renderer and basic text are present, and no
+development-only, Geode, WebGPU or test target, Rust rule or source, or Rust rule set, toolchain or
+crate repository is. The closure must resolve the C++ toolchain in both the libraries' configuration
+and the tool configuration, so a query without implicit or tool dependencies fails. The audit then
+appends Rust edges to the same query output and requires each to be rejected. This shows no Rust
+dependency visible in Bazel's configured closure on the four matrix configurations. It does not
+remove the runner's own Rust toolchain, and a genrule or repository rule that ran a host `rustc` or
+`cargo` would not appear in that closure; the lexical no-Rust verifier covers such in-tree
+references.
 
 Source archives require root `LICENSE` and `NOTICE`. The committed `NOTICE` matches
 `//third_party/licenses:notice_default` byte-for-byte and describes the default tiny-skia
@@ -102,7 +106,7 @@ After a failed preflight, rerun **all jobs** so source, binaries, matrix and qua
 one attempt; a failed-jobs-only rerun cannot qualify with older CLI artifacts. `//tools:bcr_source_tests`,
 `//tools:default_notice_freshness_tests`,
 `//tools:release_cli_tests`, and `//tools:bcr_admission_tests` cover archive, binary, and admission
-rejection paths.
+rejection paths; `//tools:bcr_dependency_closure_tests` covers the consumer closure audit.
 
 ### Publish and observe
 

@@ -2,15 +2,19 @@
 
 The input is `bazel cquery --output=label_kind` over the libraries a downstream consumer builds.
 The closure must contain the default tiny-skia renderer and basic text, and no development-only,
-Geode, WebGPU or test target. It must contain no Rust rule, and no repository of a Rust rule set,
-toolchain or crate. After the real closure passes, the check also proves that it rejects Rust edges
-injected into that same closure, so a vacuous pass fails.
+Geode, WebGPU or test target. It must contain no Rust rule or Rust source, and no repository of a
+Rust rule set, toolchain or crate. It must also resolve the C++ toolchain in at least two
+configurations, the libraries' own and the tool configuration, which a query without implicit or
+tool dependencies lacks. After the real closure passes, the check appends Rust edges to the same
+query output and requires each to be rejected, which proves the parser and classifier still
+recognize Rust.
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+from dataclasses import dataclass
 from pathlib import Path
 import re
 
@@ -20,8 +24,10 @@ MAX_LABEL_BYTES = 10 * 1024 * 1024
 LABEL = re.compile(r"(?:@{1,2}[^/]+)?//[^\s]+\Z")
 # One `cquery --output=label_kind` line: the target kind, the label, then its configuration.
 KINDED_TARGET = re.compile(
-    r"(?P<kind>[A-Za-z_][\w]*(?: [a-z]+)?) (?P<label>(?:@{1,2}[^/\s]+)?//\S+)(?: \([^)]*\))?\Z"
+    r"(?P<kind>[A-Za-z_][\w]*(?: [a-z]+)?) (?P<label>(?:@{1,2}[^/\s]+)?//\S+)"
+    r"(?: \((?P<configuration>[^)]*)\))?\Z"
 )
+RUST_SOURCE = re.compile(r"(?:\.rs|[:/](?:Cargo\.toml|Cargo\.lock))\Z", re.IGNORECASE)
 RUST_NAME = re.compile(r"(?:^|[+~_./:-])(?:rust|cargo|crate)")
 RUST_RULE = re.compile(r"(?:^|_)(?:rust|cargo|crate)")
 REQUIRED_TARGETS = frozenset({
@@ -46,17 +52,29 @@ FORBIDDEN_PACKAGES = (
     "//donner/svg/renderer/geode",
     "//third_party/webgpu-cpp",
 )
-# Rust edges the check must reject once injected into a passing closure: an in-tree Rust rule, and
-# the rule set, toolchain and crate repositories under Bazel 8 (`+`) and Bazel 7 (`~`) names.
+# `cquery --output=label_kind` lines the check must reject once appended to a passing closure: an
+# in-tree Rust rule and Rust sources, and the rule set, toolchain and crate repositories under Bazel
+# 8 (`+`) and Bazel 7 (`~`) names.
 INJECTED_RUST_EDGES = (
-    ("rust_library rule", "@@donner+//donner/svg:injected_edge"),
-    ("toolchain rule", "@@rules_rust+//rust/private:injected_edge"),
-    ("toolchain rule", "@@rules_rust~//rust/private:injected_edge"),
-    ("alias rule", "@@rules_rust++rust+rust_toolchains//:injected_edge"),
-    ("alias rule", "@@rules_rust~~rust~rust_toolchains//:injected_edge"),
-    ("filegroup rule", "@@rules_rust++crate+crates__injected-1.0.0//:injected_edge"),
-    ("filegroup rule", "@@rules_rust~~crate~crates__injected-1.0.0//:injected_edge"),
+    "rust_library rule @@donner+//donner/svg:injected_edge (0123abc)",
+    "source file @@donner+//donner/svg:injected_edge.rs (null)",
+    "source file @@donner+//donner/svg:Cargo.toml (null)",
+    "toolchain rule @@rules_rust+//rust/private:injected_edge (0123abc)",
+    "toolchain rule @@rules_rust~//rust/private:injected_edge (0123abc)",
+    "alias rule @@rules_rust++rust+rust_toolchains//:injected_edge (0123abc)",
+    "alias rule @@rules_rust~~rust~rust_toolchains//:injected_edge (0123abc)",
+    "filegroup rule @@rules_rust++crate+crates__injected-1.0.0//:injected_edge (0123abc)",
+    "filegroup rule @@rules_rust~~crate~crates__injected-1.0.0//:injected_edge (0123abc)",
 )
+
+
+@dataclass(frozen=True)
+class ConfiguredTarget:
+    """One row of `cquery --output=label_kind`: `configuration` is "null" for files."""
+
+    kind: str
+    label: str
+    configuration: str
 
 
 def keyword(call: ast.Call, name: str) -> object | None:
@@ -137,19 +155,21 @@ def dev_repository_names(module_text: str) -> set[str]:
     return names
 
 
-def configured_targets(contents: str) -> dict[str, str]:
-    """Map each label of a `cquery --output=label_kind` result to its kind."""
-    targets: dict[str, str] = {}
+def configured_targets(contents: str) -> tuple[ConfiguredTarget, ...]:
+    """Parse each row of a `cquery --output=label_kind` result, in order and without repeats."""
+    targets: dict[ConfiguredTarget, None] = {}
     for raw in contents.splitlines():
         if not raw:
             continue
         match = KINDED_TARGET.fullmatch(raw)
         if not match or not LABEL.fullmatch(match.group("label")):
             raise ValueError("configured dependency query contains a line without a kind and label")
-        targets[match.group("label")] = match.group("kind")
+        target = ConfiguredTarget(match.group("kind"), match.group("label"),
+                                  match.group("configuration") or "")
+        targets[target] = None
     if not targets:
         raise ValueError("configured dependency query returned no labels")
-    return targets
+    return tuple(targets)
 
 
 def repository_parts(label: str) -> set[str]:
@@ -190,10 +210,29 @@ def check_backend(labels: set[str]) -> None:
         raise ValueError("default renderer includes an in-tree Rust target")
 
 
-def check_rules(targets: dict[str, str]) -> None:
-    for kind in targets.values():
-        if kind.endswith(" rule") and RUST_RULE.search(kind.removesuffix(" rule")):
+def check_coverage(targets: tuple[ConfiguredTarget, ...]) -> None:
+    """Reject a closure queried without the implicit and tool dependencies that build it.
+
+    A complete closure resolves the C++ toolchain for the libraries' own configuration and again
+    for the tool (exec) configuration their build actions run in. Without implicit dependencies
+    no cc_toolchain appears; without tool dependencies only the first configuration's does.
+    """
+    configurations = {target.configuration for target in targets
+                      if target.kind == "cc_toolchain rule"
+                      and target.configuration not in ("", "null")}
+    if not configurations:
+        raise ValueError("closure has no cc_toolchain rule; query it with implicit dependencies")
+    if len(configurations) < 2:
+        raise ValueError("closure resolves cc_toolchain in only one configuration; "
+                         "query it with tool dependencies")
+
+
+def check_rules(targets: tuple[ConfiguredTarget, ...]) -> None:
+    for target in targets:
+        if target.kind.endswith(" rule") and RUST_RULE.search(target.kind.removesuffix(" rule")):
             raise ValueError("closure includes a Rust rule")
+        if target.kind == "source file" and RUST_SOURCE.search(target.label):
+            raise ValueError("closure includes a Rust source file")
 
 
 def check_external_repositories(labels: set[str], dev_repositories: set[str]) -> None:
@@ -207,23 +246,31 @@ def check_external_repositories(labels: set[str], dev_repositories: set[str]) ->
         raise ValueError("closure includes development-only repositories")
 
 
-def check_closure(targets: dict[str, str], dev_repositories: set[str]) -> None:
-    labels = set(targets)
+def check_closure(targets: tuple[ConfiguredTarget, ...], dev_repositories: set[str]) -> None:
+    labels = {target.label for target in targets}
     check_backend(labels)
+    check_coverage(targets)
     check_rules(targets)
     check_external_repositories(labels, dev_repositories)
 
 
-def check_injected_rust_edges(targets: dict[str, str], dev_repositories: set[str]) -> None:
-    """Prove that the check rejects each Rust edge added to this passing closure."""
-    for kind, label in INJECTED_RUST_EDGES:
+def check_injected_rust_edges(contents: str, dev_repositories: set[str]) -> int:
+    """Append each Rust edge to the passing query output and require it to be rejected.
+
+    Returns the number of rejected edges, which equals the number injected.
+    """
+    rejected = 0
+    for line in INJECTED_RUST_EDGES:
         try:
-            check_closure({**targets, label: kind}, dev_repositories)
+            check_closure(configured_targets(contents.rstrip("\n") + "\n" + line + "\n"),
+                          dev_repositories)
         except ValueError as error:
             if "Rust" not in str(error):
-                raise ValueError(f"injected {kind} {label} failed for another reason: {error}")
+                raise ValueError(f"injected `{line}` failed for another reason: {error}")
+            rejected += 1
             continue
-        raise ValueError(f"the check accepted an injected Rust edge: {kind} {label}")
+        raise ValueError(f"the check accepted an injected Rust edge: `{line}`")
+    return rejected
 
 
 def main() -> None:
@@ -231,15 +278,21 @@ def main() -> None:
     parser.add_argument("--module", required=True, type=Path)
     parser.add_argument("--labels", required=True, type=Path)
     args = parser.parse_args()
-    if args.module.stat().st_size > MAX_MODULE_BYTES or args.labels.stat().st_size > MAX_LABEL_BYTES:
+    too_large = (args.module.stat().st_size > MAX_MODULE_BYTES
+                 or args.labels.stat().st_size > MAX_LABEL_BYTES)
+    if too_large:
         raise ValueError("module or configured closure exceeds its size limit")
     names = dev_repository_names(args.module.read_text(encoding="utf-8"))
-    targets = configured_targets(args.labels.read_text(encoding="utf-8"))
+    contents = args.labels.read_text(encoding="utf-8")
+    targets = configured_targets(contents)
     check_closure(targets, names)
-    check_injected_rust_edges(targets, names)
-    print(f"BCR consumer closure: {len(targets)} labels; tiny-skia and base text; no dev, Geode, "
-          "WebGPU or test targets; no Rust rule, toolchain or crate; "
-          f"{len(INJECTED_RUST_EDGES)} injected Rust edges rejected")
+    rejected = check_injected_rust_edges(contents, names)
+    configurations = len({target.configuration for target in targets
+                          if target.configuration not in ("", "null")})
+    print(f"BCR consumer closure: {len(targets)} configured targets in {configurations} "
+          "configurations; tiny-skia and base text; no dev, Geode, WebGPU or test targets; "
+          f"no Rust rule, source, toolchain or crate; {rejected} of {len(INJECTED_RUST_EDGES)} "
+          "injected Rust edges rejected")
 
 
 if __name__ == "__main__":

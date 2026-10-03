@@ -163,8 +163,9 @@ jobs:
           # Audit the configured closure of the Donner libraries built above, not the consumer
           # test, whose GoogleTest/pixelmatch dev deps must not mask Donner's production
           # dependency boundary. The audit rejects development-only, Geode, WebGPU and test
-          # targets and any Rust rule, toolchain or crate, then proves it rejects Rust edges
-          # injected into this same closure.
+          # targets and any Rust rule, source, toolchain or crate, requires the C++ toolchain in
+          # the target and tool configurations, then requires Rust rows appended to this query
+          # output to be rejected.
           test "$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)" = "$SOURCE_COMMIT"
           bazelisk cquery --lockfile_mode=off \
             --registry="file://${RUNNER_TEMP}/donner-bcr/consumer-test/registry" \
