@@ -4,6 +4,8 @@
 #include <memory>
 #include <utility>
 
+#include "donner/editor/EditorApp.h"
+#include "donner/editor/FramePresentation.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #ifdef DONNER_EDITOR_WGPU
 #include "donner/editor/gui/ImGuiRuntimeRenderer.h"
@@ -405,6 +407,58 @@ TEST(GlTextureCacheTest, RuntimeBitmapUploadReplicatesBordersAndClearsUnusedAllo
 // still points at could leave that allocation holding part of the old payload and part of the new
 // one once any chunk was refused. The superseded allocation must therefore stay byte-identical to
 // what it was published with.
+TEST(GlTextureCacheTest, NewOverviewAdvancesTheEmptyPrimaryCaptureAcrossLayoutChanges) {
+  const auto device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  GlTextureCache cache(device);
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"/>)"));
+  const auto capture = [&](std::uint64_t id) {
+    return CapturedPresentation::Capture(
+        app.document().document(),
+        PresentationIdentity{.captureId = id,
+                             .documentGeneration = app.document().documentGeneration()},
+        {});
+  };
+  const auto first = capture(1);
+  ASSERT_NE(first, nullptr);
+  auto raster = RasterViewportForTest(false);
+  auto preview = SingleBitmapTilePreview(1, MakeBitmap(Vector2i(5, 5), 20, 40));
+  preview.tiles.front().bitmapDimsDoc = Vector2d(100, 100);
+  ASSERT_TRUE(cache.uploadCompositedOverview(preview, raster, first));
+  const auto held = cache.presentationResources();
+  ASSERT_NE(held, nullptr);
+  EXPECT_TRUE(held->tiles().empty());
+  app.document().document().setCanvasSize(200, 200);
+  const auto second = capture(2);
+  ASSERT_NE(second, nullptr);
+  ASSERT_NE(first->canvasSize(), second->canvasSize());
+  raster.outputSizePx = Vector2i(200, 200);
+  raster.semanticCanvasSizePx = Vector2i(200, 200);
+  raster.outputFromDocument = Transform2d::Scale(2.0);
+  preview.tiles.front().generation = 2;
+  ASSERT_TRUE(cache.uploadCompositedOverview(preview, raster, second));
+  const auto current = cache.presentationResources();
+  ASSERT_NE(current, nullptr);
+  EXPECT_TRUE(current->tiles().empty());
+  EXPECT_EQ(current->capture(), second);
+  EXPECT_EQ(current->overviewCapture(), second);
+  FramePresentationInput input;
+  input.frameId = 2;
+  input.documentIdentity = second->identity();
+  input.viewport.documentViewBox = Box2d::FromXYWH(0, 0, 100, 100);
+  input.viewport.paneSize = Vector2d(100, 100);
+  input.paneClipRect = Box2d::FromXYWH(0, 0, 100, 100);
+  EXPECT_EQ(FramePresentation::CaptureForFrame(current, input), second);
+  const auto frame = FramePresentation::Build(current, input).frame;
+  ASSERT_NE(frame, nullptr);
+  EXPECT_EQ(frame->identity(), second->identity());
+  EXPECT_THAT(frame->tiles(), testing::SizeIs(1));
+  EXPECT_EQ(held->capture(), first);
+  EXPECT_EQ(held->overviewCapture(), first);
+}
+
 TEST(GlTextureCacheTest, ReplacedTilePayloadLeavesTheSupersededAllocationIntact) {
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
