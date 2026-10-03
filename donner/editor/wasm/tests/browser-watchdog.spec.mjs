@@ -168,7 +168,10 @@ test("application heartbeat preserves presentation diagnostics without refreshin
   const worker = {
     evaluate: () => Promise.resolve(++calls === 1 ? true : { pendingSubmissions: 3 }),
   };
-  const presentation = { queue: { admission: 1, framesInFlight: 3 }, interaction: { dragging: true } };
+  const presentation = {
+    queue: { admission: 1, framesInFlight: 3 },
+    interaction: { dragging: true },
+  };
   const page = { workers: () => [worker], evaluate: () => Promise.resolve(presentation) };
   const stop = await startApplicationHeartbeat(page, heartbeat);
   try {
@@ -186,7 +189,10 @@ test("unavailable page diagnostics cannot stop a live application heartbeat", as
   const heartbeat = path.join(directory(), "heartbeat");
   let calls = 0;
   const worker = { evaluate: () => Promise.resolve(++calls === 1 ? true : { textures: 1 }) };
-  const page = { workers: () => [worker], evaluate: () => Promise.reject(new Error("page unavailable")) };
+  const page = {
+    workers: () => [worker],
+    evaluate: () => Promise.reject(new Error("page unavailable")),
+  };
   const stop = await startApplicationHeartbeat(page, heartbeat);
   try {
     const before = JSON.parse(fs.readFileSync(heartbeat, "utf8"));

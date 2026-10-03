@@ -4,9 +4,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { startApplicationHeartbeat } from "./browser-application-heartbeat.mjs";
 import { resourceQueuesAreQuiescent } from "./browser-resource-quiescence.mjs";
-import { inspectGpuImageTransfer } from "./gpu-image-transfer-canary";
-import { contentMotionFraction, installCompositedProbe, startCompositedProbe } from "./composited-probe";
+import {
+  contentMotionFraction,
+  installCompositedProbe,
+  startCompositedProbe,
+} from "./composited-probe";
 import { stopCompositedProbe } from "./composited-probe-evidence.mjs";
+import { inspectGpuImageTransfer } from "./gpu-image-transfer-canary";
 
 interface Diagnostics extends Window {
   __donnerBackend?: string;
@@ -58,7 +62,12 @@ interface Diagnostics extends Window {
     deviceLost: boolean;
     [name: string]: unknown;
   };
-  __donnerSampleThumbnailStats?: { pending: boolean; active: boolean; resultReady: boolean; ready?: number };
+  __donnerSampleThumbnailStats?: {
+    pending: boolean;
+    active: boolean;
+    resultReady: boolean;
+    ready?: number;
+  };
   __donnerLayerThumbnailStats?: {
     rowCount: number;
     renderedCount: number;
@@ -1051,97 +1060,150 @@ test("GPU image transfer preserves pixels between workers", async ({ page, brows
   }
 });
 
-
 test.describe("UI presentation diagnosis", () => {
   test.use({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
-  test("held drag advances UI submissions while composited pixels are sampled", async ({ page, browser }, info) => {
-    const report: Record<string, unknown> = { browser: info.project.name, version: browser.version(), ...packageHashes() };
-    let stopHeartbeat: (() => void) | undefined;
-    try {
-      await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
-      await expect.poll(() => page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented), {
-        timeout: 30000,
-      }).toBe(true);
-      stopHeartbeat = await startApplicationHeartbeat(page);
-      await expect.poll(async () => {
-        const thumbnails = (await snapshot(page)).thumbnails;
-        return thumbnails !== undefined && !thumbnails.pending && !thumbnails.active
-          && (thumbnails.ready ?? 0) > 0;
-      }, { timeout: 20000 }).toBe(true);
-      const canvas = await page.locator("canvas#canvas").boundingBox();
-      expect(canvas).not.toBeNull();
-      if (canvas === null) throw new Error("missing editor canvas");
-      await dispatchPointer(page, { x: canvas.x + canvas.width * 0.24, y: canvas.y + 282 }, true);
-      await expect(page.locator("canvas#canvas")).toHaveAttribute("data-active-sample-id", "donner-splash");
-      await waitForIdle(page);
-      const start = await aimAtSplashD(page);
-      await dispatchPointer(page, start, true);
-      await expect.poll(async () => (await snapshot(page)).interaction, { timeout: 15000 })
-        .toEqual(expect.objectContaining({ selectedCount: 1, pendingClick: false, workerBusy: false }));
-      await page.waitForTimeout(800);
-      report.before = await snapshot(page, true);
-      await installCompositedProbe(page, {
-        sampleRegionCss: { x: start.x - 200, y: start.y - 130, width: 245, height: 175 },
-        sampleWidth: 96, sampleHeight: 96, minColorAlpha: 64, minColorSpread: 60,
-      });
-      await startCompositedProbe(page);
-      let stream: { dispatchTimes: number[]; dispatchPoints: { x: number; y: number }[] } | undefined;
-      let usableSamples = 0;
-      let drawFraction = 0;
+  test(
+    "held drag advances UI submissions while composited pixels are sampled",
+    async ({ page, browser }, info) => {
+      const report: Record<string, unknown> = {
+        browser: info.project.name,
+        version: browser.version(),
+        ...packageHashes(),
+      };
+      let stopHeartbeat: (() => void) | undefined;
+      const checkpoint = (stage: string) => {
+        report.stage = stage;
+        fs.writeFileSync(
+          info.outputPath("ui-presentation-checkpoint.json"),
+          JSON.stringify(report),
+        );
+      };
       try {
-        stream = await page.evaluate(async (start) => {
-          const canvas = document.querySelector("canvas#canvas")!;
-          const dispatch = (type: string, point: { x: number; y: number }, buttons: number) =>
-            canvas.dispatchEvent(new MouseEvent(type, {
-              bubbles: true, cancelable: true, view: window, clientX: point.x, clientY: point.y,
-              button: 0, buttons,
-            }));
-          const dispatchTimes: number[] = [];
-          const dispatchPoints: { x: number; y: number }[] = [];
-          let point = start;
-          dispatch("mousedown", point, 1);
-          try {
-            for (let i = 1; i <= 60; ++i) {
-              await new Promise((resolve) => setTimeout(resolve, 16));
-              point = { x: Math.round(start.x - 120 * i / 60), y: Math.round(start.y - 72 * i / 60) };
-              dispatchTimes.push(performance.now());
-              dispatchPoints.push(point);
-              dispatch("mousemove", point, 1);
-            }
-          } finally { dispatch("mouseup", point, 0); }
-          return { dispatchTimes, dispatchPoints };
-        }, start);
-      }
-      finally {
-        const result = await stopCompositedProbe(page, info, stream ?? null);
-        if (stream !== undefined) {
-          const firstInput = stream.dispatchTimes[0];
-          const lastInput = stream.dispatchTimes.at(-1)!;
-          const active = result.samples.filter((sample) => sample.t >= firstInput && sample.t <= lastInput);
-          usableSamples = active.length;
-          drawFraction = active.filter((sample) => sample.drawOk).length / Math.max(1, active.length);
-          report.motion = contentMotionFraction(active);
-          report.activeSamples = usableSamples;
-          report.drawFraction = drawFraction;
-        }
-        await attachJson(info, "ui-presentation-collected", report);
-        let timer: ReturnType<typeof setTimeout> | undefined;
+        await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
+        checkpoint("waiting for first frame");
+        await expect.poll(
+          () => page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented),
+          {
+            timeout: 30000,
+          },
+        ).toBe(true);
+        stopHeartbeat = await startApplicationHeartbeat(page);
+        checkpoint("waiting for thumbnails");
+        await expect.poll(async () => {
+          const thumbnails = (await snapshot(page)).thumbnails;
+          return thumbnails !== undefined && !thumbnails.pending && !thumbnails.active
+            && (thumbnails.ready ?? 0) > 0;
+        }, { timeout: 20000 }).toBe(true);
+        checkpoint("opening Donner sample");
+        const canvas = await page.locator("canvas#canvas").boundingBox();
+        expect(canvas).not.toBeNull();
+        if (canvas === null) throw new Error("missing editor canvas");
+        await dispatchPointer(page, { x: canvas.x + canvas.width * 0.24, y: canvas.y + 282 }, true);
+        await expect(page.locator("canvas#canvas")).toHaveAttribute(
+          "data-active-sample-id",
+          "donner-splash",
+        );
+        checkpoint("waiting for Donner document");
+        await waitForIdle(page);
+        const start = await aimAtSplashD(page);
+        checkpoint("selecting D");
+        await dispatchPointer(page, start, true);
+        await expect.poll(async () => (await snapshot(page)).interaction, { timeout: 15000 })
+          .toEqual(
+            expect.objectContaining({ selectedCount: 1, pendingClick: false, workerBusy: false }),
+          );
+        await page.waitForTimeout(800);
+        report.before = await snapshot(page, true);
+        checkpoint("sampling held drag");
+        await installCompositedProbe(page, {
+          sampleRegionCss: { x: start.x - 200, y: start.y - 130, width: 245, height: 175 },
+          sampleWidth: 96,
+          sampleHeight: 96,
+          minColorAlpha: 64,
+          minColorSpread: 60,
+        });
+        await startCompositedProbe(page);
+        let stream:
+          | { dispatchTimes: number[]; dispatchPoints: { x: number; y: number }[] }
+          | undefined;
+        let usableSamples = 0;
+        let drawFraction = 0;
         try {
-          report.after = await Promise.race([
-            snapshot(page, true).catch(() => ({ unavailable: "final snapshot rejected" })),
-            new Promise((resolve) => { timer = setTimeout(() => resolve({ unavailable: "final snapshot deadline" }), 1000); }),
-          ]);
-        } finally { clearTimeout(timer); }
-        try { report.memory = monitoredMemory(); }
-        catch { report.memory = { unavailable: "watchdog resource sample unavailable" }; }
+          stream = await page.evaluate(async (start) => {
+            const canvas = document.querySelector("canvas#canvas")!;
+            const dispatch = (type: string, point: { x: number; y: number }, buttons: number) =>
+              canvas.dispatchEvent(
+                new MouseEvent(type, {
+                  bubbles: true,
+                  cancelable: true,
+                  view: window,
+                  clientX: point.x,
+                  clientY: point.y,
+                  button: 0,
+                  buttons,
+                }),
+              );
+            const dispatchTimes: number[] = [];
+            const dispatchPoints: { x: number; y: number }[] = [];
+            let point = start;
+            dispatch("mousedown", point, 1);
+            try {
+              for (let i = 1; i <= 60; ++i) {
+                await new Promise((resolve) => setTimeout(resolve, 16));
+                point = {
+                  x: Math.round(start.x - 120 * i / 60),
+                  y: Math.round(start.y - 72 * i / 60),
+                };
+                dispatchTimes.push(performance.now());
+                dispatchPoints.push(point);
+                dispatch("mousemove", point, 1);
+              }
+            } finally {
+              dispatch("mouseup", point, 0);
+            }
+            return { dispatchTimes, dispatchPoints };
+          }, start);
+        } finally {
+          const result = await stopCompositedProbe(page, info, stream ?? null);
+          if (stream !== undefined) {
+            const firstInput = stream.dispatchTimes[0];
+            const lastInput = stream.dispatchTimes.at(-1)!;
+            const active = result.samples.filter((sample) =>
+              sample.t >= firstInput && sample.t <= lastInput
+            );
+            usableSamples = active.length;
+            drawFraction = active.filter((sample) => sample.drawOk).length
+              / Math.max(1, active.length);
+            report.motion = contentMotionFraction(active);
+            report.activeSamples = usableSamples;
+            report.drawFraction = drawFraction;
+          }
+          await attachJson(info, "ui-presentation-collected", report);
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            report.after = await Promise.race([
+              snapshot(page, true).catch(() => ({ unavailable: "final snapshot rejected" })),
+              new Promise((resolve) => {
+                timer = setTimeout(() => resolve({ unavailable: "final snapshot deadline" }), 1000);
+              }),
+            ]);
+          } finally {
+            clearTimeout(timer);
+          }
+          try {
+            report.memory = monitoredMemory();
+          } catch {
+            report.memory = { unavailable: "watchdog resource sample unavailable" };
+          }
+        }
+        expect(usableSamples).toBeGreaterThanOrEqual(process.env.CI ? 12 : 16);
+        expect(drawFraction).toBeGreaterThan(0.8);
+        const motion = report.motion as ReturnType<typeof contentMotionFraction>;
+        expect(motion.fraction).toBeGreaterThanOrEqual(0.15);
+      } finally {
+        stopHeartbeat?.();
+        await attachJson(info, "ui-presentation-diagnosis", report);
       }
-      expect(usableSamples).toBeGreaterThanOrEqual(process.env.CI ? 12 : 16);
-      expect(drawFraction).toBeGreaterThan(0.8);
-      const motion = report.motion as ReturnType<typeof contentMotionFraction>;
-      expect(motion.fraction).toBeGreaterThanOrEqual(0.15);
-    } finally {
-      stopHeartbeat?.();
-      await attachJson(info, "ui-presentation-diagnosis", report);
-    }
-  });
+    },
+  );
 });

@@ -27,6 +27,34 @@ export async function startApplicationHeartbeat(
   const workerRequests = new Set();
   let busy = false;
   let stopped = false;
+  let pageRequestPending = false;
+  const presentationSnapshot = async () => {
+    if (typeof page.evaluate !== "function" || pageRequestPending) return { unavailable: true };
+    pageRequestPending = true;
+    let deadline;
+    try {
+      return await Promise.race([
+        page.evaluate(() => ({
+          interaction: window.__donnerInteractionStats ?? null,
+          queue: window.__donnerPresentationQueueStats ?? null,
+          repair: window.__donnerPresentationRepairStats ?? null,
+          worker: window.__donnerWorkerStats ?? null,
+          host: window.__donnerHostFrameTiming ?? null,
+          viewport: window.__donnerViewportStats ?? null,
+          thumbnails: window.__donnerSampleThumbnailStats ?? null,
+        })).finally(() => {
+          pageRequestPending = false;
+        }),
+        new Promise((_, reject) => {
+          deadline = setTimeout(() => reject(new Error("page diagnostic deadline")), 500);
+        }),
+      ]);
+    } catch {
+      return { unavailable: true };
+    } finally {
+      clearTimeout(deadline);
+    }
+  };
   const pulse = async () => {
     if (busy || stopped) return;
     busy = true;
@@ -42,6 +70,7 @@ export async function startApplicationHeartbeat(
         }),
       ]);
       if (stopped) return;
+      const applicationAtMs = Date.now();
       const workers = page.workers();
       for (const worker of workerSnapshots.keys()) {
         if (!workers.includes(worker)) workerSnapshots.delete(worker);
@@ -83,11 +112,14 @@ export async function startApplicationHeartbeat(
         }
       }));
       if (stopped) return;
+      const presentation = await presentationSnapshot();
+      if (stopped) return;
       writeHeartbeat(heartbeat, {
-        atMs: Date.now(),
+        atMs: applicationAtMs,
         phase: "active",
         sessionId,
         gpu,
+        presentation,
         workers: workers.map((worker, index) => {
           const prior = workerSnapshots.get(worker);
           return prior
