@@ -1130,11 +1130,13 @@ donner_cc_library(
         ":editor_shell_presentation",
         ":frame_presentation",
         ":gl_texture_cache",
+        ":overlay_renderer",
         ":presented_frame_composer",
         ":render_pane_presenter",
         ":select_tool",
         ":viewport_state",
         "//donner/base",
+        "//donner/svg/renderer",
     ] + select({
         ":wasm_geode_enabled": [],
         "//donner/svg/renderer:renderer_backend_geode": [],

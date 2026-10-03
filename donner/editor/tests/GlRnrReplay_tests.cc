@@ -2453,6 +2453,8 @@ TEST(GlRnrReplayTest, PenDragUsesCyanOverlayWithoutLegacyBluePath) {
 
   std::optional<svg::RendererBitmap> dragCapture = LoadCaptureBitmap(result, 7);
   ASSERT_TRUE(dragCapture.has_value());
+  EXPECT_GT(CountPenPreviewPixelsInCorridor(*dragCapture, 22.0, 28.0, 3.0), 0)
+      << "The live cubic must have visible cyan pixels away from its endpoints and handles.";
   EXPECT_EQ(CountLegacyBluePenPixels(*dragCapture), 0)
       << "The document-canvas capture should contain no legacy blue PenTool path pixels.";
 

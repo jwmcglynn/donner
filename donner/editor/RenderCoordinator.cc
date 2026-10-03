@@ -1227,7 +1227,6 @@ FramePresentationInput RenderCoordinator::makeFrameInput(EditorApp& app, SelectT
 }
 
 void RenderCoordinator::refreshLivePathCapture(EditorApp& app, FramePresentationInput& input) {
-#ifdef DONNER_EDITOR_WGPU
   if (!penLivePreviewElement_.has_value()) {
     livePathCapture_.reset();
   } else if (const auto access = app.document().document().tryWriteAccess(); access.has_value()) {
@@ -1242,7 +1241,6 @@ void RenderCoordinator::refreshLivePathCapture(EditorApp& app, FramePresentation
     }
   }
   input.livePathReplacement = livePathCapture_;
-#endif
 }
 
 void RenderCoordinator::recordFramePresentationCost(const FramePresentationInput& input,
@@ -1340,6 +1338,14 @@ bool SameStaticFrameIntent(const FramePresentationInput& input, const FramePrese
          input.suppressSelectionPixels == old.suppressSelectionPixels;
 }
 
+void PrepareCandidateFrame(FramePresentationBuildResult& outcome,
+                           const FramePresentationAdmission& admit) {
+  if (outcome.frame != nullptr && admit && !admit(*outcome.frame)) {
+    outcome.frame.reset();
+    outcome.failure = FramePresentationFailure::UploadRefused;
+  }
+}
+
 bool FrameCarriesInput(const FramePresentation& frame, const FramePresentationInput& input) {
   if (!frame.identity().sameContent(input.documentIdentity)) {
     return false;
@@ -1420,7 +1426,7 @@ void RenderCoordinator::installFrameDecision(
 
 std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentation(
     EditorApp& app, SelectTool& tool, const ViewportState& viewport, const Box2d& paneClipRect,
-    SelectionChromeDetail detail, bool includeChrome) {
+    SelectionChromeDetail detail, bool includeChrome, FramePresentationAdmission admit) {
   auto& cost = lastFrameCostBreakdown_.overlay;
   const auto live = tool.activeDragPreview();
   cost.hasLiveDragPreview = live.has_value();
@@ -1453,6 +1459,7 @@ std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentati
   }
   auto outcome =
       FramePresentation::Build(resources, input, selectedSceneCapture_, framePresentation_);
+  PrepareCandidateFrame(outcome, admit);
   auto next = outcome.frame;
   updateFrameRepairStatus(input, resources, outcome);
   if (next != nullptr) {

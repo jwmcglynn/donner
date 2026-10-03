@@ -161,6 +161,13 @@ declare global {
       captureId: number;
       documentRevision: number;
       followsPointer: boolean;
+      overviewRaster: boolean;
+      rasterX: number;
+      rasterY: number;
+      rasterWidth: number;
+      rasterHeight: number;
+      rasterOutputWidth: number;
+      rasterOutputHeight: number;
     };
     Module?: {
       _donner_set_overlay_state?: (key: number, enabled: number) => number;
@@ -2980,8 +2987,19 @@ test("Geode crown face paints at each held pointer position before release", asy
   ).toBe(1);
   await waitForPressReadiness(page, "Geode crown drag press");
 
+  const captureProvenance = async (name: string) => {
+    const state = await page.evaluate(() => ({
+      overlay: window.__donnerOverlayStats,
+      worker: window.__donnerWorkerStats,
+      interaction: window.__donnerInteractionStats,
+      viewport: window.__donnerViewportStats,
+    }));
+    await attachEvidenceFile(name, Buffer.from(JSON.stringify(state, null, 2)), "application/json");
+    return state;
+  };
   const baseline = await page.screenshot({ clip: crop });
   await attachEvidenceFile("geode-crown-selected-baseline", baseline, "image/png");
+  const baselineState = await captureProvenance("geode-crown-selected-provenance");
   const expectedTopLeft = screenFromDocument(518, 481);
   const expectedBottomRight = screenFromDocument(556, 515);
   const handlePixels = (png: Buffer, anchor: { x: number; y: number }, delta: number) => {
@@ -3049,6 +3067,7 @@ test("Geode crown face paints at each held pointer position before release", asy
       await waitForBrowserComposite(page);
       const held = await page.screenshot({ clip: crop });
       await attachEvidenceFile(`geode-crown-held-${delta}`, held, "image/png");
+      const heldState = await captureProvenance(`geode-crown-held-${delta}-provenance`);
       const heldHandle = handlePixels(held, expectedBottomRight, delta);
       expect.soft(
         heldHandle.teal,
@@ -3084,7 +3103,8 @@ test("Geode crown face paints at each held pointer position before release", asy
       );
       expect(
         staticControl.changedPixelsAbove8,
-        "a blank or stale screenshot cannot count as a moved crown face",
+        "a blank or stale screenshot cannot count as a moved crown face: "
+          + JSON.stringify({ baseline: baselineState.overlay, held: heldState.overlay }),
       ).toBeLessThanOrEqual(5);
     }
   } finally {

@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -29,6 +30,9 @@ class GeodeDevice;
 }
 
 namespace donner::editor {
+
+/// Prepare renderer-owned resources before publishing a sealed frame; false retains the old frame.
+using FramePresentationAdmission = std::function<bool(const FramePresentation&)>;
 
 class SelectTool;
 
@@ -444,11 +448,10 @@ public:
   /// Return true when the live selected graphics element is hidden by `display:none`.
   [[nodiscard]] bool selectedElementIsDisplayNone(EditorApp& app) const;
   /// Seal the resource, object-pose and selection decision used by every draw pass this frame.
-  std::shared_ptr<const FramePresentation> buildFramePresentation(EditorApp& app, SelectTool& tool,
-                                                                  const ViewportState& viewport,
-                                                                  const Box2d& paneClipRect,
-                                                                  SelectionChromeDetail detail,
-                                                                  bool includeChrome = true);
+  std::shared_ptr<const FramePresentation> buildFramePresentation(
+      EditorApp& app, SelectTool& tool, const ViewportState& viewport, const Box2d& paneClipRect,
+      SelectionChromeDetail detail, bool includeChrome = true,
+      FramePresentationAdmission admit = {});
   /// Last installed immutable frame, retained for diagnostics and render callbacks.
   [[nodiscard]] std::shared_ptr<const FramePresentation> framePresentation() const {
     return framePresentation_;

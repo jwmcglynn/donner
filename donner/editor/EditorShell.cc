@@ -437,7 +437,9 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
 void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay,
                          int selectionChromeSnapshotPresent, double currentDocVersion,
                          double displayedDocVersion, double frameId, double captureId,
-                         double documentRevision, int followsPointer) {
+                         double documentRevision, int followsPointer, int overviewRaster,
+                         double rasterX, double rasterY, double rasterWidth, double rasterHeight,
+                         int rasterOutputWidth, int rasterOutputHeight) {
   // clang-format off
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -451,23 +453,36 @@ void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay,
           'captureId' : $6,
           'documentRevision' : $7,
           'followsPointer' : !!$8,
+          'overviewRaster' : !!$9,
+          'rasterX' : $10,
+          'rasterY' : $11,
+          'rasterWidth' : $12,
+          'rasterHeight' : $13,
+          'rasterOutputWidth' : $14,
+          'rasterOutputHeight' : $15,
         });
       },
       compositorTileOverlay, geometryDebugOverlay, selectionChromeSnapshotPresent,
-      currentDocVersion, displayedDocVersion, frameId, captureId, documentRevision, followsPointer);
+      currentDocVersion, displayedDocVersion, frameId, captureId, documentRevision, followsPointer, overviewRaster,
+      rasterX, rasterY, rasterWidth, rasterHeight, rasterOutputWidth, rasterOutputHeight);
   // clang-format on
 }
 
 void PublishFrameOverlayStats(int tileOverlay, int debugOverlay, int chromePresent,
                               double documentVersion, double displayedVersion,
                               const FramePresentation* presentation) {
+  const Box2d raster = presentation != nullptr ? presentation->rasterDocumentRect() : Box2d();
+  const Vector2i size =
+      presentation != nullptr ? presentation->rasterOutputSizePx() : Vector2i::Zero();
   PublishOverlayStats(
       tileOverlay, debugOverlay, chromePresent, documentVersion, displayedVersion,
       presentation != nullptr ? static_cast<double>(presentation->frameId()) : 0.0,
       presentation != nullptr ? static_cast<double>(presentation->identity().captureId) : 0.0,
       presentation != nullptr ? static_cast<double>(presentation->identity().documentRevision)
                               : 0.0,
-      presentation != nullptr && presentation->followsPointer());
+      presentation != nullptr && presentation->followsPointer(),
+      presentation != nullptr && presentation->usesOverviewRaster(), raster.topLeft.x,
+      raster.topLeft.y, raster.size().x, raster.size().y, size.x, size.y);
 }
 
 void PublishViewportStats(double paneX, double paneY, double paneWidth, double paneHeight,
@@ -5276,24 +5291,32 @@ void EditorShell::renderRenderPanePresentation(
     SetImGuiOsCursorManagementEnabled(true);
   }
   updatePenLivePreviewTarget();
-  const auto frame = showSamplePicker_ ? nullptr
-                                       : renderCoordinator_.buildFramePresentation(
-                                             app_, selectTool_, presentedDocumentViewport, paneRect,
-                                             selectionChromeDetailForActiveTool(),
-                                             !contentOnlyCaptureThisFrame_ && !showSamplePicker_);
-  const bool accepted = documentPresenter_->present(frame);
-#ifdef DONNER_EDITOR_WGPU
-  const bool documentPresentedDirectly = accepted && frame != nullptr;
+#ifndef DONNER_EDITOR_WGPU
+  DocumentCompositeTextureView documentComposite;
+  const FramePresentationAdmission admit = [this,
+                                            &documentComposite](const FramePresentation& next) {
+    if (documentPresentationCompositor_ == nullptr) {
+      return false;
+    }
+    documentComposite = documentPresentationCompositor_->compose(next);
+    return documentComposite.texture != 0 || !next.documentClipRect().has_value();
+  };
 #else
-  (void)accepted;
-  const bool documentPresentedDirectly = false;
+  const FramePresentationAdmission admit;
 #endif
+  const auto frame = showSamplePicker_
+                         ? nullptr
+                         : renderCoordinator_.buildFramePresentation(
+                               app_, selectTool_, presentedDocumentViewport, paneRect,
+                               selectionChromeDetailForActiveTool(),
+                               !contentOnlyCaptureThisFrame_ && !showSamplePicker_, admit);
   const auto representedGesturePreview =
       frame != nullptr && frame->followsPointer() ? activeGesturePreview : std::nullopt;
 #ifndef DONNER_EDITOR_WGPU
-  DocumentCompositeTextureView documentComposite;
   if (documentPresentationCompositor_ != nullptr && frame != nullptr) {
-    documentComposite = documentPresentationCompositor_->compose(*frame);
+    if (documentComposite.texture == 0) {
+      documentComposite = documentPresentationCompositor_->compose(*frame);
+    }
   } else if (documentPresentationCompositor_ != nullptr) {
     documentPresentationCompositor_->reset();
   }
@@ -5303,6 +5326,13 @@ void EditorShell::renderRenderPanePresentation(
 #else
   const DocumentCompositeTextureView documentComposite;
   textures_.setDocumentCompositeBytes(0u);
+#endif
+  const bool accepted = documentPresenter_->present(frame);
+#ifdef DONNER_EDITOR_WGPU
+  const bool documentPresentedDirectly = accepted && frame != nullptr;
+#else
+  (void)accepted;
+  const bool documentPresentedDirectly = false;
 #endif
   interactionController_.frameHistory().setLatestMemorySample(
       MemorySampleFromPresentationResources(textures_.presentationResourceStats()));

@@ -118,6 +118,18 @@ public:
   }
   /// Frame identity shared by both GPU passes and any diagnostic capture.
   [[nodiscard]] std::uint64_t frameId() const { return frameId_; }
+  /// Whether the frame selected the retained overview raster family.
+  [[nodiscard]] bool usesOverviewRaster() const { return useOverview_; }
+  /// Author-space coverage of the raster family chosen for this immutable frame.
+  [[nodiscard]] Box2d rasterDocumentRect() const {
+    return useOverview_ ? resources_->coverage().overviewRasterDocumentRect
+                        : resources_->coverage().activeRasterDocumentRect;
+  }
+  /// Pixel dimensions of the raster family chosen for this immutable frame.
+  [[nodiscard]] Vector2i rasterOutputSizePx() const {
+    return useOverview_ ? resources_->coverage().overviewOutputSizePx
+                        : resources_->coverage().activeOutputSizePx;
+  }
   /// Geometry source for selected objects, including a complete live vector replacement.
   [[nodiscard]] PresentationIdentity selectionIdentity() const {
     return livePathCapture_ != nullptr ? livePathCapture_->identity()

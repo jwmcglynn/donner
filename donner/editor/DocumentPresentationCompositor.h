@@ -43,8 +43,11 @@ public:
   /// Invalidate the cached request and clear its presented view while retaining allocations.
   void reset();
 
-  /// Bytes retained by the two RGBA8 intermediate textures.
+  /// Bytes retained by document intermediates and software-rendered frame paint textures.
   [[nodiscard]] std::uint64_t retainedBytes() const;
+
+  /// Refuse the next software paint upload before changing any presented pixels.
+  void failNextSoftwarePaintUploadForTesting();
 
   /// Number of cache-miss compositions, exposed for deterministic performance tests.
   [[nodiscard]] std::uint64_t compositionCountForTesting() const;
