@@ -112,6 +112,10 @@ enum class TokenKind : uint8_t {
   Arrow,
   PlusAssign,
   MinusAssign,
+  ShiftLeft,
+  ShiftRight,
+  ShiftLeftAssign,
+  ShiftRightAssign,
 };
 
 struct Token {
@@ -487,8 +491,12 @@ private:
 
   constexpr TokenKind TwoCharacterPunctuation(char ch) {
     switch (ch) {
-      case '<': return PunctuationSuffix('=', TokenKind::LessEqual, TokenKind::Less);
-      case '>': return PunctuationSuffix('=', TokenKind::GreaterEqual, TokenKind::Greater);
+      case '<':
+        return AnglePunctuation('<', TokenKind::Less, TokenKind::LessEqual, TokenKind::ShiftLeft,
+                                TokenKind::ShiftLeftAssign);
+      case '>':
+        return AnglePunctuation('>', TokenKind::Greater, TokenKind::GreaterEqual,
+                                TokenKind::ShiftRight, TokenKind::ShiftRightAssign);
       case '+': return PunctuationSuffix('=', TokenKind::PlusAssign, TokenKind::Plus);
       case '-':
         if (Peek('>')) {
@@ -505,6 +513,20 @@ private:
 
   constexpr TokenKind PunctuationSuffix(char expected, TokenKind paired, TokenKind single) {
     return Peek(expected) ? paired : single;
+  }
+
+  /// Lexes a comparison, a shift or a shift assignment that begins with p angle. A doubled `>`
+  /// stays one shift token here; \ref ExpectTemplateEnd splits it where it closes nested
+  /// template lists.
+  /// @param angle The angle bracket already consumed. @param single The bare comparison.
+  /// @param orEqual The comparison with `=`. @param shift The doubled angle.
+  /// @param shiftAssign The doubled angle with `=`.
+  constexpr TokenKind AnglePunctuation(char angle, TokenKind single, TokenKind orEqual,
+                                       TokenKind shift, TokenKind shiftAssign) {
+    if (Peek(angle)) {
+      return PunctuationSuffix('=', shiftAssign, shift);
+    }
+    return PunctuationSuffix('=', orEqual, single);
   }
 
   constexpr bool Peek(char expected) {
@@ -539,6 +561,17 @@ private:
       Fail(ErrorCode::UnexpectedToken, token_.span);
     }
     return result;
+  }
+
+  /// Consumes the `>` that closes a template list. When that `>` begins a `>>` or `>>=` token,
+  /// as in `array<vec2<u32>>`, only its first byte closes the list and the rest is lexed again.
+  constexpr void ExpectTemplateEnd() {
+    if (token_.kind == TokenKind::ShiftRight || token_.kind == TokenKind::ShiftRightAssign) {
+      cursor_ = token_.span.begin + 1;
+      Next();
+      return;
+    }
+    Expect(TokenKind::Greater);
   }
 
   constexpr Token ExpectIdentifier() {
@@ -995,7 +1028,7 @@ private:
     const Type element = ParseType();
     const bool fixed = Match(TokenKind::Comma);
     const uint32_t count = fixed ? ParseArrayCount() : 0;
-    Expect(TokenKind::Greater);
+    ExpectTemplateEnd();
     if (fixed && element.kind == TypeKind::Struct) {
       Fail(ErrorCode::UnsupportedConstruct, name.span);
     }
@@ -1031,7 +1064,7 @@ private:
     if (Match(TokenKind::Comma)) {
       accessMode = ExpectIdentifier();
     }
-    Expect(TokenKind::Greater);
+    ExpectTemplateEnd();
     if (!TextEquals(addressSpace.text, "function")) {
       Fail(ErrorCode::InvalidPointer, addressSpace.span);
       return {};
@@ -1061,7 +1094,7 @@ private:
   constexpr Type ParseSampledTextureType() {
     Expect(TokenKind::Less);
     const Token scalar = ExpectIdentifier();
-    Expect(TokenKind::Greater);
+    ExpectTemplateEnd();
     if (scalar.text != "f32") {
       Fail(ErrorCode::UnknownType, scalar.span);
     }
@@ -1073,7 +1106,7 @@ private:
     const Token format = ExpectIdentifier();
     Expect(TokenKind::Comma);
     const Token access = ExpectIdentifier();
-    Expect(TokenKind::Greater);
+    ExpectTemplateEnd();
     Type type{TypeKind::StorageTexture2d};
     if (format.text == "rgba8unorm") {
       type.storageFormat = StorageTextureFormat::Rgba8Unorm;
@@ -1104,7 +1137,7 @@ private:
     } else {
       Expect(TokenKind::Less);
       scalar = ParseType();
-      Expect(TokenKind::Greater);
+      ExpectTemplateEnd();
     }
     if (scalar.lanes != 1 || (scalar.kind != TypeKind::Bool && !scalar.isNumeric())) {
       Fail(ErrorCode::UnknownType, name.span);
@@ -1127,7 +1160,7 @@ private:
     } else {
       Expect(TokenKind::Less);
       const Type scalar = ParseType();
-      Expect(TokenKind::Greater);
+      ExpectTemplateEnd();
       if (scalar != Type{TypeKind::F32}) {
         Fail(ErrorCode::UnknownType, name.span);
       }
@@ -1224,7 +1257,7 @@ private:
     if (Match(TokenKind::Comma)) {
       *accessMode = ExpectIdentifier();
     }
-    Expect(TokenKind::Greater);
+    ExpectTemplateEnd();
   }
 
   constexpr bool BindingAttributesValid(const Attributes& attributes) const {
@@ -1870,15 +1903,35 @@ private:
     return false;
   }
 
-  /// Parses `target += value;` or `target -= value;` as the equivalent assignment of a sum or
-  /// difference, so integer wrapping and lowering match the spelled-out form exactly.
+  /// Returns whether p kind is the `<<` or `>>` operator.
+  static constexpr bool IsShiftToken(TokenKind kind) {
+    return kind == TokenKind::ShiftLeft || kind == TokenKind::ShiftRight;
+  }
+
+  /// Returns the binary operator a compound assignment token applies, or End for any other token.
+  /// @param kind Token after an assignment target.
+  static constexpr TokenKind CompoundOperator(TokenKind kind) {
+    switch (kind) {
+      case TokenKind::PlusAssign: return TokenKind::Plus;
+      case TokenKind::MinusAssign: return TokenKind::Minus;
+      case TokenKind::ShiftLeftAssign: return TokenKind::ShiftLeft;
+      case TokenKind::ShiftRightAssign: return TokenKind::ShiftRight;
+      default: return TokenKind::End;
+    }
+  }
+
+  /// Parses `target op= value;` for `+`, `-`, `<<` and `>>` as the equivalent assignment of
+  /// `target op value`, so integer wrapping, amount masking and lowering match the spelled-out
+  /// form exactly.
   /// @param target Already-parsed assignment target. @param begin Target location.
   constexpr ArenaId ParseCompoundAssignment(ExpressionInfo target, SourceSpan begin) {
     Token arithmetic = token_;
-    arithmetic.kind = token_.kind == TokenKind::PlusAssign ? TokenKind::Plus : TokenKind::Minus;
+    arithmetic.kind = CompoundOperator(token_.kind);
     Next();
     const Type targetType = ExpressionAt(target.id).type;
-    const ExpressionInfo value = Materialize(ParseExpression(), targetType);
+    // A shift amount is u32 whatever the target's type; the shift checks its lane count.
+    const ExpressionInfo value = Materialize(
+        ParseExpression(), IsShiftToken(arithmetic.kind) ? Type{TypeKind::U32} : targetType);
     Expect(TokenKind::Semicolon);
     if (!target.mutableLvalue) {
       Fail(ErrorCode::ImmutableAssignment, begin);
@@ -1918,7 +1971,7 @@ private:
     if (token_.kind == TokenKind::Semicolon) {
       return ParseCallStatement(target, begin);
     }
-    if (token_.kind == TokenKind::PlusAssign || token_.kind == TokenKind::MinusAssign) {
+    if (CompoundOperator(token_.kind) != TokenKind::End) {
       return ParseCompoundAssignment(target, begin);
     }
     Expect(TokenKind::Assign);
@@ -2224,17 +2277,19 @@ private:
       case TokenKind::LessEqual:
       case TokenKind::Greater:
       case TokenKind::GreaterEqual: return 4;
-      default: return ArithmeticPrecedence(kind);
+      default: return ShiftAndArithmeticPrecedence(kind);
     }
   }
 
-  constexpr uint8_t ArithmeticPrecedence(TokenKind kind) const {
+  constexpr uint8_t ShiftAndArithmeticPrecedence(TokenKind kind) const {
     switch (kind) {
+      case TokenKind::ShiftLeft:
+      case TokenKind::ShiftRight: return 5;
       case TokenKind::Plus:
-      case TokenKind::Minus: return 5;
+      case TokenKind::Minus: return 6;
       case TokenKind::Star:
       case TokenKind::Slash:
-      case TokenKind::Percent: return 6;
+      case TokenKind::Percent: return 7;
       default: return 0;
     }
   }
@@ -3542,11 +3597,206 @@ private:
         false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
   }
 
-  enum class BinaryGroup : uint8_t { None, Arithmetic, Relational, And, Or, BitAnd };
+  /// Lane values of a constant i32 or u32 scalar or vector.
+  struct IntegerLanes {
+    std::array<uint32_t, 4> bits = {};  //!< Lane bits; signed lanes are two's complement.
+    uint8_t count = 0;                  //!< Number of valid lanes.
+  };
+
+  /**
+   * Shifts the bits of a constant i32 or u32 under WGSL's creation-time rules.
+   *
+   * @param left True for `<<`. @param isSigned True for i32, whose right shift is arithmetic.
+   * @param value Bits of the shifted value. @param amount Shift amount.
+   * @param result Receives the shifted bits.
+   * @return False for an amount at or above 32, or for a left shift that discards a bit differing
+   *   from the result's sign bit (i32) or a set bit (u32).
+   */
+  static constexpr bool ShiftBits(bool left, bool isSigned, uint32_t value, uint32_t amount,
+                                  uint32_t* result) {
+    if (amount >= 32) {
+      return false;
+    }
+    if (!left) {
+      *result = isSigned ? std::bit_cast<uint32_t>(std::bit_cast<int32_t>(value) >> amount)
+                         : value >> amount;
+      return true;
+    }
+    // An i32 keeps its amount + 1 most significant bits equal; a u32 discards only zero bits.
+    const uint32_t checked = isSigned ? amount + 1 : amount;
+    if (checked != 0) {
+      const uint32_t top = value >> (32 - checked);
+      const uint32_t ones = checked == 32 ? 0xffffffffu : (1u << checked) - 1u;
+      if (top != 0 && (!isSigned || top != ones)) {
+        return false;
+      }
+    }
+    *result = value << amount;
+    return true;
+  }
+
+  /// Evaluates a constant i32 or u32 scalar to its bits.
+  /// @param id Expression to evaluate. @param bits Receives two's-complement bits.
+  constexpr bool ConstIntegerBits(ArenaId id, uint32_t* bits) const {
+    int32_t signedValue = 0;
+    if (ConstI32Value(id, &signedValue)) {
+      *bits = std::bit_cast<uint32_t>(signedValue);
+      return true;
+    }
+    return ConstU32Value(id, bits);
+  }
+
+  /// Evaluates every lane of a constant i32 or u32 scalar or vector. Vector lanes come from a zero
+  /// value or a constructor of same-kind constant components, including a scalar splat.
+  /// @param id Expression to evaluate. @param lanes Receives the lane bits.
+  constexpr bool ConstIntegerLanes(ArenaId id, IntegerLanes* lanes) const {
+    const Expression& expression = ExpressionAt(id);
+    if (expression.type.kind != TypeKind::I32 && expression.type.kind != TypeKind::U32) {
+      return false;
+    }
+    if (expression.type.lanes == 1) {
+      lanes->count = 1;
+      return ConstIntegerBits(id, &lanes->bits[0]);
+    }
+    if (expression.kind == ExpressionKind::Zero) {
+      *lanes = IntegerLanes{{}, expression.type.lanes};
+      return true;
+    }
+    return expression.kind == ExpressionKind::Construct &&
+           ConstIntegerConstruction(expression, lanes);
+  }
+
+  /// Evaluates a vector constructor of same-kind constant i32 or u32 components.
+  /// @param expression Vector Construct node. @param lanes Receives the lane bits.
+  constexpr bool ConstIntegerConstruction(const Expression& expression, IntegerLanes* lanes) const {
+    IntegerLanes assembled;
+    for (uint8_t operand = 0; operand < expression.operandCount; ++operand) {
+      IntegerLanes part;
+      if (ExpressionAt(expression.operands[operand]).type.kind != expression.type.kind ||
+          !ConstIntegerLanes(expression.operands[operand], &part) ||
+          assembled.count + part.count > expression.type.lanes) {
+        return false;
+      }
+      for (uint8_t lane = 0; lane < part.count; ++lane) {
+        assembled.bits[assembled.count + lane] = part.bits[lane];
+      }
+      assembled.count += part.count;
+    }
+    if (expression.operandCount == 1 && assembled.count == 1) {
+      assembled.bits.fill(assembled.bits[0]);
+      assembled.count = expression.type.lanes;
+    }
+    if (assembled.count != expression.type.lanes) {
+      return false;
+    }
+    *lanes = assembled;
+    return true;
+  }
+
+  /// Applies WGSL's creation-time shift rules: a constant amount is below 32 in every lane, and a
+  /// left shift of a constant value by a constant amount does not overflow. Constant syntax this
+  /// profile cannot evaluate is rejected rather than assumed to be in range.
+  /// @param op Operator token. @param lhs Shifted i32 or u32 value. @param rhs u32 amount.
+  constexpr void ValidateShiftConstants(Token op, ExpressionInfo lhs, ExpressionInfo rhs) {
+    if (!IsConstantSyntax(rhs.id)) {
+      return;
+    }
+    IntegerLanes amounts;
+    bool amountsValid = ConstIntegerLanes(rhs.id, &amounts);
+    for (uint8_t lane = 0; amountsValid && lane < amounts.count; ++lane) {
+      amountsValid = amounts.bits[lane] < 32;
+    }
+    if (!amountsValid) {
+      Fail(ErrorCode::InvalidConstantExpression, ExpressionAt(rhs.id).span);
+      return;
+    }
+    if (op.kind != TokenKind::ShiftLeft || !IsConstantSyntax(lhs.id)) {
+      return;
+    }
+    const bool isSigned = ExpressionAt(lhs.id).type.kind == TypeKind::I32;
+    IntegerLanes values;
+    bool valid = ConstIntegerLanes(lhs.id, &values) && values.count == amounts.count;
+    for (uint8_t lane = 0; valid && lane < values.count; ++lane) {
+      uint32_t shifted = 0;
+      valid = ShiftBits(true, isSigned, values.bits[lane], amounts.bits[lane], &shifted);
+    }
+    if (!valid) {
+      Fail(ErrorCode::InvalidConstantExpression, op.span);
+    }
+  }
+
+  /// Folds a shift of an abstract integer by a constant amount over the 64-bit abstract range. A
+  /// left shift may discard only copies of the result's sign bit, and an amount must be below 64.
+  /// @param op Operator token. @param lhs Abstract integer literal. @param rhs Constant u32 amount.
+  constexpr ExpressionInfo FoldAbstractShift(Token op, ExpressionInfo lhs, ExpressionInfo rhs) {
+    const Expression& left = ExpressionAt(lhs.id);
+    const Expression& right = ExpressionAt(rhs.id);
+    const SourceSpan span{left.span.begin, right.span.end};
+    const Type abstractInt{TypeKind::AbstractInt};
+    uint32_t amount = 0;
+    if (left.kind != ExpressionKind::Literal || !ConstU32Value(rhs.id, &amount) || amount >= 64) {
+      Fail(ErrorCode::InvalidConstantExpression, right.span);
+      return NumericLiteral(abstractInt, 0, span);
+    }
+    const int64_t value = std::bit_cast<int64_t>(LiteralBits(left));
+    if (op.kind == TokenKind::ShiftRight) {
+      return NumericLiteral(abstractInt, std::bit_cast<uint64_t>(value >> amount), span);
+    }
+    const int64_t top = value >> (63 - amount);
+    if (top != 0 && top != -1) {
+      Fail(ErrorCode::InvalidConstantExpression, op.span);
+    }
+    return NumericLiteral(abstractInt, std::bit_cast<uint64_t>(value) << amount, span);
+  }
+
+  /**
+   * Returns `value << amount` or `value >> amount` under WGSL's shift overloads: the value is an
+   * i32 or u32 scalar or vector, and the amount is u32, or vecN<u32> for an N-lane value.
+   *
+   * An abstract amount materializes to u32. An abstract value folds to an abstract integer
+   * against a constant amount and concretizes to i32 against a runtime amount.
+   * @param op Operator token. @param lhs Shifted value. @param rhs Shift amount.
+   */
+  constexpr ExpressionInfo MakeShift(Token op, ExpressionInfo lhs, ExpressionInfo rhs) {
+    const SourceSpan span{ExpressionAt(lhs.id).span.begin, ExpressionAt(rhs.id).span.end};
+    if (ExpressionAt(lhs.id).type.kind == TypeKind::AbstractFloat ||
+        ExpressionAt(rhs.id).type.kind == TypeKind::AbstractFloat) {
+      Fail(ErrorCode::TypeMismatch, op.span);
+      return ErrorExpression(span);
+    }
+    rhs = Materialize(rhs, Type{TypeKind::U32});
+    if (ExpressionAt(lhs.id).type.kind == TypeKind::AbstractInt &&
+        ExpressionAt(rhs.id).type == Type{TypeKind::U32}) {
+      if (IsConstantSyntax(rhs.id)) {
+        return FoldAbstractShift(op, lhs, rhs);
+      }
+      lhs = Materialize(lhs, Type{TypeKind::I32});
+    }
+    if (failed()) {
+      return ErrorExpression(span);
+    }
+    const Type value = ExpressionAt(lhs.id).type;
+    if ((value.kind != TypeKind::I32 && value.kind != TypeKind::U32) ||
+        ExpressionAt(rhs.id).type != Type{TypeKind::U32, value.lanes}) {
+      Fail(ErrorCode::TypeMismatch, op.span);
+      return ErrorExpression(span);
+    }
+    ValidateShiftConstants(op, lhs, rhs);
+    const BinaryOp shift =
+        op.kind == TokenKind::ShiftLeft ? BinaryOp::ShiftLeft : BinaryOp::ShiftRight;
+    return AddExpression(Expression{ExpressionKind::Binary, value, span, Operands(lhs.id, rhs.id),
+                                    2, static_cast<uint32_t>(shift)},
+                         false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
+  }
+
+  enum class BinaryGroup : uint8_t { None, Arithmetic, Relational, And, Or, BitAnd, Shift };
 
   constexpr BinaryGroup GroupOf(TokenKind kind) const {
     if (kind == TokenKind::BitAnd) {
       return BinaryGroup::BitAnd;
+    }
+    if (IsShiftToken(kind)) {
+      return BinaryGroup::Shift;
     }
     if (kind == TokenKind::And) {
       return BinaryGroup::And;
@@ -3562,12 +3812,24 @@ private:
     return BinaryGroup::Arithmetic;
   }
 
+  /// Returns whether an ungrouped shift may be an operand of p parent. Both operands of a shift are
+  /// unary expressions, so a shift never takes an ungrouped operator; only a comparison or a
+  /// short-circuit operator takes an ungrouped shift.
+  /// @param parent Group of the enclosing operator.
+  static constexpr bool TakesUngroupedShift(BinaryGroup parent) {
+    return parent == BinaryGroup::Relational || parent == BinaryGroup::And ||
+           parent == BinaryGroup::Or;
+  }
+
   constexpr bool GroupsCompatible(BinaryGroup parent, BinaryGroup child) const {
     if (child == BinaryGroup::None) {
       return true;
     }
     if (parent == BinaryGroup::BitAnd || child == BinaryGroup::BitAnd) {
       return parent == child;
+    }
+    if (parent == BinaryGroup::Shift || child == BinaryGroup::Shift) {
+      return TakesUngroupedShift(parent);
     }
     if (parent == BinaryGroup::Relational && child == BinaryGroup::Relational) {
       return false;
@@ -3582,7 +3844,8 @@ private:
         !GroupsCompatible(group, static_cast<BinaryGroup>(rhs.ungroupedBinary))) {
       Fail(ErrorCode::UnsupportedConstruct, op.span);
     }
-    ExpressionInfo result = MakeBinaryImpl(op, lhs, rhs);
+    ExpressionInfo result =
+        IsShiftToken(op.kind) ? MakeShift(op, lhs, rhs) : MakeBinaryImpl(op, lhs, rhs);
     result.ungroupedBinary = static_cast<uint8_t>(group);
     return result;
   }
@@ -3766,7 +4029,7 @@ private:
       return ConstI32Value(expression.operands[0], value);
     }
     if (expression.kind == ExpressionKind::Binary) {
-      return EvaluateI32Binary(expression, value);
+      return EvaluateI32Operation(expression, value);
     }
     return false;
   }
@@ -3787,9 +4050,48 @@ private:
       return ConstU32Value(expression.operands[0], value);
     }
     if (expression.kind == ExpressionKind::Binary) {
-      return EvaluateU32Binary(expression, value);
+      return EvaluateU32Operation(expression, value);
     }
     return false;
+  }
+
+  /// Evaluates a constant scalar shift, failing as \ref ShiftBits does.
+  /// @param expression Shift node with an i32 or u32 value and a u32 amount.
+  /// @param bits Receives the result bits.
+  constexpr bool EvaluateShift(const Expression& expression, uint32_t* bits) const {
+    uint32_t amount = 0;
+    uint32_t value = 0;
+    return ConstU32Value(expression.operands[1], &amount) &&
+           ConstIntegerBits(expression.operands[0], &value) &&
+           ShiftBits(static_cast<BinaryOp>(expression.payload) == BinaryOp::ShiftLeft,
+                     expression.type.kind == TypeKind::I32, value, amount, bits);
+  }
+
+  /// Returns whether p op is `<<` or `>>`, whose amount operand is always u32.
+  static constexpr bool IsShift(BinaryOp op) {
+    return op == BinaryOp::ShiftLeft || op == BinaryOp::ShiftRight;
+  }
+
+  /// Evaluates a constant i32 binary node, including a shift of an i32 by a u32 amount.
+  /// @param expression Binary node of type i32. @param value Receives the result.
+  constexpr bool EvaluateI32Operation(const Expression& expression, int32_t* value) const {
+    if (!IsShift(static_cast<BinaryOp>(expression.payload))) {
+      return EvaluateI32Binary(expression, value);
+    }
+    uint32_t bits = 0;
+    if (!EvaluateShift(expression, &bits)) {
+      return false;
+    }
+    *value = std::bit_cast<int32_t>(bits);
+    return true;
+  }
+
+  /// Evaluates a constant u32 binary node, including a shift.
+  /// @param expression Binary node of type u32. @param value Receives the result.
+  constexpr bool EvaluateU32Operation(const Expression& expression, uint32_t* value) const {
+    return IsShift(static_cast<BinaryOp>(expression.payload))
+               ? EvaluateShift(expression, value)
+               : EvaluateU32Binary(expression, value);
   }
 
   constexpr bool EvaluateI32Binary(const Expression& expression, int32_t* value) const {

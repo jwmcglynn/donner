@@ -191,7 +191,9 @@ enum class UnaryOp : uint8_t {
 
 /// Binary operator represented by Expression::payload.
 enum class BinaryOp : uint8_t {
-  BitAnd = 13,  //!< Integer bitwise AND.
+  BitAnd = 13,      //!< Integer bitwise AND.
+  ShiftLeft = 14,   //!< Integer `<<`; the u32 amount is taken modulo the 32-bit width.
+  ShiftRight = 15,  //!< Integer `>>`; arithmetic for i32, logical for u32, amount modulo 32.
   Add = 0,
   Sub,  //!< `-`.
   Mul,  //!< `*`.

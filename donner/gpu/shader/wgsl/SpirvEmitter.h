@@ -870,6 +870,7 @@ private:
   constexpr void emitLoop(const Statement& node);
   constexpr uint32_t convert(Type from, Type to, uint32_t operand);
   constexpr uint32_t emitBinary(const Expression& expression);
+  constexpr uint32_t emitShift(const Expression& node, uint32_t value, uint32_t amount);
   constexpr uint32_t emitMix(const Expression& node, std::array<uint32_t, 4> args);
   constexpr uint32_t emitBuiltin(const Expression& expression);
   constexpr uint32_t emitSampling(const Expression& node, const std::array<uint32_t, 4>& args);
@@ -1279,12 +1280,28 @@ constexpr uint32_t Emitter::emitBinary(const Expression& node) {
   if (op == BinaryOp::BitAnd) {
     return operation(199, node.type, lhs, rhs);
   }
+  if (op == BinaryOp::ShiftLeft || op == BinaryOp::ShiftRight) {
+    return emitShift(node, lhs, rhs);
+  }
   const Type leftType = module_.expressions[node.operands[0]].type;
   const Type rightType = module_.expressions[node.operands[1]].type;
   if (leftType.kind == TypeKind::Matrix || rightType.kind == TypeKind::Matrix) {
     return emitMatrixProduct(node, leftType, rightType, lhs, rhs);
   }
   return emitNumericBinary(node, leftType, rightType, lhs, rhs);
+}
+
+/// WGSL takes a runtime shift amount modulo the 32-bit width, while SPIR-V leaves an amount at or
+/// above the width undefined, so a computed amount is masked; a literal amount is validated below
+/// 32. The right shift is arithmetic for i32 and logical for u32.
+constexpr uint32_t Emitter::emitShift(const Expression& node, uint32_t value, uint32_t amount) {
+  const Expression& amountNode = module_.expressions[node.operands[1]];
+  if (amountNode.kind != ExpressionKind::Literal) {
+    amount = operation(199, amountNode.type, amount, constant(amountNode.type, 31u));
+  }
+  const bool left = static_cast<BinaryOp>(node.payload) == BinaryOp::ShiftLeft;
+  const uint32_t opcode = left ? 196 : node.type.kind == TypeKind::I32 ? 195 : 194;
+  return operation(opcode, node.type, value, amount);
 }
 
 constexpr uint32_t Emitter::emitMatrixProduct(const Expression& node, Type leftType, Type rightType,
