@@ -5,6 +5,7 @@ import { PNG } from "pngjs";
 import {
   awaitBeforeBlueDeadline,
   captureReadyBasicShapesFrame,
+  hasPresentedBasicShapesHostFrame,
   type InitialBlueFrameState,
 } from "./basic-shapes-capture-gate";
 import {
@@ -1578,6 +1579,19 @@ async function readBasicShapesProbeState(
   }
   return state;
 }
+
+test("Basic Shapes capture gate accepts a completed current frame after UI coalescing", () => {
+  const state = {
+    sampleId: "basic-shapes", completedResults: 1, presentedAtMs: 11835,
+    renderedFrames: 61, hostFrames: 61, hostPresented: false,
+    frameId: 40, captureId: 4, completedFrameId: 40, completedCaptureId: 4,
+  };
+  expect(hasPresentedBasicShapesHostFrame(state, 0)).toBe(true);
+  expect(hasPresentedBasicShapesHostFrame({ ...state, completedCaptureId: 3 }, 0)).toBe(false);
+  expect(hasPresentedBasicShapesHostFrame({ ...state, completedFrameId: 39 }, 0)).toBe(false);
+  expect(hasPresentedBasicShapesHostFrame({ ...state, hostFrames: 60 }, 0)).toBe(false);
+  expect(hasPresentedBasicShapesHostFrame({ ...state, completedResults: 0 }, 0)).toBe(false);
+});
 
 test("Basic Shapes pre-capture gate reads app scalars without layout observation", async ({ page }) => {
   await page.setContent("<canvas id='canvas'></canvas>");
