@@ -1,8 +1,7 @@
 #pragma once
 /// @file
-/// \c donner::geode::GeodeWgpuAdapterDevice - the wgpu-backed \c donner::gpu::Device adapter.
-///
-/// Adapter for runtime devices that currently render through wgpu.
+/// Test-only wgpu-native implementation of \c donner::gpu::Device, the reference the Linux resvg
+/// comparison renders the production Geode contexts through.
 
 #include <atomic>
 #include <chrono>
@@ -24,345 +23,104 @@
 #include "donner/gpu/Device.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
-namespace donner::gpu::vulkan {
-class VulkanSharedRoot;
-}
-
 namespace donner::geode {
 
-class GeodeWgpuAdapterDevice;
+class GeodeDevice;
+class GeodeGpuRoot;
 
-/// The backend objects one wgpu device is reached through, and who releases them.
+/// The wgpu objects one reference device is reached through, released together.
 struct GeodeWgpuRoots {
-  wgpu::Instance instance;  //!< Instance the adapter came from; null when a host supplied none.
-  wgpu::Adapter adapter;    //!< Adapter the device came from; null when a host supplied none.
+  wgpu::Instance instance;  //!< Instance the adapter came from.
+  wgpu::Adapter adapter;    //!< Adapter the device came from.
   wgpu::Device device;      //!< Device every runtime device over this root records against.
   wgpu::Queue queue;        //!< Default queue of \ref device.
-  /// Whether releasing the handles above is Donner's job. False for an embedder's roots, which
-  /// outlive every context built over them and belong to the embedder.
-  bool owned = false;
   /// Token the device-lost callback this process installed retains, or null when it installed
   /// none. Released with the handles.
   void* deviceLostCallbackToken = nullptr;
 };
 
-/// Which backend implementation a selection builds its runtime devices from.
-enum class GpuBackendKind : uint8_t {
-  /// The transitional wgpu-native adapter, on whichever API wgpu selects underneath.
-  TransitionalWgpu,
-  /// The native Metal backend of the Donner GPU runtime. Apple platforms only.
-  NativeMetal,
-  /// The native Vulkan backend of the Donner GPU runtime. Linux only.
-  NativeVulkan,
-  /// The browser backend of the Donner GPU runtime, which drives the browser's WebGPU through a
-  /// bridge of its own instead of the transitional adapter. WebAssembly builds with the
-  /// `//donner/svg/renderer/geode:browser_backend` build setting only.
-  Browser,
-};
-
-/// Human-readable name of \p kind, for diagnostics.
-/// @param kind Backend kind to name.
-std::string_view GpuBackendKindName(GpuBackendKind kind);
-
-/// Prints \p kind by \ref GpuBackendKindName.
-/// @param os Stream to print to. @param kind Backend kind to print.
-std::ostream& operator<<(std::ostream& os, GpuBackendKind kind);
-
-/// What a selection discovered about a backend root, queried once because every runtime device
-/// over the root answers these identically.
-struct GeodeGpuRootCapabilities {
-  /// Backend the selection produced. Decides which runtime device \ref CreateGpuDeviceOver
-  /// builds, and whether the wgpu handles on the root name anything.
-  GpuBackendKind backend = GpuBackendKind::TransitionalWgpu;
-  /// Maximum supported width or height of a 2D texture, as the selected device reports it.
-  /// WebGPU guarantees at least 8,192, which is the fail-closed fallback when a device cannot
-  /// report its limits.
-  uint32_t maxTextureDimension2D = 8192u;
-  /// Whether the active backend is Vulkan (Intel Arc hardware or Mesa lavapipe software).
-  /// GeodeFilterEngine uses this to force the inter-pass serialization that eliminates a
-  /// nondeterministic cross-submit storage-write to sampled-read visibility race seen only there;
-  /// Metal keeps the fast multi-submit path.
-  bool isVulkan = false;
-};
-
 /**
- * One selected backend root: the backend a set of runtime devices drives, the capabilities the
- * selection discovered, and the sticky loss condition every one of them shares. A transitional
- * root holds the wgpu objects its devices record against. A native Metal root selects the
- * system device for each runtime device; a native Vulkan root holds one instance, logical device
- * and queue shared by all of its runtime devices.
+ * The wgpu objects every reference runtime device records against, and the sticky loss condition
+ * they share. Retained through `shared_ptr` by each runtime device over it, so the handles outlive
+ * the last of them.
  *
- * Retained through `shared_ptr` by each runtime device over it, so the handles outlive the last
- * of them. A browser root holds the browser device request that keeps its worker's GPU device
- * open between runtime devices, so each runtime device over it joins that device rather than
- * asking the browser again.
- *
- * Produced only by \ref SelectGpuRoot and \ref AdoptGpuRoot: assembling roots field by
- * field is what let a half-populated set escape to a caller, and a root that exists is a root
- * that is complete.
+ * Produced only by \ref SelectWgpuReference, so a root that exists is one whose device and queue
+ * are complete.
  */
-class GeodeGpuRoot {
+class WgpuReferenceRoot {
 public:
   /**
-   * Retains one complete set of backend roots.
+   * Retains one complete set of wgpu objects.
    *
-   * @param handles Backend objects the selection produced or adopted.
-   * @param capabilities What the selection discovered about them.
-   * @param lostState Sticky loss condition shared by every runtime device over these roots.
-   * @param backendHold What the backend needs kept open for as long as any runtime device over
-   *   these roots, or null for a backend that needs nothing. Released after the handles.
-   * @param vulkanRoot Native Vulkan owner, or null for another backend.
+   * @param handles Objects the selection produced; released with this root.
+   * @param lostState Sticky loss condition shared by every runtime device over these objects.
    */
-  GeodeGpuRoot(GeodeWgpuRoots handles, GeodeGpuRootCapabilities capabilities,
-               std::shared_ptr<gpu::DeviceLostState> lostState,
-               std::shared_ptr<const void> backendHold = nullptr,
-               std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot = nullptr);
+  WgpuReferenceRoot(GeodeWgpuRoots handles, std::shared_ptr<gpu::DeviceLostState> lostState);
 
-  /// Releases owned wgpu handles, or leaves borrowed ones to their embedder. A lost owned wgpu
-  /// root retains its driver handles rather than risking a hung driver call. A native Vulkan root
-  /// releases its handles only after its runtime devices have proved their own work complete.
-  ~GeodeGpuRoot();
+  /// Releases the wgpu handles. A lost root retains its driver handles rather than risking a
+  /// call into a driver that stopped answering.
+  ~WgpuReferenceRoot();
 
-  GeodeGpuRoot(const GeodeGpuRoot&) = delete;
-  GeodeGpuRoot& operator=(const GeodeGpuRoot&) = delete;
+  WgpuReferenceRoot(const WgpuReferenceRoot&) = delete;
+  WgpuReferenceRoot& operator=(const WgpuReferenceRoot&) = delete;
 
-  /// Instance the adapter came from, or null. Borrowed; the root retains it.
+  /// Instance the adapter came from. Borrowed; the root retains it.
   const wgpu::Instance& instance() const UTILS_LIFETIME_BOUND { return handles_.instance; }
-  /// Adapter the device came from, or null. Borrowed; the root retains it.
+  /// Adapter the device came from. Borrowed; the root retains it.
   const wgpu::Adapter& adapter() const UTILS_LIFETIME_BOUND { return handles_.adapter; }
   /// Device every runtime device over this root records against. Borrowed.
   const wgpu::Device& device() const UTILS_LIFETIME_BOUND { return handles_.device; }
   /// Default queue of \ref device. Borrowed.
   const wgpu::Queue& queue() const UTILS_LIFETIME_BOUND { return handles_.queue; }
-  /// What the selection discovered about this root.
-  const GeodeGpuRootCapabilities& capabilities() const UTILS_LIFETIME_BOUND {
-    return capabilities_;
-  }
   /// Sticky loss condition shared by every runtime device over this root.
   const std::shared_ptr<gpu::DeviceLostState>& lostState() const UTILS_LIFETIME_BOUND {
     return lostState_;
   }
 
-  /// Native Vulkan owner shared by runtime devices over this root, or null on other backends.
-  const std::shared_ptr<gpu::vulkan::VulkanSharedRoot>& vulkanRoot() const UTILS_LIFETIME_BOUND {
-    return vulkanRoot_;
-  }
-
-  /**
-   * Whether every non-null handle named here is the one this root holds.
-   *
-   * An embedder that passes both a shared root and explicit handles is stating they name the same
-   * objects; a mismatch means one of the two is wrong, and rendering through the wrong one is
-   * undiagnosable. Null names nothing and always agrees.
-   *
-   * @param instance Instance to compare, or null.
-   * @param adapter Adapter to compare, or null.
-   * @param device Device to compare, or null.
-   * @param queue Queue to compare, or null.
-   */
-  bool names(const wgpu::Instance& instance, const wgpu::Adapter& adapter,
-             const wgpu::Device& device, const wgpu::Queue& queue) const;
-
-  /// Whether this root names a backend a runtime device over it can record against. A
-  /// transitional root needs a wgpu device and queue; a native Vulkan root needs its shared
-  /// native owner. This says nothing about loss, which \ref lostState reports.
-  bool hasBackendDevice() const;
-
 private:
   GeodeWgpuRoots handles_;
-  GeodeGpuRootCapabilities capabilities_;
   std::shared_ptr<gpu::DeviceLostState> lostState_;
-  std::shared_ptr<const void> backendHold_;
-  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot_;
 };
 
-/// Caller-supplied inputs to backend-root selection. The environment-driven inputs (the backend
-/// requests and the force-fallback-adapter request) are read by the selection itself, so every
-/// caller honors them without repeating them.
-struct GpuRootSelection {
-  /// Label the selected device carries in driver diagnostics.
-  std::string_view label = "GeodeDevice";
-  /// Prepares whatever the caller presents to and reports the surface adapter selection must be
-  /// constrained to, called once with the created instance. Absent for callers that render
-  /// offscreen.
-  ///
-  /// `std::nullopt` aborts the selection: the caller could not build what it meant to present to,
-  /// and handing back a device that cannot present to it would fail later and further from the
-  /// cause. A null surface inside the optional leaves selection unconstrained. The native backend
-  /// presents to no wgpu surface and refuses any selection carrying a provider; a caller whose
-  /// platform object constrains no selection, such as a Metal layer, prepares it before selecting
-  /// and sets none.
-  std::function<std::optional<wgpu::Surface>(const wgpu::Instance&)> compatibleSurface;
-
-  /// Request a presentation-capable native Vulkan root. Headless selections leave this false;
-  /// a caller sets it before opening an instance-scoped window surface.
-  bool requireVulkanPresentation = false;
-  /// Platform surface extensions required on that Vulkan instance. The names and span are
-  /// borrowed until SelectGpuRoot returns. Nonempty without a presentation request is refused.
-  std::span<const char* const> requiredVulkanInstanceExtensions;
-
-  /// Backend to select, or empty for the process default (see \ref ResolveGpuBackendKind).
-  /// A caller that names a backend gets that one whatever the process default is, because a case
-  /// about one backend must not run on another when a whole run changes its default.
-  ///
-  /// A backend that cannot be served is refused rather than replaced by another, because a run
-  /// whose expectations were recorded against one backend and which lands on another is a failure
-  /// that looks like a rendering bug.
-  std::optional<GpuBackendKind> backend;
-
-  /// For the transitional WebGPU adapter only, choose the host's preferred WGPU backend when
-  /// `WGPU_BACKEND` is unset instead of leaving adapter choice to the driver. This setting does
-  /// not select the Geode runtime backend (native Metal, native Vulkan, or browser WebGPU).
-  /// Headless adapter runs pin their backend for reproducible expectations. An editor window
-  /// using the adapter lets the driver choose an API that can serve its surface; its offscreen
-  /// adapter target follows the same choice.
-  bool usePlatformDefaultBackend = true;
+/// A selected wgpu reference: the Geode root production contexts are created over, and the wgpu
+/// objects behind it.
+struct WgpuReferenceSelection {
+  /// Root of kind \ref GpuBackendKind::External whose runtime devices are wgpu reference devices.
+  std::shared_ptr<GeodeGpuRoot> root;
+  /// The wgpu objects every runtime device over \ref root records against.
+  std::shared_ptr<const WgpuReferenceRoot> reference;
 };
 
 /**
- * Selects a backend root: the backend \ref ResolveGpuBackendKind resolves for \p options. For
- * the transitional adapter it creates an instance, requests an adapter and a device, and takes the
- * default queue; for native Metal it queries the system Metal device's capabilities, for
- * native Vulkan it opens one instance, logical device and queue, and for the browser backend it
- * holds this worker's GPU device for runtime devices over the root.
+ * Selects the wgpu-native reference: creates an instance, requests an adapter and a device, and
+ * takes the default queue, then adopts them as a Geode root whose runtime devices are
+ * \ref GeodeWgpuAdapterDevice instances.
  *
- * The one selection every caller shares. Headless, editor and embedded construction differ only
- * in \p options, so the adapter retries under load, the backend requests, the force-fallback
- * request, the device-lost callback and the uncaptured-error reporting are decided once rather
- * than per caller. Under Emscripten the transitional adapter imports the browser's device;
- * the browser backend instead shares that worker's device through its own bridge.
+ * `WGPU_BACKEND` names the wgpu backend (`vulkan`, `metal`, `opengl` or `opengles`; Vulkan when
+ * unset on Linux), and `DONNER_GEODE_FORCE_FALLBACK_ADAPTER=1` requests wgpu's fallback adapter.
+ * Adapter and device requests that fail under parallel load are retried on a short logged
+ * schedule.
  *
- * When a backend was asked for, by `DONNER_GPU_BACKEND`, by the caller or by the build, the first
- * selection of each such backend in a process names it and what asked for it on stderr, so a run
- * that asked for a backend shows which one executed. A process that asks for nothing prints
- * nothing.
+ * The production contexts, renderer and caches drive the reference only through the runtime
+ * contract, so a comparison against it exercises the same Geode code as a native backend.
  *
- * A backend `DONNER_GPU_BACKEND` asked for that cannot be served halts the process, as does a
- * value that names no backend. Refusing would hand the caller a null root, which callers and
- * tests read as a host without a GPU and skip; a run asked to execute on one backend would then
- * pass without executing on any. A caller whose own surface provider gave up still gets a null
- * root, because that failure is the caller's and not the backend's.
- *
- * @param options Caller-supplied inputs; the rest come from the environment.
- * @return The selected root, or null when no adapter or device could be obtained for a backend
- *   the caller named or the process selects by default, or when the caller's surface provider gave
- *   up.
+ * @param label Label the selected device carries in driver diagnostics.
+ * @return The selection, with both members null when no adapter or device could be obtained.
  */
-std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options);
+WgpuReferenceSelection SelectWgpuReference(std::string_view label);
 
 /**
- * Adopts backend roots the caller created and keeps alive.
+ * Creates a headless Geode context over a newly selected wgpu reference.
  *
- * Borrowed: Donner releases nothing here, and the caller must outlive every context built over
- * them.
- *
- * @param handles Host-provided backend objects; \c device and \c queue must be non-null.
- * @param lostState Loss condition to share with the host, or null for a private one that only
- *   Donner's own bounded waits can set.
- * @return The adopted root, or null when \p handles names no device or queue.
+ * @param textureFormat Format the context's render targets and pipelines are built for.
+ * @return The context, or null when \ref SelectWgpuReference found no adapter or device.
  */
-std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots& handles,
-                                           std::shared_ptr<gpu::DeviceLostState> lostState);
+std::unique_ptr<GeodeDevice> CreateWgpuReferenceContext(
+    gpu::TextureFormat textureFormat = gpu::TextureFormat::RGBA8Unorm);
 
 /**
- * Adopts a completed native Vulkan root selected for an embedder's actual surface.
- *
- * The root and Geode contexts share the exact sticky loss state established before instance
- * creation. A mismatched or null owner is refused.
- *
- * @param nativeRoot Completed Vulkan instance, physical and logical device, and queue.
- * @param lostState Loss condition used when opening p nativeRoot.
- * @return Geode root over the native owner, or null for mismatched inputs.
- */
-std::shared_ptr<GeodeGpuRoot> AdoptNativeVulkanRoot(
-    std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeRoot,
-    std::shared_ptr<gpu::DeviceLostState> lostState);
-
-/// A runtime device opened over a selected root.
-struct GeodeRuntimeDevice {
-  /// The device, or null when none could be opened.
-  std::unique_ptr<gpu::Device> device;
-};
-
-/**
- * Creates one runtime device over \p root.
- *
- * Every logical rendering context gets its own: two contexts over one root are two runtime
- * devices with their own handle tables and submission serials, so a handle minted by one cannot
- * pass validation on the other. They share the root's loss condition, because the root is what
- * stops answering.
- *
- * @param root Root to render through; must not be null.
- * @return The device, with no device when the backend could not open one (a native root whose
- *   system device is gone, for example).
- */
-GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
-
-/**
- * The backend a selection that names none builds from: the kind `DONNER_GPU_BACKEND` names
- * (`wgpu`, `metal` or `vulkan`, in any letter case), or native Metal on Apple and native Vulkan on
- * Linux when the variable is unset or empty. Other platforms retain the transitional adapter.
- *
- * One process-wide request so a suite can be run end to end against a backend that is not yet the
- * default, without a second copy of every target.
- *
- * @return The kind, or an error naming the value and the accepted values when the variable names
- *   no backend.
- */
-gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind();
-
-/**
- * The backend this build selects when a caller has no WebGPU surface provider: the browser
- * backend in a WebAssembly build with the `//donner/svg/renderer/geode:browser_backend` build
- * setting, and none otherwise. The selected browser editor names its canvas after root selection.
- *
- * It applies only where nothing else decides, see \ref ResolveGpuBackendKind.
- *
- * @return The kind, or empty when this build leaves headless work on the platform default.
- */
-std::optional<GpuBackendKind> BuildDefaultGpuBackendKind();
-
-/**
- * The backend \ref SelectGpuRoot builds from for \p options. The first of these that applies
- * decides: the backend the caller names, the one \p request names, \p buildDefault for a
- * selection with no surface provider, and the platform default. A selection constrained by a
- * WebGPU surface provider retains the transitional adapter by default because native backends
- * cannot serve that surface. Native editor windows attach their platform surfaces without such a
- * provider.
- *
- * A selection with a WebGPU surface provider stays on the transitional adapter when only the
- * build default names a backend. The selected browser editor has no such provider: it names its
- * canvas by selector after root selection, so the browser build default applies there too. A
- * process request and a caller's choice both outrank the build default.
- *
- * Exposed so the order can be checked in a build that selects no backend by default.
- *
- * @param options Caller-supplied inputs.
- * @param request Value of `DONNER_GPU_BACKEND`; empty when it is unset or empty.
- * @param buildDefault Backend the build selects for headless work, as
- *   \ref BuildDefaultGpuBackendKind reports it.
- * @return The kind, or an error naming \p request and the accepted values when the caller names
- *   no backend and \p request names none this build knows.
- */
-gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& options,
-                                                  std::string_view request,
-                                                  std::optional<GpuBackendKind> buildDefault);
-
-/// Retained device-lost callback states this process has not yet seen the backend consume. A
-/// selection that gave up mid-retry strands at most one per attempt, so teardown tests assert this
-/// returns to zero.
-std::size_t OutstandingDeviceLostCallbacks();
-
-/// Backend instances this process created for a selection and has not released. A selection that
-/// fails must leave this where it found it, because nothing else can release the objects it built
-/// before giving up; a root released at teardown returns its own.
-/// @return Instances created for a selection and not yet released.
-std::size_t OutstandingSelectionInstances();
-
-/**
- * Implements \c donner::gpu::Device on top of one selected backend root, so Geode subsystems can
- * migrate onto the Donner GPU runtime one at a time while the process still renders through wgpu
- * underneath.
+ * Implements \c donner::gpu::Device over one selected wgpu device, so the resvg comparison drives
+ * the production Geode contexts and renderer through an independent WebGPU implementation.
  *
  * Every `on*` hook receives input the base class already validated fail-closed, and translates
  * it to the corresponding webgpu.hpp call. wgpu objects are stored in per-kind slot vectors
@@ -379,14 +137,15 @@ std::size_t OutstandingSelectionInstances();
 class GeodeWgpuAdapterDevice final : public gpu::Device {
 public:
   /**
-   * Constructs a runtime device over \p root. Prefer \ref CreateGpuDeviceOver.
+   * Constructs a runtime device over \p root. Contexts receive them from the root
+   * \ref SelectWgpuReference adopts.
    *
-   * @param root Backend root to render through; must not be null.
+   * @param root wgpu objects to render through; must not be null.
    */
-  explicit GeodeWgpuAdapterDevice(std::shared_ptr<GeodeGpuRoot> root);
+  explicit GeodeWgpuAdapterDevice(std::shared_ptr<const WgpuReferenceRoot> root);
 
-  /// The backend root this device renders through. Borrowed; the device retains it.
-  const GeodeGpuRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
+  /// The wgpu objects this device renders through. Borrowed; the device retains them.
+  const WgpuReferenceRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
 
   /**
    * Polls the backend device, bracketed for ASYNCIFY suspend attribution.
@@ -808,7 +567,7 @@ private:
 
   /// Declared before every slot vector so the backend handles outlive the objects created from
   /// them: members are destroyed in reverse declaration order.
-  std::shared_ptr<GeodeGpuRoot> root_;
+  std::shared_ptr<const WgpuReferenceRoot> root_;
 
   /// Bytes the most recent accepted \ref onWriteTexture handed the queue; see
   /// \ref onTextureWriteByteCount.

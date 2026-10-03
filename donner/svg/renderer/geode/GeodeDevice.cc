@@ -19,8 +19,6 @@
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #ifdef DONNER_GEODE_BROWSER_BACKEND
 #include "donner/svg/renderer/geode/GeodeBrowserRoot.h"
-#elif defined(DONNER_GEODE_WGPU_REFERENCE)
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #else
 #include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #endif

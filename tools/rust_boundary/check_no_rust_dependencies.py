@@ -755,10 +755,16 @@ GEODE_ORACLE_RUNTIME = "//third_party/webgpu-cpp:wgpu_native_reference_runtime"
 GEODE_ORACLE_VISIBILITY = {
     "geode_wgpu_util": ("//visibility:private",),
     "geode_device_wgpu_reference_linux": (
-        "//donner/gpu/baseline:__pkg__",
-        "//donner/svg/renderer:__pkg__", "//donner/svg/renderer/tests:__pkg__",
+        "//donner/gpu/baseline:__pkg__", "//donner/svg/renderer/tests:__pkg__",
     ),
 }
+# The reference supplies runtime devices to the production Geode context: it compiles only its own
+# source and links the production device, never a second copy of the production sources.
+GEODE_ORACLE_REFERENCE_SRCS = ("GeodeWgpuAdapterDevice.cc",)
+GEODE_ORACLE_REFERENCE_DEPS = (
+    ":geode_device", ":geode_runtime_device_source", ":geode_wgpu_util", "//donner/base",
+    "//donner/base:asyncify_suspend_probe", "//donner/gpu", GEODE_ORACLE_RUNTIME,
+)
 
 
 def _ast_keyword(call: ast.Call, name: str) -> ast.expr | None:
@@ -782,16 +788,6 @@ def _geode_archive_literals(node: ast.AST | None) -> list[str]:
             tokens_in(item.value, RUST_BUILT_ARCHIVE_TOKENS)]
 
 
-def _geode_reference_deps(call: ast.Call, name: str) -> tuple[str, ...] | None:
-    node = _ast_keyword(call, "deps")
-    if name == "geode_device_wgpu_reference_linux":
-        if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Add) or \
-           not isinstance(node.left, ast.Name) or node.left.id != "_GEODE_DEVICE_COMMON_DEPS":
-            return None
-        node = node.right
-    return _ast_string_list(node)
-
-
 def _guarded_geode_reference(call: ast.Call, name: str) -> bool:
     testonly = _ast_keyword(call, "testonly")
     if not isinstance(testonly, ast.Constant) or testonly.value not in (True, 1):
@@ -804,10 +800,10 @@ def _guarded_geode_reference(call: ast.Call, name: str) -> bool:
         return False
     if _ast_string_list(_ast_keyword(call, "visibility")) != GEODE_ORACLE_VISIBILITY[name]:
         return False
-    expected_deps = (GEODE_ORACLE_RUNTIME,) if name == "geode_wgpu_util" else (
-        ":geode_wgpu_util", GEODE_ORACLE_RUNTIME,
-    )
-    return _geode_reference_deps(call, name) == expected_deps
+    if name == "geode_wgpu_util":
+        return _ast_string_list(_ast_keyword(call, "deps")) == (GEODE_ORACLE_RUNTIME,)
+    return _ast_string_list(_ast_keyword(call, "srcs")) == GEODE_ORACLE_REFERENCE_SRCS and \
+        _ast_string_list(_ast_keyword(call, "deps")) == GEODE_ORACLE_REFERENCE_DEPS
 
 
 def _geode_archive_call_name(call: ast.Call, literals: list[str]) -> str | None:

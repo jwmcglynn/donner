@@ -18,11 +18,16 @@ class VulkanSharedRoot;
 
 namespace donner::geode {
 
+class GeodeRuntimeDeviceSource;
+
 /// The backend selected for a Geode runtime device.
 enum class GpuBackendKind : uint8_t {
   NativeMetal,
   NativeVulkan,
   Browser,
+  /// Runtime devices a \ref GeodeRuntimeDeviceSource opens. Never selected: only adopting a
+  /// source produces it.
+  External,
 };
 
 std::string_view GpuBackendKindName(GpuBackendKind kind);
@@ -35,9 +40,13 @@ struct GeodeGpuRootCapabilities {
   bool isVulkan = false;
 };
 
+struct GeodeRuntimeDevice;
+
 /// Retains a native GPU owner and the loss condition shared by logical contexts.
 class GeodeGpuRoot {
 public:
+  /// Retains a selected native backend; the external kind is refused, because only an adopted
+  /// \ref GeodeRuntimeDeviceSource can open its devices.
   GeodeGpuRoot(GeodeGpuRootCapabilities capabilities,
                std::shared_ptr<gpu::DeviceLostState> lostState,
                std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot = nullptr);
@@ -54,9 +63,21 @@ public:
   bool hasBackendDevice() const;
 
 private:
+  friend std::shared_ptr<GeodeGpuRoot> AdoptRuntimeDeviceSource(
+      std::shared_ptr<GeodeRuntimeDeviceSource> source,
+      const GeodeGpuRootCapabilities& capabilities,
+      std::shared_ptr<gpu::DeviceLostState> lostState);
+  friend GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
+
+  GeodeGpuRoot(GeodeGpuRootCapabilities capabilities,
+               std::shared_ptr<gpu::DeviceLostState> lostState,
+               std::shared_ptr<GeodeRuntimeDeviceSource> deviceSource);
+
   GeodeGpuRootCapabilities capabilities_;
   std::shared_ptr<gpu::DeviceLostState> lostState_;
   std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot_;
+  /// Opens the runtime devices of an external root; null for a selected backend.
+  std::shared_ptr<GeodeRuntimeDeviceSource> deviceSource_;
 };
 
 /// Caller inputs for a native backend selection.

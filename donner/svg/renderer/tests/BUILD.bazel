@@ -203,8 +203,8 @@ donner_cc_library(
 )
 
 # The resvg comparison registers the same TinyGolden and GeodeGolden backends, but its Geode
-# registration is linked only to the Linux test-only wgpu reference renderer. In particular this
-# target has no dependency on the ordinary renderer dispatcher or native Geode implementation.
+# registration renders the production Geode context and renderer through the Linux test-only wgpu
+# reference's runtime devices. This target has no dependency on the ordinary renderer dispatcher.
 donner_cc_library(
     name = "renderer_test_backend_wgpu_reference_linux",
     testonly = 1,
@@ -227,8 +227,9 @@ donner_cc_library(
     }),
     visibility = ["//donner/svg/renderer/tests:__pkg__"],
     deps = [
-        "//donner/svg/renderer:renderer_geode_wgpu_reference_linux",
+        "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
         "@com_google_gtest//:gtest",
     ],
@@ -1059,10 +1060,11 @@ donner_variant_cc_test(
     shard_count = 8,
 )
 
-# An explicit Linux-only comparison lane for the transitional wgpu-native implementation.
-# It compiles the same resvg registrations and image-comparison fixture as the native Geode
-# lane, then runs only GeodeGolden params. Keeping the wrapper manual avoids adding another
-# 16 GPU shards to unrelated PRs; renderer/shader/image qualification selects it explicitly.
+# An explicit Linux-only comparison lane that renders the production Geode context through the
+# test-only wgpu-native reference. It compiles the same resvg registrations and image-comparison
+# fixture as the native Geode lane, then runs only GeodeGolden params. Keeping the wrapper manual
+# avoids adding another 16 GPU shards to unrelated PRs; renderer/shader/image qualification
+# selects it explicitly.
 donner_cc_test(
     name = "resvg_test_suite_wgpu_reference_linux_impl",
     size = "large",
@@ -1077,7 +1079,6 @@ donner_cc_test(
         "//third_party/resvg-test-suite:tests",
     ],
     env = {
-        "DONNER_GPU_BACKEND": "wgpu",
         "DONNER_REQUIRE_WGPU_REFERENCE": "1",
         "DONNER_TEST_TIMEOUT_SECONDS": "300",
         "WGPU_BACKEND": "vulkan",
@@ -1124,7 +1125,6 @@ configured_dependency_audit_test(
         "//donner/svg/renderer/tests:renderer_test_backend_wgpu_reference_linux",
         "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux_impl",
         "//donner/svg/renderer:renderer_geode",
-        "//donner/svg/renderer:renderer_geode_wgpu_reference_linux",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
         "//donner/svg/renderer/geode:geode_wgpu_util",

@@ -784,11 +784,12 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
                 'donner_cc_library(\n    name = "geode_device_wgpu_reference_linux",\n'
                 '    testonly = 1,\n'
+                '    srcs = ["GeodeWgpuAdapterDevice.cc"],\n'
                 '    target_compatible_with = ["@platforms//os:linux"],\n'
                 '    visibility = ["//donner/gpu/baseline:__pkg__", '
-                '"//donner/svg/renderer:__pkg__", '
                 '"//donner/svg/renderer/tests:__pkg__"],\n'
-                '    deps = _GEODE_DEVICE_COMMON_DEPS + [":geode_wgpu_util", '
+                '    deps = [":geode_device", ":geode_runtime_device_source", ":geode_wgpu_util", '
+                '"//donner/base", "//donner/base:asyncify_suspend_probe", "//donner/gpu", '
                 '"//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
                 'configured_dependency_audit_test(\n    name = "native_audit",\n'
                 '    forbidden = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
@@ -976,6 +977,22 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
             'name = "webgpu_cpp",',
         )
         self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
+
+    def test_geode_reference_cannot_recompile_production_sources(self):
+        edits = (
+            ('srcs = ["GeodeWgpuAdapterDevice.cc"],',
+             'srcs = ["GeodeDevice.cc", "GeodeWgpuAdapterDevice.cc"],'),
+            ('deps = [":geode_device", ',
+             'deps = _GEODE_DEVICE_COMMON_DEPS + [":geode_device", '),
+            ('deps = [":geode_device", ', 'deps = [":geode_device", ":renderer_extra", '),
+        )
+        path = "donner/svg/renderer/geode/BUILD.bazel"
+        for old, new in edits:
+            with self.subTest(edit=new):
+                files = self.allowed_files()
+                self.assertIn(old, files[path])
+                files[path] = files[path].replace(old, new, 1)
+                self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
 
     def test_geode_reference_visibility_cannot_expand_beyond_reviewed_packages(self):
         files = self.allowed_files()

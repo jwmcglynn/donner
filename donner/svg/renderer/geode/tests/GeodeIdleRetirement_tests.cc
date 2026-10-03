@@ -10,6 +10,7 @@
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #ifdef DONNER_GEODE_WGPU_REFERENCE
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #endif
 
@@ -19,8 +20,18 @@ namespace {
 using testing::Eq;
 using testing::Gt;
 
+/// The context under test: the platform's native backend, or the wgpu reference in the Linux
+/// comparison, whose completion callbacks need a nonblocking poll after the final submission.
+std::unique_ptr<GeodeDevice> CreateContext() {
+#ifdef DONNER_GEODE_WGPU_REFERENCE
+  return CreateWgpuReferenceContext();
+#else
+  return GeodeDevice::CreateHeadless();
+#endif
+}
+
 TEST(GeodeIdleRetirement, ReclaimsCrossThreadHandlesAndCompletedWorkWithoutAnotherFrame) {
-  std::unique_ptr<GeodeDevice> context = GeodeDevice::CreateHeadless();
+  std::unique_ptr<GeodeDevice> context = CreateContext();
   ASSERT_NE(context, nullptr);
   gpu::Device& device = context->runtimeDevice();
 
@@ -101,10 +112,10 @@ TEST(GeodeIdleRetirement, ReclaimsCrossThreadHandlesAndCompletedWorkWithoutAnoth
 /// still ends at the caller's deadline, never inside a driver call, and declares the loss there,
 /// attributed to the queue-idle wait.
 TEST(GeodeIdleRetirement, ReferenceQueueIdleEndsAtItsDeadlineWhenWorkStopsRetiring) {
-  std::unique_ptr<GeodeDevice> context = GeodeDevice::CreateHeadless();
+  std::unique_ptr<GeodeDevice> context = CreateContext();
   ASSERT_NE(context, nullptr);
   ASSERT_THAT(context->physicalDeviceOwner()->root().capabilities().backend,
-              Eq(GpuBackendKind::TransitionalWgpu));
+              Eq(GpuBackendKind::External));
   auto& reference = static_cast<GeodeWgpuAdapterDevice&>(context->runtimeDevice());
 
   std::unique_ptr<gpu::CommandEncoder> encoder =

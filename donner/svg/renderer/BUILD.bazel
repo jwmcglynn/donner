@@ -440,26 +440,6 @@ donner_cc_library(
     deps = _RENDERER_GEODE_COMMON_DEPS + ["//donner/svg/renderer/geode:geode_device"],
 )
 
-# Only the Linux resvg comparison links this renderer implementation over the transitional root.
-donner_cc_library(
-    name = "renderer_geode_wgpu_reference_linux",
-    testonly = 1,
-    srcs = ["RendererGeode.cc"],
-    hdrs = ["RendererGeode.h"],
-    defines = select({
-        ":text_enabled": ["DONNER_TEXT_ENABLED"],
-        "//conditions:default": [],
-    }),
-    target_compatible_with = ["@platforms//os:linux"] + select({
-        "//donner/svg/renderer/geode:geode_enabled": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    visibility = ["//donner/svg/renderer/tests:__pkg__"],
-    deps = _RENDERER_GEODE_COMMON_DEPS + [
-        "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
-    ],
-)
-
 no_rust_dependency_audit_test(
     name = "renderer_geode_no_wgpu_archive_audit_impl",
     required = ["//donner/svg/renderer/geode:geode_device"],

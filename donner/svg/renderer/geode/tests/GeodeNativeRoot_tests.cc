@@ -89,6 +89,27 @@ TEST(GeodeNativeRoot, WgpuNamesNoNativeBackend) {
   EXPECT_THAT(resolved.error().message, HasSubstr("accepted values: metal, vulkan"));
 }
 
+TEST(GeodeNativeRoot, TheExternalBackendIsNeverSelected) {
+  const gpu::Result<GpuBackendKind> fromEnvironment =
+      ResolveGpuBackendKind({}, "external", std::nullopt);
+  ASSERT_TRUE(fromEnvironment.hasError()) << "resolved to " << fromEnvironment.result();
+  EXPECT_THAT(fromEnvironment.error().message, HasSubstr("accepted values: metal, vulkan"));
+
+  GpuRootSelection namedByCaller;
+  namedByCaller.backend = GpuBackendKind::External;
+  const gpu::Result<GpuBackendKind> fromCaller =
+      ResolveGpuBackendKind(namedByCaller, "", std::nullopt);
+  ASSERT_TRUE(fromCaller.hasError()) << "resolved to " << fromCaller.result();
+  EXPECT_THAT(fromCaller.error().type, Eq(gpu::GpuErrorType::Unsupported));
+
+  const gpu::Result<GpuBackendKind> fromBuild =
+      ResolveGpuBackendKind({}, "", GpuBackendKind::External);
+  ASSERT_TRUE(fromBuild.hasError()) << "resolved to " << fromBuild.result();
+  EXPECT_THAT(fromBuild.error().type, Eq(gpu::GpuErrorType::Unsupported));
+
+  EXPECT_THAT(SelectGpuRoot(namedByCaller), testing::IsNull());
+}
+
 TEST(GeodeNativeRootDeathTest, ExplicitWgpuRequestCannotFallBackToNative) {
   EXPECT_DEATH(
       {
