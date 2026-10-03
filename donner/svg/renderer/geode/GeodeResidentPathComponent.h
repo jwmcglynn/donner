@@ -759,7 +759,7 @@ private:
 /// and bind group are built once by `GeoEncoder` on first residence and
 /// reused every subsequent unchanged frame.
 ///
-/// Move-only (owns wgpu handles). Default-constructed slots are empty;
+/// Move-only (owns GPU runtime handles). Default-constructed slots are empty;
 /// `GeoEncoder::fillPathResident` populates them lazily.
 struct GeodeResidentSlot {
   /// Combined Storage|Uniform|CopyDst buffer, borrowed from the owning

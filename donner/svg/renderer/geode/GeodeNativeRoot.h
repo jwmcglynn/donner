@@ -1,8 +1,7 @@
 #pragma once
 /// @file
-/// Native Geode root selection without WebGPU C or C++ declarations.
+/// Native Geode root selection.
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -21,7 +20,6 @@ namespace donner::geode {
 
 /// The backend selected for a Geode runtime device.
 enum class GpuBackendKind : uint8_t {
-  TransitionalWgpu,
   NativeMetal,
   NativeVulkan,
   Browser,
@@ -84,7 +82,5 @@ std::shared_ptr<GeodeGpuRoot> AdoptNativeVulkanRoot(
     std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeRoot,
     std::shared_ptr<gpu::DeviceLostState> lostState);
 GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
-std::size_t OutstandingSelectionInstances();
-std::size_t OutstandingDeviceLostCallbacks();
 
 }  // namespace donner::geode

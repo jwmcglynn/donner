@@ -124,11 +124,16 @@ public:
     if (device == nullptr) {
       FAIL() << "the resvg wgpu reference could not create its GPU device";
     }
+#ifdef DONNER_GEODE_WGPU_REFERENCE
     const geode::GpuBackendKind kind = device->physicalDeviceOwner()->root().capabilities().backend;
     if (kind != geode::GpuBackendKind::TransitionalWgpu) {
       FAIL() << "the resvg wgpu reference selected " << geode::GpuBackendKindName(kind)
              << " instead of the transitional wgpu backend";
     }
+#else
+    FAIL() << "DONNER_REQUIRE_WGPU_REFERENCE is set, but this binary does not link the wgpu "
+              "reference";
+#endif
 
     size_t geodeCases = 0;
     size_t tinyCases = 0;

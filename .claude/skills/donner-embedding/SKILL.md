@@ -219,56 +219,51 @@ Key CMake facts (root `CMakeLists.txt` is generated; options validated with `FAT
   actually compiles the generated tree and catches real drift before CI). See the
   **donner-build-test** skill.
 
-## Geode embedded mode (host-owned WebGPU device)
+## Geode embedded mode (native host window)
 
 Full guide: `docs/guides/embedding_geode.md` — read it before writing embedded-mode code. The
-short version: normally Geode owns its `wgpu::Device`; in embedded mode the **host** owns the
-device/queue/target texture and Geode draws into the host's texture.
+host owns the window and its platform surface; Geode owns a rendering context over the Metal or
+Vulkan root selected for that window, and presents through a runtime surface on that context's
+runtime device. There is no host-owned WebGPU device or `wgpu::Texture` import path.
 
 ```cpp
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/RendererGeode.h"
 
-donner::geode::GeodeEmbedConfig config;           // instance(optional), device, queue,
-                                                   // textureFormat, adapter(optional)
-// CreateFromExternal returns std::unique_ptr<GeodeDevice> (non-owning of the wgpu objects);
-// nullptr if config.device or config.queue was null. The RendererGeode ctor takes a shared_ptr,
-// which a moved unique_ptr converts to.
-auto geodeDevice = donner::geode::GeodeDevice::CreateFromExternal(config);
-// Kept, because the per-frame registration below goes through it.
-std::shared_ptr<donner::geode::GeodeDevice> device = std::move(geodeDevice);
-donner::svg::RendererGeode renderer(device);
-
-// Per frame: register the host's texture with the device, then hand over the name.
-// The renderer names textures of its own device and never takes a backend handle.
-auto frameTarget = device->adapterDevice().importExternalTexture(
-    swapChainTex, donner::gpu::Extent2d{width, height}, device->textureFormat(),
-    donner::gpu::TextureUsage::RenderAttachment);
-if (frameTarget.hasError()) { return; }   // The description must match the texture.
-renderer.setTargetTexture(frameTarget.result());
-renderer.draw(document);
-renderer.clearTargetTexture();   // reverts to internal offscreen target
+// `native.root` and `native.format` come from the example's platform helper
+// (examples/geode_embed_surface.h), which selects the root against the actual window surface.
+auto context = std::shared_ptr<donner::geode::GeodeDevice>(
+    donner::geode::GeodeDevice::CreateOverSelectedRoot(native.root, native.format));
+if (context == nullptr) { return; }   // No runtime device could be opened over the root.
+donner::gpu::Device& device = context->runtimeDevice();
+// device.createSurface / surfaceCapabilities / configureSurface once, then per frame:
+donner::svg::RendererGeode renderer(context);
+auto acquired = device.acquireCurrentTexture(surface);
+if (acquired.hasResult() && acquired.result().status == donner::gpu::SurfaceStatus::Success) {
+  donner::gpu::SurfaceTexture frame = std::move(acquired).result();
+  renderer.setTargetTexture(frame.texture);
+  renderer.draw(document);
+  renderer.clearTargetTexture();   // reverts to internal offscreen target
+  (void)device.presentSurface(surface);
+}
 ```
 
 - Build with `--config=geode` (in `.bazelrc` this sets
   `--//donner/svg/renderer:renderer_backend=geode` and
   `--//donner/svg/renderer/geode:enable_geode=true`).
-- Browser embedders that use synchronous snapshots should supply the host
-  `wgpu::Instance` so Geode can wait for map callback completion through
-  `Instance::waitAny()`.
-- Lifetime: host objects must outlive every `GeodeDevice`/`RendererGeode`; destroy renderers
-  before the host `wgpu::Device`; the target texture and its registration must both stay alive
-  through the frame's draw. `setTargetTexture` keeps only the name and takes no refcount.
-- Target texture must be registered with the renderer's own device, carry `RenderAttachment`
-  usage, have `sampleCount == 1`, and match `GeodeEmbedConfig::textureFormat`. A target that
-  fails any of these is refused at frame start and the frame is declined: nothing is recorded
-  and nothing is submitted (symptom: nothing appears in your swap chain).
+- Lifetime: the host window and native surface outlive the runtime surface and the Geode context.
+  Destroy the renderer, then `device.destroySurface`, then the context, before the native surface
+  or window. `setTargetTexture` keeps only the name for the frame and takes no refcount.
+- The target texture must be a texture of the renderer's own runtime device (an acquired surface
+  texture is), carry `RenderAttachment` usage, have `sampleCount == 1`, and match the context's
+  `textureFormat()`. A target that fails any of these is refused at frame start and the frame is
+  declined: nothing is recorded and nothing is submitted (symptom: nothing appears on screen).
 - Runnable host: `bazel run --config=geode //examples:geode_embed -- file.svg`. Its
   platform-surface helpers also demonstrate the X11 macro-collision fix (`None`/`True`/`False`/
-  `Status` from Xlib vs `wgpu::Status`) — isolate GLFW-native includes in their own translation
-  unit (`examples/geode_embed_surface_linux.cc`).
-- wgpu-native quirk: `Surface::getCurrentTexture` success status is `SuccessOptimal` (not
-  `Success`); treat `SuccessSuboptimal` as renderable, reconfigure on `Outdated`.
+  `Status` from Xlib): isolate GLFW-native includes in their own translation unit
+  (`examples/geode_embed_surface_linux.cc`).
+- Surface statuses: reconfigure on `SurfaceStatus::Outdated`, retry `Timeout`, and call
+  `device.abandonCurrentTexture(surface)` before retrying a frame you discarded.
 - For Geode internals, headless/llvmpipe setup, and Geode test lanes, see **donner-geode-backend**.
 
 ## Public-API boundary: the ECS is internal

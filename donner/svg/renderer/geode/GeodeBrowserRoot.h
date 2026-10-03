@@ -1,8 +1,7 @@
 #pragma once
 /// @file
-/// Browser GPU root selection without the transitional WebGPU C++ API.
+/// Browser GPU root selection.
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -14,11 +13,8 @@
 
 namespace donner::geode {
 
-class GeodeWgpuAdapterDevice;
-
 /// The backend selected for a Geode runtime device.
 enum class GpuBackendKind : uint8_t {
-  TransitionalWgpu,
   NativeMetal,
   NativeVulkan,
   Browser,
@@ -60,13 +56,11 @@ private:
 struct GpuRootSelection {
   std::string_view label = "GeodeDevice";
   std::optional<GpuBackendKind> backend;
-  bool usePlatformDefaultBackend = true;
 };
 
 /// One logical runtime device over the selected browser root.
 struct GeodeRuntimeDevice {
   std::unique_ptr<gpu::Device> device;
-  GeodeWgpuAdapterDevice* transitionalAdapter = nullptr;
 };
 
 gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind();
@@ -76,7 +70,5 @@ gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& option
                                                   std::optional<GpuBackendKind> buildDefault);
 std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options);
 GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
-std::size_t OutstandingSelectionInstances();
-std::size_t OutstandingDeviceLostCallbacks();
 
 }  // namespace donner::geode

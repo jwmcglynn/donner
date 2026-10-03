@@ -41,8 +41,8 @@ constexpr uint64_t alignUp(uint64_t value, uint64_t alignment) {
 
 // WebGPU binding offset alignment requirements for the per-draw arenas.
 //
-// Storage buffer bind-group offset: defaults to 256 across wgpu-native
-// backends (the spec-mandated floor for portability). Querying the
+// Storage buffer bind-group offset: defaults to 256 in the WebGPU limits
+// every Geode backend follows (the spec-mandated floor for portability). Querying the
 // device's `minStorageBufferOffsetAlignment` would let us tighten this
 // to 16 or 32 on modern adapters, but 256 is safe everywhere and the
 // wasted-tail memory is negligible at typical path sizes.
@@ -353,7 +353,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// Alignment: callers pass the required alignment for the binding.
   /// Vertex buffers need 4-byte offset alignment (WebGPU spec §23.8);
   /// storage buffers need `minStorageBufferOffsetAlignment` which
-  /// defaults to 256 on the wgpu-native backends Geode supports.
+  /// defaults to 256 in the WebGPU limits every Geode backend follows.
   ///
   /// Lifetime: when the arena grows, the previous buffer is moved into
   /// `retired` and kept alive for the encoder's lifetime. Commands

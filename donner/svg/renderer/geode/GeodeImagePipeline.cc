@@ -63,7 +63,7 @@ GeodeImagePipeline::GeodeImagePipeline(gpu::Device& device, gpu::TextureFormat c
 
   // ----- Samplers -----
   // Linear (bilinear) sampler - the default for SVG's "smooth" image
-  // rendering. Clamp-to-edge addressing matches the previous wgpu defaults.
+  // rendering. Clamp-to-edge addressing is the WebGPU sampler default.
   linearSampler_ =
       UnwrapOrAbort(device.createSampler(gpu::SamplerDescriptor{
                         "GeodeImageBlitLinear", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
