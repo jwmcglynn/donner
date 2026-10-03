@@ -23,7 +23,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   var sg: u32 = 0u;
   var sb: u32 = 0u;
   if ((a8 != 0u)) {
-    let halfAlpha = (a8 / 2u);
+    let halfAlpha = (a8 >> 1u);
     sr = min(255u, (((r8 * 255u) + halfAlpha) / a8));
     sg = min(255u, (((g8 * 255u) + halfAlpha) / a8));
     sb = min(255u, (((b8 * 255u) + halfAlpha) / a8));

@@ -220,7 +220,12 @@ commits and their fixes together in a focused reviewable change.
       selected native backend and pass the integrated pixel matrix.
 - [ ] Shader profile additions follow the compiler's rules: a construct the v1 profile rejects is
       added to the compiler with tests across all three projections rather than worked around, and
-      the UI renderer's shaders are authored as WGSL sources under the same contract.
+      the UI renderer's shaders are authored as WGSL sources under the same contract. The UI draw
+      program is authored WGSL compiled into frozen artifacts, and the bit-shift operators joined
+      the profile with WGSL, MSL and SPIR-V tests, replacing the division workarounds in the UI
+      vertex color unpack and the snapshot half-alpha term. One production spelling still stands in
+      for a rejected construct: feImage's cubic weight is the literal `0.33333334f` because constant
+      f32 arithmetic is outside the profile.
 
 ### Snapshot and target identity
 

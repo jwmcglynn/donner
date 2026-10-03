@@ -86,7 +86,7 @@ Outside the profile, and rejected explicitly: `f16` and matrices with a non-f32 
 `enable` and `requires` directives; the `workgroup` and `private` address spaces, workgroup shared
 memory and barriers; `binding_array`, depth, cube, 1D, 3D and arrayed textures and texture builtins
 other than `textureDimensions`, `textureLoad`, `textureSample`, `textureSampleLevel` and
-`textureStore`; bit shifts, and bitwise operators other than the integer AND the Slug profile lists;
+`textureStore`; bitwise operators other than integer AND and the bit shifts described below;
 constant f32 arithmetic in constant expressions (integer constant expressions only); `continuing`
 blocks; pointers outside a call argument or dereference, including pointers to resources,
 immutables, members and array elements; fixed arrays of structures, nested arrays, array parameters
@@ -296,8 +296,9 @@ a termination proof: only `for` retains the finite-increment restriction, so a `
 whose exit depends on runtime data terminates only because the authored algorithm does.
 
 `target += value` and `target -= value` are parsed as an assignment of the sum or difference, so
-integer wrapping, division guards and both lowerings match the spelled-out form byte for byte. The
-right-hand side is materialized against the target's type and the operator is grouped with it, so
+integer wrapping, division guards and both lowerings match the spelled-out form byte for byte; the
+shift forms `<<=` and `>>=` are described below. The right-hand side is materialized against the
+target's type and the operator is grouped with it, so
 the compound form is slightly stricter than writing the assignment out: an abstract scalar against
 a vector target is a type mismatch, and an ungrouped mixed operator on the right-hand side is an
 unsupported construct. Both fail closed. The target is read and written, so it may not contain a
@@ -326,6 +327,43 @@ data-dependent `break` still reconverges at the merge, and a data-dependent earl
 its dependencies exactly as it does for `for`. A derivative or implicit-LOD sample therefore stays legal before the loops and
 is rejected when it follows a divergent early exit or branches on a value written through a
 pointer.
+
+## Bit shifts
+
+`<<` and `>>` take an i32 or u32 scalar or vector value and a u32 amount, or `vecN<u32>` for an
+N-lane value, and return the value's type. An abstract-integer amount materializes to u32, so
+`x << 1` is accepted for a scalar `x` while a vector needs a vector amount such as
+`v << vec2<u32>(1u)`. An abstract value shifted by a constant amount folds over the 64-bit abstract
+range; against a runtime amount it concretizes to i32, as WGSL's overload selection does. A signed
+value shifts right arithmetically and an unsigned value logically.
+
+WGSL takes a runtime amount modulo the 32-bit width. A constant amount at or above the width, in
+any lane, is a creation error, and so is a constant left shift that discards a bit differing from
+the result's sign bit (i32) or a set bit (u32). Abstract folding rejects amounts of 64 or more and
+left shifts that discard anything but copies of the sign bit. A constant amount, or a constant value
+shifted left, that the profile cannot evaluate, such as a swizzle of a constant vector, is rejected
+rather than assumed to be in range. Constant shifts evaluate wherever the profile requires a
+constant, including array extents and switch labels; an extent needs the shift parenthesized, as in
+`array<f32, (1u << 3u)>`.
+
+As in WGSL, both operands are unary expressions: a shift needs parentheses to combine with
+arithmetic, bitwise AND or another shift, while a comparison or a short-circuit operator takes it
+ungrouped (`a << b < c`). `<<=` and `>>=` follow the compound-assignment rule above with the amount
+materialized as u32, so an operator on the right-hand side needs parentheses (`x <<= (n + 1u)`).
+The lexer keeps `>>` and `>>=` whole, and a template list closes on the first `>` of such a token,
+so nested types such as `array<vec2<u32>>` parse as before.
+
+MSL and SPIR-V leave a shift by the width or more undefined, so both native projections mask a
+computed amount to its low five bits; a literal amount, including a module constant, is already
+validated below 32 and is emitted unmasked. MSL also leaves a negative or overflowing signed left
+shift undefined, so an i32 shifts left as uint bits through `as_type`. SPIR-V uses
+`OpShiftLeftLogical`, and `OpShiftRightArithmetic` or `OpShiftRightLogical` by signedness.
+
+The compiler tests cover typing, the constant rules, grouping and each projection's lowering, and
+the parser fuzzer corpus has accepted and rejected shift modules. A one-texel compute fixture runs
+both operators on i32 and u32 scalars and vectors, compound forms, an abstract value and runtime
+amounts of 35 through the offline Metal compiler, `spirv-val`, and native Metal and Vulkan
+execution. The UI vertex color unpack and the snapshot half-alpha term are written with shifts.
 
 ## Slug fill
 
@@ -405,9 +443,8 @@ and the build-time emitter tool are gone. The checkerboard render pipeline and t
 readback pipeline read entry names, binding slots and workgroup shape from their artifacts, and
 their pass code binds the reflected slot rather than a literal index.
 
-Two sources changed spelling without changing behavior to stay inside the portable profile. The
-snapshot half-alpha term uses unsigned division by two instead of a right shift, and the feImage
-cubic weight constant is the f32 literal `0.33333334f`, the same value `1f / 3f` folds to,
+One source changed spelling without changing behavior to stay inside the portable profile: the
+feImage cubic weight constant is the f32 literal `0.33333334f`, the same value `1f / 3f` folds to,
 because constant f32 arithmetic is outside the profile. Every other family compiled unchanged,
 including the morphology loops, the runtime component-transfer array, the 8,192-entry transfer
 table and the vertex/fragment checkerboard.
