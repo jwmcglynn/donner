@@ -130,6 +130,42 @@ py_test(
     main = "tests/GeodeGeometryFuzzerRouting_tests.py",
 )
 
+# The test-only wgpu reference's own sources: the only files in this package that may name it.
+_GEODE_WGPU_REFERENCE_SOURCES = [
+    "GeodeCallbackState.h",
+    "GeodeWgpuAdapterDevice.cc",
+    "GeodeWgpuAdapterDevice.h",
+    "GeodeWgpuUtil.h",
+]
+
+filegroup(
+    name = "geode_production_sources",
+    srcs = glob(
+        [
+            "*.cc",
+            "*.h",
+        ],
+        exclude = _GEODE_WGPU_REFERENCE_SOURCES,
+    ),
+    visibility = ["//visibility:private"],
+)
+
+# Production sources reach every backend through the GPU runtime alone and never name the
+# test-only wgpu reference, and the runtime device source seam stays private to this package.
+py_test(
+    name = "geode_production_source_boundary_tests",
+    srcs = ["tests/GeodeProductionSourceBoundary_tests.py"],
+    args = [
+        "--build=$(rootpath BUILD.bazel)",
+        "$(rootpaths :geode_production_sources)",
+    ],
+    data = [
+        "BUILD.bazel",
+        ":geode_production_sources",
+    ],
+    main = "tests/GeodeProductionSourceBoundary_tests.py",
+)
+
 # CPU-side Slug band decomposition. Pure path math — no WebGPU dependency,
 # always built regardless of the enable_geode flag. Downstream Geode targets
 # (GeoEncoder, RendererGeode) consume the EncodedPath struct this produces
