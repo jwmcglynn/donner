@@ -227,6 +227,31 @@ TEST(FramePresentationTest, ZoomOutRequiresCompatibleCompleteOverview) {
   EXPECT_EQ(FramePresentation::Build(torn, input).frame, nullptr);
 }
 
+TEST(FramePresentationTest, IncompatibleOverviewCannotPublishAnEmptyPrimaryFrame) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kRect));
+  SelectTool tool;
+  const auto oldCapture = Capture(app, 1);
+  app.document().document().setCanvasSize(200, 200);
+  const auto newCapture = Capture(app, 2);
+  ASSERT_NE(oldCapture->canvasSize(), newCapture->canvasSize());
+  const auto tile = RectTile(entt::null, 10, 0);
+  const auto resources =
+      FramePresentationTestAccess::resources(oldCapture, {}, {}, newCapture, {tile});
+  auto input = Input(app, tool, 1);
+  input.documentIdentity = newCapture->identity();
+  EXPECT_EQ(FramePresentation::CaptureForFrame(resources, input), nullptr);
+  const auto outcome = FramePresentation::Build(resources, input);
+  EXPECT_EQ(outcome.frame, nullptr);
+  EXPECT_EQ(outcome.failure, FramePresentationFailure::MissingOverview);
+  const auto paired =
+      FramePresentationTestAccess::resources(newCapture, {}, {}, newCapture, {tile});
+  const auto frame = FramePresentation::Build(paired, input).frame;
+  ASSERT_NE(frame, nullptr);
+  EXPECT_EQ(frame->identity(), newCapture->identity());
+  EXPECT_THAT(frame->tiles(), SizeIs(1));
+}
+
 TEST(FramePresentationTest, QueuedResizeSharesPathBoundsAndTileTransform) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kRect));
