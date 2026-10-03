@@ -684,12 +684,17 @@ acceptance gate.
       Geode renderer parity pass on lavapipe and a discrete GPU. Acquired swapchain frames remain
       unexportable; the Linux editor uses the same shared native root locally, with hosted and
       integrated acceptance pending.
-- [ ] Make the selected `gpu::Device` the backend owner. Turn `GeodeDevice` into backend-neutral
+- [x] Make the selected `gpu::Device` the backend owner. Turn `GeodeDevice` into backend-neutral
       renderer services for counters, caches, dummy resources, and deferred retirement; update
       headless and embedded construction. The selected device owns its backend root
       ([#1356](https://github.com/jwmcglynn/donner/pull/1356)) and contexts hold `gpu::Device`,
       whose observer feeds the counters on every backend
-      ([#1371](https://github.com/jwmcglynn/donner/pull/1371)); the remaining services are open.
+      ([#1371](https://github.com/jwmcglynn/donner/pull/1371)). Every context waits for its own
+      last submitted serial and keeps its pipelines, dummy resources, caches and retirement on its
+      own runtime device; `GeodeDevice` names no backend type. Headless, window-selected and
+      adopted roots share one construction path. The Linux resvg comparison adopts its test-only
+      reference as an external runtime device source that no backend request or default selects;
+      that seam is internal to Geode and is not an embedding surface.
 - [x] Select the backend by kind through the one root selection. A caller may name a kind;
       otherwise `DONNER_GPU_BACKEND` sets the process default, which fails closed on an
       unrecognized value or a backend the host cannot provide, and a process that asks for a
@@ -735,7 +740,11 @@ acceptance gate.
       the two pinned Linux archives and API wrapper needed by the resvg comparison target. The
       source graph now separates its `testonly`, Linux-compatible targets from native products and
       removes macOS archive fetches/aliases; the generated lock matches the reviewed Linux SHA-256
-      values. Complete Linux oracle execution and hosted acceptance before closing this item.
+      values. Production Geode sources no longer name the adapter, and the comparison renders the
+      production context and renderer through it rather than test-only recompilations of them;
+      `//donner/svg/renderer/geode:geode_production_source_boundary_tests` and the comparison's
+      configured dependency audit enforce both. Complete Linux oracle execution and hosted
+      acceptance before closing this item.
 - [x] Make unexpected Rust-built archives and production dependency edges blocking. The lexical
       verifier enforces source, fetch, checksum, visibility and CMake-source boundaries. Bazel
       configured dependency audits live beside native, editor, embed and browser product roots;
