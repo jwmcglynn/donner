@@ -2758,8 +2758,21 @@ TEST(GlRnrReplayTest, HighZoomRapidPanKeepsPaneCoveredByContent) {
   std::optional<svg::RendererBitmap> settled = LoadCaptureBitmap(result, 20);
   ASSERT_TRUE(settled.has_value());
   const double settledRatio = contentRatio(paneCrop(*settled));
+  const auto* baselineDiagnostics = FindFrameDiagnostics(result, 20);
+  ASSERT_NE(baselineDiagnostics, nullptr);
   EXPECT_GT(settledRatio, 0.90)
-      << "settled high-zoom frame must show the document across the whole pane";
+      << "settled high-zoom frame must show the document across the whole pane\n"
+      << "frame=" << baselineDiagnostics->presentationFrameId
+      << " capture=" << baselineDiagnostics->presentationIdentity.captureId
+      << " version=" << baselineDiagnostics->presentationIdentity.version
+      << " document_version=" << baselineDiagnostics->documentFrameVersion
+      << " displayed_version=" << baselineDiagnostics->displayedDocVersion
+      << " overview_tiles=" << baselineDiagnostics->overviewTileCount
+      << " active_coverage=" << baselineDiagnostics->presentationCoverage.activeRasterDocumentRect
+      << " overview_coverage="
+      << baselineDiagnostics->presentationCoverage.overviewRasterDocumentRect
+      << " request_pending=" << baselineDiagnostics->requestRenderAtEndOfFrame << '\n'
+      << CanonicalReplayDiagnostics(result, 18, 22);
 
   const auto expectCovered = [&](std::uint64_t frame, std::string_view what) {
     std::optional<svg::RendererBitmap> bitmap = LoadCaptureBitmap(result, frame);

@@ -403,10 +403,6 @@ TEST(GlTextureCacheTest, RuntimeBitmapUploadReplicatesBordersAndClearsUnusedAllo
   EXPECT_THAT(PixelAt(allocation, 0, 6), testing::ElementsAre(0u, 0u, 0u, 0u));
 }
 
-// The runtime write is chunked, so a replacement that overwrote the allocation a live registration
-// still points at could leave that allocation holding part of the old payload and part of the new
-// one once any chunk was refused. The superseded allocation must therefore stay byte-identical to
-// what it was published with.
 TEST(GlTextureCacheTest, NewOverviewAdvancesTheEmptyPrimaryCaptureAcrossLayoutChanges) {
   const auto device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
@@ -459,6 +455,10 @@ TEST(GlTextureCacheTest, NewOverviewAdvancesTheEmptyPrimaryCaptureAcrossLayoutCh
   EXPECT_EQ(held->overviewCapture(), first);
 }
 
+// The runtime write is chunked, so a replacement that overwrote the allocation a live registration
+// still points at could leave that allocation holding part of the old payload and part of the new
+// one once any chunk was refused. The superseded allocation must therefore stay byte-identical to
+// what it was published with.
 TEST(GlTextureCacheTest, ReplacedTilePayloadLeavesTheSupersededAllocationIntact) {
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);

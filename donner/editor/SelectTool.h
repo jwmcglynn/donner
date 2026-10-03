@@ -349,6 +349,10 @@ private:
   parentFromEntityTransformsAfterDocumentGesture(const DragState& state,
                                                  const Transform2d& documentFromStartDocument);
 
+  /// Refresh the committed reference before advancing locally projected pointer intent.
+  /// @param editor Owner of the current DOM mutation queue and document frame version.
+  void refreshCommittedDragPose(const EditorApp& editor);
+
   /// Active marquee drag. Records the start point (the document
   /// position of the `onMouseDown` that hit empty space), the
   /// current point (updated on every `onMouseMove`), and whether

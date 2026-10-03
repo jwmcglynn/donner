@@ -22,6 +22,15 @@ export async function stopCompositedProbe(page, testInfo, gesture) {
       readbackRescues: probe.readbackRescues,
       rawReadbackBytes: probe.rawReadbackBytes ?? 0,
       rawReadbackOverflow: probe.rawReadbackOverflow ?? false,
+      presentation: {
+        interaction: window.__donnerInteractionStats ?? null,
+        overlay: window.__donnerOverlayStats ?? null,
+        queue: window.__donnerPresentationQueueStats ?? null,
+        repair: window.__donnerPresentationRepairStats ?? null,
+        worker: window.__donnerWorkerStats ?? null,
+        host: window.__donnerHostFrameTiming ?? null,
+        viewport: window.__donnerViewportStats ?? null,
+      },
     };
   });
   const evidencePath = testInfo.outputPath("composited-probe.json");

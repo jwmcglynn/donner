@@ -2437,6 +2437,10 @@ bool EditorWindow::observePresentationCompletion() {
           'completedSerial' : $0,
           'submittedSerial' : $1,
           'framesInFlight' : $2,
+          'deviceCompletedSerial' : $11,
+          'oldestSerial' : $12,
+          'deviceLost' : Boolean($13),
+          'admission' : $14,
           'coalescedFrames' : $3,
           'frameId' : $4,
           'captureId' : $5,
@@ -2451,7 +2455,9 @@ bool EditorWindow::observePresentationCompletion() {
       static_cast<double>(frame.serial), static_cast<double>(device.lastSubmittedSerial()),
       static_cast<double>(presentationSubmissions_.pendingCount()),
       static_cast<double>(coalescedPresentationFrames_), static_cast<double>(frame.frameId),
-      static_cast<double>(frame.captureId), frame.pointerX, frame.pointerY, frame.mouseDown, frame.inputRepresented, frame.viewportZoom);
+      static_cast<double>(frame.captureId), frame.pointerX, frame.pointerY, frame.mouseDown, frame.inputRepresented, frame.viewportZoom,
+      static_cast<double>(completed), static_cast<double>(presentationSubmissions_.oldestSerial()),
+      wgpuState_->framebufferGeodeDevice->isDeviceLost(), static_cast<int>(admission));
   // clang-format on
 #endif
   if (admission == internal::PresentationSubmissionQueue::Admission::TimedOut) {

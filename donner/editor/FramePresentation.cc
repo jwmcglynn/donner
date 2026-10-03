@@ -341,7 +341,8 @@ std::optional<bool> ChooseOverview(
   const bool needsOverview =
       resources->tiles().empty() || !CoversPane(resources->coverage(), input);
   const bool compatibleOverview = CompatibleOverview(*resources);
-  if (needsOverview && !compatibleOverview && !resources->tiles().empty()) {
+  if (needsOverview && !compatibleOverview &&
+      (!resources->tiles().empty() || !resources->overviewTiles().empty())) {
     return std::nullopt;
   }
   const bool useOverview = needsOverview && compatibleOverview;
