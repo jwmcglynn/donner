@@ -111,15 +111,18 @@ paths use their reviewed runtime resource boundaries. Linux editor presentation 
 the browser editor canvas and diagnostic readback use the selected runtime. Native adapter
 consumers remain.
 
-Strict Wasm-size qualification is deferred until production Rust removal. The browser-selected
-WebAssembly packages now exclude emdawnwebgpu's C++ WebGPU C API implementation, its JavaScript
-glue, and the transitional adapter from their configured dependencies and link actions.
-The Rust-built libraries are native-only, so removing them does not change the WebAssembly
-payload. The browser backend brings code and a
-JavaScript bridge of its own, so the cutover alone is not expected to return the package to its
-strict ceilings. Intermediate package growth does not block these migration units. Keep the
-measurements and existing budgets for final acceptance; this deferral does not relax functional,
-lifetime, synchronization, memory-residency, security or privacy requirements.
+The browser-selected WebAssembly packages exclude emdawnwebgpu's C++ WebGPU C API implementation,
+its JavaScript glue, and the transitional adapter from their configured dependencies and link
+actions. The Rust-built libraries are native-only, so removing them does not change the WebAssembly
+payload. The browser backend brings code and a JavaScript bridge of its own, and the package did
+not return to the strict ceilings set before the migration (9,200,000 Wasm raw, 3,060,000 Wasm
+gzip and 11,270,000 total bytes). On 2026-10-03 those ceilings were raised by explicit maintainer
+decision to about 2 to 3 percent above the larger of main and main with a pending editor
+presentation change: 10,000,000 Wasm raw over 9,769,340 measured, 3,300,000 Wasm gzip over
+3,226,953, 185,000 JavaScript raw over 179,921, 51,000 JavaScript gzip over 49,472 and
+12,100,000 total over 11,829,116 bytes. CI enforces them in
+`//donner/editor/wasm:wasm_geode_package_size_tests`. Raising a ceiling does not relax
+functional, lifetime, synchronization, memory-residency, security or privacy requirements.
 
 ## Goals
 
@@ -460,8 +463,7 @@ gates remain open.
       It preserves host-frame batching below the 64-pass boundary, exact owner/generation leases,
       source-render/filter/composite order, positive-completion retirement, terminal loss behavior,
       and sibling unsubmitted host ranges. Abandoned frames allocate and record nothing; uncertain
-      accepted backing remains retained, and a browser task yield is not completion proof. Wasm-size
-      qualification remains deferred until production Rust removal.
+      accepted backing remains retained, and a browser task yield is not completion proof.
 - [x] Shared fill, gradient, mask, image and snapshot pipeline resources and `GeoEncoder` use runtime
       handles and command recording.
 - [x] Move the checkerboard pass's raw target import to `EditorShellPresentation`; accept a
