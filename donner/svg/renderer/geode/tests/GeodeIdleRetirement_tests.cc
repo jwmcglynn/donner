@@ -9,6 +9,9 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#ifdef DONNER_GEODE_WGPU_REFERENCE
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
+#endif
 
 namespace donner::geode {
 namespace {
@@ -92,6 +95,37 @@ TEST(GeodeIdleRetirement, ReclaimsCrossThreadHandlesAndCompletedWorkWithoutAnoth
                                                       secondRecycledTexture.slotIndex()};
   EXPECT_THAT(recycledTextureSlots, testing::UnorderedElementsAre(textureSlot, directTextureSlot));
 }
+
+#ifdef DONNER_GEODE_WGPU_REFERENCE
+/// The Linux comparison's wgpu reference: when submitted work stops retiring, its queue-idle wait
+/// still ends at the caller's deadline, never inside a driver call, and declares the loss there,
+/// attributed to the queue-idle wait.
+TEST(GeodeIdleRetirement, ReferenceQueueIdleEndsAtItsDeadlineWhenWorkStopsRetiring) {
+  std::unique_ptr<GeodeDevice> context = GeodeDevice::CreateHeadless();
+  ASSERT_NE(context, nullptr);
+  ASSERT_THAT(context->physicalDeviceOwner()->root().capabilities().backend,
+              Eq(GpuBackendKind::TransitionalWgpu));
+  auto& reference = static_cast<GeodeWgpuAdapterDevice&>(context->runtimeDevice());
+
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(reference.createCommandEncoder());
+  const uint64_t serial =
+      gpu::GetResultOrFail(reference.submit(gpu::GetResultOrFail(encoder->finish())));
+  ASSERT_THAT(serial, Gt(0u));
+  reference.holdSubmittedWorkForTesting(serial - 1);
+
+  constexpr std::chrono::milliseconds kBound{100};
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_THAT(context->waitForQueueIdle(kBound), Eq(GpuWaitResult::DeviceLost));
+  const auto spent = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+
+  EXPECT_THAT(spent, testing::AllOf(testing::Ge(kBound), testing::Lt(std::chrono::seconds(5))));
+  EXPECT_THAT(context->isDeviceLost(), testing::IsTrue());
+  EXPECT_THAT(context->lostState()->timedOutSite.load(), Eq(GpuWaitSite::QueueIdle));
+  EXPECT_THAT(context->lostState()->timedOutElapsedMs.load(), testing::Ge(kBound.count()));
+}
+#endif
 
 }  // namespace
 }  // namespace donner::geode
