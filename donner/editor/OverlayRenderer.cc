@@ -249,22 +249,6 @@ ChromeDrawScale ChromeDrawScaleFor(const Transform2d& canvasFromDoc, double devi
   };
 }
 
-std::array<Vector2d, 4> TransformedBoxCorners(const Box2d& box,
-                                              const Transform2d& documentFromBoxDocument) {
-  const std::array<Vector2d, 4> corners{
-      box.topLeft,
-      Vector2d(box.bottomRight.x, box.topLeft.y),
-      box.bottomRight,
-      Vector2d(box.topLeft.x, box.bottomRight.y),
-  };
-
-  std::array<Vector2d, 4> transformed;
-  for (std::size_t i = 0; i < corners.size(); ++i) {
-    transformed[i] = documentFromBoxDocument.transformPosition(corners[i]);
-  }
-  return transformed;
-}
-
 Box2d HandleBoxForCorner(const Vector2d& cornerDoc, double scale) {
   const SelectionTransformHandleBoxes handleBoxes =
       SelectionTransformHandleBoxesForBounds(Box2d(cornerDoc, cornerDoc), scale);
@@ -824,6 +808,22 @@ std::optional<SelectionChromeSnapshot::OrientedBox> CullOrientedBox(
   return orientedBox;
 }
 
+void ProjectSelectionBounds(SelectionChromeSnapshot& snapshot,
+                            const Transform2d& documentFromCapturedDocument,
+                            const std::optional<SelectionChromeBoundsPreview>& boundsPreview) {
+  if (snapshot.orientedBoundsDoc.has_value()) {
+    for (auto& corner : snapshot.orientedBoundsDoc->cornersDoc) {
+      corner = documentFromCapturedDocument.transformPosition(corner);
+    }
+  }
+  if (boundsPreview.has_value() && !snapshot.aabbsDoc.empty()) {
+    const auto corners = TransformedBoxCorners(boundsPreview->startBoundsDoc,
+                                               boundsPreview->documentFromStartDocument);
+    snapshot.orientedBoundsDoc = SelectionChromeSnapshot::OrientedBox{.cornersDoc = corners};
+    snapshot.handleAnchorsDoc.assign(corners.begin(), corners.end());
+  }
+}
+
 }  // namespace
 
 void OverlayRenderer::drawChrome(svg::RendererInterface& renderer, const EditorApp& editor) {
@@ -860,6 +860,13 @@ void OverlayRenderer::drawChromeWithTransform(svg::RendererInterface& renderer,
                                               const Transform2d& canvasFromDoc) {
   drawChromeWithTransform(renderer, selection, /*marqueeRectDoc=*/std::nullopt, canvasFromDoc);
 }
+
+namespace {
+bool CapturePathEditingPoints(SelectionChromeDetail detail) {
+  return detail == SelectionChromeDetail::PathOutlinesOnly ||
+         detail == SelectionChromeDetail::Complete;
+}
+}  // namespace
 
 SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     std::span<const svg::SVGElement> selection, const std::optional<Box2d>& marqueeRectDoc,
@@ -943,7 +950,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   // returning, so the post-return snapshot is fully self-contained.
   const bool combinedBoundsOnly = selectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
   const bool pathOutlinesOnly = selectionDetail == SelectionChromeDetail::PathOutlinesOnly;
-  const bool includePathPointChrome = pathOutlinesOnly;
+  const bool includePathPointChrome = CapturePathEditingPoints(selectionDetail);
 
   // A live select gesture carries immutable start bounds and the exact current
   // document transform. Build its lightweight bounds chrome directly from
@@ -1012,6 +1019,70 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   }
   CullHandleAnchorsInPlace(&snapshot.handleAnchorsDoc, scale, cullRectDoc);
   return snapshot;
+}
+
+SelectionChromeSnapshot OverlayRenderer::projectSelectionSnapshot(
+    SelectionChromeSnapshot snapshot, const Transform2d& documentFromCapturedDocument,
+    const std::optional<SelectionChromeBoundsPreview>& boundsPreview) {
+  for (auto& item : snapshot.paths) {
+    item.pathDoc = item.pathDoc.transformed(documentFromCapturedDocument);
+  }
+  for (auto& guide : snapshot.clipGuidesDoc) {
+    if (guide.followsSelection) {
+      guide.pathDoc = guide.pathDoc.transformed(documentFromCapturedDocument);
+    }
+  }
+  const auto transformPoints = [&](std::vector<Vector2d>& points) {
+    for (auto& point : points) {
+      point = documentFromCapturedDocument.transformPosition(point);
+    }
+  };
+  transformPoints(snapshot.pathAnchorPointsDoc);
+  transformPoints(snapshot.pathControlPointsDoc);
+  transformPoints(snapshot.handleAnchorsDoc);
+  for (auto& line : snapshot.pathControlLinesDoc) {
+    line.anchorDoc = documentFromCapturedDocument.transformPosition(line.anchorDoc);
+    line.controlDoc = documentFromCapturedDocument.transformPosition(line.controlDoc);
+  }
+  for (auto& line : snapshot.textBaselinesDoc) {
+    line.startDoc = documentFromCapturedDocument.transformPosition(line.startDoc);
+    line.endDoc = documentFromCapturedDocument.transformPosition(line.endDoc);
+  }
+  for (auto& box : snapshot.aabbsDoc) {
+    box = documentFromCapturedDocument.transformBox(box);
+  }
+  ProjectSelectionBounds(snapshot, documentFromCapturedDocument, boundsPreview);
+  return snapshot;
+}
+
+void OverlayRenderer::cullSnapshot(SelectionChromeSnapshot& snapshot, const Box2d& cullRectDoc) {
+  const auto outside = [&](const Box2d& box) { return !BoxesIntersect(box, cullRectDoc); };
+  const auto cullPaths = [&](std::vector<SelectionChromeSnapshot::PathItem>& paths) {
+    std::erase_if(paths, [&](const auto& item) { return outside(item.pathDoc.bounds()); });
+  };
+  cullPaths(snapshot.paths);
+  cullPaths(snapshot.hoverPaths);
+  std::erase_if(snapshot.aabbsDoc, outside);
+  std::erase_if(snapshot.hoverAabbsDoc, outside);
+  const auto cullPoints = [&](std::vector<Vector2d>& points, ChromeSquare kind) {
+    std::erase_if(points, [&](const auto& point) {
+      return outside(ChromeSquareForPoint(snapshot, kind, point));
+    });
+  };
+  cullPoints(snapshot.pathAnchorPointsDoc, ChromeSquare::PathAnchor);
+  cullPoints(snapshot.pathControlPointsDoc, ChromeSquare::PathControlPoint);
+  cullPoints(snapshot.handleAnchorsDoc, ChromeSquare::TransformHandle);
+  std::erase_if(snapshot.pathControlLinesDoc, [&](const auto& line) {
+    return !ControlLineIntersectsCullRect(line, cullRectDoc);
+  });
+  std::erase_if(snapshot.textBaselinesDoc, [&](const auto& line) {
+    Box2d bounds = Box2d::CreateEmpty(line.startDoc);
+    bounds.addPoint(line.endDoc);
+    return outside(bounds);
+  });
+  if (snapshot.orientedBoundsDoc.has_value()) {
+    snapshot.orientedBoundsDoc = CullOrientedBox(*snapshot.orientedBoundsDoc, cullRectDoc);
+  }
 }
 
 void OverlayRenderer::projectCachedClipGuides(

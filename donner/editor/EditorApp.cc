@@ -1093,6 +1093,7 @@ bool EditorApp::flushFrame() {
   }
 
   const bool appliedCommands = document_.flushFrame();
+  isDirty_ |= appliedCommands;
   pruneHiddenElementDisplayCache();
 
   if (!appliedCommands) {

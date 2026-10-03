@@ -27,6 +27,34 @@
 #include "tools/mcp-servers/editor-control/EditorControlSessionInternal.h"
 
 namespace donner::editor::mcp {
+
+TEST(EditorControlSessionTest, MetadataOnlyTileKeepsMovableLayerOwnership) {
+  EditorControlSession::HeadlessTextureCache cache;
+  RenderResult::CompositedPreview preview;
+  RenderResult::CompositedTile tile;
+  tile.id = "selected";
+  tile.kind = RenderResult::CompositedTile::Kind::Layer;
+  tile.layerEntity = Entity(42);
+  tile.generation = 1;
+  tile.bitmap.dimensions = Vector2i(1, 1);
+  tile.bitmap.rowBytes = 4;
+  tile.bitmap.pixels = {255, 0, 0, 255};
+  tile.bitmapDimsPx = Vector2i(1, 1);
+  tile.bitmapDimsDoc = Vector2d(1, 1);
+  preview.tiles.push_back(tile);
+  cache.uploadComposited(preview);
+  ASSERT_EQ(cache.tiles().size(), 1u);
+  ASSERT_EQ(cache.tiles().front().layerEntity, tile.layerEntity);
+
+  preview.tiles.front().bitmap = {};
+  preview.tiles.front().documentFromCachedDocument = Transform2d::Translate(Vector2d(3, 4));
+  cache.uploadComposited(preview);
+  ASSERT_EQ(cache.tiles().size(), 1u);
+  EXPECT_TRUE(cache.tiles().front().reusedPreviousTexture);
+  EXPECT_EQ(cache.tiles().front().layerEntity, tile.layerEntity);
+  EXPECT_EQ(cache.tiles().front().documentFromCachedDocument,
+            preview.tiles.front().documentFromCachedDocument);
+}
 namespace {
 
 // Writable scratch directory for tests that round-trip a file. Prefer bazel's
@@ -132,23 +160,6 @@ void ExpectNearTransformJson(std::string_view label, const json& actual, const j
         << label << " matrix index " << i << " actual=" << actual.dump(2)
         << " expected=" << expected.dump(2);
   }
-}
-
-json ExpectedEffectiveDragTranslation(const json& frame, const json& tile) {
-  const json& active = frame["active_drag_preview"];
-  const json& displayed = frame["displayed_drag_preview"];
-  const json& cached = tile["drag_translation_doc"];
-  if (!active.is_object() || !displayed.is_object() ||
-      active.value("entity", 0u) != displayed.value("entity", 0u)) {
-    return cached;
-  }
-
-  return json{
-      {"x", cached.value("x", 0.0) + active["translation_doc"].value("x", 0.0) -
-                displayed["translation_doc"].value("x", 0.0)},
-      {"y", cached.value("y", 0.0) + active["translation_doc"].value("y", 0.0) -
-                displayed["translation_doc"].value("y", 0.0)},
-  };
 }
 
 MATCHER_P(HasPreviewTileSignature, expected, "") {
@@ -1417,7 +1428,13 @@ TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
   ASSERT_FALSE(replay.body["frames"].empty());
   EXPECT_TRUE(replay.body["frames"].front().contains("display_before_render"));
   EXPECT_TRUE(replay.body["frames"].front().contains("display_before_render_diff_from_final"));
+  ASSERT_TRUE(recorded->frames.front().mouseDocX.has_value());
+  ASSERT_TRUE(recorded->frames.front().mouseDocY.has_value());
+  const Vector2d initialPointer(*recorded->frames.front().mouseDocX,
+                                *recorded->frames.front().mouseDocY);
   bool sawActiveTileDisplay = false;
+  bool sawFirstMove = false;
+  bool sawFinalMove = false;
   for (const json& frame : replay.body["frames"]) {
     const json& beforeRender = frame["display_before_render"];
     if (beforeRender.value("path", "") == "tiles" &&
@@ -1429,10 +1446,20 @@ TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
         if (!tile.value("is_drag_target", false)) {
           continue;
         }
-        EXPECT_EQ(tile["effective_drag_translation_doc"],
-                  ExpectedEffectiveDragTranslation(beforeRender, tile))
-            << "active drags should draw cached drag-target tiles at their cached offset plus "
-               "the residual active-minus-displayed drag delta";
+        const Vector2d cachedCenter(tile["canvas_offset_doc"].value("x", 0.0) +
+                                        tile["bitmap_dims_doc"].value("x", 0.0) * 0.5,
+                                    tile["canvas_offset_doc"].value("y", 0.0) +
+                                        tile["bitmap_dims_doc"].value("y", 0.0) * 0.5);
+        const Vector2d paintedCenter =
+            TransformJsonPoint(tile["effective_document_from_cached_document"], cachedCenter);
+        const Vector2d pointer(frame["mouse_doc"].value("x", 0.0),
+                               frame["mouse_doc"].value("y", 0.0));
+        // The fixture's 20x20 rectangle starts at (20,25); input determines its painted center.
+        const Vector2d expectedCenter = Vector2d(30.0, 35.0) + pointer - initialPointer;
+        EXPECT_NEAR(paintedCenter.x, expectedCenter.x, 1e-6) << beforeRender.dump(2);
+        EXPECT_NEAR(paintedCenter.y, expectedCenter.y, 1e-6) << beforeRender.dump(2);
+        sawFirstMove |= expectedCenter == Vector2d(36.0, 36.5);
+        sawFinalMove |= expectedCenter == Vector2d(42.0, 38.0);
       }
     }
     for (const json& stage : frame["stages"]) {
@@ -1445,6 +1472,8 @@ TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
     }
   }
   EXPECT_TRUE(sawActiveTileDisplay);
+  EXPECT_TRUE(sawFirstMove);
+  EXPECT_TRUE(sawFinalMove);
 }
 
 TEST(EditorControlSessionTest, RecordsInMemoryRnrWithEmbeddedSource) {

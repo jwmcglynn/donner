@@ -1,0 +1,18 @@
+load("//build_defs:rules.bzl", "donner_cc_library")
+
+donner_cc_library(
+    name = "rendering_diagnostics",
+    srcs = ["RenderingDiagnostics.cc"],
+    hdrs = ["RenderingDiagnostics.h"],
+    visibility = [
+        "//donner/svg/tests:__pkg__",
+        "//tools/mcp-servers/editor-control:__pkg__",
+    ],
+    deps = [
+        "//donner/base",
+        "//donner/base/xml/components",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/components/style:components",
+    ],
+)

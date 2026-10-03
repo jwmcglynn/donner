@@ -1590,6 +1590,54 @@ TEST(OverlayRendererTest, SnapshotProducesByteIdenticalPixelsAsLivePath) {
 // mid-chrome-rasterize would produce garbage or a crash. Today this
 // holds because the snapshot holds path data by value - no registry
 // pointers survive past `captureChromeSnapshot`.
+TEST(OverlayRendererTest, ProjectedSelectionMatchesFreshCapturePixels) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+    <rect id="selected" x="20" y="30" width="40" height="50"/>
+    <rect id="hovered" x="130" y="100" width="20" height="25"/></svg>)"));
+  app.document().document().setCanvasSize(200, 200);
+  auto selected = app.document().document().querySelector("#selected");
+  auto hovered = app.document().document().querySelector("#hovered");
+  ASSERT_TRUE(selected.has_value());
+  ASSERT_TRUE(hovered.has_value());
+  const std::array selection{*selected};
+  const std::array hover{*hovered};
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  const auto captured = OverlayRenderer::captureChromeSnapshot(selection, std::nullopt,
+                                                               canvasFromDoc, std::nullopt, hover);
+  ASSERT_EQ(captured.aabbsDoc.size(), 1u);
+  const Box2d startBounds = captured.aabbsDoc.front();
+  const auto render = [](const SelectionChromeSnapshot& snapshot) {
+    svg::Renderer renderer;
+    svg::RenderViewport viewport;
+    viewport.size = Vector2d(200.0, 200.0);
+    viewport.devicePixelRatio = 1.0;
+    renderer.beginFrame(viewport);
+    OverlayRenderer::drawChromeFromSnapshot(renderer, snapshot);
+    renderer.endFrame();
+    return renderer.takeSnapshot();
+  };
+  const std::array transforms{Transform2d::Translate(15.0, 10.0),
+                              Transform2d::Scale(1.5, 0.75) * Transform2d::Translate(10.0, 5.0),
+                              Transform2d::Rotate(kPi / 8.0) * Transform2d::Translate(45.0, 5.0)};
+  for (std::size_t i = 0; i < transforms.size(); ++i) {
+    const SelectionChromeBoundsPreview bounds{startBounds, transforms[i]};
+    const auto projected =
+        OverlayRenderer::projectSelectionSnapshot(captured, transforms[i], bounds);
+    selected->cast<svg::SVGGraphicsElement>().setTransform(transforms[i]);
+    const auto fresh = OverlayRenderer::captureChromeSnapshot(selection, std::nullopt,
+                                                              canvasFromDoc, bounds, hover);
+    const auto projectedBitmap = render(projected);
+    const auto freshBitmap = render(fresh);
+    ASSERT_FALSE(projectedBitmap.empty());
+    ASSERT_FALSE(freshBitmap.empty());
+    tests::CompareBitmapToBitmap(projectedBitmap, freshBitmap,
+                                 "projected_selection_" + std::to_string(i),
+                                 tests::PixelmatchIdentityParams());
+  }
+}
+
 TEST(OverlayRendererTest, SnapshotSurvivesDocumentMutationBetweenCaptureAndDraw) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
@@ -1969,6 +2017,13 @@ TEST(OverlayRendererTest, GeodeClipGuidesProjectDirectAndInheritedSources) {
     };
     OverlayRenderer::projectCachedClipGuides(&projected, baseline, preview, Transform2d());
     ASSERT_EQ(projected.clipGuidesDoc.size(), 1u);
+    const auto projectedSelection = OverlayRenderer::projectSelectionSnapshot(
+        baseline, preview.documentFromStartDocument, preview);
+    ASSERT_THAT(projectedSelection.clipGuidesDoc, ::testing::SizeIs(1));
+    EXPECT_EQ(projectedSelection.clipGuidesDoc.front().pathDoc,
+              projected.clipGuidesDoc.front().pathDoc);
+    EXPECT_EQ(projectedSelection.clipGuidesDoc.front().basePathDoc,
+              baseline.clipGuidesDoc.front().basePathDoc);
     const double expectedShift = followsSelection ? 12.0 : 0.0;
     EXPECT_NEAR(projected.clipGuidesDoc.front().pathDoc.bounds().topLeft.x,
                 baseline.clipGuidesDoc.front().pathDoc.bounds().topLeft.x + expectedShift, 1e-6)

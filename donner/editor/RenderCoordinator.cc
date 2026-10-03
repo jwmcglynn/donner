@@ -30,7 +30,7 @@ namespace donner::editor {
 
 namespace {
 
-bool IsCurrentRenderResult(const std::optional<RenderResult>& result, EditorApp& app) {
+bool IsCurrentRenderResult(const std::optional<RenderResult>& result, const EditorApp& app) {
   if (!result || !app.hasDocument()) {
     return false;
   }
@@ -63,7 +63,7 @@ void PublishWorkerTimingStats(
     const RenderResult& result, const EditorApp& app,
     const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
   const auto& timing = result.workerTiming;
-  constexpr std::size_t kValueCount = 33;
+  constexpr std::size_t kValueCount = 37;
   static double buffer[kValueCount];
   const double values[kValueCount] = {
       result.workerMs,
@@ -98,7 +98,11 @@ void PublishWorkerTimingStats(
       static_cast<double>(app.document().document().sourceVersion()),
       static_cast<double>(app.undoTimeline().entryCount()),
       static_cast<double>(timing.fullCanvasTextureAllocationFailureCount),
-      timing.nothingToPresent ? 1.0 : 0.0};
+      timing.nothingToPresent ? 1.0 : 0.0,
+      timing.documentWriteLockMs,
+      static_cast<double>(result.presentationRepairReason),
+      static_cast<double>(timing.compositorReadbackCount),
+      static_cast<double>(timing.tileHandoffReadbackCount)};
   std::copy(std::begin(values), std::end(values), std::begin(buffer));
   // clang-format off: EM_JS and EM_ASM bodies are JavaScript, which clang-format rewrites
   // as C++ - it has already split a `===` into `== =` elsewhere in the editor, a SyntaxError
@@ -152,6 +156,10 @@ void PublishWorkerTimingStats(
         stats['undoEntryCount'] = heap[b + 30];
         stats['fullCanvasTextureAllocationFailureCount'] = heap[b + 31];
         stats['nothingToPresent'] = heap[b + 32] > 0;
+        stats['documentWriteLockMs'] = heap[b + 33];
+        stats['presentationRepairReason'] = heap[b + 34];
+        stats['compositorReadbackCount'] = heap[b + 35];
+        stats['tileHandoffReadbackCount'] = heap[b + 36];
         stats['nothingToPresentTotal'] = (previous ? previous['nothingToPresentTotal'] || 0 : 0) +
                                          (stats['nothingToPresent'] ? 1 : 0);
         stats['publishReason'] = 'render-result';
@@ -228,9 +236,6 @@ bool IsGraphicsElement(const svg::SVGElement& element) {
 /// then happens once.
 constexpr std::chrono::milliseconds kCanvasSizeCommitDelay{120};
 constexpr double kDragTranslationRecaptureScreenPx = 128.0;
-constexpr double kOverlayCullMarginScreenPx = 64.0;
-constexpr std::size_t kLargeSelectionOverlayLodThreshold = 128;
-constexpr std::chrono::milliseconds kLargeSelectionFullDetailDelay{120};
 constexpr bool kSelectionOnlyPrewarmMayTriggerRender = true;
 
 svg::Renderer CreateRenderer(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice) {
@@ -256,6 +261,19 @@ constexpr AsyncRendererStartMode EditorRenderWorkerStartMode() {
   return AsyncRendererStartMode::Immediate;
 }
 
+bool ShouldCommitCanvas(const Vector2i& pending, bool wouldChange, bool deferForActiveDrag,
+                        bool firstCommit, bool throttleElapsed) {
+  return pending != Vector2i::Zero() && wouldChange && !deferForActiveDrag &&
+         (firstCommit || throttleElapsed);
+}
+
+bool CompleteOverviewCanRepair(FramePresentationFailure failure) {
+  return failure == FramePresentationFailure::MissingOverview ||
+         failure == FramePresentationFailure::MissingSelectionGeometry ||
+         failure == FramePresentationFailure::InsufficientCoverage ||
+         failure == FramePresentationFailure::IncompatiblePose;
+}
+
 bool CanvasSizeCloseEnough(const Vector2i& lhs, const Vector2i& rhs) {
   return std::abs(lhs.x - rhs.x) <= 1 && std::abs(lhs.y - rhs.y) <= 1;
 }
@@ -270,34 +288,6 @@ int OverlayRasterDimension(double logicalSize, double devicePixelRatio) {
 Vector2i OverlayRasterSizeForViewport(const ViewportState& viewport) {
   return Vector2i(OverlayRasterDimension(viewport.paneSize.x, viewport.devicePixelRatio),
                   OverlayRasterDimension(viewport.paneSize.y, viewport.devicePixelRatio));
-}
-
-Box2d OverlayScreenRectForViewport(const ViewportState& viewport) {
-  return Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize);
-}
-
-Box2d OverlayCullRectDocForViewport(const ViewportState& viewport) {
-  const Box2d paneRect = OverlayScreenRectForViewport(viewport);
-  const double pixelsPerDocUnit = std::abs(viewport.pixelsPerDocUnit());
-  const double marginDoc = pixelsPerDocUnit > 1e-9 ? kOverlayCullMarginScreenPx / pixelsPerDocUnit
-                                                   : kOverlayCullMarginScreenPx;
-  return viewport.screenToDocument(paneRect).inflatedBy(marginDoc);
-}
-
-Transform2d OverlayCanvasFromDocumentTransform(const ViewportState& viewport) {
-  const double devicePixelsPerDocUnit = viewport.devicePixelsPerDocUnit();
-  const Vector2d overlayCanvasOriginFromDocumentOrigin =
-      (viewport.panScreenPoint - viewport.paneOrigin) * viewport.devicePixelRatio -
-      viewport.panDocPoint * devicePixelsPerDocUnit;
-
-  Transform2d overlayCanvasFromDocument(Transform2d::uninitialized);
-  overlayCanvasFromDocument.data[0] = devicePixelsPerDocUnit;
-  overlayCanvasFromDocument.data[1] = 0.0;
-  overlayCanvasFromDocument.data[2] = 0.0;
-  overlayCanvasFromDocument.data[3] = devicePixelsPerDocUnit;
-  overlayCanvasFromDocument.data[4] = overlayCanvasOriginFromDocumentOrigin.x;
-  overlayCanvasFromDocument.data[5] = overlayCanvasOriginFromDocumentOrigin.y;
-  return overlayCanvasFromDocument;
 }
 
 std::optional<SelectTool::ActiveDragPreview> DragPreviewFromRenderRequest(
@@ -352,7 +342,29 @@ bool SameRequestedDragPreview(const std::optional<RenderRequest::DragPreview>& l
          SameTransform(lhs->documentFromCachedDocument, rhs->documentFromCachedDocument);
 }
 
+bool SamePresentationRepair(const std::optional<PresentationRepairIdentity>& lhs,
+                            const std::optional<PresentationRepairIdentity>& rhs) {
+  if (!lhs.has_value() || !rhs.has_value()) {
+    return lhs.has_value() == rhs.has_value();
+  }
+  if (!lhs->scene.sameScene(rhs->scene) || !SameRasterViewport(lhs->coverage, rhs->coverage) ||
+      lhs->selection != rhs->selection || lhs->poses.size() != rhs->poses.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < lhs->poses.size(); ++i) {
+    if (lhs->poses[i].entity != rhs->poses[i].entity ||
+        !SamePresentationTransform(lhs->poses[i].documentFromElement,
+                                   rhs->poses[i].documentFromElement)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool SameRenderAttempt(const RenderAttemptIdentity& lhs, const RenderAttemptIdentity& rhs) {
+  if (lhs.repair.has_value() || rhs.repair.has_value()) {
+    return SamePresentationRepair(lhs.repair, rhs.repair);
+  }
   return lhs.documentGeneration == rhs.documentGeneration && lhs.version == rhs.version &&
          lhs.overviewInfillOnly == rhs.overviewInfillOnly &&
          lhs.selectedEntity == rhs.selectedEntity &&
@@ -482,19 +494,6 @@ bool RasterViewportCanPresentCurrentViewport(const EditorRasterViewport& rendere
           DocumentRectContains(rendered.documentRect, current.documentRect));
 }
 
-bool SameActiveBoundsPreview(const std::optional<SelectTool::ActiveTransformBoundsPreview>& lhs,
-                             const std::optional<SelectTool::ActiveTransformBoundsPreview>& rhs) {
-  if (lhs.has_value() != rhs.has_value()) {
-    return false;
-  }
-  if (!lhs.has_value()) {
-    return true;
-  }
-
-  return lhs->startBoundsDoc == rhs->startBoundsDoc &&
-         SameTransform(lhs->documentFromStartDocument, rhs->documentFromStartDocument);
-}
-
 std::optional<svg::SVGElement> SelectedGraphicsElement(EditorApp& app) {
   if (!app.selectedElement().has_value()) {
     return std::nullopt;
@@ -558,22 +557,6 @@ FrameCostBreakdown::CompositedRender CompositedRenderCostFromStats(
 
 bool IsUnsetTimePoint(std::chrono::steady_clock::time_point timePoint) {
   return timePoint == std::chrono::steady_clock::time_point{};
-}
-
-SelectionChromeDetail ChooseSelectionChromeDetail(
-    std::size_t selectedElementCount, bool overlayInteractionActive,
-    std::chrono::steady_clock::time_point now,
-    std::chrono::steady_clock::time_point overlayStableSince) {
-  if (selectedElementCount < kLargeSelectionOverlayLodThreshold) {
-    return SelectionChromeDetail::Full;
-  }
-
-  if (overlayInteractionActive || IsUnsetTimePoint(overlayStableSince) ||
-      now - overlayStableSince < kLargeSelectionFullDetailDelay) {
-    return SelectionChromeDetail::CombinedBoundsOnly;
-  }
-
-  return SelectionChromeDetail::Full;
 }
 
 }  // namespace
@@ -788,42 +771,30 @@ void NothingToPresentRetry::reset() {
 }
 
 void RenderCoordinator::resetForLoadedDocument(std::uint64_t documentGeneration) {
+  framePresentation_.reset();
+  reusableFrameInput_.reset();
+  reusableFrameResources_.reset();
+  reusableSelectionCapture_.reset();
+  presentationNeedsRender_ = false;
+  presentationNeedsCoverage_ = false;
+  adoptionFailure_ = FramePresentationFailure::None;
+  pendingRepair_.reset();
+  acceptedRepairAttempt_.reset();
+  lastRejectedRepairCapture_ = 0;
+  selectedSceneCapture_.reset();
+  livePathCapture_.reset();
   (void)documentGeneration;
   compositedPresentation_ = CompositedPresentation{};
   selectionBoundsCache_ = SelectionBoundsCache{};
   displayedDocVersion_ = 0;
-  lastOverlaySelectionVec_.clear();
   sourceHoverElements_.clear();
   lockedRejectionFlash_.reset();
-  lastOverlaySourceHoverVec_.clear();
   immediateOverlaySnapshot_.reset();
-  clipGuideCache_.reset();
-  lastOverlayRasterSize_ = Vector2i::Zero();
-  lastOverlayScreenRect_.reset();
-  lastOverlayCanvasFromDocument_.reset();
-  lastOverlaySelectionDetail_ = SelectionChromeDetail::Full;
-  lastOverlayInteractionActive_ = false;
-  overlayStableSince_ = std::chrono::steady_clock::time_point{};
-  lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
-  lastOverlayMarqueeRectDoc_.reset();
-  lastOverlayActiveBoundsPreview_.reset();
   penLivePreviewElement_.reset();
-  lastOverlayPenLivePreviewElement_.reset();
-  lastOverlayPenLiveSpline_.reset();
   penHoverPreviewSegmentDoc_.reset();
   penHoverCloseAffordanceDoc_.reset();
-  lastOverlayPenHoverPreviewSegmentDoc_.reset();
-  lastOverlayPenHoverCloseAffordanceDoc_.reset();
-  textEditingCaretDoc_.reset();
-  textEditingFrameCornersDoc_.reset();
-  textEditingFrameOpacity_ = 1.0f;
-  textEditingSelectionQuadsDoc_.clear();
+  textEditing_.reset();
   textBoxDragPreviewDoc_.reset();
-  lastOverlayTextEditingCaretDoc_.reset();
-  lastOverlayTextEditingFrameCornersDoc_.reset();
-  lastOverlayTextEditingFrameOpacity_ = 1.0f;
-  lastOverlayTextEditingSelectionQuadsDoc_.clear();
-  lastOverlayTextBoxDragPreviewDoc_.reset();
   renderScheduler_.reset();
   displayNoneSuppressedSelectionEntity_ = entt::null;
   displayNoneSuppressedLayerEntity_ = entt::null;
@@ -1068,7 +1039,7 @@ bool RenderCoordinator::shouldDeferViewportRender(bool selectedViewportDeferred,
                                                   bool needsOverviewInfill,
                                                   bool captureNeeded) const {
   return selectedViewportDeferred && !needsOverviewInfill && !pendingPresentationRefresh_ &&
-         !pixelCaptureBlocksViewportDefer(captureNeeded);
+         !presentationNeedsRender_ && !pixelCaptureBlocksViewportDefer(captureNeeded);
 }
 
 bool RenderCoordinator::shouldCapturePixelsForRequest(
@@ -1131,17 +1102,19 @@ bool RenderCoordinator::setSourceHoverElements(std::vector<svg::SVGElement> elem
   }
 
   sourceHoverElements_ = std::move(elements);
+  selectionGeometryRefreshRequested_ = true;
   return true;
 }
 
 void RenderCoordinator::setLockedRejectionFlash(
     std::optional<SelectTool::LockedRejectionFlash> flash) {
+  const auto before = lockedRejectionFlash_.has_value()
+                          ? std::optional<svg::SVGElement>(lockedRejectionFlash_->element)
+                          : std::nullopt;
+  const auto after =
+      flash.has_value() ? std::optional<svg::SVGElement>(flash->element) : std::nullopt;
+  selectionGeometryRefreshRequested_ |= before != after;
   lockedRejectionFlash_ = std::move(flash);
-}
-
-bool RenderCoordinator::chromeSubjectDiffersFromSnapshot(const EditorApp& app) const {
-  return app.selectedElements() != lastOverlaySelectionVec_ ||
-         sourceHoverElements_ != lastOverlaySourceHoverVec_;
 }
 
 void RenderCoordinator::refreshSelectionBoundsCache(EditorApp& app) {
@@ -1159,332 +1132,393 @@ void RenderCoordinator::promoteSelectionBoundsIfReady() {
   PromoteSelectionBoundsIfReady(selectionBoundsCache_, displayedDocVersion_);
 }
 
-bool RenderCoordinator::clipGuideCacheMatches(Entity selectedEntity,
-                                              std::uint64_t documentGeneration,
-                                              std::uint64_t nonTransformRevision) const {
-  return clipGuideCache_.has_value() && clipGuideCache_->selectedEntity == selectedEntity &&
-         clipGuideCache_->documentGeneration == documentGeneration &&
-         clipGuideCache_->nonTransformRevision == nonTransformRevision;
+std::vector<Entity> RenderCoordinator::selectedPresentationEntities(const EditorApp& app) const {
+  std::vector<Entity> selected;
+  for (const auto& element : app.selectedElements()) {
+    selected.push_back(element.unsafeEntityHandle().entity());
+  }
+  return selected;
 }
 
-void RenderCoordinator::updateClipGuidesForOverlay(
-    const EditorApp& app, std::span<const svg::SVGElement> selection,
-    const std::optional<SelectTool::ActiveDragPreview>& activePreview,
-    const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
-    const Transform2d& representedDocumentFromLiveDocument, SelectionChromeSnapshot* snapshot) {
-  if (selection.size() != 1u) {
-    clipGuideCache_.reset();
-    return;
+std::optional<LockedRejectionFlashInput> RenderCoordinator::lockedFlashForCapture() const {
+  if (!lockedRejectionFlash_.has_value()) {
+    return std::nullopt;
   }
+  return LockedRejectionFlashInput{lockedRejectionFlash_->element,
+                                   lockedRejectionFlash_->intensity};
+}
 
-  const Entity selectedEntity = selection.front().unsafeEntityHandle().entity();
-  const auto& document = app.document();
-  if (clipGuideCache_.has_value() &&
-      !clipGuideCacheMatches(selectedEntity, document.documentGeneration(),
-                             document.nonTransformRevision())) {
-    clipGuideCache_.reset();
-  }
+bool RenderCoordinator::shouldRecaptureSelection(const CapturedPresentation& captured,
+                                                 const std::vector<Entity>& selection) const {
+  const bool subjectChanged = captured.selection() != selection ||
+                              selectionGeometryRefreshRequested_ || !sourceHoverElements_.empty() ||
+                              lockedRejectionFlash_.has_value();
+  const bool captureStale = selectedSceneCapture_ == nullptr ||
+                            selectedSceneCapture_->selection() != selection ||
+                            selectedSceneCapture_->identity() != captured.identity() ||
+                            selectionGeometryRefreshRequested_;
+  return subjectChanged && captureStale;
+}
 
-  if (activeBoundsPreview.has_value()) {
-    if (!clipGuideCache_.has_value() || !activePreview.has_value() ||
-        activePreview->dragGeneration == 0) {
-      return;
+void RenderCoordinator::refreshFrameSelectionCapture(
+    EditorApp& app, const std::shared_ptr<const CapturedPresentation>& captured,
+    const std::vector<Entity>& selection) {
+  if (shouldRecaptureSelection(*captured, selection) &&
+      captured->identity().documentGeneration == app.document().documentGeneration() &&
+      captured->identity().version == app.document().currentFrameVersion() &&
+      captured->identity().fontResourceRevision == app.document().fontResourceRevision()) {
+    const auto access = app.document().document().tryWriteAccess();
+    if (access.has_value() && app.document().document().canvasSize() == captured->canvasSize() &&
+        app.document().document().handle()->revision() == captured->identity().documentRevision) {
+      selectedSceneCapture_ = CapturedPresentation::Capture(
+          app.document().document(), captured->identity(), app.selectedElements(), {},
+          captured->independentlyMovable(), sourceHoverElements_, lockedFlashForCapture(),
+          std::nullopt, captured->textEditing());
+      selectionGeometryRefreshRequested_ = false;
     }
-    const std::uint64_t dragGeneration = activePreview->dragGeneration;
-    if (clipGuideCache_->dragGeneration != 0 && dragGeneration != clipGuideCache_->dragGeneration) {
-      clipGuideCache_.reset();
-      return;
-    }
-    OverlayRenderer::projectCachedClipGuides(snapshot, clipGuideCache_->baseline,
-                                             activeBoundsPreview,
-                                             representedDocumentFromLiveDocument);
-    clipGuideCache_->dragGeneration = dragGeneration;
-    return;
   }
+}
 
-  if (snapshot->clipGuidesDoc.empty()) {
-    clipGuideCache_.reset();
-    return;
+PresentationIdentity RenderCoordinator::currentPresentationIdentity(const EditorApp& app) const {
+  return {.documentGeneration = app.document().documentGeneration(),
+          .documentRevision = app.document().document().handle()->revision(),
+          .version = app.document().currentFrameVersion(),
+          .geometryRevision = app.document().nonTransformRevision(),
+          .fontResourceRevision = app.document().fontResourceRevision(),
+          .presentationEpoch = presentationEpoch_};
+}
+
+FramePresentationInput RenderCoordinator::makeFrameInput(EditorApp& app, SelectTool& tool,
+                                                         const ViewportState& viewport,
+                                                         const Box2d& paneClipRect,
+                                                         SelectionChromeDetail detail,
+                                                         bool includeChrome) {
+  auto desired = compositedPresentation_.activePreviewForPresentation(tool.activeDragPreview());
+  if (desired.has_value()) {
+    desired->contentIdentity.presentationEpoch = presentationEpoch_;
   }
-  SelectionChromeSnapshot baseline;
-  baseline.clipGuidesDoc = snapshot->clipGuidesDoc;
-  clipGuideCache_ = ClipGuideCache{
-      .baseline = std::move(baseline),
-      .selectedEntity = selectedEntity,
-      .documentGeneration = document.documentGeneration(),
-      .nonTransformRevision = document.nonTransformRevision(),
+  FramePresentationInput input{
+      .frameId = nextPresentationFrameId_++,
+      .viewport = viewport,
+      .paneClipRect = paneClipRect,
+      .selection = selectedPresentationEntities(app),
+      .documentIdentity = currentPresentationIdentity(app),
+      .pendingDocumentMutations = app.document().hasPendingMutations(),
+      .desired = std::move(desired),
+      .detail = detail,
+      .decorations = PresentationDecorations{.marqueeDoc = tool.marqueeRect(),
+                                             .penPreviewSegmentDoc = penHoverPreviewSegmentDoc_,
+                                             .penCloseAffordanceDoc = penHoverCloseAffordanceDoc_,
+                                             .textEditing = textEditing_,
+                                             .textBoxDragPreviewDoc = textBoxDragPreviewDoc_},
+      .suppressedLayerEntity = suppressedCompositedLayerEntity(app),
+      .suppressSelectionPixels = selectedElementIsDisplayNone(app),
+      .includeChrome = includeChrome,
   };
+  for (const auto& hovered : sourceHoverElements_) {
+    input.decorations.sourceHover.push_back(hovered.unsafeEntityHandle().entity());
+  }
+  if (lockedRejectionFlash_.has_value()) {
+    input.decorations.lockedFlashEntity =
+        lockedRejectionFlash_->element.unsafeEntityHandle().entity();
+    input.decorations.lockedFlashIntensity = lockedRejectionFlash_->intensity;
+  }
+  return input;
 }
 
-bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
-    EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
-    std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
-    std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview,
-    std::optional<SelectionChromeDetail> selectionDetail,
-    std::optional<SelectTool::ActiveDragPreview> documentDragPreview) {
-  ZoneScopedN("RenderCoordinator::rasterizeOverlay");
-  if (!app.hasDocument()) {
-    immediateOverlaySnapshot_.reset();
-    return false;
-  }
-
-  const Vector2i currentOverlayRasterSize = OverlayRasterSizeForViewport(viewport);
-  const Box2d currentOverlayScreenRect = OverlayScreenRectForViewport(viewport);
-  const Box2d currentOverlayCullRectDoc = OverlayCullRectDocForViewport(viewport);
-  const Transform2d currentOverlayCanvasFromDocument = OverlayCanvasFromDocumentTransform(viewport);
-  const auto currentVersion = app.document().currentFrameVersion();
-  const auto now = std::chrono::steady_clock::now();
-  const auto& overlaySelection = app.selectedElements();
-  const std::optional<SelectTool::ActiveDragPreview> effectiveDocumentDragPreview =
-      documentDragPreview.has_value() ? documentDragPreview : representedDragPreview;
-  // An active locked-rejection flash fades every frame, so it must force a fresh overlay capture
-  // (defeating the "geometry unchanged → reuse cached overlay" fast path below) until it expires.
-  const bool lockedFlashActive =
-      lockedRejectionFlash_.has_value() && lockedRejectionFlash_->intensity > 0.0f;
-  const bool overlayInteractionActive =
-      effectiveDocumentDragPreview.has_value() || representedDragPreview.has_value() ||
-      marqueeRectDoc.has_value() || activeBoundsPreview.has_value() || lockedFlashActive;
-  // The pen tool mutates the previewed path in place on one element, so identity comparison
-  // against `lastOverlayPenLivePreviewElement_` below cannot see an anchor/handle drag growing
-  // the geometry. Sample the element's current spline (element space; transforms are covered by
-  // the canvas-from-document and version terms) and compare it against the spline the current
-  // snapshot captured. Only computed while the pen preview is active.
-  std::optional<Path> currentPenLiveSpline;
-  if (penLivePreviewElement_.has_value()) {
-    currentPenLiveSpline = penLivePreviewElement_->withWriteAccess(
-        [this](svg::DocumentWriteAccess&, EntityHandle) -> std::optional<Path> {
-          if (!penLivePreviewElement_->isa<svg::SVGGeometryElement>()) {
-            return std::nullopt;
-          }
-          return penLivePreviewElement_->cast<svg::SVGGeometryElement>().computedSpline();
-        });
-  }
-  const bool overlayGeometryDiffers =
-      chromeSubjectDiffersFromSnapshot(app) || currentPenLiveSpline != lastOverlayPenLiveSpline_ ||
-      marqueeRectDoc != lastOverlayMarqueeRectDoc_ ||
-      currentOverlayRasterSize != lastOverlayRasterSize_ || !lastOverlayScreenRect_.has_value() ||
-      currentOverlayScreenRect != *lastOverlayScreenRect_ ||
-      !lastOverlayCanvasFromDocument_.has_value() ||
-      !SameTransform(currentOverlayCanvasFromDocument, *lastOverlayCanvasFromDocument_) ||
-      !SameActiveBoundsPreview(activeBoundsPreview, lastOverlayActiveBoundsPreview_) ||
-      currentVersion != lastOverlayVersion_ ||
-      overlayInteractionActive != lastOverlayInteractionActive_ ||
-      penLivePreviewElement_ != lastOverlayPenLivePreviewElement_ ||
-      penHoverPreviewSegmentDoc_ != lastOverlayPenHoverPreviewSegmentDoc_ ||
-      penHoverCloseAffordanceDoc_ != lastOverlayPenHoverCloseAffordanceDoc_ ||
-      textEditingCaretDoc_ != lastOverlayTextEditingCaretDoc_ ||
-      textEditingFrameCornersDoc_ != lastOverlayTextEditingFrameCornersDoc_ ||
-      textEditingFrameOpacity_ != lastOverlayTextEditingFrameOpacity_ ||
-      textEditingSelectionQuadsDoc_ != lastOverlayTextEditingSelectionQuadsDoc_ ||
-      textBoxDragPreviewDoc_ != lastOverlayTextBoxDragPreviewDoc_;
-  if (!selectionDetail.has_value()) {
-    if (overlayGeometryDiffers || IsUnsetTimePoint(overlayStableSince_)) {
-      overlayStableSince_ = now;
+void RenderCoordinator::refreshLivePathCapture(EditorApp& app, FramePresentationInput& input) {
+  if (!penLivePreviewElement_.has_value()) {
+    livePathCapture_.reset();
+  } else if (const auto access = app.document().document().tryWriteAccess(); access.has_value()) {
+    const std::array selected{*penLivePreviewElement_};
+    const std::array independent{penLivePreviewElement_->unsafeEntityHandle().entity()};
+    if (livePathCapture_ == nullptr || livePathCapture_->selection() != input.selection ||
+        livePathCapture_->identity().documentRevision !=
+            app.document().document().handle()->revision()) {
+      livePathCapture_ =
+          CapturedPresentation::Capture(app.document().document(), input.documentIdentity, selected,
+                                        {}, independent, {}, std::nullopt, penLivePreviewElement_);
     }
-
-    selectionDetail = ChooseSelectionChromeDetail(overlaySelection.size(), overlayInteractionActive,
-                                                  now, overlayStableSince_);
   }
-  const SelectionChromeDetail resolvedSelectionDetail = *selectionDetail;
-
-  if (!overlayInteractionActive && !overlayGeometryDiffers &&
-      resolvedSelectionDetail == lastOverlaySelectionDetail_ &&
-      immediateOverlaySnapshot_.has_value()) {
-    FrameCostBreakdown::Overlay overlayCost;
-    overlayCost.canvasSize = currentOverlayRasterSize;
-    overlayCost.selectedElementCount = static_cast<int>(overlaySelection.size());
-    overlayCost.sourceHoverElementCount = static_cast<int>(sourceHoverElements_.size());
-    overlayCost.selectionBoundsOnly =
-        resolvedSelectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
-    lastFrameCostBreakdown_.overlay = overlayCost;
-    return false;
-  }
-
-  FrameCostBreakdown::Overlay overlayCost;
-  overlayCost.canvasSize = currentOverlayRasterSize;
-  overlayCost.selectedElementCount = static_cast<int>(app.selectedElements().size());
-  overlayCost.sourceHoverElementCount = static_cast<int>(sourceHoverElements_.size());
-  overlayCost.selectionBoundsOnly =
-      resolvedSelectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
-  overlayCost.hasLiveDragPreview = effectiveDocumentDragPreview.has_value();
-  overlayCost.hasRepresentedDragPreview = representedDragPreview.has_value();
-  if (effectiveDocumentDragPreview.has_value()) {
-    overlayCost.liveDragTranslationDoc = effectiveDocumentDragPreview->translation;
-  }
-  if (representedDragPreview.has_value()) {
-    overlayCost.representedDragTranslationDoc = representedDragPreview->translation;
-  }
-  const Transform2d representedDocumentFromLiveDocument =
-      OverlayDocumentFromSourceDragPreview(effectiveDocumentDragPreview, representedDragPreview);
-
-  std::optional<SelectionChromeBoundsPreview> chromeBoundsPreview;
-  if (activeBoundsPreview.has_value()) {
-    chromeBoundsPreview = SelectionChromeBoundsPreview{
-        .startBoundsDoc = activeBoundsPreview->startBoundsDoc,
-        .documentFromStartDocument = effectiveDocumentDragPreview.has_value()
-                                         ? effectiveDocumentDragPreview->documentFromCachedDocument
-                                         : activeBoundsPreview->documentFromStartDocument,
-    };
-  }
-  // Overlay AABBs are computed from the same live DOM snapshot as the path
-  // outlines. `selectionBoundsCache_` is maintained only for main-loop
-  // selection-change detection and does not gate overlay geometry.
-  const auto captureStart = std::chrono::steady_clock::now();
-  std::optional<LockedRejectionFlashInput> lockedFlashInput;
-  if (lockedFlashActive) {
-    lockedFlashInput = LockedRejectionFlashInput{
-        .element = lockedRejectionFlash_->element,
-        .intensity = lockedRejectionFlash_->intensity,
-    };
-  }
-  SelectionChromeSnapshot chromeSnapshot = OverlayRenderer::captureChromeSnapshot(
-      std::span<const svg::SVGElement>(overlaySelection), marqueeRectDoc,
-      currentOverlayCanvasFromDocument, chromeBoundsPreview,
-      std::span<const svg::SVGElement>(sourceHoverElements_), currentOverlayCullRectDoc,
-      resolvedSelectionDetail, representedDocumentFromLiveDocument, lockedFlashInput,
-      viewport.devicePixelRatio, penLivePreviewElement_);
-  updateClipGuidesForOverlay(app, std::span<const svg::SVGElement>(overlaySelection),
-                             effectiveDocumentDragPreview, chromeBoundsPreview,
-                             representedDocumentFromLiveDocument, &chromeSnapshot);
-  // Pen hover chrome is pushed state (no registry reads), stamped onto the
-  // snapshot after capture.
-  chromeSnapshot.penPreviewSegmentDoc = penHoverPreviewSegmentDoc_;
-  chromeSnapshot.penCloseAffordanceDoc = penHoverCloseAffordanceDoc_;
-  chromeSnapshot.textCaretDoc = textEditingCaretDoc_;
-  chromeSnapshot.textSelectionQuadsDoc = textEditingSelectionQuadsDoc_;
-  chromeSnapshot.textFrameCornersDoc = textEditingFrameCornersDoc_;
-  chromeSnapshot.textFrameOpacity = textEditingFrameOpacity_;
-  chromeSnapshot.textBoxDragPreviewDoc = textBoxDragPreviewDoc_;
-  overlayCost.captureMs = MillisecondsSince(captureStart);
-  overlayCost.pathCount = static_cast<int>(chromeSnapshot.paths.size());
-  overlayCost.hoverPathCount = static_cast<int>(chromeSnapshot.hoverPaths.size());
-  overlayCost.aabbCount = static_cast<int>(chromeSnapshot.aabbsDoc.size());
-  overlayCost.hoverAabbCount = static_cast<int>(chromeSnapshot.hoverAabbsDoc.size());
-  overlayCost.handleCount = static_cast<int>(chromeSnapshot.handleAnchorsDoc.size());
-  overlayCost.hasMarquee = chromeSnapshot.marqueeDoc.has_value();
-  // Report the overlay payload this frame so the metric is non-zero whenever the
-  // overlay was re-rasterized with content - independent of presentation
-  // backend. The TinySkia path uploads the overlay raster texture (its
-  // `payloadBytes` is that texture's bytes); the Geode/WGPU path renders the
-  // snapshot direct to the framebuffer with no upload, so without this the
-  // metric would read 0 even though the overlay was rebuilt every frame
-  // (gl_rnr GeodeDragZoomRerasterizes...). Mirror the upload metric: the overlay
-  // raster bytes, gated on the snapshot actually having something to draw.
-  const bool overlayHasContent =
-      !chromeSnapshot.paths.empty() || !chromeSnapshot.hoverPaths.empty() ||
-      !chromeSnapshot.handleAnchorsDoc.empty() || !chromeSnapshot.aabbsDoc.empty() ||
-      !chromeSnapshot.pathAnchorPointsDoc.empty() || !chromeSnapshot.pathControlLinesDoc.empty() ||
-      !chromeSnapshot.pathControlPointsDoc.empty() || chromeSnapshot.marqueeDoc.has_value() ||
-      chromeSnapshot.orientedBoundsDoc.has_value() || chromeSnapshot.livePathPreview.has_value() ||
-      chromeSnapshot.penPreviewSegmentDoc.has_value() ||
-      chromeSnapshot.penCloseAffordanceDoc.has_value() || chromeSnapshot.textCaretDoc.has_value() ||
-      !chromeSnapshot.textSelectionQuadsDoc.empty() ||
-      chromeSnapshot.textFrameCornersDoc.has_value() ||
-      chromeSnapshot.textBoxDragPreviewDoc.has_value();
-  overlayCost.payloadBytes =
-      overlayHasContent
-          ? static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.x)) *
-                static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.y)) * 4u
-          : 0u;
-  immediateOverlaySnapshot_ = chromeSnapshot;
-
-  lastOverlaySelectionVec_ = overlaySelection;
-  lastOverlaySourceHoverVec_ = sourceHoverElements_;
-  lastOverlayRasterSize_ = currentOverlayRasterSize;
-  lastOverlayScreenRect_ = currentOverlayScreenRect;
-  lastOverlayCanvasFromDocument_ = currentOverlayCanvasFromDocument;
-  lastOverlaySelectionDetail_ = resolvedSelectionDetail;
-  lastOverlayInteractionActive_ = overlayInteractionActive;
-  lastOverlayVersion_ = currentVersion;
-  lastOverlayMarqueeRectDoc_ = marqueeRectDoc;
-  lastOverlayActiveBoundsPreview_ = activeBoundsPreview;
-  lastOverlayPenLivePreviewElement_ = penLivePreviewElement_;
-  lastOverlayPenLiveSpline_ = std::move(currentPenLiveSpline);
-  lastOverlayPenHoverPreviewSegmentDoc_ = penHoverPreviewSegmentDoc_;
-  lastOverlayPenHoverCloseAffordanceDoc_ = penHoverCloseAffordanceDoc_;
-  lastOverlayTextEditingCaretDoc_ = textEditingCaretDoc_;
-  lastOverlayTextEditingFrameCornersDoc_ = textEditingFrameCornersDoc_;
-  lastOverlayTextEditingFrameOpacity_ = textEditingFrameOpacity_;
-  lastOverlayTextEditingSelectionQuadsDoc_ = textEditingSelectionQuadsDoc_;
-  lastOverlayTextBoxDragPreviewDoc_ = textBoxDragPreviewDoc_;
-  lastFrameCostBreakdown_.overlay = overlayCost;
-  return true;
+  input.livePathReplacement = livePathCapture_;
 }
 
-bool RenderCoordinator::rasterizeOverlayForPresentation(
-    EditorApp& app, SelectTool& selectTool, const ViewportState& viewport, GlTextureCache& textures,
-    std::optional<SelectTool::ActiveDragPreview> activeDragPreview,
-    std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
-    std::optional<SelectionChromeDetail> selectionDetail, bool allowLiveGeometryOverlay) {
-  ZoneScopedN("RenderCoordinator::rasterizeOverlayForPresentation");
-  if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
+void RenderCoordinator::recordFramePresentationCost(const FramePresentationInput& input,
+                                                    const SelectTool& tool, double elapsedMs) {
+  auto& cost = lastFrameCostBreakdown_.overlay;
+  cost = {};
+  cost.canvasSize = OverlayRasterSizeForViewport(input.viewport);
+  cost.captureMs = elapsedMs;
+  cost.selectedElementCount = static_cast<int>(input.selection.size());
+  cost.pathCount = static_cast<int>(framePresentation_->chrome().paths.size());
+  cost.aabbCount = static_cast<int>(framePresentation_->chrome().aabbsDoc.size());
+  cost.handleCount = static_cast<int>(framePresentation_->chrome().handleAnchorsDoc.size());
+  cost.sourceHoverElementCount = static_cast<int>(input.decorations.sourceHover.size());
+  cost.hoverPathCount = static_cast<int>(framePresentation_->chrome().hoverPaths.size());
+  cost.hoverAabbCount = static_cast<int>(framePresentation_->chrome().hoverAabbsDoc.size());
+  cost.hasMarquee = input.decorations.marqueeDoc.has_value();
+  cost.hasLiveDragPreview = tool.activeDragPreview().has_value();
+  cost.hasRepresentedDragPreview = framePresentation_->followsPointer();
+  cost.selectionBoundsOnly = input.detail == SelectionChromeDetail::CombinedBoundsOnly;
+  if (input.desired.has_value()) {
+    cost.liveDragTranslationDoc = input.desired->translation;
+    if (const auto represented =
+            ResolvePresentationTransform(input.desired->startPoses, framePresentation_->poses())) {
+      cost.representedDragTranslationDoc = represented->translation();
+    }
+  }
+  if (cost.pathCount != 0 || cost.aabbCount != 0 || cost.hoverPathCount != 0) {
+    cost.payloadBytes = static_cast<std::uint64_t>(cost.canvasSize.x) * cost.canvasSize.y * 4u;
+  }
+}
+
+namespace {
+#ifdef __EMSCRIPTEN__
+void PublishFrameRepairDetails(const FramePresentationInput& input,
+                               const GlTextureCache::PresentationResources& resources,
+                               FramePresentationFailure failure,
+                               FramePresentationFailure adoptionFailure) {
+  const auto current = input.documentIdentity;
+  const auto active = resources.capture()->identity();
+  const auto overview = resources.overviewCapture() ? resources.overviewCapture()->identity()
+                                                    : PresentationIdentity{};
+  // clang-format off
+  MAIN_THREAD_ASYNC_EM_ASM({
+    window['__donnerPresentationRepairStats'] = ({
+      'failure': $0, 'current': [$1, $2, $3, $4],
+      'active': [$5, $6, $7, $8, $9], 'overview': [$10, $11, $12, $13, $14],
+      'bounded': Boolean($15),
+    });
+  }, static_cast<int>(failure), static_cast<double>(current.documentRevision),
+      static_cast<double>(current.version), static_cast<double>(current.geometryRevision),
+      static_cast<double>(current.presentationEpoch), static_cast<double>(active.captureId),
+      static_cast<double>(active.documentRevision), static_cast<double>(active.version),
+      static_cast<double>(active.geometryRevision), static_cast<double>(active.presentationEpoch),
+      static_cast<double>(overview.captureId), static_cast<double>(overview.documentRevision),
+      static_cast<double>(overview.version), static_cast<double>(overview.geometryRevision),
+      static_cast<double>(overview.presentationEpoch), resources.coverage().activeTilesViewportBounded);
+  MAIN_THREAD_ASYNC_EM_ASM({
+    const stats = window['__donnerPresentationRepairStats'];
+    if (stats && Object.is(stats['active'][0], $0)) {
+      stats['pendingMutations'] = Boolean($1);
+      stats['adoptionFailure'] = $10;
+      stats['activeCoverage'] = ([$2, $3, $4, $5]);
+      stats['overviewCoverage'] = ([$6, $7, $8, $9]);
+    }
+  }, static_cast<double>(active.captureId), input.pendingDocumentMutations,
+      resources.coverage().activeRasterDocumentRect.topLeft.x,
+      resources.coverage().activeRasterDocumentRect.topLeft.y,
+      resources.coverage().activeRasterDocumentRect.bottomRight.x,
+      resources.coverage().activeRasterDocumentRect.bottomRight.y,
+      resources.coverage().overviewRasterDocumentRect.topLeft.x,
+      resources.coverage().overviewRasterDocumentRect.topLeft.y,
+      resources.coverage().overviewRasterDocumentRect.bottomRight.x,
+      resources.coverage().overviewRasterDocumentRect.bottomRight.y, static_cast<int>(adoptionFailure));
+  // clang-format on
+}
+#endif
+
+bool HasOnlyStaticFrameIntent(const FramePresentationInput& input) {
+  const auto& decorations = input.decorations;
+  return !input.desired && !input.pendingDocumentMutations && !input.livePathReplacement &&
+         decorations.sourceHover.empty() && decorations.lockedFlashEntity == entt::null &&
+         !decorations.marqueeDoc && !decorations.penPreviewSegmentDoc &&
+         !decorations.penCloseAffordanceDoc && !decorations.textEditing &&
+         !decorations.textBoxDragPreviewDoc;
+}
+}  // namespace
+
+namespace {
+bool SameStaticFrameIntent(const FramePresentationInput& input, const FramePresentationInput& old) {
+  return input.documentIdentity.sameScene(old.documentIdentity) &&
+         input.selection == old.selection && SameViewport(input.viewport, old.viewport) &&
+         input.paneClipRect == old.paneClipRect && input.detail == old.detail &&
+         input.includeChrome == old.includeChrome &&
+         input.suppressedLayerEntity == old.suppressedLayerEntity &&
+         input.suppressSelectionPixels == old.suppressSelectionPixels;
+}
+
+void PrepareCandidateFrame(FramePresentationBuildResult& outcome,
+                           const FramePresentationAdmission& admit) {
+  if (outcome.frame != nullptr && admit && !admit(*outcome.frame)) {
+    outcome.frame.reset();
+    outcome.failure = FramePresentationFailure::UploadRefused;
+  }
+}
+
+bool FrameCarriesInput(const FramePresentation& frame, const FramePresentationInput& input) {
+  if (!frame.identity().sameContent(input.documentIdentity)) {
     return false;
   }
+  if (!input.desired) {
+    return frame.identity().sameScene(input.documentIdentity);
+  }
+  return std::ranges::all_of(input.desired->poses, [&](const auto& requested) {
+    return std::ranges::any_of(frame.poses(), [&](const auto& actual) {
+      return requested.entity == actual.entity &&
+             SamePresentationTransform(requested.documentFromElement, actual.documentFromElement);
+    });
+  });
+}
+}  // namespace
 
-  const std::optional<SelectTool::ActiveDragPreview> liveActiveDragPreview =
-      selectTool.activeDragPreview();
-  const std::optional<SelectTool::ActiveDragPreview> documentDragPreview =
-      selectTool.documentDragPreview(app);
-  const std::optional<SelectTool::ActiveDragPreview> capturedDocumentDragPreview =
-      documentDragPreview.has_value() ? documentDragPreview : activeDragPreview;
-  const std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview =
-      selectTool.activeTransformBoundsPreview();
-  const bool hasPresentationProjection = liveActiveDragPreview.has_value() ||
-                                         representedDragPreview.has_value() ||
-                                         activeBoundsPreview.has_value();
-  const std::uint64_t currentVersion = app.document().currentFrameVersion();
-  // Hold the overlay RECAPTURE back while the live document runs ahead of the presented pixels: a
-  // non-transforming geometry edit has no presenter-side projection that could make chrome captured
-  // from the new DOM line up with the older pixels on screen. Live-geometry tools are the exception
-  // the caller names with `allowLiveGeometryOverlay` - active PenTool editing, where the selected
-  // path is itself the live interaction surface, and active TextTool sessions, where every
-  // keystroke flushes the DOM ahead of the async renderer and the caret/frame chrome comes from the
-  // live post-flush DOM. For those the chrome must keep tracking the live document, or it blinks
-  // off for the whole typing or drafting burst.
-  //
-  // Only the recapture is held back, never the snapshot itself. The presenter installs its chrome
-  // pass only for frames this coordinator is holding a snapshot for, so releasing the snapshot here
-  // would present document pixels with no chrome pass over them at all: the selection outline,
-  // bounds and handles blink out until the worker catches up. Retaining it costs at most a
-  // one-render lead over the presented pixels - the conservative half of the choice the
-  // live-geometry tools above already make deliberately - and the retained geometry is re-pointed
-  // at the transform those pixels landed in before it is drawn.
-  //
-  // The chrome subject is the one difference no lead can excuse: an outline around elements that
-  // are no longer selected or hovered is wrong rather than early, and no recapture is coming while
-  // this gate holds. Recapture for those frames instead, so the chrome names the right elements -
-  // deselecting captures empty chrome, which is what draws nothing.
-  if (displayedDocVersion_ != 0u && currentVersion > displayedDocVersion_ &&
-      !hasPresentationProjection && !allowLiveGeometryOverlay &&
-      !chromeSubjectDiffersFromSnapshot(app)) {
-    ++overlayVersionGateSuppressionTotal_;
-
-    FrameCostBreakdown::Overlay overlayCost;
-    overlayCost.canvasSize = OverlayRasterSizeForViewport(viewport);
-    overlayCost.selectedElementCount = static_cast<int>(app.selectedElements().size());
-    overlayCost.sourceHoverElementCount = static_cast<int>(sourceHoverElements_.size());
-    overlayCost.selectionBoundsOnly = selectionDetail.has_value() &&
-                                      *selectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
-    lastFrameCostBreakdown_.overlay = overlayCost;
+bool RenderCoordinator::canReuseFrame(
+    const FramePresentationInput& input,
+    const std::shared_ptr<const GlTextureCache::PresentationResources>& resources) const {
+  if (presentationNeedsRender_ || framePresentation_ == nullptr || !reusableFrameInput_ ||
+      resources != reusableFrameResources_ || selectedSceneCapture_ != reusableSelectionCapture_ ||
+      !HasOnlyStaticFrameIntent(input)) {
     return false;
   }
+  return SameStaticFrameIntent(input, *reusableFrameInput_);
+}
 
-  return rasterizeOverlayForCurrentSelection(app, viewport, selectTool.marqueeRect(),
-                                             representedDragPreview, activeBoundsPreview,
-                                             selectionDetail, capturedDocumentDragPreview);
+void RenderCoordinator::updateFrameRepairStatus(
+    const FramePresentationInput& input,
+    const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
+    const FramePresentationBuildResult& outcome) {
+  const auto failure =
+      outcome.failure != FramePresentationFailure::None ? outcome.failure : adoptionFailure_;
+  presentationNeedsRender_ = failure != FramePresentationFailure::None;
+  presentationNeedsCoverage_ = failure == FramePresentationFailure::InsufficientCoverage ||
+                               failure == FramePresentationFailure::MissingOverview;
+#ifdef __EMSCRIPTEN__
+  PublishFrameRepairDetails(input, *resources, failure, adoptionFailure_);
+#endif
+  if (presentationNeedsRender_) {
+    pendingRepair_ = PresentationRepairIdentity{
+        .scene = input.documentIdentity,
+        .selection = input.selection,
+        .poses = input.desired.has_value() ? input.desired->poses : std::vector<PresentationPose>{},
+        .coverage = input.viewport.rasterViewport(),
+        .failure = failure};
+    if (acceptedRepairAttempt_.has_value() && outcome.failure != FramePresentationFailure::None &&
+        resources->capture()->identity().captureId != lastRejectedRepairCapture_) {
+      lastRejectedRepairCapture_ = resources->capture()->identity().captureId;
+      nothingToPresentRetry_.noteFailure(*acceptedRepairAttempt_, nothingToPresentRetryNow());
+    }
+  } else {
+    pendingRepair_.reset();
+    acceptedRepairAttempt_.reset();
+    nothingToPresentRetry_.reset();
+  }
+}
+
+void RenderCoordinator::installFrameDecision(
+    const FramePresentationInput& input,
+    const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
+    std::shared_ptr<const FramePresentation> next) {
+  frameRepresentsCurrentIntent_ =
+      (input.selection.empty() || next->hasSelectionGeometry()) && FrameCarriesInput(*next, input);
+  framePresentation_ = std::move(next);
+  immediateOverlaySnapshot_ = framePresentation_->chrome();
+  selectionBoundsCache_.displayedBoundsDoc = framePresentation_->selectionBounds();
+  if (!presentationNeedsRender_ && HasOnlyStaticFrameIntent(input)) {
+    reusableFrameInput_ = input;
+    reusableFrameResources_ = resources;
+    reusableSelectionCapture_ = selectedSceneCapture_;
+  } else {
+    reusableFrameInput_.reset();
+    reusableFrameResources_.reset();
+    reusableSelectionCapture_.reset();
+  }
+}
+
+std::shared_ptr<const FramePresentation> RenderCoordinator::buildFramePresentation(
+    EditorApp& app, SelectTool& tool, const ViewportState& viewport, const Box2d& paneClipRect,
+    SelectionChromeDetail detail, bool includeChrome, FramePresentationAdmission admit) {
+  auto& cost = lastFrameCostBreakdown_.overlay;
+  const auto live = tool.activeDragPreview();
+  cost.hasLiveDragPreview = live.has_value();
+  cost.liveDragTranslationDoc = live.has_value() ? live->translation : Vector2d::Zero();
+  const auto resources = compositedPresentation_.resources();
+  frameRepresentsCurrentIntent_ = false;
+  if (!app.hasDocument()) {
+    framePresentation_.reset();
+    return nullptr;
+  }
+  if (resources == nullptr || resources->capture() == nullptr) {
+    presentationNeedsRender_ = true;
+    pendingRepair_ =
+        PresentationRepairIdentity{.scene = currentPresentationIdentity(app),
+                                   .selection = selectedPresentationEntities(app),
+                                   .coverage = viewport.rasterViewport(),
+                                   .failure = FramePresentationFailure::MissingResources};
+    return framePresentation_;
+  }
+  const auto buildStart = std::chrono::steady_clock::now();
+  auto input = makeFrameInput(app, tool, viewport, paneClipRect, detail, includeChrome);
+  if (const auto selectedSource = FramePresentation::CaptureForFrame(resources, input)) {
+    refreshFrameSelectionCapture(app, selectedSource, input.selection);
+  }
+  refreshLivePathCapture(app, input);
+  if (canReuseFrame(input, resources)) {
+    frameRepresentsCurrentIntent_ = true;
+    recordFramePresentationCost(input, tool, MillisecondsSince(buildStart));
+    return framePresentation_;
+  }
+  auto outcome =
+      FramePresentation::Build(resources, input, selectedSceneCapture_, framePresentation_);
+  PrepareCandidateFrame(outcome, admit);
+  auto next = outcome.frame;
+  updateFrameRepairStatus(input, resources, outcome);
+  if (next != nullptr) {
+    installFrameDecision(input, resources, std::move(next));
+  }
+  if (framePresentation_ != nullptr) {
+    recordFramePresentationCost(input, tool, MillisecondsSince(buildStart));
+  } else {
+    cost.captureMs = MillisecondsSince(buildStart);
+  }
+  return framePresentation_;
+}
+
+bool RenderCoordinator::canReplaceWithOverview(const RenderResult& result,
+                                               const EditorApp& app) const {
+  if (!pendingRepair_ || !CompleteOverviewCanRepair(pendingRepair_->failure) ||
+      result.capturedPresentation == nullptr ||
+      !result.capturedPresentation->identity().sameContent(currentPresentationIdentity(app))) {
+    return false;
+  }
+  const std::span<const RenderResult::CompositedTile> tiles =
+      result.compositedPreview
+          ? std::span<const RenderResult::CompositedTile>(result.compositedPreview->tiles)
+          : std::span<const RenderResult::CompositedTile>();
+  return FramePresentation::CanAdopt(
+      *result.capturedPresentation, tiles, framePresentation_.get(),
+      result.capturedPresentation->identity().sameScene(currentPresentationIdentity(app)) &&
+          !app.document().hasPendingMutations());
 }
 
 void RenderCoordinator::acceptOverviewResult(RenderResult result, EditorApp& app,
                                              GlTextureCache& textures) {
-  if (result.version != app.document().currentFrameVersion()) {
+  const bool replacement = canReplaceWithOverview(result, app);
+  if (result.version != app.document().currentFrameVersion() && !replacement) {
+    return;
+  }
+  if (!textures.tiles().empty() && replacement) {
+    presentCompositedResult(result, app, result.viewport, textures);
     return;
   }
   if (!textures.tiles().empty()) {
     pendingOverviewResult_ = std::move(result);
     return;
   }
-  textures.uploadCompositedOverview(*result.compositedPreview, result.rasterViewport);
+  if (!textures.uploadCompositedOverview(*result.compositedPreview, result.rasterViewport,
+                                         result.capturedPresentation)) {
+    renderWorker_.asyncRenderer.discardUnpresentedResult(result);
+    rejectPreparedPresentation(FramePresentationFailure::UploadRefused);
+    return;
+  }
+  adoptionFailure_ = FramePresentationFailure::None;
+  acceptedRepairAttempt_ = lastPostedAttempt_;
   lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
+  compositedPresentation_.notePreparedResources(
+      textures.presentationResources(), result.compositedPreview->entity,
+      DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview),
+      result.capturedPresentation != nullptr &&
+          result.capturedPresentation->identity().sameScene(currentPresentationIdentity(app)) &&
+          !app.document().hasPendingMutations());
   overviewDocVersion_ = result.version;
   displayedDocVersion_ = result.version;
 #ifdef __EMSCRIPTEN__
@@ -1496,24 +1530,47 @@ bool RenderCoordinator::hasMatchingPendingOverview(const RenderResult& result,
                                                    EditorApp& app) const {
   return IsCurrentRenderResult(pendingOverviewResult_, app) &&
          pendingOverviewResult_->version == result.version &&
-         result.version == app.document().currentFrameVersion();
+         result.version == app.document().currentFrameVersion() &&
+         pendingOverviewResult_->capturedPresentation != nullptr &&
+         result.capturedPresentation != nullptr &&
+         pendingOverviewResult_->capturedPresentation->identity().sameScene(
+             result.capturedPresentation->identity());
 }
 
 bool RenderCoordinator::canPresentWithOverview(const RenderResult& result,
                                                const EditorRasterViewport& rasterViewport,
                                                EditorApp& app,
                                                const GlTextureCache& textures) const {
-  if (!result.rasterViewport.viewportBounded || !rasterViewport.viewportBounded ||
-      hasMatchingPendingOverview(result, app)) {
+  if (!result.rasterViewport.viewportBounded || !rasterViewport.viewportBounded) {
     return true;
   }
-  if (!textures.coverageDiagnostics().overviewInfillAvailable) {
-    return false;
+  const auto overview =
+      hasMatchingPendingOverview(result, app)
+          ? pendingOverviewResult_->capturedPresentation
+          : (textures.presentationResources() ? textures.presentationResources()->overviewCapture()
+                                              : nullptr);
+  const auto active = result.capturedPresentation;
+  return active != nullptr && overview != nullptr &&
+         active->identity().sameScene(overview->identity()) &&
+         active->canvasSize() == overview->canvasSize() &&
+         active->documentOrigin() == overview->documentOrigin();
+}
+
+bool RenderCoordinator::requiresFreshOverview(bool available, std::uint64_t currentVersion) const {
+  return !available || overviewDocVersion_ != currentVersion ||
+         (pendingRepair_ && pendingRepair_->failure == FramePresentationFailure::MissingOverview);
+}
+
+void RenderCoordinator::discardStalePendingOverview(const EditorApp& app) {
+  const auto currentVersion = app.document().currentFrameVersion();
+  if (pendingOverviewResult_.has_value() &&
+      (!IsCurrentRenderResult(pendingOverviewResult_, app) ||
+       pendingOverviewResult_->version != currentVersion ||
+       pendingOverviewResult_->capturedPresentation == nullptr ||
+       !pendingOverviewResult_->capturedPresentation->identity().sameScene(
+           currentPresentationIdentity(app)))) {
+    pendingOverviewResult_.reset();
   }
-  const auto& drag = result.compositedPreview->representedDragPreview;
-  const bool activeDrag =
-      drag.has_value() && drag->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
-  return activeDrag || overviewDocVersion_ == result.version;
 }
 
 bool RenderCoordinator::needsOverviewInfillForViewport(EditorApp& app,
@@ -1521,14 +1578,14 @@ bool RenderCoordinator::needsOverviewInfillForViewport(EditorApp& app,
                                                        bool activeDrag,
                                                        const GlTextureCache* textures) {
   const auto currentVersion = app.document().currentFrameVersion();
-  if (pendingOverviewResult_.has_value() && (!IsCurrentRenderResult(pendingOverviewResult_, app) ||
-                                             pendingOverviewResult_->version != currentVersion)) {
-    pendingOverviewResult_.reset();
-  }
-  return rasterViewport.viewportBounded && !activeDrag && textures != nullptr &&
-         !pendingOverviewResult_.has_value() &&
-         (!textures->coverageDiagnostics().overviewInfillAvailable ||
-          overviewDocVersion_ != currentVersion);
+  discardStalePendingOverview(app);
+  const auto resources = textures != nullptr ? textures->presentationResources() : nullptr;
+  const auto overview = resources ? resources->overviewCapture() : nullptr;
+  const bool currentOverview =
+      overview != nullptr && overview->identity().sameScene(currentPresentationIdentity(app));
+  return rasterViewport.viewportBounded && (!activeDrag || presentationNeedsCoverage_) &&
+         textures != nullptr && !pendingOverviewResult_.has_value() &&
+         requiresFreshOverview(currentOverview, currentVersion);
 }
 
 void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& viewport,
@@ -1559,9 +1616,9 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     return;
   }
 
-  // The worker only publishes its latest request, so the posted epoch identifies this result.
-  if (lastPostedAttempt_.has_value() &&
-      lastPostedAttempt_->presentationEpoch != presentationEpoch_) {
+  // Renderer configuration belongs to the consumed capture, not to the most recently posted work.
+  if (resultOpt->capturedPresentation != nullptr &&
+      resultOpt->capturedPresentation->identity().presentationEpoch != presentationEpoch_) {
     rejectRenderResult(resultOpt);
     return;
   }
@@ -1572,6 +1629,10 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   PublishWorkerTimingStats(result, app, compositorStats);
 #endif
   lastFrameCostBreakdown_.compositedRender = CompositedRenderCostFromStats(compositorStats);
+  lastFrameCostBreakdown_.compositedRender.presentationCoverageRepair =
+      result.presentationCoverageRepair;
+  lastFrameCostBreakdown_.compositedRender.presentationRepairReason =
+      result.presentationRepairReason;
   // Forward the worker-measured presentation latency to the frame history so
   // `RenderFrameGraph` can overlay async worker time on the UI frame graph.
   // The frame history's latest slot corresponds to the current UI frame
@@ -1589,7 +1650,6 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     }
     return;
   }
-  nothingToPresentRetry_.reset();
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
   const bool overviewInfillResult =
       result.overviewInfillOnly && !result.rasterViewport.viewportBounded;
@@ -1606,7 +1666,8 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     // sole presented content: zooming out would expose checkerboard for missing tile coverage
     // instead of document transparency. Keep the previous presentation until an overview infill
     // exists underneath the crisp bounded tiles.
-    rejectRenderResult(resultOpt);
+    renderWorker_.asyncRenderer.discardUnpresentedResult(result);
+    rejectPreparedPresentation(FramePresentationFailure::MissingOverview);
     return;
   }
   const Vector2i resultCanvasSize = result.rasterViewport.outputSizePx;
@@ -1618,17 +1679,49 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   presentCompositedResult(*resultOpt, app, viewport, textures);
 }
 
+void RenderCoordinator::rejectPreparedPresentation(FramePresentationFailure failure) {
+  adoptionFailure_ = failure;
+  presentationNeedsRender_ = true;
+  if (lastPostedAttempt_.has_value()) {
+    nothingToPresentRetry_.noteFailure(*lastPostedAttempt_, nothingToPresentRetryNow());
+  }
+}
+
+bool RenderCoordinator::prepareResultResources(RenderResult& result, EditorApp& app,
+                                               GlTextureCache& textures) {
+  if (result.capturedPresentation == nullptr ||
+      !FramePresentation::CanAdopt(
+          *result.capturedPresentation, result.compositedPreview->tiles, framePresentation_.get(),
+          result.capturedPresentation->identity().sameScene(currentPresentationIdentity(app)) &&
+              !app.document().hasPendingMutations())) {
+    renderWorker_.asyncRenderer.discardUnpresentedResult(result);
+    rejectPreparedPresentation(FramePresentationFailure::IncompatiblePose);
+    return false;
+  }
+  const RenderResult* overview =
+      hasMatchingPendingOverview(result, app) ? &*pendingOverviewResult_ : nullptr;
+  if (!textures.uploadComposited(*result.compositedPreview, result.rasterViewport, overview,
+                                 result.capturedPresentation)) {
+    renderWorker_.asyncRenderer.discardUnpresentedResult(result);
+    rejectPreparedPresentation(FramePresentationFailure::UploadRefused);
+    return false;
+  }
+  adoptionFailure_ = FramePresentationFailure::None;
+  acceptedRepairAttempt_ = lastPostedAttempt_;
+  if (overview != nullptr) {
+    overviewDocVersion_ = overview->version;
+    pendingOverviewResult_.reset();
+  }
+  return true;
+}
+
 void RenderCoordinator::presentCompositedResult(RenderResult& result, EditorApp& app,
                                                 const ViewportState& viewport,
                                                 GlTextureCache& textures) {
   const Vector2i resultCanvasSize = result.rasterViewport.outputSizePx;
-  if (hasMatchingPendingOverview(result, app)) {
-    textures.uploadCompositedOverview(*pendingOverviewResult_->compositedPreview,
-                                      pendingOverviewResult_->rasterViewport);
-    overviewDocVersion_ = pendingOverviewResult_->version;
-    pendingOverviewResult_.reset();
+  if (!prepareResultResources(result, app, textures)) {
+    return;
   }
-  textures.uploadComposited(*result.compositedPreview, result.rasterViewport);
   if (result.overviewInfillOnly) {
     renderWorker_.asyncRenderer.noteOverviewPresentedAsActive(result);
   }
@@ -1649,9 +1742,12 @@ void RenderCoordinator::presentCompositedResult(RenderResult& result, EditorApp&
       displayNoneSuppressedLayerEntity_ = entt::null;
     }
   }
-  compositedPresentation_.noteCachedTextures(
-      result.compositedPreview->entity, result.version, resultCanvasSize,
-      DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview));
+  compositedPresentation_.notePreparedResources(
+      textures.presentationResources(), result.compositedPreview->entity,
+      DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview),
+      result.capturedPresentation != nullptr &&
+          result.capturedPresentation->identity().sameScene(currentPresentationIdentity(app)) &&
+          !app.document().hasPendingMutations());
   noteSelectedPromotionAvailability(result);
   if (CompositedPreviewClearsPendingSelectedLayerRasterization(
           *result.compositedPreview, pendingSelectedLayerRasterizationEntity_, result.version,
@@ -1665,18 +1761,49 @@ void RenderCoordinator::presentCompositedResult(RenderResult& result, EditorApp&
   PublishAcceptedWorkerResult(result);
 #endif
   renderScheduler_.noteRenderCompleted(result.version, resultCanvasSize, result.rasterViewport);
-  if (compositedPresentation_.isWaitingForChromeRefresh() && app.hasDocument()) {
-    refreshSelectionBoundsCache(app);
-    // Preserve the last-known marquee rect across this internal
-    // chrome-refresh path. Composited drag lands here; SelectTool isn't
-    // reachable, so we reuse whatever the most recent main-thread
-    // rasterize baked in.
-    rasterizeOverlayForCurrentSelection(app, viewport, lastOverlayMarqueeRectDoc_, std::nullopt,
-                                        std::nullopt, lastOverlaySelectionDetail_);
-    compositedPresentation_.noteChromeRefreshCompleted(displayedDocVersion_);
-  }
   promoteSelectionBoundsIfReady();
   acceptPixelCaptureResult(result, app, viewport);
+}
+
+std::optional<SelectTool::ActiveDragPreview> RenderCoordinator::previewWithPresentationEpoch(
+    std::optional<SelectTool::ActiveDragPreview> preview) const {
+  if (preview.has_value()) {
+    preview->contentIdentity.presentationEpoch = presentationEpoch_;
+  }
+  return preview;
+}
+
+void RenderCoordinator::capturePresentationRequest(RenderRequest& request,
+                                                   const EditorApp& app) const {
+  request.version = app.document().currentFrameVersion();
+  request.documentGeneration = app.document().documentGeneration();
+  request.fontResourceRevision = app.document().fontResourceRevision();
+  request.geometryRevision = app.document().nonTransformRevision();
+  request.presentationEpoch = presentationEpoch_;
+  request.selectedElements = app.selectedElements();
+  request.sourceHoverElements = sourceHoverElements_;
+  request.textEditing = textEditing_;
+  if (lockedRejectionFlash_.has_value()) {
+    request.lockedFlash =
+        LockedRejectionFlashInput{lockedRejectionFlash_->element, lockedRejectionFlash_->intensity};
+  }
+  if (framePresentation_ != nullptr) {
+    for (const auto& pose : framePresentation_->overrides()) {
+      request.trackedPresentationObjects.push_back(pose.entity);
+    }
+  }
+}
+
+bool RenderCoordinator::hasForcedRenderReason(bool captureNeeded) const {
+  return pendingPresentationRefresh_ || presentationNeedsRender_ || captureNeeded ||
+         selectedPrewarmRecoveryPending_;
+}
+
+void RenderCoordinator::configurePresentationRepair(RenderRequest& request) const {
+  request.presentationRepairReason = pendingRepair_ ? static_cast<int>(pendingRepair_->failure) : 0;
+  request.presentationCoverageRepair =
+      presentationNeedsCoverage_ ||
+      (pendingRepair_ && pendingRepair_->failure == FramePresentationFailure::IncompatiblePose);
 }
 
 bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
@@ -1691,7 +1818,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
   const Vector2i desiredCanvasSize = rasterViewport.semanticCanvasSizePx;
   const Vector2i actualDocumentCanvas = app.document().document().canvasSize();
-  const auto dragPreview = selectTool.activeDragPreview();
+  const auto dragPreview = previewWithPresentationEpoch(selectTool.activeDragPreview());
   // Compare desired size against the live document size. Document replacement
   // can reset the stored canvas size, and LayoutSystem readback can round by a
   // pixel, so a separate last-set tracker is not authoritative here.
@@ -1724,8 +1851,12 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const Entity prewarmEntity = selectedCompositedEntity(app);
   const bool useVisibleSelectedRaster = selectedPrewarmFallbackApplies(
       app.document().documentGeneration(), prewarmEntity, rasterViewport);
+  const bool willCommitCanvas =
+      ShouldCommitCanvas(pendingCanvasSize_, wouldChange, deferCanvasCommitForActiveDrag,
+                         firstCommit, throttleElapsed);
   const bool needsOverviewInfill =
-      needsOverviewInfillForViewport(app, rasterViewport, dragPreview.has_value(), textures);
+      needsOverviewInfillForViewport(app, rasterViewport, dragPreview.has_value(), textures) ||
+      (textures != nullptr && rasterViewport.viewportBounded && willCommitCanvas);
   const bool pendingSelectedLayerRasterization =
       prewarmEntity != entt::null && prewarmEntity == pendingSelectedLayerRasterizationEntity_;
   const bool deferSelectedViewportRefresh = ShouldDeferSelectedViewportRefresh(
@@ -1747,8 +1878,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       requestOverviewInfill ? std::vector<Entity>{}
                             : selectedCompositedExtraEntities(app, prewarmEntity);
   const bool forceSelectedLayerRasterization = pendingSelectedLayerRasterization;
-  bool forcePresentationRefresh =
-      pendingPresentationRefresh_ || captureNeeded || selectedPrewarmRecoveryPending_;
+  bool forcePresentationRefresh = hasForcedRenderReason(captureNeeded);
   const bool hasIndependentSelectedPrewarmRenderReason = HasIndependentSelectedPrewarmRenderReason(
       dragPreview.has_value(), currentVersion != displayedDocVersion_,
       forceSelectedLayerRasterization, forcePresentationRefresh);
@@ -1768,8 +1898,7 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
           : (useSelectedPrewarmRasterViewport ? selectedPrewarmRaster : rasterViewport);
   const Vector2i currentCanvasSize = requestRasterViewport.outputSizePx;
 
-  if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && !deferCanvasCommitForActiveDrag &&
-      (firstCommit || throttleElapsed)) {
+  if (willCommitCanvas) {
     app.document().document().setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
     pendingCanvasSizeSince_ = now;
     ++lastFrameCostBreakdown_.documentCanvasCommitCount;
@@ -1806,8 +1935,8 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
           .activeDragPreview = dragPreview,
           // A scheduled retry owes a render even when the failed request's only reason for one,
           // such as a presentation refresh, was consumed when it was posted.
-          .forcePresentationRefresh =
-              forcePresentationRefresh || nothingToPresentRetry_.retryScheduled(),
+          .forcePresentationRefresh = forcePresentationRefresh || requestOverviewInfill ||
+                                      nothingToPresentRetry_.retryScheduled(),
           .forceSelectedLayerRasterization = forceSelectedLayerRasterization,
           .currentVersion = currentVersion,
           .currentCanvasSize = currentCanvasSize,
@@ -1821,22 +1950,22 @@ bool RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   if (!schedule.shouldRequestRender()) {
     return false;
   }
-  const RenderAttemptIdentity attempt = MakeRenderAttempt(
+  RenderAttemptIdentity attempt = MakeRenderAttempt(
       app.document().documentGeneration(), currentVersion, requestRasterViewport,
       requestOverviewInfill, prewarmEntity, schedule.dragPreview, presentationEpoch_);
+  attempt.repair = pendingRepair_;
   if (!nothingToPresentRetry_.mayPost(attempt, nothingToPresentRetryNow())) {
     return false;
   }
 
   RenderRequest req(renderWorker_.renderer, app.document().document());
-  req.version = currentVersion;
-  req.documentGeneration = app.document().documentGeneration();
-  req.fontResourceRevision = app.document().fontResourceRevision();
+  capturePresentationRequest(req, app);
   req.rasterViewport = requestRasterViewport;
   // The presenter places the accepted surface with this transform, so it must be
   // the exact viewport `requestRasterViewport` was derived from.
   req.viewport = viewport;
   req.overviewInfillOnly = requestOverviewInfill;
+  configurePresentationRepair(req);
   configurePixelCaptureRequest(&req, requestOverviewInfill, dragPreview.has_value(),
                                requestRasterViewport);
   // Drain any pending structural remap from a recent `setDocumentMaybe
@@ -1897,7 +2026,8 @@ bool RenderCoordinator::activeDragNeedsRenderedPresentation(
   if (!dragPreview.has_value()) {
     return false;
   }
-  if (textures == nullptr) {
+  if (textures == nullptr || presentationNeedsRender_ || framePresentation_ == nullptr ||
+      !framePresentation_->followsPointer()) {
     return true;
   }
   return !HasPresentableDragTargetTile(*textures, dragPreview, suppressedLayerEntity,
@@ -1942,22 +2072,14 @@ std::vector<Entity> RenderCoordinator::selectedCompositedExtraEntities(EditorApp
 }
 
 Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {
+  std::optional<svg::DocumentReadAccess> documentAccess =
+      app.hasDocument() ? app.document().document().tryReadAccess() : std::nullopt;
+  if (app.hasDocument() && !documentAccess.has_value()) {
+    return displayNoneSuppressedLayerEntity_;
+  }
   const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
   if (!selected.has_value()) {
-    if (displayNoneSuppressedLayerEntity_ != entt::null) {
-      return displayNoneSuppressedLayerEntity_;
-    }
-
-    const CompositedPresentation::DiagnosticsSnapshot diagnostics =
-        compositedPresentation_.diagnostics();
-    if (diagnostics.hasCachedTextures && diagnostics.cachedEntity != entt::null &&
-        !DocumentContainsEntity(app.document().document(), diagnostics.cachedEntity)) {
-      displayNoneSuppressedSelectionEntity_ = entt::null;
-      displayNoneSuppressedLayerEntity_ = diagnostics.cachedEntity;
-      return diagnostics.cachedEntity;
-    }
-
-    return entt::null;
+    return suppressedLayerWithoutSelection(app);
   }
 
   if (!IsDisplayNone(*selected)) {
@@ -1972,7 +2094,28 @@ Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {
     return displayNoneSuppressedLayerEntity_;
   }
 
-  const Entity selectedEntity = selected->unsafeEntityHandle().entity();
+  return suppressedLayerForHiddenSelection(*selected);
+}
+
+Entity RenderCoordinator::suppressedLayerWithoutSelection(EditorApp& app) {
+  if (displayNoneSuppressedLayerEntity_ != entt::null) {
+    return displayNoneSuppressedLayerEntity_;
+  }
+
+  const CompositedPresentation::DiagnosticsSnapshot diagnostics =
+      compositedPresentation_.diagnostics();
+  if (diagnostics.hasCachedTextures && diagnostics.cachedEntity != entt::null &&
+      !DocumentContainsEntity(app.document().document(), diagnostics.cachedEntity)) {
+    displayNoneSuppressedSelectionEntity_ = entt::null;
+    displayNoneSuppressedLayerEntity_ = diagnostics.cachedEntity;
+    return diagnostics.cachedEntity;
+  }
+
+  return entt::null;
+}
+
+Entity RenderCoordinator::suppressedLayerForHiddenSelection(const svg::SVGElement& selected) {
+  const Entity selectedEntity = selected.unsafeEntityHandle().entity();
   const CompositedPresentation::DiagnosticsSnapshot diagnostics =
       compositedPresentation_.diagnostics();
   if (diagnostics.hasCachedTextures && diagnostics.cachedEntity != entt::null) {
@@ -1992,6 +2135,15 @@ Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {
 }
 
 bool RenderCoordinator::selectedElementIsDisplayNone(EditorApp& app) const {
+  if (!app.hasDocument() || !app.selectedElement().has_value()) {
+    return false;
+  }
+  const auto documentAccess = app.document().document().tryReadAccess();
+  if (!documentAccess.has_value()) {
+    return displayNoneSuppressedSelectionEntity_ != entt::null &&
+           app.selectedElement()->unsafeEntityHandle().entity() ==
+               displayNoneSuppressedSelectionEntity_;
+  }
   const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
   return selected.has_value() && IsDisplayNone(*selected);
 }

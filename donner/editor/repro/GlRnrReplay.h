@@ -56,6 +56,10 @@ struct GlRnrReplayOptions {
   int holdFramesBehind = 0;
   /// Replay-only fixed render delay injected into the async worker.
   int workerRenderDelayMsForTesting = 0;
+  /// First frame to hold queued workers before document acquisition, or -1 to disable.
+  int workerDocumentAccessHoldStartFrame = -1;
+  /// Frame to release the document-acquisition hold and drain the submitted render.
+  int workerDocumentAccessHoldEndFrame = -1;
   /// Drive canvas tool input from recorded document coordinates instead of GUI screen hit-testing.
   bool driveDocumentSpaceInput = false;
   /// Set the source pane's animation target visible before the first frame.
@@ -87,6 +91,8 @@ struct GlRnrReplayCapture {
 
 /// Per-frame texture tile diagnostics captured during GL replay.
 struct GlRnrReplayTileDiagnostics {
+  /// Object owning this independently rasterized layer.
+  Entity layerEntity = entt::null;
   /// Stable texture-cache tile id.
   std::string id;
   /// Segment/layer tile kind.
@@ -177,6 +183,11 @@ struct GlRnrReplayFrameDiagnostics {
   std::uint64_t displayedDocVersion = 0;
   /// Document version represented by the current immediate overlay snapshot, if any.
   std::optional<std::uint64_t> immediateOverlayDocumentVersion;
+  /// Identity and poses of the immutable frame shared by artwork and chrome.
+  std::uint64_t presentationFrameId = 0;
+  PresentationIdentity presentationIdentity;
+  bool presentationFollowsPointer = false;
+  std::vector<PresentationPose> presentedPoses;
   /// Selected entity eligible for composited presentation, or entt::null.
   Entity selectedCompositedEntity = entt::null;
   /// Whether the last document flush applied commands.
@@ -219,6 +230,9 @@ struct GlRnrReplayFrameDiagnostics {
   FrameCostBreakdown frameCost;
   /// Active drag transform driving the presenter, if any.
   std::optional<SelectTool::ActiveDragPreview> activeDragPreview;
+  /// Whether the Select tool still has a live pointer drag, independent of retained release poses.
+  bool selectionDragging = false;
+
   /// Drag transform represented by the displayed cached content, if any.
   std::optional<SelectTool::ActiveDragPreview> displayedDragPreview;
   /// Replay worker scheduling mode used for this frame.

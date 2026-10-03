@@ -275,67 +275,6 @@ TEST(EditorShellInternalTest, MapsPresentationResourcesToTelemetrySamples) {
   EXPECT_EQ(telemetry.wgpuLifetimeBufferCreates, memory.wgpuLifetimeBufferCreates);
 }
 
-TEST(EditorShellPresentationTest, ChromeTransformEqualsTileTransformInTheSameFrame) {
-  // The desync impossibility, pinned at the seam: chrome and tiles are placed
-  // from ONE viewport through ONE transform function in the same frame, so a
-  // document point cannot land in two places.
-  ViewportState viewport;
-  viewport.paneOrigin = Vector2d(40.0, 24.0);
-  viewport.paneSize = Vector2d(800.0, 600.0);
-  viewport.devicePixelRatio = 2.0;
-  viewport.panScreenPoint = Vector2d(140.0, 96.0);
-  viewport.panDocPoint = Vector2d(12.0, 7.0);
-  viewport.zoom = 3.25;
-
-  // Capture-time transform is deliberately a different (stale) placement, the
-  // shape a gesture produces when the UI thread runs ahead of the pixels.
-  SelectionChromeSnapshot snapshot;
-  snapshot.canvasFromDoc = Transform2d::Scale(11.0) * Transform2d::Translate(Vector2d(3.0, 5.0));
-
-  const Vector2d framebufferFromLogicalScale(2.0, 2.0);
-  const SelectionChromeSnapshot placed =
-      ChromePlacedOnPresentedDocument(viewport, framebufferFromLogicalScale, snapshot);
-  const Transform2d presentedFromDocument =
-      PresentedFramebufferFromDocumentTransform(viewport, framebufferFromLogicalScale);
-  EXPECT_THAT(placed.canvasFromDoc.data, ::testing::ElementsAreArray(presentedFromDocument.data));
-
-  // The same transform is what the tile compose places quads with: a tile
-  // covering document rect (20,30)-(52,66) lands exactly where the chrome maps
-  // that rect.
-  const PresentedFrameTileGeometry tile{
-      .canvasOffsetDoc = Vector2d(20.0, 30.0),
-      .bitmapDimsDoc = Vector2d(32.0, 36.0),
-  };
-  const std::optional<PresentedTileQuad> tileQuad =
-      ComputePresentedTileQuad(tile, presentedFromDocument, std::nullopt);
-  ASSERT_TRUE(tileQuad.has_value());
-  EXPECT_EQ(tileQuad->topLeft, placed.canvasFromDoc.transformPosition(Vector2d(20.0, 30.0)));
-  EXPECT_EQ(tileQuad->bottomRight, placed.canvasFromDoc.transformPosition(Vector2d(52.0, 66.0)));
-}
-
-TEST(EditorShellPresentationTest, ChromePlacementIgnoresTheCaptureTimeTransform) {
-  // Two snapshots captured at wildly different zooms, presented into the same
-  // frame, must place identically: placement comes from the frame, not the
-  // capture.
-  ViewportState viewport;
-  viewport.paneSize = Vector2d(400.0, 300.0);
-  viewport.devicePixelRatio = 1.0;
-  viewport.zoom = 2.0;
-
-  SelectionChromeSnapshot capturedAtOneX;
-  capturedAtOneX.canvasFromDoc = Transform2d::Scale(1.0);
-  SelectionChromeSnapshot capturedAtFourX;
-  capturedAtFourX.canvasFromDoc = Transform2d::Scale(4.0);
-
-  const Vector2d framebufferFromLogicalScale(1.0, 1.0);
-  EXPECT_THAT(
-      ChromePlacedOnPresentedDocument(viewport, framebufferFromLogicalScale, capturedAtOneX)
-          .canvasFromDoc.data,
-      ::testing::ElementsAreArray(
-          ChromePlacedOnPresentedDocument(viewport, framebufferFromLogicalScale, capturedAtFourX)
-              .canvasFromDoc.data));
-}
-
 TEST(EditorShellPresentationTest, PresentationUsesFramebufferScaleInsteadOfRasterDpr) {
   ViewportState viewport;
   viewport.devicePixelRatio = 1.0;
@@ -1293,10 +1232,6 @@ public:
     return shell.renderCoordinator_.immediateOverlayDocumentVersionForDiagnostics();
   }
 
-  static std::uint64_t OverlayVersionGateSuppressions(const EditorShell& shell) {
-    return shell.renderCoordinator_.overlayVersionGateSuppressionTotalForDiagnostics();
-  }
-
   static RenderCoordinator& Coordinator(EditorShell& shell) { return shell.renderCoordinator_; }
 
   static void HoldRenderResultsForPolls(EditorShell& shell, int polls) {
@@ -1570,6 +1505,8 @@ public:
 
   static bool TextToolIsEditing(const EditorShell& shell) { return shell.textTool_.isEditing(); }
 
+  static bool FormatBarShouldShow(const EditorShell& shell) { return shell.formatBarShouldShow(); }
+
   static FormatBarState ComputeFormatBarState(EditorShell& shell) {
     return shell.computeFormatBarState();
   }
@@ -1623,6 +1560,11 @@ public:
   static bool MoveSelectedShapeDrag(EditorShell& shell, const Vector2d& documentPoint) {
     shell.selectTool_.onMouseMove(shell.app_, documentPoint, /*buttonHeld=*/true);
     return shell.flushInteractiveDragMutationAndRequestRender();
+  }
+
+  static void UpdateSelectionDrag(EditorShell& shell) {
+    shell.updateRenderPaneSelectionDrag(false,
+                                        shell.interactionController_.viewport().pixelsPerDocUnit());
   }
 
   static void EndSelectedShapeDrag(EditorShell& shell, const Vector2d& documentPoint) {
@@ -1832,21 +1774,11 @@ void RunFramesUntilDisplayedSelectionBounds(gui::EditorWindow& window, EditorShe
   }
 }
 
-/// Drive the frames that leave the editor holding selection chrome captured against a document
-/// version the presented pixels have not caught up to.
-///
-/// That state is what the overlay version gate is written for, and reaching it takes two things
-/// the editor only does together: a live-geometry tool (the Pen tool here) captures chrome from
-/// the post-flush DOM instead of waiting for the raster, and the worker has not published that
-/// version yet. Results are withheld from every later poll so the presented version stays pinned
-/// where the initial settle left it, making the gate's engagement a property of the sequence
-/// rather than of how fast the worker happens to be.
-///
-/// @param window Hidden window driving the frames.
-/// @param shell Editor shell under test, with its target already selected.
-/// @return Document version the presented pixels are pinned at.
-std::uint64_t RunFramesUntilChromeLeadsPresentedDocument(gui::EditorWindow& window,
-                                                         EditorShell& shell) {
+/// Hold raster results while a live style edit advances the document.
+/// @param window Hidden window driving frames.
+/// @param shell Shell whose target is already selected.
+/// @return Version of the retained raster/geometry pair.
+std::uint64_t HoldRasterWhileLiveDocumentAdvances(gui::EditorWindow& window, EditorShell& shell) {
   RunFramesUntilDisplayedSelectionBounds(window, shell);
   EditorShellTestAccess::HoldRenderResultsForPolls(shell, 64);
 
@@ -2444,7 +2376,7 @@ TEST(EditorShellTest, ReplayActionsSwitchToolsAndIgnoreUnknownToolNames) {
   EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
 }
 
-TEST(EditorShellTest, SelectionChromePresentsOnFramesTheOverlayVersionGateSuppresses) {
+TEST(EditorShellTest, ChromeRetainsRasterRevisionWhileLiveDocumentAdvances) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
@@ -2457,13 +2389,12 @@ TEST(EditorShellTest, SelectionChromePresentsOnFramesTheOverlayVersionGateSuppre
   ASSERT_TRUE(target.has_value());
   app.setSelection(*target);
 
-  const std::uint64_t presentedVersion = RunFramesUntilChromeLeadsPresentedDocument(window, shell);
+  const std::uint64_t presentedVersion = HoldRasterWhileLiveDocumentAdvances(window, shell);
   ASSERT_GT(presentedVersion, 0u) << "The gate only engages once a render has been presented.";
   ASSERT_TRUE(EditorShellTestAccess::ImmediateChromePlanProduced(shell));
   ASSERT_EQ(EditorShellTestAccess::ImmediateOverlayDocumentVersion(shell),
-            std::optional<std::uint64_t>(app.document().currentFrameVersion()));
-  ASSERT_GT(app.document().currentFrameVersion(), presentedVersion)
-      << "The Pen frame must leave the chrome captured ahead of the presented pixels.";
+            std::optional<std::uint64_t>(presentedVersion));
+  ASSERT_GT(app.document().currentFrameVersion(), presentedVersion);
 
   // Leaving the Pen tool takes away the live-geometry allowance, and there is no drag projection
   // to reconcile chrome with older pixels, so the next frame is one the gate suppresses.
@@ -2472,14 +2403,11 @@ TEST(EditorShellTest, SelectionChromePresentsOnFramesTheOverlayVersionGateSuppre
                                                .kind = repro::ReproAction::Kind::SetActiveTool,
                                                .tool = "select",
                                            });
-  const std::uint64_t suppressionsBeforeFrame =
-      EditorShellTestAccess::OverlayVersionGateSuppressions(shell);
   RunShellFrame(window, shell);
 
   ASSERT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell), presentedVersion)
       << "Withheld results should have kept the presented version pinned across the frame.";
-  ASSERT_GT(EditorShellTestAccess::OverlayVersionGateSuppressions(shell), suppressionsBeforeFrame)
-      << "This frame must actually be one the version gate suppressed, or it proves nothing.";
+  EXPECT_EQ(EditorShellTestAccess::ImmediateOverlayDocumentVersion(shell), presentedVersion);
   EXPECT_TRUE(EditorShellTestAccess::ImmediateChromePlanProduced(shell))
       << "A suppressed overlay refresh must not take the chrome pass with it: without a plan the "
          "frame presents document pixels with no chrome drawn over them, and the selection "
@@ -2488,7 +2416,7 @@ TEST(EditorShellTest, SelectionChromePresentsOnFramesTheOverlayVersionGateSuppre
       << "The retained chrome should still outline the selected element.";
 }
 
-TEST(EditorShellTest, DeselectingDropsChromeOnFramesTheOverlayVersionGateSuppresses) {
+TEST(EditorShellTest, DeselectionDropsChromeWhileRetainingRaster) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
@@ -2501,7 +2429,7 @@ TEST(EditorShellTest, DeselectingDropsChromeOnFramesTheOverlayVersionGateSuppres
   ASSERT_TRUE(target.has_value());
   app.setSelection(*target);
 
-  const std::uint64_t presentedVersion = RunFramesUntilChromeLeadsPresentedDocument(window, shell);
+  const std::uint64_t presentedVersion = HoldRasterWhileLiveDocumentAdvances(window, shell);
   ASSERT_GT(presentedVersion, 0u);
   ASSERT_EQ(EditorShellTestAccess::SelectionChromePathCount(shell), 1u);
 
@@ -2515,14 +2443,9 @@ TEST(EditorShellTest, DeselectingDropsChromeOnFramesTheOverlayVersionGateSuppres
   app.clearSelection();
   ASSERT_GT(app.document().currentFrameVersion(), presentedVersion)
       << "The Pen frame must leave the chrome captured ahead of the presented pixels.";
-  const std::uint64_t suppressionsBeforeFrame =
-      EditorShellTestAccess::OverlayVersionGateSuppressions(shell);
   RunShellFrame(window, shell);
 
   ASSERT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell), presentedVersion);
-  EXPECT_EQ(EditorShellTestAccess::OverlayVersionGateSuppressions(shell), suppressionsBeforeFrame)
-      << "A changed chrome subject must recapture instead of suppressing, because no later frame "
-         "will recapture for it while the presented document stays behind.";
   EXPECT_EQ(EditorShellTestAccess::SelectionChromePathCount(shell), 0u)
       << "Chrome captured for the old selection must not survive the deselect just because the "
          "overlay refresh is otherwise suppressed.";
@@ -3642,15 +3565,13 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
   constexpr Vector2d kTargetProbePoint(10.0, 12.0);
   const Vector2d expectedLiveProbe =
       status.activeDragPreview->documentFromCachedDocument.transformPosition(kTargetProbePoint);
-  const Vector2d representedProbe =
-      status.displayedDragPreview->documentFromCachedDocument.transformPosition(kTargetProbePoint);
   const bool hasLiveDragTile =
       std::ranges::any_of(status.tiles, [&](const LayerInspectorStatusReadback::Tile& tile) {
         if (!tile.isDragTarget) {
           return false;
         }
         const Vector2d presentedProbe =
-            tile.presentedDocumentFromCachedDocument.transformPosition(representedProbe);
+            tile.presentedDocumentFromCachedDocument.transformPosition(kTargetProbePoint);
         return std::abs(presentedProbe.x - expectedLiveProbe.x) < 1e-6 &&
                std::abs(presentedProbe.y - expectedLiveProbe.y) < 1e-6;
       });
@@ -3996,8 +3917,9 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
       if (!shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
         break;
       }
-      if (EditorShellTestAccess::DisplayedDocVersion(shell) ==
-          app.document().currentFrameVersion()) {
+      if (!app.document().hasPendingMutations() &&
+          EditorShellTestAccess::DisplayedDocVersion(shell) ==
+              app.document().currentFrameVersion()) {
         return;
       }
     }
@@ -4026,7 +3948,7 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
                                               bounds->width() + 116.0, bounds->height() + 16.0);
     const svg::RendererBitmap before = captureContent();
     ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(shell, start, *bounds));
-    ASSERT_TRUE(EditorShellTestAccess::MoveSelectedShapeDrag(shell, start + Vector2d(10.0, 0.0)));
+    (void)EditorShellTestAccess::MoveSelectedShapeDrag(shell, start + Vector2d(10.0, 0.0));
     awaitPresentation();
     const svg::RendererBitmap firstHeld = captureContent();
     const LayerInspectorStatusReadback firstStatus = shell.layerInspectorStatusForReadback();
@@ -4035,7 +3957,7 @@ TEST(EditorShellTest, GeodeMaskedChildrenUpdateCanvasThroughTwoHeldMoves) {
     const std::optional<Box2d> firstBounds = target->cast<svg::SVGGeometryElement>().worldBounds();
     ASSERT_TRUE(firstBounds.has_value());
     EXPECT_NEAR(firstBounds->topLeft.x - bounds->topLeft.x, 10.0, 1e-6);
-    ASSERT_TRUE(EditorShellTestAccess::MoveSelectedShapeDrag(shell, start + Vector2d(20.0, 0.0)));
+    (void)EditorShellTestAccess::MoveSelectedShapeDrag(shell, start + Vector2d(20.0, 0.0));
     awaitPresentation();
     const svg::RendererBitmap secondHeld = captureContent();
     const LayerInspectorStatusReadback secondStatus = shell.layerInspectorStatusForReadback();
@@ -4401,6 +4323,96 @@ TEST(EditorShellTest, GeodeSilhouetteSettledLayersSelectionStillDragsSelectedSha
                                /*waitForSelectedPrewarm=*/true);
 }
 
+TEST(EditorShellTest, DragMutationWaitsForQueuedRenderToConsumeItsDocument) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_THAT(window.valid(), testing::IsTrue());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_THAT(shell.valid(), testing::IsTrue());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  svg::SVGDocument& document = app.document().document();
+  auto target = document.querySelector("#target");
+  ASSERT_THAT(target, testing::Ne(std::nullopt));
+  app.setSelection(*target);
+  ASSERT_THAT(EditorShellTestAccess::BeginSelectedShapeDrag(
+                  shell, Vector2d(20.0, 20.0), Box2d::FromXYWH(10.0, 12.0, 40.0, 24.0)),
+              testing::IsTrue());
+  document.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  const std::uint64_t submittedVersion = app.document().currentFrameVersion();
+  {
+    // Hold the worker before document acquisition while same-thread UI guards remain available.
+    const auto holdWorkerAccess = document.writeAccess();
+    AsyncRenderer& renderer =
+        EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(0));
+    ASSERT_THAT(renderer.isBusy(), testing::IsTrue());
+    EXPECT_THAT(EditorShellTestAccess::MoveSelectedShapeDrag(shell, Vector2d(60.0, 40.0)),
+                testing::IsFalse());
+    EXPECT_EQ(app.document().currentFrameVersion(), submittedVersion);
+    EXPECT_THAT(app.document().hasPendingMutations(), testing::IsTrue());
+  }
+  AsyncRenderer& renderer = shell.asyncRendererForReplay();
+  ASSERT_THAT(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                           std::chrono::seconds(5)),
+              testing::IsTrue());
+  std::ignore = renderer.pollResult();
+  EXPECT_THAT(EditorShellTestAccess::MoveSelectedShapeDrag(shell, Vector2d(60.0, 40.0)),
+              testing::IsTrue());
+  EXPECT_EQ(app.document().currentFrameVersion(), submittedVersion + 1);
+  EXPECT_THAT(app.document().hasPendingMutations(), testing::IsFalse());
+  EXPECT_THAT(target->cast<svg::SVGGraphicsElement>().transform(),
+              testing::Eq(Transform2d::Translate(Vector2d(40.0, 20.0))));
+}
+
+TEST(EditorShellTest, CoalescedFinalPointerAndReleaseCommitTheFinalPoseAndUndo) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "coalesced-release.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0, 0, 120, 80));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(shell, Vector2d(20, 20),
+                                                            Box2d::FromXYWH(10, 12, 40, 24)));
+  ImGuiIO& io = ImGui::GetIO();
+  const bool oldTrickle = io.ConfigInputTrickleEventQueue;
+  io.ConfigInputTrickleEventQueue = false;
+  const auto startScreen = shell.viewportForReadback().documentToScreen(Vector2d(20, 20));
+  io.AddMousePosEvent(static_cast<float>(startScreen.x), static_cast<float>(startScreen.y));
+  io.AddMouseButtonEvent(0, true);
+  window.beginFrame();
+  window.endFrame();
+  ASSERT_TRUE(EditorShellTestAccess::MoveSelectedShapeDrag(shell, Vector2d(38, 32)));
+  const auto finalScreen = shell.viewportForReadback().documentToScreen(Vector2d(52, 40));
+  io.AddMousePosEvent(static_cast<float>(finalScreen.x), static_cast<float>(finalScreen.y));
+  io.AddMouseButtonEvent(0, false);
+  window.beginFrame();
+  EXPECT_TRUE(ImGui::IsMouseReleased(ImGuiMouseButton_Left));
+  EXPECT_FALSE(ImGui::IsMouseDown(ImGuiMouseButton_Left));
+  EditorShellTestAccess::UpdateSelectionDrag(shell);
+  window.endFrame();
+  io.ConfigInputTrickleEventQueue = oldTrickle;
+  const Transform2d expected = Transform2d::Translate(Vector2d(32, 20));
+  const auto presentation =
+      EditorShellTestAccess::Coordinator(shell).compositedPresentation().diagnostics();
+  ASSERT_TRUE(presentation.settlingPreview.has_value());
+  EXPECT_EQ(presentation.settlingPreview->translation, Vector2d(32, 20));
+  ASSERT_EQ(presentation.settlingPreview->poses.size(), 1u);
+  EXPECT_EQ(presentation.settlingPreview->poses.front().documentFromElement, expected);
+  ASSERT_TRUE(shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+  std::ignore = app.flushFrame();
+  EXPECT_EQ(target->cast<svg::SVGGraphicsElement>().transform(), expected);
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->cast<svg::SVGGraphicsElement>().transform(), Transform2d());
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->cast<svg::SVGGraphicsElement>().transform(), expected);
+}
+
 TEST(EditorShellTest, SelectDragKeepsFullPathChrome) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -4410,6 +4422,10 @@ TEST(EditorShellTest, SelectDragKeepsFullPathChrome) {
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
   ASSERT_TRUE(shell.valid());
   EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+
+  EditorShellTestAccess::App(shell).setSelection(
+      *EditorShellTestAccess::App(shell).document().document().querySelector("#target"));
+  RunFramesUntilDisplayedSelectionBounds(window, shell);
 
   shell.queueDocumentSpaceReplayInputForTesting(EditorShellDocumentReplayInput{
       .documentPoint = Vector2d(20.0, 20.0),
@@ -4429,6 +4445,7 @@ TEST(EditorShellTest, SelectDragKeepsFullPathChrome) {
   EditorShellTestAccess::ApplyPendingDocumentSpaceReplayInput(shell);
   EXPECT_EQ(EditorShellTestAccess::SelectionChromeDetailForActiveTool(shell),
             SelectionChromeDetail::Full);
+  RunShellFrame(window, shell);
   EXPECT_THAT(EditorShellTestAccess::SelectionChromePathCount(shell), ::testing::Gt(0u));
 }
 
@@ -4970,6 +4987,49 @@ TEST(EditorShellTest, OutputFontDemandDeduplicatesAssetsAndCancelsAfterSourceMut
   const auto fill = app.document().document().querySelector("#target")->getAttribute("fill");
   ASSERT_TRUE(fill);
   EXPECT_EQ(std::string_view(*fill), "red");
+}
+
+TEST(EditorShellTest, FormatBarSnapshotDoesNotWaitForDocumentWriter) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(
+      window, OptionsWithSource(
+                  R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label" font-family="serif"
+      font-size="24" font-weight="bold">Hello</text></svg>)"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  auto text = app.document().document().querySelector("#label");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+  const FormatBarState before = EditorShellTestAccess::ComputeFormatBarState(shell);
+  ASSERT_TRUE(before.visible);
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto release = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = app.document().document().writeAccess();
+    writerReady.set_value();
+    release.wait();
+  });
+  writerReady.get_future().wait();
+  auto format = std::async(std::launch::async, [&] {
+    const bool visible = EditorShellTestAccess::FormatBarShouldShow(shell);
+    return std::make_pair(visible, EditorShellTestAccess::ComputeFormatBarState(shell));
+  });
+  const auto status = format.wait_for(std::chrono::milliseconds(100));
+  releaseWriter.set_value();
+  writer.get();
+  const auto [visible, state] = format.get();
+  EXPECT_EQ(status, std::future_status::ready);
+  EXPECT_TRUE(visible);
+  EXPECT_TRUE(state.visible);
+  EXPECT_EQ(state.fontFamily, before.fontFamily);
+  EXPECT_EQ(state.fontSize, before.fontSize);
+  EXPECT_EQ(state.bold, before.bold);
 }
 
 TEST(EditorShellTest, TextFormatBarPrewarmsCatalogFamilyInItsOwnFace) {

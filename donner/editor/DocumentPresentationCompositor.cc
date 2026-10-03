@@ -10,8 +10,10 @@
 #include <vector>
 
 #include "donner/editor/EditorShellPresentation.h"
+#include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/RenderPanePresenter.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor {
 
@@ -64,49 +66,37 @@ bool EqualTileKey(const TileKey& lhs, const TileKey& rhs) {
          lhs.metadataOnly == rhs.metadataOnly && lhs.isDragTarget == rhs.isDragTarget;
 }
 
-struct DragKey {
-  Entity entity = entt::null;
-  std::vector<Entity> extraEntities;
-  Vector2d translation = Vector2d::Zero();
-  Transform2d documentFromCachedDocument = Transform2d();
-  std::uint64_t dragGeneration = 0;
+struct SavedSoftwareUnpack {
+  GLint buffer = 0;
+  GLint rowLength = 0;
+  GLint alignment = 0;
+  GLint skipRows = 0;
+  GLint skipPixels = 0;
+  SavedSoftwareUnpack() {
+    glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &buffer);
+    glGetIntegerv(GL_UNPACK_ROW_LENGTH, &rowLength);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
+    glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skipRows);
+    glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skipPixels);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+  }
+  ~SavedSoftwareUnpack() {
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(buffer));
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, rowLength);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
+    glPixelStorei(GL_UNPACK_SKIP_ROWS, skipRows);
+    glPixelStorei(GL_UNPACK_SKIP_PIXELS, skipPixels);
+  }
 };
 
-std::optional<DragKey> MakeDragKey(const std::optional<SelectTool::ActiveDragPreview>& preview) {
-  if (!preview.has_value()) {
-    return std::nullopt;
-  }
-  return DragKey{
-      .entity = preview->entity,
-      .extraEntities = preview->extraEntities,
-      .translation = preview->translation,
-      .documentFromCachedDocument = preview->documentFromCachedDocument,
-      .dragGeneration = preview->dragGeneration,
-  };
-}
-
-bool EqualDragKey(const std::optional<DragKey>& lhs, const std::optional<DragKey>& rhs) {
-  if (lhs.has_value() != rhs.has_value()) {
-    return false;
-  }
-  if (!lhs.has_value()) {
-    return true;
-  }
-  return lhs->entity == rhs->entity && lhs->extraEntities == rhs->extraEntities &&
-         lhs->translation == rhs->translation &&
-         EqualTransform(lhs->documentFromCachedDocument, rhs->documentFromCachedDocument) &&
-         lhs->dragGeneration == rhs->dragGeneration;
-}
-
 struct RequestKey {
+  std::uint64_t frameId = 0;
   ViewportState viewport;
   Box2d imageClipRect;
   std::vector<TileKey> overviewTiles;
   std::vector<TileKey> tiles;
-  std::optional<DragKey> activeDrag;
-  std::optional<DragKey> displayedDrag;
-  Entity suppressedLayerEntity = entt::null;
-  bool suppressDragTargetTiles = false;
 };
 
 bool EqualViewport(const ViewportState& lhs, const ViewportState& rhs) {
@@ -122,27 +112,17 @@ bool EqualTileKeys(const std::vector<TileKey>& lhs, const std::vector<TileKey>& 
 }
 
 bool EqualRequest(const RequestKey& lhs, const RequestKey& rhs) {
-  return EqualViewport(lhs.viewport, rhs.viewport) && lhs.imageClipRect == rhs.imageClipRect &&
-         EqualTileKeys(lhs.overviewTiles, rhs.overviewTiles) &&
-         EqualTileKeys(lhs.tiles, rhs.tiles) && EqualDragKey(lhs.activeDrag, rhs.activeDrag) &&
-         EqualDragKey(lhs.displayedDrag, rhs.displayedDrag) &&
-         lhs.suppressedLayerEntity == rhs.suppressedLayerEntity &&
-         lhs.suppressDragTargetTiles == rhs.suppressDragTargetTiles;
+  return lhs.frameId == rhs.frameId && EqualViewport(lhs.viewport, rhs.viewport) &&
+         lhs.imageClipRect == rhs.imageClipRect &&
+         EqualTileKeys(lhs.overviewTiles, rhs.overviewTiles) && EqualTileKeys(lhs.tiles, rhs.tiles);
 }
 
 RequestKey MakeRequestKey(const ViewportState& viewport, const Box2d& imageClipRect,
                           std::span<const GlTextureCache::TileView> overviewTiles,
-                          std::span<const GlTextureCache::TileView> tiles,
-                          const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
-                          const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview,
-                          Entity suppressedLayerEntity, bool suppressDragTargetTiles) {
+                          std::span<const GlTextureCache::TileView> tiles) {
   RequestKey key{
       .viewport = viewport,
       .imageClipRect = imageClipRect,
-      .activeDrag = MakeDragKey(activeDragPreview),
-      .displayedDrag = MakeDragKey(displayedDragPreview),
-      .suppressedLayerEntity = suppressedLayerEntity,
-      .suppressDragTargetTiles = suppressDragTargetTiles,
   };
   key.overviewTiles.reserve(overviewTiles.size());
   for (const GlTextureCache::TileView& tile : overviewTiles) {
@@ -303,6 +283,15 @@ bool IsValidSize(const Vector2i& size) {
          size.y <= ViewportState::kMaxCanvasDim;
 }
 
+std::optional<Vector2i> CompositeOutputSize(const ViewportState& viewport) {
+  const Vector2d pixels = viewport.paneSize * viewport.devicePixelRatio;
+  if (!std::isfinite(pixels.x) || !std::isfinite(pixels.y) || pixels.x <= 0.0 || pixels.y <= 0.0 ||
+      pixels.x > ViewportState::kMaxCanvasDim || pixels.y > ViewportState::kMaxCanvasDim) {
+    return std::nullopt;
+  }
+  return Vector2i(static_cast<int>(std::ceil(pixels.x)), static_cast<int>(std::ceil(pixels.y)));
+}
+
 }  // namespace
 #endif
 
@@ -315,12 +304,23 @@ struct DocumentPresentationCompositor::Impl {
   GLuint vertexBuffer = 0;
   GLuint tileProgram = 0;
   GLuint resolveProgram = 0;
+  GLuint chromeTexture = 0;
+  GLuint replacementTexture = 0;
+  bool failNextPaintUpload = false;
+  Vector2i chromeSize = Vector2i::Zero();
+  Vector2i replacementSize = Vector2i::Zero();
   Vector2i allocationSize = Vector2i::Zero();
   std::optional<RequestKey> lastRequest;
   DocumentCompositeTextureView view;
   std::uint64_t compositionCount = 0;
 
   ~Impl() {
+    if (chromeTexture != 0) {
+      glDeleteTextures(1, &chromeTexture);
+    }
+    if (replacementTexture != 0) {
+      glDeleteTextures(1, &replacementTexture);
+    }
     if (tileProgram != 0) {
       glDeleteProgram(tileProgram);
     }
@@ -428,9 +428,11 @@ void main() {
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
       glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, size.x, size.y, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                    nullptr);
+      return glGetError() == GL_NO_ERROR;
     };
-    allocate(premultipliedTexture);
-    allocate(resolvedTexture);
+    if (!allocate(premultipliedTexture) || !allocate(resolvedTexture)) {
+      return false;
+    }
     allocationSize = size;
     lastRequest.reset();
     return true;
@@ -476,6 +478,156 @@ void main() {
     glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(sizeof(vertices)), vertices.data());
     glDrawArrays(GL_TRIANGLES, 0, 6);
   }
+  bool uploadSoftwarePaint(GLuint& texture, Vector2i& size, const SelectionChromeSnapshot& snapshot,
+                           const Transform2d& outputFromDocument, const Vector2i& outputSize) {
+    svg::Renderer renderer;
+    svg::RenderViewport viewport;
+    viewport.size = Vector2d(outputSize.x, outputSize.y);
+    viewport.devicePixelRatio = 1.0;
+    renderer.beginFrame(viewport);
+    auto placed = snapshot;
+    placed.canvasFromDoc = outputFromDocument;
+    OverlayRenderer::drawChromeFromSnapshot(renderer, placed);
+    renderer.endFrame();
+    const auto bitmap = renderer.takeSnapshot();
+    if (bitmap.empty() || std::exchange(failNextPaintUpload, false)) {
+      return false;
+    }
+    if (texture == 0) {
+      glGenTextures(1, &texture);
+    }
+    if (texture == 0) {
+      return false;
+    }
+    SavedSoftwareUnpack unpack;
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (size != bitmap.dimensions) {
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, bitmap.dimensions.x, bitmap.dimensions.y, 0, GL_RGBA,
+                   GL_UNSIGNED_BYTE, nullptr);
+      if (glGetError() != GL_NO_ERROR) {
+        return false;
+      }
+      size = bitmap.dimensions;
+    }
+    glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(bitmap.rowBytes / 4u));
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, size.x, size.y, GL_RGBA, GL_UNSIGNED_BYTE,
+                    bitmap.pixels.data());
+    return glGetError() == GL_NO_ERROR;
+  }
+
+  bool prepareSoftwarePaint(const FramePresentation& frame, const Vector2i& outputSize) {
+    const double dpr = frame.viewport().devicePixelRatio;
+    const Transform2d outputFromDocument =
+        frame.framebufferFromDocument(Vector2d(dpr, dpr)) *
+        Transform2d::Translate(-frame.viewport().paneOrigin * dpr);
+    if (frame.replacementPaint().has_value() &&
+        !uploadSoftwarePaint(replacementTexture, replacementSize, *frame.replacementPaint(),
+                             outputFromDocument, outputSize)) {
+      return false;
+    }
+    return !frame.chromeEnabled() || uploadSoftwarePaint(chromeTexture, chromeSize, frame.chrome(),
+                                                         outputFromDocument, outputSize);
+  }
+
+  void drawSoftwarePaint(GLuint texture, const Vector2i& outputSize) const {
+    const PresentedTileQuad quad{
+        .topLeft = Vector2d::Zero(),
+        .topRight = Vector2d(outputSize.x, 0.0),
+        .bottomRight = Vector2d(outputSize.x, outputSize.y),
+        .bottomLeft = Vector2d(0.0, outputSize.y),
+    };
+    drawQuad(texture, quad, Vector2d(1.0, 1.0), tileProgram, outputSize);
+  }
+
+  template <typename DrawTile>
+  void drawActivePaint(const FramePresentation& frame, const Vector2d& paneOriginPx,
+                       const Vector2i& outputSize, const DrawTile& drawTile) {
+    bool replacementDrawn = false;
+    for (const GlTextureCache::TileView& tile : frame.tiles()) {
+      if (frame.replacementPaint().has_value() &&
+          tile.layerEntity == frame.replacementPaint()->livePathPreview->entity) {
+        if (!replacementDrawn) {
+          drawSoftwarePaint(replacementTexture, outputSize);
+          replacementDrawn = true;
+        }
+      } else {
+        drawTile(tile);
+      }
+    }
+    if (frame.chromeEnabled()) {
+      const auto paneClip = frame.paneClipRect();
+      setClip(Box2d(paneClip.topLeft * frame.viewport().devicePixelRatio - paneOriginPx,
+                    paneClip.bottomRight * frame.viewport().devicePixelRatio - paneOriginPx),
+              outputSize);
+      drawSoftwarePaint(chromeTexture, outputSize);
+    }
+  }
+
+  void drawFrameTiles(const FramePresentation& frame, const Vector2i& outputSize) {
+    const auto& viewport = frame.viewport();
+    const auto& imageClipRect = *frame.documentClipRect();
+    const auto& tiles = frame.tiles();
+    const auto& overviewTiles = frame.overviewTiles();
+    const double dpr = viewport.devicePixelRatio;
+    glViewport(0, 0, outputSize.x, outputSize.y);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glEnable(GL_BLEND);
+    glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+    glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+    const Vector2d paneOriginPx = viewport.paneOrigin * dpr;
+    const Transform2d outputFromDocument =
+        frame.framebufferFromDocument(Vector2d(dpr, dpr)) * Transform2d::Translate(-paneOriginPx);
+    const Box2d outputClipRect(imageClipRect.topLeft * dpr - paneOriginPx,
+                               imageClipRect.bottomRight * dpr - paneOriginPx);
+
+    const auto computeTileQuad = [&](const GlTextureCache::TileView& tile) {
+      if (tile.texture == 0) {
+        return std::optional<PresentedTileQuad>();
+      }
+      return ComputePresentedTileQuad(PresentedGeometryFromTileView(tile), outputFromDocument,
+                                      std::nullopt);
+    };
+    const auto drawTile = [&](const GlTextureCache::TileView& tile) {
+      const std::optional<PresentedTileQuad> quad = computeTileQuad(tile);
+      if (!quad.has_value()) {
+        return;
+      }
+      drawQuad(static_cast<GLuint>(tile.texture), *quad, tile.uvBottomRight, tileProgram,
+               outputSize);
+    };
+
+    glEnable(GL_SCISSOR_TEST);
+    if (!overviewTiles.empty()) {
+      std::vector<Box2d> activeTileBounds;
+      activeTileBounds.reserve(tiles.size() * 2u);
+      for (const GlTextureCache::TileView& tile : tiles) {
+        if (const std::optional<PresentedTileQuad> quad = computeTileQuad(tile)) {
+          activeTileBounds.push_back(QuadBounds(*quad));
+        }
+      }
+      for (const Box2d& overviewClipRect :
+           SubtractPresentedTileBoundsFromClip(outputClipRect, activeTileBounds)) {
+        setClip(overviewClipRect, outputSize);
+        for (const GlTextureCache::TileView& tile : overviewTiles) {
+          drawTile(tile);
+        }
+      }
+    }
+    setClip(outputClipRect, outputSize);
+    drawActivePaint(frame, paneOriginPx, outputSize, drawTile);
+  }
+
 #endif
 };
 
@@ -485,39 +637,35 @@ DocumentPresentationCompositor::DocumentPresentationCompositor()
 DocumentPresentationCompositor::~DocumentPresentationCompositor() = default;
 
 DocumentCompositeTextureView DocumentPresentationCompositor::compose(
-    const ViewportState& viewport, const Box2d& imageClipRect,
-    std::span<const GlTextureCache::TileView> overviewTiles,
-    std::span<const GlTextureCache::TileView> tiles,
-    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
-    const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview,
-    Entity suppressedLayerEntity, bool suppressDragTargetTiles) {
+    const FramePresentation& frame) {
 #ifdef DONNER_EDITOR_WGPU
-  (void)viewport;
-  (void)imageClipRect;
-  (void)overviewTiles;
-  (void)tiles;
-  (void)activeDragPreview;
-  (void)displayedDragPreview;
-  (void)suppressedLayerEntity;
-  (void)suppressDragTargetTiles;
+  (void)frame;
   return {};
 #else
-  const double dpr = viewport.devicePixelRatio;
-  if (!std::isfinite(dpr) || dpr <= 0.0) {
-    reset();
+  if (!frame.documentClipRect().has_value()) {
     return {};
   }
-  const Vector2i outputSize(std::max(1, static_cast<int>(std::ceil(viewport.paneSize.x * dpr))),
-                            std::max(1, static_cast<int>(std::ceil(viewport.paneSize.y * dpr))));
-  RequestKey request =
-      MakeRequestKey(viewport, imageClipRect, overviewTiles, tiles, activeDragPreview,
-                     displayedDragPreview, suppressedLayerEntity, suppressDragTargetTiles);
+  const auto& viewport = frame.viewport();
+  const auto& imageClipRect = *frame.documentClipRect();
+  const auto& tiles = frame.tiles();
+  const auto& overviewTiles = frame.overviewTiles();
+  const auto requestedSize = CompositeOutputSize(viewport);
+  if (!requestedSize.has_value()) {
+    return {};
+  }
+  const Vector2i outputSize = *requestedSize;
+  RequestKey request = MakeRequestKey(viewport, imageClipRect, overviewTiles, tiles);
+  request.frameId = frame.frameId();
   if (impl_->lastRequest.has_value() && EqualRequest(*impl_->lastRequest, request) &&
       impl_->view.texture != 0) {
     return impl_->view;
   }
 
   SavedGlState savedState;
+  SavedSoftwareUnpack unpackState;
+  if (!impl_->prepareSoftwarePaint(frame, outputSize)) {
+    return {};
+  }
   if (!impl_->ensurePrograms() || !impl_->ensureTextures(outputSize) ||
       !impl_->attach(impl_->premultipliedTexture)) {
     std::fprintf(stderr, "DocumentPresentationCompositor failed to initialize GL resources\n");
@@ -525,78 +673,7 @@ DocumentCompositeTextureView DocumentPresentationCompositor::compose(
     return {};
   }
 
-  glViewport(0, 0, outputSize.x, outputSize.y);
-  glDisable(GL_DEPTH_TEST);
-  glDisable(GL_CULL_FACE);
-  glDisable(GL_STENCIL_TEST);
-  glDisable(GL_SCISSOR_TEST);
-  glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-  glClear(GL_COLOR_BUFFER_BIT);
-  glEnable(GL_BLEND);
-  glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
-  glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-
-  const Vector2d paneOriginPx = viewport.paneOrigin * dpr;
-  Transform2d outputFromCanvas(Transform2d::uninitialized);
-  const double devicePixelsPerDocUnit = viewport.devicePixelsPerDocUnit();
-  outputFromCanvas.data[0] = devicePixelsPerDocUnit;
-  outputFromCanvas.data[1] = 0.0;
-  outputFromCanvas.data[2] = 0.0;
-  outputFromCanvas.data[3] = devicePixelsPerDocUnit;
-  outputFromCanvas.data[4] = viewport.panScreenPoint.x * dpr -
-                             viewport.panDocPoint.x * devicePixelsPerDocUnit - paneOriginPx.x;
-  outputFromCanvas.data[5] = viewport.panScreenPoint.y * dpr -
-                             viewport.panDocPoint.y * devicePixelsPerDocUnit - paneOriginPx.y;
-  const Box2d outputClipRect(imageClipRect.topLeft * dpr - paneOriginPx,
-                             imageClipRect.bottomRight * dpr - paneOriginPx);
-  const std::optional<PresentedDragBaseline> dragBaseline =
-      PresentedBaselineFromDragPreviews(activeDragPreview, displayedDragPreview);
-
-  const auto computeTileQuad = [&](const GlTextureCache::TileView& tile) {
-    if (!ShouldPresentCompositedTile(tile, suppressedLayerEntity, suppressDragTargetTiles) ||
-        (suppressDragTargetTiles && TileMatchesActiveDragPreview(tile, activeDragPreview))) {
-      return std::optional<PresentedTileQuad>();
-    }
-    return ComputePresentedTileQuad(PresentedGeometryFromTileView(tile, activeDragPreview),
-                                    outputFromCanvas, dragBaseline);
-  };
-  const auto drawTile = [&](const GlTextureCache::TileView& tile) {
-    const std::optional<PresentedTileQuad> quad = computeTileQuad(tile);
-    if (!quad.has_value()) {
-      return;
-    }
-    impl_->drawQuad(static_cast<GLuint>(tile.texture), *quad, tile.uvBottomRight,
-                    impl_->tileProgram, outputSize);
-  };
-
-  glEnable(GL_SCISSOR_TEST);
-  if (!overviewTiles.empty()) {
-    std::vector<Box2d> activeTileBounds;
-    activeTileBounds.reserve(tiles.size() * 2u);
-    for (const GlTextureCache::TileView& tile : tiles) {
-      if (const std::optional<PresentedTileQuad> quad = computeTileQuad(tile)) {
-        activeTileBounds.push_back(QuadBounds(*quad));
-      }
-      if (TileMatchesActiveDragPreview(tile, activeDragPreview)) {
-        const std::optional<PresentedTileQuad> cachedQuad = ComputePresentedTileQuad(
-            PresentedGeometryFromTileView(tile, std::nullopt), outputFromCanvas, std::nullopt);
-        if (cachedQuad.has_value()) {
-          activeTileBounds.push_back(QuadBounds(*cachedQuad));
-        }
-      }
-    }
-    for (const Box2d& overviewClipRect :
-         SubtractPresentedTileBoundsFromClip(outputClipRect, activeTileBounds)) {
-      impl_->setClip(overviewClipRect, outputSize);
-      for (const GlTextureCache::TileView& tile : overviewTiles) {
-        drawTile(tile);
-      }
-    }
-  }
-  impl_->setClip(outputClipRect, outputSize);
-  for (const GlTextureCache::TileView& tile : tiles) {
-    drawTile(tile);
-  }
+  impl_->drawFrameTiles(frame, outputSize);
 
   if (!impl_->attach(impl_->resolvedTexture)) {
     std::fprintf(stderr, "DocumentPresentationCompositor resolve framebuffer is incomplete\n");
@@ -626,6 +703,12 @@ DocumentCompositeTextureView DocumentPresentationCompositor::compose(
 #endif
 }
 
+void DocumentPresentationCompositor::failNextSoftwarePaintUploadForTesting() {
+#ifndef DONNER_EDITOR_WGPU
+  impl_->failNextPaintUpload = true;
+#endif
+}
+
 void DocumentPresentationCompositor::reset() {
 #ifndef DONNER_EDITOR_WGPU
   impl_->lastRequest.reset();
@@ -637,11 +720,11 @@ std::uint64_t DocumentPresentationCompositor::retainedBytes() const {
 #ifdef DONNER_EDITOR_WGPU
   return 0;
 #else
-  if (impl_->allocationSize.x <= 0 || impl_->allocationSize.y <= 0) {
-    return 0;
-  }
-  return static_cast<std::uint64_t>(impl_->allocationSize.x) *
-         static_cast<std::uint64_t>(impl_->allocationSize.y) * 4u * 2u;
+  const auto bytes = [](const Vector2i& size) {
+    return static_cast<std::uint64_t>(size.x) * static_cast<std::uint64_t>(size.y) * 4u;
+  };
+  return bytes(impl_->allocationSize) * 2u + bytes(impl_->chromeSize) +
+         bytes(impl_->replacementSize);
 #endif
 }
 

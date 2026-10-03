@@ -4,6 +4,8 @@
 #include <memory>
 #include <utility>
 
+#include "donner/editor/EditorApp.h"
+#include "donner/editor/FramePresentation.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #ifdef DONNER_EDITOR_WGPU
 #include "donner/editor/gui/ImGuiRuntimeRenderer.h"
@@ -72,6 +74,19 @@ TEST(GlTextureCacheTest, MetadataOnlyReuseRequiresFullTextureIdentity) {
   RenderResult::CompositedTile changedRasterCanvas = tile;
   changedRasterCanvas.rasterCanvasSize = Vector2i(220, 120);
   EXPECT_FALSE(TextureIdentityMatchesCompositedTile(cachedIdentity, changedRasterCanvas));
+}
+
+TEST(GlTextureCacheTest, MissingMetadataPayloadDoesNotPublishPartialPresentation) {
+  GlTextureCache cache;
+  RenderResult::CompositedPreview preview;
+  auto tile = MetadataTile(RenderResult::CompositedTile::Kind::Layer, 12, Vector2i(20, 20),
+                           Vector2i(100, 100));
+  tile.id = "missing";
+  tile.canvasOffsetDoc = Vector2d(10.0, 10.0);
+  tile.bitmapDimsDoc = Vector2d(20.0, 20.0);
+  preview.tiles.push_back(tile);
+  cache.uploadComposited(preview);
+  EXPECT_THAT(cache.tiles(), ::testing::IsEmpty());
 }
 
 TEST(GlTextureCacheTest, BitmapPayloadBytesUsesRowStride) {
@@ -183,13 +198,9 @@ TEST(GlTextureCacheTest, MetadataOnlyCompositedUploadTracksMissesAndViewportDiag
   GlTextureCache cache;
   cache.uploadComposited(preview, RasterViewportForTest(/*viewportBounded=*/true));
 
-  ASSERT_EQ(cache.tiles().size(), 1u);
-  EXPECT_EQ(cache.tiles().front().id, "seg:0");
-  EXPECT_EQ(cache.tiles().front().texture, 0u);
-  EXPECT_TRUE(cache.tiles().front().metadataOnly);
-  EXPECT_EQ(cache.tiles().front().bitmapDimsPx, Vector2i(8, 9));
+  EXPECT_THAT(cache.tiles(), ::testing::IsEmpty());
   EXPECT_TRUE(cache.overviewTiles().empty());
-  EXPECT_TRUE(cache.activeTilesViewportBounded());
+  EXPECT_FALSE(cache.activeTilesViewportBounded());
   EXPECT_EQ(cache.metadataOnlyMissCount(), 1);
   EXPECT_EQ(cache.duplicateLiveTextureCount(), 0);
   EXPECT_EQ(cache.lastCompositedUploadCost().tileCount, 1);
@@ -198,11 +209,11 @@ TEST(GlTextureCacheTest, MetadataOnlyCompositedUploadTracksMissesAndViewportDiag
   EXPECT_EQ(cache.lastCompositedUploadCost().payloadBytes, 0u);
 
   const PresentationCoverageDiagnostics coverage = cache.coverageDiagnostics();
-  EXPECT_TRUE(coverage.activeTilesViewportBounded);
+  EXPECT_FALSE(coverage.activeTilesViewportBounded);
   EXPECT_FALSE(coverage.overviewInfillAvailable);
-  EXPECT_EQ(coverage.activeRasterDocumentRect, Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
+  EXPECT_EQ(coverage.activeRasterDocumentRect, Box2d());
   EXPECT_EQ(coverage.overviewRasterDocumentRect, Box2d());
-  EXPECT_EQ(coverage.activeOutputSizePx, Vector2i(20, 20));
+  EXPECT_EQ(coverage.activeOutputSizePx, Vector2i::Zero());
   EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i::Zero());
 }
 
@@ -228,9 +239,9 @@ TEST(GlTextureCacheTest, MetadataOnlyOverviewUploadTracksMissAndRetainsViewport)
   EXPECT_FALSE(coverage.activeTilesViewportBounded);
   EXPECT_FALSE(coverage.overviewInfillAvailable);
   EXPECT_EQ(coverage.activeRasterDocumentRect, Box2d());
-  EXPECT_EQ(coverage.overviewRasterDocumentRect, Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
+  EXPECT_EQ(coverage.overviewRasterDocumentRect, Box2d());
   EXPECT_EQ(coverage.activeOutputSizePx, Vector2i::Zero());
-  EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i(100, 100));
+  EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i::Zero());
 }
 
 TEST(GlTextureCacheTest, ResetCompositedClearsMetadataBookkeepingAndCost) {
@@ -242,7 +253,7 @@ TEST(GlTextureCacheTest, ResetCompositedClearsMetadataBookkeepingAndCost) {
 
   GlTextureCache cache;
   cache.uploadComposited(preview, RasterViewportForTest(/*viewportBounded=*/true));
-  ASSERT_TRUE(cache.activeTilesViewportBounded());
+  ASSERT_FALSE(cache.activeTilesViewportBounded());
   ASSERT_EQ(cache.metadataOnlyMissCount(), 1);
   ASSERT_EQ(cache.lastCompositedUploadCost().tileCount, 1);
 
@@ -392,6 +403,58 @@ TEST(GlTextureCacheTest, RuntimeBitmapUploadReplicatesBordersAndClearsUnusedAllo
   EXPECT_THAT(PixelAt(allocation, 0, 6), testing::ElementsAre(0u, 0u, 0u, 0u));
 }
 
+TEST(GlTextureCacheTest, NewOverviewAdvancesTheEmptyPrimaryCaptureAcrossLayoutChanges) {
+  const auto device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  GlTextureCache cache(device);
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"/>)"));
+  const auto capture = [&](std::uint64_t id) {
+    return CapturedPresentation::Capture(
+        app.document().document(),
+        PresentationIdentity{.captureId = id,
+                             .documentGeneration = app.document().documentGeneration()},
+        {});
+  };
+  const auto first = capture(1);
+  ASSERT_NE(first, nullptr);
+  auto raster = RasterViewportForTest(false);
+  auto preview = SingleBitmapTilePreview(1, MakeBitmap(Vector2i(5, 5), 20, 40));
+  preview.tiles.front().bitmapDimsDoc = Vector2d(100, 100);
+  ASSERT_TRUE(cache.uploadCompositedOverview(preview, raster, first));
+  const auto held = cache.presentationResources();
+  ASSERT_NE(held, nullptr);
+  EXPECT_TRUE(held->tiles().empty());
+  app.document().document().setCanvasSize(200, 200);
+  const auto second = capture(2);
+  ASSERT_NE(second, nullptr);
+  ASSERT_NE(first->canvasSize(), second->canvasSize());
+  raster.outputSizePx = Vector2i(200, 200);
+  raster.semanticCanvasSizePx = Vector2i(200, 200);
+  raster.outputFromDocument = Transform2d::Scale(2.0);
+  preview.tiles.front().generation = 2;
+  ASSERT_TRUE(cache.uploadCompositedOverview(preview, raster, second));
+  const auto current = cache.presentationResources();
+  ASSERT_NE(current, nullptr);
+  EXPECT_TRUE(current->tiles().empty());
+  EXPECT_EQ(current->capture(), second);
+  EXPECT_EQ(current->overviewCapture(), second);
+  FramePresentationInput input;
+  input.frameId = 2;
+  input.documentIdentity = second->identity();
+  input.viewport.documentViewBox = Box2d::FromXYWH(0, 0, 100, 100);
+  input.viewport.paneSize = Vector2d(100, 100);
+  input.paneClipRect = Box2d::FromXYWH(0, 0, 100, 100);
+  EXPECT_EQ(FramePresentation::CaptureForFrame(current, input), second);
+  const auto frame = FramePresentation::Build(current, input).frame;
+  ASSERT_NE(frame, nullptr);
+  EXPECT_EQ(frame->identity(), second->identity());
+  EXPECT_THAT(frame->tiles(), testing::SizeIs(1));
+  EXPECT_EQ(held->capture(), first);
+  EXPECT_EQ(held->overviewCapture(), first);
+}
+
 // The runtime write is chunked, so a replacement that overwrote the allocation a live registration
 // still points at could leave that allocation holding part of the old payload and part of the new
 // one once any chunk was refused. The superseded allocation must therefore stay byte-identical to
@@ -417,6 +480,36 @@ TEST(GlTextureCacheTest, ReplacedTilePayloadLeavesTheSupersededAllocationIntact)
   EXPECT_THAT(PixelAt(retained, 0, 0), testing::ElementsAre(40u, 40u, 40u, 255u));
   EXPECT_THAT(PixelAt(retained, 4, 4), testing::ElementsAre(44u, 44u, 48u, 255u));
   EXPECT_THAT(PixelAt(retained, 4, 0), testing::ElementsAre(44u, 40u, 44u, 255u));
+}
+
+TEST(GlTextureCacheTest, FailedMultiTileCandidatePreservesCompletePublishedManifest) {
+  const auto device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  GlTextureCache cache(device);
+  const auto original = SingleBitmapTilePreview(1, MakeBitmap(Vector2i(5, 5), 24u, 40u));
+  ASSERT_TRUE(cache.uploadComposited(original, RasterViewportForTest(false)));
+  const auto published = cache.presentationResources();
+  ASSERT_NE(published, nullptr);
+  const auto snapshot = published->tiles().front().textureSnapshot;
+  ASSERT_NE(snapshot, nullptr);
+  const auto coverage = cache.coverageDiagnostics();
+  auto candidate = SingleBitmapTilePreview(2, MakeBitmap(Vector2i(5, 5), 24u, 90u));
+  auto missing = MetadataTile(RenderResult::CompositedTile::Kind::Layer, 1, Vector2i(5, 5),
+                              Vector2i(100, 100));
+  missing.id = "missing-second-tile";
+  candidate.tiles.push_back(missing);
+  EXPECT_FALSE(cache.uploadComposited(candidate, RasterViewportForTest(true)));
+  EXPECT_EQ(cache.presentationResources(), published);
+  ASSERT_EQ(cache.tiles().size(), 1u);
+  EXPECT_EQ(cache.tiles().front().generation, 1u);
+  EXPECT_EQ(cache.tiles().front().textureSnapshot, snapshot);
+  EXPECT_EQ(cache.coverageDiagnostics().activeRasterDocumentRect,
+            coverage.activeRasterDocumentRect);
+  EXPECT_EQ(cache.coverageDiagnostics().activeTilesViewportBounded,
+            coverage.activeTilesViewportBounded);
+  EXPECT_EQ(cache.metadataOnlyMissCount(), 1);
+  const auto retained = snapshot->takeSnapshot();
+  EXPECT_THAT(PixelAt(retained, 0, 0), testing::ElementsAre(40u, 40u, 40u, 255u));
 }
 
 TEST(GlTextureCacheTest, RuntimeBitmapUploadPreservesBordersAcrossStagingChunkBoundary) {
@@ -603,6 +696,30 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
   device->drainDeferredTextureBackings();
   EXPECT_EQ(device->lifetimeTextureReleases(), backingReleasesBefore + 2u)
       << "Cache teardown must give up the remaining active snapshot allocation";
+}
+
+TEST(GlTextureCacheTest, RetainedManifestOwnsSnapshotBeyondCacheRetirementAndReset) {
+  const auto device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  int destructions = 0;
+  GlTextureCache cache(device);
+  auto initial = SingleSnapshotTilePreview(
+      "layer", 1, CreateCountingGeodeTextureSnapshot(device, &destructions));
+  ASSERT_TRUE(cache.uploadComposited(initial));
+  initial.tiles.clear();
+  auto held = cache.presentationResources();
+  ASSERT_NE(held, nullptr);
+  ASSERT_TRUE(
+      cache.uploadComposited(SingleBitmapTilePreview(2, MakeBitmap(Vector2i(5, 5), 24u, 90u))));
+  for (int frame = 0; frame < 5; ++frame) {
+    cache.advancePresentationFrame();
+  }
+  cache.resetComposited();
+  EXPECT_EQ(destructions, 0);
+  ASSERT_NE(held->tiles().front().textureSnapshot, nullptr);
+  EXPECT_FALSE(held->tiles().front().textureSnapshot->takeSnapshot().empty());
+  held.reset();
+  EXPECT_EQ(destructions, 1);
 }
 
 TEST(GlTextureCacheTest, RegisteredBackingSurvivesUntilItsExactRetirementIsReleased) {
@@ -829,4 +946,40 @@ TEST(GlTextureCacheTest, OverviewUploadDoesNotReplaceActiveBoundedTiles) {
 #endif
 
 }  // namespace
+#ifdef DONNER_EDITOR_WGPU
+TEST(GlTextureCacheTest, OverviewMetadataCanBorrowExactActivePayload) {
+  auto device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  int destroyed = 0;
+  auto preview = SingleSnapshotTilePreview("shared", 1,
+                                           CreateCountingGeodeTextureSnapshot(device, &destroyed));
+  auto raster = RasterViewportForTest(true);
+  GlTextureCache cache(device);
+  ASSERT_TRUE(cache.uploadComposited(preview, raster));
+  const auto snapshot = cache.tiles().front().textureSnapshot;
+  preview.tiles.front().textureSnapshot.reset();
+  ASSERT_TRUE(cache.uploadCompositedOverview(preview, RasterViewportForTest(false)));
+  EXPECT_EQ(cache.overviewTiles().front().textureSnapshot, snapshot);
+  EXPECT_EQ(cache.metadataOnlyMissCount(), 0);
+}
+
+TEST(GlTextureCacheTest, PromotedOverviewMetadataReusesItsRetainedPayloadAtomically) {
+  auto device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+  int destroyed = 0;
+  auto preview = SingleSnapshotTilePreview("shared", 1,
+                                           CreateCountingGeodeTextureSnapshot(device, &destroyed));
+  GlTextureCache cache(device);
+  ASSERT_TRUE(cache.uploadCompositedOverview(preview, RasterViewportForTest(false)));
+  const auto snapshot = cache.overviewTiles().front().textureSnapshot;
+  preview.tiles.front().textureSnapshot.reset();
+  ASSERT_TRUE(cache.uploadComposited(preview, RasterViewportForTest(false)));
+  EXPECT_EQ(cache.tiles().front().textureSnapshot, snapshot);
+  ++preview.tiles.front().generation;
+  EXPECT_FALSE(cache.uploadComposited(preview, RasterViewportForTest(false)));
+  EXPECT_EQ(cache.tiles().front().textureSnapshot, snapshot);
+  EXPECT_EQ(cache.overviewTiles().front().textureSnapshot, snapshot);
+}
+#endif
+
 }  // namespace donner::editor

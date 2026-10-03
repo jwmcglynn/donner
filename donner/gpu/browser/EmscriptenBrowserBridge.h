@@ -122,6 +122,7 @@ public:
   BridgeStatus mapBufferAsync(BrowserObjectId mappingId, BrowserObjectId bufferId,
                               uint64_t offsetBytes, uint64_t byteCount) override;
   MapSliceState mappingState(BrowserObjectId mappingId) const override;
+  BridgeStatus requestMappingProgress(BrowserObjectId mappingId) override;
   void yieldToBrowser(double seconds) override;
   BridgeStatus mappedBytes(BrowserObjectId mappingId,
                            std::span<const uint8_t>& bytes) const override;

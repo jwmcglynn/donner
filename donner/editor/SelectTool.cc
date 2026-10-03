@@ -287,6 +287,7 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
               .startTransform = primaryStartTransform,
               .currentTransform = primaryStartTransform,
               .documentFromParent = DocumentFromParentTransform(element),
+              .startDocumentFromElement = graphicsElement.elementFromWorld(),
               .writebackTarget = primaryWritebackTarget,
               .sourceTransformAttributeValue = sourceTransformAttributeValue,
           },
@@ -294,6 +295,11 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
       .startDocumentPoint = documentPoint,
       .startBoundsDoc = CombinedSelectionBounds(selectionBoundsDoc),
       .generation = nextDragGeneration_++,
+      .contentIdentity =
+          PresentationIdentity{.documentGeneration = editor.document().documentGeneration(),
+                               .version = editor.document().currentFrameVersion(),
+                               .geometryRevision = editor.document().nonTransformRevision(),
+                               .fontResourceRevision = editor.document().fontResourceRevision()},
   };
   return true;
 }
@@ -364,6 +370,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
         .startTransform = startTransform,
         .currentTransform = startTransform,
         .documentFromParent = DocumentFromParentTransform(element),
+        .startDocumentFromElement = graphicsElement.elementFromWorld(),
         .writebackTarget = captureAttributeWritebackTarget(element),
         .sourceTransformAttributeValue = sourceTransformAttributeValue,
     };
@@ -399,6 +406,12 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
             .centerDocumentPoint = center,
             .startAngleRadians = AngleFromCenter(center, documentPoint),
             .generation = nextDragGeneration_++,
+            .contentIdentity =
+                PresentationIdentity{
+                    .documentGeneration = editor.document().documentGeneration(),
+                    .version = editor.document().currentFrameVersion(),
+                    .geometryRevision = editor.document().nonTransformRevision(),
+                    .fontResourceRevision = editor.document().fontResourceRevision()},
         };
         return;
       }
@@ -549,6 +562,11 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       .startDocumentPoint = documentPoint,
       .startBoundsDoc = CombinedSelectionBounds(dragStartBoundsDoc),
       .generation = nextDragGeneration_++,
+      .contentIdentity =
+          PresentationIdentity{.documentGeneration = editor.document().documentGeneration(),
+                               .version = editor.document().currentFrameVersion(),
+                               .geometryRevision = editor.document().nonTransformRevision(),
+                               .fontResourceRevision = editor.document().fontResourceRevision()},
   };
 }
 
@@ -644,6 +662,16 @@ SelectTool::parentFromEntityTransformsAfterDocumentGesture(
   return result;
 }
 
+void SelectTool::refreshCommittedDragPose(const EditorApp& editor) {
+  const std::uint64_t documentFrameVersion = editor.document().currentFrameVersion();
+  if (!editor.document().hasPendingMutations() ||
+      documentFrameVersion != dragState_->committedDocumentFrameVersion) {
+    dragState_->committedDocumentDelta = dragState_->currentDocumentDelta;
+    dragState_->committedDocumentFromStartDocument = dragState_->currentDocumentFromStartDocument;
+    dragState_->committedDocumentFrameVersion = documentFrameVersion;
+  }
+}
+
 void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) {
   onMouseMove(editor, documentPoint, buttonHeld, MouseModifiers{});
 }
@@ -689,34 +717,19 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
     return;
   }
 
-  // When the mutation queue is empty, the DOM represents the previous active preview. Preserve
-  // that baseline before advancing the pointer preview and queueing its next transform. If a
-  // render is already in flight, the queue remains non-empty and this baseline stays at the last
-  // transform that actually reached the registry. Conversion must succeed for every participant
-  // first, so an invalid parent cannot advance the overlay without a matching DOM mutation.
-  const std::uint64_t documentFrameVersion = editor.document().currentFrameVersion();
-  if (!editor.document().hasPendingMutations() ||
-      documentFrameVersion != dragState_->committedDocumentFrameVersion) {
-    dragState_->committedDocumentDelta = dragState_->currentDocumentDelta;
-    dragState_->committedDocumentFromStartDocument = dragState_->currentDocumentFromStartDocument;
-    dragState_->committedDocumentFrameVersion = documentFrameVersion;
-  }
+  refreshCommittedDragPose(editor);
 
+  const bool unchangedPose = dragState_->hasMoved && dragState_->currentDocumentFromStartDocument ==
+                                                         *documentFromStartDocument;
   dragState_->currentDocumentDelta = deltaDoc;
   dragState_->currentDocumentFromStartDocument = *documentFromStartDocument;
   dragState_->primary.currentTransform = parentFromEntityTransforms->primary;
   dragState_->hasMoved = true;
+  if (unchangedPose) {
+    return;
+  }
 
-  // DOM is the source of truth during drag. Every drag frame applies a
-  // `SetTransformCommand` for the primary AND every extra, regardless of
-  // whether the compositor preview path is active. The composited path
-  // optimizes the *visual* cost (the compositor detects a pure-translation
-  // delta on a promoted layer and reuses the cached bitmap via its
-  // internal composition transform instead of re-rasterizing - see
-  // `CompositorController` fast-path), but the DOM writes happen either
-  // way so the canvas view and the backing document never disagree. That
-  // disagreement was the source of the drag-release "pop back" class of
-  // bugs where the cached bitmap offset diverged from the DOM transform.
+  // A changed resolved pose updates the DOM while retained pixels can reuse their raster.
   editor.applyMutation(EditorCommand::SetTransformCommand(dragState_->primary.element,
                                                           parentFromEntityTransforms->primary));
   for (std::size_t i = 0; i < dragState_->extras.size(); ++i) {
@@ -868,12 +881,28 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() con
     extraEntities.push_back(extra.entity);
   }
 
-  return ActiveDragPreview{
+  ActiveDragPreview result{
       .entity = dragState_->primary.entity,
       .extraEntities = std::move(extraEntities),
       .translation = dragState_->currentDocumentDelta,
       .documentFromCachedDocument = dragState_->currentDocumentFromStartDocument,
-      .dragGeneration = dragState_->generation};
+      .dragGeneration = dragState_->generation,
+      .contentIdentity = dragState_->contentIdentity,
+      .poses = {},
+      .startPoses = {}};
+  const auto appendPose = [&](const PerElementDrag& participant) {
+    result.startPoses.push_back(PresentationPose{
+        .entity = participant.entity, .documentFromElement = participant.startDocumentFromElement});
+    result.poses.push_back(PresentationPose{
+        .entity = participant.entity,
+        .documentFromElement =
+            participant.startDocumentFromElement * dragState_->currentDocumentFromStartDocument});
+  };
+  appendPose(dragState_->primary);
+  for (const auto& extra : dragState_->extras) {
+    appendPose(extra);
+  }
+  return result;
 }
 
 std::optional<SelectTool::ActiveDragPreview> SelectTool::documentDragPreview(
@@ -886,6 +915,17 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::documentDragPreview(
 
   preview->translation = dragState_->committedDocumentDelta;
   preview->documentFromCachedDocument = dragState_->committedDocumentFromStartDocument;
+  preview->poses.clear();
+  preview->poses.push_back(
+      PresentationPose{.entity = dragState_->primary.entity,
+                       .documentFromElement = dragState_->primary.startDocumentFromElement *
+                                              dragState_->committedDocumentFromStartDocument});
+  for (const auto& extra : dragState_->extras) {
+    preview->poses.push_back(PresentationPose{
+        .entity = extra.entity,
+        .documentFromElement =
+            extra.startDocumentFromElement * dragState_->committedDocumentFromStartDocument});
+  }
   return preview;
 }
 

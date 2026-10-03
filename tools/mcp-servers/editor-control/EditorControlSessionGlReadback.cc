@@ -492,6 +492,14 @@ std::vector<std::string> BazelGlRnrReplayCommand(const repro::GlRnrReplayOptions
     args.push_back("--worker-delay-ms");
     args.push_back(std::to_string(options.workerRenderDelayMsForTesting));
   }
+  if (options.workerDocumentAccessHoldStartFrame >= 0) {
+    args.push_back("--worker-document-hold-start-frame");
+    args.push_back(std::to_string(options.workerDocumentAccessHoldStartFrame));
+  }
+  if (options.workerDocumentAccessHoldEndFrame >= 0) {
+    args.push_back("--worker-document-hold-end-frame");
+    args.push_back(std::to_string(options.workerDocumentAccessHoldEndFrame));
+  }
   if (options.workerScheduling != repro::GlRnrReplayWorkerScheduling::Realtime) {
     args.push_back("--worker-scheduling");
     args.push_back(std::string(GlRnrReplayWorkerSchedulingArgument(options.workerScheduling)));

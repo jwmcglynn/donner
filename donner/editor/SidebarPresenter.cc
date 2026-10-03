@@ -24,6 +24,7 @@
 #include "donner/editor/EditorTheme.h"
 #include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/ImGuiInternalIncludes.h"
 #include "donner/editor/LockState.h"
 #include "donner/editor/StrokeMarkerPrefabs.h"
 #include "donner/editor/UndoTimeline.h"
@@ -788,6 +789,7 @@ void SidebarPresenter::captureStrokeSnapshot(const EditorApp& app,
 }
 
 void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
+  discardForeignTransformEdit(app);
   if (!app.hasDocument()) {
     treeSnapshot_.reset();
     inspectorSnapshot_ = InspectorSnapshot{};
@@ -1690,13 +1692,11 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
     return false;
   }
 
-  bool queuedMutation = false;
+  bool queuedMutation = flushPendingTransformValue(liveApp);
   transformFieldRects_.fill(std::nullopt);
   matrixFieldRects_.fill(std::nullopt);
 
-  // The single selected element, when the app is live this frame. All edits
-  // target this element; when `liveApp` is null (async renderer busy) the
-  // fields render disabled from the snapshot, mirroring tree-click gating.
+  // Active fields retain input in their edit buffer until document access is available.
   std::optional<svg::SVGElement> liveElement;
   if (liveApp != nullptr && liveApp->selectedElements().size() == 1u) {
     liveElement = liveApp->selectedElements().front();
@@ -1841,35 +1841,31 @@ bool SidebarPresenter::renderTransformPanel(EditorApp* liveApp) {
         ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(theme.textMuted), "%c", 'a' + i);
         ImGui::TableSetColumnIndex(axisColumn + 1);
         ImGui::SetNextItemWidth(-FLT_MIN);
-        if (!visuallyEditable) {
+        const bool canEditCell = visuallyEditable && (liveApp != nullptr || editingThisCell);
+        ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha,
+                            visuallyEditable ? 1.0f : ImGui::GetStyle().DisabledAlpha);
+        if (!canEditCell) {
           ImGui::BeginDisabled();
         }
         const bool changed = ImGui::DragScalar(kMatrixLabels[i], ImGuiDataType_Double, &value,
                                                0.01f, nullptr, nullptr, "%.6g");
-        if (!visuallyEditable) {
+        if (!canEditCell) {
           ImGui::EndDisabled();
         }
+        ImGui::PopStyleVar();
         const ImVec2 cellMin = ImGui::GetItemRectMin();
         const ImVec2 cellMax = ImGui::GetItemRectMax();
         matrixFieldRects_[i] =
             Box2d(Vector2d(cellMin.x, cellMin.y), Vector2d(cellMax.x, cellMax.y));
 
-        if (liveApp == nullptr) {
-          continue;
-        }
-        if (liveEditable && ImGui::IsItemActivated()) {
+        if (liveApp != nullptr && liveEditable && ImGui::IsItemActivated()) {
           beginTransformEdit(*liveApp, TransformField::Matrix, i, "Edit transform");
         }
         if (transformEdit_.has_value() && transformEdit_->field == TransformField::Matrix &&
             transformEdit_->matrixIndex == i && !transformEdit_->pendingCommit) {
-          if (changed && std::isfinite(value)) {
-            transformEdit_->matrixValues[i] = value;
-            transformEdit_->fieldValue = value;
-            queuedMutation = applyTransformEdit(*liveApp, value) || queuedMutation;
-          }
-          if (ImGui::IsItemDeactivated()) {
-            commitTransformEdit(*liveApp);
-          }
+          queuedMutation =
+              updateTransformFieldValue(liveApp, value, changed, ImGui::IsItemDeactivated()) ||
+              queuedMutation;
         }
       }
       ImGui::EndTable();
@@ -1886,9 +1882,12 @@ bool SidebarPresenter::renderTransformFieldDrag(EditorApp* liveApp, TransformFie
                                                 const char* format) {
   const bool editingThisField = transformEdit_.has_value() && transformEdit_->field == field &&
                                 !transformEdit_->pendingCommit;
+  const float disabledAlpha = canEdit ? 1.0f : ImGui::GetStyle().DisabledAlpha;
+  canEdit = canEdit && (liveApp != nullptr || editingThisField);
   float value = editingThisField ? static_cast<float>(transformEdit_->fieldValue) : displayValue;
 
   ImGui::SetNextItemWidth(-FLT_MIN);
+  ImGui::PushStyleVar(ImGuiStyleVar_DisabledAlpha, disabledAlpha);
   if (!canEdit) {
     ImGui::BeginDisabled();
   }
@@ -1896,26 +1895,64 @@ bool SidebarPresenter::renderTransformFieldDrag(EditorApp* liveApp, TransformFie
   if (!canEdit) {
     ImGui::EndDisabled();
   }
-
-  if (liveApp == nullptr) {
-    return false;
-  }
+  ImGui::PopStyleVar();
 
   bool queuedMutation = false;
-  if (canEdit && ImGui::IsItemActivated()) {
+  if (liveApp != nullptr && canEdit && ImGui::IsItemActivated()) {
     beginTransformEdit(*liveApp, field, /*matrixIndex=*/0, undoLabel);
   }
   if (transformEdit_.has_value() && transformEdit_->field == field &&
       !transformEdit_->pendingCommit) {
-    if (changed && std::isfinite(value)) {
-      transformEdit_->fieldValue = static_cast<double>(value);
-      queuedMutation = applyTransformEdit(*liveApp, static_cast<double>(value));
-    }
-    if (ImGui::IsItemDeactivated()) {
-      commitTransformEdit(*liveApp);
-    }
+    queuedMutation = updateTransformFieldValue(liveApp, static_cast<double>(value), changed,
+                                               ImGui::IsItemDeactivated());
   }
   return queuedMutation;
+}
+
+void SidebarPresenter::discardForeignTransformEdit(const EditorApp& app) {
+  if (!transformEdit_.has_value()) {
+    return;
+  }
+  const bool sameDocument =
+      app.hasDocument() &&
+      transformEdit_->documentGeneration == app.document().documentGeneration() &&
+      transformEdit_->document == app.document().document().handle();
+  if (!sameDocument) {
+    if (ImGui::GetCurrentContext() != nullptr && transformEdit_->itemId != 0 &&
+        ImGui::GetActiveID() == transformEdit_->itemId) {
+      ImGui::ClearActiveID();
+    }
+    transformEdit_.reset();
+  }
+}
+
+bool SidebarPresenter::flushPendingTransformValue(EditorApp* liveApp) {
+  if (liveApp == nullptr) {
+    return false;
+  }
+  discardForeignTransformEdit(*liveApp);
+  if (!transformEdit_.has_value() || !transformEdit_->pendingValue) {
+    return false;
+  }
+  transformEdit_->pendingValue = false;
+  return applyTransformEdit(*liveApp, transformEdit_->fieldValue);
+}
+
+bool SidebarPresenter::updateTransformFieldValue(EditorApp* liveApp, double value, bool changed,
+                                                 bool deactivated) {
+  if (changed && std::isfinite(value)) {
+    transformEdit_->fieldValue = value;
+    transformEdit_->pendingValue = true;
+    if (transformEdit_->field == TransformField::Matrix) {
+      transformEdit_->matrixValues[static_cast<std::size_t>(transformEdit_->matrixIndex)] = value;
+    }
+  }
+  transformEdit_->pendingCommit |= deactivated;
+  const bool queued = flushPendingTransformValue(liveApp);
+  if (liveApp != nullptr && transformEdit_.has_value() && transformEdit_->pendingCommit) {
+    commitTransformEdit(*liveApp);
+  }
+  return queued;
 }
 
 void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField field, int matrixIndex,
@@ -1935,7 +1972,13 @@ void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField fie
   }
 
   TransformEditState state{
-      .element = element, .field = field, .matrixIndex = matrixIndex, .undoLabel = undoLabel};
+      .element = element,
+      .document = liveApp.document().document().handle(),
+      .documentGeneration = liveApp.document().documentGeneration(),
+      .itemId = ImGui::GetCurrentContext() != nullptr ? ImGui::GetActiveID() : 0,
+      .field = field,
+      .matrixIndex = matrixIndex,
+      .undoLabel = undoLabel};
   // `transform()` and `worldBounds()` may materialize lazy layout state and
   // therefore acquire document write access. Do not wrap these DOM getters in
   // a read scope: ConcurrentDom uses a non-recursive lock, so upgrading that
@@ -1956,31 +1999,27 @@ void SidebarPresenter::beginTransformEdit(EditorApp& liveApp, TransformField fie
     state.matrixValues[static_cast<std::size_t>(i)] = state.startTransform.data[i];
   }
 
-  switch (field) {
-    case TransformField::PositionX:
-      state.fieldValue = state.startBounds.has_value() ? state.startBounds->topLeft.x : 0.0;
-      break;
-    case TransformField::PositionY:
-      state.fieldValue = state.startBounds.has_value() ? state.startBounds->topLeft.y : 0.0;
-      break;
-    case TransformField::Width:
-      state.fieldValue = state.startBounds.has_value() ? state.startBounds->width() : 0.0;
-      break;
-    case TransformField::Height:
-      state.fieldValue = state.startBounds.has_value() ? state.startBounds->height() : 0.0;
-      break;
-    case TransformField::Rotation:
-      state.fieldValue =
-          state.startDecomposed.has_value()
-              ? state.startDecomposed->rotationRadians * MathConstants<double>::kRadToDeg
-              : 0.0;
-      break;
-    case TransformField::Matrix:
-      state.fieldValue = state.matrixValues[static_cast<std::size_t>(matrixIndex)];
-      break;
-  }
+  state.fieldValue = InitialTransformFieldValue(state);
 
   transformEdit_ = std::move(state);
+}
+
+double SidebarPresenter::InitialTransformFieldValue(const TransformEditState& state) {
+  const Box2d bounds = state.startBounds.value_or(Box2d{});
+  switch (state.field) {
+    case TransformField::PositionX: return bounds.topLeft.x;
+    case TransformField::PositionY: return bounds.topLeft.y;
+    case TransformField::Width: return bounds.width();
+    case TransformField::Height: return bounds.height();
+    case TransformField::Rotation:
+      return state.startDecomposed.has_value()
+                 ? state.startDecomposed->rotationRadians * MathConstants<double>::kRadToDeg
+                 : 0.0;
+    case TransformField::Matrix:
+      return state.matrixValues[static_cast<std::size_t>(state.matrixIndex)];
+  }
+
+  UTILS_UNREACHABLE();
 }
 
 Transform2d SidebarPresenter::composeFieldTransform(const TransformEditState& state,
@@ -2051,6 +2090,7 @@ Transform2d SidebarPresenter::composeFieldTransform(const TransformEditState& st
 }
 
 bool SidebarPresenter::applyTransformEdit(EditorApp& liveApp, double value) {
+  discardForeignTransformEdit(liveApp);
   if (!transformEdit_.has_value() || !std::isfinite(value)) {
     return false;
   }
@@ -2069,9 +2109,11 @@ bool SidebarPresenter::applyTransformEdit(EditorApp& liveApp, double value) {
 }
 
 void SidebarPresenter::commitTransformEdit(EditorApp& liveApp) {
+  discardForeignTransformEdit(liveApp);
   if (!transformEdit_.has_value()) {
     return;
   }
+  (void)flushPendingTransformValue(&liveApp);
   TransformEditState state = std::move(*transformEdit_);
   transformEdit_.reset();
   if (!state.changed) {

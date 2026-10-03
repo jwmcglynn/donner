@@ -2687,6 +2687,116 @@ CompositorConfig CachedLayersOnlyConfig() {
 
 }  // namespace
 
+namespace {
+
+class GpuCompositionCpuHandoffRenderer : public NiceMock<MockRendererInterface> {
+public:
+  bool supportsTextureSnapshotCompositing() const override { return true; }
+
+  void drawBitmap(const RendererBitmap&, const ImageParams&) override { ++bitmapUploads; }
+
+  int bitmapUploads = 0;
+};
+
+}  // namespace
+
+class CompositorGpuCompositionCpuHandoffTest : public CompositorControllerTest {
+protected:
+  void configureGpuOffscreens(bool failTexture = false) {
+    ON_CALL(mainRenderer_, requiresTextureSnapshotPresentation())
+        .WillByDefault(::testing::Return(false));
+    ON_CALL(mainRenderer_, drawTextureSnapshot(_, _, _, _))
+        .WillByDefault([this](const RendererTextureSnapshot&, const Box2d&, double, bool) {
+          ++textureDraws_;
+          return true;
+        });
+    ON_CALL(mainRenderer_, createOffscreenInstance()).WillByDefault([this, failTexture]() {
+      auto offscreen = std::make_unique<GpuCompositionCpuHandoffRenderer>();
+      ON_CALL(*offscreen, requiresTextureSnapshotPresentation())
+          .WillByDefault(::testing::Return(false));
+      EXPECT_CALL(*offscreen, takeSnapshot()).Times(0);
+      ON_CALL(*offscreen, takeSnapshot()).WillByDefault([]() {
+        return MockRendererInterface::makeDummyBitmap();
+      });
+      ON_CALL(*offscreen, takeTextureSnapshot()).WillByDefault([this, failTexture]() {
+        ++textureCaptures_;
+        return failTexture ? std::shared_ptr<const RendererTextureSnapshot>{}
+                           : std::make_shared<FakeTextureSnapshot>(Vector2i(32, 32));
+      });
+      return offscreen;
+    });
+  }
+
+  GpuCompositionCpuHandoffRenderer mainRenderer_;
+  int textureCaptures_ = 0;
+  int textureDraws_ = 0;
+};
+
+TEST_F(CompositorGpuCompositionCpuHandoffTest, ComposesGpuTilesWithoutReadbackOrUpload) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+    <rect x="50" y="10" width="20" height="20" fill="blue" />
+  )svg");
+  configureGpuOffscreens();
+  CompositorController compositor(document, mainRenderer_, CachedLayersOnlyConfig());
+  ASSERT_TRUE(
+      compositor.promoteEntity(document.querySelector("#target")->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  EXPECT_THAT(textureCaptures_, Gt(0));
+  EXPECT_THAT(textureDraws_, Gt(0));
+  EXPECT_THAT(mainRenderer_.bitmapUploads, Eq(0));
+  const auto tiles = compositor.snapshotTilesForUpload();
+  ASSERT_THAT(tiles, ::testing::Not(::testing::IsEmpty()));
+  EXPECT_THAT(tiles, Each(AllOf(Field(&CompositorTile::textureSnapshot, Ne(nullptr)),
+                                Field(&CompositorTile::bitmap,
+                                      ::testing::Property(&RendererBitmap::empty, true)))));
+}
+
+TEST_F(CompositorGpuCompositionCpuHandoffTest, FailedGpuCaptureDoesNotFallBackToReadback) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="10" y="10" width="20" height="20" fill="red" />
+  )svg");
+  configureGpuOffscreens(/*failTexture=*/true);
+  CompositorController compositor(document, mainRenderer_, CachedLayersOnlyConfig());
+  ASSERT_TRUE(
+      compositor.promoteEntity(document.querySelector("#target")->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  EXPECT_THAT(textureCaptures_, Gt(0));
+  EXPECT_THAT(mainRenderer_.bitmapUploads, Eq(0));
+  EXPECT_FALSE(compositor.hasCompleteTileSetForPresentation());
+  EXPECT_THAT(compositor.lastRenderFrameStats().textureAllocationFailureCount, Gt(0));
+}
+
+TEST_F(CompositorGpuCompositionCpuHandoffTest, UnchangedImmediateSpanKeepsGpuPayload) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="5" y="25" width="10" height="10" fill="green" />
+    <rect x="5" y="5" width="10" height="10" fill="red" />
+    <rect x="25" y="5" width="10" height="10" fill="blue" />
+  )svg");
+  configureGpuOffscreens();
+  CompositorConfig config;
+  config.immediateStaticSpans = true;
+  config.dynamicImmediateStaticSpans = false;
+  CompositorController compositor(document, mainRenderer_, config);
+  ASSERT_TRUE(
+      compositor.promoteEntity(document.querySelector("#target")->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_THAT(compositor.snapshotStaticSpanPlansForTesting(),
+              Contains(Field(&StaticSpanPlan::mode, StaticSpanMode::Immediate)));
+  const int captures = textureCaptures_;
+  const auto firstTiles = compositor.snapshotTilesForUpload();
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  EXPECT_THAT(textureCaptures_, Eq(captures));
+  const auto secondTiles = compositor.snapshotTilesForUpload();
+  ASSERT_THAT(secondTiles, SizeIs(firstTiles.size()));
+  for (size_t index = 0; index < firstTiles.size(); ++index) {
+    EXPECT_THAT(secondTiles[index].generation, Eq(firstTiles[index].generation));
+    EXPECT_THAT(secondTiles[index].textureSnapshot, Eq(firstTiles[index].textureSnapshot));
+  }
+}
+
 // On a backend whose tiles are CPU bitmaps, an offscreen that could not read its frame back (a
 // failed or timed-out mapping, a lost device, a refused target) returns an empty snapshot. That is
 // the same failure the texture path reports as a null snapshot, and it follows the same contract:

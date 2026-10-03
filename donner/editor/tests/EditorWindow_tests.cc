@@ -3659,4 +3659,109 @@ TEST(EditorWindowTest, WgpuPresentsZoomedDonnerSplashFilteredLayerWithoutDarkeni
 #endif
 
 }  // namespace
+TEST(EditorWindowPolicyTest, SubmissionCompletionHasAFiniteDeadlineAndReleasesCompletedFrames) {
+  internal::PresentationSubmissionQueue queue;
+  const auto now = internal::PresentationSubmissionQueue::Clock::time_point{};
+  for (std::uint64_t serial = 1; serial <= 3; ++serial) {
+    queue.submitted({.serial = serial, .submittedAt = now});
+  }
+  EXPECT_EQ(queue.observe(0, now), internal::PresentationSubmissionQueue::Admission::Busy);
+  EXPECT_EQ(queue.observe(0, now + std::chrono::seconds(5)),
+            internal::PresentationSubmissionQueue::Admission::TimedOut);
+  EXPECT_EQ(queue.observe(2, now + std::chrono::seconds(1)),
+            internal::PresentationSubmissionQueue::Admission::Ready);
+  EXPECT_EQ(queue.pendingCount(), 1u);
+  EXPECT_EQ(queue.completed().serial, 2u);
+}
+
+#ifdef DONNER_EDITOR_WGPU
+TEST(EditorWindowTest, PendingGpuCompletionCoalescesUiFramesAtThree) {
+  EditorWindow window(EditorWindowOptions{.title = "Pending GPU frame test",
+                                          .initialWidth = 64,
+                                          .initialHeight = 64,
+                                          .visible = false});
+  ASSERT_TRUE(window.valid());
+  ASSERT_NE(window.geodeFramebufferDevice(), nullptr);
+  std::uint64_t completed = 0;
+  window.setPresentationCompletionProbeForTesting([&] { return completed; });
+  int documentDraws = 0;
+  window.setWgpuUnderlayRenderCallback(
+      [&](const EditorWindowWgpuRenderTarget&) { ++documentDraws; });
+  for (int frame = 0; frame < 10; ++frame) {
+    window.beginFrame();
+    window.endFrame();
+  }
+  EXPECT_EQ(documentDraws, 3) << "the fourth UI frame must not allocate or submit more GPU work";
+  completed = std::numeric_limits<std::uint64_t>::max();
+  window.beginFrame();
+  window.endFrame();
+  EXPECT_EQ(documentDraws, 4) << "the newest frame must resume as soon as completion permits";
+}
+
+TEST(EditorWindowTest, APublishedManifestRetainsItsUiRegistrationUntilItsLastOwnerLeaves) {
+  EditorWindow window(EditorWindowOptions{.title = "Retained manifest test",
+                                          .initialWidth = 64,
+                                          .initialHeight = 64,
+                                          .visible = false});
+  ASSERT_TRUE(window.valid());
+  ASSERT_NE(window.geodeFramebufferDevice(), nullptr);
+  GlTextureCache cache(window.geodeFramebufferDevice());
+  RenderResult::CompositedPreview preview;
+  RenderResult::CompositedTile tile;
+  tile.id = "leased-tile";
+  tile.generation = 1;
+  tile.kind = RenderResult::CompositedTile::Kind::Segment;
+  tile.bitmap.dimensions = Vector2i(2, 2);
+  tile.bitmap.rowBytes = 8;
+  tile.bitmap.pixels.assign(16, 255);
+  tile.bitmapDimsPx = Vector2i(2, 2);
+  tile.bitmapDimsDoc = Vector2d(2, 2);
+  tile.rasterCanvasSize = Vector2i(64, 64);
+  preview.tiles.push_back(tile);
+  ASSERT_TRUE(cache.uploadComposited(preview));
+  auto retained = cache.presentationResources();
+  const auto oldId = UiTextureId::FromImTextureId(retained->tiles().front().texture);
+  auto* registry = CurrentUiTextureRegistry();
+  ASSERT_NE(registry, nullptr);
+  preview.tiles.front().generation = 2;
+  preview.tiles.front().bitmap.pixels.front() = 0;
+  ASSERT_TRUE(cache.uploadComposited(preview));
+  const auto age = [&] {
+    for (int frame = 0; frame < 10; ++frame) {
+      window.beginFrame();
+      cache.advancePresentationFrame();
+      window.endFrame();
+    }
+  };
+  age();
+  EXPECT_TRUE(registry->lookup(oldId).hasResult())
+      << "retained frame metadata must not advertise an expired registration";
+  retained.reset();
+  age();
+  EXPECT_TRUE(registry->lookup(oldId).hasError()) << "dropping the final lease must release it";
+}
+TEST(EditorWindowTest, PartialUiFailureStillCountsSubmittedDocumentWork) {
+  EditorWindow window(EditorWindowOptions{.title = "Partial UI submission test",
+                                          .initialWidth = 64,
+                                          .initialHeight = 64,
+                                          .visible = false});
+  ASSERT_TRUE(window.valid());
+  ASSERT_NE(window.geodeFramebufferDevice(), nullptr);
+  window.setPresentationCompletionProbeForTesting([] { return std::uint64_t(0); });
+  window.forceUiPassFailureForTesting(true);
+  int documentDraws = 0;
+  window.setWgpuUnderlayRenderCallback(
+      [&](const EditorWindowWgpuRenderTarget&) { ++documentDraws; });
+  for (int frame = 0; frame < 10; ++frame) {
+    window.beginFrame();
+
+    window.endFrame();
+  }
+  EXPECT_EQ(documentDraws, 3)
+      << "failure of the later UI pass must not erase the underlay's pending GPU submission";
+  EXPECT_TRUE(window.hasIdleGpuWork()) << "pending partial frames retain their completion wake";
+}
+
+#endif
+
 }  // namespace donner::editor::gui

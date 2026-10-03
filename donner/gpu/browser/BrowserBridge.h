@@ -479,6 +479,11 @@ public:
   /// State of a mapping the browser has been asked for. @param mappingId Mapping to query.
   virtual MapSliceState mappingState(BrowserObjectId mappingId) const = 0;
 
+  /// Submits an empty command list while this mapping remains pending, without submitting recorded
+  /// commands or changing logical submission serials. @param mappingId Mapping to advance.
+  /// @return Success only when a queue submission was made.
+  virtual BridgeStatus requestMappingProgress(BrowserObjectId mappingId) = 0;
+
   /**
    * Gives the browser up to \p seconds of this thread to make progress.
    *

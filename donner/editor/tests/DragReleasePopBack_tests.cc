@@ -247,9 +247,16 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
     const bool useComposited = Snapshot(state).hasCachedTextures;
     FrameSnapshot snap;
     snap.composited = useComposited;
-    if (useComposited && preview.has_value()) {
-      snap.entity = preview->entity;
-      snap.offset = preview->translation;
+    if (useComposited) {
+      snap.entity = Snapshot(state).cachedEntity;
+      if (preview.has_value()) {
+        snap.offset = preview->translation;
+      }
+      if (!activeDrag.has_value()) {
+        if (const auto released = state.activePreviewForPresentation(std::nullopt)) {
+          snap.offset = released->translation;
+        }
+      }
     }
     frames.push_back(snap);
     return snap;
@@ -296,7 +303,6 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
   // SetTransformCommand). The presentation keeps the old drag offset alive until the
   // selection chrome refreshes, then drops to zero.
   state.noteCachedTextures(entityOld, /*version=*/2, canvasSize);
-  state.noteChromeRefreshCompleted(/*refreshedVersion=*/2);
   {
     auto snap = recordDisplay(std::nullopt, "Frame 3: settling resolved");
     EXPECT_TRUE(snap.composited) << "Frame 3: composited display expected";
@@ -419,7 +425,7 @@ TEST(DragReleasePopBackTest, CpuSnapshotShowsCorrectImageAfterSettling) {
                                     .translation = Vector2d(100, 0),
                                     .documentFromCachedDocument = Transform2d::Translate(100, 0)},
       2);
-  state.noteFullRenderLanded(/*landedVersion=*/2);
+  state.noteCachedTextures(entity, 2, Vector2i(200, 100));
 
   EXPECT_TRUE(Snapshot(state).hasCachedTextures);
   EXPECT_FALSE(Snapshot(state).waitingForFullRender) << "Settling window closed at target version";
@@ -518,7 +524,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
     const bool useComposited = Snapshot(state).hasCachedTextures;
     const auto preview = state.presentationPreview(activeDrag);
 
-    if (useComposited && hasUploadedComposited && preview.has_value()) {
+    if (useComposited && hasUploadedComposited) {
       // Composited path: the promoted texture is drawn at DOM position + screen offset.
       // The "screen offset" in document coordinates is preview->translation.
       // We verify the promoted (drag-target) tile has cached pixels.
@@ -573,7 +579,6 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   // ══════════════════════════════════════════════════════════════════════
   doRender();
   state.noteCachedTextures(entity, /*version=*/2, Vector2i(200, 100));
-  state.noteChromeRefreshCompleted(/*refreshedVersion=*/2);
   verifyDisplay(std::nullopt, "Frame 3 (settling landed)");
 
   // The CPU snapshot must show element at new position.

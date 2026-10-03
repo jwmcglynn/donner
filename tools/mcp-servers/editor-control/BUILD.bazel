@@ -42,6 +42,7 @@ cc_library(
         "//donner/editor/repro:repro_file",
         "//donner/svg",
         "//donner/svg/compositor",
+        "//donner/svg/internal:rendering_diagnostics",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/resources:font_catalog",
@@ -89,7 +90,14 @@ donner_cc_test(
 # Native replay must use the editor's backend; hosted macOS has WebGPU but no NSGL context.
 donner_cc_test(
     name = "editor_control_replay_tests",
-    srcs = ["EditorControlReplay_tests.cc"],
+    srcs = [
+        "EditorControlReplay_tests.cc",
+        "EditorControlSplashDrag_tests.cc",
+    ],
+    data = [
+        "testdata/first-drag-fractional-zoom.rnr",
+        "//:donner_splash.svg",
+    ],
     opens_gpu_device = True,
     renderer_backend = EDITOR_RENDERER_BACKEND,
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,

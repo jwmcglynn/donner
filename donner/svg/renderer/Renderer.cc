@@ -599,6 +599,10 @@ const RendererTextureSnapshot* Renderer::borrowTextureSnapshot() {
   return impl_->borrowTextureSnapshot();
 }
 
+bool Renderer::supportsTextureSnapshotCompositing() const {
+  return impl_->supportsTextureSnapshotCompositing();
+}
+
 bool Renderer::requiresTextureSnapshotPresentation() const {
   return impl_->requiresTextureSnapshotPresentation();
 }

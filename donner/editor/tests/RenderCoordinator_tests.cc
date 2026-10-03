@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <limits>
 #include <thread>
 #include <vector>
@@ -11,9 +12,11 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/GlTextureCache.h"
+#include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/editor/tests/FramePresentationTestAccess.h"
 #include "donner/editor/tests/RenderCoordinatorTestAccess.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererImageIO.h"
@@ -21,21 +24,8 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
-// Unit coverage for `RenderCoordinator`'s pure-logic predicates and the
-// GL-free portions of its orchestration. These tests deliberately avoid any
-// path that calls into a live GL/WGPU context: `GlTextureCache::uploadComposited`
-// emits raw `glGenTextures`/`glBindTexture` in the default
-// (tiny-skia) build, so the editor unit-test process - which has no GL context
-// - would crash. The harness therefore:
-//   * uses the default CPU (`tiny-skia`) `svg::Renderer` (no Geode device), and
-//   * keeps `displayedDocVersion_ == 0` while the live document is at
-//     `currentFrameVersion() >= 1`, so `rasterizeOverlayForCurrentSelection`
-//     in `MatchDisplayedVersion` mode rasterizes but never uploads.
-//
-// `pollRenderResult` is intentionally left to the integration-style
-// `.rnr`-replay and golden-image suites: every non-empty render produces a
-// composited preview, and presenting it calls `GlTextureCache::uploadComposited`
-// (raw GL), which is unreachable from this contextless unit harness.
+// GPU-free orchestration tests install explicitly captured resource manifests. Actual texture
+// import and presentation are covered by the GL cache and editor replay suites.
 
 namespace donner::editor {
 
@@ -650,6 +640,58 @@ TEST(RenderCoordinatorTest, SuppressedLayerEntityNullWithoutSelection) {
   EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), kNullEntity);
 }
 
+TEST(RenderCoordinatorTest, SuppressionSnapshotDoesNotWaitForDocumentWriter) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kHiddenRectSvg));
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  RenderCoordinator coordinator;
+  app.setSelection(QuerySelector(app, "#hidden"));
+  const Entity expected = coordinator.suppressedCompositedLayerEntity(app);
+  ASSERT_NE(expected, kNullEntity);
+
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto release = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = app.document().document().writeAccess();
+    writerReady.set_value();
+    release.wait();
+  });
+  writerReady.get_future().wait();
+  auto suppressed = std::async(std::launch::async,
+                               [&] { return coordinator.suppressedCompositedLayerEntity(app); });
+  const auto status = suppressed.wait_for(std::chrono::milliseconds(100));
+  releaseWriter.set_value();
+  writer.get();
+  EXPECT_EQ(status, std::future_status::ready);
+  EXPECT_EQ(suppressed.get(), expected);
+}
+
+TEST(RenderCoordinatorTest, VisibilitySnapshotDoesNotWaitForDocumentWriter) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kHiddenRectSvg));
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  RenderCoordinator coordinator;
+  app.setSelection(QuerySelector(app, "#hidden"));
+  ASSERT_NE(coordinator.suppressedCompositedLayerEntity(app), kNullEntity);
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto release = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = app.document().document().writeAccess();
+    writerReady.set_value();
+    release.wait();
+  });
+  writerReady.get_future().wait();
+  auto hidden =
+      std::async(std::launch::async, [&] { return coordinator.selectedElementIsDisplayNone(app); });
+  const auto status = hidden.wait_for(std::chrono::milliseconds(100));
+  releaseWriter.set_value();
+  writer.get();
+  EXPECT_EQ(status, std::future_status::ready);
+  EXPECT_TRUE(hidden.get());
+}
+
 TEST(RenderCoordinatorTest, SuppressedLayerEntityNullForVisibleSelection) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kHiddenRectSvg));
@@ -810,117 +852,278 @@ TEST(RenderCoordinatorTest, ResetForLoadedDocumentClearsCachesAndOverlayState) {
 // rasterizeOverlayForCurrentSelection - GL-free immediate overlay snapshotting.
 // ---------------------------------------------------------------------------
 
-TEST(RenderCoordinatorTest, RasterizeOverlayReturnsFalseWithoutDocument) {
+std::shared_ptr<const CapturedPresentation> AcceptCapturedScene(
+    RenderCoordinator& coordinator, EditorApp& app, std::span<const svg::SVGElement> hover = {},
+    const std::optional<LockedRejectionFlashInput>& flash = std::nullopt) {
+  std::vector<Entity> independent;
+  for (const auto& element : app.selectedElements()) {
+    independent.push_back(element.unsafeEntityHandle().entity());
+  }
+  const auto capture = CapturedPresentation::Capture(
+      app.document().document(),
+      PresentationIdentity{.captureId = 1,
+                           .documentGeneration = app.document().documentGeneration(),
+                           .version = app.document().currentFrameVersion(),
+                           .geometryRevision = app.document().nonTransformRevision(),
+                           .fontResourceRevision = app.document().fontResourceRevision()},
+      app.selectedElements(), {}, independent, hover, flash);
+  EXPECT_NE(capture, nullptr);
+  std::vector<GlTextureCache::TileView> tiles;
+  for (const auto& object : capture->objects()) {
+    GlTextureCache::TileView tile;
+    tile.texture = 1;
+    tile.kind = RenderResult::CompositedTile::Kind::Layer;
+    tile.layerEntity = object.entity;
+    tile.canvasOffsetDoc = -capture->documentOrigin();
+    tile.bitmapDimsDoc = Vector2d(2048.0, 2048.0);
+    tile.bitmapDimsPx = Vector2i(2048, 2048);
+    tiles.push_back(tile);
+  }
+  const auto resources = FramePresentationTestAccess::resources(capture, std::move(tiles));
+  coordinator.compositedPresentation().notePreparedResources(
+      resources, independent.empty() ? Entity(entt::null) : independent.front(), std::nullopt);
+  return capture;
+}
+
+std::shared_ptr<const FramePresentation> BuildFrame(
+    RenderCoordinator& coordinator, EditorApp& app, SelectTool& tool, const ViewportState& viewport,
+    GlTextureCache& textures, SelectionChromeDetail detail = SelectionChromeDetail::Full) {
+  return coordinator.buildFramePresentation(
+      app, tool, viewport, Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize),
+      detail);
+}
+
+TEST(RenderCoordinatorTest, FrameRequiresAcceptedRasterResources) {
   EditorApp app;
   RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
   ViewportState viewport;
-  ASSERT_FALSE(app.hasDocument());
-
-  EXPECT_FALSE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
-                                                               /*marqueeRectDoc=*/std::nullopt));
+  EXPECT_EQ(BuildFrame(coordinator, app, tool, viewport, textures), nullptr);
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setSelection(QuerySelector(app, "#r1"));
+  viewport = MakeViewport(app);
+  coordinator.requestSelectionGeometryRefresh();
+  EXPECT_EQ(BuildFrame(coordinator, app, tool, viewport, textures), nullptr);
+  EXPECT_FALSE(coordinator.immediateOverlaySnapshot().has_value());
+  AcceptCapturedScene(coordinator, app);
+  const auto frame = BuildFrame(coordinator, app, tool, viewport, textures);
+  ASSERT_NE(frame, nullptr);
+  EXPECT_THAT(frame->chrome().paths, ::testing::SizeIs(1));
 }
 
-TEST(RenderCoordinatorTest, RasterizeOverlayPublishesImmediateSnapshot) {
+TEST(RenderCoordinatorTest, RendererRefusalRetainsCompleteFrameAndChromeUntilRecovery) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
   RenderCoordinator coordinator;
-  ViewportState viewport = MakeViewport(app);
-
+  SelectTool tool;
+  GlTextureCache textures;
+  auto viewport = MakeViewport(app);
   app.setSelection(QuerySelector(app, "#r1"));
-
-  ASSERT_GT(app.document().currentFrameVersion(), coordinator.displayedDocVersion());
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
-                                                              /*marqueeRectDoc=*/std::nullopt));
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
+  AcceptCapturedScene(coordinator, app);
+  const auto oldFrame = BuildFrame(coordinator, app, tool, viewport, textures);
+  ASSERT_NE(oldFrame, nullptr);
+  viewport.panBy(Vector2d(20, 0));
+  int attempts = 0;
+  const auto retained = coordinator.buildFramePresentation(
+      app, tool, viewport, Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize),
+      SelectionChromeDetail::Full, true, [&](const FramePresentation& candidate) {
+        ++attempts;
+        EXPECT_NE(candidate.frameId(), oldFrame->frameId());
+        EXPECT_EQ(candidate.viewport().panScreenPoint, viewport.panScreenPoint);
+        return false;
+      });
+  EXPECT_EQ(attempts, 1);
+  EXPECT_EQ(retained, oldFrame);
+  EXPECT_EQ(coordinator.framePresentation(), oldFrame);
+  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->canvasFromDoc.data[4],
+            oldFrame->chrome().canvasFromDoc.data[4]);
+  EXPECT_FALSE(coordinator.frameRepresentsCurrentIntent());
+  const auto recovered = coordinator.buildFramePresentation(
+      app, tool, viewport, Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize),
+      SelectionChromeDetail::Full, true, [](const FramePresentation&) { return true; });
+  ASSERT_NE(recovered, nullptr);
+  EXPECT_NE(recovered, oldFrame);
+  EXPECT_EQ(recovered->viewport().panScreenPoint, viewport.panScreenPoint);
+  EXPECT_TRUE(coordinator.frameRepresentsCurrentIntent());
 }
 
-TEST(RenderCoordinatorTest, RasterizeOverlaySkipsUnchangedImmediateSnapshot) {
+TEST(RenderCoordinatorTest, BusyDragProjectsCapturedFrameWithoutDocumentAccess) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
   RenderCoordinator coordinator;
-  ViewportState viewport = MakeViewport(app);
-
-  app.setSelection(QuerySelector(app, "#r1"));
-
-  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
-                                                              /*marqueeRectDoc=*/std::nullopt));
-  EXPECT_FALSE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
-                                                               /*marqueeRectDoc=*/std::nullopt));
-  EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.selectedElementCount, 1);
-  EXPECT_FALSE(coordinator.lastFrameCostBreakdown().overlay.selectionBoundsOnly);
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto viewport = MakeViewport(app);
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  AcceptCapturedScene(coordinator, app);
+  ASSERT_NE(BuildFrame(coordinator, app, tool, viewport, textures), nullptr);
+  tool.onMouseMove(app, Vector2d(25.0, 15.0), true);
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  std::promise<void> writerReady;
+  std::promise<void> releaseWriter;
+  auto release = releaseWriter.get_future();
+  auto writer = std::async(std::launch::async, [&] {
+    auto access = app.document().document().writeAccess();
+    writerReady.set_value();
+    release.wait();
+  });
+  writerReady.get_future().wait();
+  auto presentation = std::async(
+      std::launch::async, [&] { return BuildFrame(coordinator, app, tool, viewport, textures); });
+  const auto status = presentation.wait_for(std::chrono::milliseconds(100));
+  releaseWriter.set_value();
+  writer.get();
+  EXPECT_EQ(status, std::future_status::ready);
+  const auto frame = presentation.get();
+  ASSERT_NE(frame, nullptr);
+  ASSERT_THAT(frame->chrome().paths, ::testing::SizeIs(1));
+  EXPECT_EQ(frame->chrome().paths.front().pathDoc.bounds(),
+            Box2d::FromXYWH(20.0, 10.0, 20.0, 20.0));
+  EXPECT_EQ(frame->tiles().front().documentFromCachedDocument.translation(), Vector2d(10.0, 0.0));
 }
 
-TEST(RenderCoordinatorTest, RasterizeOverlayTracksActiveBoundsPreviewChanges) {
+TEST(RenderCoordinatorTest, SecondDragKeepsStaleRasterAndChromeAtTheSamePose) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
   RenderCoordinator coordinator;
-  ViewportState viewport = MakeViewport(app);
-
-  app.setSelection(QuerySelector(app, "#r1"));
-
-  SelectTool::ActiveTransformBoundsPreview boundsPreview;
-  boundsPreview.startBoundsDoc = Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0);
-  boundsPreview.documentFromStartDocument = Transform2d::Translate(Vector2d(2.0, 0.0));
-
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
-      app, viewport, /*marqueeRectDoc=*/std::nullopt,
-      /*representedDragPreview=*/std::nullopt, boundsPreview));
-  EXPECT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-
-  boundsPreview.documentFromStartDocument = Transform2d::Translate(Vector2d(4.0, 0.0));
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
-      app, viewport, /*marqueeRectDoc=*/std::nullopt,
-      /*representedDragPreview=*/std::nullopt, boundsPreview));
-  EXPECT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto viewport = MakeViewport(app);
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(35.0, 15.0), true);
+  ASSERT_TRUE(app.flushFrame());
+  AcceptCapturedScene(coordinator, app);
+  tool.onMouseMove(app, Vector2d(65.0, 15.0), true);
+  ASSERT_TRUE(app.flushFrame());
+  coordinator.compositedPresentation().beginSettling(tool.activeDragPreview(),
+                                                     app.document().currentFrameVersion());
+  tool.onMouseUp(app, Vector2d(65.0, 15.0));
+  tool.onMouseDown(app, Vector2d(65.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 15.0), true);
+  const auto frame = BuildFrame(coordinator, app, tool, viewport, textures);
+  ASSERT_NE(frame, nullptr);
+  ASSERT_THAT(frame->chrome().paths, ::testing::SizeIs(1));
+  const Box2d outline = frame->chrome().paths.front().pathDoc.bounds();
+  EXPECT_EQ(outline, Box2d::FromXYWH(65.0, 10.0, 20.0, 20.0));
+  const auto& raster = frame->tiles().front();
+  const Box2d paintedRect =
+      raster.documentFromCachedDocument.transformBox(Box2d::FromXYWH(30.0, 10.0, 20.0, 20.0));
+  EXPECT_EQ(paintedRect, outline);
 }
 
-TEST(RenderCoordinatorTest, ClipGuideUsesIdleBaselineThroughTwoHeldMovesAndInvalidatesOnClipEdit) {
+TEST(RenderCoordinatorTest, SelectionRecaptureRequiresActualDocumentRevision) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto viewport = MakeViewport(app);
+  app.setSelection(QuerySelector(app, "#r1"));
+  const auto source = AcceptCapturedScene(coordinator, app);
+  const auto oldVersion = app.document().currentFrameVersion();
+  auto second = QuerySelector(app, "#r2");
+  second.setAttribute("x", "60");
+  ASSERT_EQ(app.document().currentFrameVersion(), oldVersion);
+  ASSERT_NE(app.document().document().handle()->revision(), source->identity().documentRevision);
+  app.setSelection(second);
+  coordinator.requestSelectionGeometryRefresh();
+  const auto staleFrame = BuildFrame(coordinator, app, tool, viewport, textures);
+  ASSERT_NE(staleFrame, nullptr);
+  EXPECT_FALSE(staleFrame->hasSelectionGeometry());
+  EXPECT_THAT(staleFrame->chrome().paths, IsEmpty());
+  AcceptCapturedScene(coordinator, app);
+  const auto freshFrame = BuildFrame(coordinator, app, tool, viewport, textures);
+  ASSERT_NE(freshFrame, nullptr);
+  ASSERT_THAT(freshFrame->chrome().paths, ::testing::SizeIs(1));
+  EXPECT_EQ(freshFrame->chrome().paths.front().pathDoc.bounds(),
+            Box2d::FromXYWH(60.0, 50.0, 20.0, 20.0));
+}
+
+TEST(RenderCoordinatorTest, SelectionRecaptureBindsToTheOverviewChosenForThisCamera) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto viewport = MakeViewport(app);
+  const PresentationIdentity identity{.captureId = 1,
+                                      .documentGeneration = app.document().documentGeneration(),
+                                      .version = app.document().currentFrameVersion(),
+                                      .geometryRevision = app.document().nonTransformRevision()};
+  const auto overview = CapturedPresentation::Capture(app.document().document(), identity, {});
+  app.setSelection(QuerySelector(app, "#r1"));
+  auto selectedIdentity = identity;
+  selectedIdentity.captureId = 2;
+  const auto active = CapturedPresentation::Capture(app.document().document(), selectedIdentity,
+                                                    app.selectedElements());
+  ASSERT_EQ(active->identity().documentRevision, overview->identity().documentRevision);
+  GlTextureCache::TileView tile;
+  tile.texture = 1;
+  tile.bitmapDimsDoc = Vector2d(100, 100);
+  tile.bitmapDimsPx = Vector2i(100, 100);
+  const auto resources = FramePresentationTestAccess::resources(
+      active, {tile},
+      PresentationCoverageDiagnostics{.activeTilesViewportBounded = true,
+                                      .activeRasterDocumentRect = Box2d::FromXYWH(0, 0, 50, 50)},
+      overview, {tile});
+  coordinator.compositedPresentation().notePreparedResources(resources, active->selection().front(),
+                                                             std::nullopt);
+  const auto frame = BuildFrame(coordinator, app, tool, viewport, textures);
+  ASSERT_NE(frame, nullptr);
+  EXPECT_EQ(frame->identity().captureId, overview->identity().captureId);
+  EXPECT_TRUE(frame->hasSelectionGeometry());
+  ASSERT_THAT(frame->chrome().paths, ::testing::SizeIs(1));
+  EXPECT_EQ(frame->chrome().paths.front().pathDoc.bounds(), Box2d::FromXYWH(10, 10, 20, 20));
+}
+
+TEST(RenderCoordinatorTest, SameSceneSelectionChangeRecapturesWithoutNewRaster) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto viewport = MakeViewport(app);
+  app.setSelection(QuerySelector(app, "#r1"));
+  const auto source = AcceptCapturedScene(coordinator, app);
+  app.setSelection(QuerySelector(app, "#r2"));
+  const auto frame = BuildFrame(coordinator, app, tool, viewport, textures);
+  ASSERT_NE(frame, nullptr);
+  EXPECT_EQ(frame->identity(), source->identity());
+  ASSERT_THAT(frame->chrome().paths, ::testing::SizeIs(1));
+  EXPECT_EQ(frame->chrome().paths.front().pathDoc.bounds(),
+            Box2d::FromXYWH(50.0, 50.0, 20.0, 20.0));
+}
+
+TEST(RenderCoordinatorTest, InheritedClipStaysWithFrozenRasterUntilReplacement) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kInheritedClipSvg));
   svg::Renderer renderer;
   renderer.draw(app.document().document());
-  const svg::SVGElement child = QuerySelector(app, "#child");
-  app.setSelection(child);
+  app.setSelection(QuerySelector(app, "#child"));
   RenderCoordinator coordinator;
-  ViewportState viewport = MakeViewport(app);
-
-  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  ASSERT_EQ(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.size(), 1u);
-  const Path basePath = coordinator.immediateOverlaySnapshot()->clipGuidesDoc.front().pathDoc;
-
-  SelectTool::ActiveTransformBoundsPreview boundsPreview;
-  boundsPreview.startBoundsDoc = Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0);
-  for (double x : {12.0, 20.0}) {
-    const Transform2d movement = Transform2d::Translate(x, 0.0);
-    boundsPreview.documentFromStartDocument = movement;
-    const auto preview =
-        DragPreview(child.unsafeEntityHandle().entity(), 7, Vector2d(x, 0.0), movement);
-    ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
-        app, viewport, std::nullopt, preview, boundsPreview, SelectionChromeDetail::Full, preview));
-    ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-    ASSERT_EQ(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.size(), 1u);
-    EXPECT_EQ(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.front().pathDoc, basePath)
-        << "Inherited clip must remain fixed through held move " << x;
-  }
-
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto viewport = MakeViewport(app);
+  AcceptCapturedScene(coordinator, app);
+  const auto original = BuildFrame(coordinator, app, tool, viewport, textures);
+  ASSERT_NE(original, nullptr);
+  ASSERT_THAT(original->chrome().clipGuidesDoc, ::testing::SizeIs(1));
+  const auto guide = original->chrome().clipGuidesDoc.front().pathDoc;
   app.applyMutation(
       EditorCommand::SetAttributeCommand(QuerySelector(app, "#clip-shape"), "x", "8"));
-  ASSERT_TRUE(app.document().flushFrame());
-  const auto preview = DragPreview(child.unsafeEntityHandle().entity(), 7, Vector2d(20.0, 0.0),
-                                   Transform2d::Translate(20.0, 0.0));
-  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
-      app, viewport, std::nullopt, preview, boundsPreview, SelectionChromeDetail::Full, preview));
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_TRUE(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.empty())
-      << "Clip edits invalidate the held immutable guide even if the selection is unchanged";
+  ASSERT_TRUE(app.flushFrame());
+  coordinator.requestSelectionGeometryRefresh();
+  const auto stale = BuildFrame(coordinator, app, tool, viewport, textures);
+  ASSERT_NE(stale, nullptr);
+  ASSERT_THAT(stale->chrome().clipGuidesDoc, ::testing::SizeIs(1));
+  EXPECT_EQ(stale->chrome().clipGuidesDoc.front().pathDoc, guide);
   renderer.draw(app.document().document());
-  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  ASSERT_EQ(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.size(), 1u);
-  EXPECT_NE(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.front().pathDoc, basePath)
-      << "The edited clip guide must return on the next safe idle capture";
+  AcceptCapturedScene(coordinator, app);
+  const auto fresh = BuildFrame(coordinator, app, tool, viewport, textures);
+  ASSERT_NE(fresh, nullptr);
+  ASSERT_THAT(fresh->chrome().clipGuidesDoc, ::testing::SizeIs(1));
+  EXPECT_NE(fresh->chrome().clipGuidesDoc.front().pathDoc, guide);
 }
 
 TEST(RenderCoordinatorTest, GeodeCrownClipGuideRendersOnFirstAndSecondHeldMove) {
@@ -934,10 +1137,13 @@ TEST(RenderCoordinatorTest, GeodeCrownClipGuideRendersOnFirstAndSecondHeldMove) 
   const svg::SVGElement crown = QuerySelector(app, "#central-crown-face-2");
   app.setSelection(crown);
   RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
   ViewportState viewport = MakeViewport(app);
   viewport.paneSize = Vector2d(1536.0, 1024.0);
   viewport.resetTo100Percent();
-  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
+  AcceptCapturedScene(coordinator, app);
+  ASSERT_TRUE(BuildFrame(coordinator, app, tool, viewport, textures));
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
   ASSERT_EQ(coordinator.immediateOverlaySnapshot()->clipGuidesDoc.size(), 1u);
   const Path inheritedClip = coordinator.immediateOverlaySnapshot()->clipGuidesDoc.front().pathDoc;
@@ -955,8 +1161,8 @@ TEST(RenderCoordinatorTest, GeodeCrownClipGuideRendersOnFirstAndSecondHeldMove) 
     boundsPreview.documentFromStartDocument = movement;
     const auto preview =
         DragPreview(crown.unsafeEntityHandle().entity(), 17, Vector2d(x, 0.0), movement);
-    ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
-        app, viewport, std::nullopt, preview, boundsPreview, SelectionChromeDetail::Full, preview));
+    AcceptCapturedScene(coordinator, app);
+    ASSERT_TRUE(BuildFrame(coordinator, app, tool, viewport, textures));
     ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
     const SelectionChromeSnapshot withGuide = *coordinator.immediateOverlaySnapshot();
     ASSERT_EQ(withGuide.clipGuidesDoc.size(), 1u) << "held x=" << x;
@@ -1003,92 +1209,6 @@ TEST(RenderCoordinatorTest, GeodeCrownClipGuideRendersOnFirstAndSecondHeldMove) 
       firstHeld = withBitmap;
     }
   }
-}
-
-TEST(RenderCoordinatorTest, RasterizeOverlayWithEmptySelectionIsAccepted) {
-  EditorApp app;
-  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  RenderCoordinator coordinator;
-  ViewportState viewport = MakeViewport(app);
-
-  // No selection: the overlay still rasterizes (empty chrome) and parks
-  // pending against the undisplayed version.
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
-                                                              /*marqueeRectDoc=*/std::nullopt));
-}
-
-TEST(RenderCoordinatorTest, RasterizeOverlayTracksTransientChromeAndDegenerateScale) {
-  EditorApp app;
-  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  RenderCoordinator coordinator;
-  ViewportState viewport = MakeViewport(app);
-  viewport.devicePixelRatio = 0.0;
-
-  const svg::SVGElement r1 = QuerySelector(app, "#r1");
-  const svg::SVGElement r2 = QuerySelector(app, "#r2");
-  app.setSelection(r1);
-  ASSERT_TRUE(coordinator.setSourceHoverElements({r2}));
-  coordinator.setLockedRejectionFlash(SelectTool::LockedRejectionFlash{
-      .element = r2,
-      .intensity = 0.5f,
-  });
-  coordinator.setPenHoverChrome(
-      PathBuilder().moveTo(Vector2d(10.0, 10.0)).lineTo(Vector2d(20.0, 20.0)).build(),
-      Vector2d(12.0, 12.0));
-
-  const Entity entity = r1.unsafeEntityHandle().entity();
-  const SelectTool::ActiveDragPreview represented =
-      DragPreview(entity, 3, Vector2d(2.0, 3.0), Transform2d::Translate(Vector2d(2.0, 3.0)));
-  const SelectTool::ActiveDragPreview live =
-      DragPreview(entity, 3, Vector2d(5.0, 7.0), Transform2d::Translate(Vector2d(5.0, 7.0)));
-
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
-      app, viewport, Box2d::FromXYWH(0.0, 0.0, 15.0, 15.0), represented, std::nullopt,
-      SelectionChromeDetail::CombinedBoundsOnly, live));
-
-  const FrameCostBreakdown::Overlay& overlay = coordinator.lastFrameCostBreakdown().overlay;
-  EXPECT_EQ(overlay.canvasSize, Vector2i(1, 1));
-  EXPECT_EQ(overlay.selectedElementCount, 1);
-  EXPECT_EQ(overlay.sourceHoverElementCount, 1);
-  EXPECT_TRUE(overlay.selectionBoundsOnly);
-  EXPECT_TRUE(overlay.hasLiveDragPreview);
-  EXPECT_TRUE(overlay.hasRepresentedDragPreview);
-  EXPECT_EQ(overlay.liveDragTranslationDoc, Vector2d(5.0, 7.0));
-  EXPECT_EQ(overlay.representedDragTranslationDoc, Vector2d(2.0, 3.0));
-  EXPECT_EQ(overlay.payloadBytes, 4u);
-  EXPECT_TRUE(overlay.hasMarquee);
-  EXPECT_TRUE(coordinator.hasLockedRejectionFlash());
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_TRUE(coordinator.immediateOverlaySnapshot()->penPreviewSegmentDoc.has_value());
-  EXPECT_TRUE(coordinator.immediateOverlaySnapshot()->penCloseAffordanceDoc.has_value());
-
-  coordinator.setLockedRejectionFlash(SelectTool::LockedRejectionFlash{
-      .element = r2,
-      .intensity = 0.0f,
-  });
-  EXPECT_FALSE(coordinator.hasLockedRejectionFlash());
-}
-
-TEST(RenderCoordinatorTest, RasterizeOverlayForPresentationRejectsInvalidInputsBeforeGl) {
-  EditorApp app;
-  RenderCoordinator coordinator;
-  SelectTool selectTool;
-  GlTextureCache textures;
-  ViewportState viewport;
-  viewport.paneSize = Vector2d(100.0, 100.0);
-
-  EXPECT_FALSE(coordinator.rasterizeOverlayForPresentation(app, selectTool, viewport, textures,
-                                                           std::nullopt, std::nullopt));
-
-  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
-  viewport = MakeViewport(app);
-  viewport.paneSize = Vector2d(0.0, 100.0);
-  EXPECT_FALSE(coordinator.rasterizeOverlayForPresentation(app, selectTool, viewport, textures,
-                                                           std::nullopt, std::nullopt));
-
-  viewport.paneSize = Vector2d(100.0, -1.0);
-  EXPECT_FALSE(coordinator.rasterizeOverlayForPresentation(app, selectTool, viewport, textures,
-                                                           std::nullopt, std::nullopt));
 }
 
 // ---------------------------------------------------------------------------
@@ -1538,4 +1658,189 @@ TEST(RenderCoordinatorTest, PixelCaptureWithNothingToPresentIsNotRepostedEveryFr
 }
 
 }  // namespace
+TEST(RenderCoordinatorTest, RejectedCaptureHasBoundedRetriesWithoutConfigurationInvalidation) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  GlTextureCache textures;
+  RenderCoordinatorTestAccess::useFakeRetryClock(coordinator);
+  RenderResult result;
+  result.documentGeneration = app.document().documentGeneration();
+  result.version = app.document().currentFrameVersion();
+  result.rasterViewport = MakeViewport(app).rasterViewport();
+  result.compositedPreview = RenderResult::CompositedPreview{};
+  for (const auto delay : NothingToPresentRetry::kRetryDelays) {
+    EXPECT_FALSE(
+        RenderCoordinatorTestAccess::rejectPreparedResult(coordinator, result, app, textures));
+    EXPECT_THAT(
+        coordinator.nextNothingToPresentRetryWakeSeconds(),
+        testing::Optional(testing::FloatNear(std::chrono::duration<float>(delay).count(), 1e-4f)));
+    EXPECT_FALSE(coordinator.presentationRefreshPending())
+        << "a rejected capture is repair work, not a renderer-setting invalidation";
+    RenderCoordinatorTestAccess::advanceFakeRetryClock(delay);
+  }
+  EXPECT_FALSE(
+      RenderCoordinatorTestAccess::rejectPreparedResult(coordinator, result, app, textures));
+  EXPECT_EQ(coordinator.nextNothingToPresentRetryWakeSeconds(), std::nullopt);
+}
+
+TEST(RenderCoordinatorTest, CurrentOverviewCanReplaceUnusableBoundedCoverage) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto capture = AcceptCapturedScene(coordinator, app);
+  const auto resources = coordinator.compositedPresentation().resources();
+  coordinator.compositedPresentation().notePreparedResources(
+      FramePresentationTestAccess::resources(
+          capture, resources->tiles(),
+          {.activeTilesViewportBounded = true,
+           .activeRasterDocumentRect = Box2d::FromXYWH(0, 0, 1, 1)}),
+      capture->selection().front(), std::nullopt);
+  EXPECT_EQ(BuildFrame(coordinator, app, tool, MakeViewport(app), textures), nullptr);
+  EXPECT_GT(coordinator.lastFrameCostBreakdown().overlay.captureMs, 0.0);
+  RenderResult overview;
+  overview.capturedPresentation = capture;
+  overview.version = app.document().currentFrameVersion();
+  overview.documentGeneration = app.document().documentGeneration();
+  overview.overviewInfillOnly = true;
+  EXPECT_TRUE(RenderCoordinatorTestAccess::canReplaceWithOverview(coordinator, overview, app))
+      << "a current coherent overview must unblock a frame whose bounded raster lacks coverage";
+  for (const auto failure : {FramePresentationFailure::MissingSelectionGeometry,
+                             FramePresentationFailure::InsufficientCoverage,
+                             FramePresentationFailure::IncompatiblePose}) {
+    RenderCoordinatorTestAccess::changePendingRepairFailure(coordinator, failure);
+    EXPECT_TRUE(RenderCoordinatorTestAccess::canReplaceWithOverview(coordinator, overview, app))
+        << "A complete current family must also repair missing selection or projected coverage.";
+  }
+}
+
+TEST(RenderCoordinatorTest, RepairBudgetSurvivesOverviewAndBoundedRasterStages) {
+  NothingToPresentRetry retry;
+  const auto now = NothingToPresentRetry::Clock::now();
+  RenderAttemptIdentity overview;
+  overview.overviewInfillOnly = true;
+  overview.repair = PresentationRepairIdentity{
+      .scene = {.documentGeneration = 1, .documentRevision = 2, .version = 3},
+      .failure = FramePresentationFailure::MissingOverview};
+  retry.noteFailure(overview, now);
+  auto bounded = overview;
+  bounded.overviewInfillOnly = false;
+  bounded.rasterViewport.outputSizePx = Vector2i(1024, 1024);
+  bounded.repair->failure = FramePresentationFailure::InsufficientCoverage;
+  EXPECT_FALSE(retry.mayPost(bounded, now + std::chrono::milliseconds(50)));
+  EXPECT_TRUE(retry.mayPost(bounded, now + std::chrono::milliseconds(100)));
+  bounded.repair->coverage.outputSizePx = Vector2i(2048, 2048);
+  EXPECT_TRUE(retry.mayPost(bounded, now + std::chrono::milliseconds(50)))
+      << "a changed coverage requirement is new repair intent";
+}
+
+TEST(RenderCoordinatorTest, CompatibleOverviewPreservesNewerActiveDragIntent) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  const auto capture = AcceptCapturedScene(coordinator, app);
+  const auto resources = coordinator.compositedPresentation().resources();
+  tool.onMouseMove(app, Vector2d(35.0, 15.0), true);
+  ASSERT_TRUE(app.flushFrame());
+  coordinator.compositedPresentation().notePreparedResources(
+      FramePresentationTestAccess::resources(
+          capture, resources->tiles(),
+          {.activeTilesViewportBounded = true,
+           .activeRasterDocumentRect = Box2d::FromXYWH(0, 0, 1, 1)}),
+      capture->selection().front(), std::nullopt);
+  EXPECT_EQ(BuildFrame(coordinator, app, tool, MakeViewport(app), textures), nullptr);
+  RenderResult overview;
+  overview.capturedPresentation = capture;
+  overview.version = capture->identity().version;
+  overview.documentGeneration = app.document().documentGeneration();
+  overview.overviewInfillOnly = true;
+  EXPECT_TRUE(RenderCoordinatorTestAccess::canReplaceWithOverview(coordinator, overview, app));
+  coordinator.compositedPresentation().notePreparedResources(
+      resources, capture->selection().front(), std::nullopt);
+  const auto frame = BuildFrame(coordinator, app, tool, MakeViewport(app), textures);
+  ASSERT_NE(frame, nullptr);
+  EXPECT_TRUE(frame->followsPointer());
+  EXPECT_EQ(frame->chrome().paths.front().pathDoc.bounds(), Box2d::FromXYWH(30, 10, 20, 20));
+}
+
+TEST(RenderCoordinatorTest, SameVersionOverviewRepairRequestsMissingSceneCoverage) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  const auto overview = AcceptCapturedScene(coordinator, app);
+  const auto oldResources = coordinator.compositedPresentation().resources();
+  app.document().document().setCanvasSize(200, 200);
+  const auto active = AcceptCapturedScene(coordinator, app);
+  ASSERT_EQ(active->identity().version, overview->identity().version);
+  ASSERT_NE(active->identity().documentRevision, overview->identity().documentRevision);
+  coordinator.compositedPresentation().notePreparedResources(
+      FramePresentationTestAccess::resources(
+          active, oldResources->tiles(),
+          {.activeTilesViewportBounded = true,
+           .overviewInfillAvailable = true,
+           .activeRasterDocumentRect = Box2d::FromXYWH(0, 0, 1, 1)},
+          overview, oldResources->tiles()),
+      active->selection().front(), std::nullopt);
+  EXPECT_EQ(BuildFrame(coordinator, app, tool, MakeViewport(app), textures), nullptr);
+  EXPECT_TRUE(RenderCoordinatorTestAccess::requiresFreshOverview(
+      coordinator, true, app.document().currentFrameVersion()));
+}
+
+TEST(RenderCoordinatorTest, UnpairedBoundedResultCannotReplaceCompleteCommittedScene) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  const auto old = AcceptCapturedScene(coordinator, app);
+  const auto oldTiles = coordinator.compositedPresentation().resources()->tiles();
+  const auto second = QuerySelector(app, "#r2");
+  app.document().applyMutation(
+      EditorCommand::SetTransformCommand(second, Transform2d::Translate(20, 0)));
+  ASSERT_TRUE(app.flushFrame());
+  const auto current = AcceptCapturedScene(coordinator, app);
+  ASSERT_TRUE(old->identity().sameContent(current->identity()));
+  GlTextureCache textures;
+  FramePresentationTestAccess::installResources(
+      textures, FramePresentationTestAccess::resources(current, oldTiles, {}, old, oldTiles));
+  RenderResult result;
+  result.version = app.document().currentFrameVersion();
+  result.capturedPresentation = current;
+  result.rasterViewport.viewportBounded = true;
+  result.compositedPreview = RenderResult::CompositedPreview{};
+  result.compositedPreview->representedDragPreview =
+      RenderRequest::DragPreview{.entity = QuerySelector(app, "#r1").unsafeEntityHandle().entity(),
+                                 .interactionKind = svg::compositor::InteractionHint::ActiveDrag};
+  EXPECT_FALSE(RenderCoordinatorTestAccess::canPresentWithOverview(
+      coordinator, result, result.rasterViewport, app, textures));
+}
+
+TEST(RenderCoordinatorTest, PendingOverviewRequiresExactSceneBeyondFrameVersion) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setSelection(QuerySelector(app, "#r1"));
+  RenderCoordinator coordinator;
+  const auto old = AcceptCapturedScene(coordinator, app);
+  app.document().document().setCanvasSize(200, 200);
+  const auto current = AcceptCapturedScene(coordinator, app);
+  ASSERT_EQ(old->identity().version, current->identity().version);
+  ASSERT_NE(old->identity().documentRevision, current->identity().documentRevision);
+  RenderResult result;
+  result.documentGeneration = app.document().documentGeneration();
+  result.version = app.document().currentFrameVersion();
+  result.capturedPresentation = current;
+  EXPECT_FALSE(RenderCoordinatorTestAccess::matchingPendingOverview(coordinator, old, result, app));
+  EXPECT_TRUE(
+      RenderCoordinatorTestAccess::matchingPendingOverview(coordinator, current, result, app));
+}
+
 }  // namespace donner::editor

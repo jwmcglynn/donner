@@ -52,6 +52,49 @@ struct RenderCoordinatorTestAccess {
 
   static std::chrono::steady_clock::time_point FakeRetryNow() { return fakeRetryNow; }
 
+  static bool rejectPreparedResult(RenderCoordinator& coordinator, RenderResult& result,
+                                   EditorApp& app, GlTextureCache& textures) {
+    coordinator.lastPostedAttempt_ = RenderAttemptIdentity{
+        .documentGeneration = result.documentGeneration,
+        .version = result.version,
+        .rasterViewport = result.rasterViewport,
+    };
+    return coordinator.prepareResultResources(result, app, textures);
+  }
+
+  static bool canReplaceWithOverview(const RenderCoordinator& coordinator,
+                                     const RenderResult& result, const EditorApp& app) {
+    return coordinator.canReplaceWithOverview(result, app);
+  }
+
+  static void changePendingRepairFailure(RenderCoordinator& coordinator,
+                                         FramePresentationFailure failure) {
+    coordinator.pendingRepair_->failure = failure;
+  }
+
+  static bool requiresFreshOverview(RenderCoordinator& coordinator, bool available,
+                                    std::uint64_t currentVersion) {
+    coordinator.overviewDocVersion_ = currentVersion;
+    return coordinator.requiresFreshOverview(available, currentVersion);
+  }
+
+  static bool canPresentWithOverview(const RenderCoordinator& coordinator,
+                                     const RenderResult& result, const EditorRasterViewport& raster,
+                                     EditorApp& app, const GlTextureCache& cache) {
+    return coordinator.canPresentWithOverview(result, raster, app, cache);
+  }
+
+  static bool matchingPendingOverview(RenderCoordinator& coordinator,
+                                      const std::shared_ptr<const CapturedPresentation>& overview,
+                                      RenderResult& result, EditorApp& app) {
+    coordinator.pendingOverviewResult_.emplace();
+    coordinator.pendingOverviewResult_->version = result.version;
+    coordinator.pendingOverviewResult_->documentGeneration = result.documentGeneration;
+    coordinator.pendingOverviewResult_->fontResourceRevision = result.fontResourceRevision;
+    coordinator.pendingOverviewResult_->capturedPresentation = overview;
+    return coordinator.hasMatchingPendingOverview(result, app);
+  }
+
   static inline std::chrono::steady_clock::time_point fakeRetryNow{};
 
   static std::optional<std::uint64_t> requestedCommitGeneration(

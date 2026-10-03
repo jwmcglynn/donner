@@ -2453,6 +2453,8 @@ TEST(GlRnrReplayTest, PenDragUsesCyanOverlayWithoutLegacyBluePath) {
 
   std::optional<svg::RendererBitmap> dragCapture = LoadCaptureBitmap(result, 7);
   ASSERT_TRUE(dragCapture.has_value());
+  EXPECT_GT(CountPenPreviewPixelsInCorridor(*dragCapture, 22.0, 28.0, 3.0), 0)
+      << "The live cubic must have visible cyan pixels away from its endpoints and handles.";
   EXPECT_EQ(CountLegacyBluePenPixels(*dragCapture), 0)
       << "The document-canvas capture should contain no legacy blue PenTool path pixels.";
 
@@ -2756,8 +2758,21 @@ TEST(GlRnrReplayTest, HighZoomRapidPanKeepsPaneCoveredByContent) {
   std::optional<svg::RendererBitmap> settled = LoadCaptureBitmap(result, 20);
   ASSERT_TRUE(settled.has_value());
   const double settledRatio = contentRatio(paneCrop(*settled));
+  const auto* baselineDiagnostics = FindFrameDiagnostics(result, 20);
+  ASSERT_NE(baselineDiagnostics, nullptr);
   EXPECT_GT(settledRatio, 0.90)
-      << "settled high-zoom frame must show the document across the whole pane";
+      << "settled high-zoom frame must show the document across the whole pane\n"
+      << "frame=" << baselineDiagnostics->presentationFrameId
+      << " capture=" << baselineDiagnostics->presentationIdentity.captureId
+      << " version=" << baselineDiagnostics->presentationIdentity.version
+      << " document_version=" << baselineDiagnostics->documentFrameVersion
+      << " displayed_version=" << baselineDiagnostics->displayedDocVersion
+      << " overview_tiles=" << baselineDiagnostics->overviewTileCount
+      << " active_coverage=" << baselineDiagnostics->presentationCoverage.activeRasterDocumentRect
+      << " overview_coverage="
+      << baselineDiagnostics->presentationCoverage.overviewRasterDocumentRect
+      << " request_pending=" << baselineDiagnostics->requestRenderAtEndOfFrame << '\n'
+      << CanonicalReplayDiagnostics(result, 18, 22);
 
   const auto expectCovered = [&](std::uint64_t frame, std::string_view what) {
     std::optional<svg::RendererBitmap> bitmap = LoadCaptureBitmap(result, frame);
@@ -3540,6 +3555,7 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
     EXPECT_GT(capture->dimensions.y, 0);
   }
 
+  int cachedDragFrames = 0;
   for (std::uint64_t frame = 8; frame <= kLastCaptureFrame; ++frame) {
     const repro::GlRnrReplayFrameDiagnostics* diagnostics = FindFrameDiagnostics(result, frame);
     ASSERT_NE(diagnostics, nullptr) << "missing diagnostics for replay frame " << frame;
@@ -3550,6 +3566,13 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
         << "Zoom-driven canvas commits during active drag force full cached-span rerasterization "
            "on replay frame "
         << frame;
+    // A zoom-out can expose a flattened overview that cannot preserve the moved object. The
+    // worker request must explicitly originate from that rejected frame; ordinary affine drag
+    // frames still require zero cached-span raster work.
+    if (diagnostics->frameCost.compositedRender.presentationCoverageRepair) {
+      continue;
+    }
+    ++cachedDragFrames;
     EXPECT_EQ(diagnostics->frameCost.compositedRender.cachedTileCount, 0)
         << "Active zoom+drag should keep using presenter-transformed cache instead of "
            "rerasterizing cached compositor tiles on replay frame "
@@ -3557,6 +3580,8 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
     EXPECT_DOUBLE_EQ(diagnostics->frameCost.compositedRender.cachedMs, 0.0)
         << "Unexpected cached compositor raster cost on active zoom+drag replay frame " << frame;
   }
+
+  EXPECT_GE(cachedDragFrames, 6) << "The covered drag must retain its cached presentation path";
 
   RemoveDiagnosticOutputOnSuccess(outputDir);
 }
@@ -3768,7 +3793,10 @@ TEST(GlRnrReplayTest, GeodeZoomThenDragKeepsDonnerDOverlayLockedToPresentedConte
     }
     ++checkedDragFrames;
     ASSERT_TRUE(diagnostics->frameCost.overlay.hasRepresentedDragPreview)
-        << "Overlay presentation must record the drag transform it actually used.";
+        << "Overlay presentation must record the drag transform it actually used. Frame=" << frame
+        << " paths=" << diagnostics->frameCost.overlay.pathCount
+        << " follows=" << diagnostics->presentationFollowsPointer << "\n"
+        << CanonicalReplayDiagnostics(result, 35u, 42u);
 
     const Vector2d presentedContentTranslation = PresentedDragTargetTranslationOrZero(*diagnostics);
     EXPECT_NEAR(diagnostics->frameCost.overlay.representedDragTranslationDoc.x,

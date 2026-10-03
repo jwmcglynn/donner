@@ -5,6 +5,7 @@ import { PNG } from "pngjs";
 import {
   awaitBeforeBlueDeadline,
   captureReadyBasicShapesFrame,
+  hasPresentedBasicShapesHostFrame,
   type InitialBlueFrameState,
 } from "./basic-shapes-capture-gate";
 import {
@@ -33,6 +34,7 @@ import { compareOverlayBitmap, type OverlayBitmapComparison } from "./overlay-bi
 import { cropCapturedPng, normalizeOverlayGeneration, overlayGenerationMask } from "./png-crop";
 import {
   findCanvasOwnerWorker,
+  holdCanvasCompletionForTest,
   installSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,
@@ -157,13 +159,34 @@ declare global {
       selectionChromeSnapshotPresent: boolean;
       currentDocVersion: number;
       displayedDocVersion: number;
-      overlayVersionGateSuppressions: number;
+      frameId: number;
+      captureId: number;
+      documentRevision: number;
+      followsPointer: boolean;
+      overviewRaster: boolean;
+      rasterX: number;
+      rasterY: number;
+      rasterWidth: number;
+      rasterHeight: number;
+      rasterOutputWidth: number;
+      rasterOutputHeight: number;
     };
     Module?: {
       _donner_set_overlay_state?: (key: number, enabled: number) => number;
     };
     __donnerViewportStats?: ViewportStats;
     __donnerEditorFrameRequested?: boolean;
+    __donnerPresentationQueueStats?: {
+      completedSerial: number;
+      submittedSerial: number;
+      framesInFlight: number;
+      coalescedFrames: number;
+      frameId: number;
+      captureId: number;
+      inputRepresented: boolean;
+    };
+    __donnerWgpuReadbackLastStartedRequest?: number;
+    __donnerWgpuReadbackLastFailedRequest?: number;
   }
 }
 
@@ -1455,6 +1478,11 @@ async function readBasicShapesGateState(page: Page): Promise<InitialBlueFrameSta
     renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
     hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
     hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
+    frameId: window.__donnerOverlayStats?.frameId ?? 0,
+    captureId: window.__donnerOverlayStats?.captureId ?? 0,
+    completedFrameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
+    completedCaptureId: window.__donnerPresentationQueueStats?.captureId ?? 0,
+    completedInputRepresented: window.__donnerPresentationQueueStats?.inputRepresented === true,
   }));
 }
 
@@ -1558,6 +1586,21 @@ async function readBasicShapesProbeState(
   return state;
 }
 
+test("Basic Shapes capture gate accepts a completed current frame after UI coalescing", () => {
+  const state = {
+    sampleId: "basic-shapes", completedResults: 1, presentedAtMs: 11835,
+    renderedFrames: 61, hostFrames: 61, hostPresented: false,
+    frameId: 40, captureId: 4, completedFrameId: 40, completedCaptureId: 4,
+    completedInputRepresented: true,
+  };
+  expect(hasPresentedBasicShapesHostFrame(state, 0)).toBe(true);
+  expect(hasPresentedBasicShapesHostFrame({ ...state, completedInputRepresented: false }, 0)).toBe(false);
+  expect(hasPresentedBasicShapesHostFrame({ ...state, completedCaptureId: 3 }, 0)).toBe(false);
+  expect(hasPresentedBasicShapesHostFrame({ ...state, completedFrameId: 39 }, 0)).toBe(false);
+  expect(hasPresentedBasicShapesHostFrame({ ...state, hostFrames: 60 }, 0)).toBe(false);
+  expect(hasPresentedBasicShapesHostFrame({ ...state, completedResults: 0 }, 0)).toBe(false);
+});
+
 test("Basic Shapes pre-capture gate reads app scalars without layout observation", async ({ page }) => {
   await page.setContent("<canvas id='canvas'></canvas>");
   await page.evaluate(() => {
@@ -1566,6 +1609,8 @@ test("Basic Shapes pre-capture gate reads app scalars without layout observation
       __donnerWorkerStats: { completedResults: 2, presentedAtMs: 3 },
       __donnerMainLoopRenderedFrames: 7,
       __donnerHostFrameTiming: { frames: 7, lastSurfacePresented: true },
+      __donnerOverlayStats: { frameId: 12, captureId: 4 },
+      __donnerPresentationQueueStats: { frameId: 12, captureId: 4, inputRepresented: true },
     });
     window.getComputedStyle = () => {
       throw new Error("style read before capture");
@@ -1584,6 +1629,8 @@ test("Basic Shapes pre-capture gate reads app scalars without layout observation
     renderedFrames: 7,
     hostFrames: 7,
     hostPresented: true,
+    frameId: 12, captureId: 4, completedFrameId: 12, completedCaptureId: 4,
+    completedInputRepresented: true,
   });
 });
 
@@ -1976,6 +2023,8 @@ async function openBasicShapes(
     const presentationRead = await boundFailureDiagnostic(
       page.evaluate(() => ({
         worker: window.__donnerWorkerStats,
+        presentationQueue: window.__donnerPresentationQueueStats,
+        overlay: window.__donnerOverlayStats,
         frames: window.__donnerMainLoopRenderedFrames || 0,
         workerBusy: window.__donnerInteractionStats?.workerBusy,
         activeSample: window.__donnerActiveSampleStats,
@@ -2390,6 +2439,16 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
       )
       .toBe(true);
   } catch (error) {
+    const state = await boundFailureDiagnostic(page.evaluate(() => ({
+      overlay: window.__donnerOverlayStats,
+      queue: window.__donnerPresentationQueueStats,
+      host: window.__donnerHostFrameTiming,
+      interaction: window.__donnerInteractionStats,
+      worker: window.__donnerWorkerStats,
+      repair: (window as unknown as { __donnerPresentationRepairStats?: unknown }).__donnerPresentationRepairStats,
+    })), scaledMs(1000));
+    await attachEvidenceFile("compositor-overlay-presentation-state", Buffer.from(JSON.stringify(state)),
+                             "application/json");
     if (lastCompositorShot !== null) {
       await attachEvidenceFile(
         "compositor-tile-overlay-last-probe",
@@ -2647,6 +2706,56 @@ test("failure-only WebGPU readback makes no request on a visible Basic Shapes lo
     failures: 0,
   });
   expect(failures).toEqual([]);
+});
+
+test("coalesced UI frames do not consume diagnostic capture retries", async ({ page }) => {
+  const failures = await openEditor(page, false, true);
+  expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
+  await page.evaluate(() => { window.__donnerEditorFrameRequested = true; });
+  await expect.poll(async () => (await readSurfaceFrameProbe(page)).frames).toBeGreaterThan(0);
+  const owner = await findCanvasOwnerWorker(page);
+  expect(owner).not.toBeNull();
+  if (owner === null) return;
+  const hold = await holdCanvasCompletionForTest(page, [owner]);
+  const wakeFrame = async () => {
+    const before = await page.evaluate(() => {
+      window.__donnerEditorFrameRequested = true;
+      return window.__donnerMainLoopRenderedFrames ?? 0;
+    });
+    await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
+      timeout: scaledMs(1000), intervals: [16, 25, 50],
+    }).toBeGreaterThan(before);
+  };
+  try {
+    for (let i = 0; i < 3; ++i) await wakeFrame();
+    await expect.poll(() => page.evaluate(() => window.__donnerPresentationQueueStats?.framesInFlight), {
+      timeout: scaledMs(1000), intervals: [16, 25, 50],
+    }).toBe(3);
+    const beforeFailures = await page.evaluate(() => window.__donnerWgpuReadbackCaptureFailures ?? 0);
+    const request = await page.evaluate(() => window.__donnerRequestWgpuReadback?.() ?? 0);
+    expect(request).toBeGreaterThan(0);
+    for (let i = 0; i < 4; ++i) await wakeFrame();
+    const deferred = await page.evaluate(() => ({
+      completed: window.__donnerWgpuReadbackCompleted ?? 0,
+      failed: window.__donnerWgpuReadbackCaptureFailures ?? 0,
+      started: window.__donnerWgpuReadbackCaptureStarts ?? 0,
+      queue: window.__donnerPresentationQueueStats,
+    }));
+    await attachEvidenceFile("coalesced-capture-state", Buffer.from(JSON.stringify(deferred, null, 2)),
+                             "application/json");
+    expect(deferred.queue?.framesInFlight).toBe(3);
+    expect(deferred.queue?.coalescedFrames ?? 0).toBeGreaterThan(0);
+    expect(deferred.failed, JSON.stringify(deferred)).toBe(beforeFailures);
+    expect(deferred.completed).toBeLessThan(request);
+    await hold.release(owner);
+    await expect.poll(() => page.evaluate(() => window.__donnerWgpuReadbackStats?.request ?? 0), {
+      timeout: scaledMs(5000), intervals: [16, 25, 50, 100],
+    }).toBeGreaterThanOrEqual(request);
+    expect(await page.evaluate(() => window.__donnerWgpuReadbackCaptureFailures ?? 0)).toBe(beforeFailures);
+    expect(failures).toEqual([]);
+  } finally {
+    await hold.release(owner);
+  }
 });
 
 test("canvas GPU completion gate waits after the CPU host frame advances", async ({ page }) => {
@@ -2977,8 +3086,19 @@ test("Geode crown face paints at each held pointer position before release", asy
   ).toBe(1);
   await waitForPressReadiness(page, "Geode crown drag press");
 
+  const captureProvenance = async (name: string) => {
+    const state = await page.evaluate(() => ({
+      overlay: window.__donnerOverlayStats,
+      worker: window.__donnerWorkerStats,
+      interaction: window.__donnerInteractionStats,
+      viewport: window.__donnerViewportStats,
+    }));
+    await attachEvidenceFile(name, Buffer.from(JSON.stringify(state, null, 2)), "application/json");
+    return state;
+  };
   const baseline = await page.screenshot({ clip: crop });
   await attachEvidenceFile("geode-crown-selected-baseline", baseline, "image/png");
+  const baselineState = await captureProvenance("geode-crown-selected-provenance");
   const expectedTopLeft = screenFromDocument(518, 481);
   const expectedBottomRight = screenFromDocument(556, 515);
   const handlePixels = (png: Buffer, anchor: { x: number; y: number }, delta: number) => {
@@ -3046,6 +3166,7 @@ test("Geode crown face paints at each held pointer position before release", asy
       await waitForBrowserComposite(page);
       const held = await page.screenshot({ clip: crop });
       await attachEvidenceFile(`geode-crown-held-${delta}`, held, "image/png");
+      const heldState = await captureProvenance(`geode-crown-held-${delta}-provenance`);
       const heldHandle = handlePixels(held, expectedBottomRight, delta);
       expect.soft(
         heldHandle.teal,
@@ -3081,7 +3202,8 @@ test("Geode crown face paints at each held pointer position before release", asy
       );
       expect(
         staticControl.changedPixelsAbove8,
-        "a blank or stale screenshot cannot count as a moved crown face",
+        "a blank or stale screenshot cannot count as a moved crown face: "
+          + JSON.stringify({ baseline: baselineState.overlay, held: heldState.overlay }),
       ).toBeLessThanOrEqual(5);
     }
   } finally {
