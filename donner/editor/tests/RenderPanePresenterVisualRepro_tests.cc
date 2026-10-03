@@ -15,10 +15,12 @@
 #include "donner/base/MathUtils.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/DocumentPresentationCompositor.h"
+#include "donner/editor/DocumentPresenter.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/MenuBarPresenter.h"
+#include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/RenderPanePresenter.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/tests/FramePresentationTestAccess.h"
@@ -153,7 +155,9 @@ void WriteDiagnosticBitmap(const svg::RendererBitmap& bitmap, std::string_view f
 std::shared_ptr<const FramePresentation> FrameForTiles(
     const GlTextureCache& textures, const ViewportState& viewport, Entity suppressed = entt::null,
     const std::optional<SelectTool::ActiveDragPreview>& active = std::nullopt,
-    const std::optional<SelectTool::ActiveDragPreview>& represented = std::nullopt) {
+    const std::optional<SelectTool::ActiveDragPreview>& represented = std::nullopt,
+    std::uint64_t frameId = 1, bool includeChrome = false,
+    PresentationDecorations decorations = {}) {
   EditorApp app;
   if (!app.loadFromString(
           R"(<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220"/>)")) {
@@ -179,13 +183,14 @@ std::shared_ptr<const FramePresentation> FrameForTiles(
       capture, std::move(tiles), textures.coverageDiagnostics(), capture, textures.overviewTiles());
   return FramePresentation::Build(
              resources,
-             FramePresentationInput{.frameId = 1,
+             FramePresentationInput{.frameId = frameId,
                                     .viewport = viewport,
                                     .paneClipRect = Box2d(viewport.paneOrigin,
                                                           viewport.paneOrigin + viewport.paneSize),
                                     .documentIdentity = capture->identity(),
+                                    .decorations = std::move(decorations),
                                     .suppressedLayerEntity = suppressed,
-                                    .includeChrome = false})
+                                    .includeChrome = includeChrome})
       .frame;
 }
 
@@ -405,6 +410,200 @@ TEST(RenderPanePresenterVisualReproTest, IntermediateCompositeReusesUnchangedPre
       << "A viewport change must invalidate the document composite.";
 #endif
 }
+
+#ifndef DONNER_EDITOR_WGPU
+svg::RendererBitmap ReadCompositeTexture(const DocumentCompositeTextureView& view) {
+  svg::RendererBitmap bitmap = MakeBitmap(view.dimensions.x, view.dimensions.y, {0, 0, 0, 0});
+  GLint previousTexture = 0;
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+  glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(view.texture));
+  glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, bitmap.pixels.data());
+  glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+  return bitmap;
+}
+
+PresentationDecorations PenHoverAt(double y) {
+  PresentationDecorations result;
+  result.penPreviewSegmentDoc =
+      PathBuilder().moveTo(Vector2d(10.0, y)).lineTo(Vector2d(100.0, y)).build();
+  return result;
+}
+
+svg::RendererBitmap CaptureSealedSoftwareFrame(gui::EditorWindow& window,
+                                               std::shared_ptr<const FramePresentation> frame,
+                                               DocumentCompositeTextureView composite) {
+  window.beginFrame();
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(kLogicalWidth, kLogicalHeight), ImGuiCond_Always);
+  ImGui::Begin("software-admission", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  FrameHistory history;
+  RenderPanePresenter presenter;
+  presenter.render(RenderPanePresenterState{
+      .viewport = frame->viewport(),
+      .frameHistory = history,
+      .presentation = std::move(frame),
+      .contentRegion = Vector2d(kLogicalWidth, kLogicalHeight),
+      .documentComposite = composite,
+  });
+  ImGui::End();
+  ImGui::PopStyleVar();
+  return window.endFrameAndReadPixels();
+}
+
+TEST(RenderPanePresenterVisualReproTest, FailedPaintUploadRetainsVisibleFrameAndChromeTogether) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Software Paint Admission",
+      .initialWidth = kLogicalWidth,
+      .initialHeight = kLogicalHeight,
+      .visible = false,
+      .offscreen = true,
+      .offscreenContentScale = 1.0,
+      .enableFramebufferReadback = true,
+  });
+  ASSERT_TRUE(window.valid());
+  GlTextureCache textures(PresentationDevice(window));
+  textures.initialize();
+  ASSERT_TRUE(textures.uploadComposited(MakePreview(false)));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(kLogicalWidth, kLogicalHeight);
+  viewport.documentViewBox = Box2d::FromXYWH(0, 0, kLogicalWidth, kLogicalHeight);
+  viewport.panDocPoint = Vector2d::Zero();
+  viewport.panScreenPoint = Vector2d::Zero();
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220"/>)"));
+  const auto capture = CapturedPresentation::Capture(
+      app.document().document(),
+      PresentationIdentity{.captureId = 1,
+                           .documentGeneration = app.document().documentGeneration(),
+                           .version = app.document().currentFrameVersion()},
+      {});
+  ASSERT_NE(capture, nullptr);
+  RenderCoordinator coordinator;
+  coordinator.compositedPresentation().notePreparedResources(
+      FramePresentationTestAccess::resources(capture, textures.tiles()), entt::null, std::nullopt);
+  SelectTool tool;
+  DocumentPresentationCompositor compositor;
+  DocumentCompositeTextureView composite;
+  DocumentPresenter presenter([](auto) {});
+  const auto present = [&] {
+    composite = {};
+    const auto frame = coordinator.buildFramePresentation(
+        app, tool, viewport, Box2d(Vector2d::Zero(), viewport.paneSize),
+        SelectionChromeDetail::Full, true, [&](const FramePresentation& candidate) {
+          composite = compositor.compose(candidate);
+          return composite.texture != 0;
+        });
+    EXPECT_NE(frame, nullptr);
+    if (frame != nullptr && composite.texture == 0) {
+      composite = compositor.compose(*frame);
+    }
+    EXPECT_TRUE(presenter.present(frame));
+    return frame;
+  };
+  coordinator.setPenHoverChrome(PenHoverAt(20).penPreviewSegmentDoc, std::nullopt);
+  const auto firstFrame = present();
+  ASSERT_NE(firstFrame, nullptr);
+  ASSERT_NE(composite.texture, 0u);
+  const auto first = composite;
+  const auto firstPixels = ReadCompositeTexture(first);
+  const auto firstVisible = CaptureSealedSoftwareFrame(window, presenter.currentFrame(), composite);
+  ASSERT_FALSE(firstVisible.empty());
+  coordinator.setPenHoverChrome(PenHoverAt(30).penPreviewSegmentDoc, std::nullopt);
+  compositor.failNextSoftwarePaintUploadForTesting();
+  const auto retained = present();
+  EXPECT_EQ(retained, firstFrame);
+  EXPECT_EQ(presenter.currentFrame(), firstFrame);
+  EXPECT_EQ(coordinator.framePresentation(), firstFrame);
+  EXPECT_EQ(composite.texture, first.texture);
+  EXPECT_EQ(compositor.compositionCountForTesting(), 1u);
+  EXPECT_EQ(ReadCompositeTexture(first).pixels, firstPixels.pixels);
+  const auto retainedVisible =
+      CaptureSealedSoftwareFrame(window, presenter.currentFrame(), composite);
+  EXPECT_EQ(retainedVisible.pixels, firstVisible.pixels);
+  const auto recovered = present();
+  ASSERT_NE(recovered, nullptr);
+  EXPECT_NE(recovered, firstFrame);
+  EXPECT_EQ(presenter.currentFrame(), recovered);
+  EXPECT_EQ(compositor.compositionCountForTesting(), 2u);
+  const auto recoveredVisible =
+      CaptureSealedSoftwareFrame(window, presenter.currentFrame(), composite);
+  EXPECT_NE(recoveredVisible.pixels, firstVisible.pixels);
+  EXPECT_NE(ReadCompositeTexture(first).pixels, firstPixels.pixels);
+  ViewportState oversized = viewport;
+  oversized.paneSize.x = ViewportState::kMaxCanvasDim + 1.0;
+  const auto oversizedFrame = FrameForTiles(textures, oversized, entt::null, std::nullopt,
+                                            std::nullopt, 99, true, PenHoverAt(20));
+  ASSERT_NE(oversizedFrame, nullptr);
+  DocumentPresentationCompositor unusedCompositor;
+  EXPECT_EQ(unusedCompositor.compose(*oversizedFrame).texture, 0u);
+  EXPECT_EQ(unusedCompositor.retainedBytes(), 0u);
+  EXPECT_EQ(unusedCompositor.compositionCountForTesting(), 0u);
+  EXPECT_EQ(glGetError(), GL_NO_ERROR);
+}
+
+TEST(RenderPanePresenterVisualReproTest, PaintUploadPreservesForeignUnpackStateAndPixels) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Software Paint Unpack State",
+      .initialWidth = kLogicalWidth,
+      .initialHeight = kLogicalHeight,
+      .visible = false,
+      .offscreen = true,
+      .offscreenContentScale = 1.0,
+  });
+  ASSERT_TRUE(window.valid());
+  GlTextureCache textures(PresentationDevice(window));
+  textures.initialize();
+  ASSERT_TRUE(textures.uploadComposited(MakePreview(false)));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(kLogicalWidth, kLogicalHeight);
+  viewport.documentViewBox = Box2d::FromXYWH(0, 0, kLogicalWidth, kLogicalHeight);
+  viewport.panDocPoint = Vector2d::Zero();
+  viewport.panScreenPoint = Vector2d::Zero();
+  const auto frame = FrameForTiles(textures, viewport, entt::null, std::nullopt, std::nullopt, 1,
+                                   true, PenHoverAt(20));
+  ASSERT_NE(frame, nullptr);
+  DocumentPresentationCompositor cleanCompositor;
+  const auto clean = cleanCompositor.compose(*frame);
+  ASSERT_NE(clean.texture, 0u);
+  const auto expected = ReadCompositeTexture(clean);
+  GLuint foreignBuffer = 0;
+  glGenBuffers(1, &foreignBuffer);
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, foreignBuffer);
+  glBufferData(GL_PIXEL_UNPACK_BUFFER, 16, nullptr, GL_STATIC_DRAW);
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, 7);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 8);
+  glPixelStorei(GL_UNPACK_SKIP_ROWS, 3);
+  glPixelStorei(GL_UNPACK_SKIP_PIXELS, 2);
+  DocumentPresentationCompositor compositor;
+  const auto actual = compositor.compose(*frame);
+  const std::array<std::pair<GLenum, GLint>, 5> expectedState = {{
+      {GL_PIXEL_UNPACK_BUFFER_BINDING, static_cast<GLint>(foreignBuffer)},
+      {GL_UNPACK_ROW_LENGTH, 7},
+      {GL_UNPACK_ALIGNMENT, 8},
+      {GL_UNPACK_SKIP_ROWS, 3},
+      {GL_UNPACK_SKIP_PIXELS, 2},
+  }};
+  for (const auto& [name, expectedValue] : expectedState) {
+    GLint value = 0;
+    glGetIntegerv(name, &value);
+    EXPECT_EQ(value, expectedValue) << name;
+  }
+  EXPECT_EQ(glGetError(), GL_NO_ERROR);
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+  glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+  glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+  glDeleteBuffers(1, &foreignBuffer);
+  ASSERT_NE(actual.texture, 0u);
+  EXPECT_EQ(ReadCompositeTexture(actual).pixels, expected.pixels);
+  EXPECT_EQ(glGetError(), GL_NO_ERROR);
+}
+#endif
 
 TEST(RenderPanePresenterVisualReproTest,
      ViewMenuCompositorTileOverlayRendersMetadataOverDirectPresentation) {

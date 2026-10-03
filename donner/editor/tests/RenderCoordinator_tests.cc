@@ -912,6 +912,42 @@ TEST(RenderCoordinatorTest, FrameRequiresAcceptedRasterResources) {
   EXPECT_THAT(frame->chrome().paths, ::testing::SizeIs(1));
 }
 
+TEST(RenderCoordinatorTest, RendererRefusalRetainsCompleteFrameAndChromeUntilRecovery) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  SelectTool tool;
+  GlTextureCache textures;
+  auto viewport = MakeViewport(app);
+  app.setSelection(QuerySelector(app, "#r1"));
+  AcceptCapturedScene(coordinator, app);
+  const auto oldFrame = BuildFrame(coordinator, app, tool, viewport, textures);
+  ASSERT_NE(oldFrame, nullptr);
+  viewport.panBy(Vector2d(20, 0));
+  int attempts = 0;
+  const auto retained = coordinator.buildFramePresentation(
+      app, tool, viewport, Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize),
+      SelectionChromeDetail::Full, true, [&](const FramePresentation& candidate) {
+        ++attempts;
+        EXPECT_NE(candidate.frameId(), oldFrame->frameId());
+        EXPECT_EQ(candidate.viewport().panScreenPoint, viewport.panScreenPoint);
+        return false;
+      });
+  EXPECT_EQ(attempts, 1);
+  EXPECT_EQ(retained, oldFrame);
+  EXPECT_EQ(coordinator.framePresentation(), oldFrame);
+  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->canvasFromDoc.data[4],
+            oldFrame->chrome().canvasFromDoc.data[4]);
+  EXPECT_FALSE(coordinator.frameRepresentsCurrentIntent());
+  const auto recovered = coordinator.buildFramePresentation(
+      app, tool, viewport, Box2d(viewport.paneOrigin, viewport.paneOrigin + viewport.paneSize),
+      SelectionChromeDetail::Full, true, [](const FramePresentation&) { return true; });
+  ASSERT_NE(recovered, nullptr);
+  EXPECT_NE(recovered, oldFrame);
+  EXPECT_EQ(recovered->viewport().panScreenPoint, viewport.panScreenPoint);
+  EXPECT_TRUE(coordinator.frameRepresentsCurrentIntent());
+}
+
 TEST(RenderCoordinatorTest, BusyDragProjectsCapturedFrameWithoutDocumentAccess) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
