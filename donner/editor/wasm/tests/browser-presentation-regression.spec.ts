@@ -188,6 +188,7 @@ declare global {
       coalescedFrames: number;
       frameId: number;
       captureId: number;
+      inputRepresented: boolean;
     };
     __donnerWgpuReadbackLastStartedRequest?: number;
     __donnerWgpuReadbackLastFailedRequest?: number;
@@ -1485,6 +1486,11 @@ async function readBasicShapesGateState(page: Page): Promise<InitialBlueFrameSta
     renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
     hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
     hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
+    frameId: window.__donnerOverlayStats?.frameId ?? 0,
+    captureId: window.__donnerOverlayStats?.captureId ?? 0,
+    completedFrameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
+    completedCaptureId: window.__donnerPresentationQueueStats?.captureId ?? 0,
+    completedInputRepresented: window.__donnerPresentationQueueStats?.inputRepresented === true,
   }));
 }
 
@@ -1593,8 +1599,10 @@ test("Basic Shapes capture gate accepts a completed current frame after UI coale
     sampleId: "basic-shapes", completedResults: 1, presentedAtMs: 11835,
     renderedFrames: 61, hostFrames: 61, hostPresented: false,
     frameId: 40, captureId: 4, completedFrameId: 40, completedCaptureId: 4,
+    completedInputRepresented: true,
   };
   expect(hasPresentedBasicShapesHostFrame(state, 0)).toBe(true);
+  expect(hasPresentedBasicShapesHostFrame({ ...state, completedInputRepresented: false }, 0)).toBe(false);
   expect(hasPresentedBasicShapesHostFrame({ ...state, completedCaptureId: 3 }, 0)).toBe(false);
   expect(hasPresentedBasicShapesHostFrame({ ...state, completedFrameId: 39 }, 0)).toBe(false);
   expect(hasPresentedBasicShapesHostFrame({ ...state, hostFrames: 60 }, 0)).toBe(false);
@@ -1609,6 +1617,8 @@ test("Basic Shapes pre-capture gate reads app scalars without layout observation
       __donnerWorkerStats: { completedResults: 2, presentedAtMs: 3 },
       __donnerMainLoopRenderedFrames: 7,
       __donnerHostFrameTiming: { frames: 7, lastSurfacePresented: true },
+      __donnerOverlayStats: { frameId: 12, captureId: 4 },
+      __donnerPresentationQueueStats: { frameId: 12, captureId: 4, inputRepresented: true },
     });
     window.getComputedStyle = () => {
       throw new Error("style read before capture");
@@ -1627,6 +1637,8 @@ test("Basic Shapes pre-capture gate reads app scalars without layout observation
     renderedFrames: 7,
     hostFrames: 7,
     hostPresented: true,
+    frameId: 12, captureId: 4, completedFrameId: 12, completedCaptureId: 4,
+    completedInputRepresented: true,
   });
 });
 
@@ -2019,6 +2031,8 @@ async function openBasicShapes(
     const presentationRead = await boundFailureDiagnostic(
       page.evaluate(() => ({
         worker: window.__donnerWorkerStats,
+        presentationQueue: window.__donnerPresentationQueueStats,
+        overlay: window.__donnerOverlayStats,
         frames: window.__donnerMainLoopRenderedFrames || 0,
         workerBusy: window.__donnerInteractionStats?.workerBusy,
         activeSample: window.__donnerActiveSampleStats,

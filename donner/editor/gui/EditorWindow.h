@@ -988,7 +988,8 @@ private:
 #endif
 #ifdef DONNER_EDITOR_WGPU
   bool observePresentationCompletion();
-  bool prepareFrameSubmission(int width, int height, bool requestedReadback);
+  bool hasUsableFrameTarget(int width, int height) const;
+  bool admitFrameSubmission(bool requestedReadback);
   internal::PresentationSubmissionQueue presentationSubmissions_;
   bool presentationWasDeferred_ = false;
   bool forceUiPassFailureForTesting_ = false;

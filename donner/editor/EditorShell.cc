@@ -2124,6 +2124,7 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
       return;
     }
 
+    selectTool_.onMouseMove(app_, input.documentPoint, /*buttonHeld=*/true, input.modifiers);
     const auto previewBeforeRelease = selectTool_.activeDragPreview();
     const bool previewHadVisualChange = selectTool_.dragHasVisualChange();
     selectTool_.onMouseUp(app_, input.documentPoint);
@@ -4829,6 +4830,10 @@ void EditorShell::updateRenderPaneSelectionDrag(bool spaceHeld,
     return interactionController_.viewport().screenToDocument(
         Vector2d(screenPoint.x, screenPoint.y));
   };
+  MouseModifiers modifiers;
+  modifiers.shift = ImGui::GetIO().KeyShift;
+  modifiers.option = ImGui::GetIO().KeyAlt;
+  modifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
   if (selectTool_.isDragging() || selectTool_.isMarqueeing()) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
       const ImVec2 currentScreen = ImGui::GetMousePos();
@@ -4837,10 +4842,6 @@ void EditorShell::updateRenderPaneSelectionDrag(bool spaceHeld,
       // worker releases the document.
       if (ShouldPostDragMove<ImVec2>(currentScreen, lastPostedScreenPoint_,
                                      /*pendingFrameInFlight=*/false)) {
-        MouseModifiers modifiers;
-        modifiers.shift = ImGui::GetIO().KeyShift;
-        modifiers.option = ImGui::GetIO().KeyAlt;
-        modifiers.pixelsPerDocUnit = pointerHitTestPixelsPerDocUnit;
         selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true,
                                 modifiers);
         lastPostedScreenPoint_ = currentScreen;
@@ -4848,6 +4849,8 @@ void EditorShell::updateRenderPaneSelectionDrag(bool spaceHeld,
       }
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      // Commit the release coordinates before freezing the settling pose and undo snapshot.
+      selectTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), !spaceHeld, modifiers);
       const auto previewBeforeRelease = selectTool_.activeDragPreview();
       const bool previewHadVisualChange = selectTool_.dragHasVisualChange();
       selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
