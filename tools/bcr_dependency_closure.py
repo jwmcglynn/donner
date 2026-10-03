@@ -3,10 +3,11 @@
 The input is `bazel cquery --output=label_kind` over the libraries a downstream consumer builds.
 The closure must contain the default tiny-skia renderer and basic text, and no development-only,
 Geode, WebGPU or test target. It must contain no Rust rule or Rust source, and no repository of a
-Rust rule set, toolchain or crate. It must also resolve the C++ toolchain in at least two
-configurations, the libraries' own and the tool configuration, which a query without implicit or
-tool dependencies lacks. After the real closure passes, the check appends Rust edges to the same
-query output and requires each to be rejected, which proves the parser and classifier still
+Rust rule set, toolchain or crate. It must also contain a cc_toolchain rule, which a query
+without implicit dependencies lacks, and an exec tool of the C++ rules (`link_dynamic_library` or
+`def_parser` from bazel_tools) in a configuration other than the libraries' own, which a query
+without tool dependencies lacks. After the real closure passes, the check appends Rust edges to the
+same query output and requires each to be rejected, which proves the parser and classifier still
 recognize Rust.
 """
 
@@ -27,6 +28,13 @@ KINDED_TARGET = re.compile(
     r"(?P<kind>[A-Za-z_][\w]*(?: [a-z]+)?) (?P<label>(?:@{1,2}[^/\s]+)?//\S+)"
     r"(?: \((?P<configuration>[^)]*)\))?\Z"
 )
+# Implicit tools the C++ rules build in the exec configuration for any C++ library. Following tool
+# dependencies reaches them; --notool_deps and --noimplicit_deps drop them.
+CPP_EXEC_TOOLS = frozenset({
+    "//tools/cpp:link_dynamic_library",
+    "//tools/def_parser:def_parser",
+})
+LIBRARY_ANCHOR = "//donner/base:base"
 RUST_SOURCE = re.compile(r"(?:\.rs|[:/](?:Cargo\.toml|Cargo\.lock))\Z", re.IGNORECASE)
 RUST_NAME = re.compile(r"(?:^|[+~_./:-])(?:rust|cargo|crate)")
 RUST_RULE = re.compile(r"(?:^|_)(?:rust|cargo|crate)")
@@ -213,18 +221,27 @@ def check_backend(labels: set[str]) -> None:
 def check_coverage(targets: tuple[ConfiguredTarget, ...]) -> None:
     """Reject a closure queried without the implicit and tool dependencies that build it.
 
-    A complete closure resolves the C++ toolchain for the libraries' own configuration and again
-    for the tool (exec) configuration their build actions run in. Without implicit dependencies
-    no cc_toolchain appears; without tool dependencies only the first configuration's does.
+    Without implicit dependencies no cc_toolchain rule appears. Without tool dependencies none of
+    the C++ rules' exec tools (`@bazel_tools//tools/cpp:link_dynamic_library`,
+    `@bazel_tools//tools/def_parser:def_parser`) appears in a configuration other than the one the
+    libraries are built in.
     """
-    configurations = {target.configuration for target in targets
-                      if target.kind == "cc_toolchain rule"
-                      and target.configuration not in ("", "null")}
-    if not configurations:
+    if not any(target.kind == "cc_toolchain rule" for target in targets):
         raise ValueError("closure has no cc_toolchain rule; query it with implicit dependencies")
-    if len(configurations) < 2:
-        raise ValueError("closure resolves cc_toolchain in only one configuration; "
-                         "query it with tool dependencies")
+    library_configurations = {
+        target.configuration for target in targets
+        if local_target(target.label) == LIBRARY_ANCHOR
+        and "donner" in repository_parts(target.label)
+    }
+    if not any(
+        "bazel_tools" in repository_parts(target.label)
+        and local_target(target.label) in CPP_EXEC_TOOLS
+        and target.configuration not in ("", "null")
+        and target.configuration not in library_configurations
+        for target in targets
+    ):
+        raise ValueError("closure has no C++ exec tool (link_dynamic_library or def_parser) "
+                         "outside the libraries' configuration; query it with tool dependencies")
 
 
 def check_rules(targets: tuple[ConfiguredTarget, ...]) -> None:

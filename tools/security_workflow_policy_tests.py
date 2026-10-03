@@ -360,13 +360,20 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         consumer, step, run, query, audit_call = self._bcr_consumer_audit(preflight)
         self.assertEqual(run.count(audit), 1)
         self.assertNotIn("continue-on-error", consumer)
-        self.assertNotRegex(step, r"(?m)^        (?:if|continue-on-error):")
+        self.assertNotRegex(step, r"(?m)^        (?:if|continue-on-error|shell):")
         self.assertNotIn("|", run, "a pipe or || would hide the query or audit status")
+        self.assertNotIn("set +e", run)
         for library in ("base:base", "css:css", "svg:svg", "svg/renderer:renderer"):
             self.assertIn("@donner//donner/%s" % library, query)
         self.assertIn("--output=label_kind", query)
-        for narrowing in ("--noimplicit_deps", "--notool_deps", "--keep_going"):
+        for narrowing in ("--noimplicit_deps", "--notool_deps", "--implicit_deps=",
+                          "--tool_deps=", "--keep_going"):
             self.assertNotIn(narrowing, run)
+        # The audit is the step's last command, so its status is the step's status.
+        audit_command = run[run.rindex("python3 -B", 0, run.index(audit)):].rstrip()
+        joined = re.sub(r"\\\n\s*", " ", audit_command)
+        self.assertNotIn("\n", joined, "a command after the audit would replace its status")
+        self.assertNotRegex(joined, r";|&&")
         redirect = re.findall(r'> ("[^"]+")', query)
         labels = re.findall(r'--labels ("[^"]+")', audit_call)
         self.assertEqual(len(redirect), 1)
@@ -395,6 +402,17 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
             "no implicit deps": preflight.replace(query, query + " --noimplicit_deps", 1),
             "no tool deps": preflight.replace(query, query + " --notool_deps", 1),
             "keep going": preflight.replace(query, query + " --keep_going", 1),
+            "implicit deps false": preflight.replace(query, query + " --implicit_deps=false", 1),
+            "tool deps false": preflight.replace(query, query + " --tool_deps=false", 1),
+            "shell": preflight.replace(step, step + "        shell: bash {0}\n"),
+            "set +e": preflight.replace(
+                "          test \"$(git -C", "          set +e\n          test \"$(git -C", 1),
+            "semicolon true": preflight.replace(
+                '--labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"',
+                '--labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"; true', 1),
+            "command after the audit": preflight.replace(
+                '--labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"\n',
+                '--labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"\n          true\n', 1),
             "other labels file": preflight.replace(
                 "--labels " + redirect, '--labels "$RUNNER_TEMP/other.labels"', 1),
         }

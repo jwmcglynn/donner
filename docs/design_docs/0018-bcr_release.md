@@ -73,13 +73,13 @@ registry from a separate module; no Donner checkout override participates. Each 
 audits the configured closure of the four Donner libraries it built with
 `tools/bcr_dependency_closure.py`: the default tiny-skia renderer and basic text are present, and no
 development-only, Geode, WebGPU or test target, Rust rule or source, or Rust rule set, toolchain or
-crate repository is. The closure must resolve the C++ toolchain in both the libraries' configuration
-and the tool configuration, so a query without implicit or tool dependencies fails. The audit then
-appends Rust edges to the same query output and requires each to be rejected. This shows no Rust
-dependency visible in Bazel's configured closure on the four matrix configurations. It does not
-remove the runner's own Rust toolchain, and a genrule or repository rule that ran a host `rustc` or
-`cargo` would not appear in that closure; the lexical no-Rust verifier covers such in-tree
-references.
+crate repository is. The closure must contain a `cc_toolchain` rule and an exec tool of the C++
+rules (`link_dynamic_library` or `def_parser`) outside the libraries' configuration, so a query
+without implicit or tool dependencies fails. The audit then appends Rust edges to the same query
+output and requires each to be rejected. This shows no Rust dependency visible in Bazel's configured
+closure on the four matrix configurations. It does not remove the runner's own Rust toolchain, and a
+genrule or repository rule that ran a host `rustc` or `cargo` would not appear in that closure; the
+lexical no-Rust verifier covers such in-tree references.
 
 Source archives require root `LICENSE` and `NOTICE`. The committed `NOTICE` matches
 `//third_party/licenses:notice_default` byte-for-byte and describes the default tiny-skia

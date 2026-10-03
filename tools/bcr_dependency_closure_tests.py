@@ -23,8 +23,8 @@ use_repo(private, "harfbuzz", browser = "playwright")
 '''
 
 # A passing `cquery --output=label_kind` result: the four libraries, the default renderer and
-# text backend, vendored repositories, and the C++ toolchain resolved in the libraries'
-# configuration and in the tool configuration.
+# text backend, vendored repositories, the resolved C++ toolchain, and the C++ rules' exec tools in
+# the tool configuration.
 BASE_ROWS = (
     "cc_library rule @donner//donner/base:base (5a7f3c1)",
     "cc_library rule @donner//donner/css:css (5a7f3c1)",
@@ -39,7 +39,8 @@ BASE_ROWS = (
     "cc_library rule @@donner++_repo_rules2+stb//:stb (5a7f3c1)",
     "toolchain_type rule @bazel_tools//tools/cpp:toolchain_type (5a7f3c1)",
     "cc_toolchain rule @@rules_cc++cc_configure_extension+local_config_cc//:cc-compiler (5a7f3c1)",
-    "cc_toolchain rule @@rules_cc++cc_configure_extension+local_config_cc//:cc-compiler (e062f01)",
+    "filegroup rule @bazel_tools//tools/def_parser:def_parser (e062f01)",
+    "alias rule @bazel_tools//tools/cpp:link_dynamic_library (e062f01)",
 )
 BASE = "\n".join(BASE_ROWS) + "\n"
 
@@ -143,11 +144,17 @@ class DependencyClosureTest(unittest.TestCase):
     def test_rejects_a_closure_queried_without_implicit_or_tool_dependencies(self) -> None:
         with self.assertRaisesRegex(ValueError, "no cc_toolchain rule"):
             closure.check_closure(without("cc_toolchain rule"), self.dev)
-        with self.assertRaisesRegex(ValueError, "only one configuration"):
-            closure.check_closure(without("cc-compiler (e062f01)"), self.dev)
-        same_configuration = parse(BASE.replace("(e062f01)", "(5a7f3c1)"))
-        with self.assertRaisesRegex(ValueError, "only one configuration"):
-            closure.check_closure(same_configuration, self.dev)
+        with self.assertRaisesRegex(ValueError, "no C\\+\\+ exec tool"):
+            closure.check_closure(without("def_parser", "link_dynamic_library"), self.dev)
+        tools_in_library_configuration = parse(BASE.replace("(e062f01)", "(5a7f3c1)"))
+        with self.assertRaisesRegex(ValueError, "no C\\+\\+ exec tool"):
+            closure.check_closure(tools_in_library_configuration, self.dev)
+
+    def test_either_cpp_exec_tool_shows_tool_dependencies_were_followed(self) -> None:
+        for kept in ("def_parser", "link_dynamic_library"):
+            with self.subTest(kept=kept):
+                dropped = "link_dynamic_library" if kept == "def_parser" else "def_parser"
+                closure.check_closure(without(dropped), self.dev)
 
     def test_injected_rust_edges_are_all_rejected_from_a_passing_closure(self) -> None:
         self.assertEqual(closure.check_injected_rust_edges(BASE, self.dev),
@@ -228,11 +235,11 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn(f"{count} of {count} injected Rust edges rejected", result.stdout)
         self.assertIn(f"{len(BASE_ROWS)} configured targets in 2 configurations", result.stdout)
 
-    def test_closure_without_the_tool_configuration_toolchain_fails(self) -> None:
+    def test_closure_without_tool_dependencies_fails(self) -> None:
         result = self._run("".join(row + "\n" for row in BASE_ROWS if "(e062f01)" not in row))
 
         self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("only one configuration", result.stderr)
+        self.assertIn("no C++ exec tool", result.stderr)
 
     def test_closure_with_an_appended_rust_rule_fails(self) -> None:
         result = self._run(BASE + "rust_library rule @@donner+//donner/svg:appended (5a7f3c1)\n")
@@ -241,7 +248,7 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("closure includes a Rust rule", result.stderr)
         self.assertNotIn("injected Rust edges rejected", result.stdout)
 
-    def test_closure_without_tool_dependencies_fails(self) -> None:
+    def test_closure_without_implicit_dependencies_fails(self) -> None:
         result = self._run("".join(row + "\n" for row in BASE_ROWS if "cc_toolchain" not in row))
 
         self.assertNotEqual(result.returncode, 0, result.stdout)

@@ -879,12 +879,13 @@ fixture proves that failure. Product artifacts remain covered by the existing Ed
 consumer and BCR packaging lanes. Production source archives must build without `rustc` or
 `cargo`. BCR Preflight's Ubuntu/macOS Bazel 7/8 consumers audit the configured closure of the four
 Donner libraries they build from the exact candidate archive: it must contain no Rust rule or source
-and no Rust rule set, toolchain or crate repository, and it must resolve the C++ toolchain in both
-the libraries' and the tool configuration. The audit then appends Rust edges to that query output
-and requires each to be rejected. Generated CMake is covered by `gen_cmakelists.py --check`. This is
-dependency evidence, not a build on a runner without Rust: a host `rustc` or `cargo` run by a
-genrule or repository rule is invisible to a configured closure and is left to the lexical verifier.
-A lexical scan alone is not proof of transitive closure.
+and no Rust rule set, toolchain or crate repository, and it must contain a `cc_toolchain` rule and
+the C++ rules' exec tools, which a query without implicit or tool dependencies lacks. The audit then
+appends Rust edges to that query output and requires each to be rejected. Generated CMake is covered
+by `gen_cmakelists.py --check`. This is dependency evidence, not a build on a runner without Rust: a
+host `rustc` or `cargo` run by a genrule or repository rule is invisible to a configured closure and
+is left to the lexical verifier for in-tree references. A lexical scan alone is not proof of
+transitive closure.
 
 ## Security and Reliability
 
