@@ -17,16 +17,11 @@
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
-#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/PresentationRenderScheduler.h"
 #include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/components/DirtyFlagsComponent.h"
-#include "donner/svg/components/IdComponent.h"
-#include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/compositor/ScopedCompositorHint.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -38,28 +33,6 @@ namespace donner::editor::mcp {
 namespace {
 
 using nlohmann::json;
-
-std::string EntityDebugLabel(const Registry& registry, Entity entity) {
-  if (!registry.valid(entity)) {
-    return "null";
-  }
-
-  std::string label;
-  if (const auto* tree = registry.try_get<donner::components::TreeComponent>(entity)) {
-    label = std::string(tree->tagName().name);
-  } else {
-    label = "entity";
-  }
-  if (const auto* id = registry.try_get<svg::components::IdComponent>(entity);
-      id != nullptr && !id->id().empty()) {
-    label.push_back('#');
-    label.append(std::string_view(id->id()));
-  }
-  label.push_back(' ');
-  label.push_back('#');
-  label.append(std::to_string(EntityToJsonValue(entity)));
-  return label;
-}
 
 std::optional<SelectTool::ActiveDragPreview> DragPreviewFromRenderRequest(
     const std::optional<RenderRequest::DragPreview>& preview) {
@@ -74,30 +47,6 @@ std::optional<SelectTool::ActiveDragPreview> DragPreviewFromRenderRequest(
       .documentFromCachedDocument = preview->documentFromCachedDocument,
       .dragGeneration = preview->dragGeneration,
   };
-}
-
-json DirtyFlagsToJson(std::uint16_t flags) {
-  using DirtyFlags = svg::components::DirtyFlagsComponent;
-  const std::array<std::pair<DirtyFlags::Flags, std::string_view>, 10> names{{
-      {DirtyFlags::Style, "style"},
-      {DirtyFlags::Layout, "layout"},
-      {DirtyFlags::Transform, "transform"},
-      {DirtyFlags::WorldTransform, "world_transform"},
-      {DirtyFlags::Shape, "shape"},
-      {DirtyFlags::Paint, "paint"},
-      {DirtyFlags::Filter, "filter"},
-      {DirtyFlags::RenderInstance, "render_instance"},
-      {DirtyFlags::ShadowTree, "shadow_tree"},
-      {DirtyFlags::TextGeometry, "text_geometry"},
-  }};
-
-  json out = json::array();
-  for (const auto& [flag, name] : names) {
-    if ((flags & flag) != 0) {
-      out.push_back(name);
-    }
-  }
-  return out;
 }
 
 std::string CompositeTileKindName(
@@ -178,6 +127,7 @@ void EditorControlSession::HeadlessTextureCache::uploadComposited(
       liveIds.insert(tile.id);
       DisplayTileView view;
       view.kind = cachedIt->second.kind;
+      view.layerEntity = tile.layerEntity;
       view.id = tile.id;
       view.generation = cachedIt->second.generation;
       view.bitmapDimsPx = cachedIt->second.bitmapDimsPx;
@@ -330,59 +280,57 @@ ToolCallResult EditorControlSession::sessionState(const json&) const {
 
   if (app_.hasDocument()) {
     const svg::SVGDocument& document = app_.document().document();
-    [[maybe_unused]] svg::DocumentReadAccess access = document.readAccess();
-    const Registry& registry = document.registry();
+    const auto diagnostics = document.renderingDiagnostics();
     json dirtyEntities = json::array();
-    for (const Entity entity : registry.view<svg::components::DirtyFlagsComponent>()) {
-      const auto& dirty = registry.get<svg::components::DirtyFlagsComponent>(entity);
+    for (const auto& dirty : diagnostics.dirtyEntities) {
       dirtyEntities.push_back(json{
-          {"entity", EntityToJsonValue(entity)},
+          {"entity", EntityToJsonValue(dirty.entity)},
           {"flags", dirty.flags},
-          {"names", DirtyFlagsToJson(dirty.flags)},
+          {"names", dirty.names},
       });
     }
-
     json renderTreeState = nullptr;
-    if (const auto* stateComponent = registry.ctx().find<svg::components::RenderTreeState>()) {
+    if (diagnostics.state.has_value()) {
       renderTreeState = json{
-          {"has_been_built", stateComponent->hasBeenBuilt},
-          {"needs_full_rebuild", stateComponent->needsFullRebuild},
-          {"needs_full_style_recompute", stateComponent->needsFullStyleRecompute},
+          {"has_been_built", diagnostics.state->hasBeenBuilt},
+          {"needs_full_rebuild", diagnostics.state->needsFullRebuild},
+          {"needs_full_style_recompute", diagnostics.state->needsFullStyleRecompute},
       };
     }
     out.body["render_tree"] = json{
-        {"dirty_count", dirtyEntities.size()},
+        {"dirty_count", diagnostics.dirtyCount},
         {"dirty_entities", std::move(dirtyEntities)},
         {"state", std::move(renderTreeState)},
+        {"truncated", diagnostics.dirtyCount > diagnostics.dirtyEntities.size()},
     };
-
     json renderInstances = json::array();
-    for (auto view = registry.view<const svg::components::RenderingInstanceComponent>();
-         const Entity entity : view) {
-      const auto& instance = view.get<const svg::components::RenderingInstanceComponent>(entity);
+    for (const auto& instance : diagnostics.instances) {
       json styleJson = nullptr;
-      if (const auto* style = registry.try_get<svg::components::ComputedStyleComponent>(entity);
-          style != nullptr && style->properties.has_value()) {
+      if (instance.style.has_value()) {
         styleJson = json{
-            {"display",
-             style->properties->display.get().value() == svg::Display::None ? "none" : "other"},
-            {"visibility", static_cast<int>(style->properties->visibility.get().value())},
+            {"display", instance.style->displayNone ? "none" : "other"},
+            {"visibility", instance.style->visibility},
         };
       }
       renderInstances.push_back(json{
-          {"entity", EntityToJsonValue(entity)},
-          {"label", EntityDebugLabel(registry, entity)},
+          {"entity", EntityToJsonValue(instance.entity)},
+          {"label", instance.label},
           {"data_entity", EntityToJsonValue(instance.dataEntity)},
-          {"data_label", EntityDebugLabel(registry, instance.dataEntity)},
+          {"data_label", instance.dataLabel},
           {"draw_order", instance.drawOrder},
           {"visible", instance.visible},
           {"style", std::move(styleJson)},
       });
     }
     out.body["render_instances"] = std::move(renderInstances);
+    out.body["render_instances_count"] = diagnostics.instanceCount;
+    out.body["render_instances_truncated"] =
+        diagnostics.instanceCount > diagnostics.instances.size();
   } else {
     out.body["render_tree"] = nullptr;
     out.body["render_instances"] = json::array();
+    out.body["render_instances_count"] = 0;
+    out.body["render_instances_truncated"] = false;
   }
 
   json compositeTiles = json::array();
