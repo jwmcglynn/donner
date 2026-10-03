@@ -58,7 +58,7 @@ test("Playwright version stays synchronized across package locks and browser met
 
 function parseBrowserLane(lane) {
   const laneName = /name = "([^"]+)"/.exec(lane)?.[1];
-  const performanceLane = laneName === "browser_responsiveness_perf_test";
+  const performanceLane = laneName === "_browser_responsiveness_perf_driver";
   const tags = [...(/tags = \[([\s\S]*?)\]/.exec(lane)?.[1] ?? "").matchAll(/"([^"]+)"/g)]
     .map(([, tag]) => tag);
   const specPattern = performanceLane
@@ -78,9 +78,10 @@ function assertCommonBrowserLane({ lane, laneName, specFiles }) {
     );
     const spec = readFileSync(path.join(testDirectory, specFile), "utf8");
     for (const [, importedModule] of spec.matchAll(/from "\.\/([^"]+)"/g)) {
+      const dependency = path.extname(importedModule) ? importedModule : `${importedModule}.ts`;
       assert.ok(
-        lane.includes(`"${importedModule}.ts"`),
-        `${laneName} is missing ${specFile} dependency ${importedModule}.ts`,
+        lane.includes(`"${dependency}"`),
+        `${laneName} is missing ${specFile} dependency ${dependency}`,
       );
     }
   }
@@ -232,9 +233,9 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   assert.deepEqual(
     lanes.map((lane) => /name = "([^"]+)"/.exec(lane)?.[1]).sort(),
     [
+      "_browser_responsiveness_perf_driver",
       "boot_presentation_test",
       "browser_presentation_regression_test",
-      "browser_responsiveness_perf_test",
       "catalog_font_loading_test",
       "chromium_composited_invariants_test",
       "chromium_remote_smoke",
@@ -247,6 +248,23 @@ test("Bazel owns hermetic browser regression and manual performance lanes", () =
   for (const lane of lanes) {
     assertBrowserLane(lane);
   }
+  const watchdog = [...buildFile.matchAll(/js_test\(([\s\S]*?)\n\)\n/g)]
+    .map(([, body]) => body)
+    .find((body) => body.includes('name = "browser_responsiveness_perf_test"'));
+  assert.ok(watchdog, "the public responsiveness lane must own its watchdog");
+  assert.match(watchdog, /entry_point = "browser-watchdog\.mjs"/);
+  for (const dependency of [
+    ":_browser_responsiveness_perf_driver", "browser-watchdog-anchor.mjs",
+    "browser-watchdog-child.cjs", "browser-responsiveness.perf.ts",
+    "playwright.responsiveness.bazel.config.js",
+  ]) {
+    assert.ok(watchdog.includes(`"${dependency}"`), `watchdog missing ${dependency}`);
+  }
+  assert.match(watchdog, /"DONNER_WATCHDOG_DRIVER": "\$\(rootpath :_browser_responsiveness_perf_driver\)"/);
+  assert.match(watchdog, /"DONNER_WATCHDOG_HEARTBEAT": "browser-watchdog-heartbeat"/);
+  const watchdogTags = [...(/tags = \[([\s\S]*?)\]/.exec(watchdog)?.[1] ?? "").matchAll(/"([^"]+)"/g)]
+    .map(([, tag]) => tag).sort();
+  assert.deepEqual(watchdogTags, ["manual", "no-sandbox", "perf"]);
   const overlayLane = lanes.find((body) =>
     body.includes('name = "browser_presentation_regression_test"'));
   assert.ok(overlayLane?.includes('"overlay-bitmap-compare.ts"'));

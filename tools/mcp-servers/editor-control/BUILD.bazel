@@ -42,6 +42,7 @@ cc_library(
         "//donner/editor/repro:repro_file",
         "//donner/svg",
         "//donner/svg/compositor",
+        "//donner/svg/internal:rendering_diagnostics",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/resources:font_catalog",

@@ -6,7 +6,6 @@
 #include <memory>
 #include <optional>
 #include <ostream>
-#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -232,42 +231,6 @@ public:
    * canvas renderer.
    */
   bool hasPendingRenderInvalidation() const;
-
-  /// Owning diagnostic values from the already-prepared render tree; no computed state is built.
-  struct RenderingDiagnostics {
-    struct DirtyEntity {
-      Entity entity = entt::null;
-      std::uint16_t flags = 0;
-      std::vector<std::string_view> names;  ///< Names have static storage duration.
-    };
-    struct TreeState {
-      bool hasBeenBuilt = false;
-      bool needsFullRebuild = false;
-      bool needsFullStyleRecompute = false;
-    };
-    struct StyleState {
-      bool displayNone = false;
-      int visibility = 0;
-    };
-    struct Instance {
-      Entity entity = entt::null;
-      Entity dataEntity = entt::null;
-      std::string label;
-      std::string dataLabel;
-      int drawOrder = 0;
-      bool visible = false;
-      std::optional<StyleState> style;
-    };
-    std::optional<TreeState> state;
-    std::size_t dirtyCount = 0;
-    std::size_t instanceCount = 0;
-    std::vector<DirtyEntity> dirtyEntities;
-    std::vector<Instance> instances;
-  };
-
-  /// Observe render metadata under one read guard, retaining at most maxRecords per list.
-  /// Counts include omitted records. Does not render, recompute style, or consume invalidation.
-  RenderingDiagnostics renderingDiagnostics(std::size_t maxRecords = 4096) const;
 
   /// Adopt newly available fonts and invalidate affected geometry/paint without changing source.
   /// Call only at a frame boundary, before rendering begins. Returns whether rendering changed.

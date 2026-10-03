@@ -26,6 +26,7 @@
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
+#include "donner/svg/internal/RenderingDiagnostics.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
 
@@ -78,14 +79,14 @@ TEST(SVGDocument, RenderingDiagnosticsDoesNotBuildOrConsumeRenderingState) {
   auto element = document.querySelector("#shape");
   ASSERT_TRUE(element.has_value());
   const auto revision = document.handle()->revision();
-  const auto before = document.renderingDiagnostics(0);
+  const auto before = internal::CaptureRenderingDiagnostics(document, 0);
   EXPECT_TRUE(before.instances.empty());
   EXPECT_EQ(element->computedStyleIfPresent(), nullptr);
   EXPECT_EQ(document.handle()->revision(), revision);
 
   Renderer renderer;
   renderer.draw(document);
-  const auto captured = document.renderingDiagnostics(1);
+  const auto captured = internal::CaptureRenderingDiagnostics(document, 1);
   ASSERT_TRUE(captured.state.has_value());
   EXPECT_TRUE(captured.state->hasBeenBuilt);
   EXPECT_GT(captured.instanceCount, 0u);
@@ -94,7 +95,7 @@ TEST(SVGDocument, RenderingDiagnosticsDoesNotBuildOrConsumeRenderingState) {
   element->setId("changed");
   const auto changedRevision = document.handle()->revision();
   const bool pending = document.hasPendingRenderInvalidation();
-  const auto pendingState = document.renderingDiagnostics(0);
+  const auto pendingState = internal::CaptureRenderingDiagnostics(document, 0);
   EXPECT_TRUE(pendingState.instances.empty());
   EXPECT_TRUE(pendingState.dirtyEntities.empty());
   EXPECT_EQ(document.hasPendingRenderInvalidation(), pending);

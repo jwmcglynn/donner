@@ -1095,6 +1095,7 @@ EXCLUDE_PATTERNS       = *.py \
                          */donner/gpu/*.cc \
                          */donner/gpu/*.cpp \
                          */donner/gpu/*.mm \
+                         */donner/svg/internal/* \
                          */donner/svg/*.cc \
                          */donner/svg/*.cpp \
                          */donner/svg/*.mm \

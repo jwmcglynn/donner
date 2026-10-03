@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <string>
@@ -965,10 +966,15 @@ TEST(BrowserDevice, PendingMapProgressDoesNotAdvanceSubmissionSerials) {
       fixture.bridge->completeMapping(2, std::vector<uint8_t>{1, 2, 3, 4});
     }
   };
+  std::chrono::steady_clock::time_point now;
+  Device::MapWaitTestHooks hooks;
+  hooks.now = [&] { return now; };
+  hooks.rest = [&](std::chrono::microseconds duration) { now += duration; };
   Result<MapWaitReport> outcome =
-      fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.01}, {});
+      fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.01}, {}, hooks);
   ASSERT_THAT(outcome, HasResult());
   EXPECT_THAT(outcome.result().outcome, MapWaitOutcome::Ready);
+  EXPECT_EQ(fixture.bridge->yieldCount, 2u);
   EXPECT_THAT(observer.events.submissions, ElementsAre(tests::ObservedSubmission{0, 0}));
   EXPECT_EQ(fixture.device->lastSubmittedSerial(), 0u);
   EXPECT_EQ(fixture.device->completedSerial(), 0u);
@@ -1064,10 +1070,15 @@ TEST(BrowserDevice, RefusedMappingProgressIsNotReportedAsASubmission) {
     }
   };
 
+  std::chrono::steady_clock::time_point now;
+  Device::MapWaitTestHooks hooks;
+  hooks.now = [&] { return now; };
+  hooks.rest = [&](std::chrono::microseconds duration) { now += duration; };
   Result<MapWaitReport> outcome =
-      fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.01}, {});
+      fixture.device->waitForMapping(mapping.result(), MapWaitParams{0.001, 0.01}, {}, hooks);
   ASSERT_THAT(outcome, HasResult());
   EXPECT_THAT(outcome.result().outcome, MapWaitOutcome::Ready);
+  EXPECT_EQ(fixture.bridge->yieldCount, 2u);
   EXPECT_THAT(observer.events.submissions, testing::IsEmpty());
   EXPECT_EQ(fixture.device->lastSubmittedSerial(), 0u);
 }
