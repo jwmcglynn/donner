@@ -1562,6 +1562,11 @@ public:
     return shell.flushInteractiveDragMutationAndRequestRender();
   }
 
+  static void UpdateSelectionDrag(EditorShell& shell) {
+    shell.updateRenderPaneSelectionDrag(false,
+                                        shell.interactionController_.viewport().pixelsPerDocUnit());
+  }
+
   static void EndSelectedShapeDrag(EditorShell& shell, const Vector2d& documentPoint) {
     shell.selectTool_.onMouseUp(shell.app_, documentPoint);
   }
@@ -4356,6 +4361,51 @@ TEST(EditorShellTest, DragMutationWaitsForQueuedRenderToConsumeItsDocument) {
   EXPECT_THAT(app.document().hasPendingMutations(), testing::IsFalse());
   EXPECT_THAT(target->cast<svg::SVGGraphicsElement>().transform(),
               testing::Eq(Transform2d::Translate(Vector2d(40.0, 20.0))));
+}
+
+TEST(EditorShellTest, CoalescedFinalPointerAndReleaseCommitTheFinalPoseAndUndo) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  ASSERT_TRUE(window.valid());
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "coalesced-release.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0, 0, 120, 80));
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(shell, Vector2d(20, 20),
+                                                            Box2d::FromXYWH(10, 12, 40, 24)));
+  ImGuiIO& io = ImGui::GetIO();
+  const bool oldTrickle = io.ConfigInputTrickleEventQueue;
+  io.ConfigInputTrickleEventQueue = false;
+  const auto startScreen = shell.viewportForReadback().documentToScreen(Vector2d(20, 20));
+  io.AddMousePosEvent(static_cast<float>(startScreen.x), static_cast<float>(startScreen.y));
+  io.AddMouseButtonEvent(0, true);
+  window.beginFrame();
+  window.endFrame();
+  ASSERT_TRUE(EditorShellTestAccess::MoveSelectedShapeDrag(shell, Vector2d(38, 32)));
+  const auto finalScreen = shell.viewportForReadback().documentToScreen(Vector2d(52, 40));
+  io.AddMousePosEvent(static_cast<float>(finalScreen.x), static_cast<float>(finalScreen.y));
+  io.AddMouseButtonEvent(0, false);
+  window.beginFrame();
+  EXPECT_TRUE(ImGui::IsMouseReleased(ImGuiMouseButton_Left));
+  EXPECT_FALSE(ImGui::IsMouseDown(ImGuiMouseButton_Left));
+  EditorShellTestAccess::UpdateSelectionDrag(shell);
+  window.endFrame();
+  io.ConfigInputTrickleEventQueue = oldTrickle;
+  const Transform2d expected = Transform2d::Translate(Vector2d(32, 20));
+  EXPECT_EQ(target->cast<svg::SVGGraphicsElement>().transform(), expected);
+  const auto presentation =
+      EditorShellTestAccess::Coordinator(shell).compositedPresentation().diagnostics();
+  ASSERT_TRUE(presentation.settlingPreview.has_value());
+  EXPECT_EQ(presentation.settlingPreview->translation, Vector2d(32, 20));
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->cast<svg::SVGGraphicsElement>().transform(), Transform2d());
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(target->cast<svg::SVGGraphicsElement>().transform(), expected);
 }
 
 TEST(EditorShellTest, SelectDragKeepsFullPathChrome) {
