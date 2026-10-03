@@ -345,6 +345,83 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("donner-bcr-qualified-${{ github.run_attempt }}", preflight)
         self.assertIn("tools.bcr_source qualify", preflight)
 
+    def _bcr_consumer_audit(self, preflight):
+        """The consumer job, its audit step, the step's run body, query and audit call."""
+        consumer = preflight.split("\n  consumer:\n", 1)[1].split("\n  cli-linux:\n", 1)[0]
+        step = _step_body(consumer, "Exercise the archive through registry resolution")
+        run = step.split("        run: |\n", 1)[1]
+        audit = "tools/bcr_dependency_closure.py"
+        query = run.split("bazelisk cquery", 1)[1].split(audit, 1)[0]
+        return consumer, step, run, query, run.split(audit, 1)[1]
+
+    def _assert_bcr_consumer_audit(self, preflight):
+        audit = "tools/bcr_dependency_closure.py"
+        self.assertEqual(preflight.count(audit), 1)
+        consumer, step, run, query, audit_call = self._bcr_consumer_audit(preflight)
+        self.assertEqual(run.count(audit), 1)
+        self.assertNotIn("continue-on-error", consumer)
+        self.assertNotRegex(step, r"(?m)^        (?:if|continue-on-error|shell):")
+        self.assertNotIn("|", run, "a pipe or || would hide the query or audit status")
+        self.assertNotIn("set +e", run)
+        for library in ("base:base", "css:css", "svg:svg", "svg/renderer:renderer"):
+            self.assertIn("@donner//donner/%s" % library, query)
+        self.assertIn("--output=label_kind", query)
+        for narrowing in ("--noimplicit_deps", "--notool_deps", "--implicit_deps=",
+                          "--tool_deps=", "--keep_going"):
+            self.assertNotIn(narrowing, run)
+        # The audit is the step's last command, so its status is the step's status.
+        audit_command = run[run.rindex("python3 -B", 0, run.index(audit)):].rstrip()
+        joined = re.sub(r"\\\n\s*", " ", audit_command)
+        self.assertNotIn("\n", joined, "a command after the audit would replace its status")
+        self.assertNotRegex(joined, r";|&&")
+        redirect = re.findall(r'> ("[^"]+")', query)
+        labels = re.findall(r'--labels ("[^"]+")', audit_call)
+        self.assertEqual(len(redirect), 1)
+        self.assertEqual(redirect, labels, "the audit must read the file the query wrote")
+        self.assertLess(run.index("bazelisk build"), run.index("bazelisk cquery"))
+        self.assertIn("matrix:", consumer)
+        self.assertIn("os: [ubuntu-24.04, macos-26]", consumer)
+        self.assertIn("bazel: ['7.x', '8.x']", consumer)
+
+    def test_bcr_consumers_audit_the_configured_closure_for_rust(self):
+        preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        self._assert_bcr_consumer_audit(preflight)
+
+    def test_bcr_consumer_audit_contract_rejects_weakened_steps(self):
+        preflight = self.supply_chain_files[".github/workflows/bcr_preflight.yml"]
+        step = "      - name: Exercise the archive through registry resolution\n"
+        audit_call = '"$GITHUB_WORKSPACE/tools/bcr_dependency_closure.py"'
+        query = "--output=label_kind"
+        _, _, run, _, _ = self._bcr_consumer_audit(preflight)
+        redirect = re.findall(r'> ("[^"]+")', run)[0]
+        weakened = {
+            "continue-on-error": preflight.replace(
+                step, step + "        continue-on-error: true\n"),
+            "if": preflight.replace(step, step + "        if: always()\n"),
+            "or true": preflight.replace(audit_call, audit_call + " || true", 1),
+            "no implicit deps": preflight.replace(query, query + " --noimplicit_deps", 1),
+            "no tool deps": preflight.replace(query, query + " --notool_deps", 1),
+            "keep going": preflight.replace(query, query + " --keep_going", 1),
+            "implicit deps false": preflight.replace(query, query + " --implicit_deps=false", 1),
+            "tool deps false": preflight.replace(query, query + " --tool_deps=false", 1),
+            "shell": preflight.replace(step, step + "        shell: bash {0}\n"),
+            "set +e": preflight.replace(
+                "          test \"$(git -C", "          set +e\n          test \"$(git -C", 1),
+            "semicolon true": preflight.replace(
+                '--labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"',
+                '--labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"; true', 1),
+            "command after the audit": preflight.replace(
+                '--labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"\n',
+                '--labels "$RUNNER_TEMP/donner-bcr/consumer-closure.labels"\n          true\n', 1),
+            "other labels file": preflight.replace(
+                "--labels " + redirect, '--labels "$RUNNER_TEMP/other.labels"', 1),
+        }
+        for name, workflow in weakened.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(workflow, preflight)
+                with self.assertRaises(AssertionError):
+                    self._assert_bcr_consumer_audit(workflow)
+
     def test_bcr_fork_preparation_requires_manual_approval_and_never_files_a_pr(self):
         workflow = self.supply_chain_files[".github/workflows/publish_bcr.yml"]
         self.assertIn("workflow_dispatch:", workflow)
