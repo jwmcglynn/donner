@@ -24,6 +24,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/compositor/ScopedCompositorHint.h"
+#include "donner/svg/internal/RenderingDiagnostics.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "nlohmann/json.hpp"
 #include "tools/mcp-servers/editor-control/EditorControlSessionInternal.h"
@@ -280,7 +281,7 @@ ToolCallResult EditorControlSession::sessionState(const json&) const {
 
   if (app_.hasDocument()) {
     const svg::SVGDocument& document = app_.document().document();
-    const auto diagnostics = document.renderingDiagnostics();
+    const auto diagnostics = svg::internal::CaptureRenderingDiagnostics(document);
     json dirtyEntities = json::array();
     for (const auto& dirty : diagnostics.dirtyEntities) {
       dirtyEntities.push_back(json{
