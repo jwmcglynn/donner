@@ -27,6 +27,34 @@
 #include "tools/mcp-servers/editor-control/EditorControlSessionInternal.h"
 
 namespace donner::editor::mcp {
+
+TEST(EditorControlSessionTest, MetadataOnlyTileKeepsMovableLayerOwnership) {
+  EditorControlSession::HeadlessTextureCache cache;
+  RenderResult::CompositedPreview preview;
+  RenderResult::CompositedTile tile;
+  tile.id = "selected";
+  tile.kind = RenderResult::CompositedTile::Kind::Layer;
+  tile.layerEntity = Entity(42);
+  tile.generation = 1;
+  tile.bitmap.dimensions = Vector2i(1, 1);
+  tile.bitmap.rowBytes = 4;
+  tile.bitmap.pixels = {255, 0, 0, 255};
+  tile.bitmapDimsPx = Vector2i(1, 1);
+  tile.bitmapDimsDoc = Vector2d(1, 1);
+  preview.tiles.push_back(tile);
+  cache.uploadComposited(preview);
+  ASSERT_EQ(cache.tiles().size(), 1u);
+  ASSERT_EQ(cache.tiles().front().layerEntity, tile.layerEntity);
+
+  preview.tiles.front().bitmap = {};
+  preview.tiles.front().documentFromCachedDocument = Transform2d::Translate(Vector2d(3, 4));
+  cache.uploadComposited(preview);
+  ASSERT_EQ(cache.tiles().size(), 1u);
+  EXPECT_TRUE(cache.tiles().front().reusedPreviousTexture);
+  EXPECT_EQ(cache.tiles().front().layerEntity, tile.layerEntity);
+  EXPECT_EQ(cache.tiles().front().documentFromCachedDocument,
+            preview.tiles.front().documentFromCachedDocument);
+}
 namespace {
 
 // Writable scratch directory for tests that round-trip a file. Prefer bazel's
