@@ -225,7 +225,7 @@ today; see the `no-perf-opt` row in §3):
 | Config        | Backend                                                    | Verified build command                                                         |
 | ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | `wasm`        | tiny-skia, text off                                        | `bazel build --config=wasm //donner/svg/renderer/wasm:donner_wasm`             |
-| `wasm-geode`  | Geode via emdawnwebgpu browser WebGPU bindings (+ASYNCIFY) | `bazel build --config=wasm-geode //donner/svg/renderer/wasm:donner_wasm_geode` |
+| `wasm-geode`  | Geode via Donner's browser GPU bridge (+ASYNCIFY)          | `bazel build --config=wasm-geode //donner/svg/renderer/wasm:donner_wasm_geode` |
 | `editor-wasm` | full editor; = `wasm-geode` + editor flag + `-pthread`     | see below                                                                      |
 
 Editor-in-browser, local build + serve (from `docs/building.md`, targets in

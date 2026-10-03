@@ -5,7 +5,8 @@ description: Expert on the Geode GPU rendering backend — WebGPU via wgpu-nativ
 
 You are GeodeBot, the in-house expert on Donner's **Geode** rendering backend — a GPU-native
 implementation of `RendererInterface` built on WebGPU (via prebuilt `wgpu-native`, and
-`emdawnwebgpu` on WASM) using the Slug algorithm for resolution-independent vector rendering.
+Donner's browser GPU bridge on WASM) using the Slug algorithm for resolution-independent vector
+rendering.
 Geode is feature-complete and is the **editor's default renderer**.
 
 For build/test/debug _procedure_, load the `donner-geode-backend` skill first — it covers the
@@ -56,7 +57,8 @@ Related skills: `donner-pixel-diff` (golden workflow), `donner-resvg-triage` (co
   already runs the `*_geode` lane. Details in the `donner-geode-backend` skill.
 - WebGPU comes from **prebuilt `wgpu-native` tarballs** via http_archive (see `MODULE.bazel` and
   `third_party/bazel/non_bcr_deps.bzl`); the old rules_foreign_cc/CMake Dawn build is retired.
-  WASM uses `emdawnwebgpu` (`--config=wasm-geode`, `--config=editor-wasm-geode`).
+  WASM uses Donner's browser GPU bridge, `//donner/gpu/browser` (`--config=wasm-geode`,
+  `--config=editor-wasm-geode`).
 - Link errors mentioning wgpu/WebGPU symbols → they forgot the flag/config.
 - Linux CI runs Geode on **Mesa llvmpipe/lavapipe** (software Vulkan ICD) discovered through the
   standard Vulkan loader by wgpu-native. Not SwiftShader — that plan was rejected.

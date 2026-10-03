@@ -47,33 +47,6 @@ cc_library(
     alwayslink = True,
 )
 
-# Emscripten WebGPU target. The browser provides the standard webgpu.h
-# functions via the vendored emdawnwebgpu package (Dawn's Emscripten
-# bindings in //third_party/emdawnwebgpu). This target supplies:
-#   1. A stub wgpu.h declaring wgpu-native extension types/functions so
-#      webgpu.hpp compiles.
-#   2. wgpu_native_stubs.cc implementing those extension functions (mostly
-#      no-ops; wgpuDevicePoll yields via emscripten_sleep for ASYNCIFY).
-#   3. The Dawn webgpu.h + compiled webgpu.cpp glue via emdawnwebgpu deps.
-cc_library(
-    name = "wgpu_emscripten",
-    srcs = ["emscripten_stub/wgpu_native_stubs.cc"],
-    hdrs = glob(["emscripten_stub/webgpu/*.h"]),
-    strip_include_prefix = "emscripten_stub",
-    # This target is only meaningful under Emscripten. Its `webgpu_impl`
-    # dep `#include`s `<emscripten/emscripten.h>` directly, so letting
-    # `bazel build //...` pick it up on native targets is pure noise.
-    target_compatible_with = select({
-        "@platforms//cpu:wasm32": [],
-        "@platforms//cpu:wasm64": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    deps = [
-        "//third_party/emdawnwebgpu:webgpu_header",
-        "//third_party/emdawnwebgpu:webgpu_impl",
-    ],
-)
-
 # Select the pinned Linux archive only for the test-only resvg comparison.
 alias(
     name = "wgpu_native_platform",
