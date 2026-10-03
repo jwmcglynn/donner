@@ -72,6 +72,36 @@ TEST(SVGDocument, UnsafeRegistryNamesRawEscapeHatch) {
   EXPECT_EQ(&document.unsafeRegistry(), &document.registry());
 }
 
+TEST(SVGDocument, RenderingDiagnosticsDoesNotBuildOrConsumeRenderingState) {
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="shape" width="10" height="10"/></svg>)");
+  auto element = document.querySelector("#shape");
+  ASSERT_TRUE(element.has_value());
+  const auto revision = document.handle()->revision();
+  const auto before = document.renderingDiagnostics(0);
+  EXPECT_TRUE(before.instances.empty());
+  EXPECT_EQ(element->computedStyleIfPresent(), nullptr);
+  EXPECT_EQ(document.handle()->revision(), revision);
+
+  Renderer renderer;
+  renderer.draw(document);
+  const auto captured = document.renderingDiagnostics(1);
+  ASSERT_TRUE(captured.state.has_value());
+  EXPECT_TRUE(captured.state->hasBeenBuilt);
+  EXPECT_GT(captured.instanceCount, 0u);
+  EXPECT_EQ(captured.instances.size(), 1u);
+
+  element->setId("changed");
+  const auto changedRevision = document.handle()->revision();
+  const bool pending = document.hasPendingRenderInvalidation();
+  const auto pendingState = document.renderingDiagnostics(0);
+  EXPECT_TRUE(pendingState.instances.empty());
+  EXPECT_TRUE(pendingState.dirtyEntities.empty());
+  EXPECT_EQ(document.hasPendingRenderInvalidation(), pending);
+  EXPECT_EQ(document.handle()->revision(), changedRevision);
+  EXPECT_TRUE(captured.state->hasBeenBuilt);
+}
+
 TEST(SVGDocument, CanvasSize) {
   SVGDocument document;
   EXPECT_EQ(document.canvasSize(), Vector2i(512, 512));
