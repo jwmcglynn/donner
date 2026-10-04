@@ -355,7 +355,7 @@ of `<` must be parenthesized. WGSL's template-list discovery reads `a < b >> c` 
 list `a<b>`, so the profile rejects it and accepts `a < (b >> c)`. `<<=` and `>>=` follow the
 compound-assignment rule above with the amount materialized as u32, so an operator on the
 right-hand side needs parentheses (`x <<= (n + 1u)`).
-The lexer keeps `>>` and `>>=` whole, and a template list closes on the first `>` of such a token,
+The lexer keeps `>>` and `>>=` whole, and a template list closes on the first `>` of a `>>` token,
 so nested types such as `array<vec2<u32>>` parse as before.
 
 MSL and SPIR-V leave a shift by the width or more undefined, so both native projections mask a
