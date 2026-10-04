@@ -1100,6 +1100,10 @@ jobs:
       # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
       # sandbox; Homebrew's tool wrappers require HOME.
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME --test_env=MTL_SHADER_VALIDATION_TEXTURE_USAGE=1"
+      # Enables the browser tests' timeout recorder (browser-stall-diagnostics.mjs). It
+      # records host load, memory and process call graphs, so only this ephemeral hosted
+      # job sets it; a persistent self-hosted runner never publishes them.
+      BROWSER_STALL_TEST_FLAGS: "--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1"
       # Exercise the Geode editor configuration through transitioned wrappers, which
       # locate declared shared libraries consistently on clean workers.
       GEODE_EDITOR_TARGETS: >-
@@ -1212,7 +1216,7 @@ jobs:
           echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.
 
@@ -1230,6 +1234,59 @@ jobs:
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
+      # A timed-out browser test records the window from its browser's launch to its
+      # timeout. Slice the runner's system log to those windows for the browser's
+      # own processes and for executable code-signing checks, which can delay a
+      # browser helper's first launch. The unified log is host-wide, so only this
+      # ephemeral hosted job collects it.
+      - name: Collect browser stall system log
+        id: browser_stall_log
+        if: ${{ !cancelled() && steps.test.outcome == 'failure' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/browser-stall-system-log"
+          mkdir -p "$out"
+          iso='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+          predicate='eventType == logEvent AND (process BEGINSWITH "Google Chrome for Testing" OR process == "syspolicyd" OR process == "amfid")'
+          count=0
+          while IFS= read -r -d '' window; do
+            start=""
+            end=""
+            read -r start end _ < "$window" || true
+            if [[ ! "$start" =~ $iso || ! "$end" =~ $iso ]]; then
+              echo "Skipping malformed window: $window"
+              continue
+            fi
+            count=$((count + 1))
+            start="${start/T/ }"
+            end="${end/T/ }"
+            raw="${RUNNER_TEMP}/browser-stall-window-${count}.raw"
+            if ! log show --style compact --timezone UTC \
+                --start "${start%Z}+0000" --end "${end%Z}+0000" \
+                --predicate "$predicate" > "$raw"; then
+              echo "System log slice ${count} failed: $window"
+            fi
+            # Keep the launch end of the window, where a stalled first launch shows.
+            head -c 2097152 "$raw" > "${out}/window-${count}.log"
+            rm -f "$raw"
+            if (( count == 4 )); then
+              break
+            fi
+          done < <(find -H bazel-testlogs -path '*/browser-stall/system-log-window.txt' -type f -print0 2>/dev/null | sort -z)
+          echo "Collected ${count} browser stall system log window(s)."
+
+      - name: Upload browser stall system log
+        if: ${{ !cancelled() && steps.test.outcome == 'failure' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-stall-system-log-${{ github.job }}
+          path: ${{ runner.temp }}/browser-stall-system-log
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Detect browser GPU acquisition failure
         id: browser_gpu_failure
         if: ${{ !cancelled() && (steps.test.outcome == 'failure' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:browser-gpu-diagnostics'))) }}
@@ -1242,6 +1299,10 @@ jobs:
           for target in chromium_remote_smoke catalog_font_loading_test browser_presentation_regression_test standalone_geode_browser_renderer_test; do
             log="bazel-testlogs/donner/editor/wasm/tests/${target}/test.log"
             if [[ -f "$log" ]] && grep -qF 'stage=selection outcome=deadline_pending' "$log"; then
+              should_probe=true
+            fi
+            # A browser test timed out; its browser process states were recorded.
+            if [[ -f "$log" ]] && grep -qF 'browser-stall-diagnostics status=timedOut' "$log"; then
               should_probe=true
             fi
           done
@@ -1259,7 +1320,7 @@ jobs:
           bazelisk test --config=ci --test_output=errors --nocache_test_results \
             --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=1 --keep_going \
             --build_event_json_file="${RUNNER_TEMP}/browser-gpu-serial.bep.json" \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS \
             //tools/ci:browser_gpu_comparison || bazel_status=$?
           report_status=0
           python3 tools/browser_gpu_test_summary.py \
@@ -1286,7 +1347,7 @@ jobs:
           bazelisk test --config=ci --test_output=errors --nocache_test_results \
             --flaky_test_attempts=1 --runs_per_test=1 --local_test_jobs=4 --keep_going \
             --build_event_json_file="${RUNNER_TEMP}/browser-gpu-parallel.bep.json" \
-            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS \
             //tools/ci:browser_gpu_comparison || bazel_status=$?
           report_status=0
           python3 tools/browser_gpu_test_summary.py \

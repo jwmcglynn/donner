@@ -7,6 +7,7 @@ import {
   captureReadyBasicShapesFrame,
   type InitialBlueFrameState,
 } from "./basic-shapes-capture-gate";
+import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import {
   captureEditorPage,
   captureSplashPresentationFrame,
@@ -39,6 +40,8 @@ import {
   type SurfaceFrameProbeReport,
   waitForSubmittedCanvasGpuWork,
 } from "./surface-frame-probe";
+
+installBrowserStallDiagnostics(test);
 
 declare global {
   interface Window {

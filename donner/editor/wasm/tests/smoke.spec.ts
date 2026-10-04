@@ -5,6 +5,7 @@ import {
   captureReadyBasicShapesFrame,
   hasPresentedBasicShapesHostFrame,
 } from "./basic-shapes-capture-gate";
+import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
 import {
   type CanvasColorStats,
   captureEditorPage,
@@ -18,6 +19,8 @@ import {
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
 import { holdCanvasCompletionForTest, installSurfaceFrameProbe } from "./surface-frame-probe";
+
+installBrowserStallDiagnostics(test);
 
 declare global {
   interface Window {
