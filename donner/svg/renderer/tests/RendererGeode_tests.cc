@@ -29,6 +29,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/css/Color.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
@@ -44,6 +45,7 @@
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
@@ -4286,6 +4288,184 @@ TEST_F(RendererGeodeTest, FilterOffsetRoundsAHalfAwayFromZero) {
   // same texel wholly outside; no partial coverage separates the two answers.
   EXPECT_THAT(PixelAt(snap, 50, 32), RgbaEq(255, 0, 0, 255))
       << "A half-pixel shift must round away from zero, matching the CPU filter path";
+}
+
+/// Parses \p source, which must parse without warnings, into \p document.
+/// @param source SVG document text.
+/// @param document Receives the parsed document.
+void ParseDocumentWithoutWarnings(std::string_view source, std::optional<SVGDocument>& document) {
+  ParseWarningSink warnings;
+  ParseResult<SVGDocument> parsed = parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_THAT(parsed, NoParseError());
+  EXPECT_THAT(warnings.warnings(), testing::IsEmpty());
+  document = std::move(parsed.result());
+}
+
+/// Renders \p document through tiny-skia, the reference the Geode renderings below are held to.
+/// @param document Parsed document.
+RendererBitmap RenderWithTinySkia(SVGDocument& document) {
+  RendererTinySkia reference;
+  reference.draw(document);
+  return reference.takeSnapshot();
+}
+
+/// How a Geode rendering of a scene with a circle is held to tiny-skia's. Scenes without one
+/// match pixel for pixel and use \ref editor::tests::PixelmatchIdentityParams. In scenes with a
+/// circle the two agree exactly on every pixel the circle's edge does not cross. Along the edge,
+/// the coverage of partially covered pixels differs between them: every differing pixel lies
+/// within a pixel of the edge, with alpha up to 56 levels apart. The comparison therefore uses the
+/// renderer suite's perceptual threshold, excludes the pixels pixelmatch classifies as
+/// anti-aliased, and allows no other mismatch.
+constexpr editor::tests::BitmapGoldenCompareParams kCircleEdgeParams =
+    editor::tests::ApprovedPixelToleranceParams(0.02f, 0, /*includeAntiAliasing=*/false);
+
+/// Renders \p source through Geode and requires the renderer to keep its device and match
+/// tiny-skia's rendering of \p reference. The renderer leases a pooled headless device, which the
+/// pool drops once it is lost, so a loss this render declares cannot reach the device the other
+/// tests share.
+/// @param source SVG document text Geode renders.
+/// @param reference SVG document text of the same image, which tiny-skia renders.
+/// @param label Comparison label naming the diff images written on a mismatch.
+/// @param params How closely the two renderings must match.
+void ExpectGeodeMatchesTinySkia(std::string_view source, std::string_view reference,
+                                std::string_view label,
+                                const editor::tests::BitmapGoldenCompareParams& params) {
+  std::optional<SVGDocument> document;
+  std::optional<SVGDocument> referenceDocument;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(source, document));
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(reference, referenceDocument));
+  RendererGeode renderer;
+  renderer.draw(*document);
+  EXPECT_THAT(renderer.deviceLost(), testing::IsFalse());
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(),
+                                       RenderWithTinySkia(*referenceDocument), label, params);
+}
+
+/// A clip-path on an element inside an feOffset filter whose region starts above and left of the
+/// surface. The filter captures into a layer larger than the surface by that overhang, so the
+/// clip's coverage mask has to take the layer's extent: a mask pass scissored to the layer over a
+/// surface-sized mask is invalid, and a surface-sized mask cannot cover the whole layer.
+TEST_F(RendererGeodeTest, ClipPathInsideAnExpandedFilterLayerMatchesTinySkia) {
+  constexpr std::string_view kSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><clipPath id="c"><circle cx="100" cy="100" r="80"/></clipPath><filter id="f" filterUnits="userSpaceOnUse" x="-20" y="-20" width="240" height="240"><feOffset dx="4" dy="4"/></filter><g filter="url(#f)"><rect width="200" height="200" fill="blue" clip-path="url(#c)"/></g></svg>)svg";
+  ExpectGeodeMatchesTinySkia(kSource, kSource, "clip_path_in_expanded_filter_layer",
+                             kCircleEdgeParams);
+}
+
+/// Every surface the renderer opens while an expanded filter layer is active has the layer's
+/// extent: a group opacity layer, a mix-blend-mode layer and its backdrop, a mask and its content,
+/// a nested filter, and a clip mask, including one opened while drawing a mask's content.
+/// Otherwise content drawn into the overhang or along the far edges of the layer is lost, and what
+/// remains is rescaled when the surface composites back. Content under a nested filter also keeps
+/// the expanded layer's offset, and under a nested filter that expands too it keeps the sum of
+/// both offsets, so it lands where the rest does. The content reaches past every edge of the
+/// surface, with a small square in the overhang and another at the far corner of the layer.
+///
+/// Over a region that holds all of the content, an feOffset renders the same image as translating
+/// the content by its shift, so the reference renders those translations. tiny-skia's rendering of
+/// the filtered form cannot be the reference: it places group layers and nested filters inside a
+/// filter region that starts at negative coordinates by the region's origin (issue #1644).
+TEST_F(RendererGeodeTest, SurfacesInsideAnExpandedFilterLayerMatchTinySkia) {
+  struct SurfaceCase {
+    std::string_view label;
+    std::string_view defs;
+    /// Drawn inside the filtered group, before the group the case is about.
+    std::string_view backdrop;
+    std::string_view groupAttributes;
+    /// The group's attributes in the reference when they differ from `groupAttributes`: a nested
+    /// offset filter renders there as the translation it amounts to.
+    std::string_view referenceGroupAttributes;
+    /// Attributes of the rect that covers the whole filter region.
+    std::string_view coverAttributes;
+    editor::tests::BitmapGoldenCompareParams params = editor::tests::PixelmatchIdentityParams();
+  };
+  constexpr std::array<SurfaceCase, 8> kCases = {{
+      {.label = "expanded_filter_opacity_layer", .groupAttributes = R"svg(opacity="0.5")svg"},
+      {.label = "expanded_filter_blend_layer",
+       .backdrop = R"svg(<rect x="-8" y="-8" width="80" height="40" fill="#e0c020"/>)svg",
+       .groupAttributes = R"svg(style="mix-blend-mode:multiply")svg"},
+      {.label = "expanded_filter_mask",
+       .defs =
+           R"svg(<mask id="m" maskUnits="userSpaceOnUse" x="-8" y="-8" width="80" height="80"><rect x="-8" y="-8" width="80" height="80" fill="white"/><rect x="20" y="-8" width="8" height="80" fill="black"/></mask>)svg",
+       .groupAttributes = R"svg(mask="url(#m)")svg"},
+      {.label = "expanded_filter_nested_filter",
+       .defs =
+           R"svg(<filter id="fade" filterUnits="userSpaceOnUse" x="-8" y="-8" width="80" height="80"><feComponentTransfer><feFuncA type="linear" slope="0.5"/></feComponentTransfer></filter>)svg",
+       .groupAttributes = R"svg(filter="url(#fade)")svg"},
+      // The nested region reaches past the outer one on every side, so it starts above and left of
+      // the outer capture and expands it a second time.
+      {.label = "expanded_filter_nested_expanded_filter",
+       .defs =
+           R"svg(<filter id="drift" filterUnits="userSpaceOnUse" x="-16" y="-16" width="96" height="96"><feOffset dx="2" dy="2"/></filter>)svg",
+       .groupAttributes = R"svg(filter="url(#drift)")svg",
+       .referenceGroupAttributes = R"svg(transform="translate(2 2)")svg"},
+      {.label = "expanded_filter_clip_path",
+       .defs = R"svg(<clipPath id="c"><circle cx="32" cy="32" r="34"/></clipPath>)svg",
+       .groupAttributes = R"svg(clip-path="url(#c)")svg",
+       .params = kCircleEdgeParams},
+      {.label = "expanded_filter_clip_path_in_opacity_layer",
+       .defs = R"svg(<clipPath id="c"><circle cx="32" cy="32" r="34"/></clipPath>)svg",
+       .groupAttributes = R"svg(opacity="0.5" clip-path="url(#c)")svg",
+       .params = kCircleEdgeParams},
+      {.label = "expanded_filter_clip_path_in_mask",
+       .defs =
+           R"svg(<mask id="m" maskUnits="userSpaceOnUse" x="-8" y="-8" width="80" height="80"><rect x="-8" y="-8" width="80" height="80" fill="white"/><rect x="20" y="-8" width="8" height="80" fill="black"/></mask><clipPath id="c"><circle cx="32" cy="32" r="34"/></clipPath>)svg",
+       .groupAttributes = R"svg(mask="url(#m)")svg",
+       .coverAttributes = R"svg(clip-path="url(#c)")svg",
+       .params = kCircleEdgeParams},
+  }};
+  const auto document = [](const SurfaceCase& surfaceCase, std::string_view shiftedGroup,
+                           std::string_view groupAttributes) {
+    std::string source =
+        R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><defs><filter id="shift" filterUnits="userSpaceOnUse" x="-8" y="-8" width="80" height="80"><feOffset dx="4" dy="4"/></filter>)svg";
+    source += surfaceCase.defs;
+    source += "</defs>";
+    source += shiftedGroup;
+    source += surfaceCase.backdrop;
+    source += "<g ";
+    source += groupAttributes;
+    source += R"svg(><rect x="-8" y="-8" width="80" height="80" fill="#2050c0" )svg";
+    source += surfaceCase.coverAttributes;
+    source +=
+        R"svg(/><rect x="-6" y="-6" width="10" height="10" fill="#20c040"/><rect x="54" y="54" width="10" height="10" fill="#c02020"/></g></g></svg>)svg";
+    return source;
+  };
+  for (const SurfaceCase& surfaceCase : kCases) {
+    SCOPED_TRACE(surfaceCase.label);
+    const std::string_view referenceGroupAttributes = surfaceCase.referenceGroupAttributes.empty()
+                                                          ? surfaceCase.groupAttributes
+                                                          : surfaceCase.referenceGroupAttributes;
+    ExpectGeodeMatchesTinySkia(
+        document(surfaceCase, R"svg(<g filter="url(#shift)">)svg", surfaceCase.groupAttributes),
+        document(surfaceCase, R"svg(<g transform="translate(4 4)">)svg", referenceGroupAttributes),
+        surfaceCase.label, surfaceCase.params);
+  }
+}
+
+/// The Layers panel thumbnail of a group with an feOffset filter and a clipped child. The
+/// thumbnail is cropped to the group's geometry, so the default filter region, which reaches ten
+/// percent past that geometry, starts above and left of the thumbnail and the filter expands.
+TEST_F(RendererGeodeTest, ThumbnailOfAnOffsetFilteredGroupWithAClippedChildMatchesTinySkia) {
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  std::optional<SVGDocument> document;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><clipPath id="c"><circle cx="100" cy="100" r="40"/></clipPath><filter id="f"><feOffset dx="4" dy="4"/></filter><g filter="url(#f)"><rect x="50" y="50" width="100" height="100" fill="blue" clip-path="url(#c)"/></g></svg>)svg",
+      document));
+  // The group's geometry spans (50, 50) to (150, 150), which fits a 42x24 cell at a scale of 0.24
+  // as a 24x24 image: the same view as a 24x24 document with that box as its viewBox.
+  std::optional<SVGDocument> reference;
+  ASSERT_NO_FATAL_FAILURE(ParseDocumentWithoutWarnings(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="50 50 100 100"><clipPath id="c"><circle cx="100" cy="100" r="40"/></clipPath><filter id="f"><feOffset dx="4" dy="4"/></filter><g filter="url(#f)"><rect x="50" y="50" width="100" height="100" fill="blue" clip-path="url(#c)"/></g></svg>)svg",
+      reference));
+  const std::optional<SVGElement> group = document->querySelector("g");
+  ASSERT_THAT(group, testing::Optional(testing::_));
+
+  Renderer renderer(device);
+  const RendererImage thumbnail = renderer.renderElement(*group, Vector2i(42, 24));
+  EXPECT_THAT(device->isDeviceLost(), testing::IsFalse());
+  editor::tests::CompareBitmapToBitmap(thumbnail.bitmap(), RenderWithTinySkia(*reference),
+                                       "offset_filter_clipped_child_thumbnail", kCircleEdgeParams);
 }
 
 /// feColorMatrix type=luminanceToAlpha: red → alpha based on Y-channel luminance.
