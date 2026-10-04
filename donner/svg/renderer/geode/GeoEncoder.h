@@ -363,14 +363,19 @@ public:
    * pipeline. `endMaskPass` closes the mask pass and re-opens the
    * main pass (with `LoadOp::Load`) when the next draw lands.
    *
-   * Mask fills are placed in this encoder's target pixels, so the mask
-   * has the target's extent. The pass is scissored to the mask's own
-   * extent, which keeps it valid whatever extent the mask has.
+   * Mask fills are placed in this encoder's target pixels, and draws
+   * sample the mask at those same pixels, so the mask must have the
+   * target's extent. A mask of any other extent is refused before
+   * anything is recorded. The pass is scissored to the mask's own
+   * extent, so it can never exceed its attachment.
    *
-   * @param mask Single-sample RGBA8Unorm target. Sampled by
-   *   `setClipMask` after `endMaskPass`.
+   * @param mask Single-sample RGBA8Unorm target with this encoder's
+   *   target extent. Sampled by `setClipMask` after `endMaskPass`.
+   * @return Whether the mask pass opened. When it did not, the mask
+   *   holds no coverage, and `fillPathIntoMask` and `endMaskPass` do
+   *   nothing.
    */
-  void beginMaskPass(const gpu::Texture& mask);
+  [[nodiscard]] bool beginMaskPass(const gpu::Texture& mask);
 
   /**
    * Fill `path` into the currently open mask pass using the Slug mask

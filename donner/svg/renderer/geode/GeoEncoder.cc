@@ -1482,9 +1482,18 @@ void GeoEncoder::clearClipPolygon() {
 // Clip mask pass
 // ============================================================================
 
-void GeoEncoder::beginMaskPass(const gpu::Texture& mask) {
+bool GeoEncoder::beginMaskPass(const gpu::Texture& mask) {
   if (!mask.isValid()) {
-    return;
+    return false;
+  }
+  // Mask fills are placed in this encoder's target pixels, and draws sample the mask at those
+  // same pixels, so a mask of any other extent cannot hold the clip. Refuse it before anything is
+  // recorded.
+  const gpu::Result<gpu::TextureDescriptor> maskDescriptor =
+      impl_->gpuContext->gpuDevice->textureDescriptor(mask);
+  if (maskDescriptor.hasError() || maskDescriptor.result().size.width != impl_->targetWidth ||
+      maskDescriptor.result().size.height != impl_->targetHeight) {
+    return false;
   }
 
   // Close the current main render pass so the new mask pass can open
@@ -1509,15 +1518,10 @@ void GeoEncoder::beginMaskPass(const gpu::Texture& mask) {
 
   impl_->maskPassSavedTransform = impl_->transform;
 
-  const gpu::Result<gpu::TextureDescriptor> maskDescriptor =
-      impl_->gpuContext->gpuDevice->textureDescriptor(mask);
-  if (maskDescriptor.hasError()) {
-    return;
-  }
   gpu::Result<gpu::TextureView> maskViewResult = impl_->gpuContext->gpuDevice->createTextureView(
       mask, gpu::TextureViewDescriptor{"GeoEncoderMaskView"});
   if (maskViewResult.hasError()) {
-    return;
+    return false;
   }
   const gpu::TextureView& maskView =
       impl_->transientResources.retain(std::move(maskViewResult).result());
@@ -1528,7 +1532,7 @@ void GeoEncoder::beginMaskPass(const gpu::Texture& mask) {
           {gpu::RenderPassColorAttachment{
               maskView, gpu::LoadOp::Clear, gpu::StoreOp::Store, {0.0, 0.0, 0.0, 0.0}}}});
   if (opened.hasError()) {
-    return;
+    return false;
   }
   impl_->maskPass = opened.result();
   (void)impl_->maskPass->setPipeline(impl_->maskPipelineOwned->pipeline());
@@ -1539,6 +1543,7 @@ void GeoEncoder::beginMaskPass(const gpu::Texture& mask) {
   const gpu::Extent2d maskExtent = maskDescriptor.result().size;
   (void)impl_->maskPass->setScissorRect(0, 0, maskExtent.width, maskExtent.height);
   impl_->maskPassOpen = true;
+  return true;
 }
 
 void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,

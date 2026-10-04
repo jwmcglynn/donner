@@ -15,6 +15,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
+#include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -225,6 +226,43 @@ TEST_F(GeoEncoderTest, AScissorSetBeforeTheFirstBlitStillClipsIt) {
       << "Outside the scissor the target must keep what the clear left";
   EXPECT_THAT(pixelAt(pixels, 48, 16), RgbaEq(0, 0, 0, 255));
   EXPECT_THAT(pixelAt(pixels, 16, 48), RgbaEq(0, 0, 0, 255));
+}
+
+/// A mask pass over a mask whose extent is not the target's is refused before anything is recorded:
+/// mask fills are placed in target pixels and draws sample the mask at those pixels, so such a mask
+/// cannot hold the clip. The refusal leaves the frame's commands valid, and a mask with the
+/// target's extent still opens a pass on the same encoder.
+TEST_F(GeoEncoderTest, AMaskPassOverAMaskOfAnotherExtentIsRefused) {
+  gpu::Device& runtime = device_->runtimeDevice();
+  const auto createMask = [&runtime](const gpu::Extent2d& extent) {
+    return runtime.createTexture(
+        gpu::TextureDescriptor{"MaskPassMask", extent, gpu::TextureFormat::RGBA8Unorm,
+                               gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled});
+  };
+  gpu::Result<gpu::Texture> smaller = createMask({kSize / 2, kSize / 2});
+  gpu::Result<gpu::Texture> wider = createMask({kSize * 2, kSize});
+  gpu::Result<gpu::Texture> matching = createMask(kTargetSize);
+  ASSERT_THAT(smaller, gpu::HasResult());
+  ASSERT_THAT(wider, gpu::HasResult());
+  ASSERT_THAT(matching, gpu::HasResult());
+  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> commands = runtime.createCommandEncoder();
+  ASSERT_THAT(commands, gpu::HasResult());
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize, *commands.result());
+  EXPECT_THAT(encoder.beginMaskPass(smaller.result()), testing::IsFalse());
+  EXPECT_THAT(encoder.beginMaskPass(wider.result()), testing::IsFalse());
+  ASSERT_THAT(encoder.beginMaskPass(matching.result()), testing::IsTrue());
+  encoder.fillPathIntoMask(PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build(),
+                           FillRule::NonZero);
+  encoder.endMaskPass();
+  encoder.finish();
+
+  gpu::Result<gpu::CommandBuffer> finished = commands.result()->finish();
+  ASSERT_THAT(finished, gpu::HasResult());
+  EXPECT_THAT(runtime.submit(std::move(finished).result()), gpu::HasResult());
+  // Wait for the submitted work before its textures are released.
+  (void)readback();
 }
 
 /// Fill an axis-aligned rectangle and verify a center pixel is the fill color.

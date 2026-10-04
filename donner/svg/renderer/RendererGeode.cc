@@ -2421,6 +2421,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     Box2d pixelRect;
     bool valid = false;
     bool hasPolygon = false;
+    /// The clip's coverage could not be produced, so nothing under it draws.
     bool allocationRejected = false;
     Vector2d polygonCorners[4];
     /// Path-clip mask. When non-null these name a 1-sample texture sampled
@@ -2493,6 +2494,29 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       offset.y += frame.filterBufferOffsetY;
     }
     return offset;
+  }
+
+  /// Fills the clip paths in [\p begin, \p end) of \p clip, one layer of it, into \p mask with
+  /// the active encoder, intersected with whatever nested mask the encoder has bound.
+  /// @param mask Mask texture with the active target's extent.
+  /// @param clip Clip whose paths are filled.
+  /// @param begin Index of the layer's first path.
+  /// @param end Index past the layer's last path.
+  /// @param deviceFromLocal Transform of the clipped element's local space.
+  /// @return False when the encoder refused the mask pass, which leaves the mask without coverage.
+  [[nodiscard]] bool fillClipLayerMask(const gpu::Texture& mask, const ResolvedClip& clip,
+                                       size_t begin, size_t end,
+                                       const Transform2d& deviceFromLocal) {
+    if (!encoder->beginMaskPass(mask)) {
+      return false;
+    }
+    for (size_t s = begin; s < end; ++s) {
+      const ClipPathShape& shape = clip.clipPaths[s];
+      encoder->setTransform(clip.clipPathUnitsTransform * shape.parentFromEntity * deviceFromLocal);
+      encoder->fillPathIntoMask(shape.path, shape.fillRule);
+    }
+    encoder->endMaskPass();
+    return true;
   }
 
   bool initializeClipEntry(const ResolvedClip& clip, ClipStackEntry& entry) {
@@ -5955,15 +5979,13 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       // handle recorded below points at the owner rather than at a copy that outlives its scope.
       entry.maskLayerTextures.push_back({std::move(maskTexture), maskDesc});
       const gpu::Texture& maskTextureHandle = entry.maskLayerTextures.back().texture;
-      impl_->encoder->beginMaskPass(maskTextureHandle);
-      for (size_t s = it->begin; s < it->end; ++s) {
-        const ClipPathShape& shape = clip.clipPaths[s];
-        const Transform2d composed =
-            clip.clipPathUnitsTransform * shape.parentFromEntity * savedDeviceFromLocalTransform;
-        impl_->encoder->setTransform(composed);
-        impl_->encoder->fillPathIntoMask(shape.path, shape.fillRule);
+      if (!impl_->fillClipLayerMask(maskTextureHandle, clip, it->begin, it->end,
+                                    savedDeviceFromLocalTransform)) {
+        // The mask holds no coverage, so treat it like one that could not be allocated: nothing
+        // under this clip draws.
+        entry.allocationRejected = true;
+        break;
       }
-      impl_->encoder->endMaskPass();
 
       nestedMaskTextureHandle = &maskTextureHandle;
       nestedMaskViewHandle = &impl_->importTextureView(maskTextureHandle);
