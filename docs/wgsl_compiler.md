@@ -87,7 +87,8 @@ Outside the profile, and rejected explicitly: `f16` and matrices with a non-f32 
 memory and barriers; `binding_array`, depth, cube, 1D, 3D and arrayed textures and texture builtins
 other than `textureDimensions`, `textureLoad`, `textureSample`, `textureSampleLevel` and
 `textureStore`; bitwise operators other than integer AND and the bit shifts described below;
-constant f32 arithmetic in constant expressions (integer constant expressions only); `continuing`
+constant f32 arithmetic over operands other than literals, their negations and vector
+constructions of them, and constant matrix arithmetic (see "Constant f32 arithmetic"); `continuing`
 blocks; pointers outside a call argument or dereference, including pointers to resources,
 immutables, members and array elements; fixed arrays of structures, nested arrays, array parameters
 and returns; module-scope mutable variables; bindings outside group zero; and any source byte
@@ -395,6 +396,27 @@ these as one operator that keeps the candidates, and so does this compiler. Wher
 differ, a later `>` closes a candidate the specification dropped, and the module is rejected, as
 Chromium rejects it: `g(a < b, 1u <= c, d > a)` fails, and `g((a < b), 1u <= c, d > a)` is
 accepted.
+
+## Constant f32 arithmetic
+
+When both operands of `+`, `-`, `*` or `/` are constant and the result is f32, the compiler folds
+the expression at shader creation, as WGSL evaluates a const-expression. Each lane is the correctly
+rounded f32 result of the exact operation, ties to even, computed by the compiler's soft-float
+evaluator rather than host floating point. A scalar operand applies to every lane, an abstract
+operand converts to f32 first, and each operation rounds before the next, so
+`16777216f + 1f - 16777216f` is `0f`. A result that overflows, divides by zero or is NaN is a
+creation error at the operator. WGSL lets a result between the largest finite f32 and 2^128 round
+either way; the compiler rounds it to infinity and so rejects it, even where round-to-nearest would
+give the largest finite value. An exact cancellation such as `-1f + 1f` is `+0`; only `-0f - 0f` and
+`-0f + -0f` give `-0`. Abstract-float arithmetic follows the same rules in binary64.
+
+The folded value replaces the expression in the MSL and SPIR-V projections, which carry the literal
+and no runtime operation, so `let b = 1f / 3f;` emits the same bytes as `let b = 0.33333334f;`. The
+WGSL projection keeps the authored expression for the browser's compiler to evaluate. A module
+`const` may be written as `const k: f32 = 1f / 3f;`. Operands other than literals, their negations
+and vector constructions of them, such as a swizzle, member, index or conversion of a constant, and
+constant matrix arithmetic remain outside the profile and fail with an invalid-constant-expression
+diagnostic; f32 `%` is a type mismatch in this profile.
 
 ## Slug fill
 

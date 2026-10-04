@@ -1,0 +1,5 @@
+const kInfinite = 3.402823466e38f * 10f;
+fn divide() -> f32 { return 1f / 0f; }
+fn not_a_number() -> f32 { return 0f / 0f; }
+fn remainder() -> f32 { return 5f % 3f; }
+fn swizzled() -> f32 { return vec2<f32>(1f, 2f).x / 2f; }

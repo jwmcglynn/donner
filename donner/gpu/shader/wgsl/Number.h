@@ -421,12 +421,19 @@ constexpr FloatResult Evaluate(Op op, uint64_t leftBits, uint64_t rightBits, uin
   bool negative = left.negative;
   if (left.negative == rightNegative) {
     a.add(b);
-  } else if (a.compare(b) >= 0) {
-    a.subtract(b);
   } else {
-    b.subtract(a);
-    a = b;
-    negative = rightNegative;
+    const int order = a.compare(b);
+    // An exact cancellation is +0 under round-to-nearest, whatever the operand signs.
+    if (order == 0) {
+      return {0, true, Error::None};
+    }
+    if (order > 0) {
+      a.subtract(b);
+    } else {
+      b.subtract(a);
+      a = b;
+      negative = rightNegative;
+    }
   }
   return Round(a, UInt(1), power, precision, negative);
 }
