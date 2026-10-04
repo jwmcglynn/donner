@@ -87,6 +87,7 @@ donner_cc_test(
     name = "wgsl_tests",
     srcs = [
         "tests/Compiler_tests.cc",
+        "tests/FloatConstant_tests.cc",
         "tests/Graphics_tests.cc",
         "tests/ImageFeatures_tests.cc",
         "tests/Language_tests.cc",

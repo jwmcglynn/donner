@@ -8,6 +8,7 @@
 #include <locale>
 #include <sstream>
 #include <string>
+#include <utility>
 
 namespace donner::gpu::shader::wgsl::number {
 namespace {
@@ -79,6 +80,36 @@ TEST(Number, RejectsNonfiniteInputsAndArithmeticCapacityOverflow) {
   numerator.add(half);
   numerator.addSmall(1);
   EXPECT_EQ(Divide(numerator, denominator).error, Error::Capacity);
+}
+
+template <typename Float, typename Bits>
+void CheckZeroSigns(uint32_t precision) {
+  const Float zero = 0, negativeZero = -zero;
+  const std::pair<Float, Float> cases[] = {{1, -1},
+                                           {-1, 1},
+                                           {1, 1},
+                                           {-1, -1},
+                                           {zero, zero},
+                                           {zero, negativeZero},
+                                           {negativeZero, zero},
+                                           {negativeZero, negativeZero}};
+  for (const auto& [left, right] : cases) {
+    for (Op op : {Op::Add, Op::Subtract}) {
+      SCOPED_TRACE(testing::Message() << std::signbit(left) << left << ' ' << unsigned(op) << ' '
+                                      << std::signbit(right) << right);
+      volatile Float a = left, b = right;
+      const Float reference = op == Op::Add ? a + b : a - b;
+      const auto actual =
+          Evaluate(op, std::bit_cast<Bits>(left), std::bit_cast<Bits>(right), precision);
+      ASSERT_EQ(actual.error, Error::None);
+      EXPECT_EQ(actual.bits, std::bit_cast<Bits>(reference));
+    }
+  }
+}
+
+TEST(Number, SignsZeroSumsAndDifferencesLikeIeeeRoundToNearest) {
+  CheckZeroSigns<float, uint32_t>(24);
+  CheckZeroSigns<double, uint64_t>(53);
 }
 
 TEST(Number, EvaluatesTheSlugAbstractFractionDuringConstantEvaluation) {
