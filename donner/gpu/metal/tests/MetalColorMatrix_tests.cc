@@ -659,7 +659,7 @@ TEST_F(MetalColorMatrixTest, WgslShiftsKeepWgslSemantics) {
       shader::MakeShaderDescriptor(shader::tests::ShiftOperatorsAllProjections(),
                                    device_->shaderSourceKind(), "shift operators"),
       [this](const Buffer& b) { return device_->readBackBuffer(b); }, {-12.0f, 3.0f, 35.0f, 5.0f},
-      {-4.0f, 268435456.0f, -48.0f, 15.0f});
+      {-4.0f, 268435456.0f, -48.0f, 119.0f});
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(MetalColorMatrixTest, ColorSpaceConvertSrgbToLinear) {

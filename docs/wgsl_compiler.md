@@ -363,10 +363,12 @@ shift undefined, so an i32 shifts left as uint bits through `as_type`. SPIR-V us
 `OpShiftLeftLogical`, and `OpShiftRightArithmetic` or `OpShiftRightLogical` by signedness.
 
 The compiler tests cover typing, the constant rules, grouping and each projection's lowering, and
-the parser fuzzer corpus has accepted and rejected shift modules. A one-texel compute fixture runs
-both operators on i32 and u32 scalars and vectors, compound forms, an abstract value and runtime
-amounts of 35 through the offline Metal compiler, `spirv-val`, and native Metal and Vulkan
-execution. The UI vertex color unpack and the snapshot half-alpha term are written with shifts.
+the parser fuzzer corpus has accepted and rejected shift modules. A one-texel compute fixture
+shifts i32 and u32 scalars and vectors left and right by runtime amounts, including 35, shifts an
+i32 scalar left by a literal, shifts an i32 vector through compound assignment and shifts an
+abstract value by a runtime amount. It runs through the offline Metal compiler, `spirv-val`, and
+native Metal and Vulkan execution. The UI vertex color unpack and the snapshot half-alpha term are
+written with shifts.
 
 ## Slug fill
 
