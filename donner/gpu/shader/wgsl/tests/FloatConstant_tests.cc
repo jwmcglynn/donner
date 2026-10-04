@@ -240,8 +240,10 @@ TEST(FloatConstant, ReplacesEachOutermostFoldWithItsExactValueInTheWgslProjectio
   EXPECT_THAT(wgsl, Not(HasSubstr("divisor")));
   EXPECT_THAT(wgsl, Not(HasSubstr("4f;")));
 
-  // The projection is itself valid input that folds to the same native bytes.
+  // The projection is itself valid input that folds to the same native bytes and projects to
+  // itself, so a shipped projection is canonical.
   ASSERT_THAT(Diagnose(wgsl), Eq(kAccepted));
+  EXPECT_THAT(Wgsl(wgsl), Eq(wgsl));
   ASSERT_THAT(Msl(source), Not(IsEmpty()));
   EXPECT_THAT(Msl(wgsl), Eq(Msl(source)));
   ASSERT_THAT(Spirv(source), Not(IsEmpty()));
@@ -280,6 +282,7 @@ TEST(FloatConstant, ReplacesAbstractFloatFoldsWithTheirExactValuesInTheWgslProje
     EXPECT_THAT(wgsl, HasSubstr(line));
   }
   ASSERT_THAT(Diagnose(wgsl), Eq(kAccepted));
+  EXPECT_THAT(Wgsl(wgsl), Eq(wgsl));
   ASSERT_THAT(Msl(source), Not(IsEmpty()));
   EXPECT_THAT(Msl(wgsl), Eq(Msl(source)));
   ASSERT_THAT(Spirv(source), Not(IsEmpty()));
