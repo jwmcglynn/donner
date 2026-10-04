@@ -2,6 +2,9 @@ import { expect, type Page, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { installBrowserStallDiagnostics } from "./browser-stall-diagnostics";
+
+installBrowserStallDiagnostics(test);
 
 const baseUrl = process.env.DONNER_WASM_BASE_URL || "http://127.0.0.1:8000";
 const selectedBrowserBackend = "[Geode] GPU backend: browser, selected by the build setting";

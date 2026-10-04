@@ -18,6 +18,8 @@ playwright_bin.playwright_test(
     copy_data_to_bin = False,
     data = [
         "basic-shapes-capture-gate.ts",
+        "browser-stall-diagnostics.mjs",
+        "browser-stall-diagnostics.ts",
         "canvas-color-stats.ts",
         "gesture-streams.ts",
         "package.json",
@@ -79,6 +81,8 @@ playwright_bin.playwright_test(
     data = [
         "basic-shapes-capture-gate.ts",
         "browser-presentation-regression.spec.ts",
+        "browser-stall-diagnostics.mjs",
+        "browser-stall-diagnostics.ts",
         "browser-surface-recovery.spec.ts",
         "canvas-color-stats.ts",
         "gesture-streams.ts",
@@ -125,6 +129,8 @@ playwright_bin.playwright_test(
     copy_data_to_bin = False,
     data = [
         "basic-shapes-capture-gate.ts",
+        "browser-stall-diagnostics.mjs",
+        "browser-stall-diagnostics.ts",
         "canvas-color-stats.ts",
         "gesture-streams.ts",
         "package.json",
@@ -356,6 +362,24 @@ js_test(
     node_options = ["--test"],
 )
 
+# The browser timeout recorder runs inside the browser lanes only when the hosted CI job enables it
+# and a test times out, so its gates, bounds, path redaction and installation in each Chromium
+# regression spec are checked here against fixed process tables and sample reports.
+js_test(
+    name = "browser_stall_diagnostics_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "browser-presentation-regression.spec.ts",
+        "browser-stall-diagnostics.mjs",
+        "browser-stall-diagnostics.ts",
+        "smoke.spec.ts",
+        "standalone-geode-browser-renderer.spec.ts",
+    ],
+    entry_point = "browser-stall-diagnostics.spec.mjs",
+    node_options = ["--test"],
+)
+
 # Drives the canvas surface path of the GPU bridge's JavaScript library against a stub canvas and
 # a stub GPU device, so the library's own code runs under the normal test gate rather than only in
 # a browser. The C++ half of the bridge is covered separately by //donner/gpu/browser:browser_tests.
@@ -577,6 +601,8 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-stall-diagnostics.mjs",
+        "browser-stall-diagnostics.ts",
         "package.json",
         "playwright.bazel.config.js",
         "playwright.config.js",

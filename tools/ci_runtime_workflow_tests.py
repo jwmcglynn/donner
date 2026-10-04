@@ -101,6 +101,12 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         original_artifacts = hosted.index("      - name: Upload Bazel test failure artifacts")
         detection = self._step_body(hosted, "Detect browser GPU acquisition failure")
         self.assertIn("stage=selection outcome=deadline_pending", detection)
+        # The browser test recorder prints this marker; see browser-stall-diagnostics.mjs.
+        self.assertIn("browser-stall-diagnostics deadline", detection)
+        stall_recorder = _repository_text("donner/editor/wasm/tests/browser-stall-diagnostics.mjs")
+        self.assertIn('kStallMarker = "browser-stall-diagnostics"', stall_recorder)
+        self.assertIn("return `${kStallMarker} deadline status=${test.status} durationMs=",
+                      stall_recorder)
         self.assertIn("run_probe=$should_probe", detection)
         self.assertIn("ci:browser-gpu-diagnostics", detection)
         self.assertIn("BROWSER_GPU_DIAGNOSTICS_REQUESTED:", detection)
@@ -133,7 +139,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         hosted = self._job_body("macos")
         environment = os.environ.copy()
         environment.update(RUNNER_TEMP=".", BAZEL_MACOS_BUILD_FLAGS="",
-                           BAZEL_MACOS_TEST_FLAGS="")
+                           BAZEL_MACOS_TEST_FLAGS="", BROWSER_STALL_TEST_FLAGS="")
         prefix = "bazelisk() { return 3; }; python3() { echo summary-ran; return 0; };\n"
         for mode in ("serial", "parallel"):
             body = self._step_body(hosted, "Compare browser GPU tests (%s)" % mode)
@@ -142,6 +148,100 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                                     env=environment, capture_output=True, text=True)
             self.assertEqual(result.returncode, 3, result.stderr)
             self.assertIn("summary-ran", result.stdout)
+
+    def test_browser_stall_system_log_is_hosted_only_and_follows_the_failure_archive(self):
+        hosted = self._job_body("macos")
+        name = "Collect browser stall system log"
+        collect = self._step_body(hosted, name)
+        position = hosted.index("      - name: " + name)
+        self.assertGreater(position, hosted.index("      - name: Upload Bazel test failure artifacts"))
+        # The comparison reruns overwrite these test logs, so the slice must come first.
+        self.assertLess(position, hosted.index("      - name: Compare browser GPU tests (serial)"))
+        self.assertIn("if: ${{ !cancelled() && steps.test.outcome == 'failure' }}", collect)
+        self.assertIn("continue-on-error: true", collect)
+        self.assertIn("timeout-minutes: 5", collect)
+        self.assertIn(
+            "predicate='eventType == logEvent AND (process BEGINSWITH \"Google Chrome for Testing\" "
+            "OR process == \"syspolicyd\" OR process == \"amfid\")'",
+            collect,
+        )
+        upload = self._step_body(hosted, "Upload browser stall system log")
+        self.assertIn("if: ${{ !cancelled() && steps.test.outcome == 'failure' }}", upload)
+        self.assertIn("path: ${{ runner.temp }}/browser-stall-system-log", upload)
+        self.assertIn("retention-days: 14", upload)
+        # A self-hosted runner's unified log describes a persistent host; it is never published.
+        for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
+            body = self._job_body(job)
+            self.assertNotIn(name, body)
+            self.assertNotIn("log show", body)
+
+    def test_browser_stall_recorder_is_enabled_only_in_the_hosted_job(self):
+        # The recorder publishes host load, memory and call graphs, so only the ephemeral
+        # hosted job may enable it; every other lane and local runs leave it inert.
+        switch = '--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1'
+        hosted = self._job_body("macos")
+        self.assertIn('      BROWSER_STALL_TEST_FLAGS: "%s"\n' % switch, hosted)
+        steps = ("Test", "Compare browser GPU tests (serial)",
+                 "Compare browser GPU tests (parallel)")
+        for step in steps:
+            self.assertIn("$BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS",
+                          self._step_body(hosted, step), step)
+        recorder = _repository_text("donner/editor/wasm/tests/browser-stall-diagnostics.mjs")
+        self.assertIn('kEnableVariable = "DONNER_BROWSER_STALL_DIAGNOSTICS"', recorder)
+        self.assertEqual(self.main.count("DONNER_BROWSER_STALL_DIAGNOSTICS"), 1)
+        self.assertEqual(self.main.count("BROWSER_STALL_TEST_FLAGS"), 1 + len(steps))
+        for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
+            self.assertNotIn("BROWSER_STALL", self._job_body(job), job)
+        resolver = runfiles.Create()
+        workflows = Path(resolver.Rlocation("donner/.github/workflows/main.yml")).parent
+        others = [path for path in sorted(workflows.glob("*.y*ml")) if path.name != "main.yml"]
+        self.assertGreater(len(others), 5)
+        # A composite action or the repository bazelrc would enable it on every lane.
+        actions = sorted((workflows.parent / "actions").glob("*/action.y*ml"))
+        self.assertGreater(len(actions), 3)
+        for path in others + actions:
+            self.assertNotIn("BROWSER_STALL", path.read_text(encoding="utf-8"), path.name)
+        self.assertNotIn("BROWSER_STALL", self.bazelrc)
+
+    def test_browser_stall_system_log_slices_only_well_formed_windows(self):
+        collect = self._step_body(self._job_body("macos"), "Collect browser stall system log")
+        script = textwrap.dedent(collect.split("run: |\n", 1)[1])
+        # Records each invocation and stands in for the host's unified log; the window
+        # starting at 03:40 fails, as an unreadable log would.
+        prefix = ('log() { printf "%s|" "$@"; printf "\\n";'
+                  ' [[ "$*" != *"03:40:00+0000"* ]]; }\n')
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            windows = {
+                "a": "2026-10-04T03:24:35Z 2026-10-04T03:25:35Z\n",
+                "b": "2026-10-04T03:24:35Z 2026-10-04 03:25:35\n",
+                "c": "2026-10-04T03:30:00Z 2026-10-04T03:31:00Z\n",
+                "d": "2026-10-04T03:40:00Z 2026-10-04T03:41:00Z\n",
+                "e": "2026-10-04T03:50:00Z 2026-10-04T03:51:00Z\n",
+                "f": "2026-10-04T04:00:00Z 2026-10-04T04:01:00Z\n",
+            }
+            for target, window in windows.items():
+                directory = (root / "bazel-testlogs" / target / "test.outputs" / "playwright"
+                             / "case" / "browser-stall")
+                directory.mkdir(parents=True)
+                (directory / "system-log-window.txt").write_text(window)
+            environment = dict(os.environ, RUNNER_TEMP=str(root))
+            result = subprocess.run(["/bin/bash", "-c", prefix + script], cwd=temp_dir,
+                                    env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Skipping malformed window: bazel-testlogs/b/", result.stdout)
+            self.assertIn("System log slice 3 failed: bazel-testlogs/d/", result.stdout)
+            self.assertIn("Collected 4 browser stall system log window(s).", result.stdout)
+            out = root / "browser-stall-system-log"
+            self.assertEqual(sorted(path.name for path in out.iterdir()),
+                             ["window-%d.log" % index for index in range(1, 5)])
+            self.assertEqual(
+                (out / "window-1.log").read_text().split("|")[:7],
+                ["show", "--style", "compact", "--timezone", "UTC",
+                 "--start", "2026-10-04 03:24:35+0000"],
+            )
+            self.assertIn("2026-10-04 03:51:00+0000", (out / "window-4.log").read_text())
+            self.assertEqual(list(root.glob("browser-stall-window-*.raw")), [])
 
     def _heartbeat_script(self):
         match = re.search(
