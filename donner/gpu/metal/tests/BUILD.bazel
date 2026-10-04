@@ -441,6 +441,45 @@ cc_test(
     ],
 )
 
+# Physical residency across frames: the allocated size Metal reports for the device while a thread
+# with no autorelease pool renders frames that create and release their own scratch. Objective-C++
+# because it reads that size from the Metal device itself.
+objc_library(
+    name = "metal_working_set_tests_impl",
+    testonly = True,
+    srcs = ["MetalWorkingSet_tests.mm"],
+    sdk_frameworks = [
+        "Foundation",
+        "Metal",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_device_gate",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/metal:metal_device",
+        "@com_google_gtest//:gtest",
+    ],
+    alwayslink = True,
+)
+
+cc_test(
+    name = "metal_working_set_tests",
+    size = "small",
+    env = _METAL_API_VALIDATION_ENV,
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the no-device rule can never see one and this test keeps skipping into a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_working_set_tests_impl",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # Host buffer mapping on Metal: readiness against the submission serial, range bounds, and the
 # fail-closed paths for a released mapping and a destroyed buffer.
 donner_cc_test(
