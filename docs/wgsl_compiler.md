@@ -297,12 +297,12 @@ whose exit depends on runtime data terminates only because the authored algorith
 
 `target += value` and `target -= value` are parsed as an assignment of the sum or difference, so
 integer wrapping, division guards and both lowerings match the spelled-out form byte for byte; the
-shift forms `<<=` and `>>=` are described below. The right-hand side is materialized against the
-target's type and the operator is grouped with it, so
-the compound form is slightly stricter than writing the assignment out: an abstract scalar against
-a vector target is a type mismatch, and an ungrouped mixed operator on the right-hand side is an
-unsupported construct. Both fail closed. The target is read and written, so it may not contain a
-call.
+shift forms `<<=` and `>>=` are parsed the same way and described below. For `+=` and `-=` the
+right-hand side is materialized against the target's type; for `<<=` and `>>=` it is a u32 amount.
+Every compound form groups its operator with the right-hand side, so it is slightly stricter than
+writing the assignment out: an abstract scalar against a vector target is a type mismatch, and an
+ungrouped mixed operator on the right-hand side is an unsupported construct. Both fail closed. The
+target is read and written, so it may not contain a call.
 
 `var` declarations without a declared type concretize an abstract initializer by the WGSL rules:
 `var x = 0;` is `i32`, `var x = 0u;` is `u32` and `var x = 0.5;` is `f32`; an already-concrete
@@ -339,12 +339,14 @@ value shifts right arithmetically and an unsigned value logically.
 
 WGSL takes a runtime amount modulo the 32-bit width. A constant amount at or above the width, in
 any lane, is a creation error, and so is a constant left shift that discards a bit differing from
-the result's sign bit (i32) or a set bit (u32). Abstract folding rejects amounts of 64 or more and
-left shifts that discard anything but copies of the sign bit. A constant amount, or a constant value
-shifted left, that the profile cannot evaluate, such as a swizzle of a constant vector, is rejected
-rather than assumed to be in range. Constant shifts evaluate wherever the profile requires a
-constant, including array extents and switch labels; an extent needs the shift parenthesized, as in
-`array<f32, (1u << 3u)>`.
+the result's sign bit (i32) or a set bit (u32). Abstract folding rejects a left shift that discards
+anything but copies of the sign bit; as a restriction of this profile rather than a WGSL rule, it
+also rejects any abstract amount of 64 or more. A constant amount, or a constant value shifted left,
+that the profile cannot evaluate, such as a swizzle of a constant vector, is rejected rather than
+assumed to be in range. Constant shifts evaluate wherever the profile requires a constant,
+including array extents and switch labels; an extent needs the shift parenthesized, as in
+`array<f32, (1u << 3u)>`. A module `const` initializer must fold to a literal, so it accepts an
+abstract shift such as `(1 << 8) - 1` but not a concrete one such as `1u << 4u`.
 
 As in WGSL, both operands are unary expressions, so a shift needs parentheses to combine with
 arithmetic, bitwise AND or another shift. A comparison or a short-circuit operator may take an

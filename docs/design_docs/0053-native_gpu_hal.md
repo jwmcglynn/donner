@@ -223,9 +223,9 @@ commits and their fixes together in a focused reviewable change.
       the UI renderer's shaders are authored as WGSL sources under the same contract. The UI draw
       program is authored WGSL compiled into frozen artifacts, and the bit-shift operators joined
       the profile with WGSL, MSL and SPIR-V tests, replacing the division workarounds in the UI
-      vertex color unpack and the snapshot half-alpha term. One production spelling still stands in
-      for a rejected construct: feImage's cubic weight is the literal `0.33333334f` because constant
-      f32 arithmetic is outside the profile.
+      vertex color unpack and the snapshot half-alpha term. Besides the identifier renames the
+      profile's naming rules force (see the compiler guide), one production spelling, feImage's
+      `0.33333334f`, stands in for f32 constant folding (#1636).
 
 ### Snapshot and target identity
 
