@@ -11,9 +11,10 @@ tag with a commit.
 
 A few older pins still name a commit: the `git_override` blocks for `hedron_compile_commands`,
 `bloaty`, `imgui` and `glfw` in `MODULE.bazel` and for `stb`, `imgui` and `glfw` in
-`examples/MODULE.bazel`, and `woff2` and `bazel_clang_tidy` in
-`third_party/bazel/non_bcr_deps.bzl`. They predate this rule; do not copy them, and ask the
-operator before adding a dependency that has no usable release.
+`examples/MODULE.bazel`, `woff2` and `bazel_clang_tidy` in `third_party/bazel/non_bcr_deps.bzl`,
+the Google Fonts files in `third_party/google_fonts/fonts.bzl`, and the CMake generator's `brotli`
+revision. They predate this rule; do not copy them, and ask the operator before adding a
+dependency that has no usable release.
 
 ## Bazel LLVM Toolchain
 
