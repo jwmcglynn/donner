@@ -102,10 +102,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         detection = self._step_body(hosted, "Detect browser GPU acquisition failure")
         self.assertIn("stage=selection outcome=deadline_pending", detection)
         # The browser test recorder prints this marker; see browser-stall-diagnostics.mjs.
-        self.assertIn("browser-stall-diagnostics status=timedOut", detection)
+        self.assertIn("browser-stall-diagnostics deadline", detection)
         stall_recorder = _repository_text("donner/editor/wasm/tests/browser-stall-diagnostics.mjs")
         self.assertIn('kStallMarker = "browser-stall-diagnostics"', stall_recorder)
-        self.assertIn("return `${kStallMarker} status=${test.status} durationMs=", stall_recorder)
+        self.assertIn("return `${kStallMarker} deadline status=${test.status} durationMs=",
+                      stall_recorder)
         self.assertIn("run_probe=$should_probe", detection)
         self.assertIn("ci:browser-gpu-diagnostics", detection)
         self.assertIn("BROWSER_GPU_DIAGNOSTICS_REQUESTED:", detection)

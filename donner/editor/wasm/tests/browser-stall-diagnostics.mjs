@@ -402,7 +402,7 @@ function abandonedError() {
  * @returns {string}
  */
 export function formatStallMarker(test) {
-  return `${kStallMarker} status=${test.status} durationMs=${test.durationMs}`;
+  return `${kStallMarker} deadline status=${test.status} durationMs=${test.durationMs}`;
 }
 
 /**
@@ -425,13 +425,32 @@ export function formatStallSummary(summary) {
 }
 
 /**
- * Whether a finished test should be recorded: only a timed-out test, only on macOS, and only
- * when the hosted CI job enabled the recorder.
- * @param {{platform: string, status: string | undefined, env: Record<string, string | undefined>}} options
+ * Whether a test ended at its own deadline. A pending Playwright call cut off by the test
+ * timeout leaves the status `timedOut`. A pending `expect.poll`, `toPass` or web-first
+ * assertion instead gives up 250 ms before that deadline and fails with an ordinary
+ * assertion error whose call log reads "Test timeout of <timeout>ms exceeded", leaving the
+ * status `failed`; that is the common shape of a stalled browser in these suites.
+ * @param {{status?: string, timeout: number, errors?: Array<{message?: string}>}} testInfo
  * @returns {boolean}
  */
-export function shouldRecordBrowserStall({ platform, status, env }) {
-  return env[kEnableVariable] === "1" && platform === "darwin" && status === "timedOut";
+export function endedAtTestDeadline({ status, timeout, errors = [] }) {
+  if (status === "timedOut") {
+    return true;
+  }
+  const deadlineMessage = `Test timeout of ${timeout}ms exceeded`;
+  return status === "failed"
+    && errors.some((error) => String(error?.message ?? "").includes(deadlineMessage));
+}
+
+/**
+ * Whether a finished test should be recorded: only one that ended at its deadline, only on
+ * macOS, and only when the hosted CI job enabled the recorder.
+ * @param {{platform: string, env: Record<string, string | undefined>,
+ *   testInfo: {status?: string, timeout: number, errors?: Array<{message?: string}>}}} options
+ * @returns {boolean}
+ */
+export function shouldRecordBrowserStall({ platform, env, testInfo }) {
+  return env[kEnableVariable] === "1" && platform === "darwin" && endedAtTestDeadline(testInfo);
 }
 
 /**
@@ -472,9 +491,10 @@ export async function withCollectionBudget(collect, budgetMs = kCollectionBudget
 }
 
 /**
- * The `afterEach` body: record a timed-out test's browser processes when enabled, print the
- * summary lines, and never throw.
- * @param {{title: string, status?: string, duration: number, outputPath: (name: string) => string}} testInfo
+ * The `afterEach` body: record the browser processes of a test that ended at its deadline
+ * when enabled, print the summary lines, and never throw.
+ * @param {{title: string, status?: string, timeout: number, duration: number,
+ *   errors?: Array<{message?: string}>, outputPath: (name: string) => string}} testInfo
  * @param {{platform?: string, env?: Record<string, string | undefined>, rootPid?: number,
  *   log?: (line: string) => void, collect?: typeof collectBrowserStallDiagnostics,
  *   budgetMs?: number}} options
@@ -488,7 +508,7 @@ export async function recordBrowserStall(testInfo, {
   collect = collectBrowserStallDiagnostics,
   budgetMs = kCollectionBudgetMs,
 } = {}) {
-  if (!shouldRecordBrowserStall({ platform, status: testInfo.status, env })) {
+  if (!shouldRecordBrowserStall({ platform, env, testInfo })) {
     return [];
   }
   const test = {

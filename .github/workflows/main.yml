@@ -1234,8 +1234,8 @@ jobs:
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
-      # A timed-out browser test records the window from its browser's launch to its
-      # timeout. Slice the runner's system log to those windows for the browser's
+      # A browser test that ended at its deadline records the window from its browser's
+      # launch to that deadline. Slice the runner's system log to those windows for the browser's
       # own processes and for executable code-signing checks, which can delay a
       # browser helper's first launch. The unified log is host-wide, so only this
       # ephemeral hosted job collects it.
@@ -1301,8 +1301,8 @@ jobs:
             if [[ -f "$log" ]] && grep -qF 'stage=selection outcome=deadline_pending' "$log"; then
               should_probe=true
             fi
-            # A browser test timed out; its browser process states were recorded.
-            if [[ -f "$log" ]] && grep -qF 'browser-stall-diagnostics status=timedOut' "$log"; then
+            # A browser test ended at its deadline; its browser process states were recorded.
+            if [[ -f "$log" ]] && grep -qF 'browser-stall-diagnostics deadline' "$log"; then
               should_probe=true
             fi
           done

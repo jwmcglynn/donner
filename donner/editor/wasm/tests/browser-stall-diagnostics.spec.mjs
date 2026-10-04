@@ -299,26 +299,58 @@ test("collection writes a bounded, path-free record and removes raw reports", as
   assert.match(lines.at(-1) ?? "", /^browser-stall-diagnostics callGraphs=3\/4 window=/);
 });
 
-test("only a timed-out macOS test in the hosted job is recorded", () => {
+// The error Playwright 1.62 reports when a pending expect.poll reaches the test deadline,
+// as the hosted macOS lane printed it for a stalled WebGPU adapter request. The test status
+// is "failed", not "timedOut", because the poll gives up 250 ms before the deadline.
+const kPollCutOffByTestDeadline = [
+  "Error: expected all five catalog SVGs to publish real Donner-rendered thumbnails",
+  "",
+  "expect(received).toBe(expected) // Object.is equality",
+  "",
+  "Expected: 5",
+  "Received: 0",
+  "",
+  "Call Log:",
+  "- Test timeout of 30000ms exceeded",
+].join("\n");
+
+test("only a macOS test that ended at its deadline in the hosted job is recorded", () => {
   const enabled = { [kEnableVariable]: "1" };
+  const pollCutOff = {
+    status: "failed",
+    timeout: 30_000,
+    errors: [{ message: kPollCutOffByTestDeadline }],
+  };
+  const timedOut = { status: "timedOut", timeout: 30_000, errors: [] };
+  const assertion = { status: "failed", timeout: 30_000, errors: [{ message: "Expected: 5" }] };
+  const otherDeadline = {
+    status: "failed",
+    timeout: 60_000,
+    errors: [{ message: kPollCutOffByTestDeadline }],
+  };
   const cases = [
-    ["darwin", "timedOut", enabled],
-    ["darwin", "timedOut", {}],
-    ["darwin", "timedOut", { [kEnableVariable]: "0" }],
-    ["darwin", "failed", enabled],
-    ["darwin", "passed", enabled],
-    ["linux", "timedOut", enabled],
+    ["darwin", timedOut, enabled],
+    ["darwin", pollCutOff, enabled],
+    ["darwin", timedOut, {}],
+    ["darwin", pollCutOff, { [kEnableVariable]: "0" }],
+    ["darwin", assertion, enabled],
+    ["darwin", otherDeadline, enabled],
+    ["darwin", { status: "passed", timeout: 30_000, errors: [] }, enabled],
+    ["darwin", { status: "interrupted", timeout: 30_000, errors: [] }, enabled],
+    ["linux", pollCutOff, enabled],
   ];
   assert.deepEqual(
-    cases.map(([platform, status, env]) => shouldRecordBrowserStall({ platform, status, env })),
-    [true, false, false, false, false, false],
+    cases.map(([platform, testInfo, env]) => shouldRecordBrowserStall({ platform, testInfo, env })),
+    [true, true, false, false, false, false, false, false, false],
   );
 });
 
-function timedOutTestInfo(outputRoot) {
+function deadlineTestInfo(outputRoot) {
   return {
     title: "first browser command",
-    status: "timedOut",
+    status: "failed",
+    timeout: 30_000,
+    errors: [{ message: kPollCutOffByTestDeadline }],
     duration: 30_000,
     outputPath: (name) => path.join(outputRoot, name),
   };
@@ -328,7 +360,7 @@ test("without the hosted switch the recorder collects and prints nothing", async
   const outputRoot = await scratch("stall-inert");
   const printed = [];
   let collected = 0;
-  const lines = await recordBrowserStall(timedOutTestInfo(outputRoot), {
+  const lines = await recordBrowserStall(deadlineTestInfo(outputRoot), {
     platform: "darwin",
     env: { TEST_TMPDIR: outputRoot },
     log: (line) => printed.push(line),
@@ -347,7 +379,7 @@ test("a failed collection prints only a fixed code", async () => {
     new Error(`EACCES: permission denied, open '${outputRoot}/browser-stall/summary.json'`),
     { code: "EACCES" },
   );
-  await recordBrowserStall(timedOutTestInfo(outputRoot), {
+  await recordBrowserStall(deadlineTestInfo(outputRoot), {
     platform: "darwin",
     env: { [kEnableVariable]: "1", TEST_TMPDIR: outputRoot },
     log: (line) => printed.push(line),
@@ -356,7 +388,7 @@ test("a failed collection prints only a fixed code", async () => {
     },
   });
   assert.deepEqual(printed, [
-    "browser-stall-diagnostics status=timedOut durationMs=30000",
+    "browser-stall-diagnostics deadline status=failed durationMs=30000",
     "browser-stall-diagnostics failed: EACCES",
   ]);
   assert.deepEqual(
@@ -370,7 +402,7 @@ test("collection ends at its budget even when a command never finishes", async (
   const printed = [];
   const never = () => ({ pid: undefined, done: new Promise(() => {}) });
   const started = Date.now();
-  await recordBrowserStall(timedOutTestInfo(outputRoot), {
+  await recordBrowserStall(deadlineTestInfo(outputRoot), {
     platform: "darwin",
     env: { [kEnableVariable]: "1", TEST_TMPDIR: outputRoot },
     log: (line) => printed.push(line),
@@ -381,7 +413,7 @@ test("collection ends at its budget even when a command never finishes", async (
   // The marker selects the CI comparison reruns and the window drives the system log slice,
   // so both must survive a collection that overruns its budget.
   assert.deepEqual(printed, [
-    "browser-stall-diagnostics status=timedOut durationMs=30000",
+    "browser-stall-diagnostics deadline status=failed durationMs=30000",
     "browser-stall-diagnostics failed: collection-timeout",
   ]);
   assert.ok(elapsedMs < 5_000, `collection took ${elapsedMs} ms`);
@@ -403,7 +435,7 @@ test("a collection that outlives its budget writes nothing more", async () => {
     releaseTable = resolve;
   });
   const sampled = [];
-  const late = (file, args) => {
+  const late = (file) => {
     if (file === "/bin/ps") {
       return {
         pid: 700,
@@ -414,7 +446,7 @@ test("a collection that outlives its budget writes nothing more", async () => {
     return { pid: 701, done: Promise.resolve({ ok: true, stdout: "", error: "" }) };
   };
   let finished;
-  await recordBrowserStall(timedOutTestInfo(outputRoot), {
+  await recordBrowserStall(deadlineTestInfo(outputRoot), {
     platform: "darwin",
     env: { [kEnableVariable]: "1", TEST_TMPDIR: outputRoot },
     log: (line) => printed.push(line),
@@ -444,7 +476,7 @@ test("each Chromium regression spec installs the recorder through its hook", asy
   const hook = await readFile(new URL("./browser-stall-diagnostics.ts", import.meta.url), "utf8");
   assert.match(
     hook,
-    /test\.afterEach\(async \(\{\}, testInfo\) => \{\n\s+await recordBrowserStall\(testInfo\);\n\s+\}\);/,
+    /test\.afterEach\(async \(\) => \{\n\s+await recordBrowserStall\(test\.info\(\)\);\n\s+\}\);/,
   );
   for (
     const spec of [
