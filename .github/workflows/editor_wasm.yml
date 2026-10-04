@@ -103,11 +103,7 @@ jobs:
             //tools/ci:editor_wasm_shipped_browser_audit
           bazelisk test --config=wasm-size --test_output=errors \
             //tools/ci:wasm_size_tests
-          # Temporary payload measurement while the production Rust-built GPU dependencies are
-          # removed and the package is remeasured. Remove only this test_arg after production Rust-built GPU dependencies
-          # are removed and strict payload ceilings are restored.
           bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all \
-            --test_arg=--payload-budget-mode=measure \
             //tools/ci:editor_wasm_size_tests
 
       - name: Stage package for handoff
