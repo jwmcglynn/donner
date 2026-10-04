@@ -37,6 +37,55 @@ test("Linux process accounting needs no ps executable", () => {
   });
 });
 
+test("Linux child exit between stat and status remains an accounted zombie", () => {
+  const procRoot = directory();
+  const pid = 123456;
+  const directoryPath = path.join(procRoot, String(pid));
+  fs.mkdirSync(directoryPath);
+  const statFile = path.join(directoryPath, "stat");
+  const statusFile = path.join(directoryPath, "status");
+  const fields = ["S", "10", "42", ...Array(16).fill("0"), "901", "0", "0"];
+  const running = `${pid} (worker) ${fields.join(" ")}`;
+  const zombie = running.replace(") S ", ") Z ");
+  const read = fs.readFileSync;
+  let statReads = 0;
+  fs.readFileSync = function(file, ...args) {
+    if (file === statFile) return ++statReads === 1 ? running : zombie;
+    if (file === statusFile) return "State: Z (zombie)\n";
+    return read.call(this, file, ...args);
+  };
+  try {
+    assert.deepEqual(processRows({ platform: "linux", procRoot }), [{
+      pid,
+      ppid: 10,
+      pgid: 42,
+      start: "901",
+      rssBytes: 0,
+      command: "worker",
+    }]);
+  } finally {
+    fs.readFileSync = read;
+  }
+});
+
+test("Linux measurement preserves elapsed and snapshot-size bounds", () => {
+  const procRoot = directory();
+  const pid = 123456;
+  fs.mkdirSync(path.join(procRoot, String(pid)));
+  const fields = ["S", "10", "42", ...Array(16).fill("0"), "901", "0", "0"];
+  fs.writeFileSync(path.join(procRoot, String(pid), "stat"), `${pid} (worker) ${fields.join(" ")}`);
+  fs.writeFileSync(path.join(procRoot, String(pid), "status"), "VmRSS: 7 kB\n");
+  let clocks = 0;
+  assert.throws(
+    () => processRows({ platform: "linux", procRoot, now: () => ++clocks === 1 ? 0 : 1001 }),
+    /measurement deadline/,
+  );
+  assert.throws(
+    () => processRows({ platform: "linux", procRoot, maxSnapshotBytes: 1 }),
+    /snapshot byte limit/,
+  );
+});
+
 test("malformed Linux process identity fails closed", () => {
   const procRoot = directory();
   fs.mkdirSync(path.join(procRoot, "123456"));
@@ -481,7 +530,15 @@ test("unknown and expired negative targets never forward a process-group signal"
   vm.runInNewContext(
     fs.readFileSync(new URL("./browser-watchdog-child.cjs", import.meta.url), "utf8"),
     {
-      require: () => childProcess,
+      require: (name) => {
+        if (name === "node:child_process") return childProcess;
+        if (name === "./browser-process-snapshot.cjs") {
+          return {
+            processRows: () => [{ pid: 27, ppid: 26, pgid: 20, start: "same-start" }],
+          };
+        }
+        throw new Error(`unexpected fixture dependency: ${name}`);
+      },
       process: simulatedProcess,
     },
   );
