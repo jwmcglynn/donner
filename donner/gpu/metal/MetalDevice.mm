@@ -23,9 +23,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <format>
 #include <limits>
 #include <memory>
@@ -218,7 +221,8 @@ constexpr double kPresentCompletionTimeoutSeconds = 5.0;
 
 /// How long a submission waits for room among the command buffers in flight while neither this
 /// device nor a device its waiting work depends on completes any. A device that stops completing
-/// work for this long is treated as hung.
+/// work for this long is treated as hung. The bound runs from the last progress, not from the
+/// start of the wait, so it does not restart for each new wait on the same stalled work.
 constexpr double kSubmissionStallTimeoutSeconds = 5.0;
 
 /// Longest one submission waits for room in all, however much progress it sees meanwhile.
@@ -264,6 +268,40 @@ struct CompletionState final : DeviceLossRelease {
   std::mutex watermarkMutex;
   /// Serials published while an earlier serial's completion was still outstanding.
   std::set<uint64_t> finishedAhead;
+  /// Command buffers committed whose completion handlers have not run yet, which is what the
+  /// backstop on work in flight counts; guarded by \ref watermarkMutex.
+  uint64_t buffersOutstanding = 0;
+  /// When this device last made progress, as steady-clock ticks: when one of its command buffers
+  /// last completed, or when work was committed to an idle device. Written under
+  /// \ref watermarkMutex; atomic so that a device whose work waits on this one can read it.
+  std::atomic<std::chrono::steady_clock::rep> lastProgressTicks{0};
+  /// Notified under \ref watermarkMutex whenever a command buffer completes or the root is
+  /// declared lost, which is what a submission waiting for room waits on.
+  std::condition_variable completionAdvanced;
+
+  /// Records the current time as this device's last progress. Requires \ref watermarkMutex.
+  void noteProgressLocked() {
+    lastProgressTicks.store(std::chrono::steady_clock::now().time_since_epoch().count(),
+                            std::memory_order_release);
+  }
+
+  /// When this device last made progress; see \ref lastProgressTicks.
+  std::chrono::steady_clock::time_point lastProgress() const {
+    return std::chrono::steady_clock::time_point(
+        std::chrono::steady_clock::duration(lastProgressTicks.load(std::memory_order_acquire)));
+  }
+
+  /// Counts \p buffers command buffers about to be committed as outstanding. Work committed to an
+  /// idle device starts its progress clock, so a stall is measured from when work was first
+  /// outstanding rather than from a completion long before it.
+  /// @param buffers Command buffers about to be committed.
+  void noteCommitted(uint64_t buffers) {
+    std::lock_guard<std::mutex> lock(watermarkMutex);
+    if (buffersOutstanding == 0) {
+      noteProgressLocked();
+    }
+    buffersOutstanding += buffers;
+  }
 
   /// Signals \ref completionEvent with \p serial if that raises it. Requires \ref watermarkMutex.
   /// @param serial Value to signal.
@@ -279,11 +317,13 @@ struct CompletionState final : DeviceLossRelease {
   /// would otherwise sit behind that wait. No value a waiter can ask for is above the one
   /// signalled, so no later completion lowers it.
   ///
-  /// Runs on whichever thread declares the loss, so it drains its own autorelease pool.
+  /// It also wakes a submission of this device waiting for room in flight, which then sees the
+  /// loss. Runs on whichever thread declares the loss, so it drains its own autorelease pool.
   void releaseOnLoss() override {
     @autoreleasepool {
       std::lock_guard<std::mutex> lock(watermarkMutex);
       signalCompletionLocked(std::numeric_limits<uint64_t>::max());
+      completionAdvanced.notify_all();
     }
   }
 };
@@ -396,15 +436,27 @@ void PublishCompletion(CompletionState& state, uint64_t serial, NSError* executi
   }
 }
 
-/// Records one command buffer's outcome. The last buffer of its submission to finish then
-/// publishes the submission's completion, failed when any buffer reported an error, or parks it
-/// when a test holds it.
+/// Records one command buffer's outcome. The buffer leaves the count in flight at once, as this
+/// device's progress, whatever becomes of its submission's completion. The last buffer of its
+/// submission to finish then publishes the submission's completion, failed when any buffer reported
+/// an error, or parks it when a test holds it.
 /// @param state Completion state of the device. @param outcome Outcome of the buffer's submission.
 /// @param bufferError Error this buffer reported, or nil. @param serial Serial of the submission.
 /// @param held Whether a test holds this submission's completion.
 /// @param uploadBytes Staging bytes to return. @param payloadBytes Payload bytes to return.
 void FinishCommandBuffer(CompletionState& state, SubmissionOutcome& outcome, NSError* bufferError,
                          uint64_t serial, bool held, uint64_t uploadBytes, uint64_t payloadBytes) {
+  {
+    std::lock_guard<std::mutex> lock(state.watermarkMutex);
+    // Every buffer is counted in before it is committed, so none can finish uncounted. A debug
+    // build stops on an accounting bug here; a release build keeps the count from wrapping.
+    assert(state.buffersOutstanding > 0 && "a Metal command buffer finished without being counted");
+    if (state.buffersOutstanding > 0) {
+      --state.buffersOutstanding;
+    }
+    state.noteProgressLocked();
+    state.completionAdvanced.notify_all();
+  }
   if (bufferError != nil) {
     std::lock_guard<std::mutex> lock(outcome.mutex);
     if (outcome.firstError == nil) {
@@ -536,6 +588,17 @@ struct MetalDevice::Impl {
   /// Waits the submission being encoded places at the start of its first command buffer, one per
   /// producer with the latest serial it needs. Set and cleared around one \ref onSubmit.
   std::vector<PendingSourceWait> pendingSourceWaits;
+  /// The producers a committed submission waits on, kept while it is outstanding so a wait for
+  /// room can tell work held behind a progressing producer from work that is stuck.
+  struct OutstandingSources {
+    uint64_t serial = 0;  //!< Serial of the submission.
+    /// Completion of each producer it waits on. Weak, so a producer's teardown is not delayed by
+    /// a consumer's record of it.
+    std::vector<std::weak_ptr<CompletionState>> producers;
+  };
+  /// Uncompleted submissions that wait on another device, in serial order. Touched only by the
+  /// submitting thread.
+  std::deque<OutstandingSources> outstandingSources;
   /// \ref completionState as exports of this device's textures report it; created on the first
   /// export.
   std::shared_ptr<const SubmissionCompletion> exportCompletion;
@@ -851,6 +914,31 @@ struct MetalDevice::Impl {
   /// Encodes all queued writes ahead of this submission without submitting separate work.
   Status encodePendingWrites(EncodingState& state);
 
+  /**
+   * Waits until committing \p buffers more command buffers keeps at most
+   * \ref MetalDevice::kMaxCommandBuffersInFlight uncompleted. Returns at once when that already
+   * holds, which is every ordinary frame.
+   *
+   * The wait gives up once neither this device nor a producer its outstanding work waits on has
+   * made progress for \ref submissionStallTimeoutSeconds, measured from that progress, or once it
+   * has lasted \ref submissionWaitCapSeconds in all. It then declares the root lost, attributed
+   * to the queue wait, before refusing the submission. A loss declared over the root during the
+   * wait ends it at once.
+   *
+   * @param device Device submitting, whose root's loss condition the wait observes.
+   * @param submissionSerial Serial the submission is about to be committed under.
+   * @param buffers Command buffers the submission carries.
+   */
+  Status waitForCommandBufferRoom(const MetalDevice& device, uint64_t submissionSerial,
+                                  uint64_t buffers);
+
+  /// The latest progress among this device and the producers its uncompleted submissions wait
+  /// on. Requires \ref CompletionState::watermarkMutex of \ref completionState.
+  std::chrono::steady_clock::time_point latestProgressLocked() const;
+
+  /// Drops the records of submissions that have completed from \ref outstandingSources.
+  void pruneOutstandingSources();
+
   /// Creates a command buffer and encodes its optional pause, and the queued uploads when this
   /// is the submission's first buffer.
   /// @param state Encoding state. @param encodeQueuedWrites Whether to encode the queued uploads.
@@ -1038,7 +1126,9 @@ uint64_t MetalDevice::commandBufferRoomWaitsForTest() const {
 }
 
 uint64_t MetalDevice::commandBuffersInFlightForTest() const {
-  return 0;
+  CompletionState& state = *impl_->completionState;
+  std::lock_guard<std::mutex> lock(state.watermarkMutex);
+  return state.buffersOutstanding;
 }
 
 void MetalDevice::releaseHeldCompletionForTest() {
@@ -1081,6 +1171,16 @@ MetalDevice::~MetalDevice() {
     if (lastSubmittedSerial() > completedSerial()) {
       waitForSerial(lastSubmittedSerial(), /*timeoutSeconds=*/5.0);
     }
+#ifndef NDEBUG
+    // Once every submission is published complete on a root that is not lost, every command buffer
+    // has been counted back out of the backstop.
+    if (!isLost() && completedSerial() >= lastSubmittedSerial()) {
+      CompletionState& state = *impl_->completionState;
+      std::lock_guard<std::mutex> lock(state.watermarkMutex);
+      assert(state.buffersOutstanding == 0 &&
+             "a Metal command buffer completed without being counted back out");
+    }
+#endif
     poll();
     // Inside the pool, so whatever releasing the backend state's Metal objects autoreleases drains
     // here rather than in the calling thread's pool.
@@ -2394,19 +2494,15 @@ Status MetalDevice::Impl::encodePendingWrites(EncodingState& state) {
 
 Status MetalDevice::Impl::beginSubmission(EncodingState& state, bool encodeQueuedWrites) {
   if (commandQueue == nil) {
-    // Sized above the runtime's per-submission command-buffer bound rather than left at the
-    // default. A submission acquires a buffer per element and commits none of them until every
-    // element has encoded; -[MTLCommandQueue commandBuffer] blocks once the queue's uncompleted
-    // buffers reach its maximum, and a buffer this submission is still holding uncommitted can
-    // never complete, so a queue no larger than the bound could block on its own work. One
-    // thread submits to a device at a time, so at most one submission ever holds uncommitted
-    // buffers; every slot above the bound belongs to a committed buffer, which completes once the
-    // device-side waits it carries are met. A committed buffer can wait on another device's
-    // completion event, so a queue filled with buffers held behind a producer blocks here until
-    // that producer's work ends, the root is declared lost, or the system ends the stalled work;
-    // it never blocks on this submission's own buffers.
-    commandQueue = [device
-        newCommandQueueWithMaxCommandBufferCount:2 * Device::kMaxCommandBuffersPerSubmission];
+    // -[MTLCommandQueue commandBuffer] blocks without a bound once the queue's uncompleted
+    // buffers reach its maximum, so the queue is sized never to fill. waitForCommandBufferRoom
+    // admits a submission only when its buffers, counted before any of them is acquired, keep
+    // the buffers committed and not yet completed within kMaxCommandBuffersInFlight. Metal can
+    // count a buffer as uncompleted for a moment after its completion handler has run, so the
+    // queue holds one more submission's worth as a margin for buffers it is still retiring.
+    commandQueue =
+        [device newCommandQueueWithMaxCommandBufferCount:kMaxCommandBuffersInFlight +
+                                                         Device::kMaxCommandBuffersPerSubmission];
     if (commandQueue == nil) {
       return GpuError{GpuErrorType::InvalidState, "Metal command queue creation failed"};
     }
@@ -2428,6 +2524,93 @@ Status MetalDevice::Impl::beginSubmission(EncodingState& state, bool encodeQueue
   }
 
   return encodeQueuedWrites ? encodePendingWrites(state) : OkStatus();
+}
+
+Status MetalDevice::Impl::waitForCommandBufferRoom(const MetalDevice& device,
+                                                   uint64_t submissionSerial, uint64_t buffers) {
+  CompletionState& state = *completionState;
+  {
+    std::lock_guard<std::mutex> lock(state.watermarkMutex);
+    if (state.buffersOutstanding + buffers <= kMaxCommandBuffersInFlight) {
+      return OkStatus();
+    }
+  }
+  commandBufferRoomWaits.fetch_add(1, std::memory_order_release);
+  pruneOutstandingSources();
+
+  using Clock = std::chrono::steady_clock;
+  const auto stallBound = std::chrono::duration_cast<Clock::duration>(
+      std::chrono::duration<double>(submissionStallTimeoutSeconds));
+  const auto cap = std::chrono::duration_cast<Clock::duration>(
+      std::chrono::duration<double>(submissionWaitCapSeconds));
+  const Clock::time_point waitStart = Clock::now();
+  bool capped = false;
+  {
+    std::unique_lock<std::mutex> lock(state.watermarkMutex);
+    for (;;) {
+      // The loss first: a root lost during the wait takes no more work, even work it now has room
+      // for.
+      if (device.isLost()) {
+        return GpuError{GpuErrorType::DeviceLost,
+                        "submit: the Metal root was lost while the submission waited for room"};
+      }
+      if (state.buffersOutstanding + buffers <= kMaxCommandBuffersInFlight) {
+        return OkStatus();
+      }
+      // A producer's progress is sampled here, at each wake, rather than waking this wait: this
+      // device's own completions notify it, and otherwise it wakes at the deadline and looks
+      // again before giving up.
+      const Clock::time_point progressAt = latestProgressLocked();
+      const Clock::time_point now = Clock::now();
+      if (now - waitStart >= cap) {
+        capped = true;
+        break;
+      }
+      if (now - progressAt >= stallBound) {
+        break;
+      }
+      state.completionAdvanced.wait_until(lock, std::min(progressAt + stallBound, waitStart + cap));
+    }
+  }
+  // Declared with the lock released: the declaration runs this device's loss release, which takes
+  // it.
+  device.markLostAfterWaitTimeout(
+      DeviceLostWaitSite::QueueIdle,
+      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - waitStart),
+      capped ? "a Metal submission waited for room in flight longer than its cap"
+             : "no Metal command buffer in flight, nor work it waits on, completed within the "
+               "stall bound");
+  return GpuError{
+      GpuErrorType::DeviceLost,
+      capped ? std::format("submit: submission {} waited {} s for room among the command buffers "
+                           "in flight, so it was refused and the Metal root declared lost",
+                           submissionSerial, submissionWaitCapSeconds)
+             : std::format("submit: no work in flight completed within {} s, so submission {} was "
+                           "refused and the Metal root declared lost",
+                           submissionStallTimeoutSeconds, submissionSerial)};
+}
+
+std::chrono::steady_clock::time_point MetalDevice::Impl::latestProgressLocked() const {
+  std::chrono::steady_clock::time_point latest = completionState->lastProgress();
+  const uint64_t completed = completionState->completedSerial.load(std::memory_order_acquire);
+  for (const OutstandingSources& sources : outstandingSources) {
+    if (sources.serial <= completed) {
+      continue;
+    }
+    for (const std::weak_ptr<CompletionState>& weakProducer : sources.producers) {
+      if (std::shared_ptr<CompletionState> producer = weakProducer.lock()) {
+        latest = std::max(latest, producer->lastProgress());
+      }
+    }
+  }
+  return latest;
+}
+
+void MetalDevice::Impl::pruneOutstandingSources() {
+  const uint64_t completed = completionState->completedSerial.load(std::memory_order_acquire);
+  while (!outstandingSources.empty() && outstandingSources.front().serial <= completed) {
+    outstandingSources.pop_front();
+  }
 }
 
 void MetalDevice::Impl::didSubmitWrites(uint64_t submissionSerial) {
@@ -2502,6 +2685,13 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial,
       // because the completion handler below has to go on a command buffer that exists.
       return GpuError{GpuErrorType::InvalidState, "submission carried no command buffer"};
     }
+    // Before any native buffer is acquired, so the queue never blocks, and before anything is
+    // encoded, so a refusal leaves the queue and the queued uploads as they were.
+    if (Status room =
+            impl_->waitForCommandBufferRoom(*this, submissionSerial, commandBuffers.size());
+        room.hasError()) {
+      return room;
+    }
 
     std::vector<Impl::EncodingState> states(commandBuffers.size());
     for (size_t i = 0; i < commandBuffers.size(); ++i) {
@@ -2516,11 +2706,22 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial,
 
     // One serial gets one completion, published once every buffer of the submission has reported.
     impl_->attachCompletionHandler(states, submissionSerial);
+    // Counted before the first commit, so no handler can count a buffer out before it is in.
+    impl_->completionState->noteCommitted(states.size());
     for (Impl::EncodingState& state : states) {
       [state.commandBuffer commit];
     }
     impl_->completionState->committedSerial.store(submissionSerial, std::memory_order_release);
     impl_->didSubmitWrites(submissionSerial);
+    impl_->pruneOutstandingSources();
+    if (!impl_->pendingSourceWaits.empty()) {
+      Impl::OutstandingSources sources{submissionSerial, {}};
+      sources.producers.reserve(impl_->pendingSourceWaits.size());
+      for (const Impl::PendingSourceWait& wait : impl_->pendingSourceWaits) {
+        sources.producers.emplace_back(wait.producer);
+      }
+      impl_->outstandingSources.push_back(std::move(sources));
+    }
 
     return OkStatus();
   }
