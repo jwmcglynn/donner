@@ -2629,6 +2629,7 @@ private:
       ExpressionInfo result;
       if (type.isAbstract()) {
         result = NegateAbstract(op, operand);
+        RecordNegatedFold(op, operand, result);
       } else {
         if (!ValidUnaryType(op.kind, type)) {
           Fail(ErrorCode::TypeMismatch, op.span);
@@ -3908,6 +3909,23 @@ private:
       return;
     }
     module_.foldedConstants[count++] = FoldedConstant{span, expression};
+  }
+
+  /// Records the abstract-float negation p result of p operand as the outermost fold when the
+  /// operand holds the last recorded fold, as in `-(1.0 / 3.0)`. The projection then carries the
+  /// negated value, in f32 once the parser converts it, rather than an abstract value a browser
+  /// would negate and then round either way. Other operations on a fold need no record: f32
+  /// negation is exact, and conversions and constructions convert the folded node in place.
+  /// @param op Unary operator. @param operand Negated expression. @param result Negation.
+  constexpr void RecordNegatedFold(Token op, const ExpressionInfo& operand,
+                                   const ExpressionInfo& result) {
+    const uint16_t count = module_.foldedConstantCount;
+    const SourceSpan source = SyntaxOf(operand);
+    if (op.kind == TokenKind::Minus &&
+        ExpressionAt(result.id).type.kind == TypeKind::AbstractFloat && count > 0 &&
+        module_.foldedConstants[count - 1].span.begin >= source.begin) {
+      RecordFoldedConstant(SourceSpan{op.span.begin, source.end}, result.id);
+    }
   }
 
   /// Returns whether the parentheses and brackets in p span balance, ignoring `//` comments.
