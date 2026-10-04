@@ -11,7 +11,7 @@
 namespace donner::gpu::shader {
 
 /**
- * Emits deterministic SPIR-V words for \p module (design 0053 "Original emitters").
+ * Emits deterministic SPIR-V words for \p module.
  *
  * Targets SPIR-V 1.3 for Vulkan 1.1: Logical addressing, the GLSL450 memory model, the Shader
  * capability (plus ImageQuery only when the module calls textureDimensions), and the

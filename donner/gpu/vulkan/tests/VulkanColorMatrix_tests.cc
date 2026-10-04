@@ -1,5 +1,5 @@
 /// @file
-/// The Vulkan compute vertical slice: runs the color-matrix kernel emitted from the shader IR
+/// The Vulkan compute test: runs the color-matrix kernel emitted from the shader IR
 /// through donner::gpu::vulkan::VulkanDevice and compares the destination texels byte-for-byte
 /// against the same result computed on the host.
 
@@ -62,33 +62,33 @@
 #include "donner/gpu/shader/tests/CompiledTile.h"
 #include "donner/gpu/shader/tests/CompiledTurbulence.h"
 #include "donner/gpu/shader/tests/FloatStorageModule.h"
-#include "donner/gpu/tests/BlurSlice.h"
-#include "donner/gpu/tests/ColorMatrixSlice.h"
-#include "donner/gpu/tests/ColorSpaceConvertSlice.h"
-#include "donner/gpu/tests/ComponentTransferSlice.h"
-#include "donner/gpu/tests/CompositeSlice.h"
-#include "donner/gpu/tests/ConvolveMatrixSlice.h"
-#include "donner/gpu/tests/DisplacementMapSlice.h"
-#include "donner/gpu/tests/DropShadowSlice.h"
-#include "donner/gpu/tests/FilterBlendSlice.h"
-#include "donner/gpu/tests/FilterColorMatrixSlice.h"
-#include "donner/gpu/tests/FilterImageSlice.h"
-#include "donner/gpu/tests/FilterResolveSlice.h"
-#include "donner/gpu/tests/FlatInterfaceSlice.h"
-#include "donner/gpu/tests/FloatTextureSlice.h"
-#include "donner/gpu/tests/FloodSlice.h"
-#include "donner/gpu/tests/ImageBlitSlice.h"
-#include "donner/gpu/tests/LightingSlice.h"
-#include "donner/gpu/tests/MergeSlice.h"
-#include "donner/gpu/tests/MorphologySlice.h"
-#include "donner/gpu/tests/OffsetSlice.h"
-#include "donner/gpu/tests/SlugFillSlice.h"
-#include "donner/gpu/tests/SlugGradientSlice.h"
-#include "donner/gpu/tests/SlugMaskSlice.h"
-#include "donner/gpu/tests/SnapshotUnpremultiplySlice.h"
-#include "donner/gpu/tests/SubregionClipSlice.h"
-#include "donner/gpu/tests/TileSlice.h"
-#include "donner/gpu/tests/TurbulenceSlice.h"
+#include "donner/gpu/tests/BlurScene.h"
+#include "donner/gpu/tests/ColorMatrixScene.h"
+#include "donner/gpu/tests/ColorSpaceConvertScene.h"
+#include "donner/gpu/tests/ComponentTransferScene.h"
+#include "donner/gpu/tests/CompositeScene.h"
+#include "donner/gpu/tests/ConvolveMatrixScene.h"
+#include "donner/gpu/tests/DisplacementMapScene.h"
+#include "donner/gpu/tests/DropShadowScene.h"
+#include "donner/gpu/tests/FilterBlendScene.h"
+#include "donner/gpu/tests/FilterColorMatrixScene.h"
+#include "donner/gpu/tests/FilterImageScene.h"
+#include "donner/gpu/tests/FilterResolveScene.h"
+#include "donner/gpu/tests/FlatInterfaceScene.h"
+#include "donner/gpu/tests/FloatTextureScene.h"
+#include "donner/gpu/tests/FloodScene.h"
+#include "donner/gpu/tests/ImageBlitScene.h"
+#include "donner/gpu/tests/LightingScene.h"
+#include "donner/gpu/tests/MergeScene.h"
+#include "donner/gpu/tests/MorphologyScene.h"
+#include "donner/gpu/tests/OffsetScene.h"
+#include "donner/gpu/tests/SlugFillScene.h"
+#include "donner/gpu/tests/SlugGradientScene.h"
+#include "donner/gpu/tests/SlugMaskScene.h"
+#include "donner/gpu/tests/SnapshotUnpremultiplyScene.h"
+#include "donner/gpu/tests/SubregionClipScene.h"
+#include "donner/gpu/tests/TileScene.h"
+#include "donner/gpu/tests/TurbulenceScene.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #include "donner/gpu/vulkan/VulkanResourceState.h"
 
@@ -163,7 +163,7 @@ protected:
       const char* requireVulkan = std::getenv("DONNER_REQUIRE_VULKAN");
       if (requireVulkan != nullptr && std::string_view(requireVulkan) == "1") {
         FAIL() << "DONNER_REQUIRE_VULKAN=1 is set but no Vulkan 1.1 device is available; the "
-                  "vertical-slice gate must not be skipped on this runner";
+                  "native Vulkan gate must not be skipped on this runner";
       }
       GTEST_SKIP() << "No Vulkan 1.1 device available";
     }
@@ -381,154 +381,154 @@ TEST_F(VulkanColorMatrixTest, CompositeOver) {
   gpu::tests::CheckComposite(
       *device_, shader::programs::CompositeNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::composite_slice::Case::Over);
+      gpu::tests::composite_scene::Case::Over);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, CompositeIn) {
   gpu::tests::CheckComposite(
       *device_, shader::programs::CompositeNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::composite_slice::Case::In);
+      gpu::tests::composite_scene::Case::In);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, CompositeOut) {
   gpu::tests::CheckComposite(
       *device_, shader::programs::CompositeNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::composite_slice::Case::Out);
+      gpu::tests::composite_scene::Case::Out);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, CompositeAtop) {
   gpu::tests::CheckComposite(
       *device_, shader::programs::CompositeNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::composite_slice::Case::Atop);
+      gpu::tests::composite_scene::Case::Atop);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, CompositeXor) {
   gpu::tests::CheckComposite(
       *device_, shader::programs::CompositeNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::composite_slice::Case::Xor);
+      gpu::tests::composite_scene::Case::Xor);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, CompositeLighter) {
   gpu::tests::CheckComposite(
       *device_, shader::programs::CompositeNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::composite_slice::Case::Lighter);
+      gpu::tests::composite_scene::Case::Lighter);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, CompositeArithmetic) {
   gpu::tests::CheckComposite(
       *device_, shader::programs::CompositeNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::composite_slice::Case::Arithmetic);
+      gpu::tests::composite_scene::Case::Arithmetic);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, CompositeUnknownOperator) {
   gpu::tests::CheckComposite(
       *device_, shader::programs::CompositeNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::composite_slice::Case::UnknownOperator);
+      gpu::tests::composite_scene::Case::UnknownOperator);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, CompositeUsesReflectedBindingsAndWorkgroup) {
   gpu::tests::CheckComposite(
       *device_, shader::tests::CompositeMutatedAllProjections(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::composite_slice::Case::Arithmetic);
+      gpu::tests::composite_scene::Case::Arithmetic);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, FilterColorMatrixIdentity) {
   gpu::tests::CheckFilterColorMatrix(
       *device_, shader::programs::FilterColorMatrixNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::filter_color_matrix_slice::Case::Identity);
+      gpu::tests::filter_color_matrix_scene::Case::Identity);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, FilterColorMatrixSaturate) {
   gpu::tests::CheckFilterColorMatrix(
       *device_, shader::programs::FilterColorMatrixNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::filter_color_matrix_slice::Case::Saturate);
+      gpu::tests::filter_color_matrix_scene::Case::Saturate);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, FilterColorMatrixHueRotate) {
   gpu::tests::CheckFilterColorMatrix(
       *device_, shader::programs::FilterColorMatrixNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::filter_color_matrix_slice::Case::HueRotate);
+      gpu::tests::filter_color_matrix_scene::Case::HueRotate);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, FilterColorMatrixLuminanceToAlpha) {
   gpu::tests::CheckFilterColorMatrix(
       *device_, shader::programs::FilterColorMatrixNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::filter_color_matrix_slice::Case::LuminanceToAlpha);
+      gpu::tests::filter_color_matrix_scene::Case::LuminanceToAlpha);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, FilterColorMatrixOffsetOnly) {
   gpu::tests::CheckFilterColorMatrix(
       *device_, shader::programs::FilterColorMatrixNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::filter_color_matrix_slice::Case::OffsetOnly);
+      gpu::tests::filter_color_matrix_scene::Case::OffsetOnly);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, FilterColorMatrixZeroAlphaOffset) {
   gpu::tests::CheckFilterColorMatrix(
       *device_, shader::programs::FilterColorMatrixNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::filter_color_matrix_slice::Case::ZeroAlphaOffset);
+      gpu::tests::filter_color_matrix_scene::Case::ZeroAlphaOffset);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, FilterColorMatrixClamped) {
   gpu::tests::CheckFilterColorMatrix(
       *device_, shader::programs::FilterColorMatrixNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::filter_color_matrix_slice::Case::Clamped);
+      gpu::tests::filter_color_matrix_scene::Case::Clamped);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, FilterColorMatrixUsesReflectedBindingsAndWorkgroup) {
   gpu::tests::CheckFilterColorMatrix(
       *device_, shader::tests::FilterColorMatrixMutatedAllProjections(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::filter_color_matrix_slice::Case::Saturate);
+      gpu::tests::filter_color_matrix_scene::Case::Saturate);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, SubregionClipIdentity) {
   gpu::tests::CheckSubregionClip(
       *device_, shader::programs::SubregionClipNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::subregion_clip_slice::Case::Identity);
+      gpu::tests::subregion_clip_scene::Case::Identity);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, SubregionClipScaled) {
   gpu::tests::CheckSubregionClip(
       *device_, shader::programs::SubregionClipNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::subregion_clip_slice::Case::Scaled);
+      gpu::tests::subregion_clip_scene::Case::Scaled);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, SubregionClipRotated) {
   gpu::tests::CheckSubregionClip(
       *device_, shader::programs::SubregionClipNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::subregion_clip_slice::Case::Rotated);
+      gpu::tests::subregion_clip_scene::Case::Rotated);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, SubregionClipEmpty) {
   gpu::tests::CheckSubregionClip(
       *device_, shader::programs::SubregionClipNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::subregion_clip_slice::Case::Empty);
+      gpu::tests::subregion_clip_scene::Case::Empty);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, SubregionClipUsesReflectedBindingsAndWorkgroup) {
   gpu::tests::CheckSubregionClip(
       *device_, shader::tests::SubregionClipMutatedAllProjections(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::subregion_clip_slice::Case::Scaled);
+      gpu::tests::subregion_clip_scene::Case::Scaled);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 TEST_F(VulkanColorMatrixTest, SnapshotUnpremultiplyRoundsHalfUpLikeTheHostPath) {
@@ -565,142 +565,142 @@ TEST_F(VulkanColorMatrixTest, ColorSpaceConvertUsesReflectedBindingsAndWorkgroup
 TEST_F(VulkanColorMatrixTest, ImageBlitNearest) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Nearest});
+                             {gpu::tests::image_blit_scene::Case::Nearest});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitLinear) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Linear});
+                             {gpu::tests::image_blit_scene::Case::Linear});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitPixelated) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Pixelated});
+                             {gpu::tests::image_blit_scene::Case::Pixelated});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitCropped) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Cropped});
+                             {gpu::tests::image_blit_scene::Case::Cropped});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitStraight) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Straight});
+                             {gpu::tests::image_blit_scene::Case::Straight});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitPremultiplied) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Premultiplied});
+                             {gpu::tests::image_blit_scene::Case::Premultiplied});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitLuminanceMask) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::LuminanceMask});
+                             {gpu::tests::image_blit_scene::Case::LuminanceMask});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitAlphaMask) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::AlphaMask});
+                             {gpu::tests::image_blit_scene::Case::AlphaMask});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitMaskBounds) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::MaskBounds});
+                             {gpu::tests::image_blit_scene::Case::MaskBounds});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitPathClip) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::PathClip});
+                             {gpu::tests::image_blit_scene::Case::PathClip});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend0) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 0u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 0u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend1) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 1u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 1u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend2) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 2u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 2u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend3) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 3u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 3u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend4) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 4u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 4u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend5) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 5u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 5u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend6) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 6u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 6u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend7) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 7u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 7u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend8) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 8u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 8u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend9) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 9u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 9u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend10) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 10u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 10u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend11) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 11u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 11u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend12) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 12u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 12u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend13) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 13u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 13u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend14) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 14u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 14u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitBlend15) {
   gpu::tests::CheckImageBlit(*device_, shader::programs::ImageBlitNativeShader(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Blend, 15u});
+                             {gpu::tests::image_blit_scene::Case::Blend, 15u});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitMutated) {
   gpu::tests::CheckImageBlit(*device_, shader::tests::ImageBlitMutatedAllProjections(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Linear});
+                             {gpu::tests::image_blit_scene::Case::Linear});
 }
 TEST_F(VulkanColorMatrixTest, ImageBlitExplicitLevel) {
   gpu::tests::CheckImageBlit(*device_, shader::tests::ImageBlitExplicitLevelAllProjections(),
                              [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                             {gpu::tests::image_blit_slice::Case::Linear});
+                             {gpu::tests::image_blit_scene::Case::Linear});
 }
 TEST_F(VulkanColorMatrixTest, WgslArraySwitch) {
   gpu::tests::CheckFloatTextureStorage(
@@ -892,7 +892,7 @@ TEST_F(VulkanColorMatrixTest, ConvolveMatrixPreservesSvgSamplingAndAlphaSemantic
       gpu::tests::CheckConvolveMatrixStorage(
           *device_, descriptor,
           [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, edgeMode,
-          preserveAlpha, gpu::tests::convolve_matrix_slice::ArrayIndexMode::Authored, &convolve);
+          preserveAlpha, gpu::tests::convolve_matrix_scene::ArrayIndexMode::Authored, &convolve);
     }
   }
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
@@ -909,16 +909,16 @@ TEST_F(VulkanColorMatrixTest, ConvolveMatrixUsesReflectedBindingAndWorkgroupMeta
       *device_,
       shader::MakeShaderDescriptor(convolve, ShaderSourceKind::Spirv, "ConvolveMatrixMutated"),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); }, 1u, true,
-      gpu::tests::convolve_matrix_slice::ArrayIndexMode::Authored, &convolve);
+      gpu::tests::convolve_matrix_scene::ArrayIndexMode::Authored, &convolve);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
 TEST_F(VulkanColorMatrixTest, ConvolveMatrixClampsHighAndLowStorageIndices) {
   for (const auto [convolve, mode] :
        {std::pair{&shader::tests::ConvolveMatrixHighIndexAllProjections(),
-                  gpu::tests::convolve_matrix_slice::ArrayIndexMode::High},
+                  gpu::tests::convolve_matrix_scene::ArrayIndexMode::High},
         std::pair{&shader::tests::ConvolveMatrixLowIndexAllProjections(),
-                  gpu::tests::convolve_matrix_slice::ArrayIndexMode::Low}}) {
+                  gpu::tests::convolve_matrix_scene::ArrayIndexMode::Low}}) {
     gpu::tests::CheckConvolveMatrixStorage(
         *device_,
         shader::MakeShaderDescriptor(*convolve, ShaderSourceKind::Spirv, "ConvolveMatrixIndex"),
@@ -1274,7 +1274,7 @@ TEST_F(VulkanColorMatrixTest, DispatchMatchesTheHostComputedResult) {
   Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
   ASSERT_FALSE(pixels.hasError()) << pixels.error();
 
-  // The arithmetic is exact in unorm8 (see ColorMatrixSlice.h), so every texel must match the
+  // The arithmetic is exact in unorm8 (see ColorMatrixScene.h), so every texel must match the
   // host result byte-for-byte.
   for (uint32_t y = 0; y < kColorMatrixHeight; ++y) {
     for (uint32_t x = 0; x < kColorMatrixWidth; ++x) {
@@ -1292,347 +1292,347 @@ TEST_F(VulkanColorMatrixTest, SlugGradientLinear) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::Linear);
+      gpu::tests::slug_gradient_scene::Case::Linear);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientBinary) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::Binary);
+      gpu::tests::slug_gradient_scene::Case::Binary);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientReflect) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::Reflect);
+      gpu::tests::slug_gradient_scene::Case::Reflect);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientRepeat) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::Repeat);
+      gpu::tests::slug_gradient_scene::Case::Repeat);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientTransformed) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::Transformed);
+      gpu::tests::slug_gradient_scene::Case::Transformed);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientTransparentStops) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::TransparentStops);
+      gpu::tests::slug_gradient_scene::Case::TransparentStops);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientManyStops) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::ManyStops);
+      gpu::tests::slug_gradient_scene::Case::ManyStops);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientEmptyStops) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::EmptyStops);
+      gpu::tests::slug_gradient_scene::Case::EmptyStops);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientSingleStop) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::SingleStop);
+      gpu::tests::slug_gradient_scene::Case::SingleStop);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientRadial) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::Radial);
+      gpu::tests::slug_gradient_scene::Case::Radial);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientFocal) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::Focal);
+      gpu::tests::slug_gradient_scene::Case::Focal);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientFocalRadius) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::FocalRadius);
+      gpu::tests::slug_gradient_scene::Case::FocalRadius);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientRadialOutside) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::RadialOutside);
+      gpu::tests::slug_gradient_scene::Case::RadialOutside);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientRadialDegenerate) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::RadialDegenerate);
+      gpu::tests::slug_gradient_scene::Case::RadialDegenerate);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientZeroRadius) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::ZeroRadius);
+      gpu::tests::slug_gradient_scene::Case::ZeroRadius);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientClipMask) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::ClipMask);
+      gpu::tests::slug_gradient_scene::Case::ClipMask);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientClipPolygon) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::ClipPolygon);
+      gpu::tests::slug_gradient_scene::Case::ClipPolygon);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientEvenOdd) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::EvenOdd);
+      gpu::tests::slug_gradient_scene::Case::EvenOdd);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientDeclaredRange) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::programs::SlugGradientNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::DeclaredRange);
+      gpu::tests::slug_gradient_scene::Case::DeclaredRange);
 }
 TEST_F(VulkanColorMatrixTest, SlugGradientMutated) {
   gpu::tests::CheckSlugGradient(
       *device_, shader::tests::SlugGradientMutatedAllProjections(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_gradient_slice::Case::ManyStops);
+      gpu::tests::slug_gradient_scene::Case::ManyStops);
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque0) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {0u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {0u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque1) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {1u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {1u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque2) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {2u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {2u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque3) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {3u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {3u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque4) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {4u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {4u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque5) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {5u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {5u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque6) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {6u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {6u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque7) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {7u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {7u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque8) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {8u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {8u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque9) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {9u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {9u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque10) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {10u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {10u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque11) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {11u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {11u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque12) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {12u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {12u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque13) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {13u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {13u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque14) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {14u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {14u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendOpaque15) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {15u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {15u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendPremultiplied0) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {0u, gpu::tests::filter_blend_slice::Case::Premultiplied});
+                               {0u, gpu::tests::filter_blend_scene::Case::Premultiplied});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendPremultiplied1) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {1u, gpu::tests::filter_blend_slice::Case::Premultiplied});
+                               {1u, gpu::tests::filter_blend_scene::Case::Premultiplied});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendPremultiplied2) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {2u, gpu::tests::filter_blend_slice::Case::Premultiplied});
+                               {2u, gpu::tests::filter_blend_scene::Case::Premultiplied});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendPremultiplied12) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {12u, gpu::tests::filter_blend_slice::Case::Premultiplied});
+                               {12u, gpu::tests::filter_blend_scene::Case::Premultiplied});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendPremultiplied13) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {13u, gpu::tests::filter_blend_slice::Case::Premultiplied});
+                               {13u, gpu::tests::filter_blend_scene::Case::Premultiplied});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendPremultiplied15) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {15u, gpu::tests::filter_blend_slice::Case::Premultiplied});
+                               {15u, gpu::tests::filter_blend_scene::Case::Premultiplied});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendTransparent0) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {0u, gpu::tests::filter_blend_slice::Case::Transparent});
+                               {0u, gpu::tests::filter_blend_scene::Case::Transparent});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendTransparent12) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {12u, gpu::tests::filter_blend_slice::Case::Transparent});
+                               {12u, gpu::tests::filter_blend_scene::Case::Transparent});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendBounds) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {2u, gpu::tests::filter_blend_slice::Case::Bounds});
+                               {2u, gpu::tests::filter_blend_scene::Case::Bounds});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendUnknownMode) {
   gpu::tests::CheckFilterBlend(*device_, shader::programs::FilterBlendNativeShader(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {42u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {42u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 TEST_F(VulkanColorMatrixTest, FilterBlendMutated) {
   gpu::tests::CheckFilterBlend(*device_, shader::tests::FilterBlendMutatedAllProjections(),
                                [this](const Buffer& b) { return device_->readBackBuffer(b); },
-                               {12u, gpu::tests::filter_blend_slice::Case::Opaque});
+                               {12u, gpu::tests::filter_blend_scene::Case::Opaque});
 }
 
 TEST_F(VulkanColorMatrixTest, SlugFillAnalytic) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::Analytic);
+      gpu::tests::slug_fill_scene::Case::Analytic);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillBinary) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::Binary);
+      gpu::tests::slug_fill_scene::Case::Binary);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillEvenOddBinary) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::EvenOdd);
+      gpu::tests::slug_fill_scene::Case::EvenOdd);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillClip) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::Clip);
+      gpu::tests::slug_fill_scene::Case::Clip);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillClipRect) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::ClipRect);
+      gpu::tests::slug_fill_scene::Case::ClipRect);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillPattern) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::Pattern);
+      gpu::tests::slug_fill_scene::Case::Pattern);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillBatched) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::Batched);
+      gpu::tests::slug_fill_scene::Case::Batched);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillFirstInstance) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::FirstInstance);
+      gpu::tests::slug_fill_scene::Case::FirstInstance);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillOverlap) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::Overlap);
+      gpu::tests::slug_fill_scene::Case::Overlap);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillDeclaredRange) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::DeclaredRange);
+      gpu::tests::slug_fill_scene::Case::DeclaredRange);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillLinearGradient) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::LinearGradient);
+      gpu::tests::slug_fill_scene::Case::LinearGradient);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillRadialGradient) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::RadialGradient);
+      gpu::tests::slug_fill_scene::Case::RadialGradient);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillAnalyticEvenOdd) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_fill_slice::Case::AnalyticEvenOdd);
+      gpu::tests::slug_fill_scene::Case::AnalyticEvenOdd);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillBatchedPattern) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_fill_slice::Case::BatchedPattern);
+      gpu::tests::slug_fill_scene::Case::BatchedPattern);
 }
 TEST_F(VulkanColorMatrixTest, SlugFillBatchedClipRect) {
   gpu::tests::CheckSlugFill(
       *device_, shader::programs::SlugFillNativeShader(),
       [this](const Buffer& b) { return device_->readBackBuffer(b); },
-      gpu::tests::slug_fill_slice::Case::BatchedClipRect);
+      gpu::tests::slug_fill_scene::Case::BatchedClipRect);
 }
 TEST_F(VulkanColorMatrixTest, SlugFlatFirstVertexAndInstanceBase) {
   gpu::tests::CheckFlatInterface(*device_, shader::tests::SlugFlatInterfaceAllProjections(),
@@ -1642,14 +1642,14 @@ TEST_F(VulkanColorMatrixTest, SlugFillMutatedInterface) {
   gpu::tests::CheckSlugFill(
       *device_, shader::tests::SlugFillMutatedAllProjections(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_fill_slice::Case::Analytic);
+      gpu::tests::slug_fill_scene::Case::Analytic);
 }
 
 TEST_F(VulkanColorMatrixTest, SlugMaskAnalyticRectangle) {
   gpu::tests::CheckSlugMask(
       *device_, shader::programs::SlugMaskNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_mask_slice::Case::Analytic);
+      gpu::tests::slug_mask_scene::Case::Analytic);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
@@ -1657,7 +1657,7 @@ TEST_F(VulkanColorMatrixTest, SlugMaskBinaryRectangle) {
   gpu::tests::CheckSlugMask(
       *device_, shader::programs::SlugMaskNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_mask_slice::Case::Binary);
+      gpu::tests::slug_mask_scene::Case::Binary);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
@@ -1665,7 +1665,7 @@ TEST_F(VulkanColorMatrixTest, SlugMaskNestedClipCoverage) {
   gpu::tests::CheckSlugMask(
       *device_, shader::programs::SlugMaskNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_mask_slice::Case::NestedClip);
+      gpu::tests::slug_mask_scene::Case::NestedClip);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
@@ -1673,7 +1673,7 @@ TEST_F(VulkanColorMatrixTest, SlugMaskDoubleNonzeroWinding) {
   gpu::tests::CheckSlugMask(
       *device_, shader::programs::SlugMaskNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_mask_slice::Case::DoubleNonzero);
+      gpu::tests::slug_mask_scene::Case::DoubleNonzero);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
@@ -1681,7 +1681,7 @@ TEST_F(VulkanColorMatrixTest, SlugMaskDoubleEvenOddWinding) {
   gpu::tests::CheckSlugMask(
       *device_, shader::programs::SlugMaskNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_mask_slice::Case::DoubleEvenOdd);
+      gpu::tests::slug_mask_scene::Case::DoubleEvenOdd);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 
@@ -1689,7 +1689,7 @@ TEST_F(VulkanColorMatrixTest, SlugMaskStorageReadsRespectDeclaredRange) {
   gpu::tests::CheckSlugMask(
       *device_, shader::programs::SlugMaskNativeShader(),
       [this](const Buffer& buffer) { return device_->readBackBuffer(buffer); },
-      gpu::tests::slug_mask_slice::Case::DeclaredRange);
+      gpu::tests::slug_mask_scene::Case::DeclaredRange);
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 }
 

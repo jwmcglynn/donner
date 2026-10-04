@@ -72,7 +72,6 @@ test_suite(
     name = "editor_wasm_shipped_browser_audit",
     tags = ["manual"],
     tests = [
-        "//donner/editor/wasm:wasm_browser_no_c_webgpu_audit_test",
         "//donner/editor/wasm:wasm_shipped_browser_dependency_audit_test",
     ],
 )
@@ -82,7 +81,6 @@ test_suite(
     tags = ["manual"],
     tests = [
         "//donner/svg/renderer/wasm:geode_browser_default_audit_test",
-        "//donner/svg/renderer/wasm:geode_browser_no_c_webgpu_audit_test",
     ],
 )
 
@@ -96,6 +94,15 @@ test_suite(
     name = "editor_wasm_size_tests",
     tags = ["manual"],
     tests = ["//donner/editor/wasm:wasm_geode_package_size_tests"],
+)
+
+# The standalone Geode module is incompatible unless the browser backend is selected. The editor
+# Wasm lane requests it explicitly so that such a configuration fails the build instead of quietly
+# skipping the audits that pin its browser selection.
+filegroup(
+    name = "geode_wasm_browser_module",
+    srcs = ["//donner/svg/renderer/wasm:donner_wasm_geode"],
+    tags = ["manual"],
 )
 
 # The editor Wasm PR lane links both browser bridge variants before browser tests run.

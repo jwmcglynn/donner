@@ -96,7 +96,7 @@ TEST(FrozenBaselinePolicyTests, TheFailingNoDeviceMessageExplainsWhySkippingWasN
 
 TEST(FrozenBaselinePolicyTests, TheSlugIsOneDirectoryNamePerAdapter) {
   // The name the frozen pixels are filed under. Both the wgpu capture that writes those
-  // directories and the per-backend slices that read them derive it from here, so a disagreement
+  // directories and the per-backend tests that read them derive it from here, so a disagreement
   // would send one of them looking in a directory the other never writes.
   EXPECT_EQ(AdapterSlug("Apple M1 Pro", "Metal"), "apple_m1_pro_metal");
 

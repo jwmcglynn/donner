@@ -139,11 +139,12 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  * is checked and any failure fails closed with a \ref donner::gpu::GpuError; the backend never
  * crashes on such failures.
  *
- * Scope is exactly the solid-fill vertical slice: buffers and 2D single-sample textures, SPIR-V
- * shader modules (from \ref donner::gpu::shader::EmitSpirv), the solid-fill render pipeline
- * family, render passes with color attachments, and texture-to-buffer readback copies. Bind
- * group index N maps directly to Vulkan descriptor set N; binding numbers map directly to
- * SPIR-V binding decorations (the SPIR-V emitter uses DescriptorSet 0 / Binding b).
+ * Scope: buffers and 2D single-sample textures, SPIR-V shader modules, render pipelines with
+ * vertex buffer layouts, render passes with color attachments, scissors and viewports,
+ * non-indexed and indexed draws, compute pipelines and passes, texture-to-buffer and
+ * texture-to-texture copies, queue writes, host buffer mapping, and surface presentation. Bind
+ * group index N maps directly to Vulkan descriptor set N; binding numbers map directly to SPIR-V
+ * binding decorations.
  *
  * Targets Vulkan 1.1 core only: classic VkRenderPass + VkFramebuffer (no dynamic rendering),
  * per-submission VkFence completion tracking, and the core negative-viewport-height feature
@@ -173,6 +174,11 @@ std::vector<const char*> SelectPresentationExtensionsForTest(
  * device-lost result from the driver declares that condition, as a backend-reported loss, before
  * the error is latched; serial waits, texture uploads and mappings end as soon as any device over
  * the root has declared it.
+ *
+ * Several runtime devices can open over one \ref VulkanSharedRoot (\ref CreateOverSharedRoot).
+ * An owned texture exported from one registers on another as a read-only alias of the same
+ * VkImage, ordered by the shared queue. An image of another root is refused, and so is an
+ * acquired swapchain frame, which presentation can recycle.
  *
  * Which allocation a buffer is bound into is the allocator's decision, behind the seam in
  * VulkanBufferAllocator.h: one dedicated allocation per buffer today, with a suballocating
@@ -346,15 +352,23 @@ public:
    * Pass the resulting handle back as \ref donner::gpu::NativeSurfaceKind::EmbedderSurface.
    *
    * Returned as an opaque pointer so this header stays free of Vulkan types; it is a `VkInstance`.
-   * This device owns it and it stays valid for the device's lifetime. Ownership of a surface made
-   * against it stays with the embedder: destroy the runtime's surface first, then the embedder's,
-   * then this device. Null when the device was created without presentation support, since
-   * without the surface extensions there is nothing an embedder could create against it.
+   * The shared root this device retains owns it, so it stays valid for the device's lifetime.
+   * Ownership of a surface made against it stays with the embedder: destroy the runtime's surface
+   * first, then the embedder's, then this device. Null when the device was created without
+   * presentation support, since without the surface extensions there is nothing an embedder could
+   * create against it.
    */
   [[nodiscard]] void* nativeInstance() const;
 
-  /// Destructor; waits for in-flight submissions (vkDeviceWaitIdle), drains deferred
-  /// destructions, then destroys all remaining Vulkan objects in dependency-safe order.
+  /**
+   * Destructor. Proves this device's own work complete, waiting up to five seconds on each of its
+   * outstanding submission and upload fences and preparing each of its surfaces, then destroys its
+   * Vulkan objects in dependency order and releases its reference to the shared root. The root's
+   * instance, logical device and queue go when the root's last holder releases it, so devices over
+   * the same root are neither waited for nor torn down. If completion cannot be proved, this
+   * device's complete native graph is retained until process exit and later Vulkan device
+   * creation is refused.
+   */
   ~VulkanDevice() override;
 
   /// Serial of the most recent submission whose fence has signaled (0 if none). Polls pending
@@ -364,12 +378,12 @@ public:
   /**
    * Copies the full contents of \p buffer back to the host and returns the bytes.
    *
-   * Test/readback convenience for the vertical slice, pending the buffer mapping API: validates
-   * the handle (null, device identity, and generation) through the base class, then reads the
-   * persistently mapped host-visible allocation after waiting up to five seconds for this
-   * buffer's last submission. Unrelated work does not delay an idle buffer. Timeout or device
-   * failure returns an error without reading memory; fence completion makes device writes
-   * visible to the host for HOST_COHERENT memory.
+   * Synchronous test and diagnostic readback, outside the asynchronous mapping API
+   * (\ref donner::gpu::Device::mapBufferAsync): validates the handle (null, device identity, and
+   * generation) through the base class, then reads the persistently mapped host-visible
+   * allocation after waiting up to five seconds for this buffer's last submission. Unrelated work
+   * does not delay an idle buffer. Timeout or device failure returns an error without reading
+   * memory; fence completion makes device writes visible to the host for HOST_COHERENT memory.
    *
    * @param buffer Buffer to read back; must be a live buffer of this device.
    */
@@ -380,7 +394,7 @@ public:
   /// Reported through a backend-neutral enum so the header stays free of Vulkan types. This is a
   /// test accessor: a texture the backend never transitioned to the layout its descriptors
   /// declare is invalid use that a permissive driver executes anyway, so the mistake is not
-  /// observable in the pixels a slice reads back.
+  /// observable in the pixels a test reads back.
   enum class TrackedTextureLayout : uint8_t {
     Undefined,        //!< Never transitioned; contents undefined.
     General,          //!< Readable and writable, the layout a storage-texture binding declares.
@@ -401,7 +415,7 @@ public:
 
   /**
    * Whether \p view has a native image view. Test accessor: a view of a texture that can be
-   * neither sampled, stored to nor rendered to has none, and nothing a slice reads back shows
+   * neither sampled, stored to nor rendered to has none, and nothing a test reads back shows
    * whether one was made. Fails closed on a handle that does not name a live view of this device.
    *
    * @param view View to query.
@@ -410,7 +424,7 @@ public:
 
   /// One image barrier the backend recorded, reported as plain numbers so this header stays free
   /// of Vulkan types. Test accessor: which barriers are emitted is the whole contract of the
-  /// resource-state model, and it is not observable in the pixels a slice reads back.
+  /// resource-state model, and it is not observable in the pixels a test reads back.
   struct RecordedImageBarrierForTest {
     uint32_t textureSlot = 0;  //!< Slot of the texture the barrier applies to.
     uint32_t srcStage = 0;     //!< Source pipeline stage mask.

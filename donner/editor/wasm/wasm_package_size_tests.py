@@ -11,16 +11,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-DEFAULT_PAYLOAD_BUDGET_MODE = "strict"
-
-
-def _add_payload_budget_mode_argument(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument(
-        "--payload-budget-mode",
-        choices=(DEFAULT_PAYLOAD_BUDGET_MODE, "measure"),
-        default=DEFAULT_PAYLOAD_BUDGET_MODE,
-    )
-
 
 def _compressed_size(path: Path) -> int:
     return len(gzip.compress(path.read_bytes(), compresslevel=9, mtime=0))
@@ -36,16 +26,11 @@ def _check_payload_budget(
     metric: str,
     actual: int,
     limit: int,
-    mode: str,
     message: str,
 ) -> None:
-    delta = actual - limit
-    print(
-        f"editor-payload-budget metric={metric} actual={actual} limit={limit} "
-        f"delta={delta} mode={mode}"
-    )
-    if mode == "strict":
-        test.assertLessEqual(actual, limit, message)
+    print(f"editor-payload-budget metric={metric} actual={actual} limit={limit} "
+          f"delta={actual - limit}")
+    test.assertLessEqual(actual, limit, message)
 
 
 def _decode_u32_leb(data: bytes, offset: int) -> tuple[int, int]:
@@ -111,26 +96,17 @@ def _wasm_section_vector_count(path: Path, expected_section_id: int) -> int:
 
 
 class PackageSizeAccountingTest(unittest.TestCase):
-    def test_payload_budget_is_strict_by_default(self) -> None:
-        parser = argparse.ArgumentParser()
-        _add_payload_budget_mode_argument(parser)
-        self.assertEqual(parser.parse_args([]).payload_budget_mode, "strict")
-        self.assertEqual(
-            parser.parse_args(["--payload-budget-mode=measure"]).payload_budget_mode,
-            "measure",
-        )
+    def test_payload_budget_rejects_overage_after_reporting_it(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(AssertionError):
+            _check_payload_budget(self, "fixture", 101, 100, "fixture exceeded")
+        self.assertIn("metric=fixture actual=101 limit=100 delta=1", output.getvalue())
 
-    def test_strict_payload_budget_rejects_overage(self) -> None:
-        with self.assertRaises(AssertionError):
-            _check_payload_budget(self, "fixture", 101, 100, "strict", "fixture exceeded")
-
-    def test_measurement_payload_budget_reports_overage(self) -> None:
+    def test_payload_budget_accepts_the_ceiling(self) -> None:
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            _check_payload_budget(self, "fixture", 101, 100, "measure", "fixture exceeded")
-        self.assertIn(
-            "metric=fixture actual=101 limit=100 delta=1 mode=measure", output.getvalue()
-        )
+            _check_payload_budget(self, "fixture", 100, 100, "fixture exceeded")
+        self.assertIn("metric=fixture actual=100 limit=100 delta=0", output.getvalue())
 
     def test_runtime_memory_reservation_is_not_counted_as_download_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -168,7 +144,6 @@ class WasmPackageSizeTest(unittest.TestCase):
     max_total_raw_bytes: int
     expected_js_properties: list[str]
     forbidden_js_tokens: list[str]
-    payload_budget_mode = DEFAULT_PAYLOAD_BUDGET_MODE
 
     def test_total_package_fits_raw_size_budget(self) -> None:
         total_raw_bytes = _package_raw_size(self.package_dir)
@@ -178,7 +153,6 @@ class WasmPackageSizeTest(unittest.TestCase):
             "total_raw",
             total_raw_bytes,
             self.max_total_raw_bytes,
-            self.payload_budget_mode,
             "editor package raw size exceeded its production budget",
         )
 
@@ -217,7 +191,6 @@ class WasmPackageSizeTest(unittest.TestCase):
             "wasm_raw",
             wasm_path.stat().st_size,
             self.max_wasm_raw_bytes,
-            self.payload_budget_mode,
             "editor.wasm raw decode/compile size exceeded its production budget",
         )
         _check_payload_budget(
@@ -225,7 +198,6 @@ class WasmPackageSizeTest(unittest.TestCase):
             "wasm_gzip",
             wasm_gzip_bytes,
             self.max_wasm_gzip_bytes,
-            self.payload_budget_mode,
             "editor.wasm compressed transfer size exceeded its production budget",
         )
         _check_payload_budget(
@@ -233,7 +205,6 @@ class WasmPackageSizeTest(unittest.TestCase):
             "js_raw",
             js_path.stat().st_size,
             self.max_js_raw_bytes,
-            self.payload_budget_mode,
             "editor.js raw parse size exceeded its production budget",
         )
         _check_payload_budget(
@@ -241,7 +212,6 @@ class WasmPackageSizeTest(unittest.TestCase):
             "js_gzip",
             js_gzip_bytes,
             self.max_js_gzip_bytes,
-            self.payload_budget_mode,
             "editor.js compressed transfer size exceeded its production budget",
         )
 
@@ -280,7 +250,6 @@ if __name__ == "__main__":
     parser.add_argument("--max-js-raw-bytes", type=int, required=True)
     parser.add_argument("--max-js-gzip-bytes", type=int, required=True)
     parser.add_argument("--max-total-raw-bytes", type=int, required=True)
-    _add_payload_budget_mode_argument(parser)
     parser.add_argument("--expected-js-property", action="append", default=[])
     parser.add_argument("--forbidden-js-token", action="append", default=[])
     args, unittest_args = parser.parse_known_args()
@@ -294,5 +263,4 @@ if __name__ == "__main__":
     WasmPackageSizeTest.max_total_raw_bytes = args.max_total_raw_bytes
     WasmPackageSizeTest.expected_js_properties = args.expected_js_property
     WasmPackageSizeTest.forbidden_js_tokens = args.forbidden_js_token
-    WasmPackageSizeTest.payload_budget_mode = args.payload_budget_mode
     unittest.main(argv=[__file__, *unittest_args])

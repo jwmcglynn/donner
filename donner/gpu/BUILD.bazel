@@ -81,9 +81,9 @@ donner_cc_library(
     ],
 )
 
-# The frozen-baseline scene shared by the vertical slices: the black-box
-# capture tool and the Metal and Vulkan solid-fill slice tests all consume
-# identical inputs from this header.
+# The frozen-baseline scene shared by the black-box capture tool and the Metal
+# and Vulkan solid-fill tests, which all consume identical inputs from this
+# header.
 donner_cc_library(
     name = "baseline_scene",
     testonly = 1,
@@ -97,19 +97,19 @@ donner_cc_library(
     ],
 )
 
-# The color-matrix compute scene shared by the backend compute slices: the
+# The color-matrix compute scene shared by the backend compute tests: the
 # same input texels, matrix, bias, dispatch shape, and expected output.
 donner_cc_library(
-    name = "color_matrix_slice",
+    name = "color_matrix_scene",
     testonly = 1,
-    hdrs = ["tests/ColorMatrixSlice.h"],
+    hdrs = ["tests/ColorMatrixScene.h"],
     visibility = donner_internal_visibility(),
 )
 
 donner_cc_library(
-    name = "slug_mask_slice",
+    name = "slug_mask_scene",
     testonly = 1,
-    hdrs = ["tests/SlugMaskSlice.h"],
+    hdrs = ["tests/SlugMaskScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
@@ -121,9 +121,9 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "convolve_matrix_slice",
+    name = "convolve_matrix_scene",
     testonly = 1,
-    hdrs = ["tests/ConvolveMatrixSlice.h"],
+    hdrs = ["tests/ConvolveMatrixScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
@@ -136,9 +136,9 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "offset_slice",
+    name = "offset_scene",
     testonly = 1,
-    hdrs = ["tests/OffsetSlice.h"],
+    hdrs = ["tests/OffsetScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
@@ -151,9 +151,9 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "filter_resolve_slice",
+    name = "filter_resolve_scene",
     testonly = 1,
-    hdrs = ["tests/FilterResolveSlice.h"],
+    hdrs = ["tests/FilterResolveScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
@@ -164,7 +164,7 @@ donner_cc_library(
     ],
 )
 
-# The sub-rectangle texture-copy scene shared by the backend copy slices: the
+# The sub-rectangle texture-copy scene shared by the backend copy tests: the
 # same source pattern, destination fill, copy rectangle, origins, and expected
 # image.
 donner_cc_library(
@@ -244,9 +244,9 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "reflected_compute_slice",
+    name = "reflected_compute_pipeline",
     testonly = 1,
-    hdrs = ["tests/ReflectedComputeSlice.h"],
+    hdrs = ["tests/ReflectedComputePipeline.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
@@ -258,9 +258,9 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "float_texture_slice",
+    name = "float_texture_scene",
     testonly = 1,
-    hdrs = ["tests/FloatTextureSlice.h"],
+    hdrs = ["tests/FloatTextureScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
@@ -270,27 +270,27 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "tile_slice",
+    name = "tile_scene",
     testonly = 1,
-    hdrs = ["tests/TileSlice.h"],
+    hdrs = ["tests/TileScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "@com_google_gtest//:gtest",
     ],
 )
 
 donner_cc_library(
-    name = "drop_shadow_slice",
+    name = "drop_shadow_scene",
     testonly = 1,
-    hdrs = ["tests/DropShadowSlice.h"],
+    hdrs = ["tests/DropShadowScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/editor/tests:bitmap_golden_compare",
         "@com_google_gtest//:gtest",
         "@tiny-skia-cpp//src/tiny_skia/filter",
@@ -298,9 +298,9 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "blur_slice",
+    name = "blur_scene",
     testonly = 1,
-    hdrs = ["tests/BlurSlice.h"],
+    hdrs = ["tests/BlurScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
@@ -313,41 +313,41 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "filter_image_slice",
+    name = "filter_image_scene",
     testonly = 1,
-    hdrs = ["tests/FilterImageSlice.h"],
+    hdrs = ["tests/FilterImageScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/editor/tests:bitmap_golden_compare",
         "@com_google_gtest//:gtest",
     ],
 )
 
 donner_cc_library(
-    name = "morphology_slice",
+    name = "morphology_scene",
     testonly = 1,
-    hdrs = ["tests/MorphologySlice.h"],
+    hdrs = ["tests/MorphologyScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "@com_google_gtest//:gtest",
     ],
 )
 
 donner_cc_library(
-    name = "component_transfer_slice",
+    name = "component_transfer_scene",
     testonly = 1,
-    hdrs = ["tests/ComponentTransferSlice.h"],
+    hdrs = ["tests/ComponentTransferScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/editor/tests:bitmap_golden_compare",
         "@com_google_gtest//:gtest",
         "@tiny-skia-cpp//src/tiny_skia/filter",
@@ -355,14 +355,14 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "displacement_map_slice",
+    name = "displacement_map_scene",
     testonly = 1,
-    hdrs = ["tests/DisplacementMapSlice.h"],
+    hdrs = ["tests/DisplacementMapScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:displacement_map_api",
         "@com_google_gtest//:gtest",
@@ -371,9 +371,9 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "turbulence_slice",
+    name = "turbulence_scene",
     testonly = 1,
-    hdrs = ["tests/TurbulenceSlice.h"],
+    hdrs = ["tests/TurbulenceScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
@@ -386,14 +386,14 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "lighting_slice",
+    name = "lighting_scene",
     testonly = 1,
-    hdrs = ["tests/LightingSlice.h"],
+    hdrs = ["tests/LightingScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:compiled_shader",
         "//donner/gpu/shader:lighting_params",
@@ -403,9 +403,9 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "vertex_input_slice",
+    name = "vertex_input_scene",
     testonly = 1,
-    hdrs = ["tests/VertexInputSlice.h"],
+    hdrs = ["tests/VertexInputScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
@@ -487,7 +487,7 @@ donner_cc_library(
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/base",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:checkerboard_api",
@@ -498,9 +498,9 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "image_blit_slice",
+    name = "image_blit_scene",
     testonly = 1,
-    hdrs = ["tests/ImageBlitSlice.h"],
+    hdrs = ["tests/ImageBlitScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":blend_reference",
@@ -514,14 +514,14 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "slug_fill_slice",
+    name = "slug_fill_scene",
     testonly = 1,
-    hdrs = ["tests/SlugFillSlice.h"],
+    hdrs = ["tests/SlugFillScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":slug_mask_slice",
+        ":slug_mask_scene",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:slug_fill_api",
         "@com_google_gtest//:gtest",
@@ -530,14 +530,14 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "flat_interface_slice",
+    name = "flat_interface_scene",
     testonly = 1,
-    hdrs = ["tests/FlatInterfaceSlice.h"],
+    hdrs = ["tests/FlatInterfaceScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":slug_mask_slice",
+        ":slug_mask_scene",
         "//donner/editor/tests:bitmap_golden_compare",
         "@com_google_gtest//:gtest",
     ],
@@ -555,14 +555,14 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "slug_gradient_slice",
+    name = "slug_gradient_scene",
     testonly = 1,
-    hdrs = ["tests/SlugGradientSlice.h"],
+    hdrs = ["tests/SlugGradientScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":slug_mask_slice",
+        ":slug_mask_scene",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:slug_gradient_api",
         "@com_google_gtest//:gtest",
@@ -571,9 +571,9 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "filter_blend_slice",
+    name = "filter_blend_scene",
     testonly = 1,
-    hdrs = ["tests/FilterBlendSlice.h"],
+    hdrs = ["tests/FilterBlendScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":blend_reference",
@@ -587,14 +587,14 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "flood_slice",
+    name = "flood_scene",
     testonly = 1,
-    hdrs = ["tests/FloodSlice.h"],
+    hdrs = ["tests/FloodScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/gpu/shader:compiled_shader",
         "//donner/gpu/shader:flood_api",
         "@com_google_gtest//:gtest",
@@ -602,28 +602,28 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "merge_slice",
+    name = "merge_scene",
     testonly = 1,
-    hdrs = ["tests/MergeSlice.h"],
+    hdrs = ["tests/MergeScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/gpu/shader:compiled_shader",
         "@com_google_gtest//:gtest",
     ],
 )
 
 donner_cc_library(
-    name = "composite_slice",
+    name = "composite_scene",
     testonly = 1,
-    hdrs = ["tests/CompositeSlice.h"],
+    hdrs = ["tests/CompositeScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/gpu/shader:compiled_shader",
         "//donner/gpu/shader:composite_api",
         "@com_google_gtest//:gtest",
@@ -631,14 +631,14 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "filter_color_matrix_slice",
+    name = "filter_color_matrix_scene",
     testonly = 1,
-    hdrs = ["tests/FilterColorMatrixSlice.h"],
+    hdrs = ["tests/FilterColorMatrixScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu/shader:compiled_shader",
         "//donner/gpu/shader:filter_color_matrix_api",
@@ -648,14 +648,14 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "subregion_clip_slice",
+    name = "subregion_clip_scene",
     testonly = 1,
-    hdrs = ["tests/SubregionClipSlice.h"],
+    hdrs = ["tests/SubregionClipScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/gpu/shader:compiled_shader",
         "//donner/gpu/shader:subregion_clip_api",
         "@com_google_gtest//:gtest",
@@ -663,28 +663,28 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "snapshot_unpremultiply_slice",
+    name = "snapshot_unpremultiply_scene",
     testonly = 1,
-    hdrs = ["tests/SnapshotUnpremultiplySlice.h"],
+    hdrs = ["tests/SnapshotUnpremultiplyScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/gpu/shader:compiled_shader",
         "@com_google_gtest//:gtest",
     ],
 )
 
 donner_cc_library(
-    name = "color_space_convert_slice",
+    name = "color_space_convert_scene",
     testonly = 1,
-    hdrs = ["tests/ColorSpaceConvertSlice.h"],
+    hdrs = ["tests/ColorSpaceConvertScene.h"],
     visibility = donner_internal_visibility(),
     deps = [
         ":gpu",
         ":gpu_test_utils",
-        ":reflected_compute_slice",
+        ":reflected_compute_pipeline",
         "//donner/gpu/shader:color_space_convert_api",
         "//donner/gpu/shader:compiled_shader",
         "@com_google_gtest//:gtest",

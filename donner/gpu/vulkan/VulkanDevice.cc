@@ -276,7 +276,7 @@ VkBufferUsageFlags ToVkBufferUsage(BufferUsage usage) {
     result |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
   }
   // MapRead has no VkBufferUsageFlags equivalent: readability is a memory property, and every
-  // buffer in this slice is host-visible (see the class comment).
+  // buffer this backend allocates is host-visible (see the class comment).
   return result;
 }
 
@@ -1416,8 +1416,8 @@ struct VulkanDevice::Impl {
   bool fullDrawIndexUint32 = false;            //!< Whether the full Uint32 index range is enabled.
 
   /// A buffer plus the memory it was bound into, persistently mapped (host-visible + coherent;
-  /// see the class comment for why every buffer is host-visible in this slice). Where that
-  /// memory comes from is the allocator's decision, not this record's.
+  /// see the class comment for why every buffer is host-visible). Where that memory comes from
+  /// is the allocator's decision, not this record's.
   struct BufferRecord {
     VkBuffer buffer = VK_NULL_HANDLE;  //!< Buffer handle.
     BufferAllocation allocation;       //!< Memory this buffer was bound into.
