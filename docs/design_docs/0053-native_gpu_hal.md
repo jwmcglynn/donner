@@ -3,10 +3,10 @@
 **Status:** Implementing. Each platform defaults to its own runtime: native Metal on macOS and
 native Vulkan on Linux, for Geode and the displayed editor, and the browser runtime for the editor
 and standalone Geode WebAssembly packages. Native Metal and Vulkan qualification of the Geode,
-renderer and editor suites is complete, and the browser editor's hosted Chromium suites pass. Still
-open: backend-neutral renderer services and removal of the transitional adapter, real Safari/WebKit
-and physical iOS qualification of the browser editor, and acceptance of one integrated revision
-([Next Steps](#next-steps)).\
+renderer and editor suites is complete, the browser editor's hosted Chromium suites pass, and
+Geode's renderer services are backend-neutral. Still open: removal of the transitional adapter's
+remaining dependencies, real Safari/WebKit and physical iOS qualification of the browser editor,
+and acceptance of one integrated revision ([Next Steps](#next-steps)).\
 **Created:** 2026-07-05\
 **Updated:** 2026-10-03\
 **Author:** Claude Fable 5.1\
@@ -17,9 +17,8 @@ and physical iOS qualification of the browser editor, and acceptance of one inte
 Donner's GPU runtime is the interface between Geode/editor rendering and Metal, Vulkan, or browser
 WebGPU. Production rendering and presentation run through it on every platform, and its drawing,
 mapping, upload and presentation operations are implemented on each backend. The remaining work is
-to finish moving shared renderer services behind backend-neutral ownership, remove the transitional
-WebGPU implementation from production source and dependency closures, and qualify the integrated
-result against the cutover gates.
+to remove the transitional WebGPU implementation's remaining dependencies and qualify the
+integrated result against the cutover gates.
 A pinned Linux test-only wgpu-native backend remains as a black-box resvg pixel comparison oracle;
 it does not validate Donner's browser bridge.
 
@@ -28,9 +27,9 @@ backend execution, and compile-time shader artifacts: every production shader is
 and compiled during C++ constant evaluation into the WGSL, MSL, or SPIR-V projection its consumer
 links, with the host interface reflected from the same compile
 ([WGSL shader compilation](../wgsl_compiler.md)). Production `GeodeDevice`, filter resource
-plumbing and texture caches use runtime handles. Transitional WebGPU objects still remain in some
-production construction paths, so native execution tests and local editor presentation do not
-establish a Rust-independent build.
+plumbing and texture caches use runtime handles, and no production source names the transitional
+WebGPU implementation. Native execution tests and local editor presentation still do not by
+themselves establish a Rust-independent build.
 
 The target is an original C++20 runtime serving Donner's own rendering requirements. It is not a
 WebGPU C ABI implementation, and its shader compiler accepts a documented WGSL profile at build time
@@ -66,8 +65,8 @@ embed-example roots in this tree exclude WebGPU-C++ and wgpu-native. The two che
 archives are exposed through test-only Linux targets, and macOS archive fetches and aliases are
 removed.
 
-Still open, and separate from that qualification: backend-neutral renderer services and removal of
-the transitional adapter and its remaining dependencies
+Still open, and separate from that qualification: removal of the transitional adapter's remaining
+dependencies
 ([Device ownership and dependency closure](#device-ownership-and-dependency-closure)), real
 Safari/WebKit and physical iOS qualification of the browser editor
 ([Browser bridge](#browser-bridge)), and acceptance of one integrated revision against the cutover
@@ -171,10 +170,8 @@ memory-residency, security or privacy requirements.
 
 ## Next Steps
 
-1. Move counters and the remaining shared renderer services behind backend-neutral ownership
-   without merging logical tables, serials, caches, or retirement, and remove the transitional
-   WebGPU implementation and its remaining production consumers and dependencies, retaining only
-   the Linux test-only resvg comparison backend
+1. Remove the transitional WebGPU implementation's remaining dependencies, retaining only the
+   Linux test-only resvg comparison backend
    ([#1412](https://github.com/jwmcglynn/donner/issues/1412)).
 2. Qualify the browser editor on real Safari/WebKit and the agreed physical iOS matrix; its hosted
    Chromium suites already pass ([#1410](https://github.com/jwmcglynn/donner/issues/1410)).
