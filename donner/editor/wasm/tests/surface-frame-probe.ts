@@ -417,6 +417,11 @@ export async function installSurfaceFrameProbe(page: Page): Promise<number> {
   return probed.length;
 }
 
+/** Whether \ref installSurfaceFrameProbe installed the probe in any of the page's workers. */
+export function surfaceFrameProbeInstalled(page: Page): boolean {
+  return (probedWorkers.get(page)?.length ?? 0) > 0;
+}
+
 /** Return the one worker that acquired the editor's canvas while the probe watched. */
 export async function findCanvasOwnerWorker(page: Page): Promise<Worker | null> {
   const workers = probedWorkers.get(page) ?? [];
