@@ -611,4 +611,34 @@ TEST(FramePresentationTest, OlderWholeFamilyCannotRewindNewerCommittedFrame) {
          "overrides.";
 }
 
+TEST(FramePresentationTest, BuildCannotRewindCommittedPoseWhenPreviousOverridesAreEmpty) {
+  EditorApp app;
+  ASSERT_THAT(app.loadFromString(kRect), IsTrue());
+  const auto rect = app.document().document().querySelector("#rect");
+  ASSERT_THAT(rect, testing::Optional(testing::_));
+  app.setSelection(*rect);
+  const auto old = Capture(app, 1);
+  rect->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(20, 0));
+  const auto current = Capture(app, 2);
+  ASSERT_LT(old->identity().documentRevision, current->identity().documentRevision);
+  SelectTool tool;
+  auto input = Input(app, tool, 1);
+  input.documentIdentity = current->identity();
+  const Entity entity = current->selection().front();
+  const auto previous =
+      FramePresentation::Build(
+          FramePresentationTestAccess::resources(current, {RectTile(entity, 30, 0)}), input)
+          .frame;
+  ASSERT_THAT(previous, Ne(nullptr));
+  ASSERT_THAT(previous->overrides(), testing::IsEmpty());
+  ExpectRectAt(*previous, 30);
+  input.frameId = 2;
+  const auto rejected = FramePresentation::Build(
+      FramePresentationTestAccess::resources(old, {RectTile(entity, 10, 0)}), input, nullptr,
+      previous);
+  EXPECT_THAT(rejected.frame, Eq(nullptr));
+  EXPECT_EQ(rejected.failure, FramePresentationFailure::IncompatiblePose);
+  ExpectRectAt(*previous, 30);
+}
+
 }  // namespace donner::editor
