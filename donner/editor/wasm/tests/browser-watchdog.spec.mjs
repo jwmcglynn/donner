@@ -77,10 +77,13 @@ test("malformed evidence after a live application response fails closed", async 
   const outputDir = directory();
   const heartbeatFile = path.join(outputDir, "heartbeat");
   const corrupt = path.join(outputDir, "corrupt");
+  fs.writeFileSync(
+    heartbeatFile,
+    JSON.stringify({ phase: "active", sessionId: "live", atMs: Date.now() }),
+  );
   const script = `const fs=require('node:fs');
-    setInterval(()=>fs.writeFileSync(process.env.DONNER_WATCHDOG_HEARTBEAT,
-      fs.existsSync(${JSON.stringify(corrupt)}) ? '{' :
-      JSON.stringify({phase:'active',sessionId:'live',atMs:Date.now()})),20);`;
+    setInterval(()=>{ if(fs.existsSync(${JSON.stringify(corrupt)}))
+      fs.writeFileSync(process.env.DONNER_WATCHDOG_HEARTBEAT,'{'); },20);`;
   const result = await supervise(process.execPath, ["-e", script], {
     outputDir,
     heartbeatFile,
@@ -274,14 +277,25 @@ test("unavailable page diagnostics cannot stop a live application heartbeat", as
 test("fresh late samples cannot erase a latched teardown deadline", async () => {
   const outputDir = directory();
   const heartbeatFile = path.join(outputDir, "heartbeat");
-  const script =
-    `const fs=require('node:fs'); let n=0; setInterval(()=>fs.writeFileSync(process.env.DONNER_WATCHDOG_HEARTBEAT, JSON.stringify({phase: ++n<4 ? 'teardown' : 'active',sessionId:'same',atMs:Date.now()})),20);`;
+  const acknowledged = path.join(outputDir, "teardown-observed");
+  fs.writeFileSync(
+    heartbeatFile,
+    JSON.stringify({ phase: "teardown", sessionId: "same", atMs: Date.now() }),
+  );
+  const writer = createRequire(import.meta.url).resolve("./browser-heartbeat.cjs");
+  const script = `const fs=require('node:fs'); const {writeHeartbeat}=require(${
+    JSON.stringify(writer)
+  });
+    setInterval(()=>{if(fs.existsSync(${JSON.stringify(acknowledged)}))
+      writeHeartbeat(process.env.DONNER_WATCHDOG_HEARTBEAT,
+        {phase:'active',sessionId:'same',atMs:Date.now()});},20);`;
   const result = await supervise(process.execPath, ["-e", script], {
     outputDir,
     heartbeatFile,
     intervalMs: 20,
     teardownLimitMs: 200,
     deadlineMs: 2000,
+    writeReceipt: () => fs.writeFileSync(acknowledged, "observed"),
   });
   assert.equal(result.reason, "browser teardown deadline exceeded");
   assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });

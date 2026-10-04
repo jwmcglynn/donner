@@ -79,6 +79,7 @@ export async function supervise(executable, args, options = {}) {
   let cleanup;
   let heartbeatSessionId;
   let teardownDeadline;
+  let applicationHeartbeatObserved = false;
   const receipt = () => ({
     reason,
     reportingError,
@@ -179,6 +180,19 @@ export async function supervise(executable, args, options = {}) {
           } catch {}
         }
       }
+      if (row.application?.phase === "active") {
+        const responseAtMs = row.application.atMs;
+        const nowMs = Date.now();
+        if (!Number.isSafeInteger(responseAtMs) || responseAtMs <= 0 || responseAtMs > nowMs) {
+          throw new Error("invalid application heartbeat timestamp");
+        }
+        row.heartbeatAgeMs = Math.max(row.heartbeatAgeMs, nowMs - responseAtMs);
+        applicationHeartbeatObserved = true;
+      } else if (row.application?.phase === "launch" || row.application?.phase === "teardown") {
+        applicationHeartbeatObserved = false;
+      } else if (applicationHeartbeatObserved) {
+        throw new Error("invalid application heartbeat evidence");
+      }
       if (row.application?.phase === "active" && row.application.sessionId !== heartbeatSessionId) {
         heartbeatSessionId = row.application.sessionId;
         teardownDeadline = undefined;
@@ -193,7 +207,10 @@ export async function supervise(executable, args, options = {}) {
       else if (atMs > deadlineMs) stop("test deadline exceeded");
       else if (teardownDeadline && Date.now() > teardownDeadline) {
         stop("browser teardown deadline exceeded");
-      } else if (heartbeatFile && atMs > 5000 && (row.heartbeatAgeMs ?? atMs) > heartbeatLimitMs) {
+      } else if (
+        heartbeatFile && (row.application?.phase === "active" || atMs > 5000)
+        && (row.heartbeatAgeMs ?? atMs) > heartbeatLimitMs
+      ) {
         stop("test heartbeat stopped");
       } else {
         try {
