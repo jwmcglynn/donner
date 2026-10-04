@@ -886,3 +886,10 @@ test("renderer thread startup waits for cursor setup and wake wiring", () => {
     "every registered SVG cursor must pass its hotspot and fallback into JavaScript",
   );
 });
+
+test("UI asm diagnostics stay within the compiler's sixteen argument slots", () => {
+  for (const match of source.matchAll(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/g)) {
+    const slots = [...match[1].matchAll(/\$(\d+)/g)].map((slot) => Number(slot[1]));
+    assert.ok(slots.every((slot) => slot < 16), `unsupported asm argument slots: ${slots}`);
+  }
+});
