@@ -210,9 +210,12 @@ TEST(FloatConstant, ReplacesEachOutermostFoldWithItsExactValueInTheWgslProjectio
       "fn spread() -> f32 {\n"
       "  return 1f /  // the divisor follows\n"
       "    4f;\n"
-      "}\n",
+      "}\n"
+      "fn kw() -> f32 { return-1f*-3f; }\n"
+      "fn kp() -> f32 { return(1f)/3f; }\n"
+      "fn kv() -> vec2<f32> { return(vec2<f32>(1f, 2f))*2f; }\n",
       "weight() + negative(1f) + thirds().y + signs().x + tiny() + negativeZero() + nested() + "
-      "spread() + kThird");
+      "spread() + kThird + kw() + kp() + kv().y");
   ASSERT_THAT(Diagnose(source), Eq(kAccepted));
   const std::string wgsl = Wgsl(source);
   ASSERT_THAT(wgsl, Not(IsEmpty()));
@@ -226,6 +229,10 @@ TEST(FloatConstant, ReplacesEachOutermostFoldWithItsExactValueInTheWgslProjectio
            "fn negativeZero() -> f32 { return (-0f - 0.0f); }\n",
            "fn nested() -> f32 { return 0x1.000000p0f; }\n",
            "return 0x1.000000p-2f;\n",
+           // A value is separated from an adjacent keyword, so the splice never joins tokens.
+           "fn kw() -> f32 { return 0x1.800000p1f; }\n",
+           "fn kp() -> f32 { return 0x1.555556p-2f; }\n",
+           "fn kv() -> vec2<f32> { return vec2<f32>(0x1.000000p1f, 0x1.000000p2f); }\n",
        }) {
     EXPECT_THAT(wgsl, HasSubstr(line));
   }
@@ -251,8 +258,11 @@ TEST(FloatConstant, ReplacesAbstractFloatFoldsWithTheirExactValuesInTheWgslProje
       "const kAbstractNegative = 1.0 - 3.0;\n"
       "fn fraction(x: f32) -> f32 { return max(x, 1.0 / 65536.0); }\n"
       "fn tenth() -> f32 { return 1.0 / 10.0 * 1f; }\n"
-      "fn ordered() -> bool { return 1.0 / 3.0 < 0.5; }\n",
-      "fraction(1f) + tenth() + select(0f, 1f, ordered()) + kAbstractThird + kAbstractNegative");
+      "fn ordered() -> bool { return 1.0 / 3.0 < 0.5; }\n"
+      "const kNegatedAbstract = -(1.0 / 3.0);\n"
+      "fn negatedThird() -> f32 { let b = -(1.0 / 3.0); return b; }\n",
+      "fraction(1f) + tenth() + select(0f, 1f, ordered()) + kAbstractThird + kAbstractNegative + "
+      "kNegatedAbstract + negatedThird()");
   ASSERT_THAT(Diagnose(source), Eq(kAccepted));
   const std::string wgsl = Wgsl(source);
   ASSERT_THAT(wgsl, Not(IsEmpty()));
@@ -262,6 +272,10 @@ TEST(FloatConstant, ReplacesAbstractFloatFoldsWithTheirExactValuesInTheWgslProje
            "fn fraction(x: f32) -> f32 { return max(x, 0x1.000000p-16f); }\n",
            "fn tenth() -> f32 { return 0x1.99999ap-4f; }\n",
            "fn ordered() -> bool { return 0x1.5555555555555p-2 < 0.5; }\n",
+           // A negation applied to a fold is part of the outermost fold, so the browser converts
+           // nothing.
+           "const kNegatedAbstract = (-0x1.5555555555555p-2);\n",
+           "fn negatedThird() -> f32 { let b = (-0f - 0x1.555556p-2f); return b; }\n",
        }) {
     EXPECT_THAT(wgsl, HasSubstr(line));
   }
