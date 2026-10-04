@@ -800,7 +800,7 @@ struct AsyncRuntimeSmokeReadback {
   uint32_t height = 0;
   uint32_t bytesPerRow = 0;
   gpu::TextureFormat surfaceFormat = gpu::TextureFormat::BGRA8Unorm;
-  std::chrono::milliseconds budget{};
+  std::chrono::steady_clock::time_point deadline;
   int requestId = 0;
   std::shared_ptr<std::atomic_bool> inFlight;
   std::shared_ptr<std::atomic_bool> alive;
@@ -813,12 +813,13 @@ void CompleteAsyncRuntimeSmokeReadback(void* userdata) {
   gpu::Device& device = state->context->runtimeDevice();
   bool captureSucceeded = false;
   if (state->alive->load(std::memory_order_acquire)) {
-    gpu::Result<gpu::MapWaitReport> waited = device.waitForMapping(
-        state->mapping,
-        gpu::MapWaitParams{std::chrono::duration<double>(geode::kGpuWaitPollInterval).count(),
-                           std::chrono::duration<double>(state->budget).count()},
-        [alive = state->alive] { return !alive->load(std::memory_order_acquire); });
-    if (waited.hasResult() && waited.result().outcome == gpu::MapWaitOutcome::Ready &&
+    gpu::Result<gpu::MapSliceReport> polled = device.pollMapping(state->mapping);
+    if (polled.hasResult() && polled.result().state == gpu::MapSliceState::Pending &&
+        std::chrono::steady_clock::now() < state->deadline) {
+      emscripten_async_call(CompleteAsyncRuntimeSmokeReadback, state.release(), 1);
+      return;
+    }
+    if (polled.hasResult() && polled.result().state == gpu::MapSliceState::Ready &&
         state->alive->load(std::memory_order_acquire)) {
       gpu::Result<std::span<const uint8_t>> mapped = device.mappedBytes(state->mapping);
       if (mapped.hasResult() && mapped.result().size() >= state->size) {
@@ -883,7 +884,7 @@ bool StartAsyncRuntimeSmokeReadback(const std::shared_ptr<geode::GeodeDevice>& c
       .height = height,
       .bytesPerRow = bytesPerRow,
       .surfaceFormat = surfaceFormat,
-      .budget = budget,
+      .deadline = std::chrono::steady_clock::now() + budget,
       .requestId = requestId,
       .inFlight = inFlight,
       .alive = alive,
@@ -2425,8 +2426,26 @@ bool EditorWindow::observePresentationCompletion() {
   const auto completed = presentationCompletionProbeForTesting_
                              ? presentationCompletionProbeForTesting_()
                              : device.completedSerial();
+#ifdef __EMSCRIPTEN__
+  const auto admission =
+      presentationSubmissions_.observe(completed, std::chrono::steady_clock::now(), [&] {
+        if (!wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
+          ++presentationCompletionConfirmations_;
+          // A paused browser can have finished GPU work whose callback has not run yet.
+          (void)device.waitForSerial(presentationSubmissions_.oldestSerial(), 0.25);
+        }
+        return internal::PresentationSubmissionQueue::CompletionObservation{
+            device.completedSerial(), std::chrono::steady_clock::now()};
+      });
+#else
   const auto admission =
       presentationSubmissions_.observe(completed, std::chrono::steady_clock::now());
+#endif
+  if (admission == internal::PresentationSubmissionQueue::Admission::TimedOut &&
+      presentationTimeoutSerial_ == 0) {
+    presentationTimeoutSerial_ = presentationSubmissions_.oldestSerial();
+    presentationTimeoutAge_ = presentationSubmissions_.oldestAge(std::chrono::steady_clock::now());
+  }
 #ifdef __EMSCRIPTEN__
   const auto frame = presentationSubmissions_.completed();
   // clang-format off
@@ -2441,6 +2460,7 @@ bool EditorWindow::observePresentationCompletion() {
           'oldestSerial' : $12,
           'deviceLost' : Boolean($13),
           'admission' : $14,
+          'timeoutSerial' : $15, 'timeoutAgeMs' : $16, 'completionConfirmations' : $17,
           'coalescedFrames' : $3,
           'frameId' : $4,
           'captureId' : $5,
@@ -2456,13 +2476,16 @@ bool EditorWindow::observePresentationCompletion() {
       static_cast<double>(presentationSubmissions_.pendingCount()),
       static_cast<double>(coalescedPresentationFrames_), static_cast<double>(frame.frameId),
       static_cast<double>(frame.captureId), frame.pointerX, frame.pointerY, frame.mouseDown, frame.inputRepresented, frame.viewportZoom,
-      static_cast<double>(completed), static_cast<double>(presentationSubmissions_.oldestSerial()),
-      wgpuState_->framebufferGeodeDevice->isDeviceLost(), static_cast<int>(admission));
+      static_cast<double>(device.completedSerial()), static_cast<double>(presentationSubmissions_.oldestSerial()),
+      wgpuState_->framebufferGeodeDevice->isDeviceLost(), static_cast<int>(admission),
+      static_cast<double>(presentationTimeoutSerial_), static_cast<double>(presentationTimeoutAge_.count()),
+      static_cast<double>(presentationCompletionConfirmations_));
   // clang-format on
 #endif
   if (admission == internal::PresentationSubmissionQueue::Admission::TimedOut) {
-    wgpuState_->framebufferGeodeDevice->markDeviceLost(
-        "UI submission completion exceeded its deadline");
+    wgpuState_->framebufferGeodeDevice->markDeviceLostAfterWaitTimeout(
+        geode::GpuWaitSite::QueueIdle, presentationTimeoutAge_,
+        "UI submission completion remained overdue");
     return false;
   }
   return admission == internal::PresentationSubmissionQueue::Admission::Ready;

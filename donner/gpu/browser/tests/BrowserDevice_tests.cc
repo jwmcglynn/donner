@@ -935,6 +935,10 @@ TEST(BrowserDevice, PollingAMappingNeverYieldsAndMakesReadyBytesReadable) {
   ASSERT_THAT(pending, HasResult());
   EXPECT_THAT(pending.result().state, MapSliceState::Pending);
   EXPECT_THAT(fixture.bridge->yieldCount, 0u);
+  fixture.bridge->onYield = [&] { fixture.bridge->completed = 5; };
+  EXPECT_THAT(fixture.device->waitForSerial(5, 0.25), testing::IsTrue());
+  EXPECT_THAT(fixture.device->nestedWaitRefusalsForTest(), 0u);
+  EXPECT_THAT(fixture.bridge->yieldCount, 1u);
   fixture.bridge->completeMapping(2, {1, 2, 3, 4});
   auto ready = fixture.device->pollMapping(mapping.result());
   ASSERT_THAT(ready, HasResult());

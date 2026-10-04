@@ -695,3 +695,30 @@ playwright_bin.playwright_test(
         "@platforms//os:macos",
     ],
 )
+
+js_test(
+    name = "wgpu_readback_contract_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "wgpu-readback-contract.spec.mjs",
+        "//donner/editor:AsyncRenderer.cc",
+        "//donner/editor:AsyncRenderer.h",
+        "//donner/editor:EditorShell.cc",
+        "//donner/editor:RenderCoordinator.cc",
+        "//donner/editor:RotateCursorSet.cc",
+        "//donner/editor:WholeAppWorkerBridge.cc",
+        "//donner/editor/gui:EditorWindow.cc",
+        "//donner/editor/wasm/tests:browser-presentation-regression.spec.ts",
+        "//donner/editor/wasm/tests:composited-drag-invariants.spec.ts",
+        "//donner/editor/wasm/tests:composited-invariants.spec.ts",
+        "//donner/gpu/browser:BrowserDevice.cc",
+        "//donner/gpu/browser:EmscriptenBrowserBridge.cc",
+        "//donner/gpu/browser:library_donner_gpu.js",
+        "//donner/svg/renderer/geode:GeodeBrowserRoot.cc",
+        "//donner/svg/renderer/geode:GeodeDevice.cc",
+    ],
+    entry_point = "wgpu-readback-contract.spec.mjs",
+    env = {"NODE_OPTIONS": ""},
+    node_options = ["--test"],
+)

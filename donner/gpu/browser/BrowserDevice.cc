@@ -1313,6 +1313,13 @@ MapSliceReport BrowserDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, doub
     return MapSliceReport{.state = state, .waitKind = kWaitKind};
   }
 
+  if (sliceSeconds <= 0.0) {
+    if (bridge_->requestMappingProgress(*mappingId) == BridgeStatus::Success) {
+      notifyObserverOfBackendSubmission();
+    }
+    return MapSliceReport{.state = MapSliceState::Pending, .waitKind = kWaitKind};
+  }
+
   if (yielding_) {
     // Entered from inside this device's own yield. Handing the thread over again would start a
     // second stack unwind on top of the first, which the runtime underneath cannot represent, so

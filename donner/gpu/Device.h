@@ -675,7 +675,7 @@ public:
    * Begins mapping a range of \p buffer for host access, and returns the handle that names the
    * mapping.
    *
-   * The mapping is not readable yet: \ref donner::gpu::Device::waitForMapping decides when it is.
+   * The mapping is not readable yet: \ref pollMapping or \ref waitForMapping decides when it is.
    * The returned handle is what keeps the mapped range reachable - \ref unmapBuffer consumes it and
    * every copy of it goes stale at that moment, so a read through a handle whose mapping has been
    * released is a reported validation failure rather than a read of memory that is no longer there.
@@ -744,7 +744,8 @@ public:
    * a buffer that has since been destroyed, or belongs to a device that has been lost
    * (\ref donner::gpu::GpuErrorType::DeviceLost "GpuErrorType::DeviceLost"): the span is only valid
    * while the handle names a live, ready mapping. Completion means a \ref
-   * donner::gpu::Device::waitForMapping on this mapping reported \ref MapWaitOutcome::Ready; until
+   * donner::gpu::Device::waitForMapping reported \ref MapWaitOutcome::Ready, or \ref pollMapping
+   * reported \ref MapSliceState::Ready; until
    * one has, reading is refused rather than racing whatever the GPU is still writing.
    *
    * The span aliases the backend's allocation rather than a copy of it, so it lives only as long

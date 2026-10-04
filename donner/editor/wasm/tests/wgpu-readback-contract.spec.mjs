@@ -106,8 +106,8 @@ test("host timing consumes each current-frame draw snapshot once", () => {
     /MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},\s*endFrameMs/,
   );
   assert.ok(callback, "expected executable host timing callback");
-  const bindings = Array.from({ length: 10 }, (_, index) =>
-    `const $${index} = args[${index}];`).join("\n");
+  const bindings = Array.from({ length: 10 }, (_, index) => `const $${index} = args[${index}];`)
+    .join("\n");
   const publish = new Function("window", "args", `${bindings}\n${callback[1]}`);
   const windowState = {
     __donnerPendingUnderlayDrawStats: {
@@ -235,7 +235,8 @@ test("late browser map rejection cannot change a reused mapping ID", () => {
 test("mid-drag GPU probe follows the retained scored frame and state", () => {
   const start = presentationRegressionSource.indexOf("async function readBasicShapesDragFrame(");
   const end = presentationRegressionSource.indexOf(
-    'test("scored Firefox frame evidence', start,
+    "test(\"scored Firefox frame evidence",
+    start,
   );
   assert.ok(start >= 0 && end > start, "expected the scored mid-drag frame helper");
   const dragFrame = presentationRegressionSource.slice(start, end);
@@ -317,8 +318,14 @@ test("diagnostic readback requests wake the event-driven main loop", () => {
   assert.ok(runtimeReadback, "expected the browser-runtime diagnostic completion task");
   assert.match(
     runtimeReadback[1],
-    /device\.waitForMapping\(/,
-    "the deferred task must await its own runtime mapping",
+    /device\.pollMapping\(/,
+    "the deferred task must poll its own mapping without another Asyncify wait",
+  );
+  assert.doesNotMatch(runtimeReadback[1], /device\.waitForMapping\(/);
+  assert.match(runtimeReadback[1], /state->deadline/);
+  assert.match(
+    runtimeReadback[1],
+    /emscripten_async_call\(CompleteAsyncRuntimeSmokeReadback, state\.release\(\)/,
   );
   assert.match(
     runtimeReadback[1],

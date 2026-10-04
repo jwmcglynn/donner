@@ -501,6 +501,11 @@ public:
     double viewportZoom = 0.0;
     Clock::time_point submittedAt;
   };
+  /// Serial and clock read after a bounded GPU completion confirmation.
+  struct CompletionObservation {
+    std::uint64_t serial;
+    Clock::time_point observedAt;
+  };
   /// Observe completion before admitting a frame; a stopped queue reaches a finite deadline.
   Admission observe(std::uint64_t completedSerial, Clock::time_point now) {
     while (!pending_.empty() && pending_.front().serial <= completedSerial) {
@@ -516,14 +521,24 @@ public:
   template <typename CompletionProbe>
   Admission observe(std::uint64_t completedSerial, Clock::time_point now,
                     CompletionProbe&& confirmCompletion) {
-    (void)confirmCompletion;
-    return observe(completedSerial, now);
+    const Admission admission = observe(completedSerial, now);
+    if (admission != Admission::TimedOut) {
+      return admission;
+    }
+    const CompletionObservation confirmed = confirmCompletion();
+    return observe(confirmed.serial, confirmed.observedAt);
   }
   /// Seal the serial and input that reached the GPU as one UI frame.
   void submitted(Fence fence) { pending_.push_back(fence); }
   std::size_t pendingCount() const { return pending_.size(); }
   Fence completed() const { return completed_; }
   std::uint64_t oldestSerial() const { return pending_.empty() ? 0 : pending_.front().serial; }
+  /// Elapsed time of the oldest unfinished frame without restarting its submission clock.
+  std::chrono::milliseconds oldestAge(Clock::time_point now) const {
+    return pending_.empty() ? std::chrono::milliseconds::zero()
+                            : std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  now - pending_.front().submittedAt);
+  }
 
 private:
   std::deque<Fence> pending_;
@@ -1009,6 +1024,9 @@ private:
   bool presentationWasDeferred_ = false;
   bool forceUiPassFailureForTesting_ = false;
   std::uint64_t coalescedPresentationFrames_ = 0;
+  std::uint64_t presentationTimeoutSerial_ = 0;
+  std::chrono::milliseconds presentationTimeoutAge_{};
+  std::uint64_t presentationCompletionConfirmations_ = 0;
   std::uint64_t presentationFrameId_ = 0;
   std::uint64_t presentationCaptureId_ = 0;
   internal::PresentationSubmissionQueue::Fence presentationInputStamp_;

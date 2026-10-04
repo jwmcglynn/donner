@@ -3668,7 +3668,8 @@ TEST(EditorWindowPolicyTest, BrowserCompletionConfirmedAfterAnEventLoopPauseIsRe
   int confirmations = 0;
   const auto confirm = [&] {
     ++confirmations;
-    return std::uint64_t(3);
+    return internal::PresentationSubmissionQueue::CompletionObservation{
+        3, now + std::chrono::seconds(40) + std::chrono::milliseconds(1)};
   };
   EXPECT_EQ(queue.observe(0, now, confirm), internal::PresentationSubmissionQueue::Admission::Busy);
   EXPECT_EQ(confirmations, 0);
@@ -3689,7 +3690,8 @@ TEST(EditorWindowPolicyTest, BrowserCompletionConfirmationCannotResetUnfinishedD
   EXPECT_EQ(queue.observe(0, now + std::chrono::seconds(5),
                           [&] {
                             ++confirmations;
-                            return std::uint64_t(1);
+                            return internal::PresentationSubmissionQueue::CompletionObservation{
+                                1, now + std::chrono::seconds(5) + std::chrono::milliseconds(100)};
                           }),
             internal::PresentationSubmissionQueue::Admission::TimedOut);
   EXPECT_EQ(confirmations, 1);

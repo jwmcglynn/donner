@@ -60,7 +60,7 @@ MapSliceState BufferMappingTable::readiness(const Entry* entry) const {
 
 MapSliceReport BufferMappingTable::waitSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
   const MapSliceState before = readiness(find(mappingSlotIndex));
-  if (before != MapSliceState::Pending) {
+  if (before != MapSliceState::Pending || sliceSeconds <= 0.0) {
     // Nothing was waited on, so nothing was spent on a completion signal either.
     return MapSliceReport{.state = before, .waitKind = MapWaitKind::Polled};
   }
