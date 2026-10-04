@@ -2460,7 +2460,6 @@ bool EditorWindow::observePresentationCompletion() {
           'oldestSerial' : $12,
           'deviceLost' : Boolean($13),
           'admission' : $14,
-          'timeoutSerial' : $15, 'timeoutAgeMs' : $16, 'completionConfirmations' : $17,
           'coalescedFrames' : $3,
           'frameId' : $4,
           'captureId' : $5,
@@ -2477,8 +2476,15 @@ bool EditorWindow::observePresentationCompletion() {
       static_cast<double>(coalescedPresentationFrames_), static_cast<double>(frame.frameId),
       static_cast<double>(frame.captureId), frame.pointerX, frame.pointerY, frame.mouseDown, frame.inputRepresented, frame.viewportZoom,
       static_cast<double>(device.completedSerial()), static_cast<double>(presentationSubmissions_.oldestSerial()),
-      wgpuState_->framebufferGeodeDevice->isDeviceLost(), static_cast<int>(admission),
-      static_cast<double>(presentationTimeoutSerial_), static_cast<double>(presentationTimeoutAge_.count()),
+      wgpuState_->framebufferGeodeDevice->isDeviceLost(), static_cast<int>(admission));
+  MAIN_THREAD_ASYNC_EM_ASM({
+    const stats = window['__donnerPresentationQueueStats'];
+    if (stats) {
+      stats['timeoutSerial'] = $0;
+      stats['timeoutAgeMs'] = $1;
+      stats['completionConfirmations'] = $2;
+    }
+  }, static_cast<double>(presentationTimeoutSerial_), static_cast<double>(presentationTimeoutAge_.count()),
       static_cast<double>(presentationCompletionConfirmations_));
   // clang-format on
 #endif
