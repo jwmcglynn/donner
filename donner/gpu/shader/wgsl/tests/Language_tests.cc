@@ -1,8 +1,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <string>
+#include <utility>
 
 #include "donner/gpu/shader/wgsl/Parser.h"
 #include "donner/gpu/shader/wgsl/tests/ControlSource.h"
@@ -210,6 +212,54 @@ TEST(Language, EnforcesWgslOperatorGrouping) {
                              "fn f(a:u32,b:u32,c:u32)->u32 { return a & (b + c); }"}) {
     SCOPED_TRACE(source);
     EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::None);
+  }
+}
+
+/// Returns the diagnostic code and the source text its span covers.
+/// @param source WGSL to parse.
+std::pair<ErrorCode, std::string> DiagnosticOf(const std::string& source) {
+  const ParseResult parsed = Parse(source);
+  const uint32_t end = std::min<uint32_t>(parsed.diagnostic.span.end, uint32_t(source.size()));
+  const uint32_t begin = std::min(parsed.diagnostic.span.begin, end);
+  return {parsed.diagnostic.code, source.substr(begin, end - begin)};
+}
+
+TEST(Language, AppliesWgslTemplateListDiscoveryToComparisons) {
+  // WGSL pairs a `<` right after an identifier with the next `>` at the same nesting depth before
+  // it parses expressions, unless `;`, `{`, `:`, an assignment, `&&`, `||` or a closing bracket
+  // intervenes. Such a pair is a template list, never two comparisons.
+  const std::string prelude =
+      "fn g(x: bool, y: bool) -> bool { return x; }\n"
+      "fn h(x: u32) -> u32 { return x; }\n"
+      "fn f(a: u32, b: u32, c: u32, d: u32) -> bool {\n  ";
+  for (const char* body : {
+           "return g(a < b, c > d);",
+           "return g(a < b, c >= d);",
+           "return g(a < b, (c) > d);",
+           "return g(a < h(b), c > d);",
+           "return a < b >> c;",
+       }) {
+    const std::string source = prelude + body + "\n}\n";
+    SCOPED_TRACE(source);
+    EXPECT_THAT(DiagnosticOf(source),
+                testing::Pair(ErrorCode::UnsupportedConstruct, testing::StrEq("<")));
+  }
+  for (const char* body : {
+           "return g((a < b), (c > d));",
+           "return a < (b >> c);",
+           "return g(h(a) < b, c > d);",
+           "return g(1u < b, c > d);",
+           "return g(a < b && c > d, true);",
+           "return g(a < b || c > d, true);",
+           "return g(select(false, true, a < b), c > d);",
+           "return g(a <= b, c > d);",
+           "let p = a < b; let q = c > d; return p && q;",
+           "if (a < b) { return c > d; } return false;",
+           "return (a < b) == (c > d);",
+       }) {
+    const std::string source = prelude + body + "\n}\n";
+    SCOPED_TRACE(source);
+    EXPECT_THAT(DiagnosticOf(source), testing::Pair(ErrorCode::None, testing::IsEmpty()));
   }
 }
 
