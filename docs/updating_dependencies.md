@@ -12,9 +12,13 @@ tag with a commit.
 A few older pins still name a commit: the `git_override` blocks for `hedron_compile_commands`,
 `bloaty`, `imgui` and `glfw` in `MODULE.bazel` and for `stb`, `imgui` and `glfw` in
 `examples/MODULE.bazel`, `woff2` and `bazel_clang_tidy` in `third_party/bazel/non_bcr_deps.bzl`,
-the Google Fonts files in `third_party/google_fonts/fonts.bzl`, and the CMake generator's `brotli`
-revision. They predate this rule; do not copy them, and ask the operator before adding a
-dependency that has no usable release.
+and the Google Fonts files in `third_party/google_fonts/fonts.bzl`. The CMake generator,
+`tools/cmake/gen_cmakelists.py`, also fetches every dependency by commit: googletest,
+nlohmann_json, zlib, rules_cc and pixelmatch-cpp17 by the commit recorded for the release
+`MODULE.bazel` selects, and the generator fails if `MODULE.bazel` moves to another release; absl,
+EnTT and brotli by fixed revisions; and woff2 by the commit `non_bcr_deps.bzl` names. These predate
+this rule; do not copy them, and ask the operator before adding a dependency that has no usable
+release.
 
 ## Bazel LLVM Toolchain
 
