@@ -1943,8 +1943,9 @@ private:
         append(source_.substr(position, textEnd - position));
         position = textEnd;
         if (textEnd < stop) {
-          appendFoldedValue(module_.foldedConstants[nextFold_]);
-          position = foldAt(nextFold_++).end;
+          const FoldedConstant& folded = module_.foldedConstants[nextFold_++];
+          appendSeparatedValue(folded);
+          position = folded.span.end;
         }
       }
       append('\n');
@@ -1954,8 +1955,27 @@ private:
     }
   }
 
+  /// Returns whether p character can continue an identifier or number token.
+  static constexpr bool IsWordCharacter(char character) {
+    return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+           (character >= '0' && character <= '9') || character == '_';
+  }
+
+  /// Writes the exact value of p folded in place of its source, with a space on each side where the
+  /// neighboring source byte could otherwise join the value into one token, as the keyword in
+  /// `return-1f*-3f` or `return(1f)/3f` would.
+  constexpr void appendSeparatedValue(const FoldedConstant& folded) {
+    if (folded.span.begin > 0 && IsWordCharacter(source_[folded.span.begin - 1])) {
+      append(' ');
+    }
+    appendFoldedValue(folded);
+    if (folded.span.end < source_.size() && IsWordCharacter(source_[folded.span.end])) {
+      append(' ');
+    }
+  }
+
   /// Writes the exact value of p folded: an f32 or abstract-float literal, or a vector construction
-  /// of f32 literals.
+  /// of two to four f32 literals.
   constexpr void appendFoldedValue(const FoldedConstant& folded) {
     const Expression& value = module_.expressions[folded.expression];
     if (value.kind == ExpressionKind::Literal) {
@@ -1963,7 +1983,7 @@ private:
       return;
     }
     if (value.kind != ExpressionKind::Construct || value.type.kind != TypeKind::F32 ||
-        value.type.lanes < 2 || value.operandCount != value.type.lanes) {
+        value.type.lanes < 2 || value.type.lanes > 4 || value.operandCount != value.type.lanes) {
       fail(TextEmitError::InvalidModule);
       return;
     }
@@ -2047,7 +2067,9 @@ private:
 /// carry. A positive f32 value is a hex float such as `0x1.555556p-2f`, a negative one an exact
 /// subtraction such as `(-0f - 0x1.800000p1f)`, a vector a construction of those, and a value that
 /// is still abstract an abstract hex float such as `0x1.5555555555555p-2`, negated in parentheses
-/// when negative; a fold that spans lines or holds a comment joins its lines.
+/// when negative. A value is separated by a space from an adjacent keyword, identifier or number,
+/// so a splice never joins two tokens, and a fold that spans lines or holds a comment joins its
+/// lines.
 /// WGSL has no string literals, so `//` always begins a comment, and the lexer accepts no other
 /// comment form. The result parses to the same MSL and SPIR-V bytes, which the compiler tests
 /// check.
