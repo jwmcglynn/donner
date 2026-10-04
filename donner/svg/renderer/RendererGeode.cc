@@ -2482,6 +2482,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::vector<FilterStackFrame> filterStack;
   std::size_t rejectedFilterDepth = 0;
 
+  /// How far right and down the active filter captures move what is drawn into them, in pixels.
+  /// A capture expanded for an offset holds the content its region reaches above or left of its
+  /// outer target, moved by that overhang, and a capture nested in another is moved within it, so
+  /// the overhangs of every capture on the stack add up.
+  [[nodiscard]] Vector2i filterCaptureOffset() const {
+    Vector2i offset = Vector2i::Zero();
+    for (const FilterStackFrame& frame : filterStack) {
+      offset.x += frame.filterBufferOffsetX;
+      offset.y += frame.filterBufferOffsetY;
+    }
+    return offset;
+  }
+
   bool initializeClipEntry(const ResolvedClip& clip, ClipStackEntry& entry) {
     if (rejectedFilterDepth != 0) {
       clipStack.push_back(std::move(entry));
@@ -2931,13 +2944,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// layer, mask, and clip targets share the root pixel coordinate system.
   [[nodiscard]] Transform2d geometryDebugRootFromCurrentTarget(
       int additionalFilterOffsetX = 0, int additionalFilterOffsetY = 0) const {
-    int offsetX = additionalFilterOffsetX;
-    int offsetY = additionalFilterOffsetY;
-    for (const FilterStackFrame& frame : filterStack) {
-      offsetX += frame.filterBufferOffsetX;
-      offsetY += frame.filterBufferOffsetY;
-    }
-    return Transform2d::Translate(-offsetX, -offsetY);
+    const Vector2i offset = filterCaptureOffset();
+    return Transform2d::Translate(-(offset.x + additionalFilterOffsetX),
+                                  -(offset.y + additionalFilterOffsetY));
   }
 
   /// Configure a path-capable encoder. Pattern-tile content deliberately
@@ -5792,14 +5801,13 @@ void RendererGeode::setTransform(const Transform2d& transform) {
     impl_->deviceFromLocalTransform = scaled;
     return;
   }
-  if (!impl_->filterStack.empty()) {
-    const auto& filterFrame = impl_->filterStack.back();
-    if (filterFrame.filterBufferOffsetX != 0 || filterFrame.filterBufferOffsetY != 0) {
-      impl_->deviceFromLocalTransform =
-          transform *
-          Transform2d::Translate(filterFrame.filterBufferOffsetX, filterFrame.filterBufferOffsetY);
-      return;
-    }
+  // Every expanded filter capture on the stack moves what is drawn into it, including captures
+  // below a nested filter whose own capture is not expanded.
+  const Vector2i captureOffset = impl_->filterCaptureOffset();
+  if (captureOffset.x != 0 || captureOffset.y != 0) {
+    impl_->deviceFromLocalTransform =
+        transform * Transform2d::Translate(captureOffset.x, captureOffset.y);
+    return;
   }
   impl_->deviceFromLocalTransform = transform;
 }
