@@ -2090,8 +2090,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // from the bucket instead of calling `createTexture`.
   //
   // Exact-size pooling (no power-of-two bucketing). Works for the
-  // repeat-render case this PR targets because layer sizes are
-  // derived from `pixelWidth`/`pixelHeight`, which don't change
+  // repeat-render case because layer sizes are derived from the
+  // extents of the targets they draw into, which don't change
   // between idle re-renders. A size-bucketing extension is a future
   // follow-up for viewport-resize scenarios.
   // --------------------------------------------------------------------
@@ -5869,12 +5869,13 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
   // binding the previously-rendered deeper mask as the input clip.
   if (!clip.clipPaths.empty() && impl_->device && impl_->encoder && impl_->pixelWidth > 0 &&
       impl_->pixelHeight > 0) {
+    // Masks cover the target being drawn into, which inside a filter layer expanded for an
+    // offset is larger than the surface: the masks' coverage is addressed in that target's
+    // pixels, and the mask passes are scissored to it.
+    const gpu::Extent2d maskExtent = impl_->targetExtent();
     const auto makeMaskTexture = [&](const char* label, gpu::TextureDescriptor& outDesc) {
       outDesc =
-          gpu::TextureDescriptor{RcString(label),
-                                 gpu::Extent2d{static_cast<uint32_t>(impl_->pixelWidth),
-                                               static_cast<uint32_t>(impl_->pixelHeight)},
-                                 gpu::TextureFormat::RGBA8Unorm,
+          gpu::TextureDescriptor{RcString(label), maskExtent, gpu::TextureFormat::RGBA8Unorm,
                                  gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled};
       return impl_->acquireTexture(outDesc);
     };
@@ -6020,9 +6021,10 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
 
   // Allocate an offscreen layer. All draws issued between push/pop land
   // here; pop composites it back onto the outer target with the stored opacity.
-  const gpu::TextureDescriptor td{"RendererGeodeIsolatedLayer",
-                                  gpu::Extent2d{static_cast<uint32_t>(impl_->pixelWidth),
-                                                static_cast<uint32_t>(impl_->pixelHeight)},
+  // The layer takes the outer target's extent, not the surface's: the composite maps the whole
+  // layer over the whole outer target, which inside a filter layer expanded for an offset is
+  // larger than the surface.
+  const gpu::TextureDescriptor td{"RendererGeodeIsolatedLayer", impl_->targetExtent(),
                                   impl_->gpuTextureFormat(),
                                   gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled |
                                       gpu::TextureUsage::CopySrc};
@@ -6091,10 +6093,10 @@ void RendererGeode::popIsolatedLayer() {
     // backdrop, but a render pass may not read from its own color attachment. Snapshot the
     // parent's 1-sample resolve target into a separate texture with a texture-to-texture copy,
     // then open a fresh parent encoder over the parent target; the load-op note further down
-    // covers why that encoder preserves the target's contents.
-    const gpu::TextureDescriptor snapDesc{"RendererGeodeBlendDstSnapshot",
-                                          gpu::Extent2d{static_cast<uint32_t>(impl_->pixelWidth),
-                                                        static_cast<uint32_t>(impl_->pixelHeight)},
+    // covers why that encoder preserves the target's contents. The snapshot is the whole parent
+    // target, so the blend samples it texel for texel wherever the layer lands.
+    const gpu::Extent2d backdropExtent = impl_->targetExtent();
+    const gpu::TextureDescriptor snapDesc{"RendererGeodeBlendDstSnapshot", backdropExtent,
                                           impl_->gpuTextureFormat(),
                                           gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst};
     // Reading the backdrop copies out of the parent target, which an embedder-supplied one can
@@ -6112,9 +6114,7 @@ void RendererGeode::popIsolatedLayer() {
       // recorded outside a pass. It joins the frame's recorded stream after those draws and
       // before the composite recorded below, which is the order the backdrop has to be frozen in.
       const gpu::Status copied = impl_->frameGpuEncoder->copyTextureToTexture(
-          savedTargetHandle, snapshotHandle,
-          gpu::Extent2d{static_cast<uint32_t>(impl_->pixelWidth),
-                        static_cast<uint32_t>(impl_->pixelHeight)});
+          savedTargetHandle, snapshotHandle, backdropExtent);
       UTILS_RELEASE_ASSERT_MSG(!copied.hasError(),
                                "Failed to record the mix-blend-mode backdrop snapshot copy");
 
@@ -6134,7 +6134,7 @@ void RendererGeode::popIsolatedLayer() {
       // safe.
       auto newEncoder = std::make_unique<geode::GeoEncoder>(
           *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-          savedTargetHandle, impl_->targetExtent(), *impl_->frameGpuEncoder);
+          savedTargetHandle, backdropExtent, *impl_->frameGpuEncoder);
       impl_->configurePathEncoder(*newEncoder);
       newEncoder->setLoadPreserve();
       impl_->replaceActiveEncoder(std::move(newEncoder));
@@ -6179,16 +6179,19 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     impl_->filterStack.push_back({});
     return;
   }
-  std::optional<GeodeFilterAdmission> admission =
-      AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
-                       impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget,
-                       *impl_->surfaceBudget, *impl_->filterEngine);
+  // The capture covers the target the result composites back onto, which is larger than the
+  // surface when this filter nests inside one expanded for an offset.
+  const gpu::Extent2d outerExtent = impl_->targetExtent();
+  const int outerWidth = static_cast<int>(outerExtent.width);
+  const int outerHeight = static_cast<int>(outerExtent.height);
+  std::optional<GeodeFilterAdmission> admission = AdmitGeodeFilter(
+      filterGraph, filterRegion, impl_->deviceFromLocalTransform, outerWidth, outerHeight,
+      *impl_->filterExecutionBudget, *impl_->surfaceBudget, *impl_->filterEngine);
   if (!admission.has_value() && impl_->filterExecutionBudget->executions() != 0 &&
       impl_->submitFilterBudgetChunk()) {
-    admission =
-        AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
-                         impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget,
-                         *impl_->surfaceBudget, *impl_->filterEngine);
+    admission = AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
+                                 outerWidth, outerHeight, *impl_->filterExecutionBudget,
+                                 *impl_->surfaceBudget, *impl_->filterEngine);
   }
   if (!admission.has_value()) {
     impl_->pushRejectedFilterFrame();
@@ -6276,9 +6279,10 @@ void RendererGeode::popFilterLayer() {
   // existing contents. Composite the filtered texture back with full
   // opacity (filter results are already premultiplied).
   impl_->target = Impl::aliasOf(frame.savedTarget);
+  const gpu::Extent2d outerExtent = impl_->targetExtent();
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedTarget, impl_->targetExtent(), *impl_->frameGpuEncoder);
+      frame.savedTarget, outerExtent, *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
   impl_->replaceActiveEncoder(std::move(newEncoder));
@@ -6290,10 +6294,11 @@ void RendererGeode::popFilterLayer() {
     return;
   }
   if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
-    // The filter result is in an expanded texture. Extract the viewport-sized region at the
-    // buffer offset using a GPU texture copy, then blit the viewport-sized result.
-    const uint32_t vpW = static_cast<uint32_t>(impl_->pixelWidth);
-    const uint32_t vpH = static_cast<uint32_t>(impl_->pixelHeight);
+    // The filter result is in an expanded texture. Extract the region the outer target covers,
+    // at the buffer offset, using a GPU texture copy, then blit it over that target. The buffer
+    // was sized as that target plus the offset, so the region lies wholly inside the result.
+    const uint32_t vpW = outerExtent.width;
+    const uint32_t vpH = outerExtent.height;
 
     const gpu::TextureDescriptor vpDesc{"RendererGeodeFilterViewport", gpu::Extent2d{vpW, vpH},
                                         filteredDesc.format,
@@ -6342,12 +6347,13 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
     return;
   }
 
+  // The mask and its content take the outer target's extent, not the surface's: popMask maps both
+  // over the whole outer target, which inside a filter layer expanded for an offset is larger
+  // than the surface.
+  const gpu::Extent2d outerExtent = impl_->targetExtent();
   const auto allocTexture = [&](const char* label, gpu::Texture& outTexture,
                                 gpu::TextureDescriptor& outDesc) {
-    outDesc = gpu::TextureDescriptor{RcString(label),
-                                     gpu::Extent2d{static_cast<uint32_t>(impl_->pixelWidth),
-                                                   static_cast<uint32_t>(impl_->pixelHeight)},
-                                     impl_->gpuTextureFormat(),
+    outDesc = gpu::TextureDescriptor{RcString(label), outerExtent, impl_->gpuTextureFormat(),
                                      gpu::TextureUsage::RenderAttachment |
                                          gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc};
     outTexture = impl_->acquireTexture(outDesc);

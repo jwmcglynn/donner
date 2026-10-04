@@ -363,6 +363,10 @@ public:
    * pipeline. `endMaskPass` closes the mask pass and re-opens the
    * main pass (with `LoadOp::Load`) when the next draw lands.
    *
+   * Mask fills are placed in this encoder's target pixels, so the mask
+   * has the target's extent. The pass is scissored to the mask's own
+   * extent, which keeps it valid whatever extent the mask has.
+   *
    * @param mask Single-sample RGBA8Unorm target. Sampled by
    *   `setClipMask` after `endMaskPass`.
    */

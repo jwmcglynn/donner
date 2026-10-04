@@ -1509,6 +1509,11 @@ void GeoEncoder::beginMaskPass(const gpu::Texture& mask) {
 
   impl_->maskPassSavedTransform = impl_->transform;
 
+  const gpu::Result<gpu::TextureDescriptor> maskDescriptor =
+      impl_->gpuContext->gpuDevice->textureDescriptor(mask);
+  if (maskDescriptor.hasError()) {
+    return;
+  }
   gpu::Result<gpu::TextureView> maskViewResult = impl_->gpuContext->gpuDevice->createTextureView(
       mask, gpu::TextureViewDescriptor{"GeoEncoderMaskView"});
   if (maskViewResult.hasError()) {
@@ -1528,9 +1533,11 @@ void GeoEncoder::beginMaskPass(const gpu::Texture& mask) {
   impl_->maskPass = opened.result();
   (void)impl_->maskPass->setPipeline(impl_->maskPipelineOwned->pipeline());
   impl_->device->countPipelineSwitch();
-  // Full-target scissor so clip-path fills aren't clipped by any
-  // outer scissor still cached in the encoder state.
-  (void)impl_->maskPass->setScissorRect(0, 0, impl_->targetWidth, impl_->targetHeight);
+  // Whole-mask scissor so clip-path fills aren't clipped by any outer
+  // scissor still cached in the encoder state. It is the mask's own
+  // extent, the pass's only attachment, so it can never exceed the pass.
+  const gpu::Extent2d maskExtent = maskDescriptor.result().size;
+  (void)impl_->maskPass->setScissorRect(0, 0, maskExtent.width, maskExtent.height);
   impl_->maskPassOpen = true;
 }
 
