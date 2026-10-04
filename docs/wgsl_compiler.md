@@ -421,17 +421,23 @@ of those. A browser would otherwise evaluate the expression itself, and WGSL all
 ULP of error and lets an inexact conversion round either way, so it could reach other bits than the
 MSL and SPIR-V projections carry. The subtraction is exact in WGSL and folds back to the same
 literal here, where a bare minus sign would leave an unfolded negation and could join a preceding
-`-` into `--`. Abstract-float folds are spelled exactly as well, since WGSL leaves abstract-float
-division unbounded: one the parser has given an f32 type, such as the argument in
-`max(x, 1.0 / 65536.0)`, becomes an f32 hex float, and one that stays abstract, such as an untyped
-`const`, becomes an abstract hex float such as `0x1.5555555555555p-2`, negated in parentheses when
-negative. A fold that spans lines or contains a comment becomes part of one line, and a module holds
-at most 256 outermost folds; more fail with an expression-limit diagnostic. A module `const` may be
-written as `const k: f32 = 1f / 3f;`. A folded scalar `const` is a literal wherever it is
-referenced, so `k * 3f` folds again, to `1f`; a vector-valued `const` remains unsupported. Operands
-other than literals, their negations and vector constructions of them, such as a swizzle, member,
-index or conversion of a constant, and constant matrix arithmetic remain outside the profile and
-fail with an invalid-constant-expression diagnostic; f32 `%` is a type mismatch in this profile.
+`-` into `--`. A negative value that is a whole parenthesized expression or argument needs no
+parentheses of its own, so the projection of a projection is unchanged, and a value is separated by
+a space from an adjacent keyword, identifier or number, as after `return` in `return-1f*-3f;`.
+Abstract-float folds are spelled exactly as well, since WGSL leaves abstract-float division
+unbounded: one the parser has given an f32 type, such as the argument in `max(x, 1.0 / 65536.0)`,
+becomes an f32 hex float, and one that stays abstract, such as an untyped `const`, becomes an
+abstract hex float such as `0x1.5555555555555p-2`, negated in parentheses when negative. A value
+that stays abstract is exact in the projection, but where WGSL later converts it to f32, as at a use
+of an untyped `const` in f32 arithmetic, a browser may round an inexact value either way, as it may
+for any inexact abstract-float literal. A fold that spans lines or contains a comment becomes part
+of one line, and a module holds at most 256 outermost folds; more fail with an expression-limit
+diagnostic. A module `const` may be written as `const k: f32 = 1f / 3f;`. A folded scalar `const` is
+a literal wherever it is referenced, so `k * 3f` folds again, to `1f`; a vector-valued `const`
+remains unsupported. Operands other than literals, their negations and vector constructions of them,
+such as a swizzle, member, index or conversion of a constant, and constant matrix arithmetic remain
+outside the profile and fail with an invalid-constant-expression diagnostic; f32 `%` is a type
+mismatch in this profile.
 
 ## Slug fill
 
