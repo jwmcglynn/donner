@@ -114,14 +114,19 @@ Notes:
 ## Consuming Donner from Bazel
 
 **Known broken as of 2026-07 for non-root consumers.** The intended recipe
-(`docs/getting_started.md`) is a consumer `MODULE.bazel` with:
+(`docs/getting_started.md`) is a consumer `MODULE.bazel` with a released version:
 
 ```py
-bazel_dep(name = "donner", version = "0.0.0")
+bazel_dep(name = "donner", version = "<released version>")
+```
+
+Until that version is on the registry, override it to the matching release tag, never a commit:
+
+```py
 git_override(
     module_name = "donner",
     remote = "https://github.com/jwmcglynn/donner",
-    commit = "<pin a real commit: git ls-remote https://github.com/jwmcglynn/donner main>",
+    tag = "v<released version>",
 )
 ```
 
@@ -145,8 +150,8 @@ If/when the load bug is fixed, two more prerequisites for a from-scratch consume
 
 BCR entry preparation uses `.bcr/` and the manual `.github/workflows/publish_bcr.yml` after a
 qualified GitHub Release (see **donner-release**). Check the registry for an available Donner
-version before using a version-pinned `bazel_dep`; otherwise use `git_override` or
-`local_path_override`. The module version is in `MODULE.bazel`.
+version before using a version-pinned `bazel_dep`; otherwise use `git_override` with a release
+tag, or `local_path_override`. The module version is in `MODULE.bazel`.
 
 Consumers tune features with the module extension (`config/extensions.bzl`):
 

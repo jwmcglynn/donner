@@ -212,8 +212,10 @@ that file — bump the pin there too, then run
 `python3 tools/cmake/gen_cmakelists.py --check --build` (see donner-pr-ci, donner-build-test).
 
 Pin every dependency to a release tag or version, never a commit (`AGENTS.md`, General
-Practices): a commit pin makes Renovate propose every upstream commit. To content-pin a non-BCR
-fetch, use the release's tag archive or release asset with its `sha256`.
+Practices): for a dependency Renovate tracks, a commit pin makes it propose every upstream commit,
+and `third_party/` fetches, which Renovate ignores, follow the same rule by hand. To content-pin a
+non-BCR fetch, use the release's published asset, or its tag source archive if it publishes none,
+with its `sha256`.
 
 LLVM toolchain: `MODULE.bazel` declares
 `bazel_dep(name = "toolchains_llvm", version = "1.8.0", dev_dependency = True)`, a plain BCR dep.
