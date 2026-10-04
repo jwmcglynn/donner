@@ -226,9 +226,9 @@ commits and their fixes together in a focused reviewable change.
       vertex color unpack and the snapshot half-alpha term, and f32 constant expressions fold, so
       feImage writes its weight as `1f / 3f`. Two identifier renames still stand in for valid WGSL
       the profile rejects (see the compiler guide): the gradient local `linear_parameter`, because a
-      function-scope name may not shadow a module-scope one, and feBlend's `cs_main`, because an
-      entry name reserved in MSL is rejected rather than mapped to a native name. This item stays
-      open until the compiler accepts both.
+      function-scope name may not shadow a module-scope one (#1647), and feBlend's `cs_main`,
+      because an entry name reserved in MSL is rejected rather than mapped to a native name
+      (#1648). This item stays open until the compiler accepts both.
 
 ### Snapshot and target identity
 
