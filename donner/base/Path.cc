@@ -145,7 +145,33 @@ bool IsFiniteVector(const Vector2d& value) {
 constexpr int kMaximumRoundStrokeSubdivisionSteps = 4096;
 constexpr std::size_t kMaximumStrokeOutputPoints = 1024 * 1024;
 
-int BoundedRoundStrokeSubdivisionSteps(double requestedSteps, int minimumSteps) {
+/// Returns the subdivision steps for a round stroke piece: an arc of @p radius sweeping
+/// @p sweep radians around @p center, tessellated with @p requestedSteps chords and clamped to
+/// [@p minimumSteps, kMaximumRoundStrokeSubdivisionSteps].
+///
+/// The steps are also limited to the arc length divided by the spacing between adjacent doubles
+/// at the center's largest coordinate, so the chord angle is at most spacing / radius. The
+/// chords then deviate from the true arc by at most radius * angle^2 / 8 <=
+/// spacing^2 / (8 * radius), which is a quarter spacing or less once the radius reaches half a
+/// spacing. Every corner of the piece is already rounded by up to half a spacing in that axis,
+/// so the deviation stays inside the error the piece already has. It is not zero in a more
+/// finely resolved axis; it is only smaller than the coarse axis's rounding. A radius below a
+/// quarter spacing rounds every corner back onto the center's coordinate in the coarse axis, so
+/// the piece is discarded as degenerate and any steps beyond the minimum are wasted work.
+///
+/// Every caller requests about one step per pi / 2 units of arc length or fewer, so this limit
+/// only binds when the spacing exceeds about pi / 2. Spacings are powers of two, so that needs a
+/// center coordinate of at least 2^53, and strokes of geometry below that magnitude tessellate
+/// exactly as before. A caller requesting denser subdivision would lower that threshold.
+int BoundedRoundStrokeSubdivisionSteps(const Vector2d& center, double radius, double sweep,
+                                       double requestedSteps, int minimumSteps) {
+  const double magnitude = std::max(Abs(center.x), Abs(center.y));
+  const double spacing =
+      std::nextafter(magnitude, std::numeric_limits<double>::infinity()) - magnitude;
+  const double representableSteps = Abs(sweep) * radius / spacing;
+  if (representableSteps < requestedSteps) {
+    requestedSteps = representableSteps;
+  }
   if (!(requestedSteps > static_cast<double>(minimumSteps))) {
     return minimumSteps;
   }
@@ -2041,11 +2067,12 @@ void EmitPositiveStrokePiece(std::vector<Vector2d> points, PathBuilder& builder,
 void EmitRoundCapPiece(const Vector2d& point, const Vector2d& outwardDirection, double halfWidth,
                        PathBuilder& builder) {
   const Vector2d normal(-outwardDirection.y, outwardDirection.x);
+  const int numSteps = BoundedRoundStrokeSubdivisionSteps(
+      point, halfWidth, MathConstants<double>::kPi, halfWidth * 2.0, 8);
   std::vector<Vector2d> points;
-  points.reserve(static_cast<size_t>(BoundedRoundStrokeSubdivisionSteps(halfWidth * 2.0, 8)) + 2);
+  points.reserve(static_cast<size_t>(numSteps) + 2);
   points.push_back(point);
   const double startAngle = std::atan2(normal.y, normal.x);
-  const int numSteps = BoundedRoundStrokeSubdivisionSteps(halfWidth * 2.0, 8);
   for (int step = 0; step <= numSteps; ++step) {
     const double t = static_cast<double>(step) / static_cast<double>(numSteps);
     const double angle = startAngle - MathConstants<double>::kPi * t;
@@ -2086,9 +2113,11 @@ void EmitRoundJoinPiece(const Vector2d& vertex, const Vector2d& previousOuterNor
   const double alignment = previousOuterNormal.dot(currentOuterNormal);
   const double sweep = std::atan2(turn, alignment);
   // Near-reversal sectors use the same subdivision density as round caps.
-  const int numSteps = NearZero(turn, 1e-10) && alignment < 0.0
-                           ? BoundedRoundStrokeSubdivisionSteps(halfWidth * 2.0, 8)
-                           : BoundedRoundStrokeSubdivisionSteps(Abs(sweep) * halfWidth / 2.0, 4);
+  const int numSteps =
+      NearZero(turn, 1e-10) && alignment < 0.0
+          ? BoundedRoundStrokeSubdivisionSteps(vertex, halfWidth, sweep, halfWidth * 2.0, 8)
+          : BoundedRoundStrokeSubdivisionSteps(vertex, halfWidth, sweep,
+                                               Abs(sweep) * halfWidth / 2.0, 4);
   std::vector<Vector2d> points;
   points.reserve(static_cast<size_t>(numSteps) + 3);
   points.push_back(vertex);
@@ -2429,7 +2458,8 @@ void EmitZeroLengthStroke(const FlatSubpath& subpath, double halfWidth, const St
     return;
   }
   // Approximate the round point cap with the existing bounded circle subdivision.
-  const int numSteps = BoundedRoundStrokeSubdivisionSteps(halfWidth * 4.0, 16);
+  const int numSteps = BoundedRoundStrokeSubdivisionSteps(
+      p, halfWidth, 2.0 * MathConstants<double>::kPi, halfWidth * 4.0, 16);
   std::vector<Vector2d> points;
   points.reserve(static_cast<size_t>(numSteps));
   for (int s = 0; s < numSteps; ++s) {
