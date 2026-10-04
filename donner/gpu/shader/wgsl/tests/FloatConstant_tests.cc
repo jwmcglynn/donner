@@ -213,9 +213,10 @@ TEST(FloatConstant, ReplacesEachOutermostFoldWithItsExactValueInTheWgslProjectio
       "}\n"
       "fn kw() -> f32 { return-1f*-3f; }\n"
       "fn kp() -> f32 { return(1f)/3f; }\n"
-      "fn kv() -> vec2<f32> { return(vec2<f32>(1f, 2f))*2f; }\n",
+      "fn kv() -> vec2<f32> { return(vec2<f32>(1f, 2f))*2f; }\n"
+      "fn delimited(x: f32) -> f32 { return max(x,1f-2f); }\n",
       "weight() + negative(1f) + thirds().y + signs().x + tiny() + negativeZero() + nested() + "
-      "spread() + kThird + kw() + kp() + kv().y");
+      "spread() + kThird + kw() + kp() + kv().y + delimited(1f)");
   ASSERT_THAT(Diagnose(source), Eq(kAccepted));
   const std::string wgsl = Wgsl(source);
   ASSERT_THAT(wgsl, Not(IsEmpty()));
@@ -233,6 +234,8 @@ TEST(FloatConstant, ReplacesEachOutermostFoldWithItsExactValueInTheWgslProjectio
            "fn kw() -> f32 { return 0x1.800000p1f; }\n",
            "fn kp() -> f32 { return 0x1.555556p-2f; }\n",
            "fn kv() -> vec2<f32> { return vec2<f32>(0x1.000000p1f, 0x1.000000p2f); }\n",
+           // A whole argument needs no parentheses of its own.
+           "fn delimited(x: f32) -> f32 { return max(x,-0f - 0x1.000000p0f); }\n",
        }) {
     EXPECT_THAT(wgsl, HasSubstr(line));
   }

@@ -1968,18 +1968,30 @@ private:
     if (folded.span.begin > 0 && IsWordCharacter(source_[folded.span.begin - 1])) {
       append(' ');
     }
-    appendFoldedValue(folded);
+    appendFoldedValue(folded, IsDelimited(folded.span));
     if (folded.span.end < source_.size() && IsWordCharacter(source_[folded.span.end])) {
       append(' ');
     }
   }
 
+  /// Returns whether p span is a whole parenthesized expression or call argument, directly after
+  /// `(` or `,` and directly before `)` or `,`. A negative value there needs no parentheses of its
+  /// own, so a projection that already wrote them projects to itself.
+  constexpr bool IsDelimited(SourceSpan span) const {
+    if (span.begin == 0 || span.end >= source_.size()) {
+      return false;
+    }
+    const char before = source_[span.begin - 1];
+    const char after = source_[span.end];
+    return (before == '(' || before == ',') && (after == ')' || after == ',');
+  }
+
   /// Writes the exact value of p folded: an f32 or abstract-float literal, or a vector construction
-  /// of two to four f32 literals.
-  constexpr void appendFoldedValue(const FoldedConstant& folded) {
+  /// of two to four f32 literals. A negative scalar is parenthesized unless p delimited.
+  constexpr void appendFoldedValue(const FoldedConstant& folded, bool delimited) {
     const Expression& value = module_.expressions[folded.expression];
     if (value.kind == ExpressionKind::Literal) {
-      appendLane(value);
+      appendLane(value, !delimited);
       return;
     }
     if (value.kind != ExpressionKind::Construct || value.type.kind != TypeKind::F32 ||
@@ -1998,17 +2010,17 @@ private:
         fail(TextEmitError::InvalidModule);
         return;
       }
-      appendLane(module_.expressions[value.operands[lane]]);
+      appendLane(module_.expressions[value.operands[lane]], true);
     }
     append(')');
   }
 
   /// Writes one folded lane exactly. A negative f32 value, -0 included, is spelled as a
-  /// subtraction from `-0f`: WGSL evaluates it exactly, this compiler folds it back to the same
-  /// literal, and unlike a bare minus sign it cannot join a preceding `-` into `--`. An
-  /// abstract-float lane keeps its abstract type, and its negation in parentheses folds back to the
-  /// same abstract literal.
-  constexpr void appendLane(const Expression& lane) {
+  /// subtraction from `-0f`: WGSL evaluates it exactly, and this compiler folds it back to the same
+  /// literal. An abstract-float lane keeps its abstract type, and its negation folds back to the
+  /// same abstract literal. With p parenthesize, a negative value is wrapped in parentheses, so it
+  /// keeps its precedence as an operand and cannot join a preceding `-` into `--`.
+  constexpr void appendLane(const Expression& lane, bool parenthesize) {
     const bool abstract = lane.type == Type{TypeKind::AbstractFloat};
     const uint64_t bits = uint64_t(lane.payload) | (uint64_t(lane.literalHighBits) << 32);
     const uint64_t sign = abstract ? uint64_t(1) << 63 : uint64_t(1) << 31;
@@ -2019,12 +2031,24 @@ private:
       fail(TextEmitError::InvalidModule);
       return;
     }
-    const bool negative = (bits & sign) != 0;
-    if (negative) {
-      append(abstract ? "(-" : "(-0f - ");
+    appendSigned(magnitude.view(),
+                 (bits & sign) == 0 ? ""
+                 : abstract         ? "-"
+                                    : "-0f - ",
+                 parenthesize);
+  }
+
+  /// Writes p magnitude after p negation, which is empty for a value that is not negative, in
+  /// parentheses when p parenthesize and the value is negative.
+  constexpr void appendSigned(std::string_view magnitude, std::string_view negation,
+                              bool parenthesize) {
+    const bool wrapped = !negation.empty() && parenthesize;
+    if (wrapped) {
+      append('(');
     }
-    append(magnitude.view());
-    if (negative) {
+    append(negation);
+    append(magnitude);
+    if (wrapped) {
       append(')');
     }
   }
