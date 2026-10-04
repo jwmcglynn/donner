@@ -62,6 +62,30 @@ const kFromAbstractInt = 2 * 1.5f;
   EXPECT_THAT(ConstantNamed(parsed.module, "kFromAbstractInt"), Eq(F32Bits(0x40400000)));
 }
 
+TEST(FloatConstant, FoldsAgainThroughAScalarConstant) {
+  // A folded scalar module constant is a literal wherever it is referenced.
+  const std::string source = R"(
+const kThird: f32 = 1f / 3f;
+const kReused = kThird * 3f;
+fn f(x: f32) -> f32 { return x * (kThird * 3f); }
+)";
+  const ParseResult parsed = Parse(source);
+  ASSERT_THAT(Diagnose(source), Eq(kAccepted));
+  EXPECT_THAT(ConstantNamed(parsed.module, "kReused"), Eq(F32Bits(0x3f800000)));
+
+  // A module constant must be a literal, so a vector-valued one is rejected at its declaration
+  // before it can be a folding operand.
+  for (const auto& [vectorSource, expected] : std::vector<std::pair<std::string, Rejection>>{
+           {"const kPair = vec2<f32>(1f, 2f);\nfn f() -> vec2<f32> { return kPair * 2f; }",
+            {ErrorCode::UnsupportedConstruct, "kPair"}},
+           {"const kHalves = vec2<f32>(1f, 2f) / 2f;",
+            {ErrorCode::UnsupportedConstruct, "kHalves"}},
+       }) {
+    SCOPED_TRACE(vectorSource);
+    EXPECT_THAT(Diagnose(vectorSource), Eq(expected));
+  }
+}
+
 TEST(FloatConstant, SignsZeroResultsAsIeeeRoundToNearest) {
   const std::string source = R"(
 const kCancelled = 1f - 1f;
