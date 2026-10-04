@@ -73,6 +73,34 @@ test("fresh file writes cannot refresh a stale application response", async () =
   assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
 });
 
+test("malformed evidence after a live application response fails closed", async () => {
+  const outputDir = directory();
+  const heartbeatFile = path.join(outputDir, "heartbeat");
+  const corrupt = path.join(outputDir, "corrupt");
+  const script = `const fs=require('node:fs');
+    setInterval(()=>fs.writeFileSync(process.env.DONNER_WATCHDOG_HEARTBEAT,
+      fs.existsSync(${JSON.stringify(corrupt)}) ? '{' :
+      JSON.stringify({phase:'active',sessionId:'live',atMs:Date.now()})),20);`;
+  const result = await supervise(process.execPath, ["-e", script], {
+    outputDir,
+    heartbeatFile,
+    intervalMs: 20,
+    deadlineMs: 2000,
+    writeReceipt: () => {
+      if (fs.existsSync(heartbeatFile)) {
+        try {
+          if (JSON.parse(fs.readFileSync(heartbeatFile, "utf8")).phase === "active") {
+            fs.writeFileSync(corrupt, "observed");
+          }
+        } catch {}
+      }
+    },
+  });
+  assert.ok(result.samples.some((sample) => sample.application?.phase === "active"));
+  assert.match(result.reason, /invalid application heartbeat/);
+  assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
+});
+
 for (
   const [name, timestamp] of [["missing", "undefined"], ["future", "Date.now()+60000"], [
     "invalid",
