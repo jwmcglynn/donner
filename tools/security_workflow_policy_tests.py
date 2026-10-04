@@ -407,6 +407,26 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 r'(?:commit\s*=\s*"[0-9a-f]{40}"|tag\s*=\s*"v?\d+(?:\.\d+){1,2}")',
             )
 
+    def test_text_shaping_dependencies_are_pinned_by_commit(self):
+        """HarfBuzz and WOFF2 link into the shipped editor; a moved tag must not change them.
+
+        The HarfBuzz checks pin the current fetch shape (a commit archive with a sha256); switching to
+        another content-pinned shape, such as a release asset, means updating this test with it.
+        """
+        deps = _read("third_party/bazel/non_bcr_deps.bzl")
+        harfbuzz = re.search(r'http_archive\(\s*name = "harfbuzz",(.*?)\n    \)', deps, re.DOTALL)
+        self.assertIsNotNone(harfbuzz, "HarfBuzz must be fetched as a checksummed archive")
+        self.assertRegex(harfbuzz.group(1), r'sha256 = "[0-9a-f]{64}"')
+        commit = re.search(r'_HARFBUZZ_COMMIT = "([0-9a-f]{40})"', deps)
+        self.assertIsNotNone(commit, "the HarfBuzz archive must name an exact commit")
+        self.assertIn("strip_prefix = \"harfbuzz-\" + _HARFBUZZ_COMMIT", harfbuzz.group(1))
+        self.assertIn("archive/{}.tar.gz\".format(_HARFBUZZ_COMMIT)", harfbuzz.group(1))
+        woff2 = re.search(r'new_git_repository\(\s*name = "woff2",(.*?)\n    \)', deps, re.DOTALL)
+        self.assertIsNotNone(woff2)
+        self.assertRegex(woff2.group(1), r'commit = "[0-9a-f]{40}"')
+        for block in (harfbuzz.group(1), woff2.group(1)):
+            self.assertNotRegex(block, r"\b(?:tag|branch)\s*=")
+
     def test_fuzzer_variant_tags_derive_matching_ubsan_lanes(self):
         rules = _read("build_defs/rules.bzl")
         self.assertIn('"fuzz_text_full" in common_tags', rules)

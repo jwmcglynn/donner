@@ -49,16 +49,24 @@ def _non_bcr_deps_impl(_mctx):
 
     # HarfBuzz text shaping. Gated on //donner/svg/renderer:text_full_enabled.
     #
+    # Pinned by commit and checksum: the source archive of release 14.2.1's commit, whose files and
+    # modes reproduce that commit's tree (f4261faec1359d2e1e9d604e4125ab671ff51983) exactly. To
+    # bump, set the new release's commit and the `shasum -a 256` of its archive together. If the
+    # checksum stops matching for the same commit (GitHub can change archive compression), confirm
+    # the extracted files still reproduce the commit's tree before recording a new checksum.
+    #
     # The patch_cmds below create src/config-override.h to re-enable parts of
     # the HarfBuzz API that HB_TINY/HB_LEAN strip out. We need:
     #   - the draw API for glyph outline extraction
     #   - CFF outlines for our OTF fallback font (Public Sans)
     #   - file I/O for hb_face_create_from_file_or_fail
-    new_git_repository(
+    _HARFBUZZ_COMMIT = "56feae4035bdd48f62ba2b8d8c16232d4d89b3a4"  # 14.2.1
+    http_archive(
         name = "harfbuzz",
         build_file = "//third_party:BUILD.harfbuzz",
-        remote = "https://github.com/harfbuzz/harfbuzz.git",
-        tag = "14.2.1",
+        sha256 = "ff66aea9cfc2bf07819c2352fec4f2b4859257d33ca65e616dedb04346ec727b",
+        strip_prefix = "harfbuzz-" + _HARFBUZZ_COMMIT,
+        url = "https://github.com/harfbuzz/harfbuzz/archive/{}.tar.gz".format(_HARFBUZZ_COMMIT),
         patch_cmds = [
             """cat > src/config-override.h << 'HBEOF'
 // Re-enable the draw API for glyph outline extraction.
