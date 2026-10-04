@@ -2091,12 +2091,14 @@ private:
 /// carry. A positive f32 value is a hex float such as `0x1.555556p-2f`, a negative one an exact
 /// subtraction such as `(-0f - 0x1.800000p1f)`, a vector a construction of those, and a value that
 /// is still abstract an abstract hex float such as `0x1.5555555555555p-2`, negated in parentheses
-/// when negative. A value is separated by a space from an adjacent keyword, identifier or number,
-/// so a splice never joins two tokens, and a fold that spans lines or holds a comment joins its
-/// lines.
+/// when negative. A negative value whose source is a whole parenthesized expression or argument,
+/// directly after `(` or `,` and before `)` or `,`, is written without parentheses of its own, so
+/// the projection of a projection is unchanged. A value is separated by a space from an adjacent
+/// keyword, identifier or number, so a splice never joins two tokens, and a fold that spans lines
+/// or holds a comment joins its lines.
 /// WGSL has no string literals, so `//` always begins a comment, and the lexer accepts no other
-/// comment form. The result parses to the same MSL and SPIR-V bytes, which the compiler tests
-/// check.
+/// comment form. The result parses to the same MSL and SPIR-V bytes and projects to itself, which
+/// the compiler tests and the parser fuzzer check.
 ///
 /// @param module Validated parsed WGSL module.
 /// @param sink Caller-owned output storage.

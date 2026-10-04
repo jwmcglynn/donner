@@ -421,9 +421,10 @@ of those. A browser would otherwise evaluate the expression itself, and WGSL all
 ULP of error and lets an inexact conversion round either way, so it could reach other bits than the
 MSL and SPIR-V projections carry. The subtraction is exact in WGSL and folds back to the same
 literal here, where a bare minus sign would leave an unfolded negation and could join a preceding
-`-` into `--`. A negative value that is a whole parenthesized expression or argument needs no
-parentheses of its own, so the projection of a projection is unchanged, and a value is separated by
-a space from an adjacent keyword, identifier or number, as after `return` in `return-1f*-3f;`.
+`-` into `--`. A negative value that is a whole parenthesized expression or argument, directly
+after `(` or `,` and before `)` or `,`, needs no parentheses of its own, so the projection of a
+projection is unchanged, and a value is separated by a space from an adjacent keyword, identifier
+or number, as after `return` in `return-1f*-3f;`.
 Abstract-float folds are spelled exactly as well, since WGSL leaves abstract-float division
 unbounded: one the parser has given an f32 type, such as the argument in `max(x, 1.0 / 65536.0)`,
 becomes an f32 hex float, and one that stays abstract, such as an untyped `const`, becomes an
