@@ -156,6 +156,11 @@ See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behin
 ## General Practices
 
 - Prefer existing Donner utilities (`Transform2d`, `RcString`, `StringUtils`) before adding dependencies.
+- **Pin third-party dependencies to release tags or versions, never to a commit.** Renovate follows
+  releases, and a commit pin makes it propose every upstream commit instead. When a fetch also
+  needs a content pin, for example to answer a finding about a mutable tag, fetch the release's tag
+  archive or published release asset with its `sha256`; do not replace the tag with a commit. If an
+  upstream has no usable release, ask the operator instead of pinning a commit.
 - **No private-infra references.** Donner is public: never cite the operator's private repos, their design-doc numbers, or personal notes in code, comments, commits, or PRs. State the motivation in self-contained terms instead. See `CLAUDE.md` §"No Private-Infra References".
 - **No design-doc or planning references in code comments, including Donner's own.** Never cite `docs/design_docs/` numbers, milestones ("Milestone 3", "M2", "M4.2"), waves, tiers, phases, packets, bullets, or slices in a comment; write the invariant, constraint, or measured fact inline so the comment stands alone. Design docs may reference code; code never references design docs. Remove violations you touch, even preexisting ones. See `CLAUDE.md` §"No Design-Doc or Milestone References in Code Comments".
 - Docs: follow `docs/AGENTS.md`, use templates under `docs/design_docs/`. Run `tools/doxygen.sh` to regenerate.

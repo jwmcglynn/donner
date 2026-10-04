@@ -18,7 +18,7 @@ Canonical docs — read these before improvising; this skill is the map, they ar
 | `docs/design_docs/0018-bcr_release.md`         | BCR publishing runbook + common-failures table.                                                             |
 | `docs/design_docs/0011-v0_5_release.md`        | v0.5 milestone plan; §"v0.5 Retrospective" lists release-process bugs carried forward.                      |
 | `docs/design_docs/0028-v1_0_release.md`        | v1.0 plan; Phase 1 tracks the BCR publish root-cause.                                                       |
-| `docs/updating_dependencies.md`                | LLVM toolchain update flow (partially stale — see §Dependency updates).                                     |
+| `docs/updating_dependencies.md`                | Dependency pinning rule and the LLVM toolchain update flow.                                                 |
 | `docs/ProjectRoadmap.md`                       | Roadmap source of truth; update post-release.                                                               |
 | `docs/release_checklists/`                     | Per-release manual checklists (currently `v0_8_showcase_checklist.md`, the showcase-asset authoring steps). |
 
@@ -211,12 +211,14 @@ cross-check the CMake mirror in `tools/cmake/gen_cmakelists.py`: deps in
 that file — bump the pin there too, then run
 `python3 tools/cmake/gen_cmakelists.py --check --build` (see donner-pr-ci, donner-build-test).
 
-LLVM toolchain: `MODULE.bazel` currently declares
-`bazel_dep(name = "toolchains_llvm", version = "1.8.0", dev_dependency = True)` — a plain BCR dep,
-not a `git_override` (the `git_override` flow in `docs/updating_dependencies.md` is stale; the
-jwmcglynn fork was used for an archived libclang experiment). To test local toolchain changes,
-uncomment the `local_path_override(module_name = "toolchains_llvm", path = "../toolchains_llvm")`
-block already sketched in `MODULE.bazel`, with the checkout as a sibling directory.
+Pin every dependency to a release tag or version, never a commit (`AGENTS.md`, General
+Practices): a commit pin makes Renovate propose every upstream commit. To content-pin a non-BCR
+fetch, use the release's tag archive or release asset with its `sha256`.
+
+LLVM toolchain: `MODULE.bazel` declares
+`bazel_dep(name = "toolchains_llvm", version = "1.8.0", dev_dependency = True)`, a plain BCR dep.
+`docs/updating_dependencies.md` describes the version bump and the `local_path_override` flow for
+testing a sibling checkout.
 
 ## Volatile facts — query, never trust memory
 
