@@ -8,12 +8,9 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
-#include <optional>
-#include <ostream>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -147,26 +144,6 @@ public:
   /// The wgpu objects this device renders through. Borrowed; the device retains them.
   const WgpuReferenceRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
 
-  /**
-   * Polls the backend device, bracketed for ASYNCIFY suspend attribution.
-   *
-   * Under Emscripten, emdawnwebgpu implements `poll` by yielding the Asyncify-enabled thread for
-   * roughly one browser task regardless of @p wait, so every poll unwinds and later rewinds the
-   * wasm stack. With the whole application on one thread that wall time is UI frame time, so it
-   * has to be attributable; route every poll through here rather than calling the backend
-   * directly. The probe is a pair of clock reads on native builds, where `poll` does not suspend
-   * at all.
-   *
-   * Prefer @p wait = false: a waiting poll can block inside a hung driver with no bound. Callers
-   * that need to wait for submitted work should use \ref gpu::Device::waitForSerial, which is
-   * bounded and reports a hang as a device-lost condition.
-   *
-   * @param wait Whether to let the backend block until pending work progresses.
-   * @return True when the backend reports its queue empty (unspecified under Emscripten, where
-   *   the poll is a browser-task yield).
-   */
-  bool pollSuspending(bool wait) const;
-
   /// Destructor; waits for in-flight submissions (so deferred destructions drain), then releases
   /// every wgpu object the adapter still owns.
   ~GeodeWgpuAdapterDevice() override;
@@ -180,17 +157,6 @@ public:
   /// another submission or a serial wait.
   /// Capped by \ref holdSubmittedWorkForTesting while a test holds submitted work incomplete.
   uint64_t completedSerial() const override;
-
-  /**
-   * Test seam: makes a wait slice behave as the browser's timed wait does when it expires
-   * without the map completing - it reports that it handled the slice, having learned nothing.
-   *
-   * That arm is compiled out on every platform the test suites run on, so its contract is
-   * otherwise checked only by the browser lane, which is exactly where it went unchecked.
-   *
-   * @param simulate Whether slices should take the simulated event-wait path.
-   */
-  void setSimulateEventWaitForTest(bool simulate) { simulateEventWaitForTest_ = simulate; }
 
   /**
    * Makes this device behave like one that accepted work and stopped retiring it.
@@ -207,64 +173,8 @@ public:
   /// Ceiling value that leaves \ref completedSerial reporting what the backend reports.
   static constexpr uint64_t kNoCompletedSerialCeiling = std::numeric_limits<uint64_t>::max();
 
-  /// Wall-clock budget the destructor spends draining submitted work before tearing down anyway.
-  /// Lowered by tests that hold submitted work incomplete so the drain reaches its deadline
-  /// without a multi-second wait. Test seam.
-  ///
-  /// @param seconds Budget in seconds.
-  void setTeardownDrainBudgetForTesting(double seconds) { teardownDrainSeconds_ = seconds; }
-
-  /**
-   * TEMPORARY escape hatch (deleted with the presentation migration): registers an
-   * externally owned wgpu texture - e.g. a render target created by the host or an earlier
-   * non-migrated subsystem - as a \c donner::gpu::Texture of this adapter so migrated code can
-   * reference it in render passes and copies. The adapter does NOT take ownership; destroying
-   * the returned handle only forgets the registration, and
-   * \ref gpu::Device::ownsTextureBacking reports false for it.
-   *
-   * The description is checked against the texture, so a caller that gets it wrong is refused
-   * here rather than by the driver at the first pass that names it.
-   *
-   * @param texture Externally owned wgpu texture; must remain valid while registered.
-   * @param size Texture extent in texels; must match \p texture.
-   * @param format Texel format; must match \p texture.
-   * @param usage Usage flags; \p texture must carry at least these.
-   */
-  gpu::Result<gpu::Texture> importExternalTexture(wgpu::Texture texture, const gpu::Extent2d& size,
-                                                  gpu::TextureFormat format,
-                                                  gpu::TextureUsage usage);
-
-  /**
-   * TEMPORARY escape hatch (deleted with the presentation migration): the public form of this
-   * adapter's handle-to-backend resolution, for the presentation call sites that still hand a
-   * backend texture to something outside the runtime. Returns a null handle if \p texture does not
-   * name a live texture of this adapter. Borrowed; the adapter (or the external owner) retains
-   * ownership.
-   *
-   * @param texture Live texture handle of this adapter.
-   */
-  wgpu::Texture wgpuTextureOf(const gpu::Texture& texture) const;
-
-  /**
-   * TEMPORARY escape hatch (deleted with the readback and presentation migration): returns the
-   * wgpu texture view behind \p textureView, or a null handle if unknown. Borrowed.
-   *
-   * @param textureView Live texture view handle of this adapter.
-   */
-  wgpu::TextureView wgpuTextureViewOf(const gpu::TextureView& textureView) const;
-
 protected:
   void onPollBackend() override;
-  gpu::Status onCreateSurface(uint32_t slotIndex,
-                              const gpu::SurfaceDescriptor& descriptor) override;
-  gpu::Result<gpu::SurfaceCapabilities> onSurfaceCapabilities(uint32_t slotIndex) const override;
-  gpu::Status onConfigureSurface(uint32_t slotIndex,
-                                 const gpu::SurfaceConfiguration& configuration) override;
-  gpu::Result<gpu::SurfaceStatus> onAcquireCurrentTexture(uint32_t slotIndex,
-                                                          uint32_t textureSlotIndex) override;
-  gpu::Result<gpu::SurfaceStatus> onPresentSurface(uint32_t slotIndex) override;
-  void onAbandonCurrentTexture(uint32_t slotIndex) override;
-  void onDestroySurface(uint32_t slotIndex) override;
 
   gpu::Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,
                                gpu::MapMode mode, uint64_t offsetBytes,
@@ -272,10 +182,9 @@ protected:
   gpu::MapSliceReport onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
 
   /**
-   * Drives `wgpu::Device::poll` until \ref completedSerial reaches \p serial, the device is
-   * lost, or the budget elapses. On Emscripten the poll shim yields through Asyncify, mirroring
-   * \ref GeodeDevice's wait machinery. Idle retirement instead uses a single nonblocking
-   * \ref gpu::Device::poll iteration.
+   * Polls the backend without blocking until \ref completedSerial reaches \p serial, the device
+   * is lost, or the budget elapses (see \ref waitForSerialBounded). Idle retirement instead uses a
+   * single nonblocking \ref gpu::Device::poll iteration.
    *
    * @param serial Submission serial to wait for.
    * @param timeoutSeconds Longest to wait, in seconds.
@@ -283,31 +192,6 @@ protected:
   bool onWaitForSerial(uint64_t serial, double timeoutSeconds) override;
 
 private:
-  /**
-   * Names \p backend in a fresh texture slot of this adapter, describing it with \p descriptor.
-   *
-   * This is the one mechanism by which a texture this adapter did not allocate becomes nameable
-   * here: the slot holds a borrowed alias, \ref onOwnsTextureBacking reports false for it, and
-   * destroying the handle only forgets the registration.
-   *
-   * Refused when \p descriptor does not describe \p backend, because nothing downstream re-reads
-   * the backend and a record that misdescribes its texture is only discovered by the driver.
-   *
-   * @param backend Backend texture to name; must remain valid while the registration is live.
-   * @param descriptor How the registration describes it; must match \p backend.
-   */
-  gpu::Result<gpu::Texture> registerBorrowedTexture(wgpu::Texture backend,
-                                                    const gpu::TextureDescriptor& descriptor);
-
-  /**
-   * The backend texture \p texture names, or a null handle when it does not name a live texture
-   * of this adapter. Validation is the full handle check (null, device identity, and generation),
-   * so a stale or forged handle cannot reach the slot's new occupant.
-   *
-   * @param texture Texture handle to resolve.
-   */
-  wgpu::Texture liveBackendTexture(const gpu::Texture& texture) const;
-
   /// Longest a serial wait rests between nonblocking polls before checking again for a loss,
   /// which is not signalled, and polling again in case nothing else is driving the queue. A
   /// delivered completion wakes the wait at once.
@@ -350,23 +234,23 @@ private:
   /// Highest serial \ref completedSerial may report; see \ref holdSubmittedWorkForTesting.
   std::atomic<uint64_t> completedSerialCeiling_{kNoCompletedSerialCeiling};
 
-  /// Budget \ref ~GeodeWgpuAdapterDevice spends draining submitted work. Generous: a healthy
-  /// device drains in microseconds, so it only trips on a driver that has effectively hung, and
-  /// teardown proceeds either way.
-  double teardownDrainSeconds_ = 5.0;
+  /// Budget \ref ~GeodeWgpuAdapterDevice spends draining submitted work, in seconds. Generous: a
+  /// healthy device drains in microseconds, so it only trips on a driver that has effectively
+  /// hung, and teardown proceeds either way.
+  static constexpr double kTeardownDrainSeconds = 5.0;
 
 protected:
   /// Destroys the wgpu buffer in \p slotIndex, so the allocation goes back now rather than when
   /// the host runtime next collects. @param slotIndex Validated live buffer slot.
   void onDestroyBufferBacking(uint32_t slotIndex) override;
 
-  /// Destroys the wgpu texture in \p slotIndex if this adapter allocated it; an external
-  /// registration belongs to the embedder and is left alone.
+  /// Destroys the wgpu texture in \p slotIndex if this adapter allocated it; a registration of a
+  /// sibling adapter's export belongs to that sibling and is left alone.
   /// @param slotIndex Validated live texture slot.
   void onDestroyTextureBacking(uint32_t slotIndex) override;
 
-  /// Whether \p slotIndex holds a texture this adapter allocated, rather than a borrowed one named
-  /// through \ref registerBorrowedTexture or \ref onRegisterTexture.
+  /// Whether \p slotIndex holds a texture this adapter allocated, rather than a sibling's export
+  /// named through \ref onRegisterTexture.
   /// @param slotIndex Validated live texture slot.
   [[nodiscard]] bool onOwnsTextureBacking(uint32_t slotIndex) const override;
 
@@ -623,8 +507,8 @@ private:
     wgpu::Buffer buffer;               //!< Buffer being mapped; borrowed from its slot.
     uint64_t offsetBytes = 0;          //!< Byte offset of the mapped range.
     uint64_t byteCount = 0;            //!< Length of the mapped range.
-    /// Future the map request returned, so a wait slice can wait on the completion event itself
-    /// where the platform supports it rather than polling for it.
+    /// Future the map request returned; its id tells this request apart from a later one that
+    /// reused the slot while a wait slice was polling.
     wgpu::Future mapFuture{};
   };
 
@@ -633,40 +517,9 @@ private:
   /// @param completion Completion state to read.
   gpu::MapSliceState sliceStateOf(const MappingSlot::Completion& completion) const;
 
-  /// Waits out one slice on the map's completion event where the platform supports it.
-  /// @param mappingSlotIndex Slot of the mapping to wait on.
-  /// @param slice Length of this wait slice.
-  /// @return True if the slice was waited on the event (so the caller re-reads the completion
-  ///   rather than polling), false if this platform or this thread cannot event-wait it.
-  bool waitOnMapFutureSlice(uint32_t mappingSlotIndex, std::chrono::microseconds slice);
-
-  /// Applies a completed event-wait slice through the same path on browsers and in tests.
-  bool finishMapWaitSlice(uint32_t mappingSlotIndex, const MappingSlot::Completion* completion,
-                          wgpu::Future future, wgpu::WaitStatus status);
-
-  /// Revalidates a slot after a backend wait may have yielded to other work.
+  /// Revalidates a slot after a poll that may have run callbacks or reentrant slot changes.
   bool mappingStillMatches(uint32_t mappingSlotIndex, const MappingSlot::Completion* completion,
                            wgpu::Future future) const;
-
-  /// Test-only replacement for the suspending backend wait; may exercise reentrant slot changes.
-  std::function<wgpu::WaitStatus()> timedMapWaitForTest_;
-
-  /// Makes \ref waitOnMapFutureSlice report that an event wait handled the slice without one
-  /// having happened, so the browser arm's contract can be checked where that arm is compiled
-  /// out. See \ref simulateEventWaitForTest.
-  bool simulateEventWaitForTest_ = false;
-
-  /// One presentation surface and the texture it has handed out this frame.
-  struct SurfaceSlot {
-    ScopedWgpuHandle<wgpu::Surface> surface;  //!< Owned surface, or null for a dead slot.
-    /// Texture the surface handed out for the current frame; borrowed, since the surface owns it.
-    wgpu::Texture acquired;
-    /// Slot the runtime gave that texture, so abandoning can clear the same one.
-    uint32_t acquiredTextureSlot = 0;
-    bool hasAcquired = false;  //!< Whether \ref acquired names this frame's texture.
-  };
-
-  std::vector<SurfaceSlot> slotSurfaces_;
 
   std::vector<MappingSlot> slotMappings_;
 
@@ -682,10 +535,6 @@ private:
   std::vector<ScopedWgpuHandle<wgpu::ComputePipeline>> slotComputePipelines_;
 
   std::shared_ptr<CompletionState> completionState_ = std::make_shared<CompletionState>();
-
-  /// Set only inside \ref registerBorrowedTexture so \ref onCreateTexture names that texture in
-  /// the slot instead of allocating one.
-  wgpu::Texture pendingRegistration_;
 };
 
 /**
@@ -704,14 +553,5 @@ gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format);
  * @param format Runtime texture format to map.
  */
 wgpu::TextureFormat WgpuTextureFormatFrom(gpu::TextureFormat format);
-
-/**
- * Maps wgpu texture usage flags onto the \c donner::gpu usage flags. Flags with no runtime
- * equivalent are dropped, so the result describes exactly the capabilities the runtime can
- * express for the texture.
- *
- * @param usage wgpu usage flags to map.
- */
-gpu::TextureUsage GpuTextureUsageFromWgpu(wgpu::TextureUsage usage);
 
 }  // namespace donner::geode

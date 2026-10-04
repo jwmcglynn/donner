@@ -255,7 +255,7 @@ commits and their fixes together in a focused reviewable change.
       registration all register the export a snapshot takes on its producer's thread at adoption,
       so no consumer reads the producer's tables, and the adapter's cross-device import is gone.
       Host-supplied render targets reach the renderer as runtime textures of its own device, and
-      the adapter's external-texture import has no remaining caller.
+      the adapter's external-texture import is removed.
 - [x] Replace raw target binding in `RendererGeode` and `EditorShellPresentation` with validated
       runtime textures or acquired surface textures, retaining embedder ownership where applicable.
       `RendererGeode::setTargetTexture` takes a live texture of the renderer's own device, and the
