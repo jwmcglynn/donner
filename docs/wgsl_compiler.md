@@ -349,12 +349,10 @@ including array extents and switch labels; an extent needs the shift parenthesiz
 abstract shift such as `(1 << 8) - 1` but not a concrete one such as `1u << 4u`.
 
 As in WGSL, both operands are unary expressions, so a shift needs parentheses to combine with
-arithmetic, bitwise AND or another shift. A comparison or a short-circuit operator may take an
-ungrouped shift as an operand, as in `a << b < c`, with one exception from WGSL's template-list
-discovery: a `<` directly after an identifier is a candidate template-list start that the next `>`
-at the same nesting depth closes, so `a < b >> c` and `v.x < b >> c` read as template lists. The
-profile rejects an ungrouped right shift on the right of such a `<` and accepts `a < (b >> c)`;
-`(a) < b >> c`, `1u < b >> c` and `f(x) < b >> c` remain comparisons. `<<=` and `>>=` follow the
+arithmetic, bitwise AND or another shift, while a comparison or a short-circuit operator may take
+an ungrouped shift as an operand, as in `a << b < c`. Template-list discovery, described below,
+still applies: `a < b >> c` reads as the template list `a<b>` and is rejected, while
+`a < (b >> c)` and `(a) < b >> c` are comparisons. `<<=` and `>>=` follow the
 compound-assignment rule above with the amount materialized as u32, so an operator on the
 right-hand side needs parentheses (`x <<= (n + 1u)`).
 The lexer keeps `>>` and `>>=` whole, and a template list closes on the first `>` of a `>>` token,
@@ -373,6 +371,21 @@ i32 scalar left by a literal, shifts an i32 vector through compound assignment a
 abstract value by a runtime amount. It runs through the offline Metal compiler, `spirv-val`, and
 native Metal and Vulkan execution. The UI vertex color unpack and the snapshot half-alpha term are
 written with shifts.
+
+## Template-list discovery
+
+The compiler applies WGSL's template-list discovery to each token as it lexes it, which gives the
+same lists as the specification's scan over the whole source. A `<` directly after an identifier
+starts a candidate list, and the next `>` at the same parenthesis and bracket depth closes it,
+including the first `>` of `>>`, `>=` or `->`. A `;`, `{`, `:`, an
+assignment or a closing bracket drops the pending candidates, and `&&` or `||` drops those at the
+current depth; a `<=` that does not follow an identifier also drops them, because the scan reads its
+`=` as an assignment. Every angle bracket the parser reads as part of a type's template list must
+be one discovery found, and every `<` or `>` it reads as an operator must not be. Source where the
+two disagree fails with `UnsupportedConstruct`, so `g(a < b, c > d)` and `a < b >> c` are rejected
+as WGSL rejects them, while `g((a < b), (c > d))`, `h(a) < b`, `1u < b` and comparisons separated by
+`&&`, `||` or `;` are accepted. At most 256 candidates may be pending at once; a module that
+needs more, such as a type nested in 257 template lists, fails with `NestingLimit`.
 
 ## Slug fill
 

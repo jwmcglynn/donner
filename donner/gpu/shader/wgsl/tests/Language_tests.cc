@@ -215,13 +215,14 @@ TEST(Language, EnforcesWgslOperatorGrouping) {
   }
 }
 
-/// Returns the diagnostic code and the source text its span covers.
+/// Returns the numeric diagnostic code and the source text its span covers, so a mismatch prints
+/// both.
 /// @param source WGSL to parse.
-std::pair<ErrorCode, std::string> DiagnosticOf(const std::string& source) {
+std::pair<unsigned, std::string> DiagnosticOf(const std::string& source) {
   const ParseResult parsed = Parse(source);
   const uint32_t end = std::min<uint32_t>(parsed.diagnostic.span.end, uint32_t(source.size()));
   const uint32_t begin = std::min(parsed.diagnostic.span.begin, end);
-  return {parsed.diagnostic.code, source.substr(begin, end - begin)};
+  return {unsigned(parsed.diagnostic.code), source.substr(begin, end - begin)};
 }
 
 TEST(Language, AppliesWgslTemplateListDiscoveryToComparisons) {
@@ -242,7 +243,7 @@ TEST(Language, AppliesWgslTemplateListDiscoveryToComparisons) {
     const std::string source = prelude + body + "\n}\n";
     SCOPED_TRACE(source);
     EXPECT_THAT(DiagnosticOf(source),
-                testing::Pair(ErrorCode::UnsupportedConstruct, testing::StrEq("<")));
+                testing::Pair(unsigned(ErrorCode::UnsupportedConstruct), testing::StrEq("<")));
   }
   for (const char* body : {
            "return g((a < b), (c > d));",
@@ -259,8 +260,32 @@ TEST(Language, AppliesWgslTemplateListDiscoveryToComparisons) {
        }) {
     const std::string source = prelude + body + "\n}\n";
     SCOPED_TRACE(source);
-    EXPECT_THAT(DiagnosticOf(source), testing::Pair(ErrorCode::None, testing::IsEmpty()));
+    EXPECT_THAT(DiagnosticOf(source), testing::Pair(unsigned(ErrorCode::None), testing::IsEmpty()));
   }
+}
+
+TEST(Language, ClosesEachTemplateListOfAClosingShift) {
+  // `>>>` lexes as `>>` then `>`. Each `>` must close its own list, so the outer pointer list is
+  // read to its end and reports its address space like the spaced spelling does.
+  for (const char* type : {"ptr<storage, array<vec2<u32>>>", "ptr<storage, array<vec2<u32> > >"}) {
+    const std::string source = std::string("fn f(p: ") + type + ") {}\n";
+    SCOPED_TRACE(source);
+    EXPECT_THAT(DiagnosticOf(source),
+                testing::Pair(unsigned(ErrorCode::InvalidPointer), testing::StrEq("storage")));
+  }
+}
+
+TEST(Language, BoundsPendingTemplateListCandidates) {
+  // Discovery holds at most 256 pending `<` at once; the 257th fails.
+  const std::string prefix = "fn f(x: ";
+  std::string type;
+  for (int i = 0; i < 257; ++i) {
+    type += "vec2<";
+  }
+  const std::string source = prefix + type + "f32" + std::string(257, '>') + ") {}\n";
+  const ParseResult parsed = Parse(source);
+  EXPECT_EQ(parsed.diagnostic.code, ErrorCode::NestingLimit);
+  EXPECT_EQ(parsed.diagnostic.span.begin, prefix.size() + 256 * 5 + 4);
 }
 
 TEST(Language, RequiresDerivativesInUniformFragmentControl) {
