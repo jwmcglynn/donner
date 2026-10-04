@@ -768,6 +768,9 @@ function readSurfaceFrameSnapshot(page: Page): Promise<SurfaceFrameSnapshot> {
 
 // A hung Gecko evaluation cannot replace the already-attached scored PNG or its assertion.
 // The abandoned evaluation is never followed by another page command in this failure path.
+// The geometry frame account also bounds its reads with this, and there the capture follows:
+// an abandoned evaluation keeps running in the browser, so the bound covers a read that throws
+// or is slow, not a browser that has stopped answering page commands.
 async function boundFailureDiagnostic<T>(
   work: Promise<T>,
   timeoutMs = scaledMs(2_000),
