@@ -1,5 +1,5 @@
 /// @file
-/// The Vulkan solid-fill vertical slice: renders the shared baseline scene through
+/// The Vulkan solid-fill test: renders the shared baseline scene through
 /// donner::gpu::vulkan::VulkanDevice with the SPIR-V emitted from the solid-fill IR program,
 /// renders the IDENTICAL scene through the production Geode path on native Vulkan in the same
 /// process (GeodeDevice + GeoEncoder, exactly like the baseline capture tool), and compares
@@ -41,7 +41,7 @@
 #include "donner/gpu/tests/BaselineScene.h"
 #include "donner/gpu/tests/CheckerboardPixelTests.h"
 #include "donner/gpu/tests/SubmissionOrderScene.h"
-#include "donner/gpu/tests/VertexInputSlice.h"
+#include "donner/gpu/tests/VertexInputScene.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
@@ -97,7 +97,7 @@ std::optional<std::vector<uint8_t>> RenderNativeGeodeBaseline() {
   geode::GeodeImagePipeline& imagePipeline = device->imagePipeline();
 
   gpu::Result<gpu::Texture> target = device->runtimeDevice().createTexture(gpu::TextureDescriptor{
-      "VulkanSliceBaselineTarget", gpu::Extent2d{kBaselineSize, kBaselineSize},
+      "VulkanSolidFillBaselineTarget", gpu::Extent2d{kBaselineSize, kBaselineSize},
       gpu::TextureFormat::RGBA8Unorm,
       gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc});
   if (target.hasError()) {
@@ -137,7 +137,7 @@ void WriteUndeclaredOutputPng(const std::vector<uint8_t>& pixels, const char* fi
 
 /// A storage buffer plus the byte size it was created with, so bind groups can bind the FULL
 /// range honestly. Vulkan enforces VkDescriptorBufferInfo.range, so binding a smaller range
-/// than the shader indexes would read out of bounds; Metal ignores the range, but both slices
+/// than the shader indexes would read out of bounds; Metal ignores the range, but both tests
 /// bind the same honest sizes.
 struct SizedBuffer {
   Buffer buffer;          //!< The storage buffer.
@@ -167,7 +167,7 @@ protected:
       const char* requireVulkan = std::getenv("DONNER_REQUIRE_VULKAN");
       if (requireVulkan != nullptr && std::string_view(requireVulkan) == "1") {
         FAIL() << "DONNER_REQUIRE_VULKAN=1 is set but no Vulkan 1.1 device is available; the "
-                  "vertical-slice gate must not be skipped on this runner";
+                  "native Vulkan gate must not be skipped on this runner";
       }
       GTEST_SKIP() << "No Vulkan 1.1 device available";
     }
@@ -531,7 +531,7 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
     ASSERT_FALSE(uniformWrite.hasError()) << uniformWrite.error();
 
     // Storage buffers bind their FULL created byte size: the fragment shader indexes past
-    // element 0, and Vulkan enforces the bound range (Metal ignores it, but both slices bind
+    // element 0, and Vulkan enforces the bound range (Metal ignores it, but both tests bind
     // the same honest sizes).
     std::vector<BindGroupEntry> entries;
     entries.push_back({0, BufferBinding{draw.uniformBuffer, 0, sizeof(SolidFillUniforms)}});
@@ -587,7 +587,7 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
       << "Submission did not complete cleanly: " << device_->lastErrorForTest();
   EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
 
-  // ----- Pixel comparison: Vulkan slice vs the independent native Geode render -----
+  // ----- Pixel comparison: donner::gpu render vs the independent native Geode render -----
   Result<std::vector<uint8_t>> pixels = device_->readBackBuffer(readback);
   ASSERT_FALSE(pixels.hasError()) << pixels.error();
 

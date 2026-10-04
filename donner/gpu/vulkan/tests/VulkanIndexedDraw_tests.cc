@@ -21,7 +21,7 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
-#include "donner/gpu/tests/VertexInputSlice.h"
+#include "donner/gpu/tests/VertexInputScene.h"
 #include "donner/gpu/vulkan/VulkanDevice.h"
 
 namespace donner::gpu::vulkan::tests {

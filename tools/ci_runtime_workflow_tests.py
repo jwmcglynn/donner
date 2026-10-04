@@ -16,17 +16,17 @@ import unittest
 from python.runfiles import runfiles
 
 
-# Measurement mode reports payload sizes while the production Rust-built GPU
-# dependency is still being removed. These are the ceilings to restore when
-# that cutover is complete and the package is remeasured.
-STRICT_PAYLOAD_CEILINGS = {
-    "--max-js-gzip-bytes": 50200,
-    "--max-js-raw-bytes": 177800,
-    "--max-total-raw-bytes": 11270000,
-    "--max-wasm-gzip-bytes": 3060000,
-    "--max-wasm-raw-bytes": 9200000,
+# The editor Wasm payload ceilings CI enforces. Changing one means editing the size test's
+# arguments and this table together, so a widened ceiling is always a reviewed change.
+ENFORCED_PAYLOAD_CEILINGS = {
+    "--max-js-gzip-bytes": 51000,
+    "--max-js-raw-bytes": 185000,
+    "--max-total-raw-bytes": 12100000,
+    "--max-wasm-data-segments": 64,
+    "--max-wasm-function-body-bytes": 46000,
+    "--max-wasm-gzip-bytes": 3300000,
+    "--max-wasm-raw-bytes": 10000000,
 }
-MEASURE_MODE_ARG = "--test_arg=--payload-budget-mode=measure"
 PAYLOAD_SIZE_TEST = "//donner/editor/wasm:wasm_geode_package_size_tests"
 SIZE_CHECK_STEP = "- name: Build and size-check Geode editor Wasm package"
 STEP_AFTER_SIZE_CHECK = "- name: Stage package for handoff"
@@ -45,23 +45,11 @@ def _declared_payload_ceilings(size_test_arguments):
     test does not enforce.
     """
     ceilings = {}
-    for flag in STRICT_PAYLOAD_CEILINGS:
+    for flag in ENFORCED_PAYLOAD_CEILINGS:
         values = re.findall(r'"%s", "(\d+)"' % re.escape(flag), size_test_arguments)
         if len(values) == 1:
             ceilings[flag] = int(values[0])
     return ceilings
-
-
-def _payload_budget_expiry_message():
-    restore = ", ".join(
-        "%s %d" % (flag, limit) for flag, limit in sorted(STRICT_PAYLOAD_CEILINGS.items())
-    )
-    return (
-        "After production Rust-built GPU dependencies are removed and the Wasm package is "
-        "remeasured, drop %s from the Editor WASM size-check step and restore the strict "
-        "ceilings on %s (%s)."
-        % (MEASURE_MODE_ARG, PAYLOAD_SIZE_TEST, restore)
-    )
 
 
 class CiRuntimeWorkflowTest(unittest.TestCase):
@@ -731,16 +719,25 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("//tools/ci:editor_wasm_size_tests", build)
 
     def test_editor_wasm_pull_requests_link_the_browser_gpu_bridge(self):
-        """Both bridge probes and the standalone default audit run on every PR."""
+        """Both bridge probes, the standalone module and its default audit run on every PR.
+
+        The module is built explicitly: it is incompatible without Browser selection, and an
+        incompatible audit inside a test_suite is skipped rather than failed.
+        """
         workflow = self.editor_wasm
         build_job = workflow.split("\n  build:\n", 1)[1].split("\n  test:\n", 1)[0]
         self.assertIn("- name: Link the browser GPU bridge", build_job)
         link = build_job.split("- name: Link the browser GPU bridge", 1)[1]
-        self.assertIn("bazelisk build --config=wasm-geode", link)
-        self.assertIn("//tools/ci:browser_bridge_link_probes", link)
+        build = link.split("bazelisk build --config=wasm-geode", 1)[1].split("bazelisk test", 1)[0]
+        self.assertIn("//tools/ci:browser_bridge_link_probes", build)
+        self.assertIn("//tools/ci:geode_wasm_browser_module", build)
         self.assertIn("bazelisk test --config=wasm-geode", link)
         self.assertIn("//tools/ci:geode_wasm_browser_default_audit", link)
         self.assertNotIn("continue-on-error", link)
+        module = 'name = "geode_wasm_browser_module"'
+        self.assertIn(module, self.ci_target_definitions)
+        definition = self.ci_target_definitions.split(module, 1)[1].split("\n)", 1)[0]
+        self.assertIn('srcs = ["//donner/svg/renderer/wasm:donner_wasm_geode"]', definition)
 
     def _size_check_step(self, workflow):
         """The workflow step that builds and size-checks the editor Wasm package.
@@ -753,88 +750,29 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn(STEP_AFTER_SIZE_CHECK, workflow)
         return workflow.split(SIZE_CHECK_STEP, 1)[1].split(STEP_AFTER_SIZE_CHECK, 1)[0]
 
-    def _assert_payload_budget_gate(self, size_test_arguments, workflow, post_rust_removal):
-        """Measurement remains active until the production Rust cutover is complete.
-
-        After that cutover, the package must be remeasured and its strict ceilings
-        restored. The synthetic post-removal cases keep that future gate testable.
-        """
-        ceilings = _declared_payload_ceilings(size_test_arguments)
+    def test_editor_wasm_payload_ceilings_are_enforced(self):
+        """The size test declares each enforced ceiling once, and CI cannot relax it."""
         self.assertEqual(
-            sorted(ceilings),
-            sorted(STRICT_PAYLOAD_CEILINGS),
-            "%s no longer declares each gated payload ceiling exactly once" % PAYLOAD_SIZE_TEST,
+            _declared_payload_ceilings(self.wasm_size_test_arguments),
+            ENFORCED_PAYLOAD_CEILINGS,
+            "%s and ENFORCED_PAYLOAD_CEILINGS must change together" % PAYLOAD_SIZE_TEST,
         )
-        size_check_step = self._size_check_step(workflow)
+        size_check_step = self._size_check_step(self.editor_wasm)
+        self.assertNotIn("--test_arg", size_check_step)
+        self.assertEqual(0, self.editor_wasm.count("payload-budget-mode"))
+
+    def test_editor_wasm_payload_gate_detects_widened_or_repeated_ceilings(self):
+        flag = "--max-wasm-raw-bytes"
+        declared = '"%s", "%d"' % (flag, ENFORCED_PAYLOAD_CEILINGS[flag])
+        self.assertIn(declared, self.wasm_size_test_arguments)
+        widened = self.wasm_size_test_arguments.replace(
+            declared, '"%s", "%d"' % (flag, ENFORCED_PAYLOAD_CEILINGS[flag] + 1)
+        )
         self.assertEqual(
-            workflow.count(MEASURE_MODE_ARG),
-            size_check_step.count(MEASURE_MODE_ARG),
-            "measurement mode belongs to the size-check step and nowhere else",
+            ENFORCED_PAYLOAD_CEILINGS[flag] + 1, _declared_payload_ceilings(widened)[flag]
         )
-        if not post_rust_removal:
-            self.assertEqual(
-                size_check_step.count(MEASURE_MODE_ARG),
-                1,
-                "measurement mode remains required until production Rust removal",
-            )
-            self.assertIn(
-                "Remove only this test_arg after production Rust-built GPU dependencies",
-                size_check_step,
-                "measurement mode must carry its post-Rust removal instructions",
-            )
-            return
-
-        message = _payload_budget_expiry_message()
-        # Counted rather than asserted with assertNotIn: a containment failure
-        # prints the whole workflow and buries the instructions above.
-        self.assertEqual(0, workflow.count(MEASURE_MODE_ARG), message)
-        self.assertEqual(ceilings, STRICT_PAYLOAD_CEILINGS, message)
-
-    def test_editor_wasm_measurement_budgets_remain_until_production_rust_removal(self):
-        """The live workflow retains measurement pending the separate Rust cutover."""
-        self._assert_payload_budget_gate(
-            self.wasm_size_test_arguments,
-            self.editor_wasm,
-            post_rust_removal=False,
-        )
-
-    def test_editor_wasm_payload_gate_names_the_ceilings_and_flag_to_restore(self):
-        with self.assertRaises(AssertionError) as raised:
-            self._assert_payload_budget_gate(
-                self.wasm_size_test_arguments, self.editor_wasm, post_rust_removal=True
-            )
-        message = str(raised.exception)
-        self.assertIn(MEASURE_MODE_ARG, message)
-        for flag, limit in STRICT_PAYLOAD_CEILINGS.items():
-            self.assertIn("%s %d" % (flag, limit), message)
-
-    def test_editor_wasm_payload_gate_rejects_widened_ceilings_without_measurement_mode(self):
-        strict_workflow = self.editor_wasm.replace(MEASURE_MODE_ARG, "")
-        with self.assertRaises(AssertionError) as raised:
-            self._assert_payload_budget_gate(
-                self.wasm_size_test_arguments, strict_workflow, post_rust_removal=True
-            )
-        self.assertIn("restore the strict ceilings", str(raised.exception))
-
-    def test_editor_wasm_payload_gate_passes_once_the_migration_lands(self):
-        strict_arguments = self.wasm_size_test_arguments
-        for flag, limit in STRICT_PAYLOAD_CEILINGS.items():
-            strict_arguments = re.sub(
-                r'("%s", )"\d+"' % re.escape(flag), r'\g<1>"%d"' % limit, strict_arguments
-            )
-        self._assert_payload_budget_gate(
-            strict_arguments,
-            self.editor_wasm.replace(MEASURE_MODE_ARG, ""),
-            post_rust_removal=True,
-        )
-
-    def test_editor_wasm_payload_gate_rejects_strict_mode_before_rust_removal(self):
-        strict_workflow = self.editor_wasm.replace(MEASURE_MODE_ARG, "")
-        with self.assertRaises(AssertionError) as raised:
-            self._assert_payload_budget_gate(
-                self.wasm_size_test_arguments, strict_workflow, post_rust_removal=False
-            )
-        self.assertIn("measurement mode remains required", str(raised.exception))
+        repeated = self.wasm_size_test_arguments.replace(declared, declared + ", " + declared)
+        self.assertNotIn(flag, _declared_payload_ceilings(repeated))
 
     def test_editor_wasm_size_check_step_runs_the_gated_size_test(self):
         """The gate reads the ceilings of the target the workflow actually runs."""

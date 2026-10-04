@@ -371,8 +371,8 @@ donner_cc_library(
 # Shader programs still expressed in the IR: the solid-fill render family and the color-matrix
 # compute program, both retained as emitter and native-execution fixtures.
 # Stage IO shapes the emitters must handle but no shipped program has. A library rather than a
-# plain header in each test's srcs, because the Metal slice in another package is held to the same
-# shapes through its device's runtime compiler.
+# plain header in each test's srcs, because the Metal tests in another package are held to the same
+# shapes through their device's runtime compiler.
 donner_cc_library(
     name = "stage_io_test_modules",
     testonly = 1,

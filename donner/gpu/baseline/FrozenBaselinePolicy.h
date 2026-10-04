@@ -33,7 +33,7 @@ bool RunningUnderContinuousIntegration();
  *
  * This lives here rather than beside the capture library because both sides need it and only one
  * of them can link the capture library: the wgpu-backed capture writes these directories, and the
- * per-backend vertical slices, which deliberately carry no wgpu dependency, read them.
+ * per-backend solid-fill tests, which deliberately carry no wgpu dependency, read them.
  *
  * @param adapterName Vendor and device string the driver reports.
  * @param adapterBackend Backend name, for example `Metal` or `Vulkan`.
