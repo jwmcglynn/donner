@@ -838,8 +838,8 @@ compilation with a named diagnostic, and there is no runtime parser, generator o
 Host parameter layouts, binding slots, entry names and workgroup shapes are reflected from the
 same compile and checked against the host structures with `static_assert`, so an interface edit
 fails the build instead of changing the bytes a shader reads. The shipped WGSL projection is the
-authored source without comments, indentation or blank lines; MSL and SPIR-V are emitted from the
-parsed module. Committed shader text is the authored source; emitted projections are never
+authored source without comments, indentation or blank lines, with each folded constant expression
+replaced by its exact value; MSL and SPIR-V are emitted from the parsed module. Committed shader text is the authored source; emitted projections are never
 committed as goldens. Verification uses the compiler's own tests, offline Metal and SPIR-V
 validation, native execution, and strict renderer pixel comparisons. The typed IR and its emitters
 remain as test fixtures only.

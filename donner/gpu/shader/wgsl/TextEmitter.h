@@ -2,6 +2,7 @@
 /// @file
 /// Constexpr-capable text emission for the bounded WGSL module profile.
 
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -85,6 +86,75 @@ struct TextSink {
 };
 
 namespace detail {
+
+/// The exact text of one f32 value, as an MSL and WGSL literal.
+struct F32Text {
+  std::array<char, 24> characters = {};  //!< Literal characters.
+  uint8_t size = 0;                      //!< Number of characters used.
+  bool valid = true;                     //!< False for an infinity or NaN, which has no literal.
+
+  /// Returns the literal. Its storage is this object.
+  constexpr std::string_view view() const { return {characters.data(), size}; }
+
+  /// Appends p character.
+  constexpr void push(char character) { characters[size++] = character; }
+
+  /// Appends p text.
+  constexpr void push(std::string_view text) {
+    for (char character : text) {
+      push(character);
+    }
+  }
+};
+
+/// Formats f32 p bits exactly: `0.0f` or `-0.0f` for a zero, and otherwise a hex float with a
+/// normalized significand of six hex digits, such as `0x1.555556p-2f`, which also spells
+/// subnormals exactly. MSL and WGSL both accept the form.
+constexpr F32Text FormatF32(uint32_t bits) {
+  F32Text text;
+  if ((bits >> 31) != 0) {
+    text.push('-');
+  }
+  if ((bits & 0x7fffffffu) == 0) {
+    text.push("0.0f");
+    return text;
+  }
+  const uint32_t exponent = (bits >> 23) & 0xffu;
+  if (exponent == 0xffu) {
+    text.valid = false;
+    return text;
+  }
+  uint32_t mantissa = bits & 0x7fffffu;
+  int32_t power = static_cast<int32_t>(exponent) - 127;
+  if (exponent == 0) {
+    int32_t shift = 0;
+    for (uint32_t leading = 0x400000u; (mantissa & leading) == 0; leading >>= 1) {
+      ++shift;
+    }
+    mantissa = (mantissa << (shift + 1)) & 0x7fffffu;
+    power = -127 - shift;
+  }
+  mantissa <<= 1;
+  text.push("0x1.");
+  constexpr char kHex[] = "0123456789abcdef";
+  for (int shift = 20; shift >= 0; shift -= 4) {
+    text.push(kHex[(mantissa >> shift) & 0xfu]);
+  }
+  text.push('p');
+  if (power < 0) {
+    text.push('-');
+  }
+  const uint32_t magnitude = static_cast<uint32_t>(power < 0 ? -power : power);
+  if (magnitude >= 100) {
+    text.push(static_cast<char>('0' + magnitude / 100));
+  }
+  if (magnitude >= 10) {
+    text.push(static_cast<char>('0' + magnitude / 10 % 10));
+  }
+  text.push(static_cast<char>('0' + magnitude % 10));
+  text.push('f');
+  return text;
+}
 
 class MslTextEmitter {
 public:
@@ -677,43 +747,12 @@ private:
   }
 
   constexpr void floatText(uint32_t bits) {
-    if ((bits & 0x7fffffffu) == 0) {
-      if ((bits >> 31) != 0) {
-        character('-');
-      }
-      text("0.0f");
-      return;
-    }
-    const uint32_t exponent = (bits >> 23) & 0xffu;
-    if (exponent == 0xffu) {
+    const F32Text literal = FormatF32(bits);
+    if (!literal.valid) {
       error_ = TextEmitError::InvalidModule;
       return;
     }
-    if ((bits >> 31) != 0) {
-      character('-');
-    }
-    uint32_t mantissa = bits & 0x7fffffu;
-    int32_t power = 0;
-    if (exponent == 0) {
-      uint32_t leading = 0x400000u;
-      while ((mantissa & leading) == 0) {
-        leading >>= 1;
-        ++power;
-      }
-      mantissa = (mantissa << (power + 1)) & 0x7fffffu;
-      power = -127 - power;
-    } else {
-      power = static_cast<int32_t>(exponent) - 127;
-    }
-    mantissa <<= 1;
-    text("0x1.");
-    constexpr char kHex[] = "0123456789abcdef";
-    for (int shift = 20; shift >= 0; shift -= 4) {
-      character(kHex[(mantissa >> shift) & 0xfu]);
-    }
-    character('p');
-    intText(power);
-    character('f');
+    text(literal.view());
   }
 
   constexpr void expression(ArenaId id) {
@@ -1781,26 +1820,207 @@ constexpr TextEmitResult EmitMsl(const Module& module, TextSink& sink) {
 
 namespace detail {
 
-/// Trims spaces, tabs and carriage returns from both ends of one source line.
-constexpr std::string_view TrimLine(std::string_view line) {
-  constexpr std::string_view kBlank = " \t\r";
-  const size_t first = line.find_first_not_of(kBlank);
-  if (first == std::string_view::npos) {
-    return {};
+/// Writes the WGSL projection of a validated module: its source, one logical line at a time, with
+/// `//` comments, surrounding blanks and blank lines removed and every recorded folded f32
+/// expression replaced by its exact value.
+class WgslProjector {
+public:
+  constexpr WgslProjector(const Module& module, TextSink& sink)
+      : module_(module), source_(module.source()), sink_(sink) {}
+
+  /// Writes the projection and returns the first error.
+  constexpr TextEmitError emit() {
+    if (!foldsAreValid()) {
+      return TextEmitError::InvalidModule;
+    }
+    uint32_t cursor = 0;
+    while (cursor < source_.size() && error_ == TextEmitError::None) {
+      const uint32_t end = lineEnd(cursor);
+      emitLine(cursor, end);
+      cursor = end + 1;
+    }
+    return error_;
   }
-  const size_t last = line.find_last_not_of(kBlank);
-  return line.substr(first, last - first + 1);
-}
+
+private:
+  static constexpr std::string_view kBlank = " \t\r";
+
+  constexpr SourceSpan foldAt(uint16_t index) const { return module_.foldedConstants[index].span; }
+
+  /// Returns whether the folds named at p index or later include one that starts before p end.
+  constexpr bool foldBefore(uint16_t index, uint32_t end) const {
+    return index < module_.foldedConstantCount && foldAt(index).begin < end;
+  }
+
+  /// Returns whether every recorded fold names an expression and lies in the source, in source
+  /// order and disjoint, so that the projection can replace each one.
+  constexpr bool foldsAreValid() const {
+    if (module_.foldedConstantCount > ModuleLimits::kMaxFoldedConstants) {
+      return false;
+    }
+    uint32_t previousEnd = 0;
+    for (uint16_t index = 0; index < module_.foldedConstantCount; ++index) {
+      const FoldedConstant& folded = module_.foldedConstants[index];
+      if (folded.span.begin < previousEnd || folded.span.end <= folded.span.begin ||
+          folded.span.end > source_.size() || folded.expression >= module_.expressionCount) {
+        return false;
+      }
+      previousEnd = folded.span.end;
+    }
+    return true;
+  }
+
+  /// Returns the first newline at or after p position, or the source size.
+  constexpr uint32_t newlineFrom(uint32_t position) const {
+    const size_t newline = source_.find('\n', position);
+    return newline == std::string_view::npos ? static_cast<uint32_t>(source_.size())
+                                             : static_cast<uint32_t>(newline);
+  }
+
+  /// Returns the newline that ends the logical line starting at p begin. A fold that spans lines
+  /// joins them, so the line runs to the first newline after every fold that starts in it.
+  constexpr uint32_t lineEnd(uint32_t begin) const {
+    uint32_t end = newlineFrom(begin);
+    for (uint16_t index = nextFold_; foldBefore(index, end); ++index) {
+      if (foldAt(index).end > end) {
+        end = newlineFrom(foldAt(index).end);
+      }
+    }
+    return end;
+  }
+
+  /// Returns where the content of the logical line [p begin, p end) stops: at its first `//`
+  /// outside a fold, or at p end. No fold can follow a comment on its line.
+  constexpr uint32_t contentEnd(uint32_t begin, uint32_t end) const {
+    uint32_t position = begin;
+    for (uint16_t index = nextFold_; position < end; ++index) {
+      const bool foldAhead = foldBefore(index, end);
+      const uint32_t textEnd = foldAhead ? foldAt(index).begin : end;
+      const size_t comment = source_.substr(position, textEnd - position).find("//");
+      if (comment != std::string_view::npos) {
+        return position + static_cast<uint32_t>(comment);
+      }
+      if (!foldAhead) {
+        return end;
+      }
+      position = foldAt(index).end;
+    }
+    return end;
+  }
+
+  /// Writes the logical line [p begin, p end) without its comment and surrounding blanks, followed
+  /// by a newline, unless nothing remains. A fold starts and ends with a token, so trimming never
+  /// cuts into one.
+  constexpr void emitLine(uint32_t begin, uint32_t end) {
+    const std::string_view content = source_.substr(begin, contentEnd(begin, end) - begin);
+    const size_t first = content.find_first_not_of(kBlank);
+    if (first != std::string_view::npos) {
+      uint32_t position = begin + static_cast<uint32_t>(first);
+      const uint32_t stop = begin + static_cast<uint32_t>(content.find_last_not_of(kBlank)) + 1;
+      while (position < stop && error_ == TextEmitError::None) {
+        const uint32_t textEnd = foldBefore(nextFold_, stop) ? foldAt(nextFold_).begin : stop;
+        append(source_.substr(position, textEnd - position));
+        position = textEnd;
+        if (textEnd < stop) {
+          appendFoldedValue(module_.foldedConstants[nextFold_]);
+          position = foldAt(nextFold_++).end;
+        }
+      }
+      append('\n');
+    }
+    if (foldBefore(nextFold_, end)) {
+      fail(TextEmitError::InvalidModule);
+    }
+  }
+
+  /// Writes the exact value of p folded: an f32 literal, or a vector construction of them.
+  constexpr void appendFoldedValue(const FoldedConstant& folded) {
+    const Expression& value = module_.expressions[folded.expression];
+    if (value.kind == ExpressionKind::Literal) {
+      appendLane(value);
+      return;
+    }
+    if (value.kind != ExpressionKind::Construct || value.type.kind != TypeKind::F32 ||
+        value.type.lanes < 2 || value.operandCount != value.type.lanes) {
+      fail(TextEmitError::InvalidModule);
+      return;
+    }
+    append("vec");
+    append(static_cast<char>('0' + value.type.lanes));
+    append("<f32>(");
+    for (uint8_t lane = 0; lane < value.operandCount && error_ == TextEmitError::None; ++lane) {
+      if (lane > 0) {
+        append(", ");
+      }
+      if (value.operands[lane] >= module_.expressionCount) {
+        fail(TextEmitError::InvalidModule);
+        return;
+      }
+      appendLane(module_.expressions[value.operands[lane]]);
+    }
+    append(')');
+  }
+
+  /// Writes one folded f32 lane exactly. A negative value, -0 included, is spelled as a
+  /// subtraction from `-0f`: WGSL evaluates it exactly, this compiler folds it back to the same
+  /// literal, and unlike a bare minus sign it cannot join a preceding `-` into `--`.
+  constexpr void appendLane(const Expression& lane) {
+    const F32Text magnitude = FormatF32(lane.payload & 0x7fffffffu);
+    if (lane.kind != ExpressionKind::Literal || lane.type != Type{TypeKind::F32} ||
+        !magnitude.valid) {
+      fail(TextEmitError::InvalidModule);
+      return;
+    }
+    const bool negative = (lane.payload >> 31) != 0;
+    if (negative) {
+      append("(-0f - ");
+    }
+    append(magnitude.view());
+    if (negative) {
+      append(')');
+    }
+  }
+
+  constexpr void append(std::string_view text) {
+    if (error_ == TextEmitError::None && !sink_.append(text)) {
+      fail(TextEmitError::SinkTooSmall);
+    }
+  }
+
+  constexpr void append(char character) {
+    if (error_ == TextEmitError::None && !sink_.append(character)) {
+      fail(TextEmitError::SinkTooSmall);
+    }
+  }
+
+  constexpr void fail(TextEmitError error) {
+    if (error_ == TextEmitError::None) {
+      error_ = error;
+    }
+  }
+
+  const Module& module_;
+  std::string_view source_;
+  TextSink& sink_;
+  uint16_t nextFold_ = 0;  //!< First fold not yet written.
+  TextEmitError error_ = TextEmitError::None;
+};
 
 }  // namespace detail
 
 /// Writes the validated WGSL projection of p module into p sink.
 ///
 /// The projection is the authored source with every `//` comment, all indentation and every blank
-/// line removed; token spelling and intra-line spacing are kept, and each remaining line ends with
-/// a newline. WGSL has no string literals, so `//` always begins a comment, and the lexer accepts
-/// no other comment form. The result parses to the same module and therefore to the same MSL and
-/// SPIR-V bytes, which the compiler tests check.
+/// line removed, and with every outermost folded f32 expression replaced by its exact value; other
+/// token spelling and intra-line spacing are kept, and each remaining line ends with a newline. A
+/// browser would otherwise evaluate a folded expression itself, and WGSL lets it compute f32
+/// division to within 2.5 ULP and round an inexact conversion either way, so it could reach other
+/// bits than the MSL and SPIR-V projections carry. A positive value is a hex float such as
+/// `0x1.555556p-2f`, a negative one an exact subtraction such as `(-0f - 0x1.800000p1f)`, and a
+/// vector a construction of those; a fold that spans lines or holds a comment joins its lines.
+/// WGSL has no string literals, so `//` always begins a comment, and the lexer accepts no other
+/// comment form. The result parses to the same MSL and SPIR-V bytes, which the compiler tests
+/// check.
 ///
 /// @param module Validated parsed WGSL module.
 /// @param sink Caller-owned output storage.
@@ -1810,24 +2030,7 @@ constexpr TextEmitResult EmitWgsl(const Module& module, TextSink& sink) {
   if (!module.isValid() || module.sourceByteCount > ModuleLimits::kMaxSourceBytes) {
     error = TextEmitError::InvalidModule;
   } else {
-    const std::string_view source = module.source();
-    size_t cursor = 0;
-    while (cursor < source.size() && error == TextEmitError::None) {
-      size_t end = source.find('\n', cursor);
-      if (end == std::string_view::npos) {
-        end = source.size();
-      }
-      std::string_view line = source.substr(cursor, end - cursor);
-      const size_t comment = line.find("//");
-      if (comment != std::string_view::npos) {
-        line = line.substr(0, comment);
-      }
-      line = detail::TrimLine(line);
-      if (!line.empty() && (!sink.append(line) || !sink.append('\n'))) {
-        error = TextEmitError::SinkTooSmall;
-      }
-      cursor = end + 1;
-    }
+    error = detail::WgslProjector(module, sink).emit();
   }
   if (error != TextEmitError::None) {
     sink.size = 0;

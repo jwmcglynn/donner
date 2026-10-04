@@ -297,6 +297,9 @@ private:
     ArenaId rootSymbol = kInvalidArenaId;
     int32_t i32UpperBound = std::numeric_limits<int32_t>::max();
     uint8_t ungroupedBinary = 0;
+    /// Complete source of a parenthesized or unary expression, whose node span leaves out a
+    /// closing parenthesis; empty when the node span is complete. See \ref SyntaxOf.
+    SourceSpan syntax;
   };
 
   struct BlockInfo {
@@ -2622,20 +2625,25 @@ private:
       if (op.kind == TokenKind::Star) {
         return MakeDereference(op, operand);
       }
-      Type type = ExpressionAt(operand.id).type;
+      const Type type = ExpressionAt(operand.id).type;
+      ExpressionInfo result;
       if (type.isAbstract()) {
-        return NegateAbstract(op, operand);
+        result = NegateAbstract(op, operand);
+      } else {
+        if (!ValidUnaryType(op.kind, type)) {
+          Fail(ErrorCode::TypeMismatch, op.span);
+        }
+        ValidateUnaryConstant(op, type, operand.id);
+        result = AddExpression(
+            Expression{ExpressionKind::Unary, type,
+                       SourceSpan{op.span.begin, ExpressionAt(operand.id).span.end},
+                       Operands(operand.id), 1,
+                       static_cast<uint32_t>(op.kind == TokenKind::Minus ? UnaryOp::Negate
+                                                                         : UnaryOp::Not)},
+            false, kInvalidArenaId, operand.i32UpperBound);
       }
-      if (!ValidUnaryType(op.kind, type)) {
-        Fail(ErrorCode::TypeMismatch, op.span);
-      }
-      ValidateUnaryConstant(op, type, operand.id);
-      return AddExpression(
-          Expression{
-              ExpressionKind::Unary, type,
-              SourceSpan{op.span.begin, ExpressionAt(operand.id).span.end}, Operands(operand.id), 1,
-              static_cast<uint32_t>(op.kind == TokenKind::Minus ? UnaryOp::Negate : UnaryOp::Not)},
-          false, kInvalidArenaId, operand.i32UpperBound);
+      result.syntax = SourceSpan{op.span.begin, SyntaxOf(operand).end};
+      return result;
     }
     return ParsePostfix();
   }
@@ -2815,8 +2823,9 @@ private:
     if (token_.kind == TokenKind::Number) {
       return ParseLiteral();
     }
+    const Token open = token_;
     if (Match(TokenKind::LeftParen)) {
-      return ParseParenthesizedExpression();
+      return ParseParenthesizedExpression(open);
     }
     const Token name = ExpectIdentifier();
     if (failed()) {
@@ -2825,11 +2834,20 @@ private:
     return ParseNamedPrimary(name);
   }
 
-  constexpr ExpressionInfo ParseParenthesizedExpression() {
+  /// Parses the rest of a parenthesized expression whose `(` was p open.
+  constexpr ExpressionInfo ParseParenthesizedExpression(Token open) {
     ExpressionInfo result = ParseExpression();
+    const Token close = token_;
     Expect(TokenKind::RightParen);
     result.ungroupedBinary = 0;
+    result.syntax = SourceSpan{open.span.begin, close.span.end};
     return result;
+  }
+
+  /// Returns the complete source of p info, including the parentheses of a parenthesized
+  /// expression and of a unary operand, which node spans leave out.
+  constexpr SourceSpan SyntaxOf(const ExpressionInfo& info) const {
+    return info.syntax.empty() ? ExpressionAt(info.id).span : info.syntax;
   }
 
   constexpr ExpressionInfo ParseNamedPrimary(Token name) {
@@ -3765,7 +3783,7 @@ private:
       }
       return MakeBinary(op, lhs, rhs);
     }
-    const SourceSpan span{left.span.begin, right.span.end};
+    const SourceSpan span{SyntaxOf(lhs).begin, SyntaxOf(rhs).end};
     if (left.type.kind == TypeKind::AbstractInt && right.type.kind == TypeKind::AbstractInt) {
       return FoldAbstractIntegers(op, left, right, span);
     }
@@ -3840,7 +3858,7 @@ private:
    */
   constexpr ExpressionInfo FoldF32Arithmetic(Token op, BinaryOp binary, ExpressionInfo lhs,
                                              ExpressionInfo rhs, Type result) {
-    const SourceSpan span{ExpressionAt(lhs.id).span.begin, ExpressionAt(rhs.id).span.end};
+    const SourceSpan span{SyntaxOf(lhs).begin, SyntaxOf(rhs).end};
     std::array<uint32_t, 4> left = {};
     std::array<uint32_t, 4> right = {};
     uint8_t leftLanes = 0;
@@ -3861,7 +3879,58 @@ private:
       }
       lanes[lane] = uint32_t(value.bits);
     }
-    return F32Constant(result, lanes, span);
+    const ExpressionInfo folded = F32Constant(result, lanes, span);
+    RecordFoldedConstant(span, folded.id);
+    return folded;
+  }
+
+  /// Records an outermost folded f32 expression for the WGSL projection. The folds nested in it
+  /// were recorded last, so they are dropped from the end. Its source must not overlap another
+  /// fold and must hold balanced brackets, so that replacing it keeps the projection's structure.
+  /// @param span Complete source of the folded expression. @param expression Folded value.
+  constexpr void RecordFoldedConstant(SourceSpan span, ArenaId expression) {
+    uint16_t& count = module_.foldedConstantCount;
+    bool overlaps = false;
+    while (count > 0 && module_.foldedConstants[count - 1].span.begin >= span.begin) {
+      overlaps = overlaps || module_.foldedConstants[count - 1].span.end > span.end;
+      --count;
+    }
+    overlaps = overlaps || (count > 0 && module_.foldedConstants[count - 1].span.end > span.begin);
+    if (overlaps || !BalancedSource(span)) {
+      Fail(ErrorCode::UnsupportedConstruct, span);
+      return;
+    }
+    if (count == ModuleLimits::kMaxFoldedConstants) {
+      Fail(ErrorCode::ExpressionLimit, span);
+      return;
+    }
+    module_.foldedConstants[count++] = FoldedConstant{span, expression};
+  }
+
+  /// Returns whether the parentheses and brackets in p span balance, ignoring `//` comments.
+  constexpr bool BalancedSource(SourceSpan span) const {
+    int32_t depth = 0;
+    uint32_t position = span.begin;
+    while (position < span.end && depth >= 0) {
+      if (sourceData_[position] == '/' && position + 1 < span.end &&
+          sourceData_[position + 1] == '/') {
+        while (position < span.end && sourceData_[position] != '\n') {
+          ++position;
+        }
+        continue;
+      }
+      depth += BracketDepthChange(sourceData_[position]);
+      ++position;
+    }
+    return depth == 0;
+  }
+
+  /// Returns +1 for an opening parenthesis or bracket, -1 for a closing one, and 0 otherwise.
+  static constexpr int32_t BracketDepthChange(char character) {
+    if (character == '(' || character == '[') {
+      return 1;
+    }
+    return character == ')' || character == ']' ? -1 : 0;
   }
 
   /// Returns the soft-float operation for an f32 arithmetic operator.

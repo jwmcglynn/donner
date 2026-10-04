@@ -30,12 +30,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 The result owns exact-sized WGSL, MSL and SPIR-V arrays plus reflected resource/member data. The
 WGSL projection is the authored source with every `//` comment, all indentation and every blank line
-removed; the authored file keeps its commentary, and the compiler tests check that the projection
-parses to the same module and native bytes. A WebGPU implementation's diagnostics therefore quote
-the stripped text and its line numbers, not the authored file's. Its
-`view()` borrows those arrays and cannot be called on a temporary. Keep compiler instantiations in
-implementation files, and keep the owning artifact alive while a view is used. Text views carry an
-explicit length and do not promise a trailing NUL.
+removed, and with each folded constant expression replaced by its exact value (see "Constant f32
+arithmetic"); the authored file keeps its commentary, and the compiler tests check that the
+projection parses to the same native bytes. A WebGPU implementation's diagnostics therefore quote
+the stripped text and its line numbers, not the authored file's. Its `view()` borrows those arrays
+and cannot be called on a temporary. Keep compiler instantiations in implementation files, and keep
+the owning artifact alive while a view is used. Text views carry an explicit length and do not
+promise a trailing NUL.
 
 The `Projection` template argument is required. Production code selects exactly the representation
 its consumer uses. The Geode adapter links WGSL-only artifacts. Native Metal and Vulkan consumers
@@ -413,12 +414,20 @@ its operands, so `0f * -1f` is `-0f`. Abstract-float arithmetic follows the same
 
 The folded value replaces the expression in the MSL and SPIR-V projections, which carry the literal
 and no runtime operation, so `let b = 1f / 3f;` emits the same bytes as `let b = 0.33333334f;`. The
-WGSL projection keeps the authored expression for the browser's compiler to evaluate. A module
-`const` may be written as `const k: f32 = 1f / 3f;`. A folded scalar `const` is a literal wherever
-it is referenced, so `k * 3f` folds again, to `1f`; a vector-valued `const` remains unsupported.
-Operands other than literals, their negations and vector constructions of them, such as a swizzle,
-member, index or conversion of a constant, and constant matrix arithmetic remain outside the profile
-and fail with an invalid-constant-expression diagnostic; f32 `%` is a type mismatch in this profile.
+WGSL projection carries the same value: each outermost folded expression is replaced by its exact
+spelling, a hex float such as `0x1.555556p-2f` for a positive value (`0.0f` for zero), an exact
+subtraction such as `(-0f - 0x1.800000p1f)` for a negative value or `-0`, and a vector construction
+of those. A browser would otherwise evaluate the expression itself, and WGSL allows f32 division 2.5
+ULP of error and lets an inexact conversion round either way, so it could reach other bits than the
+MSL and SPIR-V projections carry. The subtraction is exact in WGSL and folds back to the same
+literal here, where a bare minus sign would leave an unfolded negation and could join a preceding
+`-` into `--`. A fold that spans lines or contains a comment becomes part of one line, and a module
+holds at most 256 outermost folds; more fail with an expression-limit diagnostic. A module `const`
+may be written as `const k: f32 = 1f / 3f;`. A folded scalar `const` is a literal wherever it is
+referenced, so `k * 3f` folds again, to `1f`; a vector-valued `const` remains unsupported. Operands
+other than literals, their negations and vector constructions of them, such as a swizzle, member,
+index or conversion of a constant, and constant matrix arithmetic remain outside the profile and
+fail with an invalid-constant-expression diagnostic; f32 `%` is a type mismatch in this profile.
 
 ## Slug fill
 
@@ -433,12 +442,12 @@ Flat interpolation uses the first vertex; optional interpolation sampling modes 
 this profile. Reflection retains the builtin and flat qualifier. Native acceptance uses differing
 per-vertex values and nonzero vertex/instance bases, plus differently translated storage records.
 
-The bounded module permits 64 KiB of source, 16,384 tokens/identifier bytes, 16 structures,
-256 members, 1,024 symbols/statements, 4,096 expressions and 64 functions. A fixed type may occupy
-at most 1 MiB; layout growth is checked before recording member offsets. Text emission is bounded
-at 128 KiB. The Slug mask and the dedicated gradients each use a local 4,194,304-step Clang
-evaluator cap, and Slug fill uses 8,388,608 (its ported source measures about 4.07M steps);
-existing smaller family caps remain independently checked.
+The bounded module permits 64 KiB of source, 16,384 tokens/identifier bytes, 16 structures, 256
+members, 1,024 symbols/statements, 4,096 expressions, 256 outermost folded constant expressions and
+64 functions. A fixed type may occupy at most 1 MiB; layout growth is checked before recording
+member offsets. Text emission is bounded at 128 KiB. The Slug mask and the dedicated gradients each
+use a local 4,194,304-step Clang evaluator cap, and Slug fill uses 8,388,608 (its ported source
+measures about 4.07M steps); existing smaller family caps remain independently checked.
 
 Native tests cover ordinary and batched fills, fractional/binary coverage, clipping, patterns,
 linear/radial gradients, painter ordering and reads limited to a declared record range. Duplicate
