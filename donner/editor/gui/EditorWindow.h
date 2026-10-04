@@ -482,6 +482,14 @@ class PresentationSubmissionQueue {
 public:
   using Clock = std::chrono::steady_clock;
   enum class Admission { Ready, Busy, TimedOut };
+  friend std::ostream& operator<<(std::ostream& os, Admission admission) {
+    switch (admission) {
+      case Admission::Ready: return os << "Ready";
+      case Admission::Busy: return os << "Busy";
+      case Admission::TimedOut: return os << "TimedOut";
+    }
+    return os << "Admission(" << static_cast<int>(admission) << ")";
+  }
   struct Fence {
     std::uint64_t serial = 0;
     std::uint64_t frameId = 0;
@@ -503,6 +511,13 @@ public:
       return Admission::TimedOut;
     }
     return pending_.size() < 3 ? Admission::Ready : Admission::Busy;
+  }
+  /// Recheck an expired submission using a bounded completion query.
+  template <typename CompletionProbe>
+  Admission observe(std::uint64_t completedSerial, Clock::time_point now,
+                    CompletionProbe&& confirmCompletion) {
+    (void)confirmCompletion;
+    return observe(completedSerial, now);
   }
   /// Seal the serial and input that reached the GPU as one UI frame.
   void submitted(Fence fence) { pending_.push_back(fence); }

@@ -3659,6 +3659,44 @@ TEST(EditorWindowTest, WgpuPresentsZoomedDonnerSplashFilteredLayerWithoutDarkeni
 #endif
 
 }  // namespace
+TEST(EditorWindowPolicyTest, BrowserCompletionConfirmedAfterAnEventLoopPauseIsRetired) {
+  internal::PresentationSubmissionQueue queue;
+  const auto now = internal::PresentationSubmissionQueue::Clock::time_point{};
+  for (std::uint64_t serial = 1; serial <= 3; ++serial) {
+    queue.submitted({.serial = serial, .submittedAt = now});
+  }
+  int confirmations = 0;
+  const auto confirm = [&] {
+    ++confirmations;
+    return std::uint64_t(3);
+  };
+  EXPECT_EQ(queue.observe(0, now, confirm), internal::PresentationSubmissionQueue::Admission::Busy);
+  EXPECT_EQ(confirmations, 0);
+  EXPECT_EQ(queue.observe(0, now + std::chrono::seconds(40), confirm),
+            internal::PresentationSubmissionQueue::Admission::Ready);
+  EXPECT_EQ(confirmations, 1);
+  EXPECT_EQ(queue.pendingCount(), 0u);
+  EXPECT_EQ(queue.completed().serial, 3u);
+}
+
+TEST(EditorWindowPolicyTest, BrowserCompletionConfirmationCannotResetUnfinishedDeadlines) {
+  internal::PresentationSubmissionQueue queue;
+  const auto now = internal::PresentationSubmissionQueue::Clock::time_point{};
+  for (std::uint64_t serial = 1; serial <= 3; ++serial) {
+    queue.submitted({.serial = serial, .submittedAt = now});
+  }
+  int confirmations = 0;
+  EXPECT_EQ(queue.observe(0, now + std::chrono::seconds(5),
+                          [&] {
+                            ++confirmations;
+                            return std::uint64_t(1);
+                          }),
+            internal::PresentationSubmissionQueue::Admission::TimedOut);
+  EXPECT_EQ(confirmations, 1);
+  EXPECT_EQ(queue.pendingCount(), 2u);
+  EXPECT_EQ(queue.completed().serial, 1u);
+}
+
 TEST(EditorWindowPolicyTest, SubmissionCompletionHasAFiniteDeadlineAndReleasesCompletedFrames) {
   internal::PresentationSubmissionQueue queue;
   const auto now = internal::PresentationSubmissionQueue::Clock::time_point{};
