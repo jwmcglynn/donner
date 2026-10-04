@@ -57,6 +57,45 @@ test("a stopped heartbeat is detected independently of a live test process", asy
   assert.equal(result.exit.signal, "SIGKILL");
 });
 
+test("fresh file writes cannot refresh a stale application response", async () => {
+  const outputDir = directory();
+  const heartbeatFile = path.join(outputDir, "heartbeat");
+  const script = `const fs=require('node:fs'); const atMs=Date.now()-6000;
+    setInterval(()=>fs.writeFileSync(process.env.DONNER_WATCHDOG_HEARTBEAT,
+      JSON.stringify({phase:'active',sessionId:'stale',atMs})),20);`;
+  const result = await supervise(process.execPath, ["-e", script], {
+    outputDir,
+    heartbeatFile,
+    intervalMs: 20,
+    deadlineMs: 2000,
+  });
+  assert.equal(result.reason, "test heartbeat stopped");
+  assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
+});
+
+for (
+  const [name, timestamp] of [["missing", "undefined"], ["future", "Date.now()+60000"], [
+    "invalid",
+    "'not-a-time'",
+  ]]
+) {
+  test(`an active heartbeat with a ${name} response timestamp fails closed`, async () => {
+    const outputDir = directory();
+    const heartbeatFile = path.join(outputDir, "heartbeat");
+    const script = `const fs=require('node:fs');
+      setInterval(()=>fs.writeFileSync(process.env.DONNER_WATCHDOG_HEARTBEAT,
+        JSON.stringify({phase:'active',sessionId:'invalid',atMs:${timestamp}})),20);`;
+    const result = await supervise(process.execPath, ["-e", script], {
+      outputDir,
+      heartbeatFile,
+      intervalMs: 20,
+      deadlineMs: 2000,
+    });
+    assert.match(result.reason, /invalid application heartbeat/);
+    assert.deepEqual(result.cleanup, { groupGone: true, survivors: [] });
+  });
+}
+
 test("fast launcher exit cannot orphan its detached child", async () => {
   const outputDir = directory();
   const pidFile = path.join(outputDir, "grandchild.pid");
