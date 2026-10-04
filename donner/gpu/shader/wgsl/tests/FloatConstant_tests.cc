@@ -242,6 +242,41 @@ TEST(FloatConstant, ReplacesEachOutermostFoldWithItsExactValueInTheWgslProjectio
   EXPECT_THAT(ConstantNamed(Parse(wgsl).module, "kThird"), Eq(F32Bits(0x3eaaaaab)));
 }
 
+TEST(FloatConstant, ReplacesAbstractFloatFoldsWithTheirExactValuesInTheWgslProjection) {
+  // WGSL leaves abstract-float division unbounded where f32 division is not correctly rounded, so
+  // an abstract fold is spelled exactly too: as f32 once the parser has given it an f32 type, and
+  // as an abstract hex float, negated in parentheses when negative, while it stays abstract.
+  const std::string source = ComputeModule(
+      "const kAbstractThird = 1.0 / 3.0;\n"
+      "const kAbstractNegative = 1.0 - 3.0;\n"
+      "fn fraction(x: f32) -> f32 { return max(x, 1.0 / 65536.0); }\n"
+      "fn tenth() -> f32 { return 1.0 / 10.0 * 1f; }\n"
+      "fn ordered() -> bool { return 1.0 / 3.0 < 0.5; }\n",
+      "fraction(1f) + tenth() + select(0f, 1f, ordered()) + kAbstractThird + kAbstractNegative");
+  ASSERT_THAT(Diagnose(source), Eq(kAccepted));
+  const std::string wgsl = Wgsl(source);
+  ASSERT_THAT(wgsl, Not(IsEmpty()));
+  for (const char* line : {
+           "const kAbstractThird = 0x1.5555555555555p-2;\n",
+           "const kAbstractNegative = (-0x1.0000000000000p1);\n",
+           "fn fraction(x: f32) -> f32 { return max(x, 0x1.000000p-16f); }\n",
+           "fn tenth() -> f32 { return 0x1.99999ap-4f; }\n",
+           "fn ordered() -> bool { return 0x1.5555555555555p-2 < 0.5; }\n",
+       }) {
+    EXPECT_THAT(wgsl, HasSubstr(line));
+  }
+  ASSERT_THAT(Diagnose(wgsl), Eq(kAccepted));
+  ASSERT_THAT(Msl(source), Not(IsEmpty()));
+  EXPECT_THAT(Msl(wgsl), Eq(Msl(source)));
+  ASSERT_THAT(Spirv(source), Not(IsEmpty()));
+  EXPECT_THAT(Spirv(wgsl), Eq(Spirv(source)));
+  const Type abstractFloat{TypeKind::AbstractFloat};
+  EXPECT_THAT(ConstantNamed(Parse(wgsl).module, "kAbstractThird"),
+              Eq(ConstantValue{abstractFloat, 0x3fd5555555555555}));
+  EXPECT_THAT(ConstantNamed(Parse(wgsl).module, "kAbstractNegative"),
+              Eq(ConstantValue{abstractFloat, int64_t(0xc000000000000000)}));
+}
+
 TEST(FloatConstant, BoundsTheFoldsTheWgslProjectionReplaces) {
   const auto module = [](int folds) {
     std::string body = "fn f() -> f32 {\n  var sum = 0f;\n";

@@ -30,6 +30,8 @@ TEST(Number, ParsesShaderLiteralKindsAndExactBits) {
         Case{"0x1.000000p-127f", Kind::F32, 0x400000},
         Case{"0x1.fffffep127f", Kind::F32, 0x7f7fffff},
         Case{"0x1.000000p0f", Kind::F32, 0x3f800000},
+        Case{"0x1.5555555555555p-2", Kind::AbstractFloat, 0x3fd5555555555555},
+        Case{"0x1.0000000000000p-1074", Kind::AbstractFloat, 1},
         Case{"0x1.fffffffffffffp1023", Kind::AbstractFloat, 0x7fefffffffffffff}}) {
     SCOPED_TRACE(item.text);
     const Value value = Parse(item.text);
