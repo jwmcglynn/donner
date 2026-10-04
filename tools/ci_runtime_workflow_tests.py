@@ -731,16 +731,25 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("//tools/ci:editor_wasm_size_tests", build)
 
     def test_editor_wasm_pull_requests_link_the_browser_gpu_bridge(self):
-        """Both bridge probes and the standalone default audit run on every PR."""
+        """Both bridge probes, the standalone module and its default audit run on every PR.
+
+        The module is built explicitly: it is incompatible without Browser selection, and an
+        incompatible audit inside a test_suite is skipped rather than failed.
+        """
         workflow = self.editor_wasm
         build_job = workflow.split("\n  build:\n", 1)[1].split("\n  test:\n", 1)[0]
         self.assertIn("- name: Link the browser GPU bridge", build_job)
         link = build_job.split("- name: Link the browser GPU bridge", 1)[1]
-        self.assertIn("bazelisk build --config=wasm-geode", link)
-        self.assertIn("//tools/ci:browser_bridge_link_probes", link)
+        build = link.split("bazelisk build --config=wasm-geode", 1)[1].split("bazelisk test", 1)[0]
+        self.assertIn("//tools/ci:browser_bridge_link_probes", build)
+        self.assertIn("//tools/ci:geode_wasm_browser_module", build)
         self.assertIn("bazelisk test --config=wasm-geode", link)
         self.assertIn("//tools/ci:geode_wasm_browser_default_audit", link)
         self.assertNotIn("continue-on-error", link)
+        module = 'name = "geode_wasm_browser_module"'
+        self.assertIn(module, self.ci_target_definitions)
+        definition = self.ci_target_definitions.split(module, 1)[1].split("\n)", 1)[0]
+        self.assertIn('srcs = ["//donner/svg/renderer/wasm:donner_wasm_geode"]', definition)
 
     def _size_check_step(self, workflow):
         """The workflow step that builds and size-checks the editor Wasm package.
