@@ -346,10 +346,13 @@ rather than assumed to be in range. Constant shifts evaluate wherever the profil
 constant, including array extents and switch labels; an extent needs the shift parenthesized, as in
 `array<f32, (1u << 3u)>`.
 
-As in WGSL, both operands are unary expressions: a shift needs parentheses to combine with
-arithmetic, bitwise AND or another shift, while a comparison or a short-circuit operator takes it
-ungrouped (`a << b < c`). `<<=` and `>>=` follow the compound-assignment rule above with the amount
-materialized as u32, so an operator on the right-hand side needs parentheses (`x <<= (n + 1u)`).
+As in WGSL, both operands are unary expressions, so a shift needs parentheses to combine with
+arithmetic, bitwise AND or another shift. A comparison or a short-circuit operator may take an
+ungrouped shift as an operand, as in `a << b < c`, with one exception: a right shift on the right
+of `<` must be parenthesized. WGSL's template-list discovery reads `a < b >> c` as the template
+list `a<b>`, so the profile rejects it and accepts `a < (b >> c)`. `<<=` and `>>=` follow the
+compound-assignment rule above with the amount materialized as u32, so an operator on the
+right-hand side needs parentheses (`x <<= (n + 1u)`).
 The lexer keeps `>>` and `>>=` whole, and a template list closes on the first `>` of such a token,
 so nested types such as `array<vec2<u32>>` parse as before.
 

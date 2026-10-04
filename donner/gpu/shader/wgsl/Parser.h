@@ -3789,14 +3789,34 @@ private:
                          false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
   }
 
-  enum class BinaryGroup : uint8_t { None, Arithmetic, Relational, And, Or, BitAnd, Shift };
+  enum class BinaryGroup : uint8_t {
+    None,
+    Arithmetic,
+    Relational,
+    And,
+    Or,
+    BitAnd,
+    ShiftLeft,
+    ShiftRight,
+  };
+
+  /// Returns the group of a `<<` or `>>` token.
+  /// @param kind ShiftLeft or ShiftRight.
+  static constexpr BinaryGroup ShiftGroupOf(TokenKind kind) {
+    return kind == TokenKind::ShiftLeft ? BinaryGroup::ShiftLeft : BinaryGroup::ShiftRight;
+  }
+
+  /// Returns whether p group is a shift.
+  static constexpr bool IsShiftGroup(BinaryGroup group) {
+    return group == BinaryGroup::ShiftLeft || group == BinaryGroup::ShiftRight;
+  }
 
   constexpr BinaryGroup GroupOf(TokenKind kind) const {
     if (kind == TokenKind::BitAnd) {
       return BinaryGroup::BitAnd;
     }
     if (IsShiftToken(kind)) {
-      return BinaryGroup::Shift;
+      return ShiftGroupOf(kind);
     }
     if (kind == TokenKind::And) {
       return BinaryGroup::And;
@@ -3814,7 +3834,8 @@ private:
 
   /// Returns whether an ungrouped shift may be an operand of p parent. Both operands of a shift are
   /// unary expressions, so a shift never takes an ungrouped operator; only a comparison or a
-  /// short-circuit operator takes an ungrouped shift.
+  /// short-circuit operator takes an ungrouped shift, and \ref MakeBinary further keeps an
+  /// ungrouped right shift off the right of `<`.
   /// @param parent Group of the enclosing operator.
   static constexpr bool TakesUngroupedShift(BinaryGroup parent) {
     return parent == BinaryGroup::Relational || parent == BinaryGroup::And ||
@@ -3828,7 +3849,7 @@ private:
     if (parent == BinaryGroup::BitAnd || child == BinaryGroup::BitAnd) {
       return parent == child;
     }
-    if (parent == BinaryGroup::Shift || child == BinaryGroup::Shift) {
+    if (IsShiftGroup(parent) || IsShiftGroup(child)) {
       return TakesUngroupedShift(parent);
     }
     if (parent == BinaryGroup::Relational && child == BinaryGroup::Relational) {
@@ -3842,6 +3863,12 @@ private:
     const BinaryGroup group = GroupOf(op.kind);
     if (!GroupsCompatible(group, static_cast<BinaryGroup>(lhs.ungroupedBinary)) ||
         !GroupsCompatible(group, static_cast<BinaryGroup>(rhs.ungroupedBinary))) {
+      Fail(ErrorCode::UnsupportedConstruct, op.span);
+    }
+    // WGSL's template-list discovery reads `a < b >> c` as the template list `a<b>`, so a `<`
+    // comparison never takes an ungrouped right shift as its right operand.
+    if (op.kind == TokenKind::Less &&
+        rhs.ungroupedBinary == static_cast<uint8_t>(BinaryGroup::ShiftRight)) {
       Fail(ErrorCode::UnsupportedConstruct, op.span);
     }
     ExpressionInfo result =
