@@ -5,22 +5,7 @@ const originalKill = process.kill;
 const children = new Map();
 const group = Number(process.env.DONNER_WATCHDOG_GROUP);
 if (!Number.isSafeInteger(group) || group <= 0) throw new Error("missing watchdog group");
-function rows() {
-  return childProcess.execFileSync("/bin/ps", ["-axo", "pid=,ppid=,pgid=,lstart="], {
-    encoding: "utf8",
-    timeout: 1000,
-    maxBuffer: 4 * 1024 * 1024,
-  }).trim().split("\n").map((line) => {
-    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/);
-    if (!match) throw new Error("unreadable child identity");
-    return {
-      pid: Number(match[1]),
-      ppid: Number(match[2]),
-      pgid: Number(match[3]),
-      start: match[4],
-    };
-  });
-}
+const { processRows: rows } = require("./browser-process-snapshot.cjs");
 function track(child) {
   const identity = rows().find((row) => row.pid === child.pid);
   if (identity) {

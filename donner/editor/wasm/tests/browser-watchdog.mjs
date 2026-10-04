@@ -1,29 +1,9 @@
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
-export function processRows() {
-  const output = execFileSync("/bin/ps", ["-axo", "pid=,ppid=,pgid=,rss=,lstart=,comm="], {
-    encoding: "utf8",
-    timeout: 1000,
-    maxBuffer: 4 * 1024 * 1024,
-  });
-  return output.trim().split("\n").map((line) => {
-    const match = line.match(
-      /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/,
-    );
-    if (!match) throw new Error("unreadable process identity");
-    return {
-      pid: Number(match[1]),
-      ppid: Number(match[2]),
-      pgid: Number(match[3]),
-      rssBytes: Number(match[4]) * 1024,
-      start: match[5],
-      command: path.basename(match[6]),
-    };
-  });
-}
+import { processRows } from "./browser-process-snapshot.cjs";
+export { processRows };
 
 export function descendants(rows, rootPid) {
   const selected = new Set([rootPid]);
