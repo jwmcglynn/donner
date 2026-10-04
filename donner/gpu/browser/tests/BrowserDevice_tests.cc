@@ -923,6 +923,46 @@ TEST(BrowserDevice, MappingIsUnreadableUntilTheBrowserCompletesIt) {
               ElementsAre(1, 2, 3, 4));
 }
 
+TEST(BrowserDevice, PollingAMappingNeverYieldsAndMakesReadyBytesReadable) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  auto buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+  auto mapping = fixture.device->mapBufferAsync(buffer.result(), MapMode::Read, 0, 4);
+  ASSERT_THAT(mapping, HasResult());
+  auto pending = fixture.device->pollMapping(mapping.result());
+  ASSERT_THAT(pending, HasResult());
+  EXPECT_THAT(pending.result().state, MapSliceState::Pending);
+  EXPECT_THAT(fixture.bridge->yieldCount, 0u);
+  fixture.bridge->completeMapping(2, {1, 2, 3, 4});
+  auto ready = fixture.device->pollMapping(mapping.result());
+  ASSERT_THAT(ready, HasResult());
+  EXPECT_THAT(ready.result().state, MapSliceState::Ready);
+  auto bytes = fixture.device->mappedBytes(mapping.result());
+  ASSERT_THAT(bytes, HasResult());
+  EXPECT_THAT(bytes.result(), testing::ElementsAre(1, 2, 3, 4));
+}
+
+TEST(BrowserDevice, MappingPollDuringSerialConfirmationCannotNestAWait) {
+  BrowserFixture fixture = MakeDevice();
+  ASSERT_THAT(fixture.device, testing::NotNull());
+  auto buffer =
+      fixture.device->createBuffer(SimpleBuffer(BufferUsage::CopyDst | BufferUsage::MapRead));
+  ASSERT_THAT(buffer, HasResult());
+  auto mapping = fixture.device->mapBufferAsync(buffer.result(), MapMode::Read, 0, 4);
+  ASSERT_THAT(mapping, HasResult());
+  fixture.bridge->onYield = [&] {
+    auto pending = fixture.device->pollMapping(mapping.result());
+    ASSERT_THAT(pending, HasResult());
+    EXPECT_THAT(pending.result().state, MapSliceState::Pending);
+    fixture.bridge->completed = 5;
+  };
+  EXPECT_THAT(fixture.device->waitForSerial(5, 0.25), testing::IsTrue());
+  EXPECT_THAT(fixture.device->nestedWaitRefusalsForTest(), 0u);
+  EXPECT_THAT(fixture.bridge->yieldCount, 1u);
+}
+
 TEST(BrowserDevice, GivesTheBrowserTheThreadWhileAMappingIsPending) {
   BrowserFixture fixture = MakeDevice();
   ASSERT_THAT(fixture.device, testing::NotNull());

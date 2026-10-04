@@ -697,6 +697,10 @@ public:
   Result<BufferMapping> mapBufferAsync(const Buffer& buffer, MapMode mode, uint64_t offsetBytes,
                                        uint64_t byteCount);
 
+  /// Polls a mapping once without blocking or yielding; ready mappings become readable.
+  /// @param mapping Live mapping owned by this device.
+  Result<MapSliceReport> pollMapping(const BufferMapping& mapping);
+
   /// Test seam for \ref donner::gpu::Device::waitForMapping. Production callers pass none; a test
   /// injects a clock and a rest so a budget is verified deterministically and without spending it.
   struct MapWaitTestHooks {

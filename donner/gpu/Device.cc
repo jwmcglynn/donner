@@ -1631,6 +1631,21 @@ void Device::noteMappingOutcome(const BufferMapping& mapping, MapWaitOutcome out
   }
 }
 
+Result<MapSliceReport> Device::pollMapping(const BufferMapping& mapping) {
+  auto record = resolve(bufferMappings_, mapping, BufferMappingTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  if (record.result()->bufferRetired) {
+    return GpuError{GpuErrorType::InvalidHandle, "pollMapping: mapped buffer was destroyed"};
+  }
+  const MapSliceReport slice = onWaitMappingSlice(mapping.slotIndex(), 0.001);
+  if (const auto outcome = OutcomeForSlice(slice.state); outcome.has_value()) {
+    noteMappingOutcome(mapping, *outcome);
+  }
+  return slice;
+}
+
 Result<MapWaitReport> Device::waitForMapping(const BufferMapping& mapping,
                                              const MapWaitParams& params,
                                              const std::function<bool()>& shouldCancel,
