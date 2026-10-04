@@ -16,11 +16,11 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
-#include "donner/gpu/tests/ReflectedComputeSlice.h"
+#include "donner/gpu/tests/ReflectedComputePipeline.h"
 #include "tiny_skia/filter/FloatPixmap.h"
 
 namespace donner::gpu::tests {
-namespace filter_color_matrix_slice {
+namespace filter_color_matrix_scene {
 inline constexpr uint32_t kWidth = 7, kHeight = 5, kRowBytes = 256;
 using Texel = std::array<float, 4>;
 
@@ -138,15 +138,15 @@ inline std::vector<uint8_t> Upload() {
   }
   return bytes;
 }
-}  // namespace filter_color_matrix_slice
+}  // namespace filter_color_matrix_scene
 
 /// Dispatches one matrix through reflected bindings and compares against the host reference.
 /// @param device Native device. @param shader Selected or mutation artifact.
 /// @param readbackBuffer Bounded backend readback. @param testCase Matrix under test.
 template <class DeviceType, class Readback>
 void CheckFilterColorMatrix(DeviceType& device, const shader::CompiledShaderView& shader,
-                            Readback readbackBuffer, filter_color_matrix_slice::Case testCase) {
-  using namespace filter_color_matrix_slice;
+                            Readback readbackBuffer, filter_color_matrix_scene::Case testCase) {
+  using namespace filter_color_matrix_scene;
   ReflectedComputePipeline compute;
   CreateReflectedComputePipeline(device, shader, "color matrix", compute);
   if (testing::Test::HasFatalFailure()) {

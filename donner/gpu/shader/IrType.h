@@ -172,8 +172,8 @@ public:
 
   /**
    * Named struct type. Fails closed on empty member lists, duplicate member names, or member
-   * types that are not plain data (runtime arrays are only supported as storage binding roots in
-   * this packet, so they cannot be struct members).
+   * types that are not plain data (runtime arrays are supported only as storage binding roots, so
+   * they cannot be struct members).
    *
    * @param name Struct name.
    * @param members Struct members in declaration order.

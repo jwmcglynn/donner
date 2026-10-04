@@ -1,5 +1,5 @@
 /// @file
-/// The Metal solid-fill vertical slice: renders the shared baseline scene
+/// The Metal solid-fill test: renders the shared baseline scene
 /// through donner::gpu::metal::MetalDevice with the MSL emitted from the solid-fill IR program,
 /// and compares pixels against the frozen baseline captured from the current production
 /// renderer.
@@ -43,7 +43,7 @@
 #include "donner/gpu/tests/BaselineScene.h"
 #include "donner/gpu/tests/CheckerboardPixelTests.h"
 #include "donner/gpu/tests/SubmissionOrderScene.h"
-#include "donner/gpu/tests/VertexInputSlice.h"
+#include "donner/gpu/tests/VertexInputScene.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 
@@ -73,7 +73,7 @@ constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte 
 
 /// A storage buffer plus the byte size it was created with, so bind groups can bind the FULL
 /// range honestly. Vulkan enforces VkDescriptorBufferInfo.range, so binding a smaller range than
-/// the shader indexes would read out of bounds; Metal ignores the range, but both slices bind the
+/// the shader indexes would read out of bounds; Metal ignores the range, but both tests bind the
 /// same honest sizes.
 struct SizedBuffer {
   Buffer buffer;           //!< The storage buffer.
@@ -102,7 +102,7 @@ protected:
     device_ = MetalDevice::Create();
     // Same rule the frozen pixel gate uses: a lane that selected this target and then created no
     // device has disabled the comparison, and reporting that as a pass hides it.
-    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal solid-fill slice");
+    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal solid-fill tests");
   }
 
   /**
@@ -110,9 +110,9 @@ protected:
    * matches.
    *
    * Two GPUs running the same shaders round a covered edge texel differently, so the frozen
-   * pixels are filed one directory per adapter and this slice resolves its own. Sharing the
+   * pixels are filed one directory per adapter and this test resolves its own. Sharing the
    * corpus rather than keeping a second copy of the same bytes is deliberate: a private golden is
-   * what let this slice drift away from the renderer it exists to validate.
+   * what let this test drift away from the renderer it exists to validate.
    *
    * The lookup deliberately does NOT live in SetUp. The baseline is an input to the pixel
    * comparison and to nothing else in this fixture; gating every case on it would let a corpus
@@ -288,7 +288,7 @@ TEST_F(MetalSolidFillTest, EmittedMslForAPositionOnlyFragmentEntryCompilesOnTheD
   // The offline Metal compiler ships as a downloadable Xcode component, so the out-of-process MSL
   // validation skips wherever it is absent. The runtime compiler behind createShaderModule is
   // there on any machine with a device, which makes it the one that holds the emitter's stage IO
-  // shapes everywhere this slice runs.
+  // shapes everywhere this test runs.
   //
   // This entry declares no location at all: its only input is the position builtin. Each emitter
   // decides for itself how such an input reaches the stage, so it is the shape one of them can
@@ -321,7 +321,7 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
     const std::string message = baseline::UnbaselinedAdapterMessage(
         device_->adapterName(), "Metal", baseline::AdapterSlug(device_->adapterName(), "Metal"),
         /*capturedPath=*/"",
-        "this slice renders through donner::gpu, not the production path the baselines come "
+        "this test renders through donner::gpu, not the production path the baselines come "
         "from; capture one with //donner/gpu/baseline:capture_baselines",
         disposition);
     if (disposition == baseline::MissingComparisonDisposition::FailClosed) {
@@ -483,7 +483,7 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
     ASSERT_FALSE(uniformWrite.hasError()) << uniformWrite.error();
 
     // Storage buffers bind their FULL created byte size: the fragment shader indexes past
-    // element 0, and Vulkan enforces the bound range (Metal ignores it, but both slices bind
+    // element 0, and Vulkan enforces the bound range (Metal ignores it, but both tests bind
     // the same honest sizes).
     std::vector<BindGroupEntry> entries;
     entries.push_back({0, BufferBinding{draw.uniformBuffer, 0, sizeof(SolidFillUniforms)}});
@@ -549,7 +549,7 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   bitmap.rowBytes = kBytesPerRow;
   bitmap.alphaType = svg::AlphaType::Premultiplied;
 
-  // Strict identity: the Metal slice must reproduce the frozen baseline byte-for-byte (zero
+  // Strict identity: the Metal render must reproduce the frozen baseline byte-for-byte (zero
   // mismatched pixels, anti-aliased pixels included).
   editor::tests::CompareBitmapToGolden(bitmap, goldenPath, "metal_solid_fill",
                                        editor::tests::PixelmatchIdentityParams());

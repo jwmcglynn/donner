@@ -3,11 +3,11 @@
 /// Native Slug fill rendering against independent rectangle and paint references.
 
 #include "donner/gpu/shader/programs/SlugFill.h"
-#include "donner/gpu/tests/SlugMaskSlice.h"
+#include "donner/gpu/tests/SlugMaskScene.h"
 #include "tiny_skia/filter/Blend.h"
 
 namespace donner::gpu::tests {
-namespace slug_fill_slice {
+namespace slug_fill_scene {
 using Pixel = std::array<uint8_t, 4>;
 inline constexpr uint32_t kWidth = 8, kHeight = 8, kRowBytes = 256;
 inline constexpr Pixel kUniformColor{128, 64, 32, 128}, kRecordColor{32, 96, 64, 128};
@@ -179,15 +179,15 @@ inline std::vector<uint8_t> Expected(Case c) {
   const auto pixels = background.toPixmap();
   return {pixels.data().begin(), pixels.data().end()};
 }
-}  // namespace slug_fill_slice
+}  // namespace slug_fill_scene
 
 /// Renders the real four-entry Slug program with strict independent pixel acceptance.
 /// @param device Native device. @param shader Frozen selected or test projections.
 /// @param readbackBuffer Bounded backend readback. @param testCase Reference scenario.
 template <class DeviceType, class Readback>
 void CheckSlugFill(DeviceType& device, const shader::CompiledShaderView& shader,
-                   Readback readbackBuffer, slug_fill_slice::Case testCase) {
-  using namespace slug_fill_slice;
+                   Readback readbackBuffer, slug_fill_scene::Case testCase) {
+  using namespace slug_fill_scene;
   ASSERT_THAT(shader.entryPoints, testing::SizeIs(4));
   auto module = device.createShaderModule(
       shader::MakeShaderDescriptor(shader, device.shaderSourceKind(), "Slug fill"));
@@ -267,7 +267,7 @@ void CheckSlugFill(DeviceType& device, const shader::CompiledShaderView& shader,
   std::vector<Buffer> buffers;
   std::vector<BindGroupEntry> entries;
   const auto upload = [&](const char* name, const auto& data, uint64_t range) {
-    return slug_mask_slice::UploadBinding(device, shader, name,
+    return slug_mask_scene::UploadBinding(device, shader, name,
                                           {reinterpret_cast<const uint8_t*>(&data), sizeof(data)},
                                           range, buffers, entries);
   };

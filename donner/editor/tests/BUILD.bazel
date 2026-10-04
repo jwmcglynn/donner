@@ -47,8 +47,8 @@ donner_cc_library(
         "BitmapCompareCommon.h",
         "BitmapGoldenCompare.h",
     ],
-    # //donner/gpu: the Metal and Vulkan vertical-slice tests use the one
-    # blessed pixelmatch comparator for their frozen-baseline comparisons.
+    # //donner/gpu: the Metal and Vulkan backend tests use the one blessed
+    # pixelmatch comparator for their frozen-baseline comparisons.
     visibility = [
         "//donner/gpu:__subpackages__",
         "//donner/svg/compositor:__pkg__",

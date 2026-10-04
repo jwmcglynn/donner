@@ -14,7 +14,7 @@ scenes and compares them to that unchanged record.
 
 The corpus is defined in `BaselineCorpus.h` from literal geometry, so it depends on no external
 content and re-encodes identically anywhere. It covers the three-path solid-fill scene the
-per-backend vertical slices already share, opposed fill rules on self-intersecting geometry,
+per-backend solid-fill tests already share, opposed fill rules on self-intersecting geometry,
 premultiplied source-over on integral device pixels, cubics whose extrema fall inside their
 segments on both rays, an asymmetric horizontal-versus-vertical band split, degenerate input, and
 coordinates past the float range the encoder admits.
@@ -43,13 +43,13 @@ Both run under plain `bazel test //...`:
 `//donner/gpu/metal/tests:metal_solid_fill_tests` is a third reader. It renders
 `solid_fill_baseline` through `donner::gpu` and the MSL emitted from the shader IR, with no wgpu
 dependency at all, and requires pixel identity against the baseline for its own adapter. That is
-the whole point of the slice: the two implementations are compared, not one implementation against
+the whole point of the test: the two implementations are compared, not one implementation against
 itself.
 
 It reads these directories rather than keeping its own copy of the same bytes, and the reason is
 worth recording. It used to keep one, captured on a single adapter, and when the production vertex
-stage moved from a whole-path quad to a convex bounding fan, the shader-IR re-expression the slice
-compiles kept the retired stage and the slice synthesized the retired quad locally to feed it. It
+stage moved from a whole-path quad to a convex bounding fan, the shader-IR re-expression the test
+compiles kept the retired stage and the test synthesized the retired quad locally to feed it. It
 stayed green for months against a golden nothing produced any more. A private copy of a record that
 already exists here is how that happens.
 

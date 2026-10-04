@@ -1,13 +1,13 @@
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
-# Tests for the Metal vertical slices: the solid-fill pixel comparison against
+# Tests for the Metal backend: the solid-fill pixel comparison against
 # the frozen per-adapter baseline the production renderer wrote, and the
 # color-matrix compute test.
 
-# The missing-device fixture preamble every Metal vertical slice below needs: fail closed on an
+# The missing-device fixture preamble every Metal device test below needs: fail closed on an
 # automated lane, skip on a developer machine. A library rather than a third hand copy once the
-# sub-rectangle-copy slice needed the same rule as solid-fill and color-matrix.
+# sub-rectangle-copy test needed the same rule as solid-fill and color-matrix.
 donner_cc_library(
     name = "metal_device_gate",
     testonly = 1,
@@ -44,7 +44,7 @@ donner_cc_test(
     ],
 )
 
-# The Metal solid-fill vertical slice: donner::gpu + emitted MSL only (no
+# The Metal solid-fill test: donner::gpu + emitted MSL only (no
 # wgpu-based dependencies, not geode-gated). Metal API validation is enabled
 # so validation issues abort loudly.
 donner_cc_test(
@@ -67,7 +67,7 @@ donner_cc_test(
         "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
-    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    # the no-device rule can never see one and this test keeps skipping into a green report.
     # MetalDeviceGate_tests.cc checks the macro's own logic without a device; it cannot see this
     # list, so removing an entry here is a silent regression only review catches.
     env_inherit = [
@@ -84,7 +84,7 @@ donner_cc_test(
         "//donner/gpu:checkerboard_pixel_tests",
         "//donner/gpu:gpu_test_utils",
         "//donner/gpu:submission_order_scene",
-        "//donner/gpu:vertex_input_slice",
+        "//donner/gpu:vertex_input_scene",
         "//donner/gpu/baseline:frozen_baseline_policy",
         "//donner/gpu/metal:metal_device",
         "//donner/gpu/shader",
@@ -99,7 +99,7 @@ donner_cc_test(
     ],
 )
 
-# The Metal compute vertical slice: the color-matrix kernel emitted from the
+# The Metal compute test: the color-matrix kernel emitted from the
 # shader IR, dispatched through donner::gpu and compared against the host
 # result. Metal API validation is enabled so validation issues abort loudly.
 donner_cc_test(
@@ -118,7 +118,7 @@ donner_cc_test(
         "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
-    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    # the no-device rule can never see one and this test keeps skipping into a green report.
     # MetalDeviceGate_tests.cc checks the macro's own logic without a device; it cannot see this
     # list, so removing an entry here is a silent regression only review catches.
     env_inherit = [
@@ -129,34 +129,34 @@ donner_cc_test(
     deps = [
         ":metal_device_gate",
         "//donner/gpu",
-        "//donner/gpu:blur_slice",
-        "//donner/gpu:color_matrix_slice",
-        "//donner/gpu:color_space_convert_slice",
-        "//donner/gpu:component_transfer_slice",
-        "//donner/gpu:composite_slice",
-        "//donner/gpu:convolve_matrix_slice",
-        "//donner/gpu:displacement_map_slice",
-        "//donner/gpu:drop_shadow_slice",
-        "//donner/gpu:filter_blend_slice",
-        "//donner/gpu:filter_color_matrix_slice",
-        "//donner/gpu:filter_image_slice",
-        "//donner/gpu:filter_resolve_slice",
-        "//donner/gpu:flat_interface_slice",
-        "//donner/gpu:float_texture_slice",
-        "//donner/gpu:flood_slice",
-        "//donner/gpu:image_blit_slice",
-        "//donner/gpu:lighting_slice",
-        "//donner/gpu:merge_slice",
-        "//donner/gpu:morphology_slice",
-        "//donner/gpu:offset_slice",
-        "//donner/gpu:reflected_compute_slice",
-        "//donner/gpu:slug_fill_slice",
-        "//donner/gpu:slug_gradient_slice",
-        "//donner/gpu:slug_mask_slice",
-        "//donner/gpu:snapshot_unpremultiply_slice",
-        "//donner/gpu:subregion_clip_slice",
-        "//donner/gpu:tile_slice",
-        "//donner/gpu:turbulence_slice",
+        "//donner/gpu:blur_scene",
+        "//donner/gpu:color_matrix_scene",
+        "//donner/gpu:color_space_convert_scene",
+        "//donner/gpu:component_transfer_scene",
+        "//donner/gpu:composite_scene",
+        "//donner/gpu:convolve_matrix_scene",
+        "//donner/gpu:displacement_map_scene",
+        "//donner/gpu:drop_shadow_scene",
+        "//donner/gpu:filter_blend_scene",
+        "//donner/gpu:filter_color_matrix_scene",
+        "//donner/gpu:filter_image_scene",
+        "//donner/gpu:filter_resolve_scene",
+        "//donner/gpu:flat_interface_scene",
+        "//donner/gpu:float_texture_scene",
+        "//donner/gpu:flood_scene",
+        "//donner/gpu:image_blit_scene",
+        "//donner/gpu:lighting_scene",
+        "//donner/gpu:merge_scene",
+        "//donner/gpu:morphology_scene",
+        "//donner/gpu:offset_scene",
+        "//donner/gpu:reflected_compute_pipeline",
+        "//donner/gpu:slug_fill_scene",
+        "//donner/gpu:slug_gradient_scene",
+        "//donner/gpu:slug_mask_scene",
+        "//donner/gpu:snapshot_unpremultiply_scene",
+        "//donner/gpu:subregion_clip_scene",
+        "//donner/gpu:tile_scene",
+        "//donner/gpu:turbulence_scene",
         "//donner/gpu/metal:metal_device",
         "//donner/gpu/shader",
         "//donner/gpu/shader:color_space_convert_api",
@@ -236,7 +236,7 @@ donner_cc_test(
     ],
 )
 
-# The Metal texture-to-texture copy slice: a sub-rectangle copy between two
+# The Metal texture-to-texture copy test: a sub-rectangle copy between two
 # origins, executed and compared against the shared expected image. Metal API
 # validation is enabled so validation issues abort loudly.
 donner_cc_test(
@@ -255,7 +255,7 @@ donner_cc_test(
         "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
-    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    # the no-device rule can never see one and this test keeps skipping into a green report.
     # MetalDeviceGate_tests.cc checks the macro's own logic without a device; it cannot see this
     # list, so removing an entry here is a silent regression only review catches.
     env_inherit = [
@@ -471,7 +471,7 @@ cc_test(
     ],
 )
 
-# The Metal presentation slice: an offscreen Core Animation Metal layer driven through the
+# The Metal presentation test: an offscreen Core Animation Metal layer driven through the
 # runtime's surface hooks. Objective-C++ because the test owns the layer, so it takes the same
 # objc_library plus cc_test shape as the shader-memory validation probe above. Metal API
 # validation is enabled so validation issues abort loudly.
@@ -511,7 +511,7 @@ cc_test(
         "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
-    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    # the no-device rule can never see one and this test keeps skipping into a green report.
     env_inherit = [
         "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
         "GITHUB_ACTIONS",
@@ -541,7 +541,7 @@ donner_cc_test(
         "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
-    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    # the no-device rule can never see one and this test keeps skipping into a green report.
     env_inherit = [
         "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
         "GITHUB_ACTIONS",
@@ -577,7 +577,7 @@ donner_cc_test(
         "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
-    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    # the no-device rule can never see one and this test keeps skipping into a green report.
     env_inherit = [
         "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
         "GITHUB_ACTIONS",
@@ -600,7 +600,7 @@ donner_cc_test(
         "MTL_SHADER_VALIDATION": "1",
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
-    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    # the no-device rule can never see one and this test keeps skipping into a green report.
     env_inherit = [
         "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
         "GITHUB_ACTIONS",

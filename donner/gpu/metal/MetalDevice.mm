@@ -1671,7 +1671,7 @@ Status MetalDevice::Impl::encodeSetPipeline(EncodingState& state,
   }
   [state.renderEncoder setRenderPipelineState:pipeline->state];
   // Cull mode is encoder state in Metal; apply the pipeline's recorded mode at bind time.
-  // Behavioral coverage requires winding-controlled geometry, which the solid-fill slice does
+  // Behavioral coverage requires winding-controlled geometry, which the solid-fill test does
   // not exercise: it always uses CullMode::None.
   [state.renderEncoder
       setCullMode:(pipeline->cullMode == CullMode::Back ? MTLCullModeBack : MTLCullModeNone)];
@@ -1814,7 +1814,7 @@ Status MetalDevice::Impl::encodeSetBindGroup(EncodingState& state,
                                              const SetBindGroupCommand& setBindGroup) {
   if (setBindGroup.index != 0) {
     return GpuError{GpuErrorType::Unsupported,
-                    "the Metal backend maps bind group 0 only in this slice (MslBindingMap.h)"};
+                    "the Metal backend maps bind group 0 only (MslBindingMap.h)"};
   }
   const BindGroupRecord* bindGroup = FindRecord(bindGroups, setBindGroup.bindGroupId.slotIndex);
   if ((state.renderEncoder == nil && state.computeEncoder == nil) || bindGroup == nullptr) {

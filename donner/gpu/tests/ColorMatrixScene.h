@@ -1,14 +1,14 @@
 #pragma once
 /// @file
-/// Shared scene for the color-matrix compute vertical slices.
+/// Shared scene for the color-matrix compute tests.
 ///
-/// Every backend slice runs the same kernel over the same input and checks the same expected
+/// Every backend test runs the same kernel over the same input and checks the same expected
 /// bytes, so a backend-specific divergence shows up as a byte difference rather than as two
 /// tests that happen to agree with themselves.
 ///
 /// The numbers are chosen so the whole computation is exact in 8-bit unorm. Input channels are
 /// multiples of 8, matrix coefficients are 0.5 and 0.25, and the bias is a whole multiple of
-/// 1/255, so every result lands on an integer texel value with no rounding freedom: the slices
+/// 1/255, so every result lands on an integer texel value with no rounding freedom: the tests
 /// compare bytes exactly rather than within a quantization tolerance.
 
 #include <array>
@@ -48,7 +48,7 @@ struct alignas(16) ColorMatrixParams {
 };
 static_assert(sizeof(ColorMatrixParams) == 80, "ColorMatrixParams must match the shader layout");
 
-/// The matrix the slices upload: red and green are halved and gain a quarter of blue, blue and
+/// The matrix the tests upload: red and green are halved and gain a quarter of blue, blue and
 /// alpha are halved.
 inline ColorMatrixParams ColorMatrixUniforms() {
   return ColorMatrixParams{{0.5f, 0.0f, 0.0f, 0.0f},

@@ -20,7 +20,7 @@ class MetalUiRendererTest : public testing::Test {
 protected:
   void SetUp() override {
     device_ = MetalDevice::Create();
-    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal UI rendering slice");
+    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal UI rendering tests");
   }
 
   std::unique_ptr<MetalDevice> device_;
