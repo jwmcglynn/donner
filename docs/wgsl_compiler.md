@@ -350,9 +350,11 @@ abstract shift such as `(1 << 8) - 1` but not a concrete one such as `1u << 4u`.
 
 As in WGSL, both operands are unary expressions, so a shift needs parentheses to combine with
 arithmetic, bitwise AND or another shift. A comparison or a short-circuit operator may take an
-ungrouped shift as an operand, as in `a << b < c`, with one exception: a right shift on the right
-of `<` must be parenthesized. WGSL's template-list discovery reads `a < b >> c` as the template
-list `a<b>`, so the profile rejects it and accepts `a < (b >> c)`. `<<=` and `>>=` follow the
+ungrouped shift as an operand, as in `a << b < c`, with one exception from WGSL's template-list
+discovery: a `<` directly after an identifier is a candidate template-list start that the next `>`
+at the same nesting depth closes, so `a < b >> c` and `v.x < b >> c` read as template lists. The
+profile rejects an ungrouped right shift on the right of such a `<` and accepts `a < (b >> c)`;
+`(a) < b >> c`, `1u < b >> c` and `f(x) < b >> c` remain comparisons. `<<=` and `>>=` follow the
 compound-assignment rule above with the amount materialized as u32, so an operator on the
 right-hand side needs parentheses (`x <<= (n + 1u)`).
 The lexer keeps `>>` and `>>=` whole, and a template list closes on the first `>` of a `>>` token,

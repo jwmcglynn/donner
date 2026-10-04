@@ -415,6 +415,7 @@ private:
   }
 
   constexpr void Next() {
+    previousTokenKind_ = token_.kind;
     if (failed()) {
       token_ = Token{};
       return;
@@ -2248,12 +2249,27 @@ private:
     ExpressionInfo lhs = ParseUnary();
     while (HasBinaryOperator(precedence)) {
       const Token op = token_;
+      const bool templateCandidate = OpensTemplateCandidate(op);
       const uint8_t nextPrecedence = BinaryPrecedence(op.kind) + 1;
       Next();
       const ExpressionInfo rhs = ParseBinaryOperand(op.kind, nextPrecedence);
+      // A `>` of an ungrouped right shift would close the template list this `<` starts.
+      if (templateCandidate &&
+          rhs.ungroupedBinary == static_cast<uint8_t>(BinaryGroup::ShiftRight)) {
+        Fail(ErrorCode::UnsupportedConstruct, op.span);
+      }
       lhs = MakeBinary(op, lhs, rhs);
     }
     return lhs;
+  }
+
+  /// Returns whether WGSL's template-list discovery treats p op as a candidate template-list
+  /// start: a `<` whose preceding token, ignoring blankspace and comments, is an identifier.
+  /// The next `>` at the same nesting depth closes such a list, so `a < b >> c` reads as the
+  /// template list `a<b>`, while `(a) < b >> c` and `1u < b >> c` remain comparisons.
+  /// @param op The current operator token.
+  constexpr bool OpensTemplateCandidate(Token op) const {
+    return op.kind == TokenKind::Less && previousTokenKind_ == TokenKind::Identifier;
   }
 
   constexpr bool HasBinaryOperator(uint8_t precedence) const {
@@ -3834,8 +3850,8 @@ private:
 
   /// Returns whether an ungrouped shift may be an operand of p parent. Both operands of a shift are
   /// unary expressions, so a shift never takes an ungrouped operator; only a comparison or a
-  /// short-circuit operator takes an ungrouped shift, and \ref MakeBinary further keeps an
-  /// ungrouped right shift off the right of `<`.
+  /// short-circuit operator takes an ungrouped shift, and \ref OpensTemplateCandidate further keeps
+  /// an ungrouped right shift off the right of a `<` that follows an identifier.
   /// @param parent Group of the enclosing operator.
   static constexpr bool TakesUngroupedShift(BinaryGroup parent) {
     return parent == BinaryGroup::Relational || parent == BinaryGroup::And ||
@@ -3863,12 +3879,6 @@ private:
     const BinaryGroup group = GroupOf(op.kind);
     if (!GroupsCompatible(group, static_cast<BinaryGroup>(lhs.ungroupedBinary)) ||
         !GroupsCompatible(group, static_cast<BinaryGroup>(rhs.ungroupedBinary))) {
-      Fail(ErrorCode::UnsupportedConstruct, op.span);
-    }
-    // WGSL's template-list discovery reads `a < b >> c` as the template list `a<b>`, so a `<`
-    // comparison never takes an ungrouped right shift as its right operand.
-    if (op.kind == TokenKind::Less &&
-        rhs.ungroupedBinary == static_cast<uint8_t>(BinaryGroup::ShiftRight)) {
       Fail(ErrorCode::UnsupportedConstruct, op.span);
     }
     ExpressionInfo result =
@@ -4244,6 +4254,7 @@ private:
   Statement invalidStatement_;
   Symbol invalidSymbol_;
   Token token_;
+  TokenKind previousTokenKind_ = TokenKind::End;  //!< Kind of the token before token_.
   uint32_t cursor_ = 0;
   uint16_t tokenCount_ = 0;
   std::array<ArenaId, ModuleLimits::kMaxSymbols> activeSymbols_ = {};

@@ -376,10 +376,14 @@ TEST(Shift, RequiresParenthesesAroundMixedOperators) {
 }
 
 TEST(Shift, RejectsAnUngroupedRightShiftAfterLessThan) {
-  // WGSL's template-list discovery reads `a < b >> c` as the template list `a<b>` followed by
-  // `> c`, so the right shift must be parenthesized.
-  constexpr std::string_view kSignature = "fn f(a: u32, b: u32, c: u32) -> bool { return ";
-  for (const char* body : {"a < b >> c", "a < 8u >> c", "a < b >> 1u", "a < (b) >> c"}) {
+  // WGSL's template-list discovery treats a `<` right after an identifier as a candidate list
+  // start, so `a < b >> c` reads as the template list `a<b>` followed by `> c`.
+  constexpr std::string_view kSignature =
+      "fn g(x: u32) -> u32 { return x; }\n"
+      "fn f(a: u32, b: u32, c: u32, v: vec2<u32>, i: u32) -> bool {\n"
+      "  var values = array<u32, 2>(a, b);\n  return ";
+  for (const char* body : {"a < b >> c", "a < 8u >> c", "a < b >> 1u", "a < (b) >> c",
+                           "v.x < b >> c", "a < v.y >> c"}) {
     const std::string source = std::string(kSignature) + body + "; }";
     SCOPED_TRACE(source);
     EXPECT_THAT(Diagnose(source), Eq(Rejection{ErrorCode::UnsupportedConstruct, "<"}));
@@ -387,8 +391,10 @@ TEST(Shift, RejectsAnUngroupedRightShiftAfterLessThan) {
   EXPECT_THAT(Diagnose("fn f(a: i32, b: i32, c: u32) -> bool { return a < -b >> c; }"),
               Eq(Rejection{ErrorCode::UnsupportedConstruct, "<"}));
 
+  // A `<` after anything but an identifier never starts a template list.
   for (const char* body : {"a < (b >> c)", "(a < b) && (b >> c) > a", "a <= b >> c", "a > b >> c",
-                           "a < b << c", "a >> b < c", "a == b >> c"}) {
+                           "a < b << c", "a >> b < c", "a == b >> c", "(a) < b >> c", "1u < b >> c",
+                           "8u < b >> c", "values[i] < b >> c", "g(a) < b >> c"}) {
     const std::string source = std::string(kSignature) + body + "; }";
     SCOPED_TRACE(source);
     EXPECT_THAT(Diagnose(source), Eq(kAccepted));
