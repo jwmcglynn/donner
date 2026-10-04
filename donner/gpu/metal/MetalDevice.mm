@@ -216,6 +216,14 @@ MTLPrimitiveType ToMtlPrimitiveType(PrimitiveTopology topology) {
 /// the caller indefinitely.
 constexpr double kPresentCompletionTimeoutSeconds = 5.0;
 
+/// How long a submission waits for room among the command buffers in flight while neither this
+/// device nor a device its waiting work depends on completes any. A device that stops completing
+/// work for this long is treated as hung.
+constexpr double kSubmissionStallTimeoutSeconds = 5.0;
+
+/// Longest one submission waits for room in all, however much progress it sees meanwhile.
+constexpr double kSubmissionWaitCapSeconds = 60.0;
+
 /// A completion whose publication \ref MetalDevice::holdNextCompletionForTest parked.
 struct ParkedCompletion {
   uint64_t serial = 0;        //!< Serial of the parked submission.
@@ -475,6 +483,8 @@ struct MetalDevice::Impl {
   id<MTLDevice> device = nil;               //!< The Metal device; set by Create.
   id<MTLCommandQueue> commandQueue = nil;   //!< Lazily created on first submit.
   id<MTLSharedEvent> submissionGate = nil;  //!< Optional test-controlled execution pause.
+  /// Turns handed to command buffers encoded while \ref submissionGate is installed.
+  uint64_t submissionGateTickets = 0;
 
   /// A bind group plus the layout slot it was created against (for per-binding visibility).
   struct BindGroupRecord {
@@ -806,6 +816,13 @@ struct MetalDevice::Impl {
   /// Longest a present waits for its frame's work; see
   /// \ref MetalDevice::setPresentCompletionTimeoutForTest.
   double presentCompletionTimeoutSeconds = kPresentCompletionTimeoutSeconds;
+  /// Longest a submission waits for room without progress; see
+  /// \ref MetalDevice::setSubmissionStallTimeoutForTest.
+  double submissionStallTimeoutSeconds = kSubmissionStallTimeoutSeconds;
+  /// Longest a submission waits for room in all; see \ref MetalDevice::setSubmissionWaitCapForTest.
+  double submissionWaitCapSeconds = kSubmissionWaitCapSeconds;
+  /// Submissions that waited for room; see \ref MetalDevice::commandBufferRoomWaitsForTest.
+  std::atomic<uint64_t> commandBufferRoomWaits{0};
 
   /// Whether resources are built for unified memory; decides every storage mode below.
   bool unifiedMemory = true;
@@ -966,6 +983,7 @@ Status MetalDevice::pauseSubmissionsForTest() {
     if (impl_->submissionGate == nil) {
       return GpuError{GpuErrorType::Unsupported, "Metal shared events are unavailable"};
     }
+    impl_->submissionGateTickets = 0;
     return OkStatus();
   }
 }
@@ -973,7 +991,7 @@ Status MetalDevice::pauseSubmissionsForTest() {
 void MetalDevice::resumeSubmissionsForTest() {
   @autoreleasepool {
     if (impl_->submissionGate != nil) {
-      impl_->submissionGate.signaledValue = 1;
+      impl_->submissionGate.signaledValue = std::numeric_limits<uint64_t>::max();
       impl_->submissionGate = nil;
     }
   }
@@ -992,6 +1010,35 @@ void MetalDevice::setPresentCompletionTimeoutForTest(std::chrono::milliseconds t
   impl_->presentCompletionTimeoutSeconds = timeout > std::chrono::milliseconds::zero()
                                                ? std::chrono::duration<double>(timeout).count()
                                                : kPresentCompletionTimeoutSeconds;
+}
+
+void MetalDevice::releasePausedCommandBuffersForTest(uint64_t count) {
+  @autoreleasepool {
+    id<MTLSharedEvent> gate = impl_->submissionGate;
+    if (gate != nil && count > gate.signaledValue) {
+      gate.signaledValue = count;
+    }
+  }
+}
+
+void MetalDevice::setSubmissionStallTimeoutForTest(std::chrono::milliseconds timeout) {
+  impl_->submissionStallTimeoutSeconds = timeout > std::chrono::milliseconds::zero()
+                                             ? std::chrono::duration<double>(timeout).count()
+                                             : kSubmissionStallTimeoutSeconds;
+}
+
+void MetalDevice::setSubmissionWaitCapForTest(std::chrono::milliseconds timeout) {
+  impl_->submissionWaitCapSeconds = timeout > std::chrono::milliseconds::zero()
+                                        ? std::chrono::duration<double>(timeout).count()
+                                        : kSubmissionWaitCapSeconds;
+}
+
+uint64_t MetalDevice::commandBufferRoomWaitsForTest() const {
+  return impl_->commandBufferRoomWaits.load(std::memory_order_acquire);
+}
+
+uint64_t MetalDevice::commandBuffersInFlightForTest() const {
+  return 0;
 }
 
 void MetalDevice::releaseHeldCompletionForTest() {
@@ -2371,7 +2418,7 @@ Status MetalDevice::Impl::beginSubmission(EncodingState& state, bool encodeQueue
   }
 
   if (submissionGate != nil) {
-    [state.commandBuffer encodeWaitForEvent:submissionGate value:1];
+    [state.commandBuffer encodeWaitForEvent:submissionGate value:++submissionGateTickets];
   }
   // The submission's first buffer carries the waits; the rest run after it on this queue.
   if (encodeQueuedWrites) {
