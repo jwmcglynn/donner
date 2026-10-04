@@ -1060,6 +1060,171 @@ test("GPU image transfer preserves pixels between workers", async ({ page, brows
   }
 });
 
+type DelayedCompletionState = {
+  calls: number;
+  realCompletions: number;
+  released: boolean;
+  firstHoldAtMs: number | null;
+  lastRealCompletionAtMs: number | null;
+};
+type CompletionWorker = typeof globalThis & {
+  __donnerApplicationGpuSurfaceWorker?: boolean;
+  __donnerDelayedUiCompletion?: DelayedCompletionState;
+  __donnerReleaseUiCompletion?: () => void;
+};
+
+test(
+  "delayed UI completion callbacks do not permanently disable presentation",
+  async ({ page, browser }, info) => {
+    await page.goto(process.env.DONNER_WASM_BASE_URL!, { waitUntil: "domcontentloaded" });
+    await expect.poll(
+      () => page.evaluate(() => (window as Diagnostics).__donnerFirstFramePresented),
+      { timeout: 30000 },
+    ).toBe(true);
+    const stopHeartbeat = await startApplicationHeartbeat(page);
+    let application: ReturnType<Page["workers"]>[number] | undefined;
+    const report: Record<string, unknown> = {
+      browser: info.project.name,
+      version: browser.version(),
+      ...packageHashes(),
+    };
+    try {
+      await expect.poll(async () => {
+        const state = await snapshot(page);
+        return !state.thumbnails?.pending && !state.thumbnails?.active
+          && (state.thumbnails?.ready ?? 0) > 0
+          && state.presentation?.framesInFlight === 0;
+      }, { timeout: 20000 }).toBe(true);
+      application = await Promise.any(
+        page.workers().map(async (worker) => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            const ownsSurface = await Promise.race([
+              worker.evaluate(() =>
+                Boolean((globalThis as CompletionWorker).__donnerApplicationGpuSurfaceWorker)
+              ),
+              new Promise((resolve) => {
+                timer = setTimeout(() => resolve(false), 1000);
+              }),
+            ]);
+            if (!ownsSurface) throw new Error("not the surface worker");
+            return worker;
+          } finally {
+            clearTimeout(timer);
+          }
+        }),
+      );
+      report.before = await snapshot(page);
+      const before = (report.before as Snapshot).presentation!;
+      expect(before).toEqual(
+        expect.objectContaining({ deviceLost: false, framesInFlight: 0, oldestSerial: 0 }),
+      );
+      expect(before.completedSerial).toBe(before.submittedSerial);
+      await application.evaluate(() => {
+        const queue = GPUQueue.prototype.onSubmittedWorkDone;
+        let release: (() => void) | undefined;
+        const hold = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const state: DelayedCompletionState = {
+          calls: 0,
+          realCompletions: 0,
+          released: false,
+          firstHoldAtMs: null,
+          lastRealCompletionAtMs: null,
+        };
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const restore = () => {
+          clearTimeout(timer);
+          if (!state.released) {
+            state.released = true;
+            release!();
+          }
+          if (GPUQueue.prototype.onSubmittedWorkDone === heldCompletion) {
+            GPUQueue.prototype.onSubmittedWorkDone = queue;
+          }
+        };
+        const heldCompletion = function(this: GPUQueue) {
+          const completion = queue.call(this);
+          if (state.released) return completion;
+          if (++state.calls === 1) {
+            state.firstHoldAtMs = performance.now();
+            timer = setTimeout(restore, 5100);
+          }
+          return completion.then(() => {
+            ++state.realCompletions;
+            state.lastRealCompletionAtMs = performance.now();
+            return hold;
+          });
+        };
+        const worker = globalThis as CompletionWorker;
+        worker.__donnerDelayedUiCompletion = state;
+        worker.__donnerReleaseUiCompletion = restore;
+        GPUQueue.prototype.onSubmittedWorkDone = heldCompletion;
+      });
+      const readCompletion = () =>
+        application!.evaluate(() => (globalThis as CompletionWorker).__donnerDelayedUiCompletion);
+      await page.evaluate(() => {
+        window.__donnerEditorFrameRequested = true;
+      });
+      await expect.poll(async () => (await snapshot(page)).presentation?.submittedSerial, {
+        timeout: 3000,
+      })
+        .toBeGreaterThan(before.submittedSerial);
+      await expect.poll(async () => {
+        const state = await readCompletion();
+        report.completedBeforeRelease = state;
+        return state !== undefined && !state.released && state.calls > 0
+          && state.realCompletions === state.calls && state.firstHoldAtMs !== null
+          && state.lastRealCompletionAtMs !== null
+          && state.lastRealCompletionAtMs - state.firstHoldAtMs < 3000;
+      }, { timeout: 3000 }).toBe(true);
+      await attachJson(info, "ui-gpu-completed-before-callback-release", report);
+      await expect.poll(readCompletion, { timeout: 10000 })
+        .toEqual(expect.objectContaining({ released: true, realCompletions: expect.any(Number) }));
+      await expect.poll(async () => (await snapshot(page)).presentation?.framesInFlight, {
+        timeout: 3000,
+      }).toBe(0);
+      report.after = await snapshot(page);
+      report.completion = await readCompletion();
+      await attachJson(info, "delayed-ui-completion", report);
+      expect((report.completion as DelayedCompletionState).realCompletions).toBeGreaterThan(0);
+      expect((report.after as Snapshot).presentation).toEqual(
+        expect.objectContaining({ deviceLost: false }),
+      );
+      const presented = (report.after as Snapshot).presentation!.submittedSerial;
+      await page.evaluate(() => {
+        window.__donnerEditorFrameRequested = true;
+      });
+      await expect.poll(async () => (await snapshot(page)).presentation?.completedSerial, {
+        timeout: 3000,
+      })
+        .toBeGreaterThan(presented);
+    } finally {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        if (application) {
+          report.cleanup = await Promise.race([
+            application.evaluate(() => {
+              (globalThis as CompletionWorker).__donnerReleaseUiCompletion?.();
+              return "restored";
+            }),
+            new Promise((resolve) => {
+              timer = setTimeout(() => resolve("release RPC deadline"), 1000);
+            }),
+          ]);
+        }
+      } catch {
+        report.cleanup = "release RPC unavailable";
+      } finally {
+        clearTimeout(timer);
+      }
+      stopHeartbeat();
+      await attachJson(info, "delayed-ui-completion-final", report);
+    }
+  },
+);
+
 test.describe("UI presentation diagnosis", () => {
   test.use({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
   test(
