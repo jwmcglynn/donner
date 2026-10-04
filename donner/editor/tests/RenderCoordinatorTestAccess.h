@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <sstream>
 
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/RenderCoordinator.h"
@@ -13,6 +14,44 @@
 namespace donner::editor {
 
 struct RenderCoordinatorTestAccess {
+  static std::string overviewScheduleState(const RenderCoordinator& coordinator,
+                                           const EditorApp& app, const ViewportState& viewport) {
+    const auto cache = coordinator.compositedPresentation_.diagnostics();
+    std::ostringstream out;
+    out << "current=" << app.document().currentFrameVersion()
+        << " actualCanvas=" << app.document().document().canvasSize()
+        << " pendingCanvas=" << coordinator.pendingCanvasSize_
+        << " commits=" << coordinator.documentCanvasCommitTotal_
+        << " displayed=" << coordinator.displayedDocVersion_
+        << " overview=" << coordinator.overviewDocVersion_ << " cached=" << cache.cachedVersion
+        << " cachedSize=" << cache.cachedCanvasSize
+        << " forceRefresh=" << coordinator.pendingPresentationRefresh_
+        << " repair=" << coordinator.presentationNeedsRender_
+        << " coverage=" << coordinator.presentationNeedsCoverage_
+        << " selectedRaster=" << coordinator.pendingSelectedLayerRasterizationVersion_
+        << " prewarmRecovery=" << coordinator.selectedPrewarmRecoveryPending_
+        << " retry=" << coordinator.nothingToPresentRetry_.retryScheduled()
+        << " visible=" << viewport.rasterViewport().outputSizePx
+        << " prewarm=" << viewport.selectedPrewarmRasterViewport().outputSizePx;
+    const auto resources = coordinator.compositedPresentation_.resources();
+    if (resources && resources->capture()) {
+      const auto identity = resources->capture()->identity();
+      out << " primary=" << identity.captureId << '/' << identity.version << '/'
+          << identity.geometryRevision;
+    }
+    if (resources && resources->overviewCapture()) {
+      const auto identity = resources->overviewCapture()->identity();
+      out << " overviewCapture=" << identity.captureId << '/' << identity.version << '/'
+          << identity.geometryRevision;
+    }
+    if (coordinator.lastPostedAttempt_) {
+      const auto& attempt = *coordinator.lastPostedAttempt_;
+      out << " posted=" << attempt.version << " infill=" << attempt.overviewInfillOnly
+          << " raster=" << attempt.rasterViewport.outputSizePx;
+    }
+    return out.str();
+  }
+
   static void seedPreCommitPixelCapture(RenderCoordinator& coordinator, const EditorApp& app,
                                         const ViewportState& viewport) {
     coordinator.documentPixelCaptureEnabled_ = true;
@@ -30,6 +69,10 @@ struct RenderCoordinatorTestAccess {
     coordinator.requestedPixelCapture_ = identity;
     coordinator.pendingCanvasSize_ = viewport.rasterViewport().semanticCanvasSizePx;
     coordinator.pendingCanvasSizeSince_ = std::chrono::steady_clock::now();
+  }
+
+  static void keepCanvasCommitPending(RenderCoordinator& coordinator) {
+    coordinator.pendingCanvasSizeSince_ = std::chrono::steady_clock::now() + std::chrono::hours(1);
   }
 
   static void makeCanvasCommitDue(RenderCoordinator& coordinator) {

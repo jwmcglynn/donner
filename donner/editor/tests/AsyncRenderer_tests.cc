@@ -6675,9 +6675,11 @@ TEST(RenderCoordinatorTest, ZoomedPaintUsesCompletedOverviewWhenDetailedRenderFa
 
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(false);
   RenderCoordinatorTestAccess::advanceFakeRetryClock(NothingToPresentRetry::kRetryDelays.front());
+  RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
   ASSERT_TRUE(render());
   EXPECT_TRUE(textures.activeTilesViewportBounded())
-      << "Publishing the overview must still permit a detailed render when the worker recovers";
+      << "Publishing the overview must still permit a detailed render when the worker recovers; "
+      << RenderCoordinatorTestAccess::overviewScheduleState(coordinator, app, viewport);
   EXPECT_EQ(textures.metadataOnlyMissCount(), 0u);
   ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
   for (const auto& tile : textures.tiles()) {
@@ -6723,6 +6725,7 @@ TEST(RenderCoordinatorTest, ZoomedPaintChangesRefreshOverviewAndSettle) {
   ASSERT_TRUE(render());
   ASSERT_THAT(textures.overviewTiles(), testing::Not(testing::IsEmpty()));
 
+  RenderCoordinatorTestAccess::keepCanvasCommitPending(coordinator);
   RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
   ASSERT_TRUE(render());
   ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
@@ -6764,8 +6767,14 @@ TEST(RenderCoordinatorTest, ZoomedPaintChangesRefreshOverviewAndSettle) {
     EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
     EXPECT_THAT(generations(textures.overviewTiles()),
                 testing::Not(testing::ContainerEq(oldOverview)));
+    RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
+    const std::string before =
+        RenderCoordinatorTestAccess::overviewScheduleState(coordinator, app, viewport);
     EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
-        << "The refreshed overview and selected layer must settle without repeated rendering";
+        << "The refreshed overview and selected layer must settle without repeated rendering. "
+           "Before: "
+        << before << "; after: "
+        << RenderCoordinatorTestAccess::overviewScheduleState(coordinator, app, viewport);
   }
 }
 
