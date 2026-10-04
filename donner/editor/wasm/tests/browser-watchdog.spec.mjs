@@ -15,6 +15,36 @@ test("ownership excludes unrelated processes and follows descendants", () => {
   const rows = [{ pid: 1, ppid: 0 }, { pid: 2, ppid: 1 }, { pid: 3, ppid: 2 }, { pid: 4, ppid: 0 }];
   assert.deepEqual(descendants(rows, 2), [rows[1], rows[2]]);
 });
+test("Linux process accounting needs no ps executable", () => {
+  const procRoot = directory();
+  const pid = 123456;
+  fs.mkdirSync(path.join(procRoot, String(pid)));
+  const fields = ["S", "10", "42", ...Array(16).fill("0"), "901", "0", "0"];
+  fs.writeFileSync(
+    path.join(procRoot, String(pid), "stat"),
+    `${pid} (worker) helper) ${fields.join(" ")}`,
+  );
+  fs.writeFileSync(path.join(procRoot, String(pid), "status"), "Name: worker\nVmRSS: 7 kB\n");
+  const rows = processRows({ platform: "linux", procRoot });
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows.find((row) => row.pid === pid), {
+    pid,
+    ppid: 10,
+    pgid: 42,
+    start: "901",
+    rssBytes: 7168,
+    command: "worker) helper",
+  });
+});
+
+test("malformed Linux process identity fails closed", () => {
+  const procRoot = directory();
+  fs.mkdirSync(path.join(procRoot, "123456"));
+  fs.writeFileSync(path.join(procRoot, "123456", "stat"), "unreadable identity");
+  fs.writeFileSync(path.join(procRoot, "123456", "status"), "VmRSS: 7 kB\n");
+  assert.throws(() => processRows({ platform: "linux", procRoot }), /unreadable process identity/);
+});
+
 test("normal exit preserves status and bounded evidence", async () => {
   const result = await supervise(process.execPath, [
     "-e",
