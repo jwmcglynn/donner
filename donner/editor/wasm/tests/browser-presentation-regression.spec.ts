@@ -35,8 +35,10 @@ import { cropCapturedPng, normalizeOverlayGeneration, overlayGenerationMask } fr
 import {
   findCanvasOwnerWorker,
   installSurfaceFrameProbe,
+  readCanvasOwnerSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,
+  surfaceFrameProbeInstalled,
   type SurfaceFrameProbeReport,
   waitForSubmittedCanvasGpuWork,
 } from "./surface-frame-probe";
@@ -769,6 +771,9 @@ function readSurfaceFrameSnapshot(page: Page): Promise<SurfaceFrameSnapshot> {
 
 // A hung Gecko evaluation cannot replace the already-attached scored PNG or its assertion.
 // The abandoned evaluation is never followed by another page command in this failure path.
+// The geometry frame account also bounds its reads with this, and there the capture follows:
+// an abandoned evaluation keeps running in the browser, so the bound covers a read that throws
+// or is slow, not a browser that has stopped answering page commands.
 async function boundFailureDiagnostic<T>(
   work: Promise<T>,
   timeoutMs = scaledMs(2_000),
@@ -2103,6 +2108,343 @@ async function waitForBrowserComposite(page: Page): Promise<void> {
   );
 }
 
+// The application's own account of its canvas frames, read immediately before and after one
+// capture. `uiVertices` is the UI vertex count the latest host frame recorded. `probe` is the
+// canvas owner's surface frame probe; null when it is not installed or did not answer, which
+// leaves the account incomplete. Its `frames` counts the owner's canvas acquisitions and
+// `newestLateFrame` is the highest acquisition ordinal written after its acquiring task ended, on
+// the same counter, so the two are equal when the newest acquired frame was written late.
+interface CanvasCaptureEvidence {
+  surface: SurfaceFrameSnapshot;
+  uiVertices: number | null;
+  completedResults: number;
+  presentedAtMs: number | null;
+  probe: {
+    canvasWorkers: number;
+    frames: number;
+    inTaskSubmits: number;
+    lateSubmits: number;
+    newestLateFrame: number | null;
+  } | null;
+}
+
+async function readCanvasCaptureEvidence(
+  page: Page,
+  owner: Worker | null,
+): Promise<CanvasCaptureEvidence> {
+  const surface = await readSurfaceFrameSnapshot(page);
+  const published = await page.evaluate(() => ({
+    uiVertices: window.__donnerHostFrameTiming?.lastImguiVertices ?? null,
+    completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+    presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+  }));
+  const report = owner === null ? null : await readCanvasOwnerSurfaceFrameProbe(owner);
+  const probe = report === null ? null : {
+    canvasWorkers: report.canvasWorkers,
+    frames: report.frames,
+    inTaskSubmits: report.inTaskSubmits,
+    lateSubmits: report.lateSubmits.length,
+    newestLateFrame: report.lateSubmits.length === 0
+      ? null
+      : Math.max(...report.lateSubmits.map((submit) => submit.frame)),
+  };
+  return { surface, ...published, probe };
+}
+
+// A probe that saw frames but none of their in-task writes cannot vouch for late writes either.
+function frameAccountIsComplete(evidence: CanvasCaptureEvidence): boolean {
+  return evidence.surface.acquiredFrames !== null && evidence.surface.presentedFrames !== null
+    && evidence.probe?.canvasWorkers === 1 && evidence.probe.inTaskSubmits > 0;
+}
+
+// A late write never reaches the screen, so a newest frame written late leaves an empty or
+// partial frame on screen even when it finished before the first read.
+function newestCanvasFrameWasWrittenLate(evidence: CanvasCaptureEvidence): boolean {
+  return evidence.probe !== null && evidence.probe.newestLateFrame === evidence.probe.frames;
+}
+
+// Why the editor, rather than the browser's capture, could explain an empty picture between the
+// `before` and `after` reads, or null when its account is complete and shows only drawn frames.
+// Every editor frame records the menu bar and panels, so a host frame with no UI vertices recorded
+// no editor UI. This classifies evidence for a reader of a failed run; it decides nothing.
+function canvasCaptureImplicatesApplication(
+  before: CanvasCaptureEvidence,
+  after: CanvasCaptureEvidence,
+): string | null {
+  if (!frameAccountIsComplete(before) || !frameAccountIsComplete(after)) {
+    return "the application's frame account is incomplete";
+  }
+  const acquired = after.surface.acquiredFrames! - before.surface.acquiredFrames!;
+  const presented = after.surface.presentedFrames! - before.surface.presentedFrames!;
+  if (acquired > presented) {
+    return "a frame acquired the canvas without completing its draw";
+  }
+  if (before.surface.lastPresented !== true || after.surface.lastPresented !== true) {
+    return "the latest host frame did not complete its presentation";
+  }
+  if ((before.uiVertices ?? 0) <= 0 || (after.uiVertices ?? 0) <= 0) {
+    return "the latest host frame recorded no editor UI";
+  }
+  if (newestCanvasFrameWasWrittenLate(before) || newestCanvasFrameWasWrittenLate(after)) {
+    return "the newest canvas frame was written after its acquiring task ended";
+  }
+  if (after.probe!.lateSubmits > before.probe!.lateSubmits) {
+    return "a frame wrote to the canvas after its acquiring task ended";
+  }
+  return null;
+}
+
+// What the account records in place of a read that failed or outlasted its bound.
+interface UnavailableCanvasAccount {
+  unavailable: string;
+}
+
+const kUnavailableCanvasAccount: UnavailableCanvasAccount = {
+  unavailable: "the frame account read failed or exceeded its bound",
+};
+
+interface CanvasFrameAccountRecorder {
+  read: () => Promise<CanvasCaptureEvidence>;
+  attach: (json: string) => Promise<void>;
+  boundMs: number;
+}
+
+async function readCanvasAccountOrUnavailable(
+  recorder: CanvasFrameAccountRecorder,
+): Promise<CanvasCaptureEvidence | UnavailableCanvasAccount> {
+  const evidence = await boundFailureDiagnostic(
+    Promise.resolve().then(recorder.read),
+    recorder.boundMs,
+  );
+  return evidence ?? kUnavailableCanvasAccount;
+}
+
+function classifyCanvasAccount(
+  before: CanvasCaptureEvidence | UnavailableCanvasAccount,
+  after: CanvasCaptureEvidence | UnavailableCanvasAccount,
+): string | null {
+  if ("unavailable" in before || "unavailable" in after) {
+    return "the application's frame account is unavailable";
+  }
+  return canvasCaptureImplicatesApplication(before, after);
+}
+
+// Take one capture between two reads of the editor's frame account and attach the account. Every
+// read and the attach are bounded and caught, so the account can only be recorded as unavailable;
+// the capture itself runs outside them and fails or returns exactly as it would without them.
+async function captureWithCanvasAccount(
+  recorder: CanvasFrameAccountRecorder,
+  capture: () => Promise<Buffer>,
+): Promise<Buffer> {
+  const before = await readCanvasAccountOrUnavailable(recorder);
+  const png = await capture();
+  const after = await readCanvasAccountOrUnavailable(recorder);
+  const applicationImplication = classifyCanvasAccount(before, after);
+  const json = JSON.stringify({ before, after, applicationImplication }, null, 2);
+  await boundFailureDiagnostic(
+    Promise.resolve().then(() => recorder.attach(json)),
+    recorder.boundMs,
+  );
+  return png;
+}
+
+// Capture the Geometry Debug Overlay frame once, as every engine does, and where the canvas surface
+// frame probe is installed (Firefox) record the editor's frame account around that capture.
+// Firefox has intermittently returned a full-page capture in which the transferred WebGPU canvas
+// contributes nothing; the account says whether the editor itself could explain such a capture.
+// It is attached on every run and never changes the outcome. The first read precedes the
+// composite wait so the capture follows that wait exactly as it does without the account.
+async function captureGeometryOverlayWithAccount(
+  page: Page,
+  capture: () => Promise<Buffer>,
+): Promise<Buffer> {
+  const compositeThenCapture = async () => {
+    await waitForBrowserComposite(page);
+    return capture();
+  };
+  if (!surfaceFrameProbeInstalled(page)) return compositeThenCapture();
+  const boundMs = scaledMs(2_000);
+  const owner = (await boundFailureDiagnostic(findCanvasOwnerWorker(page), boundMs)) ?? null;
+  return captureWithCanvasAccount({
+    read: () => readCanvasCaptureEvidence(page, owner),
+    attach: (json) => attachEvidenceFile("geometry-capture-state", json, "application/json"),
+    boundMs,
+  }, compositeThenCapture);
+}
+
+interface CanvasEvidenceOverrides extends Partial<SurfaceFrameSnapshot> {
+  lateSubmits?: number;
+  newestLateFrame?: number | null;
+  uiVertices?: number | null;
+  probe?: CanvasCaptureEvidence["probe"];
+}
+
+function canvasEvidenceForTest(overrides: CanvasEvidenceOverrides = {}): CanvasCaptureEvidence {
+  const { lateSubmits = 0, newestLateFrame = null, uiVertices = 3940, probe, ...surface } =
+    overrides;
+  return {
+    surface: {
+      renderedFrames: 10,
+      hostFrames: 10,
+      acquiredFrames: 10,
+      presentedFrames: 10,
+      lastAcquired: true,
+      lastPresented: true,
+      ...surface,
+    },
+    uiVertices,
+    completedResults: 3,
+    presentedAtMs: 100,
+    probe: "probe" in overrides
+      ? probe ?? null
+      : { canvasWorkers: 1, frames: 10, inTaskSubmits: 10, lateSubmits, newestLateFrame },
+  };
+}
+
+test("canvas frame account clears an editor that drew every frame", () => {
+  const clean = canvasEvidenceForTest();
+  expect(canvasCaptureImplicatesApplication(clean, clean)).toBeNull();
+  // A frame written late before the reads is not the frame on screen once a newer one presents.
+  const olderLateFrame = canvasEvidenceForTest({ lateSubmits: 1, newestLateFrame: 9 });
+  expect(canvasCaptureImplicatesApplication(olderLateFrame, olderLateFrame)).toBeNull();
+});
+
+test("canvas frame account implicates the editor for each way it could present nothing", () => {
+  const probe = (canvasWorkers: number, inTaskSubmits: number) => ({
+    canvasWorkers,
+    frames: 10,
+    inTaskSubmits,
+    lateSubmits: 0,
+    newestLateFrame: null,
+  });
+  const cases: Array<[CanvasCaptureEvidence, CanvasCaptureEvidence, string]> = [
+    [
+      canvasEvidenceForTest({ acquiredFrames: null }),
+      canvasEvidenceForTest(),
+      "the application's frame account is incomplete",
+    ],
+    [
+      canvasEvidenceForTest(),
+      canvasEvidenceForTest({ probe: null }),
+      "the application's frame account is incomplete",
+    ],
+    [
+      canvasEvidenceForTest({ probe: probe(2, 10) }),
+      canvasEvidenceForTest({ probe: probe(2, 10) }),
+      "the application's frame account is incomplete",
+    ],
+    [
+      canvasEvidenceForTest({ probe: probe(1, 0) }),
+      canvasEvidenceForTest({ probe: probe(1, 0) }),
+      "the application's frame account is incomplete",
+    ],
+    [
+      canvasEvidenceForTest(),
+      canvasEvidenceForTest({ acquiredFrames: 11 }),
+      "a frame acquired the canvas without completing its draw",
+    ],
+    [
+      canvasEvidenceForTest({ lastPresented: false }),
+      canvasEvidenceForTest(),
+      "the latest host frame did not complete its presentation",
+    ],
+    [
+      canvasEvidenceForTest(),
+      canvasEvidenceForTest({ uiVertices: 0 }),
+      "the latest host frame recorded no editor UI",
+    ],
+    [
+      canvasEvidenceForTest({ uiVertices: null }),
+      canvasEvidenceForTest(),
+      "the latest host frame recorded no editor UI",
+    ],
+    [
+      canvasEvidenceForTest({ lateSubmits: 1, newestLateFrame: 10 }),
+      canvasEvidenceForTest({ lateSubmits: 1, newestLateFrame: 10 }),
+      "the newest canvas frame was written after its acquiring task ended",
+    ],
+    [
+      canvasEvidenceForTest(),
+      canvasEvidenceForTest({ lateSubmits: 1 }),
+      "a frame wrote to the canvas after its acquiring task ended",
+    ],
+  ];
+  expect(cases.map(([before, after]) => canvasCaptureImplicatesApplication(before, after)))
+    .toEqual(cases.map(([, , reason]) => reason));
+});
+
+// Drives the account path with injected reads, capture and attach; no page is involved.
+async function recordCanvasAccountForTest(
+  read: () => Promise<CanvasCaptureEvidence>,
+  attach: (json: string) => Promise<void> = async () => {},
+): Promise<{ png: Buffer; captures: number; attached: string[] }> {
+  const shot = Buffer.from("capture");
+  let captures = 0;
+  const attached: string[] = [];
+  const png = await captureWithCanvasAccount({
+    read,
+    attach: async (json) => {
+      attached.push(json);
+      await attach(json);
+    },
+    boundMs: 50,
+  }, async () => {
+    ++captures;
+    return shot;
+  });
+  return { png, captures, attached };
+}
+
+const kUnavailableAccountRecord = {
+  before: kUnavailableCanvasAccount,
+  after: kUnavailableCanvasAccount,
+  applicationImplication: "the application's frame account is unavailable",
+};
+
+test("a frame account read that throws records the account as unavailable", async () => {
+  for (
+    const read of [
+      async (): Promise<CanvasCaptureEvidence> => {
+        throw new Error("evaluation failed");
+      },
+      (): Promise<CanvasCaptureEvidence> => {
+        throw new Error("synchronous failure");
+      },
+    ]
+  ) {
+    const result = await recordCanvasAccountForTest(read);
+    expect([result.png.toString(), result.captures]).toEqual(["capture", 1]);
+    expect(result.attached.map((json) => JSON.parse(json))).toEqual([kUnavailableAccountRecord]);
+  }
+});
+
+test("a frame account read that never settles records the account as unavailable", async () => {
+  const result = await recordCanvasAccountForTest(() =>
+    new Promise<CanvasCaptureEvidence>(() => {})
+  );
+  expect([result.png.toString(), result.captures]).toEqual(["capture", 1]);
+  expect(result.attached.map((json) => JSON.parse(json))).toEqual([kUnavailableAccountRecord]);
+});
+
+test("a frame account attach that fails or never settles still returns the capture", async () => {
+  const clean = canvasEvidenceForTest();
+  const attaches = [
+    async () => {
+      throw new Error("attach failed");
+    },
+    () => new Promise<void>(() => {}),
+  ];
+  for (const attach of attaches) {
+    const result = await recordCanvasAccountForTest(async () => clean, attach);
+    expect([result.png.toString(), result.captures, result.attached.length]).toEqual([
+      "capture",
+      1,
+      1,
+    ]);
+    expect(JSON.parse(result.attached[0]).applicationImplication).toBeNull();
+  }
+});
+
 // Block until the editor can accept a press.
 //
 // A `mouse.down` that lands while a render is still in flight is dropped by the
@@ -2492,8 +2834,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
       timeout: scaledMs(2_000),
     },
   );
-  await waitForBrowserComposite(page);
-  const geometryOverlay = await captureOverlay();
+  const geometryOverlay = await captureGeometryOverlayWithAccount(page, captureOverlay);
   await attachEvidenceFile("geometry-debug-overlay", geometryOverlay, "image/png");
   expect(
     geometryOverlay.equals(geometryBaseline),

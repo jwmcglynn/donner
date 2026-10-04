@@ -417,6 +417,11 @@ export async function installSurfaceFrameProbe(page: Page): Promise<number> {
   return probed.length;
 }
 
+/** Whether \ref installSurfaceFrameProbe installed the probe in any of the page's workers. */
+export function surfaceFrameProbeInstalled(page: Page): boolean {
+  return (probedWorkers.get(page)?.length ?? 0) > 0;
+}
+
 /** Return the one worker that acquired the editor's canvas while the probe watched. */
 export async function findCanvasOwnerWorker(page: Page): Promise<Worker | null> {
   const workers = probedWorkers.get(page) ?? [];
@@ -500,7 +505,22 @@ export async function holdCanvasCompletionForTest(
 }
 
 export async function readSurfaceFrameProbe(page: Page): Promise<SurfaceFrameProbeReport> {
-  const states = (await evaluateInWorkers(probedWorkers.get(page) ?? [], readInWorker)).filter(
+  return summarizeProbeStates(await evaluateInWorkers(probedWorkers.get(page) ?? [], readInWorker));
+}
+
+/**
+ * Read only the canvas owner's probe, so a sample taken around one capture does not wait out the
+ * answer bound of workers parked in a blocking wait. Null when the owner did not answer.
+ */
+export async function readCanvasOwnerSurfaceFrameProbe(
+  owner: Worker,
+): Promise<SurfaceFrameProbeReport | null> {
+  const [state] = await evaluateInWorkers([owner], readInWorker);
+  return state === null ? null : summarizeProbeStates([state]);
+}
+
+function summarizeProbeStates(answers: Array<WorkerProbeState | null>): SurfaceFrameProbeReport {
+  const states = answers.filter(
     (state): state is WorkerProbeState => state !== null && state.installed,
   );
   return {
