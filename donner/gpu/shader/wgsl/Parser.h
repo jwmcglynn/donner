@@ -3803,7 +3803,9 @@ private:
     if (value.error != number::Error::None) {
       Fail(ErrorCode::InvalidConstantExpression, op.span);
     }
-    return NumericLiteral(Type{TypeKind::AbstractFloat}, value.bits, span);
+    const ExpressionInfo folded = NumericLiteral(Type{TypeKind::AbstractFloat}, value.bits, span);
+    RecordFoldedConstant(span, folded.id);
+    return folded;
   }
 
   constexpr bool IsValidI32ConstantOperation(BinaryOp op, ArenaId lhs, ArenaId rhs) const {
@@ -3884,9 +3886,10 @@ private:
     return folded;
   }
 
-  /// Records an outermost folded f32 expression for the WGSL projection. The folds nested in it
-  /// were recorded last, so they are dropped from the end. Its source must not overlap another
-  /// fold and must hold balanced brackets, so that replacing it keeps the projection's structure.
+  /// Records an outermost folded f32 or abstract-float expression for the WGSL projection. The
+  /// folds nested in it were recorded last, so they are dropped from the end. Its source must not
+  /// overlap another fold and must hold balanced brackets, so that replacing it keeps the
+  /// projection's structure.
   /// @param span Complete source of the folded expression. @param expression Folded value.
   constexpr void RecordFoldedConstant(SourceSpan span, ArenaId expression) {
     uint16_t& count = module_.foldedConstantCount;

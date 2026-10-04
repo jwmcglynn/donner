@@ -87,9 +87,9 @@ struct TextSink {
 
 namespace detail {
 
-/// The exact text of one f32 value, as an MSL and WGSL literal.
-struct F32Text {
-  std::array<char, 24> characters = {};  //!< Literal characters.
+/// The exact text of one floating-point value, as an MSL or WGSL literal.
+struct FloatText {
+  std::array<char, 32> characters = {};  //!< Literal characters.
   uint8_t size = 0;                      //!< Number of characters used.
   bool valid = true;                     //!< False for an infinity or NaN, which has no literal.
 
@@ -105,54 +105,75 @@ struct F32Text {
       push(character);
     }
   }
+
+  /// Appends the decimal digits of p value.
+  constexpr void pushDecimal(uint32_t value) {
+    if (value >= 10) {
+      pushDecimal(value / 10);
+    }
+    push(static_cast<char>('0' + value % 10));
+  }
 };
 
-/// Formats f32 p bits exactly: `0.0f` or `-0.0f` for a zero, and otherwise a hex float with a
-/// normalized significand of six hex digits, such as `0x1.555556p-2f`, which also spells
-/// subnormals exactly. MSL and WGSL both accept the form.
-constexpr F32Text FormatF32(uint32_t bits) {
-  F32Text text;
-  if ((bits >> 31) != 0) {
+/// An IEEE binary format and the literal spelling of its values.
+struct FloatFormat {
+  uint32_t exponentBits;    //!< Width of the biased exponent field.
+  uint32_t fractionBits;    //!< Width of the stored fraction field.
+  uint32_t hexDigits;       //!< Hex digits after the point, covering the whole fraction.
+  std::string_view zero;    //!< Spelling of a zero magnitude.
+  std::string_view suffix;  //!< Type suffix after the exponent.
+};
+
+/// f32 literals: `0x1.555556p-2f`.
+inline constexpr FloatFormat kF32Format{8, 23, 6, "0.0f", "f"};
+
+/// WGSL AbstractFloat literals, binary64 without a suffix: `0x1.5555555555555p-2`.
+inline constexpr FloatFormat kAbstractFloatFormat{11, 52, 13, "0.0", ""};
+
+/// Formats p bits of p format exactly: the zero spelling for a zero, and otherwise a hex float with
+/// a normalized significand, which also spells subnormals exactly. A negative value has a leading
+/// minus sign. MSL and WGSL both accept the f32 form, and WGSL the abstract form.
+constexpr FloatText FormatFloat(uint64_t bits, const FloatFormat& format) {
+  FloatText text;
+  const uint32_t signBit = format.exponentBits + format.fractionBits;
+  const uint64_t fractionMask = (uint64_t(1) << format.fractionBits) - 1;
+  const uint64_t exponentMask = (uint64_t(1) << format.exponentBits) - 1;
+  if (((bits >> signBit) & 1) != 0) {
     text.push('-');
   }
-  if ((bits & 0x7fffffffu) == 0) {
-    text.push("0.0f");
+  if ((bits & ((uint64_t(1) << signBit) - 1)) == 0) {
+    text.push(format.zero);
     return text;
   }
-  const uint32_t exponent = (bits >> 23) & 0xffu;
-  if (exponent == 0xffu) {
+  const uint64_t exponent = (bits >> format.fractionBits) & exponentMask;
+  const int32_t bias = static_cast<int32_t>(exponentMask >> 1);
+  if (exponent == exponentMask) {
     text.valid = false;
     return text;
   }
-  uint32_t mantissa = bits & 0x7fffffu;
-  int32_t power = static_cast<int32_t>(exponent) - 127;
+  uint64_t fraction = bits & fractionMask;
+  int32_t power = static_cast<int32_t>(exponent) - bias;
   if (exponent == 0) {
     int32_t shift = 0;
-    for (uint32_t leading = 0x400000u; (mantissa & leading) == 0; leading >>= 1) {
+    for (uint64_t leading = uint64_t(1) << (format.fractionBits - 1); (fraction & leading) == 0;
+         leading >>= 1) {
       ++shift;
     }
-    mantissa = (mantissa << (shift + 1)) & 0x7fffffu;
-    power = -127 - shift;
+    fraction = (fraction << (shift + 1)) & fractionMask;
+    power = -bias - shift;
   }
-  mantissa <<= 1;
+  fraction <<= format.hexDigits * 4 - format.fractionBits;
   text.push("0x1.");
   constexpr char kHex[] = "0123456789abcdef";
-  for (int shift = 20; shift >= 0; shift -= 4) {
-    text.push(kHex[(mantissa >> shift) & 0xfu]);
+  for (int32_t digit = static_cast<int32_t>(format.hexDigits) - 1; digit >= 0; --digit) {
+    text.push(kHex[(fraction >> (digit * 4)) & 0xfu]);
   }
   text.push('p');
   if (power < 0) {
     text.push('-');
   }
-  const uint32_t magnitude = static_cast<uint32_t>(power < 0 ? -power : power);
-  if (magnitude >= 100) {
-    text.push(static_cast<char>('0' + magnitude / 100));
-  }
-  if (magnitude >= 10) {
-    text.push(static_cast<char>('0' + magnitude / 10 % 10));
-  }
-  text.push(static_cast<char>('0' + magnitude % 10));
-  text.push('f');
+  text.pushDecimal(static_cast<uint32_t>(power < 0 ? -power : power));
+  text.push(format.suffix);
   return text;
 }
 
@@ -747,7 +768,7 @@ private:
   }
 
   constexpr void floatText(uint32_t bits) {
-    const F32Text literal = FormatF32(bits);
+    const FloatText literal = FormatFloat(bits, kF32Format);
     if (!literal.valid) {
       error_ = TextEmitError::InvalidModule;
       return;
@@ -1821,8 +1842,8 @@ constexpr TextEmitResult EmitMsl(const Module& module, TextSink& sink) {
 namespace detail {
 
 /// Writes the WGSL projection of a validated module: its source, one logical line at a time, with
-/// `//` comments, surrounding blanks and blank lines removed and every recorded folded f32
-/// expression replaced by its exact value.
+/// `//` comments, surrounding blanks and blank lines removed and every recorded folded expression
+/// replaced by its exact value.
 class WgslProjector {
 public:
   constexpr WgslProjector(const Module& module, TextSink& sink)
@@ -1933,7 +1954,8 @@ private:
     }
   }
 
-  /// Writes the exact value of p folded: an f32 literal, or a vector construction of them.
+  /// Writes the exact value of p folded: an f32 or abstract-float literal, or a vector construction
+  /// of f32 literals.
   constexpr void appendFoldedValue(const FoldedConstant& folded) {
     const Expression& value = module_.expressions[folded.expression];
     if (value.kind == ExpressionKind::Literal) {
@@ -1961,19 +1983,25 @@ private:
     append(')');
   }
 
-  /// Writes one folded f32 lane exactly. A negative value, -0 included, is spelled as a
+  /// Writes one folded lane exactly. A negative f32 value, -0 included, is spelled as a
   /// subtraction from `-0f`: WGSL evaluates it exactly, this compiler folds it back to the same
-  /// literal, and unlike a bare minus sign it cannot join a preceding `-` into `--`.
+  /// literal, and unlike a bare minus sign it cannot join a preceding `-` into `--`. An
+  /// abstract-float lane keeps its abstract type, and its negation in parentheses folds back to the
+  /// same abstract literal.
   constexpr void appendLane(const Expression& lane) {
-    const F32Text magnitude = FormatF32(lane.payload & 0x7fffffffu);
-    if (lane.kind != ExpressionKind::Literal || lane.type != Type{TypeKind::F32} ||
+    const bool abstract = lane.type == Type{TypeKind::AbstractFloat};
+    const uint64_t bits = uint64_t(lane.payload) | (uint64_t(lane.literalHighBits) << 32);
+    const uint64_t sign = abstract ? uint64_t(1) << 63 : uint64_t(1) << 31;
+    const FloatText magnitude =
+        FormatFloat(bits & ~sign, abstract ? kAbstractFloatFormat : kF32Format);
+    if (lane.kind != ExpressionKind::Literal || (!abstract && lane.type != Type{TypeKind::F32}) ||
         !magnitude.valid) {
       fail(TextEmitError::InvalidModule);
       return;
     }
-    const bool negative = (lane.payload >> 31) != 0;
+    const bool negative = (bits & sign) != 0;
     if (negative) {
-      append("(-0f - ");
+      append(abstract ? "(-" : "(-0f - ");
     }
     append(magnitude.view());
     if (negative) {
@@ -2011,13 +2039,15 @@ private:
 /// Writes the validated WGSL projection of p module into p sink.
 ///
 /// The projection is the authored source with every `//` comment, all indentation and every blank
-/// line removed, and with every outermost folded f32 expression replaced by its exact value; other
-/// token spelling and intra-line spacing are kept, and each remaining line ends with a newline. A
-/// browser would otherwise evaluate a folded expression itself, and WGSL lets it compute f32
-/// division to within 2.5 ULP and round an inexact conversion either way, so it could reach other
-/// bits than the MSL and SPIR-V projections carry. A positive value is a hex float such as
-/// `0x1.555556p-2f`, a negative one an exact subtraction such as `(-0f - 0x1.800000p1f)`, and a
-/// vector a construction of those; a fold that spans lines or holds a comment joins its lines.
+/// line removed, and with every outermost folded f32 or abstract-float expression replaced by its
+/// exact value; other token spelling and intra-line spacing are kept, and each remaining line ends
+/// with a newline. A browser would otherwise evaluate a folded expression itself, and WGSL lets it
+/// compute f32 division to within 2.5 ULP, leaves abstract-float division unbounded and rounds an
+/// inexact conversion either way, so it could reach other bits than the MSL and SPIR-V projections
+/// carry. A positive f32 value is a hex float such as `0x1.555556p-2f`, a negative one an exact
+/// subtraction such as `(-0f - 0x1.800000p1f)`, a vector a construction of those, and a value that
+/// is still abstract an abstract hex float such as `0x1.5555555555555p-2`, negated in parentheses
+/// when negative; a fold that spans lines or holds a comment joins its lines.
 /// WGSL has no string literals, so `//` always begins a comment, and the lexer accepts no other
 /// comment form. The result parses to the same MSL and SPIR-V bytes, which the compiler tests
 /// check.

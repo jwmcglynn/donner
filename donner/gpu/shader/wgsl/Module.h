@@ -369,12 +369,12 @@ struct Function {
   uint16_t outputCount = 0;     //!< Number of flattened entry outputs.
 };
 
-/// An outermost constant f32 expression the parser folded. The WGSL projection spells its value
-/// exactly in place of the authored source, so a browser receives the value the native projections
-/// carry rather than evaluating the expression with WGSL's looser accuracy.
+/// An outermost constant f32 or abstract-float expression the parser folded. The WGSL projection
+/// spells its value exactly in place of the authored source, so a browser receives the value the
+/// native projections carry rather than evaluating the expression with WGSL's looser accuracy.
 struct FoldedConstant {
   SourceSpan span;                       //!< Authored source of the expression, brackets balanced.
-  ArenaId expression = kInvalidArenaId;  //!< f32 literal, or vector construction of literals.
+  ArenaId expression = kInvalidArenaId;  //!< Literal, or vector construction of f32 literals.
 };
 
 /// Fixed capacities for one frontend module.
@@ -397,7 +397,7 @@ struct ModuleLimits {
   static constexpr uint16_t kMaxInterfaceVariables =
       64;  //!< Maximum flattened entry-interface variables.
   static constexpr uint16_t kMaxFoldedConstants =
-      256;  //!< Maximum outermost folded f32 expressions the WGSL projection replaces.
+      256;  //!< Maximum outermost folded expressions the WGSL projection replaces.
 };
 
 /// A complete, immutable-on-success frontend module backed by fixed arenas.
@@ -490,7 +490,7 @@ struct Module {
            //!< valid.
   uint16_t interfaceVariableCount = 0;  //!< Number of flattened entry-interface arena entries.
   std::array<FoldedConstant, ModuleLimits::kMaxFoldedConstants> foldedConstants =
-      {};  //!< Outermost folded f32 expressions in source order, disjoint; only entries before
+      {};  //!< Outermost folded expressions in source order, disjoint; only entries before
            //!< foldedConstantCount are valid.
   uint16_t foldedConstantCount = 0;  //!< Number of folded-constant entries.
 };
