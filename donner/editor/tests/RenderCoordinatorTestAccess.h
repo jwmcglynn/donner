@@ -14,6 +14,19 @@
 namespace donner::editor {
 
 struct RenderCoordinatorTestAccess {
+  static std::shared_ptr<const CapturedPresentation> pendingOverviewCapture(
+      const RenderCoordinator& coordinator) {
+    return coordinator.pendingOverviewResult_
+               ? coordinator.pendingOverviewResult_->capturedPresentation
+               : nullptr;
+  }
+
+  static std::shared_ptr<const CapturedPresentation> installedOverviewCapture(
+      const RenderCoordinator& coordinator) {
+    const auto resources = coordinator.compositedPresentation_.resources();
+    return resources ? resources->overviewCapture() : nullptr;
+  }
+
   static std::string overviewScheduleState(const RenderCoordinator& coordinator,
                                            const EditorApp& app, const ViewportState& viewport) {
     const auto cache = coordinator.compositedPresentation_.diagnostics();

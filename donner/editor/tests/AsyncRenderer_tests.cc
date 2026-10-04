@@ -6636,6 +6636,8 @@ TEST(RenderCoordinatorTest, ZoomedPaintUsesCompletedOverviewWhenDetailedRenderFa
   viewport.resetTo100Percent();
   viewport.zoomAround(32.0, viewport.paneCenter());
   ASSERT_TRUE(viewport.rasterViewport().viewportBounded);
+  const Vector2i semanticCanvas = viewport.rasterViewport().semanticCanvasSizePx;
+  app.document().document().setCanvasSize(semanticCanvas.x, semanticCanvas.y);
 
   SelectTool selectTool;
   GlTextureCache textures;
@@ -6675,7 +6677,6 @@ TEST(RenderCoordinatorTest, ZoomedPaintUsesCompletedOverviewWhenDetailedRenderFa
 
   coordinator.asyncRenderer().setWithholdCompositorTilesForTesting(false);
   RenderCoordinatorTestAccess::advanceFakeRetryClock(NothingToPresentRetry::kRetryDelays.front());
-  RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
   ASSERT_TRUE(render());
   EXPECT_TRUE(textures.activeTilesViewportBounded())
       << "Publishing the overview must still permit a detailed render when the worker recovers; "
@@ -6687,6 +6688,63 @@ TEST(RenderCoordinatorTest, ZoomedPaintUsesCompletedOverviewWhenDetailedRenderFa
     EXPECT_NE(tile.textureSnapshot, nullptr);
   }
   EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
+}
+
+TEST(RenderCoordinatorTest, LateSemanticCanvasCommitStagesCurrentSceneOverviewAndRetainsDetails) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><path id="target" d="M20 20 L80 20 L50 80Z" fill="white"/></svg>)svg"));
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_THAT(target, testing::Optional(testing::_));
+  app.setSelection(*target);
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200, 120);
+  viewport.documentViewBox = Box2d::FromXYWH(0, 0, 100, 100);
+  viewport.devicePixelRatio = 2;
+  viewport.resetTo100Percent();
+  viewport.zoomAround(32, viewport.paneCenter());
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Requires native texture presentation";
+  }
+  const auto render = [&] {
+    if (!coordinator.maybeRequestRender(app, selectTool, viewport, &textures)) {
+      return false;
+    }
+    return PollUntil([&] { coordinator.pollRenderResult(app, viewport, textures); },
+                     [&] { return !coordinator.asyncRenderer().isBusy(); },
+                     std::chrono::steady_clock::now() + std::chrono::seconds(5));
+  };
+  ASSERT_TRUE(render());
+  RenderCoordinatorTestAccess::keepCanvasCommitPending(coordinator);
+  RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
+  ASSERT_TRUE(render());
+  EXPECT_EQ(app.document().document().canvasSize(), Vector2i(100, 100));
+  EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
+  ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
+  const auto detailedGeneration = textures.tiles().front().generation;
+  const auto installedOverview = RenderCoordinatorTestAccess::installedOverviewCapture(coordinator);
+  ASSERT_THAT(installedOverview, testing::NotNull());
+  RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
+  ASSERT_TRUE(render());
+  ASSERT_THAT(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator),
+              testing::Optional(testing::_));
+  EXPECT_TRUE(RenderCoordinatorTestAccess::lastPostedAttempt(coordinator)->overviewInfillOnly);
+  EXPECT_EQ(app.document().document().canvasSize(), viewport.rasterViewport().semanticCanvasSizePx);
+  EXPECT_TRUE(textures.activeTilesViewportBounded());
+  ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
+  EXPECT_EQ(textures.tiles().front().generation, detailedGeneration);
+  const auto staged = RenderCoordinatorTestAccess::pendingOverviewCapture(coordinator);
+  ASSERT_THAT(staged, testing::NotNull());
+  EXPECT_EQ(staged->identity().documentGeneration, app.document().documentGeneration());
+  EXPECT_EQ(staged->identity().version, app.document().currentFrameVersion());
+  EXPECT_EQ(staged->canvasSize(), viewport.rasterViewport().semanticCanvasSizePx);
+  const auto retained = RenderCoordinatorTestAccess::installedOverviewCapture(coordinator);
+  ASSERT_THAT(retained, testing::NotNull());
+  EXPECT_EQ(retained->identity().captureId, installedOverview->identity().captureId);
+  EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures));
 }
 
 TEST(RenderCoordinatorTest, ZoomedPaintChangesRefreshOverviewAndSettle) {
@@ -6707,6 +6765,8 @@ TEST(RenderCoordinatorTest, ZoomedPaintChangesRefreshOverviewAndSettle) {
   viewport.resetTo100Percent();
   viewport.zoomAround(32.0, viewport.paneCenter());
   ASSERT_TRUE(viewport.rasterViewport().viewportBounded);
+  const Vector2i semanticCanvas = viewport.rasterViewport().semanticCanvasSizePx;
+  app.document().document().setCanvasSize(semanticCanvas.x, semanticCanvas.y);
 
   SelectTool selectTool;
   GlTextureCache textures;
@@ -6725,7 +6785,6 @@ TEST(RenderCoordinatorTest, ZoomedPaintChangesRefreshOverviewAndSettle) {
   ASSERT_TRUE(render());
   ASSERT_THAT(textures.overviewTiles(), testing::Not(testing::IsEmpty()));
 
-  RenderCoordinatorTestAccess::keepCanvasCommitPending(coordinator);
   RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
   ASSERT_TRUE(render());
   ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()));
@@ -6767,7 +6826,6 @@ TEST(RenderCoordinatorTest, ZoomedPaintChangesRefreshOverviewAndSettle) {
     EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
     EXPECT_THAT(generations(textures.overviewTiles()),
                 testing::Not(testing::ContainerEq(oldOverview)));
-    RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
     const std::string before =
         RenderCoordinatorTestAccess::overviewScheduleState(coordinator, app, viewport);
     EXPECT_FALSE(coordinator.maybeRequestRender(app, selectTool, viewport, &textures))
