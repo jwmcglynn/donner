@@ -92,6 +92,7 @@ donner_cc_test(
         "tests/Language_tests.cc",
         "tests/Parser_tests.cc",
         "tests/PointerLoop_tests.cc",
+        "tests/ProjectionTestSupport.h",
         "tests/Shift_tests.cc",
         "tests/SlugFeatures_tests.cc",
         "tests/TextEmitter_tests.cc",
