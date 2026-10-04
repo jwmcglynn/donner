@@ -424,29 +424,44 @@ export function formatStallSummary(summary) {
   ];
 }
 
+/** How close to its own timeout a failed test's duration must be to count as a deadline. */
+export const kDeadlineToleranceMs = 500;
+
 /**
  * Whether a test ended at its own deadline. A pending Playwright call cut off by the test
  * timeout leaves the status `timedOut`. A pending `expect.poll`, `toPass` or web-first
  * assertion instead gives up 250 ms before that deadline and fails with an ordinary
  * assertion error whose call log reads "Test timeout of <timeout>ms exceeded", leaving the
  * status `failed`; that is the common shape of a stalled browser in these suites.
- * @param {{status?: string, timeout: number, errors?: Array<{message?: string}>}} testInfo
+ *
+ * A failed test counts when it carries that message for its own timeout, or when its
+ * duration is within `kDeadlineToleranceMs` of its own timeout. The duration test does not
+ * depend on Playwright's wording, which a Playwright upgrade could change: Playwright sets
+ * `testInfo.duration` to the elapsed test time before it runs the `afterEach` hooks.
+ * @param {{status?: string, timeout: number, duration?: number,
+ *   errors?: Array<{message?: string}>}} testInfo
  * @returns {boolean}
  */
-export function endedAtTestDeadline({ status, timeout, errors = [] }) {
+export function endedAtTestDeadline({ status, timeout, duration, errors = [] }) {
   if (status === "timedOut") {
     return true;
   }
+  if (status !== "failed") {
+    return false;
+  }
   const deadlineMessage = `Test timeout of ${timeout}ms exceeded`;
-  return status === "failed"
-    && errors.some((error) => String(error?.message ?? "").includes(deadlineMessage));
+  const reachedDeadline = timeout > 0 && Number.isFinite(duration)
+    && duration >= timeout - kDeadlineToleranceMs;
+  return reachedDeadline
+    || errors.some((error) => String(error?.message ?? "").includes(deadlineMessage));
 }
 
 /**
  * Whether a finished test should be recorded: only one that ended at its deadline, only on
  * macOS, and only when the hosted CI job enabled the recorder.
  * @param {{platform: string, env: Record<string, string | undefined>,
- *   testInfo: {status?: string, timeout: number, errors?: Array<{message?: string}>}}} options
+ *   testInfo: {status?: string, timeout: number, duration?: number,
+ *     errors?: Array<{message?: string}>}}} options
  * @returns {boolean}
  */
 export function shouldRecordBrowserStall({ platform, env, testInfo }) {

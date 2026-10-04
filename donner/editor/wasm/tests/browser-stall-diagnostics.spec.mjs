@@ -11,6 +11,7 @@ import {
   describeCollectionFailure,
   extractCallGraph,
   formatStallSummary,
+  kDeadlineToleranceMs,
   kEnableVariable,
   kMaxSampledProcesses,
   kMaxWindowSeconds,
@@ -316,33 +317,69 @@ const kPollCutOffByTestDeadline = [
 
 test("only a macOS test that ended at its deadline in the hosted job is recorded", () => {
   const enabled = { [kEnableVariable]: "1" };
-  const pollCutOff = {
+  const failed = (duration, message) => ({
     status: "failed",
     timeout: 30_000,
-    errors: [{ message: kPollCutOffByTestDeadline }],
-  };
-  const timedOut = { status: "timedOut", timeout: 30_000, errors: [] };
-  const assertion = { status: "failed", timeout: 30_000, errors: [{ message: "Expected: 5" }] };
-  const otherDeadline = {
-    status: "failed",
-    timeout: 60_000,
-    errors: [{ message: kPollCutOffByTestDeadline }],
-  };
+    duration,
+    errors: [{ message }],
+  });
+  // The hosted poll failure: deadline message, and a duration 250 ms short of the timeout.
+  const pollCutOff = failed(29_750, kPollCutOffByTestDeadline);
   const cases = [
-    ["darwin", timedOut, enabled],
-    ["darwin", pollCutOff, enabled],
-    ["darwin", timedOut, {}],
-    ["darwin", pollCutOff, { [kEnableVariable]: "0" }],
-    ["darwin", assertion, enabled],
-    ["darwin", otherDeadline, enabled],
-    ["darwin", { status: "passed", timeout: 30_000, errors: [] }, enabled],
-    ["darwin", { status: "interrupted", timeout: 30_000, errors: [] }, enabled],
-    ["linux", pollCutOff, enabled],
+    ["timed out", "darwin", { status: "timedOut", timeout: 30_000, duration: 30_000 }, enabled],
+    ["poll cut off by the deadline", "darwin", pollCutOff, enabled],
+    [
+      "deadline message, short duration",
+      "darwin",
+      failed(4_000, kPollCutOffByTestDeadline),
+      enabled,
+    ],
+    ["reworded message at the deadline", "darwin", failed(29_700, "Deadline reached"), enabled],
+    ["timed out, no switch", "darwin", { status: "timedOut", timeout: 30_000 }, {}],
+    ["poll cut off, switch off", "darwin", pollCutOff, { [kEnableVariable]: "0" }],
+    ["ordinary assertion", "darwin", failed(4_000, "Expected: 5"), enabled],
+    ["just before the tolerance", "darwin", failed(29_499, "Expected: 5"), enabled],
+    [
+      "another timeout's message, short duration",
+      "darwin",
+      { ...failed(4_000, kPollCutOffByTestDeadline), timeout: 60_000 },
+      enabled,
+    ],
+    [
+      "passed at the deadline",
+      "darwin",
+      { status: "passed", timeout: 30_000, duration: 29_900 },
+      enabled,
+    ],
+    [
+      "interrupted",
+      "darwin",
+      { status: "interrupted", timeout: 30_000, duration: 29_900 },
+      enabled,
+    ],
+    ["linux", "linux", pollCutOff, enabled],
   ];
   assert.deepEqual(
-    cases.map(([platform, testInfo, env]) => shouldRecordBrowserStall({ platform, testInfo, env })),
-    [true, true, false, false, false, false, false, false, false],
+    cases.map(([name, platform, testInfo, env]) => [
+      name,
+      shouldRecordBrowserStall({ platform, testInfo, env }),
+    ]),
+    [
+      ["timed out", true],
+      ["poll cut off by the deadline", true],
+      ["deadline message, short duration", true],
+      ["reworded message at the deadline", true],
+      ["timed out, no switch", false],
+      ["poll cut off, switch off", false],
+      ["ordinary assertion", false],
+      ["just before the tolerance", false],
+      ["another timeout's message, short duration", false],
+      ["passed at the deadline", false],
+      ["interrupted", false],
+      ["linux", false],
+    ],
   );
+  assert.equal(kDeadlineToleranceMs, 500);
 });
 
 function deadlineTestInfo(outputRoot) {
