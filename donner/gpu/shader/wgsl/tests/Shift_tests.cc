@@ -224,6 +224,10 @@ const kUnsignedAmount = 3 << 2u;
   EXPECT_THAT(ConstantNamed(parsed.module, "kHalf"), Eq(ConstantValue{abstractInt, -5}));
   EXPECT_THAT(ConstantNamed(parsed.module, "kMinimum"), Eq(ConstantValue{abstractInt, INT64_MIN}));
   EXPECT_THAT(ConstantNamed(parsed.module, "kUnsignedAmount"), Eq(ConstantValue{abstractInt, 12}));
+
+  // A module constant holds a literal, and only abstract arithmetic folds into one.
+  EXPECT_THAT(Diagnose("const kConcrete = 1u << 4u;"),
+              Eq(Rejection{ErrorCode::UnsupportedConstruct, "kConcrete"}));
 }
 
 TEST(Shift, EvaluatesConstantShiftsWhereAConstantIsRequired) {
@@ -292,7 +296,7 @@ TEST(Shift, RejectsConstantAmountsAtOrAboveTheBitWidth) {
             {ErrorCode::InvalidConstantExpression, "32u"}},
            {"fn f(x: u32) -> u32 { return x << -1; }",
             {ErrorCode::InvalidConstantExpression, "-1"}},
-           // Abstract integers are 64 bits wide.
+           // A profile restriction: an abstract amount of 64 or more is rejected, not folded.
            {"const kTooWide = 1 << 64;", {ErrorCode::InvalidConstantExpression, "64"}},
            {"const kTooWide = -1 >> 64u;", {ErrorCode::InvalidConstantExpression, "64u"}},
        }) {
@@ -513,7 +517,7 @@ TEST(Shift, KeepsAuthoredShiftsInTheWgslProjection) {
   ASSERT_THAT(Diagnose(source), Eq(kAccepted));
   std::string text(kMaxTextEmitBytes, '\0');
   TextSink sink{text.data(), static_cast<uint32_t>(text.size())};
-  ASSERT_THAT(EmitWgsl(parsed.module, sink).ok(), testing::IsTrue());
+  ASSERT_THAT(EmitWgsl(parsed.module, sink).error, Eq(TextEmitError::None));
   const std::string wgsl(sink.view());
   EXPECT_THAT(wgsl, HasSubstr("var result = value >> amount;"));
   EXPECT_THAT(wgsl, HasSubstr("result <<= 2u;"));

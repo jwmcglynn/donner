@@ -563,10 +563,10 @@ private:
     return result;
   }
 
-  /// Consumes the `>` that closes a template list. When that `>` begins a `>>` or `>>=` token,
-  /// as in `array<vec2<u32>>`, only its first byte closes the list and the rest is lexed again.
+  /// Consumes the `>` that closes a template list. When that `>` begins a `>>` token, as in
+  /// `array<vec2<u32>>`, only its first byte closes the list and the rest is lexed again.
   constexpr void ExpectTemplateEnd() {
-    if (token_.kind == TokenKind::ShiftRight || token_.kind == TokenKind::ShiftRightAssign) {
+    if (token_.kind == TokenKind::ShiftRight) {
       cursor_ = token_.span.begin + 1;
       Next();
       return;
