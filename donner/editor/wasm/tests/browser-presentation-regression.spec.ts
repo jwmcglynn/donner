@@ -34,6 +34,7 @@ import { cropCapturedPng, normalizeOverlayGeneration, overlayGenerationMask } fr
 import {
   findCanvasOwnerWorker,
   installSurfaceFrameProbe,
+  readCanvasOwnerSurfaceFrameProbe,
   readSurfaceFrameProbe,
   selfCheckSurfaceFrameProbe,
   type SurfaceFrameProbeReport,
@@ -2100,6 +2101,498 @@ async function waitForBrowserComposite(page: Page): Promise<void> {
   );
 }
 
+// What a full-page Firefox capture shows where the editor canvas contributed no pixel at all: the
+// page background from `editor.css` everywhere except the DOM capture sentinel.
+const kPageBackgroundRgb = [16, 19, 23];
+const kCaptureSentinelRgb = [49, 198, 179];
+
+function pixelHasRgb(image: PNG, x: number, y: number, rgb: number[]): boolean {
+  const offset = (y * image.width + x) * 4;
+  return image.data[offset] === rgb[0] && image.data[offset + 1] === rgb[1]
+    && image.data[offset + 2] === rgb[2] && image.data[offset + 3] === 255;
+}
+
+// Only this exact signature qualifies: the sentinel proves the page itself was captured, and one
+// background colour everywhere else means the canvas added nothing. A stale, partial or
+// differently drawn editor frame has editor pixels and is never classified as blank.
+function isBlankCanvasCapture(png: Buffer, viewport: Pick<CssRegion, "width" | "height">): boolean {
+  const image = PNG.sync.read(png);
+  const sentinelPx = Math.round((kCaptureSentinelSize * image.width) / viewport.width);
+  for (let y = 0; y < image.height; ++y) {
+    for (let x = 0; x < image.width; ++x) {
+      const inSentinel = x < sentinelPx && y < sentinelPx;
+      if (!pixelHasRgb(image, x, y, inSentinel ? kCaptureSentinelRgb : kPageBackgroundRgb)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// The application's own account of its canvas frames, read immediately before and after one
+// capture. `uiVertices` is the UI vertex count the latest host frame recorded. `probe` is the
+// canvas owner's surface frame probe; null when it is not installed or did not answer, which
+// leaves the account incomplete. Its `frames` counts the owner's canvas acquisitions and
+// `newestLateFrame` is the highest acquisition ordinal written after its acquiring task ended, on
+// the same counter, so the two are equal when the newest acquired frame was written late.
+interface CanvasCaptureEvidence {
+  surface: SurfaceFrameSnapshot;
+  uiVertices: number | null;
+  completedResults: number;
+  presentedAtMs: number | null;
+  probe: {
+    canvasWorkers: number;
+    frames: number;
+    inTaskSubmits: number;
+    lateSubmits: number;
+    newestLateFrame: number | null;
+  } | null;
+}
+
+async function readCanvasCaptureEvidence(
+  page: Page,
+  owner: Worker | null,
+): Promise<CanvasCaptureEvidence> {
+  const surface = await readSurfaceFrameSnapshot(page);
+  const published = await page.evaluate(() => ({
+    uiVertices: window.__donnerHostFrameTiming?.lastImguiVertices ?? null,
+    completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+    presentedAtMs: window.__donnerWorkerStats?.presentedAtMs ?? null,
+  }));
+  const report = owner === null ? null : await readCanvasOwnerSurfaceFrameProbe(owner);
+  const probe = report === null ? null : {
+    canvasWorkers: report.canvasWorkers,
+    frames: report.frames,
+    inTaskSubmits: report.inTaskSubmits,
+    lateSubmits: report.lateSubmits.length,
+    newestLateFrame: report.lateSubmits.length === 0
+      ? null
+      : Math.max(...report.lateSubmits.map((submit) => submit.frame)),
+  };
+  return { surface, ...published, probe };
+}
+
+// A probe that saw frames but none of their in-task writes cannot vouch for late writes either.
+function frameAccountIsComplete(evidence: CanvasCaptureEvidence): boolean {
+  return evidence.surface.acquiredFrames !== null && evidence.surface.presentedFrames !== null
+    && evidence.probe?.canvasWorkers === 1 && evidence.probe.inTaskSubmits > 0;
+}
+
+// A late write never reaches the screen, so a newest frame written late leaves an empty or
+// partial frame on screen even when it finished before the first read.
+function newestCanvasFrameWasWrittenLate(evidence: CanvasCaptureEvidence): boolean {
+  return evidence.probe !== null && evidence.probe.newestLateFrame === evidence.probe.frames;
+}
+
+// Why the application, not the capture, may own an empty picture between `baseline` and `after`,
+// or null when its account is complete and shows only drawn frames. Every editor frame records
+// the menu bar and panels, so a host frame with no UI vertices recorded no editor UI.
+function canvasCaptureImplicatesApplication(
+  baseline: CanvasCaptureEvidence,
+  after: CanvasCaptureEvidence,
+): string | null {
+  if (!frameAccountIsComplete(baseline) || !frameAccountIsComplete(after)) {
+    return "the application's frame account is incomplete";
+  }
+  const acquired = after.surface.acquiredFrames! - baseline.surface.acquiredFrames!;
+  const presented = after.surface.presentedFrames! - baseline.surface.presentedFrames!;
+  if (acquired > presented) {
+    return "a frame acquired the canvas without completing its draw";
+  }
+  if (baseline.surface.lastPresented !== true || after.surface.lastPresented !== true) {
+    return "the latest host frame did not complete its presentation";
+  }
+  if ((baseline.uiVertices ?? 0) <= 0 || (after.uiVertices ?? 0) <= 0) {
+    return "the latest host frame recorded no editor UI";
+  }
+  if (newestCanvasFrameWasWrittenLate(baseline) || newestCanvasFrameWasWrittenLate(after)) {
+    return "the newest canvas frame was written after its acquiring task ended";
+  }
+  if (after.probe!.lateSubmits > baseline.probe!.lateSubmits) {
+    return "a frame wrote to the canvas after its acquiring task ended";
+  }
+  return null;
+}
+
+interface CanvasCaptureAttempt {
+  blank: boolean;
+  implication: string | null;
+  before: CanvasCaptureEvidence;
+  after: CanvasCaptureEvidence;
+}
+
+interface CanvasCaptureLoop {
+  capture: () => Promise<Buffer>;
+  readEvidence: () => Promise<CanvasCaptureEvidence>;
+  isBlank: (png: Buffer) => boolean;
+  onRejected: (png: Buffer, attempt: CanvasCaptureAttempt, index: number) => Promise<void>;
+  wait: (ms: number) => Promise<void>;
+  now: () => number;
+  deadlineAtMs: number;
+  intervalsMs: number[];
+}
+
+interface CanvasCaptureResult {
+  outcome: "accepted" | "application" | "deadline";
+  png: Buffer;
+  attempts: CanvasCaptureAttempt[];
+}
+
+// Capture until the canvas contributes pixels. Every attempt is judged against the account read
+// before the FIRST capture: a frame that held the canvas while the first blank was taken can
+// finish late during a retake wait, so a retaken capture is accepted only when the account from
+// that baseline through its own `after` read implicates nothing. An implicated blank ends the
+// loop at once, and the deadline bounds the rest. A first capture with canvas pixels is returned
+// for the caller's assertions without consulting the account.
+async function captureUntilCanvasContributes(
+  loop: CanvasCaptureLoop,
+): Promise<CanvasCaptureResult> {
+  const attempts: CanvasCaptureAttempt[] = [];
+  let baseline: CanvasCaptureEvidence | null = null;
+  for (let index = 0;; ++index) {
+    const before = await loop.readEvidence();
+    baseline ??= before;
+    const png = await loop.capture();
+    const after = await loop.readEvidence();
+    const blank = loop.isBlank(png);
+    const implication = canvasCaptureImplicatesApplication(baseline, after);
+    const attempt = { blank, implication, before, after };
+    attempts.push(attempt);
+    if (!blank && (index === 0 || implication === null)) {
+      return { outcome: "accepted", png, attempts };
+    }
+    if (implication !== null) return { outcome: "application", png, attempts };
+    await loop.onRejected(png, attempt, index);
+    const intervalMs = loop.intervalsMs[Math.min(index, loop.intervalsMs.length - 1)];
+    if (loop.now() + intervalMs > loop.deadlineAtMs) return { outcome: "deadline", png, attempts };
+    await loop.wait(intervalMs);
+  }
+}
+
+async function recordRejectedCanvasCapture(
+  png: Buffer,
+  attempt: CanvasCaptureAttempt,
+  index: number,
+): Promise<void> {
+  console.log(
+    `geometry-capture: rejected blank capture ${index + 1} ${
+      JSON.stringify({ before: attempt.before, after: attempt.after })
+    }`,
+  );
+  await attachEvidenceFile(`geometry-capture-rejected-${index + 1}`, png, "image/png");
+}
+
+// The canvas diagnosis wakes the editor for one frame, so it runs only once the capture has
+// failed; a forced frame must never be what lets a retaken capture pass.
+async function recordGeometryCaptureState(page: Page, result: CanvasCaptureResult): Promise<void> {
+  const canvas = result.outcome === "accepted" ? null : await diagnosePresentedCanvas(page);
+  await attachEvidenceFile(
+    "geometry-capture-state",
+    JSON.stringify({ outcome: result.outcome, attempts: result.attempts, canvas }, null, 2),
+    "application/json",
+  );
+}
+
+// Capture the Geometry Debug Overlay frame. Firefox has intermittently returned a full-page
+// capture in which the transferred WebGPU canvas contributes nothing. One hypothesis is that the
+// browser's capture or composite loses the canvas image although the editor drew a complete
+// frame; this capture tests it. The exact blank signature is retaken with a frame window between
+// readbacks, as the overlay phases above do, only while the editor's own frame account shows drawn
+// frames; a blank that account implicates fails at once, with the account attached. The sentinel
+// that defines the signature is installed only on Firefox, so other engines keep one shot.
+async function captureGeometryOverlayFrame(
+  page: Page,
+  capture: () => Promise<Buffer>,
+  sentinelInstalled: boolean,
+): Promise<Buffer> {
+  const viewport = page.viewportSize();
+  const owner = sentinelInstalled ? await findCanvasOwnerWorker(page) : null;
+  await waitForBrowserComposite(page);
+  const result = await captureUntilCanvasContributes({
+    capture,
+    readEvidence: () => readCanvasCaptureEvidence(page, owner),
+    isBlank: (png) => sentinelInstalled && viewport !== null && isBlankCanvasCapture(png, viewport),
+    onRejected: recordRejectedCanvasCapture,
+    wait: (ms) => page.waitForTimeout(ms),
+    now: () => performance.now(),
+    deadlineAtMs: performance.now() + scaledMs(5_000),
+    intervalsMs: [250, 400, 600],
+  });
+  if (result.outcome !== "accepted" || result.attempts.length > 1) {
+    await recordGeometryCaptureState(page, result);
+  }
+  if (result.outcome === "accepted") return result.png;
+  throw new Error(
+    `Geometry Debug Overlay capture showed no editor canvas (${result.outcome}): `
+      + (result.attempts[result.attempts.length - 1].implication
+        ?? "blank until the capture deadline"),
+  );
+}
+
+interface CanvasEvidenceOverrides extends Partial<SurfaceFrameSnapshot> {
+  lateSubmits?: number;
+  newestLateFrame?: number | null;
+  uiVertices?: number | null;
+  probe?: CanvasCaptureEvidence["probe"];
+}
+
+function canvasEvidenceForTest(overrides: CanvasEvidenceOverrides = {}): CanvasCaptureEvidence {
+  const { lateSubmits = 0, newestLateFrame = null, uiVertices = 3940, probe, ...surface } =
+    overrides;
+  return {
+    surface: {
+      renderedFrames: 10,
+      hostFrames: 10,
+      acquiredFrames: 10,
+      presentedFrames: 10,
+      lastAcquired: true,
+      lastPresented: true,
+      ...surface,
+    },
+    uiVertices,
+    completedResults: 3,
+    presentedAtMs: 100,
+    probe: "probe" in overrides
+      ? probe ?? null
+      : { canvasWorkers: 1, frames: 10, inTaskSubmits: 10, lateSubmits, newestLateFrame },
+  };
+}
+
+// A 64x36 CSS capture at `scale` device pixels per CSS pixel, painted after the blank fill.
+function canvasCapturePngForTest(
+  paint?: (image: PNG) => void,
+  sentinel = true,
+  scale = 1,
+): Buffer {
+  const image = new PNG({ width: 64 * scale, height: 36 * scale });
+  const sentinelPx = kCaptureSentinelSize * scale;
+  for (let y = 0; y < image.height; ++y) {
+    for (let x = 0; x < image.width; ++x) {
+      const rgb = sentinel && x < sentinelPx && y < sentinelPx
+        ? kCaptureSentinelRgb
+        : kPageBackgroundRgb;
+      image.data.set([...rgb, 255], (y * image.width + x) * 4);
+    }
+  }
+  paint?.(image);
+  return PNG.sync.write(image);
+}
+
+function paintRectForTest(rgb: number[], left: number, top: number, size: number, alpha = 255) {
+  return (image: PNG) => {
+    for (let y = top; y < top + size; ++y) {
+      for (let x = left; x < left + size; ++x) {
+        image.data.set([...rgb, alpha], (y * image.width + x) * 4);
+      }
+    }
+  };
+}
+
+// Replays scripted captures and evidence through the capture loop on a fake clock. Evidence is
+// read twice per attempt (before, then after), and the last entry repeats.
+function scriptedCanvasCaptureLoop(
+  captures: Buffer[],
+  evidence: CanvasCaptureEvidence[],
+  deadlineAtMs = 1_000,
+): { loop: CanvasCaptureLoop; shots: () => number; rejected: number[]; waits: number[] } {
+  let shot = 0;
+  let read = 0;
+  let nowMs = 0;
+  const rejected: number[] = [];
+  const waits: number[] = [];
+  const loop: CanvasCaptureLoop = {
+    capture: async () => captures[Math.min(shot++, captures.length - 1)],
+    readEvidence: async () => evidence[Math.min(read++, evidence.length - 1)],
+    isBlank: (png) => isBlankCanvasCapture(png, { width: 64, height: 36 }),
+    onRejected: async (_png, _attempt, index) => {
+      rejected.push(index);
+    },
+    wait: async (ms) => {
+      waits.push(ms);
+      nowMs += ms;
+    },
+    now: () => nowMs,
+    deadlineAtMs,
+    intervalsMs: [250, 400, 600],
+  };
+  return { loop, shots: () => shot, rejected, waits };
+}
+
+const kEditorChromeRgb = [44, 47, 56];
+
+test("blank canvas classifier accepts only the sentinel over the page background", () => {
+  const viewport = { width: 64, height: 36 };
+  const blank = canvasCapturePngForTest();
+  const complete = canvasCapturePngForTest(paintRectForTest(kEditorChromeRgb, 12, 0, 24));
+  const staleDocument = canvasCapturePngForTest(paintRectForTest([47, 111, 237], 30, 10, 4));
+  const noSentinel = canvasCapturePngForTest(undefined, false);
+  const opaqueBlack = canvasCapturePngForTest(paintRectForTest([0, 0, 0], 20, 0, 36));
+  const translucent = canvasCapturePngForTest(paintRectForTest(kPageBackgroundRgb, 40, 20, 1, 254));
+  expect(isBlankCanvasCapture(blank, viewport)).toBe(true);
+  expect(isBlankCanvasCapture(complete, viewport)).toBe(false);
+  expect(isBlankCanvasCapture(staleDocument, viewport)).toBe(false);
+  expect(isBlankCanvasCapture(noSentinel, viewport)).toBe(false);
+  expect(isBlankCanvasCapture(opaqueBlack, viewport)).toBe(false);
+  expect(isBlankCanvasCapture(translucent, viewport)).toBe(false);
+});
+
+test("blank canvas classifier scales the sentinel with the device pixel ratio", () => {
+  const viewport = { width: 64, height: 36 };
+  expect(isBlankCanvasCapture(canvasCapturePngForTest(undefined, true, 2), viewport)).toBe(true);
+  const sentinelEdge = canvasCapturePngForTest(
+    paintRectForTest(kPageBackgroundRgb, 23, 0, 1),
+    true,
+    2,
+  );
+  expect(isBlankCanvasCapture(sentinelEdge, viewport)).toBe(false);
+});
+
+test("a blank capture over complete frames is retaken once and the drawn capture accepted", async () => {
+  const complete = canvasCapturePngForTest(paintRectForTest(kEditorChromeRgb, 12, 0, 24));
+  const run = scriptedCanvasCaptureLoop([canvasCapturePngForTest(), complete], [
+    canvasEvidenceForTest(),
+  ]);
+  const result = await captureUntilCanvasContributes(run.loop);
+  expect([result.outcome, result.png.equals(complete), run.shots()]).toEqual(["accepted", true, 2]);
+  expect(result.attempts.map((attempt) => attempt.blank)).toEqual([true, false]);
+  expect([run.rejected, run.waits]).toEqual([[0], [250]]);
+});
+
+test("a stale but drawn capture is accepted for the caller's pixel assertions", async () => {
+  const stale = canvasCapturePngForTest(paintRectForTest([47, 111, 237], 30, 10, 4));
+  for (
+    const evidence of [canvasEvidenceForTest(), canvasEvidenceForTest({ lastPresented: false })]
+  ) {
+    const run = scriptedCanvasCaptureLoop([stale], [evidence]);
+    const result = await captureUntilCanvasContributes(run.loop);
+    expect([result.outcome, result.png.equals(stale), run.shots(), run.rejected]).toEqual([
+      "accepted",
+      true,
+      1,
+      [],
+    ]);
+  }
+});
+
+test("a blank capture the application's frame account implicates fails without a retake", async () => {
+  const cases: Array<[string, CanvasCaptureEvidence[]]> = [
+    ["acquired without a completed draw", [
+      canvasEvidenceForTest(),
+      canvasEvidenceForTest({ acquiredFrames: 11 }),
+    ]],
+    ["latest frame unpresented", [canvasEvidenceForTest({ lastPresented: false })]],
+    ["late canvas write", [canvasEvidenceForTest(), canvasEvidenceForTest({ lateSubmits: 1 })]],
+    ["host counters missing", [canvasEvidenceForTest({ acquiredFrames: null })]],
+    ["probe unavailable", [canvasEvidenceForTest({ probe: null })]],
+    ["probe sees two canvas workers", [canvasEvidenceForTest({
+      probe: {
+        canvasWorkers: 2,
+        frames: 10,
+        inTaskSubmits: 10,
+        lateSubmits: 0,
+        newestLateFrame: null,
+      },
+    })]],
+    ["probe saw no in-task writes", [canvasEvidenceForTest({
+      probe: {
+        canvasWorkers: 1,
+        frames: 10,
+        inTaskSubmits: 0,
+        lateSubmits: 0,
+        newestLateFrame: null,
+      },
+    })]],
+  ];
+  for (const [name, evidence] of cases) {
+    const run = scriptedCanvasCaptureLoop([canvasCapturePngForTest()], evidence);
+    const result = await captureUntilCanvasContributes(run.loop);
+    expect([name, result.outcome, run.shots(), run.rejected, run.waits]).toEqual([
+      name,
+      "application",
+      1,
+      [],
+      [],
+    ]);
+    expect(result.attempts[0].implication, name).not.toBeNull();
+  }
+});
+
+test("a blank capture over a host frame that recorded no editor UI fails without a retake", async () => {
+  for (const uiVertices of [0, null]) {
+    const run = scriptedCanvasCaptureLoop([canvasCapturePngForTest()], [
+      canvasEvidenceForTest(),
+      canvasEvidenceForTest({ uiVertices }),
+    ]);
+    const result = await captureUntilCanvasContributes(run.loop);
+    expect([uiVertices, result.outcome, run.shots(), result.attempts[0].implication]).toEqual([
+      uiVertices,
+      "application",
+      1,
+      "the latest host frame recorded no editor UI",
+    ]);
+  }
+});
+
+test("a retaken capture is judged against the account read before the first blank", async () => {
+  // The first capture's own window looks clean, but the frame that held the canvas writes late
+  // during the retake wait; the drawn retake must not hide it.
+  const complete = canvasCapturePngForTest(paintRectForTest(kEditorChromeRgb, 12, 0, 24));
+  const run = scriptedCanvasCaptureLoop([canvasCapturePngForTest(), complete], [
+    canvasEvidenceForTest(),
+    canvasEvidenceForTest(),
+    canvasEvidenceForTest({ lateSubmits: 1 }),
+    canvasEvidenceForTest({ lateSubmits: 1 }),
+  ]);
+  const result = await captureUntilCanvasContributes(run.loop);
+  expect([result.outcome, run.shots(), run.rejected, result.attempts[1].implication]).toEqual([
+    "application",
+    2,
+    [0],
+    "a frame wrote to the canvas after its acquiring task ended",
+  ]);
+});
+
+test("a blank capture whose newest frame was written late before the first read fails", async () => {
+  // The late write finished before the baseline, so every delta is zero; the probe still shows
+  // that the frame on screen is the one written late. An older late frame does not implicate.
+  const lateBeforeBaseline = canvasEvidenceForTest({ lateSubmits: 1, newestLateFrame: 10 });
+  const run = scriptedCanvasCaptureLoop([canvasCapturePngForTest()], [lateBeforeBaseline]);
+  const result = await captureUntilCanvasContributes(run.loop);
+  expect([result.outcome, run.shots(), run.rejected, result.attempts[0].implication]).toEqual([
+    "application",
+    1,
+    [],
+    "the newest canvas frame was written after its acquiring task ended",
+  ]);
+  const olderLateFrame = canvasEvidenceForTest({ lateSubmits: 1, newestLateFrame: 9 });
+  expect(canvasCaptureImplicatesApplication(olderLateFrame, olderLateFrame)).toBeNull();
+});
+
+test("a persistent blank capture fails at the capture deadline", async () => {
+  const run = scriptedCanvasCaptureLoop([canvasCapturePngForTest()], [canvasEvidenceForTest()]);
+  const result = await captureUntilCanvasContributes(run.loop);
+  expect([result.outcome, run.shots(), run.rejected, run.waits]).toEqual([
+    "deadline",
+    3,
+    [0, 1, 2],
+    [250, 400],
+  ]);
+});
+
+test("retakes past the third keep the longest frame window", async () => {
+  const run = scriptedCanvasCaptureLoop(
+    [canvasCapturePngForTest()],
+    [canvasEvidenceForTest()],
+    2_500,
+  );
+  const result = await captureUntilCanvasContributes(run.loop);
+  expect([result.outcome, run.shots(), run.waits]).toEqual([
+    "deadline",
+    6,
+    [250, 400, 600, 600, 600],
+  ]);
+});
+
 // Block until the editor can accept a press.
 //
 // A `mouse.down` that lands while a render is still in flight is dropped by the
@@ -2489,8 +2982,11 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
       timeout: scaledMs(2_000),
     },
   );
-  await waitForBrowserComposite(page);
-  const geometryOverlay = await captureOverlay();
+  const geometryOverlay = await captureGeometryOverlayFrame(
+    page,
+    captureOverlay,
+    captureSentinelExpected,
+  );
   await attachEvidenceFile("geometry-debug-overlay", geometryOverlay, "image/png");
   expect(
     geometryOverlay.equals(geometryBaseline),

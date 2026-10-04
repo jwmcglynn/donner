@@ -500,7 +500,22 @@ export async function holdCanvasCompletionForTest(
 }
 
 export async function readSurfaceFrameProbe(page: Page): Promise<SurfaceFrameProbeReport> {
-  const states = (await evaluateInWorkers(probedWorkers.get(page) ?? [], readInWorker)).filter(
+  return summarizeProbeStates(await evaluateInWorkers(probedWorkers.get(page) ?? [], readInWorker));
+}
+
+/**
+ * Read only the canvas owner's probe, so a sample taken around one capture does not wait out the
+ * answer bound of workers parked in a blocking wait. Null when the owner did not answer.
+ */
+export async function readCanvasOwnerSurfaceFrameProbe(
+  owner: Worker,
+): Promise<SurfaceFrameProbeReport | null> {
+  const [state] = await evaluateInWorkers([owner], readInWorker);
+  return state === null ? null : summarizeProbeStates([state]);
+}
+
+function summarizeProbeStates(answers: Array<WorkerProbeState | null>): SurfaceFrameProbeReport {
+  const states = answers.filter(
     (state): state is WorkerProbeState => state !== null && state.installed,
   );
   return {
