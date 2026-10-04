@@ -1214,11 +1214,38 @@ jobs:
           # Metal validation before merge (docs/metal_validation.md). Main's
           # hosted result alone does not establish that hardware signal.
           echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
+          # Tests that launch a browser run in the next step instead.
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu \
+            --test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,-launches-browser \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.
+
+      # Browser tests hold wall-clock deadlines (a 10 s GPU device request, 30 s
+      # test timeouts) that a browser starved of CPU cannot meet. On this
+      # three-core runner, browsers co-scheduled with each other and with the
+      # rest of the suite received about 5% of a core each and missed them,
+      # while the same targets passed when rerun as a separate phase. Run every
+      # test that launches a browser after the rest of the suite, one at a time.
+      - name: Test (browser targets)
+        id: browser_test
+        if: ${{ !cancelled() && (steps.test.outcome == 'success' || steps.test.outcome == 'failure') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the test step."
+            exit 1
+          fi
+          tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
+            --local_test_jobs=1 \
+            --test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu \
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS
 
       - name: Test (Geode editor lane)
         id: geode_test
@@ -1229,7 +1256,7 @@ jobs:
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $GEODE_EDITOR_TARGETS
 
       - name: Upload Bazel test failure artifacts
-        if: failure() && (steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
+        if: failure() && (steps.metal_profile.outcome == 'failure' || steps.metal_preflight.outcome == 'failure' || steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || steps.geode_test.outcome == 'failure')
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -1241,7 +1268,7 @@ jobs:
       # ephemeral hosted job collects it.
       - name: Collect browser stall system log
         id: browser_stall_log
-        if: ${{ !cancelled() && steps.test.outcome == 'failure' }}
+        if: ${{ !cancelled() && (steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure') }}
         continue-on-error: true
         timeout-minutes: 5
         shell: bash
@@ -1279,7 +1306,7 @@ jobs:
           echo "Collected ${count} browser stall system log window(s)."
 
       - name: Upload browser stall system log
-        if: ${{ !cancelled() && steps.test.outcome == 'failure' }}
+        if: ${{ !cancelled() && (steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure') }}
         uses: actions/upload-artifact@v7
         with:
           name: browser-stall-system-log-${{ github.job }}
@@ -1289,7 +1316,7 @@ jobs:
 
       - name: Detect browser GPU acquisition failure
         id: browser_gpu_failure
-        if: ${{ !cancelled() && (steps.test.outcome == 'failure' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:browser-gpu-diagnostics'))) }}
+        if: ${{ !cancelled() && (steps.test.outcome == 'failure' || steps.browser_test.outcome == 'failure' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:browser-gpu-diagnostics'))) }}
         shell: bash
         env:
           BROWSER_GPU_DIAGNOSTICS_REQUESTED: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:browser-gpu-diagnostics') }}

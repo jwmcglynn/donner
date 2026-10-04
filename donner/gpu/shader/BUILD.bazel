@@ -3,6 +3,12 @@ load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test", "forbidde
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
+# The CI workflow contract checks that every browser test here carries its scheduling tag.
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//tools:__pkg__"],
+)
+
 donner_cc_library(
     name = "compiled_shader",
     srcs = ["CompiledShader.cc"],
@@ -865,6 +871,7 @@ js_test(
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
     },
     node_options = ["--test"],
+    tags = ["launches-browser"],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
@@ -894,6 +901,7 @@ js_test(
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
     },
     node_options = ["--test"],
+    tags = ["launches-browser"],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
