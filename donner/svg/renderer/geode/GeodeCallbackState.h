@@ -79,8 +79,8 @@ std::shared_ptr<State> takeWgpuCallbackState(void* userdata) {
 
 /// Registers a submitted-work-done callback for all work currently submitted to \p queue, in the
 /// `AllowSpontaneous` callback mode. \p State must expose `onWorkDone()`, which runs exactly once
-/// when the queue drains, during a `device.poll(...)`, on whichever thread drives the queue at
-/// that point.
+/// when the queue drains, typically during a `device.poll(...)` (it may also run on submit or
+/// during another thread's poll), on whichever thread drives the queue at that point.
 ///
 /// @param queue Queue whose currently-submitted work is observed.
 /// @param state Shared callback state; retained until the callback runs.

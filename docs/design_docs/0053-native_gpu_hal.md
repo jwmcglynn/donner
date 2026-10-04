@@ -522,9 +522,9 @@ gates remain open.
       allocation from a registration, a bounded wait for a submission serial, and the wait kind a
       mapping's slices used are runtime operations implemented on Metal, Vulkan, the browser bridge
       and the transitional adapter, so the renderer expresses them without naming a backend. The
-      renderer no longer reaches the adapter's `importExternalTexture`, which has no remaining
-      caller. `//donner/svg/renderer/tests:renderer_geode_tests` and the Geode snapshot readback
-      targets pass on the selected native backend.
+      adapter's `importExternalTexture` is removed.
+      `//donner/svg/renderer/tests:renderer_geode_tests` and the Geode snapshot readback targets
+      pass on the selected native backend.
 - [x] Verify that cancelled mappings do not reenter the reusable readback pool while still active,
       and that unmap, retirement, and loss invalidate access at the documented boundary. The native
       mapping suites run `OneBufferCarriesOneMappingAtATime` and
