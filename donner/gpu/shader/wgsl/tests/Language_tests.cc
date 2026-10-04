@@ -227,10 +227,12 @@ std::pair<unsigned, std::string> DiagnosticOf(const std::string& source) {
 
 TEST(Language, AppliesWgslTemplateListDiscoveryToComparisons) {
   // WGSL pairs a `<` right after an identifier with the next `>` at the same nesting depth before
-  // it parses expressions, unless `;`, `{`, `:`, an assignment, `&&`, `||` or a closing bracket
-  // intervenes. Such a pair is a template list, never two comparisons.
+  // it parses expressions. `;`, `{`, `:` or `=` drops every pending `<` first, and `&&`, `||` or a
+  // closing bracket drops those at its depth or deeper. Such a pair is a template list, never two
+  // comparisons.
   const std::string prelude =
       "fn g(x: bool, y: bool) -> bool { return x; }\n"
+      "fn g3(x: bool, y: bool, z: bool) -> bool { return x; }\n"
       "fn h(x: u32) -> u32 { return x; }\n"
       "fn f(a: u32, b: u32, c: u32, d: u32) -> bool {\n  ";
   for (const char* body : {
@@ -239,6 +241,9 @@ TEST(Language, AppliesWgslTemplateListDiscoveryToComparisons) {
            "return g(a < b, (c) > d);",
            "return g(a < h(b), c > d);",
            "return a < b >> c;",
+           // Chromium's compiler keeps the pending `<` across `<=` after a literal, unlike the
+           // specification's scan, so the stricter reading applies.
+           "return g3(a < b, 1u <= c, d > a);",
        }) {
     const std::string source = prelude + body + "\n}\n";
     SCOPED_TRACE(source);
@@ -257,10 +262,25 @@ TEST(Language, AppliesWgslTemplateListDiscoveryToComparisons) {
            "let p = a < b; let q = c > d; return p && q;",
            "if (a < b) { return c > d; } return false;",
            "return (a < b) == (c > d);",
+           "return g3((a < b), 1u <= c, d > a);",
        }) {
     const std::string source = prelude + body + "\n}\n";
     SCOPED_TRACE(source);
     EXPECT_THAT(DiagnosticOf(source), testing::Pair(unsigned(ErrorCode::None), testing::IsEmpty()));
+  }
+}
+
+TEST(Language, ReportsMalformedTemplateListsWhereTheParserStops) {
+  // Discovery drops a type's unclosed list at the token that ends it; the parser's diagnostic for
+  // that token comes first.
+  for (const auto& [source, spanned] : {
+           std::pair<const char*, const char*>{"fn f() { var x: vec2<f32 = vec2<f32>(1f); }", "="},
+           {"struct S { a: array<f32, 4; }", ";"},
+           {"fn f(p: ptr<function, u32) {}", ")"},
+       }) {
+    SCOPED_TRACE(source);
+    EXPECT_THAT(DiagnosticOf(source),
+                testing::Pair(unsigned(ErrorCode::UnexpectedToken), testing::StrEq(spanned)));
   }
 }
 
