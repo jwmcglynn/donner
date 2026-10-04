@@ -189,6 +189,9 @@ declare global {
       frameId: number;
       captureId: number;
       inputRepresented: boolean;
+      pointerX?: number;
+      pointerY?: number;
+      mouseDown?: boolean;
     };
     __donnerWgpuReadbackLastStartedRequest?: number;
     __donnerWgpuReadbackLastFailedRequest?: number;
@@ -1596,13 +1599,22 @@ async function readBasicShapesProbeState(
 
 test("Basic Shapes capture gate accepts a completed current frame after UI coalescing", () => {
   const state = {
-    sampleId: "basic-shapes", completedResults: 1, presentedAtMs: 11835,
-    renderedFrames: 61, hostFrames: 61, hostPresented: false,
-    frameId: 40, captureId: 4, completedFrameId: 40, completedCaptureId: 4,
+    sampleId: "basic-shapes",
+    completedResults: 1,
+    presentedAtMs: 11835,
+    renderedFrames: 61,
+    hostFrames: 61,
+    hostPresented: false,
+    frameId: 40,
+    captureId: 4,
+    completedFrameId: 40,
+    completedCaptureId: 4,
     completedInputRepresented: true,
   };
   expect(hasPresentedBasicShapesHostFrame(state, 0)).toBe(true);
-  expect(hasPresentedBasicShapesHostFrame({ ...state, completedInputRepresented: false }, 0)).toBe(false);
+  expect(hasPresentedBasicShapesHostFrame({ ...state, completedInputRepresented: false }, 0)).toBe(
+    false,
+  );
   expect(hasPresentedBasicShapesHostFrame({ ...state, completedCaptureId: 3 }, 0)).toBe(false);
   expect(hasPresentedBasicShapesHostFrame({ ...state, completedFrameId: 39 }, 0)).toBe(false);
   expect(hasPresentedBasicShapesHostFrame({ ...state, hostFrames: 60 }, 0)).toBe(false);
@@ -1637,7 +1649,10 @@ test("Basic Shapes pre-capture gate reads app scalars without layout observation
     renderedFrames: 7,
     hostFrames: 7,
     hostPresented: true,
-    frameId: 12, captureId: 4, completedFrameId: 12, completedCaptureId: 4,
+    frameId: 12,
+    captureId: 4,
+    completedFrameId: 12,
+    completedCaptureId: 4,
     completedInputRepresented: true,
   });
 });
@@ -2784,16 +2799,23 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
       )
       .toBe(true);
   } catch (error) {
-    const state = await boundFailureDiagnostic(page.evaluate(() => ({
-      overlay: window.__donnerOverlayStats,
-      queue: window.__donnerPresentationQueueStats,
-      host: window.__donnerHostFrameTiming,
-      interaction: window.__donnerInteractionStats,
-      worker: window.__donnerWorkerStats,
-      repair: (window as unknown as { __donnerPresentationRepairStats?: unknown }).__donnerPresentationRepairStats,
-    })), scaledMs(1000));
-    await attachEvidenceFile("compositor-overlay-presentation-state", Buffer.from(JSON.stringify(state)),
-                             "application/json");
+    const state = await boundFailureDiagnostic(
+      page.evaluate(() => ({
+        overlay: window.__donnerOverlayStats,
+        queue: window.__donnerPresentationQueueStats,
+        host: window.__donnerHostFrameTiming,
+        interaction: window.__donnerInteractionStats,
+        worker: window.__donnerWorkerStats,
+        repair: (window as unknown as { __donnerPresentationRepairStats?: unknown })
+          .__donnerPresentationRepairStats,
+      })),
+      scaledMs(1000),
+    );
+    await attachEvidenceFile(
+      "compositor-overlay-presentation-state",
+      Buffer.from(JSON.stringify(state)),
+      "application/json",
+    );
     if (lastCompositorShot !== null) {
       await attachEvidenceFile(
         "compositor-tile-overlay-last-probe",
@@ -3055,7 +3077,9 @@ test("failure-only WebGPU readback makes no request on a visible Basic Shapes lo
 test("coalesced UI frames do not consume diagnostic capture retries", async ({ page }) => {
   const failures = await openEditor(page, false, true);
   expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
-  await page.evaluate(() => { window.__donnerEditorFrameRequested = true; });
+  await page.evaluate(() => {
+    window.__donnerEditorFrameRequested = true;
+  });
   await expect.poll(async () => (await readSurfaceFrameProbe(page)).frames).toBeGreaterThan(0);
   const owner = await findCanvasOwnerWorker(page);
   expect(owner).not.toBeNull();
@@ -3067,15 +3091,22 @@ test("coalesced UI frames do not consume diagnostic capture retries", async ({ p
       return window.__donnerMainLoopRenderedFrames ?? 0;
     });
     await expect.poll(() => page.evaluate(() => window.__donnerMainLoopRenderedFrames ?? 0), {
-      timeout: scaledMs(1000), intervals: [16, 25, 50],
+      timeout: scaledMs(1000),
+      intervals: [16, 25, 50],
     }).toBeGreaterThan(before);
   };
   try {
     for (let i = 0; i < 3; ++i) await wakeFrame();
-    await expect.poll(() => page.evaluate(() => window.__donnerPresentationQueueStats?.framesInFlight), {
-      timeout: scaledMs(1000), intervals: [16, 25, 50],
-    }).toBe(3);
-    const beforeFailures = await page.evaluate(() => window.__donnerWgpuReadbackCaptureFailures ?? 0);
+    await expect.poll(
+      () => page.evaluate(() => window.__donnerPresentationQueueStats?.framesInFlight),
+      {
+        timeout: scaledMs(1000),
+        intervals: [16, 25, 50],
+      },
+    ).toBe(3);
+    const beforeFailures = await page.evaluate(() =>
+      window.__donnerWgpuReadbackCaptureFailures ?? 0
+    );
     const request = await page.evaluate(() => window.__donnerRequestWgpuReadback?.() ?? 0);
     expect(request).toBeGreaterThan(0);
     for (let i = 0; i < 4; ++i) await wakeFrame();
@@ -3085,17 +3116,23 @@ test("coalesced UI frames do not consume diagnostic capture retries", async ({ p
       started: window.__donnerWgpuReadbackCaptureStarts ?? 0,
       queue: window.__donnerPresentationQueueStats,
     }));
-    await attachEvidenceFile("coalesced-capture-state", Buffer.from(JSON.stringify(deferred, null, 2)),
-                             "application/json");
+    await attachEvidenceFile(
+      "coalesced-capture-state",
+      Buffer.from(JSON.stringify(deferred, null, 2)),
+      "application/json",
+    );
     expect(deferred.queue?.framesInFlight).toBe(3);
     expect(deferred.queue?.coalescedFrames ?? 0).toBeGreaterThan(0);
     expect(deferred.failed, JSON.stringify(deferred)).toBe(beforeFailures);
     expect(deferred.completed).toBeLessThan(request);
     await hold.release(owner);
     await expect.poll(() => page.evaluate(() => window.__donnerWgpuReadbackStats?.request ?? 0), {
-      timeout: scaledMs(5000), intervals: [16, 25, 50, 100],
+      timeout: scaledMs(5000),
+      intervals: [16, 25, 50, 100],
     }).toBeGreaterThanOrEqual(request);
-    expect(await page.evaluate(() => window.__donnerWgpuReadbackCaptureFailures ?? 0)).toBe(beforeFailures);
+    expect(await page.evaluate(() => window.__donnerWgpuReadbackCaptureFailures ?? 0)).toBe(
+      beforeFailures,
+    );
     expect(failures).toEqual([]);
   } finally {
     await hold.release(owner);
@@ -3436,6 +3473,9 @@ test("Geode crown face paints at each held pointer position before release", asy
       worker: window.__donnerWorkerStats,
       interaction: window.__donnerInteractionStats,
       viewport: window.__donnerViewportStats,
+      queue: window.__donnerPresentationQueueStats,
+      repair: (window as Window & { __donnerPresentationRepairStats?: unknown })
+        .__donnerPresentationRepairStats,
     }));
     await attachEvidenceFile(name, Buffer.from(JSON.stringify(state, null, 2)), "application/json");
     return state;
@@ -3482,31 +3522,50 @@ test("Geode crown face paints at each held pointer position before release", asy
   await page.mouse.down();
   try {
     for (const delta of [24, 36]) {
-      const previousResults = await page.evaluate(() =>
-        window.__donnerWorkerStats?.completedResults ?? 0
-      );
+      const before = await page.evaluate(() => ({
+        completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+        version: window.__donnerOverlayStats?.currentDocVersion ?? -1,
+      }));
       const target = { x: press.x + delta, y: press.y };
       await page.mouse.move(target.x, target.y);
       await waitForAppliedPointer(page, target, {
         message: `Geode crown held move ${delta}`,
         timeoutMs: scaledMs(4_000),
       });
-      await expect.poll(() =>
-        page.evaluate((before) => {
+      let readyState: unknown;
+      await expect.poll(async () => {
+        const state = await page.evaluate(({ before, target }) => {
           const worker = window.__donnerWorkerStats;
           const interaction = window.__donnerInteractionStats;
           const overlay = window.__donnerOverlayStats;
-          return !!interaction?.dragging && !!interaction.moved
-            && (worker?.completedResults ?? 0) > before && worker?.acceptedForPresentation === true
+          const queue = window.__donnerPresentationQueueStats;
+          const ready = !!interaction?.dragging && !!interaction.moved
+            && (worker?.completedResults ?? 0) > before.completedResults
+            && worker?.acceptedForPresentation === true
+            && (overlay?.currentDocVersion ?? -1) > before.version
             && (worker?.frameVersion ?? -1)
               >= (overlay?.currentDocVersion ?? Number.POSITIVE_INFINITY)
             && (overlay?.displayedDocVersion ?? -1)
-              >= (overlay?.currentDocVersion ?? Number.POSITIVE_INFINITY);
-        }, previousResults), {
+              >= (overlay?.currentDocVersion ?? Number.POSITIVE_INFINITY)
+            && queue?.inputRepresented === true && queue.mouseDown === true
+            && queue.frameId > 0 && queue.captureId > 0
+            && queue.captureId === overlay?.captureId
+            && Math.abs((queue.pointerX ?? Number.POSITIVE_INFINITY) - target.x) <= 0.5
+            && Math.abs((queue.pointerY ?? Number.POSITIVE_INFINITY) - target.y) <= 0.5;
+          return { ready, before, target, worker, interaction, overlay, queue };
+        }, { before, target });
+        readyState = state;
+        return state.ready;
+      }, {
         message: `Geode crown move ${delta} must present a current document frame while held`,
         timeout: scaledMs(5_000),
         intervals: [16, 25, 50, 100],
       }).toBe(true);
+      await attachEvidenceFile(
+        `geode-crown-held-${delta}-ready`,
+        Buffer.from(JSON.stringify(readyState, null, 2)),
+        "application/json",
+      );
       await waitForBrowserComposite(page);
       const held = await page.screenshot({ clip: crop });
       await attachEvidenceFile(`geode-crown-held-${delta}`, held, "image/png");

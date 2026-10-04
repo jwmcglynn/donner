@@ -270,6 +270,13 @@ std::optional<Box2d> PresentedImageClipRect(const Box2d& paneRect, const Box2d& 
 }
 
 namespace {
+bool CaptureWouldRewind(const CapturedPresentation& capture, const FramePresentation* previous) {
+  return previous != nullptr &&
+         capture.identity().documentGeneration == previous->identity().documentGeneration &&
+         (capture.identity().documentRevision < previous->identity().documentRevision ||
+          capture.identity().version < previous->identity().version);
+}
+
 bool CandidatePreservesPose(const CapturedPresentation& capture,
                             std::span<const RenderResult::CompositedTile> tiles,
                             const PresentationPose& held) {
@@ -295,10 +302,7 @@ bool CandidatePreservesPose(const CapturedPresentation& capture,
 bool FramePresentation::CanAdopt(const CapturedPresentation& capture,
                                  std::span<const RenderResult::CompositedTile> tiles,
                                  const FramePresentation* previous, bool latestCommittedScene) {
-  if (previous != nullptr &&
-      capture.identity().documentGeneration == previous->identity().documentGeneration &&
-      (capture.identity().documentRevision < previous->identity().documentRevision ||
-       capture.identity().version < previous->identity().version)) {
+  if (CaptureWouldRewind(capture, previous)) {
     return false;
   }
   if (latestCommittedScene || previous == nullptr ||
@@ -411,6 +415,9 @@ FramePresentationBuildResult FramePresentation::Build(
     return {.failure = FramePresentationFailure::MissingOverview};
   }
   const auto rasterCapture = *useOverview ? resources->overviewCapture() : resources->capture();
+  if (CaptureWouldRewind(*rasterCapture, previous.get())) {
+    return {.failure = FramePresentationFailure::IncompatiblePose};
+  }
   selectionCapture = SelectionCaptureForRaster(std::move(selectionCapture), rasterCapture);
   auto frame = std::shared_ptr<FramePresentation>(new FramePresentation());
   frame->resources_ = std::move(resources);
