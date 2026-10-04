@@ -25,6 +25,11 @@ TEST(Number, ParsesShaderLiteralKindsAndExactBits) {
         Case{"9223372036854775807", Kind::AbstractInt, 0x7fffffffffffffff},
         Case{"0.7071068f", Kind::F32, 0x3f3504f4}, Case{"3.402823466e38f", Kind::F32, 0x7f7fffff},
         Case{"0x1p-149f", Kind::F32, 1}, Case{"0x1p-1074", Kind::AbstractFloat, 1},
+        // The spellings the WGSL projection gives folded f32 values.
+        Case{"0x1.555556p-2f", Kind::F32, 0x3eaaaaab},
+        Case{"0x1.000000p-127f", Kind::F32, 0x400000},
+        Case{"0x1.fffffep127f", Kind::F32, 0x7f7fffff},
+        Case{"0x1.000000p0f", Kind::F32, 0x3f800000},
         Case{"0x1.fffffffffffffp1023", Kind::AbstractFloat, 0x7fefffffffffffff}}) {
     SCOPED_TRACE(item.text);
     const Value value = Parse(item.text);

@@ -169,11 +169,12 @@ TEST(FloatConstant, ProjectsFoldedValuesToEveryTarget) {
       "third() + thirds().y + doubled().y");
   ASSERT_THAT(Diagnose(source), Eq(kAccepted));
 
-  // The WGSL projection keeps the authored expression; WGSL folds it the same way.
+  // The WGSL projection carries the folded values too, so a browser evaluates nothing.
   const std::string wgsl = Wgsl(source);
   ASSERT_THAT(wgsl, Not(IsEmpty()));
-  EXPECT_THAT(wgsl, HasSubstr("return 1f / 3f;"));
-  EXPECT_THAT(wgsl, HasSubstr("return vec2<f32>(1f, 2f) / 3f;"));
+  EXPECT_THAT(wgsl, HasSubstr("return 0x1.555556p-2f;"));
+  EXPECT_THAT(wgsl, HasSubstr("return vec2<f32>(0x1.555556p-2f, 0x1.555556p-1f);"));
+  EXPECT_THAT(wgsl, Not(HasSubstr("/ 3f")));
   EXPECT_THAT(Msl(wgsl), Eq(Msl(source)));
   EXPECT_THAT(Spirv(wgsl), Eq(Spirv(source)));
 
@@ -191,6 +192,69 @@ TEST(FloatConstant, ProjectsFoldedValuesToEveryTarget) {
   EXPECT_THAT(words, Contains(0x3f2aaaabu));
   EXPECT_THAT(words, Contains(0x40c00000u));
   EXPECT_THAT(Opcodes(words), Not(Contains(kOpFDiv)));
+}
+
+TEST(FloatConstant, ReplacesEachOutermostFoldWithItsExactValueInTheWgslProjection) {
+  // WGSL lets a browser compute f32 division to within 2.5 ULP and convert an inexact literal in
+  // either direction, so the projection spells every folded value exactly: positive values as hex
+  // floats, and negative values as an exact subtraction from -0f that this compiler folds back.
+  const std::string source = ComputeModule(
+      "const kThird: f32 = 1f / 3f;\n"
+      "fn weight() -> f32 { let b = 1f / 3f; return b; }\n"
+      "fn negative(x: f32) -> f32 { return x-1f*-3f; }\n"
+      "fn thirds() -> vec2<f32> { return vec2<f32>(1f, 2f) / 3f; }\n"
+      "fn signs() -> vec2<f32> { return vec2<f32>(1f, -2f) * -1f; }\n"
+      "fn tiny() -> f32 { return 1.17549435e-38f / 2f; }\n"
+      "fn negativeZero() -> f32 { return -0f - 0f; }\n"
+      "fn nested() -> f32 { return (1f / 3f) * (3f); }\n"
+      "fn spread() -> f32 {\n"
+      "  return 1f /  // the divisor follows\n"
+      "    4f;\n"
+      "}\n",
+      "weight() + negative(1f) + thirds().y + signs().x + tiny() + negativeZero() + nested() + "
+      "spread() + kThird");
+  ASSERT_THAT(Diagnose(source), Eq(kAccepted));
+  const std::string wgsl = Wgsl(source);
+  ASSERT_THAT(wgsl, Not(IsEmpty()));
+  for (const char* line : {
+           "const kThird: f32 = 0x1.555556p-2f;\n",
+           "fn weight() -> f32 { let b = 0x1.555556p-2f; return b; }\n",
+           "fn negative(x: f32) -> f32 { return x-(-0f - 0x1.800000p1f); }\n",
+           "fn thirds() -> vec2<f32> { return vec2<f32>(0x1.555556p-2f, 0x1.555556p-1f); }\n",
+           "fn signs() -> vec2<f32> { return vec2<f32>((-0f - 0x1.000000p0f), 0x1.000000p1f); }\n",
+           "fn tiny() -> f32 { return 0x1.000000p-127f; }\n",
+           "fn negativeZero() -> f32 { return (-0f - 0.0f); }\n",
+           "fn nested() -> f32 { return 0x1.000000p0f; }\n",
+           "return 0x1.000000p-2f;\n",
+       }) {
+    EXPECT_THAT(wgsl, HasSubstr(line));
+  }
+  EXPECT_THAT(wgsl, Not(HasSubstr("--")));
+  EXPECT_THAT(wgsl, Not(HasSubstr("divisor")));
+  EXPECT_THAT(wgsl, Not(HasSubstr("4f;")));
+
+  // The projection is itself valid input that folds to the same native bytes.
+  ASSERT_THAT(Diagnose(wgsl), Eq(kAccepted));
+  ASSERT_THAT(Msl(source), Not(IsEmpty()));
+  EXPECT_THAT(Msl(wgsl), Eq(Msl(source)));
+  ASSERT_THAT(Spirv(source), Not(IsEmpty()));
+  EXPECT_THAT(Spirv(wgsl), Eq(Spirv(source)));
+  EXPECT_THAT(ConstantNamed(Parse(wgsl).module, "kThird"), Eq(F32Bits(0x3eaaaaab)));
+}
+
+TEST(FloatConstant, BoundsTheFoldsTheWgslProjectionReplaces) {
+  const auto module = [](int folds) {
+    std::string body = "fn f() -> f32 {\n  var sum = 0f;\n";
+    for (int i = 0; i < folds; ++i) {
+      body += "  sum += 1f / 3f;\n";
+    }
+    return body + "  return sum;\n}\n";
+  };
+  EXPECT_THAT(Diagnose(module(256)), Eq(kAccepted));
+  const std::string tooMany = module(257);
+  const ParseResult parsed = Parse(tooMany);
+  EXPECT_THAT(parsed.diagnostic.code, Eq(ErrorCode::ExpressionLimit));
+  EXPECT_THAT(parsed.diagnostic.span.begin, Eq(tooMany.rfind("1f / 3f")));
 }
 
 TEST(FloatConstant, FoldedExpressionMatchesItsLiteralSpelling) {
