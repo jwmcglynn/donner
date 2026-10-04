@@ -3460,6 +3460,96 @@ TEST(Path, StrokeToFillIndexesLargePolylineBeforeExtractingManyDashes) {
   EXPECT_GT(result.verbCount(), kSegments);
 }
 
+TEST(Path, StrokeToFillRoundSubdivisionStopsAtCoordinatePrecision) {
+  // Adjacent doubles at 2^60 are 256 apart, so a half turn of radius 2^14 spans only
+  // 64 * pi coordinate spacings and gets 202 chords rather than the 4096-step cap that its
+  // width requests. Below 2^53 adjacent doubles are at most one unit apart and the same stroke
+  // keeps the full subdivision.
+  //
+  // Verb counts: a round piece of N steps has its center and N + 1 arc points, so a moveTo,
+  // N + 1 lineTos and a close, N + 3 verbs; a straight strip with its two seam points is 7.
+  constexpr double kHalfWidth = 16384.0;
+  const StrokeStyle roundStyle{
+      .width = 2.0 * kHalfWidth, .cap = LineCap::Round, .join = LineJoin::Round};
+  const StrokeStyle roundJoinStyle{
+      .width = 2.0 * kHalfWidth, .cap = LineCap::Butt, .join = LineJoin::Round};
+  const auto capPath = [](double x) {
+    return PathBuilder().moveTo({x, 0.0}).lineTo({x, 1048576.0}).build();
+  };
+  const auto joinPath = [](double x) {
+    return PathBuilder()
+        .moveTo({x, 0.0})
+        .lineTo({x, 1048576.0})
+        .lineTo({x + 1073741824.0, 1048576.0})
+        .build();
+  };
+  const auto dotPath = [](double x) {
+    return PathBuilder().moveTo({x, 0.0}).lineTo({x, 0.0}).build();
+  };
+
+  const double kExact = std::ldexp(1.0, 52);
+  const double kCoarse = std::ldexp(1.0, 60);
+  struct Case {
+    const char* name;
+    Path exactPath;
+    Path coarsePath;
+    StrokeStyle style;
+    std::size_t coarseVerbs;
+  };
+  // Two caps of ceil(64 * pi) = 202 steps, a quarter-turn join of ceil(32 * pi) = 101 steps
+  // between two strips, and a dot of ceil(128 * pi) = 403 steps closed without a center.
+  const Case cases[] = {
+      {"caps", capPath(kExact), capPath(kCoarse), roundStyle, 2 * (202 + 3) + 7},
+      {"join", joinPath(kExact), joinPath(kCoarse), roundJoinStyle, (101 + 3) + 2 * 7},
+      {"dot", dotPath(kExact), dotPath(kCoarse), roundStyle, 403 + 1},
+  };
+  for (const Case& c : cases) {
+    SCOPED_TRACE(c.name);
+    const Path exact = c.exactPath.strokeToFill(c.style, kFlattenTolerance);
+    const Path coarse = c.coarsePath.strokeToFill(c.style, kFlattenTolerance);
+    EXPECT_THAT(exact.verbCount(), testing::Gt(4096u));
+    EXPECT_EQ(coarse.verbCount(), c.coarseVerbs);
+  }
+
+  // The coarse round cap still reaches its full radius in the finely resolved axis.
+  const Box2d capBounds = capPath(kCoarse).strokeToFill(roundStyle, kFlattenTolerance).bounds();
+  EXPECT_NEAR(capBounds.topLeft.y, -kHalfWidth, 1.0);
+  EXPECT_NEAR(capBounds.bottomRight.y, 1048576.0 + kHalfWidth, 1.0);
+
+  // The limit first binds at 2^53, where adjacent doubles are 2 apart: a radius-8 cap requests
+  // 16 steps, which fit below 2^53 but exceed the ceil(4 * pi) = 13 representable above it.
+  const StrokeStyle smallRoundStyle{.width = 16.0, .cap = LineCap::Round};
+  EXPECT_EQ(
+      capPath(std::ldexp(1.0, 52)).strokeToFill(smallRoundStyle, kFlattenTolerance).verbCount(),
+      2u * (16u + 3u) + 7u);
+  EXPECT_EQ(
+      capPath(std::ldexp(1.0, 53)).strokeToFill(smallRoundStyle, kFlattenTolerance).verbCount(),
+      2u * (13u + 3u) + 7u);
+}
+
+TEST(Path, StrokeToFillExtremeQuadraticKeepsVisibleCap) {
+  // A scheduled-fuzzing input: every flattened vertex after the first has a y coordinate near
+  // 1e91 or beyond, where adjacent doubles are far wider than the 1.2e64 half width, so each
+  // round join collapses onto a horizontal segment through its vertex and contributes nothing.
+  // Tessellating those joins at their requested 4096 steps timed out the fuzzer; at coordinate
+  // precision they need only the minimum, and the start cap at the origin and the strips remain.
+  const Path path = PathBuilder()
+                        .moveTo({0.0, 0.0})
+                        .quadTo({2.410825500452295e64, 2.4108255004517747e64},
+                                {4.506916373629527e-307, 7.396300054940545e97})
+                        .build();
+  const double halfWidth = 2.410825500584971e64 * 0.5;
+  const StrokeStyle style{
+      .width = 2.0 * halfWidth,
+      .cap = LineCap::Round,
+      .join = LineJoin::Round,
+  };
+
+  const Path result = path.strokeToFill(style, 0.25);
+  EXPECT_THAT(result.commands(), testing::Not(testing::IsEmpty()));
+  EXPECT_NEAR(result.bounds().topLeft.y, -halfWidth, halfWidth * 1e-6);
+}
+
 TEST(Path, StrokeToFillHugeRoundStrokeHasBoundedSubdivision) {
   // Wide enough that the round subdivision cap binds, and narrow enough that
   // the piece corner products still fit a double. Strokes whose products
