@@ -39,7 +39,7 @@ fn samplePixelated(position: vec2<f32>, size: vec2<i32>, multiple: vec2<f32>) ->
 
 fn cubicWeight(inputValue: f32) -> f32 {
   let distance = abs(inputValue);
-  let b = 0.33333334f;
+  let b = 1f / 3f;
   if ((distance < 1f)) {
     return (((((((12f - (9f * b)) - (6f * b)) * ((distance * distance) * distance)) + (((-18f + (12f * b)) + (6f * b)) * (distance * distance))) + (0f * distance)) + (6f - (2f * b))) / 6f);
   }

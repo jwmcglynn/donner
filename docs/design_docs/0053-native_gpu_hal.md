@@ -223,9 +223,12 @@ commits and their fixes together in a focused reviewable change.
       the UI renderer's shaders are authored as WGSL sources under the same contract. The UI draw
       program is authored WGSL compiled into frozen artifacts, and the bit-shift operators joined
       the profile with WGSL, MSL and SPIR-V tests, replacing the division workarounds in the UI
-      vertex color unpack and the snapshot half-alpha term. Besides the identifier renames the
-      profile's naming rules force (see the compiler guide), one production spelling, feImage's
-      `0.33333334f`, stands in for f32 constant folding (#1636).
+      vertex color unpack and the snapshot half-alpha term, and f32 constant expressions fold, so
+      feImage writes its weight as `1f / 3f`. Two identifier renames still stand in for valid WGSL
+      the profile rejects (see the compiler guide): the gradient local `linear_parameter`, because a
+      function-scope name may not shadow a module-scope one, and feBlend's `cs_main`, because an
+      entry name reserved in MSL is rejected rather than mapped to a native name. This item stays
+      open until the compiler accepts both.
 
 ### Snapshot and target identity
 

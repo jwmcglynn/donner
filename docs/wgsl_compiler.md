@@ -496,11 +496,10 @@ and the build-time emitter tool are gone. The checkerboard render pipeline and t
 readback pipeline read entry names, binding slots and workgroup shape from their artifacts, and
 their pass code binds the reflected slot rather than a literal index.
 
-One source changed spelling without changing behavior to stay inside the portable profile: the
-feImage cubic weight constant is the f32 literal `0.33333334f`, the same value `1f / 3f` folds to,
-because constant f32 arithmetic is outside the profile. Every other family compiled unchanged,
-including the morphology loops, the runtime component-transfer array, the 8,192-entry transfer
-table and the vertex/fragment checkerboard.
+All fifteen families compile with their authored spelling, including the morphology loops, the
+runtime component-transfer array, the 8,192-entry transfer table, the vertex/fragment checkerboard
+and the feImage cubic weight `1f / 3f`, which folds to the same f32 value as the literal
+`0.33333334f` it once had to be written as (see "Constant f32 arithmetic").
 
 Native acceptance runs every family on Metal and Vulkan from the native artifact and from the
 mutation control through reflected bindings. The new slices compare bit-exactly where the inputs
