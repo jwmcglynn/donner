@@ -80,13 +80,15 @@ namespace donner::gpu::metal {
  * synchronizes its GPU-written buffers before reporting completion to host readers. Textures
  * reach the CPU through readback buffers, so unrelated buffers and textures need no scan.
  *
- * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity. The one
- * exception is command-buffer completion handlers, which Metal invokes on an internal queue;
- * they touch only atomics, mutex-protected completion state (the error string and the ordered
- * completion watermark), and the root's shared loss condition, observable through
- * \ref completedSerial, \ref Device::waitForSerial, \ref Device::isLost, and
- * \ref lastErrorForTest. A handler that saw work fail also writes one diagnostic line to stderr,
- * after it has published everything a waiter reads.
+ * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity. The thread
+ * needs no autorelease pool of its own: every call drains the Objective-C objects it autoreleased
+ * before it returns, so a plain worker thread keeps no frame's resources resident after the call
+ * that used them. The one exception to single-threaded use is command-buffer completion handlers,
+ * which Metal invokes on an internal queue; they touch only atomics, mutex-protected completion
+ * state (the error string and the ordered completion watermark), and the root's shared loss
+ * condition, observable through \ref completedSerial, \ref Device::waitForSerial,
+ * \ref Device::isLost, and \ref lastErrorForTest. A handler that saw work fail also writes one
+ * diagnostic line to stderr, after it has published everything a waiter reads.
  *
  * Every command buffer of a submission reports its outcome, and the submission completes once all
  * of them have. When any of them failed on the GPU, the submission failed: the root is declared
