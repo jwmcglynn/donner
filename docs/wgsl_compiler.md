@@ -356,8 +356,8 @@ still applies: `a < b >> c` reads as the template list `a<b>` and is rejected, w
 compound-assignment rule above with the amount materialized as u32, so an operator on the
 right-hand side needs parentheses (`x <<= (n + 1u)`).
 The lexer keeps `>>` and `>>=` whole, and discovery examines each `>` in them, so either byte of
-`>>` can close a template list: `array<vec2<u32>>` closes both lists, and `a < b >> c` closes
-`a<b>` with the first.
+`>>` or `>>=` can close a template list: `array<vec2<u32>>` closes both lists, and `a < b >> c`
+closes `a<b>` with the first.
 
 MSL and SPIR-V leave a shift by the width or more undefined, so both native projections mask a
 computed amount to its low five bits; a literal amount, including a module constant, is already
@@ -377,18 +377,17 @@ written with shifts.
 
 The compiler applies WGSL's template-list discovery to each token as it lexes it, which finds the
 same lists as the specification's scan over the whole source apart from the operators described
-below. A `<` directly after an identifier
-starts a candidate list, and the next `>` at the same parenthesis and bracket depth closes it,
-whether that `>` stands alone or is either byte of `>>`, the first byte of `>=` or `>>=`, or the
-end of `->`. A `;`, `{`, `:` or `=` assignment drops every pending candidate, and `&&`, `||` or a
-closing bracket drops only those opened at its own depth or deeper. Every angle bracket the parser
-reads as part of a type's template list must be one discovery found, and every `<` or `>` it reads
-as an operator must not be. Source where the two disagree fails with `UnsupportedConstruct`, so
-`g(a < b, c > d)` and `a < b >> c` are rejected as WGSL rejects them, while `g((a < b), (c > d))`,
-`h(a) < b`, `1u < b` and comparisons separated by `&&`, `||` or `;` are accepted. A type whose list
-discovery drops, such as `vec2<f32 = v`, reports the parser's own diagnostic at the token that
-ends it. At most 256 candidates may be pending at once; a module that needs more, such as a type
-nested in 257 template lists, fails with `NestingLimit`.
+below. A `<` directly after an identifier starts a candidate list, and the next `>` at the same
+parenthesis and bracket depth closes it, whether that `>` stands alone or is either byte of `>>` or
+`>>=`, the first byte of `>=`, or the end of `->`. A `;`, `{`, `:` or `=` assignment drops every
+pending candidate, and `&&`, `||` or a closing bracket drops only those opened at its own depth or
+deeper. Every angle bracket the parser reads as part of a type's template list must be one discovery
+found, and every `<` or `>` it reads as an operator must not be. Source where the two disagree fails
+with `UnsupportedConstruct`, so `g(a < b, c > d)` and `a < b >> c` are rejected as WGSL rejects
+them, while `g((a < b), (c > d))`, `h(a) < b`, `1u < b` and comparisons separated by `&&`, `||` or
+`;` are accepted. A type whose list discovery drops, such as `vec2<f32 = v`, reports the parser's
+own diagnostic at the token that ends it. At most 256 candidates may be pending at once; a module
+that needs more, such as a type nested in 257 template lists, fails with `NestingLimit`.
 
 The specification's scan reads the `=` of `<=` after anything but an identifier, and of `<<=`,
 `+=` and `-=`, as an assignment that drops every candidate. Chromium's WGSL compiler lexes each of

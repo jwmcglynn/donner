@@ -617,7 +617,7 @@ private:
    *
    * WGSL discovers template lists before it parses expressions: a `<` right after an identifier
    * starts a candidate that the next `>` at the same nesting depth closes, whether that `>` stands
-   * alone or is either byte of `>>`, the first byte of `>=` or `>>=`, or the end of `->`. A `;`,
+   * alone or is either byte of `>>` or `>>=`, the first byte of `>=`, or the end of `->`. A `;`,
    * `{`, `:` or `=` drops every pending candidate first, and `&&`, `||` or a closing bracket drops
    * those opened at its own depth or deeper. Applying it per token matches the specification's
    * code-point scan, apart from the operators noted in \ref DiscoverOpeningAngle, because literals
