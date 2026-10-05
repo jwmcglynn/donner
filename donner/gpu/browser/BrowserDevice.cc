@@ -1313,6 +1313,13 @@ MapSliceReport BrowserDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, doub
     return MapSliceReport{.state = state, .waitKind = kWaitKind};
   }
 
+  if (sliceSeconds <= 0.0) {
+    if (bridge_->requestMappingProgress(*mappingId) == BridgeStatus::Success) {
+      notifyObserverOfBackendSubmission();
+    }
+    return MapSliceReport{.state = MapSliceState::Pending, .waitKind = kWaitKind};
+  }
+
   if (yielding_) {
     // Entered from inside this device's own yield. Handing the thread over again would start a
     // second stack unwind on top of the first, which the runtime underneath cannot represent, so
@@ -1334,10 +1341,19 @@ MapSliceReport BrowserDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, doub
   // yield could now name nothing.
   const std::optional<BrowserObjectId> afterYield =
       objects_.find(BrowserObjectKind::BufferMapping, mappingSlotIndex);
-  if (!afterYield.has_value()) {
+  if (observeBrowserLoss()) {
+    return MapSliceReport{.state = MapSliceState::DeviceLost, .waitKind = kWaitKind};
+  }
+  if (afterYield != mappingId) {
     return MapSliceReport{.state = MapSliceState::Failed, .waitKind = kWaitKind};
   }
-  return MapSliceReport{.state = bridge_->mappingState(*afterYield), .waitKind = kWaitKind};
+  const MapSliceState state = bridge_->mappingState(*afterYield);
+  // A browser may defer a pending map callback until another submission polls its queue.
+  if (state == MapSliceState::Pending &&
+      bridge_->requestMappingProgress(*afterYield) == BridgeStatus::Success) {
+    notifyObserverOfBackendSubmission();
+  }
+  return MapSliceReport{.state = state, .waitKind = kWaitKind};
 }
 
 Result<std::span<const uint8_t>> BrowserDevice::onMappedBytes(uint32_t mappingSlotIndex) const {

@@ -31,6 +31,12 @@ Transform2d OutputFromDocumentTransform(const Vector2d& documentTopLeft, double 
   return Transform2d::Translate(-documentTopLeft) * Transform2d::Scale(scale);
 }
 
+Vector2d PixelAlignedDocumentOrigin(const Vector2d& requested, const Vector2d& authorOrigin,
+                                    double scale) {
+  const Vector2d offsetPx = (requested - authorOrigin) * scale;
+  return authorOrigin + Vector2d(std::round(offsetPx.x), std::round(offsetPx.y)) / scale;
+}
+
 std::optional<Vector2d> BoundedRasterTarget(const Vector2d& fullTarget, const Vector2d& paneSize,
                                             double devicePixelRatio) {
   if (paneSize.x <= 0.0 || paneSize.y <= 0.0 || devicePixelRatio <= 0.0) {
@@ -113,9 +119,12 @@ EditorRasterViewport ViewportState::rasterViewport() const {
   const Vector2d outputScreenTopLeft = paneOrigin - Vector2d(marginScreenPx, marginScreenPx);
   const Vector2i outputSizePx(ClampRasterDim(boundedTarget->x), ClampRasterDim(boundedTarget->y));
   const Vector2d requestedDocumentTopLeft = screenToDocument(outputScreenTopLeft);
-  const Vector2d documentTopLeft(
+  const Vector2d preferredDocumentTopLeft(
       boundedTarget->x >= fullTarget.x ? documentViewBox.topLeft.x : requestedDocumentTopLeft.x,
       boundedTarget->y >= fullTarget.y ? documentViewBox.topLeft.y : requestedDocumentTopLeft.y);
+  // Cropped and full rasters must sample the same grid when coverage changes at a fixed zoom.
+  const Vector2d documentTopLeft =
+      PixelAlignedDocumentOrigin(preferredDocumentTopLeft, documentViewBox.topLeft, scale);
   const Vector2d documentSize(static_cast<double>(outputSizePx.x) / scale,
                               static_cast<double>(outputSizePx.y) / scale);
 
@@ -143,13 +152,14 @@ EditorRasterViewport ViewportState::selectedPrewarmRasterViewport() const {
   const double marginY = std::max(static_cast<double>(kSelectedPrewarmMinOverdrawScreenPx),
                                   paneSize.y * kSelectedPrewarmOverdrawPaneFraction);
   const Vector2d fullTarget = documentViewBox.size() * scale;
-  const Vector2i outputSizePx(
-      ClampRasterDim(std::min(fullTarget.x, std::max(static_cast<double>(result.outputSizePx.x),
-                                                     paneSize.x * devicePixelRatio +
-                                                         2.0 * marginX * devicePixelRatio))),
-      ClampRasterDim(std::min(fullTarget.y, std::max(static_cast<double>(result.outputSizePx.y),
-                                                     paneSize.y * devicePixelRatio +
-                                                         2.0 * marginY * devicePixelRatio))));
+  const Vector2d paddedTarget(
+      std::min({fullTarget.x, static_cast<double>(kMaxCanvasDim),
+                std::max(static_cast<double>(result.outputSizePx.x),
+                         paneSize.x * devicePixelRatio + 2.0 * marginX * devicePixelRatio)}),
+      std::min({fullTarget.y, static_cast<double>(kMaxCanvasDim),
+                std::max(static_cast<double>(result.outputSizePx.y),
+                         paneSize.y * devicePixelRatio + 2.0 * marginY * devicePixelRatio)}));
+  const Vector2i outputSizePx(ClampRasterDim(paddedTarget.x), ClampRasterDim(paddedTarget.y));
   if (outputSizePx == result.outputSizePx) {
     return result;
   }
@@ -158,11 +168,20 @@ EditorRasterViewport ViewportState::selectedPrewarmRasterViewport() const {
                                   static_cast<double>(outputSizePx.y) / devicePixelRatio);
   const Vector2d outputScreenTopLeft = paneOrigin - (outputScreenSize - paneSize) * 0.5;
   const Vector2d requestedDocumentTopLeft = screenToDocument(outputScreenTopLeft);
-  const Vector2d documentTopLeft(
-      static_cast<double>(outputSizePx.x) >= fullTarget.x ? documentViewBox.topLeft.x
-                                                          : requestedDocumentTopLeft.x,
-      static_cast<double>(outputSizePx.y) >= fullTarget.y ? documentViewBox.topLeft.y
-                                                          : requestedDocumentTopLeft.y);
+  // Pixel rounding must not turn a fully covered axis into a recentered crop.
+  const Vector2d preferredDocumentTopLeft(
+      paddedTarget.x >= fullTarget.x ? documentViewBox.topLeft.x : requestedDocumentTopLeft.x,
+      paddedTarget.y >= fullTarget.y ? documentViewBox.topLeft.y : requestedDocumentTopLeft.y);
+  const Vector2d addedDocumentSize((outputSizePx.x - result.outputSizePx.x) / scale,
+                                   (outputSizePx.y - result.outputSizePx.y) / scale);
+  // Padding may reach an artboard edge, but must still contain the entire visible raster.
+  const Vector2d containedDocumentTopLeft(
+      std::clamp(preferredDocumentTopLeft.x, result.documentRect.topLeft.x - addedDocumentSize.x,
+                 result.documentRect.topLeft.x),
+      std::clamp(preferredDocumentTopLeft.y, result.documentRect.topLeft.y - addedDocumentSize.y,
+                 result.documentRect.topLeft.y));
+  const Vector2d documentTopLeft =
+      PixelAlignedDocumentOrigin(containedDocumentTopLeft, documentViewBox.topLeft, scale);
   const Vector2d documentSize(static_cast<double>(outputSizePx.x) / scale,
                               static_cast<double>(outputSizePx.y) / scale);
 

@@ -164,7 +164,7 @@ playwright_bin.playwright_test(
 )
 
 playwright_bin.playwright_test(
-    name = "browser_responsiveness_perf_test",
+    name = "_browser_responsiveness_perf_driver",
     size = "large",
     timeout = "long",
     args = [
@@ -174,7 +174,15 @@ playwright_bin.playwright_test(
     ],
     copy_data_to_bin = False,
     data = [
+        "browser-application-heartbeat.mjs",
+        "browser-heartbeat.cjs",
+        "browser-resource-quiescence.mjs",
         "browser-responsiveness.perf.ts",
+        "browser-watchdog-setup.js",
+        "composited-pixel-classifier.mjs",
+        "composited-probe.ts",
+        "composited-probe-evidence.mjs",
+        "gpu-image-transfer-canary.ts",
         "package.json",
         "playwright.bazel.config.js",
         "playwright.config.js",
@@ -182,15 +190,17 @@ playwright_bin.playwright_test(
         "prepare-browser-archives.js",
         "remote-webserver.mjs",
         ":node_modules/@playwright/test",
+        ":node_modules/pngjs",
+        "//donner/editor/tests:standalone_geode_browser_png_compare",
         "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright-firefox-mac14-arm64//file",
         "@playwright_chromium_mac_arm64//file",
     ],
     env = {
         "CI": "1",
+        "DONNER_BROWSER_GOLDEN_COMPARE": "$(rootpath //donner/editor/tests:standalone_geode_browser_png_compare)",
         "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
         "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-        "NODE_OPTIONS": "",
         "DONNER_CHROMIUM_ARCHIVE": "$(rootpath @playwright_chromium_mac_arm64//file)",
         "DONNER_FIREFOX_ARCHIVE": "$(rootpath @playwright-firefox-mac14-arm64//file)",
     },
@@ -204,6 +214,55 @@ playwright_bin.playwright_test(
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
     ],
+)
+
+js_test(
+    name = "browser_responsiveness_perf_test",
+    size = "large",
+    timeout = "long",
+    copy_data_to_bin = False,
+    data = [
+        "browser-process-snapshot.cjs",
+        "browser-responsiveness.perf.ts",
+        "browser-watchdog-anchor.mjs",
+        "browser-watchdog-child.cjs",
+        "playwright.responsiveness.bazel.config.js",
+        ":_browser_responsiveness_perf_driver",
+    ],
+    entry_point = "browser-watchdog.mjs",
+    env = {
+        "DONNER_WATCHDOG_DRIVER": "$(rootpath :_browser_responsiveness_perf_driver)",
+        "DONNER_WATCHDOG_HEARTBEAT": "browser-watchdog-heartbeat",
+        "DONNER_WATCHDOG_SPEC": "$(rootpath :browser-responsiveness.perf.ts)",
+        "DONNER_WATCHDOG_CONFIG": "$(rootpath :playwright.responsiveness.bazel.config.js)",
+    },
+    tags = [
+        "manual",
+        "no-sandbox",
+        "perf",
+    ],
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)
+
+js_test(
+    name = "browser_watchdog_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "browser-application-heartbeat.mjs",
+        "browser-heartbeat.cjs",
+        "browser-process-snapshot.cjs",
+        "browser-resource-quiescence.mjs",
+        "browser-watchdog.mjs",
+        "browser-watchdog-anchor.mjs",
+        "browser-watchdog-child.cjs",
+        ":node_modules/@playwright/test",
+    ],
+    entry_point = "browser-watchdog.spec.mjs",
+    node_options = ["--test"],
 )
 
 playwright_bin.playwright_test(
@@ -637,4 +696,31 @@ playwright_bin.playwright_test(
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
     ],
+)
+
+js_test(
+    name = "wgpu_readback_contract_tests",
+    size = "small",
+    copy_data_to_bin = False,
+    data = [
+        "wgpu-readback-contract.spec.mjs",
+        "//donner/editor:AsyncRenderer.cc",
+        "//donner/editor:AsyncRenderer.h",
+        "//donner/editor:EditorShell.cc",
+        "//donner/editor:RenderCoordinator.cc",
+        "//donner/editor:RotateCursorSet.cc",
+        "//donner/editor:WholeAppWorkerBridge.cc",
+        "//donner/editor/gui:EditorWindow.cc",
+        "//donner/editor/wasm/tests:browser-presentation-regression.spec.ts",
+        "//donner/editor/wasm/tests:composited-drag-invariants.spec.ts",
+        "//donner/editor/wasm/tests:composited-invariants.spec.ts",
+        "//donner/gpu/browser:BrowserDevice.cc",
+        "//donner/gpu/browser:EmscriptenBrowserBridge.cc",
+        "//donner/gpu/browser:library_donner_gpu.js",
+        "//donner/svg/renderer/geode:GeodeBrowserRoot.cc",
+        "//donner/svg/renderer/geode:GeodeDevice.cc",
+    ],
+    entry_point = "wgpu-readback-contract.spec.mjs",
+    env = {"NODE_OPTIONS": ""},
+    node_options = ["--test"],
 )

@@ -465,6 +465,8 @@ json EditorControlSession::toolList() {
                     {"gl_output_dir", {{"type", "string"}}},
                     {"gl_visible", {{"type", "boolean"}, {"default", false}}},
                     {"gl_pace", {{"type", "boolean"}, {"default", true}}},
+                    {"gl_worker_document_hold_start_frame", {{"type", "integer"}, {"minimum", 0}}},
+                    {"gl_worker_document_hold_end_frame", {{"type", "integer"}, {"minimum", 1}}},
                     {"gl_drive_document_input", {{"type", "boolean"}, {"default", false}}},
                     {"gl_source_pane_visible", {{"type", "boolean"}, {"default", false}}},
                     {"gl_timeout_ms",

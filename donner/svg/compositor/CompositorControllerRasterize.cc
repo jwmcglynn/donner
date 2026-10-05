@@ -51,7 +51,7 @@ uint64_t SegmentTileId(Entity left, Entity right) {
 bool SetLayerPayloadFromOffscreen(CompositorLayer& layer, RendererInterface& offscreen,
                                   const Transform2d& surfaceFromEntity,
                                   const CompositorLayer::PayloadRaster& raster) {
-  if (!offscreen.requiresTextureSnapshotPresentation()) {
+  if (!offscreen.supportsTextureSnapshotCompositing()) {
     RendererBitmap bitmap = offscreen.takeSnapshot();
     if (bitmap.empty()) {
       return false;
@@ -73,7 +73,7 @@ bool SetLayerPayloadFromOffscreen(CompositorLayer& layer, RendererInterface& off
 bool SetSegmentPayloadFromOffscreen(RendererBitmap& segment,
                                     std::shared_ptr<const RendererTextureSnapshot>& segmentTexture,
                                     RendererInterface& offscreen) {
-  if (!offscreen.requiresTextureSnapshotPresentation()) {
+  if (!offscreen.supportsTextureSnapshotCompositing()) {
     RendererBitmap bitmap = offscreen.takeSnapshot();
     if (bitmap.empty()) {
       return false;
@@ -208,7 +208,7 @@ void ConfigureImmediatePresentation(ImmediateLayerPlan& plan, bool wasDynamicImm
 }
 
 bool CanPatchLayerPayload(const RendererInterface& renderer, const CompositorLayer& layer) {
-  return renderer.requiresTextureSnapshotPresentation() && !layer.isImmediate() &&
+  return renderer.supportsTextureSnapshotCompositing() && !layer.isImmediate() &&
          layer.textureSnapshot() != nullptr && layer.canvasFromBitmap().isIdentity();
 }
 
@@ -893,7 +893,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     // generation bump and GPU cache replacement. Keep texture-backed spans until a document,
     // transform, viewport, or topology change marks the slot dirty again.
     staticSegmentDirty_[i] = spanPlan.mode == StaticSpanMode::Immediate &&
-                             !renderer().requiresTextureSnapshotPresentation();
+                             !renderer().supportsTextureSnapshotCompositing();
     // Bump the generation only when this re-rasterize actually produced
     // different content (or moved the segment on the canvas). An
     // `Immediate` segment redraws every frame; if its entities and the
@@ -1304,18 +1304,6 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
                                          const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::composeLayersImpl");
 
-  // Split path: bg/fg already composite segments + non-drag promoted
-  // layers internally (see `recomposeSplitBitmaps` / `N=1` fast path), so
-  // the main-renderer compose collapses to 3 `drawImage` calls - one for
-  // bg, one for the drag layer at its current compose offset, and one
-  // for fg. With a 5-layer splash that's 3 `drawImage` + 3 `Unpremultiply
-  // Pixels` passes per frame instead of the 2N+1 = 11 the naive
-  // segment/layer interleave would pay.
-  //
-  // Non-split path (no drag, or multiple drag targets): walk the full
-  // interleave. Each segment holds non-promoted content only, each
-  // layer is independent, so paint order is preserved.
-  //
   // Tile-only callers do not consume the main frame. Keep the cold-frame guard and force
   // composition when pixel verification reads the main renderer as its actual image.
   const bool skipMainCompose = skipMainComposeDuringSplit_ && hasSplitStaticLayers() &&
@@ -1349,7 +1337,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     return true;
   };
 
-  const bool textureMode = renderer().requiresTextureSnapshotPresentation();
+  const bool textureMode = renderer().supportsTextureSnapshotCompositing();
   const auto drawPayload = [&](const RendererBitmap* bitmap,
                                const std::shared_ptr<const RendererTextureSnapshot>& texture,
                                const Transform2d& canvasFromPayload) {

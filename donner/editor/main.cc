@@ -308,7 +308,10 @@ void RunWasmEditorFrame(void* userdata) {
       ConsumeBrowserEditorFrameRequest() || state->window->hasQueuedInputEvents();
   const bool timerDue = state->nextIdleWakeAtMs.has_value() && nowMs >= *state->nextIdleWakeAtMs;
   if (!editorRequested && !browserRequested && !timerDue) {
+    // Idle completion confirmation can yield to the browser and deliver another scheduler callback.
+    state->frameActive = true;
     state->window->pollIdleGpu();
+    state->frameActive = false;
     return;
   }
   const int triggerBits =

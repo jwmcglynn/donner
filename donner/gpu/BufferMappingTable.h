@@ -48,7 +48,7 @@ public:
    * statistics carry.
    *
    * @param serial Submission serial to wait for.
-   * @param sliceSeconds Longest this call may block.
+   * @param sliceSeconds Longest this call may block; zero polls without calling the host wait.
    */
   virtual MapWaitKind waitForSubmission(uint64_t serial, double sliceSeconds) = 0;
 
@@ -91,7 +91,7 @@ public:
    * Waits up to \p sliceSeconds for one mapping, and reports what it found and how it waited.
    *
    * @param mappingSlotIndex Slot of the mapping.
-   * @param sliceSeconds Longest this call may block.
+   * @param sliceSeconds Longest this call may block; zero polls without calling the host wait.
    */
   MapSliceReport waitSlice(uint32_t mappingSlotIndex, double sliceSeconds);
 

@@ -145,6 +145,7 @@ int donner_gpu_submit_command_buffers(unsigned int device, double submissionSeri
 int donner_gpu_map_buffer_async(unsigned int device, unsigned int mappingId, unsigned int bufferId,
                                 double offsetBytes, double byteCount);
 int donner_gpu_mapping_state(unsigned int device, unsigned int mappingId);
+int donner_gpu_request_mapping_progress(unsigned int device, unsigned int mappingId);
 int donner_gpu_copy_mapped_bytes(unsigned int device, unsigned int mappingId, void* destination,
                                  double byteCount);
 int donner_gpu_unmap_buffer(unsigned int device, unsigned int mappingId);
@@ -774,6 +775,10 @@ BridgeStatus EmscriptenBrowserBridge::mapBufferAsync(BrowserObjectId mappingId,
 
 MapSliceState EmscriptenBrowserBridge::mappingState(BrowserObjectId mappingId) const {
   return MappingStateFromBrowser(donner_gpu_mapping_state(logicalDevice_, mappingId));
+}
+
+BridgeStatus EmscriptenBrowserBridge::requestMappingProgress(BrowserObjectId mappingId) {
+  return StatusFromBrowser(donner_gpu_request_mapping_progress(logicalDevice_, mappingId));
 }
 
 void EmscriptenBrowserBridge::yieldToBrowser(double seconds) {

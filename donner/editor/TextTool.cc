@@ -1577,11 +1577,18 @@ std::optional<float> TextTool::nextPointFrameFadeWakeSeconds() const {
   return std::min(kAnimationFrameSeconds, static_cast<float>(remaining));
 }
 
-std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor) const {
+std::optional<svg::DocumentWriteAccess> TextTool::tryEditingAccess(EditorApp& editor) const {
   if (state_ != State::Editing || !sessionText_.has_value()) {
     return std::nullopt;
   }
+  return editor.document().document().tryWriteAccess();
+}
 
+std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor) const {
+  const auto access = tryEditingAccess(editor);
+  if (!access.has_value()) {
+    return std::nullopt;
+  }
   const std::vector<std::u32string> lines = displayLines(const_cast<EditorApp&>(editor));
   const auto [line, column] = caretLineColumn(lines);
 
@@ -1692,6 +1699,14 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
       chrome.selectionQuadsDoc.push_back(FrameCornersDoc(documentFromText_, extent));
     }
   }
+  chrome.sourceIdentity =
+      PresentationIdentity{.documentGeneration = editor.document().documentGeneration(),
+                           .documentRevision = editor.document().document().handle()->revision(),
+                           .version = editor.document().currentFrameVersion(),
+                           .geometryRevision = editor.document().nonTransformRevision(),
+                           .fontResourceRevision = editor.document().fontResourceRevision()};
+  chrome.canvasSize = editor.document().document().canvasSize();
+  chrome.subject = sessionText_->unsafeEntityHandle().entity();
   return chrome;
 }
 

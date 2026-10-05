@@ -81,6 +81,23 @@ double ElapsedMs(std::chrono::steady_clock::time_point start) {
       .count();
 }
 
+#ifdef DONNER_EDITOR_WGPU
+struct SubmissionFenceCommit {
+  gpu::Device& device;
+  internal::PresentationSubmissionQueue& queue;
+  std::uint64_t beforeSerial;
+  internal::PresentationSubmissionQueue::Fence stamp;
+  bool& fullFramePresented;
+  ~SubmissionFenceCommit() {
+    if (device.lastSubmittedSerial() > beforeSerial) {
+      stamp.serial = device.lastSubmittedSerial();
+      stamp.inputRepresented &= fullFramePresented;
+      queue.submitted(stamp);
+    }
+  }
+};
+#endif
+
 void GlfwErrorCallback(int error, const char* description) {
   // macOS: reading the clipboard when it holds no UTF-8 string (empty, or
   // non-text content like an image) makes Cocoa's `glfwGetClipboardString` fail
@@ -783,7 +800,7 @@ struct AsyncRuntimeSmokeReadback {
   uint32_t height = 0;
   uint32_t bytesPerRow = 0;
   gpu::TextureFormat surfaceFormat = gpu::TextureFormat::BGRA8Unorm;
-  std::chrono::milliseconds budget{};
+  std::chrono::steady_clock::time_point deadline;
   int requestId = 0;
   std::shared_ptr<std::atomic_bool> inFlight;
   std::shared_ptr<std::atomic_bool> alive;
@@ -796,12 +813,13 @@ void CompleteAsyncRuntimeSmokeReadback(void* userdata) {
   gpu::Device& device = state->context->runtimeDevice();
   bool captureSucceeded = false;
   if (state->alive->load(std::memory_order_acquire)) {
-    gpu::Result<gpu::MapWaitReport> waited = device.waitForMapping(
-        state->mapping,
-        gpu::MapWaitParams{std::chrono::duration<double>(geode::kGpuWaitPollInterval).count(),
-                           std::chrono::duration<double>(state->budget).count()},
-        [alive = state->alive] { return !alive->load(std::memory_order_acquire); });
-    if (waited.hasResult() && waited.result().outcome == gpu::MapWaitOutcome::Ready &&
+    gpu::Result<gpu::MapSliceReport> polled = device.pollMapping(state->mapping);
+    if (polled.hasResult() && polled.result().state == gpu::MapSliceState::Pending &&
+        std::chrono::steady_clock::now() < state->deadline) {
+      emscripten_async_call(CompleteAsyncRuntimeSmokeReadback, state.release(), 1);
+      return;
+    }
+    if (polled.hasResult() && polled.result().state == gpu::MapSliceState::Ready &&
         state->alive->load(std::memory_order_acquire)) {
       gpu::Result<std::span<const uint8_t>> mapped = device.mappedBytes(state->mapping);
       if (mapped.hasResult() && mapped.result().size() >= state->size) {
@@ -866,7 +884,7 @@ bool StartAsyncRuntimeSmokeReadback(const std::shared_ptr<geode::GeodeDevice>& c
       .height = height,
       .bytesPerRow = bytesPerRow,
       .surfaceFormat = surfaceFormat,
-      .budget = budget,
+      .deadline = std::chrono::steady_clock::now() + budget,
       .requestId = requestId,
       .inFlight = inFlight,
       .alive = alive,
@@ -1908,6 +1926,30 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     return;
   }
 
+#ifndef __EMSCRIPTEN__
+  if (options_.offscreen && !useNullPlatform && offscreenScale != 1.0) {
+    int nativeLogicalWidth = 0;
+    int nativeLogicalHeight = 0;
+    glfwGetWindowSize(window_, &nativeLogicalWidth, &nativeLogicalHeight);
+    int nativeFramebufferWidth = 0;
+    int nativeFramebufferHeight = 0;
+    glfwGetFramebufferSize(window_, &nativeFramebufferWidth, &nativeFramebufferHeight);
+    const double nativeScaleX =
+        nativeLogicalWidth > 0 && nativeFramebufferWidth > 0
+            ? static_cast<double>(nativeFramebufferWidth) / static_cast<double>(nativeLogicalWidth)
+            : 1.0;
+    const double nativeScaleY = nativeLogicalHeight > 0 && nativeFramebufferHeight > 0
+                                    ? static_cast<double>(nativeFramebufferHeight) /
+                                          static_cast<double>(nativeLogicalHeight)
+                                    : nativeScaleX;
+    const int emulatedLogicalWidth = static_cast<int>(std::lround(
+        static_cast<double>(initialWidth) * offscreenScale / std::max(nativeScaleX, 0.001)));
+    const int emulatedLogicalHeight = static_cast<int>(std::lround(
+        static_cast<double>(initialHeight) * offscreenScale / std::max(nativeScaleY, 0.001)));
+    glfwSetWindowSize(window_, emulatedLogicalWidth, emulatedLogicalHeight);
+  }
+#endif
+
 #ifdef __EMSCRIPTEN__
   emscripten_glfw_make_canvas_resizable(window_, "window", nullptr);
 #endif
@@ -2027,27 +2069,6 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     return;
   }
 
-  if (options_.offscreen && !useNullPlatform && offscreenScale != 1.0) {
-    int nativeLogicalWidth = 0;
-    int nativeLogicalHeight = 0;
-    glfwGetWindowSize(window_, &nativeLogicalWidth, &nativeLogicalHeight);
-    int nativeFramebufferWidth = 0;
-    int nativeFramebufferHeight = 0;
-    glfwGetFramebufferSize(window_, &nativeFramebufferWidth, &nativeFramebufferHeight);
-    const double nativeScaleX =
-        nativeLogicalWidth > 0 && nativeFramebufferWidth > 0
-            ? static_cast<double>(nativeFramebufferWidth) / static_cast<double>(nativeLogicalWidth)
-            : 1.0;
-    const double nativeScaleY = nativeLogicalHeight > 0 && nativeFramebufferHeight > 0
-                                    ? static_cast<double>(nativeFramebufferHeight) /
-                                          static_cast<double>(nativeLogicalHeight)
-                                    : nativeScaleX;
-    const int emulatedLogicalWidth = static_cast<int>(std::lround(
-        static_cast<double>(initialWidth) * offscreenScale / std::max(nativeScaleX, 0.001)));
-    const int emulatedLogicalHeight = static_cast<int>(std::lround(
-        static_cast<double>(initialHeight) * offscreenScale / std::max(nativeScaleY, 0.001)));
-    glfwSetWindowSize(window_, emulatedLogicalWidth, emulatedLogicalHeight);
-  }
 #endif
 #endif
 
@@ -2360,6 +2381,123 @@ void EditorWindow::waitEventsTimeout(double timeoutSeconds) {
 #endif
 }
 
+#ifdef DONNER_EDITOR_WGPU
+void EditorWindow::setPresentationFrameIdentity(std::uint64_t frameId, std::uint64_t captureId,
+                                                bool inputRepresented, double viewportZoom) {
+  presentationFrameId_ = frameId;
+  presentationCaptureId_ = captureId;
+  presentationInputStamp_ = {.frameId = frameId,
+                             .captureId = captureId,
+                             .pointerX = ImGui::GetIO().MousePos.x,
+                             .pointerY = ImGui::GetIO().MousePos.y,
+                             .mouseDown = ImGui::GetIO().MouseDown[0],
+                             .inputRepresented = inputRepresented,
+                             .viewportZoom = viewportZoom};
+}
+
+bool EditorWindow::hasUsableFrameTarget(int width, int height) const {
+  return wgpuState_ != nullptr && wgpuState_->canPresentFrames() && width > 0 && height > 0;
+}
+
+bool EditorWindow::admitFrameSubmission(bool requestedReadback) {
+  bool ready = observePresentationCompletion();
+  if (!ready && requestedReadback && !presentationCompletionProbeForTesting_ &&
+      !wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
+    auto& device = wgpuState_->framebufferGeodeDevice->runtimeDevice();
+    if (device.waitForSerial(presentationSubmissions_.oldestSerial(), 0.25)) {
+      ready = observePresentationCompletion();
+    }
+  }
+  if (!ready) {
+    presentationWasDeferred_ = true;
+    ++coalescedPresentationFrames_;
+    return false;
+  }
+  presentationWasDeferred_ = false;
+  return true;
+}
+
+bool EditorWindow::observePresentationCompletion() {
+  if (wgpuState_ == nullptr || wgpuState_->framebufferGeodeDevice == nullptr) {
+    return false;
+  }
+  auto& device = wgpuState_->framebufferGeodeDevice->runtimeDevice();
+  device.poll();
+  const auto completed = presentationCompletionProbeForTesting_
+                             ? presentationCompletionProbeForTesting_()
+                             : device.completedSerial();
+#ifdef __EMSCRIPTEN__
+  const auto admission =
+      presentationSubmissions_.observe(completed, std::chrono::steady_clock::now(), [&] {
+        if (!wgpuState_->framebufferGeodeDevice->isDeviceLost()) {
+          ++presentationCompletionConfirmations_;
+          // A paused browser can have finished GPU work whose callback has not run yet.
+          (void)device.waitForSerial(presentationSubmissions_.oldestSerial(), 0.25);
+        }
+        return internal::PresentationSubmissionQueue::CompletionObservation{
+            device.completedSerial(), std::chrono::steady_clock::now()};
+      });
+#else
+  const auto admission =
+      presentationSubmissions_.observe(completed, std::chrono::steady_clock::now());
+#endif
+  if (admission == internal::PresentationSubmissionQueue::Admission::TimedOut &&
+      presentationTimeoutSerial_ == 0) {
+    presentationTimeoutSerial_ = presentationSubmissions_.oldestSerial();
+    presentationTimeoutAge_ = presentationSubmissions_.oldestAge(std::chrono::steady_clock::now());
+  }
+#ifdef __EMSCRIPTEN__
+  const auto frame = presentationSubmissions_.completed();
+  // clang-format off
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const previous = window['__donnerPresentationQueueStats'];
+        window['__donnerPresentationQueueStats'] = ({
+          'completedSerial' : $0,
+          'submittedSerial' : $1,
+          'framesInFlight' : $2,
+          'deviceCompletedSerial' : $11,
+          'oldestSerial' : $12,
+          'deviceLost' : Boolean($13),
+          'admission' : $14,
+          'coalescedFrames' : $3,
+          'frameId' : $4,
+          'captureId' : $5,
+          'pointerX' : $6,
+          'pointerY' : $7,
+                    'mouseDown' : Boolean($8),
+          'inputRepresented' : Boolean($9), 'viewportZoom' : $10,
+          'completedAtMs' : previous &&
+              Object.is(previous['completedSerial'], $0) ? previous['completedAtMs'] : performance.now(),
+        });
+      },
+      static_cast<double>(frame.serial), static_cast<double>(device.lastSubmittedSerial()),
+      static_cast<double>(presentationSubmissions_.pendingCount()),
+      static_cast<double>(coalescedPresentationFrames_), static_cast<double>(frame.frameId),
+      static_cast<double>(frame.captureId), frame.pointerX, frame.pointerY, frame.mouseDown, frame.inputRepresented, frame.viewportZoom,
+      static_cast<double>(device.completedSerial()), static_cast<double>(presentationSubmissions_.oldestSerial()),
+      wgpuState_->framebufferGeodeDevice->isDeviceLost(), static_cast<int>(admission));
+  MAIN_THREAD_ASYNC_EM_ASM({
+    const stats = window['__donnerPresentationQueueStats'];
+    if (stats) {
+      stats['timeoutSerial'] = $0;
+      stats['timeoutAgeMs'] = $1;
+      stats['completionConfirmations'] = $2;
+    }
+  }, static_cast<double>(presentationTimeoutSerial_), static_cast<double>(presentationTimeoutAge_.count()),
+      static_cast<double>(presentationCompletionConfirmations_));
+  // clang-format on
+#endif
+  if (admission == internal::PresentationSubmissionQueue::Admission::TimedOut) {
+    wgpuState_->framebufferGeodeDevice->markDeviceLostAfterWaitTimeout(
+        geode::GpuWaitSite::QueueIdle, presentationTimeoutAge_,
+        "UI submission completion remained overdue");
+    return false;
+  }
+  return admission == internal::PresentationSubmissionQueue::Admission::Ready;
+}
+#endif
+
 void EditorWindow::pollIdleGpu() {
 #ifdef DONNER_EDITOR_WGPU
   if (wgpuState_ == nullptr) {
@@ -2373,6 +2511,10 @@ void EditorWindow::pollIdleGpu() {
 #endif
   if (wgpuState_->framebufferGeodeDevice != nullptr) {
     wgpuState_->framebufferGeodeDevice->pollIdle();
+    if (observePresentationCompletion() && presentationWasDeferred_) {
+      presentationWasDeferred_ = false;
+      wakeEventLoop();
+    }
   }
 #endif
 }
@@ -2380,6 +2522,9 @@ void EditorWindow::pollIdleGpu() {
 bool EditorWindow::hasIdleGpuWork() const {
 #ifdef DONNER_EDITOR_WGPU
   if (wgpuState_ != nullptr) {
+    if (presentationSubmissions_.pendingCount() != 0 || presentationWasDeferred_) {
+      return true;
+    }
 #ifdef __EMSCRIPTEN__
     if (wgpuState_->geodeDevice != nullptr && wgpuState_->geodeDevice->hasIdleWork()) {
       return true;
@@ -2609,6 +2754,9 @@ bool EditorWindow::drawFrameBelowUi(const gpu::Texture& frameTarget, Vector2i fr
 bool EditorWindow::recordFrameUi(const gpu::Texture& frameTarget, Vector2i framebufferSizePx,
                                  bool loadExisting, EditorWindowFrameTiming& timing) {
   const auto imguiDrawStart = std::chrono::steady_clock::now();
+  if (forceUiPassFailureForTesting_) {
+    return false;
+  }
   if (wgpuState_->uiRenderer == nullptr) {
     return false;
   }
@@ -2805,7 +2953,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   if (targetReadback != nullptr) {
     *targetReadback = svg::RendererBitmap{};
   }
-  if (wgpuState_ == nullptr || !wgpuState_->canPresentFrames() || displayW <= 0 || displayH <= 0) {
+  if (!hasUsableFrameTarget(displayW, displayH)) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
     // No usable WGPU frame target remains, including after a terminal device loss. Complete this
     // diagnostic request as a terminal failure rather than rearming an impossible capture.
@@ -2814,6 +2962,10 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       WakeWasmEditorForPendingWgpuReadback();
     }
 #endif
+    return;
+  }
+  // A coalesced UI frame has not attempted surface setup or diagnostic capture.
+  if (!admitFrameSubmission(targetReadback != nullptr)) {
     return;
   }
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
@@ -2866,6 +3018,15 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   if (!configureFrameTarget(displayW, displayH)) {
     return;
   }
+  auto& submissionDevice = wgpuState_->framebufferGeodeDevice->runtimeDevice();
+  bool fullFramePresented = false;
+  SubmissionFenceCommit submissionFenceCommit{
+      .device = submissionDevice,
+      .queue = presentationSubmissions_,
+      .beforeSerial = submissionDevice.lastSubmittedSerial(),
+      .stamp = presentationInputStamp_,
+      .fullFramePresented = fullFramePresented};
+  submissionFenceCommit.stamp.submittedAt = std::chrono::steady_clock::now();
 
   // Holds this frame's acquisition for as long as the frame is being drawn; presenting it below
   // ends the acquisition and leaves this handle stale.
@@ -2934,6 +3095,8 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     surfacePresented = surfaceAcquired;
     timing.presentMs = ElapsedMs(presentStart);
   }
+  fullFramePresented = true;
+
 #else
   endFrameGl(readback, displayW, displayH, timing);
 #endif

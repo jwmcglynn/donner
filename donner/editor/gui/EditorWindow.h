@@ -24,6 +24,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <ostream>
@@ -475,8 +476,78 @@ struct UiScaleConfig {
   [[nodiscard]] float fontGlobalScale() const { return static_cast<float>(1.0 / displayScale); }
 };
 
-/// Derive the editor's UI scaling from logical window size, framebuffer size, and the platform's
-/// content scale hint. Prefers the framebuffer/logical ratio when available.
+namespace internal {
+/// Bounds pending UI submissions while retaining only the most recent input request.
+class PresentationSubmissionQueue {
+public:
+  using Clock = std::chrono::steady_clock;
+  enum class Admission { Ready, Busy, TimedOut };
+  friend std::ostream& operator<<(std::ostream& os, Admission admission) {
+    switch (admission) {
+      case Admission::Ready: return os << "Ready";
+      case Admission::Busy: return os << "Busy";
+      case Admission::TimedOut: return os << "TimedOut";
+    }
+    return os << "Admission(" << static_cast<int>(admission) << ")";
+  }
+  struct Fence {
+    std::uint64_t serial = 0;
+    std::uint64_t frameId = 0;
+    std::uint64_t captureId = 0;
+    double pointerX = 0.0;
+    double pointerY = 0.0;
+    bool mouseDown = false;
+    bool inputRepresented = false;
+    double viewportZoom = 0.0;
+    Clock::time_point submittedAt;
+  };
+  /// Serial and clock read after a bounded GPU completion confirmation.
+  struct CompletionObservation {
+    std::uint64_t serial;
+    Clock::time_point observedAt;
+  };
+  /// Observe completion before admitting a frame; a stopped queue reaches a finite deadline.
+  Admission observe(std::uint64_t completedSerial, Clock::time_point now) {
+    while (!pending_.empty() && pending_.front().serial <= completedSerial) {
+      completed_ = pending_.front();
+      pending_.pop_front();
+    }
+    if (!pending_.empty() && now - pending_.front().submittedAt >= std::chrono::seconds(5)) {
+      return Admission::TimedOut;
+    }
+    return pending_.size() < 3 ? Admission::Ready : Admission::Busy;
+  }
+  /// Recheck an expired submission using a bounded completion query.
+  template <typename CompletionProbe>
+  Admission observe(std::uint64_t completedSerial, Clock::time_point now,
+                    CompletionProbe&& confirmCompletion) {
+    const Admission admission = observe(completedSerial, now);
+    if (admission != Admission::TimedOut) {
+      return admission;
+    }
+    const CompletionObservation confirmed = confirmCompletion();
+    return observe(confirmed.serial, confirmed.observedAt);
+  }
+  /// Seal the serial and input that reached the GPU as one UI frame.
+  void submitted(Fence fence) { pending_.push_back(fence); }
+  std::size_t pendingCount() const { return pending_.size(); }
+  Fence completed() const { return completed_; }
+  std::uint64_t oldestSerial() const { return pending_.empty() ? 0 : pending_.front().serial; }
+  /// Elapsed time of the oldest unfinished frame without restarting its submission clock.
+  std::chrono::milliseconds oldestAge(Clock::time_point now) const {
+    return pending_.empty() ? std::chrono::milliseconds::zero()
+                            : std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  now - pending_.front().submittedAt);
+  }
+
+private:
+  std::deque<Fence> pending_;
+  Fence completed_;
+};
+}  // namespace internal
+
+/// Derive UI scaling from window size, framebuffer size, and the platform content scale hint.
+/// Prefers the framebuffer/logical ratio when available.
 [[nodiscard]] UiScaleConfig ComputeUiScaleConfig(int logicalWindowWidth, int framebufferWidth,
                                                  double contentScaleX);
 
@@ -788,6 +859,20 @@ public:
   /// Set the direct framebuffer overlay callback for the next and subsequent frames.
   /// The callback renders above the document underlay and below ImGui UI.
   void setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback);
+  /// Bind both GPU passes and completion diagnostics to this sealed document frame.
+  /// @param frameId Presentation frame. @param captureId Paired raster capture.
+  void setPresentationFrameIdentity(std::uint64_t frameId, std::uint64_t captureId,
+                                    bool inputRepresented, double viewportZoom);
+
+  /// Substitute completion observation while driving the real framebuffer test path.
+  /// @param probe Completed submission serial reported to the presentation scheduler.
+  /// Refuse UI recording after the document pass has submitted, simulating an allocation failure.
+  /// @param enabled Whether to refuse the UI pass.
+  void forceUiPassFailureForTesting(bool enabled) { forceUiPassFailureForTesting_ = enabled; }
+
+  void setPresentationCompletionProbeForTesting(std::function<std::uint64_t()> probe) {
+    presentationCompletionProbeForTesting_ = std::move(probe);
+  }
 
   /**
    * Test seam: bounds how long \ref endFrameAndReadPixels waits for its readback map, in place of
@@ -930,6 +1015,22 @@ private:
 #ifdef __EMSCRIPTEN__
   /// Cross-thread wake gate for the event-driven Wasm main loop.
   std::atomic_bool wasmFrameRequested_{true};
+#endif
+#ifdef DONNER_EDITOR_WGPU
+  bool observePresentationCompletion();
+  bool hasUsableFrameTarget(int width, int height) const;
+  bool admitFrameSubmission(bool requestedReadback);
+  internal::PresentationSubmissionQueue presentationSubmissions_;
+  bool presentationWasDeferred_ = false;
+  bool forceUiPassFailureForTesting_ = false;
+  std::uint64_t coalescedPresentationFrames_ = 0;
+  std::uint64_t presentationTimeoutSerial_ = 0;
+  std::chrono::milliseconds presentationTimeoutAge_{};
+  std::uint64_t presentationCompletionConfirmations_ = 0;
+  std::uint64_t presentationFrameId_ = 0;
+  std::uint64_t presentationCaptureId_ = 0;
+  internal::PresentationSubmissionQueue::Fence presentationInputStamp_;
+  std::function<std::uint64_t()> presentationCompletionProbeForTesting_;
 #endif
 };
 

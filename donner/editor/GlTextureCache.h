@@ -181,11 +181,17 @@ public:
   /// Reuse unchanged tile identities and evict payloads absent from the new snapshot.
   /// @param preview Paint-ordered worker tiles and metadata.
   /// @param rasterViewport Raster coverage represented by the preview, when known.
-  void uploadComposited(const RenderResult::CompositedPreview& preview,
-                        std::optional<EditorRasterViewport> rasterViewport = std::nullopt);
+  /// @param overview Optional same-scene overview that must be prepared in the same transaction.
+  /// @return True only when every required payload is ready and the complete set was installed.
+  bool uploadComposited(const RenderResult::CompositedPreview& preview,
+                        std::optional<EditorRasterViewport> rasterViewport = std::nullopt,
+                        const RenderResult* overview = nullptr,
+                        std::shared_ptr<const CapturedPresentation> capture = nullptr);
   /// Upload a full-document overview preview without replacing active viewport-bounded tiles.
-  void uploadCompositedOverview(const RenderResult::CompositedPreview& preview,
-                                const EditorRasterViewport& rasterViewport);
+  /// @return False without changing the presented resources when preparation fails.
+  bool uploadCompositedOverview(const RenderResult::CompositedPreview& preview,
+                                const EditorRasterViewport& rasterViewport,
+                                std::shared_ptr<const CapturedPresentation> capture = nullptr);
 
   /// Advance one presentation frame, retiring WGPU texture snapshots whose
   /// handles have aged past the backend's frames-in-flight window.
@@ -229,6 +235,8 @@ public:
 
   /// One cached tile's ImGui texture handle and paint-order geometry.
   struct TileView {
+    std::shared_ptr<const void> uiTextureLifetime;  //!< Registration owned by all published users.
+
     ImTextureID texture =
         0;           //!< ImGui handle for this tile, or zero when no cached payload can be reused.
     std::string id;  //!< Stable composited tile identifier.
@@ -243,13 +251,72 @@ public:
     Vector2d dragTranslationDoc =
         Vector2d::Zero();  //!< Document-space drag offset for presentation.
     std::shared_ptr<const svg::RendererTextureSnapshot>
-        textureSnapshot;                          //!< Retained GPU snapshot backing a Geode tile.
+        textureSnapshot;  //!< Retained GPU snapshot backing a Geode tile.
+#ifndef DONNER_EDITOR_WGPU
+    /// Shared GL allocation retained by every frame referencing this tile.
+    std::shared_ptr<const GLuint> glTextureLifetime;
+#endif
     Vector2d uvBottomRight = Vector2d(1.0, 1.0);  //!< Bottom-right UV of valid texture content.
     Transform2d documentFromCachedDocument =
         Transform2d();          //!< Transform from cached-document to current-document space.
     bool metadataOnly = false;  //!< True when the tile carries no new texture payload.
     bool isDragTarget = false;  //!< Whether this tile is the active drag target.
   };
+
+  /// Owner-indexed coverage and paint bounds in one immutable raster coordinate system.
+  struct RasterCoverageGroup {
+    Transform2d documentFromRaster;
+    std::vector<Box2d> tileBounds;
+    std::vector<Box2d> paintBounds;
+  };
+
+  /// Immutable resource manifest published only after complete preparation succeeds.
+  class PresentationResources {
+  public:
+    /// Captured geometry and poses corresponding to the active tile set.
+    [[nodiscard]] std::shared_ptr<const CapturedPresentation> capture() const { return capture_; }
+    /// Captured state represented by the retained overview, when available.
+    [[nodiscard]] std::shared_ptr<const CapturedPresentation> overviewCapture() const {
+      return overviewCapture_;
+    }
+    /// Owned paint-order active tile views, valid for this resource manifest's lifetime.
+    [[nodiscard]] const std::vector<TileView>& tiles() const UTILS_LIFETIME_BOUND { return tiles_; }
+    /// Owned overview tile views, valid for this resource manifest's lifetime.
+    [[nodiscard]] const std::vector<TileView>& overviewTiles() const UTILS_LIFETIME_BOUND {
+      return overviewTiles_;
+    }
+    /// Coverage cached for one object, aliasing this manifest's immutable storage.
+    /// @param entity Object owning the raster tiles. @param overview Select overview coverage.
+    [[nodiscard]] const std::vector<RasterCoverageGroup>& objectCoverage(
+        Entity entity, bool overview) const UTILS_LIFETIME_BOUND;
+
+    /// Coverage recorded by the same successful publication.
+    [[nodiscard]] const PresentationCoverageDiagnostics& coverage() const UTILS_LIFETIME_BOUND {
+      return coverage_;
+    }
+
+  private:
+    friend class GlTextureCache;
+    friend struct FramePresentationTestAccess;
+    PresentationResources() = default;
+    void indexCoverage();
+    using CoverageIndex = std::unordered_map<Entity, std::vector<RasterCoverageGroup>>;
+    static CoverageIndex IndexCoverage(const CapturedPresentation& capture,
+                                       const std::vector<TileView>& tiles);
+    CoverageIndex activeCoverage_;
+    CoverageIndex overviewCoverage_;
+
+    std::shared_ptr<const CapturedPresentation> capture_;
+    std::shared_ptr<const CapturedPresentation> overviewCapture_;
+    std::vector<TileView> tiles_;
+    std::vector<TileView> overviewTiles_;
+    PresentationCoverageDiagnostics coverage_;
+  };
+
+  /// Obtain one complete resource/geometry binding; failed candidates never replace it.
+  [[nodiscard]] std::shared_ptr<const PresentationResources> presentationResources() const {
+    return presentationResources_;
+  }
 
   /// Paint-order tile view; metadata-only direct-surface entries have a zero texture handle.
   /// Empty when no composited preview has been uploaded yet (or the preview was cleared via
@@ -287,7 +354,8 @@ private:
   /// Registers \p snapshot as a UI texture and retains the handles backing it until the
   /// registration is retired. Returns zero when it cannot be registered.
   /// @param snapshot Snapshot to register.
-  NativeTextureHandle registerSnapshotTexture(const svg::RendererTextureSnapshot& snapshot);
+  NativeTextureHandle registerSnapshotTexture(const svg::RendererTextureSnapshot& snapshot,
+                                              std::shared_ptr<const void>* lifetime);
 
   /// Upload a CPU bitmap into a runtime texture owned by the returned snapshot, or null when the
   /// payload is invalid or the runtime refuses the upload.
@@ -309,8 +377,13 @@ private:
 #endif
 
   struct CachedTextureEntry {
+    std::shared_ptr<const void> uiTextureLifetime;  //!< Registration owned by all published users.
+
     NativeTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
+#ifndef DONNER_EDITOR_WGPU
+    std::shared_ptr<const GLuint> glTextureLifetime;
+#endif
     CompositedTileTextureIdentity identity;
     std::uint64_t uploadedGeneration = 0;
     int width = 0;
@@ -320,8 +393,41 @@ private:
     Vector2d uvBottomRight = Vector2d(1.0, 1.0);
   };
 
+  using TextureEntries = std::unordered_map<std::string, CachedTextureEntry>;
+  void releaseCachedEntry(const CachedTextureEntry& entry);
+  static const CachedTextureEntry* reusableEntry(const RenderResult::CompositedTile& tile,
+                                                 const TextureEntries& entries);
+  void recordActiveCoverage(const std::optional<EditorRasterViewport>& rasterViewport);
+  std::shared_ptr<const CapturedPresentation> retainedOverviewCapture(
+      bool retainAsOverview, const std::shared_ptr<const CapturedPresentation>& capture,
+      const RenderResult* overview) const;
+  struct PreparedTileSet {
+    TextureEntries entries;
+    std::vector<TileView> views;
+    std::vector<CachedTextureEntry> newEntries;
+  };
+
+  std::optional<PreparedTileSet> prepareOverviewTiles(
+      bool retainAsOverview, const RenderResult::CompositedPreview& preview,
+      const RenderResult* overview, const PreparedTileSet& active);
+  static TileView makeTileView(const RenderResult::CompositedTile& tile,
+                               const CachedTextureEntry& entry);
+  std::optional<CachedTextureEntry> uploadTilePayload(const RenderResult::CompositedTile& tile);
+  std::optional<PreparedTileSet> prepareTileSet(const RenderResult::CompositedPreview& preview,
+                                                const TextureEntries& prior,
+                                                const TextureEntries* fallback = nullptr);
+  std::optional<CachedTextureEntry> prepareTileEntry(const RenderResult::CompositedTile& tile,
+                                                     const TextureEntries& prior,
+                                                     const TextureEntries* fallback,
+                                                     PreparedTileSet& prepared);
+  bool referencedOutside(NativeTextureHandle texture, const TextureEntries& entries) const;
+  void discardPreparedTiles(PreparedTileSet& prepared);
+  void commitTileSet(PreparedTileSet prepared, TextureEntries& entries,
+                     std::vector<TileView>& views);
+
 #ifdef DONNER_EDITOR_WGPU
   struct RetiredSnapshot {
+    std::shared_ptr<const void> uiTextureLifetime;
     NativeTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> snapshot;
     /// Backing allocation the retired texture still holds, which can exceed the snapshot's
@@ -339,7 +445,7 @@ private:
 
   std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice_;
   /// Handles backing each live registration, dropped when that registration is retired.
-  std::unordered_map<ImTextureID, UiTextureBacking> registeredBackings_;
+  std::unordered_map<ImTextureID, std::weak_ptr<const void>> registeredBackings_;
 #endif
 
   /// Tile payload cache keyed on `CompositedTile::id`; unchanged identities reuse their
@@ -359,6 +465,10 @@ private:
 
   /// Paint-order view of the most recent `uploadComposited` call.
   /// Rebuilt every upload (cheap - N tiles, plain values).
+  void publishResources(std::shared_ptr<const CapturedPresentation> capture,
+                        std::shared_ptr<const CapturedPresentation> overviewCapture);
+  friend struct FramePresentationTestAccess;
+  std::shared_ptr<const PresentationResources> presentationResources_;
   std::vector<TileView> tiles_;
   /// Paint-order view of `overviewTileTextures_`.
   std::vector<TileView> overviewTiles_;

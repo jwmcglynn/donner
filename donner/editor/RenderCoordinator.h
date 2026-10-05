@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -17,6 +18,7 @@
 #include "donner/editor/CompositedPresentation.h"
 #include "donner/editor/DocumentPixelSampler.h"
 #include "donner/editor/FrameCostBreakdown.h"
+#include "donner/editor/FramePresentation.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/PresentationRenderScheduler.h"
@@ -28,6 +30,9 @@ class GeodeDevice;
 }
 
 namespace donner::editor {
+
+/// Prepare renderer-owned resources before publishing a sealed frame; false retains the old frame.
+using FramePresentationAdmission = std::function<bool(const FramePresentation&)>;
 
 class SelectTool;
 
@@ -50,6 +55,15 @@ struct DocumentPixelCapture {
 
 /// What a posted render request asked the worker for, as far as deciding whether a later request
 /// would repeat it.
+/// Stable repair inputs, excluding allocation counters that cannot make a retry productive.
+struct PresentationRepairIdentity {
+  PresentationIdentity scene;
+  std::vector<Entity> selection;
+  std::vector<PresentationPose> poses;
+  EditorRasterViewport coverage;
+  FramePresentationFailure failure = FramePresentationFailure::None;
+};
+
 struct RenderAttemptIdentity {
   std::uint64_t documentGeneration = 0;  //!< Document the request rendered.
   std::uint64_t version = 0;             //!< Document frame version the request rendered.
@@ -58,6 +72,7 @@ struct RenderAttemptIdentity {
   Entity selectedEntity = entt::null;    //!< Selected entity the request kept promoted.
   std::optional<RenderRequest::DragPreview> dragPreview;  //!< Drag state the request carried.
   std::uint64_t presentationEpoch = 0;  //!< Presentation-refresh epoch for renderer settings.
+  std::optional<PresentationRepairIdentity> repair;
 };
 
 /**
@@ -313,6 +328,11 @@ public:
   [[nodiscard]] std::optional<float> nextNothingToPresentRetryWakeSeconds() const;
   /// Whether a renderer-presentation setting still needs a worker frame.
   [[nodiscard]] bool presentationRefreshPending() const { return pendingPresentationRefresh_; }
+  /// Request a missing coherent frame without invalidating already-running work.
+  [[nodiscard]] bool frameRepairPending() const { return presentationNeedsRender_; }
+  /// Whether the sealed frame represents the input considered by the latest UI frame.
+  [[nodiscard]] bool frameRepresentsCurrentIntent() const { return frameRepresentsCurrentIntent_; }
+
   /// Clear the per-frame cost accumulator before a new UI frame starts.
   void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
   /// Replace transient source-hover chrome elements.
@@ -356,17 +376,13 @@ public:
     penHoverCloseAffordanceDoc_ = closeAffordanceDoc;
   }
 
-  /// Set (or clear) the text tool's editing chrome for the next overlay
-  /// capture: the caret bar and the session frame's oriented corners (local
-  /// TL, TR, BR, BL mapped through the text's transform), in document space.
-  void setTextEditingChrome(std::optional<SelectionChromeSnapshot::TextCaret> caretDoc,
-                            std::optional<std::array<Vector2d, 4>> frameCornersDoc,
-                            float frameOpacity = 1.0f,
-                            std::vector<std::array<Vector2d, 4>> selectionQuadsDoc = {}) {
-    textEditingCaretDoc_ = caretDoc;
-    textEditingFrameCornersDoc_ = frameCornersDoc;
-    textEditingFrameOpacity_ = frameOpacity;
-    textEditingSelectionQuadsDoc_ = std::move(selectionQuadsDoc);
+  /// Retain a text annotation together with the exact layout state used to measure it.
+  /// @param text Captured text geometry, or null to end the editing annotation.
+  void setTextEditingChrome(std::optional<CapturedPresentation::TextEditing> text) {
+    if (text.has_value()) {
+      text->identity.presentationEpoch = presentationEpoch_;
+    }
+    textEditing_ = std::move(text);
   }
 
   /// Set (or clear) the text tool's drag-to-create preview chrome for the
@@ -388,27 +404,8 @@ public:
   void refreshSelectionBoundsCache(EditorApp& app);
   /// Promote pending selection bounds once their document version is displayed.
   void promoteSelectionBoundsIfReady();
-  /// Capture the editor chrome (path outlines, selection AABBs, marquee) for immediate
-  /// presentation. `marqueeRectDoc` is the active marquee rectangle in document space (nullopt when
-  /// the user isn't marquee-dragging). The snapshot remains vector geometry until the presentation
-  /// layer rasterizes it into the ordered Geode overlay texture.
-  bool rasterizeOverlayForCurrentSelection(
-      EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
-      std::optional<SelectTool::ActiveDragPreview> representedDragPreview = std::nullopt,
-      std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview = std::nullopt,
-      std::optional<SelectionChromeDetail> selectionDetail = std::nullopt,
-      std::optional<SelectTool::ActiveDragPreview> documentDragPreview = std::nullopt);
-  /// Rasterize the current UI-frame overlay immediately before presentation.
-  ///
-  /// Unlike content render scheduling, overlay chrome is intentionally not gated on worker
-  /// availability: drag, zoom, and marquee feedback must track the viewport used by the presented
-  /// frame.
-  bool rasterizeOverlayForPresentation(
-      EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
-      GlTextureCache& textures, std::optional<SelectTool::ActiveDragPreview> activeDragPreview,
-      std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
-      std::optional<SelectionChromeDetail> selectionDetail = std::nullopt,
-      bool allowLiveGeometryOverlay = false);
+  /// Request annotation geometry from the next safe state matching the accepted raster.
+  void requestSelectionGeometryRefresh() { selectionGeometryRefreshRequested_ = true; }
   /// Drain the latest async-render result into the editor's UI state.
   /// If a `frameHistory` is supplied, its latest slot is stamped with
   /// the backend (worker) ms reported by `AsyncRenderer` so the frame
@@ -450,17 +447,24 @@ public:
   [[nodiscard]] Entity suppressedCompositedLayerEntity(EditorApp& app);
   /// Return true when the live selected graphics element is hidden by `display:none`.
   [[nodiscard]] bool selectedElementIsDisplayNone(EditorApp& app) const;
+  /// Seal the resource, object-pose and selection decision used by every draw pass this frame.
+  std::shared_ptr<const FramePresentation> buildFramePresentation(
+      EditorApp& app, SelectTool& tool, const ViewportState& viewport, const Box2d& paneClipRect,
+      SelectionChromeDetail detail, bool includeChrome = true,
+      FramePresentationAdmission admit = {});
+  /// Last installed immutable frame, retained for diagnostics and render callbacks.
+  [[nodiscard]] std::shared_ptr<const FramePresentation> framePresentation() const {
+    return framePresentation_;
+  }
   /// Latest race-free overlay chrome snapshot for immediate screen-space presentation.
   [[nodiscard]] const std::optional<SelectionChromeSnapshot>& immediateOverlaySnapshot() const {
     return immediateOverlaySnapshot_;
   }
   /// Document version represented by \ref immediateOverlaySnapshot, if one is currently cached.
   [[nodiscard]] std::optional<std::uint64_t> immediateOverlayDocumentVersionForDiagnostics() const {
-    if (!immediateOverlaySnapshot_.has_value() ||
-        lastOverlayVersion_ == std::numeric_limits<std::uint64_t>::max()) {
-      return std::nullopt;
-    }
-    return lastOverlayVersion_;
+    return framePresentation_
+               ? std::optional<std::uint64_t>(framePresentation_->selectionIdentity().version)
+               : std::nullopt;
   }
   /// Pending selected-layer rasterization entity for replay diagnostics.
   [[nodiscard]] Entity pendingSelectedLayerRasterizationEntityForDiagnostics() const {
@@ -474,13 +478,6 @@ public:
   [[nodiscard]] std::uint64_t displayedDocVersionForDiagnostics() const {
     return displayedDocVersion_;
   }
-  /// Cumulative count of overlay refreshes suppressed because the live document
-  /// version ran ahead of the displayed presentation. Diagnostics only: lets a
-  /// browser probe distinguish "selection chrome intentionally hidden" from
-  /// "selection chrome lost".
-  [[nodiscard]] std::uint64_t overlayVersionGateSuppressionTotalForDiagnostics() const {
-    return overlayVersionGateSuppressionTotal_;
-  }
   /// Cumulative count of worker results that had nothing to present. Diagnostics only: a count
   /// that keeps rising under a frozen canvas names a renderer that produces nothing, not a stalled
   /// worker.
@@ -491,15 +488,27 @@ public:
   [[nodiscard]] Entity selectedCompositedEntityForDiagnostics(EditorApp& app) const;
 
 private:
+  std::vector<Entity> selectedPresentationEntities(const EditorApp& app) const;
+  std::optional<LockedRejectionFlashInput> lockedFlashForCapture() const;
+  bool shouldRecaptureSelection(const CapturedPresentation& captured,
+                                const std::vector<Entity>& selection) const;
+  void refreshFrameSelectionCapture(EditorApp& app,
+                                    const std::shared_ptr<const CapturedPresentation>& captured,
+                                    const std::vector<Entity>& selection);
+  FramePresentationInput makeFrameInput(EditorApp& app, SelectTool& tool,
+                                        const ViewportState& viewport, const Box2d& paneClipRect,
+                                        SelectionChromeDetail detail, bool includeChrome);
+  void refreshLivePathCapture(EditorApp& app, FramePresentationInput& input);
+  void recordFramePresentationCost(const FramePresentationInput& input, const SelectTool& tool,
+                                   double elapsedMs);
+  bool hasForcedRenderReason(bool captureNeeded) const;
+  bool prepareResultResources(RenderResult& result, EditorApp& app, GlTextureCache& textures);
+  std::optional<SelectTool::ActiveDragPreview> previewWithPresentationEpoch(
+      std::optional<SelectTool::ActiveDragPreview> preview) const;
+  void capturePresentationRequest(RenderRequest& request, const EditorApp& app) const;
+
   friend class EditorShellTestAccess;
   friend struct RenderCoordinatorTestAccess;
-  [[nodiscard]] bool clipGuideCacheMatches(Entity selectedEntity, std::uint64_t documentGeneration,
-                                           std::uint64_t nonTransformRevision) const;
-  void updateClipGuidesForOverlay(
-      const EditorApp& app, std::span<const svg::SVGElement> selection,
-      const std::optional<SelectTool::ActiveDragPreview>& activePreview,
-      const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
-      const Transform2d& representedDocumentFromLiveDocument, SelectionChromeSnapshot* snapshot);
   void noteMissingPixelCaptureResult(const std::optional<RenderResult>& result);
   void rejectRenderResult(const std::optional<RenderResult>& result);
   void rejectPixelCaptureResult(const std::optional<RenderResult>& result);
@@ -538,23 +547,8 @@ private:
       const GlTextureCache* textures, Entity suppressedLayerEntity) const;
   [[nodiscard]] std::vector<Entity> selectedCompositedExtraEntities(EditorApp& app,
                                                                     Entity primaryEntity) const;
-  /**
-   * True when the elements \ref immediateOverlaySnapshot draws chrome for are no longer the
-   * elements the editor would draw chrome for now.
-   *
-   * This is about *what* the chrome annotates, not where it sits: a snapshot captured for a
-   * different selection or source-hover set annotates elements that are no longer selected or
-   * hovered. That is the one difference the overlay refresh may never skip, because a snapshot
-   * describing the wrong elements is worse than one that trails the live geometry by a frame.
-   *
-   * Selection and source hover are not the whole chrome subject. A locked-rejection flash outlines
-   * an element that is not selected, and a marquee rect is chrome that annotates no element at all.
-   * Both are short-lived interaction state that already keeps the overlay refreshing every frame on
-   * its own, so they are compared with the rest of the per-frame geometry instead of here.
-   *
-   * @param app Editor application state holding the live selection.
-   */
-  [[nodiscard]] bool chromeSubjectDiffersFromSnapshot(const EditorApp& app) const;
+  Entity suppressedLayerWithoutSelection(EditorApp& app);
+  Entity suppressedLayerForHiddenSelection(const svg::SVGElement& selected);
 
   struct RenderWorkerBundle {
     explicit RenderWorkerBundle(
@@ -570,76 +564,51 @@ private:
   CompositedPresentation compositedPresentation_;
   SelectionBoundsCache selectionBoundsCache_;
   std::optional<SelectionChromeSnapshot> immediateOverlaySnapshot_;
-  struct ClipGuideCache {
-    SelectionChromeSnapshot baseline;
-    Entity selectedEntity = entt::null;
-    std::uint64_t documentGeneration = 0;
-    std::uint64_t nonTransformRevision = 0;
-    std::uint64_t dragGeneration = 0;
-  };
-  std::optional<ClipGuideCache> clipGuideCache_;
+  std::shared_ptr<const FramePresentation> framePresentation_;
+  std::shared_ptr<const CapturedPresentation> selectedSceneCapture_;
+  std::shared_ptr<const CapturedPresentation> livePathCapture_;
+  std::uint64_t nextPresentationFrameId_ = 1;
+  bool presentationNeedsRender_ = false;
+  bool frameRepresentsCurrentIntent_ = false;
+  bool presentationNeedsCoverage_ = false;
+  FramePresentationFailure adoptionFailure_ = FramePresentationFailure::None;
+  std::optional<PresentationRepairIdentity> pendingRepair_;
+  std::optional<FramePresentationInput> reusableFrameInput_;
+  std::shared_ptr<const GlTextureCache::PresentationResources> reusableFrameResources_;
+  std::shared_ptr<const CapturedPresentation> reusableSelectionCapture_;
+  void updateFrameRepairStatus(
+      const FramePresentationInput& input,
+      const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
+      const FramePresentationBuildResult& outcome);
+  void installFrameDecision(
+      const FramePresentationInput& input,
+      const std::shared_ptr<const GlTextureCache::PresentationResources>& resources,
+      std::shared_ptr<const FramePresentation> frame);
+  void configurePresentationRepair(RenderRequest& request) const;
+  bool canReuseFrame(
+      const FramePresentationInput& input,
+      const std::shared_ptr<const GlTextureCache::PresentationResources>& resources) const;
+  std::optional<RenderAttemptIdentity> acceptedRepairAttempt_;
+  std::uint64_t lastRejectedRepairCapture_ = 0;
+  PresentationIdentity currentPresentationIdentity(const EditorApp& app) const;
+  void rejectPreparedPresentation(FramePresentationFailure failure);
+
+  bool selectionGeometryRefreshRequested_ = true;
 
   std::uint64_t displayedDocVersion_ = 0;
-  std::uint64_t overlayVersionGateSuppressionTotal_ = 0;
 
-  std::vector<svg::SVGElement> lastOverlaySelectionVec_;
   std::vector<svg::SVGElement> sourceHoverElements_;
-  /// Active locked-rejection flash pushed by the editor each frame, drawn red on the next overlay
-  /// capture and fading toward zero intensity. nullopt when no element is being rejected.
   std::optional<SelectTool::LockedRejectionFlash> lockedRejectionFlash_;
-  std::vector<svg::SVGElement> lastOverlaySourceHoverVec_;
-  Vector2i lastOverlayRasterSize_ = Vector2i::Zero();
-  std::optional<Box2d> lastOverlayScreenRect_;
-  std::optional<Transform2d> lastOverlayCanvasFromDocument_;
-  SelectionChromeDetail lastOverlaySelectionDetail_ = SelectionChromeDetail::Full;
-  bool lastOverlayInteractionActive_ = false;
-  std::chrono::steady_clock::time_point overlayStableSince_{};
-  std::uint64_t lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
-  /// Last marquee rect captured into the immediate overlay snapshot, or nullopt if the last
-  /// overlay capture didn't include one. Used to invalidate cached chrome when marquee geometry
-  /// changes.
-  std::optional<Box2d> lastOverlayMarqueeRectDoc_;
-  /// Active rotation bounds captured into the immediate overlay snapshot, or nullopt when the last
-  /// overlay used normal axis-aligned selection bounds.
-  std::optional<SelectTool::ActiveTransformBoundsPreview> lastOverlayActiveBoundsPreview_;
-  /// Path element the Pen tool is actively editing; captured as
-  /// `SelectionChromeSnapshot::livePathPreview` on every overlay capture.
   std::optional<svg::SVGElement> penLivePreviewElement_;
-  /// Pen live-preview element baked into the current immediate overlay snapshot. Used to
-  /// invalidate cached chrome when the preview target appears/changes/clears.
-  std::optional<svg::SVGElement> lastOverlayPenLivePreviewElement_;
-  /// The live preview element's computed spline (element space) observed when the current
-  /// overlay snapshot was captured. Pen anchor/handle drags mutate the path in place on the
-  /// SAME element with no other overlay input changing, so element identity alone froze the
-  /// snapshot at its first - possibly degenerate - capture while the pen preview suppressed
-  /// the element's raster tile, leaving the edited path invisible for the rest of the drag.
-  /// Comparing the spline itself re-captures the overlay whenever the geometry changes.
-  std::optional<Path> lastOverlayPenLiveSpline_;
-  /// Pen hover chrome pushed by the shell each frame: rubber-band segment
-  /// preview + close-path affordance (document space).
   std::optional<Path> penHoverPreviewSegmentDoc_;
   std::optional<Vector2d> penHoverCloseAffordanceDoc_;
-  std::optional<SelectionChromeSnapshot::TextCaret> textEditingCaretDoc_;
-  std::optional<std::array<Vector2d, 4>> textEditingFrameCornersDoc_;
-  float textEditingFrameOpacity_ = 1.0f;
-  std::vector<std::array<Vector2d, 4>> textEditingSelectionQuadsDoc_;
-  /// Text-box drag-to-create preview pushed by the shell each frame.
+  std::optional<CapturedPresentation::TextEditing> textEditing_;
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> textBoxDragPreviewDoc_;
-  /// Pen hover chrome baked into the current immediate overlay snapshot;
-  /// hover moves must re-capture even though the document version is
-  /// unchanged.
-  std::optional<Path> lastOverlayPenHoverPreviewSegmentDoc_;
-  std::optional<Vector2d> lastOverlayPenHoverCloseAffordanceDoc_;
-  std::optional<SelectionChromeSnapshot::TextCaret> lastOverlayTextEditingCaretDoc_;
-  std::optional<std::array<Vector2d, 4>> lastOverlayTextEditingFrameCornersDoc_;
-  float lastOverlayTextEditingFrameOpacity_ = 1.0f;
-  std::vector<std::array<Vector2d, 4>> lastOverlayTextEditingSelectionQuadsDoc_;
-  std::optional<SelectionChromeSnapshot::TextBoxDragPreview> lastOverlayTextBoxDragPreviewDoc_;
 
-  /// Publish a validated tile set and advance its matching presentation and selection state.
   void presentCompositedResult(RenderResult& result, EditorApp& app, const ViewportState& viewport,
                                GlTextureCache& textures);
   /// Hold a refreshed overview until detailed tiles can publish the same document version.
+  bool canReplaceWithOverview(const RenderResult& result, const EditorApp& app) const;
   void acceptOverviewResult(RenderResult result, EditorApp& app, GlTextureCache& textures);
   /// Whether the staged overview and detailed result describe the current document.
   bool hasMatchingPendingOverview(const RenderResult& result, EditorApp& app) const;
@@ -648,6 +617,8 @@ private:
                               const EditorRasterViewport& rasterViewport, EditorApp& app,
                               const GlTextureCache& textures) const;
   /// Consume stale staging and determine whether full-document coverage needs refreshing.
+  bool requiresFreshOverview(bool available, std::uint64_t currentVersion) const;
+  void discardStalePendingOverview(const EditorApp& app);
   bool needsOverviewInfillForViewport(EditorApp& app, const EditorRasterViewport& rasterViewport,
                                       bool activeDrag, const GlTextureCache* textures);
 

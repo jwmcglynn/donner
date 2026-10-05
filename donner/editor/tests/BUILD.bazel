@@ -545,8 +545,12 @@ donner_cc_test(
     }),
     variants = ["geode"],
     deps = [
+        ":frame_presentation_test_access",
         "//donner/base",
+        "//donner/editor:captured_presentation",
         "//donner/editor:document_presenter",
+        "//donner/editor:editor_app",
+        "//donner/editor:frame_presentation",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -570,12 +574,17 @@ donner_cc_test(
     name = "render_pane_presenter_visual_repro_tests",
     srcs = ["RenderPanePresenterVisualRepro_tests.cc"],
     deps = [
+        ":frame_presentation_test_access",
         "//donner/base",
         "//donner/base:base_test_utils",
         "//donner/editor:document_presentation_compositor",
+        "//donner/editor:document_presenter",
+        "//donner/editor:editor_app",
+        "//donner/editor:editor_shell_presentation",
         "//donner/editor:gl_texture_cache",
         "//donner/editor:imgui_headers",
         "//donner/editor:menu_bar_presenter",
+        "//donner/editor:render_coordinator",
         "//donner/editor:render_pane_presenter",
         "//donner/editor/gui:editor_window",
         "//donner/svg/renderer:renderer_image_io",
@@ -595,11 +604,34 @@ donner_cc_test(
     ],
 )
 
+donner_cc_library(
+    name = "frame_presentation_test_access",
+    testonly = True,
+    hdrs = ["FramePresentationTestAccess.h"],
+    deps = ["//donner/editor:frame_presentation"],
+)
+
+donner_cc_test(
+    name = "frame_presentation_tests",
+    srcs = ["FramePresentation_tests.cc"],
+    deps = [
+        ":frame_presentation_test_access",
+        "//donner/editor:captured_presentation",
+        "//donner/editor:editor_app",
+        "//donner/editor:frame_presentation",
+        "//donner/editor:presented_frame_composer",
+        "//donner/editor:select_tool",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "composited_presentation_tests",
     srcs = ["CompositedPresentation_tests.cc"],
     deps = [
+        ":frame_presentation_test_access",
         "//donner/editor:composited_presentation",
+        "//donner/editor:editor_app",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -708,6 +740,7 @@ donner_cc_test(
     data = ["//:geode_splash.svg"],
     deps = [
         ":bitmap_golden_compare",
+        ":frame_presentation_test_access",
         ":render_coordinator_test_access",
         "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
@@ -749,6 +782,8 @@ donner_cc_test(
     opens_gpu_device = True,
     variants = ["geode"],
     deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:frame_presentation",
         "//donner/editor:gl_texture_cache",
         "@com_google_gtest//:gtest_main",
     ] + select({

@@ -1631,6 +1631,21 @@ void Device::noteMappingOutcome(const BufferMapping& mapping, MapWaitOutcome out
   }
 }
 
+Result<MapSliceReport> Device::pollMapping(const BufferMapping& mapping) {
+  auto record = resolve(bufferMappings_, mapping, BufferMappingTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  if (record.result()->bufferRetired) {
+    return GpuError{GpuErrorType::InvalidHandle, "pollMapping: mapped buffer was destroyed"};
+  }
+  const MapSliceReport slice = onWaitMappingSlice(mapping.slotIndex(), 0.0);
+  if (const auto outcome = OutcomeForSlice(slice.state); outcome.has_value()) {
+    noteMappingOutcome(mapping, *outcome);
+  }
+  return slice;
+}
+
 Result<MapWaitReport> Device::waitForMapping(const BufferMapping& mapping,
                                              const MapWaitParams& params,
                                              const std::function<bool()>& shouldCancel,
@@ -1697,7 +1712,7 @@ Result<std::span<const uint8_t>> Device::mappedBytes(const BufferMapping& mappin
   }
   if (!record.result()->ready) {
     return GpuError{GpuErrorType::InvalidState,
-                    "mappedBytes: the mapping has not completed; wait for it with waitForMapping "
+                    "mappedBytes: the mapping has not completed; poll or wait for it "
                     "before reading its bytes"};
   }
   return onMappedBytes(mapping.slotIndex());

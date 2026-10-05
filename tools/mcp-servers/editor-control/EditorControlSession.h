@@ -99,6 +99,7 @@ public:
 
   struct DisplayTileView {
     RenderResult::CompositedTile::Kind kind = RenderResult::CompositedTile::Kind::Segment;
+    Entity layerEntity = entt::null;
     std::string id;
     std::uint64_t generation = 0;
     Vector2i bitmapDimsPx = Vector2i::Zero();

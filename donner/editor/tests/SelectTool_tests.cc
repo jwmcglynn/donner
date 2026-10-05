@@ -373,6 +373,26 @@ TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
   EXPECT_EQ(app.document().queue().size(), 1u);
 }
 
+TEST_F(SelectToolTest, RepeatedResolvedPoseDoesNotInvalidateCommittedDocument) {
+  app.setSelection(elementById("#r1"));
+  tool.onMouseDown(app, Vector2d(15, 15), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(50, 35), true);
+  ASSERT_TRUE(app.flushFrame());
+  const auto version = app.document().currentFrameVersion();
+  const auto revision = app.document().document().handle()->revision();
+  tool.onMouseMove(app, Vector2d(50, 35), true);
+  EXPECT_FALSE(app.document().hasPendingMutations());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().currentFrameVersion(), version);
+  EXPECT_EQ(app.document().document().handle()->revision(), revision);
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+  EXPECT_EQ(tool.activeDragPreview()->translation, Vector2d(35, 20));
+  tool.onMouseMove(app, Vector2d(60, 45), true);
+  EXPECT_TRUE(app.document().hasPendingMutations());
+  EXPECT_TRUE(app.flushFrame());
+  EXPECT_EQ(transformOf("#r1"), Transform2d::Translate(Vector2d(45, 30)));
+}
+
 TEST_F(SelectToolTest, MultipleMoveEventsCoalesceToFinalDelta) {
   app.setSelection(elementById("#r1"));
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});

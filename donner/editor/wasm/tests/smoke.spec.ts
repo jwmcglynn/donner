@@ -72,6 +72,8 @@ declare global {
       immediateTileCount: number;
       cachedTileCount: number;
       readbackCount: number;
+      compositorReadbackCount: number;
+      tileHandoffReadbackCount: number;
       readbackPollIterations: number;
       readbackWaitStrategy: string;
       // Present on every publish, including one that reports a GPU wait
@@ -94,6 +96,9 @@ declare global {
       carouselThumbnails?: WgpuCarouselThumbnailStats[];
     };
     __donnerRequestWgpuReadback?: () => number;
+    __donnerWgpuReadbackCompleted?: number;
+    __donnerWgpuReadbackLastStartedRequest?: number;
+    __donnerWgpuReadbackLastFailedRequest?: number;
     __donnerWgpuReadbackCaptureStarts?: number;
     __donnerWgpuReadbackCaptureCompletions?: number;
     __donnerWgpuReadbackCaptureFailures?: number;
@@ -416,6 +421,50 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
   await page.waitForTimeout(options.postInitializationDwellMs ?? 2000);
 
   return fatalMessages;
+}
+
+async function readWgpuDiagnosticOutcome(page: Page) {
+  return page.evaluate(() => ({
+    requested: window.__donnerWgpuReadbackRequested ?? 0,
+    completed: window.__donnerWgpuReadbackCompleted ?? 0,
+    successfulRequest: window.__donnerWgpuReadbackStats?.request ?? 0,
+    lastStartedRequest: window.__donnerWgpuReadbackLastStartedRequest ?? 0,
+    lastFailedRequest: window.__donnerWgpuReadbackLastFailedRequest ?? 0,
+    starts: window.__donnerWgpuReadbackCaptureStarts ?? 0,
+    captures: window.__donnerWgpuReadbackCaptureCompletions ?? 0,
+    failures: window.__donnerWgpuReadbackCaptureFailures ?? 0,
+    hostFrame: window.__donnerHostFrameTiming?.frames ?? 0,
+    hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented ?? false,
+    queue: window.__donnerPresentationQueueStats ?? null,
+  }));
+}
+
+function hasSuccessfulDiagnosticRequest(
+  state: Awaited<ReturnType<typeof readWgpuDiagnosticOutcome>>, request: number,
+): boolean {
+  return request > 0 && state.completed >= request && state.successfulRequest >= request
+    && state.lastFailedRequest < request;
+}
+
+async function waitForSuccessfulWgpuDiagnostic(page: Page, request: number): Promise<void> {
+  let state = await readWgpuDiagnosticOutcome(page);
+  try {
+    await expect.poll(async () => {
+      state = await readWgpuDiagnosticOutcome(page);
+      return state.completed;
+    }, {
+      message: "expected a terminal post-load WGPU diagnostic outcome for the Layers panel",
+      timeout: scaledMs(5000), intervals: [16, 25, 50, 100],
+    }).toBeGreaterThanOrEqual(request);
+    expect(hasSuccessfulDiagnosticRequest(state, request), JSON.stringify({ request, ...state }))
+      .toBe(true);
+  } finally {
+    const path = test.info().outputPath(`wgpu-diagnostic-request-${request}.json`);
+    await writeFile(path, JSON.stringify({ request, ...state }, null, 2));
+    await test.info().attach(`wgpu-diagnostic-request-${request}`, {
+      path, contentType: "application/json",
+    });
+  }
 }
 
 async function requestWgpuDiagnostic(page: Page): Promise<number> {
@@ -1567,6 +1616,11 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
         renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
         hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
         hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
+        frameId: window.__donnerOverlayStats?.frameId ?? 0,
+        captureId: window.__donnerOverlayStats?.captureId ?? 0,
+        completedFrameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
+        completedCaptureId: window.__donnerPresentationQueueStats?.captureId ?? 0,
+        completedInputRepresented: window.__donnerPresentationQueueStats?.inputRepresented === true,
       }));
     await expect.poll(
       async () => hasPresentedBasicShapesHostFrame(await readState(), before.results),
@@ -1634,7 +1688,7 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
     expect(
       await captureReadyBasicShapesFrame(
         page,
-        { ...readyState, hostPresented: false },
+        { ...readyState, hostPresented: false, completedFrameId: 0 },
         before.results,
         performance.now() + 100,
         staleCapture,
@@ -1807,6 +1861,11 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
         renderedFrames: window.__donnerMainLoopRenderedFrames ?? 0,
         hostFrames: window.__donnerHostFrameTiming?.frames ?? null,
         hostPresented: window.__donnerHostFrameTiming?.lastSurfacePresented === true,
+        frameId: window.__donnerOverlayStats?.frameId ?? 0,
+        captureId: window.__donnerOverlayStats?.captureId ?? 0,
+        completedFrameId: window.__donnerPresentationQueueStats?.frameId ?? 0,
+        completedCaptureId: window.__donnerPresentationQueueStats?.captureId ?? 0,
+        completedInputRepresented: window.__donnerPresentationQueueStats?.inputRepresented === true,
         viewport: window.__donnerViewportStats ?? null,
       }));
       const viewport = state.viewport;
@@ -2130,6 +2189,34 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
       + `before=${JSON.stringify(beforeSelectionAccounting)} `
       + `after=${JSON.stringify(selectionAccounting)}`,
   ).toBe(beforeSelection + 1);
+  const captureDragPixels = async (name: string) => {
+    const viewport = await page.evaluate(() => window.__donnerViewportStats);
+    expect(viewport).toBeDefined();
+    const size = page.viewportSize();
+    expect(size).not.toBeNull();
+    if (viewport === undefined || size === null) throw new Error("missing drag pixel viewport");
+    const image = await page.screenshot();
+    const path = test.info().outputPath(`${name}.png`);
+    await writeFile(path, image);
+    await test.info().attach(name, { path, contentType: "image/png" });
+    const clip = { x: 0, y: 0, width: size.width, height: size.height };
+    const artboard = {
+      minX: Math.max(viewport.documentX, viewport.paneX),
+      minY: Math.max(viewport.documentY, viewport.paneY),
+      maxX: Math.min(viewport.documentX + viewport.documentWidth, viewport.paneX + viewport.paneWidth),
+      maxY: Math.min(viewport.documentY + viewport.documentHeight, viewport.paneY + viewport.paneHeight),
+    };
+    const blue = readEditorPixelBoundsFromPng(image, "basic-blue", clip, artboard);
+    expect(blue?.pixels ?? 0).toBeGreaterThan(500);
+    if (blue === null) throw new Error("missing drag artwork pixels");
+    const teal = readEditorPixelBoundsFromPng(image, "selection-teal", clip, {
+      minX: blue.minX - 16, minY: blue.minY - 16, maxX: blue.maxX + 16, maxY: blue.maxY + 16,
+    });
+    expect(teal?.pixels ?? 0).toBeGreaterThan(50);
+    if (teal === null) throw new Error("missing selection pixels");
+    return { blue, teal };
+  };
+  const startPixels = await captureDragPixels("retained-drag-start");
   await page.mouse.move(dragStart.x, dragStart.y);
   await page.mouse.down();
   await expect
@@ -2220,22 +2307,24 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
   expect(await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0)).toBe(
     settledCount,
   );
+  const settledPixels = await captureDragPixels("retained-drag-settled");
+  const centerX = (pixels: PixelBounds) => (pixels.minX + pixels.maxX) / 2;
+  const centerY = (pixels: PixelBounds) => (pixels.minY + pixels.maxY) / 2;
+  expect(Math.abs(centerX(settledPixels.blue) - centerX(startPixels.blue) - 32)).toBeLessThanOrEqual(3);
+  expect(Math.abs(centerY(settledPixels.blue) - centerY(startPixels.blue) - 20)).toBeLessThanOrEqual(3);
+  expect(Math.abs(centerX(settledPixels.blue) - centerX(settledPixels.teal))).toBeLessThanOrEqual(3);
+  expect(Math.abs(centerY(settledPixels.blue) - centerY(settledPixels.teal))).toBeLessThanOrEqual(3);
   const workerStats = await page.evaluate(() => window.__donnerWorkerStats);
   expect(workerStats).toBeDefined();
   console.log(`wasm-worker-stats=${JSON.stringify(workerStats)}`);
-  // Browser WebGPU textures cannot cross the worker/UI device boundary, so the
-  // two immediate owning spans around the preserved selected layer each need
-  // one CPU readback for upload. Tie that cost to the tiles rasterized in this
-  // settle frame: an extra readback would expose duplicate tile work or a
-  // forbidden flat full-canvas snapshot.
-  expect(workerStats?.immediateTileCount).toBe(2);
+  // The settled scene reuses unchanged retained spans and published payload identities.
+  expect(workerStats?.immediateTileCount).toBe(0);
   expect(workerStats?.cachedTileCount).toBe(0);
-  expect(workerStats?.readbackCount).toBe(
-    (workerStats?.immediateTileCount || 0) + (workerStats?.cachedTileCount || 0),
-  );
-  expect(workerStats?.readbackPollIterations || 0).toBeGreaterThanOrEqual(
-    workerStats?.readbackCount || 0,
-  );
+  expect(workerStats?.compositorReadbackCount).toBe(0);
+  expect(workerStats?.tileHandoffReadbackCount).toBe(0);
+  expect(workerStats?.readbackCount).toBe(0);
+  expect(workerStats?.immediateRasterizeMs).toBe(0);
+  expect(workerStats?.cachedRasterizeMs).toBe(0);
   expect(["timed-wait-any", "device-poll"]).toContain(workerStats?.readbackWaitStrategy);
   // A run that presented frames must say so explicitly rather than by the
   // absence of a failure field. A hung GPU wait publishes the same object with
@@ -2301,6 +2390,30 @@ test("production Geode wasm presents visible editor pixels", async ({ page }) =>
   expect(fatalMessages).toEqual([]);
 });
 
+test("WGPU diagnostic completion distinguishes failure from old successful pixels", async ({ page }) => {
+  await page.setContent("<canvas></canvas>");
+  await page.evaluate(() => {
+    Object.assign(window, {
+      __donnerWgpuReadbackRequested: 2, __donnerWgpuReadbackCompleted: 2,
+      __donnerWgpuReadbackStats: { request: 1 }, __donnerWgpuReadbackLastFailedRequest: 2,
+      __donnerWgpuReadbackCaptureFailures: 1,
+    });
+  });
+  const failed = await readWgpuDiagnosticOutcome(page);
+  expect(failed.completed).toBe(2);
+  expect(failed.successfulRequest).toBe(1);
+  expect(hasSuccessfulDiagnosticRequest(failed, 2)).toBe(false);
+  await page.evaluate(() => {
+    Object.assign(window, {
+      __donnerWgpuReadbackRequested: 3, __donnerWgpuReadbackCompleted: 3,
+      __donnerWgpuReadbackStats: { request: 3 },
+    });
+  });
+  const recovered = await readWgpuDiagnosticOutcome(page);
+  expect(hasSuccessfulDiagnosticRequest(recovered, 3)).toBe(true);
+  expect(hasSuccessfulDiagnosticRequest(recovered, 4)).toBe(false);
+});
+
 test("wasm editor renders layer panel previews after loading a document", async ({ page }) => {
   const fatalMessages = await openEditor(page, { wgpuReadbackStats: kBackend === "geode" });
   const canvas = page.locator("canvas#canvas");
@@ -2321,13 +2434,7 @@ test("wasm editor renders layer panel previews after loading a document", async 
     .toBeGreaterThan(beforeSample);
   if (kBackend === "geode") {
     const request = await requestWgpuDiagnostic(page);
-    await expect
-      .poll(async () => page.evaluate(() => window.__donnerWgpuReadbackStats?.request || 0), {
-        message: "expected a post-load WGPU diagnostic capture for the Layers panel",
-        timeout: scaledMs(5000),
-        intervals: [16, 25, 50, 100],
-      })
-      .toBeGreaterThanOrEqual(request);
+    await waitForSuccessfulWgpuDiagnostic(page, request);
   }
   // Geode-only Wasm renders row thumbnails as GPU texture snapshots; a CPU
   // bitmap fallback would mean the texture path silently degraded.

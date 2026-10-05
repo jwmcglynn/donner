@@ -8,6 +8,7 @@
 #include <utility>
 
 #ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
 #include <emscripten/threading.h>
 #endif
 
@@ -216,6 +217,39 @@ std::vector<Entity> DragPreviewEntities(const RenderRequest::DragPreview& previe
   return entities;
 }
 
+struct RenderedPresentationCapture {
+  std::shared_ptr<const CapturedPresentation> geometry;
+  std::vector<svg::FontFaceDependency> fonts;
+};
+
+RenderedPresentationCapture CapturePresentationForRequest(const RenderRequest& request,
+                                                          svg::SVGDocument& requestDocument,
+                                                          const std::vector<Entity>& promoted,
+                                                          bool independent) {
+  RenderedPresentationCapture captured;
+  std::vector<Entity> trackedObjects = request.trackedPresentationObjects;
+  trackedObjects.insert(trackedObjects.end(), promoted.begin(), promoted.end());
+  const std::vector<Entity> independentlyMovable = independent ? promoted : std::vector<Entity>();
+  captured.geometry = CapturedPresentation::Capture(
+      requestDocument,
+      PresentationIdentity{.captureId = request.captureId,
+                           .documentGeneration = request.documentGeneration,
+                           .version = request.version,
+                           .geometryRevision = request.geometryRevision,
+                           .fontResourceRevision = request.fontResourceRevision,
+                           .presentationEpoch = request.presentationEpoch},
+      request.selectedElements, trackedObjects, independentlyMovable, request.sourceHoverElements,
+      request.lockedFlash, std::nullopt, request.textEditing);
+  captured.fonts = UnresolvedFontDependencies(requestDocument);
+  return captured;
+}
+
+void NotifyDocumentCapturedForTesting(const RenderRequest& request) {
+  if (request.afterDocumentCaptureForTesting) {
+    request.afterDocumentCaptureForTesting();
+  }
+}
+
 std::vector<Entity> DesiredCompositorEntities(const RenderRequest& request) {
   if (request.dragPreview.has_value()) {
     return DragPreviewEntities(*request.dragPreview);
@@ -380,12 +414,74 @@ void CaptureFullCanvasTextureForResult(svg::RendererInterface& renderer,
   }
 }
 
+void CaptureFrameSnapshotsForResult(svg::RendererInterface& renderer,
+                                    const PresentationSnapshotPlan& plan,
+                                    svg::RendererBitmap& bitmap,
+                                    std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
+                                    RenderResult::WorkerTimingBreakdown& timing,
+                                    const std::function<bool()>& shouldCancel) {
+  if (shouldCancel && shouldCancel()) {
+    return;
+  }
+  // Texture export detaches the target, so explicit CPU capture goes first.
+  if (plan.captureCpuSnapshot) {
+    ZoneScopedN("Renderer::takeSnapshot");
+    bitmap = renderer.takeSnapshotInterruptibly(shouldCancel);
+  }
+  if (plan.captureTextureSnapshot && !(shouldCancel && shouldCancel())) {
+    CaptureFullCanvasTextureForResult(renderer, plan, bitmap, texture,
+                                      timing.fullCanvasTextureAllocationFailureCount);
+  }
+}
+
+bool PrepareCompositedTilePayload(bool requiresTexturePresentation,
+                                  RenderResult::CompositedTile& tile,
+                                  RenderResult::WorkerTimingBreakdown& timing,
+                                  const std::function<bool()>& shouldCancel) {
+  const bool capturesCpuPixels = tile.textureSnapshot != nullptr && !requiresTexturePresentation;
+  if (!PrepareTilePayloadForPresentation(requiresTexturePresentation, tile.bitmap,
+                                         tile.textureSnapshot, shouldCancel)) {
+    return false;
+  }
+  timing.tileHandoffReadbackCount += capturesCpuPixels ? 1 : 0;
+  return true;
+}
+
+void ApplyReadbackTimingStats(RenderResult::WorkerTimingBreakdown& timing,
+                              const svg::RendererReadbackStats& compositor,
+                              const svg::RendererReadbackStats& presentation) {
+  timing.readbackCount = compositor.count + presentation.count;
+  timing.readbackPollIterations = compositor.pollIterations + presentation.pollIterations;
+  timing.usedTimedWaitAny = compositor.usedTimedWaitAny || presentation.usedTimedWaitAny;
+  timing.deviceLost = compositor.deviceLost || presentation.deviceLost;
+  const svg::RendererReadbackStats& timeout =
+      presentation.timedOutWaitSite != svg::GpuWaitTimeoutSite::None ? presentation : compositor;
+  timing.timedOutWaitSite = timeout.timedOutWaitSite;
+  timing.timedOutWaitMs = timeout.timedOutWaitMs;
+}
+
 bool CanUseFullCanvasPresentation(bool hasCompositor, bool overviewInfillOnly,
                                   bool geometryDebugOverlay) {
   return !hasCompositor || overviewInfillOnly || geometryDebugOverlay;
 }
 
 }  // namespace
+
+bool PrepareTilePayloadForPresentation(bool requiresTexturePresentation,
+                                       svg::RendererBitmap& bitmap,
+                                       std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
+                                       const std::function<bool()>& shouldCancel) {
+  if (requiresTexturePresentation || texture == nullptr) {
+    return true;
+  }
+  svg::RendererBitmap captured = texture->takeSnapshotInterruptibly(shouldCancel);
+  if (captured.empty()) {
+    return false;
+  }
+  bitmap = std::move(captured);
+  texture.reset();
+  return true;
+}
 
 bool CaptureFullCanvasTextureSnapshot(
     svg::RendererInterface& renderer, const PresentationSnapshotPlan& plan,
@@ -597,6 +693,14 @@ void AsyncRenderer::setReplayRenderDelayForTesting(std::chrono::milliseconds del
   replayRenderDelayMsForTesting_.store(clampedDelay.count(), std::memory_order_release);
 }
 
+void AsyncRenderer::setReplayDocumentAccessBlockedForTesting(bool blocked) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    replayDocumentAccessBlockedForTesting_.store(blocked, std::memory_order_release);
+  }
+  cv_.notify_all();
+}
+
 void AsyncRenderer::setReplayResultHoldFramesForTesting(int frameCount) {
   std::lock_guard<std::mutex> lock(mutex_);
   replayResultHoldFramesForTesting_ = std::max(frameCount, 0);
@@ -611,6 +715,8 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
     }
     RenderRequest stagedRequest = request;
     stagedRequest.queuedAt = std::chrono::steady_clock::now();
+    UTILS_RELEASE_ASSERT(nextCaptureId_ != std::numeric_limits<std::uint64_t>::max());
+    stagedRequest.captureId = nextCaptureId_++;
     svg::SVGDocument& stagedDocument = stagedRequest.lease.document();
     if (stagedDocument.threadingMode() != svg::ThreadingMode::ConcurrentDom) {
       stagedDocument.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
@@ -772,9 +878,7 @@ void AsyncRenderer::noteOverviewPresentedAsActive(const RenderResult& result) {
   std::lock_guard<std::mutex> lock(mutex_);
   UTILS_RELEASE_ASSERT(!workerStateRenderInFlight(workerState_));
   UTILS_RELEASE_ASSERT(result.overviewInfillOnly && result.compositedPreview.has_value() &&
-                       result.compositedPreview->valid() &&
-                       result.compositedPreview->tiles.size() == 1u &&
-                       result.compositedPreview->tiles.front().id == "full-canvas");
+                       result.compositedPreview->valid());
   notePublishedCompositedPreview(result.compositedPreview);
 }
 
@@ -917,6 +1021,17 @@ void AsyncRenderer::finishSampleThumbnailRendererCreation() {
   }
 }
 
+namespace {
+bool NeedsTimedIdleWake(bool hasOwnerPoll) {
+#ifdef __EMSCRIPTEN__
+  (void)hasOwnerPoll;
+  return true;
+#else
+  return hasOwnerPoll;
+#endif
+}
+}  // namespace
+
 bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock) {
   std::function<void()> idlePoll;
   std::function<bool()> idleHasWork;
@@ -926,6 +1041,11 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
     idleHasWork = idleHasWork_;
     idleWakeRequested_.store(false, std::memory_order_release);
   }
+#ifdef __EMSCRIPTEN__
+  // A blocking pthread wait cannot run the browser's GPU completion or share-release callbacks.
+  // Yield without either document or renderer locks, including when no render is requested.
+  emscripten_sleep(0);
+#endif
   if (idlePoll) {
     idlePoll();
   }
@@ -943,9 +1063,9 @@ bool AsyncRenderer::waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>&
   };
   if (pollWhileIdle) {
     cv_.wait_for(lock, std::chrono::milliseconds(100), wakeRequested);
-  } else if (idlePoll) {
-    // The mailbox callback intentionally avoids the renderer mutex. A sparse timer bounds a
-    // notification that races with cv_.wait's lock handoff without rendering a frame.
+  } else if (NeedsTimedIdleWake(static_cast<bool>(idlePoll))) {
+    // A sparse wake services owner callbacks and a mailbox notification racing the lock handoff
+    // without requesting another document or UI frame.
     cv_.wait_for(lock, std::chrono::seconds(1), wakeRequested);
   } else {
     cv_.wait(lock, wakeRequested);
@@ -967,6 +1087,13 @@ bool AsyncRenderer::finishCancelledBeforeRender(std::unique_lock<std::mutex>& lo
   return true;
 }
 
+void AsyncRenderer::waitForReplayDocumentAccess(std::unique_lock<std::mutex>& lock) {
+  cv_.wait(lock, [this] {
+    return !replayDocumentAccessBlockedForTesting_.load(std::memory_order_acquire) ||
+           !std::holds_alternative<RenderingState>(workerState_);
+  });
+}
+
 void AsyncRenderer::workerLoop() {
 #if defined(__EMSCRIPTEN__)
   // Emscripten's WebGPU object table is per-worker. Construct and use the
@@ -986,6 +1113,7 @@ void AsyncRenderer::workerLoop() {
       if (!waitForRenderOrIdleMaintenance(lock)) {
         continue;  // A mailbox wake or completion timer needs maintenance, not a render.
       }
+      waitForReplayDocumentAccess(lock);
       if (std::holds_alternative<ShutdownState>(workerState_)) {
 #ifdef __EMSCRIPTEN__
         // `workerRenderer` is destroyed here in Emscripten builds, i.e. on
@@ -1206,7 +1334,11 @@ void AsyncRenderer::workerLoop() {
     // before every mutex_ section below to avoid a lock-order inversion.
     std::optional<svg::DocumentWriteAccess> documentAccess;
     documentAccess.emplace(requestDocument.writeAccess());
-    const auto releaseDocumentAccess = [&]() { documentAccess.reset(); };
+    const auto documentLockAcquiredAt = std::chrono::steady_clock::now();
+    const auto releaseDocumentAccess = [&]() {
+      workerTiming.documentWriteLockMs = elapsedSince(documentLockAcquiredAt);
+      documentAccess.reset();
+    };
     const EditorRasterViewport rasterViewport =
         EffectiveRasterViewportForRequest(requestDocument, request.rasterViewport);
 
@@ -1506,9 +1638,6 @@ void AsyncRenderer::workerLoop() {
     // updated presentation geometry.
     bool desiredPromotionCoverageCompleteAfterRender = false;
     const auto buildCompositedPreview = [&]() -> std::optional<RenderResult::CompositedPreview> {
-      if (request.overviewInfillOnly) {
-        return std::nullopt;
-      }
       if (!CanPublishCompositorTiles(compositor_.get())) {
         return std::nullopt;
       }
@@ -1640,7 +1769,6 @@ void AsyncRenderer::workerLoop() {
         const OutKind kind = outputTileKind(ct);
         const bool hasPayload = !ct.bitmap.empty() || ct.textureSnapshot != nullptr;
         const bool metadataOnly =
-            !hasPayload &&
             publishedTextureMatches(tileId, kind, ct.generation, ct.bitmapDims, outputCanvasSize);
         if (!metadataOnly && !hasPayload) {
           continue;
@@ -1665,6 +1793,11 @@ void AsyncRenderer::workerLoop() {
         if (!metadataOnly) {
           tile.bitmap = std::move(ct.bitmap);
           tile.textureSnapshot = std::move(ct.textureSnapshot);
+          if (!PrepareCompositedTilePayload(requestRenderer.requiresTextureSnapshotPresentation(),
+                                            tile, workerTiming,
+                                            [this]() { return cancelRender_.isCancelled(); })) {
+            return std::nullopt;
+          }
         }
         previewTiles.push_back(std::move(tile));
       }
@@ -1765,12 +1898,17 @@ void AsyncRenderer::workerLoop() {
       renderCompleted = false;
     }
 
+    std::shared_ptr<const CapturedPresentation> capturedPresentation;
+    std::vector<svg::FontFaceDependency> fontDependencies;
     if (renderCompleted) {
-      // SVG traversal is complete. Snapshot/readback, browser presentation, and diagnostic
-      // packaging below use renderer/compositor-owned state only, so release the live DOM before
-      // those potentially slow operations. UI input can then acquire the document without waiting
-      // for a browser surface handoff to finish.
+      const auto captured =
+          CapturePresentationForRequest(request, requestDocument, compositorEntities_,
+                                        desiredPromotionCoverageCompleteAfterRender);
+      capturedPresentation = captured.geometry;
+      fontDependencies = captured.fonts;
+      // Pixels and geometry are sealed before releasing the DOM for slow GPU export/readback.
       releaseDocumentAccess();
+      NotifyDocumentCapturedForTesting(request);
     }
 
     // A cancelled render leaves compositor dirty flags ready for the next
@@ -1805,6 +1943,11 @@ void AsyncRenderer::workerLoop() {
       continue;
     }
 
+    const svg::RendererReadbackStats compositorReadbackStats =
+        requestRenderer.consumeReadbackStats();
+    workerTiming.compositorReadbackCount = compositorReadbackStats.count;
+    noteGpuWaitOutcome(compositorReadbackStats);
+
     // Every non-Off editor frame publishes the compositor's paint-order tile set. Promotion
     // refusal only disables the drag skip-compose optimization; the remaining mandatory layers
     // and static segments are still the correct presentation topology.
@@ -1824,8 +1967,7 @@ void AsyncRenderer::workerLoop() {
     (void)request.selection;
     svg::RendererBitmap bitmap;
     std::shared_ptr<const svg::RendererTextureSnapshot> fullCanvasTexture;
-    // Only the explicit Off mode, overview infill, and the geometry-debug diagnostic use a flat
-    // payload. Normal On and FilterOnly presentation is the compositor's tile set or nothing.
+    // A flat overview remains a fallback when a complete paint-order tile set is unavailable.
     const bool fullCanvasPresentationAllowed = CanUseFullCanvasPresentation(
         compositor_ != nullptr, request.overviewInfillOnly, geometryDebugOverlay);
     const PresentationSnapshotPlan snapshotPlan = ChoosePresentationSnapshotPlan(
@@ -1834,24 +1976,13 @@ void AsyncRenderer::workerLoop() {
     {
       const auto finalSnapshotStart = std::chrono::steady_clock::now();
       const ScopedHeapDelta finalSnapshotHeapDelta(MemoryStage::WorkerFinalSnapshot);
-      // Read before exporting the texture because texture export detaches the renderer target.
-      if (snapshotPlan.captureCpuSnapshot) {
-        ZoneScopedN("Renderer::takeSnapshot");
-        bitmap = requestRenderer.takeSnapshot();
-      }
-      if (snapshotPlan.captureTextureSnapshot) {
-        CaptureFullCanvasTextureForResult(requestRenderer, snapshotPlan, bitmap, fullCanvasTexture,
-                                          workerTiming.fullCanvasTextureAllocationFailureCount);
-      }
+      CaptureFrameSnapshotsForResult(requestRenderer, snapshotPlan, bitmap, fullCanvasTexture,
+                                     workerTiming,
+                                     [this]() { return cancelRender_.isCancelled(); });
       workerTiming.finalSnapshotMs = elapsedSince(finalSnapshotStart);
     }
     const svg::RendererReadbackStats readbackStats = requestRenderer.consumeReadbackStats();
-    workerTiming.readbackCount = readbackStats.count;
-    workerTiming.readbackPollIterations = readbackStats.pollIterations;
-    workerTiming.usedTimedWaitAny = readbackStats.usedTimedWaitAny;
-    workerTiming.deviceLost = readbackStats.deviceLost;
-    workerTiming.timedOutWaitSite = readbackStats.timedOutWaitSite;
-    workerTiming.timedOutWaitMs = readbackStats.timedOutWaitMs;
+    ApplyReadbackTimingStats(workerTiming, compositorReadbackStats, readbackStats);
     noteGpuWaitOutcome(readbackStats);
     if (!compositedPreview.has_value() && (!bitmap.empty() || fullCanvasTexture != nullptr)) {
       UTILS_RELEASE_ASSERT_MSG(
@@ -1924,11 +2055,6 @@ void AsyncRenderer::workerLoop() {
       AddTransientBytes(MemoryCategory::WorkerFrameSnapshot, snapshotBytes);
     }
 
-    auto fontDependencies = UnresolvedFontDependencies(requestDocument);
-    // All document reads for this iteration are done; release write access before taking `mutex_`
-    // to avoid a lock-order inversion against UI-thread DOM reads.
-    releaseDocumentAccess();
-
     std::function<void()> wake;
     bool notifyStateChange = false;
     {
@@ -1939,11 +2065,14 @@ void AsyncRenderer::workerLoop() {
         if (rendering->pendingRequest.has_value()) {
         } else {
           DoneState done;
+          done.result.capturedPresentation = capturedPresentation;
           done.result.bitmap = std::move(bitmap);
           done.result.compositedPreview = std::move(compositedPreview);
           done.result.rasterViewport = rasterViewport;
           done.result.viewport = request.viewport;
           done.result.overviewInfillOnly = request.overviewInfillOnly;
+          done.result.presentationCoverageRepair = request.presentationCoverageRepair;
+          done.result.presentationRepairReason = request.presentationRepairReason;
           done.result.version = request.version;
           done.result.cpuSnapshotRequestId = request.cpuSnapshotRequestId;
           done.result.documentGeneration = request.documentGeneration;

@@ -15,10 +15,15 @@
 #include "donner/base/MathUtils.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/DocumentPresentationCompositor.h"
+#include "donner/editor/DocumentPresenter.h"
+#include "donner/editor/EditorApp.h"
+#include "donner/editor/EditorShellPresentation.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/MenuBarPresenter.h"
+#include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/RenderPanePresenter.h"
 #include "donner/editor/gui/EditorWindow.h"
+#include "donner/editor/tests/FramePresentationTestAccess.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "gtest/gtest.h"
@@ -37,6 +42,14 @@ constexpr Entity kVisibleDragEntity = static_cast<Entity>(7);
 constexpr std::array<std::uint8_t, 4> kBackground = {236, 239, 242, 255};
 constexpr std::array<std::uint8_t, 4> kHiddenStaleLayer = {224, 67, 57, 255};
 constexpr std::array<std::uint8_t, 4> kVisibleDragLayer = {33, 150, 243, 255};
+
+std::shared_ptr<geode::GeodeDevice> PresentationDevice(gui::EditorWindow& window) {
+#ifdef DONNER_EDITOR_WGPU
+  return window.geodeFramebufferDevice();
+#else
+  return window.geodeDevice();
+#endif
+}
 
 svg::RendererBitmap MakeBitmap(int width, int height, std::array<std::uint8_t, 4> rgba) {
   svg::RendererBitmap bitmap;
@@ -139,6 +152,48 @@ void WriteDiagnosticBitmap(const svg::RendererBitmap& bitmap, std::string_view f
   }
 }
 
+std::shared_ptr<const FramePresentation> FrameForTiles(
+    const GlTextureCache& textures, const ViewportState& viewport, Entity suppressed = entt::null,
+    const std::optional<SelectTool::ActiveDragPreview>& active = std::nullopt,
+    const std::optional<SelectTool::ActiveDragPreview>& represented = std::nullopt,
+    std::uint64_t frameId = 1, bool includeChrome = false,
+    PresentationDecorations decorations = {}) {
+  EditorApp app;
+  if (!app.loadFromString(
+          R"(<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220"/>)")) {
+    return nullptr;
+  }
+  const auto capture = CapturedPresentation::Capture(
+      app.document().document(), PresentationIdentity{.captureId = 1, .documentGeneration = 1}, {});
+  auto tiles = textures.tiles();
+  // This raster-consumer fixture receives already positioned tiles; pose resolution has its own
+  // frozen-scene regressions in FramePresentation_tests.
+  if (active.has_value()) {
+    const Transform2d presentedFromCached =
+        (represented.has_value() ? represented->documentFromCachedDocument.inverse()
+                                 : Transform2d()) *
+        active->documentFromCachedDocument;
+    for (auto& tile : tiles) {
+      if (tile.layerEntity == active->entity) {
+        tile.documentFromCachedDocument = tile.documentFromCachedDocument * presentedFromCached;
+      }
+    }
+  }
+  const auto resources = FramePresentationTestAccess::resources(
+      capture, std::move(tiles), textures.coverageDiagnostics(), capture, textures.overviewTiles());
+  return FramePresentation::Build(
+             resources,
+             FramePresentationInput{.frameId = frameId,
+                                    .viewport = viewport,
+                                    .paneClipRect = Box2d(viewport.paneOrigin,
+                                                          viewport.paneOrigin + viewport.paneSize),
+                                    .documentIdentity = capture->identity(),
+                                    .decorations = std::move(decorations),
+                                    .suppressedLayerEntity = suppressed,
+                                    .includeChrome = includeChrome})
+      .frame;
+}
+
 svg::RendererBitmap CapturePresenterFrame(
     gui::EditorWindow* window, GlTextureCache* textures, Entity suppressedLayerEntity,
     std::optional<SelectTool::ActiveDragPreview> activePreview = std::nullopt,
@@ -157,30 +212,31 @@ svg::RendererBitmap CapturePresenterFrame(
 
   FrameHistory frameHistory;
   frameHistory.push(1000.0f / 60.0f);
-  // Selection chrome is rendered by OverlayRenderer onto the framebuffer, not by
-  // the presenter; the presenter no longer consumes a chrome snapshot.
-  const std::optional<SelectionChromeSnapshot> noOverlaySnapshot;
+  const auto frame =
+      FrameForTiles(*textures, viewport, suppressedLayerEntity, activePreview, displayedPreview);
+  EXPECT_NE(frame, nullptr);
   RenderPanePresenter presenter;
   DocumentCompositeTextureView documentComposite;
-#ifndef DONNER_EDITOR_WGPU
-  std::unique_ptr<DocumentPresentationCompositor> compositor;
-#endif
+#ifdef DONNER_EDITOR_WGPU
+  FramebufferCheckerboardRenderer checkerboard(PresentationDevice(*window));
+  svg::RendererGeode renderer(PresentationDevice(*window));
 
-#ifndef DONNER_EDITOR_WGPU
-  if (!documentPresentedDirectly) {
-    compositor = std::make_unique<DocumentPresentationCompositor>();
-    const bool drawOverviewTiles = ShouldPresentOverviewTiles(
-        textures->activeTilesViewportBounded(), textures->overviewTiles());
-    const std::vector<GlTextureCache::TileView> noOverviewTiles;
-    documentComposite = compositor->compose(
-        viewport, viewport.imageScreenRect(),
-        drawOverviewTiles ? textures->overviewTiles() : noOverviewTiles, textures->tiles(),
-        activePreview, displayedPreview, suppressedLayerEntity,
-        /*suppressDragTargetTiles=*/false);
+#else
+  DocumentPresentationCompositor compositor;
+  if (!documentPresentedDirectly && frame != nullptr) {
+    documentComposite = compositor.compose(*frame);
   }
 #endif
 
   window->beginFrame();
+#ifdef DONNER_EDITOR_WGPU
+  if (!documentPresentedDirectly && frame != nullptr) {
+    window->setWgpuUnderlayRenderCallback([&](const gui::EditorWindowWgpuRenderTarget& target) {
+      (void)DrawDocumentPresentationToFramebuffer(checkerboard, renderer, target, *frame);
+    });
+    documentPresentedDirectly = true;
+  }
+#endif
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
   ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
   ImGui::SetNextWindowSize(
@@ -190,7 +246,8 @@ svg::RendererBitmap CapturePresenterFrame(
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
-  ImGui::Begin("display-none-suppression-repro", nullptr, kWindowFlags);
+  ImGui::Begin("display-none-suppression-repro", nullptr,
+               kWindowFlags | (documentPresentedDirectly ? ImGuiWindowFlags_NoBackground : 0));
   // `viewport` above is the transform the presented pixels are in. When the
   // caller asks for a live viewport that has run ahead of presentation - the
   // browser's worker surface lagging behind a zoom - the live viewport takes
@@ -202,21 +259,20 @@ svg::RendererBitmap CapturePresenterFrame(
   }
   presenter.render(RenderPanePresenterState{
       .viewport = liveViewport,
-      .presentedDocumentViewport = &viewport,
       .frameHistory = frameHistory,
-      .textures = *textures,
-      .immediateOverlaySnapshot = noOverlaySnapshot,
-      .activeDragPreview = activePreview,
-      .displayedDragPreview = displayedPreview,
+      .presentation = frame,
       .contentRegion = Vector2d(kLogicalWidth, kLogicalHeight),
-      .suppressedLayerEntity = suppressedLayerEntity,
       .documentPresentedDirectly = documentPresentedDirectly,
       .documentComposite = documentComposite,
       .compositorTileOverlay = compositorTileOverlay,
   });
   ImGui::End();
   ImGui::PopStyleVar();
-  return window->endFrameAndReadPixels();
+  auto pixels = window->endFrameAndReadPixels();
+#ifdef DONNER_EDITOR_WGPU
+  window->setWgpuUnderlayRenderCallback({});
+#endif
+  return pixels;
 }
 
 int CountVisibleDragPixels(const svg::RendererBitmap& bitmap) {
@@ -282,14 +338,14 @@ TEST(RenderPanePresenterVisualReproTest, WritesDisplayNoneSuppressionScreenshots
   // exercises the presenter's `display:none` drag-target tile suppression in
   // isolation: the hidden stale layer's tile must not occlude a different
   // selected drag target's tile.
-  GlTextureCache actualTextures(window.geodeDevice());
+  GlTextureCache actualTextures(PresentationDevice(window));
   actualTextures.initialize();
   actualTextures.uploadComposited(MakePreview(/*includeHiddenLayer=*/true));
   const svg::RendererBitmap actual =
       CapturePresenterFrame(&window, &actualTextures, kHiddenLayerEntity);
   WriteDiagnosticBitmap(actual, "actual_fixed_drag_target_visible.png");
 
-  GlTextureCache expectedTextures(window.geodeDevice());
+  GlTextureCache expectedTextures(PresentationDevice(window));
   expectedTextures.initialize();
   expectedTextures.uploadComposited(MakePreview(/*includeHiddenLayer=*/false));
   const svg::RendererBitmap expected =
@@ -319,7 +375,7 @@ TEST(RenderPanePresenterVisualReproTest, IntermediateCompositeReusesUnchangedPre
     GTEST_SKIP() << "Hidden editor window is unavailable on this host";
   }
 
-  GlTextureCache textures(window.geodeDevice());
+  GlTextureCache textures(PresentationDevice(window));
   textures.initialize();
   textures.uploadComposited(MakePreview(/*includeHiddenLayer=*/true));
 
@@ -331,12 +387,9 @@ TEST(RenderPanePresenterVisualReproTest, IntermediateCompositeReusesUnchangedPre
   viewport.panDocPoint = Vector2d::Zero();
 
   DocumentPresentationCompositor compositor;
-  const DocumentCompositeTextureView first =
-      compositor.compose(viewport, viewport.imageScreenRect(), {}, textures.tiles(), std::nullopt,
-                         std::nullopt, entt::null, /*suppressDragTargetTiles=*/false);
+  const DocumentCompositeTextureView first = compositor.compose(*FrameForTiles(textures, viewport));
   const DocumentCompositeTextureView second =
-      compositor.compose(viewport, viewport.imageScreenRect(), {}, textures.tiles(), std::nullopt,
-                         std::nullopt, entt::null, /*suppressDragTargetTiles=*/false);
+      compositor.compose(*FrameForTiles(textures, viewport));
 
 #ifdef DONNER_EDITOR_WGPU
   EXPECT_EQ(first.texture, 0u);
@@ -352,12 +405,205 @@ TEST(RenderPanePresenterVisualReproTest, IntermediateCompositeReusesUnchangedPre
             static_cast<std::uint64_t>(kLogicalWidth) * kLogicalHeight * 4u * 2u);
 
   viewport.panScreenPoint.x = 1.0;
-  (void)compositor.compose(viewport, viewport.imageScreenRect(), {}, textures.tiles(), std::nullopt,
-                           std::nullopt, entt::null, /*suppressDragTargetTiles=*/false);
+  (void)compositor.compose(*FrameForTiles(textures, viewport));
   EXPECT_EQ(compositor.compositionCountForTesting(), 2u)
       << "A viewport change must invalidate the document composite.";
 #endif
 }
+
+#ifndef DONNER_EDITOR_WGPU
+svg::RendererBitmap ReadCompositeTexture(const DocumentCompositeTextureView& view) {
+  svg::RendererBitmap bitmap = MakeBitmap(view.dimensions.x, view.dimensions.y, {0, 0, 0, 0});
+  GLint previousTexture = 0;
+  glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+  glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(view.texture));
+  glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, bitmap.pixels.data());
+  glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+  return bitmap;
+}
+
+PresentationDecorations PenHoverAt(double y) {
+  PresentationDecorations result;
+  result.penPreviewSegmentDoc =
+      PathBuilder().moveTo(Vector2d(10.0, y)).lineTo(Vector2d(100.0, y)).build();
+  return result;
+}
+
+svg::RendererBitmap CaptureSealedSoftwareFrame(gui::EditorWindow& window,
+                                               std::shared_ptr<const FramePresentation> frame,
+                                               DocumentCompositeTextureView composite) {
+  window.beginFrame();
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(kLogicalWidth, kLogicalHeight), ImGuiCond_Always);
+  ImGui::Begin("software-admission", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+  FrameHistory history;
+  RenderPanePresenter presenter;
+  presenter.render(RenderPanePresenterState{
+      .viewport = frame->viewport(),
+      .frameHistory = history,
+      .presentation = std::move(frame),
+      .contentRegion = Vector2d(kLogicalWidth, kLogicalHeight),
+      .documentComposite = composite,
+  });
+  ImGui::End();
+  ImGui::PopStyleVar();
+  return window.endFrameAndReadPixels();
+}
+
+TEST(RenderPanePresenterVisualReproTest, FailedPaintUploadRetainsVisibleFrameAndChromeTogether) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Software Paint Admission",
+      .initialWidth = kLogicalWidth,
+      .initialHeight = kLogicalHeight,
+      .visible = false,
+      .offscreen = true,
+      .offscreenContentScale = 1.0,
+      .enableFramebufferReadback = true,
+  });
+  ASSERT_TRUE(window.valid());
+  GlTextureCache textures(PresentationDevice(window));
+  textures.initialize();
+  ASSERT_TRUE(textures.uploadComposited(MakePreview(false)));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(kLogicalWidth, kLogicalHeight);
+  viewport.documentViewBox = Box2d::FromXYWH(0, 0, kLogicalWidth, kLogicalHeight);
+  viewport.panDocPoint = Vector2d::Zero();
+  viewport.panScreenPoint = Vector2d::Zero();
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg" width="320" height="220"/>)"));
+  const auto capture = CapturedPresentation::Capture(
+      app.document().document(),
+      PresentationIdentity{.captureId = 1,
+                           .documentGeneration = app.document().documentGeneration(),
+                           .version = app.document().currentFrameVersion()},
+      {});
+  ASSERT_NE(capture, nullptr);
+  RenderCoordinator coordinator;
+  coordinator.compositedPresentation().notePreparedResources(
+      FramePresentationTestAccess::resources(capture, textures.tiles()), entt::null, std::nullopt);
+  SelectTool tool;
+  DocumentPresentationCompositor compositor;
+  DocumentCompositeTextureView composite;
+  DocumentPresenter presenter([](auto) {});
+  const auto present = [&] {
+    composite = {};
+    const auto frame = coordinator.buildFramePresentation(
+        app, tool, viewport, Box2d(Vector2d::Zero(), viewport.paneSize),
+        SelectionChromeDetail::Full, true, [&](const FramePresentation& candidate) {
+          composite = compositor.compose(candidate);
+          return composite.texture != 0;
+        });
+    EXPECT_NE(frame, nullptr);
+    if (frame != nullptr && composite.texture == 0) {
+      composite = compositor.compose(*frame);
+    }
+    EXPECT_TRUE(presenter.present(frame));
+    return frame;
+  };
+  coordinator.setPenHoverChrome(PenHoverAt(20).penPreviewSegmentDoc, std::nullopt);
+  const auto firstFrame = present();
+  ASSERT_NE(firstFrame, nullptr);
+  ASSERT_NE(composite.texture, 0u);
+  const auto first = composite;
+  const auto firstPixels = ReadCompositeTexture(first);
+  const auto firstVisible = CaptureSealedSoftwareFrame(window, presenter.currentFrame(), composite);
+  ASSERT_FALSE(firstVisible.empty());
+  coordinator.setPenHoverChrome(PenHoverAt(30).penPreviewSegmentDoc, std::nullopt);
+  compositor.failNextSoftwarePaintUploadForTesting();
+  const auto retained = present();
+  EXPECT_EQ(retained, firstFrame);
+  EXPECT_EQ(presenter.currentFrame(), firstFrame);
+  EXPECT_EQ(coordinator.framePresentation(), firstFrame);
+  EXPECT_EQ(composite.texture, first.texture);
+  EXPECT_EQ(compositor.compositionCountForTesting(), 1u);
+  EXPECT_EQ(ReadCompositeTexture(first).pixels, firstPixels.pixels);
+  const auto retainedVisible =
+      CaptureSealedSoftwareFrame(window, presenter.currentFrame(), composite);
+  EXPECT_EQ(retainedVisible.pixels, firstVisible.pixels);
+  const auto recovered = present();
+  ASSERT_NE(recovered, nullptr);
+  EXPECT_NE(recovered, firstFrame);
+  EXPECT_EQ(presenter.currentFrame(), recovered);
+  EXPECT_EQ(compositor.compositionCountForTesting(), 2u);
+  const auto recoveredVisible =
+      CaptureSealedSoftwareFrame(window, presenter.currentFrame(), composite);
+  EXPECT_NE(recoveredVisible.pixels, firstVisible.pixels);
+  EXPECT_NE(ReadCompositeTexture(first).pixels, firstPixels.pixels);
+  ViewportState oversized = viewport;
+  oversized.paneSize.x = ViewportState::kMaxCanvasDim + 1.0;
+  const auto oversizedFrame = FrameForTiles(textures, oversized, entt::null, std::nullopt,
+                                            std::nullopt, 99, true, PenHoverAt(20));
+  ASSERT_NE(oversizedFrame, nullptr);
+  DocumentPresentationCompositor unusedCompositor;
+  EXPECT_EQ(unusedCompositor.compose(*oversizedFrame).texture, 0u);
+  EXPECT_EQ(unusedCompositor.retainedBytes(), 0u);
+  EXPECT_EQ(unusedCompositor.compositionCountForTesting(), 0u);
+  EXPECT_EQ(glGetError(), GL_NO_ERROR);
+}
+
+TEST(RenderPanePresenterVisualReproTest, PaintUploadPreservesForeignUnpackStateAndPixels) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Software Paint Unpack State",
+      .initialWidth = kLogicalWidth,
+      .initialHeight = kLogicalHeight,
+      .visible = false,
+      .offscreen = true,
+      .offscreenContentScale = 1.0,
+  });
+  ASSERT_TRUE(window.valid());
+  GlTextureCache textures(PresentationDevice(window));
+  textures.initialize();
+  ASSERT_TRUE(textures.uploadComposited(MakePreview(false)));
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(kLogicalWidth, kLogicalHeight);
+  viewport.documentViewBox = Box2d::FromXYWH(0, 0, kLogicalWidth, kLogicalHeight);
+  viewport.panDocPoint = Vector2d::Zero();
+  viewport.panScreenPoint = Vector2d::Zero();
+  const auto frame = FrameForTiles(textures, viewport, entt::null, std::nullopt, std::nullopt, 1,
+                                   true, PenHoverAt(20));
+  ASSERT_NE(frame, nullptr);
+  DocumentPresentationCompositor cleanCompositor;
+  const auto clean = cleanCompositor.compose(*frame);
+  ASSERT_NE(clean.texture, 0u);
+  const auto expected = ReadCompositeTexture(clean);
+  GLuint foreignBuffer = 0;
+  glGenBuffers(1, &foreignBuffer);
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, foreignBuffer);
+  glBufferData(GL_PIXEL_UNPACK_BUFFER, 16, nullptr, GL_STATIC_DRAW);
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, 7);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 8);
+  glPixelStorei(GL_UNPACK_SKIP_ROWS, 3);
+  glPixelStorei(GL_UNPACK_SKIP_PIXELS, 2);
+  DocumentPresentationCompositor compositor;
+  const auto actual = compositor.compose(*frame);
+  const std::array<std::pair<GLenum, GLint>, 5> expectedState = {{
+      {GL_PIXEL_UNPACK_BUFFER_BINDING, static_cast<GLint>(foreignBuffer)},
+      {GL_UNPACK_ROW_LENGTH, 7},
+      {GL_UNPACK_ALIGNMENT, 8},
+      {GL_UNPACK_SKIP_ROWS, 3},
+      {GL_UNPACK_SKIP_PIXELS, 2},
+  }};
+  for (const auto& [name, expectedValue] : expectedState) {
+    GLint value = 0;
+    glGetIntegerv(name, &value);
+    EXPECT_EQ(value, expectedValue) << name;
+  }
+  EXPECT_EQ(glGetError(), GL_NO_ERROR);
+  glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+  glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+  glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+  glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+  glDeleteBuffers(1, &foreignBuffer);
+  ASSERT_NE(actual.texture, 0u);
+  EXPECT_EQ(ReadCompositeTexture(actual).pixels, expected.pixels);
+  EXPECT_EQ(glGetError(), GL_NO_ERROR);
+}
+#endif
 
 TEST(RenderPanePresenterVisualReproTest,
      ViewMenuCompositorTileOverlayRendersMetadataOverDirectPresentation) {
@@ -380,10 +626,9 @@ TEST(RenderPanePresenterVisualReproTest,
       MakeTile("layer:7", RenderResult::CompositedTile::Kind::Layer, kVisibleDragEntity,
                Vector2d(54.0, 44.0), Vector2d(78.0, 78.0), kVisibleDragLayer,
                /*isDragTarget=*/false);
-  tile.bitmap = svg::RendererBitmap{};
   preview.tiles.push_back(std::move(tile));
 
-  GlTextureCache textures(window.geodeDevice());
+  GlTextureCache textures(PresentationDevice(window));
   textures.initialize();
   textures.uploadComposited(preview);
 
@@ -438,10 +683,9 @@ TEST(RenderPanePresenterVisualReproTest,
       MakeTile("layer:7", RenderResult::CompositedTile::Kind::Layer, kVisibleDragEntity,
                Vector2d(54.0, 44.0), Vector2d(78.0, 78.0), kVisibleDragLayer,
                /*isDragTarget=*/false);
-  tile.bitmap = svg::RendererBitmap{};
   preview.tiles.push_back(std::move(tile));
 
-  GlTextureCache textures(window.geodeDevice());
+  GlTextureCache textures(PresentationDevice(window));
   textures.initialize();
   textures.uploadComposited(preview);
 
@@ -573,7 +817,7 @@ TEST(RenderPanePresenterVisualReproTest, OverviewInfillDoesNotBleedThroughTransp
       "full-canvas", RenderResult::CompositedTile::Kind::Segment, entt::null, Vector2d(0.0, 0.0),
       Vector2d(kLogicalWidth, kLogicalHeight), {0, 0, 0, 0}, /*isDragTarget=*/false));
 
-  GlTextureCache textures(window.geodeDevice());
+  GlTextureCache textures(PresentationDevice(window));
   textures.initialize();
   textures.uploadCompositedOverview(staleOverview,
                                     RasterViewportForTest(/*viewportBounded=*/false));
@@ -617,7 +861,7 @@ TEST(RenderPanePresenterVisualReproTest, OverviewInfillDoesNotBleedThroughOldDra
                Vector2d(0.0, 0.0), Vector2d(kLogicalWidth, kLogicalHeight), kVisibleDragLayer,
                /*isDragTarget=*/true));
 
-  GlTextureCache textures(window.geodeDevice());
+  GlTextureCache textures(PresentationDevice(window));
   textures.initialize();
   textures.uploadCompositedOverview(staleOverview,
                                     RasterViewportForTest(/*viewportBounded=*/false));
@@ -670,7 +914,7 @@ TEST(RenderPanePresenterVisualReproTest, RotatedDragTileUsesItsQuadInsteadOfAxis
                                    kVisibleDragLayer,
                                    /*isDragTarget=*/true));
 
-  GlTextureCache textures(window.geodeDevice());
+  GlTextureCache textures(PresentationDevice(window));
   textures.initialize();
   textures.uploadComposited(preview, RasterViewportForTest(/*viewportBounded=*/false));
 
@@ -750,10 +994,7 @@ svg::RendererBitmap CapturePerfOverlayFrame(gui::EditorWindow* window, GlTexture
   presenter.render(RenderPanePresenterState{
       .viewport = viewport,
       .frameHistory = frameHistory,
-      .textures = *textures,
-      .immediateOverlaySnapshot = noOverlaySnapshot,
-      .activeDragPreview = noPreview,
-      .displayedDragPreview = noPreview,
+      .presentation = FrameForTiles(*textures, viewport),
       .contentRegion = Vector2d(kLogicalWidth, kLogicalHeight),
       // Match the editor's direct-presentation path: without it, an empty tile
       // set early-returns from render() before the perf overlay is drawn.
@@ -821,7 +1062,7 @@ TEST(RenderPanePresenterVisualReproTest, FpsPillDrawsReadoutInBottomRightCorner)
     GTEST_SKIP() << "Hidden editor window is unavailable on this host";
   }
 
-  GlTextureCache textures(window.geodeDevice());
+  GlTextureCache textures(PresentationDevice(window));
   textures.initialize();
 
   FrameHistory history;
@@ -853,7 +1094,7 @@ TEST(RenderPanePresenterVisualReproTest, FullGraphMarksBudgetMissesAndWorkerSamp
     GTEST_SKIP() << "Hidden editor window is unavailable on this host";
   }
 
-  GlTextureCache textures(window.geodeDevice());
+  GlTextureCache textures(PresentationDevice(window));
   textures.initialize();
 
   // Fast frames: all under the 120 Hz budget, no worker samples.
@@ -921,7 +1162,7 @@ TEST(RenderPanePresenterVisualReproTest, FullGraphStacksMemoryBucketsWithPeakLin
     GTEST_SKIP() << "Hidden editor window is unavailable on this host";
   }
 
-  GlTextureCache textures(window.geodeDevice());
+  GlTextureCache textures(PresentationDevice(window));
   textures.initialize();
 
   constexpr std::uint64_t kMiB = 1024u * 1024u;

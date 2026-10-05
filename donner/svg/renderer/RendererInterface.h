@@ -767,6 +767,18 @@ public:
    * @return CPU-readable bitmap, or an empty bitmap when readback is unsupported.
    */
   [[nodiscard]] virtual RendererBitmap takeSnapshot() const { return RendererBitmap{}; }
+
+  /// Capture CPU pixels while honoring cancellation before and after readback. GPU backends
+  /// override this to poll cancellation throughout their bounded wait.
+  /// @param shouldCancel Predicate returning true when the capture must be abandoned.
+  [[nodiscard]] virtual RendererBitmap takeSnapshotInterruptibly(
+      const std::function<bool()>& shouldCancel) const {
+    if (shouldCancel && shouldCancel()) {
+      return {};
+    }
+    RendererBitmap result = takeSnapshot();
+    return shouldCancel && shouldCancel() ? RendererBitmap{} : std::move(result);
+  }
 };
 
 /**
@@ -1331,8 +1343,15 @@ public:
     return nullptr;
   }
 
-  /// Returns true when presentation callers must use \ref takeTextureSnapshot and must not fall
-  /// back to CPU bitmap readback for normal frame handoff.
+  /// Returns true when offscreen payloads can stay on the GPU for composition on this renderer's
+  /// device. This does not imply that a texture can be handed to another thread or device.
+  [[nodiscard]] virtual bool supportsTextureSnapshotCompositing() const {
+    return requiresTextureSnapshotPresentation();
+  }
+
+  /// Returns true when existing presentation callers require direct \ref takeTextureSnapshot
+  /// handoff. This legacy transport policy does not describe GPU composition capability. A false
+  /// result does not authorize CPU readback during composition or qualify a GPU presentation path.
   [[nodiscard]] virtual bool requiresTextureSnapshotPresentation() const { return false; }
 
   /**

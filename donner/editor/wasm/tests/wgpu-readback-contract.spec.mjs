@@ -106,8 +106,8 @@ test("host timing consumes each current-frame draw snapshot once", () => {
     /MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},\s*endFrameMs/,
   );
   assert.ok(callback, "expected executable host timing callback");
-  const bindings = Array.from({ length: 10 }, (_, index) =>
-    `const $${index} = args[${index}];`).join("\n");
+  const bindings = Array.from({ length: 10 }, (_, index) => `const $${index} = args[${index}];`)
+    .join("\n");
   const publish = new Function("window", "args", `${bindings}\n${callback[1]}`);
   const windowState = {
     __donnerPendingUnderlayDrawStats: {
@@ -235,7 +235,8 @@ test("late browser map rejection cannot change a reused mapping ID", () => {
 test("mid-drag GPU probe follows the retained scored frame and state", () => {
   const start = presentationRegressionSource.indexOf("async function readBasicShapesDragFrame(");
   const end = presentationRegressionSource.indexOf(
-    'test("scored Firefox frame evidence', start,
+    "test(\"scored Firefox frame evidence",
+    start,
   );
   assert.ok(start >= 0 && end > start, "expected the scored mid-drag frame helper");
   const dragFrame = presentationRegressionSource.slice(start, end);
@@ -317,8 +318,14 @@ test("diagnostic readback requests wake the event-driven main loop", () => {
   assert.ok(runtimeReadback, "expected the browser-runtime diagnostic completion task");
   assert.match(
     runtimeReadback[1],
-    /device\.waitForMapping\(/,
-    "the deferred task must await its own runtime mapping",
+    /device\.pollMapping\(/,
+    "the deferred task must poll its own mapping without another Asyncify wait",
+  );
+  assert.doesNotMatch(runtimeReadback[1], /device\.waitForMapping\(/);
+  assert.match(runtimeReadback[1], /state->deadline/);
+  assert.match(
+    runtimeReadback[1],
+    /emscripten_async_call\(CompleteAsyncRuntimeSmokeReadback, state\.release\(\)/,
   );
   assert.match(
     runtimeReadback[1],
@@ -878,4 +885,11 @@ test("renderer thread startup waits for cursor setup and wake wiring", () => {
     /RegisterBrowserCursor\([\s\S]*hotspot\.x, hotspot\.y,[\s\S]*fallback\.data\(\),\s*static_cast<int>\(fallback\.size\(\)\)/,
     "every registered SVG cursor must pass its hotspot and fallback into JavaScript",
   );
+});
+
+test("UI asm diagnostics stay within the compiler's sixteen argument slots", () => {
+  for (const match of source.matchAll(/MAIN_THREAD_ASYNC_EM_ASM\(\s*\{([\s\S]*?)\n\s*\},/g)) {
+    const slots = [...match[1].matchAll(/\$(\d+)/g)].map((slot) => Number(slot[1]));
+    assert.ok(slots.every((slot) => slot < 16), `unsupported asm argument slots: ${slots}`);
+  }
 });

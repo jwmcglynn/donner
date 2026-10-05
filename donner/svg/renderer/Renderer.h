@@ -333,6 +333,9 @@ public:
   [[nodiscard]] const RendererTextureSnapshot* borrowTextureSnapshot()
       UTILS_LIFETIME_BOUND override;
 
+  /// Returns true when the active backend can compose offscreen texture snapshots on its device.
+  [[nodiscard]] bool supportsTextureSnapshotCompositing() const override;
+
   /// Returns true when this backend requires direct texture presentation.
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override;
 

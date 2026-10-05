@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <optional>
+#include <sstream>
 
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/RenderCoordinator.h"
@@ -13,6 +14,57 @@
 namespace donner::editor {
 
 struct RenderCoordinatorTestAccess {
+  static std::shared_ptr<const CapturedPresentation> pendingOverviewCapture(
+      const RenderCoordinator& coordinator) {
+    return coordinator.pendingOverviewResult_
+               ? coordinator.pendingOverviewResult_->capturedPresentation
+               : nullptr;
+  }
+
+  static std::shared_ptr<const CapturedPresentation> installedOverviewCapture(
+      const RenderCoordinator& coordinator) {
+    const auto resources = coordinator.compositedPresentation_.resources();
+    return resources ? resources->overviewCapture() : nullptr;
+  }
+
+  static std::string overviewScheduleState(const RenderCoordinator& coordinator,
+                                           const EditorApp& app, const ViewportState& viewport) {
+    const auto cache = coordinator.compositedPresentation_.diagnostics();
+    std::ostringstream out;
+    out << "current=" << app.document().currentFrameVersion()
+        << " actualCanvas=" << app.document().document().canvasSize()
+        << " pendingCanvas=" << coordinator.pendingCanvasSize_
+        << " commits=" << coordinator.documentCanvasCommitTotal_
+        << " displayed=" << coordinator.displayedDocVersion_
+        << " overview=" << coordinator.overviewDocVersion_ << " cached=" << cache.cachedVersion
+        << " cachedSize=" << cache.cachedCanvasSize
+        << " forceRefresh=" << coordinator.pendingPresentationRefresh_
+        << " repair=" << coordinator.presentationNeedsRender_
+        << " coverage=" << coordinator.presentationNeedsCoverage_
+        << " selectedRaster=" << coordinator.pendingSelectedLayerRasterizationVersion_
+        << " prewarmRecovery=" << coordinator.selectedPrewarmRecoveryPending_
+        << " retry=" << coordinator.nothingToPresentRetry_.retryScheduled()
+        << " visible=" << viewport.rasterViewport().outputSizePx
+        << " prewarm=" << viewport.selectedPrewarmRasterViewport().outputSizePx;
+    const auto resources = coordinator.compositedPresentation_.resources();
+    if (resources && resources->capture()) {
+      const auto identity = resources->capture()->identity();
+      out << " primary=" << identity.captureId << '/' << identity.version << '/'
+          << identity.geometryRevision;
+    }
+    if (resources && resources->overviewCapture()) {
+      const auto identity = resources->overviewCapture()->identity();
+      out << " overviewCapture=" << identity.captureId << '/' << identity.version << '/'
+          << identity.geometryRevision;
+    }
+    if (coordinator.lastPostedAttempt_) {
+      const auto& attempt = *coordinator.lastPostedAttempt_;
+      out << " posted=" << attempt.version << " infill=" << attempt.overviewInfillOnly
+          << " raster=" << attempt.rasterViewport.outputSizePx;
+    }
+    return out.str();
+  }
+
   static void seedPreCommitPixelCapture(RenderCoordinator& coordinator, const EditorApp& app,
                                         const ViewportState& viewport) {
     coordinator.documentPixelCaptureEnabled_ = true;
@@ -30,6 +82,10 @@ struct RenderCoordinatorTestAccess {
     coordinator.requestedPixelCapture_ = identity;
     coordinator.pendingCanvasSize_ = viewport.rasterViewport().semanticCanvasSizePx;
     coordinator.pendingCanvasSizeSince_ = std::chrono::steady_clock::now();
+  }
+
+  static void keepCanvasCommitPending(RenderCoordinator& coordinator) {
+    coordinator.pendingCanvasSizeSince_ = std::chrono::steady_clock::now() + std::chrono::hours(1);
   }
 
   static void makeCanvasCommitDue(RenderCoordinator& coordinator) {
@@ -51,6 +107,49 @@ struct RenderCoordinatorTestAccess {
   static void advanceFakeRetryClock(std::chrono::milliseconds step) { fakeRetryNow += step; }
 
   static std::chrono::steady_clock::time_point FakeRetryNow() { return fakeRetryNow; }
+
+  static bool rejectPreparedResult(RenderCoordinator& coordinator, RenderResult& result,
+                                   EditorApp& app, GlTextureCache& textures) {
+    coordinator.lastPostedAttempt_ = RenderAttemptIdentity{
+        .documentGeneration = result.documentGeneration,
+        .version = result.version,
+        .rasterViewport = result.rasterViewport,
+    };
+    return coordinator.prepareResultResources(result, app, textures);
+  }
+
+  static bool canReplaceWithOverview(const RenderCoordinator& coordinator,
+                                     const RenderResult& result, const EditorApp& app) {
+    return coordinator.canReplaceWithOverview(result, app);
+  }
+
+  static void changePendingRepairFailure(RenderCoordinator& coordinator,
+                                         FramePresentationFailure failure) {
+    coordinator.pendingRepair_->failure = failure;
+  }
+
+  static bool requiresFreshOverview(RenderCoordinator& coordinator, bool available,
+                                    std::uint64_t currentVersion) {
+    coordinator.overviewDocVersion_ = currentVersion;
+    return coordinator.requiresFreshOverview(available, currentVersion);
+  }
+
+  static bool canPresentWithOverview(const RenderCoordinator& coordinator,
+                                     const RenderResult& result, const EditorRasterViewport& raster,
+                                     EditorApp& app, const GlTextureCache& cache) {
+    return coordinator.canPresentWithOverview(result, raster, app, cache);
+  }
+
+  static bool matchingPendingOverview(RenderCoordinator& coordinator,
+                                      const std::shared_ptr<const CapturedPresentation>& overview,
+                                      RenderResult& result, EditorApp& app) {
+    coordinator.pendingOverviewResult_.emplace();
+    coordinator.pendingOverviewResult_->version = result.version;
+    coordinator.pendingOverviewResult_->documentGeneration = result.documentGeneration;
+    coordinator.pendingOverviewResult_->fontResourceRevision = result.fontResourceRevision;
+    coordinator.pendingOverviewResult_->capturedPresentation = overview;
+    return coordinator.hasMatchingPendingOverview(result, app);
+  }
 
   static inline std::chrono::steady_clock::time_point fakeRetryNow{};
 

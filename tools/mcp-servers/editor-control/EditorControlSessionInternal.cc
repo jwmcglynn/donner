@@ -620,13 +620,12 @@ json DisplayFrameJson(const EditorControlSession::DisplayFrameSnapshot& display)
   }
 
   int index = 0;
-  const std::optional<PresentedDragBaseline> dragBaseline =
-      PresentedBaselineFromSelectPreviews(display.activeDragPreview, display.displayedDragPreview);
+  // DisplayFrameSnapshot already resolves captured pixels to the requested object poses.
   for (const EditorControlSession::DisplayTileView& tile : display.tiles) {
     const Vector2d effectiveDragTranslationDoc =
-        ResolvePresentedTileDragTranslation(PresentedGeometryFromDisplayTile(tile), dragBaseline);
+        ResolvePresentedTileDragTranslation(PresentedGeometryFromDisplayTile(tile), std::nullopt);
     const Transform2d effectiveDocumentFromCachedDocument =
-        ResolvePresentedTileDocumentTransform(PresentedGeometryFromDisplayTile(tile), dragBaseline);
+        ResolvePresentedTileDocumentTransform(PresentedGeometryFromDisplayTile(tile), std::nullopt);
     displayJson["tiles"].push_back(json{
         {"index", index},
         {"kind", TileKindName(tile.kind)},

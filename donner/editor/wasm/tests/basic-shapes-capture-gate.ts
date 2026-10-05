@@ -50,22 +50,29 @@ export interface InitialBlueFrameState {
   renderedFrames: number;
   hostFrames: number | null;
   hostPresented: boolean;
+  frameId: number;
+  captureId: number;
+  completedFrameId: number;
+  completedCaptureId: number;
+  completedInputRepresented: boolean;
 }
 
 export function hasPresentedBasicShapesHostFrame(
   state: InitialBlueFrameState,
   beforeSample: number,
 ): boolean {
-  // RunEditorFrame calls endFrame once, and its timing callback is queued
-  // before RecordFrameSample. Both counters advance once per active frame,
-  // including early surface returns; only the completed draw/present path
-  // sets the same frame's lastSurfacePresented flag.
+  // Later UI frames may coalesce after this sealed document frame reached the GPU.
+  // Match its completion identity rather than the latest host frame's acquisition flag.
   return state.sampleId === "basic-shapes"
     && state.completedResults > beforeSample
     && state.presentedAtMs !== null
     && state.hostFrames !== null
     && state.hostFrames === state.renderedFrames
-    && state.hostPresented;
+    && state.frameId > 0
+    && state.captureId > 0
+    && state.completedFrameId >= state.frameId
+    && state.completedCaptureId === state.captureId
+    && state.completedInputRepresented;
 }
 
 export async function captureReadyBasicShapesFrame<T>(

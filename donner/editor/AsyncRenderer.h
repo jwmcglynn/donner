@@ -51,6 +51,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/CapturedPresentation.h"
 #include "donner/editor/CompositedRenderingMode.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/ViewportState.h"
@@ -138,6 +139,8 @@ struct RenderRequest {
 
   /// Non-null renderer/document lease for the worker handoff.
   RenderLease lease;
+  /// Test barrier after paired scene capture and DOM release, before exporting renderer pixels.
+  std::function<void()> afterDocumentCaptureForTesting;
   /// Internal timestamp captured by `requestRender()` for queue-latency diagnostics.
   std::chrono::steady_clock::time_point queuedAt;
   /// Document frame version snapshotted at request time so the UI can
@@ -150,6 +153,19 @@ struct RenderRequest {
   std::uint64_t documentGeneration = 0;
   /// Font adoption identity captured before the worker's dirty-region snapshot.
   std::uint64_t fontResourceRevision = 0;
+  /// Non-transform content and renderer settings consumed by this render.
+  std::uint64_t geometryRevision = 0;
+  std::uint64_t presentationEpoch = 0;
+  /// Immutable per-render identity assigned when the request is admitted.
+  std::uint64_t captureId = 0;
+  /// Selection whose geometry must accompany the raster, in selection order.
+  std::vector<svg::SVGElement> selectedElements;
+  /// Objects whose affine presentation has not yet been incorporated into a raster.
+  std::vector<Entity> trackedPresentationObjects;
+  /// Source and rejection annotations captured from the same guarded state as the pixels.
+  std::vector<svg::SVGElement> sourceHoverElements;
+  std::optional<LockedRejectionFlashInput> lockedFlash;
+  std::optional<CapturedPresentation::TextEditing> textEditing;
   /// Entity remap for structurally equivalent document replacement. When
   /// present, the worker remaps compositor state instead of fully resetting
   /// layer bitmaps and static segments.
@@ -183,6 +199,9 @@ struct RenderRequest {
   /// The worker still keeps the selected entity promoted, but skips the composited split preview
   /// and publishes a full-canvas tile. The UI uploads it into the retained overview cache without
   /// replacing active viewport-bounded tiles.
+  /// Request repairs a frame rejected for incompatible raster/pose coverage.
+  bool presentationCoverageRepair = false;
+  int presentationRepairReason = 0;  //!< Missing presentation proof carried by the request.
   bool overviewInfillOnly = false;
   /// Capture a CPU-readable copy of the fully composed frame.
   ///
@@ -233,6 +252,24 @@ struct PresentationSnapshotPlan {
     svg::RendererInterface& renderer, const PresentationSnapshotPlan& plan,
     svg::RendererBitmap& bitmap, std::shared_ptr<const svg::RendererTextureSnapshot>& texture);
 
+/**
+ * Prepare one changed tile payload for the receiving presentation device.
+ *
+ * GPU composition retains textures independently of cross-thread frame transport. A receiver
+ * requiring textures keeps the lease; a CPU receiver captures it only after the document lock has
+ * been released. Metadata-only tiles and existing bitmaps need no work.
+ *
+ * @param requiresTexturePresentation True when the receiver can sample the worker's texture.
+ * @param bitmap Receives CPU pixels when the receiver cannot sample the texture.
+ * @param texture Texture lease; cleared only after a successful CPU capture.
+ * @param shouldCancel Cancellation predicate for the bounded capture.
+ * @return False when the required capture failed or was cancelled.
+ */
+[[nodiscard]] bool PrepareTilePayloadForPresentation(
+    bool requiresTexturePresentation, svg::RendererBitmap& bitmap,
+    std::shared_ptr<const svg::RendererTextureSnapshot>& texture,
+    const std::function<bool()>& shouldCancel);
+
 /// Attribution of one worker-to-UI handoff, in milliseconds.
 struct HandoffTimings {
   /// Total time from worker render completion until the UI thread accepted the result.
@@ -281,6 +318,8 @@ struct RenderResult {
     double setupMs = 0.0;
     /// Time spent in `CompositorController::renderFrame`.
     double renderFrameMs = 0.0;
+    double documentWriteLockMs =
+        0.0;  //!< Time the captured document remained unavailable for UI edits.
     /// Time spent building composited-preview tile metadata/payloads.
     double buildPreviewMs = 0.0;
     /// Time spent taking the final fallback canvas snapshot, when needed.
@@ -294,6 +333,11 @@ struct RenderResult {
     double wakeToPollMs = 0.0;
     /// GPU-to-CPU readbacks performed by the worker renderer and its offscreen instances.
     int readbackCount = 0;
+    /// GPU-to-CPU readbacks performed inside compositor rendering, before document unlock.
+    int compositorReadbackCount = 0;
+    /// Changed GPU tiles captured for a CPU receiver after document unlock.
+    int tileHandoffReadbackCount = 0;
+
     /// Legacy device-poll iterations used while waiting for those readbacks.
     int readbackPollIterations = 0;
     /// True when browser readbacks used the event-driven timed WaitAny path.
@@ -383,11 +427,16 @@ struct RenderResult {
     [[nodiscard]] bool valid() const { return !tiles.empty(); }
   };
 
+  /// Geometry captured under the same document guard as the raster payload.
+  std::shared_ptr<const CapturedPresentation> capturedPresentation;
   svg::RendererBitmap bitmap;  //!< Optional CPU-readable full-canvas frame.
   std::optional<CompositedPreview>
-      compositedPreview;                   //!< Paint-ordered compositor tiles, when produced.
-  EditorRasterViewport rasterViewport;     //!< Raster viewport used to produce this result.
-  ViewportState viewport;                  //!< Editor viewport copied from the request.
+      compositedPreview;                //!< Paint-ordered compositor tiles, when produced.
+  EditorRasterViewport rasterViewport;  //!< Raster viewport used to produce this result.
+  ViewportState viewport;               //!< Editor viewport copied from the request.
+  /// Request repairs a frame rejected for incompatible raster/pose coverage.
+  bool presentationCoverageRepair = false;
+  int presentationRepairReason = 0;        //!< Missing presentation proof carried by the request.
   bool overviewInfillOnly = false;         //!< Update retained overview infill only.
   std::uint64_t version = 0;               //!< Document frame version represented by the result.
   std::uint64_t cpuSnapshotRequestId = 0;  //!< Nonzero explicit pixel-capture identity.
@@ -571,6 +620,10 @@ public:
    * @param delay Delay duration. Negative durations are clamped to zero.
    */
   void setReplayRenderDelayForTesting(std::chrono::milliseconds delay);
+
+  /// Pause queued renders before they acquire the document, for deterministic handoff replays.
+  /// Shutdown always releases this pause.
+  void setReplayDocumentAccessBlockedForTesting(bool blocked);
 
   /**
    * Hold each staged result for a fixed number of poll attempts in replay tests.
@@ -917,6 +970,8 @@ public:
 
 private:
   void workerLoop();
+  /// Wait for the replay-only input pause; returns with the worker mutex held, including shutdown.
+  void waitForReplayDocumentAccess(std::unique_lock<std::mutex>& lock);
   /// Poll an idle GPU context, then wait for work with a short completion timer only while needed.
   /// Returns with \p lock held so the worker can consume its state without a race.
   bool waitForRenderOrIdleMaintenance(std::unique_lock<std::mutex>& lock);
@@ -931,6 +986,7 @@ private:
 
   std::thread thread_;
   mutable std::mutex mutex_;
+  std::uint64_t nextCaptureId_ = 1;
   std::condition_variable cv_;
   std::function<void()> idlePoll_;
   std::function<bool()> idleHasWork_;
@@ -1152,6 +1208,8 @@ private:
 
   /// Replay/test-only fixed delay injected into each worker render attempt.
   std::atomic<std::chrono::milliseconds::rep> replayRenderDelayMsForTesting_{0};
+  /// Test-only pause before a worker consumes its submitted document.
+  std::atomic<bool> replayDocumentAccessBlockedForTesting_{false};
 
   /// Replay/test-only number of poll attempts to hold each newly staged result.
   int replayResultHoldFramesForTesting_ = 0;

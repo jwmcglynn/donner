@@ -15,32 +15,6 @@
 
 namespace donner::editor {
 
-Transform2d PresentedFramebufferFromDocumentTransform(const ViewportState& viewport,
-                                                      const Vector2d& framebufferFromLogicalScale) {
-  const Vector2d framebufferPixelsPerDocUnit =
-      framebufferFromLogicalScale * viewport.pixelsPerDocUnit();
-  const Vector2d framebufferOriginFromDocumentOrigin =
-      viewport.panScreenPoint * framebufferFromLogicalScale -
-      viewport.panDocPoint * framebufferPixelsPerDocUnit;
-
-  Transform2d framebufferFromDocument(Transform2d::uninitialized);
-  framebufferFromDocument.data[0] = framebufferPixelsPerDocUnit.x;
-  framebufferFromDocument.data[1] = 0.0;
-  framebufferFromDocument.data[2] = 0.0;
-  framebufferFromDocument.data[3] = framebufferPixelsPerDocUnit.y;
-  framebufferFromDocument.data[4] = framebufferOriginFromDocumentOrigin.x;
-  framebufferFromDocument.data[5] = framebufferOriginFromDocumentOrigin.y;
-  return framebufferFromDocument;
-}
-
-SelectionChromeSnapshot ChromePlacedOnPresentedDocument(const ViewportState& presentedViewport,
-                                                        const Vector2d& framebufferFromLogicalScale,
-                                                        SelectionChromeSnapshot snapshot) {
-  snapshot.canvasFromDoc =
-      PresentedFramebufferFromDocumentTransform(presentedViewport, framebufferFromLogicalScale);
-  return snapshot;
-}
-
 #ifdef DONNER_EDITOR_WGPU
 namespace {
 
@@ -52,9 +26,7 @@ double ElapsedMs(std::chrono::steady_clock::time_point start) {
 }  // namespace
 #endif
 
-PresentedFrameTileGeometry PresentedGeometryFromTileView(
-    const GlTextureCache::TileView& tile,
-    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview) {
+PresentedFrameTileGeometry PresentedGeometryFromTileView(const GlTextureCache::TileView& tile) {
   PresentedFrameTileGeometry geometry{
       .canvasOffsetDoc = tile.canvasOffsetDoc,
       .bitmapDimsDoc = tile.bitmapDimsDoc,
@@ -62,28 +34,7 @@ PresentedFrameTileGeometry PresentedGeometryFromTileView(
       .documentFromCachedDocument = tile.documentFromCachedDocument,
       .isDragTarget = tile.isDragTarget,
   };
-  if (TileMatchesActiveDragPreview(tile, activeDragPreview)) {
-    geometry.isDragTarget = true;
-  }
   return geometry;
-}
-
-std::optional<PresentedDragBaseline> PresentedBaselineFromDragPreviews(
-    const std::optional<SelectTool::ActiveDragPreview>& activePreview,
-    const std::optional<SelectTool::ActiveDragPreview>& displayedPreview) {
-  if (!activePreview.has_value() || !displayedPreview.has_value() ||
-      activePreview->entity != displayedPreview->entity ||
-      activePreview->dragGeneration != displayedPreview->dragGeneration) {
-    return std::nullopt;
-  }
-
-  return PresentedDragBaseline{
-      .entity = activePreview->entity,
-      .representedTranslationDoc = displayedPreview->translation,
-      .activeTranslationDoc = activePreview->translation,
-      .representedDocumentFromCachedDocument = displayedPreview->documentFromCachedDocument,
-      .activeDocumentFromCachedDocument = activePreview->documentFromCachedDocument,
-  };
 }
 
 #ifdef DONNER_EDITOR_WGPU
@@ -107,13 +58,15 @@ Box2d FramebufferBoxFromScreenBox(const Box2d& screenBox,
 }  // namespace
 
 FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
-    FramebufferCheckerboardRenderer& checkerboardRenderer, svg::RendererGeode& renderer,
-    const gui::EditorWindowWgpuRenderTarget& target, const ViewportState& viewport,
-    const Box2d& imageClipRect, const std::vector<GlTextureCache::TileView>& overviewTiles,
-    const std::vector<GlTextureCache::TileView>& tiles,
-    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
-    const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview,
-    Entity suppressedLayerEntity, bool suppressDragTargetTiles) {
+    FramebufferCheckerboardRenderer& checkerboard, svg::RendererGeode& renderer,
+    const gui::EditorWindowWgpuRenderTarget& target, const FramePresentation& frame) {
+  if (!frame.documentClipRect().has_value()) {
+    return {};
+  }
+  const auto& imageClipRect = *frame.documentClipRect();
+  const auto& tiles = frame.tiles();
+  const auto& overviewTiles = frame.overviewTiles();
+
   FrameCostBreakdown::DirectPresentation cost;
   const auto totalStart = std::chrono::steady_clock::now();
   if (!target.texture.isValid() || target.framebufferSizePx.x <= 0 ||
@@ -128,7 +81,7 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
 
   const auto checkerboardStart = std::chrono::steady_clock::now();
   cost.checkerboardDrawCount =
-      checkerboardRenderer.draw(target, imageClipRect, target.framebufferFromLogicalScale);
+      checkerboard.draw(target, imageClipRect, target.framebufferFromLogicalScale);
   cost.checkerboardMs = ElapsedMs(checkerboardStart);
 
   renderer.setTargetTexture(target.texture);
@@ -140,25 +93,18 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
   renderer.pushClip(clip);
   renderer.setTransform(Transform2d());
 
-  const Transform2d framebufferFromCanvasTransform =
-      PresentedFramebufferFromDocumentTransform(viewport, target.framebufferFromLogicalScale);
-  const std::optional<PresentedDragBaseline> dragBaseline =
-      PresentedBaselineFromDragPreviews(activeDragPreview, displayedDragPreview);
+  const Transform2d framebufferFromDocument =
+      frame.framebufferFromDocument(target.framebufferFromLogicalScale);
   const Box2d framebufferClipRect =
       FramebufferBoxFromScreenBox(imageClipRect, target.framebufferFromLogicalScale);
 
   const auto computeTileQuad = [&](const GlTextureCache::TileView& tile) {
-    if (tile.textureSnapshot == nullptr ||
-        !ShouldPresentCompositedTile(tile, suppressedLayerEntity, suppressDragTargetTiles)) {
-      return std::optional<PresentedTileQuad>();
-    }
-    if (suppressDragTargetTiles && TileMatchesActiveDragPreview(tile, activeDragPreview)) {
+    if (tile.textureSnapshot == nullptr) {
       return std::optional<PresentedTileQuad>();
     }
 
-    const std::optional<PresentedTileQuad> tileQuad =
-        ComputePresentedTileQuad(PresentedGeometryFromTileView(tile, activeDragPreview),
-                                 framebufferFromCanvasTransform, dragBaseline);
+    const std::optional<PresentedTileQuad> tileQuad = ComputePresentedTileQuad(
+        PresentedGeometryFromTileView(tile), framebufferFromDocument, std::nullopt);
     if (!tileQuad.has_value() ||
         !PresentedTileQuadIntersectsScreenRect(*tileQuad, framebufferClipRect)) {
       return std::optional<PresentedTileQuad>();
@@ -195,15 +141,6 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
       if (tileQuad.has_value()) {
         activeTileBounds.push_back(PresentedTileQuadBounds(*tileQuad));
       }
-      if (TileMatchesActiveDragPreview(tile, activeDragPreview)) {
-        const std::optional<PresentedTileQuad> cachedTileQuad =
-            ComputePresentedTileQuad(PresentedGeometryFromTileView(tile, std::nullopt),
-                                     framebufferFromCanvasTransform, std::nullopt);
-        if (cachedTileQuad.has_value() &&
-            PresentedTileQuadIntersectsScreenRect(*cachedTileQuad, framebufferClipRect)) {
-          activeTileBounds.push_back(PresentedTileQuadBounds(*cachedTileQuad));
-        }
-      }
     }
 
     const std::vector<Box2d> overviewClipRects =
@@ -229,7 +166,18 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
     cost.overviewTilesMs = ElapsedMs(overviewStart);
   }
   const auto activeTilesStart = std::chrono::steady_clock::now();
+  bool replacementPaintDrawn = false;
   for (const GlTextureCache::TileView& tile : tiles) {
+    if (frame.replacementPaint().has_value() &&
+        tile.layerEntity == frame.replacementPaint()->livePathPreview->entity) {
+      if (!replacementPaintDrawn) {
+        auto paint = *frame.replacementPaint();
+        paint.canvasFromDoc = framebufferFromDocument;
+        OverlayRenderer::drawChromeFromSnapshot(renderer, paint);
+        replacementPaintDrawn = true;
+      }
+      continue;
+    }
     if (drawTile(tile)) {
       ++cost.activeTileDrawCount;
     }
@@ -247,8 +195,10 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
 
 double DrawImmediateChromeToFramebuffer(svg::RendererGeode& renderer,
                                         const gui::EditorWindowWgpuRenderTarget& target,
-                                        const ViewportState& viewport, const Box2d& paneClipRect,
-                                        const SelectionChromeSnapshot& snapshot) {
+                                        const FramePresentation& frame) {
+  const auto& paneClipRect = frame.paneClipRect();
+  const auto& snapshot = frame.chrome();
+
   const auto start = std::chrono::steady_clock::now();
   if (!target.texture.isValid() || target.framebufferSizePx.x <= 0 ||
       target.framebufferSizePx.y <= 0) {
@@ -269,12 +219,11 @@ double DrawImmediateChromeToFramebuffer(svg::RendererGeode& renderer,
   renderer.setTransform(Transform2d());
   renderer.pushClip(clip);
 
-  // What makes chrome/content desync impossible: chrome is placed with the
-  // transform the tiles were placed with this frame, from the same viewport and
-  // the same function, not the one capture happened to sample.
-  OverlayRenderer::drawChromeFromSnapshot(
-      renderer,
-      ChromePlacedOnPresentedDocument(viewport, target.framebufferFromLogicalScale, snapshot));
+  OverlayRenderer::drawChromeFromSnapshot(renderer, [&] {
+    auto placed = snapshot;
+    placed.canvasFromDoc = frame.framebufferFromDocument(target.framebufferFromLogicalScale);
+    return placed;
+  }());
 
   renderer.popClip();
   renderer.endFrame();
