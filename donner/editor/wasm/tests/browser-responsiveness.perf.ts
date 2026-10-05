@@ -1229,7 +1229,11 @@ test.describe("UI presentation diagnosis", () => {
   test.use({ viewport: { width: 1600, height: 900 }, deviceScaleFactor: 1 });
   test(
     "held drag advances UI submissions while composited pixels are sampled",
-    async ({ page, browser }, info) => {
+    async ({ page, browser, browserName }, info) => {
+      test.skip(
+        browserName === "firefox",
+        "Quarantined: Firefox stalls until the watchdog fires (#1668)",
+      );
       const report: Record<string, unknown> = {
         browser: info.project.name,
         version: browser.version(),
