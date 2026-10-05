@@ -183,6 +183,7 @@ playwright_bin.playwright_test(
         "composited-probe.ts",
         "composited-probe-evidence.mjs",
         "gpu-image-transfer-canary.ts",
+        "latency-gates.mjs",
         "package.json",
         "playwright.bazel.config.js",
         "playwright.config.js",
