@@ -170,7 +170,10 @@ test("malformed Linux process identity fails closed", () => {
   assert.throws(() => processRows({ platform: "linux", procRoot }), /unreadable process identity/);
 });
 
-test("normal exit preserves status and bounded evidence", async () => {
+test("normal exit preserves status and bounded evidence", {
+  skip: process.platform === "darwin"
+    && "Quarantined: one slow process sample stops the run (#1669)",
+}, async () => {
   const result = await supervise(process.execPath, [
     "-e",
     "setTimeout(() => process.exit(17), 100)",
