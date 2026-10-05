@@ -713,6 +713,15 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+# A device reporting a chosen shader source kind that keeps the descriptor it last accepted.
+donner_cc_library(
+    name = "projection_capturing_device",
+    testonly = 1,
+    hdrs = ["tests/ProjectionCapturingDevice.h"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = ["//donner/gpu"],
+)
+
 donner_cc_test(
     name = "geode_shader_projection_tests_impl",
     srcs = ["tests/GeodeShaderProjection_tests.cc"],
@@ -720,6 +729,7 @@ donner_cc_test(
     deps = [
         ":geode_device",
         ":geode_shaders",
+        ":projection_capturing_device",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
@@ -733,6 +743,29 @@ donner_multi_transitioned_test(
     timeout = "short",
     testonly = 1,
     dep = ":geode_shader_projection_tests_impl",
+    renderer_backend = "geode",
+)
+
+# The same creators, linked without the test-only WGSL alternates: what a native product links.
+donner_cc_test(
+    name = "geode_shader_linkage_tests_impl",
+    srcs = ["tests/GeodeShaderLinkage_tests.cc"],
+    target_compatible_with = _GEODE_ONLY + _NATIVE_SHADERS_ONLY,
+    deps = [
+        ":geode_device",
+        ":geode_shaders",
+        ":projection_capturing_device",
+        "//donner/base:gtest_timeout_main",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_shader_linkage_tests",
+    timeout = "short",
+    testonly = 1,
+    dep = ":geode_shader_linkage_tests_impl",
     renderer_backend = "geode",
 )
 
