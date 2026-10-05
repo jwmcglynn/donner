@@ -324,26 +324,6 @@ void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
   }
 }
 
-#if defined(__EMSCRIPTEN__) && !defined(DONNER_EDITOR_WHOLE_APP_WORKER)
-// clang-format off: EM_JS and EM_ASM bodies are JavaScript, which clang-format rewrites
-// as C++ - it has already split a `===` into `== =` elsewhere in the editor, a SyntaxError
-// the browser reports only once that arm is built.
-EM_JS(int, CanvasPixelWidth, (), {
-  if (Module['canvas']) {
-    return Module['canvas'].width;
-  }
-  return Math.max(1, Math.floor(window.innerWidth * (window.devicePixelRatio || 1)));
-});
-
-EM_JS(int, CanvasPixelHeight, (), {
-  if (Module['canvas']) {
-    return Module['canvas'].height;
-  }
-  return Math.max(1, Math.floor(window.innerHeight * (window.devicePixelRatio || 1)));
-});
-// clang-format on
-#endif
-
 #ifdef __EMSCRIPTEN__
 // clang-format off: this body is JavaScript, including the strict equality operators.
 EM_JS(int, BrowserPreferredCanvasFormatCode, (), {
@@ -369,7 +349,6 @@ std::optional<gpu::TextureFormat> BrowserPreferredCanvasFormat() {
 #endif
 
 #ifdef __EMSCRIPTEN__
-#ifdef DONNER_EDITOR_WHOLE_APP_WORKER
 int CanvasPixelWidth() {
   return whole_app_worker::CanvasBackingWidth();
 }
@@ -377,10 +356,8 @@ int CanvasPixelHeight() {
   return whole_app_worker::CanvasBackingHeight();
 }
 // `window` does not exist in the app pthread's JS context, so the viewport
-// geometry, the loader handshake, and the readback diagnostic all move off
-// `EM_JS`. `Module['canvas']` above still works: on this build it is the
-// transferred OffscreenCanvas the app thread owns, whose `width`/`height` are
-// the backing store the app itself sizes.
+// geometry, the loader handshake, and the readback diagnostic go through the
+// whole-app bridge rather than `EM_JS`.
 int CanvasCssWidth() {
   return whole_app_worker::CssWidth();
 }
@@ -422,121 +399,6 @@ void PublishWgpuReadbackStats(int renderSamples, int renderColored, int renderNo
 void PublishWgpuCarouselThumbnailStats(const int* values, int count) {
   whole_app_worker::PublishCarouselThumbnailStats(values, count);
 }
-#else
-// clang-format off
-EM_JS(int, CanvasCssWidth, (), { return Math.max(1, Math.floor(window.innerWidth)); });
-EM_JS(int, CanvasCssHeight, (), { return Math.max(1, Math.floor(window.innerHeight)); });
-EM_JS(double, BrowserDevicePixelRatio, (), { return window.devicePixelRatio || 1.0; });
-EM_JS(void, PublishFirstPresentedFrame, (int headlessDeviceCreations), {
-  window['__donnerHeadlessDeviceCreations'] = headlessDeviceCreations;
-  if (window['__donnerFirstFramePresented']) {
-    return;
-  }
-  window['__donnerFirstFramePresented'] = true;
-  window.dispatchEvent(new Event("donner:first-frame-presented"));
-});
-EM_JS(bool, WgpuReadbackStatsEnabled, (), {
-  const enabled = new URLSearchParams(window.location.search).has('wgpuReadbackStats');
-  if (enabled && typeof window['__donnerRequestWgpuReadback'] != 'function') {
-    // One initial capture proves the diagnostic path is alive. Further captures are explicit so
-    // the probe never turns an otherwise idle editor into a continuous copy/map/pixel-scan loop.
-    window['__donnerWgpuReadbackRequested'] = 1;
-    window['__donnerWgpuReadbackCompleted'] = 0;
-    window['__donnerWgpuReadbackCaptureStarts'] = 0;
-    window['__donnerWgpuReadbackCaptureCompletions'] = 0;
-    window['__donnerWgpuReadbackCaptureFailures'] = 0;
-    window['__donnerRequestWgpuReadback'] = function() {
-      const request = Number(window['__donnerWgpuReadbackRequested'] || 0) + 1;
-      window['__donnerWgpuReadbackRequested'] = request;
-      window['__donnerEditorFrameRequested'] = true;
-      return request;
-    };
-  }
-  return enabled;
-});
-EM_JS(int, PeekWgpuReadbackRequest, (), {
-  const request = Number(window['__donnerWgpuReadbackRequested'] || 0);
-  const completed = Number(window['__donnerWgpuReadbackCompleted'] || 0);
-  if (request <= completed) {
-    return 0;
-  }
-  return request;
-});
-EM_JS(void, WakeWasmEditorForPendingWgpuReadback, (), {
-  const request = Number(window['__donnerWgpuReadbackRequested'] || 0);
-  const completed = Number(window['__donnerWgpuReadbackCompleted'] || 0);
-  if (request > completed) {
-    window['__donnerEditorFrameRequested'] = true;
-  }
-});
-EM_JS(void, MarkWgpuReadbackCaptureStarted, (int requestId), {
-  window['__donnerWgpuReadbackCaptureStarts'] =
-      Number(window['__donnerWgpuReadbackCaptureStarts'] || 0) + 1;
-  window['__donnerWgpuReadbackLastStartedRequest'] = requestId;
-});
-EM_JS(void, PublishWgpuReadbackFailure, (int requestId), {
-  if (requestId <= 0) {
-    return;
-  }
-  window['__donnerWgpuReadbackCompleted'] =
-      Math.max(Number(window['__donnerWgpuReadbackCompleted'] || 0), requestId);
-  window['__donnerWgpuReadbackCaptureFailures'] =
-      Number(window['__donnerWgpuReadbackCaptureFailures'] || 0) + 1;
-  window['__donnerWgpuReadbackLastFailedRequest'] = requestId;
-});
-EM_JS(void, PublishWgpuReadbackStats,
-      (int renderSamples, int renderColored, int renderNonBlack, int renderMaxChannel,
-       int layerSamples, int layerColored, int layerNonBlack, int layerMaxChannel,
-       int selectionChromePixels, int requestId),
-      {
-        if (requestId > 0) {
-          window['__donnerWgpuReadbackCompleted'] =
-              Math.max(Number(window['__donnerWgpuReadbackCompleted'] || 0), requestId);
-          window['__donnerWgpuReadbackCaptureCompletions'] =
-              Number(window['__donnerWgpuReadbackCaptureCompletions'] || 0) + 1;
-        }
-        const previous = window['__donnerWgpuReadbackStats'];
-        window['__donnerWgpuReadbackStats'] = {
-          'frame' : previous ? previous['frame'] + 1 : 1,
-          'request' : requestId > 0 ? requestId : (previous ? previous['request'] || 0 : 0),
-          'renderPane' : {
-            'samples' : renderSamples,
-            'coloredPixels' : renderColored,
-            'nonBlackPixels' : renderNonBlack,
-            'maxChannel' : renderMaxChannel,
-          },
-          'layerPreview' : {
-            'samples' : layerSamples,
-            'coloredPixels' : layerColored,
-            'nonBlackPixels' : layerNonBlack,
-            'maxChannel' : layerMaxChannel,
-          },
-          'selectionChromePixels' : selectionChromePixels,
-        };
-      });
-EM_JS(void, PublishWgpuCarouselThumbnailStats, (const int* values, int count), {
-  const stride = 7;
-  const base = values >> 2;
-  const thumbnails = [];
-  for (let index = 0; index < count; ++index) {
-    const offset = base + index * stride;
-    thumbnails.push({
-      'samples' : HEAP32[offset + 0],
-      'coloredPixels' : HEAP32[offset + 1],
-      'nonBlackPixels' : HEAP32[offset + 2],
-      'maxChannel' : HEAP32[offset + 3],
-      'fingerprint' : HEAP32[offset + 4] >>> 0,
-      'backgroundPixels' : HEAP32[offset + 5],
-      'glyphPixels' : HEAP32[offset + 6],
-    });
-  }
-  const stats = window['__donnerWgpuReadbackStats'];
-  if (stats) {
-    stats['carouselThumbnails'] = thumbnails;
-  }
-});
-// clang-format on
-#endif  // DONNER_EDITOR_WHOLE_APP_WORKER
 
 double CurrentDisplayScale() {
   const int logicalWidth = CanvasCssWidth();

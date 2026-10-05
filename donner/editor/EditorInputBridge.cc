@@ -1,8 +1,6 @@
 #include "donner/editor/EditorInputBridge.h"
 
 #ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-
 #include "donner/editor/WholeAppWorkerBridge.h"
 #endif
 
@@ -15,83 +13,16 @@ namespace donner::editor {
 
 namespace {
 
-#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WHOLE_APP_WORKER)
-// The zoom-modifier shadow is a `document`-scoped capture listener, so on the
-// whole-app-worker build it lives in the shared-memory mirror that
-// `whole_app_worker::Install()` sets up; there is nothing left to install or
-// remove from the app thread.
-void InstallWasmWheelModifierCapture() {}
-void RemoveWasmWheelModifierCapture() {}
+#ifdef __EMSCRIPTEN__
+// The zoom-modifier shadow is a `document`-scoped capture listener, so it lives
+// in the shared-memory mirror that `whole_app_worker::Install()` sets up rather
+// than on the app thread.
 int WasmWheelZoomModifierHeld() {
   return whole_app_worker::ZoomModifierHeld() ? 1 : 0;
 }
-void RecordWasmScrollDebug(int zoomModifierHeld, double xoffset, double yoffset, int phys,
-                           int /*dom*/) {
+void RecordWasmScrollDebug(int zoomModifierHeld, double xoffset, double yoffset, int phys) {
   whole_app_worker::RecordScrollDebug(zoomModifierHeld != 0, xoffset, yoffset, phys != 0);
 }
-#elif defined(__EMSCRIPTEN__)
-// clang-format off
-EM_JS(void, InstallWasmWheelModifierCapture, (), {
-  const canvas = document.getElementById("canvas");
-  if (!canvas) {
-    return;
-  }
-
-  if (canvas['__donnerWheelModifierCapture']) {
-    canvas['__donnerWheelModifierCapture']['state']['zoomModifierHeld'] = false;
-    return;
-  }
-
-  const state = {
-    'zoomModifierHeld': false,
-  };
-  const handler = function(event) {
-    state.zoomModifierHeld = !!(event.ctrlKey || event.metaKey);
-  };
-  // macOS drops the keyup when Cmd is held across a focus change; never let a
-  // stale modifier shadow classify ordinary scrolls as zoom after a blur.
-  const clear = function() {
-    state.zoomModifierHeld = false;
-  };
-  window.addEventListener("blur", clear);
-  document.addEventListener("visibilitychange", clear);
-
-  canvas['__donnerWheelModifierCapture'] = {
-    'state': state,
-    'handler': handler,
-  };
-  canvas.addEventListener("wheel", handler, {capture: true, passive: false});
-});
-
-EM_JS(void, RemoveWasmWheelModifierCapture, (), {
-  const canvas = document.getElementById("canvas");
-  const capture = canvas && canvas['__donnerWheelModifierCapture'];
-  if (!capture) {
-    return;
-  }
-
-  canvas.removeEventListener("wheel", capture['handler'], true);
-  delete canvas['__donnerWheelModifierCapture'];
-});
-
-EM_JS(int, WasmWheelZoomModifierHeld, (), {
-  const canvas = document.getElementById("canvas");
-  const capture = canvas && canvas['__donnerWheelModifierCapture'];
-  return capture && capture['state'] && capture['state']['zoomModifierHeld'] ? 1 : 0;
-});
-
-EM_JS(void, RecordWasmScrollDebug, (int zoomModifierHeld, double xoffset, double yoffset, int phys, int dom), {
-  const previous = window['__donnerLastScrollEvent'];
-  window['__donnerLastScrollEvent'] = {
-    'zoomModifierHeld': !!zoomModifierHeld,
-    'phys': phys,
-    'dom': dom,
-    'xoffset': xoffset,
-    'yoffset': yoffset,
-    'count': ((previous && previous['count']) || 0) + 1,
-  };
-});
-// clang-format on
 #endif
 
 [[nodiscard]] bool IsPhysicalZoomKeyHeld(GLFWwindow* window) {
@@ -117,16 +48,10 @@ EditorInputBridge::EditorInputBridge(gui::EditorWindow& window, double wheelZoom
   window_.setUserPointer(&pendingScrollEvents_);
   pendingScrollEvents_.previousCallback =
       window_.setScrollCallback(&EditorInputBridge::ScrollCallback);
-#ifdef __EMSCRIPTEN__
-  InstallWasmWheelModifierCapture();
-#endif
   (void)InstallPinchEventMonitor(window_.rawHandle(), &pendingScrollEvents_.events, wheelZoomStep);
 }
 
 EditorInputBridge::~EditorInputBridge() {
-#ifdef __EMSCRIPTEN__
-  RemoveWasmWheelModifierCapture();
-#endif
   if (window_.rawHandle() != nullptr) {
     std::ignore = window_.setScrollCallback(pendingScrollEvents_.previousCallback);
     window_.setUserPointer(nullptr);
@@ -169,7 +94,7 @@ void EditorInputBridge::ScrollCallback(GLFWwindow* window, double xoffset, doubl
     effectiveYOffset = ApplyPinchScrollUnitGain(yoffset);
   }
   RecordWasmScrollDebug(zoomModifierHeld ? 1 : 0, xoffset, effectiveYOffset,
-                        IsPhysicalZoomKeyHeld(window) ? 1 : 0, WasmWheelZoomModifierHeld());
+                        IsPhysicalZoomKeyHeld(window) ? 1 : 0);
 #endif
   state->events.push_back(RenderPaneScrollEvent{
       .scrollDelta = Vector2d(xoffset, effectiveYOffset),
