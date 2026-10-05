@@ -11,6 +11,7 @@ import {
 } from "./composited-probe";
 import { stopCompositedProbe } from "./composited-probe-evidence.mjs";
 import { inspectGpuImageTransfer } from "./gpu-image-transfer-canary";
+import { checkLatencyGate, latencyGateMode } from "./latency-gates.mjs";
 
 interface Diagnostics extends Window {
   __donnerBackend?: string;
@@ -303,7 +304,29 @@ async function zoomAtDraggedShape(page: Page, point: { x: number; y: number }, t
   }).toBeCloseTo(targetZoom, 2);
 }
 
-async function continuousDrag(page: Page, start: { x: number; y: number }, direction: number) {
+const latencyGateEnforcement = latencyGateMode();
+
+/** Record one interaction latency gate, failing the test on a miss unless the run only reports. */
+function latencyGate(
+  gate: "settledClick" | "inputP95" | "inputStall" | "completedStall",
+  phase: string,
+  valueMs: number | null | undefined,
+) {
+  checkLatencyGate(gate, valueMs, {
+    browser: test.info().project.name,
+    phase,
+    mode: latencyGateEnforcement,
+    enforce: (value, limitMs, message) => expect.soft(value, message).toBeLessThanOrEqual(limitMs),
+    log: (line) => console.log(line),
+  });
+}
+
+async function continuousDrag(
+  page: Page,
+  start: { x: number; y: number },
+  direction: number,
+  phase: string,
+) {
   const before = await snapshot(page);
   const stream = await page.evaluate(async ({ start, direction }) => {
     const state = window as Diagnostics;
@@ -496,13 +519,10 @@ async function continuousDrag(page: Page, start: { x: number; y: number }, direc
       .toBe(stream.dispatchPoints.length);
     expect(after.worker?.compositorReadbackCount, "composition must not read GPU tiles back")
       .toBe(0);
-    expect.soft(distribution(latencies).p95, "input-to-completed-frame p95 must meet 50 ms gate")
-      .toBeLessThanOrEqual(50);
-    expect.soft(distribution(latencies).max, "no input can stall above 250 ms")
-      .toBeLessThanOrEqual(250);
+    latencyGate("inputP95", phase, distribution(latencies).p95);
+    latencyGate("inputStall", phase, distribution(latencies).max);
     const cadence = gaps(completedFrames.map((frame) => frame.presentation!.completedAtMs));
-    expect.soft(distribution(cadence).max, "completed interaction cannot stall above 250 ms")
-      .toBeLessThanOrEqual(250);
+    latencyGate("completedStall", phase, distribution(cadence).max);
   }
   return {
     ...phaseReport(before, after, []),
@@ -740,12 +760,11 @@ test(
         .toBe(true);
       if (clicked?.presentation && process.env.DONNER_BROWSER_BASELINE !== "1") {
         report.settledClickFeedbackMs = clicked.presentation.completedAtMs - clicked.input!.atMs;
-        expect.soft(report.settledClickFeedbackMs, "settled click feedback must meet100ms gate")
-          .toBeLessThanOrEqual(100);
+        latencyGate("settledClick", "settled-click", report.settledClickFeedbackMs as number);
       }
       // Separate the selection click from the drag so it cannot become a group-isolation double click.
       await page.waitForTimeout(400);
-      const firstDrag = await continuousDrag(page, dragStart, -1);
+      const firstDrag = await continuousDrag(page, dragStart, -1, "first-drag-193");
       report["first-drag-193"] = firstDrag;
       console.log(
         `responsiveness first-drag-193 ${info.project.name} ${JSON.stringify(firstDrag)}`,
@@ -758,7 +777,7 @@ test(
       });
       await zoomAtDraggedShape(page, firstDrag.stream.end, 2.17);
       report.zoomBeforeSecondDrag = await snapshot(page);
-      const secondDrag = await continuousDrag(page, firstDrag.stream.end, 1);
+      const secondDrag = await continuousDrag(page, firstDrag.stream.end, 1, "second-drag-193");
       report["second-drag-193"] = secondDrag;
       console.log(
         `responsiveness second-drag-193 ${info.project.name} ${JSON.stringify(secondDrag)}`,
@@ -771,7 +790,12 @@ test(
       });
       await zoomAtDraggedShape(page, secondDrag.stream.end, 1.93);
       await waitForIdle(page);
-      report["settled-zoom-third-drag"] = await continuousDrag(page, secondDrag.stream.end, -1);
+      report["settled-zoom-third-drag"] = await continuousDrag(
+        page,
+        secondDrag.stream.end,
+        -1,
+        "settled-zoom-third-drag",
+      );
       expect(failures).toEqual([]);
     } finally {
       stopHeartbeat?.();
@@ -906,9 +930,14 @@ test(
       // Keep the selection click separate from the drag press, outside measured intervals.
       await page.waitForTimeout(400);
       for (let cycle = 0; cycle < 10; ++cycle) {
-        const first = await continuousDrag(page, point, -1);
+        const first = await continuousDrag(page, point, -1, `cycle-${cycle}-first-drag`);
         await zoomAtDraggedShape(page, first.stream.end, 2.17);
-        const second = await continuousDrag(page, first.stream.end, 1);
+        const second = await continuousDrag(
+          page,
+          first.stream.end,
+          1,
+          `cycle-${cycle}-second-drag`,
+        );
         point = second.stream.end;
         await zoomAtDraggedShape(page, point, 1.93);
         await waitForIdle(page);

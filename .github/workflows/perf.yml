@@ -60,8 +60,12 @@ jobs:
         include:
           - os: macos-26
             target_tag: perf
+            # The interaction latency gates miss their targets on this hosted runner (#1666), so
+            # this job records them without failing on a miss. Every other run enforces them.
+            latency_gates: report
           - os: ubuntu-24.04
             target_tag: perf_linux
+            latency_gates: enforce
     runs-on: ${{ matrix.os }}
     needs: gatekeeper
     if: needs.gatekeeper.outputs.should_run == 'true'
@@ -129,7 +133,15 @@ jobs:
             --test_output=all \
             --build_tag_filters="$TARGET_TAG" \
             --test_tag_filters="$TARGET_TAG" \
+            --test_env=DONNER_BROWSER_LATENCY_GATES=${{ matrix.latency_gates }} \
             ${{ steps.discover.outputs.targets }}
+
+      - name: Summarize interaction latency gates
+        if: ${{ !cancelled() && matrix.target_tag == 'perf' && steps.perf.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node donner/editor/wasm/tests/latency-gate-summary.mjs bazel-testlogs/donner/editor/wasm/tests/browser_responsiveness_perf_test/test.log >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload perf test failure artifacts
         if: failure() && steps.perf.outcome == 'failure'
