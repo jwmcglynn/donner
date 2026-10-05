@@ -6576,6 +6576,10 @@ TEST(RenderCoordinatorTest, PresentationRefreshRejectsPriorOverviewAndDetailedRe
     viewport.devicePixelRatio = 2.0;
     viewport.resetTo100Percent();
     viewport.zoomAround(32.0, viewport.paneCenter());
+    ASSERT_TRUE(viewport.rasterViewport().viewportBounded);
+    // Settle the canvas first so no render in the case becomes a canvas-commit overview infill.
+    const Vector2i semanticCanvas = viewport.rasterViewport().semanticCanvasSizePx;
+    app.document().document().setCanvasSize(semanticCanvas.x, semanticCanvas.y);
     SelectTool selectTool;
     GlTextureCache textures;
     RenderCoordinator coordinator;
