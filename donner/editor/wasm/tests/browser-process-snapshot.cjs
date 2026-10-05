@@ -56,6 +56,8 @@ exports.processRows = function processRows({
     if (
       begin < 1 || end <= begin || fields.length < 22
       || Number(raw.slice(0, begin).trim()) !== Number(name) || !/^\d+$/.test(fields[19])
+      || !/^\d{1,10}$/.test(fields[6]) || Number(fields[6]) > 0xffffffff
+      || !/^\d{1,10}$/.test(fields[17]) || Number(fields[17]) > 0x7fffffff
     ) {
       throw new Error("unreadable process identity");
     }
@@ -76,8 +78,12 @@ exports.processRows = function processRows({
         if (before.fields[19] !== after.fields[19]) continue;
         const fields = after.fields;
         const rss = status.match(/^VmRSS:\s+(\d+)\s+kB$/m);
+        // exit_mm can clear memory before a single-thread task reaches zombie state.
+        const releasedDuringExit = (Number(fields[6]) & 0x4) !== 0 && Number(fields[17]) === 1;
         if (
-          !rss && !["Z", "X"].includes(fields[0]) && fields[2] !== "0"
+          !rss
+          && (/^VmRSS:/m.test(status)
+            || (!releasedDuringExit && !["Z", "X"].includes(fields[0]) && fields[2] !== "0"))
           && fs.statSync(directory).uid === process.getuid()
         ) {
           throw new Error(
