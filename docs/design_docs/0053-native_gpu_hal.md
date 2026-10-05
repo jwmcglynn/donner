@@ -245,9 +245,12 @@ commits and their fixes together in a focused reviewable change.
       the UI renderer's shaders are authored as WGSL sources under the same contract. The UI draw
       program is authored WGSL compiled into frozen artifacts, and the bit-shift operators joined
       the profile with WGSL, MSL and SPIR-V tests, replacing the division workarounds in the UI
-      vertex color unpack and the snapshot half-alpha term. Besides the identifier renames the
-      profile's naming rules force (see the compiler guide), one production spelling, feImage's
-      `0.33333334f`, stands in for f32 constant folding (#1636).
+      vertex color unpack and the snapshot half-alpha term, and f32 constant expressions fold, so
+      feImage writes its weight as `1f / 3f`. Two identifier renames still stand in for valid WGSL
+      the profile rejects (see the compiler guide): the gradient local `linear_parameter`, because a
+      function-scope name may not shadow a module-scope one (#1647), and feBlend's `cs_main`,
+      because an entry name reserved in MSL is rejected rather than mapped to a native name
+      (#1648). This item stays open until the compiler accepts both.
 
 ### Snapshot and target identity
 
@@ -872,11 +875,11 @@ compilation with a named diagnostic, and there is no runtime parser, generator o
 Host parameter layouts, binding slots, entry names and workgroup shapes are reflected from the
 same compile and checked against the host structures with `static_assert`, so an interface edit
 fails the build instead of changing the bytes a shader reads. The shipped WGSL projection is the
-authored source without comments, indentation or blank lines; MSL and SPIR-V are emitted from the
-parsed module. Committed shader text is the authored source; emitted projections are never
-committed as goldens. Verification uses the compiler's own tests, offline Metal and SPIR-V
-validation, native execution, and strict renderer pixel comparisons. The typed IR and its emitters
-remain as test fixtures only.
+authored source without comments, indentation or blank lines, with each folded constant expression
+replaced by its exact value; MSL and SPIR-V are emitted from the parsed module. Committed shader
+text is the authored source; emitted projections are never committed as goldens. Verification uses
+the compiler's own tests, offline Metal and SPIR-V validation, native execution, and strict renderer
+pixel comparisons. The typed IR and its emitters remain as test fixtures only.
 
 Bazel is the primary build. CMake must describe the same native sources, shader artifacts, platform
 libraries, and feature flags. Tiny renderer profiles must remain independent of GPU backend linkage.

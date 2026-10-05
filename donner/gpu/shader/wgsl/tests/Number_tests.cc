@@ -8,6 +8,7 @@
 #include <locale>
 #include <sstream>
 #include <string>
+#include <utility>
 
 namespace donner::gpu::shader::wgsl::number {
 namespace {
@@ -24,6 +25,13 @@ TEST(Number, ParsesShaderLiteralKindsAndExactBits) {
         Case{"9223372036854775807", Kind::AbstractInt, 0x7fffffffffffffff},
         Case{"0.7071068f", Kind::F32, 0x3f3504f4}, Case{"3.402823466e38f", Kind::F32, 0x7f7fffff},
         Case{"0x1p-149f", Kind::F32, 1}, Case{"0x1p-1074", Kind::AbstractFloat, 1},
+        // The spellings the WGSL projection gives folded f32 values.
+        Case{"0x1.555556p-2f", Kind::F32, 0x3eaaaaab},
+        Case{"0x1.000000p-127f", Kind::F32, 0x400000},
+        Case{"0x1.fffffep127f", Kind::F32, 0x7f7fffff},
+        Case{"0x1.000000p0f", Kind::F32, 0x3f800000},
+        Case{"0x1.5555555555555p-2", Kind::AbstractFloat, 0x3fd5555555555555},
+        Case{"0x1.0000000000000p-1074", Kind::AbstractFloat, 1},
         Case{"0x1.fffffffffffffp1023", Kind::AbstractFloat, 0x7fefffffffffffff}}) {
     SCOPED_TRACE(item.text);
     const Value value = Parse(item.text);
@@ -79,6 +87,36 @@ TEST(Number, RejectsNonfiniteInputsAndArithmeticCapacityOverflow) {
   numerator.add(half);
   numerator.addSmall(1);
   EXPECT_EQ(Divide(numerator, denominator).error, Error::Capacity);
+}
+
+template <typename Float, typename Bits>
+void CheckZeroSigns(uint32_t precision) {
+  const Float zero = 0, negativeZero = -zero;
+  const std::pair<Float, Float> cases[] = {{1, -1},
+                                           {-1, 1},
+                                           {1, 1},
+                                           {-1, -1},
+                                           {zero, zero},
+                                           {zero, negativeZero},
+                                           {negativeZero, zero},
+                                           {negativeZero, negativeZero}};
+  for (const auto& [left, right] : cases) {
+    for (Op op : {Op::Add, Op::Subtract}) {
+      SCOPED_TRACE(testing::Message() << std::signbit(left) << left << ' ' << unsigned(op) << ' '
+                                      << std::signbit(right) << right);
+      volatile Float a = left, b = right;
+      const Float reference = op == Op::Add ? a + b : a - b;
+      const auto actual =
+          Evaluate(op, std::bit_cast<Bits>(left), std::bit_cast<Bits>(right), precision);
+      ASSERT_EQ(actual.error, Error::None);
+      EXPECT_EQ(actual.bits, std::bit_cast<Bits>(reference));
+    }
+  }
+}
+
+TEST(Number, SignsZeroSumsAndDifferencesLikeIeeeRoundToNearest) {
+  CheckZeroSigns<float, uint32_t>(24);
+  CheckZeroSigns<double, uint64_t>(53);
 }
 
 TEST(Number, EvaluatesTheSlugAbstractFractionDuringConstantEvaluation) {

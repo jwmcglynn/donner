@@ -30,12 +30,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
 The result owns exact-sized WGSL, MSL and SPIR-V arrays plus reflected resource/member data. The
 WGSL projection is the authored source with every `//` comment, all indentation and every blank line
-removed; the authored file keeps its commentary, and the compiler tests check that the projection
-parses to the same module and native bytes. A WebGPU implementation's diagnostics therefore quote
-the stripped text and its line numbers, not the authored file's. Its
-`view()` borrows those arrays and cannot be called on a temporary. Keep compiler instantiations in
-implementation files, and keep the owning artifact alive while a view is used. Text views carry an
-explicit length and do not promise a trailing NUL.
+removed, and with each folded constant expression replaced by its exact value (see "Constant f32
+arithmetic"); the authored file keeps its commentary, and the compiler tests check that the
+projection parses to the same native bytes. A WebGPU implementation's diagnostics therefore quote
+the stripped text and its line numbers, not the authored file's. Its `view()` borrows those arrays
+and cannot be called on a temporary. Keep compiler instantiations in implementation files, and keep
+the owning artifact alive while a view is used. Text views carry an explicit length and do not
+promise a trailing NUL.
 
 The `Projection` template argument is required. Production code selects exactly the representation
 its consumer uses. The Geode adapter links WGSL-only artifacts. Native Metal and Vulkan consumers
@@ -87,7 +88,8 @@ Outside the profile, and rejected explicitly: `f16` and matrices with a non-f32 
 memory and barriers; `binding_array`, depth, cube, 1D, 3D and arrayed textures and texture builtins
 other than `textureDimensions`, `textureLoad`, `textureSample`, `textureSampleLevel` and
 `textureStore`; bitwise operators other than integer AND and the bit shifts described below;
-constant f32 arithmetic in constant expressions (integer constant expressions only); `continuing`
+constant f32 arithmetic over operands other than literals, their negations and vector
+constructions of them, and constant matrix arithmetic (see "Constant f32 arithmetic"); `continuing`
 blocks; pointers outside a call argument or dereference, including pointers to resources,
 immutables, members and array elements; fixed arrays of structures, nested arrays, array parameters
 and returns; module-scope mutable variables; bindings outside group zero; and any source byte
@@ -396,6 +398,48 @@ differ, a later `>` closes a candidate the specification dropped, and the module
 Chromium rejects it: `g(a < b, 1u <= c, d > a)` fails, and `g((a < b), 1u <= c, d > a)` is
 accepted.
 
+## Constant f32 arithmetic
+
+When both operands of `+`, `-`, `*` or `/` are constant and the result is f32, the compiler folds
+the expression at shader creation, as WGSL evaluates a const-expression. Each lane is the correctly
+rounded f32 result of the exact operation, ties to even, computed by the compiler's soft-float
+evaluator rather than host floating point. A scalar operand applies to every lane, an abstract
+operand converts to f32 first, and each operation rounds before the next, so
+`16777216f + 1f - 16777216f` is `0f`. A result that overflows, divides by zero or is NaN is a
+creation error at the operator. WGSL lets a result between the largest finite f32 and 2^128 round
+either way; the compiler rounds it to infinity and so rejects it, even where round-to-nearest would
+give the largest finite value. An exact cancellation such as `-1f + 1f` is `+0`; among sums and
+differences only `-0f - 0f` and `-0f + -0f` give `-0`, while a product or quotient takes the sign of
+its operands, so `0f * -1f` is `-0f`. Abstract-float arithmetic follows the same rules in binary64.
+
+The folded value replaces the expression in the MSL and SPIR-V projections, which carry the literal
+and no runtime operation, so `let b = 1f / 3f;` emits the same bytes as `let b = 0.33333334f;`. The
+WGSL projection carries the same value: each outermost folded expression is replaced by its exact
+spelling, a hex float such as `0x1.555556p-2f` for a positive value (`0.0f` for zero), an exact
+subtraction such as `(-0f - 0x1.800000p1f)` for a negative value or `-0`, and a vector construction
+of those. A browser would otherwise evaluate the expression itself, and WGSL allows f32 division 2.5
+ULP of error and lets an inexact conversion round either way, so it could reach other bits than the
+MSL and SPIR-V projections carry. The subtraction is exact in WGSL and folds back to the same
+literal here, where a bare minus sign would leave an unfolded negation and could join a preceding
+`-` into `--`. A negative value that is a whole parenthesized expression or argument, directly
+after `(` or `,` and before `)` or `,`, needs no parentheses of its own, so the projection of a
+projection is unchanged, and a value is separated by a space from an adjacent keyword, identifier
+or number, as after `return` in `return-1f*-3f;`.
+Abstract-float folds are spelled exactly as well, since WGSL leaves abstract-float division
+unbounded: one the parser has given an f32 type, such as the argument in `max(x, 1.0 / 65536.0)`,
+becomes an f32 hex float, and one that stays abstract, such as an untyped `const`, becomes an
+abstract hex float such as `0x1.5555555555555p-2`, negated in parentheses when negative. A value
+that stays abstract is exact in the projection, but where WGSL later converts it to f32, as at a use
+of an untyped `const` in f32 arithmetic, a browser may round an inexact value either way, as it may
+for any inexact abstract-float literal. A fold that spans lines or contains a comment becomes part
+of one line, and a module holds at most 256 outermost folds; more fail with an expression-limit
+diagnostic. A module `const` may be written as `const k: f32 = 1f / 3f;`. A folded scalar `const` is
+a literal wherever it is referenced, so `k * 3f` folds again, to `1f`; a vector-valued `const`
+remains unsupported. Operands other than literals, their negations and vector constructions of them,
+such as a swizzle, member, index or conversion of a constant, and constant matrix arithmetic remain
+outside the profile and fail with an invalid-constant-expression diagnostic; f32 `%` is a type
+mismatch in this profile.
+
 ## Slug fill
 
 `SlugFillSource.h` is authoritative for the ordinary and batched entry-point pairs. The live
@@ -409,12 +453,12 @@ Flat interpolation uses the first vertex; optional interpolation sampling modes 
 this profile. Reflection retains the builtin and flat qualifier. Native acceptance uses differing
 per-vertex values and nonzero vertex/instance bases, plus differently translated storage records.
 
-The bounded module permits 64 KiB of source, 16,384 tokens/identifier bytes, 16 structures,
-256 members, 1,024 symbols/statements, 4,096 expressions and 64 functions. A fixed type may occupy
-at most 1 MiB; layout growth is checked before recording member offsets. Text emission is bounded
-at 128 KiB. The Slug mask and the dedicated gradients each use a local 4,194,304-step Clang
-evaluator cap, and Slug fill uses 8,388,608 (its ported source measures about 4.07M steps);
-existing smaller family caps remain independently checked.
+The bounded module permits 64 KiB of source, 16,384 tokens/identifier bytes, 16 structures, 256
+members, 1,024 symbols/statements, 4,096 expressions, 256 outermost folded constant expressions and
+64 functions. A fixed type may occupy at most 1 MiB; layout growth is checked before recording
+member offsets. Text emission is bounded at 128 KiB. The Slug mask and the dedicated gradients each
+use a local 4,194,304-step Clang evaluator cap, and Slug fill uses 8,388,608 (its ported source
+measures about 4.07M steps); existing smaller family caps remain independently checked.
 
 Native tests cover ordinary and batched fills, fractional/binary coverage, clipping, patterns,
 linear/radial gradients, painter ordering and reads limited to a declared record range. Duplicate
@@ -474,11 +518,10 @@ and the build-time emitter tool are gone. The checkerboard render pipeline and t
 readback pipeline read entry names, binding slots and workgroup shape from their artifacts, and
 their pass code binds the reflected slot rather than a literal index.
 
-One source changed spelling without changing behavior to stay inside the portable profile: the
-feImage cubic weight constant is the f32 literal `0.33333334f`, the same value `1f / 3f` folds to,
-because constant f32 arithmetic is outside the profile. Every other family compiled unchanged,
-including the morphology loops, the runtime component-transfer array, the 8,192-entry transfer
-table and the vertex/fragment checkerboard.
+All fifteen families compile with their authored spelling, including the morphology loops, the
+runtime component-transfer array, the 8,192-entry transfer table, the vertex/fragment checkerboard
+and the feImage cubic weight `1f / 3f`, which folds to the same f32 value as the literal
+`0.33333334f` it once had to be written as (see "Constant f32 arithmetic").
 
 Native acceptance runs every family on Metal and Vulkan from the native artifact and from the
 mutation control through reflected bindings. The new slices compare bit-exactly where the inputs

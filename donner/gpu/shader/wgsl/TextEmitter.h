@@ -2,6 +2,7 @@
 /// @file
 /// Constexpr-capable text emission for the bounded WGSL module profile.
 
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -85,6 +86,96 @@ struct TextSink {
 };
 
 namespace detail {
+
+/// The exact text of one floating-point value, as an MSL or WGSL literal.
+struct FloatText {
+  std::array<char, 32> characters = {};  //!< Literal characters.
+  uint8_t size = 0;                      //!< Number of characters used.
+  bool valid = true;                     //!< False for an infinity or NaN, which has no literal.
+
+  /// Returns the literal. Its storage is this object.
+  constexpr std::string_view view() const { return {characters.data(), size}; }
+
+  /// Appends p character.
+  constexpr void push(char character) { characters[size++] = character; }
+
+  /// Appends p text.
+  constexpr void push(std::string_view text) {
+    for (char character : text) {
+      push(character);
+    }
+  }
+
+  /// Appends the decimal digits of p value.
+  constexpr void pushDecimal(uint32_t value) {
+    if (value >= 10) {
+      pushDecimal(value / 10);
+    }
+    push(static_cast<char>('0' + value % 10));
+  }
+};
+
+/// An IEEE binary format and the literal spelling of its values.
+struct FloatFormat {
+  uint32_t exponentBits;    //!< Width of the biased exponent field.
+  uint32_t fractionBits;    //!< Width of the stored fraction field.
+  uint32_t hexDigits;       //!< Hex digits after the point, covering the whole fraction.
+  std::string_view zero;    //!< Spelling of a zero magnitude.
+  std::string_view suffix;  //!< Type suffix after the exponent.
+};
+
+/// f32 literals: `0x1.555556p-2f`.
+inline constexpr FloatFormat kF32Format{8, 23, 6, "0.0f", "f"};
+
+/// WGSL AbstractFloat literals, binary64 without a suffix: `0x1.5555555555555p-2`.
+inline constexpr FloatFormat kAbstractFloatFormat{11, 52, 13, "0.0", ""};
+
+/// Formats p bits of p format exactly: the zero spelling for a zero, and otherwise a hex float with
+/// a normalized significand, which also spells subnormals exactly. A negative value has a leading
+/// minus sign. MSL and WGSL both accept the f32 form, and WGSL the abstract form.
+constexpr FloatText FormatFloat(uint64_t bits, const FloatFormat& format) {
+  FloatText text;
+  const uint32_t signBit = format.exponentBits + format.fractionBits;
+  const uint64_t fractionMask = (uint64_t(1) << format.fractionBits) - 1;
+  const uint64_t exponentMask = (uint64_t(1) << format.exponentBits) - 1;
+  if (((bits >> signBit) & 1) != 0) {
+    text.push('-');
+  }
+  if ((bits & ((uint64_t(1) << signBit) - 1)) == 0) {
+    text.push(format.zero);
+    return text;
+  }
+  const uint64_t exponent = (bits >> format.fractionBits) & exponentMask;
+  const int32_t bias = static_cast<int32_t>(exponentMask >> 1);
+  if (exponent == exponentMask) {
+    text.valid = false;
+    return text;
+  }
+  uint64_t fraction = bits & fractionMask;
+  int32_t power = static_cast<int32_t>(exponent) - bias;
+  if (exponent == 0) {
+    int32_t shift = 0;
+    for (uint64_t leading = uint64_t(1) << (format.fractionBits - 1); (fraction & leading) == 0;
+         leading >>= 1) {
+      ++shift;
+    }
+    fraction = (fraction << (shift + 1)) & fractionMask;
+    power = -bias - shift;
+  }
+  fraction <<= format.hexDigits * 4 - format.fractionBits;
+  text.push("0x1.");
+  constexpr char kHex[] = "0123456789abcdef";
+  for (int32_t digit = static_cast<int32_t>(format.hexDigits) - 1; digit >= 0; --digit) {
+    text.push(kHex[(fraction >> (digit * 4)) & 0xfu]);
+  }
+  text.push('p');
+  if (power < 0) {
+    text.push('-');
+  }
+  text.pushDecimal(static_cast<uint32_t>(power < 0 ? -power : power));
+  text.push(format.suffix);
+  return text;
+}
 
 class MslTextEmitter {
 public:
@@ -677,43 +768,12 @@ private:
   }
 
   constexpr void floatText(uint32_t bits) {
-    if ((bits & 0x7fffffffu) == 0) {
-      if ((bits >> 31) != 0) {
-        character('-');
-      }
-      text("0.0f");
-      return;
-    }
-    const uint32_t exponent = (bits >> 23) & 0xffu;
-    if (exponent == 0xffu) {
+    const FloatText literal = FormatFloat(bits, kF32Format);
+    if (!literal.valid) {
       error_ = TextEmitError::InvalidModule;
       return;
     }
-    if ((bits >> 31) != 0) {
-      character('-');
-    }
-    uint32_t mantissa = bits & 0x7fffffu;
-    int32_t power = 0;
-    if (exponent == 0) {
-      uint32_t leading = 0x400000u;
-      while ((mantissa & leading) == 0) {
-        leading >>= 1;
-        ++power;
-      }
-      mantissa = (mantissa << (power + 1)) & 0x7fffffu;
-      power = -127 - power;
-    } else {
-      power = static_cast<int32_t>(exponent) - 127;
-    }
-    mantissa <<= 1;
-    text("0x1.");
-    constexpr char kHex[] = "0123456789abcdef";
-    for (int shift = 20; shift >= 0; shift -= 4) {
-      character(kHex[(mantissa >> shift) & 0xfu]);
-    }
-    character('p');
-    intText(power);
-    character('f');
+    text(literal.view());
   }
 
   constexpr void expression(ArenaId id) {
@@ -1781,26 +1841,264 @@ constexpr TextEmitResult EmitMsl(const Module& module, TextSink& sink) {
 
 namespace detail {
 
-/// Trims spaces, tabs and carriage returns from both ends of one source line.
-constexpr std::string_view TrimLine(std::string_view line) {
-  constexpr std::string_view kBlank = " \t\r";
-  const size_t first = line.find_first_not_of(kBlank);
-  if (first == std::string_view::npos) {
-    return {};
+/// Writes the WGSL projection of a validated module: its source, one logical line at a time, with
+/// `//` comments, surrounding blanks and blank lines removed and every recorded folded expression
+/// replaced by its exact value.
+class WgslProjector {
+public:
+  constexpr WgslProjector(const Module& module, TextSink& sink)
+      : module_(module), source_(module.source()), sink_(sink) {}
+
+  /// Writes the projection and returns the first error.
+  constexpr TextEmitError emit() {
+    if (!foldsAreValid()) {
+      return TextEmitError::InvalidModule;
+    }
+    uint32_t cursor = 0;
+    while (cursor < source_.size() && error_ == TextEmitError::None) {
+      const uint32_t end = lineEnd(cursor);
+      emitLine(cursor, end);
+      cursor = end + 1;
+    }
+    return error_;
   }
-  const size_t last = line.find_last_not_of(kBlank);
-  return line.substr(first, last - first + 1);
-}
+
+private:
+  static constexpr std::string_view kBlank = " \t\r";
+
+  constexpr SourceSpan foldAt(uint16_t index) const { return module_.foldedConstants[index].span; }
+
+  /// Returns whether the folds named at p index or later include one that starts before p end.
+  constexpr bool foldBefore(uint16_t index, uint32_t end) const {
+    return index < module_.foldedConstantCount && foldAt(index).begin < end;
+  }
+
+  /// Returns whether every recorded fold names an expression and lies in the source, in source
+  /// order and disjoint, so that the projection can replace each one.
+  constexpr bool foldsAreValid() const {
+    if (module_.foldedConstantCount > ModuleLimits::kMaxFoldedConstants) {
+      return false;
+    }
+    uint32_t previousEnd = 0;
+    for (uint16_t index = 0; index < module_.foldedConstantCount; ++index) {
+      const FoldedConstant& folded = module_.foldedConstants[index];
+      if (folded.span.begin < previousEnd || folded.span.end <= folded.span.begin ||
+          folded.span.end > source_.size() || folded.expression >= module_.expressionCount) {
+        return false;
+      }
+      previousEnd = folded.span.end;
+    }
+    return true;
+  }
+
+  /// Returns the first newline at or after p position, or the source size.
+  constexpr uint32_t newlineFrom(uint32_t position) const {
+    const size_t newline = source_.find('\n', position);
+    return newline == std::string_view::npos ? static_cast<uint32_t>(source_.size())
+                                             : static_cast<uint32_t>(newline);
+  }
+
+  /// Returns the newline that ends the logical line starting at p begin. A fold that spans lines
+  /// joins them, so the line runs to the first newline after every fold that starts in it.
+  constexpr uint32_t lineEnd(uint32_t begin) const {
+    uint32_t end = newlineFrom(begin);
+    for (uint16_t index = nextFold_; foldBefore(index, end); ++index) {
+      if (foldAt(index).end > end) {
+        end = newlineFrom(foldAt(index).end);
+      }
+    }
+    return end;
+  }
+
+  /// Returns where the content of the logical line [p begin, p end) stops: at its first `//`
+  /// outside a fold, or at p end. No fold can follow a comment on its line.
+  constexpr uint32_t contentEnd(uint32_t begin, uint32_t end) const {
+    uint32_t position = begin;
+    for (uint16_t index = nextFold_; position < end; ++index) {
+      const bool foldAhead = foldBefore(index, end);
+      const uint32_t textEnd = foldAhead ? foldAt(index).begin : end;
+      const size_t comment = source_.substr(position, textEnd - position).find("//");
+      if (comment != std::string_view::npos) {
+        return position + static_cast<uint32_t>(comment);
+      }
+      if (!foldAhead) {
+        return end;
+      }
+      position = foldAt(index).end;
+    }
+    return end;
+  }
+
+  /// Writes the logical line [p begin, p end) without its comment and surrounding blanks, followed
+  /// by a newline, unless nothing remains. A fold starts and ends with a token, so trimming never
+  /// cuts into one.
+  constexpr void emitLine(uint32_t begin, uint32_t end) {
+    const std::string_view content = source_.substr(begin, contentEnd(begin, end) - begin);
+    const size_t first = content.find_first_not_of(kBlank);
+    if (first != std::string_view::npos) {
+      uint32_t position = begin + static_cast<uint32_t>(first);
+      const uint32_t stop = begin + static_cast<uint32_t>(content.find_last_not_of(kBlank)) + 1;
+      while (position < stop && error_ == TextEmitError::None) {
+        const uint32_t textEnd = foldBefore(nextFold_, stop) ? foldAt(nextFold_).begin : stop;
+        append(source_.substr(position, textEnd - position));
+        position = textEnd;
+        if (textEnd < stop) {
+          const FoldedConstant& folded = module_.foldedConstants[nextFold_++];
+          appendSeparatedValue(folded);
+          position = folded.span.end;
+        }
+      }
+      append('\n');
+    }
+    if (foldBefore(nextFold_, end)) {
+      fail(TextEmitError::InvalidModule);
+    }
+  }
+
+  /// Returns whether p character can continue an identifier or number token.
+  static constexpr bool IsWordCharacter(char character) {
+    return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+           (character >= '0' && character <= '9') || character == '_';
+  }
+
+  /// Writes the exact value of p folded in place of its source, with a space on each side where the
+  /// neighboring source byte could otherwise join the value into one token, as the keyword in
+  /// `return-1f*-3f` or `return(1f)/3f` would.
+  constexpr void appendSeparatedValue(const FoldedConstant& folded) {
+    if (folded.span.begin > 0 && IsWordCharacter(source_[folded.span.begin - 1])) {
+      append(' ');
+    }
+    appendFoldedValue(folded, IsDelimited(folded.span));
+    if (folded.span.end < source_.size() && IsWordCharacter(source_[folded.span.end])) {
+      append(' ');
+    }
+  }
+
+  /// Returns whether p span is a whole parenthesized expression or call argument, directly after
+  /// `(` or `,` and directly before `)` or `,`. A negative value there needs no parentheses of its
+  /// own, so a projection that already wrote them projects to itself.
+  constexpr bool IsDelimited(SourceSpan span) const {
+    if (span.begin == 0 || span.end >= source_.size()) {
+      return false;
+    }
+    const char before = source_[span.begin - 1];
+    const char after = source_[span.end];
+    return (before == '(' || before == ',') && (after == ')' || after == ',');
+  }
+
+  /// Writes the exact value of p folded: an f32 or abstract-float literal, or a vector construction
+  /// of two to four f32 literals. A negative scalar is parenthesized unless p delimited.
+  constexpr void appendFoldedValue(const FoldedConstant& folded, bool delimited) {
+    const Expression& value = module_.expressions[folded.expression];
+    if (value.kind == ExpressionKind::Literal) {
+      appendLane(value, !delimited);
+      return;
+    }
+    if (value.kind != ExpressionKind::Construct || value.type.kind != TypeKind::F32 ||
+        value.type.lanes < 2 || value.type.lanes > 4 || value.operandCount != value.type.lanes) {
+      fail(TextEmitError::InvalidModule);
+      return;
+    }
+    append("vec");
+    append(static_cast<char>('0' + value.type.lanes));
+    append("<f32>(");
+    for (uint8_t lane = 0; lane < value.operandCount && error_ == TextEmitError::None; ++lane) {
+      if (lane > 0) {
+        append(", ");
+      }
+      if (value.operands[lane] >= module_.expressionCount) {
+        fail(TextEmitError::InvalidModule);
+        return;
+      }
+      appendLane(module_.expressions[value.operands[lane]], true);
+    }
+    append(')');
+  }
+
+  /// Writes one folded lane exactly. A negative f32 value, -0 included, is spelled as a
+  /// subtraction from `-0f`: WGSL evaluates it exactly, and this compiler folds it back to the same
+  /// literal. An abstract-float lane keeps its abstract type, and its negation folds back to the
+  /// same abstract literal. With p parenthesize, a negative value is wrapped in parentheses, so it
+  /// keeps its precedence as an operand and cannot join a preceding `-` into `--`.
+  constexpr void appendLane(const Expression& lane, bool parenthesize) {
+    const bool abstract = lane.type == Type{TypeKind::AbstractFloat};
+    const uint64_t bits = uint64_t(lane.payload) | (uint64_t(lane.literalHighBits) << 32);
+    const uint64_t sign = abstract ? uint64_t(1) << 63 : uint64_t(1) << 31;
+    const FloatText magnitude =
+        FormatFloat(bits & ~sign, abstract ? kAbstractFloatFormat : kF32Format);
+    if (lane.kind != ExpressionKind::Literal || (!abstract && lane.type != Type{TypeKind::F32}) ||
+        !magnitude.valid) {
+      fail(TextEmitError::InvalidModule);
+      return;
+    }
+    appendSigned(magnitude.view(),
+                 (bits & sign) == 0 ? ""
+                 : abstract         ? "-"
+                                    : "-0f - ",
+                 parenthesize);
+  }
+
+  /// Writes p magnitude after p negation, which is empty for a value that is not negative, in
+  /// parentheses when p parenthesize and the value is negative.
+  constexpr void appendSigned(std::string_view magnitude, std::string_view negation,
+                              bool parenthesize) {
+    const bool wrapped = !negation.empty() && parenthesize;
+    if (wrapped) {
+      append('(');
+    }
+    append(negation);
+    append(magnitude);
+    if (wrapped) {
+      append(')');
+    }
+  }
+
+  constexpr void append(std::string_view text) {
+    if (error_ == TextEmitError::None && !sink_.append(text)) {
+      fail(TextEmitError::SinkTooSmall);
+    }
+  }
+
+  constexpr void append(char character) {
+    if (error_ == TextEmitError::None && !sink_.append(character)) {
+      fail(TextEmitError::SinkTooSmall);
+    }
+  }
+
+  constexpr void fail(TextEmitError error) {
+    if (error_ == TextEmitError::None) {
+      error_ = error;
+    }
+  }
+
+  const Module& module_;
+  std::string_view source_;
+  TextSink& sink_;
+  uint16_t nextFold_ = 0;  //!< First fold not yet written.
+  TextEmitError error_ = TextEmitError::None;
+};
 
 }  // namespace detail
 
 /// Writes the validated WGSL projection of p module into p sink.
 ///
 /// The projection is the authored source with every `//` comment, all indentation and every blank
-/// line removed; token spelling and intra-line spacing are kept, and each remaining line ends with
-/// a newline. WGSL has no string literals, so `//` always begins a comment, and the lexer accepts
-/// no other comment form. The result parses to the same module and therefore to the same MSL and
-/// SPIR-V bytes, which the compiler tests check.
+/// line removed, and with every outermost folded f32 or abstract-float expression replaced by its
+/// exact value; other token spelling and intra-line spacing are kept, and each remaining line ends
+/// with a newline. A browser would otherwise evaluate a folded expression itself, and WGSL lets it
+/// compute f32 division to within 2.5 ULP, leaves abstract-float division unbounded and rounds an
+/// inexact conversion either way, so it could reach other bits than the MSL and SPIR-V projections
+/// carry. A positive f32 value is a hex float such as `0x1.555556p-2f`, a negative one an exact
+/// subtraction such as `(-0f - 0x1.800000p1f)`, a vector a construction of those, and a value that
+/// is still abstract an abstract hex float such as `0x1.5555555555555p-2`, negated in parentheses
+/// when negative. A negative value whose source is a whole parenthesized expression or argument,
+/// directly after `(` or `,` and before `)` or `,`, is written without parentheses of its own, so
+/// the projection of a projection is unchanged. A value is separated by a space from an adjacent
+/// keyword, identifier or number, so a splice never joins two tokens, and a fold that spans lines
+/// or holds a comment joins its lines.
+/// WGSL has no string literals, so `//` always begins a comment, and the lexer accepts no other
+/// comment form. The result parses to the same MSL and SPIR-V bytes and projects to itself, which
+/// the compiler tests and the parser fuzzer check.
 ///
 /// @param module Validated parsed WGSL module.
 /// @param sink Caller-owned output storage.
@@ -1810,24 +2108,7 @@ constexpr TextEmitResult EmitWgsl(const Module& module, TextSink& sink) {
   if (!module.isValid() || module.sourceByteCount > ModuleLimits::kMaxSourceBytes) {
     error = TextEmitError::InvalidModule;
   } else {
-    const std::string_view source = module.source();
-    size_t cursor = 0;
-    while (cursor < source.size() && error == TextEmitError::None) {
-      size_t end = source.find('\n', cursor);
-      if (end == std::string_view::npos) {
-        end = source.size();
-      }
-      std::string_view line = source.substr(cursor, end - cursor);
-      const size_t comment = line.find("//");
-      if (comment != std::string_view::npos) {
-        line = line.substr(0, comment);
-      }
-      line = detail::TrimLine(line);
-      if (!line.empty() && (!sink.append(line) || !sink.append('\n'))) {
-        error = TextEmitError::SinkTooSmall;
-      }
-      cursor = end + 1;
-    }
+    error = detail::WgslProjector(module, sink).emit();
   }
   if (error != TextEmitError::None) {
     sink.size = 0;

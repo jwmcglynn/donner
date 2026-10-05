@@ -297,6 +297,9 @@ private:
     ArenaId rootSymbol = kInvalidArenaId;
     int32_t i32UpperBound = std::numeric_limits<int32_t>::max();
     uint8_t ungroupedBinary = 0;
+    /// Complete source of a parenthesized or unary expression, whose node span leaves out a
+    /// closing parenthesis; empty when the node span is complete. See \ref SyntaxOf.
+    SourceSpan syntax;
   };
 
   struct BlockInfo {
@@ -2622,20 +2625,26 @@ private:
       if (op.kind == TokenKind::Star) {
         return MakeDereference(op, operand);
       }
-      Type type = ExpressionAt(operand.id).type;
+      const Type type = ExpressionAt(operand.id).type;
+      ExpressionInfo result;
       if (type.isAbstract()) {
-        return NegateAbstract(op, operand);
+        result = NegateAbstract(op, operand);
+        RecordNegatedFold(op, operand, result);
+      } else {
+        if (!ValidUnaryType(op.kind, type)) {
+          Fail(ErrorCode::TypeMismatch, op.span);
+        }
+        ValidateUnaryConstant(op, type, operand.id);
+        result = AddExpression(
+            Expression{ExpressionKind::Unary, type,
+                       SourceSpan{op.span.begin, ExpressionAt(operand.id).span.end},
+                       Operands(operand.id), 1,
+                       static_cast<uint32_t>(op.kind == TokenKind::Minus ? UnaryOp::Negate
+                                                                         : UnaryOp::Not)},
+            false, kInvalidArenaId, operand.i32UpperBound);
       }
-      if (!ValidUnaryType(op.kind, type)) {
-        Fail(ErrorCode::TypeMismatch, op.span);
-      }
-      ValidateUnaryConstant(op, type, operand.id);
-      return AddExpression(
-          Expression{
-              ExpressionKind::Unary, type,
-              SourceSpan{op.span.begin, ExpressionAt(operand.id).span.end}, Operands(operand.id), 1,
-              static_cast<uint32_t>(op.kind == TokenKind::Minus ? UnaryOp::Negate : UnaryOp::Not)},
-          false, kInvalidArenaId, operand.i32UpperBound);
+      result.syntax = SourceSpan{op.span.begin, SyntaxOf(operand).end};
+      return result;
     }
     return ParsePostfix();
   }
@@ -2815,8 +2824,9 @@ private:
     if (token_.kind == TokenKind::Number) {
       return ParseLiteral();
     }
+    const Token open = token_;
     if (Match(TokenKind::LeftParen)) {
-      return ParseParenthesizedExpression();
+      return ParseParenthesizedExpression(open);
     }
     const Token name = ExpectIdentifier();
     if (failed()) {
@@ -2825,11 +2835,20 @@ private:
     return ParseNamedPrimary(name);
   }
 
-  constexpr ExpressionInfo ParseParenthesizedExpression() {
+  /// Parses the rest of a parenthesized expression whose `(` was p open.
+  constexpr ExpressionInfo ParseParenthesizedExpression(Token open) {
     ExpressionInfo result = ParseExpression();
+    const Token close = token_;
     Expect(TokenKind::RightParen);
     result.ungroupedBinary = 0;
+    result.syntax = SourceSpan{open.span.begin, close.span.end};
     return result;
+  }
+
+  /// Returns the complete source of p info, including the parentheses of a parenthesized
+  /// expression and of a unary operand, which node spans leave out.
+  constexpr SourceSpan SyntaxOf(const ExpressionInfo& info) const {
+    return info.syntax.empty() ? ExpressionAt(info.id).span : info.syntax;
   }
 
   constexpr ExpressionInfo ParseNamedPrimary(Token name) {
@@ -3765,7 +3784,7 @@ private:
       }
       return MakeBinary(op, lhs, rhs);
     }
-    const SourceSpan span{left.span.begin, right.span.end};
+    const SourceSpan span{SyntaxOf(lhs).begin, SyntaxOf(rhs).end};
     if (left.type.kind == TypeKind::AbstractInt && right.type.kind == TypeKind::AbstractInt) {
       return FoldAbstractIntegers(op, left, right, span);
     }
@@ -3785,7 +3804,9 @@ private:
     if (value.error != number::Error::None) {
       Fail(ErrorCode::InvalidConstantExpression, op.span);
     }
-    return NumericLiteral(Type{TypeKind::AbstractFloat}, value.bits, span);
+    const ExpressionInfo folded = NumericLiteral(Type{TypeKind::AbstractFloat}, value.bits, span);
+    RecordFoldedConstant(span, folded.id);
+    return folded;
   }
 
   constexpr bool IsValidI32ConstantOperation(BinaryOp op, ArenaId lhs, ArenaId rhs) const {
@@ -3827,6 +3848,136 @@ private:
       case BinaryOp::Mod: return right != 0;
       default: return false;
     }
+  }
+
+  /**
+   * Folds constant f32 arithmetic as WGSL evaluates it at shader creation. Each lane is the
+   * correctly rounded f32 result, ties to even, and a scalar operand applies to every lane. A lane
+   * that overflows, divides by zero or is NaN fails, as does an operand other than a literal, its
+   * negation or a vector construction of those.
+   * @param op Operator token, used for the diagnostic span. @param binary Add, Sub, Mul or Div.
+   * @param lhs Left constant operand. @param rhs Right constant operand.
+   * @param result Validated f32 scalar or vector result type.
+   */
+  constexpr ExpressionInfo FoldF32Arithmetic(Token op, BinaryOp binary, ExpressionInfo lhs,
+                                             ExpressionInfo rhs, Type result) {
+    const SourceSpan span{SyntaxOf(lhs).begin, SyntaxOf(rhs).end};
+    std::array<uint32_t, 4> left = {};
+    std::array<uint32_t, 4> right = {};
+    uint8_t leftLanes = 0;
+    uint8_t rightLanes = 0;
+    if (!ConstF32Components(lhs.id, &left, &leftLanes) ||
+        !ConstF32Components(rhs.id, &right, &rightLanes)) {
+      Fail(ErrorCode::InvalidConstantExpression, op.span);
+      return ErrorExpression(span);
+    }
+    std::array<uint32_t, 4> lanes = {};
+    for (uint8_t lane = 0; lane < result.lanes; ++lane) {
+      const number::FloatResult value =
+          number::Evaluate(F32Operation(binary), left[leftLanes == 1 ? 0 : lane],
+                           right[rightLanes == 1 ? 0 : lane], 24);
+      if (value.error != number::Error::None) {
+        Fail(ErrorCode::InvalidConstantExpression, op.span);
+        return ErrorExpression(span);
+      }
+      lanes[lane] = uint32_t(value.bits);
+    }
+    const ExpressionInfo folded = F32Constant(result, lanes, span);
+    RecordFoldedConstant(span, folded.id);
+    return folded;
+  }
+
+  /// Records an outermost folded f32 or abstract-float expression for the WGSL projection. The
+  /// folds nested in it were recorded last, so they are dropped from the end. Its source must not
+  /// overlap another fold and must hold balanced brackets, so that replacing it keeps the
+  /// projection's structure.
+  /// @param span Complete source of the folded expression. @param expression Folded value.
+  constexpr void RecordFoldedConstant(SourceSpan span, ArenaId expression) {
+    uint16_t& count = module_.foldedConstantCount;
+    bool overlaps = false;
+    while (count > 0 && module_.foldedConstants[count - 1].span.begin >= span.begin) {
+      overlaps = overlaps || module_.foldedConstants[count - 1].span.end > span.end;
+      --count;
+    }
+    overlaps = overlaps || (count > 0 && module_.foldedConstants[count - 1].span.end > span.begin);
+    if (overlaps || !BalancedSource(span)) {
+      Fail(ErrorCode::UnsupportedConstruct, span);
+      return;
+    }
+    if (count == ModuleLimits::kMaxFoldedConstants) {
+      Fail(ErrorCode::ExpressionLimit, span);
+      return;
+    }
+    module_.foldedConstants[count++] = FoldedConstant{span, expression};
+  }
+
+  /// Records the abstract-float negation p result of p operand as the outermost fold when the
+  /// operand holds the last recorded fold, as in `-(1.0 / 3.0)`. The projection then carries the
+  /// negated value, in f32 once the parser converts it, rather than an abstract value a browser
+  /// would negate and then round either way. Other operations on a fold need no record: f32
+  /// negation is exact, and conversions and constructions convert the folded node in place.
+  /// @param op Unary operator. @param operand Negated expression. @param result Negation.
+  constexpr void RecordNegatedFold(Token op, const ExpressionInfo& operand,
+                                   const ExpressionInfo& result) {
+    const uint16_t count = module_.foldedConstantCount;
+    const SourceSpan source = SyntaxOf(operand);
+    if (op.kind == TokenKind::Minus &&
+        ExpressionAt(result.id).type.kind == TypeKind::AbstractFloat && count > 0 &&
+        module_.foldedConstants[count - 1].span.begin >= source.begin) {
+      RecordFoldedConstant(SourceSpan{op.span.begin, source.end}, result.id);
+    }
+  }
+
+  /// Returns whether the parentheses and brackets in p span balance, ignoring `//` comments.
+  constexpr bool BalancedSource(SourceSpan span) const {
+    int32_t depth = 0;
+    uint32_t position = span.begin;
+    while (position < span.end && depth >= 0) {
+      if (sourceData_[position] == '/' && position + 1 < span.end &&
+          sourceData_[position + 1] == '/') {
+        while (position < span.end && sourceData_[position] != '\n') {
+          ++position;
+        }
+        continue;
+      }
+      depth += BracketDepthChange(sourceData_[position]);
+      ++position;
+    }
+    return depth == 0;
+  }
+
+  /// Returns +1 for an opening parenthesis or bracket, -1 for a closing one, and 0 otherwise.
+  static constexpr int32_t BracketDepthChange(char character) {
+    if (character == '(' || character == '[') {
+      return 1;
+    }
+    return character == ')' || character == ']' ? -1 : 0;
+  }
+
+  /// Returns the soft-float operation for an f32 arithmetic operator.
+  /// @param binary Add, Sub, Mul or Div.
+  static constexpr number::Op F32Operation(BinaryOp binary) {
+    switch (binary) {
+      case BinaryOp::Add: return number::Op::Add;
+      case BinaryOp::Sub: return number::Op::Subtract;
+      case BinaryOp::Mul: return number::Op::Multiply;
+      default: return number::Op::Divide;
+    }
+  }
+
+  /// Returns an f32 literal, or a vector construction of literals, holding folded lane bits.
+  /// @param type F32 scalar or vector type. @param lanes Lane bits. @param span Folded source.
+  constexpr ExpressionInfo F32Constant(Type type, const std::array<uint32_t, 4>& lanes,
+                                       SourceSpan span) {
+    if (type.lanes == 1) {
+      return NumericLiteral(Type{TypeKind::F32}, lanes[0], span);
+    }
+    std::array<ArenaId, Expression::kMaxOperands> operands = Operands();
+    for (uint8_t lane = 0; lane < type.lanes; ++lane) {
+      operands[lane] = NumericLiteral(Type{TypeKind::F32}, lanes[lane], span).id;
+    }
+    return AddExpression(Expression{ExpressionKind::Construct, type, span, operands, type.lanes},
+                         false, kInvalidArenaId, std::numeric_limits<int32_t>::max());
   }
 
   constexpr Type MatrixProductType(Type left, Type right) const {
@@ -4219,10 +4370,12 @@ private:
       }
     }
     if (valid && IsConstantSyntax(lhs.id) && IsConstantSyntax(rhs.id)) {
+      if (result.kind == TypeKind::F32) {
+        return FoldF32Arithmetic(op, binary, lhs, rhs, result);
+      }
       int32_t constantI32 = 0;
       uint32_t constantU32 = 0;
-      if (result.kind == TypeKind::F32 ||
-          (result == Type{TypeKind::I32} && !ConstI32Value(lhs.id, &constantI32)) ||
+      if ((result == Type{TypeKind::I32} && !ConstI32Value(lhs.id, &constantI32)) ||
           (result == Type{TypeKind::U32} && !ConstU32Value(lhs.id, &constantU32))) {
         Fail(ErrorCode::InvalidConstantExpression, op.span);
       }
@@ -4534,7 +4687,9 @@ private:
  * restricted to straight-line entry code before any conditional/loop and outside short-circuit RHS.
  * Helpers are pure numeric functions over read-only globals and by-value parameters.
  * Numeric literals include bounded decimal/hexadecimal forms, abstract scalars and scalar module
- * constants. Abstract scalar arithmetic is evaluated at shader creation. Concrete static f32/vector
+ * constants. Abstract scalar arithmetic and constant f32 scalar/vector `+`, `-`, `*` and `/` over
+ * literals, their negations and vector constructions of them are evaluated at shader creation, and
+ * a result that is not finite fails. Constant f32 arithmetic over other operands, constant matrix
  * arithmetic, constant builtin calls and cross-scalar constant conversions remain unsupported.
  * Static f32 clamp bounds support literals, unary negation and vector construction, with low <=
  * high required in every lane. Floor and sign accept runtime f32 scalars/vectors in this profile.
