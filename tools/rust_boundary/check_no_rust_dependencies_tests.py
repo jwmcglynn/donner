@@ -1138,6 +1138,26 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
         files["donner/editor/.bazelrc"] = "build --//tools/ci:linux_wgpu_resvg_reference\n"
         self.assertEqual(self.chain_findings(files), [])
 
+    def test_a_rule_named_after_a_chain_rule_is_judged_by_its_references(self):
+        # A rule's own name declares a target, so a name that begins with a pinned rule's name is
+        # not a reference; what the rule depends on still is.
+        path = "donner/svg/renderer/geode/BUILD.bazel"
+        files = self.allowed_files()
+        files[path] += (
+            'donner_cc_test(\n    name = "geode_device_wgpu_reference_linux_docs_test",\n'
+            '    deps = [":geode_device"],\n)\n'
+        )
+        self.assertEqual(self.chain_findings(files), [])
+        files[path] += (
+            'donner_cc_test(\n    name = "geode_device_wgpu_reference_linux_pixel_test",\n'
+            '    deps = [":geode_device_wgpu_reference_linux"],\n)\n'
+        )
+        details = [finding.detail for finding in self.chain_findings(files)]
+        self.assertEqual(len(details), 1, details)
+        self.assertIn(" geode_device_wgpu_reference_linux_pixel_test names the wgpu-native "
+                      "reference chain (//donner/svg/renderer/geode:"
+                      "geode_device_wgpu_reference_linux)", details[0])
+
     def test_audit_metadata_may_name_the_reference_chain(self):
         files = self.allowed_files()
         files["donner/editor/BUILD.bazel"] = (

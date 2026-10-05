@@ -951,17 +951,6 @@ def _string_chain_labels(value: str, path: str) -> list[str]:
             if label is not None and _is_chain_label(label)]
 
 
-def _chain_labels(statement: ast.stmt, path: str, spans: set[SourceSpan]) -> list[str]:
-    """Chain labels the string literals of `statement` name, outside audit metadata."""
-    return sorted({
-        label
-        for node in ast.walk(statement)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and
-        _literal_span(node) not in spans
-        for label in _string_chain_labels(node.value, path)
-    })
-
-
 def _rule_call(statement: ast.stmt) -> tuple[str, str, ast.Call] | None:
     """The kind, name and call of a top-level rule call, or None for any other statement."""
     call = statement.value if isinstance(statement, ast.Expr) else None
@@ -970,6 +959,23 @@ def _rule_call(statement: ast.stmt) -> tuple[str, str, ast.Call] | None:
     name_node = _ast_keyword(call, "name")
     name = name_node.value if isinstance(name_node, ast.Constant) else ""
     return call.func.id, str(name), call
+
+
+def _chain_labels(statement: ast.stmt, path: str, spans: set[SourceSpan]) -> list[str]:
+    """Chain labels the string literals of `statement` name, outside audit metadata.
+
+    A rule's own `name` declares a target rather than referencing one, so a new rule whose name
+    merely begins with a pinned rule's name is not a reference.
+    """
+    rule = _rule_call(statement)
+    own_name = _ast_keyword(rule[2], "name") if rule is not None else None
+    return sorted({
+        label
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and
+        node is not own_name and _literal_span(node) not in spans
+        for label in _string_chain_labels(node.value, path)
+    })
 
 
 def _chain_library_findings(path: str, name: str, call: ast.Call) -> list[Finding]:
