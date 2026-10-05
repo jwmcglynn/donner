@@ -325,8 +325,8 @@ struct RenderResult {
     double setupMs = 0.0;
     /// Time spent in `CompositorController::renderFrame`.
     double renderFrameMs = 0.0;
-    double documentWriteLockMs =
-        0.0;  //!< Time the captured document remained unavailable for UI edits.
+    /// Time the captured document remained unavailable for UI edits.
+    double documentWriteLockMs = 0.0;
     /// Time spent building composited-preview tile metadata/payloads.
     double buildPreviewMs = 0.0;
     /// Time spent taking the final fallback canvas snapshot, when needed.
@@ -515,8 +515,7 @@ struct SampleThumbnailRenderResult {
   svg::RendererBitmap bitmap;  //!< Captured bitmap; it may be empty even when outcome is Rendered.
 
   /// Self-contained SVG with font-preview text replaced by glyph paths.
-  std::string outlinedSvg;  //!< Serialized sample with text converted to paths when outline
-                            //!< generation succeeds.
+  std::string outlinedSvg;
 };
 
 /// Observable state and monotonic counters for the bounded sample-thumbnail lane.

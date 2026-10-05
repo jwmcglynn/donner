@@ -60,7 +60,7 @@ public:
     return lostState_;
   }
 
-  /// Return whether this root retains a backend device owner.
+  /// Return whether this root can open runtime devices for its backend.
   bool hasBackendDevice() const { return backendHold_ != nullptr; }
 
 private:
@@ -92,9 +92,10 @@ std::optional<GpuBackendKind> BuildDefaultGpuBackendKind();
 gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& options,
                                                   std::string_view request,
                                                   std::optional<GpuBackendKind> buildDefault);
-/// In WebAssembly builds, opens the browser's GPU device as a root. Halts when
-/// `DONNER_GPU_BACKEND` is invalid or names a native backend; returns null when a caller names a
-/// native backend or the device request fails.
+/// In WebAssembly builds, opens the browser's GPU device as a root. When the caller names no
+/// backend, halts if `DONNER_GPU_BACKEND` is invalid or names a native backend. A caller-named
+/// native backend halts when `DONNER_GPU_BACKEND` is non-empty and returns null otherwise. Also
+/// returns null when the device request fails.
 std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options);
 /// In WebAssembly builds, opens one runtime device over the browser root, sharing its loss
 /// condition.

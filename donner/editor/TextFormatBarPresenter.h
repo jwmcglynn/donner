@@ -41,7 +41,7 @@ struct FormatBarFontPreview {
   std::uint64_t texture = 0;
   /// Bottom-right UV for texture allocations larger than the preview payload.
   float uvMaxX = 1.0f;
-  float uvMaxY = 1.0f;  //!< Lower valid texture coordinate for the preview payload.
+  float uvMaxY = 1.0f;  //!< Bottom (maximum V) texture coordinate of the preview payload.
 
   /// Logical row size used when the raster payload was produced.
   float width = 0.0f;

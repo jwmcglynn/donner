@@ -33,14 +33,14 @@ Native Geode uses Metal on macOS and Vulkan on Linux. For code that calls
 selects the platform backend; `metal` and `vulkan` are case-insensitive requests.
 There is no fallback to another backend when a request cannot be served.
 
-`SelectGpuRoot` terminates the process when its options contradict the resolved
-backend: Vulkan presentation required while another backend resolves, or Vulkan
-instance extensions supplied without presentation. When `DONNER_GPU_BACKEND`
-controls selection, a value that names no backend, or a backend this process
-cannot open, also terminates the process. A caller-selected or platform-selected
-backend that cannot be opened, or that this build cannot serve, returns a null
-root. `ResolveGpuBackendKind` reports the same request and option errors as
-values without creating a device; it does not probe backend availability. Treat
+`SelectGpuRoot` terminates the process when its Vulkan presentation options are
+inconsistent: presentation required while another backend resolves, or instance
+extensions supplied without presentation. When `DONNER_GPU_BACKEND` controls
+selection, a value that names no backend, or a backend this process cannot open,
+also terminates the process. A caller-selected or platform-selected backend that
+cannot be opened, or that this build cannot serve, returns a null root.
+`ResolveGpuBackendKind` reports the same request and option errors as values
+without creating a device; it does not probe backend availability. Treat
 environment settings as trusted process configuration.
 
 The macOS example helper uses `SelectGpuRoot`. The Linux helper instead creates

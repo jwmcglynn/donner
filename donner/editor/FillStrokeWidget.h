@@ -28,14 +28,14 @@ enum class FillStrokeWidgetRegion {
 
 /// Screen-space rectangles for every drawable/interactive part of the widget.
 struct FillStrokeWidgetLayout {
-  ImVec2 fillMin;        //!< Upper-left corner of the fill swatch.
+  ImVec2 fillMin;        //!< Upper-left corner of the fill swatch, which sits at the upper left.
   ImVec2 fillMax;        //!< Lower-right corner of the fill swatch.
-  ImVec2 strokeMin;      //!< Upper-left corner of the stroke swatch.
+  ImVec2 strokeMin;      //!< Upper-left corner of the stroke swatch, which sits at the lower right.
   ImVec2 strokeMax;      //!< Lower-right corner of the stroke swatch.
-  ImVec2 swapMin;        //!< Upper-left corner of the swap affordance.
-  ImVec2 swapMax;        //!< Lower-right corner of the swap affordance.
-  ImVec2 noneMin;        //!< Upper-left corner of the set-none affordance.
-  ImVec2 noneMax;        //!< Lower-right corner of the set-none affordance.
+  ImVec2 swapMin;        //!< Upper-left corner of the swap double-arrow affordance.
+  ImVec2 swapMax;        //!< Lower-right corner of the swap double-arrow affordance.
+  ImVec2 noneMin;        //!< Upper-left corner of the "set none" affordance for the active role.
+  ImVec2 noneMax;        //!< Lower-right corner of the "set none" affordance.
   ImVec2 fillChipMin;    //!< Upper-left corner of the fill custom-paint chip.
   ImVec2 fillChipMax;    //!< Lower-right corner of the fill custom-paint chip.
   ImVec2 strokeChipMin;  //!< Upper-left corner of the stroke custom-paint chip.

@@ -498,7 +498,7 @@ public:
   using Clock = std::chrono::steady_clock;
   /// Whether another UI frame may be submitted.
   enum class Admission {
-    Ready,     //!< Fewer than three submissions are pending.
+    Ready,     //!< Fewer than three submissions are pending and none has timed out.
     Busy,      //!< At least three submissions are pending and none has timed out.
     TimedOut,  //!< The oldest pending submission has waited at least five seconds.
   };
@@ -521,6 +521,7 @@ public:
     double pointerX = 0.0;        //!< Pointer x position when the frame was sealed.
     double pointerY = 0.0;        //!< Pointer y position when the frame was sealed.
     bool mouseDown = false;       //!< Whether the primary button was down when sealed.
+
     /// Whether the frame represents the input sealed with it; cleared when the full frame was not
     /// presented.
     bool inputRepresented = false;
@@ -529,8 +530,8 @@ public:
   };
   /// Serial and clock read after a bounded GPU completion confirmation.
   struct CompletionObservation {
-    std::uint64_t serial;
-    Clock::time_point observedAt;
+    std::uint64_t serial;          //!< Highest completed submission serial observed.
+    Clock::time_point observedAt;  //!< When the completion was observed.
   };
   /// Observe completion before admitting a frame; a stopped queue reaches a finite deadline.
   Admission observe(std::uint64_t completedSerial, Clock::time_point now) {
@@ -681,7 +682,7 @@ struct EditorWindowInputOverride {
   bool keySuper = false;  //!< Super/Command modifier state.
 
   /// Horizontal mouse-wheel delta for this frame.
-  float mouseWheelH = 0.0f;  //!< Horizontal wheel delta injected for this frame.
+  float mouseWheelH = 0.0f;
 
   /// Vertical mouse-wheel delta for this frame.
   float mouseWheel = 0.0f;

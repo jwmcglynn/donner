@@ -1067,8 +1067,8 @@ EXCLUDE               += donner/gpu/shader/wgsl/Number.h \
 # BaselineCorpus is test-only capture input; AllocationTracker is opt-in benchmark
 # instrumentation that replaces allocation operators. SlugFillArtifactValidation
 # is a package-private compile-time assertion helper used by shader compilation.
-# None exposes a production library interface; retain the public shader, editor,
-# and GPU declarations that these exact implementation files exercise.
+# None exposes a production library interface. Only these three files are
+# excluded; the public shader, editor and GPU headers they test stay documented.
 EXCLUDE               += donner/gpu/baseline/BaselineCorpus.h \
                          donner/svg/renderer/benchmarks/AllocationTracker.h \
                          donner/gpu/shader/programs/SlugFillArtifactValidation.h

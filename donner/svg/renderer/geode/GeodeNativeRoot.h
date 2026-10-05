@@ -63,11 +63,11 @@ public:
                std::shared_ptr<gpu::DeviceLostState> lostState,
                std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot = nullptr);
 
-  /// Return the backend capabilities shared by runtime devices over this root.
+  /// Return the selected root's capabilities.
   const GeodeGpuRootCapabilities& capabilities() const UTILS_LIFETIME_BOUND {
     return capabilities_;
   }
-  /// Return the shared device-loss condition.
+  /// Return the shared device-loss state.
   const std::shared_ptr<gpu::DeviceLostState>& lostState() const UTILS_LIFETIME_BOUND {
     return lostState_;
   }
@@ -75,7 +75,7 @@ public:
   const std::shared_ptr<gpu::vulkan::VulkanSharedRoot>& vulkanRoot() const UTILS_LIFETIME_BOUND {
     return vulkanRoot_;
   }
-  /// Return whether the root holds the owner its backend needs to open runtime devices.
+  /// Return whether this root can open runtime devices for its backend.
   bool hasBackendDevice() const;
 
 private:
@@ -139,9 +139,9 @@ std::optional<GpuBackendKind> BuildDefaultGpuBackendKind();
  * @param options Caller-supplied inputs.
  * @param request Value of `DONNER_GPU_BACKEND`; empty when it is unset or empty.
  * @param buildDefault Backend the build selects when nothing else names one.
- * @return The kind, or an error when @p request names no backend, the external kind is named, no
- *   backend applies on this platform, or the Vulkan presentation options are inconsistent with
- *   each other or with the resolved backend.
+ * @return The kind, or an error when the caller names no backend and a non-empty @p request names
+ *   none, the external kind is named, no backend applies on this platform, or the Vulkan
+ *   presentation options are inconsistent with each other or with the resolved backend.
  */
 gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& options,
                                                   std::string_view request,
@@ -151,8 +151,9 @@ gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& option
  * Selects a native backend root for @p options and opens the system device behind it.
  *
  * Halts the process when the Vulkan presentation options are inconsistent with each other or with
- * the resolved backend, or when `DONNER_GPU_BACKEND` names no backend or one this process cannot
- * open: an explicit process request is never silently replaced with another backend.
+ * the resolved backend. When the caller names no backend and `DONNER_GPU_BACKEND` controls
+ * selection, it also halts if the variable names no backend or one this process cannot open: an
+ * explicit process request is never silently replaced with another backend.
  *
  * @param options Caller-supplied inputs.
  * @return The root, or null when a caller-named or platform-default backend cannot be opened or

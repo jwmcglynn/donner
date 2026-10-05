@@ -168,13 +168,11 @@ public:
   /// Frame-boundary font adoption identity, distinct from the manager's individual face counter.
   [[nodiscard]] std::uint64_t fontResourceRevision() const { return fontResourceRevision_; }
 
-  // Test hook: re-parse a string into a fresh document via `SVGParser`.
-  // Returns true on success. On failure, the existing document is left
-  // intact and `lastParseError()` returns the diagnostic from the parser
-  // (so the caller can surface a line + reason in a text editor).
-
-  /// Replace the document from SVG source and retain parsing diagnostics.
+  /// Test hook: re-parse @p svgBytes into a fresh document via `SVGParser`. On failure the
+  /// existing document is left intact and `lastParseError()` returns the parser's diagnostic, so
+  /// the caller can surface a line and reason in a text editor.
   /// @param svgBytes SVG source bytes to parse.
+  /// @return True when the source parsed and replaced the document.
   [[nodiscard]] bool loadFromString(std::string_view svgBytes);
 
   /// The diagnostic from the most recent failed `loadFromString` /

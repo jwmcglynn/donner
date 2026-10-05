@@ -69,11 +69,11 @@ public:
    *
    * @param commandBufferCount Command buffers the submission carried. Zero for a submission a
    *   backend made on its own, outside \ref donner::gpu::Device::submit "Device::submit", to make
-   * the queue progress.
+   *   the queue progress.
    * @param drawCount Draws counted under one rule on every backend: each draw command, including
    *   one with no vertices or no instances, and each indexed draw command that is not empty (see
    *   \ref donner::gpu::IsEmptyIndexedDraw "IsEmptyIndexedDraw"), whether or not the backend issues
-   * it natively.
+   *   it natively.
    */
   virtual void onSubmitted(uint64_t commandBufferCount, uint64_t drawCount) = 0;
 

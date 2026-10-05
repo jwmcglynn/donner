@@ -72,8 +72,7 @@ struct ImageBarrierParams {
   VkAccessFlags dstAccess = 0;                                         //!< Access made visible.
 
   /// True when the usage pair fell outside the tracked set and the maximal barrier was used.
-  bool conservative =
-      false;  //!< Whether the resulting transition used the conservative synchronization barrier.
+  bool conservative = false;
 
   /// Equality operator. @param other Parameters to compare against.
   bool operator==(const ImageBarrierParams& other) const = default;

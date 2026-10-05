@@ -112,8 +112,6 @@ struct Line : public std::vector<Glyph> {
   /// Glyph storage underlying a line of text.
   using Base = std::vector<Glyph>;
 
-  // Convenience method to insert a glyph at an arbitrary iterator position
-
   /// Insert a colored character before the supplied iterator.
   /// @param it Insertion position in the line.
   /// @param ch Character to insert.

@@ -71,8 +71,7 @@ struct DetachedStyleSourceContribution {
 struct DetachedStyleSourceAnnotations {
   bool valid = false;  ///< False when the source could not be parsed.
 
-  /// Deduplicated targets shared by contribution match lists.
-  /// Source-stable writeback targets replacing live element handles.
+  /// Deduplicated, source-stable writeback targets shared by contribution match lists.
   std::vector<AttributeWritebackTarget> elementTargets;
   /// Source declarations contributing to the captured style annotations.
   std::vector<DetachedStyleSourceContribution> contributions;

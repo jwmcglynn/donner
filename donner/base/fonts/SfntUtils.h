@@ -103,9 +103,9 @@ public:
    * Validate and index @p data.
    *
    * @param data Complete sfnt byte stream.
-   * @return A cached index on success, or std::nullopt for malformed or over-limit input.
    * @param options Validation limits and table requirements.
    * @param metrics Optional destination for validation work and size measurements.
+   * @return A cached index on success, or std::nullopt for malformed or over-limit input.
    */
   static std::optional<SfntFont> Validate(std::span<const uint8_t> data,
                                           const SfntValidationOptions& options = {},
