@@ -534,6 +534,30 @@ donner_cc_test(
     ],
 )
 
+# The backstop on command buffers in flight: waiting for room, giving up on a stalled GPU instead
+# of blocking inside the native queue, the stall rule's progress sources, and the per-wait cap.
+donner_cc_test(
+    name = "metal_submission_backstop_tests",
+    srcs = ["MetalSubmissionBackstop_tests.cc"],
+    env = _METAL_API_VALIDATION_ENV,
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the no-device rule can never see one and this test keeps skipping into a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_device_gate",
+        "//donner/gpu",
+        "//donner/gpu:device_lost",
+        "//donner/gpu:gpu_limits",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/metal:metal_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "metal_device_loss_tests",
     srcs = ["MetalDeviceLoss_tests.cc"],

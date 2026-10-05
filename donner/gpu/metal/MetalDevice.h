@@ -98,6 +98,19 @@ namespace donner::gpu::metal {
  * Mappings answer loss before readiness and serial waits give up at once, whichever device over
  * the root declared the loss, so teardown after a hang does not wait it out.
  *
+ * Work in flight is bounded in command buffers: a submission that would leave more than
+ * \ref kMaxCommandBuffersInFlight committed and uncompleted waits for room before it acquires any
+ * native buffer, so acquisition never blocks inside Metal. The wait is bounded. It gives up when no
+ * progress has been seen for five seconds, measured from the last progress rather than from the
+ * start of the wait; progress is a command buffer of this device completing, or a completion on
+ * another device while an uncompleted submission of this one still waits for that device's work.
+ * Once that work completes, the other device's later completions no longer count. The wait also
+ * gives up after sixty seconds in all. Either way the root is declared lost, attributed to the
+ * queue wait, and the submission is refused without consuming a serial. Ordinary frames stay far
+ * below the backstop and never wait. Another device's progress is sampled one hop deep: when that
+ * device's own work in turn waits on a third device, the third device's completions do not count,
+ * so a chain that progresses only at its far end for longer than the stall bound declares the loss.
+ *
  * The header is pure C++ (Objective-C state lives behind a pimpl) so it is includable from C++
  * tests; the implementation is Objective-C++.
  */
@@ -105,6 +118,12 @@ class MetalDevice final : public Device {
 public:
   /// Native shader representation accepted by this device.
   ShaderSourceKind shaderSourceKind() const override { return ShaderSourceKind::Msl; }
+
+  /// Most command buffers a device leaves uncompleted on the GPU at once. A submission that would
+  /// exceed it first waits for earlier ones to complete. It is a backstop against runaway work
+  /// rather than a pacing bound: ordinary frames stay far below it, and it is the ceiling the
+  /// native queue imposed before, now with a wait that is bounded instead of one that is not.
+  static constexpr uint64_t kMaxCommandBuffersInFlight = 512;
 
   /// Which memory model the backend builds its resources for.
   enum class MemoryModel : uint8_t {
@@ -202,8 +221,17 @@ public:
   WriteStats writeStatsForTest() const;
 
   /// Pauses submitted GPU work at a shared event until \ref resumeSubmissionsForTest is called.
-  /// A deterministic test seam for writes issued while an earlier submission is in flight.
+  /// A deterministic test seam for writes issued while an earlier submission is in flight. Each
+  /// command buffer encoded while paused waits for its own turn, numbered from one in encoding
+  /// order, so \ref releasePausedCommandBuffersForTest can let them run a few at a time.
   Status pauseSubmissionsForTest();
+
+  /// Lets the first \p count command buffers encoded since \ref pauseSubmissionsForTest run and
+  /// keeps the rest paused. It only signals a shared event, so another thread may call it while
+  /// the device's own thread waits, provided that thread does not pause or resume meanwhile. Does
+  /// nothing when no pause is active.
+  /// @param count Command buffers to release, counted from the first one encoded while paused.
+  void releasePausedCommandBuffersForTest(uint64_t count);
 
   /// Releases the event installed by \ref pauseSubmissionsForTest. Safe when no pause is active.
   void resumeSubmissionsForTest();
@@ -232,6 +260,25 @@ public:
   /// own timeout ends a command buffer that makes no progress.
   /// @param timeout Longest a present waits; zero or less restores the default.
   void setPresentCompletionTimeoutForTest(std::chrono::milliseconds timeout);
+
+  /// Bounds how long a submission waits for room among the command buffers in flight while
+  /// neither this device nor a device its waiting work depends on completes any, in place of the
+  /// five seconds it otherwise allows.
+  /// @param timeout Longest a wait sees no progress; zero or less restores the default.
+  void setSubmissionStallTimeoutForTest(std::chrono::milliseconds timeout);
+
+  /// Bounds how long one submission waits for room in all, in place of the sixty seconds it
+  /// otherwise allows, however much progress it sees meanwhile.
+  /// @param timeout Longest a wait lasts; zero or less restores the default.
+  void setSubmissionWaitCapForTest(std::chrono::milliseconds timeout);
+
+  /// How many submissions found too many command buffers in flight and waited for room, whether
+  /// or not they were then committed. Test accessor, readable from any thread.
+  [[nodiscard]] uint64_t commandBufferRoomWaitsForTest() const;
+
+  /// Command buffers committed and not yet completed, as the backstop counts them. Test
+  /// accessor, readable from any thread.
+  [[nodiscard]] uint64_t commandBuffersInFlightForTest() const;
 
   /// Waits until \p count submissions have had all their completion handlers run on this device,
   /// parked ones included. Test seam for ordering completions deterministically.
