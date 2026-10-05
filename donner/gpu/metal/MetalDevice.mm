@@ -588,13 +588,21 @@ struct MetalDevice::Impl {
   /// Waits the submission being encoded places at the start of its first command buffer, one per
   /// producer with the latest serial it needs. Set and cleared around one \ref onSubmit.
   std::vector<PendingSourceWait> pendingSourceWaits;
+  /// One producer a committed submission waits on, and the serial it waits for.
+  struct AwaitedProducer {
+    /// Completion of the producer. Weak, so a producer's teardown is not delayed by a consumer's
+    /// record of it.
+    std::weak_ptr<CompletionState> producer;
+    uint64_t serial = 0;  //!< Producer serial the submission's GPU wait is for.
+    /// The producer's last progress when this device first saw \ref serial complete. Meeting the
+    /// wait is progress for this device; the producer's later work is not.
+    std::optional<std::chrono::steady_clock::time_point> metAt;
+  };
   /// The producers a committed submission waits on, kept while it is outstanding so a wait for
   /// room can tell work held behind a progressing producer from work that is stuck.
   struct OutstandingSources {
-    uint64_t serial = 0;  //!< Serial of the submission.
-    /// Completion of each producer it waits on. Weak, so a producer's teardown is not delayed by
-    /// a consumer's record of it.
-    std::vector<std::weak_ptr<CompletionState>> producers;
+    uint64_t serial = 0;                     //!< Serial of the submission.
+    std::vector<AwaitedProducer> producers;  //!< Each producer it waits on.
   };
   /// Uncompleted submissions that wait on another device, in serial order. Touched only by the
   /// submitting thread.
@@ -932,9 +940,11 @@ struct MetalDevice::Impl {
   Status waitForCommandBufferRoom(const MetalDevice& device, uint64_t submissionSerial,
                                   uint64_t buffers);
 
-  /// The latest progress among this device and the producers its uncompleted submissions wait
-  /// on. Requires \ref CompletionState::watermarkMutex of \ref completionState.
-  std::chrono::steady_clock::time_point latestProgressLocked() const;
+  /// The latest progress among this device and the producers its uncompleted submissions wait on.
+  /// A producer counts until it completes the serial a submission waits for, and that completion
+  /// counts as it is first seen; the producer's later work is unrelated to this device. Requires
+  /// \ref CompletionState::watermarkMutex of \ref completionState.
+  std::chrono::steady_clock::time_point latestProgressLocked();
 
   /// Drops the records of submissions that have completed from \ref outstandingSources.
   void pruneOutstandingSources();
@@ -2590,17 +2600,28 @@ Status MetalDevice::Impl::waitForCommandBufferRoom(const MetalDevice& device,
                            submissionStallTimeoutSeconds, submissionSerial)};
 }
 
-std::chrono::steady_clock::time_point MetalDevice::Impl::latestProgressLocked() const {
+std::chrono::steady_clock::time_point MetalDevice::Impl::latestProgressLocked() {
   std::chrono::steady_clock::time_point latest = completionState->lastProgress();
   const uint64_t completed = completionState->completedSerial.load(std::memory_order_acquire);
-  for (const OutstandingSources& sources : outstandingSources) {
+  for (OutstandingSources& sources : outstandingSources) {
     if (sources.serial <= completed) {
       continue;
     }
-    for (const std::weak_ptr<CompletionState>& weakProducer : sources.producers) {
-      if (std::shared_ptr<CompletionState> producer = weakProducer.lock()) {
-        latest = std::max(latest, producer->lastProgress());
+    for (AwaitedProducer& awaited : sources.producers) {
+      if (!awaited.metAt.has_value()) {
+        const std::shared_ptr<CompletionState> producer = awaited.producer.lock();
+        if (producer == nullptr) {
+          continue;
+        }
+        if (producer->completedSerial.load(std::memory_order_acquire) < awaited.serial) {
+          latest = std::max(latest, producer->lastProgress());
+          continue;
+        }
+        // Met since the last look. The producer's last progress is no earlier than the completion
+        // that met the wait, and no later than this look.
+        awaited.metAt = producer->lastProgress();
       }
+      latest = std::max(latest, *awaited.metAt);
     }
   }
   return latest;
@@ -2718,7 +2739,7 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial,
       Impl::OutstandingSources sources{submissionSerial, {}};
       sources.producers.reserve(impl_->pendingSourceWaits.size());
       for (const Impl::PendingSourceWait& wait : impl_->pendingSourceWaits) {
-        sources.producers.emplace_back(wait.producer);
+        sources.producers.push_back(Impl::AwaitedProducer{wait.producer, wait.serial});
       }
       impl_->outstandingSources.push_back(std::move(sources));
     }

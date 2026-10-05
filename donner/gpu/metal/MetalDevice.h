@@ -100,15 +100,16 @@ namespace donner::gpu::metal {
  *
  * Work in flight is bounded in command buffers: a submission that would leave more than
  * \ref kMaxCommandBuffersInFlight committed and uncompleted waits for room before it acquires any
- * native buffer, so acquisition never blocks inside Metal. The wait is bounded. It gives up when
- * no progress has been seen for five seconds, measured from the last progress rather than from
- * the start of the wait; progress is a command buffer of this device completing, or a completion
- * on another device whose work an uncompleted submission of this one waits on. It also gives up
- * after sixty seconds in all. Either way the root is declared lost, attributed to the queue wait,
- * and the submission is refused without consuming a serial. Ordinary frames stay far below the
- * backstop and never wait. Another device's progress is sampled one hop deep: when that device's
- * own work in turn waits on a third device, the third device's completions do not count, so a
- * chain that progresses only at its far end for longer than the stall bound declares the loss.
+ * native buffer, so acquisition never blocks inside Metal. The wait is bounded. It gives up when no
+ * progress has been seen for five seconds, measured from the last progress rather than from the
+ * start of the wait; progress is a command buffer of this device completing, or a completion on
+ * another device while an uncompleted submission of this one still waits for that device's work.
+ * Once that work completes, the other device's later completions no longer count. The wait also
+ * gives up after sixty seconds in all. Either way the root is declared lost, attributed to the
+ * queue wait, and the submission is refused without consuming a serial. Ordinary frames stay far
+ * below the backstop and never wait. Another device's progress is sampled one hop deep: when that
+ * device's own work in turn waits on a third device, the third device's completions do not count,
+ * so a chain that progresses only at its far end for longer than the stall bound declares the loss.
  *
  * The header is pure C++ (Objective-C state lives behind a pimpl) so it is includable from C++
  * tests; the implementation is Objective-C++.
