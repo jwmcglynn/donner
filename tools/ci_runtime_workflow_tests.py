@@ -157,7 +157,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertGreater(position, hosted.index("      - name: Upload Bazel test failure artifacts"))
         # The comparison reruns overwrite these test logs, so the slice must come first.
         self.assertLess(position, hosted.index("      - name: Compare browser GPU tests (serial)"))
-        self.assertIn("if: ${{ !cancelled() && steps.test.outcome == 'failure' }}", collect)
+        self.assertIn("if: ${{ !cancelled() && (steps.test.outcome == 'failure' || "
+                      "steps.browser_test.outcome == 'failure') }}", collect)
         self.assertIn("continue-on-error: true", collect)
         self.assertIn("timeout-minutes: 5", collect)
         self.assertIn(
@@ -166,7 +167,8 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             collect,
         )
         upload = self._step_body(hosted, "Upload browser stall system log")
-        self.assertIn("if: ${{ !cancelled() && steps.test.outcome == 'failure' }}", upload)
+        self.assertIn("if: ${{ !cancelled() && (steps.test.outcome == 'failure' || "
+                      "steps.browser_test.outcome == 'failure') }}", upload)
         self.assertIn("path: ${{ runner.temp }}/browser-stall-system-log", upload)
         self.assertIn("retention-days: 14", upload)
         # A self-hosted runner's unified log describes a persistent host; it is never published.
@@ -175,13 +177,83 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             self.assertNotIn(name, body)
             self.assertNotIn("log show", body)
 
+    def test_hosted_browser_tests_run_alone_after_the_suite(self):
+        # A browser starved of CPU misses its wall-clock deadlines, so on the three-core
+        # hosted runner every test that launches a browser runs after the rest of the
+        # suite, one at a time, and nowhere else in that job.
+        hosted = self._job_body("macos")
+        main_test = self._step_body(hosted, "Test")
+        self.assertIn(
+            "--test_tag_filters=-manual,-perf,-requires_metal_toolchain,-ci-remote-gpu,"
+            "-launches-browser ",
+            main_test,
+        )
+        browser = self._step_body(hosted, "Test (browser targets)")
+        self.assertLess(hosted.index("      - name: Test\n"),
+                        hosted.index("      - name: Test (browser targets)\n"))
+        self.assertLess(hosted.index("      - name: Test (browser targets)\n"),
+                        hosted.index("      - name: Upload Bazel test failure artifacts\n"))
+        self.assertIn("id: browser_test", browser)
+        self.assertIn(
+            "if: ${{ !cancelled() && (steps.test.outcome == 'success' || "
+            "steps.test.outcome == 'failure') }}",
+            browser,
+        )
+        self.assertIn("--local_test_jobs=1", browser)
+        self.assertIn(
+            "--test_tag_filters=launches-browser,-manual,-perf,-requires_metal_toolchain,"
+            "-ci-remote-gpu ",
+            browser,
+        )
+        self.assertIn("$BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS $TARGETS", browser)
+        # Every step that reacts to a failed test step also reacts to the browser phase.
+        for step in ("Upload Bazel test failure artifacts", "Collect browser stall system log",
+                     "Upload browser stall system log", "Detect browser GPU acquisition failure"):
+            body = self._step_body(hosted, step)
+            self.assertIn("steps.test.outcome == 'failure'", body, step)
+            self.assertIn("steps.browser_test.outcome == 'failure'", body, step)
+        # Other jobs keep their own scheduling.
+        for job in ("macos-self-hosted", "linux", "linux-self-hosted"):
+            self.assertNotIn("launches-browser", self._job_body(job), job)
+
+    def test_every_test_that_launches_a_browser_is_tagged(self):
+        # The hosted browser phase selects by tag, so an untagged browser test would
+        # silently return to the oversubscribed main test step.
+        launching = []
+        for package in ("donner/editor/wasm/tests", "donner/gpu/shader"):
+            build = _repository_text(package + "/BUILD.bazel")
+            for match in re.finditer(r"^\w[\w.]*\(\n(.*?)\n\)\n", build, re.MULTILINE | re.DOTALL):
+                body = match.group(1)
+                launches = ('"@playwright//:' in body
+                            or 'entry_point = "browser-archive-check.mjs"' in body)
+                if not launches:
+                    continue
+                name = re.search(r'name = "([^"]+)"', body).group(1)
+                tags = re.search(r"\n    tags = \[(.*?)\]", body, re.DOTALL)
+                tag_names = re.findall(r'"([^"]+)"', tags.group(1)) if tags else []
+                if "manual" in tag_names:
+                    continue
+                launching.append(name)
+                self.assertIn("launches-browser", tag_names, "%s:%s" % (package, name))
+        self.assertEqual(sorted(launching), [
+            "boot_presentation_test",
+            "browser_presentation_regression_test",
+            "catalog_font_loading_test",
+            "chromium_remote_smoke",
+            "linux_browser_archive_tests",
+            "mac_browser_archive_tests",
+            "slug_endpoint_chromium_tests",
+            "standalone_geode_browser_renderer_test",
+            "wgsl_chromium_compilation_tests",
+        ])
+
     def test_browser_stall_recorder_is_enabled_only_in_the_hosted_job(self):
         # The recorder publishes host load, memory and call graphs, so only the ephemeral
         # hosted job may enable it; every other lane and local runs leave it inert.
         switch = '--test_env=DONNER_BROWSER_STALL_DIAGNOSTICS=1'
         hosted = self._job_body("macos")
         self.assertIn('      BROWSER_STALL_TEST_FLAGS: "%s"\n' % switch, hosted)
-        steps = ("Test", "Compare browser GPU tests (serial)",
+        steps = ("Test", "Test (browser targets)", "Compare browser GPU tests (serial)",
                  "Compare browser GPU tests (parallel)")
         for step in steps:
             self.assertIn("$BAZEL_MACOS_TEST_FLAGS $BROWSER_STALL_TEST_FLAGS",

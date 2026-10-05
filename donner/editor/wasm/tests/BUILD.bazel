@@ -54,6 +54,7 @@ playwright_bin.playwright_test(
     # with ANGLE/SwiftShader GL, Vulkan, and Graphite flag configurations, so
     # this is an environment capability boundary, not a flag or timing gap.
     # macOS headless Chromium presents through the real GPU and passes.
+    tags = ["launches-browser"],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
@@ -110,6 +111,7 @@ playwright_bin.playwright_test(
         "NODE_OPTIONS": "",
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
     },
+    tags = ["launches-browser"],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
@@ -151,7 +153,10 @@ playwright_bin.playwright_test(
         "NODE_OPTIONS": "",
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
     },
-    tags = ["no-local"],
+    tags = [
+        "launches-browser",
+        "no-local",
+    ],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
@@ -232,6 +237,7 @@ playwright_bin.playwright_test(
         "NODE_OPTIONS": "",
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
     },
+    tags = ["launches-browser"],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
@@ -441,6 +447,7 @@ js_test(
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
     },
     node_options = ["--test"],
+    tags = ["launches-browser"],
     target_compatible_with = [
         "@platforms//cpu:x86_64",
         "@platforms//os:linux",
@@ -462,6 +469,7 @@ js_test(
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
     },
     node_options = ["--test"],
+    tags = ["launches-browser"],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
@@ -624,6 +632,7 @@ playwright_bin.playwright_test(
         "NODE_OPTIONS": "",
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
     },
+    tags = ["launches-browser"],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
