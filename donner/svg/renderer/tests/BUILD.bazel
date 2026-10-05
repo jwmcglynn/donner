@@ -1224,6 +1224,10 @@ filegroup(
 py_test(
     name = "donner_svg2_pilot",
     size = "small",
+    # Runs 25 cases through two subprocesses each, so wall time follows CPU contention: about 7 s
+    # alone, about 23 s in a normal CI run and over 40 s on a busy CI host, close to the 60 s limit
+    # of `size = "small"`. Raise only the time limit, keeping the resource class.
+    timeout = "moderate",
     srcs = ["donner_svg2_pilot_test.py"],
     data = [
         ":donner_svg2_render_adapter",
