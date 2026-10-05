@@ -5,9 +5,9 @@
 /// Commands store only validated Donner value objects and slot-based resource identities, never
 /// raw pointers or native handles, so recorded streams serialize deterministically and contain no
 /// process state. Each referenced resource is stored as a
-/// \ref ResourceIdentity (slot plus generation): `Device::submit` re-validates every identity, so
-/// a resource destroyed between recording and submission fails closed instead of reaching a
-/// backend.
+/// \ref donner::gpu::ResourceIdentity "ResourceIdentity" (slot plus generation): `Device::submit`
+/// re-validates every identity, so a resource destroyed between recording and submission fails
+/// closed instead of reaching a backend.
 
 #include <cstdint>
 #include <variant>
@@ -98,8 +98,8 @@ struct DrawIndexedCommand {
  * Whether \p draw has no work: no indices or no instances.
  *
  * The encoder records such a draw. A backend may skip it rather than issue a native draw with
- * nothing to draw, and \ref DeviceObserver does not count it as a draw, so every backend reports
- * the same draw count for the same commands.
+ * nothing to draw, and \ref donner::gpu::DeviceObserver "DeviceObserver" does not count it as a
+ * draw, so every backend reports the same draw count for the same commands.
  *
  * @param draw Recorded indexed draw.
  */

@@ -3,6 +3,7 @@
 /// Authoritative WGSL for FilterBlend.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for FilterBlend.
 inline constexpr wgsl::SourceText kFilterBlendSource{
     R"wgsl(// Geode feBlend compute pipeline: W3C Compositing 1 blend modes.
 //

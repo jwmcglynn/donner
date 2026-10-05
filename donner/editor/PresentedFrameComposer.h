@@ -66,7 +66,10 @@ struct PresentedTileRect {
   /// Drag translation used to derive this rectangle.
   Vector2d effectiveDragTranslationDoc = Vector2d::Zero();
 
-  friend bool operator==(const PresentedTileRect&, const PresentedTileRect&) = default;
+  /// Compare all members for value equality.
+  /// @param lhs Value to compare.
+  /// @param rhs Value to compare.
+  friend bool operator==(const PresentedTileRect& lhs, const PresentedTileRect& rhs) = default;
 };
 
 /// Integer output-space rectangle used by headless bitmap presentation.
@@ -80,7 +83,10 @@ struct PresentedPixelRect {
   /// Height in pixels.
   int height = 0;
 
-  friend bool operator==(const PresentedPixelRect&, const PresentedPixelRect&) = default;
+  /// Compare all members for value equality.
+  /// @param lhs Value to compare.
+  /// @param rhs Value to compare.
+  friend bool operator==(const PresentedPixelRect& lhs, const PresentedPixelRect& rhs) = default;
 };
 
 /**

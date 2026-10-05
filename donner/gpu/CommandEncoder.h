@@ -19,7 +19,7 @@ namespace donner::gpu {
 
 class CommandEncoder;
 
-/// Which kind of pass a \ref CommandEncoder currently has open.
+/// Which kind of pass a \ref donner::gpu::CommandEncoder "CommandEncoder" currently has open.
 enum class PassKind : uint8_t {
   None,     //!< No pass is active; copies and pass begins are allowed.
   Render,   //!< A render pass is active.
@@ -323,6 +323,7 @@ private:
     std::vector<VertexBufferLayout> vertexBuffers;                 //!< Declared vertex layouts.
     std::vector<ResourceIdentity> bindGroupLayoutIds;              //!< Required group layouts.
     PrimitiveTopology topology = PrimitiveTopology::TriangleList;  //!< Declared topology.
+
     /// Inline range requirements retained when a pipeline is selected. Sized for one group's
     /// worth of bindings, which covers every pipeline this runtime accepts today; a pipeline
     /// that declared bindings across more groups spills to the heap once at setPipeline rather

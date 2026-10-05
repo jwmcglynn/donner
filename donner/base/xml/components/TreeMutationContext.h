@@ -54,20 +54,32 @@ struct TreeMutationContext {
                                              referenceNode ? referenceNode.entity() : entt::null);
   }
 
+  /// Append a child through the default ECS tree operation.
+  /// @param parent Destination parent in the same registry as the child.
+  /// @param child Element to append.
   static void DefaultAppendChild(EntityHandle parent, EntityHandle child) {
     parent.get<TreeComponent>().appendChild(*parent.registry(), child.entity());
   }
 
+  /// Replace a child through the default ECS tree operation.
+  /// @param parent Parent containing the old child.
+  /// @param newChild Replacement child in the same registry.
+  /// @param oldChild Child to replace.
   static void DefaultReplaceChild(EntityHandle parent, EntityHandle newChild,
                                   EntityHandle oldChild) {
     parent.get<TreeComponent>().replaceChild(*parent.registry(), newChild.entity(),
                                              oldChild.entity());
   }
 
+  /// Detach a child through the default ECS tree operation.
+  /// @param parent Parent containing the child.
+  /// @param child Child to detach.
   static void DefaultRemoveChild(EntityHandle parent, EntityHandle child) {
     parent.get<TreeComponent>().removeChild(*parent.registry(), child.entity());
   }
 
+  /// Detach an entity through the default ECS tree operation.
+  /// @param entity Entity to remove from its parent.
   static void DefaultRemove(EntityHandle entity) {
     entity.get<TreeComponent>().remove(*entity.registry());
   }

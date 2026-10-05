@@ -79,6 +79,7 @@ public:
     bool lockedFlash = false;
     SelectionChromeSnapshot chrome;
   };
+  /// Source-hover and locked-element flash annotations owned by this capture.
   [[nodiscard]] const std::vector<Adornment>& adornments() const UTILS_LIFETIME_BOUND {
     return adornments_;
   }

@@ -15,9 +15,10 @@
 ///   code fails to compile and removing one stops compiling at its use.
 /// - The tests in this package pin every code, so changing a number on this side is a test
 ///   failure. They cannot see the JavaScript side.
-/// - \ref ProtocolCodeTable is compared against the table `library_donner_gpu.js` holds, element
-///   by element, before a device is requested. That is the check that covers the JavaScript side,
-///   and it is a runtime one: a disagreement fails the device request rather than the build.
+/// - \ref donner::gpu::browser::ProtocolCodeTable "ProtocolCodeTable" is compared against the table
+///   `library_donner_gpu.js` holds, element by element, before a device is requested. That is
+///   the check that covers the JavaScript side, and it is a runtime one: a disagreement fails the
+///   device request rather than the build.
 ///
 /// Linking covers something narrower still: it proves the C++ half references no entry point the
 /// library leaves undefined. It does not check parameter lists, because a JavaScript function

@@ -25,24 +25,32 @@ namespace donner::editor {
 /// framebuffer pass draws the checkerboard; there is no draw-list fallback.
 inline constexpr double kFramebufferCheckerboardSize = 16.0;
 
+/// Borrowed presentation inputs for one render-pane UI pass.
 struct RenderPanePresenterState {
   /// Live viewport for this frame. Owns pane geometry: the pane rect, the
   /// content region, and everything anchored to the window rather than to the
   /// document.
   const ViewportState& viewport;
+  /// Frame timing and memory samples used by the performance overlay.
   const FrameHistory& frameHistory;
+  /// Sealed frame drawn by this pass, or null when no coherent frame is available.
   std::shared_ptr<const FramePresentation> presentation;
+  /// Available content size in logical UI pixels.
   Vector2d contentRegion = Vector2d::Zero();
+  /// Whether the document was already drawn into the host framebuffer.
   bool documentPresentedDirectly = false;
+  /// Composite texture used when the document is presented as a single image.
   DocumentCompositeTextureView documentComposite;
+  /// Whether to draw tile boundaries and identities.
   bool compositorTileOverlay = false;
+  /// Performance overlay selected by the View menu.
   PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
 };
 
 /**
  * Return true when a composited tile should be drawn in the render pane.
  *
- * @param tile Tile view published by \ref GlTextureCache.
+ * @param tile Tile view published by \ref donner::editor::GlTextureCache "GlTextureCache".
  * @param suppressedLayerEntity Promoted entity whose cached or immediate pixels should not be drawn
  *   while selection chrome remains visible. Null leaves all entity-owned tiles eligible.
  * @param suppressDragTargetTiles True when the current selected element is `display:none` and
@@ -59,7 +67,7 @@ struct RenderPanePresenterState {
  * are valid drag presentation candidates even though their worker-side `isDragTarget` bit was
  * false at prewarm time.
  *
- * @param tile Tile view published by \ref GlTextureCache.
+ * @param tile Tile view published by \ref donner::editor::GlTextureCache "GlTextureCache".
  * @param activeDragPreview Active drag preview driving presenter-side transforms.
  */
 [[nodiscard]] bool TileMatchesActiveDragPreview(
@@ -95,21 +103,14 @@ struct RenderPanePresenterState {
 /**
  * Return true when a presented tile quad has visible overlap with a screen rect.
  *
- * @param tileQuad Output-space tile quad from \ref ComputePresentedTileQuad.
+ * @param tileQuad Output-space tile quad from \ref donner::editor::ComputePresentedTileQuad
+ * "ComputePresentedTileQuad".
  * @param screenRect Screen-space clip rect, usually the render pane bounds.
  */
 [[nodiscard]] bool PresentedTileQuadIntersectsScreenRect(const PresentedTileQuad& tileQuad,
                                                          const Box2d& screenRect);
 
-/**
- * Return the screen-space clip rect for presented document pixels.
- *
- * @param paneRect Screen-space render-pane bounds.
- * @param imageRect Screen-space artboard/image bounds.
- */
-[[nodiscard]] std::optional<Box2d> PresentedImageClipRect(const Box2d& paneRect,
-                                                          const Box2d& imageRect);
-
+/// Draws the document presentation and diagnostic overlays into the render pane.
 class RenderPanePresenter {
 public:
   /**

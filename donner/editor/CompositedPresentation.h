@@ -17,6 +17,8 @@
 
 namespace donner::editor {
 
+/// Accepted composited presentation resources, plus the released drag intent retained until a
+/// render that represents it is accepted.
 class CompositedPresentation {
 public:
   /// Closed presentation phases. A ready resource set already includes its chrome geometry.
@@ -24,13 +26,21 @@ public:
 
   /// Detached metadata for scheduler, replay and inspector diagnostics.
   struct DiagnosticsSnapshot {
+    /// Current cached-presentation lifecycle phase.
     Phase phase = Phase::NoCache;
+    /// Whether a presentation texture cache is available.
     bool hasCachedTextures = false;
+    /// Entity associated with the retained presentation cache.
     Entity cachedEntity = entt::null;
+    /// Document frame version represented by the retained cache.
     std::uint64_t cachedVersion = 0;
+    /// Canvas dimensions of the retained cache, in pixels.
     Vector2i cachedCanvasSize = Vector2i::Zero();
+    /// Drag transform retained while the final raster result is pending.
     std::optional<SelectTool::ActiveDragPreview> settlingPreview;
+    /// Whether presentation is waiting for the final complete render.
     bool waitingForFullRender = false;
+    /// Document frame version needed to finish drag settling.
     std::uint64_t settlingTargetVersion = 0;
   };
 
@@ -87,11 +97,15 @@ public:
     return cache.has_value() ? cache->capture : nullptr;
   }
 
+  /// Whether an accepted presentation cache exists.
   [[nodiscard]] bool hasCachedTextures() const { return currentCache().has_value(); }
+  /// Whether the accepted presentation cache belongs to @p entity.
+  /// @param entity Selected-layer owner to compare.
   [[nodiscard]] bool hasCachedTexturesForEntity(Entity entity) const {
     const auto cache = currentCache();
     return cache.has_value() && cache->entity == entity;
   }
+  /// Whether a released drag is waiting for a render that represents its final poses.
   [[nodiscard]] bool isWaitingForFullRender() const {
     return std::holds_alternative<SettlingForRender>(state_);
   }
@@ -170,17 +184,33 @@ public:
     return std::max(scaleX, scaleY) > 1.5 || std::min(scaleX, scaleY) < 1.0 / 1.5;
   }
 
+  /// Whether the released drag of @p entity is settling and @p version has reached the document
+  /// version that represents its final poses, so its selection must be refreshed.
+  /// @param entity Selected entity to check.
+  /// @param version Document frame version now available.
   [[nodiscard]] bool needsSettledSelectionRefresh(Entity entity, std::uint64_t version) const {
     const auto* settling = std::get_if<SettlingForRender>(&state_);
     return entity != entt::null && settling != nullptr && settling->preview.entity == entity &&
            version >= settling->targetVersion;
   }
+  /// Whether the settling drag of @p entity also needs a fresh layer raster: its selection needs a
+  /// settled refresh and its retained transform is not a pure translation.
+  /// @param entity Selected entity to check.
+  /// @param version Document frame version now available.
   [[nodiscard]] bool needsSettledLayerRasterization(Entity entity, std::uint64_t version) const {
     const auto* settling = std::get_if<SettlingForRender>(&state_);
     return needsSettledSelectionRefresh(entity, version) && settling != nullptr &&
            !settling->preview.documentFromCachedDocument.isTranslation();
   }
 
+  /// Whether a selection prewarm render should run for @p entity: no drag is active or settling,
+  /// and the accepted cache does not already hold this entity, version, canvas size and set of
+  /// entities moving with it.
+  /// @param entity Selected entity to prewarm.
+  /// @param extraEntities Additional entities that move with @p entity.
+  /// @param version Current document frame version.
+  /// @param canvasSize Current canvas size in pixels.
+  /// @param dragActive Whether a drag gesture is in progress.
   [[nodiscard]] bool shouldPrewarm(Entity entity, const std::vector<Entity>& extraEntities,
                                    std::uint64_t version, const Vector2i& canvasSize,
                                    bool dragActive) const {
@@ -245,6 +275,10 @@ public:
     return true;
   }
 
+  /// Retain a released drag's @p preview until a render at @p targetVersion that represents its
+  /// poses is accepted. Without a preview, only the accepted cache is kept.
+  /// @param preview Drag state at release, or empty when nothing was dragged.
+  /// @param targetVersion Document frame version expected to include the released poses.
   void beginSettling(const std::optional<SelectTool::ActiveDragPreview>& preview,
                      std::uint64_t targetVersion) {
     const auto cache = currentCache();
@@ -326,6 +360,9 @@ private:
   State state_ = NoCache{};
 };
 
+/// Ostream output operator, e.g. `SettlingForRender`.
+/// @param os Output stream.
+/// @param phase Value to output.
 inline std::ostream& operator<<(std::ostream& os, CompositedPresentation::Phase phase) {
   switch (phase) {
     case CompositedPresentation::Phase::NoCache: return os << "NoCache";

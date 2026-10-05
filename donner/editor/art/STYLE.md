@@ -48,17 +48,17 @@ spec is what makes the two suites read as a set.
 
 ## Hotspots (cursor pointer origin, in 32-grid px)
 
-| Cursor        | Hotspot | Notes                                              |
-|---------------|---------|----------------------------------------------------|
-| select arrow  | (5, 4)  | Arrowhead tip, top-left. No tail (unlike the icon).|
-| pen           | (4, 4)  | Nib tip, top-left.                                 |
-| pen add       | (4, 4)  | Base pen tip; `+` badge bottom-right.              |
-| pen remove    | (4, 4)  | Base pen tip; `-` badge bottom-right.              |
-| pen close     | (4, 4)  | Base pen tip; `o` badge bottom-right.              |
-| rotate        | (16,16) | Centered; art rotated per corner by the pipeline.  |
-| scale         | (16,16) | Centered double arrow; rotated per corner.         |
-| path modify   | (6, 6)  | Angle vertex at the top-left.                      |
-| pan open/close| (15,15) | Palm center.                                       |
+| Cursor         | Hotspot | Notes                                               |
+| -------------- | ------- | --------------------------------------------------- |
+| select arrow   | (5, 4)  | Arrowhead tip, top-left. No tail (unlike the icon). |
+| pen            | (4, 4)  | Nib tip, top-left.                                  |
+| pen add        | (4, 4)  | Base pen tip; `+` badge bottom-right.               |
+| pen remove     | (4, 4)  | Base pen tip; `-` badge bottom-right.               |
+| pen close      | (4, 4)  | Base pen tip; `o` badge bottom-right.               |
+| rotate         | (16,16) | Centered; art rotated per corner by the pipeline.   |
+| scale          | (16,16) | Centered double arrow; rotated per corner.          |
+| path modify    | (6, 6)  | Angle vertex at the top-left.                       |
+| pan open/close | (15,15) | Palm center.                                        |
 
 ## Adding art
 
@@ -69,5 +69,3 @@ spec is what makes the two suites read as a set.
    art fails the build.
 3. Icons: add a case in `ToolbarIconSet.cc` (`ToolbarIcon` enum + SVG map). The
    registry-coverage test iterates the enum.
-</content>
-</invoke>

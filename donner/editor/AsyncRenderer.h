@@ -105,7 +105,10 @@ struct RenderRequest {
   /// Drag state snapshotted with one worker render request.
   struct DragPreview {
     Entity entity = entt::null;  //!< Primary entity whose drag this request represents.
-    /// Additional entities moving with `entity` under the same active drag transform.
+
+    /// Additional entities moving with
+    /// \ref donner::editor::RenderRequest::DragPreview::entity "entity" under the same active drag
+    /// transform.
     std::vector<Entity> extraEntities;
     /// Which interaction phase drove this preview. `Selection` means the
     /// editor is pre-warming a layer for the selected entity before any
@@ -155,6 +158,7 @@ struct RenderRequest {
   std::uint64_t fontResourceRevision = 0;
   /// Non-transform content and renderer settings consumed by this render.
   std::uint64_t geometryRevision = 0;
+  /// Presentation-refresh epoch of the renderer settings this render used.
   std::uint64_t presentationEpoch = 0;
   /// Immutable per-render identity assigned when the request is admitted.
   std::uint64_t captureId = 0;
@@ -164,7 +168,9 @@ struct RenderRequest {
   std::vector<Entity> trackedPresentationObjects;
   /// Source and rejection annotations captured from the same guarded state as the pixels.
   std::vector<svg::SVGElement> sourceHoverElements;
+  /// Locked-element rejection flash captured with the pixels, when one is showing.
   std::optional<LockedRejectionFlashInput> lockedFlash;
+  /// Text-editing annotations captured with the pixels, when a text session is open.
   std::optional<CapturedPresentation::TextEditing> textEditing;
   /// Entity remap for structurally equivalent document replacement. When
   /// present, the worker remaps compositor state instead of fully resetting
@@ -194,14 +200,15 @@ struct RenderRequest {
   /// against. Placing them through a later viewport would stretch a
   /// viewport-bounded raster past the document region it actually covers.
   ViewportState viewport;
+  /// Request repairs a frame rejected for incompatible raster/pose coverage.
+  bool presentationCoverageRepair = false;
+  int presentationRepairReason = 0;  //!< Missing presentation proof carried by the request.
+
   /// True when this request should produce only a low-resolution full-document overview infill.
   ///
   /// The worker still keeps the selected entity promoted, but skips the composited split preview
   /// and publishes a full-canvas tile. The UI uploads it into the retained overview cache without
   /// replacing active viewport-bounded tiles.
-  /// Request repairs a frame rejected for incompatible raster/pose coverage.
-  bool presentationCoverageRepair = false;
-  int presentationRepairReason = 0;  //!< Missing presentation proof carried by the request.
   bool overviewInfillOnly = false;
   /// Capture a CPU-readable copy of the fully composed frame.
   ///
@@ -318,8 +325,8 @@ struct RenderResult {
     double setupMs = 0.0;
     /// Time spent in `CompositorController::renderFrame`.
     double renderFrameMs = 0.0;
-    double documentWriteLockMs =
-        0.0;  //!< Time the captured document remained unavailable for UI edits.
+    /// Time the captured document remained unavailable for UI edits.
+    double documentWriteLockMs = 0.0;
     /// Time spent building composited-preview tile metadata/payloads.
     double buildPreviewMs = 0.0;
     /// Time spent taking the final fallback canvas snapshot, when needed.
@@ -434,6 +441,7 @@ struct RenderResult {
       compositedPreview;                //!< Paint-ordered compositor tiles, when produced.
   EditorRasterViewport rasterViewport;  //!< Raster viewport used to produce this result.
   ViewportState viewport;               //!< Editor viewport copied from the request.
+
   /// Request repairs a frame rejected for incompatible raster/pose coverage.
   bool presentationCoverageRepair = false;
   int presentationRepairReason = 0;        //!< Missing presentation proof carried by the request.
@@ -505,6 +513,7 @@ struct SampleThumbnailRenderResult {
   SampleThumbnailRenderOutcome outcome =
       SampleThumbnailRenderOutcome::RenderError;  //!< Terminal outcome of this preview attempt.
   svg::RendererBitmap bitmap;  //!< Captured bitmap; it may be empty even when outcome is Rendered.
+
   /// Self-contained SVG with font-preview text replaced by glyph paths.
   std::string outlinedSvg;
 };
@@ -791,7 +800,9 @@ public:
   /// modes reconstructs it with the matching `CompositorConfig`. Every mode
   /// produces identical pixels.
   ///
-  /// Same threading contract as `setTightBoundedSegmentsEnabled`:
+  /// Same threading contract as
+  /// \ref donner::editor::AsyncRenderer::setTightBoundedSegmentsEnabled
+  /// "setTightBoundedSegmentsEnabled":
   /// safe to call from the UI thread while a render is in flight.
   void setCompositedRenderingMode(CompositedRenderingMode mode) {
     compositedRenderingMode_.store(mode, std::memory_order_release);
@@ -804,7 +815,8 @@ public:
   }
 
   /// Toggle the Geode geometry debug overlay
-  /// (`RendererInterface::setDebugGeometryOverlay`) on the root document
+  /// (\ref donner::svg::RendererInterface::setDebugGeometryOverlay
+  /// "RendererInterface::setDebugGeometryOverlay") on the root document
   /// renderer. The change applies at the start of the next worker iteration.
   /// Each state transition clears retained compositor state once. While
   /// enabled, selection promotion/prewarm remains suppressed and every render
@@ -812,7 +824,9 @@ public:
   /// or cover the frame-final wireframe. Disabling performs one transition
   /// reset, then normal retained promotion resumes.
   ///
-  /// Same threading contract as `setTightBoundedSegmentsEnabled`:
+  /// Same threading contract as
+  /// \ref donner::editor::AsyncRenderer::setTightBoundedSegmentsEnabled
+  /// "setTightBoundedSegmentsEnabled":
   /// safe to call from the UI thread while a render is in flight.
   void setGeometryDebugOverlayEnabled(bool enabled) {
     geometryDebugOverlay_.store(enabled, std::memory_order_release);

@@ -161,6 +161,7 @@ struct FrameCostBreakdown {
     /// This completed request repaired raster/pose coverage rejected by the frame builder.
     bool presentationCoverageRepair = false;
     int presentationRepairReason = 0;  //!< The explicit missing geometry/pose/coverage proof.
+
     /// Milliseconds spent rendering transient immediate-mode spans.
     double immediateMs = 0.0;
     /// Milliseconds spent rendering retained cached segment/layer tiles.
@@ -193,13 +194,16 @@ struct FrameCostBreakdown {
     int activeStateCount = 0;
   };
 
-  MainFrame mainFrame;
-  HostFrame hostFrame;
-  DirectPresentation directPresentation;
-  Overlay overlay;
-  CompositedUpload compositedUpload;
-  CompositedRender compositedRender;
-  SourceRopes sourceRopes;
+  MainFrame mainFrame;  //!< UI-thread frame preparation and widget costs.
+  HostFrame hostFrame;  //!< Host frame setup and presentation costs.
+  DirectPresentation
+      directPresentation;  //!< Costs of drawing document content directly into the host target.
+  Overlay overlay;         //!< Selection and tool-chrome capture and draw costs.
+  CompositedUpload
+      compositedUpload;  //!< Costs of registering or uploading composited tile textures.
+  CompositedRender
+      compositedRender;     //!< Worker costs for retained and immediate compositor rendering.
+  SourceRopes sourceRopes;  //!< Source-focus rope layout, simulation, and drawing costs.
 
   /// Cumulative number of full-document canvas-size commits since document load.
   std::uint64_t documentCanvasCommitCount = 0;

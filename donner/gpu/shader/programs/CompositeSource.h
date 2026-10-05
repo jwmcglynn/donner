@@ -3,6 +3,7 @@
 /// Authoritative WGSL for feComposite.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for feComposite.
 inline constexpr wgsl::SourceText kCompositeSource{R"wgsl(struct CompositeParams {
   op: u32,
   pad0: u32,

@@ -31,8 +31,10 @@ class VulkanSurfaceRetirement;
 /// owner observes that poison and retains the complete device graph, including every prerequisite
 /// of leaked native handles. The live count catches a child that escaped the owner's containers.
 struct VulkanSurfaceLifetime {
-  std::atomic<bool> unproven{false};
-  std::atomic<size_t> liveChildren{0};
+  std::atomic<bool> unproven{
+      false};  //!< Whether outstanding surface work lacks a completion proof.
+  std::atomic<size_t> liveChildren{
+      0};  //!< Number of live swapchain children retaining this surface lifetime.
 };
 
 /// Converts native surface formats into the formats the runtime can present.
@@ -68,11 +70,11 @@ inline constexpr VkPipelineStageFlags kAcquireWaitStage =
 /// The synchronization state a frame is in the moment it is acquired.
 ///
 /// Its contents are undefined, and the last thing to have touched it is the presentation engine's
-/// read, which the acquisition semaphore orders against \ref kAcquireWaitStage. Recording that
-/// stage rather than the top of the pipe is what places the frame's first layout transition after
-/// the wait; a transition from the top of the pipe is a write the wait does not cover, which
-/// synchronization validation reports as a write-after-read hazard against the presentation
-/// engine.
+/// read, which the acquisition semaphore orders against \ref donner::gpu::vulkan::kAcquireWaitStage
+/// "kAcquireWaitStage". Recording that stage rather than the top of the pipe is what places the
+/// frame's first layout transition after the wait; a transition from the top of the pipe is a write
+/// the wait does not cover, which synchronization validation reports as a write-after-read hazard
+/// against the presentation engine.
 inline TextureSyncState AcquiredFrameSyncState() {
   return TextureSyncState{VK_IMAGE_LAYOUT_UNDEFINED, kAcquireWaitStage, 0};
 }
@@ -382,6 +384,7 @@ private:
   VulkanSurfaceContext context_;  //!< Borrowed device objects.
   std::shared_ptr<VulkanSurfaceRetirement> retirement_;
   VkSurfaceKHR surface_ = VK_NULL_HANDLE;  //!< The surface presented to.
+
   /// Whether \ref surface_ is this object's to destroy. False for a surface the embedder created
   /// and still owns, which its windowing library generally destroys with the window.
   bool ownsSurface_ = true;
@@ -390,12 +393,14 @@ private:
   Extent2d extent_;                                    //!< Extent the swapchain was created with.
 
   std::vector<VkImage> images_;  //!< Swapchain images; owned by the swapchain, not by this.
+
   /// One semaphore per swapchain image, signalled by the submission that hands the image over
   /// and waited on by the present. Indexed by image index, so it is free to reuse exactly when
   /// that image comes back around.
   std::vector<VkSemaphore> handoverSemaphores_;
   std::vector<VkFence> presentFences_;     //!< Completion fence for each image's latest present.
   std::vector<bool> presentFencePending_;  //!< Whether the corresponding fence was enqueued.
+
   /// Ring of acquisition semaphores, one longer than the image count so the slot being reused is
   /// always one whose frame has already been presented or discarded.
   std::vector<VkSemaphore> acquireSemaphores_;
@@ -403,6 +408,7 @@ private:
   /// before that slot is reused.
   std::vector<VkFence> acquireRingFences_;
   uint64_t acquireCount_ = 0;  //!< Total acquisitions, which selects the ring slot.
+
   /// Ring slot the current frame was acquired on. Carried with the frame rather than recomputed
   /// from \ref acquireCount_ when the frame ends: a rebuild restarts that counter, so recomputing
   /// would file this frame's fence under a slot whose semaphore was never signalled for it.
@@ -418,6 +424,7 @@ private:
   bool forceNextAcquireOutOfDate_ = false;           //!< One-shot injected out-of-date acquisition.
   bool forceMinimumImageCount_ = false;              //!< One-shot smallest-allowed image count.
   std::optional<size_t> lastFencedRingSlot_;         //!< Ring slot the last handover fenced.
+
   /// True once a frame was discarded rather than presented: Vulkan reclaims it only when the
   /// swapchain that owns it is replaced.
   bool needsRecreation_ = false;

@@ -26,8 +26,8 @@ enum class ToolId : std::uint8_t {
 /// design-tool users expect (Selection = V, Pen = P, Type = T); `label` is the tool's
 /// human name. The toolbar renders the tooltip as `"<label> (<key>)"`.
 struct ToolKeybinding {
-  std::string_view label;
-  char key = '\0';
+  std::string_view label;  //!< User-visible shortcut label.
+  char key = '\0';         //!< Single-character keyboard binding, or zero when none is assigned.
 };
 
 /// The full toolbar tool list in display (top-to-bottom) order. The single

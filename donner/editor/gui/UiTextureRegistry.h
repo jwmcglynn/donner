@@ -26,7 +26,8 @@ enum class UiTextureAlphaMode : uint8_t {
 };
 
 /**
- * Ostream output operator for \ref UiTextureAlphaMode, e.g. `Premultiplied`.
+ * Ostream output operator for \ref donner::editor::UiTextureAlphaMode "UiTextureAlphaMode", e.g.
+ * `Premultiplied`.
  *
  * @param os Output stream.
  * @param value Alpha mode to output.

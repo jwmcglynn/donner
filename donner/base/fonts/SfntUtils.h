@@ -86,8 +86,15 @@ public:
 
   SfntFont();
   ~SfntFont();
-  SfntFont(SfntFont&&) noexcept;
-  SfntFont& operator=(SfntFont&&) noexcept;
+
+  /// Construct by moving another instance's state.
+  /// @param other Source object.
+  SfntFont(SfntFont&& other) noexcept;
+
+  /// Replace this object's state by moving another instance.
+  /// @param other Source object.
+  /// @return This object after the move.
+  SfntFont& operator=(SfntFont&& other) noexcept;
 
   SfntFont(const SfntFont&) = delete;
   SfntFont& operator=(const SfntFont&) = delete;
@@ -96,6 +103,8 @@ public:
    * Validate and index @p data.
    *
    * @param data Complete sfnt byte stream.
+   * @param options Validation limits and table requirements.
+   * @param metrics Optional destination for validation work and size measurements.
    * @return A cached index on success, or std::nullopt for malformed or over-limit input.
    */
   static std::optional<SfntFont> Validate(std::span<const uint8_t> data,

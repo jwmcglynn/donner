@@ -3,6 +3,7 @@
 /// Authoritative WGSL for the transparency checkerboard.
 #include "donner/gpu/shader/wgsl/Compiler.h"
 namespace donner::gpu::shader::programs {
+/// Authoritative WGSL for the transparency checkerboard.
 inline constexpr wgsl::SourceText kCheckerboardSource{R"wgsl(struct CheckerboardParams {
   target_size: vec2<f32>,
   device_pixel_ratio: f32,

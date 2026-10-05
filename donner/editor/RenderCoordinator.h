@@ -53,17 +53,19 @@ struct DocumentPixelCapture {
   svg::RendererBitmap bitmap;             //!< Document-only pixels, without editor chrome.
 };
 
-/// What a posted render request asked the worker for, as far as deciding whether a later request
-/// would repeat it.
 /// Stable repair inputs, excluding allocation counters that cannot make a retry productive.
 struct PresentationRepairIdentity {
-  PresentationIdentity scene;
-  std::vector<Entity> selection;
-  std::vector<PresentationPose> poses;
-  EditorRasterViewport coverage;
+  PresentationIdentity scene;           //!< Scene the rejected frame had to present.
+  std::vector<Entity> selection;        //!< Selected entities the frame had to present.
+  std::vector<PresentationPose> poses;  //!< Requested object poses; empty without a gesture.
+  EditorRasterViewport coverage;        //!< Raster coverage the frame needed.
+
+  /// Missing proof that rejected the frame.
   FramePresentationFailure failure = FramePresentationFailure::None;
 };
 
+/// What a posted render request asked the worker for, as far as deciding whether a later request
+/// would repeat it.
 struct RenderAttemptIdentity {
   std::uint64_t documentGeneration = 0;  //!< Document the request rendered.
   std::uint64_t version = 0;             //!< Document frame version the request rendered.
@@ -72,6 +74,9 @@ struct RenderAttemptIdentity {
   Entity selectedEntity = entt::null;    //!< Selected entity the request kept promoted.
   std::optional<RenderRequest::DragPreview> dragPreview;  //!< Drag state the request carried.
   std::uint64_t presentationEpoch = 0;  //!< Presentation-refresh epoch for renderer settings.
+
+  /// Frame repair the request was posted for. When either attempt carries one, attempts are
+  /// compared by repair inputs alone.
   std::optional<PresentationRepairIdentity> repair;
 };
 

@@ -73,9 +73,9 @@ public:
  */
 struct DeviceLostState {
   /// True once the device has been declared lost. Never reset. Publish it only through
-  /// \ref DeclareDeviceLost or \ref DeclareDeviceLostAfterWaitTimeout, never by storing directly:
-  /// the declaring call is what decides the attribution below, and a direct store silently opts
-  /// out of that decision.
+  /// \ref donner::gpu::DeclareDeviceLost "DeclareDeviceLost" or \ref
+  /// DeclareDeviceLostAfterWaitTimeout, never by storing directly: the declaring call is what
+  /// decides the attribution below, and a direct store silently opts out of that decision.
   std::atomic<bool> lost{false};
   /// Bounded wait that declared the loss, or `None` when the backend reported it. Only the call
   /// that wins the `lost` transition writes this, so an empty site is a positive statement ("no
@@ -119,7 +119,8 @@ private:
  *
  * For losses the backend reports: there is no deadline behind them, so `timedOutSite` stays
  * `None` and says exactly that. The call that declares the loss runs every release registered
- * with \ref DeviceLostState::addLossRelease before it returns.
+ * with \ref donner::gpu::DeviceLostState::addLossRelease "DeviceLostState::addLossRelease" before
+ * it returns.
  *
  * @param state Shared device-lost record.
  * @return True when this call performed the false-to-true transition, so a caller can log the
@@ -138,8 +139,9 @@ bool DeclareDeviceLost(DeviceLostState& state);
  * the site would let a driver-reported loss landing in between be relabelled as a wait timeout,
  * which is the one misattribution an empty site exists to rule out.
  *
- * Like \ref DeclareDeviceLost, the declaring call runs every registered release before it
- * returns, after the attribution is written, so whatever a release lets run sees the site.
+ * Like \ref donner::gpu::DeclareDeviceLost "DeclareDeviceLost", the declaring call runs every
+ * registered release before it returns, after the attribution is written, so whatever a release
+ * lets run sees the site.
  *
  * @param state Shared device-lost record.
  * @param site Which bounded wait gave up.

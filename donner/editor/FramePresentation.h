@@ -22,17 +22,23 @@ Transform2d PresentedFramebufferFromDocumentTransform(const ViewportState& viewp
 /// Intersect the artboard with the pane, refusing invalid or empty rectangles.
 /// @param paneRect Logical pane clip.
 /// @param imageRect Artboard extent in the same coordinate space.
-std::optional<Box2d> PresentedImageClipRect(const Box2d& paneRect, const Box2d& imageRect);
+/// @return Clip rectangle for presented document pixels, or empty when a corner is not finite or
+///   the rectangles do not overlap.
+[[nodiscard]] std::optional<Box2d> PresentedImageClipRect(const Box2d& paneRect,
+                                                          const Box2d& imageRect);
 
 /// Transient UI adornments, distinct from selection geometry captured with the document pixels.
 struct PresentationDecorations {
-  std::optional<Box2d> marqueeDoc;
-  std::vector<Entity> sourceHover;
-  Entity lockedFlashEntity = entt::null;
-  float lockedFlashIntensity = 0.0f;
-  std::optional<Path> penPreviewSegmentDoc;
-  std::optional<Vector2d> penCloseAffordanceDoc;
+  std::optional<Box2d> marqueeDoc;  //!< Marquee rectangle in document space, while dragging one.
+  std::vector<Entity> sourceHover;  //!< Elements highlighted by source-pane hover.
+  Entity lockedFlashEntity = entt::null;          //!< Locked element flashing a rejected selection.
+  float lockedFlashIntensity = 0.0f;              //!< Fade intensity of the locked-element flash.
+  std::optional<Path> penPreviewSegmentDoc;       //!< Pen segment that a click would commit.
+  std::optional<Vector2d> penCloseAffordanceDoc;  //!< First anchor highlighted to close the path.
+
+  /// Text-editing caret, frame and selection for an open text session.
   std::optional<CapturedPresentation::TextEditing> textEditing;
+  /// Text-box creation preview while the text tool drags one out.
   std::optional<SelectionChromeSnapshot::TextBoxDragPreview> textBoxDragPreviewDoc;
 };
 
@@ -52,24 +58,29 @@ enum class FramePresentationFailure {
 
 /// A sealed frame, when available, and the exact work needed to complete its presentation.
 struct FramePresentationBuildResult {
-  std::shared_ptr<const FramePresentation> frame;
+  std::shared_ptr<const FramePresentation> frame;  //!< Sealed frame, or null when none was built.
+
+  /// Missing proof that kept the frame from being built or complete; `None` when it is complete.
   FramePresentationFailure failure = FramePresentationFailure::None;
 };
 
 /// Input intent consumed once while sealing a frame; draw callbacks cannot consult it later.
 struct FramePresentationInput {
-  std::uint64_t frameId = 0;
-  ViewportState viewport;
-  Box2d paneClipRect;
-  std::vector<Entity> selection;
-  PresentationIdentity documentIdentity;
+  std::uint64_t frameId = 0;              //!< Nonzero identity of the UI frame being sealed.
+  ViewportState viewport;                 //!< Camera and pane geometry for this frame.
+  Box2d paneClipRect;                     //!< Render-pane clip rectangle in logical pixels.
+  std::vector<Entity> selection;          //!< Selected objects, in selection order.
+  PresentationIdentity documentIdentity;  //!< Live document scene the frame should present.
   bool pendingDocumentMutations = false;  //!< Input not yet incorporated into a guarded capture.
+
+  /// Drag poses the pointer requests, including a released drag that is still settling.
   std::optional<SelectTool::ActiveDragPreview> desired;
-  SelectionChromeDetail detail = SelectionChromeDetail::Full;
-  PresentationDecorations decorations;
-  Entity suppressedLayerEntity = entt::null;
-  bool suppressSelectionPixels = false;
-  bool includeChrome = true;
+  SelectionChromeDetail detail = SelectionChromeDetail::Full;  //!< Selection chrome detail level.
+  PresentationDecorations decorations;        //!< Transient UI adornments drawn with this frame.
+  Entity suppressedLayerEntity = entt::null;  //!< Layer whose tiles are hidden; null hides none.
+  bool suppressSelectionPixels = false;       //!< Hide tiles owned by selected objects.
+  bool includeChrome = true;                  //!< Whether the frame draws editor chrome.
+
   /// Complete vector paint and geometry replacing one independently owned raster layer.
   std::shared_ptr<const CapturedPresentation> livePathReplacement;
 };
@@ -103,6 +114,8 @@ public:
   /// @param capture Candidate geometry and pose provenance.
   /// @param tiles Candidate renderer-owned tile identities.
   /// @param previous Last installed frame, or null before first presentation.
+  /// @param latestCommittedScene True when @p capture is the current committed scene with no
+  ///   pending mutations; such a capture need not preserve poses @p previous still holds.
   [[nodiscard]] static bool CanAdopt(const CapturedPresentation& capture,
                                      std::span<const RenderResult::CompositedTile> tiles,
                                      const FramePresentation* previous,

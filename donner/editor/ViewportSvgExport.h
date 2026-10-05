@@ -8,16 +8,19 @@
 /// that contains the whole image preserves the source `viewBox` and intrinsic dimensions. The
 /// export is **vector-first**: the source SVG
 /// children are copied verbatim into a clipped `<g>`, never snapshotted as a
-/// raster `<image>`. \ref ViewportState supplies the screen↔document mapping;
-/// the source root supplies the document bounds when its viewBox is available.
+/// raster `<image>`. \ref donner::editor::ViewportState "ViewportState" supplies the
+/// screen↔document mapping; the source root supplies the document bounds when its viewBox is
+/// available.
 ///
 /// Content export is vector-first as described above. When
-/// \ref ViewportExportOptions::includeSelectionOverlay is set and a
-/// \ref SelectionChromeSnapshot is supplied, the editor selection chrome
-/// (path outlines, AABBs, resize handles, marquee) is serialized into the
-/// preferred `id="donner-editor-overlay"` group via \ref SerializeOverlaySnapshotToSvg. If the
-/// source already declares that id, the exporter appends a numeric suffix. The overlay group is
-/// clipped to the same `donner-viewport-clip` clipPath as the content and uses deterministic,
+/// \ref donner::editor::ViewportExportOptions::includeSelectionOverlay
+/// "ViewportExportOptions::includeSelectionOverlay" is set and a \ref
+/// donner::editor::SelectionChromeSnapshot "SelectionChromeSnapshot" is supplied, the editor
+/// selection chrome (path outlines, AABBs, resize handles, marquee) is serialized into the
+/// preferred `id="donner-editor-overlay"` group via \ref
+/// donner::editor::SerializeOverlaySnapshotToSvg "SerializeOverlaySnapshotToSvg". If the source
+/// already declares that id, the exporter appends a numeric suffix. The overlay group is clipped to
+/// the same `donner-viewport-clip` clipPath as the content and uses deterministic,
 /// theme-independent styling.
 
 #include <string>
@@ -115,9 +118,9 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
  *
  * When \p options.includeSelectionOverlay is true and \p overlaySnapshot is
  * non-null, the overlay group is populated with the serialized snapshot (see
- * \ref SerializeOverlaySnapshotToSvg). When the flag is true but the pointer is
- * null, an empty overlay group is emitted (back-compat). The overlay group
- * is clipped to the same `donner-viewport-clip` clipPath as the content.
+ * \ref donner::editor::SerializeOverlaySnapshotToSvg "SerializeOverlaySnapshotToSvg"). When the
+ * flag is true but the pointer is null, an empty overlay group is emitted (back-compat). The
+ * overlay group is clipped to the same `donner-viewport-clip` clipPath as the content.
  *
  * @param doc Source SVG document. Must have an owned XML source store.
  * @param viewport Viewport state describing the screen↔document mapping.

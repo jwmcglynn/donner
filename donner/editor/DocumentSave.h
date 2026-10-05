@@ -22,10 +22,10 @@ std::ostream& operator<<(std::ostream& os, DocumentSaveStatus status);
 
 /// Detailed outcome from a document save attempt.
 struct DocumentSaveResult {
-  DocumentSaveStatus status = DocumentSaveStatus::Ok;
-  int errorNumber = 0;
-  std::size_t bytesWritten = 0;
-  std::string message;
+  DocumentSaveStatus status = DocumentSaveStatus::Ok;  //!< Category of the save outcome.
+  int errorNumber = 0;           //!< Captured operating-system error number, or zero on success.
+  std::size_t bytesWritten = 0;  //!< Number of source bytes successfully written.
+  std::string message;           //!< Human-readable diagnostic for the save outcome.
 
   /// Whether the save completed successfully.
   [[nodiscard]] bool ok() const { return status == DocumentSaveStatus::Ok; }

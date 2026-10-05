@@ -6,6 +6,7 @@
 
 namespace donner::gpu::shader::programs {
 
+/// Authoritative WGSL source for analytic dual-ray clip-mask coverage.
 inline constexpr wgsl::SourceText kSlugMaskSource{
     R"wgsl(// Slug mask pipeline: analytic dual-ray coverage at 1 sample/pixel, written
 // into an RGBA8Unorm mask texture for use as a clip source by the main fill /
