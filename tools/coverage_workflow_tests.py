@@ -143,6 +143,8 @@ class CoverageWorkflowTest(unittest.TestCase):
         self.assertIn("artifact-ids: ${{ needs.build.outputs.report_artifact_id }}", download)
         self.assertNotRegex(download, r"(?m)^\s+name: ")
         self.assertIn("path: coverage-report\n", download)
+        # The report must land directly in that path, where the upload reads it.
+        self.assertIn("merge-multiple: true\n", download)
         upload = self._step_body(job, "Upload coverage to Codecov")
         self.assertIn("uses: codecov/codecov-action@", upload)
         for setting in (

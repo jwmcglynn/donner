@@ -198,11 +198,16 @@ jobs:
         with:
           persist-credentials: false
 
+      # One artifact is selected, and it must unpack straight into the path the
+      # upload step names, not into a directory named after the artifact.
+      # `merge-multiple` states that outright instead of relying on how the
+      # action treats a selection of exactly one.
       - name: Download coverage report
         uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ needs.build.outputs.report_artifact_id }}
           path: coverage-report
+          merge-multiple: true
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
