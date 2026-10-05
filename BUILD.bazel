@@ -112,6 +112,7 @@ exports_files(
         ".github/workflows/fuzz.yml",
         ".github/workflows/lint.yml",
         ".github/workflows/main.yml",
+        ".github/workflows/perf.yml",
         ".github/workflows/sanitizers.yml",
         ".bazelversion",
         ".bazelrc",

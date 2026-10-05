@@ -738,3 +738,113 @@ test("macOS perf Firefox archive has a content integrity pin", () => {
     "the native extractor must receive a content-authenticated Firefox archive",
   );
 });
+
+test("latency gates enforce by default and only record a miss when set to report", async () => {
+  const gates = await import("./latency-gates.mjs");
+  assert.equal(gates.latencyGateMode({}), "enforce");
+  assert.equal(gates.latencyGateMode({ [gates.kLatencyGatesEnv]: "enforce" }), "enforce");
+  assert.equal(gates.latencyGateMode({ [gates.kLatencyGatesEnv]: "report" }), "report");
+  assert.throws(() => gates.latencyGateMode({ [gates.kLatencyGatesEnv]: "off" }), /must be/);
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(gates.kLatencyGates).map(([gate, { limitMs }]) => [
+        gate,
+        limitMs,
+      ]),
+    ),
+    { settledClick: 100, inputP95: 50, inputStall: 250, completedStall: 250 },
+    "the gate limits are the targets, not a hosted-runner allowance",
+  );
+  for (const mode of ["enforce", "report"]) {
+    const enforced = [];
+    const lines = [];
+    const result = gates.checkLatencyGate("inputP95", 447, {
+      browser: "firefox",
+      phase: "first-drag-193",
+      mode,
+      enforce: (...check) => enforced.push(check),
+      log: (line) => lines.push(line),
+    });
+    assert.deepEqual(result, {
+      gate: "inputP95",
+      browser: "firefox",
+      phase: "first-drag-193",
+      valueMs: 447,
+      limitMs: 50,
+      met: false,
+      mode,
+    });
+    assert.deepEqual(
+      enforced,
+      mode === "enforce" ? [[447, 50, gates.kLatencyGates.inputP95.message]] : [],
+      `${mode} mode`,
+    );
+    assert.deepEqual(lines, [`${gates.kLatencyGateRecordPrefix}${JSON.stringify(result)}`]);
+  }
+  const summary = gates.latencyGateSummary([
+    "responsiveness first-drag-193 chromium {}",
+    `${gates.kLatencyGateRecordPrefix}${
+      JSON.stringify({
+        gate: "settledClick",
+        browser: "chromium",
+        phase: "settled-click",
+        valueMs: 716.6,
+        limitMs: 100,
+        met: false,
+        mode: "report",
+      })
+    }`,
+  ].join("\n"));
+  assert.match(
+    summary,
+    /\| chromium \| settled-click \| settledClick \| 716\.6 \| 100 \| missed \(reported\) \|/,
+  );
+  assert.equal(gates.latencyGateSummary(""), "No latency gate results were recorded.\n");
+});
+
+test("only the hosted macOS Perf job reports latency gates without enforcing them", () => {
+  const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/perf.yml"), "utf8");
+  const entries = workflow.split(/\n {10}- os: /).slice(1).map((entry) => ({
+    os: entry.split("\n")[0].trim(),
+    latencyGates: /\n {12}latency_gates: (\S+)/.exec(entry)?.[1],
+  }));
+  assert.deepEqual(
+    entries.map(({ os, latencyGates }) => [os, latencyGates]),
+    [["macos-26", "report"], ["ubuntu-24.04", "enforce"]],
+    "only the GitHub-hosted macOS entry, which runs the browser lane, may report gate misses",
+  );
+  const testStep = workflow.slice(workflow.indexOf("- name: Test perf-tagged targets"));
+  assert.match(
+    testStep.slice(0, testStep.indexOf("\n      - name:")),
+    /--test_env=DONNER_BROWSER_LATENCY_GATES=\$\{\{ matrix\.latency_gates \}\}/,
+  );
+  const summaryStart = workflow.indexOf("- name: Summarize interaction latency gates");
+  assert.ok(summaryStart >= 0, "Perf must summarize the recorded gate values");
+  const summaryEnd = workflow.indexOf("\n      - name:", summaryStart);
+  const summaryStep = workflow.slice(summaryStart, summaryEnd < 0 ? undefined : summaryEnd);
+  assert.ok(
+    summaryStep.includes(
+      "if: ${{ !cancelled() && matrix.target_tag == 'perf' && steps.perf.outcome != 'skipped' }}",
+    ),
+    "the summary must also follow a failed test step",
+  );
+  const testLog =
+    "bazel-testlogs/donner/editor/wasm/tests/browser_responsiveness_perf_test/test.log";
+  assert.ok(
+    summaryStep.includes(
+      `node donner/editor/wasm/tests/latency-gates.mjs ${testLog} >> "$GITHUB_STEP_SUMMARY"`,
+    ),
+    "the summary must come from the browser lane's own test log",
+  );
+});
+
+test("responsiveness latency gates go through the gate helper", async () => {
+  const gates = await import("./latency-gates.mjs");
+  const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
+  assert.match(spec, /from "\.\/latency-gates\.mjs"/);
+  assert.match(spec, /latencyGateMode\(\)/, "the mode must come from the run's environment");
+  for (const [gate, { message }] of Object.entries(gates.kLatencyGates)) {
+    assert.ok(spec.includes(`latencyGate("${gate}"`), `${gate} must be checked through the helper`);
+    assert.ok(!spec.includes(message), `${gate} must not be enforced outside the helper`);
+  }
+});
