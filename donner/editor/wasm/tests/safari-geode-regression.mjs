@@ -351,9 +351,6 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
   assert.ok(thumbnails, "thumbnail statistics were not published");
   assert.deepEqual(
     {
-      requested: thumbnails.requested,
-      started: thumbnails.started,
-      completed: thumbnails.completed,
       rendered: thumbnails.rendered,
       ready: thumbnails.ready,
       pending: thumbnails.pending,
@@ -361,9 +358,6 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
       resultReady: thumbnails.resultReady,
     },
     {
-      requested: 5,
-      started: 5,
-      completed: 5,
       rendered: 5,
       ready: 5,
       pending: false,
@@ -372,6 +366,15 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
     },
     "five SVG thumbnails did not settle cleanly",
   );
+  // A thumbnail whose catalog font is still loading completes as FontsPending and is requested
+  // again once the font arrives (Text and Style waits for Inter), so attempts may exceed five, as
+  // the Playwright smoke suite allows. Every attempt must still have started and completed.
+  assert.ok(
+    thumbnails.requested >= 5,
+    `expected at least five thumbnail requests, got ${thumbnails.requested}`,
+  );
+  assert.equal(thumbnails.started, thumbnails.requested, "a thumbnail request never started");
+  assert.equal(thumbnails.completed, thumbnails.started, "a thumbnail attempt never completed");
   assert.ok(
     thumbnails.firstRequestFrame > thumbnails.carouselFrame,
     "thumbnail rendering did not start asynchronously after the carousel frame",
@@ -389,8 +392,11 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
     "thumbnail generation unexpectedly created another WebGPU device",
   );
 
+  // The diagnostic readback probes four fixed card regions of the final frame even though the
+  // carousel shows five cards (the publication counts above cover all five), as the Playwright
+  // smoke suite expects. The fourth probed card is Text and Style.
   const diagnostics = state.wgpuReadback?.carouselThumbnails;
-  assert.equal(diagnostics?.length, 5, "expected final readback diagnostics for five thumbnails");
+  assert.equal(diagnostics?.length, 4, "expected final readback diagnostics for four thumbnails");
   const fingerprints = new Set();
   for (const [index, stats] of diagnostics.entries()) {
     assert.ok(stats.maxChannel > 80, `thumbnail ${index} had no visible source pixels`);
@@ -401,9 +407,9 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
     );
     fingerprints.add(stats.fingerprint);
   }
-  assert.equal(fingerprints.size, 5, "the five SVG thumbnail fingerprints were not distinct");
-  assert.ok(diagnostics[2].backgroundPixels > 1000, "text thumbnail lacked its background");
-  assert.ok(diagnostics[2].glyphPixels > 20, "text thumbnail lacked rendered glyphs");
+  assert.equal(fingerprints.size, 4, "the four sampled thumbnail fingerprints were not distinct");
+  assert.ok(diagnostics[3].backgroundPixels > 1000, "text thumbnail lacked its background");
+  assert.ok(diagnostics[3].glyphPixels > 20, "text thumbnail lacked rendered glyphs");
 }
 
 async function installErrorCapture(driver) {
@@ -518,6 +524,7 @@ async function readState(driver) {
       wgpuReadbackCaptureFailures: window.__donnerWgpuReadbackCaptureFailures || 0,
       wgpuReadbackCaptureStarts: window.__donnerWgpuReadbackCaptureStarts || 0,
       wholeAppWorker: window.__donnerWholeAppWorker === true,
+      viewport: window.__donnerViewportStats || null,
       worker: window.__donnerWorkerStats || null,
     };
   `);
@@ -556,9 +563,7 @@ async function requireVisibleSafariAnimationFrame(driver) {
   }
 }
 
-// The single-canvas replacement removed the accepted-epoch handshake: the whole application draws
-// into the one canvas, so "a new frame landed" is now a completed document
-// render followed by an app-thread frame.
+// Waits for a new completed document render.
 async function waitForDocumentRender(driver, label, minimumResults) {
   return poll(label, async () => {
     const state = await readState(driver);
@@ -567,10 +572,107 @@ async function waitForDocumentRender(driver, label, minimumResults) {
   });
 }
 
+// An active drag, a resize at unchanged zoom, and other presentation-only changes draw UI frames
+// that composite existing document textures without a new document render, so their signal is the
+// app-thread frame counter.
+async function waitForUiFrame(driver, label, minimumFrames, accept = () => true) {
+  return poll(label, async () => {
+    const state = await readState(driver);
+    assertNoFatal(label, [state]);
+    return Number(state.mainLoopRenderedFrames || 0) > minimumFrames && accept(state)
+      ? state
+      : null;
+  });
+}
+
+async function readInteraction(driver) {
+  return driver.execute(`
+    return {
+      completedResults: window.__donnerWorkerStats?.completedResults || 0,
+      dragging: Boolean(window.__donnerInteractionStats?.dragging),
+      moved: Boolean(window.__donnerInteractionStats?.moved),
+      pendingClick: window.__donnerInteractionStats?.pendingClick ?? true,
+      selectedCount: window.__donnerInteractionStats?.selectedCount ?? -1,
+      workerBusy: window.__donnerInteractionStats?.workerBusy ?? true,
+    };
+  `);
+}
+
+// Waits until the worker is idle and its completed-result count has held for 250 ms, so a later
+// step does not read a still-landing render (such as a selection prewarm) as its own.
+async function waitForSettledWorker(driver, label, accept = () => true) {
+  let lastCompleted = -1;
+  let stableSince = Date.now();
+  return poll(label, async () => {
+    const interaction = await readInteraction(driver);
+    const now = Date.now();
+    if (interaction.workerBusy || interaction.completedResults !== lastCompleted) {
+      lastCompleted = interaction.completedResults;
+      stableSince = now;
+      return null;
+    }
+    return now - stableSince >= 250 && accept(interaction) ? interaction : null;
+  });
+}
+
 async function capture(driver, name) {
   const filePath = path.join(kArtifactDir, `${name}.png`);
   await driver.screenshot(filePath);
   return filePath;
+}
+
+// Clicks at `point`, then drags a short way from it, and waits for the document render the gesture
+// causes. Requires the trusted down and up events to reach the canvas. Appends the captured input
+// to `wakeInputs` before checking it, so a failed run keeps the evidence.
+async function wakeGesture(driver, point, direction, label, initialHeapBytes, wakeInputs) {
+  const inputBefore = await driver.execute(`
+    return {
+      eventCount: (window.__donnerSafariClickProbeEvents || []).length,
+      mainLoopRenderedFrames: window.__donnerMainLoopRenderedFrames || 0,
+    };
+  `);
+  await click(driver, point.x, point.y);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const beforeResults = Number((await readState(driver)).worker?.completedResults || 0);
+  await driver.actions([
+    pointerMove(point.x, point.y, 40),
+    { type: "pause", duration: 30 },
+    { type: "pointerDown", button: 0 },
+    { type: "pause", duration: 30 },
+  ]);
+  try {
+    const moves = [];
+    for (let step = 1; step <= 12; ++step) {
+      moves.push(pointerMove(
+        point.x + direction * step * 3,
+        point.y + direction * step * 2,
+        4,
+      ));
+    }
+    await driver.actions(moves);
+  } finally {
+    await driver.actions([{ type: "pointerUp", button: 0 }]).catch(() => {});
+    await driver.releaseActions().catch(() => {});
+  }
+  const wakeInput = await driver.execute(
+    `
+    const [eventOffset, beforeResults] = arguments;
+    return {
+      beforeResults,
+      events: (window.__donnerSafariClickProbeEvents || []).slice(eventOffset),
+      activeSample: window.__donnerActiveSampleStats || null,
+      editorFrameRequested: Boolean(window.__donnerEditorFrameRequested),
+      mainLoopRenderedFrames: window.__donnerMainLoopRenderedFrames || 0,
+      worker: window.__donnerWorkerStats || null,
+    };
+  `,
+    [inputBefore.eventCount, beforeResults],
+  );
+  wakeInputs.push(wakeInput);
+  assertTrustedClickAtPoint(label, wakeInput.events, point);
+  const after = await waitForDocumentRender(driver, label, beforeResults);
+  assertFlatHeap(label, after, initialHeapBytes);
+  return after;
 }
 
 async function runRegression(driver, editorUrl, result) {
@@ -753,6 +855,7 @@ async function runRegression(driver, editorUrl, result) {
         const signature = JSON.stringify({
           bitmapBytes: Number(layers.bitmapBytes || 0),
           bitmapCount: Number(layers.bitmapCount || 0),
+          textureSnapshotCount: Number(layers.textureSnapshotCount || 0),
           lifetimeBufferCreates: Number(resources.lifetimeBufferCreates || 0),
           lifetimeTextureCreates: Number(resources.lifetimeTextureCreates || 0),
           textureCount: Number(layers.textureCount || 0),
@@ -764,9 +867,10 @@ async function runRegression(driver, editorUrl, result) {
           sampledAtMs: Date.now(),
           signature,
         });
+        // Layer thumbnails are GPU texture snapshots; bitmaps remain only as a fallback.
         const thumbnailsReady = Number(layers.rowCount || 0) > 0
           && Number(layers.deferredCount || 0) === 0
-          && Number(layers.bitmapCount || 0) > 0;
+          && (Number(layers.textureSnapshotCount || 0) > 0 || Number(layers.bitmapCount || 0) > 0);
         if (!thumbnailsReady) {
           previousResourceSignature = "";
           stableResourceSamples = 0;
@@ -795,7 +899,42 @@ async function runRegression(driver, editorUrl, result) {
       5_000,
       100,
     );
-    result.memoryWebContentSamples = [result.memoryWebContentProcess];
+    // WebContent RSS stays well above its steady state for a while after the editor loads (about
+    // 750 MB, falling to about 100 MB within 30 s on Safari 26), so the ceiling applies from the
+    // first sample under it through the whole dwell. The highest RSS seen before that sample is
+    // recorded for diagnosis only; sampling starts after the baseline, so it is not the load peak.
+    result.memoryWebContentPostBaselinePeakRssBytes = result.memoryWebContentProcess.rssBytes;
+    let lastWebContentRssBytes = result.memoryWebContentProcess.rssBytes;
+    try {
+      result.memoryWebContentSettled = await poll(
+        "Safari WebContent RSS falling under the ceiling",
+        async () => {
+          const webContentSample = safariWebContentProcesses()
+            .find((process) => process.pid === result.memoryWebContentProcess.pid);
+          assert.ok(webContentSample, "Safari WebContent process exited before the memory dwell");
+          lastWebContentRssBytes = webContentSample.rssBytes;
+          result.memoryWebContentPostBaselinePeakRssBytes = Math.max(
+            result.memoryWebContentPostBaselinePeakRssBytes,
+            webContentSample.rssBytes,
+          );
+          return webContentSample.rssBytes <= kMemoryMaxWebContentRssBytes
+            ? webContentSample
+            : null;
+        },
+        60_000,
+        1_000,
+      );
+    } catch (error) {
+      if (error instanceof assert.AssertionError) {
+        throw error;
+      }
+      throw new Error(
+        `Safari WebContent RSS stayed above ${kMemoryMaxWebContentRssBytes} bytes for 60 s; `
+          + `last ${lastWebContentRssBytes} bytes`,
+        { cause: error },
+      );
+    }
+    result.memoryWebContentSamples = [result.memoryWebContentSettled];
     assert.equal(
       result.memoryBaseline.pageLifetimeToken,
       kPageLifetimeToken,
@@ -844,6 +983,14 @@ async function runRegression(driver, editorUrl, result) {
           + `${kMemoryMaxWebContentRssBytes} bytes during the memory dwell`,
       );
     }
+    // The absolute ceiling is several times the steady state, so also reject growth across the
+    // dwell: the final sample must stay within 128 MiB of the lowest one.
+    const dwellRss = result.memoryWebContentSamples.map((sample) => sample.rssBytes);
+    assert.ok(
+      dwellRss.at(-1) <= Math.min(...dwellRss) + 128 * 1024 * 1024,
+      `Safari WebContent RSS grew during the memory dwell: lowest ${Math.min(...dwellRss)}, `
+        + `final ${dwellRss.at(-1)} bytes`,
+    );
     const finalState = await readState(driver);
     result.memoryDwell = await driver.execute(`
       clearInterval(window.__donnerSafariMemoryTimer);
@@ -862,9 +1009,18 @@ async function runRegression(driver, editorUrl, result) {
       "Safari returned to the picker during the memory dwell",
     );
     assertFlatHeap("Safari memory dwell", finalState, initialHeapBytes);
+    // Safari can stretch an idle page's 5 s interval timer to about 6 s, so require samples across
+    // the whole dwell rather than an exact count.
+    const sampleTimes = result.memoryDwell.map((sample) => Number(sample.sampledAtMs || 0));
     assert.ok(
-      result.memoryDwell.length >= kMemoryDwellMs / kMemorySampleIntervalMs,
+      sampleTimes.length >= 2
+        && sampleTimes.at(-1) - sampleTimes[0] >= kMemoryDwellMs - 2 * kMemorySampleIntervalMs,
       "Safari memory timer stopped during the dwell",
+    );
+    const sampleGaps = sampleTimes.slice(1).map((time, index) => time - sampleTimes[index]);
+    assert.ok(
+      Math.max(...sampleGaps) <= 3 * kMemorySampleIntervalMs,
+      "Safari memory timer stalled during the dwell",
     );
     assert.equal(
       Number(finalState.worker?.completedResults || 0),
@@ -963,101 +1119,91 @@ async function runRegression(driver, editorUrl, result) {
     y: result.basicShapes.canvasRect.y + kBlueRectOffset.y,
   };
   await click(driver, dragStart.x, dragStart.y);
+  // An active drag presents by transforming the prewarmed selected-layer texture inside UI frames;
+  // the worker does not re-rasterize the document until the pointer releases, as the Playwright
+  // smoke suite's retained-drag test also asserts. The click selects the shape and schedules one
+  // prewarm render of its layer, so let that land before pressing. Pressing the selected shape
+  // starts a redrag without a render, and each step must then draw a UI frame with the document
+  // count unchanged.
+  result.dragPressReady = await waitForSettledWorker(
+    driver,
+    "Safari drag press readiness",
+    (interaction) => interaction.selectedCount === 1 && !interaction.pendingClick,
+  );
   await driver.actions([pointerMove(dragStart.x, dragStart.y), { type: "pointerDown", button: 0 }]);
-  result.dragRenders = [];
-  let previousResults = Number((await readState(driver)).worker?.completedResults || 0);
+  result.dragFrames = [];
   try {
+    const pressed = await waitForSettledWorker(driver, "Safari drag press");
+    assert.equal(
+      pressed.completedResults,
+      result.dragPressReady.completedResults,
+      "pressing the selected shape re-rasterized the document",
+    );
+    const resultsDuringDrag = pressed.completedResults;
+    result.dragResultsDuringDrag = resultsDuringDrag;
+    let previousFrames = Number((await readState(driver)).mainLoopRenderedFrames || 0);
     for (let step = 1; step <= 16; ++step) {
       await driver.actions([pointerMove(dragStart.x + step * 6, dragStart.y + step * 3, 8)]);
-      const state = await waitForDocumentRender(
-        driver,
-        `Safari drag render ${step}`,
-        previousResults,
+      const state = await waitForUiFrame(driver, `Safari drag frame ${step}`, previousFrames);
+      assertFlatHeap(`Safari drag frame ${step}`, state, initialHeapBytes);
+      const interaction = await readInteraction(driver);
+      assert.ok(interaction.dragging, `Safari drag step ${step} is not an active drag`);
+      assert.equal(
+        Number(state.worker?.completedResults || 0),
+        resultsDuringDrag,
+        `Safari drag step ${step} re-rasterized the document before the release`,
       );
-      assertFlatHeap(`Safari drag render ${step}`, state, initialHeapBytes);
-      previousResults = Number(state.worker.completedResults);
-      result.dragRenders.push({
-        completedResults: previousResults,
+      previousFrames = Number(state.mainLoopRenderedFrames || 0);
+      if (step >= 2) {
+        assert.ok(interaction.moved, `Safari drag step ${step} did not move the selected shape`);
+      }
+      result.dragFrames.push({
+        completedResults: Number(state.worker?.completedResults || 0),
         heapBytes: state.heapBytes,
-        mainLoopRenderedFrames: Number(state.mainLoopRenderedFrames || 0),
+        mainLoopRenderedFrames: previousFrames,
+        moved: interaction.moved,
       });
       if (step % 4 === 0) {
         await capture(driver, `04-drag-${String(step).padStart(2, "0")}`);
       }
     }
+    const beforeRelease = await readInteraction(driver);
+    assert.ok(
+      beforeRelease.dragging && beforeRelease.moved,
+      "the Safari drag was not active and moved before the release",
+    );
+    assert.equal(
+      beforeRelease.completedResults,
+      resultsDuringDrag,
+      "the Safari drag re-rasterized the document before the release",
+    );
   } finally {
     await driver.actions([{ type: "pointerUp", button: 0 }]).catch(() => {});
     await driver.releaseActions().catch(() => {});
   }
-  const dragResults = result.dragRenders.map((sample) => sample.completedResults);
-  assert.deepEqual(
-    dragResults,
-    [...dragResults].sort((left, right) => left - right),
-    "Safari drag document renders regressed",
+  result.dragRelease = await waitForDocumentRender(
+    driver,
+    "Safari drag release render",
+    result.dragResultsDuringDrag,
   );
-  assert.equal(new Set(dragResults).size, dragResults.length, "Safari drag renders repeated");
-  assertNoFatal("Safari drag renders", [await readState(driver)]);
+  assertFlatHeap("Safari drag release render", result.dragRelease, initialHeapBytes);
+  assertNoFatal("Safari drag release render", [result.dragRelease]);
+  // Release queues a settle render and a selection refresh; the worker must then go idle.
+  result.dragReleaseSettled = await waitForSettledWorker(driver, "Safari drag release settle");
 
   result.wakeBurst = [];
   result.wakeInput = [];
   let wakePoint = { x: dragStart.x + 96, y: dragStart.y + 48 };
   for (let iteration = 0; iteration < 4; ++iteration) {
     const direction = iteration % 2 === 0 ? 1 : -1;
-    const inputBefore = await driver.execute(`
-      return {
-        eventCount: (window.__donnerSafariClickProbeEvents || []).length,
-        mainLoopRenderedFrames: window.__donnerMainLoopRenderedFrames || 0,
-      };
-    `);
-    await click(driver, wakePoint.x, wakePoint.y);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    const beforeResults = Number((await readState(driver)).worker?.completedResults || 0);
-    await driver.actions([
-      pointerMove(wakePoint.x, wakePoint.y, 40),
-      { type: "pause", duration: 30 },
-      { type: "pointerDown", button: 0 },
-      { type: "pause", duration: 30 },
-    ]);
-    try {
-      const moves = [];
-      for (let step = 1; step <= 12; ++step) {
-        moves.push(pointerMove(
-          wakePoint.x + direction * step * 3,
-          wakePoint.y + direction * step * 2,
-          4,
-        ));
-      }
-      await driver.actions(moves);
-    } finally {
-      await driver.actions([{ type: "pointerUp", button: 0 }]).catch(() => {});
-      await driver.releaseActions().catch(() => {});
-    }
-    const wakeInput = await driver.execute(
-      `
-      const [eventOffset, beforeResults] = arguments;
-      return {
-        beforeResults,
-        events: (window.__donnerSafariClickProbeEvents || []).slice(eventOffset),
-        activeSample: window.__donnerActiveSampleStats || null,
-        editorFrameRequested: Boolean(window.__donnerEditorFrameRequested),
-        mainLoopRenderedFrames: window.__donnerMainLoopRenderedFrames || 0,
-        worker: window.__donnerWorkerStats || null,
-      };
-    `,
-      [inputBefore.eventCount, beforeResults],
-    );
-    result.wakeInput.push(wakeInput);
-    assertTrustedClickAtPoint(
-      `renderer pthread wake burst ${iteration + 1}`,
-      wakeInput.events,
-      wakePoint,
-    );
-    const after = await waitForDocumentRender(
+    const after = await wakeGesture(
       driver,
+      wakePoint,
+      direction,
       `renderer pthread wake burst ${iteration + 1}`,
-      beforeResults,
+      initialHeapBytes,
+      result.wakeInput,
     );
-    assertFlatHeap(`renderer pthread wake burst ${iteration + 1}`, after, initialHeapBytes);
     result.wakeBurst.push({
       completedResults: Number(after.worker?.completedResults || 0),
       heapBytes: after.heapBytes,
@@ -1076,9 +1222,23 @@ async function runRegression(driver, editorUrl, result) {
   // Repeated viewport-size churn used to retain every superseded Geode primary target until
   // Safari's JavaScript/GPU garbage collection caught up, eventually triggering the browser's
   // significant-memory reload. Exercise enough distinct targets to cross the old unbounded-growth
-  // shape while proving the worker, document renders, Wasm heap, and page lifetime remain stable.
+  // shape while proving presentation, the Wasm heap, the page lifetime and, at the end, the render
+  // worker remain healthy.
   result.resizeChurn = [];
-  let resizeResults = Number(result.afterWakeBurst.worker?.completedResults || 0);
+  // A resize at unchanged zoom recomposites existing document tiles in UI frames and need not start
+  // a document render. Each target therefore waits for a UI frame drawn after the resize request in
+  // which the editor's own published pane size has changed; the editor publishes that size from
+  // inside the frame, in order with the frame counter.
+  const paneSize = (state) => ({
+    height: Number(state.viewport?.paneHeight || 0),
+    width: Number(state.viewport?.paneWidth || 0),
+  });
+  const paneResizedFrom = (previous) => (state) => {
+    const current = paneSize(state);
+    return current.width > 0
+      && (current.width !== previous.width || current.height !== previous.height);
+  };
+  let resizePane = paneSize(result.afterWakeBurst);
   const initialPageLifetimeToken = result.initial.pageLifetimeToken;
   assert.equal(
     initialPageLifetimeToken,
@@ -1088,16 +1248,18 @@ async function runRegression(driver, editorUrl, result) {
   for (let iteration = 0; iteration < 24; ++iteration) {
     const width = 1400 + (iteration % 12) * 13;
     const height = 850 + Math.floor(iteration / 12) * 37 + (iteration % 3) * 7;
+    const resizeFrames = Number((await readState(driver)).mainLoopRenderedFrames || 0);
     await driver.request("POST", `/session/${driver.sessionId}/window/rect`, {
       width,
       height,
       x: 20,
       y: 20,
     });
-    const state = await waitForDocumentRender(
+    const state = await waitForUiFrame(
       driver,
       `Safari primary-target resize churn ${iteration + 1}`,
-      resizeResults,
+      resizeFrames,
+      paneResizedFrom(resizePane),
     );
     assertFlatHeap(`Safari primary-target resize churn ${iteration + 1}`, state, initialHeapBytes);
     assert.equal(
@@ -1105,25 +1267,28 @@ async function runRegression(driver, editorUrl, result) {
       initialPageLifetimeToken,
       `Safari reloaded the page under resize memory pressure at iteration ${iteration + 1}`,
     );
-    resizeResults = Number(state.worker.completedResults);
+    resizePane = paneSize(state);
     result.resizeChurn.push({
-      completedResults: resizeResults,
+      pane: resizePane,
+      completedResults: Number(state.worker?.completedResults || 0),
       heapBytes: state.heapBytes,
       height,
       mainLoopRenderedFrames: Number(state.mainLoopRenderedFrames || 0),
       width,
     });
   }
+  const restoreFrames = Number((await readState(driver)).mainLoopRenderedFrames || 0);
   await driver.request("POST", `/session/${driver.sessionId}/window/rect`, {
     width: 1600,
     height: 1000,
     x: 20,
     y: 20,
   });
-  result.afterResizeChurn = await waitForDocumentRender(
+  result.afterResizeChurn = await waitForUiFrame(
     driver,
     "Safari resize-churn restore",
-    resizeResults,
+    restoreFrames,
+    paneResizedFrom(resizePane),
   );
   assertFlatHeap("Safari resize-churn restore", result.afterResizeChurn, initialHeapBytes);
   assert.equal(
@@ -1132,6 +1297,21 @@ async function runRegression(driver, editorUrl, result) {
     "Safari reloaded the page while restoring the viewport after resize churn",
   );
   result.afterResizeChurnScreenshot = await capture(driver, "06-after-resize-churn");
+  // UI frames keep flowing even if the render worker wedged after a surface reconfigure, so finish
+  // the churn by requiring the worker to go idle and then render the document for one gesture.
+  result.afterResizeChurnSettled = await waitForSettledWorker(
+    driver,
+    "Safari resize-churn worker settle",
+  );
+  result.afterResizeChurnWakeInput = [];
+  result.afterResizeChurnRender = await wakeGesture(
+    driver,
+    wakePoint,
+    1,
+    "Safari resize-churn document render",
+    initialHeapBytes,
+    result.afterResizeChurnWakeInput,
+  );
 
   await driver.request("POST", `/session/${driver.sessionId}/refresh`, {});
   await installErrorCapture(driver);
@@ -1166,7 +1346,7 @@ async function runRegression(driver, editorUrl, result) {
     result.thumbnailsSettled.heapBytes,
     result.thumbnailDiagnostic.heapBytes,
     result.basicShapes.heapBytes,
-    ...result.dragRenders.map((sample) => sample.heapBytes),
+    ...result.dragFrames.map((sample) => sample.heapBytes),
     ...result.wakeBurst.map((sample) => sample.heapBytes),
     ...result.resizeChurn.map((sample) => sample.heapBytes),
     result.afterWakeBurst.heapBytes,
