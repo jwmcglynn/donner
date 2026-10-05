@@ -2701,276 +2701,299 @@ test("browser overlay control stays disabled after a normal editor frame", async
 });
 
 test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ browserName, page }) => {
-  test.skip(
-    browserName === "firefox",
-    "Quarantined: Firefox can capture a blank editor page (#1634)",
-  );
   const failures = await openEditor(page, "overlay");
   const captureSentinelExpected = browserName === "firefox";
   if (captureSentinelExpected) await installCaptureSentinel(page);
-  const {
-    canvasBounds,
-    documentClip: presentedDocumentClip,
-    captureClip: documentClip,
-    baselinePng: baseline,
-    blueRect,
-  } = await openBasicShapes(
-    page,
-    captureSentinelExpected,
-  );
-  const rejectedControlInputs = await page.evaluate(() => {
-    const control = window.Module?._donner_set_overlay_state;
-    return [
-      control?.(2, 1),
-      control?.(0, 2),
-    ];
-  });
-  expect(rejectedControlInputs).toEqual([0, 0]);
-  await attachEvidenceFile("overlay-baseline", baseline, "image/png");
-  const captureOverlay = () =>
-    page.context().browser()?.browserType().name() === "firefox"
-      ? page.screenshot()
-      : page.screenshot({ clip: documentClip });
-  // Since the single-canvas architecture the document has no element of its own to measure, so the
-  // document-space mapping is recovered from the document's own pixels: the
-  // Basic Shapes blue rounded rectangle spans (32,32)-(212,152) in document
-  // units. Both the probe points below and the "restored baseline" comparison
-  // window are derived from it, so neither can drift onto render-pane chrome.
-  const documentScale =
-    ((blueRect.maxX - blueRect.minX) / 180 + (blueRect.maxY - blueRect.minY) / 120) * 0.5;
-  expect(documentScale, "the recovered document scale is degenerate").toBeGreaterThan(0.05);
-  const documentPointInClip = (documentX: number, documentY: number) => ({
-    x: blueRect.minX + (documentX - 32) * documentScale,
-    y: blueRect.minY + (documentY - 32) * documentScale,
-  });
-  const documentTopLeft = documentPointInClip(0, 0);
-  const documentBottomRight = documentPointInClip(640, 400);
-  const documentPixelsInClip = {
-    x: Math.max(0, documentTopLeft.x),
-    y: Math.max(0, documentTopLeft.y),
-    width: Math.max(
-      0,
-      Math.min(documentClip.width, documentBottomRight.x) - Math.max(0, documentTopLeft.x),
-    ),
-    height: Math.max(
-      0,
-      Math.min(documentClip.height, documentBottomRight.y) - Math.max(0, documentTopLeft.y),
-    ),
+  // diag: record every canvas frame's acquire-to-submit timing for the whole case.
+  const diagProbeWorkers = await installSurfaceFrameProbe(page);
+  console.log(`DIAG surface probe workers=${diagProbeWorkers}`);
+  const diagReport = async (label: string) => {
+    const report = await readSurfaceFrameProbe(page);
+    console.log(
+      `DIAG ${label} frames=${report.frames} inTask=${report.inTaskSubmits} late=${report.lateSubmits.length}`,
+    );
+    await attachEvidenceFile(
+      `diag-surface-frames-${label}`,
+      Buffer.from(JSON.stringify(report, null, 2)),
+      "application/json",
+    );
   };
-
-  const beforeCompositorResults = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
-  );
-  await setViewOverlayState(page, "compositorTileOverlay", true);
-  await expectWorkerResultsToReach(
-    page,
-    (completedResults) => completedResults > beforeCompositorResults,
-    {
-      message: "Compositor Tile Overlay must rasterize a fresh document render",
-      timeout: scaledMs(2_000),
-    },
-  );
-  await waitForBrowserComposite(page);
-  // Worker completion can precede texture upload. Poll the shared native
-  // bitmap comparator until the actual presented document reaches its golden.
-  const overlayGolden = test.info().snapshotPath("basic-shapes-compositor-tile-overlay.png");
-  const compareDir = test.info().outputPath("overlay-native-compare");
-  let compositorOverlay: Buffer | null = null;
-  let lastCompositorShot: Buffer | null = null;
-  let lastComparison: OverlayBitmapComparison | null = null;
   try {
+    await diagBody();
+    await diagReport("pass");
+  } catch (error) {
+    await diagReport("fail");
+    throw error;
+  }
+  async function diagBody() {
+    const {
+      canvasBounds,
+      documentClip: presentedDocumentClip,
+      captureClip: documentClip,
+      baselinePng: baseline,
+      blueRect,
+    } = await openBasicShapes(
+      page,
+      captureSentinelExpected,
+    );
+    const rejectedControlInputs = await page.evaluate(() => {
+      const control = window.Module?._donner_set_overlay_state;
+      return [
+        control?.(2, 1),
+        control?.(0, 2),
+      ];
+    });
+    expect(rejectedControlInputs).toEqual([0, 0]);
+    await attachEvidenceFile("overlay-baseline", baseline, "image/png");
+    const captureOverlay = () =>
+      page.context().browser()?.browserType().name() === "firefox"
+        ? page.screenshot()
+        : page.screenshot({ clip: documentClip });
+    // Since the single-canvas architecture the document has no element of its own to measure, so the
+    // document-space mapping is recovered from the document's own pixels: the
+    // Basic Shapes blue rounded rectangle spans (32,32)-(212,152) in document
+    // units. Both the probe points below and the "restored baseline" comparison
+    // window are derived from it, so neither can drift onto render-pane chrome.
+    const documentScale =
+      ((blueRect.maxX - blueRect.minX) / 180 + (blueRect.maxY - blueRect.minY) / 120) * 0.5;
+    expect(documentScale, "the recovered document scale is degenerate").toBeGreaterThan(0.05);
+    const documentPointInClip = (documentX: number, documentY: number) => ({
+      x: blueRect.minX + (documentX - 32) * documentScale,
+      y: blueRect.minY + (documentY - 32) * documentScale,
+    });
+    const documentTopLeft = documentPointInClip(0, 0);
+    const documentBottomRight = documentPointInClip(640, 400);
+    const documentPixelsInClip = {
+      x: Math.max(0, documentTopLeft.x),
+      y: Math.max(0, documentTopLeft.y),
+      width: Math.max(
+        0,
+        Math.min(documentClip.width, documentBottomRight.x) - Math.max(0, documentTopLeft.x),
+      ),
+      height: Math.max(
+        0,
+        Math.min(documentClip.height, documentBottomRight.y) - Math.max(0, documentTopLeft.y),
+      ),
+    };
+
+    const beforeCompositorResults = await page.evaluate(
+      () => window.__donnerWorkerStats?.completedResults || 0,
+    );
+    await setViewOverlayState(page, "compositorTileOverlay", true);
+    await expectWorkerResultsToReach(
+      page,
+      (completedResults) => completedResults > beforeCompositorResults,
+      {
+        message: "Compositor Tile Overlay must rasterize a fresh document render",
+        timeout: scaledMs(2_000),
+      },
+    );
+    await waitForBrowserComposite(page);
+    // Worker completion can precede texture upload. Poll the shared native
+    // bitmap comparator until the actual presented document reaches its golden.
+    const overlayGolden = test.info().snapshotPath("basic-shapes-compositor-tile-overlay.png");
+    const compareDir = test.info().outputPath("overlay-native-compare");
+    let compositorOverlay: Buffer | null = null;
+    let lastCompositorShot: Buffer | null = null;
+    let lastComparison: OverlayBitmapComparison | null = null;
+    try {
+      await expect
+        .poll(
+          async () => {
+            const shot = await captureOverlay();
+            lastCompositorShot = shot;
+            lastComparison = null;
+            lastComparison = compareOverlayBitmap(
+              cropCapturedPng(shot, documentClip, presentedDocumentClip),
+              overlayGolden,
+              compareDir,
+            );
+            if (lastComparison.matched) compositorOverlay = shot;
+            return lastComparison.matched;
+          },
+          {
+            message: "Compositor Tile Overlay must match its document pixels",
+            timeout: scaledMs(5_000),
+            intervals: page.context().browser()?.browserType().name() === "firefox"
+              ? [250, 400, 600]
+              : [50, 100, 250],
+          },
+        )
+        .toBe(true);
+    } catch (error) {
+      const state = await boundFailureDiagnostic(
+        page.evaluate(() => ({
+          overlay: window.__donnerOverlayStats,
+          queue: window.__donnerPresentationQueueStats,
+          host: window.__donnerHostFrameTiming,
+          interaction: window.__donnerInteractionStats,
+          worker: window.__donnerWorkerStats,
+          repair: (window as unknown as { __donnerPresentationRepairStats?: unknown })
+            .__donnerPresentationRepairStats,
+        })),
+        scaledMs(1000),
+      );
+      await attachEvidenceFile(
+        "compositor-overlay-presentation-state",
+        Buffer.from(JSON.stringify(state)),
+        "application/json",
+      );
+      if (lastCompositorShot !== null) {
+        await attachEvidenceFile(
+          "compositor-tile-overlay-last-probe",
+          lastCompositorShot,
+          "image/png",
+        );
+      }
+      if (lastComparison !== null) {
+        for (
+          const [name, path] of [
+            ["compositor-overlay-actual", lastComparison.failureActual],
+            ["compositor-overlay-expected", lastComparison.failureExpected],
+            ["compositor-overlay-diff", lastComparison.diff],
+          ]
+        ) {
+          if (existsSync(path)) await attachEvidenceFile(name, await readFile(path), "image/png");
+        }
+      }
+      throw new Error(
+        "Compositor Tile Overlay failed native pixelmatch: "
+          + (lastComparison?.detail || String(error)),
+      );
+    }
+    if (compositorOverlay === null) {
+      throw new Error("Compositor Tile Overlay passed without a verified document capture");
+    }
+    await attachEvidenceFile("compositor-tile-overlay", compositorOverlay, "image/png");
+
+    // Disable the independent compositor overlay before checking renderer
+    // geometry pixels, so tile labels cannot masquerade as Slug edges.
+    await setViewOverlayState(page, "compositorTileOverlay", false);
+    await waitForBrowserComposite(page);
+    // Toggling an overlay drops the uploaded composited textures (the same
+    // document version renders different pixels, so the cache cannot reuse
+    // them), and restoration therefore takes a full render round-trip. Poll the
+    // comparison to convergence instead of reading one instant: "must restore"
+    // is a claim about where the presentation settles, and a slow runner can
+    // screenshot the gap between the drop and the fresh upload.
+    //
+    // The screenshot clip includes a few pixels of animated render-pane chrome
+    // around the document. Compare only the document's own extent; Firefox may
+    // change those unrelated chrome pixels while menus close.
+    let lastRestoreDifference = "";
+    let restoredPng: Buffer | null = null;
     await expect
       .poll(
         async () => {
           const shot = await captureOverlay();
-          lastCompositorShot = shot;
-          lastComparison = null;
-          lastComparison = compareOverlayBitmap(
-            cropCapturedPng(shot, documentClip, presentedDocumentClip),
-            overlayGolden,
-            compareDir,
+          const difference = readCssPngPixelDifferenceStats(
+            baseline,
+            shot,
+            documentClip,
+            documentPixelsInClip,
           );
-          if (lastComparison.matched) compositorOverlay = shot;
-          return lastComparison.matched;
+          lastRestoreDifference = JSON.stringify(difference);
+          if (difference.changedPixels === 0) {
+            restoredPng = shot;
+          }
+          return difference.changedPixels;
         },
         {
-          message: "Compositor Tile Overlay must match its document pixels",
+          message: "Disabling Compositor Tile Overlay must restore document pixels",
           timeout: scaledMs(5_000),
+          // Gecko can return a blank transferred-canvas capture immediately after the texture
+          // drop. Leave a frame window between readbacks while retaining exact pixel identity.
           intervals: page.context().browser()?.browserType().name() === "firefox"
             ? [250, 400, 600]
             : [50, 100, 250],
         },
       )
-      .toBe(true);
-  } catch (error) {
-    const state = await boundFailureDiagnostic(
-      page.evaluate(() => ({
-        overlay: window.__donnerOverlayStats,
-        queue: window.__donnerPresentationQueueStats,
-        host: window.__donnerHostFrameTiming,
-        interaction: window.__donnerInteractionStats,
-        worker: window.__donnerWorkerStats,
-        repair: (window as unknown as { __donnerPresentationRepairStats?: unknown })
-          .__donnerPresentationRepairStats,
-      })),
-      scaledMs(1000),
-    );
+      .toBe(0);
     await attachEvidenceFile(
-      "compositor-overlay-presentation-state",
-      Buffer.from(JSON.stringify(state)),
+      "overlay-restore-difference",
+      lastRestoreDifference,
       "application/json",
     );
-    if (lastCompositorShot !== null) {
-      await attachEvidenceFile(
-        "compositor-tile-overlay-last-probe",
-        lastCompositorShot,
-        "image/png",
-      );
+    if (restoredPng === null) {
+      throw new Error("overlay restore passed without a verified document capture");
     }
-    if (lastComparison !== null) {
-      for (
-        const [name, path] of [
-          ["compositor-overlay-actual", lastComparison.failureActual],
-          ["compositor-overlay-expected", lastComparison.failureExpected],
-          ["compositor-overlay-diff", lastComparison.diff],
-        ]
-      ) {
-        if (existsSync(path)) await attachEvidenceFile(name, await readFile(path), "image/png");
-      }
-    }
-    throw new Error(
-      "Compositor Tile Overlay failed native pixelmatch: "
-        + (lastComparison?.detail || String(error)),
+    const geometryBaseline = restoredPng;
+    await attachEvidenceFile("overlay-disabled-baseline", geometryBaseline, "image/png");
+
+    // The blue rounded rectangle spans (32,32)-(212,152). Its emitted
+    // triangles share the diagonal through (122,92). Dynamic Slug dilation
+    // moves the right submitted edge slightly beyond x=212, so probe a
+    // neighborhood around 212.7 rather than assuming the pre-vertex bound.
+    // (80,120) is normal fill well away from every triangle edge.
+    const sharedTriangleEdge = documentPointInClip(122, 92);
+    const dilatedOuterTriangleEdge = documentPointInClip(212.7, 92);
+    const untouchedBlueInterior = documentPointInClip(80, 120);
+
+    const beforeGeometryResults = await page.evaluate(
+      () => window.__donnerWorkerStats?.completedResults || 0,
     );
-  }
-  if (compositorOverlay === null) {
-    throw new Error("Compositor Tile Overlay passed without a verified document capture");
-  }
-  await attachEvidenceFile("compositor-tile-overlay", compositorOverlay, "image/png");
-
-  // Disable the independent compositor overlay before checking renderer
-  // geometry pixels, so tile labels cannot masquerade as Slug edges.
-  await setViewOverlayState(page, "compositorTileOverlay", false);
-  await waitForBrowserComposite(page);
-  // Toggling an overlay drops the uploaded composited textures (the same
-  // document version renders different pixels, so the cache cannot reuse
-  // them), and restoration therefore takes a full render round-trip. Poll the
-  // comparison to convergence instead of reading one instant: "must restore"
-  // is a claim about where the presentation settles, and a slow runner can
-  // screenshot the gap between the drop and the fresh upload.
-  //
-  // The screenshot clip includes a few pixels of animated render-pane chrome
-  // around the document. Compare only the document's own extent; Firefox may
-  // change those unrelated chrome pixels while menus close.
-  let lastRestoreDifference = "";
-  let restoredPng: Buffer | null = null;
-  await expect
-    .poll(
-      async () => {
-        const shot = await captureOverlay();
-        const difference = readCssPngPixelDifferenceStats(
-          baseline,
-          shot,
-          documentClip,
-          documentPixelsInClip,
-        );
-        lastRestoreDifference = JSON.stringify(difference);
-        if (difference.changedPixels === 0) {
-          restoredPng = shot;
-        }
-        return difference.changedPixels;
-      },
+    await setViewOverlayState(page, "geometryDebugOverlay", true);
+    await expectWorkerResultsToReach(
+      page,
+      (completedResults) => completedResults > beforeGeometryResults,
       {
-        message: "Disabling Compositor Tile Overlay must restore document pixels",
-        timeout: scaledMs(5_000),
-        // Gecko can return a blank transferred-canvas capture immediately after the texture
-        // drop. Leave a frame window between readbacks while retaining exact pixel identity.
-        intervals: page.context().browser()?.browserType().name() === "firefox"
-          ? [250, 400, 600]
-          : [50, 100, 250],
+        message: "Geometry Debug Overlay must schedule a freshly rasterized document render",
+        timeout: scaledMs(2_000),
       },
-    )
-    .toBe(0);
-  await attachEvidenceFile("overlay-restore-difference", lastRestoreDifference, "application/json");
-  if (restoredPng === null) {
-    throw new Error("overlay restore passed without a verified document capture");
+    );
+    const geometryOverlay = await captureGeometryOverlayWithAccount(page, captureOverlay);
+    await attachEvidenceFile("geometry-debug-overlay", geometryOverlay, "image/png");
+    expect(
+      geometryOverlay.equals(geometryBaseline),
+      "Geometry Debug Overlay was checked and accepted, but contributed no visible canvas pixels",
+    ).toBe(false);
+    const edgeDifference = readCssPngPixelDifferenceStats(
+      geometryBaseline,
+      geometryOverlay,
+      documentClip,
+      {
+        x: sharedTriangleEdge.x - 3,
+        y: sharedTriangleEdge.y - 3,
+        width: 7,
+        height: 7,
+      },
+    );
+    expect(
+      edgeDifference.changedPixels,
+      "Geometry Debug Overlay must expose the shared edge from the actual Slug triangles",
+    ).toBeGreaterThan(0);
+    const outerEdgeDifference = readCssPngPixelDifferenceStats(
+      geometryBaseline,
+      geometryOverlay,
+      documentClip,
+      {
+        x: dilatedOuterTriangleEdge.x - 4,
+        y: dilatedOuterTriangleEdge.y - 4,
+        width: 9,
+        height: 9,
+      },
+    );
+    expect(
+      outerEdgeDifference.changedPixels,
+      "Geometry Debug Overlay must expose the dynamically-dilated outer Slug edge",
+    ).toBeGreaterThan(0);
+    const interiorDifference = readCssPngPixelDifferenceStats(
+      geometryBaseline,
+      geometryOverlay,
+      documentClip,
+      {
+        x: untouchedBlueInterior.x - 6,
+        y: untouchedBlueInterior.y - 6,
+        width: 13,
+        height: 13,
+      },
+    );
+    expect(
+      interiorDifference.changedPixels,
+      "Geometry Debug Overlay must preserve normal document colors between triangle edges",
+    ).toBe(0);
+    expect(failures).toEqual([]);
   }
-  const geometryBaseline = restoredPng;
-  await attachEvidenceFile("overlay-disabled-baseline", geometryBaseline, "image/png");
-
-  // The blue rounded rectangle spans (32,32)-(212,152). Its emitted
-  // triangles share the diagonal through (122,92). Dynamic Slug dilation
-  // moves the right submitted edge slightly beyond x=212, so probe a
-  // neighborhood around 212.7 rather than assuming the pre-vertex bound.
-  // (80,120) is normal fill well away from every triangle edge.
-  const sharedTriangleEdge = documentPointInClip(122, 92);
-  const dilatedOuterTriangleEdge = documentPointInClip(212.7, 92);
-  const untouchedBlueInterior = documentPointInClip(80, 120);
-
-  const beforeGeometryResults = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
-  );
-  await setViewOverlayState(page, "geometryDebugOverlay", true);
-  await expectWorkerResultsToReach(
-    page,
-    (completedResults) => completedResults > beforeGeometryResults,
-    {
-      message: "Geometry Debug Overlay must schedule a freshly rasterized document render",
-      timeout: scaledMs(2_000),
-    },
-  );
-  const geometryOverlay = await captureGeometryOverlayWithAccount(page, captureOverlay);
-  await attachEvidenceFile("geometry-debug-overlay", geometryOverlay, "image/png");
-  expect(
-    geometryOverlay.equals(geometryBaseline),
-    "Geometry Debug Overlay was checked and accepted, but contributed no visible canvas pixels",
-  ).toBe(false);
-  const edgeDifference = readCssPngPixelDifferenceStats(
-    geometryBaseline,
-    geometryOverlay,
-    documentClip,
-    {
-      x: sharedTriangleEdge.x - 3,
-      y: sharedTriangleEdge.y - 3,
-      width: 7,
-      height: 7,
-    },
-  );
-  expect(
-    edgeDifference.changedPixels,
-    "Geometry Debug Overlay must expose the shared edge from the actual Slug triangles",
-  ).toBeGreaterThan(0);
-  const outerEdgeDifference = readCssPngPixelDifferenceStats(
-    geometryBaseline,
-    geometryOverlay,
-    documentClip,
-    {
-      x: dilatedOuterTriangleEdge.x - 4,
-      y: dilatedOuterTriangleEdge.y - 4,
-      width: 9,
-      height: 9,
-    },
-  );
-  expect(
-    outerEdgeDifference.changedPixels,
-    "Geometry Debug Overlay must expose the dynamically-dilated outer Slug edge",
-  ).toBeGreaterThan(0);
-  const interiorDifference = readCssPngPixelDifferenceStats(
-    geometryBaseline,
-    geometryOverlay,
-    documentClip,
-    {
-      x: untouchedBlueInterior.x - 6,
-      y: untouchedBlueInterior.y - 6,
-      width: 13,
-      height: 13,
-    },
-  );
-  expect(
-    interiorDifference.changedPixels,
-    "Geometry Debug Overlay must preserve normal document colors between triangle edges",
-  ).toBe(0);
-  expect(failures).toEqual([]);
 });
 
 test(

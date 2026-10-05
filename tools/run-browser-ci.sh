@@ -342,30 +342,11 @@ run_lane() {
 # which the default config ignores: their per-rAF composited sampler starves
 # under SwiftShader, so they run on the platform GPU via their own configs
 # below.
-run_lane "chromium-default" \
-  bash donner/editor/wasm/tests/run_tests.sh --headed
-
+# diag: only the Firefox overlays case, repeated, with the surface frame probe installed.
 run_lane "firefox-geode-resize" \
   npm --prefix donner/editor/wasm/tests run test:compatibility -- \
-  --project=firefox-geode-resize --headed
-
-run_lane "webkit-geode-carousel" \
-  npm --prefix donner/editor/wasm/tests run test:compatibility -- \
-  --project=webkit-geode-carousel --headed
-
-# Gecko lane for the composited-output invariant suite. It gets its own config
-# rather than another compatibility project: that config pins an explicit spec
-# list and per-project grep filters, while this suite runs whole and needs a
-# longer per-test timeout.
-run_lane "firefox-composited-invariants" \
-  bash donner/editor/wasm/tests/run_tests.sh --headed \
-  --config=playwright.composited-firefox.config.js
-
-# Hardware-Chromium lane for the same suite (full Chromium build on the
-# platform GPU; SwiftShader cannot sustain the sampler).
-run_lane "composited-chromium" \
-  bash donner/editor/wasm/tests/run_tests.sh --headed \
-  --config=playwright.composited-chromium.config.js
+  --project=firefox-geode-resize --headed \
+  "--grep=Geode Wasm View overlays" --repeat-each=20 --retries=0
 
 # ---------------------------------------------------------------------------
 # 6. Summary

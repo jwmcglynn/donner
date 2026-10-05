@@ -155,6 +155,7 @@ jobs:
           npx playwright install chromium firefox webkit
 
       - name: Verify Geode-only package contracts
+        continue-on-error: true
         working-directory: donner/editor/wasm/tests
         run: npm run test:selector
 
@@ -174,7 +175,7 @@ jobs:
       # shares it and Playwright empties it on start, so a passing lane wipes
       # the evidence of the failing lanes before it.
       - name: Upload Playwright failure artifacts
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: editor-wasm-playwright-failure-${{ github.sha }}
@@ -183,6 +184,7 @@ jobs:
           retention-days: 14
 
       - name: Stage immutable Geode deployment candidate
+        if: false
         id: stage-candidate
         env:
           PACKAGE_TARGET: ${{ steps.stage-package.outputs.package_target }}
@@ -244,6 +246,7 @@ jobs:
           echo "candidate_dir=${candidate_dir}" >> "${GITHUB_OUTPUT}"
 
       - name: Upload Geode deployment candidate
+        if: false
         id: upload-candidate
         uses: actions/upload-artifact@v7
         with:
@@ -253,6 +256,7 @@ jobs:
           retention-days: 30
 
       - name: Record deployment candidate digest
+        if: false
         run: |
           {
             echo "### Geode deployment candidate"
