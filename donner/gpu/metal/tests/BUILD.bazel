@@ -108,6 +108,12 @@ donner_cc_test(
 # result. Metal API validation is enabled so validation issues abort loudly.
 donner_cc_test(
     name = "metal_color_matrix_tests",
+    size = "small",
+    # The 174 cases each create a Metal device under API and shader validation: 0.38 to 0.52 s per
+    # case on the hosted virtual-GPU macOS runner (CI baseline, 2026-10-05), 66 to 90 s serially.
+    # Two shards take 33 to 45 s each there, too close to the 60 s small-test limit on a loaded
+    # runner, so raise only the time limit, keeping the resource class.
+    timeout = "moderate",
     srcs = ["MetalColorMatrix_tests.cc"],
     env = _METAL_API_VALIDATION_ENV,
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
@@ -118,6 +124,7 @@ donner_cc_test(
         "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
         "GITHUB_ACTIONS",
     ],
+    shard_count = 2,
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         ":metal_device_gate",
