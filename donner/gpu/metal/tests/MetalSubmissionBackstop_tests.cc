@@ -218,8 +218,14 @@ TEST_F(MetalSubmissionBackstopTest, ASubmissionPastTheBackstopWaitsForRoom) {
 
   std::chrono::steady_clock::time_point releasedAt;
   std::thread releaser([&] {
-    // Long enough that a submission let through without waiting would already be back.
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    // Released only once the submission is waiting for room, however late its worker starts, and
+    // in any case well before the paused work's release deadline.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (device_->commandBufferRoomWaitsForTest() == 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     releasedAt = std::chrono::steady_clock::now();
     device_->releasePausedCommandBuffersForTest(1);
   });
@@ -229,9 +235,7 @@ TEST_F(MetalSubmissionBackstopTest, ASubmissionPastTheBackstopWaitsForRoom) {
   EXPECT_TRUE(past.finishedInWindow) << "the submission past the backstop never went through";
   ASSERT_TRUE(past.result.has_value());
   EXPECT_THAT(*past.result, HasResult());
-  // Measured from the release rather than from the submission's start, which can come later than
-  // the releaser's.
-  EXPECT_THAT(MillisecondsBetween(releasedAt, past.endedAt), Ge(0))
+  EXPECT_TRUE(past.endedAt >= releasedAt)
       << "the submission went through before any room was made, so it did not wait for room";
   EXPECT_THAT(device_->commandBufferRoomWaitsForTest(), Eq(1u));
   EXPECT_THAT(device_->commandBuffersInFlightForTest(), Le(kBackstop));
