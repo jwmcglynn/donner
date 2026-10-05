@@ -371,8 +371,23 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 explain,
                 job_name,
             )
-            self.assertIn("rerun all jobs", explain, job_name)
-            self.assertIn("exit 1", explain, job_name)
+            # A download can also fail for transient reasons, so the explanation is conditional,
+            # and the attempt reaches the script through the environment, not an expression.
+            self.assertIn("RUN_ATTEMPT: ${{ github.run_attempt }}", explain, job_name)
+            script = explain.split("        run: |\n", 1)[1]
+            self.assertNotIn("${{", script, job_name)
+            self.assertIn('if [ "$RUN_ATTEMPT" -gt 1 ]; then', script, job_name)
+            for message in (
+                "If the download error above is 'Artifact not found', this attempt reran only"
+                " failed jobs, and the CLI artifacts are bound to the attempt that built them;"
+                " rerun all jobs.",
+                "Otherwise the download failed for another reason; see the error above and the"
+                " GitHub status page before rerunning.",
+            ):
+                self.assertIn(message, script, job_name)
+            self.assertLess(
+                script.index("rerun all jobs."), script.index("Otherwise the download"), job_name)
+            self.assertIn("exit 1", script, job_name)
 
     def _bcr_consumer_audit(self, preflight):
         """The consumer job, its audit step, the step's run body, query and audit call."""
