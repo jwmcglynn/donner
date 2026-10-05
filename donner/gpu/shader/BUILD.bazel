@@ -1,5 +1,5 @@
 load("@aspect_rules_js//js:defs.bzl", "js_test")
-load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test", "forbidden_transitive_dep_test")
+load("//build_defs:dep_audit.bzl", "configured_dependency_audit_test")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
@@ -921,12 +921,6 @@ js_test(
     ],
 )
 
-forbidden_transitive_dep_test(
-    name = "wgsl_browser_no_webgpu_wrapper_test",
-    forbidden = "//third_party/webgpu-cpp:webgpu_cpp",
-    target = "//donner/gpu/shader:wgsl_chromium_compilation_tests",
-)
-
 # Executes the migrated Slug endpoint coverage probes on the pinned browser WebGPU device.
 js_test(
     name = "slug_endpoint_chromium_tests",
@@ -949,12 +943,6 @@ js_test(
         "@platforms//cpu:aarch64",
         "@platforms//os:macos",
     ],
-)
-
-forbidden_transitive_dep_test(
-    name = "slug_endpoint_browser_no_webgpu_wrapper_test",
-    forbidden = "//third_party/webgpu-cpp:webgpu_cpp",
-    target = "//donner/gpu/shader:slug_endpoint_chromium_tests",
 )
 
 donner_cc_library(

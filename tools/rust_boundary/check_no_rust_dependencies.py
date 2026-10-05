@@ -153,13 +153,7 @@ COMPILE_ATTRIBUTES = frozenset(
 )
 DATA_ATTRIBUTES = frozenset({"data", "testdata", "resources", "args", "tags"})
 AUDIT_METADATA_ATTRIBUTES = frozenset({"forbidden", "forbidden_packages", "required"})
-# A `forbidden_transitive_dep_test` names its forbidden label only as a genquery scope, which is a
-# query edge, never a build or link edge.
-AUDIT_RULES = frozenset({
-    "configured_dependency_audit_test",
-    "forbidden_transitive_dep_test",
-    "no_rust_dependency_audit_test",
-})
+AUDIT_RULES = frozenset({"configured_dependency_audit_test", "no_rust_dependency_audit_test"})
 
 ATTRIBUTE_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 VISIBILITY_ASSIGN_RE = re.compile(r"(?:default_)?visibility\s*=\s*")
@@ -855,10 +849,11 @@ def _archive_geode_consumer_findings(path: str, text: str) -> list[Finding]:
 # the archive is reachable from, by the build file that declares it and the rule kind it must be.
 # The checks above pin each hop's shape; this pins the set. Every string a Starlark build file
 # names outside dependency-audit metadata is read as a label in that file's package, and one that
-# resolves to a chain rule or to an archive may appear only in that chain rule's own declaration.
-# So a new consumer of any hop, in these files or any other, is a finding, and so is a pinned rule
-# that disappears or changes kind. The CI test_suite selects the comparison's tests without
-# depending on them; it is pinned so that nothing else can select it either.
+# resolves to a chain rule, a target a chain rule's macro generates, or anything in an archive
+# repository may appear only in that chain rule's own declaration. So a new consumer of any hop,
+# in these files or any other, is a finding, and so is a pinned rule that disappears or changes
+# kind. The CI test_suite selects the comparison's tests without depending on them; it is pinned
+# so that nothing else names it either.
 REFERENCE_CHAIN_RULES = {
     ARCHIVE_RUNTIME: {
         "webgpu_cpp": "cc_library",
@@ -885,8 +880,11 @@ REFERENCE_CHAIN_PACKAGE_LIBRARIES = (
     "image_comparison_test_fixture_wgpu_reference_linux",
 )
 REFERENCE_CHAIN_PACKAGE_VISIBILITY = ("//donner/svg/renderer/tests:__pkg__",)
-ARCHIVE_LABEL_RE = re.compile(r"@wgpu_native_[A-Za-z0-9_]+//:wgpu_native")
+# Any label in an archive repository, by apparent or canonical name.
+ARCHIVE_LABEL_RE = re.compile(r"@@?[^/@]*wgpu_native_[^/@]*//.*")
 BARE_TARGET_RE = re.compile(r"[A-Za-z0-9_.+=,-]+")
+# Spellings of the main repository: its canonical name, the apparent root, and its module name.
+MAIN_REPOSITORY_PREFIXES = ("@@//", "@//", "@donner//")
 STARLARK_FILE_RE = re.compile(
     r"(^|/)(BUILD(\.[^/]+)?|[^/]+\.bzl|MODULE\.bazel|WORKSPACE(\.bazel)?)$"
 )
@@ -907,12 +905,12 @@ REFERENCE_CHAIN_NAMES = tuple(sorted({name for rules in REFERENCE_CHAIN_RULES.va
 
 def _resolve_label(value: str, package: str) -> str | None:
     """The main-repository label `value` names from a rule in `package`, or an archive label."""
-    archive = "@" + value.lstrip("@")
-    if ARCHIVE_LABEL_RE.fullmatch(archive):
-        return archive
-    for prefix in ("@@//", "@//"):
+    if ARCHIVE_LABEL_RE.fullmatch(value):
+        return value
+    for prefix in MAIN_REPOSITORY_PREFIXES:
         if value.startswith(prefix):
             value = value[len(prefix) - 2:]
+            break
     if value.startswith("//"):
         target_package, separator, name = value[2:].partition(":")
         return f"//{target_package}:{name if separator else target_package.rsplit('/', 1)[-1]}"
@@ -924,18 +922,43 @@ def _resolve_label(value: str, package: str) -> str | None:
 
 
 def _is_chain_label(label: str) -> bool:
-    return label in REFERENCE_CHAIN_LABELS or bool(ARCHIVE_LABEL_RE.fullmatch(label))
+    """True for a pinned chain rule, a target its macro generates, or an archive label.
+
+    Donner's test and audit macros name what they generate after the rule, as in an audit's
+    `_checker`; the wrapper package's plain rules generate nothing.
+    """
+    if label in REFERENCE_CHAIN_LABELS or ARCHIVE_LABEL_RE.fullmatch(label):
+        return True
+    package, _, name = label.partition(":")
+    return any(
+        path != ARCHIVE_RUNTIME and package == f"//{_package(path)}" and
+        name.startswith(rule + "_")
+        for path, rule in REFERENCE_CHAIN_LABELS.values()
+    )
 
 
-def _chain_labels(statement: ast.stmt, package: str, spans: set[SourceSpan]) -> list[str]:
+def _string_chain_labels(value: str, path: str) -> list[str]:
+    """Chain labels `value` can name from `path`.
+
+    A package-relative name in a `.bzl` macro resolves against whichever package calls the macro,
+    so it is checked against every chain package.
+    """
+    packages = [_package(path)]
+    if path.endswith(".bzl") and not value.startswith(("@", "//")):
+        packages = sorted({_package(chain_path) for chain_path in REFERENCE_CHAIN_RULES})
+    return [label for package in packages
+            for label in (_resolve_label(value, package),)
+            if label is not None and _is_chain_label(label)]
+
+
+def _chain_labels(statement: ast.stmt, path: str, spans: set[SourceSpan]) -> list[str]:
     """Chain labels the string literals of `statement` name, outside audit metadata."""
     return sorted({
         label
         for node in ast.walk(statement)
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and
         _literal_span(node) not in spans
-        for label in (_resolve_label(node.value, package),)
-        if label is not None and _is_chain_label(label)
+        for label in _string_chain_labels(node.value, path)
     })
 
 
@@ -961,7 +984,7 @@ def _chain_library_findings(path: str, name: str, call: ast.Call) -> list[Findin
 
 def _chain_statement_findings(path: str, statement: ast.stmt,
                               spans: set[SourceSpan]) -> list[Finding]:
-    labels = _chain_labels(statement, _package(path), spans)
+    labels = _chain_labels(statement, path, spans)
     rule = _rule_call(statement)
     pinned = REFERENCE_CHAIN_RULES.get(path, {})
     if rule is not None and rule[1] in pinned:

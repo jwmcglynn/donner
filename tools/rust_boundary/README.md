@@ -61,7 +61,9 @@ scopes and the verifier enforces the boundary of each:
   or to an archive may appear only in that rule's own declaration. So any other
   rule, in those files or elsewhere, that names the chain fails, as does a
   pinned rule that disappears or changes kind. A label assembled from pieces is
-  not read; each hop's narrow Bazel visibility is the backstop for that. The
+  not read. Bazel visibility narrows the wrapper, the Geode leaves and the
+  comparison's libraries, but the archive repositories and `//tools/ci` are
+  publicly visible, so for those hops this check is the only guard. The
   full tracked-tree scan also fails if any of these boundary files disappears.
   The Linux oracle's configured dependency audit proves the selected test root
   actually reaches that archive.

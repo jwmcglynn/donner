@@ -82,11 +82,16 @@ struct FrozenMatch {
 
 bool SameSoftwareVulkanEnvironment(const CaptureEnvironment& live,
                                    const FrozenEnvironment& candidate) {
-  if (live.adapterBackend != "Vulkan" ||
-      (live.adapterType != "CPU" && candidate.adapterType != "CPU")) {
+  if (live.adapterBackend != "Vulkan") {
     return true;
   }
-  if (live.adapterType != "CPU" || candidate.adapterType != "CPU") {
+  const bool liveSoftware = IsSoftwareRasterizer(live.adapterBackend, live.adapterType);
+  const bool candidateSoftware =
+      IsSoftwareRasterizer(candidate.adapterBackend, candidate.adapterType);
+  if (!liveSoftware && !candidateSoftware) {
+    return true;
+  }
+  if (liveSoftware != candidateSoftware) {
     return false;
   }
   if (candidate.rendererPath != "wgpu-native Geode production path (GeodeDevice+GeoEncoder)") {
@@ -142,6 +147,20 @@ FrozenMatch MatchFrozenEnvironment(const CaptureEnvironment& live,
     return {.ambiguous = true};
   }
   return {.slug = std::move(legacy)};
+}
+
+/// The directory whose record the check compares against: the matched frozen environment, or for a
+/// hardware adapter its own slug. A software rasterizer may use only a matched wgpu-native record,
+/// so without a match it has no directory to read.
+std::optional<std::string> FrozenDirectoryFor(const CaptureEnvironment& live,
+                                              const FrozenMatch& match) {
+  if (match.slug.has_value()) {
+    return match.slug;
+  }
+  if (IsSoftwareRasterizer(live.adapterBackend, live.adapterType)) {
+    return std::nullopt;
+  }
+  return EnvironmentSlug(live);
 }
 
 FrozenMatch FrozenSlugFor(const CaptureEnvironment& live) {
@@ -239,6 +258,17 @@ TEST(FrozenEnvironmentMatchTest, SoftwareVulkanRequiresTheSameHostArchitecture) 
                                                 "aarch64", "2", "native Geode"}})
                   .slug,
               testing::Eq(std::nullopt));
+}
+
+TEST(FrozenEnvironmentMatchTest, ASoftwareRasterizerWithoutAMatchReadsNoDirectory) {
+  const CaptureEnvironment software = {"llvmpipe (LLVM 99.0.0, 128 bits)", "Vulkan", "CPU",
+                                       "aarch64"};
+  EXPECT_THAT(FrozenDirectoryFor(software, FrozenMatch{}), testing::Eq(std::nullopt));
+  EXPECT_THAT(FrozenDirectoryFor(software, FrozenMatch{.slug = "matched"}),
+              testing::Optional(testing::Eq("matched")));
+  const CaptureEnvironment hardware = {"Apple M9", "Metal", "Unknown", "aarch64"};
+  EXPECT_THAT(FrozenDirectoryFor(hardware, FrozenMatch{}),
+              testing::Optional(testing::Eq(EnvironmentSlug(hardware))));
 }
 
 TEST(FrozenEnvironmentMatchTest, MetalKeepsItsExistingAdapterNameKey) {
@@ -345,10 +375,9 @@ protected:
                 "directory could not be read; refusing an arbitrary pixel comparison";
     }
     const CaptureEnvironment& live = capturer_->environment();
-    slug_ = match.slug.value_or(EnvironmentSlug(live));
-    // A software rasterizer may use only a wgpu-native record, which matching already looked for;
-    // a directory at its own slug cannot hold one it may compare against.
-    if (!match.slug.has_value() && IsSoftwareRasterizer(live.adapterBackend, live.adapterType)) {
+    const std::optional<std::string> directory = FrozenDirectoryFor(live, match);
+    slug_ = directory.value_or(EnvironmentSlug(live));
+    if (!directory.has_value()) {
       handleUnbaselinedEnvironment();
       return;
     }

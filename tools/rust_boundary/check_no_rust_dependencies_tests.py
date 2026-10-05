@@ -1069,6 +1069,32 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
              '    data = ["//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"],\n)\n',
              "reference_wrapper",
              "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"),
+            # The main repository by its module name.
+            ("donner/svg/BUILD.bazel",
+             'test_suite(\n    name = "by_module_name",\n'
+             '    tests = ["@donner//tools/ci:linux_wgpu_resvg_reference"],\n)\n',
+             "by_module_name", "//tools/ci:linux_wgpu_resvg_reference"),
+            # A file inside an archive, and an archive by its canonical repository name.
+            ("donner/svg/renderer/tests/BUILD.bazel",
+             'cc_test(\n    name = "archive_file_test",\n'
+             '    data = ["@wgpu_native_linux_x86_64//:lib/libwgpu_native.so"],\n)\n',
+             "archive_file_test", "@wgpu_native_linux_x86_64//:lib/libwgpu_native.so"),
+            ("third_party/webgpu-cpp/BUILD.bazel",
+             'cc_library(\n    name = "canonical_archive",\n'
+             '    deps = ["@@+non_bcr_deps+wgpu_native_linux_x86_64//:wgpu_native"],\n)\n',
+             "canonical_archive", "@@+non_bcr_deps+wgpu_native_linux_x86_64//:wgpu_native"),
+            # A target the pinned audit's macro generates.
+            ("donner/svg/renderer/tests/BUILD.bazel",
+             'sh_test(\n    name = "checker_wrapper",\n'
+             '    data = [":resvg_wgpu_reference_dependency_audit_test_checker"],\n)\n',
+             "checker_wrapper",
+             "//donner/svg/renderer/tests:resvg_wgpu_reference_dependency_audit_test_checker"),
+            # A package-relative name in a macro, which resolves in the calling package.
+            ("build_defs/reference.bzl",
+             'def reference_test(name):\n'
+             '    native.cc_test(name = name, deps = [":renderer_test_backend_wgpu_reference_linux"])\n',
+             None,
+             "//donner/svg/renderer/tests:renderer_test_backend_wgpu_reference_linux"),
             ("donner/svg/BUILD.bazel",
              'configured_dependency_audit_test(\n    name = "reference_audit",\n'
              '    target = "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux",\n)\n',
@@ -1082,7 +1108,10 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 details = [finding.detail for finding in self.chain_findings(files)
                            if finding.path == path]
                 self.assertEqual(len(details), 1, details)
-                self.assertIn(f" {rule} names the wgpu-native reference chain", details[0])
+                if rule is None:
+                    self.assertIn("outside a build rule", details[0])
+                else:
+                    self.assertIn(f" {rule} names the wgpu-native reference chain", details[0])
                 self.assertIn(label, details[0])
 
     def test_a_chain_label_outside_a_build_rule_is_rejected(self):
@@ -1116,11 +1145,21 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
             '    forbidden = ["//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",\n'
             '                 "//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n'
             '    target = ":editor",\n)\n'
+        )
+        self.assertEqual(categories(verifier.check_tracked_tree(files, SCOPES)), [])
+
+    def test_a_genquery_audit_naming_the_chain_is_rejected(self):
+        # Its scope loads the named target's whole closure, archives included.
+        files = self.allowed_files()
+        files["donner/editor/BUILD.bazel"] = (
             'forbidden_transitive_dep_test(\n    name = "editor_no_wrapper",\n'
             '    forbidden = "//third_party/webgpu-cpp:webgpu_cpp",\n'
             '    target = ":editor",\n)\n'
         )
-        self.assertEqual(categories(verifier.check_tracked_tree(files, SCOPES)), [])
+        details = [finding.detail for finding in self.chain_findings(files)
+                   if finding.path == "donner/editor/BUILD.bazel"]
+        self.assertEqual(len(details), 1, details)
+        self.assertIn("forbidden_transitive_dep_test editor_no_wrapper", details[0])
 
     def test_each_pinned_reference_chain_rule_is_required(self):
         removals = {

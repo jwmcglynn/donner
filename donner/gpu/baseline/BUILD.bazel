@@ -137,7 +137,7 @@ donner_cc_test(
 donner_multi_transitioned_test(
     name = "baseline_pixels_tests",
     # Sized for a software rasterizer, not for the sub-second run a hardware adapter gives:
-    # creating the device compiles every shared pipeline, which dominates the wall clock on llvmpipe.
+    # creating the device compiles every shared pipeline, which dominates on llvmpipe.
     size = "medium",
     testonly = 1,
     dep = ":baseline_pixels_tests_impl",
