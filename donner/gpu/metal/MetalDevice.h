@@ -280,6 +280,11 @@ public:
   /// accessor, readable from any thread.
   [[nodiscard]] uint64_t commandBuffersInFlightForTest() const;
 
+  /// How many times serial waits on this device have looked at its completion state, so a case
+  /// can tell a wait that looks only when that state changes from one that keeps checking. Test
+  /// accessor, readable from any thread.
+  [[nodiscard]] uint64_t serialWaitLooksForTest() const;
+
   /// Waits until \p count submissions have had all their completion handlers run on this device,
   /// parked ones included. Test seam for ordering completions deterministically.
   /// @param count Submissions to wait for. @param timeoutSeconds Longest to wait.

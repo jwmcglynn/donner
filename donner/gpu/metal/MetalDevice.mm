@@ -894,6 +894,8 @@ struct MetalDevice::Impl {
   double submissionWaitCapSeconds = kSubmissionWaitCapSeconds;
   /// Submissions that waited for room; see \ref MetalDevice::commandBufferRoomWaitsForTest.
   std::atomic<uint64_t> commandBufferRoomWaits{0};
+  /// Looks serial waits took at completion state; see \ref MetalDevice::serialWaitLooksForTest.
+  std::atomic<uint64_t> serialWaitLooks{0};
 
   /// Whether resources are built for unified memory; decides every storage mode below.
   bool unifiedMemory = true;
@@ -1135,6 +1137,10 @@ uint64_t MetalDevice::commandBufferRoomWaitsForTest() const {
   return impl_->commandBufferRoomWaits.load(std::memory_order_acquire);
 }
 
+uint64_t MetalDevice::serialWaitLooksForTest() const {
+  return impl_->serialWaitLooks.load(std::memory_order_acquire);
+}
+
 uint64_t MetalDevice::commandBuffersInFlightForTest() const {
   CompletionState& state = *impl_->completionState;
   std::lock_guard<std::mutex> lock(state.watermarkMutex);
@@ -1208,6 +1214,7 @@ bool MetalDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
                             std::chrono::duration<double>(timeoutSeconds));
   const CompletionState& state = *impl_->completionState;
   for (;;) {
+    impl_->serialWaitLooks.fetch_add(1, std::memory_order_release);
     // Completion is read before the error flag: a handler publishes a failure before it advances
     // the serial, so a serial seen complete here brings its failure with it, and failed work can
     // never read as finished.
