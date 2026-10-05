@@ -256,14 +256,22 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.source_artifact }}
           path: ${{ runner.temp }}/donner-bcr/source
-      - uses: actions/download-artifact@v8
+      # The CLI artifacts are bound to the attempt that built them; the release path pins that.
+      - id: cli-linux-artifact
+        uses: actions/download-artifact@v8
         with:
           name: donner-svg-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-bcr/cli-linux
-      - uses: actions/download-artifact@v8
+      - id: cli-macos-artifact
+        uses: actions/download-artifact@v8
         with:
           name: donner-svg-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-bcr/cli-macos
+      - name: Explain missing CLI artifacts
+        if: failure() && (steps.cli-linux-artifact.outcome == 'failure' || steps.cli-macos-artifact.outcome == 'failure')
+        run: |
+          echo "::error::This attempt's CLI artifacts are missing. They are bound to the attempt that built them, so a rerun of only failed jobs that carried a passed CLI build over cannot use them: rerun all jobs."
+          exit 1
       - name: Verify the exact preflight source and CLI bytes
         run: |
           python3 -B -m tools.bcr_source verify \
@@ -297,14 +305,22 @@ jobs:
         with:
           name: ${{ needs.prepare.outputs.source_artifact }}
           path: ${{ runner.temp }}/donner-bcr/artifacts
-      - uses: actions/download-artifact@v8
+      # The CLI artifacts are bound to the attempt that built them; the release path pins that.
+      - id: cli-linux-artifact
+        uses: actions/download-artifact@v8
         with:
           name: donner-svg-linux-x86-64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-bcr/cli-linux
-      - uses: actions/download-artifact@v8
+      - id: cli-macos-artifact
+        uses: actions/download-artifact@v8
         with:
           name: donner-svg-darwin-arm64-${{ needs.prepare.outputs.source_commit }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-bcr/cli-macos
+      - name: Explain missing CLI artifacts
+        if: failure() && (steps.cli-linux-artifact.outcome == 'failure' || steps.cli-macos-artifact.outcome == 'failure')
+        run: |
+          echo "::error::This attempt's CLI artifacts are missing. They are bound to the attempt that built them, so a rerun of only failed jobs that carried a passed CLI build over cannot use them: rerun all jobs."
+          exit 1
       - name: Verify both CLI artifacts from this preflight attempt
         run: |
           python3 -B -m tools.release_cli verify \
