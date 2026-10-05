@@ -214,9 +214,10 @@ MTLPrimitiveType ToMtlPrimitiveType(PrimitiveTopology topology) {
   return MTLPrimitiveTypeTriangle;
 }
 
-/// How long presenting waits for the frame's own work before reporting that it is not showing.
-/// Long enough that a heavy frame is never cut off, short enough that a wedged GPU does not stall
-/// the caller indefinitely.
+/// How long presenting waits for the frame's own work while neither that work nor the work it
+/// waits behind makes progress, before reporting that the frame is not showing. Measured from the
+/// last progress, so a heavy frame or a long backlog is never cut off, while a wedged GPU does not
+/// stall the caller indefinitely.
 constexpr double kPresentCompletionTimeoutSeconds = 5.0;
 
 /// How long a submission waits for room among the command buffers in flight while neither this
@@ -227,6 +228,9 @@ constexpr double kSubmissionStallTimeoutSeconds = 5.0;
 
 /// Longest one submission waits for room in all, however much progress it sees meanwhile.
 constexpr double kSubmissionWaitCapSeconds = 60.0;
+
+/// How long the drain at teardown waits while none of the work it waits for makes progress.
+constexpr std::chrono::milliseconds kTeardownStallTimeout{5000};
 
 /// A completion whose publication \ref MetalDevice::holdNextCompletionForTest parked.
 struct ParkedCompletion {
@@ -512,7 +516,7 @@ private:
 };
 
 /// A device's completion as consumers on other threads read it: the counter the command-buffer
-/// handlers advance and the error flag they set.
+/// handlers advance, the error flag they set, and the device's own progress clock.
 class MetalSubmissionCompletion final : public SubmissionCompletion {
 public:
   explicit MetalSubmissionCompletion(std::shared_ptr<CompletionState> state)
@@ -525,6 +529,9 @@ public:
     return state_->committedSerial.load(std::memory_order_acquire);
   }
   bool failed() const override { return state_->hadError.load(std::memory_order_acquire); }
+  std::optional<std::chrono::steady_clock::time_point> lastProgress() const override {
+    return state_->lastProgress();
+  }
 
 private:
   std::shared_ptr<CompletionState> state_;
@@ -887,7 +894,7 @@ struct MetalDevice::Impl {
   std::optional<size_t> failedCommandBufferIndex;
   /// Set by \ref MetalDevice::holdNextCompletionForTest; consumed by the next submission.
   bool holdNextCompletion = false;
-  /// Longest a present waits for its frame's work; see
+  /// Longest a present waits for its frame's work without progress; see
   /// \ref MetalDevice::setPresentCompletionTimeoutForTest.
   double presentCompletionTimeoutSeconds = kPresentCompletionTimeoutSeconds;
   /// Longest a submission waits for room without progress; see
@@ -950,6 +957,57 @@ struct MetalDevice::Impl {
   /// counts as it is first seen; the producer's later work is unrelated to this device. Requires
   /// \ref CompletionState::watermarkMutex of \ref completionState.
   std::chrono::steady_clock::time_point latestProgressLocked();
+
+  /// How \ref waitWhileProgressing ended.
+  enum class ProgressWaitEnd : uint8_t {
+    Met,      //!< The condition was met.
+    Failed,   //!< The condition can no longer be met: the root is lost or the work failed.
+    Stalled,  //!< Nothing the wait depends on made progress for the stall bound.
+    Capped,   //!< The wait lasted its cap in all.
+  };
+
+  /**
+   * Waits until \p settled reports an outcome, giving up once \ref latestProgressLocked is
+   * \p stallBound in the past, or once the wait has lasted \p cap. The one progress clock every
+   * wait on this device's work measures a stall by: a stall is judged from the last progress,
+   * not from the start of the wait, so a new wait on work that has already stopped does not
+   * restart it.
+   *
+   * Sleeps on \ref CompletionState::completionAdvanced, which a command buffer completing, a
+   * serial being published and a declared loss notify. A producer's progress is sampled at each
+   * wake rather than waking the wait: this device's own completions notify it, and otherwise it
+   * wakes at the deadline and looks again before giving up.
+   *
+   * @param lock Lock held on \ref CompletionState::watermarkMutex of \ref completionState.
+   * @param settled Returns true once the condition is met, false once it can no longer be, and
+   *   nothing while it is pending. Called with \p lock held.
+   * @param stallBound Longest the wait may see no progress.
+   * @param cap Longest the wait may last in all, or nothing for no limit.
+   * @param waitStart When the wait started, which \p cap is measured from.
+   */
+  template <typename Settled>
+  ProgressWaitEnd waitWhileProgressing(std::unique_lock<std::mutex>& lock, Settled&& settled,
+                                       std::chrono::steady_clock::duration stallBound,
+                                       std::optional<std::chrono::steady_clock::duration> cap,
+                                       std::chrono::steady_clock::time_point waitStart) {
+    using Clock = std::chrono::steady_clock;
+    for (;;) {
+      if (const std::optional<bool> outcome = settled()) {
+        return *outcome ? ProgressWaitEnd::Met : ProgressWaitEnd::Failed;
+      }
+      const Clock::time_point progressAt = latestProgressLocked();
+      const Clock::time_point now = Clock::now();
+      if (cap.has_value() && now - waitStart >= *cap) {
+        return ProgressWaitEnd::Capped;
+      }
+      if (now - progressAt >= stallBound) {
+        return ProgressWaitEnd::Stalled;
+      }
+      const Clock::time_point stallDeadline = progressAt + stallBound;
+      completionState->completionAdvanced.wait_until(
+          lock, cap.has_value() ? std::min(stallDeadline, waitStart + *cap) : stallDeadline);
+    }
+  }
 
   /// Drops the records of submissions that have completed from \ref outstandingSources.
   void pruneOutstandingSources();
@@ -1183,12 +1241,13 @@ MetalDevice::~MetalDevice() {
   @autoreleasepool {
     resumeSubmissionsForTest();
     // Wait for in-flight submissions so deferred destructions drain before Impl teardown releases
-    // the remaining Metal objects. On timeout (a hung submission), or at once when the root is
-    // already lost, teardown proceeds anyway: Metal itself retains every resource referenced by a
-    // committed command buffer until it completes, so releasing our references cannot free memory
-    // the GPU is still using.
+    // the remaining Metal objects. The wait lasts as long as the work keeps progressing, however
+    // long its backlog. On a stall (a hung submission), or at once when the root is already lost,
+    // teardown proceeds anyway: Metal itself retains every resource referenced by a committed
+    // command buffer until it completes, so releasing our references cannot free memory the GPU
+    // is still using.
     if (lastSubmittedSerial() > completedSerial()) {
-      waitForSerial(lastSubmittedSerial(), /*timeoutSeconds=*/5.0);
+      (void)waitForSerialUnlessStalled(lastSubmittedSerial(), kTeardownStallTimeout);
     }
 #ifndef NDEBUG
     // Once every submission is published complete on a root that is not lost, every command buffer
@@ -1241,6 +1300,50 @@ bool MetalDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
     }
     state.completionAdvanced.wait_until(lock, deadline);
   }
+}
+
+SerialWaitResult MetalDevice::onWaitForSerialUnlessStalled(uint64_t serial,
+                                                           std::chrono::milliseconds stallBound) {
+  using Clock = std::chrono::steady_clock;
+  const Clock::time_point waitStart = Clock::now();
+  impl_->pruneOutstandingSources();
+  CompletionState& state = *impl_->completionState;
+  Impl::ProgressWaitEnd end = Impl::ProgressWaitEnd::Failed;
+  {
+    std::unique_lock<std::mutex> lock(state.watermarkMutex);
+    end = impl_->waitWhileProgressing(
+        lock,
+        [&]() -> std::optional<bool> {
+          // In the order onWaitForSerial reads them, for the reasons given there.
+          const bool completed = state.completedSerial.load(std::memory_order_acquire) >= serial;
+          if (state.hadError.load(std::memory_order_acquire)) {
+            return false;
+          }
+          if (completed) {
+            return true;
+          }
+          if (isLost()) {
+            return false;
+          }
+          return std::nullopt;
+        },
+        stallBound, std::nullopt, waitStart);
+  }
+  const auto waited =
+      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - waitStart);
+  switch (end) {
+    case Impl::ProgressWaitEnd::Met: return {SerialWaitEnd::Completed, waited};
+    case Impl::ProgressWaitEnd::Stalled:
+    case Impl::ProgressWaitEnd::Capped: return {SerialWaitEnd::Stalled, waited};
+    case Impl::ProgressWaitEnd::Failed: break;
+  }
+  return {SerialWaitEnd::Failed, waited};
+}
+
+std::optional<std::chrono::steady_clock::time_point> MetalDevice::onLastProgress() {
+  impl_->pruneOutstandingSources();
+  std::lock_guard<std::mutex> lock(impl_->completionState->watermarkMutex);
+  return impl_->latestProgressLocked();
 }
 
 Result<std::vector<uint8_t>> MetalDevice::readBackBuffer(const Buffer& buffer) {
@@ -1802,8 +1905,8 @@ Status MetalDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
       }
       if (lastUse > completedSerial()) {
         ++impl_->unalignedWriteWaits;
-        if (!waitForSerial(lastUse,
-                           std::chrono::duration<double>(impl_->unalignedWriteTimeout).count())) {
+        if (waitForSerialUnlessStalled(lastUse, impl_->unalignedWriteTimeout).end !=
+            SerialWaitEnd::Completed) {
           return GpuError{
               GpuErrorType::InvalidState,
               std::format("Metal unaligned buffer write could not complete submission {}",
@@ -2567,34 +2670,32 @@ Status MetalDevice::Impl::waitForCommandBufferRoom(const MetalDevice& device,
   const auto cap = std::chrono::duration_cast<Clock::duration>(
       std::chrono::duration<double>(submissionWaitCapSeconds));
   const Clock::time_point waitStart = Clock::now();
-  bool capped = false;
+  ProgressWaitEnd end = ProgressWaitEnd::Failed;
   {
     std::unique_lock<std::mutex> lock(state.watermarkMutex);
-    for (;;) {
-      // The loss first: a root lost during the wait takes no more work, even work it now has room
-      // for.
-      if (device.isLost()) {
-        return GpuError{GpuErrorType::DeviceLost,
-                        "submit: the Metal root was lost while the submission waited for room"};
-      }
-      if (state.buffersOutstanding + buffers <= kMaxCommandBuffersInFlight) {
-        return OkStatus();
-      }
-      // A producer's progress is sampled here, at each wake, rather than waking this wait: this
-      // device's own completions notify it, and otherwise it wakes at the deadline and looks
-      // again before giving up.
-      const Clock::time_point progressAt = latestProgressLocked();
-      const Clock::time_point now = Clock::now();
-      if (now - waitStart >= cap) {
-        capped = true;
-        break;
-      }
-      if (now - progressAt >= stallBound) {
-        break;
-      }
-      state.completionAdvanced.wait_until(lock, std::min(progressAt + stallBound, waitStart + cap));
-    }
+    end = waitWhileProgressing(
+        lock,
+        [&]() -> std::optional<bool> {
+          // The loss first: a root lost during the wait takes no more work, even work it now has
+          // room for.
+          if (device.isLost()) {
+            return false;
+          }
+          if (state.buffersOutstanding + buffers <= kMaxCommandBuffersInFlight) {
+            return true;
+          }
+          return std::nullopt;
+        },
+        stallBound, cap, waitStart);
   }
+  if (end == ProgressWaitEnd::Met) {
+    return OkStatus();
+  }
+  if (end == ProgressWaitEnd::Failed) {
+    return GpuError{GpuErrorType::DeviceLost,
+                    "submit: the Metal root was lost while the submission waited for room"};
+  }
+  const bool capped = end == ProgressWaitEnd::Capped;
   // Declared with the lock released: the declaration runs this device's loss release, which takes
   // it.
   device.markLostAfterWaitTimeout(
@@ -2878,17 +2979,18 @@ Result<SurfaceStatus> MetalDevice::onPresentSurface(uint32_t slotIndex) {
     // anything else between drawing the frame and presenting it.
     const std::optional<uint32_t> textureSlot = GetSlot(impl_->surfaceTextureSlots, slotIndex);
     const uint64_t frameSerial = textureSlot.has_value() ? lastTextureUseSerial(*textureSlot) : 0;
-    const auto waitStart = std::chrono::steady_clock::now();
-    const bool frameFinished = frameSerial <= completedSerial() ||
-                               waitForSerial(frameSerial, impl_->presentCompletionTimeoutSeconds);
-    if (!frameFinished && !isLost()) {
-      // A frame whose own work did not finish within the whole bound cannot be shown, and the
-      // queue holding it has stopped answering: declared here, the loss fails every later frame at
-      // once, and releases work another device's queue holds behind this device's.
-      markLostAfterWaitTimeout(DeviceLostWaitSite::Present,
-                               std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   std::chrono::steady_clock::now() - waitStart),
-                               "a frame's work did not complete within the present bound");
+    // The wait lasts while the frame's work, or the work it waits behind, keeps progressing.
+    if (frameSerial > completedSerial()) {
+      const SerialWaitResult frameWait = waitForSerialUnlessStalled(
+          frameSerial, std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::duration<double>(impl_->presentCompletionTimeoutSeconds)));
+      if (frameWait.end == SerialWaitEnd::Stalled && !isLost()) {
+        // A frame whose work stopped progressing for the whole bound cannot be shown, and the
+        // queue holding it has stopped answering: declared here, the loss fails every later frame
+        // at once, and releases work another device's queue holds behind this device's.
+        markLostAfterWaitTimeout(DeviceLostWaitSite::Present, frameWait.waited,
+                                 "a frame's work made no progress within the present bound");
+      }
     }
     // A lost root is checked after the wait, and whether or not there was one: a submission that
     // failed on the GPU declares the loss and then completes its serial, so a frame whose own work

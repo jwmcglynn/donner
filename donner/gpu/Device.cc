@@ -1486,6 +1486,38 @@ bool Device::waitForSerial(uint64_t serial, double timeoutSeconds) {
   return onWaitForSerial(serial, clampedSeconds);
 }
 
+SerialWaitResult Device::waitForSerialUnlessStalled(uint64_t serial,
+                                                    std::chrono::milliseconds stallBound) {
+  // Clamped for the same reasons as waitForSerial's budget.
+  const auto maxBound = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::duration<double>(kMaxWaitSeconds));
+  return onWaitForSerialUnlessStalled(
+      serial, std::clamp(stallBound, std::chrono::milliseconds::zero(), maxBound));
+}
+
+std::optional<std::chrono::steady_clock::time_point> Device::lastProgress() {
+  return onLastProgress();
+}
+
+SerialWaitResult Device::onWaitForSerialUnlessStalled(uint64_t serial,
+                                                      std::chrono::milliseconds stallBound) {
+  // A backend that tracks no progress cannot tell a slow device from a hung one, so the whole
+  // wait gets the bound, as a plain serial wait does. Running out of it is a stall, not a failure:
+  // the caller decides whether that means the device is lost.
+  const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+  const bool completed = waitForSerial(serial, std::chrono::duration<double>(stallBound).count());
+  const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+  if (completed) {
+    return {SerialWaitEnd::Completed, waited};
+  }
+  return {isLost() ? SerialWaitEnd::Failed : SerialWaitEnd::Stalled, waited};
+}
+
+std::optional<std::chrono::steady_clock::time_point> Device::onLastProgress() {
+  return std::nullopt;
+}
+
 namespace {
 
 /// Rejects wait bounds that could never terminate or could never wait.
@@ -2811,6 +2843,37 @@ bool Device::waitForTextureSource(const Texture& registration, double timeoutSec
     }
     if (std::chrono::steady_clock::now() >= deadline) {
       return false;
+    }
+    std::this_thread::sleep_for(kRecheckInterval);
+  }
+}
+
+SerialWaitResult Device::waitForTextureSourceUnlessStalled(const Texture& registration,
+                                                           std::chrono::milliseconds stallBound) {
+  const std::chrono::steady_clock::time_point waitStart = std::chrono::steady_clock::now();
+  const auto ended = [&waitStart](SerialWaitEnd end) {
+    return SerialWaitResult{end, std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - waitStart)};
+  };
+  if (validateTextureHandleForBackend(registration).hasError()) {
+    return ended(SerialWaitEnd::Failed);
+  }
+  const TextureRegistration* entry = textureRegistrationOf(registration.slotIndex());
+  if (entry == nullptr || entry->lease->share()->ordering() == SourceOrdering::SharedQueue) {
+    return ended(SerialWaitEnd::Completed);
+  }
+  const auto maxBound = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::duration<double>(kMaxWaitSeconds));
+  const std::chrono::milliseconds bound =
+      std::clamp(stallBound, std::chrono::milliseconds::zero(), maxBound);
+  const SubmissionCompletion& completion = *entry->lease->share()->completion();
+  constexpr std::chrono::milliseconds kRecheckInterval{1};
+  for (;;) {
+    if (const std::optional<bool> settled = textureSourceState(*entry)) {
+      return ended(*settled ? SerialWaitEnd::Completed : SerialWaitEnd::Failed);
+    }
+    if (std::chrono::steady_clock::now() - completion.lastProgress().value_or(waitStart) >= bound) {
+      return ended(SerialWaitEnd::Stalled);
     }
     std::this_thread::sleep_for(kRecheckInterval);
   }

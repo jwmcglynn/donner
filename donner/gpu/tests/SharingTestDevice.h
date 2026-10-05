@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -69,10 +70,19 @@ public:
   uint64_t completedSerial() const override { return completed.load(); }
   uint64_t committedSerial() const override { return committed.load(); }
   bool failed() const override { return failedFlag.load(); }
+  std::optional<std::chrono::steady_clock::time_point> lastProgress() const override {
+    const std::chrono::steady_clock::rep ticks = progressTicks.load();
+    if (ticks == 0) {
+      return std::nullopt;
+    }
+    return std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(ticks));
+  }
 
   std::atomic<uint64_t> completed{0};
   std::atomic<uint64_t> committed{0};
   std::atomic<bool> failedFlag{false};
+  /// When the producer last made progress, in steady clock ticks, or zero while it reports none.
+  std::atomic<std::chrono::steady_clock::rep> progressTicks{0};
 };
 
 /// What a test device is built with.
@@ -104,6 +114,12 @@ public:
   }
   /// Reports a terminal execution failure, as a backend does for a failed command buffer.
   void failExecution() { completion_->failedFlag.store(true); }
+  /// Reports progress on this device's queue now, as a backend that tracks progress does when a
+  /// command buffer completes. Until the first call the device reports no progress notion.
+  /// Callable from any thread.
+  void noteProgress() {
+    completion_->progressTicks.store(std::chrono::steady_clock::now().time_since_epoch().count());
+  }
   /// Accepted submissions stop reaching the native queue until \ref commitDeferred, standing in
   /// for a backend that accepts work before it hands it over.
   void deferCommit() { commitDeferred_ = true; }

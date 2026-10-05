@@ -106,6 +106,11 @@ struct VulkanApi {
   PFN_vkGetFenceStatus vkGetFenceStatus = nullptr;
   PFN_vkWaitForFences vkWaitForFences = nullptr;
   PFN_vkResetFences vkResetFences = nullptr;
+  PFN_vkCreateEvent vkCreateEvent = nullptr;
+  PFN_vkDestroyEvent vkDestroyEvent = nullptr;
+  PFN_vkGetEventStatus vkGetEventStatus = nullptr;
+  PFN_vkResetEvent vkResetEvent = nullptr;
+  PFN_vkCmdSetEvent vkCmdSetEvent = nullptr;
   PFN_vkCmdBeginRenderPass vkCmdBeginRenderPass = nullptr;
   PFN_vkCmdEndRenderPass vkCmdEndRenderPass = nullptr;
   PFN_vkCmdBindPipeline vkCmdBindPipeline = nullptr;

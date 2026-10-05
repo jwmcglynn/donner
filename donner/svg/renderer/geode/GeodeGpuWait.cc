@@ -4,6 +4,15 @@
 
 namespace donner::geode {
 
+std::ostream& operator<<(std::ostream& os, GpuWaitResult value) {
+  switch (value) {
+    case GpuWaitResult::Complete: return os << "Complete";
+    case GpuWaitResult::TimedOut: return os << "TimedOut";
+    case GpuWaitResult::DeviceLost: return os << "DeviceLost";
+  }
+  return os << "GpuWaitResult(" << static_cast<int>(value) << ")";
+}
+
 GpuWaitResult BoundedGpuWait(const std::function<bool()>& pollOnce,
                              std::chrono::microseconds timeout,
                              std::chrono::microseconds pollInterval,

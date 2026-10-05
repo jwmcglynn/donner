@@ -160,18 +160,18 @@ struct SnapshotReadbackResources {
  * waits only for the producer to have handed that work to its queue, which it has by the time it
  * exports. Otherwise it blocks this thread for the producer's frame.
  *
- * Loss policy. The runtime's source wait declares nothing when its budget runs out; this helper
- * is the consumer's own bounded wait and applies the policy of every other bounded wait over a
- * Geode root. A wait that spent all of \p bound means the producer's queue stopped answering: the
+ * Loss policy. The runtime's source wait declares nothing when it gives up; this helper is the
+ * consumer's own bounded wait and applies the policy of every other bounded wait over a Geode
+ * root. A producer that made no progress for all of \p bound has stopped answering: the
  * consumer's condition is declared lost with the queue-idle wait site and the measured wait, so
- * later frames fail at once instead of stalling again. A wait that ended sooner did so because a
- * device is lost or the producer failed, which is not this consumer's to report: the helper fails
- * with `DeviceLost` and declares nothing. A producer already lost is refused at registration the
- * same way.
+ * later frames fail at once instead of stalling again. A producer still finishing work is waited
+ * out however long its backlog. A wait that failed did so because a device is lost or the producer
+ * failed, which is not this consumer's to report: the helper fails with `DeviceLost` and declares
+ * nothing. A producer already lost is refused at registration the same way.
  *
  * @param consumer Runtime device of the context that will name the texture.
  * @param source Export of the producer's texture.
- * @param bound Longest to wait for the producer's work; must be positive.
+ * @param bound Longest the producer's work may go without progress; must be positive.
  * @return The registration, or why it was refused or could not be ordered.
  */
 gpu::Result<gpu::Texture> RegisterOrderedTexture(
@@ -260,21 +260,24 @@ public:
   [[nodiscard]] uint32_t maxTextureDimension2D() const;
 
   /**
-   * Wait, bounded, for all submitted GPU work to complete.
+   * Wait, bounded by lack of progress, for all submitted GPU work to complete.
    *
    * Waits through this context's runtime device for its last submitted serial, rather than asking
-   * whether a queue shared with other contexts is momentarily empty. A timeout declares the device
-   * lost, attributed to the queue-idle wait, and later waits return immediately. A runtime device
-   * that declares that loss itself when its own bounded wait expires reports it as `DeviceLost`
-   * rather than `TimedOut`.
+   * whether a queue shared with other contexts is momentarily empty. That serial completes only
+   * after everything queued ahead of it, so the wait gives up only when that work stops making
+   * progress for \p stallBound (see \ref gpu::Device::waitForSerialUnlessStalled), never because
+   * a slow device's backlog is long. A stall declares the device lost, attributed to the
+   * queue-idle wait with the time the wait actually spent, and later waits return immediately. A
+   * runtime device that declares that loss itself reports it as `DeviceLost` rather than
+   * `TimedOut`.
    *
-   * @param timeout Wait budget; defaults to the shared generous bound.
-   * @return `Complete` when the queue drained, `TimedOut` when the deadline
-   *   expired (the device is now marked lost), or `DeviceLost` when the device
-   *   was already lost and no wait was performed, or a loss was declared while
-   *   the wait was running.
+   * @param stallBound Longest the work may go without progress; defaults to the shared bound.
+   * @return `Complete` when the queue drained, `TimedOut` when the work stopped progressing (the
+   *   device is now marked lost), or `DeviceLost` when the device was already lost and no wait was
+   *   performed, or a loss was declared while the wait was running.
    */
-  GpuWaitResult waitForQueueIdle(std::chrono::milliseconds timeout = kDefaultGpuWaitTimeout) const;
+  GpuWaitResult waitForQueueIdle(
+      std::chrono::milliseconds stallBound = kDefaultGpuWaitTimeout) const;
 
   /// Overrides one queue-idle result while preserving its loss side effects. Test seam.
   void setQueueWaitResultForTesting(std::optional<GpuWaitResult> result) {

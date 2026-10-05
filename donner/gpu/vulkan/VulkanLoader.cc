@@ -312,6 +312,11 @@ Status VulkanLoader::loadDevice(VkDevice device) {
   missing.store(api_.vkGetFenceStatus, "vkGetFenceStatus", resolve("vkGetFenceStatus"));
   missing.store(api_.vkWaitForFences, "vkWaitForFences", resolve("vkWaitForFences"));
   missing.store(api_.vkResetFences, "vkResetFences", resolve("vkResetFences"));
+  missing.store(api_.vkCreateEvent, "vkCreateEvent", resolve("vkCreateEvent"));
+  missing.store(api_.vkDestroyEvent, "vkDestroyEvent", resolve("vkDestroyEvent"));
+  missing.store(api_.vkGetEventStatus, "vkGetEventStatus", resolve("vkGetEventStatus"));
+  missing.store(api_.vkResetEvent, "vkResetEvent", resolve("vkResetEvent"));
+  missing.store(api_.vkCmdSetEvent, "vkCmdSetEvent", resolve("vkCmdSetEvent"));
   missing.store(api_.vkCmdBeginRenderPass, "vkCmdBeginRenderPass", resolve("vkCmdBeginRenderPass"));
   missing.store(api_.vkCmdEndRenderPass, "vkCmdEndRenderPass", resolve("vkCmdEndRenderPass"));
   missing.store(api_.vkCmdBindPipeline, "vkCmdBindPipeline", resolve("vkCmdBindPipeline"));

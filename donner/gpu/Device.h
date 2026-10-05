@@ -593,6 +593,22 @@ public:
   bool waitForTextureSource(const Texture& registration, double timeoutSeconds);
 
   /**
+   * \ref waitForTextureSource for a caller whose bound exists to detect a hung producer: the
+   * wait gives up only once the producer has made no progress for \p stallBound, measured from
+   * that progress, rather than giving the producer's whole backlog a fixed budget. A producer
+   * whose backend does not report progress (\ref SubmissionCompletion::lastProgress) bounds the
+   * whole wait by \p stallBound instead. Declares nothing.
+   *
+   * @param registration Live texture of this device.
+   * @param stallBound Longest the producer may go without progress; clamped like
+   *   \ref waitForSerialUnlessStalled.
+   * @return `Completed` once work naming the registration may be submitted, `Failed` when a
+   *   device is lost or the producer failed, `Stalled` when the producer stopped progressing.
+   */
+  SerialWaitResult waitForTextureSourceUnlessStalled(const Texture& registration,
+                                                     std::chrono::milliseconds stallBound);
+
+  /**
    * Bytes of this device's exported textures that are still held by an export token or a
    * registration after this device released its own handle.
    *
@@ -926,6 +942,43 @@ public:
   bool waitForSerial(uint64_t serial, double timeoutSeconds);
 
   /**
+   * Blocks until \ref completedSerial reaches \p serial, giving up only when the work the serial
+   * waits behind stops making progress.
+   *
+   * A serial completes only after everything queued ahead of it, so a fixed budget measures the
+   * whole backlog and would time out a slow device that is still working through it. This wait
+   * gives up instead once \ref lastProgress is \p stallBound in the past. The bound runs from the
+   * last progress, not from the start of the wait, so a new wait on work that has already stopped
+   * does not restart it. While progress continues the wait has no total limit: the work ahead of
+   * a serial is finite, and a stall anywhere in it ends the wait within the bound. A backend with
+   * no notion of progress (\ref lastProgress returns nothing) bounds the whole wait by
+   * \p stallBound instead.
+   *
+   * A lost root, or a backend failure that means the serial can never complete, ends the wait at
+   * once with \ref SerialWaitEnd::Failed. Declares nothing: what a stall means is the caller's
+   * decision. Owner-thread only.
+   *
+   * @param serial Submission serial to wait for.
+   * @param stallBound Longest the work may go without progress; clamped to the range zero to
+   *   \ref kMaxWaitSeconds.
+   * @return How the wait ended, and how long it ran.
+   */
+  SerialWaitResult waitForSerialUnlessStalled(uint64_t serial,
+                                              std::chrono::milliseconds stallBound);
+
+  /**
+   * When the work this device's submissions wait behind last made progress, or nothing when the
+   * backend has no notion of progress.
+   *
+   * Progress is a command buffer finishing on the queue this device's work runs on, work being
+   * committed to that queue while none of it was outstanding, which starts the clock, and, while
+   * a submission waits on the GPU for another device's work, that device's progress until the
+   * awaited work completes. It can predate any particular wait: a queue that stopped making
+   * progress before a caller started waiting has been stalled since then. Owner-thread only.
+   */
+  std::optional<std::chrono::steady_clock::time_point> lastProgress();
+
+  /**
    * Installs \p observer to be notified of the work this device accepts (see
    * \ref DeviceObserver).
    *
@@ -1122,6 +1175,22 @@ protected:
    * @return True once this device has completed \p serial.
    */
   virtual bool onWaitForSerial(uint64_t serial, double timeoutSeconds);
+
+  /**
+   * Backend hook: \ref waitForSerialUnlessStalled with a bound already clamped.
+   *
+   * The default, for a backend with no notion of progress, waits for \p serial for at most
+   * \p stallBound in all and reports a wait that ran out as stalled. A backend that tracks
+   * progress overrides this, together with \ref onLastProgress.
+   *
+   * @param serial Submission serial to wait for.
+   * @param stallBound Longest the work may go without progress.
+   */
+  virtual SerialWaitResult onWaitForSerialUnlessStalled(uint64_t serial,
+                                                        std::chrono::milliseconds stallBound);
+
+  /// Backend hook: \ref lastProgress. The default reports no notion of progress.
+  virtual std::optional<std::chrono::steady_clock::time_point> onLastProgress();
 
   /// Backend hook: a validated buffer write.
   /// @param slotIndex Destination buffer slot. @param offsetBytes Destination byte offset.

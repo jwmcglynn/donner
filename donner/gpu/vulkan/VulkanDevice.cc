@@ -35,6 +35,7 @@
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/vulkan/VulkanBufferAllocator.h"
 #include "donner/gpu/vulkan/VulkanLoader.h"
+#include "donner/gpu/vulkan/VulkanQueueProgress.h"
 #include "donner/gpu/vulkan/VulkanResourceState.h"
 #include "donner/gpu/vulkan/VulkanSwapchain.h"
 
@@ -48,15 +49,18 @@ constexpr uint32_t kTargetApiVersion = VK_API_VERSION_1_1;
 /// Stable family tag for runtime devices that can alias images over one Vulkan root.
 constexpr char kVulkanTextureShareFamily = 0;
 
-/// Timeout for the synchronous internal texture-upload submission, in nanoseconds (60 s). A
-/// stuck driver fails closed with an error instead of hanging the caller forever.
-constexpr double kUploadFenceTimeoutSeconds = 60.0;
+/// How long the synchronous internal texture-upload submission waits while the queue it is on
+/// makes no progress (60 s). A stuck driver fails closed with an error instead of hanging the
+/// caller forever, while an upload behind a long backlog that is still progressing completes.
+constexpr std::chrono::seconds kUploadStallTimeout{60};
 
-/// Bound for a host access waiting on the buffer's outstanding submission.
-constexpr double kBusyBufferAccessTimeoutSeconds = 5.0;
+/// How long a host access waits on the buffer's outstanding submission while the queue it is on
+/// makes no progress.
+constexpr std::chrono::milliseconds kBusyBufferAccessStallTimeout{5000};
 
-/// Bound for each outstanding fence during device destruction.
-constexpr uint64_t kTeardownFenceTimeoutNs = 5'000'000'000;
+/// How long device destruction waits for each outstanding fence while the queue it is on makes
+/// no progress, before it gives up proving the work complete.
+constexpr std::chrono::milliseconds kTeardownStallTimeout{5000};
 
 const char* AdapterTypeName(VkPhysicalDeviceType type) {
   switch (type) {
@@ -1176,8 +1180,12 @@ struct VulkanSharedRoot::Impl {
   std::mutex queueMutex;      //!< Vulkan requires external synchronization of one VkQueue.
   std::mutex externalSurfaceMutex;
   std::map<uint64_t, std::shared_ptr<VulkanSurfaceRetirement>> externalSurfaces;
+  /// Progress of the queue every runtime device over this root submits to. Created with the first
+  /// runtime device, and destroyed before the device its events belong to.
+  std::unique_ptr<VulkanQueueProgress> queueProgress;
 
   ~Impl() {
+    queueProgress.reset();
     if (api == nullptr) {
       return;
     }
@@ -1389,6 +1397,9 @@ struct VulkanDevice::Impl {
   std::shared_ptr<VulkanSharedRoot> nativeRoot;
   std::mutex* executionMutex = nullptr;  //!< Shared image-state order, null for fake test owners.
   std::mutex* queueMutex = nullptr;  //!< Shared queue call lock, null only for fake test owners.
+  /// Progress of the shared queue, owned by \ref nativeRoot; null for fake test owners, whose
+  /// command buffers then set no events and whose waits bound their whole duration.
+  VulkanQueueProgress* queueProgress = nullptr;
 
   /// Holds image-state order through command encoding, native submit and commit or rollback.
   /// The native queue lock is taken only inside this lock, never the reverse.
@@ -1530,6 +1541,8 @@ struct VulkanDevice::Impl {
     std::vector<VkFramebuffer> framebuffers;      //!< Transient per-pass framebuffers.
     BufferRecord bufferWriteStaging;              //!< Packed queued-write payload.
     std::vector<BufferRecord> retiredBuffers;     //!< Upload destinations whose slots were freed.
+    /// Events the submission's command buffers set as they finish; see \ref queueProgress.
+    std::vector<VkEvent> progressEvents;
   };
 
   /// A copied host payload awaiting an ordinary submission, ordered by write call.
@@ -1742,8 +1755,11 @@ struct VulkanDevice::Impl {
   /// @param wait Semaphores this submission must wait on, empty for internal work; a frame
   ///   acquired from a surface comes back before the presentation engine has finished reading
   ///   it, so the submission that writes it waits here.
+  /// @param progressEvents Events the buffers set as they finish, recorded as submitted to
+  ///   \ref queueProgress once the queue accepts them.
   VkResult submitToQueue(std::span<const VkCommandBuffer> commandBuffers, VkFence fence,
-                         const SurfaceWaitSync& wait = {}) {
+                         const SurfaceWaitSync& wait = {},
+                         std::span<const VkEvent> progressEvents = {}) {
     // One queue submission for the whole span: the buffers execute in the order given, and the
     // fence signals once, when all of them have finished.
     VkSubmitInfo submitInfo = {};
@@ -1762,9 +1778,14 @@ struct VulkanDevice::Impl {
       queueLock = std::unique_lock<std::mutex>(*queueMutex);
     }
     // A submission without command buffers has nothing to hold, and still has to signal its fence.
-    return commandBufferGate.paused && !commandBuffers.empty()
-               ? submitThroughGate(commandBuffers, fence, wait)
-               : api->vkQueueSubmit(queue, 1, &submitInfo, fence);
+    const VkResult result = commandBufferGate.paused && !commandBuffers.empty()
+                                ? submitThroughGate(commandBuffers, fence, wait)
+                                : api->vkQueueSubmit(queue, 1, &submitInfo, fence);
+    if (result == VK_SUCCESS && queueProgress != nullptr) {
+      // Recorded under the queue lock, so tracked work is noted in the order the queue runs it.
+      queueProgress->noteSubmitted(progressEvents);
+    }
+    return result;
   }
 
   /// Test seam: what \ref VulkanDevice::pauseSubmissionsForTest installs. Every command buffer
@@ -1882,6 +1903,9 @@ struct VulkanDevice::Impl {
 
   /// Destroys the transient objects and command buffer of a completed submission.
   void releaseSubmission(InFlightSubmission& submission) {
+    if (queueProgress != nullptr) {
+      queueProgress->retire(submission.progressEvents);
+    }
     inFlightBufferWriteBytes -= submission.bufferWriteStaging.byteSize;
     destroyBufferRecord(submission.bufferWriteStaging);
     for (BufferRecord& record : submission.retiredBuffers) {
@@ -1942,52 +1966,30 @@ struct VulkanDevice::Impl {
     return found == inFlight.end() ? nullptr : &*found;
   }
 
-  /// How a stepped fence wait ended.
-  enum class FenceWaitEnd : uint8_t {
-    Signalled,  //!< The fence signalled.
-    TimedOut,   //!< The budget ran out first.
-    RootLost,   //!< A device over the root declared the root lost first.
-    Failed,     //!< The wait itself failed; \ref FenceWait::result says how.
-  };
-
-  /// How a stepped fence wait ended, with the native result of its last step.
-  struct FenceWait {
-    FenceWaitEnd end = FenceWaitEnd::TimedOut;  //!< How the wait ended.
-    VkResult result = VK_TIMEOUT;               //!< Native result of the last step.
-  };
-
-  /// Waits for \p fence for up to \p timeoutSeconds, in steps of at most 10 ms so that a loss
-  /// another device over the root declares while the wait is blocked ends it too. Records
-  /// nothing; each caller decides what its outcome means.
+  /// Waits for \p fence for up to \p timeoutSeconds in all, for a caller whose deadline is its
+  /// own; see \ref WaitForFencesWhileQueueProgresses. A loss another device over the root declares
+  /// while the wait is blocked ends it too, and an exhausted budget ends as
+  /// \ref FenceProgressWaitEnd::Stalled. Records nothing; each caller decides what its outcome
+  /// means.
   /// @param fence Fence to wait for.
   /// @param timeoutSeconds Budget in seconds, already bounded by the caller.
-  FenceWait waitForFenceUnlessLost(VkFence fence, double timeoutSeconds) {
-    constexpr std::chrono::nanoseconds kLossCheckInterval = std::chrono::milliseconds(10);
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::duration_cast<std::chrono::nanoseconds>(
-                              std::chrono::duration<double>(std::max(timeoutSeconds, 0.0)));
-    while (true) {
-      const std::chrono::nanoseconds remaining =
-          std::max(std::chrono::nanoseconds::zero(), deadline - std::chrono::steady_clock::now());
-      const std::chrono::nanoseconds step = std::min(remaining, kLossCheckInterval);
-      const VkResult result =
-          api->vkWaitForFences(device, 1, &fence, VK_TRUE, static_cast<uint64_t>(step.count()));
-      if (result == VK_SUCCESS) {
-        return {FenceWaitEnd::Signalled, result};
-      }
-      if (result != VK_TIMEOUT) {
-        return {FenceWaitEnd::Failed, result};
-      }
-      if (fenceWaitStepHookForTest) {
-        fenceWaitStepHookForTest();
-      }
-      if (rootLoss->lost.load(std::memory_order_acquire)) {
-        return {FenceWaitEnd::RootLost, result};
-      }
-      if (remaining <= step) {
-        return {FenceWaitEnd::TimedOut, result};
-      }
-    }
+  FenceProgressWait waitForFenceUnlessLost(VkFence fence, double timeoutSeconds) {
+    return WaitForFencesWhileQueueProgresses(
+        *api, device, std::span(&fence, 1), /*progress=*/nullptr, rootLoss.get(),
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(std::max(timeoutSeconds, 0.0))),
+        fenceWaitStepHookForTest);
+  }
+
+  /// Waits for \p fence until it signals, giving up once the shared queue has made no progress
+  /// for \p stallBound; see \ref WaitForFencesWhileQueueProgresses. A loss another device over
+  /// the root declares ends it too. Records nothing.
+  /// @param fence Fence to wait for.
+  /// @param stallBound Longest the queue may go without progress.
+  FenceProgressWait waitForFenceWhileQueueProgresses(VkFence fence,
+                                                     std::chrono::milliseconds stallBound) {
+    return WaitForFencesWhileQueueProgresses(*api, device, std::span(&fence, 1), queueProgress,
+                                             rootLoss.get(), stallBound, fenceWaitStepHookForTest);
   }
 
   /// Records a fence wait that failed with \p result. @param result Native result of the wait.
@@ -2115,8 +2117,16 @@ struct VulkanDevice::Impl {
   /// the loss. @param fence Fence of work this device still owns.
   /// @return True when the fence's work is proven complete.
   bool proveFenceCompleteForTeardown(VkFence fence) {
+    // However long the work ahead of it takes, as long as the queue keeps finishing work: giving
+    // up leaves the device's whole ownership graph retained until the process exits. A declared
+    // loss does not end it, because only a signalled fence proves the work complete. After a
+    // submission whose completion is unknown, its work may be on the queue without the progress
+    // record knowing, so the wait gets a fixed budget instead.
     const VkResult result =
-        api->vkWaitForFences(device, 1, &fence, VK_TRUE, kTeardownFenceTimeoutNs);
+        WaitForFencesWhileQueueProgresses(*api, device, std::span(&fence, 1),
+                                          executionUncertain ? nullptr : queueProgress,
+                                          /*rootLoss=*/nullptr, kTeardownStallTimeout)
+            .result;
     if (result == VK_ERROR_DEVICE_LOST) {
       recordDeviceLoss("teardown fence wait reported device loss");
     }
@@ -2324,7 +2334,7 @@ struct VulkanDevice::Impl {
   VulkanSurfaceContext surfaceContext() const {
     return VulkanSurfaceContext{api,        instance,         physicalDevice, device,
                                 queue,      queueFamilyIndex, commandPool,    surfaceLifetime,
-                                queueMutex, rootLoss};
+                                queueMutex, rootLoss,         queueProgress};
   }
 
   /// Waits taken from surfaces for one submission, and the surfaces they came from.
@@ -2404,10 +2414,12 @@ struct VulkanDevice::Impl {
     std::vector<VkCommandBuffer> commandBuffers;
     std::vector<VkRenderPass> transientRenderPasses;   //!< Render passes created while encoding.
     std::vector<VkFramebuffer> transientFramebuffers;  //!< Framebuffers created while encoding.
-    bool inRenderPass = false;                         //!< True between begin and end pass.
-    bool inComputePass = false;                        //!< True between begin and end compute pass.
-    BufferRecord bufferWriteStaging;                   //!< Staging released on encoding failure.
-    Extent2d passExtent;                               //!< Extent of the active pass.
+    /// Events the encoded command buffers set as they finish, one each; see \ref queueProgress.
+    std::vector<VkEvent> progressEvents;
+    bool inRenderPass = false;        //!< True between begin and end pass.
+    bool inComputePass = false;       //!< True between begin and end compute pass.
+    BufferRecord bufferWriteStaging;  //!< Staging released on encoding failure.
+    Extent2d passExtent;              //!< Extent of the active pass.
     const RenderPipelineRecord* currentPipeline = nullptr;  //!< Pipeline bound in the pass.
     /// Compute pipeline bound in the active compute pass.
     const ComputePipelineRecord* currentComputePipeline = nullptr;
@@ -2452,6 +2464,10 @@ struct VulkanDevice::Impl {
     syncStates.discardStaged();
     destroyTransientEncodingObjects(state);
     destroyBufferRecord(state.bufferWriteStaging);
+    if (queueProgress != nullptr) {
+      queueProgress->releaseUnsubmitted(state.progressEvents);
+    }
+    state.progressEvents.clear();
   }
 
   /// Allocates and records one command buffer of a submission, leaving it unsubmitted.
@@ -2940,6 +2956,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::CreateOverSharedRoot(
   impl.nativeRoot = root;
   impl.executionMutex = &native.executionMutex;
   impl.queueMutex = &native.queueMutex;
+  if (native.queueProgress == nullptr) {
+    native.queueProgress = std::make_unique<VulkanQueueProgress>(api, native.device);
+  }
+  impl.queueProgress = native.queueProgress.get();
   impl.loader = native.loader;
   impl.api = native.api;
   impl.instance = native.instance;
@@ -3135,15 +3155,59 @@ bool VulkanDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
   if (target == nullptr) {
     return false;  // Serial was never submitted.
   }
-  const Impl::FenceWait waited = impl.waitForFenceUnlessLost(target->fence, timeoutSeconds);
-  if (waited.end == Impl::FenceWaitEnd::Failed) {
+  const FenceProgressWait waited = impl.waitForFenceUnlessLost(target->fence, timeoutSeconds);
+  if (waited.end == FenceProgressWaitEnd::Failed) {
     impl.recordFenceWaitFailure(waited.result);
   }
-  if (waited.end != Impl::FenceWaitEnd::Signalled) {
+  if (waited.end != FenceProgressWaitEnd::Signalled) {
     return false;
   }
   impl.pollCompleted();
   return !impl.hasError() && impl.completedSerialValue >= serial;
+}
+
+SerialWaitResult VulkanDevice::onWaitForSerialUnlessStalled(uint64_t serial,
+                                                            std::chrono::milliseconds stallBound) {
+  const auto waitStart = std::chrono::steady_clock::now();
+  const auto ended = [&waitStart](SerialWaitEnd end) {
+    return SerialWaitResult{end, std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now() - waitStart)};
+  };
+  Impl& impl = *impl_;
+  // The same checks, in the same order, as onWaitForSerial.
+  impl.pollCompleted();
+  if (impl.hasError()) {
+    return ended(SerialWaitEnd::Failed);
+  }
+  if (impl.completedSerialValue >= serial) {
+    return ended(SerialWaitEnd::Completed);
+  }
+  if (isLost()) {
+    return ended(SerialWaitEnd::Failed);
+  }
+  const Impl::InFlightSubmission* target = impl.firstInFlightThrough(serial);
+  if (target == nullptr) {
+    return ended(SerialWaitEnd::Failed);  // Serial was never submitted.
+  }
+  const FenceProgressWait waited = impl.waitForFenceWhileQueueProgresses(target->fence, stallBound);
+  switch (waited.end) {
+    case FenceProgressWaitEnd::Signalled: break;
+    case FenceProgressWaitEnd::Stalled: return ended(SerialWaitEnd::Stalled);
+    case FenceProgressWaitEnd::Failed:
+      impl.recordFenceWaitFailure(waited.result);
+      return ended(SerialWaitEnd::Failed);
+    case FenceProgressWaitEnd::RootLost: return ended(SerialWaitEnd::Failed);
+  }
+  impl.pollCompleted();
+  return ended(!impl.hasError() && impl.completedSerialValue >= serial ? SerialWaitEnd::Completed
+                                                                       : SerialWaitEnd::Failed);
+}
+
+std::optional<std::chrono::steady_clock::time_point> VulkanDevice::onLastProgress() {
+  if (impl_->queueProgress == nullptr) {
+    return std::nullopt;
+  }
+  return impl_->queueProgress->observe();
 }
 
 Status VulkanDevice::pauseSubmissionsForTest() {
@@ -3193,7 +3257,8 @@ void VulkanDevice::resumeSubmissionsForTest() {
 }
 
 Status VulkanDevice::waitForBufferAccess(uint64_t serial, std::string_view operation) {
-  if (waitForSerial(serial, kBusyBufferAccessTimeoutSeconds)) {
+  const SerialWaitEnd end = waitForSerialUnlessStalled(serial, kBusyBufferAccessStallTimeout).end;
+  if (end == SerialWaitEnd::Completed) {
     return OkStatus();
   }
   const std::string error = lastErrorForTest();
@@ -3204,10 +3269,15 @@ Status VulkanDevice::waitForBufferAccess(uint64_t serial, std::string_view opera
         GpuErrorType::DeviceLost,
         std::format("{} cannot wait for submission {}: the device was lost", operation, serial)};
   }
+  if (!error.empty()) {
+    return GpuError{GpuErrorType::InvalidState, error};
+  }
   return GpuError{GpuErrorType::InvalidState,
-                  error.empty()
-                      ? std::format("{} timed out waiting for submission {}", operation, serial)
-                      : error};
+                  end == SerialWaitEnd::Stalled
+                      ? std::format("{} gave up waiting for submission {}: the queue made no "
+                                    "progress for {} ms",
+                                    operation, serial, kBusyBufferAccessStallTimeout.count())
+                      : std::format("{} cannot wait for submission {}", operation, serial)};
 }
 
 Result<std::vector<uint8_t>> VulkanDevice::readBackBuffer(const Buffer& buffer) {
@@ -4254,18 +4324,18 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
 }
 
 Status VulkanDevice::Impl::waitForTextureUpload(VkFence fence, bool& objectsStillInUse) {
-  const FenceWait waited = waitForFenceUnlessLost(fence, kUploadFenceTimeoutSeconds);
-  if (waited.end == FenceWaitEnd::Signalled) {
+  const FenceProgressWait waited = waitForFenceWhileQueueProgresses(fence, kUploadStallTimeout);
+  if (waited.end == FenceProgressWaitEnd::Signalled) {
     return OkStatus();
   }
-  if (waited.end == FenceWaitEnd::Failed && waited.result == VK_ERROR_DEVICE_LOST) {
+  if (waited.end == FenceProgressWaitEnd::Failed && waited.result == VK_ERROR_DEVICE_LOST) {
     recordDeviceLoss("vkWaitForFences (writeTexture) reported device loss");
     return VkError("vkWaitForFences (writeTexture)", waited.result);
   }
   // A wait that did not see the fence signal does not prove completion, whatever ended it, so
   // ownership is retained until polling or teardown does.
   objectsStillInUse = true;
-  if (waited.end == FenceWaitEnd::RootLost) {
+  if (waited.end == FenceProgressWaitEnd::RootLost) {
     // A loss another device over the root declared leaves no error here; it is still a loss.
     if (!hasError()) {
       return GpuError{GpuErrorType::DeviceLost,
@@ -4996,7 +5066,8 @@ Status VulkanDevice::Impl::finishSubmission(uint64_t submissionSerial, EncodingS
   // A frame acquired from a surface comes back before the presentation engine has finished
   // reading it, so the first submission that writes that frame carries its wait.
   const ClaimedSurfaceWaits claimed = claimSurfaceWaits(encodedTextureSlots);
-  const VkResult submitResult = submitToQueue(state.commandBuffers, fence, claimed.sync);
+  const VkResult submitResult =
+      submitToQueue(state.commandBuffers, fence, claimed.sync, state.progressEvents);
   if (SubmissionWasRejected(submitResult)) {
     returnSurfaceWaits(claimed);
     api->vkDestroyFence(device, fence, nullptr);
@@ -5022,6 +5093,8 @@ Status VulkanDevice::Impl::finishSubmission(uint64_t submissionSerial, EncodingS
   submission.renderPasses = std::move(state.transientRenderPasses);
   submission.framebuffers = std::move(state.transientFramebuffers);
   submission.bufferWriteStaging = state.bufferWriteStaging;
+  // The queue may run these buffers, so their events stay with the submission until it retires.
+  submission.progressEvents = std::move(state.progressEvents);
   commitPendingBufferWrites(submissionSerial);
   inFlight.push_back(std::move(submission));
   return submitResult == VK_SUCCESS ? OkStatus() : Status(VkError("vkQueueSubmit", submitResult));
@@ -5058,6 +5131,18 @@ Status VulkanDevice::Impl::encodeSubmittedCommandBuffer(EncodingState& state,
   if (state.inRenderPass || state.inComputePass) {
     // The encoder state machine guarantees passes are ended before finish; fail closed anyway.
     return GpuError{GpuErrorType::InvalidState, "submitted command stream left a pass open"};
+  }
+
+  if (queueProgress != nullptr) {
+    // Set once everything before it on the queue has finished, so a wait behind this buffer sees
+    // the queue progress as each buffer finishes rather than only when a whole submission does.
+    Result<VkEvent> progressEvent = queueProgress->acquire();
+    if (progressEvent.hasError()) {
+      return std::move(progressEvent).error();
+    }
+    state.progressEvents.push_back(progressEvent.result());
+    api->vkCmdSetEvent(state.commandBuffer, progressEvent.result(),
+                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
   }
 
   if (const VkResult result = api->vkEndCommandBuffer(state.commandBuffer); result != VK_SUCCESS) {

@@ -10,12 +10,13 @@
 /// routes through this header so the timeout policy lives in exactly one
 /// place.
 ///
-/// This header is deliberately WebGPU-free (chrono + functional only) so the
+/// This header is deliberately WebGPU-free (chrono, functional and ostream only) so the
 /// wait loop can be unit tested without a GPU via the injectable clock and
 /// sleep hooks.
 
 #include <chrono>
 #include <functional>
+#include <ostream>
 
 #include "donner/gpu/DeviceLost.h"
 
@@ -25,17 +26,26 @@ namespace donner::geode {
 enum class GpuWaitResult {
   /// The awaited condition was observed before the deadline.
   Complete,
-  /// The deadline expired without the condition being observed. Callers
-  /// treat this as evidence of a hung device and declare the device lost.
+  /// The wait gave up without the condition being observed: a queue-idle wait because the work
+  /// stopped progressing, other waits because their deadline expired. Callers treat this as
+  /// evidence of a hung device and declare the device lost.
   TimedOut,
   /// The device was already marked lost; no wait was performed.
   DeviceLost,
 };
 
+/// Ostream output operator, e.g. `TimedOut`. @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, GpuWaitResult value);
+
 /// Default bound for waits that previously blocked without limit (teardown
-/// drains, inter-submit serialization, editor readback maps). Generous: a
-/// healthy device completes these in microseconds to milliseconds, so the
-/// bound only trips when the driver has effectively hung.
+/// drains, inter-submit serialization, editor readback maps).
+///
+/// A wait for submitted work measures it as time without progress, not as a
+/// budget for the whole wait: the awaited work completes only after everything
+/// queued ahead of it, and a slow device can take far longer than this to get
+/// through a long backlog while still finishing command buffers. A healthy
+/// device finishes some command buffer well within the bound, so it only trips
+/// when the device has effectively hung.
 inline constexpr std::chrono::milliseconds kDefaultGpuWaitTimeout{5000};
 
 /// Bound for snapshot readback map waits. Matches the long-standing readback

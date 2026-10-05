@@ -27,6 +27,8 @@
 
 using testing::ElementsAre;
 using testing::Eq;
+using testing::Ge;
+using testing::Gt;
 using testing::HasSubstr;
 using testing::IsEmpty;
 using testing::IsFalse;
@@ -653,6 +655,75 @@ TEST_F(TextureRegistrationTest, ATimedOutSourceWaitDeclaresNothing) {
   EXPECT_THAT(consumer_->waitForTextureSource(registered, 0.02), IsFalse());
   EXPECT_THAT(producer_->isLost(), IsFalse());
   EXPECT_THAT(consumer_->isLost(), IsFalse());
+}
+
+/// How often the producer in the stall-bounded source waits makes progress, against what bound.
+constexpr std::chrono::milliseconds kSourceStallBound{300};
+constexpr std::chrono::milliseconds kSourceProgressInterval{50};
+
+/// A source wait that gives up only on a stall judges it by the producer's progress: work ahead of
+/// the source that keeps finishing is waited out, although the source itself completes nothing
+/// for longer than the bound.
+TEST_F(TextureRegistrationTest, AStallBoundedSourceWaitOutlastsItsBoundWhileTheProducerProgresses) {
+  constexpr int kProgressSteps = 12;  // Twice the bound.
+  const Texture owned = MakeSharedTexture(*producer_);
+  producer_->holdCompletion();
+  ASSERT_THAT(SubmitSharedTextureRead(*producer_, owned), HasResult());
+  producer_->noteProgress();
+  const Texture registered =
+      GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
+
+  // Stands in for the producer's queue: the main thread only waits on the consumer meanwhile.
+  PacedSteps producerQueue(kProgressSteps, kSourceProgressInterval, [this](int step) {
+    producer_->noteProgress();
+    if (step == kProgressSteps) {
+      producer_->releaseCompletion();
+    }
+  });
+  const SerialWaitResult waited =
+      consumer_->waitForTextureSourceUnlessStalled(registered, kSourceStallBound);
+  producerQueue.join();
+  ASSERT_THAT(producerQueue, KeptPaceWithin(kSourceStallBound));
+
+  EXPECT_THAT(waited.end, Eq(SerialWaitEnd::Completed))
+      << "the producer kept making progress, yet the wait gave up: " << waited;
+  EXPECT_THAT(waited.waited.count(), Gt(kSourceStallBound.count()))
+      << "the source completed within the bound, so this case measured nothing";
+  EXPECT_THAT(consumer_->isLost(), IsFalse());
+}
+
+/// A producer that stops making progress ends a stall-bounded source wait within the bound of its
+/// last progress, and not before, and the wait declares nothing: what a stall means is the
+/// caller's decision.
+TEST_F(TextureRegistrationTest, AStallBoundedSourceWaitEndsWithinItsBoundOnceTheProducerStops) {
+  constexpr int kProgressSteps = 3;
+  const Texture owned = MakeSharedTexture(*producer_);
+  producer_->holdCompletion();
+  ASSERT_THAT(SubmitSharedTextureRead(*producer_, owned), HasResult());
+  producer_->noteProgress();
+  const Texture registered =
+      GetResultOrFail(consumer_->registerTexture(GetResultOrFail(producer_->exportTexture(owned))));
+
+  PacedSteps producerQueue(kProgressSteps, kSourceProgressInterval,
+                           [this](int) { producer_->noteProgress(); });
+  const SerialWaitResult waited =
+      consumer_->waitForTextureSourceUnlessStalled(registered, kSourceStallBound);
+  const auto endedAt = std::chrono::steady_clock::now();
+  producerQueue.join();
+  ASSERT_THAT(producerQueue, KeptPaceWithin(kSourceStallBound));
+
+  // The wait cannot have seen the last progress before it was noted, so the lower bound is
+  // measured from before the note and the upper bound from after it.
+  EXPECT_THAT(waited.end, Eq(SerialWaitEnd::Stalled)) << waited;
+  EXPECT_THAT(MillisecondsBetween(producerQueue.lastStepStart(), endedAt),
+              Ge(kSourceStallBound.count()))
+      << "the wait gave up while the producer was still making progress";
+  EXPECT_THAT(MillisecondsBetween(producerQueue.lastStepEnd(), endedAt),
+              Lt(kSourceStallBound.count() + 1000))
+      << "the wait outlived its bound after the producer stopped";
+  EXPECT_THAT(producer_->isLost(), IsFalse());
+  EXPECT_THAT(consumer_->isLost(), IsFalse());
+  producer_->releaseCompletion();
 }
 
 /// A surface of \p device whose frames can be sampled and copied from.

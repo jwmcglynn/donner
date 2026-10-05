@@ -22,9 +22,16 @@ namespace {
 /// is not handing images back.
 constexpr uint64_t kAcquireTimeoutNanoseconds = 1'000'000'000;
 
-/// How long a drain waits for this swapchain's own submissions. Only teardown and recreation use
-/// it, and a device that has not finished them in this long is not going to.
-constexpr uint64_t kDrainTimeoutNanoseconds = 5'000'000'000;
+/// How long a wait for this swapchain's own submissions waits while the queue they are on makes
+/// no progress. They complete only after everything queued ahead of them, other devices' work
+/// included, so a long backlog that is still progressing is waited out, and a queue that has not
+/// progressed for this long is not going to.
+constexpr std::chrono::milliseconds kDrainStallTimeout{5000};
+
+/// How long a wait for a present to finish waits in all. The presentation engine signals a
+/// present's fence, not the queue, so the queue's progress says nothing about it, and the wait
+/// keeps a fixed budget.
+constexpr std::chrono::milliseconds kPresentFenceTimeout{5000};
 
 /// A failure that names the native operation and its result. @param what Operation name.
 /// @param result Native result.
@@ -448,6 +455,22 @@ VulkanSwapchain::VulkanSwapchain(const VulkanSurfaceContext& context, VkSurfaceK
   }
 }
 
+VkResult VulkanSwapchain::waitForOwnFences(std::span<const VkFence> fences) const {
+  // The loss condition is not watched: only a signalled fence proves the work complete.
+  return WaitForFencesWhileQueueProgresses(*context_.api, context_.device, fences,
+                                           context_.queueProgress, /*rootLoss=*/nullptr,
+                                           kDrainStallTimeout)
+      .result;
+}
+
+VkResult VulkanSwapchain::waitForPresentFenceWithFixedBudget(VkFence fence) const {
+  // No progress record: the whole wait gets the budget, in one native wait.
+  return WaitForFencesWhileQueueProgresses(*context_.api, context_.device, std::span(&fence, 1),
+                                           /*progress=*/nullptr, /*rootLoss=*/nullptr,
+                                           kPresentFenceTimeout)
+      .result;
+}
+
 void VulkanSwapchain::declareDeviceLoss(VkResult result, const char* reason) const {
   if (result == VK_ERROR_DEVICE_LOST && context_.rootLoss &&
       DeclareDeviceLost(*context_.rootLoss)) {
@@ -517,9 +540,7 @@ Status VulkanSwapchain::prepareForDestruction() {
     if (!presentFencePending_[image]) {
       continue;
     }
-    const VkFence fence = presentFences_[image];
-    const VkResult waited = context_.api->vkWaitForFences(context_.device, 1, &fence, VK_TRUE,
-                                                          kDrainTimeoutNanoseconds);
+    const VkResult waited = waitForPresentFenceWithFixedBudget(presentFences_[image]);
     declareDeviceLoss(waited, "vkWaitForFences (present destruction proof) reported device loss");
     if (!CompletionProvesIdle(waited)) {
       return VkError("vkWaitForFences (present destruction proof)", waited);
@@ -756,8 +777,7 @@ Status VulkanSwapchain::waitForPresentFence(uint32_t imageIndex) {
     return OkStatus();
   }
   VkFence fence = presentFences_[imageIndex];
-  const VkResult waited =
-      context_.api->vkWaitForFences(context_.device, 1, &fence, VK_TRUE, kDrainTimeoutNanoseconds);
+  const VkResult waited = waitForPresentFenceWithFixedBudget(fence);
   declareDeviceLoss(waited, "vkWaitForFences (present completion) reported device loss");
   if (!CompletionProvesIdle(waited)) {
     return VkError("vkWaitForFences (present completion)", waited);
@@ -816,8 +836,7 @@ Status VulkanSwapchain::waitForAcquireRingSlot(size_t ringSlot) {
   if (acquireRingFences_[ringSlot] == VK_NULL_HANDLE) {
     return OkStatus();
   }
-  const VkResult result = context_.api->vkWaitForFences(
-      context_.device, 1, &acquireRingFences_[ringSlot], VK_TRUE, kDrainTimeoutNanoseconds);
+  const VkResult result = waitForOwnFences(std::span(&acquireRingFences_[ringSlot], 1));
   declareDeviceLoss(result, "vkWaitForFences (acquire ring) reported device loss");
   if (!CompletionProvesIdle(result)) {
     return VkError("vkWaitForFences (acquire ring)", result);
@@ -1069,6 +1088,11 @@ Status VulkanSwapchain::submitFrameHandover(const std::optional<TextureSyncState
       queueLock = std::unique_lock<std::mutex>(*context_.queueMutex);
     }
     result = context_.api->vkQueueSubmit(context_.queue, 1, &submitInfo, submission.fence);
+    if (result == VK_SUCCESS && context_.queueProgress != nullptr) {
+      // The handover sets no progress event, but on a queue with nothing tracked outstanding it
+      // still starts the clock its fence wait is judged by.
+      context_.queueProgress->noteSubmitted({});
+    }
   }
   return finishHandoverSubmission(result, wait, submission);
 }
@@ -1214,9 +1238,7 @@ Status VulkanSwapchain::provePendingSubmissionsComplete() {
   if (fences.empty()) {
     return OkStatus();
   }
-  const VkResult result =
-      context_.api->vkWaitForFences(context_.device, static_cast<uint32_t>(fences.size()),
-                                    fences.data(), VK_TRUE, kDrainTimeoutNanoseconds);
+  const VkResult result = waitForOwnFences(fences);
   declareDeviceLoss(result, "vkWaitForFences (surface destruction proof) reported device loss");
   if (!CompletionProvesIdle(result)) {
     return VkError("vkWaitForFences (surface destruction proof)", result);

@@ -81,10 +81,11 @@ browser runtime in WebAssembly.
   builds select Metal on macOS and Vulkan on Linux; an explicit `wgpu` request fails closed there.
   Only the Linux resvg comparison configuration admits the transitional adapter. A value that
   names no backend, or a requested backend the host cannot provide, halts instead of falling back.
-- A native Metal root reports the device's own limits and drains its queue with a bounded wait for
-  the last submitted serial, and a Metal device reports failed work as the loss of the root it
-  shares. Contexts hold the runtime device and count what it accepts and releases through its
-  observer.
+- A native Metal root reports the device's own limits and drains its queue with a wait for the
+  last submitted serial that gives up only when the work stops progressing (see
+  [Bounded GPU waits](#bounded-gpu-waits)), and a Metal device reports failed work as the loss of
+  the root it shares. Contexts hold the runtime device and count what it accepts and releases
+  through its observer.
 - On Linux, a native Vulkan root reports its physical device's own limits without opening a
   second device for the query. Runtime devices over one selected root share its instance, logical
   device, graphics queue and loss condition, while each keeps its own handles and serials.
@@ -378,22 +379,23 @@ Ordering:
   capture queues its readback behind the producer's frame on the GPU. A producer whose queue stops
   answering now holds the consumer's queue instead of the UI thread, until a bounded wait declares
   the root lost. The first such wait is usually the consumer's own present: a Metal present waits
-  up to five seconds for its frame's work, and a present that spends that whole bound declares the
-  root lost at the `Present` wait site, as the five-second queue-idle and readback-map bounds
-  already do, so the first hang costs one bounded stall and every later frame fails at once: an
-  acquire on the lost root reports `DeviceLost` and hands out no frame. This
-  also makes an ordinary GPU stall of more than five seconds at present a lost root rather than a
-  dropped frame. The system's own timeout for a command buffer that makes no progress, measured at
-  about five seconds on the hosts these suites run on, can end the hang first, and the backend
-  then reports the loss with no wait site. Declaring the loss signals every Metal device's event
+  for its frame's work until neither that work nor the producer work it waits for has made
+  progress for five seconds, and a present that reaches that bound declares the root lost at the
+  `Present` wait site, as the queue-idle and readback-map waits do, so the first hang costs one
+  bounded stall and every later frame fails at once: an acquire on the lost root reports
+  `DeviceLost` and hands out no frame. This also makes an ordinary GPU stall of more than five
+  seconds without progress at present a lost root rather than a dropped frame. The system's own
+  timeout for a command buffer that makes no progress, measured at about five seconds on the hosts
+  these suites run on, can end the hang first, and the backend then reports the loss with no wait
+  site. Declaring the loss signals every Metal device's event
   over that root past any value a consumer can wait for, after the loss's wait site is published.
   That releases the held command buffers, so the consumer's queue drains and publishes its
   completions instead of staying held behind a producer that stopped answering; the consumer's
   bounded waits and teardown end at once on a lost root either way. Later completions never lower
-  the event's value. The exception: the consumer's queue holds at most 512 uncompleted command
-  buffers, and once that many sit behind a held wait, asking the queue for another blocks the
-  consumer's thread until the producer's work ends, the root is declared lost by another thread,
-  or the system ends the stalled work.
+  the event's value. The exception: a Metal device keeps at most 512 command buffers uncompleted,
+  and once that many sit behind a held wait, a submission that needs room waits on the consumer's
+  thread until the work in flight or the producer work it waits for makes progress, giving up and
+  declaring the root lost once neither has for five seconds, or after sixty seconds in all.
 - Producer work accepted after the registration is not ordered before the consumer. A producer
   must not write an exported texture while a registration of it may still be read, and must finish
   writing a texture before handing it to another thread. Detached snapshots are never rewritten,
@@ -410,13 +412,14 @@ Loss:
   behalf, so each condition keeps the attribution of the wait that first declared it. Contexts
   over one selected root share one condition.
 - Geode's two consumers, cross-context snapshot drawing and UI texture registration, register
-  through one helper whose wait, up to the default GPU wait bound, is the consumer's own; on Metal
-  it returns at once, because the device orders the work. It
-  follows the policy of every bounded wait over a Geode root: only a wait that spent its whole
-  bound declares the consumer's condition lost, with the queue-idle wait site and the measured
+  through one helper whose wait is the consumer's own; on Metal it returns at once between
+  contexts over one root, because the device orders the work. It follows the policy of every
+  bounded wait over a Geode root: only a producer that made no progress for the default GPU wait
+  bound, where its backend reports progress, or a wait that spent that whole bound where it does
+  not, declares the consumer's condition lost, with the queue-idle wait site and the measured
   wait, so a producer queue that stopped answering fails later frames at once instead of stalling
-  each one. A wait that ends sooner, because a device is lost or the producer failed, declares
-  nothing and fails with `DeviceLost`, and a producer already lost is refused at registration.
+  each one. A wait that fails because a device is lost or the producer failed declares nothing
+  and fails with `DeviceLost`, and a producer already lost is refused at registration.
 
 Backends:
 
@@ -807,6 +810,13 @@ acceptance of the Linux editor, with the rest of the cutover, is under
 - [ ] Run paired rendering/overlap, startup, clean/incremental build, and artifact-size measurements
       on the same host and configuration; qualify the exact integrated candidate against the gates
       below and resolve actionable review findings.
+- [ ] Bound every wait that detects a hung device by its lack of progress rather than by the time
+      its whole backlog takes ([#1680](https://github.com/jwmcglynn/donner/issues/1680)); see
+      [Bounded GPU waits](#bounded-gpu-waits). The memory and DPR2 gate found zoom-8 splash frames
+      declared lost on lavapipe at the Vulkan frame split while lavapipe was still completing work.
+      The losses the same gate recorded when 64 overlapped zoom-8 frames drain on Metal and on a
+      discrete Vulkan GPU are not this wait: the system's GPU timeout failed a command buffer on
+      Metal, and the Vulkan driver reported the device lost. They remain open.
 
 ## Proposed Architecture
 
@@ -959,6 +969,64 @@ is implemented in merged PR #1272 and qualified by the native Vulkan surface tes
 not use a process-abort path. Linux editor integration must also retain its external
 `VkSurfaceKHR`, GLFW window, shared root and GLFW runtime claim until the native swapchain's
 retirement is proved; releasing the runtime handle alone does not provide that proof.
+
+### Bounded GPU waits
+
+Every wait whose bound exists to detect a hung device measures time without progress, not the time
+its whole backlog takes. A serial completes only after everything queued ahead of it, so a fixed
+budget for the whole wait declares a slow device that is still working lost. At device pixel ratio
+2, one split submission of a zoom-8 Donner splash frame, 16 command buffers, takes up to 14 s of
+lavapipe time on a many-core host, while none of its command buffers takes more than 2.7 s, so
+lavapipe declared the first zoom-8 frame lost at the frame split. On hardware the same drains take
+about 0.3 s on a discrete Vulkan GPU and up to 3.7 s on an Apple silicon Mac when they run alone,
+so there the bound matters only for a longer backlog.
+
+`Device::waitForSerialUnlessStalled` gives up only once the device's last progress is the bound in
+the past. The bound runs from that progress, not from the start of the wait, so a new wait on work
+that has already stopped does not restart it. While work progresses there is no total limit: the
+work ahead of a serial is finite, and a stall anywhere in it ends the wait within the bound.
+`Device::lastProgress` exposes the same clock to a caller that judges a stall itself.
+
+- Metal measures progress on the clock its backstop on command buffers in flight already uses: a
+  command buffer of the device completing, work committed to an idle device, and, while a
+  submission waits on the GPU for another device's work, that device's progress until the work
+  completes. One condition wakes both waits.
+- Vulkan devices over one root share a queue, so a device's work completes only after its
+  siblings' work ahead of it. Each command buffer ends by setting an event, the queue progresses
+  whenever any device over the root sees one set, and work submitted while no tracked work is
+  outstanding starts the clock, including work that sets no event, such as a texture upload or a
+  swapchain's frame handover. Such work never counts as outstanding, so each submission made while
+  only such work is outstanding starts the clock again. An event is timed when it is first seen, by
+  a wait or a caller of `Device::lastProgress`, rather than when its command buffer finished, so
+  the first wait after a stretch in which nothing looked can run for up to the whole bound from its
+  first look even when the queue had already stopped.
+- On both backends the unit of progress is one command buffer. A single command buffer that runs
+  longer than the bound is indistinguishable from a hang.
+- The rule covers the Geode queue-idle drain (teardown of a context and of a renderer, the Vulkan
+  frame split, the Vulkan filter chunk boundary and a failed filter execution); on Metal the
+  present, the drain at device teardown and an unaligned write's wait for a busy buffer; on Vulkan
+  a host access to a busy buffer, a texture upload, the proof of completion at teardown and the
+  swapchain's waits for its own submissions; the editor's UI submission deadline and framebuffer
+  readback; and the cross-context registration helper, which judges a producer by the progress
+  its backend reports. Waits whose budget is the caller's latency policy keep a fixed one: the
+  snapshot capture deadline, the editor's 250 ms admission recheck, swapchain image acquisition,
+  and `Device::waitForSerial` itself.
+- Two Vulkan waits keep a fixed five-second budget because the queue's progress cannot judge them:
+  a swapchain's wait for a present to finish, whose fence the presentation engine signals, and the
+  proof of completion at teardown after a submission whose completion is unknown, whose work may
+  be on the queue without the progress record knowing.
+- `//donner/svg/renderer/geode:geode_device_tests` enforces the drain on both backends with
+  `QueueIdleWaitsOutABacklogThatKeepsProgressing` and
+  `QueueIdleDeclaresTheLossOnceTheBacklogStopsProgressing`, which hold one split's worth of command
+  buffers and let them finish at a steady pace. The producer cases of
+  `//donner/gpu/metal/tests:metal_submission_backstop_tests` and
+  `//donner/gpu/vulkan/tests:vulkan_queue_progress_tests` cover progress on another device; the
+  latter, with `AFrameHandoverToAnIdleQueueStartsTheProgressClock` in
+  `//donner/gpu/vulkan/tests:vulkan_surface_tests`, covers work that sets no event. The
+  stall-bounded source wait cases of `TextureRegistrationTest` in `//donner/gpu:gpu_tests` cover
+  the registration helper's wait, and
+  `EditorWindowPolicyTest.AnOverdueFrameBehindADeviceStillMakingProgressIsNotTimedOut` covers the
+  editor's deadline.
 
 The required owning tests and missing enforcement surfaces are listed below. Optional diagnostics
 and physical-hardware observations are evidence with their stated limits, not universal guarantees.

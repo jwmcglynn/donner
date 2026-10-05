@@ -10,9 +10,11 @@
 /// device. What crosses between the two is the token declared here.
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ostream>
 #include <utility>
 
@@ -114,6 +116,11 @@ public:
   /// Whether the producer's backend has reported a terminal execution failure, after which no
   /// serial it reports as complete can be trusted. Callable from any thread.
   [[nodiscard]] virtual bool failed() const = 0;
+
+  /// When the producer last made progress on its own queue, which a consumer waiting for its work
+  /// judges a stall by, or nothing when the producer's backend does not track progress. The
+  /// default reports nothing. Callable from any thread.
+  [[nodiscard]] virtual std::optional<std::chrono::steady_clock::time_point> lastProgress() const;
 };
 
 /// What a backend reports when it exports one of its textures.

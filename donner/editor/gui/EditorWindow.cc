@@ -1536,7 +1536,8 @@ struct EditorWindow::WgpuState {
   /// Whether finished frames are copied back to the host, remembered so a rebuilt surface asks
   /// for the same thing the first one did.
   bool surfaceReadbackEnabled = false;
-  /// Longest a framebuffer readback waits for its map before the device is declared lost; see
+  /// Longest a framebuffer readback waits for its map without the device making progress before
+  /// the device is declared lost; see
   /// \ref EditorWindow::setFramebufferReadbackBudgetForTesting.
   std::chrono::milliseconds readbackBudget = geode::kDefaultGpuWaitTimeout;
 
@@ -2438,8 +2439,8 @@ bool EditorWindow::observePresentationCompletion() {
             device.completedSerial(), std::chrono::steady_clock::now()};
       });
 #else
-  const auto admission =
-      presentationSubmissions_.observe(completed, std::chrono::steady_clock::now());
+  const auto admission = presentationSubmissions_.observe(
+      completed, std::chrono::steady_clock::now(), device.lastProgress());
 #endif
   if (admission == internal::PresentationSubmissionQueue::Admission::TimedOut &&
       presentationTimeoutSerial_ == 0) {
@@ -2803,24 +2804,48 @@ void EditorWindow::readFrameReadback(const gpu::Buffer& buffer, uint64_t byteSiz
   if (mapping.hasError()) {
     return;
   }
+  // The copy completes only after everything queued ahead of it, so the bound is on time without
+  // progress: each wait runs until the device's last progress is a whole bound old, and a device
+  // that has not progressed meanwhile is the one that stopped answering. A device that does not
+  // track progress gives the whole wait the bound. Each look at the map lasts at least one poll
+  // interval, so work that has already completed is never declared lost, and at most
+  // kProgressLookInterval, so progress made meanwhile is read promptly.
+  constexpr std::chrono::milliseconds kProgressLookInterval{10};
   const auto waitStart = std::chrono::steady_clock::now();
-  const gpu::Result<gpu::MapWaitReport> waited =
-      device.waitForMapping(mapping.result(),
-                            gpu::MapWaitParams{
-                                std::chrono::duration<double>(geode::kGpuWaitPollInterval).count(),
-                                std::chrono::duration<double>(wgpuState_->readbackBudget).count(),
-                            },
-                            /*shouldCancel=*/{});
-  const gpu::MapWaitOutcome outcome =
-      waited.hasError() ? gpu::MapWaitOutcome::Failed : waited.result().outcome;
+  const auto untilStalled = [&] {
+    return std::max<std::chrono::steady_clock::duration>(
+        device.lastProgress().value_or(waitStart) + wgpuState_->readbackBudget -
+            std::chrono::steady_clock::now(),
+        std::chrono::steady_clock::duration::zero());
+  };
+  gpu::MapWaitOutcome outcome = gpu::MapWaitOutcome::TimedOut;
+  std::chrono::steady_clock::duration remaining = untilStalled();
+  do {
+    const std::chrono::steady_clock::duration budget =
+        std::clamp<std::chrono::steady_clock::duration>(remaining, geode::kGpuWaitPollInterval,
+                                                        kProgressLookInterval);
+    const gpu::Result<gpu::MapWaitReport> waited = device.waitForMapping(
+        mapping.result(),
+        gpu::MapWaitParams{
+            std::chrono::duration<double>(geode::kGpuWaitPollInterval).count(),
+            std::chrono::duration<double>(budget).count(),
+        },
+        /*shouldCancel=*/{});
+    outcome = waited.hasError() ? gpu::MapWaitOutcome::Failed : waited.result().outcome;
+    if (outcome != gpu::MapWaitOutcome::TimedOut) {
+      break;
+    }
+    remaining = untilStalled();
+  } while (remaining > std::chrono::steady_clock::duration::zero());
   if (outcome == gpu::MapWaitOutcome::TimedOut) {
-    // The runtime leaves a spent budget to its caller. This bound is the editor's, and a map that
-    // outlasts it means the device stopped answering, so later frames fail at once instead.
+    // The runtime leaves a spent budget to its caller. This bound is the editor's, and a map whose
+    // work stopped progressing for it means the device stopped answering, so later frames fail at
+    // once instead.
     context.markDeviceLostAfterWaitTimeout(
         geode::GpuWaitSite::ReadbackMap,
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
                                                               waitStart),
-        "editor surface readback map did not complete within the bound");
+        "editor surface readback map made no progress within the bound");
   } else if (outcome == gpu::MapWaitOutcome::Ready) {
     const auto readbackStart = std::chrono::steady_clock::now();
     const gpu::Result<std::span<const uint8_t>> mapped = device.mappedBytes(mapping.result());
