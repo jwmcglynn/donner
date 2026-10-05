@@ -3,10 +3,10 @@
 **Status:** Implementing. Each platform defaults to its own runtime: native Metal on macOS and
 native Vulkan on Linux, for Geode and the displayed editor, and the browser runtime for the editor
 and standalone Geode WebAssembly packages. Native Metal and Vulkan qualification of the Geode,
-renderer and editor suites is complete, and the browser editor's hosted Chromium suites pass. Still
-open: backend-neutral renderer services and removal of the transitional adapter, real Safari/WebKit
-and physical iOS qualification of the browser editor, and acceptance of one integrated revision
-([Next Steps](#next-steps)).\
+renderer and editor suites is complete, the browser editor's hosted Chromium suites pass, and
+Geode's renderer services are backend-neutral. Still open: removal of the transitional adapter's
+remaining dependencies, real Safari/WebKit and physical iOS qualification of the browser editor,
+and acceptance of one integrated revision ([Next Steps](#next-steps)).\
 **Created:** 2026-07-05\
 **Updated:** 2026-10-03\
 **Author:** Claude Fable 5.1\
@@ -17,9 +17,8 @@ and physical iOS qualification of the browser editor, and acceptance of one inte
 Donner's GPU runtime is the interface between Geode/editor rendering and Metal, Vulkan, or browser
 WebGPU. Production rendering and presentation run through it on every platform, and its drawing,
 mapping, upload and presentation operations are implemented on each backend. The remaining work is
-to finish moving shared renderer services behind backend-neutral ownership, remove the transitional
-WebGPU implementation from production source and dependency closures, and qualify the integrated
-result against the cutover gates.
+to remove the transitional WebGPU implementation's remaining dependencies and qualify the
+integrated result against the cutover gates.
 A pinned Linux test-only wgpu-native backend remains as a black-box resvg pixel comparison oracle;
 it does not validate Donner's browser bridge.
 
@@ -28,9 +27,9 @@ backend execution, and compile-time shader artifacts: every production shader is
 and compiled during C++ constant evaluation into the WGSL, MSL, or SPIR-V projection its consumer
 links, with the host interface reflected from the same compile
 ([WGSL shader compilation](../wgsl_compiler.md)). Production `GeodeDevice`, filter resource
-plumbing and texture caches use runtime handles. Transitional WebGPU objects still remain in some
-production construction paths, so native execution tests and local editor presentation do not
-establish a Rust-independent build.
+plumbing and texture caches use runtime handles, and no production source names the transitional
+WebGPU implementation. Native execution tests and local editor presentation still do not by
+themselves establish a Rust-independent build.
 
 The target is an original C++20 runtime serving Donner's own rendering requirements. It is not a
 WebGPU C ABI implementation, and its shader compiler accepts a documented WGSL profile at build time
@@ -66,8 +65,8 @@ embed-example roots in this tree exclude WebGPU-C++ and wgpu-native. The two che
 archives are exposed through test-only Linux targets, and macOS archive fetches and aliases are
 removed.
 
-Still open, and separate from that qualification: backend-neutral renderer services and removal of
-the transitional adapter and its remaining dependencies
+Still open, and separate from that qualification: removal of the transitional adapter's remaining
+dependencies
 ([Device ownership and dependency closure](#device-ownership-and-dependency-closure)), real
 Safari/WebKit and physical iOS qualification of the browser editor
 ([Browser bridge](#browser-bridge)), and acceptance of one integrated revision against the cutover
@@ -171,10 +170,8 @@ memory-residency, security or privacy requirements.
 
 ## Next Steps
 
-1. Move counters and the remaining shared renderer services behind backend-neutral ownership
-   without merging logical tables, serials, caches, or retirement, and remove the transitional
-   WebGPU implementation and its remaining production consumers and dependencies, retaining only
-   the Linux test-only resvg comparison backend
+1. Remove the transitional WebGPU implementation's remaining dependencies, retaining only the
+   Linux test-only resvg comparison backend
    ([#1412](https://github.com/jwmcglynn/donner/issues/1412)).
 2. Qualify the browser editor on real Safari/WebKit and the agreed physical iOS matrix; its hosted
    Chromium suites already pass ([#1410](https://github.com/jwmcglynn/donner/issues/1410)).
@@ -728,12 +725,17 @@ acceptance of the Linux editor, with the rest of the cutover, is under
       `//donner/gpu/vulkan/tests:vulkan_texture_registration_tests` runs in hosted Linux CI.
       Acquired swapchain frames remain unexportable because presentation can recycle them. The
       Linux editor presents over the same shared native root.
-- [ ] Make the selected `gpu::Device` the backend owner. Turn `GeodeDevice` into backend-neutral
+- [x] Make the selected `gpu::Device` the backend owner. Turn `GeodeDevice` into backend-neutral
       renderer services for counters, caches, dummy resources, and deferred retirement; update
       headless and embedded construction. The selected device owns its backend root
       ([#1356](https://github.com/jwmcglynn/donner/pull/1356)) and contexts hold `gpu::Device`,
       whose observer feeds the counters on every backend
-      ([#1371](https://github.com/jwmcglynn/donner/pull/1371)); the remaining services are open.
+      ([#1371](https://github.com/jwmcglynn/donner/pull/1371)). Every context waits for its own
+      last submitted serial and keeps its pipelines, dummy resources, caches and retirement on its
+      own runtime device; `GeodeDevice` names no backend type. Headless, window-selected and
+      adopted roots share one construction path. The Linux resvg comparison adopts its test-only
+      reference as an external runtime device source that no backend request or default selects;
+      that seam is internal to Geode and is not an embedding surface.
 - [x] Select the backend by kind through the one root selection. A caller may name a kind;
       otherwise `DONNER_GPU_BACKEND` sets the process default, which fails closed on an
       unrecognized value or a backend the host cannot provide, and a process that asks for a
@@ -780,7 +782,11 @@ acceptance of the Linux editor, with the rest of the cutover, is under
       the two pinned Linux archives and API wrapper needed by the resvg comparison target. The
       source graph now separates its `testonly`, Linux-compatible targets from native products and
       removes macOS archive fetches/aliases; the generated lock matches the reviewed Linux SHA-256
-      values. Complete Linux oracle execution and hosted acceptance before closing this item.
+      values. Production Geode sources no longer name the adapter, and the comparison renders the
+      production context and renderer through it rather than test-only recompilations of them;
+      `//donner/svg/renderer/geode:geode_production_source_boundary_tests` and the comparison's
+      configured dependency audit enforce both. Complete Linux oracle execution and hosted
+      acceptance before closing this item.
 - [x] Make unexpected Rust-built archives and production dependency edges blocking. The lexical
       verifier enforces source, fetch, checksum, visibility and CMake-source boundaries. Bazel
       configured dependency audits live beside native, editor, embed and browser product roots;

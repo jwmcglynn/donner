@@ -33,13 +33,12 @@ exports_files(
         "GeodeDevice.cc",
         "GeodeDevice.h",
         "GeodeBrowserRoot.cc",
-        "GeodeWgpuAdapterDevice.cc",
     ],
     visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
 
-# This one source is also compiled by the existing Linux resvg comparison target. That target
-# remains the sole test closure permitted to link the wgpu-native reference.
+# This one source is also compiled by the Linux resvg comparison, which runs it over the
+# wgpu-native reference. That comparison remains the sole test closure permitted to link it.
 exports_files(
     ["tests/GeodeIdleRetirement_tests.cc"],
     visibility = ["//donner/svg/renderer/tests:__pkg__"],
@@ -128,6 +127,42 @@ py_test(
         ":geode_geometry_fuzzer_routing_manifest",
     ],
     main = "tests/GeodeGeometryFuzzerRouting_tests.py",
+)
+
+# The test-only wgpu reference's own sources: the only files in this package that may name it.
+_GEODE_WGPU_REFERENCE_SOURCES = [
+    "GeodeCallbackState.h",
+    "GeodeWgpuAdapterDevice.cc",
+    "GeodeWgpuAdapterDevice.h",
+    "GeodeWgpuUtil.h",
+]
+
+filegroup(
+    name = "geode_production_sources",
+    srcs = glob(
+        [
+            "*.cc",
+            "*.h",
+        ],
+        exclude = _GEODE_WGPU_REFERENCE_SOURCES,
+    ),
+    visibility = ["//visibility:private"],
+)
+
+# Production sources reach every backend through the GPU runtime alone and never name the
+# test-only wgpu reference, and the runtime device source seam stays private to this package.
+py_test(
+    name = "geode_production_source_boundary_tests",
+    srcs = ["tests/GeodeProductionSourceBoundary_tests.py"],
+    args = [
+        "--build=$(rootpath BUILD.bazel)",
+        "$(rootpaths :geode_production_sources)",
+    ],
+    data = [
+        "BUILD.bazel",
+        ":geode_production_sources",
+    ],
+    main = "tests/GeodeProductionSourceBoundary_tests.py",
 )
 
 # CPU-side Slug band decomposition. Pure path math — no WebGPU dependency,
@@ -283,8 +318,7 @@ donner_cc_library(
     deps = [
         "//donner/base",
         "//donner/gpu/shader:slug_fill_api",
-        # The final renderer names the selected Geode implementation; this header needs only its
-        # API so the Linux comparison can link the reference implementation instead.
+        # The final renderer names the Geode device implementation; this header needs only its API.
         ":geode_device_api",
         ":geode_handle_retirement",
         ":geode_resource_budget",
@@ -361,6 +395,16 @@ donner_cc_library(
            ] + shader_apis(CHECKERBOARD_SHADER_FAMILIES) +
            shader_artifacts(CHECKERBOARD_SHADER_FAMILIES) +
            native_shader_artifacts(CHECKERBOARD_SHADER_FAMILIES),
+)
+
+# Adopts runtime devices a source opens as a Geode root. Internal to this package: the test-only
+# wgpu reference is its one source, and it is not an embedding surface.
+donner_cc_library(
+    name = "geode_runtime_device_source",
+    hdrs = ["GeodeRuntimeDeviceSource.h"],
+    target_compatible_with = _GEODE_ONLY,
+    visibility = ["//visibility:private"],
+    deps = ["//donner/gpu"],
 )
 
 donner_cc_library(
@@ -443,6 +487,8 @@ donner_cc_library(
         ":browser_backend_enabled": ["GeodeBrowserRoot.h"],
         "//conditions:default": ["GeodeNativeRoot.h"],
     }),
+    # Implementation-only: the seam header stays out of every dependent's compile inputs.
+    implementation_deps = [":geode_runtime_device_source"],
     linkopts = _GEODE_DEVICE_NATIVE_LINKOPTS,
     local_defines = select({
         ":browser_backend_enabled": ["DONNER_GEODE_BROWSER_BACKEND=1"],
@@ -468,26 +514,31 @@ donner_cc_library(
     }),
 )
 
-# Linux resvg comparison and frozen-corpus reference capture use this transitional adapter.
-# This rule is testonly and cannot enter an ordinary product's dependency graph.
+# The wgpu-native reference the Linux resvg comparison and frozen-corpus reference capture render
+# the production Geode context through. It supplies runtime devices to an adopted root and never
+# recompiles the production sources. This rule is testonly and cannot enter an ordinary product's
+# dependency graph.
 donner_cc_library(
     name = "geode_device_wgpu_reference_linux",
     testonly = 1,
-    srcs = _GEODE_DEVICE_COMMON_SRCS + ["GeodeWgpuAdapterDevice.cc"],
+    srcs = ["GeodeWgpuAdapterDevice.cc"],
     hdrs = [
         "GeodeCallbackState.h",
         "GeodeWgpuAdapterDevice.h",
     ],
     defines = ["DONNER_GEODE_WGPU_REFERENCE=1"],
-    linkopts = _GEODE_DEVICE_NATIVE_LINKOPTS,
     target_compatible_with = _GEODE_ONLY + ["@platforms//os:linux"],
     visibility = [
         "//donner/gpu/baseline:__pkg__",
-        "//donner/svg/renderer:__pkg__",
         "//donner/svg/renderer/tests:__pkg__",
     ],
-    deps = _GEODE_DEVICE_COMMON_DEPS + [
+    deps = [
+        ":geode_device",
+        ":geode_runtime_device_source",
         ":geode_wgpu_util",
+        "//donner/base",
+        "//donner/base:asyncify_suspend_probe",
+        "//donner/gpu",
         "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
     ],
 )
@@ -497,7 +548,6 @@ configured_dependency_audit_test(
     name = "geode_native_no_wgpu_archive_audit_impl",
     forbidden = [
         "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",
-        "//donner/svg/renderer:renderer_geode_wgpu_reference_linux",
         "//donner/svg/renderer/tests:image_comparison_test_fixture_wgpu_reference_linux",
         "//donner/svg/renderer/tests:renderer_test_backend_wgpu_reference_linux",
         "//third_party/webgpu-cpp:webgpu_cpp",
@@ -552,19 +602,6 @@ donner_cc_library(
     ],
 )
 
-donner_cc_library(
-    name = "geode_test_contexts_wgpu_reference_linux",
-    testonly = 1,
-    srcs = ["tests/GeodeTestContexts.cc"],
-    hdrs = ["tests/GeodeTestContexts.h"],
-    target_compatible_with = _GEODE_ONLY + ["@platforms//os:linux"],
-    visibility = ["//donner/gpu/baseline:__pkg__"],
-    deps = [
-        ":geode_device_wgpu_reference_linux",
-        "//donner/gpu",
-    ],
-)
-
 donner_cc_test(
     name = "geode_device_tests_impl",
     srcs = ["tests/GeodeDevice_tests.cc"],
@@ -572,11 +609,13 @@ donner_cc_test(
     deps = [
         ":geode_device",
         ":geode_gpu_wait",
+        ":geode_runtime_device_source",
         ":geode_test_contexts",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:recording_device",
         "//donner/gpu:sharing_test_device",
         "//donner/svg/renderer/tests:rgba_test_matchers",
     ] + select({

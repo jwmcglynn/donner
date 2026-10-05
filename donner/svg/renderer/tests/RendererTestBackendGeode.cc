@@ -7,10 +7,9 @@
 
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #ifdef DONNER_GEODE_WGPU_REFERENCE
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#else
-#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #endif
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 
@@ -37,7 +36,13 @@ SharedGeodeBackendState& SharedTestBackendState() {
 std::shared_ptr<geode::GeodeDevice> SharedTestDevice() {
   SharedGeodeBackendState& state = SharedTestBackendState();
   if (!state.device) {
+#ifdef DONNER_GEODE_WGPU_REFERENCE
+    // The Linux comparison renders the production context and renderer through the wgpu
+    // reference's runtime devices.
+    auto d = geode::CreateWgpuReferenceContext();
+#else
     auto d = geode::GeodeDevice::CreateHeadless();
+#endif
     // Wrap the unique_ptr in a shared_ptr for lifetime sharing.
     state.device = std::shared_ptr<geode::GeodeDevice>(std::move(d));
   }
@@ -126,9 +131,9 @@ public:
     }
 #ifdef DONNER_GEODE_WGPU_REFERENCE
     const geode::GpuBackendKind kind = device->physicalDeviceOwner()->root().capabilities().backend;
-    if (kind != geode::GpuBackendKind::TransitionalWgpu) {
-      FAIL() << "the resvg wgpu reference selected " << geode::GpuBackendKindName(kind)
-             << " instead of the transitional wgpu backend";
+    if (kind != geode::GpuBackendKind::External) {
+      FAIL() << "the resvg wgpu reference renders through " << geode::GpuBackendKindName(kind)
+             << " instead of the wgpu reference's external runtime devices";
     }
 #else
     FAIL() << "DONNER_REQUIRE_WGPU_REFERENCE is set, but this binary does not link the wgpu "
@@ -154,7 +159,15 @@ public:
     }
   }
 
-  void TearDown() override { ResetSharedTestBackendState(); }
+  void TearDown() override {
+    ResetSharedTestBackendState();
+#ifdef DONNER_GEODE_WGPU_REFERENCE
+    // A headless context selects a native backend, so one created anywhere in this binary would
+    // compare that backend's pixels instead of the reference's.
+    EXPECT_EQ(geode::GeodeDevice::headlessCreationCountForTesting(), 0)
+        << "a native headless Geode context was created in the wgpu reference comparison";
+#endif
+  }
 };
 
 [[maybe_unused]] const ::testing::Environment* const geodeBackendEnvironment =

@@ -32,53 +32,12 @@
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
-#ifdef __EMSCRIPTEN__
-#include <emscripten/emscripten.h>
-#endif
-#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
-#include "donner/gpu/metal/MetalDevice.h"
-#endif
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
-#include "donner/gpu/vulkan/VulkanDevice.h"
-#endif
-#if defined(__EMSCRIPTEN__) && defined(DONNER_GEODE_BROWSER_BACKEND)
-#include "donner/gpu/browser/BrowserDevice.h"
-#include "donner/gpu/browser/EmscriptenBrowserBridge.h"
-#endif
+#include "donner/svg/renderer/geode/GeodeNativeRoot.h"
+#include "donner/svg/renderer/geode/GeodeRuntimeDeviceSource.h"
 
 namespace donner::geode {
 
-#ifdef __EMSCRIPTEN__
-// clang-format off: EM_JS contains JavaScript, whose arrow syntax clang-format corrupts.
-// Keep this internal import name compact: EM_JS function names survive Closure in editor.js.
-EM_JS(void, G, (void* handlesOut, WGPUInstance instance), {
-  if (!navigator.gpu) {
-    // A browser with no WebGPU throws here rather than rejecting, which would abort the module
-    // instead of reporting a failed selection.
-    setTimeout(() => Atomics.store(HEAP32, handlesOut >> 2, 1));
-    return;
-  }
-  navigator.gpu.requestAdapter()
-    .then((adapter) => adapter.requestDevice().then((device) => {
-      // An imported device carries no C-level uncaptured-error callback, because only a device
-      // created through a descriptor is given one. Report them from here so a validation error in
-      // the browser is as visible as it is natively.
-      device.onuncapturederror = (event) => console.error(
-        '[Geode/emscripten] Uncaptured error: ' + event.error.message);
-      // Published before the device below, which is the store the waiting thread is watching.
-      Atomics.store(HEAP32, (handlesOut >> 2) + 1, WebGPU.importJsAdapter(adapter, instance));
-      return WebGPU.importJsDevice(device, instance);
-    }))
-    .catch(() => 1)
-    .then((devicePtr) => setTimeout(() => Atomics.store(HEAP32, handlesOut >> 2, devicePtr)));
-});
-// clang-format on
-#endif
-
 namespace {
-
-/// Instances created for a selection and not yet released; see \ref OutstandingSelectionInstances.
-std::atomic<std::size_t> gSelectionInstances{0};
 
 /// Releases the backend objects a selection created, in the order their ownership nests: the
 /// queue and device first, then the adapter and instance they came from. Shared by the root's
@@ -116,9 +75,6 @@ private:
   GeodeWgpuRoots* handles_;
 };
 
-#ifndef __EMSCRIPTEN__
-std::atomic<std::size_t> gOutstandingDeviceLostCallbacks{0};
-
 enum class DeviceLostCallbackStatus : std::uint8_t {
   Pending,
   Running,
@@ -142,7 +98,6 @@ void ReleaseDeviceLostCallbackTokenReference(DeviceLostCallbackToken* token) {
 }
 
 void* CreateDeviceLostCallbackToken(const std::shared_ptr<gpu::DeviceLostState>& state) {
-  gOutstandingDeviceLostCallbacks.fetch_add(1, std::memory_order_release);
   return new DeviceLostCallbackToken(state);
 }
 
@@ -156,9 +111,6 @@ std::shared_ptr<gpu::DeviceLostState> ConsumeDeviceLostCallbackState(void* userd
 
   std::shared_ptr<gpu::DeviceLostState> state = token->state;
   token->status.store(DeviceLostCallbackStatus::Done, std::memory_order_release);
-  [[maybe_unused]] const std::size_t previous =
-      gOutstandingDeviceLostCallbacks.fetch_sub(1, std::memory_order_acq_rel);
-  assert(previous > 0);
   ReleaseDeviceLostCallbackTokenReference(token);
   return state;
 }
@@ -173,9 +125,6 @@ void ReleaseDeviceLostCallbackToken(void*& userdata, bool callbackCannotRun) {
     DeviceLostCallbackStatus expected = DeviceLostCallbackStatus::Pending;
     if (token->status.compare_exchange_strong(expected, DeviceLostCallbackStatus::Canceled,
                                               std::memory_order_acq_rel)) {
-      [[maybe_unused]] const std::size_t previous =
-          gOutstandingDeviceLostCallbacks.fetch_sub(1, std::memory_order_acq_rel);
-      assert(previous > 0);
       ReleaseDeviceLostCallbackTokenReference(token);
     }
   }
@@ -219,7 +168,7 @@ void OnDeviceLost(WGPUDevice const* /*device*/, WGPUDeviceLostReason reason, WGP
   }
 }
 
-wgpu::BackendType RequestedBackend(bool usePlatformDefault) {
+wgpu::BackendType RequestedBackend() {
   const char* backendEnv = std::getenv("WGPU_BACKEND");
   if (backendEnv != nullptr && backendEnv[0] != '\0') {
     const std::string_view backend(backendEnv);
@@ -244,14 +193,7 @@ wgpu::BackendType RequestedBackend(bool usePlatformDefault) {
                  static_cast<int>(backend.size()), backend.data());
   }
 
-  if (!usePlatformDefault) {
-    return wgpu::BackendType::Undefined;
-  }
-#if defined(__linux__)
   return wgpu::BackendType::Vulkan;
-#else
-  return wgpu::BackendType::Undefined;
-#endif
 }
 
 WGPUInstanceBackend InstanceBackendsFor(wgpu::BackendType backendType) {
@@ -279,9 +221,6 @@ wgpu::Instance CreateSelectionInstance(wgpu::BackendType backendType) {
     instance = wgpu::createInstance(instanceDesc);
   } else {
     instance = wgpu::createInstance();
-  }
-  if (instance) {
-    gSelectionInstances.fetch_add(1, std::memory_order_relaxed);
   }
   return instance;
 }
@@ -373,106 +312,24 @@ bool DescribeSelectedAdapter(const wgpu::Adapter& adapter) {
   wgpuAdapterInfoFreeMembers(info);
   return isVulkan;
 }
-#else
-void ReleaseDeviceLostCallbackToken(void*& userdata, bool /*callbackCannotRun*/) {
-  assert(userdata == nullptr);
-}
-#endif  // !__EMSCRIPTEN__
 
-/// Queries what every runtime device over \p handles will answer identically.
-/// @param handles Backend objects to query.
-GeodeGpuRootCapabilities QueryRootCapabilities(const GeodeWgpuRoots& handles) {
+/// Queries what every runtime device over one wgpu device will answer identically.
+/// @param device Device whose limits to read.
+/// @param adapter Adapter the device came from, described once in the log.
+GeodeGpuRootCapabilities QueryRootCapabilities(const wgpu::Device& device,
+                                               const wgpu::Adapter& adapter) {
   GeodeGpuRootCapabilities capabilities;
   wgpu::Limits limits;
-  if (handles.device.getLimits(&limits) == wgpu::Status::Success &&
+  if (device.getLimits(&limits) == wgpu::Status::Success &&
       limits.maxTextureDimension2D != WGPU_LIMIT_U32_UNDEFINED &&
       limits.maxTextureDimension2D > 0) {
     capabilities.maxTextureDimension2D = limits.maxTextureDimension2D;
   }
-#ifndef __EMSCRIPTEN__
-  if (handles.adapter) {
-    capabilities.isVulkan = DescribeSelectedAdapter(handles.adapter);
+  if (adapter) {
+    capabilities.isVulkan = DescribeSelectedAdapter(adapter);
   }
-#endif
   return capabilities;
 }
-
-#ifdef __EMSCRIPTEN__
-/// Slots the browser import bridge writes into, in the order it writes them: the adapter first,
-/// then the device, whose store is what releases the waiting thread.
-struct BrowserImportState {
-  std::atomic<WGPUDevice> device = nullptr;
-  std::atomic<WGPUAdapter> adapter = nullptr;
-};
-static_assert(offsetof(BrowserImportState, device) == 0);
-static_assert(sizeof(BrowserImportState) == 2 * sizeof(WGPUDevice));
-static_assert(alignof(BrowserImportState) == alignof(WGPUDevice));
-static_assert(offsetof(BrowserImportState, adapter) == sizeof(WGPUDevice));
-static_assert(std::atomic<WGPUDevice>::is_always_lock_free);
-static_assert(std::atomic<WGPUAdapter>::is_always_lock_free);
-
-/// Imports the browser's WebGPU device, which is the only selection that platform offers.
-/// @param handles Root handles to populate; left partly filled on failure.
-/// @param options Caller inputs; its surface provider still runs, because preparing what the
-///   caller presents to is its job even where the choice of adapter is the browser's.
-bool ImportBrowserRoot(GeodeWgpuRoots& handles, const GpuRootSelection& options) {
-  const WGPUInstanceFeatureName timedWaitFeature = WGPUInstanceFeatureName_TimedWaitAny;
-  WGPUInstanceDescriptor instanceDescriptor = WGPU_INSTANCE_DESCRIPTOR_INIT;
-  instanceDescriptor.requiredFeatureCount = 1;
-  instanceDescriptor.requiredFeatures = &timedWaitFeature;
-  handles.instance = wgpu::Instance(wgpuCreateInstance(&instanceDescriptor));
-  if (!handles.instance) {
-    std::fprintf(stderr, "[Geode/emscripten] wgpuCreateInstance returned null.\n");
-    return false;
-  }
-  gSelectionInstances.fetch_add(1, std::memory_order_relaxed);
-  handles.owned = true;
-
-  // The browser chooses the adapter, so the surface constrains nothing here - but the provider is
-  // also what builds the surface the caller presents to, and a caller that could not build it has
-  // nothing to do with a device.
-  if (options.compatibleSurface && !options.compatibleSurface(handles.instance).has_value()) {
-    return false;
-  }
-
-  // WebKit cannot drive Emdawn's adapter/device futures through WaitAnyOnly from a transferred
-  // renderer pthread. Import one direct Promise chain, then cross a task boundary before the C
-  // continuation initializes pipelines. Both handles come back through it, because requesting
-  // either through the C API is the future WebKit cannot drive. Snapshot map futures still use
-  // TimedWaitAny.
-  BrowserImportState state;
-  WGPUDevice importedDevice = nullptr;
-  G(&state.device, handles.instance);
-  while ((importedDevice = state.device.load(std::memory_order_acquire)) == nullptr) {
-    emscripten_sleep(1);
-  }
-  // Written before the device store the loop above was watching, so it is visible now, and taken
-  // before the failure check below so that an import which got this far and then threw leaves the
-  // adapter to the release path rather than stranding it. A caller asking what its surface can
-  // present has an adapter to ask, which is what the editor's window does before it compiles a
-  // pipeline for the answer.
-  handles.adapter = wgpu::Adapter(state.adapter.load(std::memory_order_acquire));
-  if (reinterpret_cast<std::uintptr_t>(importedDevice) == 1) {
-    std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU device request failed.\n");
-    return false;
-  }
-  if (!handles.adapter) {
-    std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU adapter import returned null.\n");
-    return false;
-  }
-  handles.device = wgpu::Device(importedDevice);
-  handles.queue = handles.device.getQueue();
-  if (!handles.queue) {
-    std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU device returned no queue.\n");
-    return false;
-  }
-  return true;
-}
-#endif
-
-}  // namespace
-
-namespace {
 
 void ReleaseSelectedHandles(GeodeWgpuRoots& handles) {
   ReleaseWgpuHandle(handles.queue);
@@ -481,495 +338,33 @@ void ReleaseSelectedHandles(GeodeWgpuRoots& handles) {
   }
   ReleaseWgpuHandle(handles.device);
   ReleaseWgpuHandle(handles.adapter);
-  if (handles.instance) {
-    gSelectionInstances.fetch_sub(1, std::memory_order_relaxed);
-  }
   ReleaseWgpuHandle(handles.instance);
   ReleaseDeviceLostCallbackToken(handles.deviceLostCallbackToken, /*callbackCannotRun=*/true);
 }
 
-/// Selects the native Metal backend: the system default Metal device is the root every runtime
-/// device over it opens, so the root itself carries no handles - only the kind, the capabilities
-/// that device reports, and the loss condition its devices share. A platform without that
-/// backend is refused here rather than falling back to the transitional adapter, because a run
-/// recorded against one backend and served by another fails as if it were a rendering bug.
-///
-/// @param options Caller-supplied inputs. A selection constrained to a wgpu surface is refused
-///   before its surface provider runs, because no native backend presents to a wgpu surface.
-/// @param lostState Loss condition every runtime device over this root shares.
-/// @return The selected root, or null for a surface-constrained selection, on a platform with no
-///   native Metal backend, or on a host with no Metal device.
-std::shared_ptr<GeodeGpuRoot> SelectNativeMetalRoot(
-    const GpuRootSelection& options, std::shared_ptr<gpu::DeviceLostState> lostState) {
-#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
-  if (options.compatibleSurface) {
-    std::fprintf(stderr,
-                 "[Geode/metal] Selection constrained by a wgpu surface is not served by the "
-                 "native backend.\n");
-    return nullptr;
-  }
-  // Asked here rather than of the first device over the root: the root is what every device over
-  // it is described by, and a root that exists is one whose device is there to be opened.
-  const std::optional<gpu::metal::MetalDevice::SystemCapabilities> metal =
-      gpu::metal::MetalDevice::QuerySystemCapabilities();
-  if (!metal.has_value()) {
-    std::fprintf(stderr, "[Geode/metal] No Metal device available.\n");
-    return nullptr;
-  }
-  GeodeGpuRootCapabilities capabilities;
-  capabilities.backend = GpuBackendKind::NativeMetal;
-  capabilities.maxTextureDimension2D = metal->maxTextureDimension2D;
-  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState));
-#else
-  (void)options;
-  (void)lostState;
-  std::fprintf(stderr, "[Geode] No native Metal backend on this platform.\n");
-  return nullptr;
-#endif
-}
-
-#if defined(__EMSCRIPTEN__) && defined(DONNER_GEODE_BROWSER_BACKEND)
-/// Longest a browser device request may take to settle before the selection or the device that
-/// asked gives up. The first request in a worker waits for the browser to hand over an adapter
-/// and a device; every later one joins the device the root holds and settles at once.
-constexpr double kBrowserDeviceSettleSeconds = 10.0;
-
-/// Opens one runtime device on this worker's browser GPU device, asking the browser for that
-/// device if no runtime device in the worker holds it yet.
-///
-/// The browser settles the request from a promise callback, so the wait hands the thread over in
-/// short slices rather than holding it, and gives up after \ref kBrowserDeviceSettleSeconds.
-///
-/// @param lostState Loss condition the device shares with the others over its root.
-/// @return The device, or an error naming why the browser did not supply one.
-gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> OpenBrowserDevice(
-    std::shared_ptr<gpu::DeviceLostState> lostState) {
-  gpu::browser::BrowserDeviceRequest request = gpu::browser::BrowserDeviceRequest::Begin(
-      std::make_unique<gpu::browser::EmscriptenBrowserBridge>());
-  if (request.settle(kBrowserDeviceSettleSeconds) ==
-      gpu::browser::BrowserDeviceRequestState::Pending) {
-    return gpu::GpuError{
-        gpu::GpuErrorType::InvalidState,
-        std::format("the browser did not settle its GPU device request within {} seconds",
-                    kBrowserDeviceSettleSeconds)};
-  }
-  return std::move(request).take(std::move(lostState));
-}
-#endif
-
-/// Selects the browser backend: the root holds one runtime device over this worker's browser GPU
-/// device, which keeps that device open for as long as any runtime device over the root, so each
-/// of them joins it instead of asking the browser for another. A selected browser editor also
-/// reaches it without a WebGPU surface provider, then names its canvas through the runtime.
-///
-/// @param options Caller-supplied inputs. A selection constrained to a wgpu surface is refused
-///   before its surface provider runs: the browser backend presents to no wgpu surface.
-/// @param lostState Loss condition every runtime device over this root shares, and which the
-///   browser reporting its device lost declares.
-/// @return The selected root, or null for a surface-constrained selection, in a build without the
-///   browser backend, or when the browser supplied no device.
-std::shared_ptr<GeodeGpuRoot> SelectBrowserRoot(const GpuRootSelection& options,
-                                                std::shared_ptr<gpu::DeviceLostState> lostState) {
-#if defined(__EMSCRIPTEN__) && defined(DONNER_GEODE_BROWSER_BACKEND)
-  if (options.compatibleSurface) {
-    std::fprintf(stderr,
-                 "[Geode/browser] Selection constrained by a wgpu surface is not served by the "
-                 "browser backend.\n");
-    return nullptr;
-  }
-  gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> hold = OpenBrowserDevice(lostState);
-  if (hold.hasError()) {
-    std::fprintf(stderr, "[Geode/browser] No browser GPU device: %s\n",
-                 hold.error().message.c_str());
-    return nullptr;
-  }
-  GeodeGpuRootCapabilities capabilities;
-  capabilities.backend = GpuBackendKind::Browser;
-  capabilities.maxTextureDimension2D = hold.result()->maxTextureDimension2D();
-  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState),
-                                        std::shared_ptr<const void>(std::move(hold).result()));
-#else
-  (void)options;
-  (void)lostState;
-  std::fprintf(stderr, "[Geode] No browser backend in this build.\n");
-  return nullptr;
-#endif
-}
-
-/// Opens one runtime device on the browser backend \p root names.
-/// @param root Root whose loss condition the device shares.
-/// @return The device, or null when the browser supplied none.
-std::unique_ptr<gpu::Device> CreateBrowserDeviceOver(const GeodeGpuRoot& root) {
-#if defined(__EMSCRIPTEN__) && defined(DONNER_GEODE_BROWSER_BACKEND)
-  gpu::Result<std::unique_ptr<gpu::browser::BrowserDevice>> device =
-      OpenBrowserDevice(root.lostState());
-  if (device.hasError()) {
-    std::fprintf(stderr, "[Geode/browser] No runtime device over the browser GPU device: %s\n",
-                 device.error().message.c_str());
-    return nullptr;
-  }
-  return std::move(device).result();
-#else
-  (void)root;
-  return nullptr;
-#endif
-}
-
-/// Opens one runtime device on the native Metal backend \p root names.
-/// @param root Root whose loss condition the device shares.
-/// @return The device, or null when no Metal device could be opened.
-std::unique_ptr<gpu::Device> CreateNativeMetalDeviceOver(const GeodeGpuRoot& root) {
-#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
-  std::unique_ptr<gpu::Device> device = gpu::metal::MetalDevice::Create(
-      gpu::metal::MetalDevice::MemoryModel::Detected, gpu::kMaxBufferByteSize,
-      std::chrono::seconds(5), root.lostState());
-  if (device == nullptr) {
-    std::fprintf(stderr, "[Geode/metal] No Metal device available.\n");
-  }
-  return device;
-#else
-  (void)root;
-  return nullptr;
-#endif
-}
-
-/// Selects one native Vulkan instance, device and queue for every runtime device over this root.
-/// The selected owner retains the native handles while those runtime devices keep independent
-/// command pools, serials and resource tables. A platform without the backend is refused rather
-/// than served by the transitional adapter, for the reason \ref SelectNativeMetalRoot gives.
-///
-/// @param options Caller-supplied inputs. A selection constrained to a wgpu surface is refused
-///   before its surface provider runs, because no native backend presents to a wgpu surface.
-/// @param lostState Loss condition every runtime device over this root shares.
-/// @return The selected root, or null for a surface-constrained selection, on a platform with no
-///   native Vulkan backend, or on a host with no Vulkan device.
-std::shared_ptr<GeodeGpuRoot> SelectNativeVulkanRoot(
-    const GpuRootSelection& options, std::shared_ptr<gpu::DeviceLostState> lostState) {
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
-  if (options.compatibleSurface) {
-    std::fprintf(stderr,
-                 "[Geode/vulkan] Selection constrained by a wgpu surface is not served by the "
-                 "native backend.\n");
-    return nullptr;
-  }
-  if (!options.requireVulkanPresentation && !options.requiredVulkanInstanceExtensions.empty()) {
-    std::fprintf(stderr, "[Geode/vulkan] Surface extensions need a presentation root.\n");
-    return nullptr;
-  }
-  std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeRoot =
-      options.requireVulkanPresentation
-          ? gpu::vulkan::VulkanDevice::CreateSharedRootWithPresentationSupport(
-                options.requiredVulkanInstanceExtensions, lostState)
-          : gpu::vulkan::VulkanDevice::CreateSharedRoot(lostState);
-  if (nativeRoot == nullptr) {
-    std::fprintf(stderr, "[Geode/vulkan] No Vulkan device available.\n");
-    return nullptr;
-  }
-  return AdoptNativeVulkanRoot(std::move(nativeRoot), std::move(lostState));
-#else
-  (void)options;
-  (void)lostState;
-  std::fprintf(stderr, "[Geode] No native Vulkan backend on this platform.\n");
-  return nullptr;
-#endif
-}
-
-/// Opens one runtime device on the native Vulkan backend \p root names.
-/// @param root Root whose loss condition the device shares.
-/// @return The device, or null when no Vulkan device could be opened.
-std::unique_ptr<gpu::Device> CreateNativeVulkanDeviceOver(const GeodeGpuRoot& root) {
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
-  std::unique_ptr<gpu::Device> device =
-      gpu::vulkan::VulkanDevice::CreateOverSharedRoot(root.vulkanRoot());
-  if (device == nullptr) {
-    std::fprintf(stderr, "[Geode/vulkan] No Vulkan device available.\n");
-  }
-  return device;
-#else
-  (void)root;
-  return nullptr;
-#endif
-}
-
-}  // namespace
-
-std::size_t OutstandingSelectionInstances() {
-  return gSelectionInstances.load(std::memory_order_relaxed);
-}
-
-std::size_t OutstandingDeviceLostCallbacks() {
-#ifdef __EMSCRIPTEN__
-  return 0;
-#else
-  return gOutstandingDeviceLostCallbacks.load(std::memory_order_acquire);
-#endif
-}
-
-GeodeGpuRoot::GeodeGpuRoot(GeodeWgpuRoots handles, GeodeGpuRootCapabilities capabilities,
-                           std::shared_ptr<gpu::DeviceLostState> lostState,
-                           std::shared_ptr<const void> backendHold,
-                           std::shared_ptr<gpu::vulkan::VulkanSharedRoot> vulkanRoot)
-    : handles_(std::move(handles)),
-      capabilities_(capabilities),
-      lostState_(lostState ? std::move(lostState) : std::make_shared<gpu::DeviceLostState>()),
-      backendHold_(std::move(backendHold)),
-      vulkanRoot_(std::move(vulkanRoot)) {}
-
-GeodeGpuRoot::~GeodeGpuRoot() {
-  if (!handles_.owned) {
-    return;
-  }
-  if (lostState_->lost.load(std::memory_order_acquire)) {
-    // A lost device is a process-fatal condition for GPU rendering, and releasing it calls into a
-    // driver that has stopped answering. Leak one root's worth of driver objects rather than risk
-    // a blocking call into a hung driver.
-    ReleaseDeviceLostCallbackToken(handles_.deviceLostCallbackToken, /*callbackCannotRun=*/false);
-    return;
-  }
-  ReleaseSelectedHandles(handles_);
-}
-
-bool GeodeGpuRoot::names(const wgpu::Instance& instance, const wgpu::Adapter& adapter,
-                         const wgpu::Device& device, const wgpu::Queue& queue) const {
-  return (!instance ||
-          static_cast<WGPUInstance>(instance) == static_cast<WGPUInstance>(handles_.instance)) &&
-         (!adapter ||
-          static_cast<WGPUAdapter>(adapter) == static_cast<WGPUAdapter>(handles_.adapter)) &&
-         (!device || static_cast<WGPUDevice>(device) == static_cast<WGPUDevice>(handles_.device)) &&
-         (!queue || static_cast<WGPUQueue>(queue) == static_cast<WGPUQueue>(handles_.queue));
-}
-
-std::string_view GpuBackendKindName(GpuBackendKind kind) {
-  switch (kind) {
-    case GpuBackendKind::TransitionalWgpu: return "transitional wgpu adapter";
-    case GpuBackendKind::NativeMetal: return "native Metal";
-    case GpuBackendKind::NativeVulkan: return "native Vulkan";
-    case GpuBackendKind::Browser: return "browser";
-  }
-  UTILS_UNREACHABLE();
-}
-
-std::ostream& operator<<(std::ostream& os, GpuBackendKind kind) {
-  return os << GpuBackendKindName(kind);
-}
-
-namespace {
-
-/// The value `DONNER_GPU_BACKEND` holds, or empty when it is unset or empty.
-std::string_view ProcessBackendRequest() {
-  const char* value = std::getenv("DONNER_GPU_BACKEND");
-  return value != nullptr ? std::string_view(value) : std::string_view();
-}
-
-/// The native backend qualified for this host's unconstrained Geode roots.
-GpuBackendKind PlatformDefaultGpuBackendKind() {
-#if defined(__APPLE__) && !defined(__EMSCRIPTEN__)
-  return GpuBackendKind::NativeMetal;
-#elif defined(__linux__) && !defined(__EMSCRIPTEN__)
-  return GpuBackendKind::NativeVulkan;
-#else
-  return GpuBackendKind::TransitionalWgpu;
-#endif
-}
-
-/// What asked for the backend a selection produced.
-enum class BackendRequestSource : uint8_t {
-  Caller,        //!< The caller named it.
-  Environment,   //!< `DONNER_GPU_BACKEND` named it.
-  BuildSetting,  //!< The build selects it for headless work.
-  Default,       //!< Nothing named one, so the process default applied.
-};
-
-/// How many \ref BackendRequestSource values there are.
-constexpr uint32_t kBackendRequestSourceCount = 4;
-
-/// A resolved backend and what asked for it.
-struct ResolvedBackend {
-  GpuBackendKind kind = GpuBackendKind::TransitionalWgpu;       //!< Backend to select.
-  BackendRequestSource source = BackendRequestSource::Default;  //!< What asked for it.
-};
-
-/// The backend \p request names, as `DONNER_GPU_BACKEND` spells it.
-/// @param request Value of the variable; empty selects the platform default.
-/// @return The kind, or an error naming the value and the accepted values.
-gpu::Result<GpuBackendKind> ParseBackendRequest(std::string_view request) {
-  if (request.empty()) {
-    return PlatformDefaultGpuBackendKind();
-  }
-  using namespace std::string_view_literals;
-  if (StringUtils::EqualsLowercase(request, "wgpu"sv)) {
-    return GpuBackendKind::TransitionalWgpu;
-  }
-  if (StringUtils::EqualsLowercase(request, "metal"sv)) {
-    return GpuBackendKind::NativeMetal;
-  }
-  if (StringUtils::EqualsLowercase(request, "vulkan"sv)) {
-    return GpuBackendKind::NativeVulkan;
-  }
-  return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor,
-                       std::format("DONNER_GPU_BACKEND={} names no GPU backend; accepted values: "
-                                   "wgpu, metal, vulkan",
-                                   request)};
-}
-
-/// Halts on a backend request this process cannot serve. A refused selection would read to its
-/// caller as a host without a GPU, and callers skip on that.
-/// @param reason What was asked for and why it cannot be served.
-[[noreturn]] void HaltOnUnservableBackendRequest(const std::string& reason) {
-  std::fprintf(stderr, "[Geode] %s\n", reason.c_str());
-  std::abort();
-}
-
-/// Names the backend a selection produced and what asked for it, once per pair in this process,
-/// so a run that asked for a backend shows which one executed without a line per device. A
-/// selection nothing asked for prints nothing: the default path stays silent.
-/// @param kind Backend selected. @param source What asked for it.
-/// @param request Value of `DONNER_GPU_BACKEND` when that is the source.
-void ReportSelectedBackendOnce(GpuBackendKind kind, BackendRequestSource source,
-                               std::string_view request) {
-  if (source == BackendRequestSource::Default) {
-    return;
-  }
-  static std::atomic<uint32_t> reported{0};
-  const uint32_t pair = 1u << (static_cast<uint32_t>(kind) * kBackendRequestSourceCount +
-                               static_cast<uint32_t>(source));
-  if ((reported.fetch_or(pair, std::memory_order_relaxed) & pair) != 0) {
-    return;
-  }
-  const std::string_view name = GpuBackendKindName(kind);
-  switch (source) {
-    case BackendRequestSource::Caller:
-      std::fprintf(stderr, "[Geode] GPU backend: %.*s, named by the caller.\n",
-                   static_cast<int>(name.size()), name.data());
-      break;
-    case BackendRequestSource::Environment:
-      std::fprintf(stderr, "[Geode] GPU backend: %.*s, requested by DONNER_GPU_BACKEND=%.*s.\n",
-                   static_cast<int>(name.size()), name.data(), static_cast<int>(request.size()),
-                   request.data());
-      break;
-    case BackendRequestSource::BuildSetting:
-      std::fprintf(stderr,
-                   "[Geode] GPU backend: %.*s, selected by the build setting "
-                   "//donner/svg/renderer/geode:browser_backend for headless work.\n",
-                   static_cast<int>(name.size()), name.data());
-      break;
-    case BackendRequestSource::Default: break;
-  }
-}
-
-}  // namespace
-
-gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind() {
-  return ParseBackendRequest(ProcessBackendRequest());
-}
-
-std::optional<GpuBackendKind> BuildDefaultGpuBackendKind() {
-#if defined(__EMSCRIPTEN__) && defined(DONNER_GEODE_BROWSER_BACKEND)
-  return GpuBackendKind::Browser;
-#else
-  return std::nullopt;
-#endif
-}
-
-namespace {
-
-/// The backend \p options resolves to and what asked for it, in the order
-/// \ref ResolveGpuBackendKind documents.
-/// @param options Caller-supplied inputs. @param request Value of `DONNER_GPU_BACKEND`.
-/// @param buildDefault Backend the build selects for headless work.
-gpu::Result<ResolvedBackend> ResolveBackend(const GpuRootSelection& options,
-                                            std::string_view request,
-                                            std::optional<GpuBackendKind> buildDefault) {
-  // A WebGPU surface provider can only be served by the transitional adapter. Native editor
-  // windows attach their platform surfaces without one, so their roots take the native default.
-  ResolvedBackend resolved{options.compatibleSurface ? GpuBackendKind::TransitionalWgpu
-                                                     : PlatformDefaultGpuBackendKind(),
-                           BackendRequestSource::Default};
-  if (options.backend.has_value()) {
-    resolved = ResolvedBackend{*options.backend, BackendRequestSource::Caller};
-  } else if (!request.empty()) {
-    gpu::Result<GpuBackendKind> requested = ParseBackendRequest(request);
-    if (requested.hasError()) {
-      return std::move(requested).error();
-    }
-    resolved = ResolvedBackend{requested.result(), BackendRequestSource::Environment};
-  } else if (buildDefault.has_value() && !options.compatibleSurface) {
-    resolved = ResolvedBackend{*buildDefault, BackendRequestSource::BuildSetting};
-  }
-  if (options.requireVulkanPresentation && resolved.kind != GpuBackendKind::NativeVulkan) {
-    return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor,
-                         std::format("Vulkan presentation requested, but the {} backend resolved",
-                                     GpuBackendKindName(resolved.kind))};
-  }
-  if (!options.requireVulkanPresentation && !options.requiredVulkanInstanceExtensions.empty()) {
-    return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor,
-                         "Vulkan instance extensions require presentation"};
-  }
-  return resolved;
-}
-
-}  // namespace
-
-gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& options,
-                                                  std::string_view request,
-                                                  std::optional<GpuBackendKind> buildDefault) {
-  gpu::Result<ResolvedBackend> resolved = ResolveBackend(options, request, buildDefault);
-  if (resolved.hasError()) {
-    return std::move(resolved).error();
-  }
-  return resolved.result().kind;
-}
-
-bool GeodeGpuRoot::hasBackendDevice() const {
-  if (capabilities_.backend == GpuBackendKind::NativeVulkan) {
-    return vulkanRoot_ != nullptr;
-  }
-  if (capabilities_.backend != GpuBackendKind::TransitionalWgpu) {
-    return true;
-  }
-  return static_cast<bool>(handles_.device) && static_cast<bool>(handles_.queue);
-}
-
-namespace {
-
-/// Selects the transitional adapter's root: creates an instance, requests an adapter and a device,
-/// and takes the default queue, or imports the browser's device under Emscripten.
-/// @param options Caller-supplied inputs.
+/// Selects the wgpu objects the reference renders through: creates an instance, requests an
+/// adapter and a device, and takes the default queue.
+/// @param label Label the selected device carries in driver diagnostics.
 /// @param lostState Loss condition the device-lost callback publishes into.
-/// @return The selected root, or null when no adapter or device could be obtained.
-std::shared_ptr<GeodeGpuRoot> SelectTransitionalRoot(
-    const GpuRootSelection& options, std::shared_ptr<gpu::DeviceLostState> lostState) {
+/// @return The selected objects, or null when no adapter or device could be obtained.
+std::shared_ptr<WgpuReferenceRoot> SelectWgpuReferenceRoot(
+    std::string_view label, std::shared_ptr<gpu::DeviceLostState> lostState) {
   GeodeWgpuRoots handles;
   PartialSelection partial(handles);
-#ifdef __EMSCRIPTEN__
-  if (!ImportBrowserRoot(handles, options)) {
-    return nullptr;
-  }
-#else
   // 1. Create the instance. `wgpuCreateInstance` is synchronous and never blocks on I/O; the
   //    returned handle is the root of the object graph.
-  const wgpu::BackendType backendType = RequestedBackend(options.usePlatformDefaultBackend);
+  const wgpu::BackendType backendType = RequestedBackend();
   handles.instance = CreateSelectionInstance(backendType);
   if (!handles.instance) {
     std::fprintf(stderr, "[Geode/wgpu-native] wgpuCreateInstance returned null\n");
     return nullptr;
   }
-  handles.owned = true;
-
   // 2. Request an adapter. The synchronous form in webgpu-cpp internally calls the async C API
   //    with a lambda that parks the result on the stack - wgpu-native invokes the callback before
   //    returning from the request, so the sync form is safe on native targets.
   wgpu::RequestAdapterOptions adapterOptions = {};
   adapterOptions.backendType = backendType;
   adapterOptions.forceFallbackAdapter = wgpuForceFallbackAdapterRequested();
-  if (options.compatibleSurface) {
-    // A caller that could not build what it presents to has nothing useful to do with a device.
-    const std::optional<wgpu::Surface> surface = options.compatibleSurface(handles.instance);
-    if (!surface.has_value()) {
-      return nullptr;
-    }
-    adapterOptions.compatibleSurface = *surface;
-  }
 
   for (int attempt = 0;; ++attempt) {
     handles.adapter = handles.instance.requestAdapter(adapterOptions);
@@ -985,7 +380,7 @@ std::shared_ptr<GeodeGpuRoot> SelectTransitionalRoot(
   // 3. Create the device. Error diagnostics are wired through the descriptor; the callbacks stay
   //    valid for the device's lifetime.
   wgpu::DeviceDescriptor deviceDesc = {};
-  deviceDesc.label = wgpu::StringView{options.label};
+  deviceDesc.label = wgpu::StringView{label};
   deviceDesc.uncapturedErrorCallbackInfo.callback = OnUncapturedError;
   deviceDesc.uncapturedErrorCallbackInfo.userdata1 = nullptr;
   deviceDesc.uncapturedErrorCallbackInfo.userdata2 = nullptr;
@@ -1022,123 +417,66 @@ std::shared_ptr<GeodeGpuRoot> SelectTransitionalRoot(
     std::fprintf(stderr, "[Geode/wgpu-native] Failed to get queue.\n");
     return nullptr;
   }
-#endif
 
-  // Queried before the handles are moved from: reading and moving them in one argument list is
-  // unsequenced.
-  const GeodeGpuRootCapabilities capabilities = QueryRootCapabilities(handles);
   partial.keep();
-  return std::make_shared<GeodeGpuRoot>(std::move(handles), capabilities, std::move(lostState));
+  return std::make_shared<WgpuReferenceRoot>(std::move(handles), std::move(lostState));
 }
 
-/// Selects a root of \p kind, or null when that backend cannot be selected here.
-/// @param kind Backend the selection resolved to.
-/// @param selection Caller-supplied inputs.
-/// @param lostState Loss condition every runtime device over the root shares.
-std::shared_ptr<GeodeGpuRoot> SelectRootOfKind(GpuBackendKind kind,
-                                               const GpuRootSelection& selection,
-                                               std::shared_ptr<gpu::DeviceLostState> lostState) {
-  switch (kind) {
-    case GpuBackendKind::TransitionalWgpu:
-      return SelectTransitionalRoot(selection, std::move(lostState));
-    case GpuBackendKind::NativeMetal: return SelectNativeMetalRoot(selection, std::move(lostState));
-    case GpuBackendKind::NativeVulkan:
-      return SelectNativeVulkanRoot(selection, std::move(lostState));
-    case GpuBackendKind::Browser: return SelectBrowserRoot(selection, std::move(lostState));
+/// Opens wgpu reference runtime devices over one selected set of wgpu objects.
+class WgpuReferenceDeviceSource final : public GeodeRuntimeDeviceSource {
+public:
+  /// @param root wgpu objects every opened device records against; must not be null.
+  explicit WgpuReferenceDeviceSource(std::shared_ptr<const WgpuReferenceRoot> root)
+      : root_(std::move(root)) {}
+
+  std::unique_ptr<gpu::Device> openRuntimeDevice() override {
+    return std::make_unique<GeodeWgpuAdapterDevice>(root_);
   }
-  UTILS_UNREACHABLE();
-}
+
+private:
+  std::shared_ptr<const WgpuReferenceRoot> root_;
+};
 
 }  // namespace
 
-std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
-  const std::string_view request = ProcessBackendRequest();
-  gpu::Result<ResolvedBackend> resolved =
-      ResolveBackend(options, request, BuildDefaultGpuBackendKind());
-  if (resolved.hasError()) {
-    HaltOnUnservableBackendRequest(resolved.error().message);
-  }
-  const GpuBackendKind kind = resolved.result().kind;
-  const BackendRequestSource source = resolved.result().source;
+WgpuReferenceRoot::WgpuReferenceRoot(GeodeWgpuRoots handles,
+                                     std::shared_ptr<gpu::DeviceLostState> lostState)
+    : handles_(std::move(handles)), lostState_(std::move(lostState)) {
+  UTILS_RELEASE_ASSERT(handles_.device && handles_.queue && lostState_ != nullptr);
+}
 
-  // A surface provider that gives up is the caller's failure, not the backend's, so it is told
-  // apart from a backend that could not be selected.
-  bool surfaceProviderGaveUp = false;
-  GpuRootSelection selection = options;
-  if (options.compatibleSurface) {
-    selection.compatibleSurface =
-        [&options,
-         &surfaceProviderGaveUp](const wgpu::Instance& instance) -> std::optional<wgpu::Surface> {
-      std::optional<wgpu::Surface> surface = options.compatibleSurface(instance);
-      surfaceProviderGaveUp = !surface.has_value();
-      return surface;
-    };
+WgpuReferenceRoot::~WgpuReferenceRoot() {
+  if (lostState_->lost.load(std::memory_order_acquire)) {
+    // A lost device is a process-fatal condition for GPU rendering, and releasing it calls into a
+    // driver that has stopped answering. Leak one root's worth of driver objects rather than risk
+    // a blocking call into a hung driver.
+    ReleaseDeviceLostCallbackToken(handles_.deviceLostCallbackToken, /*callbackCannotRun=*/false);
+    return;
   }
+  ReleaseSelectedHandles(handles_);
+}
 
+WgpuReferenceSelection SelectWgpuReference(std::string_view label) {
   auto lostState = std::make_shared<gpu::DeviceLostState>();
-  std::shared_ptr<GeodeGpuRoot> root = SelectRootOfKind(kind, selection, std::move(lostState));
+  std::shared_ptr<WgpuReferenceRoot> reference = SelectWgpuReferenceRoot(label, lostState);
+  if (reference == nullptr) {
+    return {};
+  }
+  std::shared_ptr<GeodeGpuRoot> root = AdoptRuntimeDeviceSource(
+      std::make_shared<WgpuReferenceDeviceSource>(reference),
+      QueryRootCapabilities(reference->device(), reference->adapter()), std::move(lostState));
   if (root == nullptr) {
-    if (source == BackendRequestSource::Environment && !surfaceProviderGaveUp) {
-      HaltOnUnservableBackendRequest(
-          std::format("DONNER_GPU_BACKEND={} asked for the {} backend, which this process could "
-                      "not select; a run on any other backend is no evidence for it",
-                      request, GpuBackendKindName(kind)));
-    }
-    return nullptr;
+    return {};
   }
-  UTILS_RELEASE_ASSERT_MSG(root->capabilities().backend == kind,
-                           "SelectGpuRoot built a root for a backend other than the one resolved");
-  ReportSelectedBackendOnce(kind, source, request);
-  return root;
+  return WgpuReferenceSelection{.root = std::move(root), .reference = std::move(reference)};
 }
 
-std::shared_ptr<GeodeGpuRoot> AdoptGpuRoot(const GeodeWgpuRoots& handles,
-                                           std::shared_ptr<gpu::DeviceLostState> lostState) {
-  if (!handles.device || !handles.queue) {
-    std::fprintf(stderr, "[Geode] AdoptGpuRoot: null device or queue\n");
+std::unique_ptr<GeodeDevice> CreateWgpuReferenceContext(gpu::TextureFormat textureFormat) {
+  WgpuReferenceSelection selection = SelectWgpuReference("GeodeWgpuReference");
+  if (selection.root == nullptr) {
     return nullptr;
   }
-  GeodeWgpuRoots borrowed = handles;
-  // Whatever the caller says, an adopted root is borrowed: Donner did not create these objects
-  // and the embedder outlives every context built over them.
-  borrowed.owned = false;
-  borrowed.deviceLostCallbackToken = nullptr;
-  const GeodeGpuRootCapabilities capabilities = QueryRootCapabilities(handles);
-  return std::make_shared<GeodeGpuRoot>(std::move(borrowed), capabilities, std::move(lostState));
-}
-
-std::shared_ptr<GeodeGpuRoot> AdoptNativeVulkanRoot(
-    std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeRoot,
-    std::shared_ptr<gpu::DeviceLostState> lostState) {
-#if defined(__linux__) && !defined(__EMSCRIPTEN__)
-  if (nativeRoot == nullptr || lostState == nullptr || nativeRoot->lostState() != lostState) {
-    return nullptr;
-  }
-  GeodeGpuRootCapabilities capabilities;
-  capabilities.backend = GpuBackendKind::NativeVulkan;
-  capabilities.maxTextureDimension2D = nativeRoot->maxTextureDimension2D();
-  capabilities.isVulkan = true;
-  return std::make_shared<GeodeGpuRoot>(GeodeWgpuRoots{}, capabilities, std::move(lostState),
-                                        nullptr, std::move(nativeRoot));
-#else
-  (void)nativeRoot;
-  (void)lostState;
-  return nullptr;
-#endif
-}
-
-GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
-  UTILS_RELEASE_ASSERT(root != nullptr);
-  if (root->capabilities().backend == GpuBackendKind::NativeMetal) {
-    return GeodeRuntimeDevice{.device = CreateNativeMetalDeviceOver(*root)};
-  }
-  if (root->capabilities().backend == GpuBackendKind::NativeVulkan) {
-    return GeodeRuntimeDevice{.device = CreateNativeVulkanDeviceOver(*root)};
-  }
-  if (root->capabilities().backend == GpuBackendKind::Browser) {
-    return GeodeRuntimeDevice{.device = CreateBrowserDeviceOver(*root)};
-  }
-  return GeodeRuntimeDevice{.device = std::make_unique<GeodeWgpuAdapterDevice>(std::move(root))};
+  return GeodeDevice::CreateOverSelectedRoot(std::move(selection.root), textureFormat);
 }
 
 namespace {
@@ -1444,7 +782,7 @@ void ApplyBindingType(wgpu::BindGroupLayoutEntry& entry,
 
 }  // namespace
 
-GeodeWgpuAdapterDevice::GeodeWgpuAdapterDevice(std::shared_ptr<GeodeGpuRoot> root)
+GeodeWgpuAdapterDevice::GeodeWgpuAdapterDevice(std::shared_ptr<const WgpuReferenceRoot> root)
     : root_(std::move(root)) {
   UTILS_RELEASE_ASSERT(root_ != nullptr);
   // Every runtime device over one backend root answers the same question about whether that root
@@ -1606,7 +944,7 @@ constexpr char kWgpuTextureShareFamily = 'W';
 /// last registration may be released after the exporting adapter is gone.
 class WgpuExportedTexture final : public gpu::ExportedTextureBacking {
 public:
-  WgpuExportedTexture(wgpu::Texture texture, std::shared_ptr<GeodeGpuRoot> root)
+  WgpuExportedTexture(wgpu::Texture texture, std::shared_ptr<const WgpuReferenceRoot> root)
       : root_(std::move(root)), texture_(AddedReference(std::move(texture))) {}
 
   /// Destroys the texture's backing, for an owner that released its backing while a sibling still
@@ -1616,7 +954,7 @@ public:
   /// The exported texture; borrowed, this object holds the reference.
   const wgpu::Texture& texture() const UTILS_LIFETIME_BOUND { return texture_.get(); }
   /// The root the exporting adapter records against.
-  const GeodeGpuRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
+  const WgpuReferenceRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
 
 private:
   /// \p texture with a reference of its own taken. @param texture Texture to reference.
@@ -1625,7 +963,7 @@ private:
     return texture;
   }
 
-  std::shared_ptr<GeodeGpuRoot> root_;
+  std::shared_ptr<const WgpuReferenceRoot> root_;
   /// Mutable because the release above runs through the const handle every holder shares, once,
   /// after every other holder is gone.
   mutable ScopedWgpuHandle<wgpu::Texture> texture_;

@@ -19,6 +19,7 @@
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/DeviceLost.h"
+#include "donner/gpu/RecordingDevice.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/gpu/tests/SharingTestDevice.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
@@ -26,6 +27,7 @@
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeRuntimeDeviceSource.h"
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
@@ -882,6 +884,62 @@ TEST(DeviceOrderedRegistrationTest, TheHelperReturnsWithoutWaitingForTheProducer
       << "the helper waited on the host for work the device orders";
   EXPECT_THAT(consumer.isLost(), IsFalse());
   EXPECT_THAT(producer.isLost(), IsFalse());
+}
+
+/// Opens a recording device per call and remembers each one, so a test can tell which context
+/// renders through which device.
+class RecordingDeviceSource final : public GeodeRuntimeDeviceSource {
+public:
+  std::unique_ptr<gpu::Device> openRuntimeDevice() override {
+    auto device = std::make_unique<gpu::RecordingDevice>();
+    opened.push_back(device.get());
+    return device;
+  }
+
+  /// Devices opened so far, in order. Borrowed; the contexts own them.
+  std::vector<const gpu::Device*> opened;
+};
+
+/// An adopted source supplies every runtime device; each context keeps one of its own, the
+/// adopted capabilities and loss condition reach every context, and nothing about the backend is
+/// selected.
+TEST(GeodeAdoptedRuntimeDeviceSource, EachContextRendersThroughADeviceTheSourceOpened) {
+  auto source = std::make_shared<RecordingDeviceSource>();
+  auto lostState = std::make_shared<gpu::DeviceLostState>();
+  GeodeGpuRootCapabilities capabilities;
+  capabilities.backend = GpuBackendKind::NativeMetal;
+  capabilities.maxTextureDimension2D = 4096u;
+  std::shared_ptr<GeodeGpuRoot> root = AdoptRuntimeDeviceSource(source, capabilities, lostState);
+  ASSERT_THAT(root, NotNull());
+  EXPECT_THAT(root->capabilities().backend, Eq(GpuBackendKind::External));
+  EXPECT_THAT(root->hasBackendDevice(), IsTrue());
+
+  const int headlessBefore = GeodeDevice::headlessCreationCountForTesting();
+  std::unique_ptr<GeodeDevice> first =
+      GeodeDevice::CreateOverSelectedRoot(root, gpu::TextureFormat::RGBA8Unorm);
+  ASSERT_THAT(first, NotNull());
+  std::unique_ptr<GeodeDevice> second = GeodeDevice::CreateOverPhysicalDeviceOwner(
+      first->physicalDeviceOwner(), gpu::TextureFormat::RGBA8Unorm);
+  ASSERT_THAT(second, NotNull());
+
+  EXPECT_THAT(source->opened,
+              ElementsAreArray({static_cast<const gpu::Device*>(&first->runtimeDevice()),
+                                static_cast<const gpu::Device*>(&second->runtimeDevice())}));
+  EXPECT_THAT(first->lostState(), Eq(lostState));
+  EXPECT_THAT(second->lostState(), Eq(lostState));
+  EXPECT_THAT(first->maxTextureDimension2D(), Eq(4096u));
+  EXPECT_THAT(first->isBoundToCreatingThread(), IsFalse());
+  EXPECT_THAT(first->waitForQueueIdle(), Eq(GpuWaitResult::Complete));
+  EXPECT_THAT(GeodeDevice::headlessCreationCountForTesting(), Eq(headlessBefore));
+}
+
+TEST(GeodeAdoptedRuntimeDeviceSource, RefusesAMissingSourceOrLossCondition) {
+  EXPECT_THAT(AdoptRuntimeDeviceSource(nullptr, GeodeGpuRootCapabilities{},
+                                       std::make_shared<gpu::DeviceLostState>()),
+              IsNull());
+  EXPECT_THAT(AdoptRuntimeDeviceSource(std::make_shared<RecordingDeviceSource>(),
+                                       GeodeGpuRootCapabilities{}, nullptr),
+              IsNull());
 }
 
 }  // namespace donner::geode

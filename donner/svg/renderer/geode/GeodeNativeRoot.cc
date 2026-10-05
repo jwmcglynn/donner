@@ -15,6 +15,7 @@
 #include "donner/base/StringUtils.h"
 #include "donner/base/Utils.h"
 #include "donner/gpu/GpuLimits.h"
+#include "donner/svg/renderer/geode/GeodeRuntimeDeviceSource.h"
 #if defined(__APPLE__)
 #include "donner/gpu/metal/MetalDevice.h"
 #endif
@@ -99,6 +100,11 @@ gpu::Result<ResolvedBackend> ResolveBackend(const GpuRootSelection& options,
     return NoPlatformDefaultBackend();
   }
   const ResolvedBackend resolved = *named;
+  if (resolved.kind == GpuBackendKind::External) {
+    return gpu::GpuError{gpu::GpuErrorType::Unsupported,
+                         "the external backend is adopted from a runtime device source, never "
+                         "selected"};
+  }
   if (options.requireVulkanPresentation && resolved.kind != GpuBackendKind::NativeVulkan) {
     return gpu::GpuError{gpu::GpuErrorType::InvalidDescriptor,
                          std::format("Vulkan presentation requested, but the {} backend resolved",
@@ -202,11 +208,26 @@ GeodeGpuRoot::GeodeGpuRoot(GeodeGpuRootCapabilities capabilities,
       lostState_(std::move(lostState)),
       vulkanRoot_(std::move(vulkanRoot)) {
   UTILS_RELEASE_ASSERT(lostState_ != nullptr);
+  UTILS_RELEASE_ASSERT_MSG(capabilities_.backend != GpuBackendKind::External,
+                           "an external root is built only by AdoptRuntimeDeviceSource");
+}
+
+GeodeGpuRoot::GeodeGpuRoot(GeodeGpuRootCapabilities capabilities,
+                           std::shared_ptr<gpu::DeviceLostState> lostState,
+                           std::shared_ptr<GeodeRuntimeDeviceSource> deviceSource)
+    : capabilities_(capabilities),
+      lostState_(std::move(lostState)),
+      deviceSource_(std::move(deviceSource)) {
+  UTILS_RELEASE_ASSERT(lostState_ != nullptr && deviceSource_ != nullptr);
+  capabilities_.backend = GpuBackendKind::External;
 }
 
 bool GeodeGpuRoot::hasBackendDevice() const {
   if (capabilities_.backend == GpuBackendKind::NativeVulkan) {
     return vulkanRoot_ != nullptr;
+  }
+  if (capabilities_.backend == GpuBackendKind::External) {
+    return deviceSource_ != nullptr;
   }
   return capabilities_.backend == GpuBackendKind::NativeMetal;
 }
@@ -216,6 +237,7 @@ std::string_view GpuBackendKindName(GpuBackendKind kind) {
     case GpuBackendKind::NativeMetal: return "native Metal";
     case GpuBackendKind::NativeVulkan: return "native Vulkan";
     case GpuBackendKind::Browser: return "browser";
+    case GpuBackendKind::External: return "external runtime device";
   }
   UTILS_UNREACHABLE();
 }
@@ -299,8 +321,21 @@ std::shared_ptr<GeodeGpuRoot> AdoptNativeVulkanRoot(
 #endif
 }
 
+std::shared_ptr<GeodeGpuRoot> AdoptRuntimeDeviceSource(
+    std::shared_ptr<GeodeRuntimeDeviceSource> source, const GeodeGpuRootCapabilities& capabilities,
+    std::shared_ptr<gpu::DeviceLostState> lostState) {
+  if (source == nullptr || lostState == nullptr) {
+    return nullptr;
+  }
+  return std::shared_ptr<GeodeGpuRoot>(
+      new GeodeGpuRoot(capabilities, std::move(lostState), std::move(source)));
+}
+
 GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root) {
   UTILS_RELEASE_ASSERT(root != nullptr);
+  if (root->capabilities().backend == GpuBackendKind::External) {
+    return {.device = root->deviceSource_->openRuntimeDevice()};
+  }
   if (root->capabilities().backend == GpuBackendKind::NativeMetal) {
 #if defined(__APPLE__)
     return {.device = gpu::metal::MetalDevice::Create(
