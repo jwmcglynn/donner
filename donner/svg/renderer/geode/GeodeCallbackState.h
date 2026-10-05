@@ -77,12 +77,10 @@ std::shared_ptr<State> takeWgpuCallbackState(void* userdata) {
   return std::move(*retained);
 }
 
-/// Registers a submitted-work-done callback for all work currently submitted to \p queue,
-/// centralizing the wgpu-native vs emdawnwebgpu callback-signature difference (emdawnwebgpu's
-/// `WGPUQueueWorkDoneCallback` carries an extra `WGPUStringView` message parameter) and the
-/// `AllowSpontaneous` callback mode both consumers use. \p State must expose `onWorkDone()`,
-/// which runs exactly once when the queue drains (driven by `device.poll(...)` on native and by
-/// Asyncify-yielding poll on Emscripten), on whichever thread drives the queue at that point.
+/// Registers a submitted-work-done callback for all work currently submitted to \p queue, in the
+/// `AllowSpontaneous` callback mode. \p State must expose `onWorkDone()`, which runs exactly once
+/// when the queue drains, typically during a `device.poll(...)` (it may also run on submit or
+/// during another thread's poll), on whichever thread drives the queue at that point.
 ///
 /// @param queue Queue whose currently-submitted work is observed.
 /// @param state Shared callback state; retained until the callback runs.
@@ -90,17 +88,10 @@ template <typename State>
 void notifyWhenSubmittedWorkDone(const wgpu::Queue& queue, const std::shared_ptr<State>& state) {
   wgpu::QueueWorkDoneCallbackInfo callbackInfo{wgpu::Default};
   callbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
-#if defined(__EMSCRIPTEN__)
-  callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, WGPUStringView /*message*/,
-                             void* userdata1, void* /*userdata2*/) {
-    takeWgpuCallbackState<State>(userdata1)->onWorkDone();
-  };
-#else
   callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, void* userdata1,
                              void* /*userdata2*/) {
     takeWgpuCallbackState<State>(userdata1)->onWorkDone();
   };
-#endif
   callbackInfo.userdata1 = retainWgpuCallbackState(state);
   callbackInfo.userdata2 = nullptr;
   queue.onSubmittedWorkDone(callbackInfo);

@@ -101,8 +101,8 @@ _RULES: List[_Rule] = [
         # `examples/svg_viewer` covers the canonical //examples:svg_viewer
         # demo binary that wires the editor TextEditor + AsyncSVGDocument
         # together for live demos. `examples/geode_embed` is the Geode
-        # embedding reference app - Phase 6 - whose GLFW window demonstrates
-        # how a host integrates wgpu-native + Geode. New non-editor consumers
+        # embedding reference app, whose GLFW window demonstrates how a host
+        # presents Geode through its native GPU device. New non-editor consumers
         # of these headers must add an explicit exemption (and a justification).
         exempt_path_prefixes=(
             "donner/editor/",
@@ -163,12 +163,10 @@ _RULES: List[_Rule] = [
         # runtime's own validated APIs, not wgpu-native pipeline constructors, and its recording
         # backend never touches a driver. Pipeline ownership rules for that runtime are enforced
         # by its Device API and model tests.
-        # GeodeWgpuAdapterDevice.cc is the transition adapter: its `onCreate*Pipeline` hooks are
-        # the wgpu translation of those validated APIs, and the pipelines it constructs are the
-        # same GeodeDevice-owned singletons as before (the pipeline classes cache the handles;
-        # the adapter slot-owns the wgpu objects for the device's lifetime). Its conformance test
-        # is exempt for the same reason GeoEncoder_tests and GeodeShaders_tests are: the pipelines
-        # it constructs live for the test binary's whole run, not per frame.
+        # GeodeWgpuAdapterDevice.cc is the Linux test-only wgpu reference: its `onCreate*Pipeline`
+        # hooks are the wgpu translation of those validated APIs, and the pipelines it constructs
+        # are the same GeodeDevice-owned singletons (the pipeline classes cache the handles; the
+        # reference slot-owns the wgpu objects for the device's lifetime).
         exempt_path_prefixes=(
             "donner/svg/renderer/geode/GeodePipeline.cc",
             "donner/svg/renderer/geode/GeodeImagePipeline.cc",
@@ -177,7 +175,6 @@ _RULES: List[_Rule] = [
             "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.cc",
             "donner/svg/renderer/geode/tests/GeoEncoder_tests.cc",
             "donner/svg/renderer/geode/tests/GeodeShaders_tests.cc",
-            "donner/svg/renderer/geode/tests/GeodeWgpuAdapterDevice_tests.cc",
             "donner/gpu/",
         ),
     ),

@@ -763,7 +763,7 @@ GEODE_ORACLE_VISIBILITY = {
 GEODE_ORACLE_REFERENCE_SRCS = ("GeodeWgpuAdapterDevice.cc",)
 GEODE_ORACLE_REFERENCE_DEPS = (
     ":geode_device", ":geode_runtime_device_source", ":geode_wgpu_util", "//donner/base",
-    "//donner/base:asyncify_suspend_probe", "//donner/gpu", GEODE_ORACLE_RUNTIME,
+    "//donner/gpu", GEODE_ORACLE_RUNTIME,
 )
 
 

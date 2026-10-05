@@ -24,7 +24,6 @@
 #include <thread>
 #include <utility>
 
-#include "donner/base/AsyncifySuspendProbe.h"
 #include "donner/base/StringUtils.h"
 #include "donner/base/Utils.h"
 #include "donner/gpu/CheckedArithmetic.h"
@@ -790,11 +789,6 @@ GeodeWgpuAdapterDevice::GeodeWgpuAdapterDevice(std::shared_ptr<const WgpuReferen
   adoptLostState(root_->lostState());
 }
 
-bool GeodeWgpuAdapterDevice::pollSuspending(bool wait) const {
-  const ScopedSuspendPoint suspend(SuspendKind::DeviceWait);
-  return root_->device().poll(wait, nullptr);
-}
-
 GeodeWgpuAdapterDevice::~GeodeWgpuAdapterDevice() {
   // Wait for in-flight submissions so deferred destructions drain before the slot vectors
   // release the remaining wgpu objects. On timeout teardown proceeds anyway: wgpu retains every
@@ -802,7 +796,7 @@ GeodeWgpuAdapterDevice::~GeodeWgpuAdapterDevice() {
   // the drain declares nothing - it is nobody's deadline, it overruns on a loaded host, and the
   // other contexts over this root are still rendering through it.
   if (lastSubmittedSerial() > completedSerial()) {
-    waitForSerialBounded(lastSubmittedSerial(), teardownDrainSeconds_, LossOnTimeout::Tolerate);
+    waitForSerialBounded(lastSubmittedSerial(), kTeardownDrainSeconds, LossOnTimeout::Tolerate);
   }
   poll();
 }
@@ -815,7 +809,7 @@ uint64_t GeodeWgpuAdapterDevice::completedSerial() const {
 }
 
 void GeodeWgpuAdapterDevice::onPollBackend() {
-  (void)pollSuspending(false);
+  root_->device().poll(false, nullptr);
 }
 
 bool GeodeWgpuAdapterDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
@@ -876,8 +870,8 @@ bool GeodeWgpuAdapterDevice::onOwnsTextureBacking(uint32_t slotIndex) const {
 
 void GeodeWgpuAdapterDevice::onDestroyTextureBacking(uint32_t slotIndex) {
   if (slotIndex < slotTextures_.size()) {
-    // An external registration leaves `ownedTexture` empty, so this destroys only what this
-    // adapter allocated; the embedder's texture is left to the embedder.
+    // A registration of a sibling's export leaves `ownedTexture` empty, so this destroys only
+    // what this adapter allocated; the sibling's texture is left to the sibling.
     slotTextures_[slotIndex].ownedTexture.destroyBackingAndReset();
   }
 }
@@ -886,51 +880,6 @@ void GeodeWgpuAdapterDevice::onDestroyBufferBacking(uint32_t slotIndex) {
   if (slotIndex < slotBuffers_.size()) {
     slotBuffers_[slotIndex].destroyBackingAndReset();
   }
-}
-
-gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::registerBorrowedTexture(
-    wgpu::Texture backend, const gpu::TextureDescriptor& descriptor) {
-  if (!backend) {
-    return GpuError{GpuErrorType::InvalidHandle, "registerBorrowedTexture: wgpu texture is null"};
-  }
-
-  // A registration is the only look anything downstream gets at the texture: a render pass, a
-  // copy, a readback are all recorded against the record this creates, never re-reading the
-  // backend. So the record has to be what the texture is, and a caller that describes it
-  // otherwise is refused here rather than at the pass that names it - where wgpu-native answers
-  // a mismatch by aborting the process.
-  if (backend.getWidth() != descriptor.size.width ||
-      backend.getHeight() != descriptor.size.height ||
-      backend.getFormat() != WgpuTextureFormatFrom(descriptor.format) ||
-      !gpu::HasAllFlags(GpuTextureUsageFromWgpu(backend.getUsage()), descriptor.usage)) {
-    return GpuError{GpuErrorType::InvalidState,
-                    "texture registration: the extent, format or capabilities do not describe "
-                    "the texture being registered"};
-  }
-  // The runtime's texture model is 2D, single layer, single sample and has no way to say
-  // otherwise, so a texture that is any of those things has no honest record to be given.
-  if (backend.getSampleCount() != 1 || backend.getDepthOrArrayLayers() != 1 ||
-      backend.getDimension() != wgpu::TextureDimension::_2D) {
-    return GpuError{GpuErrorType::InvalidState,
-                    "texture registration: only a single-sample, single-layer 2D texture can be "
-                    "described"};
-  }
-
-  // The slot the allocation would have gone into is claimed inside this call, so a registration
-  // entered while this one is in flight would hand its texture to whichever slot resolves first.
-  UTILS_RELEASE_ASSERT_MSG(!pendingRegistration_, "texture registration is not reentrant");
-  pendingRegistration_ = std::move(backend);
-  gpu::Result<gpu::Texture> result = createTexture(descriptor);
-  pendingRegistration_ = wgpu::Texture();  // Cleared on the failure paths too.
-  return result;
-}
-
-gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Texture texture,
-                                                                        const gpu::Extent2d& size,
-                                                                        gpu::TextureFormat format,
-                                                                        gpu::TextureUsage usage) {
-  return registerBorrowedTexture(std::move(texture),
-                                 gpu::TextureDescriptor{"externalTexture", size, format, usage});
 }
 
 namespace {
@@ -1002,31 +951,6 @@ gpu::Status GeodeWgpuAdapterDevice::onRegisterTexture(uint32_t slotIndex,
   return OkStatus();
 }
 
-wgpu::Texture GeodeWgpuAdapterDevice::liveBackendTexture(const gpu::Texture& texture) const {
-  // Full base-class validation (null, device identity, AND generation), so a stale or forged
-  // handle cannot bridge the slot's new occupant to raw wgpu.
-  if (validateTextureHandleForBackend(texture).hasError() ||
-      texture.slotIndex() >= slotTextures_.size()) {
-    return wgpu::Texture();
-  }
-  return slotTextures_[texture.slotIndex()].texture;
-}
-
-wgpu::Texture GeodeWgpuAdapterDevice::wgpuTextureOf(const gpu::Texture& texture) const {
-  return liveBackendTexture(texture);
-}
-
-wgpu::TextureView GeodeWgpuAdapterDevice::wgpuTextureViewOf(
-    const gpu::TextureView& textureView) const {
-  // Full base-class validation including viewed-texture re-resolution, so a view whose Donner
-  // texture was destroyed (or slot-recycled) fails closed here exactly like it does on every
-  // normal Device path instead of bridging a stale view to raw wgpu.
-  if (validateTextureViewHandleForBackend(textureView).hasError()) {
-    return wgpu::TextureView();
-  }
-  return GetHandle(slotTextureViews_, textureView.slotIndex());
-}
-
 wgpu::TextureFormat WgpuTextureFormatFrom(gpu::TextureFormat format) {
   switch (format) {
     case gpu::TextureFormat::RGBA8Unorm: return wgpu::TextureFormat::RGBA8Unorm;
@@ -1050,253 +974,6 @@ gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format) {
                            "wgpu texture format is outside the donner::gpu supported set "
                            "(RGBA8Unorm / BGRA8Unorm / R8Unorm / RGBA32Float)");
   return gpu::TextureFormat::RGBA8Unorm;
-}
-
-gpu::TextureUsage GpuTextureUsageFromWgpu(wgpu::TextureUsage usage) {
-  const WGPUTextureUsage raw = static_cast<WGPUTextureUsage>(usage);
-  gpu::TextureUsage result = gpu::TextureUsage::None;
-  if ((raw & WGPUTextureUsage_RenderAttachment) != 0) {
-    result = result | gpu::TextureUsage::RenderAttachment;
-  }
-  if ((raw & WGPUTextureUsage_TextureBinding) != 0) {
-    result = result | gpu::TextureUsage::Sampled;
-  }
-  if ((raw & WGPUTextureUsage_CopySrc) != 0) {
-    result = result | gpu::TextureUsage::CopySrc;
-  }
-  if ((raw & WGPUTextureUsage_CopyDst) != 0) {
-    result = result | gpu::TextureUsage::CopyDst;
-  }
-  if ((raw & WGPUTextureUsage_StorageBinding) != 0) {
-    result = result | gpu::TextureUsage::StorageBinding;
-  }
-  return result;
-}
-
-namespace {
-
-/// Maps what the backend reported about a surface onto the runtime's status.
-///
-/// A suboptimal frame is reported as a success rather than as out of date, because it presents
-/// correctly: reconfiguring for it would cost a frame to fix a difference that never reaches the
-/// display, and a platform that keeps reporting it would charge that cost on every frame.
-///
-/// @param status Backend status.
-gpu::SurfaceStatus GpuSurfaceStatusFromWgpu(wgpu::SurfaceGetCurrentTextureStatus status) {
-  switch (status) {
-    case wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal:
-    case wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal:
-      return gpu::SurfaceStatus::Success;
-    case wgpu::SurfaceGetCurrentTextureStatus::Outdated: return gpu::SurfaceStatus::Outdated;
-    case wgpu::SurfaceGetCurrentTextureStatus::Timeout: return gpu::SurfaceStatus::Timeout;
-    case wgpu::SurfaceGetCurrentTextureStatus::DeviceLost: return gpu::SurfaceStatus::DeviceLost;
-    default: break;
-  }
-  // Everything else means the surface itself can no longer serve frames, which recovers only by
-  // building a new one.
-  return gpu::SurfaceStatus::Lost;
-}
-
-/// Maps the runtime's frame pacing onto the backend's. @param mode Runtime pacing.
-wgpu::PresentMode WgpuPresentModeFrom(gpu::PresentMode mode) {
-  switch (mode) {
-    case gpu::PresentMode::Immediate: return wgpu::PresentMode::Immediate;
-    case gpu::PresentMode::Mailbox: return wgpu::PresentMode::Mailbox;
-    case gpu::PresentMode::Fifo: break;
-  }
-  return wgpu::PresentMode::Fifo;
-}
-
-/// Maps the backend's frame pacing onto the runtime's. @param mode Backend pacing.
-gpu::PresentMode GpuPresentModeFrom(wgpu::PresentMode mode) {
-  switch (static_cast<WGPUPresentMode>(mode)) {
-    case WGPUPresentMode_Immediate: return gpu::PresentMode::Immediate;
-    case WGPUPresentMode_Mailbox: return gpu::PresentMode::Mailbox;
-    default: break;
-  }
-  return gpu::PresentMode::Fifo;
-}
-
-/// Maps the runtime's alpha compositing onto the backend's. @param mode Runtime mode.
-wgpu::CompositeAlphaMode WgpuAlphaModeFrom(gpu::SurfaceAlphaMode mode) {
-  switch (mode) {
-    case gpu::SurfaceAlphaMode::Premultiplied: return wgpu::CompositeAlphaMode::Premultiplied;
-    case gpu::SurfaceAlphaMode::Inherit: return wgpu::CompositeAlphaMode::Inherit;
-    case gpu::SurfaceAlphaMode::Opaque: break;
-  }
-  return wgpu::CompositeAlphaMode::Opaque;
-}
-
-/// Maps the backend's alpha compositing onto the runtime's. @param mode Backend mode.
-gpu::SurfaceAlphaMode GpuAlphaModeFrom(wgpu::CompositeAlphaMode mode) {
-  switch (static_cast<WGPUCompositeAlphaMode>(mode)) {
-    case WGPUCompositeAlphaMode_Premultiplied: return gpu::SurfaceAlphaMode::Premultiplied;
-    case WGPUCompositeAlphaMode_Inherit: return gpu::SurfaceAlphaMode::Inherit;
-    default: break;
-  }
-  return gpu::SurfaceAlphaMode::Opaque;
-}
-
-}  // namespace
-
-gpu::Status GeodeWgpuAdapterDevice::onCreateSurface(uint32_t slotIndex,
-                                                    const gpu::SurfaceDescriptor& descriptor) {
-  if (descriptor.native.kind == gpu::NativeSurfaceKind::EmbedderSurface) {
-    // The host's own window library made the surface object against this instance and keeps it.
-    // Taking a reference of its own is what keeps the swapchain built on it from outliving the
-    // object; the reference goes back when the slot does, and the object itself stays the host's
-    // to destroy.
-    wgpu::Surface hostSurface(
-        reinterpret_cast<WGPUSurface>(static_cast<uintptr_t>(descriptor.native.window)));
-    hostSurface.addRef();
-    SetSlot(slotSurfaces_, slotIndex,
-            SurfaceSlot{ScopedWgpuHandle<wgpu::Surface>(hostSurface), wgpu::Texture(), 0, false});
-    return OkStatus();
-  }
-  if (descriptor.native.kind != gpu::NativeSurfaceKind::MetalLayer) {
-    return GpuError{GpuErrorType::Unsupported,
-                    "this adapter presents to a Metal layer, or to a surface object the embedder "
-                    "created itself; the other platform surfaces are not built here"};
-  }
-
-  wgpu::SurfaceSourceMetalLayer source(wgpu::Default);
-  source.layer = descriptor.native.display;
-
-  wgpu::SurfaceDescriptor surfaceDescriptor(wgpu::Default);
-  surfaceDescriptor.label = wgpuLabel(std::string_view(descriptor.label));
-  surfaceDescriptor.nextInChain = &source.chain;
-
-  wgpu::Surface surface = root_->instance().createSurface(surfaceDescriptor);
-  if (!surface) {
-    return GpuError{GpuErrorType::Unsupported, "the backend could not create a surface"};
-  }
-
-  SetSlot(slotSurfaces_, slotIndex,
-          SurfaceSlot{ScopedWgpuHandle<wgpu::Surface>(surface), wgpu::Texture(), 0, false});
-  return OkStatus();
-}
-
-gpu::Result<gpu::SurfaceCapabilities> GeodeWgpuAdapterDevice::onSurfaceCapabilities(
-    uint32_t slotIndex) const {
-  if (slotIndex >= slotSurfaces_.size() || !slotSurfaces_[slotIndex].surface) {
-    return GpuError{GpuErrorType::InvalidState, "the surface is no longer live"};
-  }
-
-  wgpu::SurfaceCapabilities backendCapabilities = {};
-  slotSurfaces_[slotIndex].surface.get().getCapabilities(root_->adapter(), &backendCapabilities);
-
-  gpu::SurfaceCapabilities capabilities;
-  for (size_t i = 0; i < backendCapabilities.formatCount; ++i) {
-    // Formats outside the runtime's set are dropped rather than mapped to a stand-in: a caller
-    // choosing among them must only ever see ones this runtime can actually render.
-    const auto format = static_cast<WGPUTextureFormat>(backendCapabilities.formats[i]);
-    if (format == WGPUTextureFormat_RGBA8Unorm || format == WGPUTextureFormat_BGRA8Unorm ||
-        format == WGPUTextureFormat_R8Unorm) {
-      capabilities.formats.push_back(GpuTextureFormatFromWgpu(backendCapabilities.formats[i]));
-    }
-  }
-  capabilities.usages = GpuTextureUsageFromWgpu(wgpu::TextureUsage{backendCapabilities.usages});
-  for (size_t i = 0; i < backendCapabilities.presentModeCount; ++i) {
-    capabilities.presentModes.push_back(GpuPresentModeFrom(backendCapabilities.presentModes[i]));
-  }
-  for (size_t i = 0; i < backendCapabilities.alphaModeCount; ++i) {
-    capabilities.alphaModes.push_back(GpuAlphaModeFrom(backendCapabilities.alphaModes[i]));
-  }
-  // The backend allocated the arrays above; they are this caller's to free.
-  backendCapabilities.freeMembers();
-  return capabilities;
-}
-
-gpu::Status GeodeWgpuAdapterDevice::onConfigureSurface(
-    uint32_t slotIndex, const gpu::SurfaceConfiguration& configuration) {
-  if (slotIndex >= slotSurfaces_.size() || !slotSurfaces_[slotIndex].surface) {
-    return GpuError{GpuErrorType::InvalidState, "the surface is no longer live"};
-  }
-
-  wgpu::SurfaceConfiguration backendConfiguration(wgpu::Default);
-  backendConfiguration.device = root_->device();
-  backendConfiguration.format = WgpuTextureFormatFrom(configuration.format);
-  backendConfiguration.usage = ToWgpuTextureUsage(configuration.usage);
-  backendConfiguration.width = configuration.size.width;
-  backendConfiguration.height = configuration.size.height;
-  backendConfiguration.presentMode = WgpuPresentModeFrom(configuration.presentMode);
-  backendConfiguration.alphaMode = WgpuAlphaModeFrom(configuration.alphaMode);
-  slotSurfaces_[slotIndex].surface.get().configure(backendConfiguration);
-  return OkStatus();
-}
-
-gpu::Result<gpu::SurfaceStatus> GeodeWgpuAdapterDevice::onAcquireCurrentTexture(
-    uint32_t slotIndex, uint32_t textureSlotIndex) {
-  if (slotIndex >= slotSurfaces_.size() || !slotSurfaces_[slotIndex].surface) {
-    return GpuError{GpuErrorType::InvalidState, "the surface is no longer live"};
-  }
-
-  wgpu::SurfaceTexture surfaceTexture = {};
-  slotSurfaces_[slotIndex].surface.get().getCurrentTexture(&surfaceTexture);
-  const gpu::SurfaceStatus status = GpuSurfaceStatusFromWgpu(surfaceTexture.status);
-  // Whatever came back carries a reference of its own, so it is held here and only handed to the
-  // slot below once this is a frame the caller is being given. A status that says there is no
-  // frame gives the reference back instead of dropping it.
-  ScopedWgpuHandle<wgpu::Texture> acquired{wgpu::Texture(surfaceTexture.texture)};
-  if (status == gpu::SurfaceStatus::Lost || status == gpu::SurfaceStatus::DeviceLost ||
-      status == gpu::SurfaceStatus::Timeout || !acquired) {
-    return status;
-  }
-
-  SurfaceSlot& slot = slotSurfaces_[slotIndex];
-  slot.acquired = acquired.take();
-  slot.acquiredTextureSlot = textureSlotIndex;
-  slot.hasAcquired = true;
-  // Borrowed: the surface owns the frame's texture, so the runtime's slot names it without
-  // taking a reference that would outlive the frame.
-  SetSlot(slotTextures_, textureSlotIndex,
-          TextureSlot{ScopedWgpuHandle<wgpu::Texture>(), slot.acquired});
-  return status;
-}
-
-gpu::Result<gpu::SurfaceStatus> GeodeWgpuAdapterDevice::onPresentSurface(uint32_t slotIndex) {
-  if (slotIndex >= slotSurfaces_.size() || !slotSurfaces_[slotIndex].surface) {
-    return GpuError{GpuErrorType::InvalidState, "the surface is no longer live"};
-  }
-
-  SurfaceSlot& slot = slotSurfaces_[slotIndex];
-  slot.surface.get().present();
-  SetSlot(slotTextures_, slot.acquiredTextureSlot, TextureSlot{});
-  // Acquiring the frame took a reference of its own, so it goes back with the frame.
-  ReleaseWgpuHandle(slot.acquired);
-  slot.hasAcquired = false;
-  return isLost() ? gpu::SurfaceStatus::DeviceLost : gpu::SurfaceStatus::Success;
-}
-
-void GeodeWgpuAdapterDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
-  if (slotIndex >= slotSurfaces_.size() || !slotSurfaces_[slotIndex].hasAcquired) {
-    return;
-  }
-  SurfaceSlot& slot = slotSurfaces_[slotIndex];
-  // Clear the runtime slot only while it still names this frame. A caller that disposed of the
-  // frame's handle frees that slot, and a texture created before the next acquire can be given
-  // the same index; wiping it then would take out a texture this frame never owned.
-  if (slot.acquiredTextureSlot < slotTextures_.size() &&
-      slotTextures_[slot.acquiredTextureSlot].texture == slot.acquired) {
-    SetSlot(slotTextures_, slot.acquiredTextureSlot, TextureSlot{});
-  }
-  ReleaseWgpuHandle(slot.acquired);
-  slot.hasAcquired = false;
-}
-
-void GeodeWgpuAdapterDevice::onDestroySurface(uint32_t slotIndex) {
-  if (slotIndex >= slotSurfaces_.size()) {
-    return;
-  }
-  // The slot is handed to the next surface, so the backend object goes with the surface that
-  // owned it rather than surviving until something happens to take the slot again.
-  SurfaceSlot& slot = slotSurfaces_[slotIndex];
-  if (slot.hasAcquired && slot.acquiredTextureSlot < slotTextures_.size() &&
-      slotTextures_[slot.acquiredTextureSlot].texture == slot.acquired) {
-    SetSlot(slotTextures_, slot.acquiredTextureSlot, TextureSlot{});
-  }
-  ReleaseWgpuHandle(slot.acquired);
-  slot = SurfaceSlot{};
 }
 
 gpu::Status GeodeWgpuAdapterDevice::onMapBufferAsync(uint32_t mappingSlotIndex,
@@ -1361,66 +1038,6 @@ gpu::MapSliceState GeodeWgpuAdapterDevice::sliceStateOf(
   return isLost() ? gpu::MapSliceState::DeviceLost : gpu::MapSliceState::Pending;
 }
 
-bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
-                                                  std::chrono::microseconds slice) {
-  if (simulateEventWaitForTest_) {
-    // Stands in for a browser timed wait that expired without the map completing. The real arm
-    // is compiled out everywhere the test suites run, so without this seam its contract - that a
-    // slice which waited and learned nothing reports "not finished", never "failed" - would be
-    // checked only by the browser lane.
-    (void)mappingSlotIndex;
-    (void)slice;
-    return true;
-  }
-  const MappingSlot::Completion* completion = slotMappings_[mappingSlotIndex].completion;
-  const wgpu::Future future = slotMappings_[mappingSlotIndex].mapFuture;
-  if (!future.id) {
-    return false;
-  }
-  if (timedMapWaitForTest_) {
-    const wgpu::WaitStatus status = timedMapWaitForTest_();
-    return finishMapWaitSlice(mappingSlotIndex, completion, future, status);
-  }
-#ifdef __EMSCRIPTEN__
-  // The browser instance is created asking for TimedWaitAny (see GeodeDevice::CreateHeadless)
-  // exactly so this wait exists: on a worker thread the map completion is a browser-side event,
-  // and a poll-and-yield loop only observes it when a yield happens to line up with the
-  // browser's delivery - measured at 265 five-millisecond yields, 1.85 seconds, for a first
-  // snapshot readback. Waiting on the future returns the moment the map resolves, while a
-  // timeout still returns within the slice so the caller's cancellation stays responsive.
-  //
-  // The latch is process-wide because the failure it guards against is a property of this
-  // thread's relationship to the instance, not of one mapping: once a status other than
-  // Success or TimedOut says this future cannot be time-waited here, every later wait polls.
-  static std::atomic<bool> instanceWaitUsable{true};
-  if (!root_->instance() || !instanceWaitUsable.load(std::memory_order_relaxed)) {
-    return false;
-  }
-
-  wgpu::FutureWaitInfo waitInfo{};
-  waitInfo.future = future;
-  // The browser's timed wait keeps its own cadence rather than the caller's slice. Every wait
-  // here is an asyncify suspend and rewind of the whole call stack, so slicing at the native
-  // poll cadence would spend fifty of those per millisecond to learn the same thing; five
-  // milliseconds is what this path was tuned to, and a cancellation is still observed within it
-  // because the caller re-checks between slices.
-  constexpr std::chrono::microseconds kBrowserTimedWaitSlice{5000};
-  (void)slice;
-  const auto sliceNs = static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(kBrowserTimedWaitSlice).count());
-  const wgpu::WaitStatus waitStatus = root_->instance().waitAny(1, &waitInfo, sliceNs);
-  if (waitStatus != wgpu::WaitStatus::Success && waitStatus != wgpu::WaitStatus::TimedOut) {
-    instanceWaitUsable.store(false, std::memory_order_relaxed);
-    return false;
-  }
-  return finishMapWaitSlice(mappingSlotIndex, completion, future, waitStatus);
-#else
-  (void)mappingSlotIndex;
-  (void)slice;
-  return false;
-#endif
-}
-
 bool GeodeWgpuAdapterDevice::mappingStillMatches(uint32_t mappingSlotIndex,
                                                  const MappingSlot::Completion* completion,
                                                  wgpu::Future future) const {
@@ -1428,24 +1045,6 @@ bool GeodeWgpuAdapterDevice::mappingStillMatches(uint32_t mappingSlotIndex,
          slotMappings_[mappingSlotIndex].completion == completion &&
          slotMappings_[mappingSlotIndex].mapFuture.id == future.id &&
          !completion->abandoned.load(std::memory_order_acquire);
-}
-
-bool GeodeWgpuAdapterDevice::finishMapWaitSlice(uint32_t mappingSlotIndex,
-                                                const MappingSlot::Completion* completion,
-                                                wgpu::Future future, wgpu::WaitStatus status) {
-  if (status != wgpu::WaitStatus::Success && status != wgpu::WaitStatus::TimedOut) {
-    return false;
-  }
-  if (!mappingStillMatches(mappingSlotIndex, completion, future)) {
-    return true;
-  }
-  if (status == wgpu::WaitStatus::TimedOut && !completion->done.load(std::memory_order_acquire) &&
-      !isLost()) {
-    // A browser can defer pending map completion until another queue submission arrives.
-    root_->queue().submit(0, nullptr);
-    notifyObserverOfBackendSubmission();
-  }
-  return true;
 }
 
 gpu::MapSliceReport GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSlotIndex,
@@ -1462,7 +1061,8 @@ gpu::MapSliceReport GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingS
                                .waitKind = gpu::MapWaitKind::Polled};
   }
 
-  // Asyncify may run completion or abandonment callbacks before this stack resumes.
+  // The polls below can run the completion callback or let an abandonment release the record, so
+  // it is retained until the slice ends.
   completion.references.fetch_add(1, std::memory_order_relaxed);
   const auto releaseCompletion = [](MappingSlot::Completion* value) { value->release(); };
   const std::unique_ptr<MappingSlot::Completion, decltype(releaseCompletion)> retainedCompletion(
@@ -1478,19 +1078,9 @@ gpu::MapSliceReport GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingS
   const auto slice = std::chrono::duration_cast<std::chrono::microseconds>(
       std::chrono::duration<double>(sliceSeconds));
 
-  const bool usedEventWait = waitOnMapFutureSlice(mappingSlotIndex, slice);
-  const gpu::MapWaitKind waitKind =
-      usedEventWait ? gpu::MapWaitKind::CompletionEvent : gpu::MapWaitKind::Polled;
-  if (!mappingStillMatches(mappingSlotIndex, &completion, future)) {
-    return gpu::MapSliceReport{.state = gpu::MapSliceState::Failed, .waitKind = waitKind};
-  }
-  if (usedEventWait) {
-    return gpu::MapSliceReport{.state = sliceStateOf(completion), .waitKind = waitKind};
-  }
-
   (void)BoundedGpuWait(
       [&] {
-        (void)pollSuspending(false);
+        root_->device().poll(false, nullptr);
         return !mappingStillMatches(mappingSlotIndex, &completion, future) ||
                completion.done.load(std::memory_order_acquire) || isLost();
       },
@@ -1499,7 +1089,7 @@ gpu::MapSliceReport GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingS
   return gpu::MapSliceReport{.state = mappingStillMatches(mappingSlotIndex, &completion, future)
                                           ? sliceStateOf(completion)
                                           : gpu::MapSliceState::Failed,
-                             .waitKind = waitKind};
+                             .waitKind = gpu::MapWaitKind::Polled};
 }
 
 gpu::Result<std::span<const uint8_t>> GeodeWgpuAdapterDevice::onMappedBytes(
@@ -1557,14 +1147,6 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBuffer(uint32_t slotIndex,
 
 gpu::Status GeodeWgpuAdapterDevice::onCreateTexture(uint32_t slotIndex,
                                                     const gpu::TextureDescriptor& descriptor) {
-  if (pendingRegistration_) {
-    // Registration path: name the borrowed texture in this slot; no ownership is taken and
-    // nothing is allocated, so the allocation counters stay a count of real allocations.
-    SetSlot(slotTextures_, slotIndex,
-            TextureSlot{ScopedWgpuHandle<wgpu::Texture>(), pendingRegistration_});
-    return OkStatus();
-  }
-
   wgpu::TextureDescriptor textureDescriptor = {};
   textureDescriptor.label = wgpuLabel(std::string_view(descriptor.label));
   textureDescriptor.size = {descriptor.size.width, descriptor.size.height, 1u};

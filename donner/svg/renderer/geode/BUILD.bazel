@@ -537,7 +537,6 @@ donner_cc_library(
         ":geode_runtime_device_source",
         ":geode_wgpu_util",
         "//donner/base",
-        "//donner/base:asyncify_suspend_probe",
         "//donner/gpu",
         "//third_party/webgpu-cpp:wgpu_native_reference_runtime",
     ],
