@@ -6591,8 +6591,13 @@ TEST(RenderCoordinatorTest, PresentationRefreshRejectsPriorOverviewAndDetailedRe
       return coordinator.maybeRequestRender(app, selectTool, viewport, &textures) && drain();
     };
     ASSERT_TRUE(render());
+    // Land any pending canvas commit on the settled render, not wherever render timing puts it.
+    RenderCoordinatorTestAccess::makeCanvasCommitDue(coordinator);
     RenderCoordinatorTestAccess::makeRasterViewportSettled(coordinator);
     ASSERT_TRUE(render());
+    ASSERT_THAT(textures.tiles(), testing::Not(testing::IsEmpty()))
+        << "The settled render must leave detailed tiles beside the overview; "
+        << RenderCoordinatorTestAccess::overviewScheduleState(coordinator, app, viewport);
     const auto oldVersion = coordinator.displayedDocVersion();
     ASSERT_THAT(textures.overviewTiles(), testing::Not(testing::IsEmpty()));
     const auto oldOverviewGeneration = textures.overviewTiles().front().generation;
