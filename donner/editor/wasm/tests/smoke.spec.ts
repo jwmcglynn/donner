@@ -1798,6 +1798,10 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
 
 test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox" || kBackend !== "geode", "Firefox Geode regression");
+  test.skip(
+    browserName === "firefox",
+    "Quarantined: Firefox can capture a blank editor page (#1634)",
+  );
   const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
   expect(await installSurfaceFrameProbe(page), "no worker could observe canvas submissions")
     .toBeGreaterThan(0);

@@ -3223,6 +3223,10 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   // blue rectangle and the teal outline together, and the shape only ever moves
   // forward.
   test.skip(browserName !== "firefox", "Firefox Geode regression");
+  test.skip(
+    browserName === "firefox",
+    "Quarantined: Firefox can capture a blank editor page (#1634)",
+  );
   const failures = await openEditor(page, false, true);
   await installCaptureSentinel(page);
   const { documentClip: probeRegion, captureClip, blueRect: blueCss } = await openBasicShapes(
