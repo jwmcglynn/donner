@@ -94,6 +94,21 @@ std::string UnfreezableAdapterMessage(std::string_view adapterName, std::string_
   return message;
 }
 
+bool IsSoftwareRasterizer(std::string_view adapterBackend, std::string_view adapterType) {
+  return adapterBackend == "Vulkan" && adapterType == "CPU";
+}
+
+std::string MissingBaselineMessage(std::string_view adapterName, std::string_view adapterBackend,
+                                   std::string_view adapterType, std::string_view slug,
+                                   std::string_view capturedPath, std::string_view captureError,
+                                   MissingComparisonDisposition disposition) {
+  return IsSoftwareRasterizer(adapterBackend, adapterType)
+             ? UnfreezableAdapterMessage(adapterName, adapterBackend, capturedPath, captureError,
+                                         disposition)
+             : UnbaselinedAdapterMessage(adapterName, adapterBackend, slug, capturedPath,
+                                         captureError, disposition);
+}
+
 std::string AdapterSlug(std::string_view adapterName, std::string_view adapterBackend) {
   std::string source(adapterName);
   source += ' ';

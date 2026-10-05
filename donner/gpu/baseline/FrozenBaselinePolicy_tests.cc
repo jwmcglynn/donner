@@ -15,6 +15,7 @@
 namespace donner::gpu::baseline {
 namespace {
 
+using testing::AllOf;
 using testing::HasSubstr;
 using testing::Not;
 
@@ -151,6 +152,25 @@ TEST(FrozenBaselinePolicyTests, ASoftwareRasterizerCaptureFailureIsReported) {
 
   EXPECT_THAT(message, HasSubstr("device lost while capturing"));
   EXPECT_THAT(message, Not(HasSubstr("silently stop running")));
+}
+
+TEST(FrozenBaselinePolicyTests, OnlySoftwareVulkanIsASoftwareRasterizer) {
+  EXPECT_THAT(IsSoftwareRasterizer("Vulkan", "CPU"), testing::IsTrue());
+  EXPECT_THAT(IsSoftwareRasterizer("Vulkan", "DiscreteGPU"), testing::IsFalse());
+  EXPECT_THAT(IsSoftwareRasterizer("Metal", "CPU"), testing::IsFalse());
+  EXPECT_THAT(IsSoftwareRasterizer("Metal", "Unknown"), testing::IsFalse());
+}
+
+TEST(FrozenBaselinePolicyTests, AMissingBaselineMessageFitsTheAdapter) {
+  EXPECT_THAT(
+      MissingBaselineMessage("llvmpipe", "Vulkan", "CPU", "llvmpipe_vulkan",
+                             "/outputs/llvmpipe_vulkan", "", MissingComparisonDisposition::Skip),
+      AllOf(HasSubstr("cannot be frozen"), Not(HasSubstr("commit it under"))));
+  EXPECT_THAT(
+      MissingBaselineMessage("Example GPU", "Vulkan", "DiscreteGPU", "example_gpu_vulkan",
+                             "/outputs/example_gpu_vulkan", "", MissingComparisonDisposition::Skip),
+      AllOf(HasSubstr("donner/gpu/baseline/baselines/example_gpu_vulkan/"),
+            Not(HasSubstr("cannot be frozen"))));
 }
 
 TEST(FrozenBaselinePolicyTests, AFailedCaptureIsReportedInsteadOfAMissingPath) {

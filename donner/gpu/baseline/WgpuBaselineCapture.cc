@@ -114,7 +114,7 @@ std::string CaptureOneScene(WgpuBaselineCapturer& capturer, const CorpusScene& s
 
 std::string EnvironmentSlug(const CaptureEnvironment& environment) {
   std::string slug = AdapterSlug(environment.adapterName, environment.adapterBackend);
-  if (environment.adapterBackend == "Vulkan" && environment.adapterType == "CPU" &&
+  if (IsSoftwareRasterizer(environment.adapterBackend, environment.adapterType) &&
       environment.hostArchitecture != "x86_64") {
     slug += '_' + AdapterSlug(environment.hostArchitecture, "");
   }

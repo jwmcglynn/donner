@@ -2,15 +2,17 @@
 
 This directory holds the committed pre-cutover record of what Donner's wgpu-backed Geode renderer
 produced for a fixed set of Donner-owned scenes. The native Geode check mode re-renders those
-scenes and compares them to that unchanged record.
+scenes and compares them to that unchanged record. Every directory committed so far came from the
+wgpu-backed renderer; a hardware adapter frozen later from a native capture says so in its
+`rendererPath` (see [Maintaining the frozen records](#maintaining-the-frozen-records)).
 
 ## What is frozen
 
-| Artifact                             | Derived from                               | Needs a GPU |
-| ------------------------------------ | ------------------------------------------ | ----------- |
-| `baselines/structural_counters.json` | The production CPU path encoder            | No          |
-| `baselines/*.png`                    | The pre-cutover wgpu-backed Geode renderer | Yes         |
-| `baselines/capture_provenance.txt`   | The original capture run                   | Yes         |
+| Artifact                             | Derived from                                   | Needs a GPU |
+| ------------------------------------ | ---------------------------------------------- | ----------- |
+| `baselines/structural_counters.json` | The production CPU path encoder                | No          |
+| `baselines/*.png`                    | The renderer each directory's provenance names | Yes         |
+| `baselines/capture_provenance.txt`   | The capture run                                | Yes         |
 
 The corpus is defined in `BaselineCorpus.h` from literal geometry, so it depends on no external
 content and re-encodes identically anywhere. It covers the three-path solid-fill scene the
@@ -82,8 +84,9 @@ What the run does next depends on where it is:
   build.
 - On an automated lane it fails. A suite that skips every case still reports its target as
   passing, so skipping there would retire the pixel gate while the summary kept saying it ran.
-  The failure carries the same instructions, so the lane that goes red is the lane that hands
-  over what turns it green.
+  The failure carries the same instructions, so for a hardware adapter the lane that goes red is
+  the lane that hands over what turns it green. A software rasterizer cannot be frozen, so its
+  lane stays red until it runs a rasterizer that has a record.
 
 The same rule covers a run that cannot create a device at all. That is a different situation from
 a missing baseline, with the same consequence - nothing is compared - so it gets the same answer:
@@ -153,5 +156,5 @@ bazel run //donner/gpu/baseline:capture_baselines -- \
 
 Use the result to diagnose an adapter, or copy its one new directory into `baselines/` to freeze a
 hardware adapter that has no record, as described under
-[Maintaining the frozen records](#maintaining-the-frozen-records). A regeneration whose diff nobody
-can explain is a regression that was overwritten.
+[Maintaining the frozen records](#maintaining-the-frozen-records). A structural-counter
+regeneration whose diff nobody can explain is a regression that was overwritten.

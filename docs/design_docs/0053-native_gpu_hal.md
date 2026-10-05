@@ -793,7 +793,7 @@ acceptance of the Linux editor, with the rest of the cutover, is under
       their required labels prevent vacuous passes, and an injected aliased dependency proves the
       failure path. The Linux oracle has a positive selected-closure audit for its exact test-only
       wrapper and architecture-specific archive, and the lexical verifier pins the complete set of
-      first-party rules that may name a target in that chain, so a new consumer anywhere fails.
+      first-party rules that may name a label in that chain, so a new build rule naming one fails.
       Generated CMake rejects both Rust toolchain commands and install rules until install
       artifacts have their own scanner.
 

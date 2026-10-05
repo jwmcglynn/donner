@@ -104,9 +104,10 @@ ARCHIVE_OVERLAY = "third_party/BUILD.wgpu_native_platform"
 ARCHIVE_RUNTIME = "third_party/webgpu-cpp/BUILD.bazel"
 ARCHIVE_ORACLE_CONSUMER = "donner/svg/renderer/tests/BUILD.bazel"
 ARCHIVE_GEODE_CONSUMER = "donner/svg/renderer/geode/BUILD.bazel"
+REFERENCE_CHAIN_SELECTOR = "tools/ci/BUILD.bazel"
 REQUIRED_ARCHIVE_SITES = tuple(sorted((
     ARCHIVE_FETCH_RULE, ARCHIVE_MODULE, ARCHIVE_OVERLAY, ARCHIVE_RUNTIME,
-    ARCHIVE_ORACLE_CONSUMER,
+    ARCHIVE_ORACLE_CONSUMER, ARCHIVE_GEODE_CONSUMER, REFERENCE_CHAIN_SELECTOR,
 )))
 ARCHIVE_NAME_RE = re.compile(r"\bwgpu_native_[a-z0-9_]+\b")
 ARCHIVE_STRUCT_RE = re.compile(
@@ -152,7 +153,13 @@ COMPILE_ATTRIBUTES = frozenset(
 )
 DATA_ATTRIBUTES = frozenset({"data", "testdata", "resources", "args", "tags"})
 AUDIT_METADATA_ATTRIBUTES = frozenset({"forbidden", "forbidden_packages", "required"})
-AUDIT_RULES = frozenset({"configured_dependency_audit_test", "no_rust_dependency_audit_test"})
+# A `forbidden_transitive_dep_test` names its forbidden label only as a genquery scope, which is a
+# query edge, never a build or link edge.
+AUDIT_RULES = frozenset({
+    "configured_dependency_audit_test",
+    "forbidden_transitive_dep_test",
+    "no_rust_dependency_audit_test",
+})
 
 ATTRIBUTE_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 VISIBILITY_ASSIGN_RE = re.compile(r"(?:default_)?visibility\s*=\s*")
@@ -844,32 +851,30 @@ def _archive_geode_consumer_findings(path: str, text: str) -> list[Finding]:
     return []
 
 
-# The complete first-party graph that may reach the wgpu-native archives. Every rule that names one
-# of these targets outside dependency-audit metadata must be one of the rules pinned for its build
-# file, with the pinned kind, and every pinned rule must exist. The checks above pin each hop's
-# shape; this pins the consumer set, so "only the Linux resvg reference reaches wgpu-native" holds
-# for the tracked tree, and a new consumer, in these files or any other, is a finding. The CI
-# test_suite selects the comparison's tests without depending on them.
-REFERENCE_CHAIN_TARGETS = (
-    "wgpu_native_reference_runtime",
-    "geode_wgpu_util",
-    "geode_device_wgpu_reference_linux",
-    "renderer_test_backend_wgpu_reference_linux",
-    "image_comparison_test_fixture_wgpu_reference_linux",
-    "resvg_test_suite_wgpu_reference_linux",
-)
-REFERENCE_CHAIN_SELECTOR = "tools/ci/BUILD.bazel"
+# The complete first-party graph that may reach the wgpu-native archives: every rule whose label
+# the archive is reachable from, by the build file that declares it and the rule kind it must be.
+# The checks above pin each hop's shape; this pins the set. Every string a Starlark build file
+# names outside dependency-audit metadata is read as a label in that file's package, and one that
+# resolves to a chain rule or to an archive may appear only in that chain rule's own declaration.
+# So a new consumer of any hop, in these files or any other, is a finding, and so is a pinned rule
+# that disappears or changes kind. The CI test_suite selects the comparison's tests without
+# depending on them; it is pinned so that nothing else can select it either.
 REFERENCE_CHAIN_RULES = {
-    ARCHIVE_RUNTIME: {"wgpu_native_reference_runtime": "cc_library"},
+    ARCHIVE_RUNTIME: {
+        "webgpu_cpp": "cc_library",
+        "wgpu_native_linux": "alias",
+        "wgpu_native_platform": "alias",
+        "wgpu_native_reference_runtime": "cc_library",
+    },
     ARCHIVE_GEODE_CONSUMER: {
-        "geode_wgpu_util": "donner_cc_library",
         "geode_device_wgpu_reference_linux": "donner_cc_library",
+        "geode_wgpu_util": "donner_cc_library",
     },
     ARCHIVE_ORACLE_CONSUMER: {
-        "renderer_test_backend_wgpu_reference_linux": "donner_cc_library",
         "image_comparison_test_fixture_wgpu_reference_linux": "donner_cc_library",
-        "resvg_test_suite_wgpu_reference_linux_impl": "donner_cc_test",
+        "renderer_test_backend_wgpu_reference_linux": "donner_cc_library",
         "resvg_test_suite_wgpu_reference_linux": "donner_multi_transitioned_test",
+        "resvg_test_suite_wgpu_reference_linux_impl": "donner_cc_test",
         "resvg_wgpu_reference_dependency_audit_test": "configured_dependency_audit_test",
     },
     REFERENCE_CHAIN_SELECTOR: {"linux_wgpu_resvg_reference": "test_suite"},
@@ -880,36 +885,68 @@ REFERENCE_CHAIN_PACKAGE_LIBRARIES = (
     "image_comparison_test_fixture_wgpu_reference_linux",
 )
 REFERENCE_CHAIN_PACKAGE_VISIBILITY = ("//donner/svg/renderer/tests:__pkg__",)
+ARCHIVE_LABEL_RE = re.compile(r"@wgpu_native_[A-Za-z0-9_]+//:wgpu_native")
+BARE_TARGET_RE = re.compile(r"[A-Za-z0-9_.+=,-]+")
+STARLARK_FILE_RE = re.compile(
+    r"(^|/)(BUILD(\.[^/]+)?|[^/]+\.bzl|MODULE\.bazel|WORKSPACE(\.bazel)?)$"
+)
 
 
-def _chain_literals(statement: ast.stmt, spans: set[SourceSpan]) -> list[str]:
-    """String literals in `statement` naming a chain target, outside audit metadata."""
+def _package(path: str) -> str:
+    return path.rsplit("/", 1)[0] if "/" in path else ""
+
+
+REFERENCE_CHAIN_LABELS = {
+    f"//{_package(path)}:{name}": (path, name)
+    for path, rules in REFERENCE_CHAIN_RULES.items()
+    for name in rules
+}
+REFERENCE_CHAIN_NAMES = tuple(sorted({name for rules in REFERENCE_CHAIN_RULES.values()
+                                      for name in rules} | {"wgpu_native"}))
+
+
+def _resolve_label(value: str, package: str) -> str | None:
+    """The main-repository label `value` names from a rule in `package`, or an archive label."""
+    archive = "@" + value.lstrip("@")
+    if ARCHIVE_LABEL_RE.fullmatch(archive):
+        return archive
+    for prefix in ("@@//", "@//"):
+        if value.startswith(prefix):
+            value = value[len(prefix) - 2:]
+    if value.startswith("//"):
+        target_package, separator, name = value[2:].partition(":")
+        return f"//{target_package}:{name if separator else target_package.rsplit('/', 1)[-1]}"
+    if value.startswith(":"):
+        return f"//{package}:{value[1:]}"
+    if BARE_TARGET_RE.fullmatch(value):
+        return f"//{package}:{value}"
+    return None
+
+
+def _is_chain_label(label: str) -> bool:
+    return label in REFERENCE_CHAIN_LABELS or bool(ARCHIVE_LABEL_RE.fullmatch(label))
+
+
+def _chain_labels(statement: ast.stmt, package: str, spans: set[SourceSpan]) -> list[str]:
+    """Chain labels the string literals of `statement` name, outside audit metadata."""
     return sorted({
-        token
+        label
         for node in ast.walk(statement)
         if isinstance(node, ast.Constant) and isinstance(node.value, str) and
         _literal_span(node) not in spans
-        for token in REFERENCE_CHAIN_TARGETS
-        if token in node.value
+        for label in (_resolve_label(node.value, package),)
+        if label is not None and _is_chain_label(label)
     })
 
 
-def _chain_rule_finding(path: str, statement: ast.stmt, tokens: list[str]) -> tuple[str, ast.Call] | Finding:
-    """The pinned rule `statement` declares, or the finding for an unpinned chain reference."""
-    named = ", ".join(tokens)
+def _rule_call(statement: ast.stmt) -> tuple[str, str, ast.Call] | None:
+    """The kind, name and call of a top-level rule call, or None for any other statement."""
     call = statement.value if isinstance(statement, ast.Expr) else None
     if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
-        return Finding("rust-built-archive", path,
-                       f"names the wgpu-native reference chain ({named}) outside a build rule")
+        return None
     name_node = _ast_keyword(call, "name")
     name = name_node.value if isinstance(name_node, ast.Constant) else ""
-    if REFERENCE_CHAIN_RULES.get(path, {}).get(name) != call.func.id:
-        return Finding(
-            "rust-built-archive", path,
-            f"{call.func.id} {name or '<unnamed>'} names the wgpu-native reference chain "
-            f"({named}); only the pinned Linux resvg comparison may reach wgpu-native",
-        )
-    return name, call
+    return call.func.id, str(name), call
 
 
 def _chain_library_findings(path: str, name: str, call: ast.Call) -> list[Finding]:
@@ -922,43 +959,60 @@ def _chain_library_findings(path: str, name: str, call: ast.Call) -> list[Findin
     return []
 
 
+def _chain_statement_findings(path: str, statement: ast.stmt,
+                              spans: set[SourceSpan]) -> list[Finding]:
+    labels = _chain_labels(statement, _package(path), spans)
+    rule = _rule_call(statement)
+    pinned = REFERENCE_CHAIN_RULES.get(path, {})
+    if rule is not None and rule[1] in pinned:
+        kind, name, call = rule
+        if kind != pinned[name]:
+            return _archive_finding(path, f"reference chain rule {name} must be a {pinned[name]}, "
+                                    f"not a {kind}")
+        return _chain_library_findings(path, name, call)
+    if not labels:
+        return []
+    named = ", ".join(labels)
+    if rule is None:
+        return _archive_finding(path, f"names the wgpu-native reference chain ({named}) outside "
+                                "a build rule")
+    return _archive_finding(path, f"{rule[0]} {rule[1] or '<unnamed>'} names the wgpu-native "
+                            f"reference chain ({named}); only the pinned Linux resvg comparison "
+                            "may reach wgpu-native")
+
+
 def reference_chain_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
     """Pins the exact set of first-party rules that may reach the wgpu-native archives."""
     pinned = REFERENCE_CHAIN_RULES.get(path, {})
-    if not pinned and not any(token in text for token in REFERENCE_CHAIN_TARGETS):
+    if not STARLARK_FILE_RE.search(path) or \
+       (not pinned and not any(name in text for name in REFERENCE_CHAIN_NAMES)):
         return []
     try:
         tree = ast.parse(text)
     except SyntaxError:
-        return _archive_finding(path, "cannot read a build file that names the wgpu-native "
+        return _archive_finding(path, "cannot read a build file that may name the wgpu-native "
                                 "reference chain")
     spans = audit_metadata_spans(text)
     findings: list[Finding] = []
-    seen: set[str] = set()
+    declared: set[str] = set()
     for index, statement in enumerate(tree.body):
         if index == 0 and isinstance(statement, ast.Expr) and \
            isinstance(statement.value, ast.Constant):
             continue  # BUILD module docstring, not an executable reference.
-        tokens = _chain_literals(statement, spans)
-        if not tokens:
-            continue
-        result = _chain_rule_finding(path, statement, tokens)
-        if isinstance(result, Finding):
-            findings.append(result)
-            continue
-        name, call = result
-        seen.add(name)
-        findings.extend(_chain_library_findings(path, name, call))
+        rule = _rule_call(statement)
+        if rule is not None:
+            declared.add(rule[1])
+        findings.extend(_chain_statement_findings(path, statement, spans))
     findings.extend(
         Finding("rust-built-archive", path, f"pinned reference chain rule {name} is missing")
-        for name in sorted(set(pinned) - seen)
+        for name in sorted(set(pinned) - declared)
     )
     return findings
 
 
 def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
     """Allow only the checksum-pinned Linux test oracle's complete build boundary."""
-    # These five files are the complete allowed boundary. Inspect them even if
+    # These files are the complete allowed archive boundary. Inspect them even if
     # their last Rust token was deleted: absence of the required oracle edge is
     # a failure, not a clean scan.
     if path == ARCHIVE_FETCH_RULE:
@@ -1035,7 +1089,7 @@ def check(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
 def check_tracked_tree(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
     """Apply the per-file rules and require every test-oracle boundary file to exist."""
     findings = check(files, scopes)
-    for path in sorted(set(REQUIRED_ARCHIVE_SITES) | set(REFERENCE_CHAIN_RULES)):
+    for path in REQUIRED_ARCHIVE_SITES:
         if path not in files:
             findings.extend(_archive_finding(path, "required Linux test-oracle boundary file is missing"))
     return findings

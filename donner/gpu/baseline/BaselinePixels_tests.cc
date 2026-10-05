@@ -344,7 +344,14 @@ protected:
       FAIL() << "The selected adapter matches multiple frozen environments, or the baseline "
                 "directory could not be read; refusing an arbitrary pixel comparison";
     }
-    slug_ = match.slug.value_or(EnvironmentSlug(capturer_->environment()));
+    const CaptureEnvironment& live = capturer_->environment();
+    slug_ = match.slug.value_or(EnvironmentSlug(live));
+    // A software rasterizer may use only a wgpu-native record, which matching already looked for;
+    // a directory at its own slug cannot hold one it may compare against.
+    if (!match.slug.has_value() && IsSoftwareRasterizer(live.adapterBackend, live.adapterType)) {
+      handleUnbaselinedEnvironment();
+      return;
+    }
     provenance_ = ReadProvenance(ProvenancePathFor(slug_));
     if (provenance_.empty()) {
       handleUnbaselinedEnvironment();
@@ -377,14 +384,9 @@ protected:
         WriteFrozenBaselineSet(*capturer_, UndeclaredOutputDir(), "unknown", "unknown", &written);
     const MissingComparisonDisposition disposition =
         DispositionForUnbaselinedAdapter(RunningUnderContinuousIntegration());
-    // A software rasterizer's baseline must come from the wgpu-native reference, which no longer
-    // renders this corpus, so its capture cannot become a baseline.
-    const bool softwareRasterizer = live.adapterBackend == "Vulkan" && live.adapterType == "CPU";
     const std::string message =
-        softwareRasterizer ? UnfreezableAdapterMessage(live.adapterName, live.adapterBackend,
-                                                       written.string(), captureError, disposition)
-                           : UnbaselinedAdapterMessage(live.adapterName, live.adapterBackend, slug_,
-                                                       written.string(), captureError, disposition);
+        MissingBaselineMessage(live.adapterName, live.adapterBackend, live.adapterType, slug_,
+                               written.string(), captureError, disposition);
 
     if (disposition == MissingComparisonDisposition::FailClosed) {
       FAIL() << message;
@@ -401,7 +403,8 @@ TEST_P(FrozenPixelBaselineTest, MatchesFrozenCapture) {
   const std::string& sceneName = GetParam();
   ASSERT_TRUE(ProvenanceListsScene(provenance_["capturedScenes"], sceneName))
       << "the capture provenance does not list " << sceneName
-      << "; re-run the capture so the frozen set covers the whole corpus";
+      << "; the frozen set must cover every pixel-capturing scene (see "
+         "donner/gpu/baseline/README.md)";
 
   std::vector<uint8_t> pixels;
   const std::string error = CaptureNamedScene(*capturer_, sceneName, pixels);

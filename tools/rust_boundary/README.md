@@ -52,12 +52,16 @@ scopes and the verifier enforces the boundary of each:
   release assets and reviewed SHA-256 pins for the sole resvg comparison lane.
   The verifier checks the fetch rule, root module names, Linux-only overlay,
   test-only wrapper alias chain, and resvg test consumer as one narrow declared
-  boundary. It also pins the complete set of first-party rules that may name a
-  target reaching the archive: the two Geode reference leaves, the resvg
-  comparison's libraries, tests and audit, and the CI `test_suite` that selects
-  them. Any other rule, in those files or elsewhere, that names one outside
-  dependency-audit metadata fails, as does a pinned rule that disappears or
-  changes kind, so only the Linux resvg comparison can reach wgpu-native. The
+  boundary. It also pins the complete set of first-party rules the archive is
+  reachable from: the wrapper's `webgpu_cpp`, two aliases and reference
+  runtime, the two Geode reference leaves, the resvg comparison's libraries,
+  test, wrapper and audit, and the CI `test_suite` that selects them. Every
+  string literal a Starlark build file names outside dependency-audit metadata
+  is read as a label in that file's package; one that resolves to a pinned rule
+  or to an archive may appear only in that rule's own declaration. So any other
+  rule, in those files or elsewhere, that names the chain fails, as does a
+  pinned rule that disappears or changes kind. A label assembled from pieces is
+  not read; each hop's narrow Bazel visibility is the backstop for that. The
   full tracked-tree scan also fails if any of these boundary files disappears.
   The Linux oracle's configured dependency audit proves the selected test root
   actually reaches that archive.

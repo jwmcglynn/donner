@@ -1021,42 +1021,93 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 )
                 self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
 
+    def chain_findings(self, files):
+        return [finding for finding in verifier.check_tracked_tree(files, SCOPES)
+                if finding.category == "rust-built-archive"]
+
     def test_a_consumer_outside_the_pinned_reference_chain_is_rejected(self):
-        additions = {
+        # (path, addition, the rule the finding must name, the chain label it must report)
+        cases = (
             # The retired frozen-baseline re-capture library, rejected by name.
-            "donner/gpu/baseline/BUILD.bazel": (
-                'donner_cc_library(\n    name = "wgpu_reference_baseline_capture_linux",\n'
-                '    testonly = 1,\n'
-                '    deps = ["//donner/svg/renderer/geode:geode_device_wgpu_reference_linux"],\n)\n'
-            ),
-            "donner/svg/renderer/tests/BUILD.bazel": (
-                'donner_cc_test(\n    name = "another_reference_test",\n'
-                '    deps = [":renderer_test_backend_wgpu_reference_linux"],\n)\n'
-            ),
-            "donner/svg/renderer/geode/BUILD.bazel": (
-                'donner_cc_test(\n    name = "geode_reference_tests",\n'
-                '    deps = [":geode_device_wgpu_reference_linux"],\n)\n'
-            ),
-            "donner/editor/BUILD.bazel": (
-                '_REFERENCE = ["//donner/svg/renderer/tests:'
-                'image_comparison_test_fixture_wgpu_reference_linux"]\n'
-            ),
-            "tools/ci/BUILD.bazel": (
-                'sh_test(\n    name = "reference_wrapper",\n'
-                '    data = ["//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"],\n)\n'
-            ),
-            "donner/svg/BUILD.bazel": (
-                'configured_dependency_audit_test(\n    name = "reference_audit",\n'
-                '    target = "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux",\n)\n'
-            ),
-        }
-        for path, addition in additions.items():
-            with self.subTest(path=path):
+            ("donner/gpu/baseline/BUILD.bazel",
+             'donner_cc_library(\n    name = "wgpu_reference_baseline_capture_linux",\n'
+             '    testonly = 1,\n'
+             '    deps = ["//donner/svg/renderer/geode:geode_device_wgpu_reference_linux"],\n)\n',
+             "wgpu_reference_baseline_capture_linux",
+             "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux"),
+            ("donner/svg/renderer/tests/BUILD.bazel",
+             'donner_cc_test(\n    name = "another_reference_test",\n'
+             '    deps = [":renderer_test_backend_wgpu_reference_linux"],\n)\n',
+             "another_reference_test",
+             "//donner/svg/renderer/tests:renderer_test_backend_wgpu_reference_linux"),
+            # An archive named directly next to the comparison, bypassing the wrapper.
+            ("donner/svg/renderer/tests/BUILD.bazel",
+             'cc_test(\n    name = "archive_test",\n'
+             '    deps = ["@wgpu_native_linux_x86_64//:wgpu_native"],\n)\n',
+             "archive_test", "@wgpu_native_linux_x86_64//:wgpu_native"),
+            # A second exit from the wrapper package.
+            ("third_party/webgpu-cpp/BUILD.bazel",
+             'alias(\n    name = "leak",\n    actual = ":webgpu_cpp",\n'
+             '    visibility = ["//visibility:public"],\n)\n',
+             "leak", "//third_party/webgpu-cpp:webgpu_cpp"),
+            ("donner/svg/renderer/tests/BUILD.bazel",
+             'sh_test(\n    name = "audit_wrapper",\n'
+             '    data = [":resvg_wgpu_reference_dependency_audit_test"],\n)\n',
+             "audit_wrapper",
+             "//donner/svg/renderer/tests:resvg_wgpu_reference_dependency_audit_test"),
+            ("donner/svg/renderer/geode/BUILD.bazel",
+             'donner_cc_test(\n    name = "geode_reference_tests",\n'
+             '    deps = [":geode_device_wgpu_reference_linux"],\n)\n',
+             "geode_reference_tests",
+             "//donner/svg/renderer/geode:geode_device_wgpu_reference_linux"),
+            ("donner/svg/BUILD.bazel",
+             'test_suite(\n    name = "everything",\n'
+             '    tests = ["//tools/ci:linux_wgpu_resvg_reference"],\n)\n',
+             "everything", "//tools/ci:linux_wgpu_resvg_reference"),
+            ("tools/ci/BUILD.bazel",
+             'sh_test(\n    name = "reference_wrapper",\n'
+             '    data = ["//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"],\n)\n',
+             "reference_wrapper",
+             "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"),
+            ("donner/svg/BUILD.bazel",
+             'configured_dependency_audit_test(\n    name = "reference_audit",\n'
+             '    target = "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux",\n)\n',
+             "reference_audit",
+             "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"),
+        )
+        for path, addition, rule, label in cases:
+            with self.subTest(rule=rule):
                 files = self.allowed_files()
                 files[path] = files.get(path, "") + addition
-                findings = verifier.check_tracked_tree(files, SCOPES)
-                self.assertIn("rust-built-archive", categories(findings))
-                self.assertIn(path, [finding.path for finding in findings])
+                details = [finding.detail for finding in self.chain_findings(files)
+                           if finding.path == path]
+                self.assertEqual(len(details), 1, details)
+                self.assertIn(f" {rule} names the wgpu-native reference chain", details[0])
+                self.assertIn(label, details[0])
+
+    def test_a_chain_label_outside_a_build_rule_is_rejected(self):
+        files = self.allowed_files()
+        files["donner/editor/BUILD.bazel"] = (
+            '_REFERENCE = ["//donner/svg/renderer/tests:'
+            'image_comparison_test_fixture_wgpu_reference_linux"]\n'
+        )
+        details = [finding.detail for finding in self.chain_findings(files)
+                   if finding.path == "donner/editor/BUILD.bazel"]
+        self.assertEqual(len(details), 1, details)
+        self.assertIn("outside a build rule", details[0])
+
+    def test_names_that_merely_resemble_the_chain_are_not_references(self):
+        files = self.allowed_files()
+        # The same target names in another package, a file named after one, and a
+        # repository-qualified label are not the chain's labels.
+        files["donner/editor/BUILD.bazel"] = (
+            'cc_library(\n    name = "webgpu_cpp",\n'
+            '    srcs = ["resvg_test_suite_wgpu_reference_linux.md"],\n'
+            '    deps = [":geode_wgpu_util", "//donner/other:webgpu_cpp",\n'
+            '            "@platforms//cpu:aarch64"],\n)\n'
+        )
+        files["donner/editor/.bazelrc"] = "build --//tools/ci:linux_wgpu_resvg_reference\n"
+        self.assertEqual(self.chain_findings(files), [])
 
     def test_audit_metadata_may_name_the_reference_chain(self):
         files = self.allowed_files()
@@ -1064,6 +1115,9 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
             'configured_dependency_audit_test(\n    name = "editor_audit",\n'
             '    forbidden = ["//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",\n'
             '                 "//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n'
+            '    target = ":editor",\n)\n'
+            'forbidden_transitive_dep_test(\n    name = "editor_no_wrapper",\n'
+            '    forbidden = "//third_party/webgpu-cpp:webgpu_cpp",\n'
             '    target = ":editor",\n)\n'
         )
         self.assertEqual(categories(verifier.check_tracked_tree(files, SCOPES)), [])
@@ -1087,6 +1141,11 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 findings = verifier.check_tracked_tree(files, SCOPES)
                 self.assertIn("rust-built-archive", categories(findings))
                 self.assertIn(path, [finding.path for finding in findings])
+                if removed is not None:
+                    self.assertIn(
+                        "pinned reference chain rule resvg_test_suite_wgpu_reference_linux is "
+                        "missing",
+                        [finding.detail for finding in findings if finding.path == path])
 
     def test_reference_chain_rules_keep_their_kind_and_package_scope(self):
         edits = (
