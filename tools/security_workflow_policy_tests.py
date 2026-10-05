@@ -139,6 +139,21 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         for identity in ("github.run_id", "github.run_attempt", "github.job"):
             self.assertIn(identity, artifacts)
 
+    def test_passing_perf_retains_test_logs_per_matrix_entry(self):
+        # A passing browser responsiveness run prints more than Bazel's console limit, so its
+        # measured values are only in its test log; keep the logs of passing runs too.
+        workflow = self.supply_chain_files[".github/workflows/perf.yml"]
+        job = workflow.split("\n  perf:\n", 1)[1]
+        logs = _step_body(job, "Upload perf test logs")
+        # A failing summary step after a passing test still keeps the log.
+        self.assertIn("if: ${{ !cancelled() && steps.perf.outcome == 'success' }}", logs)
+        self.assertIn("uses: ./.github/actions/upload-bazel-test-artifacts", logs)
+        # Both matrix entries run the same job, so each artifact name needs the entry.
+        for name in ("Upload perf test logs", "Upload perf test failure artifacts"):
+            step = _step_body(job, name)
+            for identity in ("github.run_id", "github.run_attempt", "matrix.target_tag"):
+                self.assertIn(identity, step, name)
+
     def test_action_cache_preserves_setup_bazel_rc_without_a_final_newline(self):
         action = self.supply_chain_files[".github/actions/cache-bazel-actions/action.yml"]
         body = action.split("      run:", 1)[1].split("\n\n", 1)[0]
