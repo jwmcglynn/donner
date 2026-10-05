@@ -3117,15 +3117,20 @@ test("coalesced UI frames do not consume diagnostic capture retries", async ({ p
     hold = await holdCanvasCompletionForTest(page, [owner]);
     for (let i = 0; i < queueCapacity; ++i) await wakeFrame();
     await waitForFullQueue();
+    // Once released, the frame from before the hold completes and frees a slot. Wake frames until
+    // held ones fill every slot.
+    await lateCompletion.release();
+    for (let i = 0; i < 8 && (await hold.observedCalls()) < queueCapacity; ++i) await wakeFrame();
+    await waitForFullQueue();
     // Each frame here submits one canvas completion, so held completions count held frames.
     expect(
       await hold.observedCalls(),
       `every in-flight UI frame must be held: ${JSON.stringify(await queueStats())}`,
     ).toBeGreaterThanOrEqual(queueCapacity);
-    await lateCompletion.release();
     const beforeFailures = await page.evaluate(() =>
       window.__donnerWgpuReadbackCaptureFailures ?? 0
     );
+    const coalescedBefore = (await queueStats())?.coalescedFrames ?? 0;
     const request = await page.evaluate(() => window.__donnerRequestWgpuReadback?.() ?? 0);
     expect(request).toBeGreaterThan(0);
     for (let i = 0; i < 4; ++i) await wakeFrame();
@@ -3141,7 +3146,7 @@ test("coalesced UI frames do not consume diagnostic capture retries", async ({ p
       "application/json",
     );
     expect(deferred.queue?.framesInFlight).toBe(queueCapacity);
-    expect(deferred.queue?.coalescedFrames ?? 0).toBeGreaterThan(0);
+    expect(deferred.queue?.coalescedFrames ?? 0).toBeGreaterThan(coalescedBefore);
     expect(deferred.failed, JSON.stringify(deferred)).toBe(beforeFailures);
     expect(deferred.completed).toBeLessThan(request);
     await hold.release(owner);
