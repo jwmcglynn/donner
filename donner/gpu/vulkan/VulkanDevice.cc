@@ -1761,7 +1761,94 @@ struct VulkanDevice::Impl {
     if (queueMutex != nullptr) {
       queueLock = std::unique_lock<std::mutex>(*queueMutex);
     }
-    return api->vkQueueSubmit(queue, 1, &submitInfo, fence);
+    // A submission without command buffers has nothing to hold, and still has to signal its fence.
+    return commandBufferGate.paused && !commandBuffers.empty()
+               ? submitThroughGate(commandBuffers, fence, wait)
+               : api->vkQueueSubmit(queue, 1, &submitInfo, fence);
+  }
+
+  /// Test seam: what \ref VulkanDevice::pauseSubmissionsForTest installs. Every command buffer
+  /// submitted while it is paused waits for its own turn on \ref semaphore.
+  struct CommandBufferGate {
+    VkSemaphore semaphore = VK_NULL_HANDLE;     //!< Timeline semaphore the turns are counted on.
+    PFN_vkSignalSemaphoreKHR signal = nullptr;  //!< Host signal of \ref semaphore.
+    PFN_vkDestroySemaphore destroy = nullptr;   //!< Destroys \ref semaphore.
+    bool paused = false;  //!< Whether new command buffers wait for a turn. Owner thread only.
+    uint64_t turns = 0;   //!< Turns handed out so far. Owner thread only.
+    /// Turns handed out before the current pause began, which its release counts from.
+    std::atomic<uint64_t> pausedAfter{0};
+    std::mutex mutex;       //!< Guards \ref released and host access to \ref semaphore.
+    uint64_t released = 0;  //!< Turns let run so far.
+    /// \ref turns as other threads may read it, published once the queue accepted the turns.
+    std::atomic<uint64_t> issued{0};
+  };
+  CommandBufferGate commandBufferGate;  //!< Test seam; inert unless paused.
+
+  /// Submits each of \p commandBuffers as a queue submission of its own, waiting for the next turn
+  /// on the test gate, so a test can let them run a few at a time. Separate submissions, because
+  /// a driver may hold every batch of one submission until all of their waits are met. The fence
+  /// goes with the last one, so it signals once all of them have finished, as for an ordinary
+  /// submission.
+  /// @param commandBuffers Command buffers to submit, in execution order.
+  /// @param fence Fence signaled once every buffer has finished.
+  /// @param wait Surface waits, carried by the first batch.
+  VkResult submitThroughGate(std::span<const VkCommandBuffer> commandBuffers, VkFence fence,
+                             const SurfaceWaitSync& wait) {
+    const size_t count = commandBuffers.size();
+    std::vector<std::vector<VkSemaphore>> semaphores(count);
+    std::vector<std::vector<VkPipelineStageFlags>> stages(count);
+    std::vector<std::vector<uint64_t>> values(count);
+    std::vector<VkTimelineSemaphoreSubmitInfoKHR> timelines(count);
+    std::vector<VkSubmitInfo> batches(count);
+    for (size_t i = 0; i < count; ++i) {
+      if (i == 0) {
+        semaphores[i].assign(wait.semaphores.begin(), wait.semaphores.end());
+        stages[i].assign(wait.stages.begin(), wait.stages.end());
+        values[i].assign(wait.semaphores.size(), 0);  // Binary semaphores ignore their value.
+      }
+      semaphores[i].push_back(commandBufferGate.semaphore);
+      stages[i].push_back(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+      values[i].push_back(++commandBufferGate.turns);
+      timelines[i].sType = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO_KHR;
+      timelines[i].waitSemaphoreValueCount = static_cast<uint32_t>(values[i].size());
+      timelines[i].pWaitSemaphoreValues = values[i].data();
+      batches[i].sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+      batches[i].pNext = &timelines[i];
+      batches[i].waitSemaphoreCount = static_cast<uint32_t>(semaphores[i].size());
+      batches[i].pWaitSemaphores = semaphores[i].data();
+      batches[i].pWaitDstStageMask = stages[i].data();
+      batches[i].commandBufferCount = 1;
+      batches[i].pCommandBuffers = &commandBuffers[i];
+    }
+    // Only tests hold the queue, and nothing they submit through it is expected to fail: a failure
+    // partway would leave the earlier command buffers queued without the fence, which no caller
+    // of a failed submission expects.
+    VkResult result = VK_SUCCESS;
+    for (size_t i = 0; i < count && result == VK_SUCCESS; ++i) {
+      result = api->vkQueueSubmit(queue, 1, &batches[i], i + 1 == count ? fence : VK_NULL_HANDLE);
+    }
+    commandBufferGate.issued.store(commandBufferGate.turns, std::memory_order_release);
+    return result;
+  }
+
+  /// Lets every turn up to \p turn, or every turn handed out when that is fewer, run. Callable
+  /// from any thread.
+  /// @param turn Highest turn to let run.
+  void releaseGateThrough(uint64_t turn) {
+    std::lock_guard<std::mutex> lock(commandBufferGate.mutex);
+    // A timeline semaphore may not run further ahead of its waits than the device allows, so it
+    // is never signalled past the turns actually handed out.
+    turn = std::min(turn, commandBufferGate.issued.load(std::memory_order_acquire));
+    if (commandBufferGate.semaphore == VK_NULL_HANDLE || turn <= commandBufferGate.released) {
+      return;
+    }
+    VkSemaphoreSignalInfoKHR signal = {};
+    signal.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO_KHR;
+    signal.semaphore = commandBufferGate.semaphore;
+    signal.value = turn;
+    if (commandBufferGate.signal(device, &signal) == VK_SUCCESS) {
+      commandBufferGate.released = turn;
+    }
   }
 
   /// Latches terminal native failure and drains pending work before releasing its objects.
@@ -2195,6 +2282,11 @@ struct VulkanDevice::Impl {
     }
 
     destroySubmissionAndUploadRecords();
+    if (commandBufferGate.semaphore != VK_NULL_HANDLE) {
+      // Every batch that waited on it is complete: its submission's fence was proven above.
+      commandBufferGate.destroy(device, commandBufferGate.semaphore, nullptr);
+      commandBufferGate.semaphore = VK_NULL_HANDLE;
+    }
     destroyPipelines();
     destroyShadersAndBindings();
     destroyTexturesAndBuffers();
@@ -2965,6 +3057,7 @@ VulkanSurfaceContext VulkanDevice::surfaceContextForTeardownTest() const {
 }
 
 VulkanDevice::~VulkanDevice() {
+  resumeSubmissionsForTest();
   // A surface can outlive this object when teardown cannot prove its work finished, so none may
   // call back into it from here on.
   for (const std::unique_ptr<VulkanSwapchain>& surface : impl_->surfaces) {
@@ -3051,6 +3144,52 @@ bool VulkanDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
   }
   impl.pollCompleted();
   return !impl.hasError() && impl.completedSerialValue >= serial;
+}
+
+Status VulkanDevice::pauseSubmissionsForTest() {
+  Impl& impl = *impl_;
+  Impl::CommandBufferGate& gate = impl.commandBufferGate;
+  if (gate.paused) {
+    return OkStatus();
+  }
+  if (gate.semaphore == VK_NULL_HANDLE) {
+    const auto create = reinterpret_cast<PFN_vkCreateSemaphore>(
+        impl.api->vkGetDeviceProcAddr(impl.device, "vkCreateSemaphore"));
+    gate.destroy = reinterpret_cast<PFN_vkDestroySemaphore>(
+        impl.api->vkGetDeviceProcAddr(impl.device, "vkDestroySemaphore"));
+    gate.signal = reinterpret_cast<PFN_vkSignalSemaphoreKHR>(
+        impl.api->vkGetDeviceProcAddr(impl.device, "vkSignalSemaphoreKHR"));
+    if (create == nullptr || gate.destroy == nullptr || gate.signal == nullptr) {
+      return GpuError{GpuErrorType::Unsupported,
+                      "pauseSubmissionsForTest needs a device with timeline semaphore support"};
+    }
+    VkSemaphoreTypeCreateInfoKHR type = {};
+    type.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO_KHR;
+    type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE_KHR;
+    VkSemaphoreCreateInfo info = {};
+    info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    info.pNext = &type;
+    if (const VkResult result = create(impl.device, &info, nullptr, &gate.semaphore);
+        result != VK_SUCCESS) {
+      return VkError("vkCreateSemaphore (pauseSubmissionsForTest)", result);
+    }
+  }
+  gate.pausedAfter.store(gate.turns, std::memory_order_release);
+  gate.paused = true;
+  return OkStatus();
+}
+
+void VulkanDevice::releasePausedCommandBuffersForTest(uint64_t count) {
+  const uint64_t pausedAfter = impl_->commandBufferGate.pausedAfter.load(std::memory_order_acquire);
+  // Saturating: a count meant as "all of them" does not wrap past the turns handed out.
+  constexpr uint64_t kAll = std::numeric_limits<uint64_t>::max();
+  impl_->releaseGateThrough(count > kAll - pausedAfter ? kAll : pausedAfter + count);
+}
+
+void VulkanDevice::resumeSubmissionsForTest() {
+  Impl::CommandBufferGate& gate = impl_->commandBufferGate;
+  gate.paused = false;
+  impl_->releaseGateThrough(gate.turns);
 }
 
 Status VulkanDevice::waitForBufferAccess(uint64_t serial, std::string_view operation) {

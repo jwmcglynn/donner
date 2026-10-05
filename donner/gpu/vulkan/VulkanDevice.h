@@ -544,6 +544,22 @@ public:
   /// @param hook Called on the waiting thread.
   void setFenceWaitStepHookForTest(std::function<void()> hook);
 
+  /// Holds every command buffer submitted from now on, each waiting for its own turn in
+  /// submission order until \ref releasePausedCommandBuffersForTest lets it run, so a test can let
+  /// one submission's command buffers run a few at a time. Each held command buffer goes to the
+  /// queue as a submission of its own, and the last of them carries the submission's fence. Needs
+  /// timeline semaphore support, as on a device from \ref CreateWithTimelineSemaphoreForTest or
+  /// over a root from \ref CreateSharedRootWithTimelineSemaphoreForTest.
+  Status pauseSubmissionsForTest();
+
+  /// Lets the first \p count command buffers submitted since \ref pauseSubmissionsForTest run and
+  /// keeps the rest held. Callable from any thread while the device's own thread waits.
+  /// @param count Command buffers to let run, counted from the first one submitted while paused.
+  void releasePausedCommandBuffersForTest(uint64_t count);
+
+  /// Lets every held command buffer run and stops holding new ones. Safe when no pause is active.
+  void resumeSubmissionsForTest();
+
   /// Makes the next acquisition on the surface at \p surfaceSlotIndex report the swapchain as
   /// out of date, so its rebuild-and-retry path runs. Test seam; see the swapchain's own note for
   /// why a headless surface needs one.
