@@ -254,6 +254,7 @@ public:
       }
     }
     if (!failed()) {
+      ValidateTemplateStarts();
       ValidateBufferRootTypes();
       ValidateUniformity();
       module_.valid = !failed();
@@ -414,8 +415,15 @@ private:
     }
   }
 
+  /// Lexes the next token and applies WGSL's template-list discovery to it.
   constexpr void Next() {
-    previousTokenKind_ = token_.kind;
+    LexToken();
+    if (!failed()) {
+      DiscoverTemplateToken(token_);
+    }
+  }
+
+  constexpr void LexToken() {
     if (failed()) {
       token_ = Token{};
       return;
@@ -435,8 +443,7 @@ private:
     if (IsIdentifierStart(ch)) {
       return ScanIdentifier(begin);
     }
-    if ((ch >= '0' && ch <= '9') || (ch == '.' && cursor_ < sourceSize_ &&
-                                     sourceData_[cursor_] >= '0' && sourceData_[cursor_] <= '9')) {
+    if (StartsNumber(ch)) {
       return ScanNumber(begin);
     }
     const TokenKind kind = Punctuation(ch);
@@ -445,6 +452,13 @@ private:
       return;
     }
     token_ = MakeToken(kind, begin);
+  }
+
+  /// Returns whether p ch, already consumed, starts a numeric literal: a digit, or a `.` that a
+  /// digit follows.
+  constexpr bool StartsNumber(char ch) const {
+    return (ch >= '0' && ch <= '9') || (ch == '.' && cursor_ < sourceSize_ &&
+                                        sourceData_[cursor_] >= '0' && sourceData_[cursor_] <= '9');
   }
 
   constexpr void ScanIdentifier(uint32_t begin) {
@@ -564,12 +578,265 @@ private:
     return result;
   }
 
-  /// Consumes the `>` that closes a template list. When that `>` begins a `>>` token, as in
-  /// `array<vec2<u32>>`, only its first byte closes the list and the rest is lexed again.
+  /// How the parser read the `<` of a template-list candidate.
+  enum class AngleUse : uint8_t {
+    Unread,         //!< Not consumed yet.
+    Comparison,     //!< Consumed as the `<` operator.
+    TemplateStart,  //!< Consumed as the start of a type's template list.
+  };
+
+  /// One unclosed `<` that may start a template list.
+  struct TemplateCandidate {
+    uint16_t position = 0;            //!< Source offset of the `<`.
+    uint16_t depth = 0;               //!< Parenthesis and bracket nesting depth at the `<`.
+    AngleUse use = AngleUse::Unread;  //!< How the parser read the `<`.
+  };
+
+  /// Maximum pending candidates. A `<` after an identifier stays pending until a `>`, a closing
+  /// bracket, `&&`, `||` or a delimiter ends it; a module that holds more at once, such as a type
+  /// nested in 257 template lists, fails with NestingLimit.
+  static constexpr uint16_t kMaxTemplateCandidates = 256;
+
+  /// State of WGSL's template-list discovery between tokens.
+  struct TemplateDiscovery {
+    std::array<TemplateCandidate, kMaxTemplateCandidates> pending = {};  //!< Unclosed candidates.
+    uint16_t count = 0;                       //!< Number of entries in pending.
+    uint16_t depth = 0;                       //!< Current nesting depth.
+    TokenKind previous = TokenKind::End;      //!< Kind of the preceding token.
+    std::array<uint16_t, 2> closedEnds = {};  //!< `>` offsets where the latest token closed a list.
+    uint8_t closedCount = 0;                  //!< Number of entries in closedEnds.
+    bool droppedStart = false;                //!< A type's template start was dropped unclosed.
+    uint16_t droppedStartPosition = 0;        //!< Offset of the first such start.
+  };
+
+  // Template-list offsets are stored in 16 bits.
+  static_assert(ModuleLimits::kMaxSourceBytes <= 65536);
+
+  /**
+   * Applies WGSL's template-list discovery to the token just lexed.
+   *
+   * WGSL discovers template lists before it parses expressions: a `<` right after an identifier
+   * starts a candidate that the next `>` at the same nesting depth closes, whether that `>` stands
+   * alone or is either byte of `>>` or `>>=`, the first byte of `>=`, or the end of `->`. A `;`,
+   * `{`, `:` or `=` drops every pending candidate first, and `&&`, `||` or a closing bracket drops
+   * those opened at its own depth or deeper. Applying it per token matches the specification's
+   * code-point scan, apart from the operators noted in \ref DiscoverOpeningAngle, because literals
+   * and comments are already single tokens or trivia, and the parser has consumed every earlier
+   * `<` by the time a later `>` is lexed. The parser's reading of every angle bracket must agree:
+   * a closed list must start at a type's template `<`, so `g(a < b, c > d)` is rejected rather
+   * than parsed as two comparisons, and \ref RejectTemplateBracket, \ref ExpectTemplateStart,
+   * \ref ExpectTemplateEnd and \ref ValidateTemplateStarts check the rest.
+   * @param token Token just lexed.
+   */
+  constexpr void DiscoverTemplateToken(const Token& token) {
+    const TokenKind previous = discovery_.previous;
+    discovery_.previous = token.kind;
+    discovery_.closedCount = 0;
+    if (token.kind == TokenKind::Identifier || token.kind == TokenKind::Number) {
+      return;
+    }
+    if (DiscoverOpeningAngle(previous, token) || DiscoverClosingAngle(token)) {
+      return;
+    }
+    DiscoverDelimiter(token.kind);
+  }
+
+  /// Applies `<`, `<=`, `<<` and `<<=`; returns whether p token was one of them.
+  /// @param previous Kind of the preceding token. @param token Current token.
+  constexpr bool DiscoverOpeningAngle(TokenKind previous, const Token& token) {
+    const bool afterIdentifier = previous == TokenKind::Identifier;
+    switch (token.kind) {
+      case TokenKind::Less:
+        if (afterIdentifier) {
+          PushTemplateCandidate(token.span);
+        }
+        return true;
+      // The specification's scan reads the `=` of a `<=` that does not follow an identifier, and of
+      // `<<=`, as an assignment that drops every candidate. Chromium's WGSL compiler (Tint) lexes
+      // each as one operator that keeps them, and so does this compiler: where the two readings
+      // differ, a later `>` closes a candidate the specification dropped and the module is
+      // rejected, as Chromium rejects it.
+      case TokenKind::LessEqual:
+      case TokenKind::ShiftLeft:
+      case TokenKind::ShiftLeftAssign: return true;
+      default: return false;
+    }
+  }
+
+  /// Applies `>`, `>=`, `>>`, `>>=` and `->`; returns whether p token was one of them.
+  /// @param token Current token.
+  constexpr bool DiscoverClosingAngle(const Token& token) {
+    const uint32_t begin = token.span.begin;
+    switch (token.kind) {
+      case TokenKind::Greater: CloseTemplateCandidate(begin); return true;
+      case TokenKind::Arrow: CloseTemplateCandidate(begin + 1); return true;
+      // A `>` that closes a list leaves the following `=` to read as an assignment.
+      case TokenKind::GreaterEqual:
+        if (CloseTemplateCandidate(begin)) {
+          ClearTemplateCandidates();
+        }
+        return true;
+      case TokenKind::ShiftRight:
+        CloseTemplateCandidate(begin);
+        CloseTemplateCandidate(begin + 1);
+        return true;
+      case TokenKind::ShiftRightAssign:
+        CloseTemplateCandidate(begin);
+        if (CloseTemplateCandidate(begin + 1)) {
+          ClearTemplateCandidates();
+        }
+        return true;
+      default: return false;
+    }
+  }
+
+  /// Applies brackets and the tokens that end or limit pending candidates.
+  /// @param kind Current token kind.
+  constexpr void DiscoverDelimiter(TokenKind kind) {
+    switch (kind) {
+      case TokenKind::LeftParen:
+      case TokenKind::LeftBracket: ++discovery_.depth; return;
+      case TokenKind::RightParen:
+      case TokenKind::RightBracket:
+        PopTemplateCandidatesAtDepth();
+        discovery_.depth = discovery_.depth == 0 ? 0 : discovery_.depth - 1;
+        return;
+      case TokenKind::And:
+      case TokenKind::Or: PopTemplateCandidatesAtDepth(); return;
+      default: break;
+    }
+    if (EndsTemplateCandidates(kind)) {
+      ClearTemplateCandidates();
+    }
+  }
+
+  /// Returns whether p kind cannot appear inside an expression, so it drops every candidate.
+  /// Compound assignments keep them, as Chromium's compiler does; see \ref DiscoverOpeningAngle.
+  static constexpr bool EndsTemplateCandidates(TokenKind kind) {
+    return kind == TokenKind::Semicolon || kind == TokenKind::LeftBrace ||
+           kind == TokenKind::Colon || kind == TokenKind::Assign;
+  }
+
+  constexpr void PushTemplateCandidate(SourceSpan span) {
+    if (discovery_.count == kMaxTemplateCandidates) {
+      Fail(ErrorCode::NestingLimit, span);
+      return;
+    }
+    discovery_.pending[discovery_.count++] =
+        TemplateCandidate{static_cast<uint16_t>(span.begin), discovery_.depth};
+  }
+
+  /// Drops the innermost candidate. A type's template start dropped before it closes is recorded
+  /// and fails once parsing ends, so a malformed type reports the parser's own diagnostic first.
+  constexpr void DropTemplateCandidate() {
+    const TemplateCandidate dropped = discovery_.pending[--discovery_.count];
+    if (dropped.use == AngleUse::TemplateStart && !discovery_.droppedStart) {
+      discovery_.droppedStart = true;
+      discovery_.droppedStartPosition = dropped.position;
+    }
+  }
+
+  constexpr void ClearTemplateCandidates() {
+    while (discovery_.count > 0) {
+      DropTemplateCandidate();
+    }
+    discovery_.depth = 0;
+  }
+
+  /// Drops the candidates at the current depth or deeper.
+  constexpr void PopTemplateCandidatesAtDepth() {
+    while (discovery_.count > 0 &&
+           discovery_.pending[discovery_.count - 1].depth >= discovery_.depth) {
+      DropTemplateCandidate();
+    }
+  }
+
+  /// Closes the innermost candidate with the `>` at p position when it is at the same depth. The
+  /// `<` it pairs with must be one the parser read as a type's template start.
+  /// @return Whether a template list ended there.
+  constexpr bool CloseTemplateCandidate(uint32_t position) {
+    if (discovery_.count == 0 ||
+        discovery_.pending[discovery_.count - 1].depth != discovery_.depth) {
+      return false;
+    }
+    const TemplateCandidate closed = discovery_.pending[--discovery_.count];
+    if (closed.use != AngleUse::TemplateStart) {
+      Fail(ErrorCode::UnsupportedConstruct, SourceSpan{closed.position, closed.position + 1u});
+    }
+    discovery_.closedEnds[discovery_.closedCount++] = static_cast<uint16_t>(position);
+    return true;
+  }
+
+  /// Returns whether the latest token closed a template list with its `>` at p position.
+  constexpr bool ClosedTemplateAt(uint32_t position) const {
+    for (uint8_t i = 0; i < discovery_.closedCount; ++i) {
+      if (discovery_.closedEnds[i] == position) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Returns the pending candidate for the `<` at p position, which is the innermost one when the
+  /// parser reads the `<` it just lexed, or null.
+  constexpr TemplateCandidate* CandidateAt(uint32_t position) {
+    if (discovery_.count == 0 || discovery_.pending[discovery_.count - 1].position != position) {
+      return nullptr;
+    }
+    return &discovery_.pending[discovery_.count - 1];
+  }
+
+  /// Records an operator's `<` as a comparison and fails when the operator or arrow token holds a
+  /// `>` that closed a template list, as in `a < b >> c`.
+  /// @param token Operator or arrow token, the latest token lexed.
+  constexpr void RejectTemplateBracket(const Token& token) {
+    if (TemplateCandidate* candidate = CandidateAt(token.span.begin);
+        candidate != nullptr && token.kind == TokenKind::Less) {
+      candidate->use = AngleUse::Comparison;
+    }
+    for (uint32_t position = token.span.begin; position < token.span.end; ++position) {
+      if (ClosedTemplateAt(position)) {
+        Fail(ErrorCode::UnsupportedConstruct, token.span);
+        return;
+      }
+    }
+  }
+
+  /// Fails at the first type's template start that no `>` closed, if parsing found no error.
+  constexpr void ValidateTemplateStarts() {
+    while (discovery_.count > 0) {
+      DropTemplateCandidate();
+    }
+    if (discovery_.droppedStart) {
+      const uint32_t position = discovery_.droppedStartPosition;
+      Fail(ErrorCode::UnsupportedConstruct, SourceSpan{position, position + 1u});
+    }
+  }
+
+  /// Consumes the `<` that starts a type's template list, which must be a discovery candidate.
+  constexpr void ExpectTemplateStart() {
+    if (token_.kind == TokenKind::Less) {
+      if (TemplateCandidate* candidate = CandidateAt(token_.span.begin); candidate != nullptr) {
+        candidate->use = AngleUse::TemplateStart;
+      } else {
+        Fail(ErrorCode::UnsupportedConstruct, token_.span);
+      }
+    }
+    Expect(TokenKind::Less);
+  }
+
+  /// Consumes the `>` that closes a template list, which discovery must also have found. When
+  /// that `>` begins a `>>` token, as in `array<vec2<u32>>`, only its first byte closes the list
+  /// and the second becomes the current `>` token. Discovery already applied both bytes, and the
+  /// lexer resumes after the `>>`, so `array<vec2<vec2<f32>>>` lexes its third `>` normally.
   constexpr void ExpectTemplateEnd() {
+    const bool closes = token_.kind == TokenKind::Greater || token_.kind == TokenKind::ShiftRight;
+    if (closes && !ClosedTemplateAt(token_.span.begin)) {
+      Fail(ErrorCode::UnsupportedConstruct, token_.span);
+    }
     if (token_.kind == TokenKind::ShiftRight) {
-      cursor_ = token_.span.begin + 1;
-      Next();
+      token_ = Token{TokenKind::Greater, SourceSpan{token_.span.begin + 1, token_.span.end},
+                     token_.text.substr(1)};
       return;
     }
     Expect(TokenKind::Greater);
@@ -1025,7 +1292,7 @@ private:
   }
 
   constexpr Type ParseArrayType(Token name) {
-    Expect(TokenKind::Less);
+    ExpectTemplateStart();
     const Type element = ParseType();
     const bool fixed = Match(TokenKind::Comma);
     const uint32_t count = fixed ? ParseArrayCount() : 0;
@@ -1057,7 +1324,7 @@ private:
   /// Returns a `ptr<function, T>` type, encoding the pointee in the element fields.
   /// @param name The `ptr` token, used for the diagnostic span.
   constexpr Type ParsePointerType(Token name) {
-    Expect(TokenKind::Less);
+    ExpectTemplateStart();
     const Token addressSpace = ExpectIdentifier();
     Expect(TokenKind::Comma);
     const Type pointee = ParseType();
@@ -1093,7 +1360,7 @@ private:
   }
 
   constexpr Type ParseSampledTextureType() {
-    Expect(TokenKind::Less);
+    ExpectTemplateStart();
     const Token scalar = ExpectIdentifier();
     ExpectTemplateEnd();
     if (scalar.text != "f32") {
@@ -1103,7 +1370,7 @@ private:
   }
 
   constexpr Type ParseStorageTextureType() {
-    Expect(TokenKind::Less);
+    ExpectTemplateStart();
     const Token format = ExpectIdentifier();
     Expect(TokenKind::Comma);
     const Token access = ExpectIdentifier();
@@ -1136,7 +1403,7 @@ private:
                     : suffix == 'u' ? TypeKind::U32
                                     : TypeKind::Void;
     } else {
-      Expect(TokenKind::Less);
+      ExpectTemplateStart();
       scalar = ParseType();
       ExpectTemplateEnd();
     }
@@ -1159,7 +1426,7 @@ private:
         Fail(ErrorCode::UnknownType, name.span);
       }
     } else {
-      Expect(TokenKind::Less);
+      ExpectTemplateStart();
       const Type scalar = ParseType();
       ExpectTemplateEnd();
       if (scalar != Type{TypeKind::F32}) {
@@ -1251,9 +1518,10 @@ private:
   }
 
   constexpr void ParseBindingAddressSpace(Token* addressSpace, Token* accessMode) {
-    if (!Match(TokenKind::Less)) {
+    if (token_.kind != TokenKind::Less) {
       return;
     }
+    ExpectTemplateStart();
     *addressSpace = ExpectIdentifier();
     if (Match(TokenKind::Comma)) {
       *accessMode = ExpectIdentifier();
@@ -1442,6 +1710,9 @@ private:
 
   constexpr void ParseFunctionReturnType(Function* function, Token name) {
     Attributes attributes;
+    if (token_.kind == TokenKind::Arrow) {
+      RejectTemplateBracket(token_);
+    }
     if (Match(TokenKind::Arrow)) {
       ParseLeadingAttributes(&attributes);
       function->returnType = ParseType();
@@ -1928,6 +2199,7 @@ private:
   constexpr ArenaId ParseCompoundAssignment(ExpressionInfo target, SourceSpan begin) {
     Token arithmetic = token_;
     arithmetic.kind = CompoundOperator(token_.kind);
+    RejectTemplateBracket(token_);
     Next();
     const Type targetType = ExpressionAt(target.id).type;
     // A shift amount is u32 whatever the target's type; the shift checks its lane count.
@@ -2249,27 +2521,13 @@ private:
     ExpressionInfo lhs = ParseUnary();
     while (HasBinaryOperator(precedence)) {
       const Token op = token_;
-      const bool templateCandidate = OpensTemplateCandidate(op);
+      RejectTemplateBracket(op);
       const uint8_t nextPrecedence = BinaryPrecedence(op.kind) + 1;
       Next();
       const ExpressionInfo rhs = ParseBinaryOperand(op.kind, nextPrecedence);
-      // A `>` of an ungrouped right shift would close the template list this `<` starts.
-      if (templateCandidate &&
-          rhs.ungroupedBinary == static_cast<uint8_t>(BinaryGroup::ShiftRight)) {
-        Fail(ErrorCode::UnsupportedConstruct, op.span);
-      }
       lhs = MakeBinary(op, lhs, rhs);
     }
     return lhs;
-  }
-
-  /// Returns whether WGSL's template-list discovery treats p op as a candidate template-list
-  /// start: a `<` whose preceding token, ignoring blankspace and comments, is an identifier.
-  /// The next `>` at the same nesting depth closes such a list, so `a < b >> c` reads as the
-  /// template list `a<b>`, while `(a) < b >> c` and `1u < b >> c` remain comparisons.
-  /// @param op The current operator token.
-  constexpr bool OpensTemplateCandidate(Token op) const {
-    return op.kind == TokenKind::Less && previousTokenKind_ == TokenKind::Identifier;
   }
 
   constexpr bool HasBinaryOperator(uint8_t precedence) const {
@@ -3812,27 +4070,15 @@ private:
     And,
     Or,
     BitAnd,
-    ShiftLeft,
-    ShiftRight,
+    Shift,
   };
-
-  /// Returns the group of a `<<` or `>>` token.
-  /// @param kind ShiftLeft or ShiftRight.
-  static constexpr BinaryGroup ShiftGroupOf(TokenKind kind) {
-    return kind == TokenKind::ShiftLeft ? BinaryGroup::ShiftLeft : BinaryGroup::ShiftRight;
-  }
-
-  /// Returns whether p group is a shift.
-  static constexpr bool IsShiftGroup(BinaryGroup group) {
-    return group == BinaryGroup::ShiftLeft || group == BinaryGroup::ShiftRight;
-  }
 
   constexpr BinaryGroup GroupOf(TokenKind kind) const {
     if (kind == TokenKind::BitAnd) {
       return BinaryGroup::BitAnd;
     }
     if (IsShiftToken(kind)) {
-      return ShiftGroupOf(kind);
+      return BinaryGroup::Shift;
     }
     if (kind == TokenKind::And) {
       return BinaryGroup::And;
@@ -3850,8 +4096,7 @@ private:
 
   /// Returns whether an ungrouped shift may be an operand of p parent. Both operands of a shift are
   /// unary expressions, so a shift never takes an ungrouped operator; only a comparison or a
-  /// short-circuit operator takes an ungrouped shift, and \ref OpensTemplateCandidate further keeps
-  /// an ungrouped right shift off the right of a `<` that follows an identifier.
+  /// short-circuit operator takes an ungrouped shift.
   /// @param parent Group of the enclosing operator.
   static constexpr bool TakesUngroupedShift(BinaryGroup parent) {
     return parent == BinaryGroup::Relational || parent == BinaryGroup::And ||
@@ -3865,7 +4110,7 @@ private:
     if (parent == BinaryGroup::BitAnd || child == BinaryGroup::BitAnd) {
       return parent == child;
     }
-    if (IsShiftGroup(parent) || IsShiftGroup(child)) {
+    if (parent == BinaryGroup::Shift || child == BinaryGroup::Shift) {
       return TakesUngroupedShift(parent);
     }
     if (parent == BinaryGroup::Relational && child == BinaryGroup::Relational) {
@@ -4254,7 +4499,7 @@ private:
   Statement invalidStatement_;
   Symbol invalidSymbol_;
   Token token_;
-  TokenKind previousTokenKind_ = TokenKind::End;  //!< Kind of the token before token_.
+  TemplateDiscovery discovery_;
   uint32_t cursor_ = 0;
   uint16_t tokenCount_ = 0;
   std::array<ArenaId, ModuleLimits::kMaxSymbols> activeSymbols_ = {};

@@ -1,8 +1,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <string>
+#include <utility>
 
 #include "donner/gpu/shader/wgsl/Parser.h"
 #include "donner/gpu/shader/wgsl/tests/ControlSource.h"
@@ -211,6 +213,99 @@ TEST(Language, EnforcesWgslOperatorGrouping) {
     SCOPED_TRACE(source);
     EXPECT_EQ(Parse(source).diagnostic.code, ErrorCode::None);
   }
+}
+
+/// Returns the numeric diagnostic code and the source text its span covers, so a mismatch prints
+/// both.
+/// @param source WGSL to parse.
+std::pair<unsigned, std::string> DiagnosticOf(const std::string& source) {
+  const ParseResult parsed = Parse(source);
+  const uint32_t end = std::min<uint32_t>(parsed.diagnostic.span.end, uint32_t(source.size()));
+  const uint32_t begin = std::min(parsed.diagnostic.span.begin, end);
+  return {unsigned(parsed.diagnostic.code), source.substr(begin, end - begin)};
+}
+
+TEST(Language, AppliesWgslTemplateListDiscoveryToComparisons) {
+  // WGSL pairs a `<` right after an identifier with the next `>` at the same nesting depth before
+  // it parses expressions. `;`, `{`, `:` or `=` drops every pending `<` first, and `&&`, `||` or a
+  // closing bracket drops those at its depth or deeper. Such a pair is a template list, never two
+  // comparisons.
+  const std::string prelude =
+      "fn g(x: bool, y: bool) -> bool { return x; }\n"
+      "fn g3(x: bool, y: bool, z: bool) -> bool { return x; }\n"
+      "fn h(x: u32) -> u32 { return x; }\n"
+      "fn f(a: u32, b: u32, c: u32, d: u32) -> bool {\n  ";
+  for (const char* body : {
+           "return g(a < b, c > d);",
+           "return g(a < b, c >= d);",
+           "return g(a < b, (c) > d);",
+           "return g(a < h(b), c > d);",
+           "return a < b >> c;",
+           // Chromium's compiler keeps the pending `<` across `<=` after a literal, unlike the
+           // specification's scan, so the stricter reading applies.
+           "return g3(a < b, 1u <= c, d > a);",
+       }) {
+    const std::string source = prelude + body + "\n}\n";
+    SCOPED_TRACE(source);
+    EXPECT_THAT(DiagnosticOf(source),
+                testing::Pair(unsigned(ErrorCode::UnsupportedConstruct), testing::StrEq("<")));
+  }
+  for (const char* body : {
+           "return g((a < b), (c > d));",
+           "return a < (b >> c);",
+           "return g(h(a) < b, c > d);",
+           "return g(1u < b, c > d);",
+           "return g(a < b && c > d, true);",
+           "return g(a < b || c > d, true);",
+           "return g(select(false, true, a < b), c > d);",
+           "return g(a <= b, c > d);",
+           "let p = a < b; let q = c > d; return p && q;",
+           "if (a < b) { return c > d; } return false;",
+           "return (a < b) == (c > d);",
+           "return g3((a < b), 1u <= c, d > a);",
+       }) {
+    const std::string source = prelude + body + "\n}\n";
+    SCOPED_TRACE(source);
+    EXPECT_THAT(DiagnosticOf(source), testing::Pair(unsigned(ErrorCode::None), testing::IsEmpty()));
+  }
+}
+
+TEST(Language, ReportsMalformedTemplateListsWhereTheParserStops) {
+  // Discovery drops a type's unclosed list at the token that ends it; the parser's diagnostic for
+  // that token comes first.
+  for (const auto& [source, spanned] : {
+           std::pair<const char*, const char*>{"fn f() { var x: vec2<f32 = vec2<f32>(1f); }", "="},
+           {"struct S { a: array<f32, 4; }", ";"},
+           {"fn f(p: ptr<function, u32) {}", ")"},
+       }) {
+    SCOPED_TRACE(source);
+    EXPECT_THAT(DiagnosticOf(source),
+                testing::Pair(unsigned(ErrorCode::UnexpectedToken), testing::StrEq(spanned)));
+  }
+}
+
+TEST(Language, ClosesEachTemplateListOfAClosingShift) {
+  // `>>>` lexes as `>>` then `>`. Each `>` must close its own list, so the outer pointer list is
+  // read to its end and reports its address space like the spaced spelling does.
+  for (const char* type : {"ptr<storage, array<vec2<u32>>>", "ptr<storage, array<vec2<u32> > >"}) {
+    const std::string source = std::string("fn f(p: ") + type + ") {}\n";
+    SCOPED_TRACE(source);
+    EXPECT_THAT(DiagnosticOf(source),
+                testing::Pair(unsigned(ErrorCode::InvalidPointer), testing::StrEq("storage")));
+  }
+}
+
+TEST(Language, BoundsPendingTemplateListCandidates) {
+  // Discovery holds at most 256 pending `<` at once; the 257th fails.
+  const std::string prefix = "fn f(x: ";
+  std::string type;
+  for (int i = 0; i < 257; ++i) {
+    type += "vec2<";
+  }
+  const std::string source = prefix + type + "f32" + std::string(257, '>') + ") {}\n";
+  const ParseResult parsed = Parse(source);
+  EXPECT_EQ(parsed.diagnostic.code, ErrorCode::NestingLimit);
+  EXPECT_EQ(parsed.diagnostic.span.begin, prefix.size() + 256 * 5 + 4);
 }
 
 TEST(Language, RequiresDerivativesInUniformFragmentControl) {
