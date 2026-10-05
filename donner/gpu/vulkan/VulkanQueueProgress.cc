@@ -102,66 +102,93 @@ std::ostream& operator<<(std::ostream& os, FenceProgressWaitEnd value) {
   return os << "Unknown";
 }
 
+namespace {
+
+using Clock = std::chrono::steady_clock;
+
+/// Longest single native wait between looks for progress and for a declared loss.
+constexpr std::chrono::nanoseconds kStepInterval = std::chrono::milliseconds(10);
+
+/// One native wait for every fence in \p fences, for up to \p timeout.
+/// @param api Entry points. @param device Device the fences belong to.
+/// @param fences Fences to wait for. @param timeout Longest to wait.
+VkResult WaitForAllFences(const VulkanApi& api, VkDevice device, std::span<const VkFence> fences,
+                          std::chrono::nanoseconds timeout) {
+  return api.vkWaitForFences(device, static_cast<uint32_t>(fences.size()), fences.data(), VK_TRUE,
+                             static_cast<uint64_t>(timeout.count()));
+}
+
+/// How a wait ends on a native result that is not a timeout. @param result Native result.
+FenceProgressWaitEnd EndForAnsweredWait(VkResult result) {
+  return result == VK_SUCCESS ? FenceProgressWaitEnd::Signalled : FenceProgressWaitEnd::Failed;
+}
+
+/// Whether a loss has been declared over the root. @param rootLoss Loss condition, or null.
+bool RootDeclaredLost(const DeviceLostState* rootLoss) {
+  return rootLoss != nullptr && rootLoss->lost.load(std::memory_order_acquire);
+}
+
+/// Time left before the queue has gone \p stallBound without progress, or zero once it has.
+/// Looks for progress first. Without a progress record, the bound runs from \p waitStart.
+/// @param progress Progress of the queue, or null. @param waitStart When the wait began.
+/// @param stallBound Longest the queue may go without progress.
+std::chrono::nanoseconds TimeUntilStalled(VulkanQueueProgress* progress,
+                                          Clock::time_point waitStart, Clock::duration stallBound) {
+  const Clock::time_point progressAt = progress != nullptr ? progress->observe() : waitStart;
+  return std::max(
+      std::chrono::nanoseconds::zero(),
+      std::chrono::duration_cast<std::chrono::nanoseconds>(progressAt + stallBound - Clock::now()));
+}
+
+/// Waits for \p fences in steps of at most \ref kStepInterval, looking for progress and for a
+/// declared loss between steps; see \ref WaitForFencesWhileQueueProgresses.
+FenceProgressWait WaitInSteps(const VulkanApi& api, VkDevice device,
+                              std::span<const VkFence> fences, VulkanQueueProgress* progress,
+                              const DeviceLostState* rootLoss, Clock::duration stallBound,
+                              const std::function<void()>& stepHook) {
+  const Clock::time_point waitStart = Clock::now();
+  for (;;) {
+    const std::chrono::nanoseconds remaining = TimeUntilStalled(progress, waitStart, stallBound);
+    // A step of zero still asks once, so a fence that has signalled is never reported stalled.
+    const std::chrono::nanoseconds step = std::min(remaining, kStepInterval);
+    const VkResult result = WaitForAllFences(api, device, fences, step);
+    if (result != VK_TIMEOUT) {
+      return {EndForAnsweredWait(result), result};
+    }
+    if (stepHook) {
+      stepHook();
+    }
+    if (RootDeclaredLost(rootLoss)) {
+      return {FenceProgressWaitEnd::RootLost, result};
+    }
+    // When the bound ran out on this step, look once more: progress seen during it moves the
+    // deadline, and only a queue that has still not progressed is stalled.
+    if (remaining <= step &&
+        TimeUntilStalled(progress, waitStart, stallBound) == std::chrono::nanoseconds::zero()) {
+      return {FenceProgressWaitEnd::Stalled, result};
+    }
+  }
+}
+
+}  // namespace
+
 FenceProgressWait WaitForFencesWhileQueueProgresses(const VulkanApi& api, VkDevice device,
                                                     std::span<const VkFence> fences,
                                                     VulkanQueueProgress* progress,
                                                     const DeviceLostState* rootLoss,
                                                     std::chrono::steady_clock::duration stallBound,
                                                     const std::function<void()>& stepHook) {
-  using Clock = std::chrono::steady_clock;
-  constexpr std::chrono::nanoseconds kStepInterval = std::chrono::milliseconds(10);
-  const Clock::time_point waitStart = Clock::now();
-  const auto ended = [](FenceProgressWaitEnd end, VkResult result) {
-    return FenceProgressWait{end, result};
-  };
-  const Clock::duration stallBoundClock = std::max(stallBound, Clock::duration::zero());
-  VkResult result = VK_TIMEOUT;
   if (fences.empty()) {
-    return ended(FenceProgressWaitEnd::Signalled, VK_SUCCESS);
+    return {FenceProgressWaitEnd::Signalled, VK_SUCCESS};
   }
-  const auto fenceCount = static_cast<uint32_t>(fences.size());
-  if (progress == nullptr && rootLoss == nullptr) {
-    // Nothing to look at between steps, so one wait for the whole bound does the same.
-    result = api.vkWaitForFences(
-        device, fenceCount, fences.data(), VK_TRUE,
-        static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(stallBoundClock).count()));
-    return ended(result == VK_SUCCESS   ? FenceProgressWaitEnd::Signalled
-                 : result == VK_TIMEOUT ? FenceProgressWaitEnd::Stalled
-                                        : FenceProgressWaitEnd::Failed,
-                 result);
+  const Clock::duration bound = std::max(stallBound, Clock::duration::zero());
+  if (progress != nullptr || rootLoss != nullptr) {
+    return WaitInSteps(api, device, fences, progress, rootLoss, bound, stepHook);
   }
-  for (;;) {
-    const Clock::time_point progressAt = progress != nullptr ? progress->observe() : waitStart;
-    const Clock::time_point stallDeadline = progressAt + stallBoundClock;
-    const std::chrono::nanoseconds remaining = std::max(
-        std::chrono::nanoseconds::zero(),
-        std::chrono::duration_cast<std::chrono::nanoseconds>(stallDeadline - Clock::now()));
-    // A step of zero still asks once, so a fence that has signalled is never reported stalled.
-    const std::chrono::nanoseconds step = std::min(remaining, kStepInterval);
-    result = api.vkWaitForFences(device, fenceCount, fences.data(), VK_TRUE,
-                                 static_cast<uint64_t>(step.count()));
-    if (result == VK_SUCCESS) {
-      return ended(FenceProgressWaitEnd::Signalled, result);
-    }
-    if (result != VK_TIMEOUT) {
-      return ended(FenceProgressWaitEnd::Failed, result);
-    }
-    if (stepHook) {
-      stepHook();
-    }
-    if (rootLoss != nullptr && rootLoss->lost.load(std::memory_order_acquire)) {
-      return ended(FenceProgressWaitEnd::RootLost, result);
-    }
-    if (remaining <= step) {
-      // The bound ran out on this step. Look once more: progress seen during it moves the
-      // deadline, and only a queue that has still not progressed is stalled.
-      const Clock::time_point latest = progress != nullptr ? progress->observe() : waitStart;
-      if (Clock::now() - latest >= stallBoundClock) {
-        return ended(FenceProgressWaitEnd::Stalled, result);
-      }
-    }
-  }
+  // Nothing to look at between steps, so one wait for the whole bound does the same.
+  const VkResult result = WaitForAllFences(api, device, fences, bound);
+  return {result == VK_TIMEOUT ? FenceProgressWaitEnd::Stalled : EndForAnsweredWait(result),
+          result};
 }
 
 }  // namespace donner::gpu::vulkan
