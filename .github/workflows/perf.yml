@@ -143,8 +143,17 @@ jobs:
           set -euo pipefail
           node donner/editor/wasm/tests/latency-gate-summary.mjs bazel-testlogs/donner/editor/wasm/tests/browser_responsiveness_perf_test/test.log >> "$GITHUB_STEP_SUMMARY"
 
+      # Both matrix entries run this job, so artifact names carry the entry's target tag.
       - name: Upload perf test failure artifacts
         if: failure() && steps.perf.outcome == 'failure'
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
-          name: perf-test-failure-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          name: perf-test-failure-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.target_tag }}
+
+      # A passing browser responsiveness run prints more than Bazel's console limit, so its
+      # measured values are kept only in its test log; retain passing runs' logs as well.
+      - name: Upload perf test logs
+        if: ${{ !cancelled() && steps.perf.outcome == 'success' }}
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: perf-test-logs-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ matrix.target_tag }}
