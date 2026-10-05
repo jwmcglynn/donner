@@ -18,7 +18,26 @@ import {
   type ScreenshotTimeoutStage,
 } from "./canvas-color-stats";
 import { waitForAppliedPointer } from "./gesture-streams";
-import { holdCanvasCompletionForTest, installSurfaceFrameProbe } from "./surface-frame-probe";
+import {
+  holdCanvasCompletionForTest,
+  installSurfaceFrameProbe,
+  readSurfaceFrameProbe,
+} from "./surface-frame-probe";
+
+// diag: on any failure, log the surface frame probe's late canvas submissions when it is installed.
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus) return;
+  try {
+    const report = await Promise.race([
+      readSurfaceFrameProbe(page),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+    console.log(`DIAG failure ${testInfo.title} probe=${JSON.stringify(report)?.slice(0, 4000)}`);
+  } catch (error) {
+    console.log(`DIAG failure ${testInfo.title} probe-unavailable ${String(error).slice(0, 200)}`);
+  }
+});
+
 
 installBrowserStallDiagnostics(test);
 
@@ -1798,10 +1817,6 @@ test("production Geode wasm presents visible editor pixels after held canvas GPU
 
 test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox" || kBackend !== "geode", "Firefox Geode regression");
-  test.skip(
-    browserName === "firefox",
-    "Quarantined: Firefox can capture a blank editor page (#1634)",
-  );
   const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
   expect(await installSurfaceFrameProbe(page), "no worker could observe canvas submissions")
     .toBeGreaterThan(0);

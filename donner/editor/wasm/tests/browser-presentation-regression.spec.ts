@@ -45,6 +45,21 @@ import {
   waitForSubmittedCanvasGpuWork,
 } from "./surface-frame-probe";
 
+// diag: on any failure, log the surface frame probe's late canvas submissions when it is installed.
+test.afterEach(async ({ page }, testInfo) => {
+  if (testInfo.status === testInfo.expectedStatus) return;
+  try {
+    const report = await Promise.race([
+      readSurfaceFrameProbe(page),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+    ]);
+    console.log(`DIAG failure ${testInfo.title} probe=${JSON.stringify(report)?.slice(0, 4000)}`);
+  } catch (error) {
+    console.log(`DIAG failure ${testInfo.title} probe-unavailable ${String(error).slice(0, 200)}`);
+  }
+});
+
+
 installBrowserStallDiagnostics(test);
 
 declare global {
@@ -3246,10 +3261,6 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   // blue rectangle and the teal outline together, and the shape only ever moves
   // forward.
   test.skip(browserName !== "firefox", "Firefox Geode regression");
-  test.skip(
-    browserName === "firefox",
-    "Quarantined: Firefox can capture a blank editor page (#1634)",
-  );
   const failures = await openEditor(page, false, true);
   await installCaptureSentinel(page);
   const { documentClip: probeRegion, captureClip, blueRect: blueCss } = await openBasicShapes(
