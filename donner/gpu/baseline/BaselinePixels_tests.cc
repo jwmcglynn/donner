@@ -377,8 +377,14 @@ protected:
         WriteFrozenBaselineSet(*capturer_, UndeclaredOutputDir(), "unknown", "unknown", &written);
     const MissingComparisonDisposition disposition =
         DispositionForUnbaselinedAdapter(RunningUnderContinuousIntegration());
-    const std::string message = UnbaselinedAdapterMessage(
-        live.adapterName, live.adapterBackend, slug_, written.string(), captureError, disposition);
+    // A software rasterizer's baseline must come from the wgpu-native reference, which no longer
+    // renders this corpus, so its capture cannot become a baseline.
+    const bool softwareRasterizer = live.adapterBackend == "Vulkan" && live.adapterType == "CPU";
+    const std::string message =
+        softwareRasterizer ? UnfreezableAdapterMessage(live.adapterName, live.adapterBackend,
+                                                       written.string(), captureError, disposition)
+                           : UnbaselinedAdapterMessage(live.adapterName, live.adapterBackend, slug_,
+                                                       written.string(), captureError, disposition);
 
     if (disposition == MissingComparisonDisposition::FailClosed) {
       FAIL() << message;

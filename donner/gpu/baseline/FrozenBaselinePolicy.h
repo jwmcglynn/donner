@@ -80,6 +80,25 @@ std::string UnbaselinedAdapterMessage(std::string_view adapterName, std::string_
                                       MissingComparisonDisposition disposition);
 
 /**
+ * The message a run reports when its adapter is a software rasterizer with no committed baseline.
+ *
+ * A software Vulkan baseline must have been rendered by the wgpu-native reference the frozen
+ * corpus was captured with, and nothing in the tree renders that corpus through it any more, so
+ * such an adapter cannot be frozen. The native capture this run took is diagnostic only.
+ *
+ * @param adapterName Live adapter name.
+ * @param adapterBackend Live adapter backend.
+ * @param capturedPath Where this run left its diagnostic capture, empty when none was written.
+ * @param captureError Why the capture failed, empty on success.
+ * @param disposition What the run is about to do.
+ * @return A message saying the adapter cannot be frozen and, when failing, why skipping was not an
+ *   option.
+ */
+std::string UnfreezableAdapterMessage(std::string_view adapterName, std::string_view adapterBackend,
+                                      std::string_view capturedPath, std::string_view captureError,
+                                      MissingComparisonDisposition disposition);
+
+/**
  * The message a run reports when it cannot create a GPU device.
  *
  * @param gateLabel What the gate is, for a reader who sees only this line.

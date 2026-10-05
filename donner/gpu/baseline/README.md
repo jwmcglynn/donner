@@ -69,10 +69,12 @@ directory names carry none. The ARM64 software Vulkan record was rendered by the
 on that architecture, like the x86_64 ones, and an ARM64 run never matches an x86_64 record.
 
 A run that finds no directory for its adapter captures one through native Geode into
-`$TEST_UNDECLARED_OUTPUTS_DIR`, naming the directory it would be committed as. A bootstrapped
-record leaves `sourceRevision` and `sourceTreeClean` as `unknown`, because a test cannot see the
-working tree; set them to the revision and tree state the run happened at before committing. The
-counters gate requires a real revision, so an untraceable baseline cannot land.
+`$TEST_UNDECLARED_OUTPUTS_DIR`. For a hardware adapter it names the directory the capture would
+be committed as; for a software rasterizer it says the adapter cannot be frozen, because its
+baseline must come from the wgpu-native renderer, and keeps the capture for diagnosis. A
+bootstrapped record leaves `sourceRevision` and `sourceTreeClean` as `unknown`, because a test
+cannot see the working tree; set them to the revision and tree state the run happened at before
+committing. The counters gate requires a real revision, so an untraceable baseline cannot land.
 
 What the run does next depends on where it is:
 

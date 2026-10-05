@@ -132,6 +132,27 @@ TEST(FrozenBaselinePolicyTests, TheFailingMessageExplainsWhySkippingWasNotAnOpti
   EXPECT_THAT(message, HasSubstr("silently stop running"));
 }
 
+TEST(FrozenBaselinePolicyTests, ASoftwareRasterizerIsToldItCannotBeFrozen) {
+  const std::string message = UnfreezableAdapterMessage(
+      "llvmpipe (LLVM 99.0.0, 128 bits)", "Vulkan", "/outputs/llvmpipe_vulkan_aarch64", "",
+      MissingComparisonDisposition::FailClosed);
+
+  EXPECT_THAT(message, HasSubstr("llvmpipe (LLVM 99.0.0, 128 bits)"));
+  EXPECT_THAT(message, HasSubstr("cannot be frozen"));
+  EXPECT_THAT(message, HasSubstr("/outputs/llvmpipe_vulkan_aarch64"));
+  EXPECT_THAT(message, HasSubstr("donner/gpu/baseline/README.md"));
+  EXPECT_THAT(message, HasSubstr("silently stop running"));
+  EXPECT_THAT(message, Not(HasSubstr("commit it under")));
+}
+
+TEST(FrozenBaselinePolicyTests, ASoftwareRasterizerCaptureFailureIsReported) {
+  const std::string message = UnfreezableAdapterMessage(
+      "llvmpipe", "Vulkan", "", "device lost while capturing", MissingComparisonDisposition::Skip);
+
+  EXPECT_THAT(message, HasSubstr("device lost while capturing"));
+  EXPECT_THAT(message, Not(HasSubstr("silently stop running")));
+}
+
 TEST(FrozenBaselinePolicyTests, AFailedCaptureIsReportedInsteadOfAMissingPath) {
   const std::string message = UnbaselinedAdapterMessage("Example GPU", "Metal", "example_gpu_metal",
                                                         "", "device lost while capturing",

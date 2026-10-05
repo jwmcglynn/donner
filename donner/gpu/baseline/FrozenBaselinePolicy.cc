@@ -32,15 +32,34 @@ MissingComparisonDisposition DispositionForMissingAdapter(bool underContinuousIn
   return DispositionForUnbaselinedAdapter(underContinuousIntegration);
 }
 
-std::string UnbaselinedAdapterMessage(std::string_view adapterName, std::string_view adapterBackend,
-                                      std::string_view slug, std::string_view capturedPath,
-                                      std::string_view captureError,
-                                      MissingComparisonDisposition disposition) {
+namespace {
+
+/// Opens a missing-baseline message by naming the adapter.
+std::string NoBaselineFor(std::string_view adapterName, std::string_view adapterBackend) {
   std::string message = "no frozen pixel baseline for ";
   message += adapterName;
   message += " (";
   message += adapterBackend;
   message += "). ";
+  return message;
+}
+
+/// Says why an automated lane fails instead of skipping, when it does.
+void AppendDisposition(std::string& message, MissingComparisonDisposition disposition) {
+  if (disposition == MissingComparisonDisposition::FailClosed) {
+    message +=
+        " Failing rather than skipping: on an automated lane a skip reports success while "
+        "comparing nothing, so the pixel gate would silently stop running.";
+  }
+}
+
+}  // namespace
+
+std::string UnbaselinedAdapterMessage(std::string_view adapterName, std::string_view adapterBackend,
+                                      std::string_view slug, std::string_view capturedPath,
+                                      std::string_view captureError,
+                                      MissingComparisonDisposition disposition) {
+  std::string message = NoBaselineFor(adapterName, adapterBackend);
   if (captureError.empty()) {
     message += "This run captured one at ";
     message += capturedPath;
@@ -51,11 +70,27 @@ std::string UnbaselinedAdapterMessage(std::string_view adapterName, std::string_
     message += "Capturing one here also failed: ";
     message += captureError;
   }
-  if (disposition == MissingComparisonDisposition::FailClosed) {
-    message +=
-        " Failing rather than skipping: on an automated lane a skip reports success while "
-        "comparing nothing, so the pixel gate would silently stop running.";
+  AppendDisposition(message, disposition);
+  return message;
+}
+
+std::string UnfreezableAdapterMessage(std::string_view adapterName, std::string_view adapterBackend,
+                                      std::string_view capturedPath, std::string_view captureError,
+                                      MissingComparisonDisposition disposition) {
+  std::string message = NoBaselineFor(adapterName, adapterBackend);
+  message +=
+      "A software rasterizer's baseline must come from the wgpu-native reference renderer, which "
+      "no longer renders this corpus, so this rasterizer cannot be frozen: run the check with a "
+      "software rasterizer that has a committed baseline (see donner/gpu/baseline/README.md). ";
+  if (captureError.empty()) {
+    message += "This run's native capture, for diagnosis only, is at ";
+    message += capturedPath;
+    message += ".";
+  } else {
+    message += "Capturing a diagnostic here also failed: ";
+    message += captureError;
   }
+  AppendDisposition(message, disposition);
   return message;
 }
 
