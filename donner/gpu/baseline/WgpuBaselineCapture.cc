@@ -4,7 +4,6 @@
 #include <string_view>
 #include <utility>
 
-#include "donner/base/Utils.h"
 #include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
@@ -13,13 +12,10 @@
 #include "donner/svg/renderer/geode/GeodeNativeRoot.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/tests/GeodeTestContexts.h"
-#if defined(DONNER_GEODE_WGPU_REFERENCE)
-#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
-#endif
-#if defined(__APPLE__) && !defined(DONNER_GEODE_WGPU_REFERENCE)
+#if defined(__APPLE__)
 #include "donner/gpu/metal/MetalDevice.h"
 #endif
-#if defined(__linux__) && !defined(DONNER_GEODE_WGPU_REFERENCE)
+#if defined(__linux__)
 #include "donner/gpu/vulkan/VulkanDevice.h"
 #endif
 
@@ -40,37 +36,7 @@ CaptureEnvironment DescribeAdapter(const geode::GeodeDevice& device) {
   CaptureEnvironment environment;
   environment.adapterType = "Unknown";
   environment.hostArchitecture = HostArchitecture();
-#if defined(DONNER_GEODE_WGPU_REFERENCE)
-  // Create selects the wgpu reference, the only external runtime device source in this binary,
-  // so the context's runtime device is a reference device.
-  UTILS_RELEASE_ASSERT(device.physicalDeviceOwner()->root().capabilities().backend ==
-                       geode::GpuBackendKind::External);
-  const wgpu::Adapter& adapter =
-      static_cast<const geode::GeodeWgpuAdapterDevice&>(device.runtimeDevice()).root().adapter();
-  WGPUAdapterInfo info = {};
-  if (!adapter || wgpuAdapterGetInfo(adapter, &info) != WGPUStatus_Success) {
-    return environment;
-  }
-  const auto copy = [](WGPUStringView text) {
-    return std::string(text.data == nullptr ? "" : text.data,
-                       text.data == nullptr ? 0 : text.length);
-  };
-  environment.adapterName = copy(info.vendor);
-  if (!environment.adapterName.empty()) {
-    environment.adapterName += ' ';
-  }
-  environment.adapterName += copy(info.device);
-  if (info.backendType == WGPUBackendType_Vulkan) {
-    environment.adapterBackend = "Vulkan";
-  }
-  switch (info.adapterType) {
-    case WGPUAdapterType_DiscreteGPU: environment.adapterType = "DiscreteGPU"; break;
-    case WGPUAdapterType_IntegratedGPU: environment.adapterType = "IntegratedGPU"; break;
-    case WGPUAdapterType_CPU: environment.adapterType = "CPU"; break;
-    default: break;
-  }
-  wgpuAdapterInfoFreeMembers(info);
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
   environment.adapterBackend = "Metal";
   environment.adapterName =
       static_cast<const gpu::metal::MetalDevice&>(device.runtimeDevice()).adapterName();
@@ -97,16 +63,10 @@ void RecordScene(geode::GeodeDevice& device, const gpu::Texture& target, const C
   encoder.finish();
 }
 
-/// Identifies the renderer the frozen bytes came from. The freeze is only an oracle for a
-/// replacement backend if it is unambiguous which implementation produced it.
-#if defined(DONNER_GEODE_WGPU_REFERENCE)
-constexpr const char* kRendererPath = "wgpu-native Geode production path (GeodeDevice+GeoEncoder)";
-constexpr const char* kCaptureTarget =
-    "//donner/gpu/baseline:capture_baselines_wgpu_reference_linux";
-#else
+/// Identifies the renderer a capture came from, so a native capture is never mistaken for one of
+/// the committed wgpu-native records it is compared against.
 constexpr const char* kRendererPath = "native Geode production path (GeodeDevice+GeoEncoder)";
 constexpr const char* kCaptureTarget = "//donner/gpu/baseline:capture_baselines";
-#endif
 constexpr const char* kRendererBackend = "geode";
 constexpr const char* kTargetFormat = "RGBA8Unorm premultiplied, transparent background";
 
@@ -167,10 +127,6 @@ WgpuBaselineCapturer::WgpuBaselineCapturer(std::unique_ptr<geode::GeodeDevice> d
 WgpuBaselineCapturer::~WgpuBaselineCapturer() = default;
 
 std::unique_ptr<WgpuBaselineCapturer> WgpuBaselineCapturer::Create() {
-#if defined(DONNER_GEODE_WGPU_REFERENCE)
-  std::shared_ptr<geode::GeodeGpuRoot> root =
-      geode::SelectWgpuReference("FrozenBaselineCapture").root;
-#else
   geode::GpuRootSelection selection;
   selection.label = "FrozenBaselineCapture";
 #if defined(__APPLE__)
@@ -181,7 +137,6 @@ std::unique_ptr<WgpuBaselineCapturer> WgpuBaselineCapturer::Create() {
   return nullptr;
 #endif
   std::shared_ptr<geode::GeodeGpuRoot> root = geode::SelectGpuRoot(selection);
-#endif
   if (root == nullptr) {
     return nullptr;
   }

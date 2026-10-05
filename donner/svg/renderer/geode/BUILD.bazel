@@ -2,8 +2,8 @@
 
 This backend is gated behind a build flag so default builds do not pull in the
 GPU runtime at all. Geode is the editor's default renderer. Native macOS and
-Linux use Donner's Metal and Vulkan devices. Explicit Linux test-only comparisons
-and frozen-corpus capture retain the pinned wgpu-native reference implementation.
+Linux use Donner's Metal and Vulkan devices. Only the explicit Linux test-only
+resvg comparison retains the pinned wgpu-native reference implementation.
 
 To enable:
 
@@ -514,10 +514,9 @@ donner_cc_library(
     }),
 )
 
-# The wgpu-native reference the Linux resvg comparison and frozen-corpus reference capture render
-# the production Geode context through. It supplies runtime devices to an adopted root and never
-# recompiles the production sources. This rule is testonly and cannot enter an ordinary product's
-# dependency graph.
+# The wgpu-native reference the Linux resvg comparison renders the production Geode context
+# through. It supplies runtime devices to an adopted root and never recompiles the production
+# sources. This rule is testonly and cannot enter an ordinary product's dependency graph.
 donner_cc_library(
     name = "geode_device_wgpu_reference_linux",
     testonly = 1,
@@ -528,10 +527,7 @@ donner_cc_library(
     ],
     defines = ["DONNER_GEODE_WGPU_REFERENCE=1"],
     target_compatible_with = _GEODE_ONLY + ["@platforms//os:linux"],
-    visibility = [
-        "//donner/gpu/baseline:__pkg__",
-        "//donner/svg/renderer/tests:__pkg__",
-    ],
+    visibility = ["//donner/svg/renderer/tests:__pkg__"],
     deps = [
         ":geode_device",
         ":geode_runtime_device_source",

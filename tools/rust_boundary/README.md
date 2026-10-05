@@ -52,9 +52,15 @@ scopes and the verifier enforces the boundary of each:
   release assets and reviewed SHA-256 pins for the sole resvg comparison lane.
   The verifier checks the fetch rule, root module names, Linux-only overlay,
   test-only wrapper alias chain, and resvg test consumer as one narrow declared
-  boundary. The full tracked-tree scan also fails if any of these five files
-  disappears. The Linux oracle's configured dependency audit proves the
-  selected test root actually reaches that archive.
+  boundary. It also pins the complete set of first-party rules that may name a
+  target reaching the archive: the two Geode reference leaves, the resvg
+  comparison's libraries, tests and audit, and the CI `test_suite` that selects
+  them. Any other rule, in those files or elsewhere, that names one outside
+  dependency-audit metadata fails, as does a pinned rule that disappears or
+  changes kind, so only the Linux resvg comparison can reach wgpu-native. The
+  full tracked-tree scan also fails if any of these boundary files disappears.
+  The Linux oracle's configured dependency audit proves the selected test root
+  actually reaches that archive.
 
 The visibility check reads the raw file and fails closed on anything it cannot
 parse as a literal list of quoted labels, a comment included: a comment

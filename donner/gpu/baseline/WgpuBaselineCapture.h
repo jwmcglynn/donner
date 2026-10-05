@@ -1,10 +1,8 @@
 #pragma once
 /// @file
-/// Renders corpus scenes through the selected Geode runtime as a black box.
-///
-/// The scene encoder is compiled over two separate GPU runtimes: native Geode for the check and
-/// its diagnostic capture, and Linux test-only wgpu-native for an independent reference capture.
-/// Both paths use the same corpus and record which runtime produced their pixels.
+/// Renders corpus scenes through the native Geode runtime as a black box, for the frozen-pixel
+/// check and its diagnostic capture. The committed records it is compared against were rendered by
+/// the earlier wgpu-native Geode path; every capture records which runtime produced its pixels.
 
 #include <cstdint>
 #include <filesystem>

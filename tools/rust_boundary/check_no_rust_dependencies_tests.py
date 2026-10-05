@@ -767,14 +767,31 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 '    }),\n)\n'
             ),
             "donner/svg/renderer/tests/BUILD.bazel": (
+                'donner_cc_library(\n    name = "renderer_test_backend_wgpu_reference_linux",\n'
+                '    testonly = 1,\n'
+                '    visibility = ["//donner/svg/renderer/tests:__pkg__"],\n'
+                '    deps = ["//donner/svg/renderer/geode:geode_device_wgpu_reference_linux"],\n)\n'
+                'donner_cc_library(\n'
+                '    name = "image_comparison_test_fixture_wgpu_reference_linux",\n'
+                '    testonly = 1,\n'
+                '    visibility = ["//donner/svg/renderer/tests:__pkg__"],\n'
+                '    deps = [":renderer_test_backend_wgpu_reference_linux"],\n)\n'
                 'donner_cc_test(\n    name = "resvg_test_suite_wgpu_reference_linux_impl",\n'
                 '    target_compatible_with = ["@platforms//os:linux"],\n'
-                '    deps = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
+                '    deps = [":image_comparison_test_fixture_wgpu_reference_linux", '
+                '"//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
+                'donner_multi_transitioned_test(\n'
+                '    name = "resvg_test_suite_wgpu_reference_linux",\n'
+                '    dep = ":resvg_test_suite_wgpu_reference_linux_impl",\n)\n'
                 'configured_dependency_audit_test(\n'
                 '    name = "resvg_wgpu_reference_dependency_audit_test",\n'
                 '    required = ["//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n'
                 '    target = ":resvg_test_suite_wgpu_reference_linux",\n'
                 ')\n'
+            ),
+            "tools/ci/BUILD.bazel": (
+                'test_suite(\n    name = "linux_wgpu_resvg_reference",\n'
+                '    tests = ["//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"],\n)\n'
             ),
             "donner/svg/renderer/geode/BUILD.bazel": (
                 'donner_cc_library(\n    name = "geode_wgpu_util",\n'
@@ -786,8 +803,7 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 '    testonly = 1,\n'
                 '    srcs = ["GeodeWgpuAdapterDevice.cc"],\n'
                 '    target_compatible_with = ["@platforms//os:linux"],\n'
-                '    visibility = ["//donner/gpu/baseline:__pkg__", '
-                '"//donner/svg/renderer/tests:__pkg__"],\n'
+                '    visibility = ["//donner/svg/renderer/tests:__pkg__"],\n'
                 '    deps = [":geode_device", ":geode_runtime_device_source", ":geode_wgpu_util", '
                 '"//donner/base", "//donner/gpu", '
                 '"//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n)\n'
@@ -995,11 +1011,105 @@ class LinuxGpuOracleArchiveTest(unittest.TestCase):
                 self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
 
     def test_geode_reference_visibility_cannot_expand_beyond_reviewed_packages(self):
-        files = self.allowed_files()
         path = "donner/svg/renderer/geode/BUILD.bazel"
-        files[path] = files[path].replace(
-            '"//donner/gpu/baseline:__pkg__"',
-            '"//donner:__subpackages__"',
+        for widened in ('"//donner:__subpackages__"',
+                        '"//donner/gpu/baseline:__pkg__", "//donner/svg/renderer/tests:__pkg__"'):
+            with self.subTest(visibility=widened):
+                files = self.allowed_files()
+                files[path] = files[path].replace(
+                    '"//donner/svg/renderer/tests:__pkg__"', widened, 1,
+                )
+                self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
+
+    def test_a_consumer_outside_the_pinned_reference_chain_is_rejected(self):
+        additions = {
+            # The retired frozen-baseline re-capture library, rejected by name.
+            "donner/gpu/baseline/BUILD.bazel": (
+                'donner_cc_library(\n    name = "wgpu_reference_baseline_capture_linux",\n'
+                '    testonly = 1,\n'
+                '    deps = ["//donner/svg/renderer/geode:geode_device_wgpu_reference_linux"],\n)\n'
+            ),
+            "donner/svg/renderer/tests/BUILD.bazel": (
+                'donner_cc_test(\n    name = "another_reference_test",\n'
+                '    deps = [":renderer_test_backend_wgpu_reference_linux"],\n)\n'
+            ),
+            "donner/svg/renderer/geode/BUILD.bazel": (
+                'donner_cc_test(\n    name = "geode_reference_tests",\n'
+                '    deps = [":geode_device_wgpu_reference_linux"],\n)\n'
+            ),
+            "donner/editor/BUILD.bazel": (
+                '_REFERENCE = ["//donner/svg/renderer/tests:'
+                'image_comparison_test_fixture_wgpu_reference_linux"]\n'
+            ),
+            "tools/ci/BUILD.bazel": (
+                'sh_test(\n    name = "reference_wrapper",\n'
+                '    data = ["//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux"],\n)\n'
+            ),
+            "donner/svg/BUILD.bazel": (
+                'configured_dependency_audit_test(\n    name = "reference_audit",\n'
+                '    target = "//donner/svg/renderer/tests:resvg_test_suite_wgpu_reference_linux",\n)\n'
+            ),
+        }
+        for path, addition in additions.items():
+            with self.subTest(path=path):
+                files = self.allowed_files()
+                files[path] = files.get(path, "") + addition
+                findings = verifier.check_tracked_tree(files, SCOPES)
+                self.assertIn("rust-built-archive", categories(findings))
+                self.assertIn(path, [finding.path for finding in findings])
+
+    def test_audit_metadata_may_name_the_reference_chain(self):
+        files = self.allowed_files()
+        files["donner/editor/BUILD.bazel"] = (
+            'configured_dependency_audit_test(\n    name = "editor_audit",\n'
+            '    forbidden = ["//donner/svg/renderer/geode:geode_device_wgpu_reference_linux",\n'
+            '                 "//third_party/webgpu-cpp:wgpu_native_reference_runtime"],\n'
+            '    target = ":editor",\n)\n'
+        )
+        self.assertEqual(categories(verifier.check_tracked_tree(files, SCOPES)), [])
+
+    def test_each_pinned_reference_chain_rule_is_required(self):
+        removals = {
+            "donner/svg/renderer/tests/BUILD.bazel": (
+                'donner_multi_transitioned_test(\n'
+                '    name = "resvg_test_suite_wgpu_reference_linux",\n'
+                '    dep = ":resvg_test_suite_wgpu_reference_linux_impl",\n)\n'
+            ),
+            "tools/ci/BUILD.bazel": None,
+        }
+        for path, removed in removals.items():
+            with self.subTest(path=path):
+                files = self.allowed_files()
+                if removed is None:
+                    del files[path]
+                else:
+                    files[path] = files[path].replace(removed, "")
+                findings = verifier.check_tracked_tree(files, SCOPES)
+                self.assertIn("rust-built-archive", categories(findings))
+                self.assertIn(path, [finding.path for finding in findings])
+
+    def test_reference_chain_rules_keep_their_kind_and_package_scope(self):
+        edits = (
+            ('donner_multi_transitioned_test(\n    name = "resvg_test_suite_wgpu_reference_linux"',
+             'cc_binary(\n    name = "resvg_test_suite_wgpu_reference_linux"'),
+            ('donner_cc_library(\n    name = "renderer_test_backend_wgpu_reference_linux",\n'
+             '    testonly = 1,\n',
+             'donner_cc_library(\n    name = "renderer_test_backend_wgpu_reference_linux",\n'),
+            ('visibility = ["//donner/svg/renderer/tests:__pkg__"],\n'
+             '    deps = [":renderer_test_backend_wgpu_reference_linux"]',
+             'visibility = ["//donner/editor:__pkg__"],\n'
+             '    deps = [":renderer_test_backend_wgpu_reference_linux"]'),
+        )
+        path = "donner/svg/renderer/tests/BUILD.bazel"
+        for old, new in edits:
+            with self.subTest(edit=new):
+                files = self.allowed_files()
+                self.assertIn(old, files[path])
+                files[path] = files[path].replace(old, new, 1)
+                self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
+        files = self.allowed_files()
+        files["tools/ci/BUILD.bazel"] = files["tools/ci/BUILD.bazel"].replace(
+            "test_suite(", "genrule(", 1,
         )
         self.assertIn("rust-built-archive", categories(verifier.check(files, SCOPES)))
 

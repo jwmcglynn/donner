@@ -144,9 +144,6 @@ public:
    */
   explicit GeodeWgpuAdapterDevice(std::shared_ptr<const WgpuReferenceRoot> root);
 
-  /// The wgpu objects this device renders through. Borrowed; the device retains them.
-  const WgpuReferenceRoot& root() const UTILS_LIFETIME_BOUND { return *root_; }
-
   /// Destructor; waits for in-flight submissions (so deferred destructions drain), then releases
   /// every wgpu object the adapter still owns.
   ~GeodeWgpuAdapterDevice() override;

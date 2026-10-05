@@ -27,7 +27,8 @@ Categories:
 - reference-into-allowlist: a build-graph file compiling or linking the inert
   snapshot. Naming its golden images as test data is not a finding.
 - rust-built-archive: a Rust-built GPU archive or reference outside the sole
-  checksum-pinned Linux test-only resvg comparison boundary.
+  checksum-pinned Linux test-only resvg comparison boundary, or a rule outside
+  that comparison's pinned chain naming a target that reaches the archive.
 
 `--blocking` takes the categories that must fail the run. `--blocking default`
 enforces every category, including unexpected Rust-built archives.
@@ -754,9 +755,7 @@ def _archive_consumer_findings(path: str, text: str) -> list[Finding]:
 GEODE_ORACLE_RUNTIME = "//third_party/webgpu-cpp:wgpu_native_reference_runtime"
 GEODE_ORACLE_VISIBILITY = {
     "geode_wgpu_util": ("//visibility:private",),
-    "geode_device_wgpu_reference_linux": (
-        "//donner/gpu/baseline:__pkg__", "//donner/svg/renderer/tests:__pkg__",
-    ),
+    "geode_device_wgpu_reference_linux": ("//donner/svg/renderer/tests:__pkg__",),
 }
 # The reference supplies runtime devices to the production Geode context: it compiles only its own
 # source and links the production device, never a second copy of the production sources.
@@ -845,6 +844,118 @@ def _archive_geode_consumer_findings(path: str, text: str) -> list[Finding]:
     return []
 
 
+# The complete first-party graph that may reach the wgpu-native archives. Every rule that names one
+# of these targets outside dependency-audit metadata must be one of the rules pinned for its build
+# file, with the pinned kind, and every pinned rule must exist. The checks above pin each hop's
+# shape; this pins the consumer set, so "only the Linux resvg reference reaches wgpu-native" holds
+# for the tracked tree, and a new consumer, in these files or any other, is a finding. The CI
+# test_suite selects the comparison's tests without depending on them.
+REFERENCE_CHAIN_TARGETS = (
+    "wgpu_native_reference_runtime",
+    "geode_wgpu_util",
+    "geode_device_wgpu_reference_linux",
+    "renderer_test_backend_wgpu_reference_linux",
+    "image_comparison_test_fixture_wgpu_reference_linux",
+    "resvg_test_suite_wgpu_reference_linux",
+)
+REFERENCE_CHAIN_SELECTOR = "tools/ci/BUILD.bazel"
+REFERENCE_CHAIN_RULES = {
+    ARCHIVE_RUNTIME: {"wgpu_native_reference_runtime": "cc_library"},
+    ARCHIVE_GEODE_CONSUMER: {
+        "geode_wgpu_util": "donner_cc_library",
+        "geode_device_wgpu_reference_linux": "donner_cc_library",
+    },
+    ARCHIVE_ORACLE_CONSUMER: {
+        "renderer_test_backend_wgpu_reference_linux": "donner_cc_library",
+        "image_comparison_test_fixture_wgpu_reference_linux": "donner_cc_library",
+        "resvg_test_suite_wgpu_reference_linux_impl": "donner_cc_test",
+        "resvg_test_suite_wgpu_reference_linux": "donner_multi_transitioned_test",
+        "resvg_wgpu_reference_dependency_audit_test": "configured_dependency_audit_test",
+    },
+    REFERENCE_CHAIN_SELECTOR: {"linux_wgpu_resvg_reference": "test_suite"},
+}
+# The comparison's own libraries stay test-only and private to its package.
+REFERENCE_CHAIN_PACKAGE_LIBRARIES = (
+    "renderer_test_backend_wgpu_reference_linux",
+    "image_comparison_test_fixture_wgpu_reference_linux",
+)
+REFERENCE_CHAIN_PACKAGE_VISIBILITY = ("//donner/svg/renderer/tests:__pkg__",)
+
+
+def _chain_literals(statement: ast.stmt, spans: set[SourceSpan]) -> list[str]:
+    """String literals in `statement` naming a chain target, outside audit metadata."""
+    return sorted({
+        token
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and
+        _literal_span(node) not in spans
+        for token in REFERENCE_CHAIN_TARGETS
+        if token in node.value
+    })
+
+
+def _chain_rule_finding(path: str, statement: ast.stmt, tokens: list[str]) -> tuple[str, ast.Call] | Finding:
+    """The pinned rule `statement` declares, or the finding for an unpinned chain reference."""
+    named = ", ".join(tokens)
+    call = statement.value if isinstance(statement, ast.Expr) else None
+    if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+        return Finding("rust-built-archive", path,
+                       f"names the wgpu-native reference chain ({named}) outside a build rule")
+    name_node = _ast_keyword(call, "name")
+    name = name_node.value if isinstance(name_node, ast.Constant) else ""
+    if REFERENCE_CHAIN_RULES.get(path, {}).get(name) != call.func.id:
+        return Finding(
+            "rust-built-archive", path,
+            f"{call.func.id} {name or '<unnamed>'} names the wgpu-native reference chain "
+            f"({named}); only the pinned Linux resvg comparison may reach wgpu-native",
+        )
+    return name, call
+
+
+def _chain_library_findings(path: str, name: str, call: ast.Call) -> list[Finding]:
+    if path != ARCHIVE_ORACLE_CONSUMER or name not in REFERENCE_CHAIN_PACKAGE_LIBRARIES:
+        return []
+    testonly = _ast_keyword(call, "testonly")
+    if not isinstance(testonly, ast.Constant) or testonly.value not in (True, 1) or \
+       _ast_string_list(_ast_keyword(call, "visibility")) != REFERENCE_CHAIN_PACKAGE_VISIBILITY:
+        return _archive_finding(path, f"{name} must be test-only and visible only to its package")
+    return []
+
+
+def reference_chain_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
+    """Pins the exact set of first-party rules that may reach the wgpu-native archives."""
+    pinned = REFERENCE_CHAIN_RULES.get(path, {})
+    if not pinned and not any(token in text for token in REFERENCE_CHAIN_TARGETS):
+        return []
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return _archive_finding(path, "cannot read a build file that names the wgpu-native "
+                                "reference chain")
+    spans = audit_metadata_spans(text)
+    findings: list[Finding] = []
+    seen: set[str] = set()
+    for index, statement in enumerate(tree.body):
+        if index == 0 and isinstance(statement, ast.Expr) and \
+           isinstance(statement.value, ast.Constant):
+            continue  # BUILD module docstring, not an executable reference.
+        tokens = _chain_literals(statement, spans)
+        if not tokens:
+            continue
+        result = _chain_rule_finding(path, statement, tokens)
+        if isinstance(result, Finding):
+            findings.append(result)
+            continue
+        name, call = result
+        seen.add(name)
+        findings.extend(_chain_library_findings(path, name, call))
+    findings.extend(
+        Finding("rust-built-archive", path, f"pinned reference chain rule {name} is missing")
+        for name in sorted(set(pinned) - seen)
+    )
+    return findings
+
+
 def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
     """Allow only the checksum-pinned Linux test oracle's complete build boundary."""
     # These five files are the complete allowed boundary. Inspect them even if
@@ -900,6 +1011,7 @@ BUILD_GRAPH_RULES = (
     rust_build_edge_findings,
     fixture_containment_findings,
     rust_built_archive_findings,
+    reference_chain_findings,
     inert_reference_findings,
 )
 
@@ -923,7 +1035,7 @@ def check(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
 def check_tracked_tree(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
     """Apply the per-file rules and require every test-oracle boundary file to exist."""
     findings = check(files, scopes)
-    for path in REQUIRED_ARCHIVE_SITES:
+    for path in sorted(set(REQUIRED_ARCHIVE_SITES) | set(REFERENCE_CHAIN_RULES)):
         if path not in files:
             findings.extend(_archive_finding(path, "required Linux test-oracle boundary file is missing"))
     return findings

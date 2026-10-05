@@ -59,21 +59,17 @@ Frozen pixels are only comparable against the adapter that produced them. Two GP
 same shaders can round a covered edge texel differently, and a difference measured across
 adapters cannot be attributed to a regression. Baselines are therefore filed one directory per
 adapter, named from the adapter and backend the capture ran on, and the pixel check resolves its
-goldens from the live adapter. Adding coverage for another adapter means capturing a baseline set
-on it, not relaxing the comparison.
+goldens from the live adapter. Coverage for another adapter is never obtained by relaxing the
+comparison; [Maintaining the frozen records](#maintaining-the-frozen-records) says when one may be
+added at all.
 
-New capture provenance records `hostArchitecture` (`x86_64` or `aarch64`) and the Vulkan physical
-device type. ARM64 software Vulkan uses an `_aarch64` directory suffix; existing x86_64 and Metal
-directory names remain unchanged. A missing ARM64 record fails closed in CI. Its native capture
-artifact diagnoses the run, but is not by itself an independent pre-cutover expectation: the
-committed corpus was captured through wgpu-native. Before freezing ARM64 parity, run the retained
-Linux test-only wgpu-native implementation on that same ARM64 adapter and corpus, record that
-renderer path and source revision, then compare native ARM64 output to the new reference capture.
+Capture provenance with schema 2 records `hostArchitecture` (`x86_64` or `aarch64`) and the Vulkan
+physical device type. ARM64 software Vulkan uses an `_aarch64` directory suffix; x86_64 and Metal
+directory names carry none. The ARM64 software Vulkan record was rendered by the wgpu-native path
+on that architecture, like the x86_64 ones, and an ARM64 run never matches an x86_64 record.
 
 A run that finds no directory for its adapter captures one through native Geode into
-`$TEST_UNDECLARED_OUTPUTS_DIR`,
-naming the directory to commit. That is how an environment nobody can run the capture command on
-interactively gets frozen: run the check there, collect the artifact, commit it. A bootstrapped
+`$TEST_UNDECLARED_OUTPUTS_DIR`, naming the directory it would be committed as. A bootstrapped
 record leaves `sourceRevision` and `sourceTreeClean` as `unknown`, because a test cannot see the
 working tree; set them to the revision and tree state the run happened at before committing. The
 counters gate requires a real revision, so an untraceable baseline cannot land.
@@ -101,46 +97,37 @@ ones with a device.
 
 A mismatch against an existing baseline also emits a complete current adapter capture under
 `current_capture/` in the test outputs. Its source revision and tree state are `unknown` because
-the test cannot inspect Git. Bind those fields to the actual test candidate before a deliberate
-refresh; the extra capture does not turn the failed comparison into a pass.
+the test cannot inspect Git. It is diagnostic evidence: it does not turn the failed comparison into
+a pass, and it never replaces the committed record.
 
 The PNG bytes are versioned in git, which is also their integrity record; the provenance file
 records what produced them, not a second hash of them.
 
-## ARM64 reference capture
+## Maintaining the frozen records
 
-The existing llvmpipe PNGs are an x86_64 wgpu-native reference. A native ARM64 capture from a
-failed pixel check is diagnostic evidence, not a new frozen oracle. On the Linux ARM64 runner,
-capture the same corpus through the retained test-only wgpu-native device into a separate output
-directory:
+The pixel records are closed. Every committed adapter directory was rendered by the wgpu-native
+Geode path, and nothing in the tree renders that path any more: the only remaining wgpu-native
+consumer is the Linux resvg comparison, which renders resvg scenes rather than this corpus. The
+manual wgpu-native re-capture tool that produced the ARM64 software Vulkan record was retired once
+that record was committed. From now on:
 
-```sh
-WGPU_BACKEND=vulkan bazel run //donner/gpu/baseline:capture_baselines_wgpu_reference_linux -- \
-  /tmp/donner-arm64-wgpu-reference "$(git rev-parse HEAD)" \
-  "$(test -z "$(git status --porcelain --untracked-files=all)" && echo clean || echo dirty)"
-```
-
-The binary refuses a non-Vulkan adapter. Inspect its `capture_provenance.txt` for
-`rendererPath: wgpu-native Geode production path (GeodeDevice+GeoEncoder)`, `adapterType: CPU`,
-and `hostArchitecture: aarch64`, then compare its PNGs with the native diagnostic capture. The
-frozen pixel check will use the ARM64 reference only after that reviewed capture is committed;
-it continues to fail closed until then.
-
-To preserve a capture as a Bazel test artifact, use the manual test wrapper on the ARM64 Linux
-lane. It writes the same capture beneath the test's undeclared-output artifact and takes the clean
-source revision as its only test argument. Set `VK_ICD_FILENAMES` to an ICD file readable
-on the Linux execution worker before running the command:
-
-```sh
-test -z "$(git status --porcelain --untracked-files=all)" &&
-  bazel test //donner/gpu/baseline:capture_baselines_wgpu_reference_linux_test \
-    --test_env=VK_ICD_FILENAMES="$VK_ICD_FILENAMES" \
-    --test_arg="$(git rev-parse HEAD)"
-```
-
-The clean-tree check is required because the wrapper records `sourceTreeClean: clean`;
-a dirty checkout would falsely identify the captured source. If the worker uses driver libraries
-outside default loader paths, pass its required loader environment through `--test_env` too.
+- Committed PNGs and their `capture_provenance.txt` are never regenerated or hand-edited. A
+  provenance header can name a capture target that no longer exists; it records what produced the
+  bytes, not a command to run.
+- Scenes that capture pixels are fixed with them. Adding, removing, or changing one would leave
+  every committed environment without a matching record and no way to render one. Counter-only
+  scenes (`capturesPixels = false`) and structural counters still follow the counters gate.
+- A hardware adapter (Metal, or a hardware Vulkan device) without a record may be frozen from the
+  native capture its first failing automated run emits, with the source fields bound as above. That
+  record carries the `native Geode production path` renderer and guards the native renderer
+  against regressions on that adapter; it is not an independent oracle, and its review should say
+  so.
+- A software Vulkan adapter needs a wgpu-native record: `baseline_counters_tests` and the pixel
+  check both refuse a native one. No software adapter can be added, so a lane whose software
+  rasterizer changes version or architecture fails closed and attaches its native capture for
+  diagnosis. Extending software Vulkan coverage needs a new decision about what counts as the
+  reference, not a capture step.
+- A mismatch against an existing record is a regression until proven otherwise.
 
 ## Regenerating
 
@@ -151,18 +138,18 @@ bazel run //donner/gpu/baseline:dump_baseline_counters \
   > donner/gpu/baseline/baselines/structural_counters.json
 ```
 
-Native diagnostic pixels and provenance, on a machine with a working GPU adapter, from a clean
-tree so the recorded revision is meaningful:
+Native pixels and provenance, on a machine with a working GPU adapter, from a clean tree so the
+recorded revision is meaningful. Capture outside the tree, so a committed directory can never be
+overwritten:
 
 ```sh
 bazel run //donner/gpu/baseline:capture_baselines -- \
-  "$(bazel info workspace)/donner/gpu/baseline/baselines" \
+  "$HOME/donner-baseline-capture" \
   "$(git rev-parse HEAD)" \
   "$(test -z "$(git status --porcelain --untracked-files=all)" && echo clean || echo dirty)"
 ```
 
-This native command cannot replace the wgpu-native software Vulkan oracle. The committed
-pre-cutover PNGs and their wgpu-native provenance have not been regenerated by the native
-migration. Regenerate a frozen reference only deliberately: an intentional change to the corpus,
-or an intentional change to the expected renderer output. A regeneration whose diff nobody can
-explain is a regression that was overwritten.
+Use the result to diagnose an adapter, or copy its one new directory into `baselines/` to freeze a
+hardware adapter that has no record, as described under
+[Maintaining the frozen records](#maintaining-the-frozen-records). A regeneration whose diff nobody
+can explain is a regression that was overwritten.
