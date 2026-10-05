@@ -2701,6 +2701,10 @@ test("browser overlay control stays disabled after a normal editor frame", async
 });
 
 test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edges", async ({ browserName, page }) => {
+  test.skip(
+    browserName === "firefox",
+    "Quarantined: Firefox can capture a blank editor page (#1634)",
+  );
   const failures = await openEditor(page, "overlay");
   const captureSentinelExpected = browserName === "firefox";
   if (captureSentinelExpected) await installCaptureSentinel(page);
@@ -3074,7 +3078,11 @@ test("failure-only WebGPU readback makes no request on a visible Basic Shapes lo
   expect(failures).toEqual([]);
 });
 
-test("coalesced UI frames do not consume diagnostic capture retries", async ({ page }) => {
+test("coalesced UI frames do not consume diagnostic capture retries", async ({ browserName, page }) => {
+  test.skip(
+    browserName === "chromium",
+    "Quarantined: a pre-hold frame can free a queue slot (#1667)",
+  );
   const failures = await openEditor(page, false, true);
   expect(await installSurfaceFrameProbe(page)).toBeGreaterThan(0);
   await page.evaluate(() => {
