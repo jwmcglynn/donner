@@ -5,6 +5,21 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 # the frozen per-adapter baseline the production renderer wrote, and the
 # color-matrix compute test.
 
+# Metal API and shader validation for the device tests below, so a validation issue aborts the
+# test loudly instead of passing unnoticed.
+_METAL_API_VALIDATION_ENV = {
+    "MTL_DEBUG_LAYER": "1",
+    "MTL_SHADER_VALIDATION": "1",
+    "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
+    "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
+    "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
+    "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
+    "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
+    "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
+    "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
+    "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
+}
+
 # The missing-device fixture preamble every Metal device test below needs: fail closed on an
 # automated lane, skip on a developer machine. A library rather than a third hand copy once the
 # sub-rectangle-copy test needed the same rule as solid-fill and color-matrix.
@@ -54,18 +69,7 @@ donner_cc_test(
         "MetalVertexBindings_tests.cc",
     ],
     data = ["//donner/gpu/baseline:baselines"],
-    env = {
-        "MTL_DEBUG_LAYER": "1",
-        "MTL_SHADER_VALIDATION": "1",
-        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
-        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
-        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
-        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
-        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
-        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
-    },
+    env = _METAL_API_VALIDATION_ENV,
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this test keeps skipping into a green report.
     # MetalDeviceGate_tests.cc checks the macro's own logic without a device; it cannot see this
@@ -105,18 +109,7 @@ donner_cc_test(
 donner_cc_test(
     name = "metal_color_matrix_tests",
     srcs = ["MetalColorMatrix_tests.cc"],
-    env = {
-        "MTL_DEBUG_LAYER": "1",
-        "MTL_SHADER_VALIDATION": "1",
-        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
-        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
-        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
-        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
-        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
-        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
-    },
+    env = _METAL_API_VALIDATION_ENV,
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this test keeps skipping into a green report.
     # MetalDeviceGate_tests.cc checks the macro's own logic without a device; it cannot see this
@@ -242,18 +235,7 @@ donner_cc_test(
 donner_cc_test(
     name = "metal_sub_rectangle_copy_tests",
     srcs = ["MetalSubRectangleCopy_tests.cc"],
-    env = {
-        "MTL_DEBUG_LAYER": "1",
-        "MTL_SHADER_VALIDATION": "1",
-        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
-        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
-        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
-        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
-        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
-        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
-    },
+    env = _METAL_API_VALIDATION_ENV,
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this test keeps skipping into a green report.
     # MetalDeviceGate_tests.cc checks the macro's own logic without a device; it cannot see this
@@ -278,18 +260,7 @@ donner_cc_test(
 donner_cc_test(
     name = "metal_sub_rectangle_upload_tests",
     srcs = ["MetalSubRectangleUpload_tests.cc"],
-    env = {
-        "MTL_DEBUG_LAYER": "1",
-        "MTL_SHADER_VALIDATION": "1",
-        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
-        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
-        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
-        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
-        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
-        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
-    },
+    env = _METAL_API_VALIDATION_ENV,
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this target keeps skipping into a green report.
     # MetalDeviceGate_tests.cc checks the macro's own logic without a device; it cannot see this
@@ -312,18 +283,7 @@ donner_cc_test(
 donner_cc_test(
     name = "metal_queue_writes_tests",
     srcs = ["MetalQueueWrites_tests.cc"],
-    env = {
-        "MTL_DEBUG_LAYER": "1",
-        "MTL_SHADER_VALIDATION": "1",
-        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
-        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
-        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
-        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
-        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
-        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
-    },
+    env = _METAL_API_VALIDATION_ENV,
     env_inherit = [
         "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
         "GITHUB_ACTIONS",
@@ -345,18 +305,7 @@ donner_cc_test(
         "MetalBufferBounds_tests.cc",
         "//donner/svg/renderer/benchmarks:AllocationTracker.h",
     ],
-    env = {
-        "MTL_DEBUG_LAYER": "1",
-        "MTL_SHADER_VALIDATION": "1",
-        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
-        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
-        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
-        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
-        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
-        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
-    },
+    env = _METAL_API_VALIDATION_ENV,
     env_inherit = ["GITHUB_ACTIONS"],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
@@ -403,19 +352,10 @@ objc_library(
     alwayslink = True,
 )
 
-_METAL_VALIDATION_PROBE_ENV = {
-    "MTL_DEBUG_LAYER": "1",
-    "MTL_SHADER_VALIDATION": "1",
-    "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
-    "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
-    "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
-    "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
-    "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
-    "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
-    "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
-    "MTL_SHADER_VALIDATION_TEXTURE_USAGE": "1",
-    "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
-}
+_METAL_VALIDATION_PROBE_ENV = dict(
+    _METAL_API_VALIDATION_ENV,
+    MTL_SHADER_VALIDATION_TEXTURE_USAGE = "1",
+)
 
 cc_test(
     name = "metal_validation_profile",
@@ -451,18 +391,7 @@ objc_library(
 cc_test(
     name = "metal_shader_memory_validation_tests",
     size = "small",
-    env = {
-        "MTL_DEBUG_LAYER": "1",
-        "MTL_SHADER_VALIDATION": "1",
-        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
-        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
-        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
-        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
-        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
-        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
-    },
+    env = _METAL_API_VALIDATION_ENV,
     shard_count = 1,
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
@@ -498,18 +427,7 @@ objc_library(
 cc_test(
     name = "metal_surface_tests",
     size = "small",
-    env = {
-        "MTL_DEBUG_LAYER": "1",
-        "MTL_SHADER_VALIDATION": "1",
-        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
-        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
-        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
-        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
-        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
-        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
-    },
+    env = _METAL_API_VALIDATION_ENV,
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this test keeps skipping into a green report.
     env_inherit = [
@@ -523,23 +441,51 @@ cc_test(
     ],
 )
 
+# Physical residency across frames: the allocated size Metal reports for the device while a thread
+# with no autorelease pool renders frames that create and release their own scratch. Objective-C++
+# because it reads that size from the Metal device itself.
+objc_library(
+    name = "metal_working_set_tests_impl",
+    testonly = True,
+    srcs = ["MetalWorkingSet_tests.mm"],
+    sdk_frameworks = [
+        "Foundation",
+        "Metal",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_device_gate",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/metal:metal_device",
+        "@com_google_gtest//:gtest",
+    ],
+    alwayslink = True,
+)
+
+cc_test(
+    name = "metal_working_set_tests",
+    size = "small",
+    env = _METAL_API_VALIDATION_ENV,
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the no-device rule can never see one and this test keeps skipping into a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_working_set_tests_impl",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # Host buffer mapping on Metal: readiness against the submission serial, range bounds, and the
 # fail-closed paths for a released mapping and a destroyed buffer.
 donner_cc_test(
     name = "metal_buffer_mapping_tests",
     srcs = ["MetalBufferMapping_tests.cc"],
-    env = {
-        "MTL_DEBUG_LAYER": "1",
-        "MTL_SHADER_VALIDATION": "1",
-        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
-        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
-        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
-        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
-        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
-        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
-    },
+    env = _METAL_API_VALIDATION_ENV,
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this test keeps skipping into a green report.
     env_inherit = [
@@ -564,18 +510,7 @@ donner_cc_test(
 donner_cc_test(
     name = "metal_texture_registration_tests",
     srcs = ["MetalTextureRegistration_tests.cc"],
-    env = {
-        "MTL_DEBUG_LAYER": "1",
-        "MTL_SHADER_VALIDATION": "1",
-        "MTL_SHADER_VALIDATION_DEFAULT_STATE": "all",
-        "MTL_SHADER_VALIDATION_DISABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ENABLE_PIPELINES": "",
-        "MTL_SHADER_VALIDATION_ABORT_ON_FAULT": "1",
-        "MTL_SHADER_VALIDATION_ENABLE_ERROR_REPORTING": "1",
-        "MTL_SHADER_VALIDATION_REPORT_TO_STDERR": "1",
-        "MTL_SHADER_VALIDATION_GLOBAL_MEMORY": "1",
-        "MTL_SHADER_VALIDATION_THREADGROUP_MEMORY": "1",
-    },
+    env = _METAL_API_VALIDATION_ENV,
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this test keeps skipping into a green report.
     env_inherit = [

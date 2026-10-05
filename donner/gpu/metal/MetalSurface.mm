@@ -5,6 +5,10 @@
 
 #import <Foundation/Foundation.h>
 
+#if !__has_feature(objc_arc)
+#error "MetalSurface.mm holds Metal objects in strong members and must be compiled with ARC"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <format>

@@ -2,11 +2,23 @@
 /// Metal backend implementation for \c donner::gpu::metal::MetalDevice (Objective-C++).
 ///
 /// Compiled with ARC (Bazel `objc_library` compiles `srcs` with ARC), so Metal objects held in
-/// C++ containers use implicit `__strong` semantics: clearing a slot to nil releases the object.
+/// C++ containers and structs use implicit `__strong` semantics: storing one retains it, and
+/// clearing a slot to nil releases it.
+///
+/// Every entry point that handles an Objective-C object runs inside its own autorelease pool, which
+/// drains before it returns. Metal hands out command buffers, encoders and pass descriptors
+/// autoreleased, and they reference every resource a submission uses; a thread that never drains a
+/// pool, such as a renderer's worker, would otherwise keep each frame's resources resident until
+/// the thread exits. Objects that outlive a call are held in strong storage, so a drain only drops
+/// the references autoreleasing added.
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <TargetConditionals.h>
+
+#if !__has_feature(objc_arc)
+#error "MetalDevice.mm keeps Metal objects in strong C++ storage and must be compiled with ARC"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -258,9 +270,13 @@ struct CompletionState final : DeviceLossRelease {
   /// work: this device's queue may never complete it, and the waiter's teardown and bounded waits
   /// would otherwise sit behind that wait. No value a waiter can ask for is above the one
   /// signalled, so no later completion lowers it.
+  ///
+  /// Runs on whichever thread declares the loss, so it drains its own autorelease pool.
   void releaseOnLoss() override {
-    std::lock_guard<std::mutex> lock(watermarkMutex);
-    signalCompletionLocked(std::numeric_limits<uint64_t>::max());
+    @autoreleasepool {
+      std::lock_guard<std::mutex> lock(watermarkMutex);
+      signalCompletionLocked(std::numeric_limits<uint64_t>::max());
+    }
   }
 };
 
@@ -862,56 +878,60 @@ uint32_t MetalDevice::MaxTextureDimension2DFor(GpuFamilies families) {
 }
 
 std::optional<MetalDevice::SystemCapabilities> MetalDevice::QuerySystemCapabilities() {
-  id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-  if (device == nil) {
-    return std::nullopt;
-  }
-  // Metal reports no texture limit directly; its feature set tables give it per GPU family.
-  GpuFamilies families;
+  @autoreleasepool {
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (device == nil) {
+      return std::nullopt;
+    }
+    // Metal reports no texture limit directly; its feature set tables give it per GPU family.
+    GpuFamilies families;
 #if TARGET_OS_OSX
-  // Every Metal device on macOS is in a Mac family. That is a fact of the platform, so it is not
-  // asked of the device, whose first Mac family symbol is deprecated.
-  families.mac = true;
+    // Every Metal device on macOS is in a Mac family. That is a fact of the platform, so it is not
+    // asked of the device, whose first Mac family symbol is deprecated.
+    families.mac = true;
 #endif
-  families.apple3OrLater = [device supportsFamily:MTLGPUFamilyApple3];
-  return SystemCapabilities{.maxTextureDimension2D = MaxTextureDimension2DFor(families)};
+    families.apple3OrLater = [device supportsFamily:MTLGPUFamilyApple3];
+    return SystemCapabilities{.maxTextureDimension2D = MaxTextureDimension2DFor(families)};
+  }
 }
 
 std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel,
                                                  uint64_t uploadStagingByteBudget,
                                                  std::chrono::milliseconds unalignedWriteTimeout,
                                                  std::shared_ptr<DeviceLostState> lostState) {
-  if (uploadStagingByteBudget == 0 || unalignedWriteTimeout < std::chrono::milliseconds::zero() ||
-      unalignedWriteTimeout > std::chrono::seconds(5)) {
-    return nullptr;
-  }
-  id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-  if (device == nil) {
-    return nullptr;
-  }
+  @autoreleasepool {
+    if (uploadStagingByteBudget == 0 || unalignedWriteTimeout < std::chrono::milliseconds::zero() ||
+        unalignedWriteTimeout > std::chrono::seconds(5)) {
+      return nullptr;
+    }
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (device == nil) {
+      return nullptr;
+    }
 
-  std::unique_ptr<MetalDevice> result(new MetalDevice());
-  result->impl_->device = device;
-  result->impl_->uploadStagingByteBudget = uploadStagingByteBudget;
-  result->impl_->unalignedWriteTimeout = unalignedWriteTimeout;
-  // Ask the device rather than assuming. On a unified-memory device the CPU and GPU address one
-  // copy of a shared resource and nothing has to be moved between them; on a device without it,
-  // a shared resource is not the same bytes on both sides, and reading GPU output through the
-  // CPU pointer without synchronizing returns whatever the host copy last held - which is zeros
-  // for a buffer nothing ever wrote from the host.
-  result->impl_->unifiedMemory =
-      memoryModel == MemoryModel::Detected ? (device.hasUnifiedMemory != NO) : false;
-  if (!lostState) {
-    lostState = std::make_shared<DeviceLostState>();
+    std::unique_ptr<MetalDevice> result(new MetalDevice());
+    result->impl_->device = device;
+    result->impl_->uploadStagingByteBudget = uploadStagingByteBudget;
+    result->impl_->unalignedWriteTimeout = unalignedWriteTimeout;
+    // Ask the device rather than assuming. On a unified-memory device the CPU and GPU address one
+    // copy of a shared resource and nothing has to be moved between them; on a device without it,
+    // a shared resource is not the same bytes on both sides, and reading GPU output through the
+    // CPU pointer without synchronizing returns whatever the host copy last held - which is zeros
+    // for a buffer nothing ever wrote from the host.
+    result->impl_->unifiedMemory =
+        memoryModel == MemoryModel::Detected ? (device.hasUnifiedMemory != NO) : false;
+    if (!lostState) {
+      lostState = std::make_shared<DeviceLostState>();
+    }
+    result->impl_->completionState->completionEvent = [device newSharedEvent];
+    if (result->impl_->completionState->completionEvent == nil) {
+      return nullptr;
+    }
+    result->impl_->completionState->rootLoss = lostState;
+    lostState->addLossRelease(result->impl_->completionState);
+    result->adoptLostState(std::move(lostState));
+    return result;
   }
-  result->impl_->completionState->completionEvent = [device newSharedEvent];
-  if (result->impl_->completionState->completionEvent == nil) {
-    return nullptr;
-  }
-  result->impl_->completionState->rootLoss = lostState;
-  lostState->addLossRelease(result->impl_->completionState);
-  result->adoptLostState(std::move(lostState));
-  return result;
 }
 
 bool MetalDevice::usesUnifiedMemoryForTest() const {
@@ -938,20 +958,24 @@ MetalDevice::WriteStats MetalDevice::writeStatsForTest() const {
 }
 
 Status MetalDevice::pauseSubmissionsForTest() {
-  if (impl_->submissionGate != nil) {
-    return GpuError{GpuErrorType::InvalidState, "a Metal submission pause is already active"};
+  @autoreleasepool {
+    if (impl_->submissionGate != nil) {
+      return GpuError{GpuErrorType::InvalidState, "a Metal submission pause is already active"};
+    }
+    impl_->submissionGate = [impl_->device newSharedEvent];
+    if (impl_->submissionGate == nil) {
+      return GpuError{GpuErrorType::Unsupported, "Metal shared events are unavailable"};
+    }
+    return OkStatus();
   }
-  impl_->submissionGate = [impl_->device newSharedEvent];
-  if (impl_->submissionGate == nil) {
-    return GpuError{GpuErrorType::Unsupported, "Metal shared events are unavailable"};
-  }
-  return OkStatus();
 }
 
 void MetalDevice::resumeSubmissionsForTest() {
-  if (impl_->submissionGate != nil) {
-    impl_->submissionGate.signaledValue = 1;
-    impl_->submissionGate = nil;
+  @autoreleasepool {
+    if (impl_->submissionGate != nil) {
+      impl_->submissionGate.signaledValue = 1;
+      impl_->submissionGate = nil;
+    }
   }
 }
 
@@ -971,16 +995,18 @@ void MetalDevice::setPresentCompletionTimeoutForTest(std::chrono::milliseconds t
 }
 
 void MetalDevice::releaseHeldCompletionForTest() {
-  CompletionState& state = *impl_->completionState;
-  std::optional<ParkedCompletion> parked;
-  {
-    std::lock_guard<std::mutex> lock(state.mutex);
-    state.heldSerial.reset();
-    parked = std::exchange(state.parked, std::nullopt);
-  }
-  if (parked.has_value()) {
-    PublishCompletion(state, parked->serial, parked->error, parked->uploadBytes,
-                      parked->payloadBytes);
+  @autoreleasepool {
+    CompletionState& state = *impl_->completionState;
+    std::optional<ParkedCompletion> parked;
+    {
+      std::lock_guard<std::mutex> lock(state.mutex);
+      state.heldSerial.reset();
+      parked = std::exchange(state.parked, std::nullopt);
+    }
+    if (parked.has_value()) {
+      PublishCompletion(state, parked->serial, parked->error, parked->uploadBytes,
+                        parked->payloadBytes);
+    }
   }
 }
 
@@ -998,16 +1024,21 @@ bool MetalDevice::waitForCompletionHandlersForTest(uint64_t count, double timeou
 }
 
 MetalDevice::~MetalDevice() {
-  resumeSubmissionsForTest();
-  // Wait for in-flight submissions so deferred destructions drain before Impl teardown releases
-  // the remaining Metal objects. On timeout (a hung submission), or at once when the root is
-  // already lost, teardown proceeds anyway: Metal itself retains every resource referenced by a
-  // committed command buffer until it completes, so releasing our references cannot free memory
-  // the GPU is still using.
-  if (lastSubmittedSerial() > completedSerial()) {
-    waitForSerial(lastSubmittedSerial(), /*timeoutSeconds=*/5.0);
+  @autoreleasepool {
+    resumeSubmissionsForTest();
+    // Wait for in-flight submissions so deferred destructions drain before Impl teardown releases
+    // the remaining Metal objects. On timeout (a hung submission), or at once when the root is
+    // already lost, teardown proceeds anyway: Metal itself retains every resource referenced by a
+    // committed command buffer until it completes, so releasing our references cannot free memory
+    // the GPU is still using.
+    if (lastSubmittedSerial() > completedSerial()) {
+      waitForSerial(lastSubmittedSerial(), /*timeoutSeconds=*/5.0);
+    }
+    poll();
+    // Inside the pool, so whatever releasing the backend state's Metal objects autoreleases drains
+    // here rather than in the calling thread's pool.
+    impl_.reset();
   }
-  poll();
 }
 
 uint64_t MetalDevice::completedSerial() const {
@@ -1043,40 +1074,46 @@ bool MetalDevice::onWaitForSerial(uint64_t serial, double timeoutSeconds) {
 }
 
 Result<std::vector<uint8_t>> MetalDevice::readBackBuffer(const Buffer& buffer) {
-  // Full handle validation (null, device identity, AND generation) through the base class, so a
-  // stale handle whose slot was reused cannot read the replacement buffer.
-  if (Status status = validateBufferHandleForBackend(buffer); status.hasError()) {
-    return std::move(status).error();
-  }
-  id<MTLBuffer> metalBuffer = GetSlot(impl_->buffers, buffer.slotIndex());
-  if (metalBuffer == nil) {
-    return GpuError{GpuErrorType::InvalidHandle,
-                    std::format("buffer handle (slot {}) does not name a live Metal buffer",
-                                buffer.slotIndex())};
-  }
+  @autoreleasepool {
+    // Full handle validation (null, device identity, AND generation) through the base class, so a
+    // stale handle whose slot was reused cannot read the replacement buffer.
+    if (Status status = validateBufferHandleForBackend(buffer); status.hasError()) {
+      return std::move(status).error();
+    }
+    id<MTLBuffer> metalBuffer = GetSlot(impl_->buffers, buffer.slotIndex());
+    if (metalBuffer == nil) {
+      return GpuError{GpuErrorType::InvalidHandle,
+                      std::format("buffer handle (slot {}) does not name a live Metal buffer",
+                                  buffer.slotIndex())};
+    }
 
-  const uint8_t* contents = static_cast<const uint8_t*>(metalBuffer.contents);
-  return std::vector<uint8_t>(contents, contents + metalBuffer.length);
+    const uint8_t* contents = static_cast<const uint8_t*>(metalBuffer.contents);
+    return std::vector<uint8_t>(contents, contents + metalBuffer.length);
+  }
 }
 
 Result<MetalDevice::NativeTextureUsage> MetalDevice::textureUsageForTest(
     const Texture& texture) const {
-  if (Status status = validateTextureHandleForBackend(texture); status.hasError()) {
-    return std::move(status).error();
+  @autoreleasepool {
+    if (Status status = validateTextureHandleForBackend(texture); status.hasError()) {
+      return std::move(status).error();
+    }
+    id<MTLTexture> nativeTexture = GetSlot(impl_->textures, texture.slotIndex());
+    if (nativeTexture == nil) {
+      return GpuError{GpuErrorType::InvalidHandle, "texture does not name a live Metal allocation"};
+    }
+    const MTLTextureUsage usage = nativeTexture.usage;
+    return NativeTextureUsage{(usage & MTLTextureUsageShaderRead) != 0,
+                              (usage & MTLTextureUsageShaderWrite) != 0,
+                              (usage & MTLTextureUsageRenderTarget) != 0};
   }
-  id<MTLTexture> nativeTexture = GetSlot(impl_->textures, texture.slotIndex());
-  if (nativeTexture == nil) {
-    return GpuError{GpuErrorType::InvalidHandle, "texture does not name a live Metal allocation"};
-  }
-  const MTLTextureUsage usage = nativeTexture.usage;
-  return NativeTextureUsage{(usage & MTLTextureUsageShaderRead) != 0,
-                            (usage & MTLTextureUsageShaderWrite) != 0,
-                            (usage & MTLTextureUsageRenderTarget) != 0};
 }
 
 std::string MetalDevice::adapterName() const {
-  NSString* name = [impl_->device name];
-  return name != nil ? std::string([name UTF8String]) : std::string();
+  @autoreleasepool {
+    NSString* name = [impl_->device name];
+    return name != nil ? std::string([name UTF8String]) : std::string();
+  }
 }
 
 std::string MetalDevice::lastErrorForTest() const {
@@ -1086,55 +1123,59 @@ std::string MetalDevice::lastErrorForTest() const {
 }
 
 Status MetalDevice::onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) {
-  const MTLResourceOptions bufferOptions =
-      impl_->unifiedMemory ? MTLResourceStorageModeShared : MTLResourceStorageModeManaged;
-  id<MTLBuffer> buffer = [impl_->device newBufferWithLength:descriptor.byteSize
-                                                    options:bufferOptions];
-  if (buffer == nil) {
-    return GpuError{GpuErrorType::InvalidState,
-                    std::format("Metal buffer allocation of {} bytes failed for '{}'",
-                                descriptor.byteSize, std::string_view(descriptor.label))};
-  }
+  @autoreleasepool {
+    const MTLResourceOptions bufferOptions =
+        impl_->unifiedMemory ? MTLResourceStorageModeShared : MTLResourceStorageModeManaged;
+    id<MTLBuffer> buffer = [impl_->device newBufferWithLength:descriptor.byteSize
+                                                      options:bufferOptions];
+    if (buffer == nil) {
+      return GpuError{GpuErrorType::InvalidState,
+                      std::format("Metal buffer allocation of {} bytes failed for '{}'",
+                                  descriptor.byteSize, std::string_view(descriptor.label))};
+    }
 
-  SetSlot(impl_->buffers, slotIndex, buffer);
-  SetSlot(impl_->bufferUploadSerials, slotIndex, uint64_t{0});
-  return OkStatus();
+    SetSlot(impl_->buffers, slotIndex, buffer);
+    SetSlot(impl_->bufferUploadSerials, slotIndex, uint64_t{0});
+    return OkStatus();
+  }
 }
 
 Status MetalDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor& descriptor) {
-  MTLTextureDescriptor* textureDescriptor =
-      [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:ToMtlPixelFormat(descriptor.format)
-                                                         width:descriptor.size.width
-                                                        height:descriptor.size.height
-                                                     mipmapped:NO];
+  @autoreleasepool {
+    MTLTextureDescriptor* textureDescriptor =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:ToMtlPixelFormat(descriptor.format)
+                                                           width:descriptor.size.width
+                                                          height:descriptor.size.height
+                                                       mipmapped:NO];
 
-  MTLTextureUsage usage = 0;
-  if (HasAllFlags(descriptor.usage, TextureUsage::RenderAttachment)) {
-    usage |= MTLTextureUsageRenderTarget;
-  }
-  if (HasAllFlags(descriptor.usage, TextureUsage::Sampled)) {
-    usage |= MTLTextureUsageShaderRead;
-  }
-  if (HasAllFlags(descriptor.usage, TextureUsage::StorageBinding)) {
-    usage |= MTLTextureUsageShaderWrite;
-  }
-  textureDescriptor.usage = usage;
-  // Host-visible either way: render targets and storage textures are read back through blits
-  // into host-visible buffers, and on a device without unified memory that means a managed
-  // texture whose GPU-side changes are published before the host reads them.
-  textureDescriptor.storageMode = impl_->hostVisibleStorageMode();
+    MTLTextureUsage usage = 0;
+    if (HasAllFlags(descriptor.usage, TextureUsage::RenderAttachment)) {
+      usage |= MTLTextureUsageRenderTarget;
+    }
+    if (HasAllFlags(descriptor.usage, TextureUsage::Sampled)) {
+      usage |= MTLTextureUsageShaderRead;
+    }
+    if (HasAllFlags(descriptor.usage, TextureUsage::StorageBinding)) {
+      usage |= MTLTextureUsageShaderWrite;
+    }
+    textureDescriptor.usage = usage;
+    // Host-visible either way: render targets and storage textures are read back through blits
+    // into host-visible buffers, and on a device without unified memory that means a managed
+    // texture whose GPU-side changes are published before the host reads them.
+    textureDescriptor.storageMode = impl_->hostVisibleStorageMode();
 
-  id<MTLTexture> texture = [impl_->device newTextureWithDescriptor:textureDescriptor];
-  if (texture == nil) {
-    return GpuError{
-        GpuErrorType::InvalidState,
-        std::format("Metal texture allocation ({}x{}) failed for '{}'", descriptor.size.width,
-                    descriptor.size.height, std::string_view(descriptor.label))};
-  }
+    id<MTLTexture> texture = [impl_->device newTextureWithDescriptor:textureDescriptor];
+    if (texture == nil) {
+      return GpuError{
+          GpuErrorType::InvalidState,
+          std::format("Metal texture allocation ({}x{}) failed for '{}'", descriptor.size.width,
+                      descriptor.size.height, std::string_view(descriptor.label))};
+    }
 
-  SetSlot(impl_->textures, slotIndex, texture);
-  SetSlot(impl_->textureUploadSerials, slotIndex, uint64_t{0});
-  return OkStatus();
+    SetSlot(impl_->textures, slotIndex, texture);
+    SetSlot(impl_->textureUploadSerials, slotIndex, uint64_t{0});
+    return OkStatus();
+  }
 }
 
 BackendDeviceIdentity MetalDevice::backendDeviceIdentity() const {
@@ -1142,43 +1183,50 @@ BackendDeviceIdentity MetalDevice::backendDeviceIdentity() const {
 }
 
 Result<BackendTextureExport> MetalDevice::onExportTexture(uint32_t slotIndex) {
-  id<MTLTexture> texture = GetSlot(impl_->textures, slotIndex);
-  if (texture == nil) {
-    return GpuError{GpuErrorType::InvalidState,
-                    std::format("texture slot {} has no Metal texture to export", slotIndex)};
+  @autoreleasepool {
+    id<MTLTexture> texture = GetSlot(impl_->textures, slotIndex);
+    if (texture == nil) {
+      return GpuError{GpuErrorType::InvalidState,
+                      std::format("texture slot {} has no Metal texture to export", slotIndex)};
+    }
+    if (impl_->exportCompletion == nullptr) {
+      impl_->exportCompletion = std::make_shared<MetalSubmissionCompletion>(impl_->completionState);
+    }
+    BackendTextureExport exported;
+    exported.backing =
+        std::make_shared<const MetalExportedTexture>(texture, impl_->completionState);
+    // Each runtime device submits to its own command queue, and nothing orders one queue's work
+    // after another's, so a consumer's command buffer waits on the GPU for this device's
+    // completion event to reach the serial it reads after. The event is signalled for failed work
+    // and on a loss of this device's root as well, so the runtime orders on the device only a
+    // consumer that shares that root's loss condition; any other consumer waits on the host.
+    exported.ordering = SourceOrdering::WaitOnDevice;
+    exported.completion = impl_->exportCompletion;
+    // An upload carried by a submission that never named the texture is recorded only here.
+    exported.contentSerial = GetSlot(impl_->textureUploadSerials, slotIndex);
+    exported.writePending = impl_->hasPendingWrite(nil, texture);
+    return exported;
   }
-  if (impl_->exportCompletion == nullptr) {
-    impl_->exportCompletion = std::make_shared<MetalSubmissionCompletion>(impl_->completionState);
-  }
-  BackendTextureExport exported;
-  exported.backing = std::make_shared<const MetalExportedTexture>(texture, impl_->completionState);
-  // Each runtime device submits to its own command queue, and nothing orders one queue's work
-  // after another's, so a consumer's command buffer waits on the GPU for this device's
-  // completion event to reach the serial it reads after. The event is signalled for failed work
-  // and on a loss of this device's root as well, so the runtime orders on the device only a
-  // consumer that shares that root's loss condition; any other consumer waits on the host.
-  exported.ordering = SourceOrdering::WaitOnDevice;
-  exported.completion = impl_->exportCompletion;
-  // An upload carried by a submission that never named the texture is recorded only here.
-  exported.contentSerial = GetSlot(impl_->textureUploadSerials, slotIndex);
-  exported.writePending = impl_->hasPendingWrite(nil, texture);
-  return exported;
 }
 
 Status MetalDevice::onRegisterTexture(uint32_t slotIndex, const ExportedTextureBacking& backing) {
-  id<MTLTexture> texture = static_cast<const MetalExportedTexture&>(backing).texture();
-  // Metal accepts a texture only in command buffers of the device object that created it.
-  if (texture == nil || texture.device != impl_->device) {
-    return GpuError{GpuErrorType::DeviceMismatch,
-                    "registerTexture: the Metal texture belongs to a different MTLDevice"};
+  @autoreleasepool {
+    id<MTLTexture> texture = static_cast<const MetalExportedTexture&>(backing).texture();
+    // Metal accepts a texture only in command buffers of the device object that created it.
+    if (texture == nil || texture.device != impl_->device) {
+      return GpuError{GpuErrorType::DeviceMismatch,
+                      "registerTexture: the Metal texture belongs to a different MTLDevice"};
+    }
+    SetSlot(impl_->textures, slotIndex, texture);
+    SetSlot(impl_->textureUploadSerials, slotIndex, uint64_t{0});
+    return OkStatus();
   }
-  SetSlot(impl_->textures, slotIndex, texture);
-  SetSlot(impl_->textureUploadSerials, slotIndex, uint64_t{0});
-  return OkStatus();
 }
 
 bool MetalDevice::onTextureWritePending(uint32_t slotIndex) const {
-  return impl_->hasPendingWrite(nil, GetSlot(impl_->textures, slotIndex));
+  @autoreleasepool {
+    return impl_->hasPendingWrite(nil, GetSlot(impl_->textures, slotIndex));
+  }
 }
 
 Status MetalDevice::onCreateTextureView(uint32_t slotIndex, uint32_t textureSlotIndex,
@@ -1191,21 +1239,23 @@ Status MetalDevice::onCreateTextureView(uint32_t slotIndex, uint32_t textureSlot
 }
 
 Status MetalDevice::onCreateSampler(uint32_t slotIndex, const SamplerDescriptor& descriptor) {
-  MTLSamplerDescriptor* samplerDescriptor = [[MTLSamplerDescriptor alloc] init];
-  samplerDescriptor.minFilter = ToMtlFilter(descriptor.minFilter);
-  samplerDescriptor.magFilter = ToMtlFilter(descriptor.magFilter);
-  samplerDescriptor.sAddressMode = ToMtlAddressMode(descriptor.addressModeU);
-  samplerDescriptor.tAddressMode = ToMtlAddressMode(descriptor.addressModeV);
+  @autoreleasepool {
+    MTLSamplerDescriptor* samplerDescriptor = [[MTLSamplerDescriptor alloc] init];
+    samplerDescriptor.minFilter = ToMtlFilter(descriptor.minFilter);
+    samplerDescriptor.magFilter = ToMtlFilter(descriptor.magFilter);
+    samplerDescriptor.sAddressMode = ToMtlAddressMode(descriptor.addressModeU);
+    samplerDescriptor.tAddressMode = ToMtlAddressMode(descriptor.addressModeV);
 
-  id<MTLSamplerState> sampler = [impl_->device newSamplerStateWithDescriptor:samplerDescriptor];
-  if (sampler == nil) {
-    return GpuError{
-        GpuErrorType::InvalidState,
-        std::format("Metal sampler creation failed for '{}'", std::string_view(descriptor.label))};
+    id<MTLSamplerState> sampler = [impl_->device newSamplerStateWithDescriptor:samplerDescriptor];
+    if (sampler == nil) {
+      return GpuError{GpuErrorType::InvalidState,
+                      std::format("Metal sampler creation failed for '{}'",
+                                  std::string_view(descriptor.label))};
+    }
+
+    SetSlot(impl_->samplers, slotIndex, sampler);
+    return OkStatus();
   }
-
-  SetSlot(impl_->samplers, slotIndex, sampler);
-  return OkStatus();
 }
 
 Status MetalDevice::onCreateBindGroupLayout(uint32_t slotIndex,
@@ -1264,34 +1314,38 @@ Status MetalDevice::onCreatePipelineLayout(uint32_t slotIndex,
 
 Status MetalDevice::onCreateShaderModule(uint32_t slotIndex,
                                          const ShaderModuleDescriptor& descriptor) {
-  if (descriptor.sourceKind != ShaderSourceKind::Msl) {
-    return GpuError{GpuErrorType::Unsupported, "the Metal backend compiles MSL only"};
-  }
+  @autoreleasepool {
+    if (descriptor.sourceKind != ShaderSourceKind::Msl) {
+      return GpuError{GpuErrorType::Unsupported, "the Metal backend compiles MSL only"};
+    }
 
-  if (!descriptor.bufferBindings.has_value()) {
-    return GpuError{GpuErrorType::InvalidDescriptor,
-                    "the Metal backend requires buffer binding metadata for every MSL module"};
-  }
+    if (!descriptor.bufferBindings.has_value()) {
+      return GpuError{GpuErrorType::InvalidDescriptor,
+                      "the Metal backend requires buffer binding metadata for every MSL module"};
+    }
 
-  NSString* source = ToNSString(std::string_view(descriptor.sourceText));
-  if (source == nil) {
-    return GpuError{GpuErrorType::InvalidDescriptor,
-                    std::format("shader source for '{}' is not valid UTF-8",
-                                std::string_view(descriptor.label))};
-  }
+    NSString* source = ToNSString(std::string_view(descriptor.sourceText));
+    if (source == nil) {
+      return GpuError{GpuErrorType::InvalidDescriptor,
+                      std::format("shader source for '{}' is not valid UTF-8",
+                                  std::string_view(descriptor.label))};
+    }
 
-  MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
-  NSError* error = nil;
-  id<MTLLibrary> library = [impl_->device newLibraryWithSource:source options:options error:&error];
-  if (library == nil) {
-    return GpuError{
-        GpuErrorType::InvalidDescriptor,
-        std::format("MSL compilation failed for '{}': {}", std::string_view(descriptor.label),
-                    DescribeNSError(error, "no compiler diagnostics"))};
-  }
+    MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
+    NSError* error = nil;
+    id<MTLLibrary> library = [impl_->device newLibraryWithSource:source
+                                                         options:options
+                                                           error:&error];
+    if (library == nil) {
+      return GpuError{
+          GpuErrorType::InvalidDescriptor,
+          std::format("MSL compilation failed for '{}': {}", std::string_view(descriptor.label),
+                      DescribeNSError(error, "no compiler diagnostics"))};
+    }
 
-  SetSlot(impl_->shaderLibraries, slotIndex, library);
-  return OkStatus();
+    SetSlot(impl_->shaderLibraries, slotIndex, library);
+    return OkStatus();
+  }
 }
 
 Result<std::array<bool, shader::kMslVertexBufferIndex + 1>>
@@ -1368,155 +1422,166 @@ MTLVertexDescriptor* CreateVertexDescriptor(const VertexState& vertex,
 
 Status MetalDevice::onCreateRenderPipeline(uint32_t slotIndex,
                                            const RenderPipelineDescriptor& descriptor) {
-  id<MTLLibrary> vertexLibrary =
-      GetSlot(impl_->shaderLibraries, descriptor.vertex.module.slotIndex());
-  id<MTLLibrary> fragmentLibrary =
-      GetSlot(impl_->shaderLibraries, descriptor.fragment.module.slotIndex());
-  if (vertexLibrary == nil || fragmentLibrary == nil) {
-    return GpuError{GpuErrorType::InvalidState,
-                    "render pipeline references a shader module with no compiled Metal library"};
-  }
-
-  NSString* vertexEntryPoint = ToNSString(std::string_view(descriptor.vertex.entryPoint));
-  NSString* fragmentEntryPoint = ToNSString(std::string_view(descriptor.fragment.entryPoint));
-  id<MTLFunction> vertexFunction =
-      vertexEntryPoint != nil ? [vertexLibrary newFunctionWithName:vertexEntryPoint] : nil;
-  id<MTLFunction> fragmentFunction =
-      fragmentEntryPoint != nil ? [fragmentLibrary newFunctionWithName:fragmentEntryPoint] : nil;
-  if (vertexFunction == nil) {
-    return GpuError{GpuErrorType::InvalidDescriptor,
-                    std::format("vertex entry point '{}' not found in shader module",
-                                std::string_view(descriptor.vertex.entryPoint))};
-  }
-  if (fragmentFunction == nil) {
-    return GpuError{GpuErrorType::InvalidDescriptor,
-                    std::format("fragment entry point '{}' not found in shader module",
-                                std::string_view(descriptor.fragment.entryPoint))};
-  }
-
-  MTLRenderPipelineDescriptor* pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
-  pipelineDescriptor.vertexFunction = vertexFunction;
-  pipelineDescriptor.fragmentFunction = fragmentFunction;
-
-  auto vertexIndicesResult = impl_->vertexBufferIndices(descriptor);
-  if (vertexIndicesResult.hasError()) {
-    return std::move(vertexIndicesResult).error();
-  }
-  std::vector<uint32_t> vertexIndices = std::move(vertexIndicesResult).result();
-  pipelineDescriptor.vertexDescriptor = CreateVertexDescriptor(descriptor.vertex, vertexIndices);
-
-  for (size_t i = 0; i < descriptor.fragment.targets.size(); ++i) {
-    const ColorTargetState& target = descriptor.fragment.targets[i];
-    MTLRenderPipelineColorAttachmentDescriptor* attachment = pipelineDescriptor.colorAttachments[i];
-    attachment.pixelFormat = ToMtlPixelFormat(target.format);
-    attachment.writeMask = ToMtlColorWriteMask(target.writeMask);
-    if (target.blend.has_value()) {
-      attachment.blendingEnabled = YES;
-      attachment.sourceRGBBlendFactor = ToMtlBlendFactor(target.blend->color.srcFactor);
-      attachment.destinationRGBBlendFactor = ToMtlBlendFactor(target.blend->color.dstFactor);
-      attachment.rgbBlendOperation = ToMtlBlendOperation(target.blend->color.operation);
-      attachment.sourceAlphaBlendFactor = ToMtlBlendFactor(target.blend->alpha.srcFactor);
-      attachment.destinationAlphaBlendFactor = ToMtlBlendFactor(target.blend->alpha.dstFactor);
-      attachment.alphaBlendOperation = ToMtlBlendOperation(target.blend->alpha.operation);
+  @autoreleasepool {
+    id<MTLLibrary> vertexLibrary =
+        GetSlot(impl_->shaderLibraries, descriptor.vertex.module.slotIndex());
+    id<MTLLibrary> fragmentLibrary =
+        GetSlot(impl_->shaderLibraries, descriptor.fragment.module.slotIndex());
+    if (vertexLibrary == nil || fragmentLibrary == nil) {
+      return GpuError{GpuErrorType::InvalidState,
+                      "render pipeline references a shader module with no compiled Metal library"};
     }
-  }
 
-  NSError* error = nil;
-  id<MTLRenderPipelineState> pipelineState =
-      [impl_->device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error];
-  if (pipelineState == nil) {
-    return GpuError{GpuErrorType::InvalidDescriptor,
-                    std::format("Metal render pipeline creation failed for '{}': {}",
-                                std::string_view(descriptor.label),
-                                DescribeNSError(error, "no pipeline diagnostics"))};
-  }
+    NSString* vertexEntryPoint = ToNSString(std::string_view(descriptor.vertex.entryPoint));
+    NSString* fragmentEntryPoint = ToNSString(std::string_view(descriptor.fragment.entryPoint));
+    id<MTLFunction> vertexFunction =
+        vertexEntryPoint != nil ? [vertexLibrary newFunctionWithName:vertexEntryPoint] : nil;
+    id<MTLFunction> fragmentFunction =
+        fragmentEntryPoint != nil ? [fragmentLibrary newFunctionWithName:fragmentEntryPoint] : nil;
+    if (vertexFunction == nil) {
+      return GpuError{GpuErrorType::InvalidDescriptor,
+                      std::format("vertex entry point '{}' not found in shader module",
+                                  std::string_view(descriptor.vertex.entryPoint))};
+    }
+    if (fragmentFunction == nil) {
+      return GpuError{GpuErrorType::InvalidDescriptor,
+                      std::format("fragment entry point '{}' not found in shader module",
+                                  std::string_view(descriptor.fragment.entryPoint))};
+    }
 
-  SetSlot(impl_->renderPipelines, slotIndex,
-          std::optional<Impl::RenderPipelineRecord>(Impl::RenderPipelineRecord{
-              pipelineState, descriptor.topology, descriptor.cullMode, std::move(vertexIndices),
-              !FindRecord(impl_->pipelineLayouts, descriptor.layout.slotIndex())
-                   ->bindGroupLayouts.empty()}));
-  return OkStatus();
+    MTLRenderPipelineDescriptor* pipelineDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
+    pipelineDescriptor.vertexFunction = vertexFunction;
+    pipelineDescriptor.fragmentFunction = fragmentFunction;
+
+    auto vertexIndicesResult = impl_->vertexBufferIndices(descriptor);
+    if (vertexIndicesResult.hasError()) {
+      return std::move(vertexIndicesResult).error();
+    }
+    std::vector<uint32_t> vertexIndices = std::move(vertexIndicesResult).result();
+    pipelineDescriptor.vertexDescriptor = CreateVertexDescriptor(descriptor.vertex, vertexIndices);
+
+    for (size_t i = 0; i < descriptor.fragment.targets.size(); ++i) {
+      const ColorTargetState& target = descriptor.fragment.targets[i];
+      MTLRenderPipelineColorAttachmentDescriptor* attachment =
+          pipelineDescriptor.colorAttachments[i];
+      attachment.pixelFormat = ToMtlPixelFormat(target.format);
+      attachment.writeMask = ToMtlColorWriteMask(target.writeMask);
+      if (target.blend.has_value()) {
+        attachment.blendingEnabled = YES;
+        attachment.sourceRGBBlendFactor = ToMtlBlendFactor(target.blend->color.srcFactor);
+        attachment.destinationRGBBlendFactor = ToMtlBlendFactor(target.blend->color.dstFactor);
+        attachment.rgbBlendOperation = ToMtlBlendOperation(target.blend->color.operation);
+        attachment.sourceAlphaBlendFactor = ToMtlBlendFactor(target.blend->alpha.srcFactor);
+        attachment.destinationAlphaBlendFactor = ToMtlBlendFactor(target.blend->alpha.dstFactor);
+        attachment.alphaBlendOperation = ToMtlBlendOperation(target.blend->alpha.operation);
+      }
+    }
+
+    NSError* error = nil;
+    id<MTLRenderPipelineState> pipelineState =
+        [impl_->device newRenderPipelineStateWithDescriptor:pipelineDescriptor error:&error];
+    if (pipelineState == nil) {
+      return GpuError{GpuErrorType::InvalidDescriptor,
+                      std::format("Metal render pipeline creation failed for '{}': {}",
+                                  std::string_view(descriptor.label),
+                                  DescribeNSError(error, "no pipeline diagnostics"))};
+    }
+
+    SetSlot(impl_->renderPipelines, slotIndex,
+            std::optional<Impl::RenderPipelineRecord>(Impl::RenderPipelineRecord{
+                pipelineState, descriptor.topology, descriptor.cullMode, std::move(vertexIndices),
+                !FindRecord(impl_->pipelineLayouts, descriptor.layout.slotIndex())
+                     ->bindGroupLayouts.empty()}));
+    return OkStatus();
+  }
 }
 
 Status MetalDevice::onCreateComputePipeline(uint32_t slotIndex,
                                             const ComputePipelineDescriptor& descriptor) {
-  id<MTLLibrary> library = GetSlot(impl_->shaderLibraries, descriptor.compute.module.slotIndex());
-  if (library == nil) {
-    return GpuError{GpuErrorType::InvalidState,
-                    "compute pipeline references a shader module with no compiled Metal library"};
-  }
+  @autoreleasepool {
+    id<MTLLibrary> library = GetSlot(impl_->shaderLibraries, descriptor.compute.module.slotIndex());
+    if (library == nil) {
+      return GpuError{GpuErrorType::InvalidState,
+                      "compute pipeline references a shader module with no compiled Metal library"};
+    }
 
-  NSString* entryPoint = ToNSString(std::string_view(descriptor.compute.entryPoint));
-  id<MTLFunction> function = entryPoint != nil ? [library newFunctionWithName:entryPoint] : nil;
-  if (function == nil) {
-    return GpuError{GpuErrorType::InvalidDescriptor,
-                    std::format("compute entry point '{}' not found in shader module",
-                                std::string_view(descriptor.compute.entryPoint))};
-  }
+    NSString* entryPoint = ToNSString(std::string_view(descriptor.compute.entryPoint));
+    id<MTLFunction> function = entryPoint != nil ? [library newFunctionWithName:entryPoint] : nil;
+    if (function == nil) {
+      return GpuError{GpuErrorType::InvalidDescriptor,
+                      std::format("compute entry point '{}' not found in shader module",
+                                  std::string_view(descriptor.compute.entryPoint))};
+    }
 
-  NSError* error = nil;
-  id<MTLComputePipelineState> pipelineState =
-      [impl_->device newComputePipelineStateWithFunction:function error:&error];
-  if (pipelineState == nil) {
-    return GpuError{GpuErrorType::InvalidDescriptor,
-                    std::format("Metal compute pipeline creation failed for '{}': {}",
-                                std::string_view(descriptor.label),
-                                DescribeNSError(error, "no pipeline diagnostics"))};
-  }
-  // The declared threadgroup must fit what the compiled kernel can actually launch; a larger
-  // shape would be rejected asynchronously at dispatch instead of here.
-  const uint64_t declaredInvocations = uint64_t{descriptor.workgroupSize.x} *
-                                       descriptor.workgroupSize.y * descriptor.workgroupSize.z;
-  if (declaredInvocations > pipelineState.maxTotalThreadsPerThreadgroup) {
-    return GpuError{
-        GpuErrorType::LimitExceeded,
-        std::format("compute pipeline '{}' declares {} threads per threadgroup but the compiled "
-                    "kernel supports at most {}",
-                    std::string_view(descriptor.label), declaredInvocations,
-                    pipelineState.maxTotalThreadsPerThreadgroup)};
-  }
+    NSError* error = nil;
+    id<MTLComputePipelineState> pipelineState =
+        [impl_->device newComputePipelineStateWithFunction:function error:&error];
+    if (pipelineState == nil) {
+      return GpuError{GpuErrorType::InvalidDescriptor,
+                      std::format("Metal compute pipeline creation failed for '{}': {}",
+                                  std::string_view(descriptor.label),
+                                  DescribeNSError(error, "no pipeline diagnostics"))};
+    }
+    // The declared threadgroup must fit what the compiled kernel can actually launch; a larger
+    // shape would be rejected asynchronously at dispatch instead of here.
+    const uint64_t declaredInvocations = uint64_t{descriptor.workgroupSize.x} *
+                                         descriptor.workgroupSize.y * descriptor.workgroupSize.z;
+    if (declaredInvocations > pipelineState.maxTotalThreadsPerThreadgroup) {
+      return GpuError{
+          GpuErrorType::LimitExceeded,
+          std::format("compute pipeline '{}' declares {} threads per threadgroup but the compiled "
+                      "kernel supports at most {}",
+                      std::string_view(descriptor.label), declaredInvocations,
+                      pipelineState.maxTotalThreadsPerThreadgroup)};
+    }
 
-  SetSlot(impl_->computePipelines, slotIndex,
-          std::optional<Impl::ComputePipelineRecord>(
-              Impl::ComputePipelineRecord{pipelineState, descriptor.workgroupSize}));
-  return OkStatus();
+    SetSlot(impl_->computePipelines, slotIndex,
+            std::optional<Impl::ComputePipelineRecord>(
+                Impl::ComputePipelineRecord{pipelineState, descriptor.workgroupSize}));
+    return OkStatus();
+  }
 }
 
 void MetalDevice::onRetireBuffer(uint32_t slotIndex) {
-  impl_->discardPendingWrites(GetSlot(impl_->buffers, slotIndex), nil);
-  if (impl_->mappingTable) {
-    impl_->mappingTable->invalidateBuffer(slotIndex);
+  @autoreleasepool {
+    impl_->discardPendingWrites(GetSlot(impl_->buffers, slotIndex), nil);
+    if (impl_->mappingTable) {
+      impl_->mappingTable->invalidateBuffer(slotIndex);
+    }
   }
 }
 
 void MetalDevice::onRetireTexture(uint32_t slotIndex) {
-  impl_->discardPendingWrites(nil, GetSlot(impl_->textures, slotIndex));
+  @autoreleasepool {
+    impl_->discardPendingWrites(nil, GetSlot(impl_->textures, slotIndex));
+  }
 }
 
 void MetalDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
-  // Clearing a slot to nil / nullopt releases the ObjC object under ARC. Unknown resource names
-  // are ignored; the base class owns their bookkeeping.
-  if (resourceName == "buffer") {
-    SetSlot(impl_->buffers, slotIndex, id<MTLBuffer>(nil));
-  } else if (resourceName == "texture") {
-    SetSlot(impl_->textures, slotIndex, id<MTLTexture>(nil));
-  } else if (resourceName == "textureView") {
-    SetSlot(impl_->textureViewToTexture, slotIndex, std::optional<uint32_t>());
-  } else if (resourceName == "sampler") {
-    SetSlot(impl_->samplers, slotIndex, id<MTLSamplerState>(nil));
-  } else if (resourceName == "bindGroupLayout") {
-    SetSlot(impl_->bindGroupLayouts, slotIndex, std::optional<BindGroupLayoutDescriptor>());
-  } else if (resourceName == "bindGroup") {
-    SetSlot(impl_->bindGroups, slotIndex, std::optional<Impl::BindGroupRecord>());
-  } else if (resourceName == "pipelineLayout") {
-    SetSlot(impl_->pipelineLayouts, slotIndex, std::optional<PipelineLayoutDescriptor>());
-  } else if (resourceName == "shaderModule") {
-    SetSlot(impl_->shaderLibraries, slotIndex, id<MTLLibrary>(nil));
-  } else if (resourceName == "renderPipeline") {
-    SetSlot(impl_->renderPipelines, slotIndex, std::optional<Impl::RenderPipelineRecord>());
-  } else if (resourceName == "computePipeline") {
-    SetSlot(impl_->computePipelines, slotIndex, std::optional<Impl::ComputePipelineRecord>());
+  @autoreleasepool {
+    // Clearing a slot to nil / nullopt releases the ObjC object under ARC. Unknown resource names
+    // are ignored; the base class owns their bookkeeping.
+    if (resourceName == "buffer") {
+      SetSlot(impl_->buffers, slotIndex, id<MTLBuffer>(nil));
+    } else if (resourceName == "texture") {
+      SetSlot(impl_->textures, slotIndex, id<MTLTexture>(nil));
+    } else if (resourceName == "textureView") {
+      SetSlot(impl_->textureViewToTexture, slotIndex, std::optional<uint32_t>());
+    } else if (resourceName == "sampler") {
+      SetSlot(impl_->samplers, slotIndex, id<MTLSamplerState>(nil));
+    } else if (resourceName == "bindGroupLayout") {
+      SetSlot(impl_->bindGroupLayouts, slotIndex, std::optional<BindGroupLayoutDescriptor>());
+    } else if (resourceName == "bindGroup") {
+      SetSlot(impl_->bindGroups, slotIndex, std::optional<Impl::BindGroupRecord>());
+    } else if (resourceName == "pipelineLayout") {
+      SetSlot(impl_->pipelineLayouts, slotIndex, std::optional<PipelineLayoutDescriptor>());
+    } else if (resourceName == "shaderModule") {
+      SetSlot(impl_->shaderLibraries, slotIndex, id<MTLLibrary>(nil));
+    } else if (resourceName == "renderPipeline") {
+      SetSlot(impl_->renderPipelines, slotIndex, std::optional<Impl::RenderPipelineRecord>());
+    } else if (resourceName == "computePipeline") {
+      SetSlot(impl_->computePipelines, slotIndex, std::optional<Impl::ComputePipelineRecord>());
+    }
   }
 }
 
@@ -1540,87 +1605,92 @@ void MetalDevice::Impl::flushIdleBufferWrites(id<MTLBuffer> buffer) {
 
 Status MetalDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                                   std::span<const uint8_t> data) {
-  id<MTLBuffer> buffer = GetSlot(impl_->buffers, slotIndex);
-  if (buffer == nil) {
-    return GpuError{GpuErrorType::InvalidState,
-                    std::format("buffer slot {} has no Metal buffer", slotIndex)};
-  }
+  @autoreleasepool {
+    id<MTLBuffer> buffer = GetSlot(impl_->buffers, slotIndex);
+    if (buffer == nil) {
+      return GpuError{GpuErrorType::InvalidState,
+                      std::format("buffer slot {} has no Metal buffer", slotIndex)};
+    }
 
-  if (data.empty()) {
-    return OkStatus();
-  }
-  const uint64_t lastUse =
-      std::max(bufferLastUseSerial(slotIndex), GetSlot(impl_->bufferUploadSerials, slotIndex));
-  if (lastUse > completedSerial() || impl_->hasPendingWrite(buffer, nil)) {
-    if (offsetBytes % 4 == 0 && data.size() % 4 == 0) {
-      auto queued = impl_->queueWrite(Impl::PendingWrite{.slotIndex = slotIndex,
-                                                         .buffer = buffer,
-                                                         .offsetBytes = offsetBytes,
-                                                         .payloadBytes = data.size()},
-                                      data.size());
-      if (queued.hasError()) {
-        return std::move(queued).error();
-      }
-      std::memcpy(queued.result()->bytes.data(), data.data(), data.size());
+    if (data.empty()) {
       return OkStatus();
     }
-    if (lastUse > completedSerial()) {
-      ++impl_->unalignedWriteWaits;
-      if (!waitForSerial(lastUse,
-                         std::chrono::duration<double>(impl_->unalignedWriteTimeout).count())) {
-        return GpuError{
-            GpuErrorType::InvalidState,
-            std::format("Metal unaligned buffer write could not complete submission {}", lastUse)};
+    const uint64_t lastUse =
+        std::max(bufferLastUseSerial(slotIndex), GetSlot(impl_->bufferUploadSerials, slotIndex));
+    if (lastUse > completedSerial() || impl_->hasPendingWrite(buffer, nil)) {
+      if (offsetBytes % 4 == 0 && data.size() % 4 == 0) {
+        auto queued = impl_->queueWrite(Impl::PendingWrite{.slotIndex = slotIndex,
+                                                           .buffer = buffer,
+                                                           .offsetBytes = offsetBytes,
+                                                           .payloadBytes = data.size()},
+                                        data.size());
+        if (queued.hasError()) {
+          return std::move(queued).error();
+        }
+        std::memcpy(queued.result()->bytes.data(), data.data(), data.size());
+        return OkStatus();
       }
+      if (lastUse > completedSerial()) {
+        ++impl_->unalignedWriteWaits;
+        if (!waitForSerial(lastUse,
+                           std::chrono::duration<double>(impl_->unalignedWriteTimeout).count())) {
+          return GpuError{
+              GpuErrorType::InvalidState,
+              std::format("Metal unaligned buffer write could not complete submission {}",
+                          lastUse)};
+        }
+      }
+      impl_->flushIdleBufferWrites(buffer);
     }
-    impl_->flushIdleBufferWrites(buffer);
+    impl_->writeIdleBuffer(buffer, offsetBytes, data);
+    return OkStatus();
   }
-  impl_->writeIdleBuffer(buffer, offsetBytes, data);
-  return OkStatus();
 }
 
 Status MetalDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> data,
                                    const TexelCopyBufferLayout& dataLayout,
                                    const Extent2d& writeSize, const Origin2d& destinationOrigin) {
-  id<MTLTexture> texture = GetSlot(impl_->textures, slotIndex);
-  if (texture == nil) {
-    return GpuError{GpuErrorType::InvalidState,
-                    std::format("texture slot {} has no Metal texture", slotIndex)};
-  }
+  @autoreleasepool {
+    id<MTLTexture> texture = GetSlot(impl_->textures, slotIndex);
+    if (texture == nil) {
+      return GpuError{GpuErrorType::InvalidState,
+                      std::format("texture slot {} has no Metal texture", slotIndex)};
+    }
 
-  const uint64_t lastUse =
-      std::max(textureLastUseSerial(slotIndex), GetSlot(impl_->textureUploadSerials, slotIndex));
-  if (lastUse > completedSerial() || impl_->hasPendingWrite(nil, texture)) {
-    const uint32_t texelBytes = texture.pixelFormat == MTLPixelFormatRGBA32Float ? 16
-                                : texture.pixelFormat == MTLPixelFormatR8Unorm   ? 1
-                                                                                 : 4;
-    const uint32_t rowBytes = writeSize.width * texelBytes;
-    const uint32_t rowPitch = static_cast<uint32_t>(Impl::StagingSize(rowBytes));
-    auto queued =
-        impl_->queueWrite(Impl::PendingWrite{.slotIndex = slotIndex,
-                                             .texture = texture,
-                                             .size = writeSize,
-                                             .origin = destinationOrigin,
-                                             .bytesPerRow = rowPitch,
-                                             .payloadBytes = uint64_t{rowBytes} * writeSize.height},
-                          uint64_t{rowPitch} * writeSize.height);
-    if (queued.hasError()) {
-      return std::move(queued).error();
+    const uint64_t lastUse =
+        std::max(textureLastUseSerial(slotIndex), GetSlot(impl_->textureUploadSerials, slotIndex));
+    if (lastUse > completedSerial() || impl_->hasPendingWrite(nil, texture)) {
+      const uint32_t texelBytes = texture.pixelFormat == MTLPixelFormatRGBA32Float ? 16
+                                  : texture.pixelFormat == MTLPixelFormatR8Unorm   ? 1
+                                                                                   : 4;
+      const uint32_t rowBytes = writeSize.width * texelBytes;
+      const uint32_t rowPitch = static_cast<uint32_t>(Impl::StagingSize(rowBytes));
+      auto queued = impl_->queueWrite(
+          Impl::PendingWrite{.slotIndex = slotIndex,
+                             .texture = texture,
+                             .size = writeSize,
+                             .origin = destinationOrigin,
+                             .bytesPerRow = rowPitch,
+                             .payloadBytes = uint64_t{rowBytes} * writeSize.height},
+          uint64_t{rowPitch} * writeSize.height);
+      if (queued.hasError()) {
+        return std::move(queued).error();
+      }
+      for (uint32_t row = 0; row < writeSize.height; ++row) {
+        std::memcpy(queued.result()->bytes.data() + uint64_t{row} * rowPitch,
+                    data.data() + dataLayout.offsetBytes + uint64_t{row} * dataLayout.bytesPerRow,
+                    rowBytes);
+      }
+      return OkStatus();
     }
-    for (uint32_t row = 0; row < writeSize.height; ++row) {
-      std::memcpy(queued.result()->bytes.data() + uint64_t{row} * rowPitch,
-                  data.data() + dataLayout.offsetBytes + uint64_t{row} * dataLayout.bytesPerRow,
-                  rowBytes);
-    }
+
+    [texture replaceRegion:MTLRegionMake2D(destinationOrigin.x, destinationOrigin.y,
+                                           writeSize.width, writeSize.height)
+               mipmapLevel:0
+                 withBytes:data.data() + dataLayout.offsetBytes
+               bytesPerRow:dataLayout.bytesPerRow];
     return OkStatus();
   }
-
-  [texture replaceRegion:MTLRegionMake2D(destinationOrigin.x, destinationOrigin.y, writeSize.width,
-                                         writeSize.height)
-             mipmapLevel:0
-               withBytes:data.data() + dataLayout.offsetBytes
-             bytesPerRow:dataLayout.bytesPerRow];
-  return OkStatus();
 }
 
 Status MetalDevice::Impl::beginEncodedRenderPass(EncodingState& state,
@@ -2184,12 +2254,15 @@ void MetalDevice::Impl::attachCompletionHandler(std::span<EncodingState> states,
   for (size_t index = 0; index < states.size(); ++index) {
     [states[index].commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
       ReceiveCompletionHandoff(handoff);
-      NSError* bufferError = completedBuffer.error;
-      if (bufferError == nil && injectedFailureIndex == index) {
-        bufferError = InjectedCommandBufferFailure();
+      // Metal's completion queue need not drain a pool per handler, so this one drains its own.
+      @autoreleasepool {
+        NSError* bufferError = completedBuffer.error;
+        if (bufferError == nil && injectedFailureIndex == index) {
+          bufferError = InjectedCommandBufferFailure();
+        }
+        FinishCommandBuffer(*sharedState, *outcome, bufferError, submissionSerial, held,
+                            uploadBytes, payloadBytes);
       }
-      FinishCommandBuffer(*sharedState, *outcome, bufferError, submissionSerial, held, uploadBytes,
-                          payloadBytes);
     }];
   }
   // Every handler is attached and none can run before its buffer is committed, which the caller
@@ -2367,41 +2440,43 @@ Status MetalDevice::Impl::encodeSubmittedCommandBuffer(EncodingState& state,
 
 Status MetalDevice::onSubmit(uint64_t submissionSerial,
                              std::span<const SubmittedCommandBuffer> commandBuffers) {
-  if (isLost()) {
-    return GpuError{GpuErrorType::DeviceLost, "submit: the Metal root is lost"};
-  }
-  // One native command buffer per submitted buffer, committed in order on the one queue this
-  // device owns, rather than one native buffer carrying the whole submission: command buffers
-  // committed to a queue execute in commit order, and a single very large command buffer stalls
-  // the completion path, so the caller's split is kept rather than flattened. Nothing is
-  // committed until every buffer has encoded, so an encoding failure partway through leaves the
-  // queue exactly as it was.
-  if (commandBuffers.empty()) {
-    // The runtime refuses an empty submission before it reaches a backend; fail closed anyway,
-    // because the completion handler below has to go on a command buffer that exists.
-    return GpuError{GpuErrorType::InvalidState, "submission carried no command buffer"};
-  }
-
-  std::vector<Impl::EncodingState> states(commandBuffers.size());
-  for (size_t i = 0; i < commandBuffers.size(); ++i) {
-    // Only the first buffer carries the queued uploads: they are one batch for the submission,
-    // and repeating them would copy each payload once per buffer.
-    if (Status status =
-            impl_->encodeSubmittedCommandBuffer(states[i], commandBuffers[i].commands, i == 0);
-        status.hasError()) {
-      return status;
+  @autoreleasepool {
+    if (isLost()) {
+      return GpuError{GpuErrorType::DeviceLost, "submit: the Metal root is lost"};
     }
-  }
+    // One native command buffer per submitted buffer, committed in order on the one queue this
+    // device owns, rather than one native buffer carrying the whole submission: command buffers
+    // committed to a queue execute in commit order, and a single very large command buffer stalls
+    // the completion path, so the caller's split is kept rather than flattened. Nothing is
+    // committed until every buffer has encoded, so an encoding failure partway through leaves the
+    // queue exactly as it was.
+    if (commandBuffers.empty()) {
+      // The runtime refuses an empty submission before it reaches a backend; fail closed anyway,
+      // because the completion handler below has to go on a command buffer that exists.
+      return GpuError{GpuErrorType::InvalidState, "submission carried no command buffer"};
+    }
 
-  // One serial gets one completion, published once every buffer of the submission has reported.
-  impl_->attachCompletionHandler(states, submissionSerial);
-  for (Impl::EncodingState& state : states) {
-    [state.commandBuffer commit];
-  }
-  impl_->completionState->committedSerial.store(submissionSerial, std::memory_order_release);
-  impl_->didSubmitWrites(submissionSerial);
+    std::vector<Impl::EncodingState> states(commandBuffers.size());
+    for (size_t i = 0; i < commandBuffers.size(); ++i) {
+      // Only the first buffer carries the queued uploads: they are one batch for the submission,
+      // and repeating them would copy each payload once per buffer.
+      if (Status status =
+              impl_->encodeSubmittedCommandBuffer(states[i], commandBuffers[i].commands, i == 0);
+          status.hasError()) {
+        return status;
+      }
+    }
 
-  return OkStatus();
+    // One serial gets one completion, published once every buffer of the submission has reported.
+    impl_->attachCompletionHandler(states, submissionSerial);
+    for (Impl::EncodingState& state : states) {
+      [state.commandBuffer commit];
+    }
+    impl_->completionState->committedSerial.store(submissionSerial, std::memory_order_release);
+    impl_->didSubmitWrites(submissionSerial);
+
+    return OkStatus();
+  }
 }
 
 Status MetalDevice::onSubmitAfterSources(uint64_t submissionSerial,
@@ -2436,14 +2511,16 @@ void MetalDevice::Impl::releaseFrameTextureSlot(uint32_t slotIndex, id<MTLTextur
 }
 
 Status MetalDevice::onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor& descriptor) {
-  Result<std::unique_ptr<MetalSurface>> surface = MetalSurface::Create(impl_->device, descriptor);
-  if (surface.hasError()) {
-    return std::move(surface).error();
-  }
+  @autoreleasepool {
+    Result<std::unique_ptr<MetalSurface>> surface = MetalSurface::Create(impl_->device, descriptor);
+    if (surface.hasError()) {
+      return std::move(surface).error();
+    }
 
-  SetSlot(impl_->surfaces, slotIndex, std::move(surface).result());
-  SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>());
-  return OkStatus();
+    SetSlot(impl_->surfaces, slotIndex, std::move(surface).result());
+    SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>());
+    return OkStatus();
+  }
 }
 
 Result<SurfaceCapabilities> MetalDevice::onSurfaceCapabilities(uint32_t slotIndex) const {
@@ -2457,105 +2534,115 @@ Result<SurfaceCapabilities> MetalDevice::onSurfaceCapabilities(uint32_t slotInde
 
 Status MetalDevice::onConfigureSurface(uint32_t slotIndex,
                                        const SurfaceConfiguration& configuration) {
-  MetalSurface* surface = impl_->surfaceAt(slotIndex);
-  if (surface == nullptr) {
-    return GpuError{GpuErrorType::InvalidHandle,
-                    std::format("surface slot {} has no Metal layer", slotIndex)};
+  @autoreleasepool {
+    MetalSurface* surface = impl_->surfaceAt(slotIndex);
+    if (surface == nullptr) {
+      return GpuError{GpuErrorType::InvalidHandle,
+                      std::format("surface slot {} has no Metal layer", slotIndex)};
+    }
+    return surface->configure(configuration);
   }
-  return surface->configure(configuration);
 }
 
 Result<SurfaceStatus> MetalDevice::onAcquireCurrentTexture(uint32_t slotIndex,
                                                            uint32_t textureSlotIndex) {
-  MetalSurface* surface = impl_->surfaceAt(slotIndex);
-  if (surface == nullptr) {
-    return GpuError{GpuErrorType::InvalidHandle,
-                    std::format("surface slot {} has no Metal layer", slotIndex)};
-  }
-  if (isLost()) {
-    // Nothing drawn on a lost root can be shown, so no frame is handed out, and the caller learns
-    // that from the status rather than from the present that would have refused it.
-    return SurfaceStatus::DeviceLost;
-  }
+  @autoreleasepool {
+    MetalSurface* surface = impl_->surfaceAt(slotIndex);
+    if (surface == nullptr) {
+      return GpuError{GpuErrorType::InvalidHandle,
+                      std::format("surface slot {} has no Metal layer", slotIndex)};
+    }
+    if (isLost()) {
+      // Nothing drawn on a lost root can be shown, so no frame is handed out, and the caller learns
+      // that from the status rather than from the present that would have refused it.
+      return SurfaceStatus::DeviceLost;
+    }
 
-  Result<SurfaceStatus> status = surface->acquire();
-  if (status.hasError()) {
+    Result<SurfaceStatus> status = surface->acquire();
+    if (status.hasError()) {
+      return status;
+    }
+
+    id<MTLTexture> frameTexture = surface->currentTexture();
+    if (frameTexture == nil) {
+      return status;  // No frame came back; the runtime releases the slot it proposed.
+    }
+
+    SetSlot(impl_->textures, textureSlotIndex, frameTexture);
+    SetSlot(impl_->textureUploadSerials, textureSlotIndex, uint64_t{0});
+    SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>(textureSlotIndex));
     return status;
   }
-
-  id<MTLTexture> frameTexture = surface->currentTexture();
-  if (frameTexture == nil) {
-    return status;  // No frame came back; the runtime releases the slot it proposed.
-  }
-
-  SetSlot(impl_->textures, textureSlotIndex, frameTexture);
-  SetSlot(impl_->textureUploadSerials, textureSlotIndex, uint64_t{0});
-  SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>(textureSlotIndex));
-  return status;
 }
 
 Result<SurfaceStatus> MetalDevice::onPresentSurface(uint32_t slotIndex) {
-  MetalSurface* surface = impl_->surfaceAt(slotIndex);
-  if (surface == nullptr) {
-    return GpuError{GpuErrorType::InvalidHandle,
-                    std::format("surface slot {} has no Metal layer", slotIndex)};
-  }
+  @autoreleasepool {
+    MetalSurface* surface = impl_->surfaceAt(slotIndex);
+    if (surface == nullptr) {
+      return GpuError{GpuErrorType::InvalidHandle,
+                      std::format("surface slot {} has no Metal layer", slotIndex)};
+    }
 
-  // Read before anything below can release the drawable: every path from here has to clear the
-  // texture slot this frame occupies, and a released drawable no longer names its texture.
-  id<MTLTexture> frameTexture = surface->currentTexture();
+    // Read before anything below can release the drawable: every path from here has to clear the
+    // texture slot this frame occupies, and a released drawable no longer names its texture.
+    id<MTLTexture> frameTexture = surface->currentTexture();
 
-  // Handing a drawable to the layer shows it as it is at that moment, so the frame's own work
-  // has to have finished first. Metal offers no way to order that from here once the frame has
-  // been submitted - scheduling the present on a later command buffer would not do it, because a
-  // present fires when its command buffer is scheduled rather than when it completes - so the
-  // wait is explicit. It waits on the work that named this frame rather than on whatever the
-  // device submitted most recently, which stop being the same thing the moment a caller submits
-  // anything else between drawing the frame and presenting it.
-  const std::optional<uint32_t> textureSlot = GetSlot(impl_->surfaceTextureSlots, slotIndex);
-  const uint64_t frameSerial = textureSlot.has_value() ? lastTextureUseSerial(*textureSlot) : 0;
-  const auto waitStart = std::chrono::steady_clock::now();
-  const bool frameFinished = frameSerial <= completedSerial() ||
-                             waitForSerial(frameSerial, impl_->presentCompletionTimeoutSeconds);
-  if (!frameFinished && !isLost()) {
-    // A frame whose own work did not finish within the whole bound cannot be shown, and the
-    // queue holding it has stopped answering: declared here, the loss fails every later frame at
-    // once, and releases work another device's queue holds behind this device's.
-    markLostAfterWaitTimeout(DeviceLostWaitSite::Present,
-                             std::chrono::duration_cast<std::chrono::milliseconds>(
-                                 std::chrono::steady_clock::now() - waitStart),
-                             "a frame's work did not complete within the present bound");
-  }
-  // A lost root is checked after the wait, and whether or not there was one: a submission that
-  // failed on the GPU declares the loss and then completes its serial, so a frame whose own work
-  // failed reads as finished. A frame whose work did not finish has declared the loss above, so
-  // this is every frame that cannot be shown.
-  if (isLost()) {
-    // The frame is the layer's either way; the caller is told the frame it drew is not showing.
-    surface->abandon();
+    // Handing a drawable to the layer shows it as it is at that moment, so the frame's own work
+    // has to have finished first. Metal offers no way to order that from here once the frame has
+    // been submitted - scheduling the present on a later command buffer would not do it, because a
+    // present fires when its command buffer is scheduled rather than when it completes - so the
+    // wait is explicit. It waits on the work that named this frame rather than on whatever the
+    // device submitted most recently, which stop being the same thing the moment a caller submits
+    // anything else between drawing the frame and presenting it.
+    const std::optional<uint32_t> textureSlot = GetSlot(impl_->surfaceTextureSlots, slotIndex);
+    const uint64_t frameSerial = textureSlot.has_value() ? lastTextureUseSerial(*textureSlot) : 0;
+    const auto waitStart = std::chrono::steady_clock::now();
+    const bool frameFinished = frameSerial <= completedSerial() ||
+                               waitForSerial(frameSerial, impl_->presentCompletionTimeoutSeconds);
+    if (!frameFinished && !isLost()) {
+      // A frame whose own work did not finish within the whole bound cannot be shown, and the
+      // queue holding it has stopped answering: declared here, the loss fails every later frame at
+      // once, and releases work another device's queue holds behind this device's.
+      markLostAfterWaitTimeout(DeviceLostWaitSite::Present,
+                               std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - waitStart),
+                               "a frame's work did not complete within the present bound");
+    }
+    // A lost root is checked after the wait, and whether or not there was one: a submission that
+    // failed on the GPU declares the loss and then completes its serial, so a frame whose own work
+    // failed reads as finished. A frame whose work did not finish has declared the loss above, so
+    // this is every frame that cannot be shown.
+    if (isLost()) {
+      // The frame is the layer's either way; the caller is told the frame it drew is not showing.
+      surface->abandon();
+      impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
+      return SurfaceStatus::DeviceLost;
+    }
+
+    Result<SurfaceStatus> status = surface->present();
     impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
-    return SurfaceStatus::DeviceLost;
+    return status;
   }
-
-  Result<SurfaceStatus> status = surface->present();
-  impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
-  return status;
 }
 
 void MetalDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
-  MetalSurface* surface = impl_->surfaceAt(slotIndex);
-  if (surface == nullptr) {
-    return;
-  }
+  @autoreleasepool {
+    MetalSurface* surface = impl_->surfaceAt(slotIndex);
+    if (surface == nullptr) {
+      return;
+    }
 
-  id<MTLTexture> frameTexture = surface->currentTexture();
-  surface->abandon();
-  impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
+    id<MTLTexture> frameTexture = surface->currentTexture();
+    surface->abandon();
+    impl_->releaseFrameTextureSlot(slotIndex, frameTexture);
+  }
 }
 
 void MetalDevice::onDestroySurface(uint32_t slotIndex) {
-  SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>());
-  SetSlot(impl_->surfaces, slotIndex, std::unique_ptr<MetalSurface>());
+  @autoreleasepool {
+    SetSlot(impl_->surfaceTextureSlots, slotIndex, std::optional<uint32_t>());
+    SetSlot(impl_->surfaces, slotIndex, std::unique_ptr<MetalSurface>());
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2614,41 +2701,48 @@ private:
 
 Status MetalDevice::onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,
                                      MapMode /*mode*/, uint64_t offsetBytes, uint64_t byteCount) {
-  if (!impl_->mappingTable) {
-    impl_->mappingHost =
-        std::make_unique<MetalMappingHost>(*this, impl_->buffers, impl_->completionState);
-    impl_->mappingTable = std::make_unique<BufferMappingTable>(*impl_->mappingHost);
+  @autoreleasepool {
+    if (!impl_->mappingTable) {
+      impl_->mappingHost =
+          std::make_unique<MetalMappingHost>(*this, impl_->buffers, impl_->completionState);
+      impl_->mappingTable = std::make_unique<BufferMappingTable>(*impl_->mappingHost);
+    }
+    // A queued write has no serial yet: it is applied at the start of whichever submission happens
+    // next, which can be unrelated work, so it would change the mapped bytes after the mapping had
+    // already reported itself ready. Readiness cannot express that, so the mapping is refused until
+    // the queue drains.
+    if (impl_->hasPendingWrite(GetSlot(impl_->buffers, bufferSlotIndex), nil)) {
+      return GpuError{
+          GpuErrorType::InvalidState,
+          std::format("mapBufferAsync: buffer (slot {}) has a queued write that has not "
+                      "been applied yet; submit before mapping",
+                      bufferSlotIndex)};
+    }
+    // A mapping observes work that was already submitted, so the serial is taken now rather than
+    // when the wait starts: a submission issued after this call belongs to a later mapping.
+    const uint64_t readySerial = std::max(bufferLastUseSerial(bufferSlotIndex),
+                                          GetSlot(impl_->bufferUploadSerials, bufferSlotIndex));
+    return impl_->mappingTable->begin(mappingSlotIndex, bufferSlotIndex, offsetBytes, byteCount,
+                                      readySerial);
   }
-  // A queued write has no serial yet: it is applied at the start of whichever submission happens
-  // next, which can be unrelated work, so it would change the mapped bytes after the mapping had
-  // already reported itself ready. Readiness cannot express that, so the mapping is refused until
-  // the queue drains.
-  if (impl_->hasPendingWrite(GetSlot(impl_->buffers, bufferSlotIndex), nil)) {
-    return GpuError{GpuErrorType::InvalidState,
-                    std::format("mapBufferAsync: buffer (slot {}) has a queued write that has not "
-                                "been applied yet; submit before mapping",
-                                bufferSlotIndex)};
-  }
-  // A mapping observes work that was already submitted, so the serial is taken now rather than
-  // when the wait starts: a submission issued after this call belongs to a later mapping.
-  const uint64_t readySerial = std::max(bufferLastUseSerial(bufferSlotIndex),
-                                        GetSlot(impl_->bufferUploadSerials, bufferSlotIndex));
-  return impl_->mappingTable->begin(mappingSlotIndex, bufferSlotIndex, offsetBytes, byteCount,
-                                    readySerial);
 }
 
 MapSliceReport MetalDevice::onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) {
-  if (!impl_->mappingTable) {
-    return MapSliceReport{.state = MapSliceState::Failed, .waitKind = MapWaitKind::Polled};
+  @autoreleasepool {
+    if (!impl_->mappingTable) {
+      return MapSliceReport{.state = MapSliceState::Failed, .waitKind = MapWaitKind::Polled};
+    }
+    return impl_->mappingTable->waitSlice(mappingSlotIndex, sliceSeconds);
   }
-  return impl_->mappingTable->waitSlice(mappingSlotIndex, sliceSeconds);
 }
 
 Result<std::span<const uint8_t>> MetalDevice::onMappedBytes(uint32_t mappingSlotIndex) const {
-  if (!impl_->mappingTable) {
-    return GpuError{GpuErrorType::InvalidHandle, "mappedBytes: this device has no open mappings"};
+  @autoreleasepool {
+    if (!impl_->mappingTable) {
+      return GpuError{GpuErrorType::InvalidHandle, "mappedBytes: this device has no open mappings"};
+    }
+    return impl_->mappingTable->bytes(mappingSlotIndex);
   }
-  return impl_->mappingTable->bytes(mappingSlotIndex);
 }
 
 void MetalDevice::onUnmapBuffer(uint32_t mappingSlotIndex) {
