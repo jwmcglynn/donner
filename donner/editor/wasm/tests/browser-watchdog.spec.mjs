@@ -68,6 +68,56 @@ test("Linux child exit between stat and status remains an accounted zombie", () 
   }
 });
 
+function linuxExitFixture(flags, threads = "1", rss) {
+  const procRoot = directory();
+  const pid = 123456;
+  const root = path.join(procRoot, String(pid));
+  fs.mkdirSync(root);
+  const fields = ["R", "10", "42", ...Array(16).fill("0"), "901", "0", "0"];
+  fields[6] = flags;
+  fields[17] = threads;
+  fs.writeFileSync(path.join(root, "stat"), `${pid} (worker) ${fields.join(" ")}`);
+  fs.writeFileSync(
+    path.join(root, "status"),
+    `Threads: ${threads}\n${rss === undefined ? "" : `VmRSS: ${rss} kB\n`}`,
+  );
+  return { platform: "linux", procRoot };
+}
+
+test("Linux single-thread exit can release its mm before zombie state", () => {
+  assert.deepEqual(processRows(linuxExitFixture("4")), [{
+    pid: 123456,
+    ppid: 10,
+    pgid: 42,
+    start: "901",
+    rssBytes: 0,
+    command: "worker",
+  }]);
+});
+
+test("Linux exiting tasks retain a present memory measurement", () => {
+  assert.equal(processRows(linuxExitFixture("4", "1", "7"))[0].rssBytes, 7168);
+});
+
+test("Linux missing memory for live or multi-thread tasks fails closed", () => {
+  for (const [flags, threads] of [["0", "1"], ["4", "2"], ["4", "0"]]) {
+    assert.throws(() => processRows(linuxExitFixture(flags, threads)), /unreadable process RSS/);
+  }
+});
+
+test("Linux process flags and thread counts require valid unsigned integers", () => {
+  for (const flags of ["-1", "4294967296", "4.0", "bad"]) {
+    assert.throws(
+      () => processRows(linuxExitFixture(flags, "1", "7")),
+      /unreadable process identity/,
+    );
+  }
+  assert.throws(
+    () => processRows(linuxExitFixture("4", "bad", "7")),
+    /unreadable process identity/,
+  );
+});
+
 test("Linux measurement preserves elapsed and snapshot-size bounds", () => {
   const procRoot = directory();
   const pid = 123456;

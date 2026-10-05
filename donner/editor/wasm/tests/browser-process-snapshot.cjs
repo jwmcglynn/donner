@@ -80,7 +80,11 @@ exports.processRows = function processRows({
           !rss && !["Z", "X"].includes(fields[0]) && fields[2] !== "0"
           && fs.statSync(directory).uid === process.getuid()
         ) {
-          throw new Error("unreadable process RSS");
+          throw new Error(
+            `unreadable process RSS (pid=${Number(name)} state=${
+              /^[A-Za-z]$/.test(fields[0]) ? fields[0] : "invalid"
+            } flags=${Number(fields[6])} threads=${Number(fields[17])})`,
+          );
         }
         const row = {
           pid: Number(name),
