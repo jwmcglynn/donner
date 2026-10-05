@@ -812,26 +812,34 @@ test("latency gates enforce by default and only record a miss when set to report
   assert.equal(gates.latencyGateSummary(""), "No latency gate results were recorded.\n");
 });
 
+// The Perf workflow's matrix entries as [os, value of `key`] pairs.
+function perfMatrixSetting(workflow, key) {
+  return workflow.split(/\n {10}- os: /).slice(1).map((entry) => [
+    entry.split("\n")[0].trim(),
+    new RegExp(`\\n {12}${key}: (\\S+)`).exec(entry)?.[1],
+  ]);
+}
+
+// The body of the Perf workflow step named `name`, up to the next step.
+function perfStep(workflow, name) {
+  const start = workflow.indexOf(`- name: ${name}`);
+  assert.ok(start >= 0, `Perf must have the step "${name}"`);
+  const end = workflow.indexOf("\n      - name:", start);
+  return workflow.slice(start, end < 0 ? undefined : end);
+}
+
 test("only the hosted macOS Perf job reports latency gates without enforcing them", () => {
   const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/perf.yml"), "utf8");
-  const entries = workflow.split(/\n {10}- os: /).slice(1).map((entry) => ({
-    os: entry.split("\n")[0].trim(),
-    latencyGates: /\n {12}latency_gates: (\S+)/.exec(entry)?.[1],
-  }));
   assert.deepEqual(
-    entries.map(({ os, latencyGates }) => [os, latencyGates]),
+    perfMatrixSetting(workflow, "latency_gates"),
     [["macos-26", "report"], ["ubuntu-24.04", "enforce"]],
     "only the GitHub-hosted macOS entry, which runs the browser lane, may report gate misses",
   );
-  const testStep = workflow.slice(workflow.indexOf("- name: Test perf-tagged targets"));
   assert.match(
-    testStep.slice(0, testStep.indexOf("\n      - name:")),
+    perfStep(workflow, "Test perf-tagged targets"),
     /--test_env=DONNER_BROWSER_LATENCY_GATES=\$\{\{ matrix\.latency_gates \}\}/,
   );
-  const summaryStart = workflow.indexOf("- name: Summarize interaction latency gates");
-  assert.ok(summaryStart >= 0, "Perf must summarize the recorded gate values");
-  const summaryEnd = workflow.indexOf("\n      - name:", summaryStart);
-  const summaryStep = workflow.slice(summaryStart, summaryEnd < 0 ? undefined : summaryEnd);
+  const summaryStep = perfStep(workflow, "Summarize interaction latency gates");
   assert.ok(
     summaryStep.includes(
       "if: ${{ !cancelled() && matrix.target_tag == 'perf' && steps.perf.outcome != 'skipped' }}",
@@ -903,4 +911,109 @@ test("modules that the TypeScript specs import stay loadable as CommonJS", () =>
     const source = readFileSync(path.join(testDirectory, module), "utf8");
     assert.ok(!source.includes("import.meta"), `${module} must not use import.meta`);
   }
+});
+
+test("completion checks enforce by default and report only tracked misses", async () => {
+  const gates = await import("./latency-gates.mjs");
+  assert.equal(gates.completionCheckMode({}), "enforce");
+  assert.equal(gates.completionCheckMode({ [gates.kCompletionChecksEnv]: "report" }), "report");
+  assert.throws(
+    () => gates.completionCheckMode({ [gates.kCompletionChecksEnv]: "off" }),
+    /must be/,
+  );
+  assert.equal(
+    gates.completionCheckMode({ [gates.kLatencyGatesEnv]: "report" }),
+    "enforce",
+    "reporting latency gates must not also report completion checks",
+  );
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(gates.kCompletionChecks).map(([check, { browser }]) => [check, browser]),
+    ),
+    { coldZoomPresents: "chromium", dragInputsComplete: "firefox" },
+  );
+  const miss = new Error("every dispatched input must complete\n\nExpected: 60");
+  const run = async (mode, browserName, assertion) => {
+    const lines = [];
+    const outcome = await gates.runCompletionCheck("dragInputsComplete", assertion, {
+      browserName,
+      project: `${browserName}-dpr1`,
+      phase: "first-drag-193",
+      detail: "58 of 60 inputs completed",
+      mode,
+      log: (line) => lines.push(line),
+    }).then((result) => ({ result }), (error) => ({ error }));
+    return { ...outcome, lines };
+  };
+  const reported = await run("report", "firefox", () => Promise.reject(miss));
+  assert.deepEqual(reported.result, {
+    check: "dragInputsComplete",
+    browser: "firefox-dpr1",
+    phase: "first-drag-193",
+    detail: "58 of 60 inputs completed",
+    met: false,
+    mode: "report",
+    error: "every dispatched input must complete",
+  });
+  assert.deepEqual(reported.lines, [
+    `${gates.kCompletionCheckRecordPrefix}${JSON.stringify(reported.result)}`,
+  ]);
+  for (const [mode, browserName] of [["enforce", "firefox"], ["report", "chromium"]]) {
+    const enforced = await run(mode, browserName, () => {
+      throw miss;
+    });
+    assert.equal(enforced.error, miss, `${mode} mode in ${browserName} must rethrow the miss`);
+    assert.equal(enforced.lines.length, 1, "an enforced miss is recorded too");
+    assert.match(enforced.lines[0], /"mode":"enforce"/);
+  }
+  assert.equal((await run("enforce", "firefox", () => {})).result.met, true);
+  await assert.rejects(
+    gates.runCompletionCheck("anyOtherCheck", () => {}, {
+      browserName: "firefox",
+      project: "firefox",
+      phase: "first-drag-193",
+      detail: "",
+      mode: "report",
+      log: () => {},
+    }),
+    /unknown completion check/,
+  );
+  assert.ok(
+    gates.latencyGateSummary(reported.lines.join("\n")).includes(
+      "| first-drag-193 | dragInputsComplete | 58 of 60 inputs completed | missed (reported) |",
+    ),
+  );
+});
+
+test("only the hosted macOS Perf job reports the completion checks without enforcing them", () => {
+  const workflow = readFileSync(path.join(repositoryRoot, ".github/workflows/perf.yml"), "utf8");
+  assert.deepEqual(
+    perfMatrixSetting(workflow, "completion_checks"),
+    [["macos-26", "report"], ["ubuntu-24.04", "enforce"]],
+  );
+  assert.match(
+    perfStep(workflow, "Test perf-tagged targets"),
+    /--test_env=DONNER_BROWSER_COMPLETION_CHECKS=\$\{\{ matrix\.completion_checks \}\}/,
+  );
+});
+
+test("only the two tracked responsiveness checks go through the completion check helper", () => {
+  const spec = readFileSync(path.join(testDirectory, "browser-responsiveness.perf.ts"), "utf8");
+  assert.match(spec, /completionCheckMode\(\)/, "the mode must come from the run's environment");
+  const calls = [...spec.matchAll(/completionCheck\(\s*"(\w+)"/g)];
+  assert.deepEqual(calls.map(([, check]) => check), ["dragInputsComplete", "coldZoomPresents"]);
+  const [drag, coldZoom] = calls.map(({ index }) => index);
+  assert.match(
+    spec.slice(coldZoom - 80, coldZoom),
+    /if \(phase === "cold-zoom"\) \{\s*await $/,
+    "only the cold-zoom phase may report its presentation check",
+  );
+  const message =
+    "every dispatched input, including the final one, must complete in the measured stream";
+  assert.equal(spec.split(message).length, 2, "the drag input check must appear once");
+  const messageAt = spec.indexOf(message);
+  assert.ok(
+    messageAt > drag && messageAt - drag < 400,
+    "the drag input check must run through the helper",
+  );
 });

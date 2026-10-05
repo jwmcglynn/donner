@@ -1,5 +1,6 @@
-// `node latency-gate-summary.mjs <test.log>` prints the interaction latency gates recorded in a
-// test log as a Markdown table, or a notice when the log is missing because the test did not run.
+// `node latency-gate-summary.mjs <test.log>` prints the interaction latency gates and completion
+// checks recorded in a test log as Markdown tables, or a notice when the log is missing because the
+// test did not run.
 //
 // This command lives apart from latency-gates.mjs because the responsiveness spec imports that
 // module, which must therefore stay loadable as CommonJS.
