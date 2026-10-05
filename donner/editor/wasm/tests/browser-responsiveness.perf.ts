@@ -11,7 +11,13 @@ import {
 } from "./composited-probe";
 import { stopCompositedProbe } from "./composited-probe-evidence.mjs";
 import { inspectGpuImageTransfer } from "./gpu-image-transfer-canary";
-import { checkLatencyGate, latencyGateMode } from "./latency-gates.mjs";
+import {
+  checkLatencyGate,
+  completionCheckMode,
+  kCompletionChecks,
+  latencyGateMode,
+  runCompletionCheck,
+} from "./latency-gates.mjs";
 
 interface Diagnostics extends Window {
   __donnerBackend?: string;
@@ -321,6 +327,29 @@ function latencyGate(
   });
 }
 
+const completionCheckEnforcement = completionCheckMode();
+
+/**
+ * Run one tracked completion check's assertion and record whether it held. A miss fails the test
+ * unless the run only reports completion checks and the miss is in the check's tracked browser.
+ */
+async function completionCheck(
+  check: keyof typeof kCompletionChecks,
+  phase: string,
+  detail: string,
+  assertion: () => unknown,
+) {
+  const project = test.info().project;
+  await runCompletionCheck(check, assertion, {
+    browserName: project.use.browserName ?? "",
+    project: project.name,
+    phase,
+    detail,
+    mode: completionCheckEnforcement,
+    log: (line) => console.log(line),
+  });
+}
+
 async function continuousDrag(
   page: Page,
   start: { x: number; y: number },
@@ -512,11 +541,16 @@ async function continuousDrag(
     );
     expect(positions.size, "held drag must complete multiple represented positions")
       .toBeGreaterThan(1);
-    expect(
-      latencies.length,
-      "every dispatched input, including the final one, must complete in the measured stream",
-    )
-      .toBe(stream.dispatchPoints.length);
+    await completionCheck(
+      "dragInputsComplete",
+      phase,
+      `${latencies.length} of ${stream.dispatchPoints.length} inputs completed`,
+      () =>
+        expect(
+          latencies.length,
+          "every dispatched input, including the final one, must complete in the measured stream",
+        ).toBe(stream.dispatchPoints.length),
+    );
     expect(after.worker?.compositorReadbackCount, "composition must not read GPU tiles back")
       .toBe(0);
     latencyGate("inputP95", phase, distribution(latencies).p95);
@@ -717,24 +751,32 @@ test(
             }, { ...center, deltaY: step % 2 === 0 ? -42 : 42 });
           }
           let presented: Snapshot | undefined;
-          await expect.poll(async () => {
-            const current = await snapshot(page);
-            const changed = kind === "pointer"
-              ? current.interaction?.pointerX === point.x
-                && current.interaction?.pointerY === point.y
-              : current.viewport?.zoom !== prior.viewport?.zoom;
-            const ready = changed
-              && (current.frameLoop?.renderedFrames ?? 0) > (prior.frameLoop?.renderedFrames ?? 0)
-              && (current.frameLoop?.lastFrameAtMs ?? 0) >= (current.input?.atMs ?? Infinity);
-            if (ready) presented = current;
-            return ready;
-          }, {
-            timeout: 10000,
-            intervals: [8, 16, 32],
-            message: `${phase} step ${step} must present`,
-          })
-            .toBe(true);
-          latencies.push(presented!.frameLoop!.lastFrameAtMs - presented!.input!.atMs);
+          const stepPresents = () =>
+            expect.poll(async () => {
+              const current = await snapshot(page);
+              const changed = kind === "pointer"
+                ? current.interaction?.pointerX === point.x
+                  && current.interaction?.pointerY === point.y
+                : current.viewport?.zoom !== prior.viewport?.zoom;
+              const ready = changed
+                && (current.frameLoop?.renderedFrames ?? 0)
+                  > (prior.frameLoop?.renderedFrames ?? 0)
+                && (current.frameLoop?.lastFrameAtMs ?? 0) >= (current.input?.atMs ?? Infinity);
+              if (ready) presented = current;
+              return ready;
+            }, {
+              timeout: 10000,
+              intervals: [8, 16, 32],
+              message: `${phase} step ${step} must present`,
+            })
+              .toBe(true);
+          if (phase === "cold-zoom") {
+            await completionCheck("coldZoomPresents", phase, `step ${step}`, stepPresents);
+          } else {
+            await stepPresents();
+          }
+          // A reported miss leaves this step without a presented frame to measure.
+          if (presented) latencies.push(presented.frameLoop!.lastFrameAtMs - presented.input!.atMs);
         }
         report[phase] = phaseReport(before, await snapshot(page), latencies);
         console.log(
