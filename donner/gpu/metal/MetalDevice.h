@@ -252,7 +252,8 @@ public:
   void holdNextCompletionForTest();
 
   /// Publishes the completion \ref holdNextCompletionForTest parked, from the calling thread, or
-  /// lets it publish normally when its handler has not run yet. Safe when nothing is held.
+  /// lets it publish normally when its handler has not run yet. Safe when nothing is held, and
+  /// callable from any thread while the device's own thread waits.
   void releaseHeldCompletionForTest();
 
   /// Bounds how long a present waits for its frame's work, in place of the five seconds it
@@ -407,10 +408,10 @@ protected:
   MapSliceReport onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
 
   /**
-   * Polls the completion counter until it reaches \p serial, the budget runs out, or a completed
-   * command buffer reports an execution error (see \ref lastErrorForTest). Completion handlers
-   * run on a Metal-internal thread, so rechecking a counter is enough and keeps this backend free
-   * of extra synchronization primitives.
+   * Sleeps until the completion counter reaches \p serial, the budget runs out, a completed
+   * command buffer reports an execution error (see \ref lastErrorForTest), or the root is
+   * declared lost. Completion handlers run on a Metal-internal thread and wake the wait each time
+   * a command buffer completes or a serial is published, so it returns as soon as the work does.
    *
    * @param serial Submission serial to wait for.
    * @param timeoutSeconds Longest to wait, in seconds.

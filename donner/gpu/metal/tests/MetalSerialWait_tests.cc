@@ -120,5 +120,26 @@ TEST_F(MetalSerialWaitTest, AWaitForHeldWorkLooksOnlyWhenCompletionStateChanges)
                                        "the work completes";
 }
 
+/// Publishing the serial wakes the wait on its own. The command buffer has completed, which also
+/// wakes a waiter, but its serial is held back, so publishing it later is the only wake the wait
+/// gets: a wait that missed it would sleep until its budget ran out.
+TEST_F(MetalSerialWaitTest, PublishingTheSerialWakesTheWait) {
+  device_->holdNextCompletionForTest();
+  const uint64_t serial = submitEmptyWork();
+  ASSERT_THAT(device_->waitForCompletionHandlersForTest(1, /*timeoutSeconds=*/5.0), IsTrue())
+      << "the command buffer's completion handler never ran";
+
+  DelayedRelease publisher([this] { device_->releaseHeldCompletionForTest(); });
+  const bool completed = device_->waitForSerial(serial, /*timeoutSeconds=*/5.0);
+  const auto returnedAt = std::chrono::steady_clock::now();
+  publisher.join();
+
+  EXPECT_THAT(completed, IsTrue());
+  EXPECT_THAT(MillisecondsBetween(publisher.releasedAt(), returnedAt), Ge(0))
+      << "the wait returned before its serial was published";
+  EXPECT_THAT(MillisecondsBetween(publisher.releasedAt(), returnedAt), Lt(kWakeSlack.count()))
+      << "publishing the serial did not wake the wait, which slept toward its budget";
+}
+
 }  // namespace
 }  // namespace donner::gpu::metal
