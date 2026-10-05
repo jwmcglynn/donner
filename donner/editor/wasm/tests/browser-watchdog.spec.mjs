@@ -96,7 +96,33 @@ test("Linux single-thread exit can release its mm before zombie state", () => {
 });
 
 test("Linux exiting tasks retain a present memory measurement", () => {
-  assert.equal(processRows(linuxExitFixture("4", "1", "7"))[0].rssBytes, 7168);
+  for (const threads of ["0", "1", "2"]) {
+    assert.equal(processRows(linuxExitFixture("4", threads, "7"))[0].rssBytes, 7168);
+  }
+});
+
+test("Linux exit accounting uses flags from the identity-confirmed second stat", () => {
+  const options = linuxExitFixture("0");
+  const file = path.join(options.procRoot, "123456", "stat");
+  const first = fs.readFileSync(file, "utf8");
+  const fields = first.slice(first.lastIndexOf(")") + 1).trim().split(/\s+/);
+  fields[6] = "4";
+  const second = `123456 (worker) ${fields.join(" ")}`;
+  const read = fs.readFileSync;
+  let statReads = 0;
+  fs.readFileSync = function(input, ...args) {
+    if (input === file) return ++statReads === 1 ? first : second;
+    return read.call(this, input, ...args);
+  };
+  try {
+    assert.equal(processRows(options)[0].rssBytes, 0);
+  } finally {
+    fs.readFileSync = read;
+  }
+});
+
+test("Linux exiting tasks cannot turn a malformed RSS field into zero", () => {
+  assert.throws(() => processRows(linuxExitFixture("4", "1", "bad")), /unreadable process RSS/);
 });
 
 test("Linux missing memory for live or multi-thread tasks fails closed", () => {
