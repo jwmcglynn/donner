@@ -93,10 +93,13 @@ function assertCommonBrowserLane({ lane, laneName, specFiles }) {
 }
 
 function assertPerformanceLane({ lane, tags, specFiles }) {
+  // The driver runs only under the watchdog lane, which owns the `perf` tag. Perf discovery
+  // selects every `perf`-tagged test, so the tag here would run the driver without its watchdog.
   assert.deepEqual(
     tags.sort(),
-    ["manual", "no-sandbox", "perf"],
-    "responsiveness timing must remain opt-in while allowing Firefox's own sandbox",
+    ["manual", "no-sandbox"],
+    "the responsiveness driver must stay opt-in, allow Firefox's own sandbox, and stay out of "
+      + "perf discovery",
   );
   assert.match(lane, /--config=\$\(rootpath :playwright\.responsiveness\.bazel\.config\.js\)/);
   assert.ok(lane.includes("\"playwright.responsiveness.bazel.config.js\""));
