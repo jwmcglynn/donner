@@ -181,20 +181,13 @@ function bazel_info() {
 }
 
 TARGETS=()
-BAZEL_COVERAGE_FLAGS=()
-DEFAULT_BAZEL_COVERAGE_FLAGS=()
 read -r -a BAZEL_CMD <<< "${DONNER_BAZEL:-bazel}"
-
-if [[ -n "${DONNER_COVERAGE_BAZEL_FLAGS:-}" ]]; then
-  read -r -a BAZEL_COVERAGE_FLAGS <<< "$DONNER_COVERAGE_BAZEL_FLAGS"
-else
-  DEFAULT_BAZEL_COVERAGE_FLAGS=(
-    --remote_executor=
-    --remote_cache=
-    --experimental_remote_downloader=
-    --noremote_upload_local_results
-  )
-fi
+BAZEL_COVERAGE_FLAGS=(
+  --remote_executor=
+  --remote_cache=
+  --experimental_remote_downloader=
+  --noremote_upload_local_results
+)
 
 # Check for --quiet option
 QUIET=false
@@ -355,36 +348,13 @@ fi
   FILTER_COVERAGE_LOG="$COVERAGE_HTML_DIR/filter_coverage.log"
   GENHTML_LOG="$COVERAGE_HTML_DIR/genhtml.log"
 
-  # CI diagnostics: when DONNER_CI_DIAGNOSTICS_DIR is set (self-hosted CI),
-  # capture the inner `bazel coverage` profile + BEP there and record phase
-  # wall times, so slow coverage runs are attributable from artifacts alone.
-  DIAG_FLAGS=()
-  COVERAGE_TIMING_FILE=""
-  if [ -n "${DONNER_CI_DIAGNOSTICS_DIR:-}" ]; then
-    mkdir -p "$DONNER_CI_DIAGNOSTICS_DIR/coverage"
-    local_timing="$DONNER_CI_DIAGNOSTICS_DIR/coverage/timing.txt"
-    if [[ -e "$local_timing" || -L "$local_timing" ]]; then
-      rm -f -- "$local_timing" >/dev/null 2>&1 || true
-    fi
-    if [[ ! -e "$local_timing" && ! -L "$local_timing" ]]; then
-      if { : > "$local_timing"; } 2>/dev/null; then
-        COVERAGE_TIMING_FILE="$local_timing"
-      fi
-    fi
-    DIAG_FLAGS=(
-      --profile="$DONNER_CI_DIAGNOSTICS_DIR/coverage/profile.gz"
-    )
-    COVERAGE_BEP="$DONNER_CI_DIAGNOSTICS_DIR/coverage/bep.json"
-  else
-    COVERAGE_BEP="$COVERAGE_HTML_DIR/bep.json"
-  fi
-  # The build event stream is written unconditionally, not only under CI
-  # diagnostics: the missing-report guard below reads it to tell "every target
-  # was skipped as incompatible with this platform" apart from a real failure,
-  # and that distinction has to work wherever this script runs.
-  DIAG_FLAGS+=(--build_event_json_file="$COVERAGE_BEP")
-  # Self-hosted CI retains only numeric timing and allowlisted BEP fields.
-  # Report failures without publishing raw logs, runner paths, or test output.
+  # The build event stream is written on every run: the missing-report guard
+  # below reads it to tell "every target was skipped as incompatible with this
+  # platform" apart from a real failure, and the coverage proof reads it for
+  # per-target test status.
+  COVERAGE_BEP="$COVERAGE_HTML_DIR/bep.json"
+  # Report failures from allowlisted BEP fields without publishing raw logs,
+  # runner paths, or test output.
   report_coverage_failure_labels() {
     local bazel_status="$1"
     if [[ -f "$COVERAGE_BEP" ]]; then
@@ -412,37 +382,7 @@ fi
       context='{"bepStatus":"unavailable"}'
     fi
     printf 'Bazel coverage failure context (BEP): %s\n' "$context"
-    if [[ -n "${DONNER_CI_DIAGNOSTICS_DIR:-}" ]]; then
-      local summary="$DONNER_CI_DIAGNOSTICS_DIR/coverage/failure-summary.json"
-      local temporary
-      # Never let mv treat an existing directory as a destination. A fresh CI
-      # diagnostics directory also keeps both uploaded files isolated per run.
-      if [[ -d "$summary" ]]; then
-        return 0
-      fi
-      if [[ -e "$summary" || -L "$summary" ]]; then
-        rm -f -- "$summary" >/dev/null 2>&1 || return 0
-      fi
-      if temporary="$(mktemp "${summary}.XXXXXX" 2>/dev/null)"; then
-        if { printf '%s\n' "$context" > "$temporary"; } 2>/dev/null &&
-            python3 -c 'import os, sys; os.replace(sys.argv[1], sys.argv[2])' \
-              "$temporary" "$summary" >/dev/null 2>&1; then
-          :
-        else
-          rm -f -- "$temporary" >/dev/null 2>&1 || true
-        fi
-      fi
-    fi
   }
-  phase_mark() {
-    if [[ -n "$COVERAGE_TIMING_FILE" ]]; then
-      if ! { printf '%s=%s\n' "$1" "$(date +%s)" >> "$COVERAGE_TIMING_FILE"; } \
-          2>/dev/null; then
-        COVERAGE_TIMING_FILE=""
-      fi
-    fi
-  }
-  phase_mark start
 
   # --keep_going is set in .bazelrc for coverage so that analysis failures
   # don't block the rest of the run. Remove any previous combined report so
@@ -458,29 +398,26 @@ fi
     # record of the in-flight target when the job is killed by its timeout.
     run_quiet_with_progress "Bazel coverage" "$BAZEL_COVERAGE_LOG" \
       "${BAZEL_CMD[@]}" coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr \
-      "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
       "${BAZEL_COVERAGE_FLAGS[@]}" \
       "${LLVM_COVERAGE_FLAGS[@]}" \
-      "${DIAG_FLAGS[@]}" \
+      --build_event_json_file="$COVERAGE_BEP" \
       "${BAZEL_TEST_ENV[@]}" "${TARGETS[@]}" || coverage_status=$?
   else
     "${BAZEL_CMD[@]}" coverage --config=latest_llvm \
-      "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
       "${BAZEL_COVERAGE_FLAGS[@]}" \
       "${LLVM_COVERAGE_FLAGS[@]}" \
-      "${DIAG_FLAGS[@]}" \
+      --build_event_json_file="$COVERAGE_BEP" \
       "${BAZEL_TEST_ENV[@]}" "${TARGETS[@]}" || coverage_status=$?
   fi
-  phase_mark bazel_coverage_done
 
   if [ ! -f "$COVERAGE_REPORT" ]; then
     # Fail closed by default: an absent report must never read as success,
     # because a silently empty report would claim full coverage of nothing.
     #
     # The one benign cause is that every selected target is restricted to a
-    # platform this lane does not run on, so Bazel skipped them all and there
-    # was nothing to measure. A change touching only such a target would
-    # otherwise be unable to pass this lane on any run. Consult the build event
+    # platform this host does not run, so Bazel skipped them all and there
+    # was nothing to measure. Explicit labels naming only such targets would
+    # otherwise fail on every run. Consult the build event
     # stream, which names skipped targets explicitly, and exit cleanly only
     # when it positively shows skipping accounted for every target.
     BEP_STATUS="unknown"
@@ -501,8 +438,8 @@ fi
       # CI believed the announcement and its upload step, which names that
       # exact path with if-no-files-found: error, failed on the missing file.
       # The marker is the honest half of that contract: the script says a
-      # report was not written, and every consumer that needs one reads this
-      # and stands down.
+      # report was not written. Callers decide what that means; the Coverage
+      # workflow, whose complete-tree run must produce a report, fails on it.
       echo "all_skipped" > "$COVERAGE_HTML_DIR/coverage_skipped"
       exit 0
     fi
@@ -541,7 +478,6 @@ fi
     METRICS_ARGS+=(--codecov-reference-json "$CODECOV_REFERENCE_JSON")
   fi
   python3 tools/lcov_metrics.py "${METRICS_ARGS[@]}"
-  phase_mark filter_done
 
   if [ "$NO_HTML" = false ]; then
     if [ "$QUIET" = true ]; then
@@ -551,7 +487,6 @@ fi
       genhtml "$COVERAGE_HTML_DIR/filtered_report.dat" $GENHTML_OPTIONS
     fi
   fi
-  phase_mark end
 )
 
 if [ -f "$COVERAGE_OUTPUT_DIR/coverage_skipped" ]; then

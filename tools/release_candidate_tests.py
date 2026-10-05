@@ -227,13 +227,22 @@ class RecordValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "required execution lane"):
             self.verify()
 
-    def test_self_hosted_ci_and_coverage_lanes_can_qualify(self):
+    def test_self_hosted_ci_lanes_can_qualify(self):
         ci_id = self.record["evidence"]["ci"]["run_id"]
-        coverage_id = self.record["evidence"]["coverage"]["run_id"]
         self.jobs[ci_id]["jobs"][0]["name"] = "linux-self-hosted"
         self.jobs[ci_id]["jobs"][1]["name"] = "macos-self-hosted"
-        self.jobs[coverage_id]["jobs"][0]["name"] = "coverage-self-hosted"
         self.verify()
+
+    def test_coverage_run_without_its_codecov_upload_cannot_qualify(self):
+        run_id = self.record["evidence"]["coverage"]["run_id"]
+        self.jobs[run_id] = {"total_count": 2, "jobs": [
+            {"name": "build", "conclusion": "success"},
+            {"name": "upload-coverage", "conclusion": "skipped"},
+        ]}
+        self.record["evidence"]["coverage"]["passed_jobs"] = 1
+        self.record["evidence"]["coverage"]["skipped_jobs"] = 1
+        with self.assertRaisesRegex(ValueError, "required execution lane"):
+            self.verify()
 
 
 class SourceAndEditorTest(unittest.TestCase):

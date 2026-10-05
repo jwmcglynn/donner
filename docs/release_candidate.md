@@ -30,7 +30,8 @@ trailing newline. Record its SHA-256 outside the record; the record cannot conta
   exact-source run ID and attempt, its retained evidence-file SHA-256, and successful/skipped
   **workflow job** counts. The verifier gets those counts from GitHub's attempt-specific jobs API;
   they are not test-target counts. Required CI, coverage, fuzz, sanitizer, and CodeQL lanes must
-  each have a successful job; a green idle workflow with skipped sanitizer jobs is insufficient.
+  each have a successful job, and coverage also needs its successful Codecov upload job; a green
+  idle workflow with skipped sanitizer jobs is insufficient.
   Keep test-target details in the evidence files themselves.
 - `reviews`: SHA-256 digests of the local `security.md` and `supply-chain.md` reports. The record
   contains their digests, not the reports' potentially sensitive contents.

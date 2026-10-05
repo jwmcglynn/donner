@@ -12,32 +12,18 @@ coverage:
           - main
         flags:
           - unittests
-    patch:
-      default:
-        target: auto
-        threshold: 0%
-        only_pulls: true
-        # Report patch coverage as a status/comment but never block the
-        # merge on it. For large backend-introduction PRs (Geode renderer
-        # stack, future backends) patch coverage naturally dips below the
-        # project baseline while follow-up test work lands. Keeping this
-        # informational matches the `project` status above — both are
-        # visibility, not merge gates. Coverage improvement is measured
-        # against the complete main baseline, not selected PR uploads.
-        informational: true
+    # Coverage is uploaded only by the nightly and manually dispatched runs of
+    # the Coverage workflow on main; pull requests upload nothing. Without a
+    # head upload there is no patch to measure, so the patch status is off
+    # rather than left pending on every pull request.
+    patch: false
 
-comment:
-  # PR uploads are selected subsets. The diff component prints a project
-  # comparison even with the project header hidden, so show patch-only details
-  # and the explicit incremental flag instead.
-  layout: "condensed_header, flags, condensed_files, condensed_footer"
-  hide_project_coverage: true
+# Pull requests have no coverage upload to report on.
+comment: false
 
 flags:
   unittests:
     carryforward: true
-  pr-incremental:
-    carryforward: false
 
 parsers:
   gcov:

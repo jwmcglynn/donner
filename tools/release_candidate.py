@@ -33,7 +33,7 @@ EVIDENCE_WORKFLOWS = {
 }
 REQUIRED_EVIDENCE_JOBS = {
     "ci": (("linux", "linux-self-hosted"), ("macos", "macos-self-hosted")),
-    "coverage": (("build", "coverage-self-hosted"),),
+    "coverage": (("build",), ("upload-coverage",)),
     "fuzz": (("linux",), ("macos",)),
     "sanitizers": (("asan",), ("ubsan",)),
     "security": (("Analyze (c-cpp)",), ("Analyze (javascript-typescript)",),

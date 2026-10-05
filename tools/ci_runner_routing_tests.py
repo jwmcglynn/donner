@@ -23,7 +23,6 @@ class CiRunnerRoutingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.text = _workflow_text(".github/workflows/main.yml")
-        cls.coverage_text = _workflow_text(".github/workflows/coverage.yml")
 
     def _job_body(self, job):
         marker = "\n  %s:\n" % job
@@ -32,19 +31,12 @@ class CiRunnerRoutingTest(unittest.TestCase):
         end = re.search(r"^  [A-Za-z0-9_-]+:\s*$", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
 
-    def _routing_script(self, workflow):
-        if workflow == "main":
-            section = self.text.split("      - id: runner_gate\n", 1)[1]
-            section = section.split("\n  determine-targets:\n", 1)[0]
-        else:
-            section = self.coverage_text.split("      - id: determine\n", 1)[1]
-            section = section.split(
-                '          # Single source of truth for "does a coverage lane actually run?".',
-                1,
-            )[0]
+    def _routing_script(self):
+        section = self.text.split("      - id: runner_gate\n", 1)[1]
+        section = section.split("\n  determine-targets:\n", 1)[0]
         return textwrap.dedent(section.split("        run: |\n", 1)[1])
 
-    def _route(self, workflow, *, event_name="pull_request", event=None,
+    def _route(self, *, event_name="pull_request", event=None,
                actor="jwmcglynn", triggering_actor="jwmcglynn",
                linux_enabled="true", macos_enabled="true"):
         if event is None:
@@ -71,18 +63,15 @@ class CiRunnerRoutingTest(unittest.TestCase):
                        SELFHOSTED_MACOS_RUNNER=macos_enabled,
                        GITHUB_EVENT_PATH=str(event_path), GITHUB_OUTPUT=str(output_path),
                        RUNNER_TEMP=directory, GH_TOKEN="test", PATH=f"{directory}:{os.environ['PATH']}")
-            result = subprocess.run(["bash", "-c", self._routing_script(workflow)],
+            result = subprocess.run(["bash", "-c", self._routing_script()],
                                     env=env, text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             return dict(line.split("=", 1) for line in output_path.read_text().splitlines())
 
     def test_operator_pr_uses_self_hosted_lanes_when_enabled(self):
-        for workflow in ("main", "coverage"):
-            with self.subTest(workflow=workflow):
-                route = self._route(workflow)
-                self.assertEqual(route["use_self_hosted_linux"], "true")
-                if workflow == "main":
-                    self.assertEqual(route["use_self_hosted_macos"], "true")
+        route = self._route()
+        self.assertEqual(route["use_self_hosted_linux"], "true")
+        self.assertEqual(route["use_self_hosted_macos"], "true")
 
     def test_operator_stacked_pr_uses_self_hosted_lanes(self):
         event = {
@@ -94,21 +83,15 @@ class CiRunnerRoutingTest(unittest.TestCase):
                          "ref": "feature/dependency"},
             },
         }
-        for workflow in ("main", "coverage"):
-            with self.subTest(workflow=workflow):
-                route = self._route(workflow, event=event)
-                self.assertEqual(route["use_self_hosted_linux"], "true")
-                if workflow == "main":
-                    self.assertEqual(route["use_self_hosted_macos"], "true")
+        route = self._route(event=event)
+        self.assertEqual(route["use_self_hosted_linux"], "true")
+        self.assertEqual(route["use_self_hosted_macos"], "true")
 
     def test_operator_main_push_uses_hosted_lanes(self):
         event = {"sender": {"login": "jwmcglynn"}}
-        for workflow in ("main", "coverage"):
-            with self.subTest(workflow=workflow):
-                route = self._route(workflow, event_name="push", event=event)
-                self.assertEqual(route["use_self_hosted_linux"], "false")
-                if workflow == "main":
-                    self.assertEqual(route["use_self_hosted_macos"], "false")
+        route = self._route(event_name="push", event=event)
+        self.assertEqual(route["use_self_hosted_linux"], "false")
+        self.assertEqual(route["use_self_hosted_macos"], "false")
 
     def test_operator_fork_pr_stays_hosted(self):
         event = {
@@ -119,10 +102,7 @@ class CiRunnerRoutingTest(unittest.TestCase):
                 "base": {"repo": {"full_name": "jwmcglynn/donner"}, "ref": "main"},
             },
         }
-        for workflow in ("main", "coverage"):
-            with self.subTest(workflow=workflow):
-                self.assertEqual(self._route(workflow, event=event)["use_self_hosted_linux"],
-                                 "false")
+        self.assertEqual(self._route(event=event)["use_self_hosted_linux"], "false")
 
     def test_missing_author_and_collaborator_rerun_stay_hosted(self):
         event = {
@@ -133,19 +113,14 @@ class CiRunnerRoutingTest(unittest.TestCase):
                 "base": {"repo": {"full_name": "jwmcglynn/donner"}, "ref": "main"},
             },
         }
-        for workflow in ("main", "coverage"):
-            with self.subTest(workflow=workflow):
-                self.assertEqual(self._route(workflow, event=event)["use_self_hosted_linux"],
-                                 "false")
-                self.assertEqual(self._route(workflow, triggering_actor="collaborator")[
-                    "use_self_hosted_linux"], "false")
+        self.assertEqual(self._route(event=event)["use_self_hosted_linux"], "false")
+        self.assertEqual(self._route(triggering_actor="collaborator")[
+            "use_self_hosted_linux"], "false")
 
     def test_disabled_linux_switch_only_affects_linux(self):
-        route = self._route("main", linux_enabled="false")
+        route = self._route(linux_enabled="false")
         self.assertEqual(route["use_self_hosted_linux"], "false")
         self.assertEqual(route["use_self_hosted_macos"], "true")
-        self.assertEqual(self._route("coverage", linux_enabled="false")[
-            "use_self_hosted_linux"], "false")
 
     def test_operator_hosted_macos_label_preserves_linux_routing(self):
         event = {
@@ -157,13 +132,12 @@ class CiRunnerRoutingTest(unittest.TestCase):
                 "labels": [{"name": "ci:hosted-macos"}],
             },
         }
-        route = self._route("main", event=event)
+        route = self._route(event=event)
         self.assertEqual(route["use_self_hosted_linux"], "true")
         self.assertEqual(route["use_self_hosted_macos"], "false")
-        self.assertEqual(self._route("coverage", event=event)["use_self_hosted_linux"], "true")
 
         event["pull_request"]["base"]["ref"] = "feature/dependency"
-        self.assertEqual(self._route("main", event=event)["use_self_hosted_macos"], "false")
+        self.assertEqual(self._route(event=event)["use_self_hosted_macos"], "false")
 
     def test_hosted_macos_label_requires_exact_name_and_trusted_operator(self):
         event = {
@@ -175,14 +149,14 @@ class CiRunnerRoutingTest(unittest.TestCase):
                 "labels": [{"name": "ci:hosted-macos-extra"}],
             },
         }
-        self.assertEqual(self._route("main", event=event)["use_self_hosted_macos"], "true")
+        self.assertEqual(self._route(event=event)["use_self_hosted_macos"], "true")
         event["pull_request"]["labels"] = [{"name": "ci:hosted-macos"}]
         event["pull_request"]["head"]["repo"]["full_name"] = "jwmcglynn/fork"
-        fork = self._route("main", event=event)
+        fork = self._route(event=event)
         self.assertEqual(fork["use_self_hosted_linux"], "false")
         self.assertEqual(fork["use_self_hosted_macos"], "false")
         event["pull_request"]["head"]["repo"]["full_name"] = "jwmcglynn/donner"
-        collaborator = self._route("main", event=event, triggering_actor="collaborator")
+        collaborator = self._route(event=event, triggering_actor="collaborator")
         self.assertEqual(collaborator["use_self_hosted_linux"], "false")
         self.assertEqual(collaborator["use_self_hosted_macos"], "false")
 
@@ -191,9 +165,6 @@ class CiRunnerRoutingTest(unittest.TestCase):
         self.assertNotIn("SELF_HOSTED_MAX_CHANGED_FILES", self.text)
         self.assertNotIn("outputs.large_change", self.text)
         self.assertNotIn("changed_file_count", self.text)
-        self.assertNotIn("SELF_HOSTED_MAX_CHANGED_FILES", self.coverage_text)
-        self.assertNotIn("outputs.large_change", self.coverage_text)
-        self.assertNotIn("changed_file_count", self.coverage_text)
 
     def test_linux_jobs_are_selected_only_by_the_trusted_runner_gate(self):
         hosted = self._job_body("linux")

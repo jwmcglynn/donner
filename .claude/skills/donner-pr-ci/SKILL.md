@@ -145,7 +145,7 @@ Workflow map (all in `.github/workflows/`):
 | `lint.yml`          | push + PR                                                                                                                    | Banned-pattern check for `examples/`, `gen_cmakelists.py --check`                                              |
 | `sanitizers-pr.yml` | PR touching Geode renderer paths                                                                                             | ASan+Geode; currently informational (`continue-on-error`, see doc 0031 M1.2)                                   |
 | `sanitizers.yml`    | nightly cron + dispatch                                                                                                      | Full sanitizer sweep                                                                                           |
-| `coverage.yml`      | push + PR + dispatch                                                                                                         | Coverage upload (Codecov patch signal needs PR-side runs)                                                      |
+| `coverage.yml`      | nightly cron + dispatch (main only)                                                                                          | Complete-tree coverage; separate `upload-coverage` job sends it to Codecov (no PR runs or patch status)        |
 | `fuzz.yml`          | nightly cron + dispatch + PR touching `**/*_fuzzer.{cc,cpp,h}`, `**/corpus/**`, `build_defs/rules.bzl`, or `fuzz.yml` itself | Fuzzer regression suite                                                                                        |
 | `perf.yml`          | nightly cron + dispatch                                                                                                      | Wall-clock perf targets (discovered via `bazelisk query 'tests(//...) intersect attr("tags", "perf", //...)'`) |
 | `editor_wasm.yml`   | nightly cron + dispatch                                                                                                      | Builds and browser-tests both editor backends; emits the reviewed Geode static-site candidate                  |
@@ -155,9 +155,8 @@ Workflow map (all in `.github/workflows/`):
 **Check-name collisions**: `gh pr checks` interleaves every workflow's checks, and job names
 repeat — `cmake.yml` also defines `gatekeeper`, `linux`, and `macos` (its build lanes show a
 matrix suffix, e.g. `linux (tiny_skia)`). Other names you will see: `validate-generator`
-(cmake.yml), `lint` + `cmake-validate` (lint.yml), `asan-geode` (sanitizers-pr.yml), `build` +
-`coverage-self-hosted` (coverage.yml). Disambiguate by the run URL's workflow name, never by the
-job-name column alone.
+(cmake.yml), `lint` + `cmake-validate` (lint.yml), `asan-geode` (sanitizers-pr.yml). Disambiguate
+by the run URL's workflow name, never by the job-name column alone.
 
 ## 6. Failure decision tree: transient vs real
 

@@ -261,18 +261,16 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_downloaded_bazel_diff_is_verified_before_execution(self):
         """The downloaded JAR must match the digest published for its release."""
-        for path in (".github/workflows/main.yml", ".github/workflows/coverage.yml"):
-            workflow = self.supply_chain_files[path]
-            with self.subTest(path=path):
-                self.assertIn('BAZEL_DIFF_TAG: "%s"' % BAZEL_DIFF_TAG, workflow)
-                self.assertIn('BAZEL_DIFF_SHA256: "%s"' % BAZEL_DIFF_SHA256, workflow)
+        workflow = self.supply_chain_files[".github/workflows/main.yml"]
+        self.assertIn('BAZEL_DIFF_TAG: "%s"' % BAZEL_DIFF_TAG, workflow)
+        self.assertIn('BAZEL_DIFF_SHA256: "%s"' % BAZEL_DIFF_SHA256, workflow)
 
-                download = _step_body(workflow, "Download bazel-diff")
-                verification = "sha256sum --check --status"
-                self.assertIn("$BAZEL_DIFF_SHA256", download)
-                self.assertIn(verification, download)
-                self.assertLess(download.index(verification), download.index("exit 0"))
-                self.assertIn('rm -f "$out"', download)
+        download = _step_body(workflow, "Download bazel-diff")
+        verification = "sha256sum --check --status"
+        self.assertIn("$BAZEL_DIFF_SHA256", download)
+        self.assertIn(verification, download)
+        self.assertLess(download.index(verification), download.index("exit 0"))
+        self.assertIn('rm -f "$out"', download)
 
     def test_downloaded_tools_are_verified_before_extraction(self):
         cases = (

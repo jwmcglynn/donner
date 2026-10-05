@@ -684,12 +684,8 @@ jobs:
   # cannot run on the constrained self-hosted pool itself: newer runs could
   # occupy every runner while the oldest lane job remains queued, creating a
   # head-of-line deadlock. This lightweight prerequisite waits off-pool and
-  # releases dependent self-hosted jobs in submission order.
-  #
-  # The Linux and coverage lanes share ONE pool sized to the runner fleet
-  # rather than holding one slot each. Per-lane serialization capped the whole
-  # fleet at two concurrent jobs no matter which lane the queued work was in,
-  # so a burst of coverage runs left Linux capacity idle and vice versa.
+  # releases dependent self-hosted jobs in submission order. The pool is sized
+  # to the runner fleet, so up to four Linux jobs run at once.
   linux-self-hosted-turnstile:
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
@@ -705,8 +701,8 @@ jobs:
         uses: ./.github/actions/re-turnstile
         with:
           lane: linux-self-hosted
-          pool: linux-self-hosted coverage-self-hosted
-          pool-workflows: main.yml coverage.yml
+          pool: linux-self-hosted
+          pool-workflows: main.yml
           capacity: "4"
           token: ${{ github.token }}
           timeout-minutes: "150"
@@ -744,25 +740,19 @@ jobs:
     # its turn, FIFO,
     # so N concurrent runs all execute in submission order and none are
     # cancelled. Bounding CI's demand on the backend also protects the
-    # interactive host's latency.
-    #
-    # The bound is a POOL shared with the coverage lane, sized to the runner
-    # fleet, not one slot per lane. Per-lane slots capped the fleet at two jobs
-    # and let a burst in one lane serialize behind itself while the other
-    # lane's capacity sat idle. Any mix of Linux and coverage jobs may hold the
-    # pool's slots.
+    # interactive host's latency. The bound is a pool sized to the runner
+    # fleet.
     env:
       # The runner host may add the LAN Bazel cache from its home rc. Use that
       # acceleration when healthy, but do NOT fall back to local execution when
       # remote execution is down/degraded: a CPU-capped runner executing the
       # whole graph locally is the measured 2-3 h tail. Fast-fail on RE
       # degradation; the wedge-watch + rerun recover.
-      # --remote_timeout is 60s (not 5s) for the same reason as the coverage
-      # lane: a healthy-but-BUSY endpoint legitimately takes >5s on bulk
-      # transfers under a multi-job burst (observed as spurious
-      # DEADLINE_EXCEEDED-after-4.999s failures on full-`//...` fallback runs,
-      # 2026-07-11, twice in a row on organic load; same signature as the
-      # 2026-07-02 coverage-lane incident that motivated coverage.yml's 60s).
+      # --remote_timeout is 60s (not 5s): a healthy-but-BUSY endpoint
+      # legitimately takes >5s on bulk transfers under a multi-job burst
+      # (observed as spurious DEADLINE_EXCEEDED-after-4.999s failures on
+      # full-`//...` fallback runs, 2026-07-11, twice in a row on organic load;
+      # the same signature appeared on 2026-07-02 for large coverage uploads).
       # 60s still fast-fails a genuinely dead endpoint.
       BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--strategy=TestRunner=remote --remote_local_fallback=false --incompatible_remote_local_fallback_for_remote_cache=false --remote_timeout=60s"
       # Every self-hosted run uploads Bazel profiles + BEP + compact execution
