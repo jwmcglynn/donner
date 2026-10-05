@@ -2090,8 +2090,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // from the bucket instead of calling `createTexture`.
   //
   // Exact-size pooling (no power-of-two bucketing). Works for the
-  // repeat-render case this PR targets because layer sizes are
-  // derived from `pixelWidth`/`pixelHeight`, which don't change
+  // repeat-render case because layer sizes are derived from the
+  // extents of the targets they draw into, which don't change
   // between idle re-renders. A size-bucketing extension is a future
   // follow-up for viewport-resize scenarios.
   // --------------------------------------------------------------------
@@ -2421,6 +2421,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     Box2d pixelRect;
     bool valid = false;
     bool hasPolygon = false;
+    /// The clip's coverage could not be produced, so nothing under it draws.
     bool allocationRejected = false;
     Vector2d polygonCorners[4];
     /// Path-clip mask. When non-null these name a 1-sample texture sampled
@@ -2481,6 +2482,42 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::vector<ClipStackEntry> clipStack;
   std::vector<FilterStackFrame> filterStack;
   std::size_t rejectedFilterDepth = 0;
+
+  /// How far right and down the active filter captures move what is drawn into them, in pixels.
+  /// A capture expanded for an offset holds the content its region reaches above or left of its
+  /// outer target, moved by that overhang, and a capture nested in another is moved within it, so
+  /// the overhangs of every capture on the stack add up.
+  [[nodiscard]] Vector2i filterCaptureOffset() const {
+    Vector2i offset = Vector2i::Zero();
+    for (const FilterStackFrame& frame : filterStack) {
+      offset.x += frame.filterBufferOffsetX;
+      offset.y += frame.filterBufferOffsetY;
+    }
+    return offset;
+  }
+
+  /// Fills the clip paths in [\p begin, \p end) of \p clip, one layer of it, into \p mask with
+  /// the active encoder, intersected with whatever nested mask the encoder has bound.
+  /// @param mask Mask texture with the active target's extent.
+  /// @param clip Clip whose paths are filled.
+  /// @param begin Index of the layer's first path.
+  /// @param end Index past the layer's last path.
+  /// @param deviceFromLocal Transform of the clipped element's local space.
+  /// @return False when the encoder refused the mask pass, which leaves the mask without coverage.
+  [[nodiscard]] bool fillClipLayerMask(const gpu::Texture& mask, const ResolvedClip& clip,
+                                       size_t begin, size_t end,
+                                       const Transform2d& deviceFromLocal) {
+    if (!encoder->beginMaskPass(mask)) {
+      return false;
+    }
+    for (size_t s = begin; s < end; ++s) {
+      const ClipPathShape& shape = clip.clipPaths[s];
+      encoder->setTransform(clip.clipPathUnitsTransform * shape.parentFromEntity * deviceFromLocal);
+      encoder->fillPathIntoMask(shape.path, shape.fillRule);
+    }
+    encoder->endMaskPass();
+    return true;
+  }
 
   bool initializeClipEntry(const ResolvedClip& clip, ClipStackEntry& entry) {
     if (rejectedFilterDepth != 0) {
@@ -2931,13 +2968,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// layer, mask, and clip targets share the root pixel coordinate system.
   [[nodiscard]] Transform2d geometryDebugRootFromCurrentTarget(
       int additionalFilterOffsetX = 0, int additionalFilterOffsetY = 0) const {
-    int offsetX = additionalFilterOffsetX;
-    int offsetY = additionalFilterOffsetY;
-    for (const FilterStackFrame& frame : filterStack) {
-      offsetX += frame.filterBufferOffsetX;
-      offsetY += frame.filterBufferOffsetY;
-    }
-    return Transform2d::Translate(-offsetX, -offsetY);
+    const Vector2i offset = filterCaptureOffset();
+    return Transform2d::Translate(-(offset.x + additionalFilterOffsetX),
+                                  -(offset.y + additionalFilterOffsetY));
   }
 
   /// Configure a path-capable encoder. Pattern-tile content deliberately
@@ -5792,14 +5825,13 @@ void RendererGeode::setTransform(const Transform2d& transform) {
     impl_->deviceFromLocalTransform = scaled;
     return;
   }
-  if (!impl_->filterStack.empty()) {
-    const auto& filterFrame = impl_->filterStack.back();
-    if (filterFrame.filterBufferOffsetX != 0 || filterFrame.filterBufferOffsetY != 0) {
-      impl_->deviceFromLocalTransform =
-          transform *
-          Transform2d::Translate(filterFrame.filterBufferOffsetX, filterFrame.filterBufferOffsetY);
-      return;
-    }
+  // Every expanded filter capture on the stack moves what is drawn into it, including captures
+  // below a nested filter whose own capture is not expanded.
+  const Vector2i captureOffset = impl_->filterCaptureOffset();
+  if (captureOffset.x != 0 || captureOffset.y != 0) {
+    impl_->deviceFromLocalTransform =
+        transform * Transform2d::Translate(captureOffset.x, captureOffset.y);
+    return;
   }
   impl_->deviceFromLocalTransform = transform;
 }
@@ -5869,12 +5901,13 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
   // binding the previously-rendered deeper mask as the input clip.
   if (!clip.clipPaths.empty() && impl_->device && impl_->encoder && impl_->pixelWidth > 0 &&
       impl_->pixelHeight > 0) {
+    // Masks cover the target being drawn into, which inside a filter layer expanded for an
+    // offset is larger than the surface: the masks' coverage is addressed in that target's
+    // pixels, and the mask passes are scissored to it.
+    const gpu::Extent2d maskExtent = impl_->targetExtent();
     const auto makeMaskTexture = [&](const char* label, gpu::TextureDescriptor& outDesc) {
       outDesc =
-          gpu::TextureDescriptor{RcString(label),
-                                 gpu::Extent2d{static_cast<uint32_t>(impl_->pixelWidth),
-                                               static_cast<uint32_t>(impl_->pixelHeight)},
-                                 gpu::TextureFormat::RGBA8Unorm,
+          gpu::TextureDescriptor{RcString(label), maskExtent, gpu::TextureFormat::RGBA8Unorm,
                                  gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled};
       return impl_->acquireTexture(outDesc);
     };
@@ -5946,15 +5979,13 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       // handle recorded below points at the owner rather than at a copy that outlives its scope.
       entry.maskLayerTextures.push_back({std::move(maskTexture), maskDesc});
       const gpu::Texture& maskTextureHandle = entry.maskLayerTextures.back().texture;
-      impl_->encoder->beginMaskPass(maskTextureHandle);
-      for (size_t s = it->begin; s < it->end; ++s) {
-        const ClipPathShape& shape = clip.clipPaths[s];
-        const Transform2d composed =
-            clip.clipPathUnitsTransform * shape.parentFromEntity * savedDeviceFromLocalTransform;
-        impl_->encoder->setTransform(composed);
-        impl_->encoder->fillPathIntoMask(shape.path, shape.fillRule);
+      if (!impl_->fillClipLayerMask(maskTextureHandle, clip, it->begin, it->end,
+                                    savedDeviceFromLocalTransform)) {
+        // The mask holds no coverage, so treat it like one that could not be allocated: nothing
+        // under this clip draws.
+        entry.allocationRejected = true;
+        break;
       }
-      impl_->encoder->endMaskPass();
 
       nestedMaskTextureHandle = &maskTextureHandle;
       nestedMaskViewHandle = &impl_->importTextureView(maskTextureHandle);
@@ -6020,9 +6051,10 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
 
   // Allocate an offscreen layer. All draws issued between push/pop land
   // here; pop composites it back onto the outer target with the stored opacity.
-  const gpu::TextureDescriptor td{"RendererGeodeIsolatedLayer",
-                                  gpu::Extent2d{static_cast<uint32_t>(impl_->pixelWidth),
-                                                static_cast<uint32_t>(impl_->pixelHeight)},
+  // The layer takes the outer target's extent, not the surface's: the composite maps the whole
+  // layer over the whole outer target, which inside a filter layer expanded for an offset is
+  // larger than the surface.
+  const gpu::TextureDescriptor td{"RendererGeodeIsolatedLayer", impl_->targetExtent(),
                                   impl_->gpuTextureFormat(),
                                   gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::Sampled |
                                       gpu::TextureUsage::CopySrc};
@@ -6091,10 +6123,10 @@ void RendererGeode::popIsolatedLayer() {
     // backdrop, but a render pass may not read from its own color attachment. Snapshot the
     // parent's 1-sample resolve target into a separate texture with a texture-to-texture copy,
     // then open a fresh parent encoder over the parent target; the load-op note further down
-    // covers why that encoder preserves the target's contents.
-    const gpu::TextureDescriptor snapDesc{"RendererGeodeBlendDstSnapshot",
-                                          gpu::Extent2d{static_cast<uint32_t>(impl_->pixelWidth),
-                                                        static_cast<uint32_t>(impl_->pixelHeight)},
+    // covers why that encoder preserves the target's contents. The snapshot is the whole parent
+    // target, so the blend samples it texel for texel wherever the layer lands.
+    const gpu::Extent2d backdropExtent = impl_->targetExtent();
+    const gpu::TextureDescriptor snapDesc{"RendererGeodeBlendDstSnapshot", backdropExtent,
                                           impl_->gpuTextureFormat(),
                                           gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst};
     // Reading the backdrop copies out of the parent target, which an embedder-supplied one can
@@ -6112,9 +6144,7 @@ void RendererGeode::popIsolatedLayer() {
       // recorded outside a pass. It joins the frame's recorded stream after those draws and
       // before the composite recorded below, which is the order the backdrop has to be frozen in.
       const gpu::Status copied = impl_->frameGpuEncoder->copyTextureToTexture(
-          savedTargetHandle, snapshotHandle,
-          gpu::Extent2d{static_cast<uint32_t>(impl_->pixelWidth),
-                        static_cast<uint32_t>(impl_->pixelHeight)});
+          savedTargetHandle, snapshotHandle, backdropExtent);
       UTILS_RELEASE_ASSERT_MSG(!copied.hasError(),
                                "Failed to record the mix-blend-mode backdrop snapshot copy");
 
@@ -6134,7 +6164,7 @@ void RendererGeode::popIsolatedLayer() {
       // safe.
       auto newEncoder = std::make_unique<geode::GeoEncoder>(
           *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-          savedTargetHandle, impl_->targetExtent(), *impl_->frameGpuEncoder);
+          savedTargetHandle, backdropExtent, *impl_->frameGpuEncoder);
       impl_->configurePathEncoder(*newEncoder);
       newEncoder->setLoadPreserve();
       impl_->replaceActiveEncoder(std::move(newEncoder));
@@ -6179,16 +6209,19 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     impl_->filterStack.push_back({});
     return;
   }
-  std::optional<GeodeFilterAdmission> admission =
-      AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
-                       impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget,
-                       *impl_->surfaceBudget, *impl_->filterEngine);
+  // The capture covers the target the result composites back onto, which is larger than the
+  // surface when this filter nests inside one expanded for an offset.
+  const gpu::Extent2d outerExtent = impl_->targetExtent();
+  const int outerWidth = static_cast<int>(outerExtent.width);
+  const int outerHeight = static_cast<int>(outerExtent.height);
+  std::optional<GeodeFilterAdmission> admission = AdmitGeodeFilter(
+      filterGraph, filterRegion, impl_->deviceFromLocalTransform, outerWidth, outerHeight,
+      *impl_->filterExecutionBudget, *impl_->surfaceBudget, *impl_->filterEngine);
   if (!admission.has_value() && impl_->filterExecutionBudget->executions() != 0 &&
       impl_->submitFilterBudgetChunk()) {
-    admission =
-        AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
-                         impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget,
-                         *impl_->surfaceBudget, *impl_->filterEngine);
+    admission = AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
+                                 outerWidth, outerHeight, *impl_->filterExecutionBudget,
+                                 *impl_->surfaceBudget, *impl_->filterEngine);
   }
   if (!admission.has_value()) {
     impl_->pushRejectedFilterFrame();
@@ -6276,9 +6309,10 @@ void RendererGeode::popFilterLayer() {
   // existing contents. Composite the filtered texture back with full
   // opacity (filter results are already premultiplied).
   impl_->target = Impl::aliasOf(frame.savedTarget);
+  const gpu::Extent2d outerExtent = impl_->targetExtent();
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedTarget, impl_->targetExtent(), *impl_->frameGpuEncoder);
+      frame.savedTarget, outerExtent, *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
   impl_->replaceActiveEncoder(std::move(newEncoder));
@@ -6290,10 +6324,11 @@ void RendererGeode::popFilterLayer() {
     return;
   }
   if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
-    // The filter result is in an expanded texture. Extract the viewport-sized region at the
-    // buffer offset using a GPU texture copy, then blit the viewport-sized result.
-    const uint32_t vpW = static_cast<uint32_t>(impl_->pixelWidth);
-    const uint32_t vpH = static_cast<uint32_t>(impl_->pixelHeight);
+    // The filter result is in an expanded texture. Extract the region the outer target covers,
+    // at the buffer offset, using a GPU texture copy, then blit it over that target. The buffer
+    // was sized as that target plus the offset, so the region lies wholly inside the result.
+    const uint32_t vpW = outerExtent.width;
+    const uint32_t vpH = outerExtent.height;
 
     const gpu::TextureDescriptor vpDesc{"RendererGeodeFilterViewport", gpu::Extent2d{vpW, vpH},
                                         filteredDesc.format,
@@ -6342,12 +6377,13 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
     return;
   }
 
+  // The mask and its content take the outer target's extent, not the surface's: popMask maps both
+  // over the whole outer target, which inside a filter layer expanded for an offset is larger
+  // than the surface.
+  const gpu::Extent2d outerExtent = impl_->targetExtent();
   const auto allocTexture = [&](const char* label, gpu::Texture& outTexture,
                                 gpu::TextureDescriptor& outDesc) {
-    outDesc = gpu::TextureDescriptor{RcString(label),
-                                     gpu::Extent2d{static_cast<uint32_t>(impl_->pixelWidth),
-                                                   static_cast<uint32_t>(impl_->pixelHeight)},
-                                     impl_->gpuTextureFormat(),
+    outDesc = gpu::TextureDescriptor{RcString(label), outerExtent, impl_->gpuTextureFormat(),
                                      gpu::TextureUsage::RenderAttachment |
                                          gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc};
     outTexture = impl_->acquireTexture(outDesc);

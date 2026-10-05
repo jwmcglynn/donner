@@ -817,6 +817,7 @@ donner_cc_test(
     }),
     deps = [
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
         "//donner/css:core",
         "//donner/editor/tests:bitmap_golden_compare",
@@ -831,6 +832,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/renderer:stroke_params",
         "//donner/svg/renderer/geode:geode_device",
