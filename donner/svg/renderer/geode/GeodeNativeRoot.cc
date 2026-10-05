@@ -51,7 +51,7 @@ gpu::GpuError NoPlatformDefaultBackend() {
   return gpu::GpuError{gpu::GpuErrorType::Unsupported, "this platform has no native GPU backend"};
 }
 
-enum class BackendRequestSource : uint8_t { Caller, Environment, BuildSetting, Default };
+enum class BackendRequestSource : uint8_t { Caller, Environment, Default };
 
 struct ResolvedBackend {
   GpuBackendKind kind;
@@ -79,8 +79,7 @@ gpu::Result<GpuBackendKind> ParseBackendRequest(std::string_view request) {
 }
 
 gpu::Result<ResolvedBackend> ResolveBackend(const GpuRootSelection& options,
-                                            std::string_view request,
-                                            std::optional<GpuBackendKind> buildDefault) {
+                                            std::string_view request) {
   std::optional<ResolvedBackend> named;
   if (options.backend.has_value()) {
     named = ResolvedBackend{*options.backend, BackendRequestSource::Caller};
@@ -90,8 +89,6 @@ gpu::Result<ResolvedBackend> ResolveBackend(const GpuRootSelection& options,
       return std::move(requested).error();
     }
     named = ResolvedBackend{requested.result(), BackendRequestSource::Environment};
-  } else if (buildDefault.has_value()) {
-    named = ResolvedBackend{*buildDefault, BackendRequestSource::BuildSetting};
   } else if (const std::optional<GpuBackendKind> platformDefault =
                  PlatformDefaultGpuBackendKind()) {
     named = ResolvedBackend{*platformDefault, BackendRequestSource::Default};
@@ -127,7 +124,7 @@ void ReportSelectedBackendOnce(GpuBackendKind kind, BackendRequestSource source,
   if (source == BackendRequestSource::Default) {
     return;
   }
-  constexpr uint32_t kSourceCount = 4;
+  constexpr uint32_t kSourceCount = static_cast<uint32_t>(BackendRequestSource::Default) + 1;
   static std::atomic<uint32_t> reported{0};
   const uint32_t pair =
       1u << (static_cast<uint32_t>(kind) * kSourceCount + static_cast<uint32_t>(source));
@@ -144,10 +141,6 @@ void ReportSelectedBackendOnce(GpuBackendKind kind, BackendRequestSource source,
       std::fprintf(stderr, "[Geode] GPU backend: %.*s, requested by DONNER_GPU_BACKEND=%.*s.\n",
                    static_cast<int>(name.size()), name.data(), static_cast<int>(request.size()),
                    request.data());
-      break;
-    case BackendRequestSource::BuildSetting:
-      std::fprintf(stderr, "[Geode] GPU backend: %.*s, selected by the build setting.\n",
-                   static_cast<int>(name.size()), name.data());
       break;
     case BackendRequestSource::Default: break;
   }
@@ -250,14 +243,9 @@ gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind() {
   return ParseBackendRequest(ProcessBackendRequest());
 }
 
-std::optional<GpuBackendKind> BuildDefaultGpuBackendKind() {
-  return std::nullopt;
-}
-
 gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& options,
-                                                  std::string_view request,
-                                                  std::optional<GpuBackendKind> buildDefault) {
-  gpu::Result<ResolvedBackend> resolved = ResolveBackend(options, request, buildDefault);
+                                                  std::string_view request) {
+  gpu::Result<ResolvedBackend> resolved = ResolveBackend(options, request);
   if (resolved.hasError()) {
     return std::move(resolved).error();
   }
@@ -266,8 +254,7 @@ gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& option
 
 std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options) {
   const std::string_view request = ProcessBackendRequest();
-  gpu::Result<ResolvedBackend> resolved =
-      ResolveBackend(options, request, BuildDefaultGpuBackendKind());
+  gpu::Result<ResolvedBackend> resolved = ResolveBackend(options, request);
   if (resolved.hasError()) {
     if (resolved.error().type == gpu::GpuErrorType::Unsupported) {
       std::fprintf(stderr, "[Geode] %s.\n", resolved.error().message.c_str());

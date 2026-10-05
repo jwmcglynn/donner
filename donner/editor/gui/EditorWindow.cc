@@ -1583,8 +1583,7 @@ bool NativeVulkanWindowSelected(const geode::GpuRootSelection& selection, bool o
   }
   const char* backendRequest = std::getenv("DONNER_GPU_BACKEND");
   const gpu::Result<geode::GpuBackendKind> kind = geode::ResolveGpuBackendKind(
-      selection, backendRequest == nullptr ? std::string_view{} : std::string_view(backendRequest),
-      geode::BuildDefaultGpuBackendKind());
+      selection, backendRequest == nullptr ? std::string_view{} : std::string_view(backendRequest));
   return kind.hasResult() && kind.result() == geode::GpuBackendKind::NativeVulkan;
 }
 

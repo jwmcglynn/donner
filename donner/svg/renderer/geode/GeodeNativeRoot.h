@@ -125,27 +125,18 @@ struct GeodeRuntimeDevice {
 gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind();
 
 /**
- * The backend this build selects when neither the caller nor `DONNER_GPU_BACKEND` names one.
- *
- * @return Empty in native builds, which use the platform default.
- */
-std::optional<GpuBackendKind> BuildDefaultGpuBackendKind();
-
-/**
  * The backend \ref donner::geode::SelectGpuRoot "SelectGpuRoot" opens for @p options, without
  * opening it. The first of these that applies decides: the backend the caller names, the one
- * @p request names, @p buildDefault, and the platform default.
+ * @p request names, and the platform default.
  *
  * @param options Caller-supplied inputs.
  * @param request Value of `DONNER_GPU_BACKEND`; empty when it is unset or empty.
- * @param buildDefault Backend the build selects when nothing else names one.
  * @return The kind, or an error when the caller names no backend and a non-empty @p request names
  *   none, the external kind is named, no backend applies on this platform, or the Vulkan
  *   presentation options are inconsistent with each other or with the resolved backend.
  */
 gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& options,
-                                                  std::string_view request,
-                                                  std::optional<GpuBackendKind> buildDefault);
+                                                  std::string_view request);
 
 /**
  * Selects a native backend root for @p options and opens the system device behind it.
