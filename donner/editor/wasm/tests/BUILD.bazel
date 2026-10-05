@@ -204,11 +204,11 @@ playwright_bin.playwright_test(
         "DONNER_CHROMIUM_ARCHIVE": "$(rootpath @playwright_chromium_mac_arm64//file)",
         "DONNER_FIREFOX_ARCHIVE": "$(rootpath @playwright-firefox-mac14-arm64//file)",
     },
+    # No `perf` tag: Perf runs every `perf` test, and this driver works only under its watchdog.
     tags = [
         "manual",
         # Firefox cannot initialize its macOS sandbox inside Bazel's sandbox.
         "no-sandbox",
-        "perf",
     ],
     target_compatible_with = [
         "@platforms//cpu:aarch64",
