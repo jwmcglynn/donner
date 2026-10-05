@@ -12,7 +12,6 @@
 #include "donner/base/tests/RunfileGate.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/SourceSync.h"
-#include "donner/editor/ViewportGeometry.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -2025,6 +2024,45 @@ TEST(EditorAppTest, RevertToCleanSourceReloadsLastSavedDocument) {
   EXPECT_FALSE(app.hasSelection());
   EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
   EXPECT_FALSE(app.document().document().querySelector("#replacement").has_value());
+}
+
+/// A rendered image placed in a pane, with the document-space viewBox it depicts.
+struct DrawingViewportLayout {
+  Vector2d imageOrigin;   //!< Displayed image origin in logical UI coordinates.
+  Vector2d imageSize;     //!< Displayed image dimensions in logical UI pixels.
+  Box2d documentViewBox;  //!< Document-space bounds represented by the image.
+
+  /// Map a screen point into the document, or return no value when the image is empty.
+  /// @param screenPoint Point in logical UI coordinates.
+  [[nodiscard]] std::optional<Vector2d> screenToDocument(const Vector2d& screenPoint) const {
+    if (imageSize.x <= 0.0 || imageSize.y <= 0.0) {
+      return std::nullopt;
+    }
+    const double normalizedX = (screenPoint.x - imageOrigin.x) / imageSize.x;
+    const double normalizedY = (screenPoint.y - imageOrigin.y) / imageSize.y;
+    return Vector2d(documentViewBox.topLeft.x + normalizedX * documentViewBox.width(),
+                    documentViewBox.topLeft.y + normalizedY * documentViewBox.height());
+  }
+};
+
+/// Centers an image of \p imageSize in the pane, then offsets it by \p panOffset.
+/// @param contentOrigin Top-left screen position of the pane.
+/// @param availableRegionSize Size of the pane in screen coordinates.
+/// @param imageSize Displayed image size in screen coordinates.
+/// @param panOffset Pan offset in screen coordinates.
+/// @param documentViewBox Document-space viewBox the image depicts.
+DrawingViewportLayout ComputeDrawingViewportLayout(const Vector2d& contentOrigin,
+                                                   const Vector2d& availableRegionSize,
+                                                   const Vector2d& imageSize,
+                                                   const Vector2d& panOffset,
+                                                   const Box2d& documentViewBox) {
+  DrawingViewportLayout result;
+  result.imageSize = imageSize;
+  result.documentViewBox = documentViewBox;
+  result.imageOrigin =
+      Vector2d(contentOrigin.x + (availableRegionSize.x - imageSize.x) * 0.5 + panOffset.x,
+               contentOrigin.y + (availableRegionSize.y - imageSize.y) * 0.5 + panOffset.y);
+  return result;
 }
 
 // Regression for the "scale is wrong, clicks land on the background" bug in

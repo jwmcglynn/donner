@@ -9,7 +9,7 @@
 /// Coordinates passed to tool methods are in **document space** (the same
 /// coordinate system as the SVG canvas). Coordinate translation from
 /// screen space happens at the main-loop layer using
-/// `donner::editor::ViewportGeometry`, so tools are insulated from the
+/// `donner::editor::ViewportState`, so tools are insulated from the
 /// viewport / pan / zoom state.
 
 #include "donner/base/Vector2.h"

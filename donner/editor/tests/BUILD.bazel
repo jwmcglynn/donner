@@ -98,15 +98,6 @@ donner_cc_library(
 )
 
 donner_cc_test(
-    name = "viewport_geometry_tests",
-    srcs = ["ViewportGeometry_tests.cc"],
-    deps = [
-        "//donner/editor:viewport_geometry",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "document_pixel_sampler_tests",
     srcs = ["DocumentPixelSampler_tests.cc"],
     deps = [
@@ -960,7 +951,6 @@ donner_cc_test(
         "//donner/base:base_test_utils",
         "//donner/editor:editor_app",
         "//donner/editor:source_sync",
-        "//donner/editor:viewport_geometry",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
     ],
