@@ -494,8 +494,17 @@ namespace internal {
 /// Bounds pending UI submissions while retaining only the most recent input request.
 class PresentationSubmissionQueue {
 public:
+  /// Clock that times pending submissions.
   using Clock = std::chrono::steady_clock;
-  enum class Admission { Ready, Busy, TimedOut };
+  /// Whether another UI frame may be submitted.
+  enum class Admission {
+    Ready,     //!< Fewer than three submissions are pending.
+    Busy,      //!< At least three submissions are pending and none has timed out.
+    TimedOut,  //!< The oldest pending submission has waited at least five seconds.
+  };
+  /// Ostream output operator, e.g. `Busy`.
+  /// @param os Output stream.
+  /// @param admission Value to output.
   friend std::ostream& operator<<(std::ostream& os, Admission admission) {
     switch (admission) {
       case Admission::Ready: return os << "Ready";
@@ -504,16 +513,19 @@ public:
     }
     return os << "Admission(" << static_cast<int>(admission) << ")";
   }
+  /// One submitted UI frame: the GPU serial that retires it and the input it presented.
   struct Fence {
-    std::uint64_t serial = 0;
-    std::uint64_t frameId = 0;
-    std::uint64_t captureId = 0;
-    double pointerX = 0.0;
-    double pointerY = 0.0;
-    bool mouseDown = false;
+    std::uint64_t serial = 0;     //!< Last GPU submission serial of the frame.
+    std::uint64_t frameId = 0;    //!< Presentation frame identity.
+    std::uint64_t captureId = 0;  //!< Raster capture paired with the frame.
+    double pointerX = 0.0;        //!< Pointer x position when the frame was sealed.
+    double pointerY = 0.0;        //!< Pointer y position when the frame was sealed.
+    bool mouseDown = false;       //!< Whether the primary button was down when sealed.
+    /// Whether the frame represents the input sealed with it; cleared when the full frame was not
+    /// presented.
     bool inputRepresented = false;
-    double viewportZoom = 0.0;
-    Clock::time_point submittedAt;
+    double viewportZoom = 0.0;      //!< Viewport zoom the frame was drawn with.
+    Clock::time_point submittedAt;  //!< When the frame's work was submitted.
   };
   /// Serial and clock read after a bounded GPU completion confirmation.
   struct CompletionObservation {
@@ -544,8 +556,11 @@ public:
   }
   /// Seal the serial and input that reached the GPU as one UI frame.
   void submitted(Fence fence) { pending_.push_back(fence); }
+  /// Number of submitted frames whose GPU work has not been observed complete.
   std::size_t pendingCount() const { return pending_.size(); }
+  /// Most recently retired frame, or a default fence before any frame retires.
   Fence completed() const { return completed_; }
+  /// Serial of the oldest pending frame, or zero when none is pending.
   std::uint64_t oldestSerial() const { return pending_.empty() ? 0 : pending_.front().serial; }
   /// Elapsed time of the oldest unfinished frame without restarting its submission clock.
   std::chrono::milliseconds oldestAge(Clock::time_point now) const {

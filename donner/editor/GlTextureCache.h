@@ -182,6 +182,7 @@ public:
   /// @param preview Paint-ordered worker tiles and metadata.
   /// @param rasterViewport Raster coverage represented by the preview, when known.
   /// @param overview Optional same-scene overview that must be prepared in the same transaction.
+  /// @param capture Geometry captured with the preview's pixels, published with the installed set.
   /// @return True only when every required payload is ready and the complete set was installed.
   bool uploadComposited(const RenderResult::CompositedPreview& preview,
                         std::optional<EditorRasterViewport> rasterViewport = std::nullopt,

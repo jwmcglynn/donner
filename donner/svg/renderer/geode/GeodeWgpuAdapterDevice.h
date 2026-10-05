@@ -31,6 +31,7 @@ struct GeodeWgpuRoots {
   wgpu::Adapter adapter;    //!< Adapter the device came from.
   wgpu::Device device;      //!< Device every runtime device over this root records against.
   wgpu::Queue queue;        //!< Default queue of \ref device.
+
   /// Token the device-lost callback this process installed retains, or null when it installed
   /// none. Released with the handles.
   void* deviceLostCallbackToken = nullptr;
@@ -82,7 +83,8 @@ private:
 /// A selected wgpu reference: the Geode root production contexts are created over, and the wgpu
 /// objects behind it.
 struct WgpuReferenceSelection {
-  /// Root of kind \ref GpuBackendKind::External whose runtime devices are wgpu reference devices.
+  /// Root of kind \ref donner::geode::GpuBackendKind::External "GpuBackendKind::External" whose
+  /// runtime devices are wgpu reference devices.
   std::shared_ptr<GeodeGpuRoot> root;
   /// The wgpu objects every runtime device over \ref root records against.
   std::shared_ptr<const WgpuReferenceRoot> reference;
@@ -91,7 +93,7 @@ struct WgpuReferenceSelection {
 /**
  * Selects the wgpu-native reference: creates an instance, requests an adapter and a device, and
  * takes the default queue, then adopts them as a Geode root whose runtime devices are
- * \ref GeodeWgpuAdapterDevice instances.
+ * \ref donner::geode::GeodeWgpuAdapterDevice "GeodeWgpuAdapterDevice" instances.
  *
  * `WGPU_BACKEND` names the wgpu backend (`vulkan`, `metal`, `opengl` or `opengles`; Vulkan when
  * unset on Linux), and `DONNER_GEODE_FORCE_FALLBACK_ADAPTER=1` requests wgpu's fallback adapter.
@@ -110,7 +112,8 @@ WgpuReferenceSelection SelectWgpuReference(std::string_view label);
  * Creates a headless Geode context over a newly selected wgpu reference.
  *
  * @param textureFormat Format the context's render targets and pipelines are built for.
- * @return The context, or null when \ref SelectWgpuReference found no adapter or device.
+ * @return The context, or null when \ref donner::geode::SelectWgpuReference "SelectWgpuReference"
+ *   found no adapter or device.
  */
 std::unique_ptr<GeodeDevice> CreateWgpuReferenceContext(
     gpu::TextureFormat textureFormat = gpu::TextureFormat::RGBA8Unorm);
@@ -183,7 +186,7 @@ protected:
 
   /**
    * Polls the backend without blocking until \ref completedSerial reaches \p serial, the device
-   * is lost, or the budget elapses (see \ref waitForSerialBounded). Idle retirement instead uses a
+   * is lost, or the budget elapses (see `waitForSerialBounded`). Idle retirement instead uses a
    * single nonblocking \ref gpu::Device::poll iteration.
    *
    * @param serial Submission serial to wait for.

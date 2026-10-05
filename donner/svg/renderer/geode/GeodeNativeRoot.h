@@ -30,13 +30,22 @@ enum class GpuBackendKind : uint8_t {
   External,
 };
 
+/// Human-readable name of a selected backend.
+/// @param kind Backend kind to name.
 std::string_view GpuBackendKindName(GpuBackendKind kind);
+/// Prints the kind's human-readable name.
+/// @param os Output stream.
+/// @param kind Value to output.
 std::ostream& operator<<(std::ostream& os, GpuBackendKind kind);
 
 /// Capabilities shared by runtime devices over one native root.
 struct GeodeGpuRootCapabilities {
+  /// Backend whose runtime devices the root opens.
   GpuBackendKind backend = GpuBackendKind::NativeMetal;
+  /// Largest 2D texture width or height the selected device supports.
   uint32_t maxTextureDimension2D = 8192u;
+  /// Whether the backend is Vulkan, where filter passes wait for the queue at each submission
+  /// boundary instead of relying on cross-submission synchronization.
   bool isVulkan = false;
 };
 
@@ -89,26 +98,88 @@ private:
 
 /// Caller inputs for a native backend selection.
 struct GpuRootSelection {
+  /// Caller's name for the selection.
   std::string_view label = "GeodeDevice";
+  /// Require a Vulkan root whose queue can present; another resolved backend is a contradiction.
   bool requireVulkanPresentation = false;
+  /// Instance extensions a presentation root must enable, such as the window system's surface
+  /// extensions. Only valid with \ref requireVulkanPresentation.
   std::span<const char* const> requiredVulkanInstanceExtensions;
+  /// Backend the caller names. It outranks `DONNER_GPU_BACKEND` and every default.
   std::optional<GpuBackendKind> backend;
 };
 
 /// One logical runtime device over the selected native root.
 struct GeodeRuntimeDevice {
-  std::unique_ptr<gpu::Device> device;
+  std::unique_ptr<gpu::Device> device;  //!< The device, or null when none could be opened.
 };
 
+/**
+ * The backend `DONNER_GPU_BACKEND` requests: `metal` or `vulkan` in any letter case, or the
+ * platform default (native Metal on Apple, native Vulkan on Linux) when the variable is unset or
+ * empty.
+ *
+ * @return The kind, or an error when the variable names no backend or the platform has no native
+ *   backend.
+ */
 gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind();
+
+/**
+ * The backend this build selects when neither the caller nor `DONNER_GPU_BACKEND` names one.
+ *
+ * @return Empty in native builds, which use the platform default.
+ */
 std::optional<GpuBackendKind> BuildDefaultGpuBackendKind();
+
+/**
+ * The backend \ref donner::geode::SelectGpuRoot "SelectGpuRoot" opens for @p options, without
+ * opening it. The first of these that applies decides: the backend the caller names, the one
+ * @p request names, @p buildDefault, and the platform default.
+ *
+ * @param options Caller-supplied inputs.
+ * @param request Value of `DONNER_GPU_BACKEND`; empty when it is unset or empty.
+ * @param buildDefault Backend the build selects when nothing else names one.
+ * @return The kind, or an error when @p request names no backend, the external kind is named, no
+ *   backend applies on this platform, or the Vulkan presentation options are inconsistent with
+ *   each other or with the resolved backend.
+ */
 gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& options,
                                                   std::string_view request,
                                                   std::optional<GpuBackendKind> buildDefault);
+
+/**
+ * Selects a native backend root for @p options and opens the system device behind it.
+ *
+ * Halts the process when the Vulkan presentation options are inconsistent with each other or with
+ * the resolved backend, or when `DONNER_GPU_BACKEND` names no backend or one this process cannot
+ * open: an explicit process request is never silently replaced with another backend.
+ *
+ * @param options Caller-supplied inputs.
+ * @return The root, or null when a caller-named or platform-default backend cannot be opened or
+ *   this build cannot serve it.
+ */
 std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options);
+
+/**
+ * Adopts a completed native Vulkan root, for example one an embedder selected for its actual
+ * presentation surface.
+ *
+ * @param nativeRoot Completed Vulkan instance, physical and logical device, and queue.
+ * @param lostState Loss condition @p nativeRoot was opened with.
+ * @return The root, or null when either input is null, @p lostState is not the condition
+ *   @p nativeRoot shares, or this platform has no native Vulkan backend.
+ */
 std::shared_ptr<GeodeGpuRoot> AdoptNativeVulkanRoot(
     std::shared_ptr<gpu::vulkan::VulkanSharedRoot> nativeRoot,
     std::shared_ptr<gpu::DeviceLostState> lostState);
+
+/**
+ * Opens one runtime device over @p root. Every logical rendering context gets its own, with its
+ * own handle tables and submission serials, while all of them share the root's loss condition.
+ *
+ * @param root Root to render through; must not be null.
+ * @return The device, or an empty device when the backend could not open one.
+ */
 GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
 
 }  // namespace donner::geode

@@ -212,6 +212,7 @@ public:
   [[nodiscard]] std::optional<Box2d> strokeIncrementRectForTesting() const {
     return strokeIncrementRect_;
   }
+  /// Screen rectangle of the stroke-width decrement button from the last inspector frame.
   [[nodiscard]] std::optional<Box2d> strokeDecrementRectForTesting() const {
     return strokeDecrementRect_;
   }
@@ -259,9 +260,11 @@ public:
   [[nodiscard]] std::optional<Box2d> strokeMiterLimitRectForTesting() const {
     return strokeMiterLimitRect_;
   }
+  /// Screen rectangle of the miter-limit increment button from the last inspector frame.
   [[nodiscard]] std::optional<Box2d> strokeMiterIncrementRectForTesting() const {
     return strokeMiterIncrementRect_;
   }
+  /// Screen rectangle of the miter-limit decrement button from the last inspector frame.
   [[nodiscard]] std::optional<Box2d> strokeMiterDecrementRectForTesting() const {
     return strokeMiterDecrementRect_;
   }
@@ -278,12 +281,18 @@ public:
   /// Cached IDs offered by the marker selectors.
   [[nodiscard]] std::span<const std::string> markerIdsForTesting() const { return markerCacheIds_; }
 
+  /// Screen rectangle of the Markers disclosure row from the last inspector frame.
   [[nodiscard]] std::optional<Box2d> markerDisclosureRectForTesting() const {
     return markerDisclosureRect_;
   }
+  /// Screen rectangle of a marker picker from the last inspector frame, or no value when absent.
+  /// @param index 0 for the start-marker picker, 1 for the end-marker picker.
   [[nodiscard]] std::optional<Box2d> markerPickerRectForTesting(std::size_t index) const {
     return index < markerPickerRects_.size() ? markerPickerRects_[index] : std::nullopt;
   }
+  /// Screen rectangle of a marker preset row in an open picker popup, or no value when absent.
+  /// @param index Index into \ref donner::editor::kStrokeMarkerPrefabOptions
+  ///   "kStrokeMarkerPrefabOptions".
   [[nodiscard]] std::optional<Box2d> markerPrefabRectForTesting(std::size_t index) const {
     return index < markerPrefabRects_.size() ? markerPrefabRects_[index] : std::nullopt;
   }
@@ -582,6 +591,7 @@ enum class StrokePreviewIcon : std::uint8_t {
   BevelJoin,
 };
 
+/// Every stroke preview icon, in button order.
 inline constexpr std::array<StrokePreviewIcon, 6> kStrokePreviewIcons = {
     StrokePreviewIcon::ButtCap,   StrokePreviewIcon::RoundCap,  StrokePreviewIcon::SquareCap,
     StrokePreviewIcon::MiterJoin, StrokePreviewIcon::RoundJoin, StrokePreviewIcon::BevelJoin,

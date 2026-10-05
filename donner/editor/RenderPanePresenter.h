@@ -110,15 +110,6 @@ struct RenderPanePresenterState {
 [[nodiscard]] bool PresentedTileQuadIntersectsScreenRect(const PresentedTileQuad& tileQuad,
                                                          const Box2d& screenRect);
 
-/**
- * Return the screen-space clip rect for presented document pixels.
- *
- * @param paneRect Screen-space render-pane bounds.
- * @param imageRect Screen-space artboard/image bounds.
- */
-[[nodiscard]] std::optional<Box2d> PresentedImageClipRect(const Box2d& paneRect,
-                                                          const Box2d& imageRect);
-
 /// Draws the document presentation and diagnostic overlays into the render pane.
 class RenderPanePresenter {
 public:

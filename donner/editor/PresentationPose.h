@@ -27,7 +27,11 @@ struct PresentationIdentity {
   /// Compare the exact consumed document/resource revision, independent of capture allocation.
   /// @param other Candidate source identity.
   [[nodiscard]] bool sameScene(const PresentationIdentity& other) const;
-  friend bool operator==(const PresentationIdentity&, const PresentationIdentity&) = default;
+  /// Compare all members for value equality.
+  /// @param lhs Value to compare.
+  /// @param rhs Value to compare.
+  friend bool operator==(const PresentationIdentity& lhs,
+                         const PresentationIdentity& rhs) = default;
 };
 
 /// An object's absolute pose in the document, independent of mouse gestures.

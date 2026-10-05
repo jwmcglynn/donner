@@ -21,13 +21,21 @@ enum class GpuBackendKind : uint8_t {
 };
 
 /// Human-readable name of a selected backend.
+/// @param kind Backend kind to name.
 std::string_view GpuBackendKindName(GpuBackendKind kind);
+/// Prints the kind's human-readable name.
+/// @param os Output stream.
+/// @param kind Value to output.
 std::ostream& operator<<(std::ostream& os, GpuBackendKind kind);
 
 /// Capabilities shared by runtime devices opened over one browser GPU device.
 struct GeodeGpuRootCapabilities {
+  /// Backend whose runtime devices the root opens.
   GpuBackendKind backend = GpuBackendKind::Browser;
+  /// Largest 2D texture width or height the selected device supports.
   uint32_t maxTextureDimension2D = 8192u;
+  /// Whether the backend is Vulkan, where filter passes wait for the queue at each submission
+  /// boundary instead of relying on cross-submission synchronization.
   bool isVulkan = false;
 };
 
@@ -63,21 +71,33 @@ private:
 
 /// Inputs to browser-root selection. A named unsupported backend is refused.
 struct GpuRootSelection {
+  /// Caller's name for the selection.
   std::string_view label = "GeodeDevice";
+  /// Backend the caller names. It outranks `DONNER_GPU_BACKEND` and every default.
   std::optional<GpuBackendKind> backend;
 };
 
 /// One logical runtime device over the selected browser root.
 struct GeodeRuntimeDevice {
-  std::unique_ptr<gpu::Device> device;
+  std::unique_ptr<gpu::Device> device;  //!< The device, or null when none could be opened.
 };
 
+/// In WebAssembly builds, the backend `DONNER_GPU_BACKEND` requests, or the browser backend when
+/// it is unset or empty.
 gpu::Result<GpuBackendKind> ProcessDefaultGpuBackendKind();
+/// In WebAssembly builds, the browser backend, selected when nothing else names a backend.
 std::optional<GpuBackendKind> BuildDefaultGpuBackendKind();
+/// In WebAssembly builds, resolves the caller's backend, then `DONNER_GPU_BACKEND`, then the build
+/// default, without opening a device.
 gpu::Result<GpuBackendKind> ResolveGpuBackendKind(const GpuRootSelection& options,
                                                   std::string_view request,
                                                   std::optional<GpuBackendKind> buildDefault);
+/// In WebAssembly builds, opens the browser's GPU device as a root. Halts when
+/// `DONNER_GPU_BACKEND` is invalid or names a native backend; returns null when a caller names a
+/// native backend or the device request fails.
 std::shared_ptr<GeodeGpuRoot> SelectGpuRoot(const GpuRootSelection& options);
+/// In WebAssembly builds, opens one runtime device over the browser root, sharing its loss
+/// condition.
 GeodeRuntimeDevice CreateGpuDeviceOver(std::shared_ptr<GeodeGpuRoot> root);
 
 }  // namespace donner::geode

@@ -158,6 +158,7 @@ struct RenderRequest {
   std::uint64_t fontResourceRevision = 0;
   /// Non-transform content and renderer settings consumed by this render.
   std::uint64_t geometryRevision = 0;
+  /// Presentation-refresh epoch of the renderer settings this render used.
   std::uint64_t presentationEpoch = 0;
   /// Immutable per-render identity assigned when the request is admitted.
   std::uint64_t captureId = 0;
@@ -167,7 +168,9 @@ struct RenderRequest {
   std::vector<Entity> trackedPresentationObjects;
   /// Source and rejection annotations captured from the same guarded state as the pixels.
   std::vector<svg::SVGElement> sourceHoverElements;
+  /// Locked-element rejection flash captured with the pixels, when one is showing.
   std::optional<LockedRejectionFlashInput> lockedFlash;
+  /// Text-editing annotations captured with the pixels, when a text session is open.
   std::optional<CapturedPresentation::TextEditing> textEditing;
   /// Entity remap for structurally equivalent document replacement. When
   /// present, the worker remaps compositor state instead of fully resetting
@@ -197,14 +200,15 @@ struct RenderRequest {
   /// against. Placing them through a later viewport would stretch a
   /// viewport-bounded raster past the document region it actually covers.
   ViewportState viewport;
+  /// Request repairs a frame rejected for incompatible raster/pose coverage.
+  bool presentationCoverageRepair = false;
+  int presentationRepairReason = 0;  //!< Missing presentation proof carried by the request.
+
   /// True when this request should produce only a low-resolution full-document overview infill.
   ///
   /// The worker still keeps the selected entity promoted, but skips the composited split preview
   /// and publishes a full-canvas tile. The UI uploads it into the retained overview cache without
   /// replacing active viewport-bounded tiles.
-  /// Request repairs a frame rejected for incompatible raster/pose coverage.
-  bool presentationCoverageRepair = false;
-  int presentationRepairReason = 0;  //!< Missing presentation proof carried by the request.
   bool overviewInfillOnly = false;
   /// Capture a CPU-readable copy of the fully composed frame.
   ///
@@ -437,6 +441,7 @@ struct RenderResult {
       compositedPreview;                //!< Paint-ordered compositor tiles, when produced.
   EditorRasterViewport rasterViewport;  //!< Raster viewport used to produce this result.
   ViewportState viewport;               //!< Editor viewport copied from the request.
+
   /// Request repairs a frame rejected for incompatible raster/pose coverage.
   bool presentationCoverageRepair = false;
   int presentationRepairReason = 0;        //!< Missing presentation proof carried by the request.

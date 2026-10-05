@@ -94,8 +94,9 @@ public:
   [[nodiscard]] bool rootRetirementOutlivesRootDeviceForTesting() const;
 
 private:
-  /// Only a context builds an owner, from a root and the device \ref CreateGpuDeviceOver opened
-  /// over it, so a device can never be paired with a root of another backend.
+  /// Only a context builds an owner, from a root and the device
+  /// \ref donner::geode::CreateGpuDeviceOver "CreateGpuDeviceOver" opened over it, so a device can
+  /// never be paired with a root of another backend.
   friend class GeodeDevice;
 
   /**

@@ -183,10 +183,13 @@ struct GlRnrReplayFrameDiagnostics {
   std::uint64_t displayedDocVersion = 0;
   /// Document version represented by the current immediate overlay snapshot, if any.
   std::optional<std::uint64_t> immediateOverlayDocumentVersion;
-  /// Identity and poses of the immutable frame shared by artwork and chrome.
+  /// Identity of the immutable frame shared by artwork and chrome.
   std::uint64_t presentationFrameId = 0;
+  /// Raster and geometry provenance of that frame.
   PresentationIdentity presentationIdentity;
+  /// Whether that frame applied pointer intent to independently movable captured pixels.
   bool presentationFollowsPointer = false;
+  /// Absolute object poses that frame presents.
   std::vector<PresentationPose> presentedPoses;
   /// Selected entity eligible for composited presentation, or entt::null.
   Entity selectedCompositedEntity = entt::null;
