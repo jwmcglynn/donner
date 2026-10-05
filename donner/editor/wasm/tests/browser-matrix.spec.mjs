@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -832,7 +842,7 @@ test("only the hosted macOS Perf job reports latency gates without enforcing the
     "bazel-testlogs/donner/editor/wasm/tests/browser_responsiveness_perf_test/test.log";
   assert.ok(
     summaryStep.includes(
-      `node donner/editor/wasm/tests/latency-gates.mjs ${testLog} >> "$GITHUB_STEP_SUMMARY"`,
+      `node donner/editor/wasm/tests/latency-gate-summary.mjs ${testLog} >> "$GITHUB_STEP_SUMMARY"`,
     ),
     "the summary must come from the browser lane's own test log",
   );
@@ -846,5 +856,51 @@ test("responsiveness latency gates go through the gate helper", async () => {
   for (const [gate, { message }] of Object.entries(gates.kLatencyGates)) {
     assert.ok(spec.includes(`latencyGate("${gate}"`), `${gate} must be checked through the helper`);
     assert.ok(!spec.includes(message), `${gate} must not be enforced outside the helper`);
+  }
+});
+
+test("the latency gate summary command prints the gates recorded in a test log", () => {
+  const command = path.join(testDirectory, "latency-gate-summary.mjs");
+  const directory = mkdtempSync(path.join(process.env.TEST_TMPDIR ?? tmpdir(), "latency-gates-"));
+  try {
+    const log = path.join(directory, "test.log");
+    const record = {
+      gate: "inputP95",
+      browser: "firefox",
+      phase: "first-drag-193",
+      valueMs: 447.4,
+      limitMs: 50,
+      met: false,
+      mode: "report",
+    };
+    writeFileSync(log, `[firefox] drag\nlatency-gate ${JSON.stringify(record)}\n`);
+    assert.match(
+      execFileSync(process.execPath, [command, log], { encoding: "utf8" }),
+      /\| firefox \| first-drag-193 \| inputP95 \| 447\.4 \| 50 \| missed \(reported\) \|/,
+    );
+    assert.equal(
+      execFileSync(process.execPath, [command, path.join(directory, "missing.log")], {
+        encoding: "utf8",
+      }),
+      "No latency gate results were recorded.\n",
+      "a test that did not run leaves no log",
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("modules that the TypeScript specs import stay loadable as CommonJS", () => {
+  // Playwright loads the TypeScript specs, and the modules they import, as CommonJS. There
+  // import.meta is a syntax error that stops the whole spec file from loading.
+  const imported = new Set();
+  for (const file of readdirSync(testDirectory).filter((name) => name.endsWith(".ts"))) {
+    const source = readFileSync(path.join(testDirectory, file), "utf8");
+    for (const [, module] of source.matchAll(/from "\.\/([^"]+\.m?js)"/g)) imported.add(module);
+  }
+  assert.ok(imported.has("latency-gates.mjs"), "the responsiveness spec imports the gate module");
+  for (const module of imported) {
+    const source = readFileSync(path.join(testDirectory, module), "utf8");
+    assert.ok(!source.includes("import.meta"), `${module} must not use import.meta`);
   }
 });
