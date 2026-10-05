@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -74,6 +75,19 @@ Result<uint64_t> SubmitEmptyWork(MetalDevice& device, uint64_t buffers = 1) {
     commandBuffers.push_back(EmptyCommandBuffer(device));
   }
   return device.submit(std::span<CommandBuffer>(commandBuffers));
+}
+
+/// Submits one empty command buffer, doing nothing when the root is lost meanwhile.
+/// @param device Device to submit to.
+void SubmitEmptyWorkUnlessLost(MetalDevice& device) {
+  Result<std::unique_ptr<CommandEncoder>> encoder = device.createCommandEncoder();
+  if (!encoder.hasResult()) {
+    return;
+  }
+  Result<CommandBuffer> commandBuffer = encoder.result()->finish();
+  if (commandBuffer.hasResult()) {
+    (void)device.submit(std::move(commandBuffer).result());
+  }
 }
 
 /// Milliseconds from \p start to \p end. @param start Start time. @param end End time.
@@ -202,9 +216,11 @@ TEST_F(MetalSubmissionBackstopTest, WorkWithinTheBackstopNeverWaits) {
 TEST_F(MetalSubmissionBackstopTest, ASubmissionPastTheBackstopWaitsForRoom) {
   ASSERT_NO_FATAL_FAILURE(fillBackstopWhilePaused());
 
+  std::chrono::steady_clock::time_point releasedAt;
   std::thread releaser([&] {
     // Long enough that a submission let through without waiting would already be back.
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    releasedAt = std::chrono::steady_clock::now();
     device_->releasePausedCommandBuffersForTest(1);
   });
   const WorkerSubmission past = submitPastTheBackstop();
@@ -213,7 +229,10 @@ TEST_F(MetalSubmissionBackstopTest, ASubmissionPastTheBackstopWaitsForRoom) {
   EXPECT_TRUE(past.finishedInWindow) << "the submission past the backstop never went through";
   ASSERT_TRUE(past.result.has_value());
   EXPECT_THAT(*past.result, HasResult());
-  EXPECT_THAT(past.waitedMs, Ge(300)) << "the submission did not wait for room";
+  // Measured from the release rather than from the submission's start, which can come later than
+  // the releaser's.
+  EXPECT_THAT(MillisecondsBetween(releasedAt, past.endedAt), Ge(0))
+      << "the submission went through before any room was made, so it did not wait for room";
   EXPECT_THAT(device_->commandBufferRoomWaitsForTest(), Eq(1u));
   EXPECT_THAT(device_->commandBuffersInFlightForTest(), Le(kBackstop));
 }
@@ -382,7 +401,7 @@ protected:
   }
 
   /// Fills the consumer's backstop with full-size submissions whose first command buffer reads
-  /// \p source, so none of them can complete before the producer renders it.
+  /// \p source, so each of them waits on the GPU for the producer to render it.
   /// @param source Consumer's registration of the producer's texture.
   void fillConsumerBehind(const Texture& source) {
     const Buffer readback = GetResultOrFail(device_->createBuffer(
@@ -453,6 +472,76 @@ TEST_F(MetalSubmissionBackstopProducerTest, AProducerThatKeepsCompletingKeepsACo
       << "the consumer did not wait longer than its stall bound, so this case measured nothing";
   EXPECT_FALSE(device_->isLost()) << "a wait behind a progressing producer declared a loss";
   EXPECT_THAT(device_->commandBufferRoomWaitsForTest(), Eq(1u));
+}
+
+/// Once the producer completes the work a consumer's submissions wait for, the producer's later
+/// work is unrelated to them: a consumer whose own work does not complete declares the loss once
+/// its stall bound passes, however busy the producer stays.
+TEST_F(MetalSubmissionBackstopProducerTest,
+       AProducerBusyWithUnrelatedWorkDoesNotKeepAConsumerWaitAlive) {
+  // Many unrelated submissions fit inside the stall bound, so a slow or shared machine still
+  // completes several of them during the consumer's wait.
+  constexpr std::chrono::milliseconds kStallBound{500};
+  constexpr std::chrono::milliseconds kBusyInterval{25};
+  device_->setSubmissionStallTimeoutForTest(kStallBound);
+  const Texture target = pausedProducerTexture(0);
+  // The serial the consumer's work waits for; anything the producer completes after it is
+  // unrelated to the consumer.
+  const uint64_t awaited = producer_->lastSubmittedSerial();
+  const Texture source =
+      GetResultOrFail(device_->registerTexture(GetResultOrFail(producer_->exportTexture(target))));
+  // The consumer's own work stays paused, so only the producer can show progress.
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  fillStarted_ = std::chrono::steady_clock::now();
+  ASSERT_NO_FATAL_FAILURE(fillConsumerBehind(source));
+
+  std::promise<void> unrelatedWorkCompleted;
+  std::future<void> unrelatedWorkCompletedFuture = unrelatedWorkCompleted.get_future();
+  std::atomic<bool> stopBusyProducer{false};
+  uint64_t completedBeforeLoss = 0;
+  std::thread busyProducer([&] {
+    // The producer renders the texture at once, which meets the consumer's waits, then keeps
+    // completing unrelated work. It stops once the root is lost, when the consumer's paused work
+    // is released, or when the case gives up on it.
+    producer_->resumeSubmissionsForTest();
+    const auto until = fillStarted_ + kReleaseDeadline;
+    bool announced = false;
+    while (!rootLoss_->lost.load(std::memory_order_acquire) &&
+           !stopBusyProducer.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < until) {
+      completedBeforeLoss = producer_->completedSerial();
+      if (!announced && completedBeforeLoss > awaited) {
+        unrelatedWorkCompleted.set_value();
+        announced = true;
+      }
+      SubmitEmptyWorkUnlessLost(*producer_);
+      std::this_thread::sleep_for(kBusyInterval);
+    }
+  });
+  // The wait starts only once the awaited serial is met and unrelated producer work has completed.
+  if (unrelatedWorkCompletedFuture.wait_for(std::chrono::seconds(1)) != std::future_status::ready) {
+    stopBusyProducer.store(true, std::memory_order_release);
+    busyProducer.join();
+    FAIL() << "the producer completed no unrelated work within 1 s";
+  }
+  const uint64_t completedAtWaitStart = producer_->completedSerial();
+  const WorkerSubmission past = submitPastTheBackstop();
+  busyProducer.join();
+  const uint64_t unrelatedCompletedDuringWait =
+      completedBeforeLoss > completedAtWaitStart ? completedBeforeLoss - completedAtWaitStart : 0;
+
+  EXPECT_TRUE(past.finishedInWindow) << "a producer busy with work the consumer no longer waits "
+                                        "for kept the consumer's wait alive";
+  ASSERT_TRUE(past.result.has_value());
+  EXPECT_THAT(*past.result, IsGpuError(GpuErrorType::DeviceLost));
+  EXPECT_THAT(MillisecondsBetween(fillStarted_, past.endedAt), Ge(kStallBound.count()))
+      << "the consumer gave up before its own work had made no progress for its stall bound";
+  EXPECT_THAT(past.waitedMs, Lt(kStallBound.count() + 1000))
+      << "the consumer waited well past its stall bound";
+  EXPECT_THAT(rootLoss_->timedOutSite.load(), Eq(DeviceLostWaitSite::QueueIdle));
+  EXPECT_THAT(unrelatedCompletedDuringWait, Ge(2u))
+      << "the producer completed too little unrelated work during the wait for this case to show "
+         "that it no longer counts";
 }
 
 /// A consumer held behind a producer that completes nothing declares the loss once its stall
