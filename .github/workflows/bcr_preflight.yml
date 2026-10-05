@@ -269,8 +269,13 @@ jobs:
           path: ${{ runner.temp }}/donner-bcr/cli-macos
       - name: Explain missing CLI artifacts
         if: failure() && (steps.cli-linux-artifact.outcome == 'failure' || steps.cli-macos-artifact.outcome == 'failure')
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          echo "::error::This attempt's CLI artifacts are missing. They are bound to the attempt that built them, so a rerun of only failed jobs that carried a passed CLI build over cannot use them: rerun all jobs."
+          if [ "$RUN_ATTEMPT" -gt 1 ]; then
+            echo "::error::If the download error above is 'Artifact not found', this attempt reran only failed jobs, and the CLI artifacts are bound to the attempt that built them; rerun all jobs."
+          fi
+          echo "::error::Otherwise the download failed for another reason; see the error above and the GitHub status page before rerunning."
           exit 1
       - name: Verify the exact preflight source and CLI bytes
         run: |
@@ -318,8 +323,13 @@ jobs:
           path: ${{ runner.temp }}/donner-bcr/cli-macos
       - name: Explain missing CLI artifacts
         if: failure() && (steps.cli-linux-artifact.outcome == 'failure' || steps.cli-macos-artifact.outcome == 'failure')
+        env:
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          echo "::error::This attempt's CLI artifacts are missing. They are bound to the attempt that built them, so a rerun of only failed jobs that carried a passed CLI build over cannot use them: rerun all jobs."
+          if [ "$RUN_ATTEMPT" -gt 1 ]; then
+            echo "::error::If the download error above is 'Artifact not found', this attempt reran only failed jobs, and the CLI artifacts are bound to the attempt that built them; rerun all jobs."
+          fi
+          echo "::error::Otherwise the download failed for another reason; see the error above and the GitHub status page before rerunning."
           exit 1
       - name: Verify both CLI artifacts from this preflight attempt
         run: |
