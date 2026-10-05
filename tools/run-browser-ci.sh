@@ -342,11 +342,13 @@ run_lane() {
 # which the default config ignores: their per-rAF composited sampler starves
 # under SwiftShader, so they run on the platform GPU via their own configs
 # below.
-# diag: only the Firefox overlays case, repeated, with the surface frame probe installed.
+run_lane "chromium-default" \
+  bash donner/editor/wasm/tests/run_tests.sh --headed
+
+# diag: the whole Firefox lane, repeated, after chromium-default as in CI.
 run_lane "firefox-geode-resize" \
   npm --prefix donner/editor/wasm/tests run test:compatibility -- \
-  --project=firefox-geode-resize --headed \
-  "--grep=Geode Wasm View overlays" --repeat-each=20 --retries=0
+  --project=firefox-geode-resize --headed --repeat-each=5 --retries=0
 
 # ---------------------------------------------------------------------------
 # 6. Summary
